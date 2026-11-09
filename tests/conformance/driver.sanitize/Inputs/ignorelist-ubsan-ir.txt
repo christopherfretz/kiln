@@ -1,0 +1,8 @@
+# Function-level UBSan suppression (WP-1032).
+[undefined]
+fun:_Z4skipii
+src:*Inputs/ignorelist-src-ubsan.h
+[signed-integer-overflow]
+fun:*only_sio*
+[shift]
+fun:*shift_off*

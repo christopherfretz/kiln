@@ -168,6 +168,9 @@ pub struct Parser<'a, 'sm> {
     /// `ParseDirectDeclarator` consumes one wherever a name may follow;
     /// sema rejects it). Taken by the first direct declarator.
     pub(crate) catch_declarator: bool,
+    /// A handler's exception-declaration is being parsed (clang does not
+    /// run `CheckExtraCXXDefaultArguments` on it, [dcl.fct.default]/3).
+    pub(crate) in_exception_decl: bool,
     /// The type-constraint location of the constrained placeholder the
     /// last type-id contained (its decl-specifier's, or one in its
     /// trailing return types), for the enclosing declarator's
@@ -188,10 +191,13 @@ pub struct Parser<'a, 'sm> {
     /// Selects clang's recovery for an unqualified `typename T`
     /// (spec/parse.md, typename-specifiers).
     pub(crate) param_recovery: Option<bool>,
-    /// Set while a non-type template parameter's decl-specifier-seq is
-    /// parsed (a `Prototype` context that is not a parameter type for
-    /// "cannot be defined in a parameter type", WP-962).
-    pub(crate) nttp_specs: bool,
+    /// The [`kiln_sema::TagSite`] of the next decl-specifier-seq, when its
+    /// caller knows more than its [`kiln_sema::DeclaratorContext`] (a
+    /// non-type template parameter, `sizeof`, a template argument, an
+    /// alias-declaration...): taken by
+    /// [`Parser::parse_decl_specifiers_from`], so nested ones get their own
+    /// (spec/sema.md §4.4.1).
+    pub(crate) next_tag_site: Option<kiln_sema::TagSite>,
     /// Set when an unqualified `typename` ended a parameter's
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
@@ -368,11 +374,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             pack_hint: false,
             addr_operand_at: None,
             catch_declarator: false,
+            in_exception_decl: false,
             type_id_constraint: Loc::INVALID,
             named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
-            nttp_specs: false,
+            next_tag_site: None,
             param_abort: false,
             typename_failed: false,
             typename_pack_index: None,

@@ -14,7 +14,7 @@ use kiln_sema::templ::auto::AutoGroup;
 use kiln_sema::{
     BindingId, Chunk, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
     Designator, InitItem, InitList, InitValue, Initializer, NameClass, NullSpec, ParamInfo, Sign,
-    SpecialName, StorageSpec, TagUse, TypeSpecKind, Width,
+    SpecialName, StorageSpec, TagDefinedIn, TagSite, TagUse, TypeSpecKind, Width,
 };
 use kiln_sema::{ContractDeclKind, DeclSite};
 use kiln_source::symbol::Symbol;
@@ -528,6 +528,11 @@ impl Parser<'_, '_> {
             let tl = self.loc();
             self.typename_pack_index = None;
             let own = attrs.len();
+            self.next_tag_site = Some(if self.s.has_open_template_head() {
+                TagSite::AliasTemplate
+            } else {
+                TagSite::Alias
+            });
             let Some(ty) = self.parse_type_id_into(Some(&mut attrs), DeclSite::Alias) else {
                 self.skip_to_semi();
                 return Vec::new();
@@ -726,6 +731,7 @@ impl Parser<'_, '_> {
         friend_loc: Option<Loc>,
     ) -> DeclSpec {
         let mut ds = DeclSpec::new(self.name_begin());
+        ds.tag_site = self.next_tag_site.take().unwrap_or_default();
         ds.friend = friend_loc;
         ds.attrs = std::mem::take(&mut self.lead_decl_attrs);
         ds.lead_cxx11 = self.stmt_attrs_loc.take().filter(|_| !ds.attrs.is_empty());
@@ -1830,6 +1836,7 @@ impl Parser<'_, '_> {
         kw_loc: Loc,
     ) {
         let ty = self.s.act_dependent_name_at(nns, name, None, keyword, name_loc);
+        self.s.note_tag_keyword_loc(name_loc, kw_loc);
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
             self.spec_error(&e, kw_loc);
@@ -1920,7 +1927,7 @@ impl Parser<'_, '_> {
 
     /// The class-key or `enum` (with its `class`/`struct`) at `k`: the tag
     /// keyword and the enum's `EnumData` scoped flags.
-    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32) {
+    fn parse_tag_key(&mut self, ds: &mut DeclSpec, k: Kw) -> (TagKeyword, u32, Loc) {
         let keyword = match k {
             Kw::Struct => TagKeyword::Struct,
             Kw::Class => TagKeyword::Class,
@@ -1928,16 +1935,60 @@ impl Parser<'_, '_> {
             _ => TagKeyword::Enum,
         };
         let mut scoped = 0;
+        let mut scoped_loc = Loc::INVALID;
         if keyword == TagKeyword::Enum {
             if let Some(l) = self.eat_kw(Kw::Class) {
                 scoped = EnumData::SCOPED;
+                scoped_loc = l;
                 ds.scoped_key_end = Some(l.with_offset(5));
             } else if let Some(l) = self.eat_kw(Kw::Struct) {
                 scoped = EnumData::SCOPED | EnumData::SCOPED_STRUCT;
+                scoped_loc = l;
                 ds.scoped_key_end = Some(l.with_offset(6));
             }
         }
-        (keyword, scoped)
+        (keyword, scoped, scoped_loc)
+    }
+
+    /// [`Self::parse_tag_specifier`]'s enum-key checks once the tag's use
+    /// is known: an elaborated-type-specifier uses `enum`, not
+    /// `enum class` ([dcl.type.elab]/1, clang `ext_elaborated_enum_class`),
+    /// and `friend enum E;` befriends nothing. Returns the scoped bits to
+    /// declare with: 0 when recovering as a plain `enum` reference (not
+    /// an opaque-enum-declaration).
+    fn enum_key_use(
+        &mut self,
+        (keyword, kw_loc): (TagKeyword, Loc),
+        (scoped, scoped_loc): (u32, Loc),
+        fixed: Option<QualType>,
+        use_: TagUse,
+    ) -> u32 {
+        let elaborated_scoped =
+            scoped != 0 && fixed.is_none() && matches!(use_, TagUse::Reference | TagUse::Friend);
+        if elaborated_scoped {
+            let e = self
+                .s
+                .diag(DiagId::sema_elaborated_enum_class, scoped_loc)
+                .arg(u8::from(scoped & EnumData::SCOPED_STRUCT != 0));
+            self.emit(e);
+        }
+        if keyword == TagKeyword::Enum && use_ == TagUse::Friend {
+            self.diag_friend_enum(kw_loc, scoped);
+        }
+        if elaborated_scoped { 0 } else { scoped }
+    }
+
+    /// [dcl.type.elab]/4 (clang `warn_friend_enum`): `friend enum E;`
+    /// befriends nothing; the note offers to drop the enum-key.
+    fn diag_friend_enum(&mut self, kw_loc: Loc, scoped: u32) {
+        let key = match scoped {
+            0 => "enum",
+            s if s & EnumData::SCOPED_STRUCT != 0 => "enum struct",
+            _ => "enum class",
+        };
+        let note = self.s.diag(DiagId::note_remove_enum_friend, kw_loc).arg(key);
+        let w = self.s.diag(DiagId::sema_friend_enum, kw_loc).with_note(note);
+        self.emit(w);
     }
 
     /// The attributes after a class-key or enum-key. After a class-key,
@@ -1955,19 +2006,96 @@ impl Parser<'_, '_> {
         attrs
     }
 
-    /// [dcl.fct]/17: types shall not be defined in parameter types (clang
-    /// `GetFullTypeForDeclarator`, after the body); the parameter is
-    /// invalid. A non-type template parameter is left to WP-946.
-    fn check_tag_defined_in_param(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
-        if ctx == DeclaratorContext::Prototype && !self.nttp_specs {
-            self.s.diag_type_defined_in_param(d);
-            ds.invalid = true;
+    /// The [`TagSite`] of `ds` in context `ctx`: a type-id's
+    /// decl-specifier-seq is a type-specifier-seq unless its caller said
+    /// otherwise (clang's `DSC_type_specifier` from `ParseTypeName`).
+    fn tag_site(ds: &DeclSpec, ctx: DeclaratorContext) -> TagSite {
+        if ds.tag_site == TagSite::Context && ctx == DeclaratorContext::TypeName {
+            TagSite::TypeSpecifier
+        } else {
+            ds.tag_site
         }
     }
 
+    /// The checks on the class or enumeration `d`, about to be defined,
+    /// that clang's `ActOnTag` makes before the body ([dcl.type.general]/3,
+    /// [dcl.fct]/17; spec/sema.md §4.4.1): a type-specifier-seq, an
+    /// enumerator, a function parameter scope (a named tag or any
+    /// enumeration). An error makes the tag invalid there, so the
+    /// declarator says nothing more. Returns whether one was reported.
+    fn check_tag_declared_in(
+        &mut self,
+        ds: &mut DeclSpec,
+        d: DeclId,
+        keyword: TagKeyword,
+        named: bool,
+        ctx: DeclaratorContext,
+    ) -> bool {
+        let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
+        let mut invalid = false;
+        if type_spec {
+            self.s.diag_type_defined_in(d, TagDefinedIn::TypeSpecifier, false);
+            invalid = true;
+        }
+        if !invalid && self.s.tag_in_enum(d) {
+            self.s.diag_type_defined_in(d, TagDefinedIn::Enum, false);
+            invalid = true;
+        }
+        if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
+            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+            invalid = true;
+        }
+        if invalid {
+            ds.invalid = true;
+            ds.tag_rejected = true;
+        }
+        invalid
+    }
+
+    /// The checks on the class or enumeration `d` just defined that
+    /// clang's `GetDeclSpecTypeForDeclarator` makes on the declarator
+    /// (spec/sema.md §4.4.1): a type-id of `sizeof`, `alignof`, a C-style
+    /// cast or a parenthesized new type-id, an exception-declaration, a
+    /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
+    /// alias template's type-id. The declarator is invalid.
+    fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        let rule = match (Self::tag_site(ds, ctx), ctx) {
+            (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
+            (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
+            (TagSite::Context, DeclaratorContext::Prototype) => TagDefinedIn::ParamType,
+            (TagSite::Context, DeclaratorContext::Condition) => TagDefinedIn::Condition,
+            _ => return,
+        };
+        self.s.diag_type_defined_in(d, rule, false);
+        ds.invalid = true;
+        ds.tag_rejected = true;
+    }
+
+    /// Parses the declarator `d` of a decl-specifier-seq `ds`, then makes
+    /// the [dcl.fct]/17 result-type check on it
+    /// ([`Parser::check_tag_defined_in_result`]).
+    pub(crate) fn parse_declarator_in_group(&mut self, ds: &DeclSpec, d: &mut Declarator) {
+        self.parse_declarator(d);
+        self.check_tag_defined_in_result(ds, d);
+    }
+
+    /// [dcl.fct]/17: "cannot be defined in the result type of a function",
+    /// once per function declarator chunk of `d` when its
+    /// decl-specifier-seq defines a valid tag (clang's
+    /// `GetFullTypeForDeclarator`).
+    fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
+        for c in &d.chunks {
+            if matches!(c, Chunk::Function { .. }) {
+                self.s.diag_type_defined_in(t, TagDefinedIn::ResultType, false);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_lines, reason = "the class-head and enum-head forms in one place")]
     fn parse_tag_specifier(&mut self, ds: &mut DeclSpec, k: Kw, ctx: DeclaratorContext) {
         let kw_loc = self.bump().span.lo;
-        let (keyword, scoped) = self.parse_tag_key(ds, k);
+        let (keyword, scoped, scoped_loc) = self.parse_tag_key(ds, k);
         let mut attrs = self.parse_tag_key_attrs(keyword);
         let qual_loc = self.tok().span.lo;
         self.incomplete_standalone_tag_qualifier(ds, keyword, qual_loc);
@@ -2006,6 +2134,7 @@ impl Parser<'_, '_> {
             final_loc = self.parse_class_virt_specifiers();
         }
         let use_ = self.tag_use(ds, is_class, final_loc, ctx);
+        let scoped = self.enum_key_use((keyword, kw_loc), (scoped, scoped_loc), fixed, use_);
         // [expr.prim.id.qual]/3: the nested-name-specifier of a
         // class-head-name or enum-head-name is declarative and cannot
         // contain a splice-scope-specifier; the definition declares
@@ -2030,8 +2159,16 @@ impl Parser<'_, '_> {
         if use_ == TagUse::Declaration && qualifier.is_some() {
             self.s.check_standalone_tag_qualifier(keyword, qual_loc);
         }
+        // A reference or friend is not entering the qualifier's scope
+        // (clang `ActOnTag`: `computeDeclContext(SS, false)`): a class
+        // template pattern reached only because the qualifier was parsed
+        // entering context (`class B<T>::M` in another template, where
+        // `B<T>`'s arguments happen to be `B`'s own parameters) is an
+        // unknown specialization whose tag is looked up, and its kind
+        // checked, at instantiation ([temp.dep.type]/6; else an explicit
+        // or partial specialization's member is silently missed, WP-1054).
         if let (Some(q), Some((n, nloc)), TagUse::Reference | TagUse::Friend) = (qual, name, use_)
-            && self.s.is_dependent_ctx(q.ctx)
+            && (self.s.is_dependent_ctx(q.ctx) || self.s.is_unentered_dependent_class(q.ctx))
         {
             self.dependent_tag_reference(ds, q.nns, (n, nloc), keyword, kw_loc);
             return;
@@ -2045,23 +2182,38 @@ impl Parser<'_, '_> {
         // A definition after a failed qualifier is parsed as an unnamed
         // class, declaring nothing.
         let name = if qual_failed { None } else { name };
+        // A class inside another declaration (a parameter, a type-id, a
+        // condition) takes none of the template heads that declaration
+        // will consume, and neither do its members ([temp.pre]/1).
+        let nested = Self::nested_tag_context(ctx);
+        self.s.nested_tag = nested;
+        // [temp.pre]/5: a class defined by a template-declaration (a class
+        // template, a partial or explicit specialization, or a member of a
+        // class template defined out of line) takes no declarator.
+        let templated = !nested && keyword != TagKeyword::Enum && self.s.in_template_declaration();
         let d = self.s.act_on_tag(keyword, name, qualifier, use_, scoped, fixed, kw_loc);
         self.s.act_on_tag_attrs(d, &attrs, use_);
         if use_ == TagUse::Definition && self.s.tag_body_skipped(d) {
             self.skip_redefined_tag_body(ds, keyword, kw_loc);
             return;
         }
-        if use_ == TagUse::Definition {
-            // `struct A::B { ... }`: names in the body are looked up in
-            // `A` too ([basic.lookup.unqual]/2, [class.nest]/3).
-            let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
-            if keyword == TagKeyword::Enum {
-                self.parse_enum_body(d);
-            } else {
-                self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
+        let heads = (nested && use_ == TagUse::Definition).then(|| self.s.hide_open_heads());
+        let rejected = use_ == TagUse::Definition
+            && self.check_tag_declared_in(ds, d, keyword, name.is_some(), ctx);
+        if rejected {
+            self.rejected_tag_body(ds, d, keyword, qualifier, final_loc, ctx, kw_loc);
+            if let Some(h) = heads {
+                self.s.restore_template_decl_state(&h);
             }
-            self.s.act_on_exit_declarator_scope(entered);
-            self.check_tag_defined_in_param(ds, d, ctx);
+            return;
+        }
+        if use_ == TagUse::Definition {
+            self.parse_tag_body(d, keyword, qualifier, final_loc, ctx);
+            if let Some(h) = heads {
+                self.s.restore_template_decl_state(&h);
+            }
+            self.check_tag_defined_in(ds, d, ctx);
+            ds.tag_defined = true;
         }
         ds.tag = Some(d);
         ds.tag_declares = use_ != TagUse::Reference;
@@ -2074,8 +2226,84 @@ impl Parser<'_, '_> {
         if use_ == TagUse::Definition {
             // `keyword` is a class-key or `enum` here, never `None`.
             let could_be_bitfield = keyword == TagKeyword::Enum && ctx == DeclaratorContext::Member;
-            self.check_after_tag_definition(keyword.spelling(), could_be_bitfield);
+            self.end_tag_definition(keyword.spelling(), templated, could_be_bitfield);
         }
+    }
+
+    /// Whether a class or enumeration defined in a decl-specifier-seq of
+    /// context `ctx` is nested in another declaration (a parameter, a
+    /// type-id, a condition): it takes none of the template heads that
+    /// declaration will consume ([temp.pre]/1).
+    fn nested_tag_context(ctx: DeclaratorContext) -> bool {
+        matches!(
+            ctx,
+            DeclaratorContext::Prototype
+                | DeclaratorContext::TypeName
+                | DeclaratorContext::Condition
+        )
+    }
+
+    /// The body of the class or enumeration `d` being defined.
+    fn parse_tag_body(
+        &mut self,
+        d: DeclId,
+        keyword: TagKeyword,
+        qualifier: Option<DeclId>,
+        final_loc: Option<Loc>,
+        ctx: DeclaratorContext,
+    ) {
+        // `struct A::B { ... }`: names in the body are looked up in `A`
+        // too ([basic.lookup.unqual]/2, [class.nest]/3).
+        let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+        if keyword == TagKeyword::Enum {
+            self.parse_enum_body(d);
+        } else {
+            self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
+        }
+        self.s.act_on_exit_declarator_scope(entered);
+    }
+
+    /// What may follow the `}` of a class or enumeration definition.
+    /// [temp.pre]/5: a template-declaration (`templated`) that defines a
+    /// class has no declarator, so only `;` may follow the body (clang's
+    /// `ParseClassSpecifier` with a template head).
+    fn end_tag_definition(&mut self, spelling: &str, templated: bool, could_be_bitfield: bool) {
+        if templated && !self.at(Punct::Semi) {
+            self.expected_semi_after_tag(spelling);
+        } else {
+            self.check_after_tag_definition(spelling, could_be_bitfield);
+        }
+    }
+
+    /// The body of the class or enumeration `d` whose definition
+    /// [`Parser::check_tag_declared_in`] rejected. clang's `ActOnTag`
+    /// returns no declaration then: an enumeration's body is skipped (its
+    /// enumerators are not declared), a class's is parsed for its own
+    /// errors, and the decl-specifier-seq names no type (`TST_error`, no
+    /// "expected ';' after" check).
+    #[allow(clippy::too_many_arguments)]
+    fn rejected_tag_body(
+        &mut self,
+        ds: &mut DeclSpec,
+        d: DeclId,
+        keyword: TagKeyword,
+        qualifier: Option<DeclId>,
+        final_loc: Option<Loc>,
+        ctx: DeclaratorContext,
+        kw_loc: Loc,
+    ) {
+        if keyword == TagKeyword::Enum {
+            if self.eat(Punct::LBrace).is_some() {
+                self.skip_until(&[Punct::RBrace], true, true);
+            }
+        } else {
+            let entered = qualifier.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+            self.parse_record_body(d, final_loc, ctx == DeclaratorContext::TypeName);
+            self.s.act_on_exit_declarator_scope(entered);
+        }
+        ds.invalid = true;
+        ds.type_error = true;
+        let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::INT), kw_loc);
     }
 
     /// How the tag specifier just parsed (up to its name and any
@@ -2090,9 +2318,14 @@ impl Parser<'_, '_> {
         final_loc: Option<Loc>,
         ctx: DeclaratorContext,
     ) -> TagUse {
-        let use_ = if self.at(Punct::LBrace)
-            || (is_class && self.at(Punct::Colon))
-            || final_loc.is_some()
+        // A new-type-id, a trailing return type or a template argument
+        // admits no class-specifier: `new struct S {}` allocates `S` with
+        // an initializer (clang's `isDefiningTypeSpecifierContext`).
+        let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
+        let use_ = if can_define
+            && (self.at(Punct::LBrace)
+                || (is_class && self.at(Punct::Colon))
+                || final_loc.is_some())
         {
             TagUse::Definition
         } else if self.at(Punct::Semi) && ds.storage.is_none() && ctx != DeclaratorContext::TypeName
@@ -2154,6 +2387,13 @@ impl Parser<'_, '_> {
             let _ = ds.set_base(TypeSpecKind::Named, Some(QualType::ERROR), kw_loc);
             return;
         };
+        // [temp.pre]/5, as in `parse_tag_specifier`: a partial or explicit
+        // specialization's definition takes no declarator. One nested in
+        // another declaration takes none of its template heads ([temp.pre]/1;
+        // clang then requires `template<>`).
+        let nested = Self::nested_tag_context(ctx);
+        let templated = !nested && self.s.in_template_declaration();
+        let heads = (nested && use_ == TagUse::Definition).then(|| self.s.hide_open_heads());
         let r = self.s.act_on_class_template_id_tag(
             keyword,
             tmpl,
@@ -2201,6 +2441,9 @@ impl Parser<'_, '_> {
             ds.invalid = true;
             QualType::ERROR
         };
+        if let Some(h) = heads {
+            self.s.restore_template_decl_state(&h);
+        }
         ds.keyword = keyword;
         if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), kw_loc) {
             ds.invalid = true;
@@ -2212,7 +2455,7 @@ impl Parser<'_, '_> {
                 TagKeyword::Class => "class",
                 _ => "union",
             };
-            self.check_after_tag_definition(spelling, false);
+            self.end_tag_definition(spelling, templated, false);
         }
     }
 
@@ -3137,7 +3380,7 @@ impl Parser<'_, '_> {
                 || (ds.base == TypeSpecKind::Named
                     && ds.named.is_some_and(|t| self.s.has_unexpanded_pack(t)));
             let saved = std::mem::replace(&mut self.pack_hint, hint);
-            self.parse_declarator(&mut pd);
+            self.parse_declarator_in_group(&ds, &mut pd);
             self.pack_hint = saved;
             self.set_abstract_loc(&mut pd);
             self.param_placeholders(&mut ds, &mut pd, start, fn_decl, site, d.qualifier);
@@ -3160,6 +3403,14 @@ impl Parser<'_, '_> {
                     self.late_fn.default_args.push((params.len(), toks));
                 } else {
                     self.parse_default_argument(&mut p);
+                }
+                // [dcl.fct.default]/3: only the parameter clause of a
+                // function declaration (or a lambda) takes default
+                // arguments. clang's `CheckExtraCXXDefaultArguments` is
+                // not run for an exception-declaration.
+                if !fn_decl && site != DeclSite::RequiresParam && !self.in_exception_decl {
+                    let at = pd.name.map_or(pd.loc, |(_, l)| l);
+                    self.s.act_on_nonfunc_default_arg(&mut p, at);
                 }
             }
             p.range = (start, self.prev_end());
@@ -3540,11 +3791,21 @@ impl Parser<'_, '_> {
         self.parse_type_id_into(None, DeclSite::Plain)
     }
 
+    /// A type-id whose class or enumeration definition is parsed and then
+    /// rejected by its declarator (`sizeof`, `alignof`, a C-style cast:
+    /// clang parses these with `DSC_normal`; [`TagSite::TypeId`]).
+    pub(crate) fn parse_type_id_checked(&mut self) -> Option<QualType> {
+        self.next_tag_site = Some(TagSite::TypeId);
+        self.parse_type_id_into(None, DeclSite::Plain)
+    }
+
     /// A type-id where clang's parser forms no placeholder for a deduced
     /// class type (a trailing return type, a template argument;
     /// [dcl.type.class.deduct]/2): a class template name alone lacks its
     /// arguments.
     pub(crate) fn parse_type_id_no_ctad(&mut self) -> Option<QualType> {
+        // A trailing return type admits no class-specifier.
+        self.next_tag_site = Some(TagSite::NoDefinition);
         self.parse_type_id_into(None, DeclSite::NoDeduction)
     }
 
@@ -3585,7 +3846,7 @@ impl Parser<'_, '_> {
         }
         let mut d = Declarator::new(DeclaratorContext::TypeName, self.loc());
         d.site = site;
-        self.parse_declarator(&mut d);
+        self.parse_declarator_in_group(&ds, &mut d);
         let mut base = self.s.type_from_declspec(&ds);
         if !vec_out {
             base = self.s.apply_type_id_vector_attrs(base, &ds, warn_mode);
@@ -3595,10 +3856,10 @@ impl Parser<'_, '_> {
         } else {
             d.trailing_constraint
         };
-        if ds.type_error {
-            // "unknown type name" was reported: the type-id is clang's
-            // invalid type, so a cast or trait of it says nothing more
-            // (WP-186).
+        if ds.type_error || ds.tag_rejected {
+            // "unknown type name" or "cannot be defined in" was reported:
+            // the type-id is clang's invalid type, so a cast or trait of it
+            // says nothing more (WP-186, WP-946).
             return Some(QualType::ERROR);
         }
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &d);
@@ -3922,7 +4183,7 @@ impl Parser<'_, '_> {
         let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
-            self.parse_declarator(&mut d);
+            self.parse_declarator_in_group(&ds, &mut d);
             let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);
             self.diagnose_virt_specifiers_outside_class(&d);

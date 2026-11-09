@@ -19,8 +19,11 @@ pub mod debug_flags;
 pub mod deps;
 pub mod features;
 pub mod fp_flags;
+mod help;
 pub mod link;
 pub mod llvm;
+pub mod module_cache;
+mod pch;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
@@ -30,6 +33,7 @@ pub mod templ_opts;
 pub mod time;
 pub mod toolchain;
 pub mod version;
+pub mod x86_features;
 pub mod x86_targets;
 
 use std::io::{self, Read, Write};
@@ -114,37 +118,6 @@ pub fn make_engine<'sm>(
     }
 }
 
-const HELP: &str = "\
-OVERVIEW: kiln, a C++26 frontend emitting LLVM IR
-
-USAGE: kiln [options] file...
-
-kiln++ compiles every input as C++. kiln picks by extension: .c, .h and
-.i are C (preprocessing only so far), everything else is C++. -x <lang>
-overrides both.
-
-Implemented: -E -P -C -CC -dM -dD -dI -o -x -std= -D -U -I -isystem -iquote
--idirafter -cxx-isystem -nostdinc -nostdinc++ -nostdlibinc -nobuiltininc
--isysroot --sysroot -resource-dir -stdlib= -f[no-]experimental-library
---gcc-toolchain= --gcc-install-dir=
---target= -march= -mcpu= -target-feature --embed-dir= -M -MM
--MD -MMD -MF -MT -MQ -MP -MG -MJ -W... -w -pedantic -ferror-limit=
--fdiagnostics-format= -f[no-]color-diagnostics -fkiln-reproducible-time
--fkiln-source-path-style=<clang|gcc> -fkiln-reflection-mangling=<kiln|gcc>
--fsyntax-only -fdump-ast[=...] -fdump-ast-filter= -verify[=<prefixes>]
--verify-ignore-unexpected[=<levels>] -Xclang <arg> -fconstexpr-steps=
--fconstexpr-depth= -fconstexpr-memory= -fconstexpr-backtrace-limit=
--fconstexpr-report= -ftemplate-depth= -ftemplate-backtrace-limit=
--fkiln-instantiation-report[=all|json] -fkiln-stack-size= -fkiln-dump-cfg
--fkiln-cfg-stats -fkiln-cfg-max-elems= -fkiln-outline-expansions=
--fkiln-memory-report -c -S -emit-llvm
--O<n> -g (ignored) -l -L -Wl, -fuse-ld= -static -nostdlib -shared -rdynamic -pie -no-pie -pthread -###
--f[no-]reflection -v --version -dumpversion -dumpmachine -print-search-dirs
--print-libgcc-file-name -print-file-name= -print-prog-name=
--print-target-triple -print-multiarch -print-sysroot -print-resource-dir.
-See spec/driver.md.
-";
-
 /// `-fkiln-memory-report` (spec/driver.md): one line per row of `r`,
 /// `memory: <name> count=N live=N reserved=N`, then `memory: total
 /// live=N reserved=N` ([`MemReport::live_bytes`], which leaves out the
@@ -205,6 +178,12 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
             Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID).arg(a).arg(b)
         }
         ArgError::NoSuchFile(f) => Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(f),
+        ArgError::MalformedIgnorelist(m) => {
+            Diag::new(DiagId::drv_malformed_sanitizer_ignorelist, Span::INVALID).arg(m)
+        }
+        ArgError::RegexIgnorelist(f) => {
+            Diag::new(DiagId::drv_regex_sanitizer_ignorelist, Span::INVALID).arg(f)
+        }
         ArgError::PatchableEntryOffset => {
             Diag::new(DiagId::drv_unsupported_fpatchable_function_entry_argument, Span::INVALID)
         }
@@ -245,6 +224,13 @@ fn immediate(args: &Args, tc: &Toolchain, io: &mut Io, drv: &DiagEngine<'_>) -> 
         let own = std::path::Path::new(&tc.resource_dir).join(name);
         if !name.is_empty() && own.exists() {
             return line(&own.display().to_string());
+        }
+        // libc++'s module manifest, for build systems' `import std;`
+        // (CMake's `CXX_MODULE_STD`; spec/driver.md "Module cache").
+        if name == "libc++.modules.json"
+            && let Some(json) = tc.libcxx_modules_json()
+        {
+            return line(&json.display().to_string());
         }
         return Some(delegate(args, tc, io, drv, &[format!("-print-file-name={name}")]));
     }
@@ -440,7 +426,7 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
 
 /// One `-fsyntax-only` input (C is not implemented yet).
 #[allow(clippy::too_many_arguments)]
-fn syntax_only(
+pub(crate) fn syntax_only(
     args: &Args,
     tc: &Toolchain,
     std: LangStd,
@@ -467,8 +453,11 @@ fn syntax_only(
 /// 'c++' when in C++ mode` once per promoted input (spec/driver.md "Input
 /// languages"), then `-Woption-ignored` for `-m[no-]outline-atomics` (the
 /// last one written) on a non-`AArch64` target, once per source input, as
-/// clang warns once per compile job. `true` when `-Werror` made one an
-/// error (clang then runs no job).
+/// clang warns once per compile job, and the x86 feature flags' warnings
+/// (WP-1000: `argument unused during compilation` for the ones clang
+/// claims on `AArch64`, `the clang compiler does not support '-m3dnow'` on
+/// x86-64). `true` when `-Werror` made one an error (clang then runs no
+/// job).
 fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
@@ -486,7 +475,21 @@ fn driver_warnings(
     if !args.quiet_unused_arguments && !tc.target.is_aarch64() {
         unused_xray.extend(args.codegen.sign_return_address_written.iter().cloned());
     }
-    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() {
+    // WP-1000: the x86 feature flags clang claims on `AArch64` without an
+    // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
+    // warning for the dropped `-m3dnow` / `-m3dnowa`.
+    let v22 = args.predef.clang_compat == kiln_pp::ClangCompat::Clang22;
+    let mut no_3dnow: Vec<&String> = Vec::new();
+    for a in args.x86_feature_flags.iter().filter(|a| !x86_features::unknown_at(a, v22)) {
+        if tc.target.is_aarch64() {
+            if !args.quiet_unused_arguments && x86_features::non_x86_spelling(a, v22).is_none() {
+                unused_xray.push(a.clone());
+            }
+        } else if x86_features::is_3dnow(a) && !a.starts_with("-mno-") {
+            no_3dnow.push(a);
+        }
+    }
+    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() && no_3dnow.is_empty() {
         return false;
     }
     let sm = SourceManager::new();
@@ -510,6 +513,11 @@ fn driver_warnings(
     }
     for x in unused_xray {
         Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(x).emit(&e);
+    }
+    for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+        for a in &no_3dnow {
+            Diag::new(DiagId::drv_clang_unsupported, Span::INVALID).arg(*a).emit(&e);
+        }
     }
     e.flush();
     e.error_count() > 0
@@ -617,7 +625,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         emit_arg_error(e, &drv);
     }
     // spec/driver.md "Sanitizers".
-    for e in &args.sanitize(!tc.target.is_aarch64(), tc.target.triple).1 {
+    let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
+    for e in &sanitize_errors {
         emit_arg_error(e, &drv);
     }
     for f in &args.sanitize.ignorelists {
@@ -625,8 +634,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             emit_arg_error(&ArgError::NoSuchFile(f.clone()), &drv);
         }
     }
+    // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
+    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir) {
+        emit_arg_error(e, &drv);
+    }
     if args.help {
-        let _ = io.stdout.write_all(HELP.as_bytes());
+        let _ = io.stdout.write_all(help::HELP.as_bytes());
         return 0;
     }
     // An explicitly named LLVM that is not usable stops everything, before
@@ -672,6 +685,12 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    let Ok(pch_args) = pch::consumer(&args, &tc, &inputs, &diag_opts, &io.stderr) else {
+        return 1;
+    };
+    let args: &Args = pch_args.as_ref().unwrap_or(&args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();
@@ -685,10 +704,21 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         e.flush();
         return 1;
     }
+    // Headers (and every input with `-emit-pch`) are precompiled; the
+    // other inputs go on (WP-1023).
+    let all_inputs = inputs.len();
+    let (producers, inputs): (Vec<&args::Input>, Vec<&args::Input>) =
+        inputs.into_iter().partition(|i| pch::is_producer(args, i));
+    if !producers.is_empty() {
+        let errors = pch::produce(args, &tc, &producers, all_inputs, &diag_opts, &mut io);
+        if errors > 0 || inputs.is_empty() {
+            return i32::from(errors > 0);
+        }
+    }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
         return codegen_cmd::compile(
-            &args,
+            args,
             &tc,
             &inputs,
             stdin_text.as_deref(),
@@ -709,14 +739,14 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             inputs.iter().map(|&input| cdb::CdbJob { input, output: out.clone() }).collect();
         let sm = SourceManager::new();
         let e = make_engine(&sm, &diag_opts, io.stderr.clone(), Some(&args.program));
-        if !cdb::write(&args, &tc, &jobs, &e) {
+        if !cdb::write(args, &tc, &jobs, &e) {
             errors += 1;
         }
         e.flush();
     }
     for input in inputs {
         let lang = args.input_lang(input);
-        let std = match input_std(&args, lang) {
+        let std = match input_std(args, lang) {
             Ok(s) => s,
             Err(d) => {
                 let sm = SourceManager::new();
@@ -729,18 +759,18 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         };
         if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
-            let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
+            let r = syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;
             output.push_str(&r.output);
             if let Some(list) = r.dep_list
-                && !deps::write_side_file(&args, &input.path, &list.borrow(), &diag_opts, &mut io)
+                && !deps::write_side_file(args, &input.path, &list.borrow(), &diag_opts, &mut io)
             {
                 errors += 1;
             }
             continue;
         }
         let job = Job {
-            args: &args,
+            args,
             toolchain: &tc,
             std,
             path: &input.path,
@@ -752,15 +782,15 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         errors += r.errors;
         output.push_str(&r.output);
         if let Some(files) = r.deps {
-            let text = deps::deps_text(&args, &input.path, &files);
-            match deps::dep_destination(&args, &input.path) {
+            let text = deps::deps_text(args, &input.path, &files);
+            match deps::dep_destination(args, &input.path) {
                 deps::DepDest::Main => output.push_str(&text),
                 deps::DepDest::File(f) => side_deps.push((f, text)),
             }
         }
     }
 
-    write_results(&args, &diag_opts, &mut io, &output, errors, side_deps)
+    write_results(args, &diag_opts, &mut io, &output, errors, side_deps)
 }
 
 pub(crate) fn report_output_error(opts: &DiagOptions, stderr: &SharedWriter, path: &str, e: &str) {

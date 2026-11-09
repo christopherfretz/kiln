@@ -1,8 +1,11 @@
 // [module.import]/5: `import <header>;` of an importable library header
-// (here `<cstddef>`) makes its declarations and macros available.
+// (here `<cstddef>`) makes its declarations and macros available. kiln
+// builds the header unit in-process at the import; a clang builds it first
+// with `-fmodule-header=system` (spec/harness.md `header-unit:`).
 //@ expect: run
 //@ std: c++20
-//@ skip(clang): clang needs -fmodule-header=system to build <cstddef> as a header unit first, which the harness cannot drive
+//@ args: -Wno-experimental-header-units
+//@ header-unit: <cstddef>
 import <cstddef>;
 
 #ifndef offsetof

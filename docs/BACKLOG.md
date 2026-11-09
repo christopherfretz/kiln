@@ -699,6 +699,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-664 | perf: WP-663 follow-ups — leaf-walk reads inside declined expressions (kiln_oven/src/leaf.rs:236/387, 4,000 on tf); fold_for_overflow entries (kiln_sema/src/oven_bridge.rs:420, 4,000 on rw); B3 retained failed trial thunks (kiln_oven/src/compile.rs:391, est. 1.9 MB rw / 2.8 MB tf, measure first); A3 memo of node-creating explicit substitutions only if the AST can be kept identical (kiln_sema/src/templ/deduce_call.rs:702, report-only so far); A4 insert_with_flags scans (kiln_ast/src/lookup.rs:212, 0.16% of wall at S8 N=1,600); TokenSource::get codegen slowdown after A1 (kiln_parse/src/tokens.rs:202, ~35 M Ir on tf) | WP-663 | open |
 | WP-665 | perf: constant-image lowering is quadratic in the relocation count — `Img::reloc` (kiln_codegen/consts.rs) linear-scans every relocation once per lowered field (F×R); scaling profile: the large-constant shape spends 0.5/4.9/17.4 s in codegen for 1x/7x/14x entries, frontend linear; fix = binary search / per-image index, bench shape + regression test, sweep siblings | scaling profile 2026-11-06 | done (#307): Img::reloc + unions_at binary search over the sorted tables; reproducer N=12000 IR−FE 5.84→0.22 s; bench constant-table-emit 3.0→0.49 s; test const_table_relocs; 1710/1710 byte-identical |
 | WP-666 | robustness M8: OSS build harness — `scripts/oss/projects.toml` (waves 1–3), `oss-build.sh` (fetch, configure with the kiln++ logging wrapper under the shared jobserver via Unix Makefiles, build, test, report.json), the wrapper (per-TU argv/rc/wall/RSS/first diagnostic, 3 GiB / 10 min caps), `oss-report.py` (TU + test parity vs the clang-19 control build, failure clusters by first-diagnostic signature), `docs/status/oss.md`, ROADMAP M8; verified end to end on googletest + magic_enum; kiln bugs found are recorded, not fixed | robustness outline 11-07 | done (PR #308; scripts/oss harness, docs/status/oss.md, ROADMAP M8; clusters WP-670..672) |
+| WP-1023 | 1.0 Tier A6: precompiled headers — textual PCH record (`-emit-pch`, `-x c++-header`, `-include-pch`, validation with clang diagnostics) and the PCH driver flags so CMake `target_precompile_headers` works; glaze/reflect-cpp built with PCH | WP-666 | done (#422) |
 | WP-961 | 1.0 Tier A9: x86_64 confidence sweep — `.github/workflows/sweep.yml` (manual/`sweep/**` push, never gating) runs the libc++ 22 full suite (sharded) and ~10 OSS projects on GitHub x86_64 runners; triage x86_64-only failures; docs/status/x86_64-sweep.md | WP-666 | done (#412) |
 | WP-912 | accepts-invalid hunt step 1: `cargo xtask clang-neg` runs clang 22.1.8 `clang/test/{CXX,SemaCXX}` `-verify` tests through kiln, measures file-level accepts-invalid and line-level missed errors, docs/status/accepts-invalid.md, triage repros | WP-666 | done (#406) |
 | WP-811 | M8 wave 4 big apps (3/3): CMake, Bitcoin Core and gRPC through their own CMake builds + test suites with kiln++ via scripts/oss; triage clusters | WP-666 | done (#384) |
@@ -890,9 +891,10 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-852 | UBSan: emit null/alignment/object-size/bounds/bool/enum/float-cast/pointer-overflow/vptr/function/nonnull/builtin/implicit-conversion checks (accepted, no instrumentation today; `kiln_ast/src/sanitize.rs:195`, `kiln_codegen/src/ubsan.rs`) | WP-675 | partial (#404, via WP-871; vptr/function -> WP-934, nullability -> WP-935) |
 | WP-853 | UBSan: checks on atomic ++/-- and atomic compound assignment (`ubsan.rs:638` ub_inc_dec) | WP-675 | done (#404, via WP-871) |
 | WP-854 | UBSan: _BitInt type descriptors (`ubsan.rs:152` ub_type) | WP-675 | done (#404, via WP-871) |
-| WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | open |
-| WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | open |
-| WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | open |
+| WP-855 | UBSan: reuse an identical .str for .src strings like clang (`ubsan.rs:117` ub_loc) | WP-675 | done (#424, WP-1032) |
+| WP-856 | driver: -ftrapv and -fsanitize-merge= (`kiln_driver/src/codegen_flags.rs:135`) | WP-675 | done (#424, WP-1032) |
+| WP-857 | driver: apply -fsanitize-ignorelist files, not just check them (`kiln_driver/src/sanitize.rs:38`) | WP-675 | done (#424, WP-1032) |
+| WP-1032 | UBSan completion: .src string reuse, -ftrapv/-fsanitize-merge=, applied -fsanitize-ignorelist (bundles WP-855/856/857) | WP-675 | done (#424) |
 | WP-858 | codegen: local value names and clang 22 alloca !annotation under ASan/MSan so they can be exact-IR tests (`kiln_driver/src/codegen_cmd.rs:697`) | WP-675 | open |
 | WP-859 | codegen: ASan module name is <stdin> (should be the source file); ASan/TSan module ctors lack target-cpu/target-features (`codegen_cmd.rs:738` sanitizer_passes) | WP-675 | open |
 | WP-860 | harness: `requires: sanitizer-runtime` capability + recover-mode run tests; CI apt libclang-rt-19-dev libclang-rt-22-dev (`.github/actions/kiln-ci/action.yml:36`) | WP-675 | open |
@@ -943,7 +945,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
 | WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | open |
-| WP-915 | sema: constexpr never-constant check only tries parameterless functions (constexpr_body.rs:59); xfail dcl.constexpr/constexpr-asm-never-constant.cpp | WP-891 | open |
+| WP-915 | sema: constexpr never-constant check only tries parameterless functions (constexpr_body.rs:59); xfail dcl.constexpr/constexpr-asm-never-constant.cpp | WP-891 | done (#430, WP-945) |
 | WP-916 | sema wording/missing warnings: [[clang::warn_unused_result]] ignored (attr_triage.rs:343) and gnu spelling message says nodiscard (decl.rs:11409); noinline on a variable lacks clang message (class_b_attrs.rs:1127); `&k ?: nullptr` lacks -Wpointer-bool-conversion (null_compare.rs:218) | WP-891 | deferred |
 | WP-918 | sema warnings (WP-443 UNINIT remainder): -Wuninitialized-const-pointer (clang 21+; uninit.rs ~1170), uninitialized field use in ctor initializers incl. qualified base wording (self_ref.rs:41), `int x = x;` inside a statement-expression in a static-local initializer, bool-switch case-label note range (uninit.rs ~690), -Wunused-variable for a namespace-scope lambda variable | WP-862 | deferred |
 | WP-921 | sema: `this->tm<long>` (member template of the current instantiation) in a template body is diagnosed at instantiation; clang diagnoses at the definition (crates/kiln_sema/src/class/member_expr.rs diagnose_bound_member_as) | WP-888 | open |
@@ -967,18 +969,20 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-942 | Show `version::long_version()` (git sha) in `--version`/`-v` identity; crates/kiln_driver/src/version.rs:39 + lib.rs print_version (coordinate WP-920) | WP-927 | open |
 | WP-943 | Portable release binaries: build dist on an older-glibc image to lower the GLIBC_2.39 floor (pidfd_spawnp); .github/workflows/release.yml:31 | WP-927 | open |
 | WP-944 | actionlint clean on ci-lane.yml YAML anchors (`*debugger-container`, `*kiln-shards`) or pin a version that supports them; .github/workflows/ci-lane.yml:79 | WP-927 | open |
-| WP-945 | accepts-invalid (WP-912): HIGH: WP-873 never-constant false positives on builtins (fabs, strcmp) and a consteval operator template; crates/kiln_sema/src/never_constant.rs (3 xfails) | WP-912 | open |
+| WP-945 | accepts-invalid (WP-912): HIGH: WP-873 never-constant false positives on builtins (fabs, strcmp) and a consteval operator template; crates/kiln_sema/src/never_constant.rs (3 xfails) | WP-912 | done (#430) |
 | WP-962 | accepts-invalid part 1: never-constant false positives (builtins, consteval operator template), out-of-line member parameter tag panic, empty initializer_list stack overflow | WP-945 | done (#410) |
-| WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | open |
-| WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | open |
+| WP-946 | accepts-invalid (WP-912): types defined where the grammar forbids (parameter, conversion type, type specifier) + out-of-line member enum-parameter panic; crates/kiln_sema/src/decl.rs:7586 act_on_tag, crates/kiln_ast/src/decl.rs:2477 | WP-912 | done (#433) |
+| WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | done (#433, WP-946; root fix in WP-962) |
 | WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | done (#417) |
-| WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | open |
-| WP-950 | accepts-invalid (WP-912): allocation-function and `main` declaration rules | WP-912 | open |
-| WP-951 | accepts-invalid (WP-912): union, static data member and bit-field rules | WP-912 | open |
-| WP-952 | accepts-invalid (WP-912): redeclarations: ref-qualifier overloads, using-declaration redeclaration, qualified members | WP-912 | open |
-| WP-953 | accepts-invalid (WP-912): default-argument, block-scope `inline`, lambda shadowing and friend-template default restrictions | WP-912 | open |
+| WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | done (#423, WP-1015) |
+| WP-1015 | accepts-invalid part 2: declaration rules (class-name members, new/delete + main, unions/static members/bit-fields, redeclarations, default args) | WP-949 | done (#423) |
+| WP-950 | accepts-invalid (WP-912): allocation-function and `main` declaration rules | WP-912 | done (#423, WP-1015) |
+| WP-951 | accepts-invalid (WP-912): union, static data member and bit-field rules | WP-912 | done (#423, WP-1015) |
+| WP-952 | accepts-invalid (WP-912): redeclarations: ref-qualifier overloads, using-declaration redeclaration, qualified members | WP-912 | done (#423, WP-1015) |
+| WP-953 | accepts-invalid (WP-912): default-argument, block-scope `inline`, lambda shadowing and friend-template default restrictions | WP-912 | done (#423, WP-1015) |
 | WP-954 | accepts-invalid (WP-912): clang attribute semantic/argument checks (unavailable, carries_dependency, require_constant_initialization, annotate); overlaps WP-674/675 | WP-912 | open |
-| WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | open |
+| WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | done (#428, WP-1017) |
+| WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | done (#428) |
 | WP-956 | accepts-invalid (WP-912): template declaration rules (partial spec more specialized, CWG526, pre-C++20 float NTTP, conversion function template) + constraint self-dependency hard error in SFINAE; crates/kiln_sema/src/templ/concepts/sat.rs:148 | WP-912 | open |
 | WP-957 | accepts-invalid (WP-912): lookup/type checks (ambiguous elaborated, enum keyword, alignas incomplete, differing UDL suffixes) + exception specs laxer than base | WP-912 | open |
 | WP-958 | accepts-invalid (WP-912): rejects-valid: templates and deduction (12 xfails, docs/status/accepts-invalid.md cluster 15) | WP-912 | done (#416) |
@@ -992,16 +996,18 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-968 | debug info: keep alias-template sugar (kiln_codegen debuginfo/types.rs:135) | WP-910 | open |
 | WP-969 | debug info: subprogram for the global-init function; local variables for structured bindings (kiln_codegen debuginfo/func.rs) | WP-910 | open |
 | WP-970 | codegen: lower SVE tuple locals as a struct of vectors under clang-compat 22 | WP-910 | open |
-| WP-971 | ICE (WP-911): codegen kind-mismatch expect/unreachable sites (class.rs 45, expr.rs 37, stmt.rs, complex.rs, cleanup.rs, fir.rs) become "unsupported construct" diagnostics | WP-911 | open |
-| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | open |
-| WP-973 | ICE (WP-911): kiln_pp preprocessor.rs (8) / ifeval.rs (3) token-state unreachable!: which can malformed directives reach | WP-911 | open |
+| WP-971 | ICE (WP-911): codegen kind-mismatch expect/unreachable sites (class.rs 45, expr.rs 37, stmt.rs, complex.rs, cleanup.rs, fir.rs) become "unsupported construct" diagnostics | WP-911 | done (#439) |
+| WP-972 | ICE (WP-911): audit kiln_ast builder.rs (41) / expr.rs (23) node-shape expects for user-reachable ones | WP-911 | done (#440) |
+| WP-973 | ICE (WP-911): kiln_pp preprocessor.rs (8) / ifeval.rs (3) token-state unreachable!: which can malformed directives reach | WP-911 | done (#439, WP-971) |
 | WP-974 | driver (WP-911): test the `.i` crash reproducer once C -fsyntax-only works (git sha in --version is WP-942) | WP-911 | open |
-| WP-987 | parameter-type tags: NTTP "cannot be defined in a type specifier", sizeof(struct{}) in a default arg, conversion-type tag, lambda inside NTTP type (kiln_parse decl.rs check_tag_defined_in_param) | WP-962 | open |
+| WP-987 | parameter-type tags: NTTP "cannot be defined in a type specifier", sizeof(struct{}) in a default arg, conversion-type tag, lambda inside NTTP type (kiln_parse decl.rs check_tag_defined_in_param) | WP-962 | done (#433, WP-946) |
 | WP-988 | missing "passing argument to parameter here" note on an incomplete-element initializer_list parameter (kiln_sema init.rs std_initializer_list_init) | WP-962 | open |
 | WP-989 | `struct C{X a; X b;}; C c={};` reports 1 of clang's 2 "no matching constructor" errors (kiln_sema init.rs aggregate path) | WP-962 | open |
-| WP-990 | never-constant silent where clang warns: `__builtin_floor(2.5)+x`, builtins missing from the table (kiln_sema never_constant.rs opaque_builtin) | WP-962 | open |
-| WP-1000 | driver: x86 `-m<feature>`/`-mno-<feature>` flags (feature macros, target-features, builtin gating); bitcoin_core/opencv drop TUs today; xfail target.x86/m-feature-flags.cpp | WP-961 | open |
-| WP-1001 | glibc x86-64 `typedef __float128 _Float128` must make the two the same type as under clang (LLVM IRTests); xfail basic.extended.fp/float128-glibc-typedef-x86.cpp | WP-961 | open |
+| WP-990 | never-constant silent where clang warns: `__builtin_floor(2.5)+x`, builtins missing from the table (kiln_sema never_constant.rs opaque_builtin) | WP-962 | done (#430, WP-945) |
+| WP-1000 | driver: x86 `-m<feature>`/`-mno-<feature>` flags (feature macros, target-features, builtin gating); bitcoin_core/opencv drop TUs today; xfail target.x86/m-feature-flags.cpp | WP-961 | done (#431) |
+| WP-1058 | x86-64 glibc `_Float128` vs `__float128` (WP-1000 follow-up, keeps them distinct per decision (B)): kiln's `__GNUC__` < 13 makes glibc <bits/floatn.h> reach `typedef __float128 _Float128;`, which kiln already drops in a system header as a no-op extension (spec/types.md), so glibc's `*f128` functions (`logf128`, ...) stay `_Float128` functions while LLVM's llvm/Support/float128.h uses `__float128` under `__clang__`; `apply(logf128, v)` with a `float128 (*)(float128)` parameter fails (ConstantFolding.cpp). Candidate fix: as an extension, accept the conversion between function (pointer) types that differ only in `_Float128` vs `__float128` in a system-header declaration, or honour that exact typedef under clang compat; xfail basic.extended.fp/float128-glibc-typedef-x86.cpp | WP-1000 | open |
+| WP-1059 | x86-64 function multiversioning: `target_clones` / multiple `target("...")` versions are sema_multiversion_not_supported on x86-64 (WP-810 covers AArch64 only); needs clang's `.resolver` + ifunc + `__cpu_indicator_init`/`__cpu_model` dispatch and the `.default`/`.avx2.0` manglings; xfail ext.multiversion/target-clones-x86.cpp | WP-1000 | open |
+| WP-1001 | glibc x86-64 `typedef __float128 _Float128` must make the two the same type as under clang (LLVM IRTests); xfail basic.extended.fp/float128-glibc-typedef-x86.cpp | WP-961 | done (#431, WP-1000; decision B keeps the types distinct, residue is WP-1058) |
 | WP-1002 | fill gRPC x86_64 results into docs/status/x86_64-sweep.md + COMPATIBILITY.md from the `oss-grpc-*` artifacts of sweep runs 42545156708 / 42543199768 (may have hit the 355-min timeout → shard gRPC) | WP-961 | open |
 | WP-975 | driver: Meson identity, implement the operator's choice of (a) native file / (b) clang-compatible banner / (c) opt-in banner in kiln_driver::version (spec/driver.md Identity) | WP-920 | open |
 | WP-976 | driver: link -v relays "Debian clang version" from the backing driver; filter or relabel (kiln_driver lib.rs link path, Q3) | WP-920 | open |
@@ -1013,7 +1019,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-993 | abi: mangle LambdaExpr in signatures (kiln_abi mangle/dep.rs operator_expression) | WP-933 | open |
 | WP-994 | diag: "cannot yet mangle" error has no source range (kiln_codegen module.rs ~512 `Span::empty(begin_loc)`) | WP-933 | open |
 | WP-995 | abi: `_Generic` in C++ template arguments (mangle/dep.rs) | WP-933 | open |
-| WP-996 | oven: "ImplicitCastExpr of builtin callee not supported" makes the never-constant check skip (kiln_oven compile.rs:1401) | WP-933 | open |
+| WP-996 | oven: "ImplicitCastExpr of builtin callee not supported" makes the never-constant check skip (kiln_oven compile.rs:1401) | WP-933 | done (#430, WP-945) |
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | open |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
@@ -1035,18 +1041,55 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
 | WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
-| WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | open |
-| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | open |
-| WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | open |
+| WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
+| WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
+| WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | in progress |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
-| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | open |
-| WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | open |
-| WP-1031 | `cargo xtask test tests/mangle` does not run the mangle_vs_clang differential; make it run or document the right command | WP-980 | open |
-| WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | open |
+| WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | done (#432) |
+| WP-1030 | mangle ImaginaryLiteral (`LCi0_2E`) and PackIndexingExpr in dependent signatures | WP-980 | done (#432, WP-1029) |
+| WP-1031 | `cargo xtask test tests/mangle` does not run the mangle_vs_clang differential; make it run or document the right command | WP-980 | done (#427, WP-1034) |
+| WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | done (#426, WP-1027) |
 | WP-1025 | codegen tests: drive backend 22 under oracle 22 in ir_vs_clang (ir_vs_clang.rs:239), then prune the llvm_major DEVIATIONS entries (line 81) | WP-1016 | open |
 | WP-1026 | driver: verify the Fedora package names in COMPATIBILITY.md Runtime dependencies (llvm22 clang22 compiler-rt22); collapse the noisy nothing-found note list in llvm.rs Search::run | WP-1016 | open |
 | WP-1033 | oss harness: build module-using projects with `-G Ninja` (oss-build.sh:176 uses Unix Makefiles) and pass `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` when the compiler is the kiln-cxx wrapper | WP-982 | open |
-| WP-1034 | CI: install cmake 3.28+ and ninja in the CI image and run the selftest.sh `cmake_modules` modules e2e under CI | WP-982 | open |
+| WP-1034 | CI: install cmake 3.28+ and ninja in the CI image and run the selftest.sh `cmake_modules` modules e2e under CI | WP-982 | done (#427) |
 | WP-1035 | kiln-scan-deps: `-compilation-database` (scan_deps.rs:102), `-format=experimental-full` (scan_deps.rs:82), and a `clang-scan-deps-19` alias for `-fclang-compat=19` (build.rs:44, dist.rs:108) | WP-982 | open |
-| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | open |
-| WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | open |
+| WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | done (#426) |
+| WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | done (#426, WP-1027) |
+| WP-1036 | PCH speed: serialised-AST/Oven-state PCH reusing the spec/modules.md §11 module-file format and the WP-985 kind-2 BMI; `KILNPCH 1` (spec/driver.md:1149) becomes its fingerprint/validation layer (crates/kiln_driver/src/pch.rs:460) | WP-1023 | open |
+| WP-1037 | driver: `-include foo.h` probes for `foo.h.pch` as clang's driver does (spec/driver.md:1313) | WP-1023 | open |
+| WP-1038 | decision: PCH staleness by content hash (kiln) vs mtime (clang): keep or match (spec/driver.md:1309) | WP-1023 | open |
+| WP-1039 | driver: `-fsyntax-only foo.hpp` warns "#pragma once in main file" where clang does not; only PCH producers treat the main file as a header (crates/kiln_driver/src/pch.rs:603) | WP-1023 | open |
+| WP-1040 | accepts-invalid tail (WP-1015) main/allocation: clang -Wmain warnings, C-linkage variable named main, variable template main (kiln_sema main_decl.rs:43); destroying and type-aware operator delete checks (alloc_decl.rs:52) | WP-1015 | open |
+| WP-1041 | accepts-invalid tail (WP-1015) decls: braced default argument not searched for this/params (decl.rs:2052); friend class template in a local class (class/friend.rs:80); ref-qualifier mix in a class template at instantiation and explicit object parameter in a virtual function (overload/redecl.rs:143) | WP-1015 | open |
+| WP-1042 | accepts-invalid tail (WP-1015) clang tests still missed: C++03 non-trivial union members (class.union/p1.cpp), inline after a non-inline definition (dcl.fct.spec/p4.cpp), template-parameter shadowing in a typedef, namespace.udecl/p11.cpp | WP-1015 | open |
+| WP-1043 | sanitizer ignorelist tails (WP-1032): `#!special-case-list-v1` regex lists rejected where clang 19 reads them (kiln_codegen ignorelist.rs:32); not applied to string-literal globals (class_b.rs:199) or coroutine await_suspend wrappers (coro.rs:611); stale "`.src` strings are always new globals" line in spec/landed/codegen/WP-675.md | WP-1032 | open |
+| WP-1044 | -ftrapv tails (WP-1032): separate-argument `-ftrapv-handler <name>` (kiln_driver codegen_flags.rs:288); `-fno-trapv` accepted where clang rejects (codegen_flags.rs:221); sanitize-merge flags accepted at compat 19 (sanitize.rs:127); `-ftrapv-handler` on `__int128` truncates operands (kiln_codegen ubsan.rs:1009) | WP-1032 | open |
+| WP-1045 | CI: install libclang-rt-19-dev/libclang-rt-22-dev in .github/actions/kiln-ci/action.yml:38 so `requires: sanitizer-runtime` run tests (ASan/UBSan ignorelist runs) execute in CI instead of skipping | WP-1032 | done (#427, WP-1034) |
+| WP-1046 | modules kind 2: carry constant results of evaluations inside template instantiations (10,142 of the uncarried std results; spec/modules.md §11.11 Part 2) | WP-985 | open |
+| WP-1047 | modules kind 2: carry pointer, reference and reflection constant values | WP-985 | open |
+| WP-1048 | modules kind 2 part 2: serialised decl/type/expression image, fresh DeclIds, ODR merging, lazy loading (cuts import std time) | WP-985 | done (#434, part 2a; rest is WP-1064..1070) |
+| WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
+| WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
+| WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | open |
+| WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
+| WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
+| WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | open |
+| WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | open |
+| WP-1056 | constexpr int f(){__builtin_unreachable();} reports never-constant where clang reports err_constexpr_body_no_return (never_constant.rs:177) | WP-945 | open |
+| WP-1057 | __has_builtin(__builtin_readcyclecounter) is 1 but Sema leaves the builtin undeclared on aarch64 (features_table.rs:2032; rejects-valid) | WP-945 | open |
+| WP-1060 | mangling: template substitution folds a pack-index expression inside a dependent decltype to its element (kiln_sema templ/pack.rs:687 pack_indexing_expr); xfail dcl.type.pack.index/substituted-expr-mangling-two-units-run.cpp | WP-1029 | open |
+| WP-1061 | abi: audit qualifier spelling in non-member unresolved names (kiln_abi mangle/dep.rs:1344 unresolved_prefix_in; WP-1029 fixed member access only) | WP-1029 | open |
+| WP-1062 | abi: mangle a lambda expression in a template parameter type (kiln_codegen module.rs:526); xfail temp.param/lambda-in-parameter-type-mangle-run.cpp | WP-946 | open |
+| WP-1063 | accepts-invalid: `template<class T> enum E {}` lacks enumeration cannot be a template; nested template-id lacks templates can only be declared in namespace or class scope (kiln_sema decl.rs:7911 act_on_tag) | WP-946 | open |
+| WP-1064 | modules image S2: expression and statement records, inline/constexpr/consteval functions, variable initializers (kiln_sema bmi_image.rs:1054, :1094) | WP-1048 | open |
+| WP-1065 | modules image S3: classes (kiln_sema bmi_image.rs:1314 kind_gate) | WP-1048 | open |
+| WP-1066 | modules image S4: templates as patterns (kiln_sema bmi_image.rs:1293) | WP-1048 | open |
+| WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
+| WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | open |
+| WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
+| WP-1070 | modules image S7: locations in other files and macro expansions (bmi_image.rs:868); then flip -fkiln-bmi-image on once std is covered | WP-1048 | open |
+| WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | open |
+| WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | open |
+| WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | open |
+| WP-1072 | rejects-valid: dependent friend class A<T>::Member gets no access to private members (xfail temp.friend/dependent-member-class-friend-run.cpp) | WP-1054 | open |

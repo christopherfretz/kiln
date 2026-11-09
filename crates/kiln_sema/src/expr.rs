@@ -398,6 +398,10 @@ impl Sema<'_, '_> {
                 ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = self.ast.exprs.operand(e);
                 }
+                // GNU `__extension__` (clang `IgnoreParensSingleStep`).
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 ExprKind::SubstNonTypeTemplateParmExpr => e = self.ast.exprs.subst_replacement(e),
                 _ => break,
             }
@@ -425,9 +429,13 @@ impl Sema<'_, '_> {
         let mut e = e;
         for _ in 0..256 {
             // clang `IgnoreParensSingleStep` also looks through a
-            // `__builtin_choose_expr` to its chosen operand.
+            // `__builtin_choose_expr` to its chosen operand and through
+            // GNU `__extension__`.
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ParenExpr => e = self.ast.exprs.operand(e),
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 ExprKind::ChooseExpr => match self.ast.exprs.choose_chosen(e) {
                     Some(c) => e = c,
                     None => break,
@@ -2808,6 +2816,16 @@ impl Sema<'_, '_> {
     pub fn act_on_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
+        }
+        if op == UnaryOp::Extension {
+            // GNU `__extension__ e` is always built in and applies no
+            // conversion: it has the operand's type, value category and
+            // object kind, dependent or not (clang `BuildUnaryOp`,
+            // "extension is always a builtin operator"). It is not an
+            // id-expression, so `decltype(__extension__ x)` is `T&` for
+            // an lvalue `x` and mangles `DT` (spec/abi.md, WP-1029).
+            let t = self.ety(e);
+            return self.builder().unary(op, e, t, loc, ExprFlags::CANNOT_OVERFLOW);
         }
         let e = if op == UnaryOp::AddrOf {
             self.undo_dependent_implicit_member(e)
@@ -5912,7 +5930,20 @@ impl Sema<'_, '_> {
         loc: Loc,
         range: Option<kiln_source::Span>,
     ) -> bool {
-        let name = Self::trait_name(kind);
+        self.check_trait_operand_named(kind, Self::trait_name(kind), ty, loc, range)
+    }
+
+    /// [`Self::check_trait_operand`] with the operator spelled `name` in
+    /// the diagnostics (`alignas(type-id)`, [dcl.align]/3: as
+    /// `alignas(alignof(type-id))`; clang `CheckAlignasTypeArgument`).
+    pub(crate) fn check_trait_operand_named(
+        &mut self,
+        kind: TraitKind,
+        name: &'static str,
+        ty: QualType,
+        loc: Loc,
+        range: Option<kiln_source::Span>,
+    ) -> bool {
         if self.is_error_type(ty) {
             return false;
         }
@@ -6400,6 +6431,10 @@ impl Sema<'_, '_> {
             if x == e {
                 return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
             }
+            // [class.abstract]/3: a temporary of an abstract class.
+            if self.require_non_abstract_alloc(loc, ty) {
+                return self.recover(ty, &[x], loc);
+            }
             let x = self.maybe_bind_temporary(x);
             return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
         }
@@ -6442,6 +6477,12 @@ impl Sema<'_, '_> {
                 if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+                }
+                // [class.abstract]/3: a temporary of an abstract class
+                // (clang's `checkAbstractType` for the constructor call,
+                // at the cast's location).
+                if self.require_non_abstract_alloc(loc, ty) {
+                    return self.recover(ty, &[x], loc);
                 }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
                     CastKind::NoOp

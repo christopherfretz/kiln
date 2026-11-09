@@ -702,7 +702,7 @@ All of these are built by sema actions, which compute dependence as in
 | `obj.f(args)` that names an overload set of members | `UnresolvedMemberExpr` |
 | `a op b` with a type-dependent operand | `CXXOperatorCallExpr` whose callee is an `UnresolvedLookupExpr` holding the operator functions found by unqualified lookup at definition ([temp.dep.candidate]); if none are found, a `BinaryOperator`/`UnaryOperator` of dependent type (clang) |
 | `typename T::type` | `DependentName` type (canonical keyword `typename`, types.md §18) |
-| `class-key T::X` (`struct`/`class`/`union`/`enum`) with a dependent qualifier, as a reference or in `friend class-key T::X;` ([dcl.type.elab]/1-3, [class.friend]/3; WP-332) | `DependentName` type with the class-key as its keyword (parser `parse_tag_specifier`, clang `ActOnDependentTag`); with `friend`, a friend type. Instantiation (`dependent_tag_name`) looks up a tag of the substituted class: none gives `no struct named 'X' in 'Q'`, a tag of the other kind `use of 'X' with tag type that does not match previous declaration`. Gap: a found typedef reports the first (clang: `type alias 'X' cannot be referenced with the 'struct' specifier`) |
+| `class-key T::X` (`struct`/`class`/`union`/`enum`) with a dependent qualifier, as a reference or in `friend class-key T::X;` ([dcl.type.elab]/1-3, [class.friend]/3; WP-332) | `DependentName` type with the class-key as its keyword (parser `parse_tag_specifier`, clang `ActOnDependentTag`); with `friend`, a friend type. A qualifier naming a class template specialization that the context does not enter (`class B<T>::M` in another template, whose `B<T>` is not the current instantiation: `is_unentered_dependent_class`) is dependent too, as clang's `computeDeclContext(SS, false)`; it used to resolve to `B`'s pattern member, so an explicit or partial specialization's `M` was silently dropped (WP-1054). Instantiation (`dependent_tag_name`) looks up a tag of the substituted class: none gives `no struct named 'X' in 'Q'`, a tag of the other kind `use of 'X' with tag type that does not match previous declaration` at the class-key (`tag_keyword_loc`). Gap: a found typedef reports the first (clang: `type alias 'X' cannot be referenced with the 'struct' specifier`) |
 | `typename T::template X<U>` | `DependentTemplateSpecialization` type |
 | `X<T>` where `X` is a class template | dependent `TemplateSpecialization` type |
 | `T(args)` / `T{args}` with dependent `T` | `CXXUnresolvedConstructExpr` (list flag) |
@@ -1697,6 +1697,34 @@ Out-of-class partial specializations of a member template (WP-150):
   One declared after `Outer<X>` was instantiated is not part of it, as
   with clang.
 
+**Landed (WP-1017).** Declaration checks on a partial specialization:
+- *More specialized than the primary* ([temp.spec.partial.general]/9.2;
+  `check_partial_more_specialized`, `templ/order.rs`
+  `primary_at_least_as_specialized`). A class or variable partial
+  specialization whose primary is at least as specialized as it gets
+  `{class|variable} template partial specialization is not more
+  specialized than the primary template` + `template is declared here`
+  on the primary. The check is conservative and skips four cases, which
+  pass unchecked:
+  - packs;
+  - constraints on either side;
+  - member templates of a class template;
+  - a primary non-type parameter whose type is a placeholder or
+    dependent (`template<auto V>`, `template<class T, T V>`).
+
+  Test: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`.
+- *Non-deducible arguments* (CWG526, [temp.deduct.type]/5.3). A non-type
+  argument that is not just the parameter's name, such as `(N)`, is a
+  non-deduced context. A call cannot deduce it, and a partial
+  specialization that uses it gets `contains a template parameter that
+  cannot be deduced`. Test:
+  `tests/conformance/temp.deduct.type/parenthesized-nttp-non-deduced.cpp`.
+- *Wrong class-key*. An explicit or partial specialization whose class-key
+  does not match the primary's, and a reference `union B<int>` to a class
+  specialization, get `use of 'X' with tag type that does not match
+  previous declaration`. It is reported at the class-key, with `previous
+  use is here` on the primary pattern (spec/sema.md §4.4).
+
 ### 4.5 Explicit specializations and instantiations
 
 **Placement** ([temp.expl.spec]).
@@ -2102,6 +2130,24 @@ with an invalid type; a base-specifier `X<A>::B` is clang's "expected
 class name" at `B`
 (`temp.inst/invalid-specialization-invalid-members.cpp`,
 `temp.inst/invalid-specialization-base.cpp`).
+
+**No silent drop (WP-1054).** A member that `class_body_with` does not
+instantiate must leave a diagnostic behind. Each member's instantiation
+returns `Err` only after an error, a SFINAE failure or a not-yet-implemented
+note was emitted, or when it is silent because an earlier error (in the
+same instantiation or anywhere in the TU) already covers it. The guard
+checks that contract at the one place every member goes through: it takes
+`Sema::failure_mark()` (a count of every error-class emission, SFINAE
+failures and suppressed ones included) before the member and, when the
+member fails, `failed_silently_since(mark)` (no failure emitted since, and
+no error in the TU, clang's `hasUncompilableErrorOccurred` rule) emits
+`kiln: internal error: member 'x' of 'A<int>' was not instantiated and no
+diagnostic says why` at the member (`member_dropped`, also for an unnamed
+member class). It is an error, not a panic or a `debug_assert!`: the
+program would otherwise compile with a member missing, and a release build
+must not do that either. A substitution failure in a member *declaration*
+is never SFINAE here: SFINAE applies only to deduction, and a class
+instantiated inside a SFINAE context is a hard error there (§5.7).
 
 **Points of instantiation.**
 - `SpecInfo.point_of_instantiation` is the location of the use that first
@@ -2810,7 +2856,7 @@ like clang's.
 | `UnaryTransform` | substitute the operand, then apply the builtin (§9.2) |
 | `PackExpansion`, `PackIndexing` | §7 |
 | `InjectedClassName` | §4.7 |
-| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed |
+| `Record`/`Enum`/`Typedef` of a decl in a dependent context | `find_instantiated_decl(d)`: a local goes through `locals`, and a local in `failed_locals` (its declaration statement failed: the declarator and the rest of its statement) is a silent substitution failure, already diagnosed ([temp.inst]/3; WP-316); a member goes through `member_map` of the enclosing specialization (of the instantiated parent, else of its defined redeclaration: a member class declared before its definition has two instantiated declarations and only the defined one records members; WP-582), and the member class is instantiated if completeness is needed. A member whose instantiated parent was not instantiated from its parent (a nested `In::Deep` reached through `B<T>` that selected an explicit or partial specialization) is looked up by name in that parent (`relookup_member`): none is `no member named 'In' in 'B<int>'` at the written qualifier, one tag of the same kind is used, anything else is "not yet implemented"; it is never a silent failure (WP-1054) |
 | `Auto` | a deduced `Auto` substitutes its deduced type; an undeduced one stays and is deduced in the instantiation |
 | `QualifiedArray{quals, base}` | cv applied to array sugar (`const A` with `using A = T[3]`): substitute `base`, then `qualify` pushes `quals` into the new element type ([dcl.array]/6; WP-301) |
 
@@ -4614,6 +4660,10 @@ The `SpecKind` transitions are those of §4.5.
     (`note_not_structural_subobject`), recursing into it. Structurality is
     recomputed (`is_structural_at`), because `DefinitionBits::STRUCTURAL`
     misses rvalue-reference members (class owner).
+  - before C++20 ([temp.param]/4 in C++17), a floating-point or class
+    type gets `a non-type template parameter cannot have type 'T' before
+    C++20`; any other non-structural type gets `... cannot have type 'T'`
+    (WP-1017; `tests/conformance/temp.param/float-nttp-cxx{17,20}.cpp`).
   - Dependent types are checked when substituted (not yet: §11.2 gaps).
 - **Class arguments** (`convert_class_nttp_arg`, hooked from
   `args.rs::convert_nttp_arg`): copy-initialize a `const T` from the
@@ -5481,6 +5531,12 @@ whose head the notes name. It evaluates:
   - Otherwise the expression must have type exactly `bool`. Anything else
     is the hard error "atomic constraint must be of type 'bool' (found
     'int')".
+  - A constraint whose satisfaction depends on itself
+    ([temp.constr.atomic]/3) is unsatisfied. The error "satisfaction of
+    constraint 'E' depends on itself" is a hard error, also inside overload
+    resolution and other SFINAE contexts (`is_sfinae_report`, clang
+    `err_constraint_depends_on_self` is `SFINAE_Report`; WP-1017). Test:
+    `temp.constr.atomic/self-dependent-constraint.cpp`.
   - The value is evaluated by the Oven with `EvalKind::Constraint` (a new
     `EvalContext` kind; Q5).
   - A non-constant result is clang's error "substitution into constraint

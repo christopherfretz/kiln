@@ -135,6 +135,58 @@ pub fn target_dir(root: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "cargo metadata: no target_directory".into())
 }
 
+/// The `XDG_CACHE_HOME` the suites give every compiler they run: a
+/// directory under the target directory, so kiln's module-file cache
+/// (spec/driver.md "Module cache") never writes to the user's
+/// `~/.cache`, and test runs share one cache.
+pub fn suite_cache_home() -> PathBuf {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        let root = repo_root();
+        target_dir(&root).unwrap_or_else(|_| root.join("target")).join("xdg-cache")
+    })
+    .clone()
+}
+
+/// Points `c`'s caches at [`suite_cache_home`].
+pub fn isolate_caches(c: &mut Command) -> &mut Command {
+    c.env("XDG_CACHE_HOME", suite_cache_home())
+}
+
+/// The directory of libc++'s module sources (`std.cppm`) as `compiler`
+/// reports them: the manifest `-print-file-name=libc++.modules.json`
+/// names, else (clang prints the bare name when its own prefix has no
+/// libc++, as Debian's clang 22 beside libc++ 19) the manifest beside the
+/// libc++ headers its `-v` search list shows, `<prefix>/include/c++/v1`
+/// with symlinks resolved giving `<prefix>/lib/libc++.modules.json` (the
+/// rule kiln itself uses). Then the `std` entry's `source-path`, relative
+/// to the manifest. `None` when neither names an existing `std.cppm`.
+pub fn libcxx_module_dir_of(compiler: &Path, llvm_dir: &Path) -> Option<PathBuf> {
+    let run = |args: &[&str]| {
+        Command::new(compiler).args(args).env("KILN_LLVM_DIR", llvm_dir).output().ok()
+    };
+    let printed = run(&["-stdlib=libc++", "-print-file-name=libc++.modules.json"])
+        .filter(|o| o.status.success())
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+        .filter(|p| p.is_absolute() && p.is_file());
+    let json = printed.or_else(|| {
+        let o = run(&["-stdlib=libc++", "-x", "c++", "-E", "-v", "/dev/null", "-o", "/dev/null"])?;
+        let err = String::from_utf8_lossy(&o.stderr);
+        let v1 = err.lines().map(str::trim).find(|l| l.ends_with("/c++/v1"))?;
+        let v1 = std::fs::canonicalize(v1).ok()?;
+        let json = v1.parent()?.parent()?.parent()?.join("lib").join("libc++.modules.json");
+        json.is_file().then_some(json)
+    })?;
+    let text = std::fs::read_to_string(&json).ok()?;
+    let doc = Json::parse(&text).ok()?;
+    let modules = doc.get("modules")?.as_arr()?;
+    let std =
+        modules.iter().find(|m| m.get("logical-name").and_then(Json::as_str) == Some("std"))?;
+    let source = std.get("source-path")?.as_str()?;
+    let path = std::fs::canonicalize(json.parent()?.join(source)).ok()?;
+    path.parent().map(Path::to_path_buf)
+}
+
 /// The string value of the top-level `key` of a JSON object document.
 pub fn json_string_field(json: &str, key: &str) -> Option<String> {
     Json::parse(json).ok()?.get(key)?.as_str().map(str::to_owned)

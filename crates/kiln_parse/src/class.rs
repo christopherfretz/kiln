@@ -1577,7 +1577,7 @@ impl Parser<'_, '_> {
                 ..LateFnParts::default()
             };
             if !self.at(Punct::Colon) {
-                self.parse_declarator(&mut d);
+                self.parse_declarator_in_group(&ds, &mut d);
                 self.parse_trailing_requires(&mut d);
                 self.set_declarator_end(&mut d);
             }
@@ -2118,6 +2118,7 @@ impl Parser<'_, '_> {
             d.invalid = true;
         }
         d.special = Some((SpecialName::Conversion(ty), loc));
+        d.conv_type_loc = conv_type_loc(&ds);
     }
 
     /// conversion-declarator ([class.conv.fct]/1): ptr-operators only,
@@ -2375,6 +2376,12 @@ impl Parser<'_, '_> {
         if self.is_valid_after_tag(could_be_bitfield) {
             return;
         }
+        self.expected_semi_after_tag(spelling);
+    }
+
+    /// Reports the `;` missing after a class or enum definition and
+    /// inserts it.
+    pub(crate) fn expected_semi_after_tag(&mut self, spelling: &str) {
         if self.at(Punct::Colon) {
             let d = self.s.diag(DiagId::parse_expected_after, self.loc()).arg(spelling).arg("';'");
             self.emit(d);
@@ -2468,6 +2475,17 @@ impl Parser<'_, '_> {
             }),
             Some(_) => false,
         }
+    }
+}
+
+/// [`Declarator::conv_type_loc`]: where a conversion-type-id's
+/// placeholder is reported (CWG1878), the type-constraint of a `C auto`,
+/// else the type specifier.
+fn conv_type_loc(ds: &DeclSpec) -> Loc {
+    if ds.auto_constraint.is_some() && ds.constraint_loc.is_valid() {
+        ds.constraint_loc
+    } else {
+        ds.type_loc.unwrap_or(ds.loc)
     }
 }
 

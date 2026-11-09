@@ -243,6 +243,7 @@ impl Cg<'_> {
         self.start_fp();
         self.f.func = Some(f);
         self.f.san = self.opts.sanitize.kinds;
+        self.ignore_sanitizers(f, None);
         self.f.mustprogress = false;
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
@@ -304,6 +305,7 @@ impl Cg<'_> {
         // GenerateCXXGlobalVarDeclInitFunc.
         let saved = std::mem::replace(&mut self.f, Fx::empty());
         self.start_init_fn(f);
+        self.ignore_sanitizers(f, Some(ast.decls.get(d).loc()));
         let lin = self.m.global(g).linkage;
         let r = if matches!(
             lin,
@@ -458,6 +460,7 @@ impl Cg<'_> {
         self.m.func_mut(f).attrs.params = vec![nu];
         let saved = std::mem::replace(&mut self.f, Fx::empty());
         self.start_init_fn(f);
+        self.ignore_sanitizers(f, Some(self.ast.decls.get(d).loc()));
         // The (unused) object parameter is spilled, as every parameter
         // at -O0.
         let p = self.f.fir.alloca(LTy::PTR, 8);

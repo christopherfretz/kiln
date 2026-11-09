@@ -214,10 +214,11 @@ impl Job<'_> {
                     .map(|(n, v)| (n.to_owned(), v))
                     .collect(),
             };
-        } else if let Some(cpu) = crate::features::resolve(self.args, &self.toolchain.target).0.cpu
-        {
-            // WP-630: the `-march=<cpu>` macros.
-            cfg.x86_macros = crate::features::x86_cpu_macros(&cpu);
+        } else {
+            // WP-630 / WP-1000: the `-march=<cpu>` and feature-flag macros.
+            let f = crate::features::resolve(self.args, &self.toolchain.target).0;
+            let v22 = self.args.predef.clang_compat == kiln_pp::ClangCompat::Clang22;
+            cfg.x86_macros = crate::features::x86_macros(&f, v22);
         }
         // Errors were reported by the driver's own `resolve` pass.
         cfg.sanitize_macros = self
@@ -262,6 +263,7 @@ impl Job<'_> {
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
+        o.main_is_header = a.pch.header_main;
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);
@@ -379,6 +381,39 @@ impl Job<'_> {
         Some(PpInputs { skipped: None, list, main: main?, predefines: predefines? })
     }
 
+    /// The module options of a compile that imports (spec/modules.md §2,
+    /// §11.6): the module files named on the command line, the prebuilt
+    /// paths, libc++'s module directory and the `std` module cache
+    /// (§11.12; `cache_key` is the predefines and the search list).
+    /// `None` after reporting an error.
+    fn module_options(
+        &self,
+        engine: &DiagEngine<'_>,
+        cache_key: Option<&(String, String)>,
+    ) -> Option<kiln_pp::ModuleOptions> {
+        let a = self.args;
+        let mut module_files: Vec<(String, std::path::PathBuf)> =
+            a.module_files.iter().map(|(n, p)| (n.clone(), std::path::PathBuf::from(p))).collect();
+        // A scan reads no module file (they may not exist yet).
+        for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
+            module_files.push((nameless_module_name(path, engine)?, path.into()));
+        }
+        let fingerprint = self.fingerprint();
+        let std_cache = cache_key.and_then(|(predefines, search)| {
+            crate::module_cache::for_job(self, predefines, search, &fingerprint)
+        });
+        Some(kiln_pp::ModuleOptions {
+            module_files,
+            prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
+            std_dir: Some(self.toolchain.libcxx_module_dir()),
+            std_cache,
+            fingerprint,
+            record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
+            scan: a.scan_deps,
+            image: a.bmi_image,
+        })
+    }
+
     /// The preprocessor of this input, exactly as `-E` configures it
     /// (header search, `#if` evaluation, `__has_feature` and friends,
     /// dependency collection), with the main file entered. Shared by
@@ -397,6 +432,9 @@ impl Job<'_> {
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let a = self.args;
         let PpInputs { skipped, list, main, predefines } = inputs;
+        // The module cache's key takes the predefines and the search list
+        // (spec/modules.md §11.12); `-E`/`-M` import nothing.
+        let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
@@ -417,23 +455,7 @@ impl Job<'_> {
         // Modules for the modes that run sema, from C++20 (spec/modules.md
         // §2); `-E`/`-M` keep the directives as text.
         if staged && self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx20 {
-            let mut module_files: Vec<(String, std::path::PathBuf)> = a
-                .module_files
-                .iter()
-                .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
-                .collect();
-            // A scan reads no module file (they may not exist yet).
-            for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
-                module_files.push((nameless_module_name(path, engine)?, path.into()));
-            }
-            opts.modules = Some(kiln_pp::ModuleOptions {
-                module_files,
-                prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
-                std_dir: Some(self.toolchain.libcxx_module_dir()),
-                fingerprint: self.fingerprint(),
-                record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
-                scan: a.scan_deps,
-            });
+            opts.modules = Some(self.module_options(engine, cache_key.as_ref())?);
         } else if let MainInput::Capsule(_) = &main {
             let what =
                 if staged { "a module file before C++20" } else { "preprocessing a module file" };
@@ -518,7 +540,7 @@ impl Job<'_> {
 
     /// The options a module file records and checks (spec/modules.md
     /// §11.4), as (key, effective flag spelling).
-    fn fingerprint(&self) -> Vec<(String, String)> {
+    pub(crate) fn fingerprint(&self) -> Vec<(String, String)> {
         let a = self.args;
         let p = &a.predef;
         let on = |b: bool, yes: &str, no: &str| if b { yes.to_owned() } else { no.to_owned() };
@@ -603,10 +625,12 @@ impl Job<'_> {
         &self,
         pp: &mut Preprocessor<'_, '_>,
         engine: &DiagEngine<'_>,
+        carried: Option<&kiln_sema::CarriedConstants>,
+        image: Option<&kiln_sema::ModuleImage>,
     ) -> bool {
         let a = self.args;
         let Some(out) = self.module_output_path() else { return true };
-        let Some(capsule) = pp.take_capsule() else {
+        let Some(mut capsule) = pp.take_capsule() else {
             if a.action == crate::args::Action::Precompile {
                 Diag::new(DiagId::drv_precompile_not_module, Span::INVALID).emit(engine);
                 return false;
@@ -627,6 +651,51 @@ impl Job<'_> {
             }
             return true;
         };
+        let consts = carried.filter(|c| !c.bytes.is_empty());
+        let decl_image = image.filter(|i| i.fallback.is_none() && !i.bytes.is_empty());
+        if let Some(c) = consts {
+            capsule
+                .sections
+                .push(bmi::Section { tag: bmi::SECTION_CONSTS, bytes: c.bytes.clone() });
+        }
+        if let Some(i) = decl_image {
+            capsule.sections.push(bmi::Section { tag: bmi::SECTION_IMAGE, bytes: i.bytes.clone() });
+        }
+        let skip = |c: &kiln_sema::CarriedConstants| {
+            c.first_skip.map(|w| format!(" (first not carried: {w})")).unwrap_or_default()
+        };
+        let mut kind = match carried {
+            None => "kind 1, as -fkiln-bmi-kind=1 requests".to_owned(),
+            Some(c) if consts.is_some() => {
+                format!("kind 2, carrying {} constant results", c.carried)
+            }
+            Some(c) if decl_image.is_some() => {
+                format!("kind 2, carrying no constant result{}", skip(c))
+            }
+            Some(c) => format!("kind 1: no constant result to carry{}", skip(c)),
+        };
+        // spec/modules.md §11.11 "Part 2a": the image, or why there is none.
+        match image {
+            Some(i) if i.fallback.is_none() => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(", with a declaration image of {} declarations", i.decls),
+                );
+            }
+            Some(i) => {
+                let _ = std::fmt::Write::write_fmt(
+                    &mut kind,
+                    format_args!(" (no declaration image: {})", i.fallback.unwrap_or("empty")),
+                );
+            }
+            None => {}
+        }
+        if a.verbose {
+            // A `-v` line, never a warning (spec/modules.md §11.11
+            // "Fallback").
+            let mut err = self.stderr.clone();
+            let _ = writeln!(err, "note: wrote module file '{out}' as {kind}");
+        }
         let bytes = bmi::write(&capsule);
         drop(capsule);
         if let Err(e) = bmi::write_file(Path::new(&out), &bytes) {

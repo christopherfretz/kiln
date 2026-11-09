@@ -42,6 +42,7 @@ mod fold;
 mod fp;
 mod func;
 mod global_init;
+pub mod ignorelist;
 mod lambda;
 mod lifetime;
 mod loop_md;
@@ -117,13 +118,21 @@ pub struct CodegenOptions {
     pub outline_atomics: Option<bool>,
     /// On `AArch64`, the `+name`/`-name` target features beyond the base
     /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
-    /// into the functions' `target-features`. On x86-64, the `-march=`
-    /// CPU's features as `+name` (empty: the default `x86-64`'s; WP-630).
+    /// into the functions' `target-features`. On x86-64, the module's
+    /// whole feature map as `+name`/`-name` (empty: the default
+    /// `x86-64`'s; WP-630, WP-1000).
     pub target_features: Vec<String>,
+    /// x86-64: the module CPU's features (`-march=`; empty: the default
+    /// `x86-64`, or `native` off an x86-64 host), the start of a
+    /// `target("...")` function's map without `arch=` (WP-1000).
+    pub target_cpu_features: Vec<String>,
+    /// x86-64: the command line's feature items as written (`-m<feature>`
+    /// as `+name`/`-name`; clang `FeaturesAsWritten`), applied before a
+    /// `target("...")` attribute's own items (WP-1000).
+    pub target_features_written: Vec<String>,
     /// How a function's `target("...")` attribute string changes the
     /// module's features (the driver's `features::target_attr_features` /
-    /// `features::x86_target_attr_features`; its arguments are the string,
-    /// the module's features as `+name`/`-name` and `-fclang-compat=22`).
+    /// `features::x86_target_attr_features`; see [`TargetAttrModule`]).
     /// `None` ignores the attribute (spec/landed/codegen/WP-558.md "Target
     /// features", WP-558; spec/landed/codegen/WP-630.md, WP-630).
     pub target_attr: Option<TargetAttrParser>,
@@ -233,6 +242,15 @@ pub struct CodegenOptions {
     /// plain `getelementptr` (no `inbounds`), and a variable length
     /// array index is scaled by a plain `mul`.
     pub wrapv_pointer: bool,
+    /// `-ftrapv` (clang `SOB_Trapping`; WP-1032): signed `+ - *`,
+    /// negation, `++` and `--` check overflow and trap (`llvm.ubsantrap`)
+    /// unless `signed-integer-overflow` reports it. Overrides
+    /// [`Self::wrapv`].
+    pub trapv: bool,
+    /// `-ftrapv-handler=<name>` with `-ftrapv` (clang
+    /// `OverflowHandler`): an overflow calls `i64 <name>(i64, i64, i8,
+    /// i8, ...)` for the result instead of trapping.
+    pub trapv_handler: Option<String>,
     /// `-fno-delete-null-pointer-checks` (clang
     /// `CodeGenOpts.NullPointerIsValid`): functions are
     /// `null_pointer_is_valid`, and references, `this` and `operator new`
@@ -291,6 +309,9 @@ pub struct CodegenOptions {
     pub hardening: Hardening,
     /// The `-fsanitize=` set (WP-675, spec/codegen.md "Sanitizers").
     pub sanitize: SanitizeOptions,
+    /// The `-fsanitize-ignorelist=` and default lists (WP-1032): what
+    /// they name is not instrumented.
+    pub ignorelist: Option<std::sync::Arc<ignorelist::SanitizerIgnorelist>>,
     /// `-flto` / `-flto=thin`: the module is an LTO unit (its module flags
     /// and vtable `!type` metadata; spec/codegen.md §5.3 "LTO", WP-873).
     pub lto: Option<Lto>,
@@ -321,6 +342,10 @@ pub struct SanitizeOptions {
     pub recover: kiln_ast::sanitize::SanitizerSet,
     /// The UB checks that trap (`-fsanitize-trap=`).
     pub trap: kiln_ast::sanitize::SanitizerSet,
+    /// The checks whose traps and handler calls may merge
+    /// (`-f[no-]sanitize-merge[=]`, WP-1032); `None` when no such flag is
+    /// given (clang 22: the `undefined` group; clang 19: every check).
+    pub merge: Option<kiln_ast::sanitize::SanitizerSet>,
     /// clang `SanitizeAddressUseAfterScope`: an address sanitizer with
     /// `-fsanitize-address-use-after-scope` (the default) wants lifetime
     /// markers.
@@ -644,9 +669,23 @@ pub struct TargetAttrFeatures {
     pub tune: Option<String>,
 }
 
+/// The module side of a `target("...")` attribute (see
+/// [`CodegenOptions::target_attr`]).
+#[derive(Clone, Copy, Debug)]
+pub struct TargetAttrModule<'a> {
+    /// The module's features as `+name`/`-name`.
+    pub features: &'a [String],
+    /// x86-64: [`CodegenOptions::target_cpu_features`].
+    pub cpu_features: &'a [String],
+    /// x86-64: [`CodegenOptions::target_features_written`].
+    pub written: &'a [String],
+    /// `-fclang-compat=22`.
+    pub v22: bool,
+}
+
 /// Parses a `target("...")` attribute string (see
 /// [`CodegenOptions::target_attr`]).
-pub type TargetAttrParser = fn(&str, &[String], bool) -> TargetAttrFeatures;
+pub type TargetAttrParser = fn(&str, &TargetAttrModule<'_>) -> TargetAttrFeatures;
 
 impl CodegenOptions {
     /// The IR will be optimized (`-O1` and above): definitions are
@@ -667,6 +706,8 @@ impl Default for CodegenOptions {
             ident: String::new(),
             outline_atomics: Some(true),
             target_features: Vec::new(),
+            target_cpu_features: Vec::new(),
+            target_features_written: Vec::new(),
             target_attr: None,
             sve: false,
             sve_vector_bits: None,
@@ -694,6 +735,8 @@ impl Default for CodegenOptions {
             static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,
+            trapv: false,
+            trapv_handler: None,
             null_pointer_is_valid: false,
             no_builtin: false,
             no_builtin_fns: Vec::new(),
@@ -709,6 +752,7 @@ impl Default for CodegenOptions {
             coverage: CoverageOptions::default(),
             hardening: Hardening::default(),
             sanitize: SanitizeOptions::default(),
+            ignorelist: None,
             lto: None,
             lto_module_flags: true,
         }

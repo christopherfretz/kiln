@@ -525,8 +525,12 @@ impl Parser<'_, '_> {
             }
             Some(Kw::DataSizeof) => return self.parse_sizeof_alignof(TraitKind::DataSizeOf),
             Some(Kw::Extension) => {
+                // GNU `__extension__ e`: clang keeps a `UO_Extension`
+                // node, which `decltype` and the mangler see
+                // (spec/abi.md, WP-1029); sema looks through it.
                 self.bump();
-                return self.parse_cast_expr();
+                let e = self.parse_cast_expr()?;
+                return Some(self.s.act_on_unary(UnaryOp::Extension, e, loc));
             }
             Some(k @ (Kw::Real | Kw::Imag)) => {
                 // GNU `__real__ e` / `__imag__ e` (clang's `ParseCastExpression`).
@@ -726,7 +730,7 @@ impl Parser<'_, '_> {
 
     /// [`Parser::parse_c_style_cast`] after the `(` at `open`.
     fn parse_c_style_cast_rest(&mut self, open: Loc) -> PExpr {
-        let ty = self.parse_type_id();
+        let ty = self.parse_type_id_checked();
         let Some(ty) = ty else {
             self.skip_until(&[Punct::RParen], false, true);
             return None;
@@ -800,7 +804,7 @@ impl Parser<'_, '_> {
         self.s.exit_unevaluated();
         if let Some((open, is_type, _)) = scoped {
             if is_type {
-                let Some(ty) = self.parse_type_id() else {
+                let Some(ty) = self.parse_type_id_checked() else {
                     self.skip_until(&[Punct::RParen], false, true);
                     return None;
                 };
@@ -818,7 +822,7 @@ impl Parser<'_, '_> {
             && self.is_cxx_type_id_at(self.pos() + 1, TypeIdContext::InParens).0
         {
             let open = self.bump().span.lo;
-            let Some(ty) = self.parse_type_id() else {
+            let Some(ty) = self.parse_type_id_checked() else {
                 self.skip_until(&[Punct::RParen], false, true);
                 return None;
             };
@@ -1844,8 +1848,21 @@ impl Parser<'_, '_> {
             // An unqualified type name not followed by `(` or `{` is
             // not looked at as a type (clang only annotates it before
             // those), so the id-expression names a type.
+            // A pack-index-specifier `T...[i]` ([dcl.type.pack.index]) is
+            // part of the type: `T...[0]{}` is a functional cast.
+            let after = if end == self.pos() + 1
+                && self.peek_is(1, Punct::Ellipsis)
+                && self.peek_is(2, Punct::LSquare)
+            {
+                self.skip_balanced(end + 1).unwrap_or(end)
+            } else {
+                end
+            };
             if end == self.pos() + 1
-                && !matches!(Self::punct_of(self.tok_at(end)), Some(Punct::LParen | Punct::LBrace))
+                && !matches!(
+                    Self::punct_of(self.tok_at(after)),
+                    Some(Punct::LParen | Punct::LBrace)
+                )
             {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);
@@ -2632,6 +2649,26 @@ impl Parser<'_, '_> {
             self.literal_diags(t, sp, &s.diags, None);
             error |= s.has_error;
             pieces.push((s, t.span.lo));
+        }
+        // [lex.string.concat]/2: every ud-suffix of the concatenation is
+        // the first one (clang `err_string_concat_mixed_suffix`, at each
+        // differing token).
+        let mut first_suffix: Option<&str> = None;
+        for (p, loc) in &pieces {
+            let Some(sfx) = p.ud_suffix else { continue };
+            match first_suffix {
+                None => first_suffix = Some(sfx),
+                Some(f) if f != sfx => {
+                    let m = self
+                        .s
+                        .diag(DiagId::lex_string_concat_mixed_suffix, *loc)
+                        .arg(f.to_owned())
+                        .arg(sfx.to_owned());
+                    self.s.emit(m);
+                    error = true;
+                }
+                Some(_) => {}
+            }
         }
         if error {
             return Some(self.s.act_on_error_expr(&[], toks[0].span.lo));

@@ -23,6 +23,7 @@ mod gcc;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 pub struct Config {
     /// Repository root; compilers run with this as their working directory.
     pub root: PathBuf,
@@ -42,6 +43,10 @@ pub struct Config {
     /// The GCC oracle's installation prefix (`%{gcc_toolchain}`, what
     /// `--gcc-toolchain=` takes); `None` without a GCC oracle.
     pub gcc_toolchain: Option<PathBuf>,
+    /// The directory of libc++'s module sources, `std.cppm` and
+    /// `std.compat.cppm` (`%{libcxx_modules}`): what the compiler under
+    /// test, else the oracle, reports (`util::libcxx_module_dir_of`).
+    pub libcxx_modules: Option<PathBuf>,
     /// `--meta-header`: the directory of the compatibility headers that
     /// stand in for `tests/support/kiln_meta*.h` (they include the real
     /// `<meta>`); `None` outside the header-differential mode.
@@ -67,9 +72,19 @@ pub struct Config {
     /// on `PATH` is an ERROR rather than a SKIP (`spec/harness.md`
     /// "Debugger tests").
     pub require_debuggers: bool,
+    /// `KILN_REQUIRE_SANITIZER_RUNTIME=1`: a `requires: sanitizer-runtime`
+    /// test whose clangs lack compiler-rt's runtimes is an ERROR rather
+    /// than a SKIP (`spec/harness.md` "Directives", WP-1034).
+    pub require_sanitizer_runtime: bool,
     /// `--debug-sweep`: the debug-info sweep (`spec/harness.md` "Debug-info
     /// sweep"); `None` outside it.
     pub debug_sweep: Option<DebugSweep>,
+    /// `--bmi-kind`: the module-file variant (`spec/harness.md`
+    /// "Module-file kinds"); `None` outside it.
+    pub bmi_kind: Option<u8>,
+    /// `--bmi-image`: kiln's two-step module builds and their importers
+    /// also pass `-fkiln-bmi-image`.
+    pub bmi_image: bool,
 }
 
 /// The debug-info sweep's configuration.
@@ -221,11 +236,23 @@ impl Test<'_> {
             let reason = "no GCC oracle, so no `%{gcc_toolchain}` (the test needs GCC's libstdc++)";
             return Some(reason.to_owned());
         }
+        let needs_modules = |s: &str| s.contains("%{libcxx_modules}");
+        if self.cfg.libcxx_modules.is_none()
+            && (spec.args.iter().any(|a| needs_modules(a))
+                || spec.modules.iter().any(|(_, p)| needs_modules(&p.to_string_lossy())))
+        {
+            let reason = "no libc++ module sources, so no `%{libcxx_modules}` (neither the \
+                          compiler nor the oracle has a libc++.modules.json)";
+            return Some(reason.to_owned());
+        }
         if self.cfg.meta_header.is_some() {
             return meta_header_skip(spec, source);
         }
         if self.cfg.debug_sweep.is_some() {
             return debug_sweep_skip(spec);
+        }
+        if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() {
+            return Some("no `module:` lines (`--bmi-kind`)".to_owned());
         }
         None
     }
@@ -238,12 +265,86 @@ impl Test<'_> {
             return None;
         }
         let p = self.build_modules(&self.cfg.compiler.clone(), spec, false).err()?;
-        Some(match p {
+        Some(Self::verdict(p))
+    }
+
+    /// The verdict of a failed prebuild step.
+    fn verdict(p: Problem) -> (Status, Option<String>, String) {
+        match p {
             Problem::Killed { mib, details } => {
                 (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
             }
             Problem::Fail(d) | Problem::Broken(d) => (Status::Error, None, d),
-        })
+        }
+    }
+
+    /// Builds a `pch:` test's precompiled headers before anything else:
+    /// the compiler under test's (a rejection fails the test) and a clang
+    /// oracle's (a rejection makes it broken). `Some` is the verdict when
+    /// a build fails.
+    fn prebuild_pch(&mut self, spec: &TestSpec) -> Option<(Status, Option<String>, String)> {
+        spec.pch.as_ref()?;
+        if let Err(p) = self.build_pch(&self.cfg.compiler.clone(), spec) {
+            return Some(match p {
+                Problem::Fail(d) => (Status::Fail, None, d),
+                p => Self::verdict(p),
+            });
+        }
+        let oracle = self.cfg.oracle.clone().filter(|_| self.cfg.oracle_kind.speaks_clang())?;
+        self.build_pch(&oracle, spec).err().map(Self::verdict)
+    }
+
+    /// The precompiled header `program` builds from the `pch:` header
+    /// (the oracle's apart).
+    fn pch_file(&self, program: &Path) -> PathBuf {
+        let oracle = program != self.cfg.compiler;
+        self.dir.join(if oracle { "oracle-test.pch" } else { "test.pch" })
+    }
+
+    /// `<program> -std=<std> [-fclang-compat=N] <args...> -x c++-header
+    /// <pch header> -o <pch file>`: the producer step of a `pch:` test
+    /// (WP-1023); the test file's compile adds `-include-pch <pch file>`
+    /// ([`Self::command`]).
+    fn build_pch(&mut self, program: &Path, spec: &TestSpec) -> Result<(), Problem> {
+        let Some(header) = &spec.pch else { return Ok(()) };
+        self.scratch()?;
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        let src = self.module_source(header);
+        if !src.is_file() {
+            return Err(Problem::Broken(format!(
+                "`pch: {}`: no such file {}",
+                header.display(),
+                src.display()
+            )));
+        }
+        let out = self.pch_file(program);
+        let mut c = Command::new(program);
+        c.current_dir(&self.cfg.root);
+        if self.is_kiln(program) {
+            c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
+        }
+        c.arg(format!("-std={}", spec.std));
+        if self.is_kiln(program) {
+            c.arg("-fno-crash-diagnostics");
+        }
+        if let Some(n) = self.clang_compat(program, spec) {
+            c.arg(format!("-fclang-compat={n}"));
+        }
+        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        let lang = if self.case.lang == Lang::C { "c-header" } else { "c++-header" };
+        c.args(["-x", lang]).arg(&src).arg("-o").arg(&out);
+        let o = self.exec(who, &c, self.cfg.compile_timeout)?;
+        if o.success() && !o.stderr_str().contains("panicked at") {
+            return Ok(());
+        }
+        let msg = format!(
+            "{who} could not build the precompiled header {} ({})\n{}",
+            header.display(),
+            o.describe_end(),
+            indent(&o.stderr_str())
+        );
+        Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) })
     }
 
     /// The test's source and its parsed directives, or the ERROR result.
@@ -286,6 +387,12 @@ impl Test<'_> {
         ) {
             return (Status::Skip, Some(r), String::new());
         }
+        if spec.requires_sanitizer_runtime
+            && let Some(r) = self.missing_sanitizer_runtime(&spec)
+        {
+            let (status, why) = sanitizer_runtime_gate(r, self.cfg.require_sanitizer_runtime);
+            return (status, Some(why), String::new());
+        }
         if let Some(reason) = self.mode_skip(&spec, &source) {
             return (Status::Skip, Some(reason), String::new());
         }
@@ -308,6 +415,9 @@ impl Test<'_> {
             }
         }
         if let Some(verdict) = self.prebuild_modules(&spec) {
+            return verdict;
+        }
+        if let Some(verdict) = self.prebuild_pch(&spec) {
             return verdict;
         }
         if let Some(sweep) = &self.cfg.debug_sweep {
@@ -364,6 +474,37 @@ impl Test<'_> {
         out
     }
 
+    /// `requires: sanitizer-runtime` (WP-1032): why the test cannot link
+    /// against the undefined-behaviour and address sanitizer runtimes,
+    /// if it cannot. The clangs that
+    /// link its program are kiln's linker driver (`<llvm_dir>/bin/clang++`)
+    /// when kiln compiles it, and every clang it runs; each must find
+    /// `libclang_rt.{ubsan_standalone,asan}` for the host (compiler-rt is
+    /// a separate package, `libclang-rt-N-dev`, on Debian).
+    fn missing_sanitizer_runtime(&self, spec: &TestSpec) -> Option<String> {
+        let mut linkers: Vec<(&str, PathBuf)> = Vec::new();
+        let kiln_oracle =
+            spec.oracle && self.cfg.oracle.is_some() && self.cfg.oracle_kind == CompilerKind::Kiln;
+        if self.cfg.compiler_kind == CompilerKind::Kiln || kiln_oracle {
+            linkers.push(("kiln's linker", self.cfg.llvm_dir.join("bin/clang++")));
+        }
+        if self.cfg.compiler_kind == CompilerKind::Clang {
+            linkers.push(("the compiler", self.cfg.compiler.clone()));
+        }
+        if let Some(o) = &self.cfg.oracle
+            && spec.oracle
+            && self.cfg.oracle_kind == CompilerKind::Clang
+        {
+            linkers.push(("the oracle", o.clone()));
+        }
+        linkers.into_iter().find(|(_, c)| !has_sanitizer_runtime(c)).map(|(role, c)| {
+            format!(
+                "requires sanitizer-runtime; {role} ({}) has no UBSan/ASan runtime",
+                c.display()
+            )
+        })
+    }
+
     /// The LLVM backends that consume `spec`'s IR, for `requires: llvm>=`:
     /// kiln's (`llvm_dir`) when kiln compiles it, and every clang it runs
     /// (a clang's major is its LLVM's).
@@ -394,6 +535,7 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Command {
         let mut c = Command::new(program);
+        crate::util::isolate_caches(&mut c);
         c.current_dir(&self.cfg.root);
         if self.is_kiln(program) {
             c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -423,6 +565,9 @@ impl Test<'_> {
         }
         c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
         c.args(self.module_flags(program, spec, spec.modules.len()));
+        if spec.pch.is_some() {
+            c.arg("-include-pch").arg(self.pch_file(program));
+        }
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
@@ -432,32 +577,107 @@ impl Test<'_> {
 
     /// The `module:` source of `path` (relative to the test's directory).
     fn module_source(&self, path: &Path) -> PathBuf {
+        // A `%{libcxx_modules}` path is absolute once substituted.
+        let path = directives::substitute(&path.to_string_lossy(), |n| self.placeholder(n));
         self.case.path.parent().unwrap_or(&self.cfg.root).join(path)
     }
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
-    /// `run` tests with `module:` or `unit:` lines, and `two-step`.
-    fn two_step(spec: &TestSpec) -> bool {
+    /// `run` tests with `module:`, `unit:` or `header-unit:` lines, and
+    /// `two-step`; under `--bmi-kind`, every test with `module:` lines.
+    fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
-            || (spec.expect == Expect::Run && (!spec.modules.is_empty() || !spec.units.is_empty()))
+            || (spec.expect == Expect::Run
+                && (!spec.modules.is_empty()
+                    || !spec.units.is_empty()
+                    || !spec.header_units.is_empty()))
+            || (self.cfg.bmi_kind.is_some() && !spec.modules.is_empty())
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`
     /// lines for `program`: kiln builds each from its source unless the
     /// test is [two-step](Self::two_step); otherwise `program` reads the
     /// module file [`Self::build_modules`] wrote.
+    /// A clang also gets `-fmodule-file=<file>` for each `header-unit:`
+    /// first ([`Self::build_header_units`]); kiln builds header units
+    /// in-process and gets nothing for them.
     fn module_flags(&self, program: &Path, spec: &TestSpec, n: usize) -> Vec<std::ffi::OsString> {
-        let source = self.is_kiln(program) && !Self::two_step(spec);
+        let kiln = self.is_kiln(program);
+        let source = kiln && !self.two_step(spec);
         let oracle = program != self.cfg.compiler;
-        spec.modules[..n]
-            .iter()
-            .map(|(name, path)| {
+        let header_units = if kiln { 0 } else { spec.header_units.len() };
+        let hu = (0..header_units).map(|i| {
+            let mut f = std::ffi::OsString::from("-fmodule-file=");
+            f.push(self.header_unit_bmi(i, oracle));
+            f
+        });
+        let mut flags: Vec<std::ffi::OsString> = hu
+            .chain(spec.modules[..n].iter().map(|(name, path)| {
                 let file = if source { self.module_source(path) } else { self.bmi(name, oracle) };
                 let mut f = std::ffi::OsString::from(format!("-fmodule-file={name}="));
                 f.push(file);
                 f
-            })
-            .collect()
+            }))
+            .collect();
+        if self.cfg.bmi_image && !oracle && !source && kiln {
+            flags.push("-fkiln-bmi-image".into());
+        }
+        flags
+    }
+
+    /// The module file of `header-unit:` line `i` (the oracle's apart).
+    fn header_unit_bmi(&self, i: usize, oracle: bool) -> PathBuf {
+        self.dir.join(if oracle { format!("oracle-hu{i}.pcm") } else { format!("hu{i}.pcm") })
+    }
+
+    /// Builds each `header-unit:` into a module file for a clang
+    /// `program`: `<program> -std=<std> <args...> -fmodule-header=user -x
+    /// c++-user-header <path> -o <file>` (a quoted path, relative to the
+    /// test's directory), or `-fmodule-header=system -x c++-system-header
+    /// <name>` (an angled name). Kiln builds nothing: it builds a header
+    /// unit in-process at its import (spec/modules.md §3; header-unit
+    /// module files are §11.10). A header unit the compiler under test
+    /// rejects fails the test; one the oracle rejects makes it broken.
+    fn build_header_units(&mut self, program: &Path, spec: &TestSpec) -> Result<(), Problem> {
+        if spec.header_units.is_empty() || self.is_kiln(program) {
+            return Ok(());
+        }
+        self.scratch()?;
+        let oracle = program != self.cfg.compiler;
+        let who = if oracle { "the oracle" } else { "the compiler" };
+        for (i, hu) in spec.header_units.iter().enumerate() {
+            let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
+            c.current_dir(&self.cfg.root);
+            c.arg(format!("-std={}", spec.std));
+            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            if hu.system {
+                c.args(["-fmodule-header=system", "-x", "c++-system-header", &hu.name]);
+            } else {
+                let src = self.module_source(Path::new(&hu.name));
+                if !src.is_file() {
+                    return Err(Problem::Broken(format!(
+                        "`header-unit: \"{}\"`: no such file {}",
+                        hu.name,
+                        src.display()
+                    )));
+                }
+                c.args(["-fmodule-header=user", "-x", "c++-user-header"]).arg(&src);
+            }
+            c.arg("-o").arg(self.header_unit_bmi(i, oracle));
+            let o = self.exec(who, &c, self.cfg.compile_timeout)?;
+            if !o.success() {
+                let (open, close) = if hu.system { ('<', '>') } else { ('"', '"') };
+                let msg = format!(
+                    "{who} could not build header unit {open}{}{close} ({})\n{}",
+                    hu.name,
+                    o.describe_end(),
+                    indent(&o.stderr_str())
+                );
+                return Err(if oracle { Problem::Broken(msg) } else { Problem::Fail(msg) });
+            }
+        }
+        Ok(())
     }
 
     /// The module file of unit `name` (the oracle's apart).
@@ -485,7 +705,8 @@ impl Test<'_> {
         spec: &TestSpec,
         objects: bool,
     ) -> Result<Vec<PathBuf>, Problem> {
-        if spec.modules.is_empty() || (self.is_kiln(program) && !Self::two_step(spec)) {
+        self.build_header_units(program, spec)?;
+        if spec.modules.is_empty() || (self.is_kiln(program) && !self.two_step(spec)) {
             return Ok(Vec::new());
         }
         self.scratch()?;
@@ -517,9 +738,13 @@ impl Test<'_> {
                     spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))),
                 );
                 c.args(self.module_flags(program, spec, i));
+                if let (true, Some(k)) = (kiln, self.cfg.bmi_kind) {
+                    c.arg(format!("-fkiln-bmi-kind={k}"));
+                }
             };
             let mut steps = Vec::new();
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             base(&mut c);
             if kiln && objects {
                 let mut f = std::ffi::OsString::from("-fmodule-output=");
@@ -531,6 +756,7 @@ impl Test<'_> {
                 steps.push(c);
                 if objects {
                     let mut c = Command::new(program);
+                    crate::util::isolate_caches(&mut c);
                     base(&mut c);
                     c.arg("-c").arg(&bmi).arg("-o").arg(&obj);
                     steps.push(c);
@@ -579,6 +805,7 @@ impl Test<'_> {
             let src = self.module_source(unit);
             let obj = self.unit_object(&format!("unit{i}"), oracle);
             let mut c = Command::new(program);
+            crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
             if self.is_kiln(program) {
                 c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
@@ -647,6 +874,7 @@ impl Test<'_> {
     fn placeholder(&self, name: &str) -> Option<String> {
         let path = match name {
             "gcc_toolchain" => self.cfg.gcc_toolchain.clone()?,
+            "libcxx_modules" => self.cfg.libcxx_modules.clone()?,
             "repo_root" => self.cfg.root.clone(),
             "resource_dir" => self.cfg.root.join("resource"),
             "test_dir" => self.case.path.parent()?.to_path_buf(),
@@ -1158,7 +1386,10 @@ impl Test<'_> {
         if stdin.is_some() {
             shown.push_str(" < (stdin)");
         }
-        let cap = self.mem_limit;
+        // A sanitized program (`requires: sanitizer-runtime`) runs with no
+        // address-space cap: ASan reserves its shadow memory (gigabytes of
+        // address space, little of it resident) before `main`.
+        let cap = if spec.requires_sanitizer_runtime { None } else { self.mem_limit };
         let o = self.run_capped(&shown, &cmd, stdin, cap, self.cfg.run_timeout).map_err(|e| {
             let d = format!("could not run `{shown}`: {e}");
             if oracle { Problem::Broken(d) } else { Problem::Fail(d) }
@@ -1172,7 +1403,7 @@ impl Test<'_> {
     /// in one command or [two steps](Self::two_step); the output returned
     /// is the test file's compile's.
     fn compile_run_test(&mut self, spec: &TestSpec, exe: &Path) -> Result<Output, Problem> {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.compile(spec, &[], Some(exe));
         }
         let o = self.build_two_step(&self.cfg.compiler.clone(), spec, exe)?;
@@ -1190,7 +1421,7 @@ impl Test<'_> {
     /// Builds a `run` test's binary `exe` with `oracle`; a rejection is
     /// [`Problem::Broken`].
     fn compile_run_oracle(&mut self, oracle: &Path, spec: &TestSpec, exe: &Path) -> Check {
-        if !Self::two_step(spec) {
+        if !self.two_step(spec) {
             return self.oracle_compile(oracle, spec, &[], Some(exe)).map(drop);
         }
         let o = self.build_two_step(oracle, spec, exe)?;
@@ -1805,6 +2036,12 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
         return needs("module:", "kiln or clang");
     }
+    if !spec.header_units.is_empty() && !kind.speaks_clang() {
+        return needs("header-unit:", "kiln or clang");
+    }
+    if spec.pch.is_some() && !kind.speaks_clang() {
+        return needs("pch:", "kiln or clang");
+    }
     if spec.verify && !kind.speaks_clang() {
         return needs("verify", "kiln or clang");
     }
@@ -1864,6 +2101,19 @@ fn debugger_gate_in(
     } else {
         (Status::Skip, format!("requires `{name}` on PATH (`expect: debugger`)"))
     })
+}
+
+/// A `requires: sanitizer-runtime` test whose runtime is `missing` (the
+/// SKIP reason of `Test::missing_sanitizer_runtime`): a SKIP, or under
+/// `require` (`KILN_REQUIRE_SANITIZER_RUNTIME=1`, GitHub CI) an ERROR, so
+/// CI never passes with the runtime tests silently skipped (WP-1034).
+fn sanitizer_runtime_gate(missing: String, require: bool) -> (Status, String) {
+    if require {
+        let env = super::REQUIRE_SANITIZER_RUNTIME_ENV;
+        (Status::Error, format!("{env}=1 and the test {missing}"))
+    } else {
+        (Status::Skip, missing)
+    }
 }
 
 /// The first of `checks` that no output line after the previous match
@@ -2126,6 +2376,36 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
     None
 }
 
+/// Whether `clang` finds the host's undefined-behaviour and address
+/// sanitizer runtime archives, in
+/// either compiler-rt layout (`lib/linux/libclang_rt.<rt>-<arch>.a` or the
+/// per-target `lib/<triple>/libclang_rt.<rt>.a`). Probed once per clang.
+fn has_sanitizer_runtime(clang: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut seen = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, ok)) = seen.iter().find(|(c, _)| c == clang) {
+        return *ok;
+    }
+    let ask = |arg: &str| {
+        Command::new(clang)
+            .arg(arg)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
+    };
+    let arch = std::env::consts::ARCH;
+    let runtime_dir = ask("--print-runtime-dir");
+    let ok = ["ubsan_standalone", "asan"].iter().all(|rt| {
+        let old = ask(&format!("-print-file-name=libclang_rt.{rt}-{arch}.a"));
+        let new = runtime_dir.as_ref().map(|d| d.join(format!("libclang_rt.{rt}.a")));
+        [old, new].into_iter().flatten().any(|p| p.is_absolute() && p.is_file())
+    });
+    seen.push((clang.to_owned(), ok));
+    ok
+}
+
 #[cfg(test)]
 mod compat_tests {
     use super::{
@@ -2136,6 +2416,17 @@ mod compat_tests {
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.
+    /// WP-1034: a missing sanitizer runtime is a SKIP, or an ERROR that
+    /// names `KILN_REQUIRE_SANITIZER_RUNTIME` when CI requires the runtimes.
+    #[test]
+    fn sanitizer_runtime_gate_skips_or_errors() {
+        let why = "requires sanitizer-runtime; the oracle (clang++-22) has no UBSan/ASan runtime";
+        assert_eq!(super::sanitizer_runtime_gate(why.into(), false), (Status::Skip, why.into()));
+        let (status, msg) = super::sanitizer_runtime_gate(why.into(), true);
+        assert_eq!(status, Status::Error);
+        assert_eq!(msg, format!("KILN_REQUIRE_SANITIZER_RUNTIME=1 and the test {why}"));
+    }
+
     #[test]
     fn compat_level() {
         assert_eq!(compat_for(22, None, None), 22);

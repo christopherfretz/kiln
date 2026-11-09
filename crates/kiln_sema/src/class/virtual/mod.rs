@@ -97,6 +97,13 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_virtual_not_member_fn, vloc);
             } else if !site.in_class {
                 self.error(DiagId::sema_virtual_out_of_class, vloc);
+            } else if self.is_union(site.class) {
+                // [class.union.general]/2: a union has no virtual
+                // functions (clang `err_virtual_in_union`, which wins
+                // over the template rule below); the function is
+                // declared non-virtual and invalid.
+                self.error(DiagId::sema_union_virtual, vloc);
+                out.invalid = true;
             } else if self.templ.cur.is_some() {
                 // [temp.mem]/3: a member function template is not virtual
                 // (clang `err_virtual_member_function_template`; the
@@ -145,6 +152,9 @@ impl Sema<'_, '_> {
             } else {
                 self.overridden_methods(site.class, site.name, ty)
             };
+            if !is_static && self.std < kiln_lex::Std::Cxx23 {
+                self.check_override_ref_mix(site.class, site.name, ty, d.name_loc());
+            }
             if !out.overridden.is_empty() && !is_static {
                 *spec = spec.with_virtual(true);
             }
@@ -361,7 +371,7 @@ impl Sema<'_, '_> {
     /// Visits the bases of `class` depth-first, left to right (a virtual
     /// base once), not descending below a base where `visit` returns
     /// true.
-    fn overridden_walk(
+    pub(crate) fn overridden_walk(
         &self,
         class: DeclId,
         seen_v: &mut FxHashSet<DeclId>,
@@ -783,6 +793,10 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        let computed = matches!(
+            self.ast.decls.get(m).ty().map(|t| self.written_exc_spec(t)),
+            Some(ExcSpec::Deferred(_))
+        );
         let os: Vec<DeclId> = overridden(&self.ast, m).collect();
         for o in os {
             let oloc = self.ast.decls.get(o).loc();
@@ -794,7 +808,7 @@ impl Sema<'_, '_> {
             if mexc.is_nothrow() {
                 return;
             }
-            if oexc.is_nothrow() {
+            if self.override_exc_spec_lax(oexc, mexc, computed) {
                 // clang: overriding a GNU `nothrow` one is the
                 // `-Wmicrosoft-exception-spec` extension (WP-186).
                 let gnu = self.ast.decls.get(o).ty().map(|t| self.written_exc_spec(t))

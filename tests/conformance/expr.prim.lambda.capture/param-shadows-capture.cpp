@@ -2,9 +2,9 @@
 // be the name of a parameter of the lambda. Found by the clang negative-test
 // run (WP-912).
 //@ std: c++20
-//@ xfail(kiln): WP-912 follow-up, lambda parameters shadowing explicit captures are accepted
 //@ expect: compile-fail
 //@ diag: 10:17 error "a lambda parameter cannot shadow an explicitly captured entity"
+//@ diag: 10:10 note "variable 'x' is explicitly captured here"
 void f() {
   int x = 0;
   (void)[x](int x) { return x; };

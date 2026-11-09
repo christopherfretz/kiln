@@ -3,7 +3,9 @@
 //! qualifiers ([class.static.mfct]/2) and base-specifiers
 //! ([class.derived.general]).
 
-use kiln_ast::decl::{Access, BaseSpec, DeclKind, DefinitionBits, TagKind, VarSpec, VarStorage};
+use kiln_ast::decl::{
+    Access, BaseSpec, DeclFlags, DeclKind, DefinitionBits, TagKind, VarSpec, VarStorage,
+};
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{Quals, RefQual, TypeView};
@@ -283,7 +285,7 @@ impl Sema<'_, '_> {
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);
         if invalid {
-            self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
         self.check_sizeless_var(v, false);
         self.record_constinit(v, ds);
@@ -433,11 +435,11 @@ impl Sema<'_, '_> {
         let int_like = self.ast.types.is_integral(ty) || self.ast.types.as_enum(ty).is_some();
         if !quals.is_const() || self.ast.types.is_reference(ty) {
             self.error(DiagId::sema_static_member_nonconst_init, vn.loc());
-            self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
         } else if int_like {
             if quals.is_volatile() {
                 self.error(DiagId::sema_static_member_volatile_init, vn.loc());
-                self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
                 return;
             }
             let loc = self.begin_loc(e);
@@ -457,7 +459,7 @@ impl Sema<'_, '_> {
                     let at = self.culprit_loc(e);
                     self.error(DiagId::sema_static_member_init_not_ice, at);
                 }
-                self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
             }
         } else if self.is_literal_type(ty) {
             if self.ast.types.is_floating(ty) {
@@ -473,12 +475,12 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_static_member_literal_init, vn.loc())
                     .arg(self.ty_arg(ty));
                 self.emit(msg);
-                self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+                self.ast.decls.set_flags(v, DeclFlags::INVALID);
             }
         } else {
             let msg = self.diag(DiagId::sema_static_member_bad_init, vn.loc()).arg(self.ty_arg(ty));
             self.emit(msg);
-            self.ast.decls.set_flags(v, kiln_ast::decl::DeclFlags::INVALID);
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
         }
     }
 
@@ -570,7 +572,7 @@ impl Sema<'_, '_> {
             let def = self.ast.definition(b).unwrap_or(b);
             // clang `CheckBaseSpecifier`: "if the base class is invalid
             // the derived class is as well" (spec/sema-class.md §2.3).
-            if self.ast.decls.get(def).has(kiln_ast::decl::DeclFlags::INVALID) {
+            if self.ast.decls.get(def).has(DeclFlags::INVALID) {
                 self.invalidate_defining(r);
             }
             if self.ast.decls.record(def).is_some_and(|x| x.defn.contains(DefinitionBits::FINAL)) {
@@ -691,6 +693,9 @@ impl Sema<'_, '_> {
             s.note_default_init_full_expr();
             s.act_on_full_expr(c)
         });
+        if !self.check_default_arg_locals(c) {
+            self.ast.decls.set_flags(p, DeclFlags::INVALID);
+        }
         let _ = self.ast.decls.set_default_arg(p, c);
     }
 

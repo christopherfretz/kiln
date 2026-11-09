@@ -1158,6 +1158,11 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
 - Block layout, forwarding-block removal and the dead-block cleanup
   follow clang -O0. A statement with no insertion point is skipped unless
   it contains a label (`ContainsLabel`).
+- A declaration in unreachable code is still emitted. A local variable's
+  alloca and NRVO flag, and a VLA's bound computation, first reopen a
+  block with `ensure_insert_point` (clang `EnsureInsertPoint` in
+  `EmitAutoVarAlloca` and `EmitVariablyModifiedType`). Every
+  `fir.cur().expect(fir::OPEN_BLOCK)` depends on this (WP-971).
 - Each loop gets a distinct `!llvm.loop` node with
   `llvm.loop.mustprogress`. A loop with a constant-true or absent
   condition and an empty body clears `mustprogress` on the function and
@@ -1361,6 +1366,22 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   marks trap and handler calls at `-O0`/`optnone` and for checks outside
   the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
   `memory(inaccessiblemem: write)` from LLVM 22.
+- **`-ftrapv`, `-ftrapv-handler=`, `-fsanitize-merge=`** (WP-1032;
+  `CodegenOptions::trapv`, `trapv_handler`, `SanitizeOptions::merge`;
+  spec/driver.md). `-ftrapv` checks the signed operations the sanitizer
+  leaves alone with the empty kind: `with.overflow` plus a bare trap,
+  clang's `EmitTrapCheck`, whose trap block is shared like the
+  sanitizer's. With `-ftrapv`, a handler name routes every overflow check through
+  clang's `EmitOverflowCheckedBinOp` handler block. The merge set
+  splits trap blocks and adds `nomerge` as clang 20+.
+- **Ignorelists** (WP-1032; `ignorelist.rs`, `class_b.rs`
+  `ignored_sanitizers` / `global_sanitizer`): a function an entry
+  names for some sanitizers is treated as `no_sanitize` of them (its
+  `sanitize_*` attributes and UBSan checks go, including in its
+  outlined and implicit helpers); a global loses its address/hwaddress
+  instrumentation and, for `=init`, `sanitize_address_dyninit`; at
+  `-fclang-compat=22` a `type:` entry elides overflow and implicit
+  conversion checks of that type. Rules in spec/driver.md "Sanitizers".
 
 - **UBSan type and value checks** (WP-871; docs/design/sanitizers.md
   §1.5 has the coverage table). Each is clang 19's function of the
@@ -3835,11 +3856,15 @@ guarantees it a constant initializer and a trivial destructor
 - **Calls: `-Wpsabi`** (`psabi.rs`, clang
   `X86_64TargetCodeGenInfo::checkFunctionCallABI`). On x86-64 only, each
   direct call, member call and constructor call checks its arguments in
-  order, then the return type. The first vector wider than 128 bits warns
-  `AVX vector argument|return of type T without 'F' enabled changes the
-  ABI` (`cg_avx_calling_convention`, group `psabi`), with F = `avx` up to
-  256 bits and `avx512f` beyond, and ends the check. kiln has no
-  per-function target features, so clang's mismatch error cannot arise.
+  order, then the return type. The first vector wider than 128 bits,
+  with F = `avx` up to 256 bits and `avx512f` beyond, is checked against
+  the caller's and the callee's feature maps (WP-1000: the command line's,
+  or a `target("...")` attribute's, spec/driver.md "x86-64 target
+  features"), and ends the check: neither has F warns `AVX vector
+  argument|return of type T without 'F' enabled changes the ABI`
+  (`cg_avx_calling_convention`, group `psabi`); exactly one has it is
+  the same text as an error (`cg_avx_calling_convention_mismatch`, clang
+  `err_avx_calling_convention`); both have it is silent.
   - T is the callee's declared (sugared) parameter type. For a call that
     passes an object argument, it is the parameter after that one (clang
     counts `this`). Through `...` it is the argument's own type, and for
@@ -3849,8 +3874,10 @@ guarantees it a constant initializer and a trivial destructor
     call, the member name for a member call, the operator for most
     overloaded operators.
   - Calls through a pointer are not checked. At `-fclang-compat=22`, a
-    callee that is not externally visible is skipped too.
-  - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`.
+    callee that is not externally visible does not get the warning (the
+    error still applies).
+  - Tests: `ext.vector/ir-psabi-x86_64.cpp`, `ir-psabi-internal-x86_64*.cpp`,
+    `crates/kiln_driver/tests/codegen.rs` `x86_avx_calling_convention`.
 - **`bool` ext-vector `?:` conditions** (clang 20+) select on the
   condition's `<N x i1>` lanes with one `select`
   (`emit_vector_conditional`; `ext.vector/ir-bool-conditional*.cpp`,

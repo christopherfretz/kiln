@@ -236,6 +236,18 @@ translation unit that fails costs about what it costs clang:
   as clang does (`Diag::allow_duplicate`). The diagnostic is at the
   member access's location (`(g.f)` at its `(`). Under SFINAE nothing is
   recovered. `expr.ref/bound-member-recovery-by-call.cpp`.
+- **Nothing fails silently** (WP-1054). A declaration kiln cannot form
+  produces an error, a SFINAE failure or a "not yet implemented" note,
+  never nothing: recovery may stay quiet only because an earlier error
+  already covers the failure. For class template instantiation this is
+  checked, not just promised: `Sema::emit` counts every error-class
+  emission (printed, captured under SFINAE, or suppressed), and a member
+  whose instantiation fails with no new emission, in a TU without errors,
+  is reported as `kiln: internal error: member 'x' of 'A<int>' was not
+  instantiated and no diagnostic says why` (`failure_mark` /
+  `failed_silently_since`, `class_body_with`; spec/sema-templates.md §4.6
+  "No silent drop"). A member declaration's substitution failure is a
+  hard error, never SFINAE ([temp.inst]/3, [temp.deduct.general]/8).
 
 ## 2. Scopes (`scope.rs`)
 - **Kinds:** `ScopeKind` is one of TranslationUnit, Namespace,
@@ -1763,9 +1775,8 @@ and returns the scope it names:
     name), and the declaration specifiers are invalid, so the parameter,
     and with it the function, is invalid: no follow-on "out-of-line
     definition does not match" for a member or a constructor. The parser
-    reports it after the tag's definition (`diag_type_defined_in_param`,
-    for `DeclaratorContext::Prototype` except a non-type template
-    parameter, whose "cannot be defined in a type specifier" is WP-946's).
+    reports it after the tag's definition (`diag_type_defined_in`; the
+    other forbidden contexts are §4.4.1 "Forbidden type definitions").
     The tag itself is declared in the current context, except that a
     complete class's member list is frozen (spec/ast.md §2.4): in the
     parameter clause of an out-of-line member definition it goes to the
@@ -1838,6 +1849,201 @@ and returns the scope it names:
     class.union.anon/alias-of-unnamed-class-is-not-anonymous-run.cpp.
 - **Unnamed tags named by a typedef** record their typedef with
   `set_typedef_for_anon` ([dcl.typedef]/9).
+- **Elaborated-type-specifier checks** (WP-1017, [dcl.type.elab]):
+  - *Wrong class-key or `enum`*. `use of 'X' with tag type that does not
+    match previous declaration` is reported at the class-key, with
+    `previous use is here` at the previous declaration
+    (`Sema::diag_wrong_tag`). This covers references, friends, friend
+    class templates, specializations and references to specializations
+    (named `'B<float>'`, as clang 19 does), and the instantiation of a
+    dependent `struct T::X`. A reference recovers to the declaration it
+    found. Test: `dcl.type.elab/wrong-tag-kind.cpp`.
+  - *`enum class E` as a reference or friend* (no enum-base). The error
+    `reference to enumeration must use 'enum' not 'enum class'`
+    (`-Welaborated-enum-class`, an error by default) is reported at the
+    `class`/`struct` keyword. Recovery is a plain `enum E` reference.
+    Test: `dcl.type.elab/elaborated-enum-class.cpp`.
+  - *`friend enum E;`* gets `elaborated enum specifier cannot be declared
+    as a friend` (`-Wfriend-enum`) + `remove 'enum' to befriend an enum`,
+    at `enum`. It also fires for a dependent `friend enum T::E;`. Test:
+    `class.friend/friend-enum.cpp`.
+  - *Ambiguous qualified lookup* (`struct N::x` with `x` found through
+    two using-directives) gets `reference to 'x' is ambiguous`. The
+    candidates are listed latest nominated first, as clang does. A
+    qualified reference that finds no tag declares a hidden, invalid
+    recovery tag, so later uses get no cascade. Test:
+    `dcl.type.elab/ambiguous-qualified-elab.cpp`.
+  - *Unknown specialization*. `struct A<T>::K` naming a member of another
+    class template's unknown specialization ([temp.dep.type]/6) is
+    dependent and is not looked up. It used to be rejected when the
+    primary has no `K`. Test:
+    `temp.dep.type/elaborated-unknown-specialization.cpp`.
+
+### 4.4.1 Declaration rules (WP-1015)
+Rules clang enforces at declaration time that kiln accepted (found by the
+clang negative-test run, docs/status/accepts-invalid.md). Each follows
+clang 19's wording, location and recovery. None is re-run on
+instantiation unless stated.
+- **Members named as their class** ([class.mem.general]/22,
+  `class/member_name.rs`): a static data member, member type, member
+  template, unscoped enumerator or using-declaration named as the class is
+  "member 'X' has the same name as its class" at the name
+  (`diagnose_class_name_shadow`). A non-static data member is reported only
+  when the class has a user-declared constructor, once, as the definition
+  completes (`check_field_named_as_class`). Tests:
+  class.mem/member-named-as-class{,-ok}.cpp.
+- **Allocation function declarations** ([basic.stc.dynamic.allocation]/1,
+  [basic.stc.dynamic.deallocation]/1-2, `alloc_decl.rs`): not in a
+  namespace other than the global one and not `static` at global scope; the
+  return type is `void *` (`void`) and not dependent; a template has at
+  least two parameters; the first parameter is `std::size_t` (`void *`)
+  and not dependent; an allocation function's first parameter has no
+  default argument. The first violation in clang's order is reported at
+  the name. Destroying and type-aware (`std::type_identity`) forms and
+  undeduced return types are not checked. Tests: basic.stc.dynamic/.
+- **The main function** ([basic.start.main], `main_decl.rs`): the
+  parameter forms `()`, `(int, char**)`, `(int, char**, char**)` (with
+  clang's `const` extension) and no more than three; not a template; not
+  deleted; not overloaded (another signature redeclares it, so the merge
+  reports conflicting types); a variable named `main` at global scope, or
+  a block-scope `extern` one in a global function, is ill-formed. All off
+  under `-ffreestanding`. `-Wmain` warnings are not issued. Tests:
+  basic.start.main/.
+- **Union, bit-field and static data member rules** (`class/member_rules.rs`):
+  - [class.static.data]/4: an initializer on the namespace-scope
+    definition of a member initialized in-class is reported at the new
+    initializer with a note at the first and dropped;
+  - [class.union.general]/6 (CWG1460): a second variant member with a
+    default member initializer (anonymous members searched), with a note
+    at the first;
+  - a union has no virtual functions; an anonymous bit-field takes no
+    qualifiers.
+  Tests: class.static.data/, class.union/, class.bit/.
+- **Ref-qualifier overloads** ([over.load]/2.3, CWG2496,
+  `overload/redecl.rs`): before C++23 a member function with the
+  parameter-type-list of an earlier one whose ref-qualifier differs, one
+  of them having none, is an error at the name with a note; both stay
+  declared. From C++23 the two correspond when their cv-qualifiers agree,
+  which makes the later one a member redeclaration. The virtual-override
+  form (clang 19 before C++23) reports once per base function and neither
+  overrides. Tests: over.load/ref-qualifier-*.cpp,
+  class.virtual/override-ref-qualifier-*.cpp.
+- **Member redeclarations**: a member class or enumeration redeclared
+  without a definition is `-Wredeclared-class-member` (an extension
+  warning) with a note; a qualified member tag is "extra qualification"
+  (qualifier naming the class) or an error otherwise; a dependent
+  using-declarator repeated with the same canonical qualifier and kind is
+  a redeclaration ([namespace.udecl]/10, `using.rs`). Tests:
+  class.mem.general/member-redeclared-tag*.cpp, dcl.meaning/qualified-member-tag*.cpp,
+  namespace.udecl/dependent-using-*.cpp.
+- **Default arguments** ([dcl.fct.default], `decl.rs`):
+  - /3: a default argument on a parameter of a function declarator that
+    is not the declaration's own clause (a function pointer, reference,
+    typedef or alias, a type-id, a nested parameter, a return type) is
+    "default arguments can only be specified for parameters in a function
+    declaration" at the parameter name, or where it would be; the
+    argument is dropped. The parser calls `act_on_nonfunc_default_arg`;
+    a lambda's own clause, a requires-expression parameter and an
+    exception-declaration (as clang) are not checked.
+  - /8: `this` does not appear, even unevaluated; a lambda-expression
+    captures nothing (the first written or implicit capture is reported
+    at its location; init-capture initializers are searched, lambda
+    bodies are not) (`check_default_arg_refs`).
+  - /9: a local variable (any block-scope variable, `static`, `extern`
+    and `thread_local` included, or a structured binding of one) is not
+    odr-used. The check runs on the converted full-expression, so a
+    constant read by value is accepted while `&c` or binding a reference
+    is not; in a template definition the constant non-odr-uses are
+    computed from the potential results (`check_default_arg_locals`).
+    Every use is reported and the parameter becomes invalid.
+- **Block-scope inline** ([dcl.inline]/5): `inline` on a block-scope
+  function declaration (also in a lambda body or a template) is "inline
+  declaration of 'g' not allowed in block scope" at `inline`; members of
+  local classes are unaffected.
+- **Lambda parameter shadowing a capture** ([expr.prim.lambda.capture]/5,
+  `lambda/capture.rs`): a parameter named as an explicit capture (simple,
+  init or pack capture) is "a lambda parameter cannot shadow an explicitly
+  captured entity" at the parameter with the note "variable 'x' is
+  explicitly captured here"; implicit captures do not count. clang's
+  follow-on "reference to 'w' is ambiguous" for an init-capture is not
+  reproduced.
+- **Friend template defaults** ([temp.param]/12, `class/friend.rs`): a
+  default template argument on a friend template declaration that is not
+  a function template definition is "default template argument not
+  permitted on a friend template" at each defaulted parameter (its name,
+  or the `=` when unnamed); the default no longer counts for the
+  redeclaration rules. A friend class template in a dependent context is
+  not checked (clang's `CheckClassTemplate`).
+- **Forbidden type definitions** ([dcl.type.general]/3, [dcl.fct]/17,
+  [stmt.pre]/2, [temp.alias]/2, [dcl.enum]/2; WP-946, clang's `ActOnTag`
+  and `GetDeclSpecTypeForDeclarator`). A class or enumeration may be
+  defined only in the decl-specifier-seq of a simple-declaration or
+  member-declaration (any declarators, `typedef` included), a
+  for-init-statement, or a non-template alias-declaration; a lambda body
+  is a fresh context anywhere. The parser classifies the site
+  (`DeclSpec::tag_site`, `TagSite`) and `diag_type_defined_in` reports, at
+  the tag's name (the keyword when unnamed), one of:
+  - "cannot be defined in a type specifier": a type-id (`sizeof`,
+    `alignof`, `typeid`, casts, `__builtin_offsetof`, `decltype`, `new
+    (T)`, template arguments, a type-parameter default), a non-type
+    template parameter type, an exception-declaration, a dynamic
+    exception specification (its rejected types are dropped, so `throw(S
+    {})` becomes `throw()` with no C++17 error) and a conversion-type-id;
+  - "in an enumeration": an enumerator's initializer;
+  - "in a parameter type": a tag declared in a function prototype scope
+    (a parameter, a default argument, a noexcept operand). clang streams
+    the identifier, so an unnamed enumeration prints `(null)`; an unnamed
+    class is not a prototype-scope declaration and is a type specifier;
+  - "in a condition": a condition declaration, including a for condition
+    (a range declaration is "types may not be defined in a for range
+    declaration");
+  - "in a type alias template";
+  - "in the result type of a function": once per function declarator
+    chunk, so `struct S {} f(), g();` reports twice at the same location
+    (`allow_duplicate`); a nested function type reports this after the
+    site's own error.
+  A rejected enumeration's body is skipped and a rejected class's is
+  parsed; either way the declaration specifiers become an error type and
+  no follow-on mismatch is reported. A tag nested in another declaration
+  (a parameter, a type-id, a condition) takes none of the open template
+  heads (`hide_open_heads`), so its members are ordinary members and a
+  nested template-id definition is "template specialization requires
+  'template<>'". A `new struct S {}` allocates the elaborated type (the
+  braces are the initializer). The name is the tag's type printed fully
+  scoped (`'C::S'`); a scope stops at the first enclosing function, as in
+  clang's `TypePrinter::AppendScope`, so local types print unqualified. A
+  tag inside an enumeration is scoped by it at 19 (`'E::S'`); clang 22
+  drops an unscoped enumeration's scope (`'S'`) and keeps a scoped one.
+  Not reproduced: clang's `type-id cannot have a name` and its "expected
+  '>'" recovery for `W<struct S {}>`, the class scope clang gives an
+  unnamed tag in an out-of-line static member initializer
+  (`'A::(unnamed struct …)'`), and clang 22's `struct (unnamed at …)`
+  printing. Tests: dcl.type/type-defined-in-type-specifier.cpp,
+  dcl.type/type-definition-allowed-contexts-run.cpp,
+  dcl.fct/type-defined-in-{default-argument,result-type}.cpp,
+  stmt.pre/type-defined-in-condition.cpp,
+  temp.alias/type-defined-in-alias-template.cpp,
+  except.handle/type-defined-in-handler.cpp,
+  class.conv.fct/type-defined-in-conversion-type.cpp,
+  expr.new/type-defined-in-new-type-id.cpp,
+  dcl.enum/type-defined-in-enumeration{,-19}.cpp,
+  temp.param/lambda-local-class-in-parameter-type.cpp.
+- **Template-declarations define no declarators** ([temp.pre]/5): when
+  any template head is open (a class template, a partial or explicit
+  specialization, an out-of-line member class, an explicit instantiation
+  recovered as a specialization; `in_template_declaration`), a class
+  definition must be followed by `;`: clang's "expected ';' after struct"
+  at the end of the body, after which the rest parses as a new
+  declaration. A concept definition consumes its head before its
+  constraint expression (`act_on_concept_head`), so a tag there is a
+  type specifier. Test: temp.pre/class-definition-takes-no-declarator.cpp.
+- **Incomplete result type** ([dcl.fct.def.general]/2): a function
+  definition whose return type is an incomplete class is "incomplete
+  result type 'X' in function definition" at the name with the forward
+  declaration note, checked before the parameters, and the function is
+  invalid. A dependent, `void`, reference, undeduced or error return type,
+  and a deleted or already invalid function, are skipped. Test:
+  dcl.fct.def.general/incomplete-result-type.cpp.
 
 ### 4.5 Attributes
 - **Policy: kiln never accepts a semantics-changing construct without
@@ -1862,7 +2068,9 @@ and returns the scope it names:
   - `deprecated`, `noreturn`, `fallthrough`
   - `likely`/`unlikely`
   - `no_unique_address`
-  - `alignas`/`aligned`, `packed`
+  - `alignas`/`aligned`, `packed`. `alignas(type-id)` checks its operand as
+    `alignof` does: `invalid application of 'alignas' to an incomplete type
+    'T'` ([dcl.align]/3; WP-1017, `dcl.align/alignas-void.cpp`).
   - `used`, `noinline`, `always_inline`, `weak`, `const`, `pure`, `cold`,
     `hot` (`AttrKind::HOT`, WP-172)
   - `optnone` / `minsize` (GNU syntax or `clang::`; `gnu::` and
@@ -3363,6 +3571,21 @@ specification as written (`TypeNames` prints ` noexcept`,
 - *Redeclarations*, overriders more lax than the base, and
   [conv.fctptr] function-pointer conversions use clang's wording. The
   tests are in `tests/conformance/except.spec/`.
+- *Overriders* (WP-1017; clang `CheckOverridingFunctionExceptionSpec`).
+  A dynamic `throw(T...)` of an overrider is compared type by type with
+  the base's (`override_exc_spec_lax`). Each type must be caught by one
+  of the base's, by [except.handle]/3 (`handler_can_catch`): the same
+  type, an unambiguous public base, a pointer qualification or
+  derived-to-base conversion, `void *`, or `std::nullptr_t` for a pointer
+  handler. A reference handler to a pointer must be `const`. Lists with a
+  dependent type or a pack expansion are checked only at instantiation.
+  Clang also rejects some of those at definition time; kiln does not.
+  The checks clang runs when the overrider is declared (no written
+  specification) are reported before the delayed ones, across the whole
+  outermost class. Not checked: the nested function-type rule
+  (`CheckParamExceptionSpec`) and implicit members whose computed
+  specification is a type list. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  `class.virtual/exception-spec-dynamic-pack-nested.cpp`.
 - *Function references* ([dcl.init.ref]/4, [conv.fctptr]). A function
   type `T noexcept` is reference-compatible with `T`; the rule and its
   identity ranking are in spec/sema-conv.md (WP-290). More tests:
@@ -7295,7 +7518,7 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   operator with the right operand's range, through the runtime-behaviour
   deferral (clang `CheckShiftOperands` / `CheckMultiplyDivideOperands` /
   `CheckRemainderOperands` with `IsCompAssign`).
-- **Never constant (WP-468, WP-873).** A `constexpr` or `consteval`
+- **Never constant (WP-468, WP-873, WP-945).** A `constexpr` or `consteval`
   function that can never be constant is ill-formed, no diagnostic
   required ([dcl.constexpr]/6); clang runs `isPotentialConstantExpr` on
   each written definition when `CheckConstexprFunctionBodies` is on:
@@ -7342,14 +7565,46 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
     `CallExpr` or `CXXOperatorCallExpr`) is not evaluated as a value:
     naming a builtin or a consteval function there is no failure, only
     the arguments (and a member call's object) are walked (WP-962);
-  - conservative on builtins (WP-962): a failure in a call of a builtin
-    is reportable only for the builtin table's `Oven::No` rows (each
-    checked against clang 19's `__has_constexpr_builtin`: clang's
-    evaluator rejects them as "subexpression not valid in a constant
-    expression"); any other builtin, in the table or not, is opaque: a
-    subexpression calling one that fails is taken apart and the call
-    itself is unknown. A failure noted as a kiln limitation (`kiln: ...
-    not supported yet`) is never reported.
+  - builtins follow clang's own table, not the Oven (WP-945): kiln's
+    Oven folds more than clang's evaluator (the P0533 `<cmath>` builtins
+    and their library twins, as GCC does) and notes some calls its own
+    way, so a builtin call never takes its result or failure from the
+    Oven. `Sema::clang_constexpr_builtin` (set by the parser) asks
+    kiln_pp's `__has_builtin` / `__has_constexpr_builtin` tables for the
+    target, `-std`, GNU mode and `-fclang-compat`
+    (`__builtin_abs` is constexpr from clang 22):
+    - a non-library builtin clang does not evaluate (`__builtin_floor`,
+      `__builtin_trap`, `__builtin_sqrt`, `__builtin_unreachable`) fails
+      at its callee, before its arguments: "subexpression not valid in a
+      constant expression" at the callee's start;
+    - any other non-library builtin (constexpr in clang, or unknown to
+      it) is opaque: its arguments are walked and its value is unknown;
+      `__builtin_constant_p`, `__builtin_object_size`,
+      `__builtin_dynamic_object_size`, `__builtin_classify_type`,
+      `__builtin_assume` and `__assume` walk no argument,
+      `__builtin_expect{,_with_probability}` only the first;
+    - a library builtin (C linkage, `lib_builtin_info`) that clang
+      constant-evaluates (`strlen`, `memcpy`, `strcmp`) always fails:
+      "non-constexpr function 'NAME' cannot be used in a constant
+      expression" at the call, without `declared here` (clang's
+      `isBuiltinCall` refusal outside a constant-evaluated context);
+    - any other library builtin (`fabs`, `abs`) is an ordinary
+      non-constexpr function: its arguments are evaluated first, so a
+      call fails only when they are all known, with `declared here` at
+      the latest declaration;
+    - a decayed builtin that reaches the Oven other than as a direct
+      callee (`BuiltinFnToFnPtr`) gets the generic "subexpression not
+      valid" note, as clang's `PointerExprEvaluator` has no case for it.
+    For a function evaluated as a call (below), a first walk in which
+    only such builtin calls can fail runs before the Oven call, so the
+    Oven never decides a builtin call. A failure noted as a kiln
+    limitation (`kiln: ... not supported yet`) is never reported;
+  - an `asm` statement fails ("subexpression not valid in a constant
+    expression" at the statement, clang `EvaluateStmt`'s default), with
+    or without parameters (WP-915);
+  - a function declared in a system header is never checked, even under
+    `-Wsystem-headers` (clang skips `CheckConstexprFunctionBody` there;
+    libstdc++'s `<cmath>` overloads call `__builtin_acosf`);
   Kiln never reports a function clang accepts; it misses some clang
   reports because clang tracks local variables (`int z = 0; if (z)
   ...`) and keeps evaluating past a quiet nested call (WP-873
@@ -7367,7 +7622,16 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/potential-constant-builtin-{fabs,strcmp,not-constexpr}.cpp`,
   `dcl.constexpr/potential-constant-builtins-spread.cpp`,
   `dcl.constexpr/potential-constant-consteval-operator-template.cpp`,
-  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`.
+  `dcl.constexpr/never-constant-direct-callee-cxx20.cpp`,
+  `dcl.constexpr/never-constant-builtin-not-evaluated-cxx20.cpp`,
+  `dcl.constexpr/never-constant-library-builtin-cxx20.cpp`,
+  `dcl.constexpr/never-constant-builtin-abs-clang19.cpp`,
+  `dcl.constexpr/potential-constant-builtin-abs-clang22.cpp`,
+  `dcl.constexpr/never-constant-builtin-cxx23.cpp`,
+  `dcl.constexpr/potential-constant-builtin-cxx23.cpp`,
+  `dcl.constexpr/potential-constant-builtin-off-path-cxx20.cpp`,
+  `dcl.constexpr/potential-constant-system-header-cxx20.cpp`,
+  `dcl.constexpr/constexpr-asm-never-constant.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

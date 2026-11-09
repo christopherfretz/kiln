@@ -16,6 +16,7 @@
 
 mod absolute_value;
 mod align_redecl;
+mod alloc_decl;
 mod annot;
 mod arm_builtins;
 mod asm;
@@ -23,6 +24,8 @@ mod attr_cond;
 pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
+mod bmi_ast;
+mod bmi_image;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -80,6 +83,7 @@ mod local_friend;
 pub mod lookup;
 mod loop_hint;
 mod macro_fixit;
+mod main_decl;
 mod meta;
 mod missing_noreturn;
 pub mod modules;
@@ -143,12 +147,14 @@ use kiln_ast::{Ast, AstBuilder, DeclId, ExprId, QualType};
 use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
+pub use bmi_ast::CarriedSection as CarriedConstants;
+pub use bmi_image::ModuleImage;
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
-pub use decl::{NameClass, TagUse};
+pub use decl::{NameClass, TagDefinedIn, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
+    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit};
@@ -156,6 +162,7 @@ pub use gnu::{OffsetofComponent, StmtExprScope};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
+pub use never_constant::BuiltinQuery;
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 pub use template_id_typo::TemplateIdTypo;
@@ -336,6 +343,9 @@ pub struct Sema<'a, 'sm> {
     /// `LangOptions::NoBuiltinFuncs`): each is not recognized as a
     /// library builtin; `std-<name>` names a `std` one (WP-808).
     pub no_builtin_fns: Vec<String>,
+    /// `-ffreestanding` (clang `LangOptions::Freestanding`): `main` is
+    /// an ordinary name ([basic.start.main]/1; WP-1015).
+    pub freestanding: bool,
     /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
     /// default on; WP-808): off, the sized global `operator delete` and
     /// `operator delete[]` are not declared implicitly, and a global
@@ -350,6 +360,17 @@ pub struct Sema<'a, 'sm> {
     /// by the parser from the preprocessor's): the names a `no_builtin`
     /// attribute accepts (WP-808).
     pub lib_builtin_name: fn(&str, bool) -> bool,
+    /// Whether clang knows builtin `name` and constant-evaluates it
+    /// (`__has_builtin` and `__has_constexpr_builtin`, the `Constexpr`
+    /// markers of clang's `Builtins.td`) for the target, dialect and
+    /// `-fclang-compat` level of the query: `None` when clang does not
+    /// know it, else `Some(constexpr)`. Set by the parser from the
+    /// preprocessor's tables; the default knows no builtin (WP-945, the
+    /// never-constant check).
+    pub clang_constexpr_builtin: fn(&str, BuiltinQuery) -> Option<bool>,
+    /// The never-constant walk looks only at calls of builtins clang
+    /// does not constant-evaluate (`never_constant.rs`).
+    nc_strict_only: bool,
     /// The functions whose `no_builtin` attribute waits for their
     /// definition (clang checks the declarator's definition kind), with the
     /// attribute's location: a `{` body clears one, `= default` / `=
@@ -734,6 +755,11 @@ pub struct Sema<'a, 'sm> {
     /// operator whose built-in fallback fails, spec/sema-overload.md
     /// §6.2): set and cleared around the fallback.
     pub(crate) trailing_notes: std::cell::RefCell<Vec<Diag>>,
+    /// The errors [`Sema::emit`] was given, whether it printed, captured
+    /// (a SFINAE context, a held-back typo) or suppressed them: what
+    /// proves a failed instantiation step was diagnosed
+    /// ([`Sema::failure_mark`]; spec/sema-templates.md §4.6, WP-1054).
+    pub(crate) failures: std::cell::Cell<u64>,
     /// The designator warnings of a braced list checked in a template
     /// definition, by its semantic `InitListExpr`: an instantiation
     /// shares the non-dependent list but issues them again, as clang's
@@ -1059,6 +1085,12 @@ pub struct Sema<'a, 'sm> {
     /// naming a non-template class is also clang's "specialization of
     /// member does not specialize an instantiated member".
     pub extraneous_tag_head: Option<Diag>,
+    /// Set by the parser for a class declared inside another declaration
+    /// (a parameter, a type-id, a condition): it consumes no template
+    /// head, which belongs to the enclosing declaration ([temp.pre]/1;
+    /// `template<class T> using A = struct S {};` declares no class
+    /// template). Read and cleared by [`Sema::act_on_tag`].
+    pub nested_tag: bool,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
@@ -1174,6 +1206,8 @@ pub struct Sema<'a, 'sm> {
     pub(crate) ptrdiff_t_sugar: QualType,
     /// C++20 modules: the units being read (spec/modules.md).
     pub(crate) modules: modules::ModSema,
+    /// Kind-2 module files: carried constant results (spec/modules.md §11.11).
+    pub(crate) bmi: bmi_ast::BmiState,
     /// The decl-specifier nullability markers awaiting their declarator
     /// and the qualifier each stands for (`nullability.rs`).
     pub(crate) declspec_nulls: Vec<(QualType, NullSpec)>,
@@ -1243,7 +1277,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sized_deallocation: true,
             char8: None,
             no_builtin_fns: Vec::new(),
+            freestanding: false,
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
+            clang_constexpr_builtin: |_, _| None,
+            nc_strict_only: false,
             no_builtin_pending: Vec::new(),
             math_errno: true,
             cfg_dump: false,
@@ -1341,6 +1378,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             spare_oven: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
+            failures: std::cell::Cell::new(0),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
             null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -1423,6 +1461,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             extraneous_tag_head: None,
+            nested_tag: false,
             declarator_type_invalid: false,
             lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,
@@ -1454,6 +1493,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             signed_size_t_sugar: ptrdiff_t,
             ptrdiff_t_sugar: ptrdiff_t,
             modules: modules::ModSema::default(),
+            bmi: bmi_ast::BmiState::default(),
             declspec_nulls: Vec::new(),
         };
         s.declare_size_t_sugar();
@@ -1497,6 +1537,21 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.diags.error_count() > 0
     }
 
+    /// A point to check, with [`Sema::failed_silently_since`], that a
+    /// failure after it was diagnosed.
+    pub(crate) fn failure_mark(&self) -> u64 {
+        self.failures.get()
+    }
+
+    /// Whether a step begun at `mark` that failed did so without any
+    /// diagnostic: no error was given to [`Sema::emit`] since (printed,
+    /// captured or suppressed), and none was ever printed (a failure
+    /// that names a declaration an earlier error left invalid stays
+    /// quiet, clang's `hasUncompilableErrorOccurred`).
+    pub(crate) fn failed_silently_since(&self, mark: u64) -> bool {
+        self.failures.get() == mark && self.diags.error_count() == 0
+    }
+
     // -- diagnostics helpers ---------------------------------------------
 
     /// A diagnostic `id` with its caret at `loc`.
@@ -1511,6 +1566,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
+        if d.id().is_some_and(|id| {
+            id.class() == kiln_diag::DiagClass::Error
+                || id.is_default_error()
+                || is_sfinae_failure(id)
+                || self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error
+        }) {
+            self.failures.set(self.failures.get() + 1);
+        }
         // The overload candidates' notes go with the error they explain,
         // also when a range-based `for` holds it back.
         if !self.trailing_notes.borrow().is_empty()
@@ -1537,7 +1600,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             // Dedup is per instantiation (spec/diag.md §7.4).
             d = d.context(self.inst.stack.context_key());
             let sev = self.diags.severity_at(id, d.loc());
-            if self.inst.stack.is_sfinae() {
+            // clang's `NoSFINAE` errors (`SFINAE_Report`) print even in
+            // a SFINAE context, with the context notes.
+            if self.inst.stack.is_sfinae() && !is_sfinae_report(id) {
                 if self.inst.suppress_access.get() && is_access_error(id) {
                     if let Some(s) = self.inst.sfinae.borrow_mut().last_mut()
                         && s.first.is_none()
@@ -2121,6 +2186,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             s
         })
     }
+}
+
+/// clang's `NoSFINAE` errors: reported even in a SFINAE context, not a
+/// substitution failure (a constraint whose satisfaction depends on
+/// itself, [temp.constr.atomic]/3).
+fn is_sfinae_report(id: DiagId) -> bool {
+    matches!(id, DiagId::sema_constraint_depends_on_self)
 }
 
 /// clang's `SFINAEFailure` warnings: in a SFINAE context they are a

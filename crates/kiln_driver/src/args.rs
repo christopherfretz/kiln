@@ -115,6 +115,9 @@ pub struct Input {
     pub path: String,
     /// The language set by the last `-x` before it, if any.
     pub lang: Option<Lang>,
+    /// That `-x` was `c-header` or `c++-header` (WP-1023: the input is
+    /// precompiled; see [`Args::is_header_input`]).
+    pub header: bool,
 }
 
 /// `-M` / `-MM` / `-MD` / `-MMD`: which headers the dependency output lists.
@@ -354,7 +357,7 @@ pub enum ArgError {
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-ftrapv`, profile-guided optimization,
+    /// implement (`-fshort-enums`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
     /// "invalid argument '{0}' only allowed with '{1}'"
@@ -369,6 +372,12 @@ pub enum ArgError {
     NotAllowedWith(String, String),
     /// "no such file or directory: '{0}'" (`-fsanitize-ignorelist=`).
     NoSuchFile(String),
+    /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
+    /// message (WP-1032).
+    MalformedIgnorelist(String),
+    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
+    /// path (WP-1032).
+    RegexIgnorelist(String),
 }
 
 /// The parsed command line.
@@ -475,6 +484,8 @@ pub struct Args {
     /// `-include <file>`, in order: `#include "<file>"` at the end of the
     /// predefines' `<command line>` section (clang `AddImplicitInclude`).
     pub includes: Vec<String>,
+    /// The PCH options (WP-1023, spec/driver.md "Precompiled headers").
+    pub pch: PchArgs,
     /// `-ffile-prefix-map=<old>=<new>` and `-fmacro-prefix-map=<old>=<new>`,
     /// in order: the path prefixes `__FILE__` and source locations replace
     /// (`SourceManager::remap_macro_path`).
@@ -492,6 +503,13 @@ pub struct Args {
     pub module_output: Option<(String, Option<String>)>,
     /// `-fprebuilt-module-path=<dir>`, in order.
     pub prebuilt_module_paths: Vec<String>,
+    /// `-fmodules-cache-path=<dir>` (the last one): the toolchain's
+    /// module-file cache for `std` and `std.compat` (spec/modules.md
+    /// §11.12, spec/driver.md "Module cache"); an empty value disables it.
+    pub modules_cache_path: Option<String>,
+    /// `-fno-kiln-module-cache` (false) / `-fkiln-module-cache` (true), the
+    /// last one: whether `import std;` uses the module-file cache.
+    pub module_cache: Option<bool>,
     /// Set by `kiln-scan-deps` (not an option): the preprocessor records
     /// module directives instead of importing (spec/modules.md §11.9).
     pub scan_deps: bool,
@@ -546,6 +564,12 @@ pub struct Args {
     /// template arguments mangle (spec/reflection.md §8.3; the hidden
     /// `kiln-hashed` is a prototype; the last one wins).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
+    /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
+    pub bmi_kind: Option<u8>,
+    /// The hidden `-fkiln-bmi-image`: write (and use) the kind-2
+    /// declaration image section (spec/modules.md §11.11 "Part 2a").
+    pub bmi_image: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -594,6 +618,11 @@ pub struct Args {
     pub sve_vector_bits: Option<String>,
     /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
     pub target_features: Vec<String>,
+    /// The x86 `-m<feature>` / `-mno-<feature>` flags as written, in order
+    /// (WP-1000; resolved by [`crate::features::resolve`] once the target
+    /// and `-fclang-compat=` are known: spec/driver.md "x86-64 target
+    /// features").
+    pub x86_feature_flags: Vec<String>,
     /// `-f[no-]omit-frame-pointer` (the last wins; `Some(true)` omits);
     /// `None` is the target's default (spec/codegen.md "Frame pointer").
     pub omit_frame_pointer: Option<bool>,
@@ -636,6 +665,28 @@ pub struct Args {
     pub no_builtin_names: Vec<String>,
 }
 
+/// The precompiled-header options (WP-1023, spec/driver.md "Precompiled
+/// headers"), and the state the PCH consumer gives a compile.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PchArgs {
+    /// The last `-include-pch <file>` (clang uses the last one too).
+    pub include: Option<String>,
+    /// `-emit-pch` (a cc1 option, usually behind `-Xclang`): every input
+    /// is precompiled, whatever its type.
+    pub emit: bool,
+    /// `-fno-validate-pch` (cc1): `-include-pch` skips the file and
+    /// option checks.
+    pub no_validate: bool,
+    /// The files the `-include-pch` file depends on, as the producer
+    /// listed them, with their system-header flag: listed first in the
+    /// dependency output, as clang lists a PCH's input files (set by
+    /// `crate::pch`, never by an option).
+    pub deps: Vec<(String, bool)>,
+    /// The input is a header being precompiled (clang's `IsHeaderFile`;
+    /// set by `crate::pch` on its producer's copy of the arguments).
+    pub header_main: bool,
+}
+
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
 const JOINED_OR_SEPARATE: &[&str] = &[
     "-cxx-isystem",
@@ -672,6 +723,18 @@ const SEPARATE_OR_EQ: &[&str] = &[
     "-dumpdir",
 ];
 
+/// Options taking a separate value only (`-include-pch foo`; clang's
+/// `Separate` kind: `-include-pchfoo` is not this option).
+const SEPARATE: &[&str] = &["-include-pch"];
+
+impl Input {
+    /// The input `path` under the `-x` in force (its language, and
+    /// whether that is a `-header` type).
+    fn under_x(path: &str, x: Option<(Lang, bool)>) -> Input {
+        Input { path: path.to_owned(), lang: x.map(|(l, _)| l), header: x.is_some_and(|(_, h)| h) }
+    }
+}
+
 impl Args {
     /// Parses `argv` (without the program name) as `kiln++` would.
     pub fn parse(argv: &[String]) -> Args {
@@ -690,7 +753,7 @@ impl Args {
             predef: PredefArgs { clang_compat: DEFAULT_CLANG_COMPAT, ..PredefArgs::default() },
             ..Args::default()
         };
-        let mut x: Option<Lang> = None;
+        let mut x: Option<(Lang, bool)> = None;
         let mut verify = VerifyRaw::default();
         let mut i = 0;
         while i < argv.len() {
@@ -735,7 +798,7 @@ impl Args {
                 continue;
             }
             if arg == "-" || !arg.starts_with('-') {
-                a.inputs.push(Input { path: arg.to_owned(), lang: x });
+                a.inputs.push(Input::under_x(arg, x));
                 continue;
             }
             // Valued options.
@@ -817,6 +880,19 @@ impl Args {
         input.lang.unwrap_or_else(|| Lang::of_input(&input.path, self.mode).0)
     }
 
+    /// Whether `input` is a header the compile actions precompile instead
+    /// (WP-1023): `-x c-header` / `-x c++-header`, else, without `-x`, a
+    /// header extension clang types as a header (`.h`, `.hh`, `.hpp`,
+    /// `.hxx`, `.H`).
+    pub fn is_header_input(&self, input: &Input) -> bool {
+        input.header
+            || input.lang.is_none()
+                && matches!(
+                    std::path::Path::new(&input.path).extension().and_then(|e| e.to_str()),
+                    Some("h" | "hh" | "hpp" | "hxx" | "H")
+                )
+    }
+
     /// The inputs C++ mode compiles as C++ although their extension is C's
     /// (no `-x`), with the [`Promotion`]: clang's deprecated
     /// `treating 'c' input as 'c++'` warning, once per input.
@@ -828,12 +904,13 @@ impl Args {
             .collect()
     }
 
-    fn valued(&mut self, opt: &str, v: &str, x: &mut Option<Lang>) {
+    fn valued(&mut self, opt: &str, v: &str, x: &mut Option<(Lang, bool)>) {
         let v_owned = v.to_owned();
         match opt {
             "-D" => self.macros.push(CmdMacro::Define(v_owned)),
             "-U" => self.macros.push(CmdMacro::Undef(v_owned)),
             "-include" => self.includes.push(v_owned),
+            "-include-pch" => self.pch.include = Some(v_owned),
             "-I" => self.dirs.push((DirGroup::Angled, v_owned)),
             "-iquote" => self.dirs.push((DirGroup::Quoted, v_owned)),
             "-isystem" => self.dirs.push((DirGroup::System, v_owned)),
@@ -867,7 +944,7 @@ impl Args {
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
             "-x" => match Lang::from_x(v) {
-                Some(l) => *x = Some(l),
+                Some(l) => *x = Some((l, v.ends_with("-header"))),
                 None if v == "none" => *x = None,
                 None => self.errors.push(ArgError::InvalidValue("-x".to_owned(), v_owned)),
             },
@@ -876,9 +953,12 @@ impl Args {
     }
 
     /// `-march=` / `-mcpu=` / `-msve-vector-bits=` (the last of each wins; resolved by
-    /// [`crate::features::resolve`]). Returns false if `arg` is neither.
+    /// [`crate::features::resolve`]) and the x86 feature flags. Returns
+    /// false if `arg` is none of them.
     fn target_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("-march=") {
+        if crate::x86_features::is_flag(arg) {
+            self.x86_feature_flags.push(arg.to_owned());
+        } else if let Some(v) = arg.strip_prefix("-march=") {
             self.march = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("-mcpu=") {
             self.mcpu = Some(v.to_owned());
@@ -898,9 +978,25 @@ impl Args {
             "-fsyntax-only" => self.action = Action::SyntaxOnly,
             "--precompile" => self.precompile = true,
             "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
+            "-fkiln-module-cache" => self.module_cache = Some(true),
+            "-fno-kiln-module-cache" => self.module_cache = Some(false),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),
+            // WP-1023 (spec/driver.md "Precompiled headers").
+            "-emit-pch" => self.pch.emit = true,
+            "-fno-validate-pch" => self.pch.no_validate = true,
+            // Accepted no-ops: a textual PCH holds no instantiations, no
+            // code and no debug info, and kiln always validates the
+            // contents of a PCH's input files.
+            "-fpch-instantiate-templates"
+            | "-fno-pch-instantiate-templates"
+            | "-fpch-validate-input-files-content"
+            | "-fno-pch-validate-input-files-content"
+            | "-fpch-codegen"
+            | "-fno-pch-codegen"
+            | "-fpch-debuginfo"
+            | "-fno-pch-debuginfo" => {}
             "-###" => self.print_commands = true,
             "-Qunused-arguments" => self.quiet_unused_arguments = true,
             "-ftime-trace" | "-ftime-trace-verbose" => self.time_trace.push(arg.to_owned()),
@@ -963,6 +1059,8 @@ impl Args {
             "-fkiln-dump-cfg" => self.dump_cfg = true,
             "-fkiln-cfg-stats" => self.cfg_stats = true,
             "-fkiln-memory-report" => self.memory_report = true,
+            "-fkiln-bmi-image" => self.bmi_image = true,
+            "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }
@@ -988,6 +1086,14 @@ impl Args {
                             "-fkiln-source-path-style=".to_owned(),
                             v.to_owned(),
                         )),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
+                    match v {
+                        "1" => self.bmi_kind = Some(1),
+                        "2" => self.bmi_kind = Some(2),
+                        _ => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-reflection-mangling=") {
                     match kiln_abi::ReflectionMangling::parse(v) {
@@ -1064,6 +1170,8 @@ impl Args {
                     self.time_trace.push(arg.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fprebuilt-module-path=") {
                     self.prebuilt_module_paths.push(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-fmodules-cache-path=") {
+                    self.modules_cache_path = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast-filter=") {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
@@ -1431,30 +1539,42 @@ pub(crate) enum Valued<'a> {
     Missing,
 }
 
-/// If `arg` is a valued option, the option and where its value is.
+/// If `arg` is a valued option, the option and where its value is. Of
+/// the options `arg` can be read as, the longest wins, as in clang's
+/// option table (WP-1023): `-include-pch` is not `-include` with the
+/// value `-pch`, `-isystem` is not `-I` with `system`, `-target-feature`
+/// is not `-target`.
 pub(crate) fn split_valued<'a>(
     arg: &'a str,
     next: Option<&str>,
 ) -> Option<(&'static str, Valued<'a>)> {
+    let separate = |opt| (opt, if next.is_some() { Valued::Next } else { Valued::Missing });
+    let mut best: Option<(&'static str, Valued<'a>)> = None;
+    let mut consider = |c: (&'static str, Valued<'a>)| {
+        if best.as_ref().is_none_or(|(b, _)| c.0.len() > b.len()) {
+            best = Some(c);
+        }
+    };
+    for &opt in SEPARATE {
+        if arg == opt {
+            consider(separate(opt));
+        }
+    }
     for &opt in SEPARATE_OR_EQ {
         if arg == opt {
-            return Some((opt, if next.is_some() { Valued::Next } else { Valued::Missing }));
-        }
-        if let Some(v) = arg.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
-            return Some((opt, Valued::Joined(v)));
+            consider(separate(opt));
+        } else if let Some(v) = arg.strip_prefix(opt).and_then(|r| r.strip_prefix('=')) {
+            consider((opt, Valued::Joined(v)));
         }
     }
     for &opt in JOINED_OR_SEPARATE {
         if arg == opt {
-            return Some((opt, if next.is_some() { Valued::Next } else { Valued::Missing }));
-        }
-        if let Some(v) = arg.strip_prefix(opt) {
-            // `-isystem` must not be read as `-I` + `system`, etc.: the
-            // table lists longer options first.
-            return Some((opt, Valued::Joined(v)));
+            consider(separate(opt));
+        } else if let Some(v) = arg.strip_prefix(opt) {
+            consider((opt, Valued::Joined(v)));
         }
     }
-    None
+    best
 }
 
 #[cfg(test)]
@@ -1505,7 +1625,7 @@ mod tests {
             ]
         );
         assert_eq!(a.output.as_deref(), Some("out"));
-        assert_eq!(a.inputs, [Input { path: "t.cpp".into(), lang: None }]);
+        assert_eq!(a.inputs, [Input { path: "t.cpp".into(), lang: None, header: false }]);
         assert_eq!(a.errors, []);
     }
 
@@ -1981,5 +2101,72 @@ mod tests {
         assert_eq!(a.errors, [ArgError::MissingValue("-Xclang".into())]);
         let a = parse("-verify=a-b_c1 t.cpp");
         assert_eq!(a.verify.unwrap().prefixes, ["a-b_c1"]);
+    }
+
+    /// WP-1023: the longest option wins (spec/driver.md "Precompiled
+    /// headers"): one test per prefix collision in the option tables.
+    #[test]
+    fn longest_option_wins() {
+        let a = parse("-include-pch p.pch t.cpp");
+        assert_eq!(a.pch.include.as_deref(), Some("p.pch"));
+        assert!(a.includes.is_empty() && a.errors.is_empty());
+        // `-include-pch` is separate-only: joined, it is `-include`.
+        let a = parse("-include-pchfoo t.cpp");
+        assert_eq!(a.includes, ["-pchfoo"]);
+        assert_eq!(a.pch.include, None);
+        let a = parse("-include h.h -includeg.h t.cpp");
+        assert_eq!(a.includes, ["h.h", "g.h"]);
+        let a = parse("-include-pch");
+        assert_eq!(a.errors, [ArgError::MissingValue("-include-pch".into())]);
+        // The last `-include-pch` wins, as in clang.
+        let a = parse("-include-pch a.pch -include-pch b.pch t.cpp");
+        assert_eq!(a.pch.include.as_deref(), Some("b.pch"));
+        let a = parse("-isystem d -isystemd2 -Isystem t.cpp");
+        assert_eq!(
+            a.dirs,
+            [
+                (DirGroup::System, "d".to_owned()),
+                (DirGroup::System, "d2".to_owned()),
+                (DirGroup::Angled, "system".to_owned()),
+            ]
+        );
+        let a = parse("-cxx-isystem d t.cpp");
+        assert_eq!(a.dirs, [(DirGroup::CxxSystem, "d".to_owned())]);
+        let a = parse("-target-feature +sve -target aarch64-linux-gnu t.cpp");
+        assert_eq!(a.target_features, ["+sve"]);
+        assert_eq!(a.target.as_deref(), Some("aarch64-linux-gnu"));
+        let a = parse("-MF d -MTt -MQ q t.cpp");
+        assert_eq!(a.deps.file.as_deref(), Some("d"));
+        assert_eq!(a.deps.targets, [("t".to_owned(), false), ("q".to_owned(), true)]);
+    }
+
+    /// WP-1023: `CMake`'s PCH command lines (`-Xclang -include -Xclang X`
+    /// is `-include X`).
+    #[test]
+    fn pch_flags() {
+        let a = parse(
+            "-Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -Xclang -include \
+             -Xclang p.hxx -x c++-header -c p.hxx.cxx",
+        );
+        assert!(a.errors.is_empty(), "{:?}", a.errors);
+        assert!(a.pch.emit);
+        assert_eq!(a.includes, ["p.hxx"]);
+        assert!(a.is_header_input(&a.inputs[0]));
+        let a =
+            parse("-Xclang -include-pch -Xclang p.hxx.pch -Xclang -include -Xclang p.hxx -c m.cpp");
+        assert!(a.errors.is_empty(), "{:?}", a.errors);
+        assert_eq!(a.pch.include.as_deref(), Some("p.hxx.pch"));
+        assert_eq!(a.includes, ["p.hxx"]);
+        assert!(!a.is_header_input(&a.inputs[0]));
+        let a = parse(
+            "-fno-pch-instantiate-templates -fpch-validate-input-files-content \
+             -fno-pch-validate-input-files-content -fpch-codegen -fno-pch-codegen \
+             -fpch-debuginfo -fno-pch-debuginfo -Xclang -fno-validate-pch t.cpp",
+        );
+        assert!(a.errors.is_empty(), "{:?}", a.errors);
+        assert!(a.pch.no_validate && !a.pch.emit);
+        let a = parse("a.h b.hh c.hpp d.hxx e.H f.inc -x c++ g.hpp -x c-header h.c -x none i.hpp");
+        let headers: Vec<bool> = a.inputs.iter().map(|i| a.is_header_input(i)).collect();
+        assert_eq!(headers, [true, true, true, true, true, false, false, true, true]);
     }
 }

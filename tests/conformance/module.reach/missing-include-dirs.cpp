@@ -9,8 +9,8 @@
 // reached from the guarded mr-m.h.
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -I tests/conformance/module.reach/Inputs/rel -I %{test_dir}/Inputs/abs -fmodule-file=mr.d=%{test_dir}/Inputs/mr-d.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs module that the harness cannot drive
+//@ args: -I tests/conformance/module.reach/Inputs/rel -I %{test_dir}/Inputs/abs
+//@ module: mr.d=Inputs/mr-d.cppm
 //@ strict-diags
 //@ diag: 19:9 error "missing '#include \"Inputs/rel/mr-r.h\"'; 'rel_fn' must be declared before it is used"
 //@ diag: 20:9 error "missing '#include \"mr-a.h\"'; 'abs_fn' must be declared before it is used"

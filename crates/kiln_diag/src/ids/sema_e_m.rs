@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_early_catch_all = Error (0) "catch-all handler must come last";
+sema_elaborated_enum_class = WarningError [ElaboratedEnumClass] (1) "reference to enumeration must use 'enum' not 'enum {0:class|struct}'";
 sema_ellipsis_in_declarator_not_parameter = Error (0) "only function and template parameters can be parameter packs";
 sema_empty_for_body = Warning [EmptyBody] (0) "for loop has empty body";
 sema_empty_if_body = Warning [EmptyBody] (0) "if statement has empty body";
@@ -129,8 +130,10 @@ sema_friend_decl_with_def_arg_must_be_def = Error (0) "friend declaration specif
 sema_friend_decl_with_def_arg_redeclared = Error (0) "friend declaration specifying a default argument must be the only declaration";
 sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
+sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
 sema_friend_invalid_in_context = Error (0) "'friend' used outside of class";
 sema_friend_not_class_or_fn = Error (0) "friends can only be classes or functions";
+sema_func_def_incomplete_result = Error (1) "incomplete result type {0} in function definition";
 sema_func_returning_array_function = Error (2) "function cannot return {0:array|function} type {1}";
 sema_function_attribute_ignored_in_stmt = Warning [IgnoredAttributes] (1) "attribute is ignored on this statement as it only applies to functions; use '{0}' on statements";
 // clang `err_function_attribute_mismatch` (WP-808)
@@ -223,6 +226,10 @@ sema_inline_declaration_block_scope = Error (1) "inline declaration of '{0}' not
 sema_inline_main = Error (0) "'main' is not allowed to be declared inline";
 sema_inline_namespace_mismatch = Error (0) "non-inline namespace cannot be reopened as inline";
 sema_inline_namespace_reopened_noninline = Warning [InlineNamespaceReopenedNoninline] (0) "inline namespace reopened as a non-inline namespace";
+// A pattern member that failed to instantiate with no error reported
+// (WP-1054; spec/sema-templates.md §4.6): an internal error, never a
+// silent drop.
+sema_inst_member_dropped = Error (2) "kiln: internal error: member '{0}' of {1} was not instantiated and no diagnostic says why";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
 sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";
@@ -247,6 +254,7 @@ sema_invalid_pcs = Error (0) "invalid PCS type";
 sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_invalid_use_of_function_type = Error (0) "a function type is not allowed here";
+sema_lambda_capture_default_arg = Error (0) "lambda expression in default argument cannot capture any entity";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";
 sema_left_shift_always = Warning [TautologicalConstantCompare] (1) "converting the result of '<<' to a boolean always evaluates to {0:false|true}";
@@ -279,8 +287,13 @@ sema_lvalue_ref_bind_to_initlist = Error (2) "{0:non-const|volatile} lvalue refe
 sema_lvalue_ref_bind_to_temporary = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a temporary of type {2}";
 sema_lvalue_ref_bind_to_unrelated = Error (3) "{0:non-const|volatile} lvalue reference to type {1} cannot bind to a value of unrelated type {2}";
 sema_machine_mode = Error (2) "{0:unknown|unsupported} machine mode {1}";
+sema_main_arg_wrong = Error (3) "{0:first|second|third} parameter of 'main' ({1:argument count|argument array|environment}) must be of type {2}";
 sema_main_attached_to_named_module = Warning [MainAttachedToNamedModule] (0) "'main' never has module linkage";
+sema_main_global_variable = Error (0) "main cannot be declared as a variable in the global scope";
+sema_main_global_variable_19 = Error (0) "main cannot be declared as global variable";
 sema_main_returns_nonint = Error (0) "'main' must return 'int'";
+sema_main_surplus_args = Error (1) "too many parameters ({0}) for 'main': must be 0, 2, or 3";
+sema_main_template = Error (0) "'main' cannot be a template";
 sema_make_signed_bad_type = Error (2) "'{0:make_signed|make_unsigned}' is only compatible with non-bool integers and enum types, but was given {1}";
 sema_malformed_std_coroutine_handle = Error (0) "std::coroutine_handle isn't a class template";
 sema_malformed_std_coroutine_traits = Error (0) "std::coroutine_traits isn't a class template";
@@ -293,9 +306,11 @@ sema_member_def_ret_type_mismatch = Error (1) "return type of out-of-line defini
 sema_member_extra_qualification = Error (1) "extra qualification on member '{0}'";
 sema_member_fn_drops_quals = Error (3) "'this' argument to member function '{0}' has type {1}, but function is not marked {2}";
 sema_member_fn_ref_qual_mismatch = Error (3) "'this' argument to member function '{0}' is an {1:lvalue|rvalue}, but function has {2:non-const lvalue|rvalue} ref-qualifier";
+sema_member_name_of_class = Error (1) "member '{0}' has the same name as its class";
 sema_member_pointer_conv_via_virtual = Error (3) "conversion from pointer to member of class {0} to pointer to member of class {1} via virtual base {2} is not allowed";
 sema_member_qualification = Error (1) "non-friend class member '{0}' cannot have a qualified name";
 sema_member_redeclared = Error (0) "class member cannot be redeclared";
+sema_member_redeclared_tag = ExtWarn [RedeclaredClassMember] (0) "class member cannot be redeclared";
 sema_member_reference_incomplete = Error (1) "member access into incomplete type {0}";
 sema_member_reference_needs_call = Error (0) "base of member reference is a function; perhaps you meant to call it with no arguments?";
 sema_member_reference_struct_union = Error (1) "member reference base type {0} is not a structure or union";

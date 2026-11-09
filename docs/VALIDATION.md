@@ -31,7 +31,16 @@ image with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1`, so a
 missing GCC fails CI instead of skipping (WP-502; spec/harness.md "GCC
 oracle"). The same jobs install gdb and lldb-19 and set
 `KILN_REQUIRE_DEBUGGERS=1`, so the debugger tests (`tests/debuginfo`)
-run in CI and a missing debugger fails it (WP-816). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
+run in CI and a missing debugger fails it (WP-816). Likewise they
+install compiler-rt for clang 19 and 22 and set
+`KILN_REQUIRE_SANITIZER_RUNTIME=1`, so the ASan/UBSan run tests
+(`requires: sanitizer-runtime`) run on both architectures; the
+`unit codegen` job runs the Itanium mangling differential
+(`mangle_vs_clang`, 39 files, about 1,200 clang symbols per triple) as
+its own command with its counts in the log; and one `kiln-22` shard per
+lane runs the CMake C++20 modules end-to-end
+(`scripts/oss/selftest.sh --cmake-modules`) with CMake and ninja
+(WP-1034; "GitHub Actions" below). On the dev host, where `scripts/env.sh` sets `KILN_GCC`,
 `cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
@@ -53,7 +62,11 @@ representative TU, reproduction command), which are reduced into
 `tests/conformance` cases and work packages. Not in `ci` (it needs the
 network and hours of CPU); run by hand or by agents; `.oss/` is
 gitignored and only the regenerated status page reaches the repo.
-`scripts/oss/selftest.sh` checks the scripts themselves.
+`scripts/oss/selftest.sh` checks the scripts themselves; its
+`--cmake-modules` mode runs only the CMake modules end-to-end (a
+three-module Ninja build with kiln++ as `CMAKE_CXX_COMPILER`, then an
+edit and rebuild), failing rather than skipping without CMake 3.28,
+ninja or a built kiln++, which is how GitHub CI runs it.
 
 ## Conformance test format
 
@@ -203,6 +216,14 @@ included). The defects found so far, each with the test that records it:
   does in both ([dcl.init.general]/16.6.2.2 value-initializes `arr`). kiln
   accepts it. `dcl.init.general/paren-aggregate-array-of-class.cpp`
   carries `requires: clang>=22` (WP-316).
+- clang 19 and 22 resolve `class B<T>::In::Deep` (a nested tag named
+  through a dependent specialization, in another template) to the primary
+  template's `Deep`: they accept a `B<int>` without `In` and a `B<char>`
+  whose `Deep` is a union without a diagnostic, and crash in codegen
+  (`FindInstantiatedDecl`) when the selected specialization's `Deep` is
+  used. g++ 14 and kiln instantiate the specialization's member and reject
+  the invalid ones (WP-1054).
+  `temp.inst/member-elaborated-qualifier-nested{,-run}.cpp`.
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
@@ -385,6 +406,32 @@ an `expect: debugger` test whose debugger is missing is an ERROR there,
 never a SKIP; `ci_tests::workflow_installs_the_debuggers` checks that
 every corpus job installs them. Each debugger session gets at least 60 s
 (spec/harness.md "Debugger tests").
+
+**Capability tests that must not skip in CI** (WP-1034). What runs
+where, per lane (`arm` and `x86_64` alike):
+
+- *Sanitizer runtimes*: the corpus jobs pass `sanitizer-runtimes:
+  "true"`, which installs `libclang-rt-19-dev libclang-rt-22-dev`
+  (compiler-rt for both clangs, about 30 MB each), and the lane env sets
+  `KILN_REQUIRE_SANITIZER_RUNTIME=1`, so a `requires: sanitizer-runtime`
+  test (the ASan/UBSan `run` tests, `tests/conformance/driver.sanitize`)
+  whose clang finds no runtime is an ERROR. They run in the shard that
+  owns them in `self-check`, `kiln-22` and `kiln-19`.
+- *CMake modules end-to-end*: `kiln-22 1/6` passes `cmake: "true"`
+  (Debian trixie's CMake 3.31 and ninja 1.12) and, after its corpus
+  step, runs `scripts/oss/selftest.sh --cmake-modules` against the
+  `target/debug/kiln++` that step built. It is only in one shard: it
+  needs no oracle, and a second run would repeat the same build.
+- *Mangling differential*: `unit codegen` runs `cargo test -p
+  kiln_codegen --test mangle_vs_clang -- --nocapture` after the rest of
+  `kiln_codegen`'s tests, printing per triple the files and clang
+  symbols checked; `KILN_REQUIRE_LLVM=1` makes a missing clang++-19 a
+  failure. Locally, `cargo xtask ci` (and `--quick`) runs the same
+  command and `cargo xtask test tests/mangle` runs it after the corpus
+  (spec/harness.md "The mangling differential").
+
+`ci_tests::workflow_installs_the_sanitizer_runtimes` and
+`workflow_runs_the_cmake_modules_e2e` keep the workflow honest.
 
 The `x86_64` lane runs the same jobs in the same container on the
 x86-64 `ubuntu-24.04` runner (WP-228), so the host-dependent paths

@@ -217,6 +217,7 @@ impl SyntaxJob<'_> {
             gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
             no_builtin: a.no_builtin(),
             no_builtin_fns: a.no_builtin_fns(),
+            freestanding: a.predef.freestanding.unwrap_or(false),
             sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
@@ -228,13 +229,17 @@ impl SyntaxJob<'_> {
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
+            record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),
+            record_image: a.bmi_image
+                && a.bmi_kind != Some(1)
+                && job.module_output_path().is_some(),
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
         let (tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
         if engine.error_count() == 0 {
-            job.write_module_file(&mut pp, engine);
+            job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes

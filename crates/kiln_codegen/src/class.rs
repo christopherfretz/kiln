@@ -291,7 +291,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let ctor = ast.exprs.constructor(e);
         let (kind, from_vbase) = ast.exprs.inherited_ctor_info(e);
-        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let rd = ast.decls.get(ctor).ctx().expect("Sema: a ctor is a member");
         let first = ast.first(ctor);
         let mut vals = Vec::new();
         let mut ptys = Vec::new();
@@ -306,7 +306,7 @@ impl Cg<'_> {
             let params: Vec<DeclId> =
                 outer.map(|l| ast.lists.iter(l).collect()).unwrap_or_default();
             for p in params {
-                let q = ast.decls.get(p).ty().expect("param type");
+                let q = ast.decls.get(p).ty().expect("Sema: a parameter has a type");
                 let Some(&a) = self.f.locals.get(&p) else {
                     return err(self.loc_of(e), "inherited constructor parameter not bound");
                 };
@@ -323,7 +323,7 @@ impl Cg<'_> {
             };
             return self.emit_inlined_inheriting_ctor(ctor, dest, Structor::Base, vals, ptys, vtt);
         }
-        let fty = ast.decls.get(first).ty().expect("constructor type");
+        let fty = ast.decls.get(first).ty().expect("Sema: a ctor has a type");
         let mut sig = self.call_sig_this(fty, false, &ptys, Some(rd));
         if from_vbase {
             sig = self.without_params(sig);
@@ -372,7 +372,7 @@ impl Cg<'_> {
     ) -> R<()> {
         let ast = self.ast;
         let first = ast.first(ctor);
-        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let rd = ast.decls.get(ctor).ctx().expect("Sema: a ctor is a member");
         let def = self.structor_def(first);
         let Some((def, body)) =
             def.and_then(|d| ast.decls.function(d).and_then(|f| f.body).map(|b| (d, b)))
@@ -584,7 +584,7 @@ impl Cg<'_> {
         let p = if let Some(&p) = self.ph_of.get(&(first, v)) {
             p
         } else {
-            let p = u32::try_from(self.phs.len()).expect("placeholder count");
+            let p = u32::try_from(self.phs.len()).expect("< 2^32 placeholders");
             self.phs.push(None);
             self.ph_of.insert((first, v), p);
             p
@@ -917,7 +917,7 @@ impl Cg<'_> {
 
     /// `this` as an address of its class (clang `LoadCXXThisAddress`).
     pub(crate) fn this_addr(&mut self) -> Addr {
-        let rd = self.f.this_class.expect("member function");
+        let rd = self.f.this_class.expect("set for a method body");
         let ty = self.record_ty(rd);
         let (_, align) = self.this_layout(rd);
         Addr { v: self.this_value(), ty, align }
@@ -925,7 +925,7 @@ impl Cg<'_> {
 
     /// `CXXThisValue`.
     pub(crate) fn this_value(&self) -> V {
-        self.f.this.expect("`this` in a member function")
+        self.f.this.expect("bound for a method body")
     }
 
     /// `p` advanced by `offset` bytes (clang `CreateConstInBoundsByteGEP`).
@@ -969,7 +969,7 @@ impl Cg<'_> {
         let inits: Vec<kiln_ast::decl::CtorInit> = ast.ctor_inits(d).copied().collect();
         let memcpyize = self.is_defaulted(d)
             && matches!(self.special_of(d), Some(Special::CopyCtor | Special::MoveCtor));
-        let rd = self.f.this_class.expect("constructor class");
+        let rd = self.f.this_class.expect("Sema: a ctor is a member");
         let mut run: Vec<(DeclId, u64, u64)> = Vec::new();
         // InitializeVTablePointers runs after the base initializers and
         // before the member initializers (not in delegating constructors).
@@ -1178,7 +1178,7 @@ impl Cg<'_> {
                 .ctor_inits(ctor)
                 .find(|c| c.kind == CtorInitKind::Field && DeclId::new(c.target) == field)
                 .copied()
-                .expect("field initializer");
+                .expect("Sema: field has an init");
             return self.emit_field_init(ci.kind, field, ci.init, ci.loc);
         }
         // clang `addInitialField` / `addNextField`.
@@ -1200,7 +1200,7 @@ impl Cg<'_> {
         // memcpy.
         if self.opts.exceptions {
             for &(f, _, _) in &items {
-                let q = ast.decls.get(f).ty().expect("field type");
+                let q = ast.decls.get(f).ty().expect("Sema: a field has a type");
                 if self.destructed_class(q).is_some() {
                     let this = self.this_addr();
                     let a = self.field_lvalue_init(this, f, q)?.addr;
@@ -1211,19 +1211,19 @@ impl Cg<'_> {
         let (Some((first, start)), Some((_, end))) = (first, last) else {
             return Ok(());
         };
-        let fq = ast.decls.get(first).ty().expect("field type");
+        let fq = ast.decls.get(first).ty().expect("Sema: a field has a type");
         // clang `emitMemcpy`: the destination and the source are the first
         // field's lvalues (struct GEPs), destination first.
         let this = self.this_addr();
         let dst = self.field_lvalue_init(this, first, fq)?.addr;
-        let fd = ast.decls.function(ctor).expect("constructor");
-        let p0: DeclId = ast.lists.iter(fd.params).next().expect("copy parameter");
-        let slot = *self.f.locals.get(&p0).expect("parameter slot");
+        let fd = ast.decls.function(ctor).expect("Sema: a ctor is a function");
+        let p0: DeclId = ast.lists.iter(fd.params).next().expect("Sema: copy ctor has a param");
+        let slot = *self.f.locals.get(&p0).expect("prologue binds every param");
         let src_obj = self.load(LTy::PTR, slot.v, slot.align, false);
-        let pq = ast.decls.get(p0).ty().expect("param type");
+        let pq = ast.decls.get(p0).ty().expect("Sema: a parameter has a type");
         let src_q = self.referee(pq).unwrap_or(pq);
         let (_, src_align0) = self.pointee_layout(src_q);
-        let rd = ast.decls.get(first).ctx().expect("field parent");
+        let rd = ast.decls.get(first).ctx().expect("Sema: a field is a member");
         let rty = self.record_ty(rd);
         let src_base = Addr { v: src_obj, ty: rty, align: src_align0 };
         let src = self.field_lvalue_init(src_base, first, fq)?.addr;
@@ -1265,15 +1265,15 @@ impl Cg<'_> {
             let mut btb = crate::tbaa::Tb::Type;
             let mut lv = None;
             for f in chain {
-                let q = ast.decls.get(f).ty().expect("field type");
+                let q = ast.decls.get(f).ty().expect("Sema: a field has a type");
                 let l = self.field_lvalue_init_tb(base, btb, f, q)?;
                 base = l.addr;
                 btb = l.tb;
                 lv = Some(l);
             }
-            lv.expect("indirect field chain")
+            lv.expect("Sema: chain names a field")
         } else {
-            let q = ast.decls.get(field).ty().expect("field type");
+            let q = ast.decls.get(field).ty().expect("Sema: a field has a type");
             self.field_lvalue_init(this, field, q)?
         };
         let fq = lv.q;
@@ -1302,7 +1302,7 @@ impl Cg<'_> {
         // handlers also cover the destruction of the members and bases
         // ([except.pre]/4).
         let fn_try = ast.stmts.get(body).kind() == StmtKind::CXXTryStmt;
-        let rd = self.f.this_class.expect("destructor class");
+        let rd = self.f.this_class.expect("set for a dtor body");
         let complete_vbases =
             self.f.structor == Some(Structor::Complete) && self.structor_has_vbases(d);
         if complete_vbases && self.class_bits_of(rd).contains(DefinitionBits::ABSTRACT) {
@@ -1322,7 +1322,7 @@ impl Cg<'_> {
             self.push_vbase_dtor_cleanups(rd);
         }
         if !self.is_union(rd) {
-            let def = self.class_def(rd).expect("class definition");
+            let def = self.class_def(rd).expect("Sema: class is complete");
             let bases: Vec<(QualType, bool)> =
                 ast.decls.bases(def, &ast.lists).map(|b| (b.ty, b.is_virtual)).collect();
             for (bq, virt) in bases {
@@ -1374,7 +1374,7 @@ impl Cg<'_> {
     /// class's own VTT), then the virtual bases in reverse order
     /// (`EnterDtorCleanups(Dtor_Complete)`).
     pub(crate) fn emit_complete_dtor_body(&mut self) -> R<()> {
-        let rd = self.f.this_class.expect("destructor class");
+        let rd = self.f.this_class.expect("set for a dtor body");
         // An abstract class's complete-object destructor can never be
         // called.
         if self.class_bits_of(rd).contains(DefinitionBits::ABSTRACT) {
@@ -1391,7 +1391,7 @@ impl Cg<'_> {
 
     /// `EnterDtorCleanups(Dtor_Complete)`: the virtual bases of `rd`.
     fn push_vbase_dtor_cleanups(&mut self, rd: DeclId) {
-        let def = self.class_def(rd).expect("class definition");
+        let def = self.class_def(rd).expect("Sema: class is complete");
         let mut vbases = Vec::new();
         self.collect_vbases(def, &mut vbases, 0);
         for b in vbases {
@@ -1448,7 +1448,7 @@ impl Cg<'_> {
     /// (`CallDtorDelete`).
     pub(crate) fn emit_deleting_dtor_body(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
-        let rd = self.f.this_class.expect("destructor class");
+        let rd = self.f.this_class.expect("set for a dtor body");
         let loc = Some(ast.decls.get(d).loc());
         let this = self.this_addr();
         // EmitDestructorBody: an abstract class's D0 can never be called.
@@ -1474,7 +1474,7 @@ impl Cg<'_> {
         // EnterDtorCleanups: the deallocation is a normal-and-EH cleanup
         // around the complete-object destructor call.
         self.push_cleanup(Cleanup::DtorDelete { op_delete: od, ptr: this.v, ty });
-        let fty = ast.decls.get(ast.first(d)).ty().expect("destructor type");
+        let fty = ast.decls.get(ast.first(d)).ty().expect("Sema: a dtor has a type");
         let (callee, fid) = self.structor_ref(d, Structor::Complete)?;
         let sig = self.call_sig_this(fty, false, &[], Some(rd));
         let r = self.call_vals(&sig, callee, fid, Some(this.v), &[], &[], None, &[]);
@@ -1488,7 +1488,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let _ = record;
         let this = self.this_addr();
-        let q = ast.decls.get(field).ty().expect("field type");
+        let q = ast.decls.get(field).ty().expect("Sema: a field has a type");
         let lv = match self.field_lvalue(this, field, q) {
             Ok(lv) => lv,
             Err(e) => {
@@ -1567,7 +1567,7 @@ impl Cg<'_> {
         let v = if base { Structor::Base } else { Structor::Complete };
         let (callee, fid) = self.structor_ref(dtor, v)?;
         let first = ast.first(dtor);
-        let fty = ast.decls.get(first).ty().expect("destructor type");
+        let fty = ast.decls.get(first).ty().expect("Sema: a dtor has a type");
         let mut sig = self.call_sig_this(fty, false, &[], Some(def));
         if base && self.structor_has_vbases(first) {
             sig = self.with_vtt(sig);
@@ -1690,7 +1690,7 @@ impl Cg<'_> {
         let q = ast.exprs.get(e).ty();
         let overlap = std::mem::take(&mut self.f.overlap);
         let checked = std::mem::take(&mut self.f.ub_checked);
-        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let rd = ast.decls.get(ctor).ctx().expect("Sema: a ctor is a member");
         if info.zeroing && !zeroed {
             match info.kind {
                 ConstructionKind::Complete | ConstructionKind::Delegating => {
@@ -1701,7 +1701,7 @@ impl Cg<'_> {
                 }
                 _ => {
                     if !self.class_bits(rd).contains(DefinitionBits::EMPTY) {
-                        let def = self.class_def(rd).expect("class definition");
+                        let def = self.class_def(rd).expect("Sema: class is complete");
                         let nv = self.tys.layouter().record(def).nv_size;
                         // clang `EmitNullBaseClassInitialization`: the
                         // store range is addressed as a byte offset (0;
@@ -1711,7 +1711,7 @@ impl Cg<'_> {
                 }
             }
         }
-        let fd = *ast.decls.function(ctor).expect("constructor");
+        let fd = *ast.decls.function(ctor).expect("Sema: a ctor is a function");
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         self.psabi_call_check(e, ctor, &args, true);
         if fd.spec.is_trivial() && args.is_empty() {
@@ -1796,14 +1796,15 @@ impl Cg<'_> {
             out = Some(o);
         }
         let end = self.gep(elem, begin, vec![num], true);
-        let entry = self.f.fir.cur().expect("insertion point");
+        let entry = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         let body = self.f.fir.create_block();
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(begin, entry)] }, LTy::PTR);
         let sc = self.begin_scope(false);
         // The elements constructed so far are destroyed if a constructor
         // throws ([except.ctor]/3, `pushRegularPartialArrayCleanup`).
-        let ctor_class = ast.decls.get(ast.exprs.constructor(e)).ctx().expect("constructor class");
+        let ctor_class =
+            ast.decls.get(ast.exprs.constructor(e)).ctx().expect("Sema: a ctor is a member");
         if self.opts.exceptions && self.has_nontrivial_dtor(ctor_class) {
             let c = Cleanup::PartialArray { begin, end: phi, elem, record: ctor_class };
             self.push_full_expr_cleanup(c, false, true);
@@ -1823,7 +1824,7 @@ impl Cg<'_> {
         r?;
         let one = self.i64c(1);
         let next = self.gep(elem, phi, vec![one], true);
-        let cur = self.f.fir.cur().expect("insertion point");
+        let cur = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), next, cur);
         let done = self.icmp(IntPredicate::Eq, next, end);
         let out = out.unwrap_or_else(|| self.f.fir.create_block());
@@ -1839,7 +1840,7 @@ impl Cg<'_> {
         let ast = self.ast;
         let ctor = ast.exprs.constructor(e);
         let info = ast.exprs.construct_info(e);
-        let rd = ast.decls.get(ctor).ctx().expect("constructor class");
+        let rd = ast.decls.get(ctor).ctx().expect("Sema: a ctor is a member");
         let args: Vec<ExprId> = ast.lists.iter(ast.exprs.construct_args(e)).collect();
         if self.memcpy_equivalent(ctor) {
             let src = self.emit_lvalue(args[0])?;
@@ -1860,7 +1861,7 @@ impl Cg<'_> {
             ConstructionKind::Delegating => self.f.structor.unwrap_or(Structor::Complete),
         };
         let first = ast.first(ctor);
-        let fty = ast.decls.get(first).ty().expect("constructor type");
+        let fty = ast.decls.get(first).ty().expect("Sema: a ctor has a type");
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
         // A base-object inheriting constructor that drops its parameters
         // is still called with the arguments (clang
@@ -1989,7 +1990,7 @@ impl Cg<'_> {
     ) -> R<Option<V>> {
         let ast = self.ast;
         let arg_tys: Vec<QualType> = args.iter().map(|&a| ast.exprs.get(a).ty()).collect();
-        let fty = ast.decls.get(md).ty().expect("method type");
+        let fty = ast.decls.get(md).ty().expect("Sema: a method has a type");
         self.psabi_call_check(e, md, args, self.this_class_of(md).is_some());
         if self.this_class_of(md).is_none() {
             // A static member function called through an object.
@@ -2017,7 +2018,7 @@ impl Cg<'_> {
             base = b;
             use_virtual = false;
         }
-        let rd = ast.decls.get(md).ctx().expect("method class");
+        let rd = ast.decls.get(md).ctx().expect("Sema: a method is a member");
         let trivial = ast.decls.function(md).is_some_and(|f| f.spec.is_trivial())
             || (self.is_union(rd) && self.is_defaulted(md));
         let kind = ast.decls.get(md).kind();
@@ -2035,8 +2036,8 @@ impl Cg<'_> {
         if rtl && trivial_assign {
             rtl_src = Some(self.emit_lvalue(args[0])?);
         }
-        let crd = ast.decls.get(callee_md).ctx().expect("method class");
-        let cfty = ast.decls.get(callee_md).ty().expect("method type");
+        let crd = ast.decls.get(callee_md).ctx().expect("Sema: a method is a member");
+        let cfty = ast.decls.get(callee_md).ty().expect("Sema: a method has a type");
         if rtl && !trivial {
             let sig = self.call_sig_this(cfty, false, &arg_tys, Some(crd));
             rtl_vals = Some(self.emit_call_args_for(&sig, args, Some(md))?);
@@ -2044,7 +2045,7 @@ impl Cg<'_> {
         let this = if arrow {
             // clang `EmitCXXMemberOrOperatorMemberCallExpr`:
             // `EmitPointerWithAlignment` of the object pointer.
-            let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("pointee");
+            let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("Sema: pointer type");
             let (p, align) = self.ptr_align(base)?;
             let ty = self.mty(pq);
             Addr { v: p, ty, align }
@@ -2365,9 +2366,9 @@ impl Cg<'_> {
         let adj = self.gep(LTy::I8, this.v, vec![off], true);
         let align = min_align(self.vbase_align(this.align, derived, vb), nv);
         let Some((_, end)) = blocks else { return Ok((adj, align)) };
-        let from = self.f.fir.cur().expect("insertion point");
+        let from = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(end, false);
-        let orig = orig.expect("insertion point");
+        let orig = orig.expect(crate::fir::OPEN_BLOCK);
         let phi = self
             .f
             .fir
@@ -2397,14 +2398,14 @@ impl Cg<'_> {
         let end = self.f.fir.create_block();
         let null = V::C(self.m.const_null(LTy::PTR));
         let is_null = self.icmp(IntPredicate::Eq, p, null);
-        let orig = self.f.fir.cur().expect("insertion point");
+        let orig = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.cond_br(is_null, end, not_null);
         self.emit_block(not_null, false);
         if let Some(tc) = check {
             self.ub_type_check(p, tc)?;
         }
         let adj = self.byte_offset(p, off);
-        let from = self.f.fir.cur().expect("insertion point");
+        let from = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(end, false);
         Ok(self
             .f
@@ -2435,7 +2436,7 @@ impl Cg<'_> {
         self.cond_br(is_null, cast_null, not_null);
         self.emit_block(not_null, false);
         let adj = neg(self);
-        let from = self.f.fir.cur().expect("insertion point");
+        let from = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_branch(end);
         self.emit_block(cast_null, false);
         self.emit_block(end, false);

@@ -730,7 +730,7 @@ impl Sema<'_, '_> {
         let ex = &self.ast.exprs;
         loop {
             match ex.get(e).kind() {
-                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = ex.operand(e);
                 }
                 ExprKind::SubstNonTypeTemplateParmExpr => e = ex.subst_replacement(e),
@@ -868,19 +868,22 @@ impl Sema<'_, '_> {
         self.nttp_of_expr(expr).filter(|r| r.depth == depth && !r.pack).map(|r| r.index)
     }
 
-    /// The non-type template parameter expression `e` names (through
-    /// implicit conversions and parentheses).
     /// Whether `e` names a non-type template parameter of `depth` as a
     /// bare (possibly converted) reference: a deduced context.
     pub(crate) fn nttp_of_expr_at(&self, e: Option<ExprId>, depth: u16) -> bool {
         e.and_then(|e| self.nttp_of_expr(e)).is_some_and(|r| r.depth == depth)
     }
 
+    /// The non-type template parameter expression `e` names (through
+    /// implicit conversions, not parentheses).
     fn nttp_of_expr(&self, mut e: ExprId) -> Option<ParmRef> {
         let ex = &self.ast.exprs;
         loop {
             match ex.get(e).kind() {
-                ExprKind::ImplicitCastExpr | ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                // Not through parentheses: `S<(N)>` is a non-deduced
+                // context (CWG526, [temp.deduct.type]/5.3; clang
+                // `getDeducedParameterFromExpr`).
+                ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
                     e = ex.operand(e);
                 }
                 // clang `getDeducedParameterFromExpr` looks through the

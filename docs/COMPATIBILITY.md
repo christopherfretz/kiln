@@ -169,11 +169,43 @@ compiler wrapper, say), configure with
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
 ([spec/modules.md](../spec/modules.md) §11.9).
 
+**`import std;`** (libc++, `-stdlib=libc++`) needs no flags. kiln builds
+libc++'s `std` and `std.compat` modules once per toolchain configuration
+into a module cache, `$XDG_CACHE_HOME/kiln/modules` (else
+`~/.cache/kiln/modules`), and later compiles reuse them. Concurrent
+builds share the cache safely. `-fmodules-cache-path=<dir>` moves it,
+and `-fno-kiln-module-cache` (or an empty `-fmodules-cache-path=`)
+turns it off. An unwritable cache is not an error: kiln builds the
+module from its source, as it does with the cache off, and says so under
+`-v`. Today a cached module costs the same as building it in-process
+(1.5 s and 96 MiB for `import std;` plus a small `main`, harness build,
+aarch64), because module files hold sources. The first compile also
+fills the cache (2.5 s, 140 MiB).
+
+`-print-file-name=libc++.modules.json` prints libc++'s module manifest,
+so CMake's **`CXX_MODULE_STD`** (3.30+) works with `kiln++`. CMake
+requires its experimental gate, set before `project()`:
+`CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` =
+`0e5b6991-d74f-4b3d-a41c-cf096e0b2508` for 3.30 and 3.31,
+`a9e1cf81-9932-4810-974b-6eccaf14e457` for 4.0, and
+`d0edc3af-4c50-42ea-a356-e2862fe7a444` for 4.1 and 4.2. It also needs
+`-stdlib=libc++` and `CXX_STANDARD 23`. CMake then builds `std.cppm`
+with kiln like any other module.
+
 Not yet supported:
 
-- `import std;` through CMake (`CXX_MODULE_STD`);
 - header units as module files (`-fmodule-header`), so the scanner
   rejects `import "h";` with an error.
+
+## Precompiled headers
+
+clang's PCH interface works (WP-1023; spec/driver.md "Precompiled
+headers"). That includes CMake's `target_precompile_headers`, which
+passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
+
+| feature | status | notes |
+|---|---|---|
+| PCH (`-x c++-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; correctness, not speed** | kiln's PCH is a textual record: the header path, the hash of every file it read, and the options that change meaning. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then processes the header again as if `-include`d. **A PCH build is not faster than the same build without one in 1.0.** clang's `.pch` files are refused, and vice versa. Same-size edits are found by content, not mtime. `-include foo.h` does not look for `foo.h.pch` (use `-include-pch`). A serialized-AST PCH that shares the module-file format is a follow-up. |
 
 ## Libraries and applications
 
@@ -264,6 +296,12 @@ and what it concludes about kiln (WP-920):
   only for CUDA, HIP and assembler vendor detection, which kiln does not
   serve. Works unchanged. C++20 modules (`FILE_SET CXX_MODULES`, Ninja)
   find kiln's scanner beside the compiler ("C++20 modules" above).
+  Precompiled headers (`target_precompile_headers`) use CMake's Clang
+  flags and work unchanged ([above](#precompiled-headers); WP-1023). They
+  are checked by `scripts/oss/selftest.sh`, and glaze and reflect-cpp are
+  built with them on. They are correct but not faster, so
+  `-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON` remains a valid way to save the
+  extra parse.
 - **Autotools** (hunspell's configure: autoconf 2.69, automake, libtool): `AC_PROG_CXX` decides
   "GNU C++" from `__GNUC__` (kiln: 4.2.1, as clang). It runs `--version`,
   `-v`, `-V` and `-qversion` only to log them in `config.log`. libtool
@@ -311,9 +349,9 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 |---|---|---|
 | libc++ 22.1.8 (9247 tests) | 99.0% (aarch64 99.2%); the 2 x86_64-only failures are a narrow signed `++` bug that signed `char` exposes (WP-981, fixed in WP-980) and a flaky timeout | **Near-perfect** |
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
-| Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags are not accepted yet, so the SSE4.1/AVX2/SHA-NI code is configured out | **Flawless** (tests), follow-up for the flags |
-| OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap | **Flawless** (tests), follow-up for the flags |
-| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: `_Float128` is not glibc's x86-64 `__float128` typedef | **Broken** for `IRTests` (follow-up) |
+| Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags were not accepted, so the SSE4.1/AVX2/SHA-NI code was configured out. WP-1000 added the flags; not re-swept yet | **Flawless** (tests); TU count to re-measure |
+| OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap (WP-1000, not re-swept yet) | **Flawless** (tests); TU count to re-measure |
+| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: glibc's x86-64 `_Float128` functions are not `__float128` ones in kiln (WP-1058) | **Broken** for `IRTests` (follow-up) |
 | gRPC | the missing `__rdtsc` (31 TUs) is fixed; the full x86_64 build was still running at the first sweep | **Not run** (pending) |
 
 ## Rejecting invalid code
@@ -357,6 +395,21 @@ with kiln and with clang++-19 and compares the reports. Detail, and the
 compile-time cost of each mode, in
 [spec/landed/codegen/WP-941.md](../spec/landed/codegen/WP-941.md) and
 [spec/landed/codegen/WP-1003.md](../spec/landed/codegen/WP-1003.md).
+
+## Sanitizers
+
+| feature | flags | status |
+|---|---|---|
+| UndefinedBehaviorSanitizer | `-fsanitize=undefined` and its members, `integer`, recover/trap/abort modes | **Works**: the frontend IR equals clang 19's and 22's for every check but vptr and function (not implemented yet); reports come from clang's runtime |
+| AddressSanitizer, HWASan, TSan, MSan, LeakSanitizer, libFuzzer | `-fsanitize=address`, `hwaddress`, `thread`, `memory`, `leak`, `fuzzer` | **Works**: clang's attributes and pass pipeline; under ASan and MSan kiln does not name local values, so stack reports show no variable names |
+| Trapping overflow | `-ftrapv`, `-ftrapv-handler=` | **Works**: IR as clang's |
+| Check merging | `-f[no-]sanitize-merge[=]` | **Works**: `nomerge` and trap blocks as clang 22 |
+| Ignorelists | `-fsanitize-ignorelist=`, the default `asan`/`hwasan`/`msan` lists, `-fno-sanitize-ignorelist` | **Works** for `fun:`, `src:`, `mainfile:`, `global:`, `type:` and `=init`, with clang's error wording; regular-expression (`#!special-case-list-v1`) lists are rejected |
+
+The runtimes are LLVM's compiler-rt (Debian package `libclang-rt-19-dev`),
+which the linking `clang++` adds. Detail in
+[docs/design/sanitizers.md](design/sanitizers.md) and
+[spec/landed/codegen/WP-1032.md](../spec/landed/codegen/WP-1032.md).
 
 ## Constexpr and compile-time performance
 

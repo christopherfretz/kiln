@@ -65,7 +65,10 @@ fn cli_parsing() {
             toolchain: None,
             require_gcc: false,
             require_debuggers: false,
+            require_sanitizer_runtime: false,
             debug_sweep: false,
+            bmi_kind: None,
+            bmi_image: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -514,6 +517,23 @@ fn debugger_corpus_is_a_default_root() {
     assert!(roots.contains(&root.join("tests/conformance")), "{roots:?}");
 }
 
+/// `cargo xtask test tests/mangle` also runs the mangling differential
+/// (WP-1034, spec/harness.md "The mangling differential"): a path in
+/// tests/mangle or a directory holding it selects it; the default roots and
+/// other directories do not.
+#[test]
+fn mangle_corpus_paths() {
+    let root = repo_root();
+    let p = |v: &[&str]| v.iter().map(PathBuf::from).collect::<Vec<_>>();
+    assert!(names_mangle_corpus(&root, &p(&["tests/mangle"])));
+    assert!(names_mangle_corpus(&root, &p(&["tests/mangle/basic.cpp"])));
+    assert!(names_mangle_corpus(&root, &p(&["tests/conformance", "tests"])));
+    assert!(names_mangle_corpus(&root, &[root.join("tests/mangle/")]));
+    assert!(!names_mangle_corpus(&root, &[]));
+    assert!(!names_mangle_corpus(&root, &p(&["tests/conformance"])));
+    assert!(!names_mangle_corpus(&root, &p(&["tests/mangle/no-such-file.cpp"])));
+}
+
 /// `KILN_REQUIRE_GCC=1` ([`Options::require_gcc`]): a run without a usable
 /// GCC oracle is an infrastructure error (exit 2), never a run with the
 /// `oracle: gcc` comparisons dropped (spec/harness.md "GCC oracle").
@@ -943,6 +963,17 @@ fn ci_gate_honours_failure_counts() {
 
 /// `--meta-header` and `meta-header: skip` (spec/harness.md
 /// "Header-differential mode").
+#[test]
+fn bmi_kind_option() {
+    assert_eq!(parse_args(strings(&["--bmi-kind", "1"])).unwrap().unwrap().bmi_kind, Some(1));
+    assert_eq!(parse_args(strings(&["--bmi-kind=2"])).unwrap().unwrap().bmi_kind, Some(2));
+    assert!(parse_args(strings(&["--bmi-kind", "3"])).is_err());
+    assert!(parse_args(strings(&["--bmi-kind"])).is_err());
+    let o = parse_args(strings(&["--bmi-image"])).unwrap().unwrap();
+    assert_eq!((o.bmi_kind, o.bmi_image), (Some(2), true));
+    assert!(parse_args(strings(&["--bmi-image", "--bmi-kind", "1"])).is_err());
+}
+
 #[test]
 fn meta_header_mode_selection() {
     let o = parse_args(strings(&["--meta-header"])).unwrap().unwrap();

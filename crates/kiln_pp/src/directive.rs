@@ -1255,10 +1255,6 @@ impl Preprocessor<'_, '_> {
         }
         self.check_eod(dir, true);
         let Some((fname, angled)) = self.include_name(&ft.tok, ft.tok.span) else { return };
-        if self.include_depth + 1 >= self.opts.max_include_depth {
-            self.emit(Diag::new(DiagId::pp_include_nested_too_deeply, ft.tok.span));
-            return;
-        }
         let req = IncludeRequest {
             kind,
             name: fname,
@@ -1291,12 +1287,23 @@ impl Preprocessor<'_, '_> {
             self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
+        // clang `IncludeLimitReached`: after the depth limit was hit (an
+        // include cycle), a file already entered is not entered again.
+        if self.include_limit_reached && self.entered.contains(&r.file) {
+            return;
+        }
         // The multiple-include optimization: re-including a guarded file
         // whose guard macro is defined has no effect.
         if self.once_files.contains(&r.file)
             || self.guards.get(&r.file).is_some_and(|&m| self.macros.is_defined(m))
         {
             self.callbacks.file_skipped(&r, system);
+            return;
+        }
+        // clang checks the depth only for a file it would enter.
+        if self.include_depth + 1 >= self.opts.max_include_depth {
+            self.emit(Diag::new(DiagId::pp_include_nested_too_deeply, ft.tok.span));
+            self.include_limit_reached = true;
             return;
         }
         if d == Dir::Import {

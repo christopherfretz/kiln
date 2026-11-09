@@ -255,6 +255,10 @@ pub(crate) fn skip_parens(ast: &kiln_ast::Ast, mut e: ExprId) -> ExprId {
     loop {
         match ast.exprs.get(e).kind() {
             ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            // GNU `__extension__` is transparent (clang `IgnoreParens`).
+            ExprKind::UnaryOperator if ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                e = ast.exprs.operand(e);
+            }
             ExprKind::ChooseExpr if ast.exprs.choose_chosen(e).is_some() => {
                 e = ast.exprs.choose_chosen(e).expect("guarded");
             }
@@ -1389,6 +1393,13 @@ impl<'a> Compiler<'a> {
             // `co_await`/`co_yield` ([expr.const]/5.23, WP-351).
             return self.throw_invalid(e);
         }
+        if k.is_cast() && self.b.ast().exprs.cast_kind(e) == CastKind::BuiltinFnToFnPtr {
+            // A builtin's callee evaluated apart from its call (a call
+            // strips the cast to reach the builtin, `call_inner`): clang's
+            // `PointerExprEvaluator` has no case for the cast, so the
+            // generic note at the callee (WP-996).
+            return self.throw_invalid(e);
+        }
         if k.is_cast()
             && self.b.ast().exprs.cast_kind(e) == CastKind::IntegralToBoolean
             && matches!(self.b.ast().types.canonical_view(n.ty()), TypeView::Vector { .. })
@@ -1645,7 +1656,7 @@ impl Scan<'_> {
                 let op = ast.exprs.unary_op(e);
                 let x = ast.exprs.operand(e);
                 match op {
-                    UnaryOp::PreInc | UnaryOp::PreDec => self.expr(x, ok),
+                    UnaryOp::PreInc | UnaryOp::PreDec | UnaryOp::Extension => self.expr(x, ok),
                     UnaryOp::PostInc | UnaryOp::PostDec => self.expr(x, true),
                     _ => self.expr(x, false),
                 }
@@ -3425,7 +3436,7 @@ impl Compiler<'_> {
         let op = self.ast().exprs.unary_op(e);
         let x = self.ast().exprs.operand(e);
         match op {
-            UnaryOp::Plus => self.rv_inner(x, dst),
+            UnaryOp::Plus | UnaryOp::Extension => self.rv_inner(x, dst),
             UnaryOp::Minus => {
                 let r = self.rv(x);
                 match self.kind(ty) {
@@ -3478,7 +3489,7 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, Some(dst), e);
             }
-            _ => self.unsupported(e),
+            UnaryOp::Coawait => self.unsupported(e),
         }
     }
 
@@ -4626,6 +4637,7 @@ impl Compiler<'_> {
                         }
                     }
                     UnaryOp::Real | UnaryOp::Imag => self.real_imag_lv(e, acc),
+                    UnaryOp::Extension => self.lv(x, acc),
                     UnaryOp::PreInc | UnaryOp::PreDec => {
                         let place = self.lv_rmw(x, e);
                         let xty = self.ety(x);
@@ -5018,6 +5030,10 @@ impl Compiler<'_> {
         }
         match n.kind() {
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
+                let op = self.ast().exprs.operand(e);
+                return self.init_inner(op, p, ty);
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Extension => {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
             }
@@ -5524,6 +5540,10 @@ impl Compiler<'_> {
             ExprKind::CXXThrowExpr => self.throw_expr(e),
             ExprKind::StmtExpr => self.stmt_expr(e, None),
             ExprKind::ParenExpr => {
+                let op = self.ast().exprs.operand(e);
+                self.effect(op);
+            }
+            ExprKind::UnaryOperator if self.ast().exprs.unary_op(e) == UnaryOp::Extension => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }

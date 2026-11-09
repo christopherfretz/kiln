@@ -935,6 +935,181 @@ fn x86_call_without_feature() {
     }
 }
 
+/// spec/driver.md "x86-64 target features" (WP-1000): intrinsic gating
+/// follows the `-m` flags and `target("...")` attributes on any host
+/// (`--target` pinned, `-ffreestanding` so only the builtin headers are
+/// read). A `target` attribute's map starts from the command line's
+/// features as written (clang `getFunctionFeatureMap`), so `-mno-crc32`
+/// still holds inside `target("sha")`. Where clang++-19 is installed the
+/// whole stderr is compared with it.
+#[test]
+fn x86_target_feature_gating() {
+    let d = scratch("x86gate");
+    std::fs::write(
+        d.join("t.cpp"),
+        "#include <immintrin.h>\n\
+         unsigned f(unsigned c, unsigned char v) { return _mm_crc32_u8(c, v); }\n\
+         __attribute__((target(\"avx2\"))) __m256i g(__m256i a, __m256i b) { return _mm256_add_epi32(a, b); }\n\
+         __m128i s(__m128i a, __m128i b) { return _mm_sha1msg1_epu32(a, b); }\n",
+    )
+    .unwrap();
+    let cases: [(&[&str], &[&str]); 3] = [
+        (&["-msse4.2", "-msha"], &[]),
+        (
+            &["-msse4.2"],
+            &[
+                "t.cpp:4:42: error: always_inline function '_mm_sha1msg1_epu32' requires target feature 'sha'",
+            ],
+        ),
+        (
+            &["-march=x86-64-v3", "-msha", "-mno-crc32"],
+            &[
+                "t.cpp:2:50: error: always_inline function '_mm_crc32_u8' requires target feature 'crc32'",
+            ],
+        ),
+    ];
+    for (flags, errors) in cases {
+        let mut args = vec!["-fclang-compat=19", "--target=x86_64-linux-gnu", "-ffreestanding"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let got: Vec<&str> = err.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(got.len(), errors.len(), "{flags:?}: {err}");
+        for (g, w) in got.iter().zip(errors) {
+            assert!(g.starts_with(w), "{flags:?}: {err}");
+        }
+        assert_eq!(o.status.code(), Some(i32::from(!errors.is_empty())), "{flags:?}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
+            assert_eq!(err, text(&c.stderr), "{flags:?}");
+        }
+    }
+}
+
+/// spec/driver.md "x86-64 target features" (WP-1000): x86 feature flags
+/// on an `AArch64` target and `AArch64` ones on x86-64 are clang's
+/// "unsupported option for target" errors, a bad `-march=` /
+/// `-mapx-features=` value is "unsupported argument", and `-m3dnow` is
+/// clang's dropped-feature warning. The driver's stderr matches
+/// clang++-19's (`kiln++` for the program name) where it is installed.
+#[test]
+fn x86_flag_driver_diagnostics() {
+    let d = scratch("x86flags");
+    std::fs::write(d.join("e.cpp"), "int x;\n").unwrap();
+    let cases: [(&str, &str, &str); 7] = [
+        (
+            "aarch64-linux-gnu",
+            "-mavx2",
+            "error: unsupported option '-mavx2' for target 'aarch64-linux-gnu'",
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-mapx-features=egpr",
+            "error: unsupported option '-mapx-features=' for target 'aarch64-linux-gnu'",
+        ),
+        (
+            "aarch64-linux-gnu",
+            "-march=haswell",
+            "error: unsupported argument 'haswell' to option '-march='",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-mcpu=cortex-a57",
+            "error: unsupported option '-mcpu=' for target 'x86_64-linux-gnu'",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-msve-vector-bits=256",
+            "error: unsupported option '-msve-vector-bits=' for target 'x86_64-linux-gnu'",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-mapx-features=bogus",
+            "error: unsupported argument 'bogus' to option '-mapx-features='",
+        ),
+        ("x86_64-linux-gnu", "-m3dnow", "warning: the clang compiler does not support '-m3dnow'"),
+    ];
+    for (target, flag, want) in cases {
+        let t = format!("--target={target}");
+        let args = ["-fclang-compat=19", t.as_str(), flag, "-fsyntax-only", "e.cpp"];
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        assert_eq!(err, format!("kiln++: {want}\n"), "{target} {flag}");
+        assert_eq!(o.status.code(), Some(i32::from(want.starts_with("error"))), "{flag}");
+        if have("clang++-19") {
+            let c = Command::new("clang++-19").current_dir(&d).args(&args[1..]).output().unwrap();
+            assert_eq!(err.replacen("kiln++", "clang++-19", 1), text(&c.stderr), "{target} {flag}");
+        }
+    }
+}
+
+/// spec/codegen.md psABI (WP-1000): passing a 256-bit vector by value is
+/// clang's `-Wpsabi` warning when neither caller nor callee has `avx`
+/// (clang 22: not for a callee with internal linkage), and its
+/// `err_avx_calling_convention` error when exactly one of them has it.
+#[test]
+fn x86_avx_calling_convention() {
+    let d = scratch("x86psabi");
+    std::fs::write(
+        d.join("t.cpp"),
+        "typedef long long v4 __attribute__((vector_size(32)));\n\
+         v4 ext(v4 a);\n\
+         static v4 in(v4 a) { return a; }\n\
+         __attribute__((target(\"avx\"))) v4 ax(v4 a);\n\
+         v4 c1(v4 a) { return ext(a); }\n\
+         v4 c2(v4 a) { return in(a); }\n\
+         __attribute__((target(\"avx\"))) v4 c3(v4 a) { return ext(a); }\n\
+         v4 c4(v4 a) { return ax(a); }\n\
+         __attribute__((target(\"avx2\"))) v4 c5(v4 a) { return ax(a); }\n",
+    )
+    .unwrap();
+    let diag = |l: &str| {
+        l.split_once(": ")
+            .map(|(loc, rest)| format!("{loc} {}", &rest[..rest.find(':').unwrap_or(0)]))
+            .unwrap_or_default()
+    };
+    let cases: [(&str, &[&str], &[&str]); 3] = [
+        (
+            "19",
+            &[],
+            &["t.cpp:5:22 warning", "t.cpp:6:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"],
+        ),
+        ("22", &[], &["t.cpp:5:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"]),
+        ("19", &["-mavx"], &[]),
+    ];
+    for (compat, flags, want) in cases {
+        let compat = format!("-fclang-compat={compat}");
+        let mut args = vec![compat.as_str(), "--target=x86_64-linux-gnu"];
+        args.extend_from_slice(flags);
+        args.extend_from_slice(&["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let got: Vec<String> = err
+            .lines()
+            .filter(|l| l.starts_with("t.cpp:") && l.contains("changes the ABI"))
+            .map(diag)
+            .collect();
+        assert_eq!(got, want, "{compat} {flags:?}: {err}");
+        if compat.ends_with("19") && have("clang++-19") {
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
+            assert_eq!(err, text(&c.stderr), "{flags:?}");
+        }
+    }
+}
+
 /// spec/driver.md "Codegen flags" (WP-605): every honoured or ignored
 /// GCC/clang codegen flag compiles `int main(){}` to an object; every
 /// rejected one is the driver error "'<flag>' is not supported by kiln".
@@ -996,8 +1171,17 @@ fn codegen_flags_classes() {
         &["-fstack-usage"],
         &["-gz"],
         &["-gz=zlib"],
-        &["-fno-trapv"],
         &["-fno-short-enums"],
+        // WP-1032: `-ftrapv` and its handler, `-fno-trapv` (GCC's), and
+        // the merge lists in every spelling.
+        &["-ftrapv"],
+        &["-fno-trapv"],
+        &["-ftrapv", "-fno-trapv"],
+        &["-ftrapv", "-ftrapv-handler=overflow_handler"],
+        &["-fsanitize-merge"],
+        &["-fno-sanitize-merge"],
+        &["-fsanitize-merge=undefined"],
+        &["-fno-sanitize-merge=signed-integer-overflow,alignment"],
         &["-ffp-model=precise"],
         // The common hardening set together, at -O2.
         &[
@@ -1013,8 +1197,8 @@ fn codegen_flags_classes() {
         ],
     ];
     for flags in accepted {
-        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported argument",
-        // as clang ("Target features"), so the host target decides.
+        // `-mcpu=` is AArch64-only: on x86-64 it is "unsupported option
+        // for target", as clang ("Target features"), so the host target decides.
         if flags.contains(&"-mcpu=native") && !cfg!(target_arch = "aarch64") {
             continue;
         }
@@ -1040,7 +1224,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = ["-ftrapv", "-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
+    let rejected = ["-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1061,6 +1245,11 @@ fn codegen_flags_rejected() {
         ("-gz=lzma", "unsupported argument 'lzma' to option '-gz='"),
         ("-fexcess-precision=none", "unsupported argument 'none' to option '-fexcess-precision='"),
         ("-mtune=", "unsupported argument '' to option '-mtune='"),
+        ("-fsanitize-merge=bogus", "unsupported argument 'bogus' to option '-fsanitize-merge='"),
+        (
+            "-fno-sanitize-merge=bogus",
+            "unsupported argument 'bogus' to option '-fno-sanitize-merge='",
+        ),
     ] {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(
@@ -1674,4 +1863,154 @@ fn sanitizer_frontend_attributes() {
     assert!(attrs(&ll, "@_Z1fi").contains(" sanitize_memory "), "{ll}");
     assert!(!attrs(&ll, "@_Z2f2i").contains("sanitize_"), "{ll}");
     assert!(!ll.contains("no_sanitize_address"), "{ll}");
+}
+
+/// spec/driver.md "Sanitizers" (WP-1032): `-fsanitize-ignorelist=` under
+/// the address sanitizer. A function named by `fun:` or defined in a `src:` file loses
+/// `sanitize_address`; a global named by `global:`, of a class named by
+/// `type:` (or an array of one) or defined in a `src:` file is
+/// `no_sanitize_address`; an `=init` entry drops only the
+/// dynamic-initialisation marker. The resource directory's default
+/// `share/asan_ignorelist.txt` applies (its `fun:*_Find_elem@*@std*`) until
+/// `-fno-sanitize-ignorelist`. Each line was checked against clang 19's
+/// output (address sanitizer IR tests cannot be exact: clang keeps value names there).
+#[test]
+fn sanitizer_ignorelist_asan() {
+    let d = scratch("ignorelist-asan");
+    std::fs::write(
+        d.join("h.h"),
+        "int src_g[3];\ninline int from_header(int *p) { return p[1]; }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("list.txt"),
+        "fun:_Z4skipPi\nfun:*skip_tmpl*\nglobal:skip_g\ntype:Skipped\ntype:ns::Inner\n\
+         src:*h.h\nglobal:dyn_skip=init\ntype:Lazy=init\n",
+    )
+    .unwrap();
+    let src = "#include \"h.h\"\n\
+               struct Skipped { int v[2]; };\n\
+               struct Lazy { Lazy(); int v; };\n\
+               namespace ns { struct Inner { int v[4]; }; }\n\
+               int init();\n\
+               int skip_g[4];\nint kept_g[4];\n\
+               Skipped by_type;\nSkipped by_type_arr[2];\nns::Inner by_inner;\n\
+               int dyn_skip = init();\nint dyn_kept = init();\nLazy lazy;\n\
+               int skip(int *p) { return p[1]; }\n\
+               int kept(int *p) { return p[1]; }\n\
+               template <class T> T skip_tmpl(T *p) { return p[1]; }\n\
+               template int skip_tmpl<int>(int *);\n\
+               int use(int *p) { return from_header(p) + kept_g[1] + skip_g[1]; }\n\
+               int found(int *p) __asm__(\"my_Find_elem@1@std\");\n\
+               int found(int *p) { return p[1]; }\n";
+    std::fs::write(d.join("s.cpp"), src).unwrap();
+    let ir = |extra: &[&str]| {
+        let mut args = vec!["-fsanitize=address", "-Xclang", "-disable-llvm-passes"];
+        args.extend(extra);
+        args.extend(["-S", "-emit-llvm", "-o", "-", "s.cpp"]);
+        let o = kiln_in(&d, &args);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{extra:?}");
+        text(&o.stdout)
+    };
+    let instrumented = |ll: &str, name: &str| -> bool {
+        let def = ll.lines().find(|l| l.starts_with("define") && l.contains(name)).unwrap();
+        let group = def.split(' ').find(|t| t.starts_with('#')).unwrap();
+        let line = format!("attributes {group} = ");
+        ll.lines().find(|l| l.starts_with(&line)).unwrap().contains(" sanitize_address ")
+    };
+    let ll = ir(&["-fsanitize-ignorelist=list.txt"]);
+    for g in [
+        "@src_g = dso_local global [3 x i32] zeroinitializer, no_sanitize_address,",
+        "@skip_g = dso_local global [4 x i32] zeroinitializer, no_sanitize_address,",
+        "@by_type = dso_local global %struct.Skipped zeroinitializer, no_sanitize_address,",
+        "@by_type_arr = dso_local global [2 x %struct.Skipped] zeroinitializer, \
+         no_sanitize_address,",
+        "@by_inner = dso_local global %\"struct.ns::Inner\" zeroinitializer, \
+         no_sanitize_address,",
+        "@dyn_skip = dso_local global i32 0, align 4",
+        "@dyn_kept = dso_local global i32 0, sanitize_address_dyninit, align 4",
+        "@lazy = dso_local global %struct.Lazy zeroinitializer, align 4",
+    ] {
+        assert!(ll.contains(g), "{g}\n{ll}");
+    }
+    // The alignment differs by host (16 on x86_64 SysV, 4 on aarch64), so check only the attributes.
+    let kept = ll.lines().find(|l| l.starts_with("@kept_g = ")).unwrap();
+    assert!(
+        kept.starts_with("@kept_g = dso_local global [4 x i32] zeroinitializer, align "),
+        "{kept}"
+    );
+    for (f, on) in [
+        ("@_Z4skipPi", false),
+        ("@_Z9skip_tmplIiET_PS0_", false),
+        ("@_Z11from_headerPi", false),
+        ("@\"my_Find_elem@1@std\"", false),
+        ("@_Z4keptPi", true),
+        ("@_Z3usePi", true),
+    ] {
+        assert_eq!(instrumented(&ll, f), on, "{f}\n{ll}");
+    }
+    // `-fno-sanitize-ignorelist` drops the default list and the earlier
+    // `-fsanitize-ignorelist=`.
+    let ll = ir(&["-fsanitize-ignorelist=list.txt", "-fno-sanitize-ignorelist"]);
+    assert!(instrumented(&ll, "@\"my_Find_elem@1@std\""), "{ll}");
+    assert!(instrumented(&ll, "@_Z4skipPi"), "{ll}");
+    assert!(!ll.contains("no_sanitize_address"), "{ll}");
+    // `-fsanitize-blacklist=` is the older spelling.
+    let ll = ir(&["-fno-sanitize-blacklist", "-fsanitize-blacklist=list.txt"]);
+    assert!(!instrumented(&ll, "@_Z4skipPi"), "{ll}");
+    assert!(instrumented(&ll, "@\"my_Find_elem@1@std\""), "{ll}");
+}
+
+/// spec/driver.md "Sanitizers" (WP-1032): a malformed ignorelist is
+/// clang's driver error, word for word (LLVM `SpecialCaseList`'s message);
+/// a regular-expression (`#!special-case-list-v1`) list is kiln's error.
+/// No job runs.
+#[test]
+fn sanitizer_ignorelist_errors() {
+    let d = scratch("ignorelist-err");
+    std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
+    for (name, body, want) in [
+        (
+            "bad1.txt",
+            "fun:ok\nbadline\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad1.txt': malformed line 2: \
+             'badline''",
+        ),
+        (
+            "bad2.txt",
+            "[a\nfun:x\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad2.txt': malformed section \
+             header on line 1: [a'",
+        ),
+        (
+            "bad3.txt",
+            "fun:[z-a]\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'bad3.txt': malformed glob in \
+             line 1: '[z-a]': invalid glob pattern: [z-a]'",
+        ),
+        (
+            "v1.txt",
+            "#!special-case-list-v1\nfun:a.*\n",
+            "sanitizer ignorelist 'v1.txt' uses regular expressions ('#!special-case-list-v1'), \
+             which kiln does not support; use glob patterns",
+        ),
+    ] {
+        std::fs::write(d.join(name), body).unwrap();
+        let flag = format!("-fsanitize-ignorelist={name}");
+        let o = kiln_in(&d, &["-fsanitize=address", &flag, "-c", "m.cpp", "-o", "r.o"]);
+        assert_eq!(
+            (o.status.code(), text(&o.stderr)),
+            (Some(1), format!("kiln++: error: {want}\n")),
+            "{name}"
+        );
+        assert!(!d.join("r.o").exists(), "{name}");
+    }
+    let o = kiln_in(
+        &d,
+        &["-fsanitize=undefined", "-fsanitize-ignorelist=none.txt", "-c", "m.cpp", "-o", "r.o"],
+    );
+    assert_eq!(
+        (o.status.code(), text(&o.stderr).as_str()),
+        (Some(1), "kiln++: error: no such file or directory: 'none.txt'\n")
+    );
 }

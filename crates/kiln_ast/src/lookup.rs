@@ -139,7 +139,8 @@ impl<'a> LookupResult<'a> {
     /// The declarations with their flags.
     pub fn iter_with_flags(&self) -> impl ExactSizeIterator<Item = (DeclId, LookupFlags)> + 'a {
         let this = *self;
-        (0..this.len()).map(move |i| this.get_with_flags(i).expect("in range"))
+        (0..this.len())
+            .map(move |i| this.get_with_flags(i).expect("invariant: the index is below len()"))
     }
 
     /// The declarations visible to ordinary (non-ADL) lookup: all but
@@ -156,13 +157,14 @@ impl<'a> LookupResult<'a> {
     /// The declarations.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = DeclId> + 'a {
         let this = *self;
-        (0..this.len()).map(move |i| this.get(i).map(|(d, _)| d).expect("in range"))
+        (0..this.len())
+            .map(move |i| this.get(i).map(|(d, _)| d).expect("invariant: the index is below len()"))
     }
 
     /// The declarations with their `via_inline` flag.
     pub fn iter_with_inline(&self) -> impl ExactSizeIterator<Item = (DeclId, bool)> + 'a {
         let this = *self;
-        (0..this.len()).map(move |i| this.get(i).expect("in range"))
+        (0..this.len()).map(move |i| this.get(i).expect("invariant: the index is below len()"))
     }
 
     /// The declarations, collected.

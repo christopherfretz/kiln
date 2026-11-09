@@ -44,6 +44,31 @@ pub struct ModuleOptions {
     /// module directives are recorded ([`Preprocessor::scanned_imports`])
     /// and no import is performed; a header-unit import is an error.
     pub scan: bool,
+    /// The hidden `-fkiln-bmi-image`: build an imported unit from its
+    /// module file's declaration image when it has one and the name gate
+    /// passes (spec/modules.md §11.11 "Part 2a"); otherwise replay.
+    pub image: bool,
+    /// The toolchain's module-file cache for libc++'s `std` and
+    /// `std.compat` (spec/modules.md §11.12): asked wherever one of them
+    /// would otherwise be built from its source in `std_dir`.
+    pub std_cache: Option<StdModuleCache>,
+}
+
+/// A lookup in the toolchain's module-file cache (spec/modules.md
+/// §11.12): given `std` or `std.compat` and its libc++ source, the module
+/// file to read instead (built and stored on a miss), or `None` to build
+/// the unit from its source in-process (part A).
+#[derive(Clone)]
+pub struct StdModuleCache(pub Rc<StdModuleLookup>);
+
+/// The function behind a [`StdModuleCache`]: module name and libc++
+/// source to the module file to read.
+pub type StdModuleLookup = dyn Fn(&str, &Path) -> Option<PathBuf>;
+
+impl std::fmt::Debug for StdModuleCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StdModuleCache")
+    }
 }
 
 /// A consumed module or import directive ([cpp.module], [cpp.import]).
@@ -141,6 +166,9 @@ pub(crate) struct ModState {
     unit_replay: Vec<Option<usize>>,
     /// The replay of the main unit, when it is read from a module file.
     main_replay: Option<usize>,
+    /// The carried constants of the main unit's module file (a `.pcm`
+    /// input of kind 2), until the parser takes them.
+    main_carried: Option<Rc<bmi::CarriedSection>>,
     /// The main unit's module declaration: its key and, when it is
     /// importable, its kind.
     main_unit: Option<(String, Option<UnitKind>)>,
@@ -544,23 +572,44 @@ impl Preprocessor<'_, '_> {
         None
     }
 
+    /// The module file the toolchain cache gives for `std` or
+    /// `std.compat` when `path` is libc++'s own source of it
+    /// (spec/modules.md §11.12), else `path`. `std.compat` imports `std`,
+    /// so it is taken from the cache only when `std` is libc++'s too.
+    fn cached_std(&self, key: &str, path: PathBuf) -> PathBuf {
+        let Some(m) = &self.modules else { return path };
+        let (Some(cache), Some(dir)) = (&m.opts.std_cache, &m.opts.std_dir) else { return path };
+        let source = |name: &str| dir.join(format!("{name}.cppm"));
+        if !matches!(key, "std" | "std.compat") || path != source(key) {
+            return path;
+        }
+        if key == "std.compat" && self.find_module("std") != Some(source("std")) {
+            return path;
+        }
+        let cache = Rc::clone(&cache.0);
+        cache(key, &path).unwrap_or(path)
+    }
+
     /// Imports named module (or partition) `key`: from a module file
     /// (spec/modules.md §11) or from its source (§1).
     fn import_module(&mut self, key: &str, span: Span) {
         if self.already_built(key, span) {
             return;
         }
-        let Some(path) = self.find_module(key) else {
+        let Some(source) = self.find_module(key) else {
             self.emit(Diag::new(DiagId::pp_module_not_found, span).arg(key));
             return;
         };
-        let shown = path.display().to_string();
+        // A module file records the path it found, never the cache's: an
+        // importer of it looks the cache up again (§11.12).
         if self.unit_ctx() == Ctx::Main
             && let Some(rec) = self.modules.as_mut().and_then(|m| m.record.as_mut())
             && !rec.imports.iter().any(|(k, _)| k == key)
         {
-            rec.imports.push((key.to_owned(), shown.clone()));
+            rec.imports.push((key.to_owned(), source.display().to_string()));
         }
+        let path = self.cached_std(key, source);
+        let shown = path.display().to_string();
         match bmi::sniff(&path) {
             bmi::Sniffed::Kiln => {
                 let read = bmi::read_file(&path);
@@ -653,7 +702,76 @@ impl Preprocessor<'_, '_> {
 
     /// Starts reading unit `key` from the module file `path`.
     fn begin_capsule_unit(&mut self, key: String, path: String, c: Capsule, span: Span) {
+        if let Some(c) = self.try_image_unit(&key, &path, c, span) {
+            self.replay_capsule_unit(key, path, c, span);
+        }
+    }
+
+    /// Builds unit `key` from its module file's declaration image when
+    /// `-fkiln-bmi-image` is on, the capsule has one and none of its
+    /// declared names is interned yet (spec/modules.md §11.11 "Part 2a",
+    /// "ODR merging"): queues [`Marker::UnitBegin`] carrying the image and
+    /// [`Marker::UnitEnd`], lexes nothing, and returns `None`. Otherwise
+    /// returns the capsule to replay, without its image section.
+    fn try_image_unit(
+        &mut self,
+        key: &str,
+        path: &str,
+        mut c: Capsule,
+        span: Span,
+    ) -> Option<Capsule> {
+        let take = |c: &mut Capsule| {
+            let i = c.sections.iter().position(|s| s.tag == bmi::SECTION_IMAGE)?;
+            Some(c.sections.remove(i).bytes)
+        };
+        let on = self.modules.as_ref().is_some_and(|m| m.opts.image);
+        let Some(bytes) =
+            take(&mut c).filter(|_| on && c.imports.is_empty() && !c.files.is_empty())
+        else {
+            return Some(c);
+        };
+        // An image names its unit's main file; one that is not the
+        // capsule's first file, or that declares a name the importer has
+        // already seen (§11.11 "Part 2a", ODR merging), replays. A header
+        // that does not decode is used anyway: sema then reports the file
+        // as corrupt ("The reader").
+        if let Some((main_path, names)) = bmi::image_header(&bytes) {
+            if c.files[0].path != main_path || names.iter().any(|n| self.interner.get(n).is_some())
+            {
+                return Some(c);
+            }
+            // Interned now, so that a later import in the same lookahead
+            // whose image declares one of them replays instead.
+            for n in names {
+                self.interner.intern(n);
+            }
+        }
+        let carried = take_carried(path, &mut c);
+        let main = c.files.swap_remove(0);
+        drop(c);
+        let Some(main_file) = self.load_recorded(&main.path, main.text) else {
+            self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(path));
+            return None;
+        };
+        let image = Rc::new(bmi::ImageSection { path: path.to_owned(), bytes, main_file });
+        let Some(m) = &mut self.modules else { return None };
+        m.built.insert(key.to_owned(), Vec::new());
+        self.queue(Marker::UnitBegin {
+            key: key.to_owned(),
+            header: false,
+            span,
+            carried,
+            image: Some(image),
+        });
+        self.queue(Marker::UnitEnd { key: key.to_owned() });
+        None
+    }
+
+    /// Starts replaying unit `key` from the capsule `c` of module file
+    /// `path` (§11.2).
+    fn replay_capsule_unit(&mut self, key: String, path: String, mut c: Capsule, span: Span) {
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let carried = take_carried(&path, &mut c);
         let Some(m) = &mut self.modules else { return };
         m.replays.push(Replay::new(path.clone(), c, builtin));
         let i = m.replays.len() - 1;
@@ -662,6 +780,23 @@ impl Preprocessor<'_, '_> {
             return;
         };
         self.begin_unit(key, false, file, false, span, Some(i));
+        if let Some(c) = carried {
+            self.set_unit_carried(c);
+        }
+    }
+
+    /// Attaches `c` to the [`Marker::UnitBegin`] just queued.
+    fn set_unit_carried(&mut self, c: Rc<bmi::CarriedSection>) {
+        let last = self.markers.iter_mut().rev().find(|m| matches!(m, Marker::UnitBegin { .. }));
+        if let Some(Marker::UnitBegin { carried, .. }) = last {
+            *carried = Some(c);
+        }
+    }
+
+    /// The carried constants of a `.pcm` main input of kind 2
+    /// (spec/modules.md §11.11), once.
+    pub fn take_main_carried(&mut self) -> Option<Rc<bmi::CarriedSection>> {
+        self.modules.as_mut()?.main_carried.take()
     }
 
     /// Enters the module file `path` (`bytes`) as the main unit: its main
@@ -675,11 +810,13 @@ impl Preprocessor<'_, '_> {
             self.emit(d);
             return false;
         }
-        let Some(c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else {
+        let Some(mut c) = self.load_capsule(path, bmi::read(bytes), None, Span::INVALID) else {
             return false;
         };
         let builtin = self.sm.add_virtual("<built-in>", c.predefines.clone()).ok();
+        let carried = take_carried(path, &mut c);
         let Some(m) = &mut self.modules else { return false };
+        m.main_carried = carried;
         m.replays.push(Replay::new(path.to_owned(), c, builtin));
         let i = m.replays.len() - 1;
         m.main_replay = Some(i);
@@ -727,6 +864,7 @@ impl Preprocessor<'_, '_> {
             files,
             includes: rec.includes,
             embeds: rec.embeds,
+            sections: Vec::new(),
         })
     }
 
@@ -858,17 +996,24 @@ impl Preprocessor<'_, '_> {
         }
         let (path, text) = r.files.get_mut(k)?;
         let text = text.take()?;
-        // The file itself when it still holds the recorded text (its
-        // FileId is then shared with any textual inclusion of it, §6);
-        // otherwise the recorded text under the file's name (§11.3).
-        let id = match self.sm.load_regular_file_expecting(Path::new(path.as_str()), text) {
-            Ok((id, None)) => id,
-            Ok((id, Some(text))) if self.sm.text(id) == text => id,
-            Ok((_, Some(text))) | Err((_, text)) => self.sm.add_virtual(path, text).ok()?,
-        };
+        let path = path.clone();
+        let id = self.load_recorded(&path, text)?;
+        let r = self.modules.as_mut()?.replays.get_mut(i)?;
         r.ids[k] = Some(id);
         r.index.insert(id, idx);
         Some(id)
+    }
+
+    /// Loads a capsule file `path` recorded with `text`: the file itself
+    /// when it still holds the recorded text (its `FileId` is then shared
+    /// with any textual inclusion of it, §6); otherwise the recorded text
+    /// under the file's name (§11.3).
+    fn load_recorded(&mut self, path: &str, text: String) -> Option<FileId> {
+        match self.sm.load_regular_file_expecting(Path::new(path), text) {
+            Ok((id, None)) => Some(id),
+            Ok((id, Some(text))) if self.sm.text(id) == text => Some(id),
+            Ok((_, Some(text))) | Err((_, text)) => self.sm.add_virtual(path, text).ok(),
+        }
     }
 
     /// Imports the header unit `key` (resolved by `read_header_import`).
@@ -944,7 +1089,7 @@ impl Preprocessor<'_, '_> {
             module,
         };
         self.define_builtins();
-        self.queue(Marker::UnitBegin { key, header, span });
+        self.queue(Marker::UnitBegin { key, header, span, carried: None, image: None });
         self.push_file(file, Some(span.lo), None, None, system, false);
         if let Some(Frame::File(f)) = self.frames.last_mut() {
             f.unit = Some(Box::new(save));
@@ -1013,4 +1158,12 @@ fn embed_key(includer: u32, req: &EmbedRequest) -> EmbedKey {
         offset: req.offset,
         query_only: req.query_only,
     }
+}
+
+/// Moves the carried-constants section out of the kind-2 capsule `c`
+/// read from `path` (spec/modules.md §11.11).
+fn take_carried(path: &str, c: &mut Capsule) -> Option<Rc<bmi::CarriedSection>> {
+    let i = c.sections.iter().position(|s| s.tag == bmi::SECTION_CONSTS)?;
+    let s = c.sections.swap_remove(i);
+    Some(Rc::new(bmi::CarriedSection { path: path.to_owned(), bytes: s.bytes }))
 }

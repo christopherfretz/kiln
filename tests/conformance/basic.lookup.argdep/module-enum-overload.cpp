@@ -9,8 +9,9 @@
 // §10 deviation 10).
 //@ expect: run
 //@ std: c++20
-//@ args: %{test_dir}/Inputs/adl-e2.cppm %{test_dir}/Inputs/adl-f2.cppm -fmodule-file=E2=%{test_dir}/Inputs/adl-e2.cppm -fmodule-file=F2=%{test_dir}/Inputs/adl-f2.cppm
-//@ skip(clang): clang needs a two-step --precompile build of the Inputs modules that the harness cannot drive; it also exits 7 (deviation 10)
+//@ module: E2=Inputs/adl-e2.cppm
+//@ module: F2=Inputs/adl-f2.cppm
+//@ skip(clang): clang calls ::h(int) and exits 7 (spec/modules.md §10 deviation 10)
 //@ exit: 1
 import F2;
 int h(int) { return 7; }

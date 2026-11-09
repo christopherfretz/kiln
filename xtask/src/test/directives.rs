@@ -120,9 +120,10 @@ impl PpCompare {
     }
 }
 
-/// The `%{name}` placeholders `args:` may use, substituted by the runner
-/// (`spec/harness.md` "Placeholders").
-pub const PLACEHOLDERS: &[&str] = &["gcc_toolchain", "repo_root", "resource_dir", "test_dir"];
+/// The `%{name}` placeholders `args:` (and `module:` paths) may use,
+/// substituted by the runner (`spec/harness.md` "Placeholders").
+pub const PLACEHOLDERS: &[&str] =
+    &["gcc_toolchain", "libcxx_modules", "repo_root", "resource_dir", "test_dir"];
 
 /// Checks that every `%{...}` in `arg` names a known placeholder.
 fn check_placeholders(arg: &str) -> Result<(), String> {
@@ -325,6 +326,10 @@ pub struct TestSpec {
     /// [`HOST_FEATURES`] the host the harness runs on must have, the test
     /// targeting the host's architecture; otherwise the test is a SKIP.
     pub requires_host: Option<String>,
+    /// `requires: sanitizer-runtime` (WP-1032): every clang that links the
+    /// test's program must find the undefined-behaviour and address sanitizer runtimes (compiler-rt);
+    /// otherwise the test is a SKIP. The runner probes for them.
+    pub requires_sanitizer_runtime: bool,
     /// `verify`: the outcome is clang's `-verify` check of the test's
     /// `expected-*` comments, under the compiler and the oracle.
     pub verify: bool,
@@ -343,10 +348,20 @@ pub struct TestSpec {
     /// any other TU) a `run` test compiles separately, against the module
     /// files, and links (`spec/harness.md` "Modules").
     pub units: Vec<PathBuf>,
+    /// `header-unit: "<path>"` / `header-unit: <name>`: the header units
+    /// the test imports, which a clang builds first with `-fmodule-header`
+    /// and reads with `-fmodule-file=` (kiln builds them in-process;
+    /// `spec/harness.md` "Modules"; WP-986).
+    pub header_units: Vec<HeaderUnit>,
     /// `two-step`: kiln, too, compiles the `module:` units to module files
     /// (the test then imports those) instead of reading their sources.
     /// Implied for `run` tests.
     pub two_step: bool,
+    /// `pch: <path>`: a header (relative to the test's directory) each
+    /// compiler first builds into a precompiled header (`-x c++-header`)
+    /// that the test file's compile then reads with `-include-pch`
+    /// (`spec/harness.md` "Precompiled headers"; WP-1023).
+    pub pch: Option<PathBuf>,
     /// `min-oracle: N`: every clang the test runs must be release N or
     /// later; otherwise a SKIP (`ir_vs_clang` compares the case only under
     /// such an oracle).
@@ -387,6 +402,15 @@ pub struct ClangRun<'a> {
 pub struct LlvmRun<'a> {
     pub role: &'a str,
     pub major: Option<u32>,
+}
+
+/// One `header-unit:` line: `"<path>"` (a user header, relative to the
+/// test's directory) or `<name>` (a system header, found on the include
+/// path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeaderUnit {
+    pub system: bool,
+    pub name: String,
 }
 
 impl TestSpec {
@@ -518,6 +542,7 @@ pub fn parse(source: &str, lang: Lang) -> Result<TestSpec, Vec<DirectiveError>> 
     p.finish()
 }
 
+#[allow(clippy::struct_excessive_bools)]
 struct Parser {
     lang: Lang,
     errors: Vec<DirectiveError>,
@@ -549,6 +574,7 @@ struct Parser {
     mem_mib: Option<u64>,
     requires_target: Option<String>,
     requires_host: Option<String>,
+    requires_sanitizer_runtime: bool,
     /// Line of `verify` (0: absent).
     verify_line: usize,
     /// Line of the first `diag:` / `strict-diags` (0: none).
@@ -561,8 +587,14 @@ struct Parser {
     units: Vec<PathBuf>,
     /// Line of the first `unit:` (0: none).
     unit_line: usize,
+    header_units: Vec<HeaderUnit>,
+    /// Line of the first `header-unit:` (0: none).
+    header_unit_line: usize,
     /// Line of `two-step` (0: absent).
     two_step_line: usize,
+    pch: Option<PathBuf>,
+    /// Line of `pch:` (0: absent).
+    pch_line: usize,
     min_oracle: Option<u32>,
     requires_llvm: Option<u32>,
     requires_llvm_below: Option<u32>,
@@ -621,6 +653,7 @@ impl Parser {
             mem_mib: None,
             requires_target: None,
             requires_host: None,
+            requires_sanitizer_runtime: false,
             verify_line: 0,
             diag_line: 0,
             requires_clang: None,
@@ -629,7 +662,11 @@ impl Parser {
             module_line: 0,
             units: Vec::new(),
             unit_line: 0,
+            header_units: Vec::new(),
+            header_unit_line: 0,
             two_step_line: 0,
+            pch: None,
+            pch_line: 0,
             min_oracle: None,
             requires_llvm: None,
             requires_llvm_below: None,
@@ -814,6 +851,7 @@ impl Parser {
             "skip" | "xfail" => self.marker(line, name, qualifier, value),
             "requires" => self.requires_directive(line, value),
             "module" => self.module_directive(line, value),
+            "header-unit" => self.header_unit_directive(line, value),
             "unit" => {
                 if value.is_empty() || value.contains(char::is_whitespace) {
                     self.err(line, "expected `unit: <path>`");
@@ -824,6 +862,18 @@ impl Parser {
                         self.unit_line = line;
                     }
                     self.units.push(PathBuf::from(value));
+                }
+            }
+            "pch" => {
+                if value.is_empty() || value.contains(char::is_whitespace) {
+                    self.err(line, "expected `pch: <path>`");
+                } else if Path::new(value).is_absolute() {
+                    self.err(line, "a `pch` path is relative to the test's directory");
+                } else if self.pch_line != 0 {
+                    self.err(line, "duplicate `pch`");
+                } else {
+                    self.pch_line = line;
+                    self.pch = Some(PathBuf::from(value));
                 }
             }
             "min-oracle" => match value.parse::<u32>() {
@@ -950,6 +1000,8 @@ impl Parser {
             self.err(line, "expected `module: <name>=<path>`");
         } else if Path::new(path).is_absolute() {
             self.err(line, "a `module` path is relative to the test's directory");
+        } else if let Err(e) = check_placeholders(path) {
+            self.err(line, e);
         } else if self.modules.iter().any(|(n, _)| n == name) {
             self.err(line, format!("duplicate `module` `{name}`"));
         } else {
@@ -957,6 +1009,30 @@ impl Parser {
                 self.module_line = line;
             }
             self.modules.push((name.to_owned(), PathBuf::from(path)));
+        }
+    }
+
+    fn header_unit_directive(&mut self, line: usize, value: &str) {
+        let (system, name) =
+            if let Some(n) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                (false, n)
+            } else if let Some(n) = value.strip_prefix('<').and_then(|v| v.strip_suffix('>')) {
+                (true, n)
+            } else {
+                self.err(line, "expected `header-unit: \"<path>\"` or `header-unit: <name>`");
+                return;
+            };
+        if name.is_empty() || name.contains(char::is_whitespace) {
+            self.err(line, "expected `header-unit: \"<path>\"` or `header-unit: <name>`");
+        } else if Path::new(name).is_absolute() {
+            self.err(line, "a `header-unit` path is relative to the test's directory");
+        } else if self.header_units.iter().any(|h| h.system == system && h.name == name) {
+            self.err(line, format!("duplicate `header-unit` `{value}`"));
+        } else {
+            if self.header_unit_line == 0 {
+                self.header_unit_line = line;
+            }
+            self.header_units.push(HeaderUnit { system, name: name.to_owned() });
         }
     }
 
@@ -1041,14 +1117,21 @@ impl Parser {
     /// `requires: target-<arch>` (`<arch>` one of [`TARGET_ARCHES`]),
     /// `requires: host-<feature>` (one of [`HOST_FEATURES`]),
     /// `requires: clang>=X[.Y[.Z]]`, `requires: clang<X[.Y[.Z]]`,
-    /// `requires: llvm>=N` or `requires: llvm<N`; each kind at most once.
+    /// `requires: llvm>=N`, `requires: llvm<N` or
+    /// `requires: sanitizer-runtime`; each kind at most once.
     fn requires_directive(&mut self, line: usize, value: &str) {
         let usage = format!(
             "expected `requires: target-<arch>` (<arch> one of {}), `requires: clang>=X[.Y[.Z]]`, \
-             `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N` or `requires: llvm<N`",
+             `requires: clang<X[.Y[.Z]]`, `requires: llvm>=N`, `requires: llvm<N` or \
+             `requires: sanitizer-runtime`",
             TARGET_ARCHES.join(" ")
         );
-        if let Some(f) = value.strip_prefix("host-") {
+        if value == "sanitizer-runtime" {
+            if self.requires_sanitizer_runtime {
+                self.err(line, "duplicate `requires: sanitizer-runtime`");
+            }
+            self.requires_sanitizer_runtime = true;
+        } else if let Some(f) = value.strip_prefix("host-") {
             if !HOST_FEATURES.contains(&f) {
                 self.err(
                     line,
@@ -1313,9 +1396,28 @@ impl Parser {
                 "`module` only applies to `compile-ok`, `compile-fail`, `no-crash` and `run` tests",
             );
         }
+        if self.header_unit_line != 0
+            && (verify
+                || !matches!(
+                    expect,
+                    Expect::CompileOk | Expect::CompileFail | Expect::NoCrash | Expect::Run
+                ))
+        {
+            let line = self.header_unit_line;
+            self.err(
+                line,
+                "`header-unit` only applies to `compile-ok`, `compile-fail`, `no-crash` and `run` tests",
+            );
+        }
         if self.unit_line != 0 && expect != Expect::Run {
             let line = self.unit_line;
             self.err(line, "`unit` only applies to `run` tests");
+        }
+        if self.pch_line != 0
+            && !matches!(expect, Expect::CompileOk | Expect::CompileFail | Expect::Run)
+        {
+            let line = self.pch_line;
+            self.err(line, "`pch` only applies to `compile-ok`, `compile-fail` and `run` tests");
         }
         if self.two_step_line != 0 && (self.module_line == 0 || expect == Expect::Run) {
             let line = self.two_step_line;
@@ -1367,12 +1469,15 @@ impl Parser {
             mem_mib: self.mem_mib,
             requires_target: self.requires_target,
             requires_host: self.requires_host,
+            requires_sanitizer_runtime: self.requires_sanitizer_runtime,
             verify,
             requires_clang: self.requires_clang,
             requires_clang_below: self.requires_clang_below,
             modules: self.modules,
             units: self.units,
+            header_units: self.header_units,
             two_step: self.two_step_line != 0,
+            pch: self.pch,
             min_oracle: self.min_oracle,
             requires_llvm: self.requires_llvm,
             requires_llvm_below: self.requires_llvm_below,
@@ -1454,6 +1559,7 @@ fn is_known_key(k: &str) -> bool {
             | "requires"
             | "module"
             | "unit"
+            | "pch"
             | "min-oracle"
             | "meta-header"
             | "gdb"
@@ -1708,6 +1814,15 @@ mod tests {
         assert!(e.iter().any(|e| e.contains("duplicate `requires: target-`")), "{e:?}");
     }
 
+    #[test]
+    fn requires_sanitizer_runtime_directive() {
+        let s = ok("//@ expect: run\n//@ requires: sanitizer-runtime\n");
+        assert!(s.requires_sanitizer_runtime);
+        assert!(!ok("//@ expect: run\n").requires_sanitizer_runtime);
+        let e = errs("//@ requires: sanitizer-runtime\n//@ requires: sanitizer-runtime\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `requires: sanitizer-runtime`")), "{e:?}");
+    }
+
     /// WP-810: `requires: host-sve` parses, rejects unknown features and
     /// skips a test that targets another architecture than the host.
     #[test]
@@ -1859,6 +1974,42 @@ mod tests {
         }
         let e = errs("//@ min-oracle: 22\n//@ min-oracle: 23\n");
         assert!(e.iter().any(|e| e.contains("duplicate `min-oracle`")), "{e:?}");
+    }
+
+    /// WP-1023: `pch: <header>` (`spec/harness.md` "Precompiled headers").
+    #[test]
+    fn pch_directive() {
+        assert_eq!(ok("int x;\n").pch, None);
+        assert_eq!(ok("//@ pch: p.h\n").pch, Some(PathBuf::from("p.h")));
+        assert_eq!(ok("//@ expect: run\n//@ pch: d/p.h\n").pch, Some(PathBuf::from("d/p.h")));
+        let e = errs("//@ pch: a.h\n//@ pch: b.h\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `pch`")), "{e:?}");
+        for bad in ["", "a b.h", "/abs.h"] {
+            assert!(!errs(&format!("//@ pch: {bad}\n")).is_empty(), "{bad:?}");
+        }
+        let e = errs("//@ expect: pp\n//@ pch: p.h\n");
+        assert!(e.iter().any(|e| e.contains("`pch` only applies")), "{e:?}");
+    }
+
+    /// WP-986: `header-unit: "<path>"` / `header-unit: <name>`
+    /// (`spec/harness.md` "Directives").
+    #[test]
+    fn header_unit_directive() {
+        assert!(ok("int x;\n").header_units.is_empty());
+        let s =
+            ok("//@ expect: run\n//@ header-unit: \"Inputs/hu.h\"\n//@ header-unit: <cstddef>\n");
+        let hus: Vec<_> = s.header_units.iter().map(|h| (h.system, h.name.as_str())).collect();
+        assert_eq!(hus, [(false, "Inputs/hu.h"), (true, "cstddef")]);
+        let e = errs("//@ header-unit: <a.h>\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("duplicate `header-unit`")), "{e:?}");
+        assert!(ok("//@ header-unit: <a.h>\n//@ header-unit: \"a.h\"\n").header_units.len() == 2);
+        for bad in ["", "a.h", "\"\"", "<>", "\"/abs.h\"", "<a b.h>", "\"a.h"] {
+            assert!(!errs(&format!("//@ header-unit: {bad}\n")).is_empty(), "{bad:?}");
+        }
+        let e = errs("//@ expect: pp\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("`header-unit` only applies")), "{e:?}");
+        let e = errs("//@ verify\n//@ header-unit: <a.h>\n");
+        assert!(e.iter().any(|e| e.contains("`header-unit` only applies")), "{e:?}");
     }
 
     /// WP-386: `requires: llvm>=N` / `llvm<N` against the backends that

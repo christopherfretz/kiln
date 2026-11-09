@@ -995,6 +995,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   and looks at the next token): `(__extension__ reinterpret_cast<T(*)[n]>(p))`
   is a parenthesized expression (libstdc++ 16 `<bits/stl_construct.h>`;
   WP-525, `ext.gnu.extension/extension-paren-expr.cpp`).
+  The unary operator is kept as a `UnaryOperator` with
+  `UnaryOp::Extension` (clang `UO_Extension`), not dropped: sema, the
+  Oven and codegen look through it (it has its operand's type, value
+  category, bit-field-ness and constant value), but the operand is no
+  longer an id-expression, so `decltype(__extension__ x)` is `int &`
+  and mangles `DT` (WP-1029, `ext.gnu.extension/extension-transparent-run.cpp`).
+- **Pack-index type as a functional cast:** a one-token type name
+  followed by `...[ balanced ]` and then `(` or `{` is a
+  simple-type-specifier starting an explicit type conversion
+  ([expr.type.conv]), so `T...[0]{}` and `T...[0]()` parse
+  (WP-1029, `dcl.type.pack.index/functional-cast-run.cpp`).
 - **`__restrict` on a reference declarator:** `restrict`, `__restrict`
   and `__restrict__` after `&`/`&&` in a declarator are consumed and
   dropped, as clang (which keeps the qualifier only on pointers and
@@ -1498,6 +1509,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     (spec/sema-conv.md §8).
   - Adjacent string literals are concatenated
     (`act_on_string_literal(pieces, unevaluated, ud_loc)`).
+    Pieces with two different ud-suffixes get `differing user-defined
+    suffixes ('_x' and '_y') in string literal concatenation`
+    ([lex.ext]/8). It is reported at the second suffix's piece. A piece
+    without a suffix takes the other's suffix (WP-1017; test
+    `lex.ext/differing-ud-suffixes.cpp`).
   - A user-defined literal suffix goes to Sema as `ud_loc`, and Sema
     reports clang's `no matching literal operator`.
 - **`sizeof...(x)`:**

@@ -7,7 +7,7 @@ use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DefinitionBits, FnSpec, FnStorage, TagKind, TemplLinkKind,
 };
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::Quals;
+use kiln_ast::types::{ExcSpec, Quals};
 use kiln_ast::{DeclId, QualType};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -303,6 +303,22 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The member functions of `r` and its nested classes that override
+    /// a virtual function, in declaration order.
+    fn collect_overriders(&self, r: DeclId, depth: usize, out: &mut Vec<DeclId>) {
+        if depth > 256 {
+            return;
+        }
+        for m in self.ast.members(r) {
+            let k = self.ast.decls.get(m).kind();
+            if is_method_kind(k) && overridden(&self.ast, m).next().is_some() {
+                out.push(m);
+            } else if k == DeclKind::CXXRecord && self.ast.definition(m) == Some(m) {
+                self.collect_overriders(m, depth + 1, out);
+            }
+        }
+    }
+
     /// After the complete-class contexts of class `r` (and its nested
     /// classes) are parsed: the overriders' exception specifications
     /// ([except.spec]/8; `noexcept(expr)` is parsed late) and the key
@@ -311,14 +327,27 @@ impl Sema<'_, '_> {
         if depth > 256 {
             return;
         }
+        if depth == 0 {
+            // clang checks an overrider without a written specification
+            // when it is declared, the others (and implicit ones) at the
+            // end of the outermost class: those first.
+            let mut overriders = Vec::new();
+            self.collect_overriders(r, 0, &mut overriders);
+            let (now, delayed): (Vec<DeclId>, Vec<DeclId>) =
+                overriders.into_iter().partition(|&m| {
+                    self.ast.decls.get(m).ty().map(|t| self.written_exc_spec(t))
+                        == Some(ExcSpec::None)
+                });
+            for m in now.into_iter().chain(delayed) {
+                self.check_override_exc_spec(m);
+            }
+        }
         let members: Vec<DeclId> = self.ast.members(r).collect();
         let polymorphic =
             self.ast.decls.record(r).is_some_and(|x| x.defn.contains(DefinitionBits::POLYMORPHIC));
         for &m in &members {
             let k = self.ast.decls.get(m).kind();
-            if is_method_kind(k) && overridden(&self.ast, m).next().is_some() {
-                self.check_override_exc_spec(m);
-            } else if k == DeclKind::CXXRecord && self.ast.definition(m) == Some(m) {
+            if k == DeclKind::CXXRecord && self.ast.definition(m) == Some(m) {
                 self.act_on_virtual_class_contexts(m, depth + 1);
             }
         }

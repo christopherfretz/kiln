@@ -126,12 +126,15 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
-| `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
+| `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
+| `-fmodules-cache-path=<dir>`, `-f[no-]kiln-module-cache` | where the `std` / `std.compat` module cache lives, and turning it off (see "Module cache") |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
 | `-fcrash-diagnostics-dir=<dir>` | where the crash reproducer is written (default `$TMPDIR`, else `/tmp`) (WP-911) |
 | `-fkiln-crash-for-testing=<phase>` | hidden (kiln's tests): panic on purpose in `<phase>`; see "Internal compiler errors" (WP-911) |
+| `-fkiln-bmi-kind=<1\|2>` | hidden (kiln's tests and measurements): the kind of module file `--precompile` / `-fmodule-output` writes. `1`: the source capsule only; `2` (the default): the capsule plus the carried constant results when at least one is carried, else kind 1. `-v` names the kind written and why (spec/modules.md §11.11). Any other value is `invalid value`; the last one wins (WP-985) |
+| `-fkiln-bmi-image`, `-fno-kiln-bmi-image` | hidden, **off by default** (kiln's tests and measurements): at `--precompile` / `-fmodule-output`, also write the declaration image section when the unit qualifies (the file is then kind 2 even with no constant result carried; `-v` adds ", with a declaration image of N declarations" or "(no declaration image: <reason>)"); at an import, build a module whose file has an image from the image instead of replaying its capsule. Either side alone is harmless: no section is written, or a present one is ignored. Not part of the flags fingerprint. The last one wins (spec/modules.md §11.11 "Part 2a", WP-1048) |
 
 ### Response files (WP-799)
 
@@ -165,8 +168,9 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
 | `-ffunction-sections`, `-fdata-sections` | `llc -function-sections` / `-data-sections` (see "Code generation") |
 | `-fc++-static-destructors[=all\|thread-local\|none]`, `-fno-c++-static-destructors` | which static and thread-local variables register their destructors (`CodegenOptions::static_destructors`, clang `RegisterStaticDestructorsKind`; WP-805): `all` (the default, and the bare flag), `thread-local` (only `thread_local` ones), `none` (= `-fno-`; `[[clang::always_destroy]]` variables still register); the last wins; another value is `invalid value '<v>' in '-fc++-static-destructors=<v>'`. spec/landed/sema/WP-805.md |
-| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); a CPU clang 21 knows also sets clang 21's `"target-features"` and predefined macros for it (spec/landed/driver/WP-630.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); kiln never inspects the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
+| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); its features and predefined macros are clang 19's or clang 22's ("x86-64 target features"; spec/landed/driver/WP-630.md, WP-1000.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); on a Linux x86-64 host x86 `-march=native` takes its features from `/proc/cpuinfo`, otherwise kiln does not inspect the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
+| `-ftrapv`, `-fno-trapv`, `-ftrapv-handler=<name>` (WP-1032) | `CodegenOptions::trapv` / `trapv_handler`, clang's `SOB_Trapping`: the last of `-ftrapv` / `-fno-trapv` (a kiln spelling; clang has none and GCC's cancels `-ftrapv`). Signed `+ - *`, unary `-` (checked as `0 - x`), `++`/`--` and compound assignment use `llvm.s{add,sub,mul}.with.overflow` and, on overflow, a bare `@llvm.ubsantrap(<id>)` (clang `EmitTrapCheck`: add 0, sub 21, mul 12), with no handler call and no `.src` data; `-ftrapv` beats `-fwrapv` and `-fno-strict-overflow`. Under `-fsanitize=signed-integer-overflow` the sanitizer's check wins for the signed operations it covers. An `_Atomic` signed operand takes the compare-exchange loop. `-ftrapv-handler=<name>`, with `-ftrapv` (alone it has no effect, as clang), replaces the trap or `__ubsan_handle_*` call of every overflow check, `-ftrapv`'s and signed/unsigned-integer-overflow's, by `<name>(i64 sext l, i64 sext r, i8 op, i8 width, ...)` in a block at the function's end whose `i64` result, truncated, is the operation's value (`op` is add 1, sub 2, mul 3, shifted left once, plus 1 when signed). Test: `tests/conformance/driver.sanitize/trapv-*.cpp`, `crates/kiln_driver/tests/codegen.rs` |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
 | `-fpatchable-function-entry=N[,M]`, `-fzero-call-used-regs=<kind>`, `-mfunction-return=keep\|thunk-extern` (x86), `-fcf-protection[=full\|branch\|return\|none]` (x86), `-mspeculative-load-hardening`, `-fsplit-stack`, `-finstrument-functions`, `-finstrument-functions-after-inlining`, `-finstrument-function-entry-bare`, `-fxray-instrument`, `-fxray-instruction-threshold=N`, `-fxray-ignore-loops` (WP-813) | `CodegenOptions::hardening` (`kiln_codegen::Hardening`): the function attributes and module flags clang 19 emits for each, with the class B attributes overriding them per function (spec/landed/codegen/WP-813.md). `-mspeculative-load-hardening` on x86 also adds `+retpoline-indirect-calls` to the target features; `-finstrument-functions*` at `-O0` runs `default<O0>` so ee-instrument emits the calls; `-fxray-instrument` is passed on to the link. Errors as clang: a bad `-fpatchable-function-entry=` (`invalid argument 'x' to -fpatchable-function-entry=`, or the offset larger than the count), `-fxray-instrument` with `-fpatchable-function-entry=`, a bad `-fxray-instruction-threshold=` under `-fxray-instrument` are driver errors; a bad `-mfunction-return=` / `-fzero-call-used-regs=` / `-fcf-protection=` value (the last of each wins), `-mfunction-return=` off x86 and (when generating code) `-fcf-protection` off x86 are clang's `-cc1` errors, printed without the `kiln++:` prefix and in cc1's order (an invalid `-mfunction-return=` on x86 is reported twice, as clang 19 does). Without `-fxray-instrument` the other `-fxray-*` options are `argument unused during compilation` |
 | `-mbranches-within-32B-boundaries` (x86; WP-961) | `llc -x86-branches-within-32B-boundaries`, as clang 19's `addX86AlignBranchArgs`: the integrated assembler pads so no branch (fused, `jcc`, `jmp`) crosses or ends on a 32-byte boundary. Off x86, clang's driver error `unsupported option '-mbranches-within-32B-boundaries' for target '<triple>'`. There is no negative form (clang has none). Test: `crates/kiln_driver/tests/hardening.rs` `branches_within_32b_boundaries`, `flag_errors` |
@@ -177,7 +181,7 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 **2. Accepted and ignored silently** (no observable effect in kiln today;
 do not add a diagnostic): `-f[no-]stack-clash-protection`,
 `-f[no-]common`, `-fstack-usage`,
-`-fno-trapv`, `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
+`-fno-short-enums`, `-m64` (every kiln target is 64-bit;
 `-m32` stays unknown) and `-pipe`.
 WP-677 (configure scripts and CMake probe them; clang 19 accepts them):
 `-fdiagnostics-show-template-tree` (kiln prints template diffs inline,
@@ -196,7 +200,7 @@ source capsule, spec/modules.md §11.9). An empty `-mtune=` is `unsupported argu
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-ftrapv`, `-fshort-enums`, the `-fsanitize*` and `-fno-sanitize*`
+`-fshort-enums`, the `-fsanitize*` and `-fno-sanitize*`
 options "Sanitizers" below does not list (`-fsanitize-coverage=`,
 `-fsanitize-cfi-*`, ...), and under
 `-fxray-instrument` every `-fxray-*` option but the threshold and
@@ -367,9 +371,48 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   conversion checks (spec/codegen.md §5.2; WP-675, WP-871). vptr,
   function, the nullability checks and local-bounds are accepted and
   emit no check yet (spec/landed/codegen/WP-871.md).
-- `-fsanitize-ignorelist=`/`-fsanitize-blacklist=` (the file must exist:
-  `no such file or directory: '<f>'`; not applied yet),
-  `-fno-sanitize-ignorelist`, `-f[no-]sanitize-address-use-after-scope`,
+- `-f[no-]sanitize-merge[=<list>]` (WP-1032, clang 20+): the checks whose
+  traps and handler calls may merge, read like the recover list (no
+  value is `all`; default the `undefined` group at `-fclang-compat=22`,
+  every check at 19). A check outside the set gets its own trap block
+  even above `-O0`, and its trap or handler call `nomerge`; `nomerge`
+  is emitted at `-fclang-compat=22`, and at 19 once either flag is
+  given.
+- `-fsanitize-ignorelist=<f>`/`-fsanitize-blacklist=<f>` (WP-1032;
+  `kiln_codegen::ignorelist`, clang's `NoSanitizeList`): LLVM special
+  case lists, `prefix:glob[=category]` lines under optional
+  `[<sanitizer glob>]` sections (none: every sanitizer), `#` comments,
+  LLVM's `GlobPattern` (`*`, `?`, `[...]`, `{a,b}`, `\`). Every file is
+  read; a later `=sanitize` category entry takes an earlier match back
+  (clang 20+ precedence, at `-fclang-compat=22`). What each prefix
+  suppresses, per sanitizer the section names:
+  - `fun:<mangled name>`, `src:<file>` (the presumed file of the
+    function's expansion location) and `mainfile:<file>`: every
+    instrumentation of the function, as `no_sanitize`: its `sanitize_*`
+    attributes and its UBSan checks;
+  - `global:<mangled name>`, `src:`, `mainfile:` and `type:<record>` (the
+    canonical, fully scoped class of the variable, arrays drilled) on a
+    global: `no_sanitize_address`/`no_sanitize_hwaddress`, and memtag;
+    `=init` on any of them (under `[address]`) drops only
+    `sanitize_address_dyninit`;
+  - at `-fclang-compat=22`, `type:<integer type>` also elides the
+    signed/unsigned-integer-overflow checks of arithmetic in that type
+    and the implicit truncation and sign-change checks into it (clang
+    20+ `isTypeIgnoredBySanitizer`).
+  The resource directory's `share/asan_ignorelist.txt`,
+  `hwasan_ignorelist.txt` and `msan_ignorelist.txt` (clang's, shipped in
+  `resource/share/`) load first for their sanitizer, when present;
+  `-fno-sanitize-ignorelist` drops those and every earlier
+  `-fsanitize-ignorelist=`. Errors, as clang 19: a missing file is
+  `no such file or directory: '<f>'`, a malformed one `malformed
+  sanitizer ignorelist: 'error parsing file '<f>': <LLVM message>'`
+  (`malformed line <n>: '<line>'`, `malformed section header on line
+  <n>: <text>`, `malformed glob in line <n>: '<glob>': <reason>`, ...),
+  and a `#!special-case-list-v1` (regular expression) list is
+  `drv_regex_sanitizer_ignorelist`, `sanitizer ignorelist '<f>' uses
+  regular expressions ('#!special-case-list-v1'), which kiln does not
+  support; use glob patterns` (a deviation; clang 19 reads them).
+- `-f[no-]sanitize-address-use-after-scope`,
   `-fsanitize-address-use-after-return=never|runtime|always`,
   `-f[no-]sanitize-memory-track-origins[=0|1|2]`, `-shared-libsan`,
   `-static-libsan`.
@@ -384,8 +427,11 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   `__SANITIZE_ADDRESS__`, `__SANITIZE_THREAD__` and
   `__SANITIZE_HWADDRESS__` are predefined from `-fclang-compat=22`.
 
-Tests: `sanitize.rs` unit tests; `crates/kiln_driver/tests/codegen.rs`
-`sanitizer_frontend_attributes`; `tests/conformance/driver.sanitize/`.
+Tests: `sanitize.rs` and `kiln_codegen::ignorelist` unit tests;
+`crates/kiln_driver/tests/codegen.rs` `sanitizer_frontend_attributes`,
+`sanitizer_ignorelist_asan`, `sanitizer_ignorelist_errors`;
+`tests/conformance/driver.sanitize/` (the `*-run.cpp` tests that link
+a runtime need `requires: sanitizer-runtime`, spec/harness.md).
 
 ### Coverage flags (WP-941, WP-1003)
 
@@ -524,8 +570,13 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
-<prefix>/share/doc/kiln/                 README.md, LICENSE-MIT, LICENSE-APACHE,
-                                         COMPATIBILITY.md, STABILITY.md
+<prefix>/lib/kiln/<major>/share/         resource/share/*.txt: the default
+                                         sanitizer ignorelists (WP-1032)
+<prefix>/share/doc/kiln/                 README.md, CHANGELOG.md, CONTRIBUTING.md,
+                                         SECURITY.md, LICENSE-MIT, LICENSE-APACHE,
+                                         COMPATIBILITY.md, KNOWN_ISSUES.md,
+                                         STABILITY.md, USER_GUIDE.md (flat; links
+                                         rewritten, spec/harness.md "Dist")
 ```
 
 - `<major>` is the major version ("Version"): two major versions install
@@ -765,14 +816,96 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   option '-march='` (`-mcpu=` alike), and so is a `-msve-vector-bits=`
   value outside the list (`'<v>' to option '-msve-vector-bits='`).
   `native` is accepted (no features; "Codegen flags"). On
-  x86-64, `-march=` takes `native` or one of clang's x86 CPU names
-  ("Codegen flags") and any other value, and every `-mcpu=`, is the same
-  error, `-msve-vector-bits=` is
-  `unsupported option '-msve-vector-bits=' for target '<triple>'` (the
+  x86-64 ("x86-64 target features" below), `-march=` takes `native` or
+  one of clang's x86 CPU names and any other value is the same error;
+  `-mcpu=` and `-msve-vector-bits=` are
+  `unsupported option '<opt>' for target '<triple>'` (the
   `--target` as written; `drv_unsupported_opt_for_target`) and
   `-target-feature` is ignored. A `-target-feature` value without a sign
   is `unsupported argument`. An unknown `+name` is passed through to
   `"target-features"`.
+
+## x86-64 target features (WP-1000)
+
+On an x86-64 target `features::resolve` builds the feature map clang's
+x86 driver and `X86TargetInfo::initFeatureMap` build, modelling clang 22
+by default and clang 19 at `-fclang-compat=19`
+(`crates/kiln_driver/src/x86_features.rs`; implication graph: the
+generated clang 21 table `x86_targets` with the measured clang 19 / 22
+differences).
+
+- **Flags.** `-m<feature>` / `-mno-<feature>` for every name of clang's
+  `m_x86_Features_Group`: the 104 both versions accept
+  (`x86_features::FLAGS`: `sse`..`sse4.2`, `sse4a`, `ssse3`, `avx`,
+  `avx2`, the `avx512*` family, `avxvnni*`, `avxifma`, `fma`, `fma4`,
+  `f16c`, `bmi`, `bmi2`, `lzcnt`, `popcnt`, `pclmul`, `aes`, `sha`,
+  `sha512`, `sm3`, `sm4`, `rdrnd`, `rdseed`, `adx`, `movbe`, `xsave*`,
+  `cx16`, `crc32`, `gfni`, `vaes`, `vpclmulqdq`, `amx-*`, `apxf`, ...),
+  clang 19's `avx10.1-256`, `avx10.1-512`, `evex512` and clang 22's
+  `amx-avx512`, `amx-fp8`, `amx-movrs`, `amx-tf32`, `avx10.2`, `movrs`;
+  a name the selected clang lacks is `unknown argument`. Also
+  `-m[no-]apx-features=<list>` (`egpr`, `push2pop2`, `ppx`, `ndd`,
+  `ccmp`, `nf`, `cf`, `zu`; any other value is `unsupported argument
+  '<v>' to option '-m[no-]apx-features='`) and
+  `-mapx-inline-asm-use-gpr32` (`+inline-asm-use-gpr32`).
+- **Spellings.** As clang's driver: `-msse4` is `+sse4.2` and
+  `-mno-sse4` `-sse4.1`; `-m80387` is `x87`; `-mapxf` is the APX list
+  (clang 19: `egpr,push2pop2,ppx,ndd,ccmp,nf,cf,zu`; clang 22 without
+  `cf`); clang 19's `-mavx10.1` is `avx10.1-256`; `-m3dnow` / `-m3dnowa`
+  add nothing and warn `the clang compiler does not support '-m3dnow'`.
+  The items are deduplicated as clang's `unifyTargetFeatures`: the last
+  item naming a feature wins.
+- **CPU.** `-march=<cpu>` (clang 19's list, plus clang 22's
+  `wildcatlake`, `novalake`, `diamondrapids` at 22) gives the CPU's
+  features: the clang 21 row with clang 19's / clang 22's differences
+  (`x86_features::CPU_19` / `CPU_22`); `wildcatlake` and `novalake` are
+  not expanded (deviation). `-march=native` on a Linux x86-64 host takes
+  the features of `/proc/cpuinfo`'s first `flags` line clang knows, over
+  `x86-64`'s; on another host none. Without `-march=` the base is
+  `x86-64` (`cmov,cx8,fxsr,mmx,sse,sse2,x87`).
+- **Map.** clang's `initFeatureMap`: `sse2`, then the CPU's features
+  (each with what it implies), then each item (`+f` enables `f` and what
+  it implies; `-f` disables `f` and every feature implying it), then
+  `sse4.2` adds `popcnt` and `crc32`, `sse` `mmx` and `avx` `xsave`
+  unless an item disabled that feature. clang 19 applies the `evex512`
+  items after the others and adds `+evex512` when an AVX-512 feature is
+  on (clang 22 has no `evex512`). `-mspeculative-load-hardening` adds
+  `+retpoline-indirect-calls` ("Codegen flags").
+- **Effects.** The map's macros (`x86_features::feature_macros`, clang's
+  `getTargetDefines`: `__AVX2__`, `__SSE4_1__`, `__PCLMUL__`, `__SHA__`,
+  `__SSE_MATH__`/`__SSE2_MATH__`, the `_Float16` macros with `sse2`,
+  `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16` with `cx16`, `__LAHF_SAHF__`,
+  clang 19's `__EVEX256__`/`__EVEX512__`, `__AVX10_*__`, `__APX_F__`
+  with every APX feature) replace the default ones; the map is every
+  function's `"target-features"` and the `-march=` CPU its
+  `"target-cpu"`, as clang prints them (`CodegenOptions::target_features`,
+  `target_cpu_features`, `target_features_written`). The intrinsic and
+  builtin gating, `target("...")` attributes and the AVX calling
+  convention checks of spec/codegen.md read the same map; a `target`
+  attribute's map starts from the `arch=` CPU (else the `-march=` CPU),
+  then the command line's items as written, then the attribute's own
+  (clang `getFunctionFeatureMap`).
+- **Other targets.** On AArch64 every x86 feature flag is `unsupported
+  option '<flag>' for target '<triple>'` (`-mno-sse4` names
+  `-mno-sse4.1`, `-m80387` `-mx87`, clang 19's `-mapxf`
+  `-mapx-features=`), except `-msse4`, `-msse4.2` and `-m[no-]3dnow[a]`,
+  which clang claims: `argument unused during compilation`. A non-x86
+  `-march=` value on x86-64 (or an x86 CPU on AArch64) is `unsupported
+  argument`.
+- **Not modelled.** `-mgeneral-regs-only`, `-msoft-float`,
+  `-mfp-ret-in-387`, `-mretpoline`, `-mretpoline-external-thunk`,
+  `-mlvi-cfi`, `-mseses`, `-mx32` stay unknown arguments; `-Xclang
+  -target-feature` is ignored; clang's `-Winvalid-feature-combination`
+  is not emitted; a bad `-march=` / `-mtune=` CPU is the driver's
+  `unsupported argument` (clang: cc1 `unknown target CPU` with a note),
+  and a bad `-mtune=` is accepted.
+- Tests: `tests/conformance/cpp.predefined/x86-feature-macros-*.cpp`
+  (per CPU level and flag combination, `-19` siblings),
+  `tests/conformance/target.x86/ir-target-features-*.cpp`,
+  `target.x86/m-feature-flags.cpp`, `crates/kiln_driver/tests/codegen.rs`
+  `x86_target_feature_gating`, `x86_avx_calling_convention`,
+  `x86_flag_driver_diagnostics`, and the `features` / `x86_features`
+  unit tests.
 
 ## Predefines
 
@@ -1086,7 +1219,8 @@ an earlier compile (spec/modules.md §11; WP-917). A module (or partition
 4. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
    `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
    ("LLVM discovery"; clang 19's and 22's libc++ have the
-   same layout).
+   same layout). The module file comes from the module cache ("Module
+   cache"), which builds it from that source on a miss.
 
 A module not found is `fatal error: module 'M' not found` at the module
 name. Header units (`import "h";`, `import <h>;`) are found like
@@ -1132,6 +1266,48 @@ units it imports. `-fmodule-header` and header-unit module files are not
 supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
 accepted and ignored ("Codegen flags").
 
+### Module cache (WP-984)
+
+`std` and `std.compat` found by step 4 above are imported from module
+files in a per-user cache, built there on first use (spec/modules.md
+§11.12 has the design):
+
+- **Location.** `-fmodules-cache-path=<dir>` (made absolute), else
+  `$XDG_CACHE_HOME/kiln/modules` when `XDG_CACHE_HOME` is an absolute
+  path (the XDG rule: a relative one is ignored), else `$HOME/.cache/kiln/modules`. An entry is
+  `<root>/<key>/<name>.pcm` plus `<name>.stamp`, where `<key>` is 32 hex
+  digits (spec/modules.md §11.12 "Key").
+- **Turning it off.** `-fno-kiln-module-cache` (`-fkiln-module-cache`
+  turns it back on; the last one wins) or an empty
+  `-fmodules-cache-path=`. Without a home directory there is no cache.
+  The cache is also off for `kiln-scan-deps`, which imports nothing. A
+  kiln-specific flag, not clang's `-fno-implicit-module-maps` family,
+  because clang has no equivalent: clang never builds `std` implicitly.
+  `-fmodules-cache-path=` is clang's spelling for the Clang-modules
+  cache, which kiln reuses for the one cache it has.
+- **Precedence.** Only step 4 consults the cache: `-fmodule-file=std=`
+  or a `std.pcm` / `std.cppm` in a `-fprebuilt-module-path` wins, as
+  without it.
+- **Failure is never an error.** A cache directory that cannot be
+  created, a module that fails to build there, or a stamp that cannot be
+  written falls back to building the module from its source in-process
+  (part A), which reports the module's own errors as before. Under `-v`
+  each case prints one line on standard error
+  (`kiln++: module cache: cannot create '<dir>': <reason>; building 'std'
+  from its source`), as do a miss (`building 'std' into '<pcm>'`) and a
+  hit (`using '<pcm>' for 'std'`).
+- **Concurrency.** Racing compiles on a miss each build the module and
+  rename it into place; the last rename wins and every one of them gets
+  a complete file (spec/modules.md §11.12 "Concurrency").
+- **No eviction.** Entries for configurations no longer used stay until
+  removed by hand (`rm -r ~/.cache/kiln/modules`; each is about 9 MiB).
+- `-print-file-name=libc++.modules.json` prints libc++'s module
+  manifest for the libc++ that `-stdlib=libc++` selects
+  (`<prefix>/lib/<triple>/` then `<prefix>/lib/`, where
+  `<prefix>/include/c++/v1` holds the headers), so CMake's
+  `CXX_MODULE_STD` finds `std.cppm` through its relative `source-path`
+  (spec/modules.md §11.12 "CMake").
+
 ## Dependency scanning
 
 `kiln-scan-deps` (WP-982; design, output and deviations in
@@ -1159,6 +1335,176 @@ whatever its name (`clang++`, a path to `kiln++`); its flags are kiln's.
 Exit status 0 after a clean scan, 1 otherwise (diagnostics under
 `Diagnostics while scanning dependencies for '<src>':`, the empty
 document on stdout). Warnings are not printed.
+
+## Precompiled headers (WP-1023)
+
+kiln accepts clang's precompiled-header (PCH) driver interface, so build
+systems that precompile headers work unchanged. The main one is CMake's
+`target_precompile_headers`, which uses `Compiler/Clang.cmake`'s flags.
+**In 1.0 a kiln PCH is about correctness, not speed.** It is a *textual*
+record. The consumer checks that the record is still valid and then
+processes the header again, as if `-include`d. A PCH build is therefore
+never faster than the same build without one. The CMake end-to-end check
+(`scripts/oss/selftest.sh`) times both. A serialized-AST PCH, which would
+store Oven state, is a follow-up; it would share the module-file format
+(spec/modules.md §11).
+
+### Flags
+
+- **Producing a PCH.** These are the producers:
+  - `-x c++-header <h>`, `-x c-header <h>`, or a header by extension
+    (`.h` in C++ mode, `.hh`, `.hpp`, `.hxx`, `.H`), with `-c`, `-S` or no
+    action;
+  - any input with `-emit-pch`. This is a cc1 option, also accepted as
+    `-Xclang -emit-pch`; CMake spells it that way, with input
+    `cmake_pch.hxx.cxx` and `-x c++-header`.
+
+  The header is checked exactly as `-fsyntax-only` checks it. Any error
+  means no PCH is written and the exit status is 1. Where the PCH goes:
+  - with `-o`, at that path, unless a link follows (non-header inputs on
+    the same line);
+  - otherwise `<input>.pch` for a header (clang's name);
+  - otherwise, for `-emit-pch` on a non-header, the object's default name.
+
+  `-o` with more than one output is clang's `cannot specify -o when
+  generating multiple output files`. `-fsyntax-only`, `-E` and `-M`/`-MM`
+  treat a header as an ordinary input, and produce nothing. A header is
+  its own main file, so `#pragma once` in it gets no warning. C headers
+  are recorded, but compiling C is "not implemented yet" (WP-243).
+- **`-include-pch <file>`.** This is separate-only, as in clang:
+  `-include-pchX` is `-include` with the value `-pchX`. It is also
+  accepted as `-Xclang -include-pch -Xclang <file>`, and the last one
+  wins. The record is validated (see Diagnostics) and its header is then
+  processed as if `-include`d ([Replay](#replay)).
+- **`-Xclang -include -Xclang <h>`** is `-include <h>`, which CMake uses.
+- **`-fno-validate-pch`** (cc1; `-Xclang`) skips validation.
+- **`-Winvalid-pch`** is accepted and is a known warning group. In clang
+  it is an empty group: no diagnostic belongs to it. Every PCH problem
+  is an error whatever `-W` options are given, as in clang.
+- **Accepted, no effect:**
+  - `-f[no-]pch-instantiate-templates`: instantiation happens on replay
+    in any case.
+  - `-f[no-]pch-codegen` and `-f[no-]pch-debuginfo`: there is no PCH
+    object to share code or debug info from.
+  - `-f[no-]pch-validate-input-files-content`: kiln always compares
+    content, never mtime.
+- **The longest option wins.** When an argument could be read as more
+  than one option, the longest spelling is taken, as in clang's option
+  table. So `-include-pch` is not `-include` with `-pch`, `-isystem` is not
+  `-I` with `system`, `-cxx-isystem` is not `-c…`, `-target-feature` is
+  not `-target` with `-feature`, and `-MT`/`-MQ` are not `-M`. `args.rs`
+  `longest_option_wins` tests each such collision.
+
+### Format (`KILNPCH 1`)
+
+The record is UTF-8 text, one field per line. Values are tab-separated,
+with `\\`, `\t`, `\n` and `\r` escaped. It is written atomically (a
+temporary file, then a rename). Lines, in order:
+
+```
+KILNPCH 1                               magic and format version
+kiln <version> <commit|-> -fclang-compat=<N>
+cwd <producer's working directory>
+main <the header, as spelled>
+include <a -include of the producer>    (0 or more, in order)
+opt b\t<option>\t0|1                    a language option (bool)
+opt v\t<option>\t<value>                a language option (value)
+target <triple>
+macro D\t<name>\t<definition>           -D/-U of the producer, in order
+macro U\t<name>
+file <size>\t<fnv1a64 hex>\t<0|1 system>\t<spelled>\t<absolute>
+end <fnv1a64 hex of every byte before this line>
+```
+
+The `file` lines list every file the producer read (the dependency list
+`-MD` writes), with each file's size and content hash. An unknown line, a
+missing field or a bad checksum makes the record corrupt. A different
+version is "older" or "newer". A different `kiln` line is "built from a
+different branch". The language options are those of the module-file
+fingerprint (spec/modules.md §11.4), named as clang names them: the
+standard levels, `char8_t keyword`, GNU extensions, exceptions, RTTI,
+freestanding, signed char, sized deallocation, C++26 reflection, the
+reflection mangling, and the optimization level.
+
+### Diagnostics
+
+The consumer validates in clang's order and with clang's wording, at the
+`-fclang-compat` level's version (19 says "PCH file" and "AST file"; 22
+says "precompiled file"):
+
+1. **Unreadable record.**
+   - A missing file: `fatal error: PCH file 'p.pch' not found: module file
+     not found`.
+   - Not a PCH: `fatal error: file 'p.pch' is not a valid precompiled PCH
+     file: file doesn't start with AST file magic`.
+   - A clang PCH (`CPCH`): `fatal error: file 'p.pch' is a precompiled
+     header built by clang; kiln reads only its own precompiled headers`.
+   - A corrupt record: `fatal error: malformed or corrupted AST file:
+     '<why> in kiln PCH record 'p.pch''`.
+2. **Language options.** For the first option that differs: `error: C++20
+   was enabled in PCH file but is currently disabled` (a bool), or
+   `error: OptimizationLevel differs in precompiled file 'p.pch' vs.
+   current file` (a value). In clang 19, `-O` shows up as
+   `__OPTIMIZE__ predefined macro`.
+3. **Target.** `error: PCH file was compiled for the target '<a>' but the
+   current translation unit is being compiled for target '<b>'`.
+4. **Macros.** The consumer's `-D`/`-U` are checked against the
+   producer's with clang's `checkPreprocessorOptions`, and the first
+   mismatch is reported:
+   - `error: definition of macro 'X' differs between the precompiled
+     header ('1') and the command line ('2')`;
+   - `error: macro 'X' was defined in the precompiled header but undef'd
+     on the command line`.
+
+   A macro that one side defines and the other never mentions is
+   accepted, as in clang.
+5. **Files.** Any error in steps 2–4 stops the compile before this step.
+   Every non-system file is then compared with its recorded size and
+   hash, and the first one that changed is fatal:
+   - `fatal error: file '/abs/h.hpp' has been modified since the
+     precompiled header 'p.pch' was built: size changed (was 41, now 47)`,
+     or `content changed`;
+   - with `note: please rebuild precompiled header 'p.pch'`.
+
+   A deleted file is `fatal error: malformed or corrupted AST file:
+   'could not find file '/abs/h.hpp' referenced by AST file 'p.pch''`.
+
+   System files are not checked, as in clang. This includes CMake's
+   prefix header, because `cmake_pch.hxx` says `#pragma clang
+   system_header`.
+
+### Replay
+
+A valid PCH makes the compile behave like:
+
+```
+<consumer args> -include <producer's -include>... -include <producer's
+main> -include <consumer's -include>...
+```
+
+A consumer `-include` that the producer already had is dropped. Without
+this, CMake's `-include-pch p.pch -include cmake_pch.hxx` would enter its
+unguarded `cmake_pch.hxx` twice. A relative path is resolved against the
+producer's working directory when the consumer's is different. `-E` and
+`-M*` replay the producer's main and the consumer's includes without
+validating.
+
+**Dependency files.** As in clang, the producer's depfile lists the
+producer input and every file it read. The consumer's depfile lists the
+PCH's inputs first and then its own files. `-MMD` drops the system files
+from both.
+
+### Deviations
+
+- A touch that leaves the content unchanged is accepted. A same-size edit
+  is reported as `content changed`. Clang compares mtimes: it reports
+  `mtime changed (was N, now M)`, or misses an edit made within the same
+  second.
+- `-include foo.h` does not probe for `foo.h.pch` or `foo.h.gch`. Only
+  `-include-pch` reads a PCH.
+- A `.gch` directory is not supported, and `-fpch-preprocess` is an
+  unknown argument.
+- A PCH is not an object: `-fpch-codegen` emits nothing.
 
 ## Dependency output
 
@@ -1466,8 +1812,22 @@ and `codegen`.
   directory (`-resource-dir`, else the default, "Toolchain") and a
   newline to standard output and exits 0, whatever else is given, as
   clang does (WP-667). It is one of the toolchain probes below.
-- `--help` prints a short summary of the implemented options and the
-  two names' language rule (the usage line says `kiln` under both names).
+- `--help` prints the option summary (`kiln_driver::help::HELP`, WP-1027)
+  in clang's `--help` layout: `OVERVIEW: kiln, ...`, the usage lines of
+  both names (`kiln++` and `kiln`), the two names' language rule, then
+  the options by group (actions, language, preprocessor, dependency
+  output, target and toolchain, code generation, debug information,
+  sanitizers and coverage, modules, linking, diagnostics, compile-time
+  evaluation, kiln development, information). `[kiln]` opens the
+  description of an option clang does not have. It is a summary: this
+  section's "Options" is the complete list, and hidden options
+  (`--driver-mode=`, `-fkiln-crash-for-testing=`) are not in it.
+- Every option `--help` names is accepted: a unit test expands each
+  listed form (`[...]` with and without, `<...>` with a sample value),
+  parses it with an input, and requires no argument error and no
+  diagnostic-option error. The reverse (every accepted option is listed)
+  is not required. The text never calls kiln clang ("Identity") and fits
+  80 columns.
 
 ## Version
 
@@ -1537,7 +1897,7 @@ reported next to the answer (clang stays silent).
 | `-print-multiarch` | the Debian multiarch name (`x86_64-linux-gnu`, `aarch64-linux-gnu`); GCC's probe, which clang 19 rejects |
 | `-print-sysroot` | `--sysroot`, else an empty line; GCC's probe |
 | `-print-resource-dir` | the resource directory |
-| `-print-file-name=<f>` | `<resource dir>/<f>` if it exists, else the backing clang++'s answer (which searches the GCC installation and library paths and echoes `<f>` when nothing matches) |
+| `-print-file-name=<f>` | `<resource dir>/<f>` if it exists; for `libc++.modules.json`, libc++'s module manifest ("Module cache"); else the backing clang++'s answer (which searches the GCC installation and library paths and echoes `<f>` when nothing matches) |
 | `-print-prog-name=<p>`, `-print-libgcc-file-name`, `-print-search-dirs` | the backing clang++'s answer, run with the toolchain arguments kiln links with (`--target=`, `--sysroot=`, `--gcc-toolchain=`, `--gcc-install-dir=`; `toolchain_link_args`): links go through that program, so its tools, runtime library and search directories are the honest ones |
 
 ## Reproducible time
@@ -1619,22 +1979,27 @@ Each deviation is covered by a test or a test note.
 18. **Target features** ("Target features" above): the CPU names other
     than `generic` and `native`, `-march=armv8-r`, and the extensions kiln does
     not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
-    errors where clang accepts them; on x86-64, `-mcpu=` is "unsupported
-    argument" (clang: "unsupported option") and `-target-feature` is
-    ignored (clang passes it on); a `-target-feature` value without
+    errors where clang accepts them; on x86-64 `-target-feature` is
+    ignored (clang passes it on), and the flags listed under "x86-64
+    target features", "Not modelled", differ; a `-target-feature` value without
     `+`/`-` is an error (clang warns).
 19. **Codegen flags** ("Codegen flags" above, WP-605): `-fno-plt` puts
     `nonlazybind` only on functions with no definition in the TU, where
     clang also marks a function used before its later definition and
-    template instantiations; x86-64 `-march=<cpu>` expands to clang
-    21's features and predefines (also at `-fclang-compat=19`), and not
-    at all for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md);
+    template instantiations; x86-64 `-march=<cpu>` is not expanded
+    for `wildcatlake` / `novalake` (spec/landed/driver/WP-630.md), and
+    `-march=native` has `/proc/cpuinfo`'s features but not clang's host
+    CPU name or tuning (WP-1000);
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
     (clang 19 has no such flag); the
-    profile-guided optimization flags ("Coverage flags"), `-ftrapv` and
+    profile-guided optimization flags ("Coverage flags"),
     `-fshort-enums`, and the sanitizers "Sanitizers" does not
-    list, are errors; and the Oven ignores `-fwrapv`.
+    list, are errors; `-fno-trapv` is accepted (clang has no such
+    flag) and so are `-f[no-]sanitize-merge[=]` at `-fclang-compat=19`
+    (clang 19 has neither); version 1 (regular expression) sanitizer
+    ignorelists are rejected; and the Oven ignores `-fwrapv` and
+    `-ftrapv`.
 20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once
     any `-fmacro-prefix-map=`/`-ffile-prefix-map=` is given, clang also
     applies `llvm::sys::path::remove_dots` (no `..` folding) to every
@@ -1679,6 +2044,16 @@ Each deviation is covered by a test or a test note.
   names (`kiln` and `kiln++`): the report pinned against clang 19, and
   compared live with `clang++-19 -Xclang -verify` when it is installed.
   `args.rs` unit tests cover the option semantics.
+- `crates/kiln_driver/tests/pch.rs` (WP-1023): CMake's producer and
+  consumer command lines, with their depfiles byte-compared with clang 19
+  when it is installed; object and link; output naming; include order and
+  the producer's working directory; each option, target and macro mismatch
+  under both compat levels; stale, deleted, missing and foreign PCH files;
+  `-MMD`. `args.rs` `longest_option_wins` and `pch_flags`, `pch.rs`
+  `record_round_trip`. The harness's `pch:` tests are
+  `tests/conformance/cpp.include/pch-*.cpp`, and
+  `scripts/oss/selftest.sh` builds a CMake `target_precompile_headers`
+  project.
 - `crates/kiln_driver/tests/codegen.rs`: the codegen path end to end
   (`.ll`, `.s`, `.o`, linking and running, output naming, `-###`, `-v`,
   unused-input warnings, missing tools; `kiln_and_kilnpp`: both names as
@@ -1728,7 +2103,12 @@ Each deviation is covered by a test or a test note.
 - `crates/kiln_driver/tests/scan_deps.rs` (WP-982): the dependency
   scanner against clang-scan-deps 22's output (spec/modules.md Tests);
   `scripts/oss/selftest.sh` `cmake_modules`: a CMake `FILE_SET
-  CXX_MODULES` build with Ninja, run and rebuilt incrementally.
+  CXX_MODULES` build with Ninja, run and rebuilt incrementally, with a
+  `CXX_MODULE_STD` target (WP-984).
+- `crates/kiln_driver/tests/module_cache.rs` (WP-984): the `std` module
+  cache against a miniature libc++ sysroot (miss then hit, both modules,
+  invalidation, racing misses, an unwritable root, location and
+  switches, `-print-file-name=libc++.modules.json`).
 - `run` conformance tests compile and link through the driver.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*
