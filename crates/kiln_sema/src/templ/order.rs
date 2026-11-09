@@ -552,9 +552,28 @@ impl Sema<'_, '_> {
         if cp.is_empty() {
             return true;
         }
-        let kt = self.inst.concepts.member_constraints.get(&head).map_or(head, |&(t, _)| t);
-        let ct = self.associated_constraints(head);
+        let (kt, ct) = self.primary_constraints(head);
         !self.more_constrained(kp, &cp, kt, &ct)
+    }
+
+    /// The associated constraints of primary template `head` and their
+    /// normal-form key (the original member template for a redeclared
+    /// one).
+    fn primary_constraints(&mut self, head: DeclId) -> (DeclId, Vec<ExprId>) {
+        let kt = self.inst.concepts.member_constraints.get(&head).map_or(head, |&(t, _)| t);
+        (kt, self.associated_constraints(head))
+    }
+
+    /// The "similar constraint" notes after partial specialization `p` was
+    /// found not more specialized than its primary template (clang
+    /// `checkMoreSpecializedThanPrimary` calls
+    /// `MaybeEmitAmbiguousAtomicConstraintsDiagnostic`).
+    pub(crate) fn primary_constraint_notes(&mut self, p: DeclId) -> Vec<kiln_diag::Diag> {
+        let Some((_, info)) = self.ast.partial_spec_info(p) else { return Vec::new() };
+        let head = self.head_template(info.template);
+        let (kp, cp) = self.partial_constraints(p);
+        let (kt, ct) = self.primary_constraints(head);
+        self.similar_atom_notes(kp, &cp, kt, &ct)
     }
 
     /// Deduces the parameters of list `l` (all of them, an undeduced pack

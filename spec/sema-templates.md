@@ -1570,7 +1570,18 @@ silently (`diag = None`) at those sites. S3O lists them.
    element, it is that partial. Otherwise the pattern is the most
    specialized partial, found by function-template partial ordering of
    the rewritten `template<p.params> void f(X<p.args>)` (§6.7), with
-   constraints as the tie-breaker. In each direction a pack expansion
+   constraints as the tie-breaker. The tie-breaker applies only when the
+   two are equally specialized by deduction, their template parameter
+   lists are equivalent ignoring constraints ([temp.over.link]/6, same
+   length, kinds, packness and non-type parameter types) and their
+   canonical arguments are the same, packs flattened ([temp.func.order]/6.2,
+   clang `getMoreSpecialized`); the more constrained one
+   ([temp.constr.order], §8.4) wins, type-constraints and requires-clauses
+   alike (`partial_constraints`: a redeclared member partial's are the
+   original's). So `requires C<T> Y<T*, U*>` and `requires D<T> Y<U*, T*>`
+   are ambiguous for `Y<int*, int*>` even though `D` subsumes `C` (WP-1053,
+   `tests/conformance/temp.spec.partial.order/constrained-partial-ordering-ambiguous.cpp`,
+   `.../constrained-partial-selection-run.cpp`). In each direction a pack expansion
    among the synthesized arguments is deduced as a whole by a pack
    expansion of the other partial ([temp.deduct.type]/9,
    `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
@@ -1697,22 +1708,48 @@ Out-of-class partial specializations of a member template (WP-150):
   One declared after `Outer<X>` was instantiated is not part of it, as
   with clang.
 
-**Landed (WP-1017).** Declaration checks on a partial specialization:
+**Landed (WP-1017, WP-1053).** Declaration checks on a partial specialization:
 - *More specialized than the primary* ([temp.spec.partial.general]/9.2;
   `check_partial_more_specialized`, `templ/order.rs`
-  `primary_at_least_as_specialized`). A class or variable partial
-  specialization whose primary is at least as specialized as it gets
-  `{class|variable} template partial specialization is not more
-  specialized than the primary template` + `template is declared here`
-  on the primary. The check is conservative and skips four cases, which
-  pass unchecked:
-  - packs;
-  - constraints on either side;
-  - member templates of a class template;
-  - a primary non-type parameter whose type is a placeholder or
-    dependent (`template<auto V>`, `template<class T, T V>`).
+  `not_more_specialized_than_primary`, clang
+  `isMoreSpecializedThanPrimary`). The primary's own parameters as
+  arguments are deduced from the partial's arguments and the reverse,
+  with the rules of §4.4 step 4 (packs deduced as a whole, the
+  deduction finished). A class or variable partial specialization the
+  primary is at least as specialized as gets `{class|variable} template
+  partial specialization is not more specialized than the primary
+  template` + `template is declared here` on the primary, unless it is
+  equally specialized and, from C++20, more constrained under the
+  conditions of the step-4 tie-breaker (`template <D T> struct K; template
+  <C T> struct K<T>` is invalid, `template <class T> requires C<T> struct
+  A<T>` valid); then clang's "similar constraint expressions" note pair
+  when textually identical atoms would have decided it (§8.4). Not
+  checked at the definition: a partial specialization of a member template
+  of a class template, whose arguments are dependent; it is checked when
+  the enclosing class is instantiated (`Substituter::member_partial_spec`
+  runs both checks on the redeclared one, with the instantiation note), as
+  clang does. Still skipped: a primary non-type parameter whose type is a
+  placeholder or dependent (`template<auto V>`, `template<class T, T V>`).
+- *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
+  the arguments are deduced from themselves; a parameter left undeduced
+  gets `contains a template parameter that cannot be deduced`
+  (`-Wunusable-partial-specialization`), at the definition and again in
+  each instantiation of an enclosing class template (`per_instantiation`).
+  A pack expansion that is not the last argument of a list makes the
+  whole list non-deduced ([temp.deduct.type]/9, clang
+  `hasPackExpansionBeforeEnd`, `deduce_arg_list_packs`), so
+  `template <class... T> F<T..., int>` and `template <class T, class...
+  Us> Z<T, Us..., int, T>` deduce nothing; `F<T..., int>` still matches
+  `F<int>` with `T` empty, as with clang. The primary's own arguments
+  with a pack (`G<Ts...>`, `H<T, Ts...>`) "do not specialize any template
+  argument" (`check_partial_args` looks through the pack wrapping one
+  expansion).
 
-  Test: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`.
+  Tests: `tests/conformance/temp.spec.partial.general/not-more-specialized.cpp`,
+  `.../constrained-not-more-specialized.cpp`,
+  `.../pack-expansion-partial-spec-checks.cpp`,
+  `temp.spec.partial.member/member-partial-checked-per-instantiation.cpp`,
+  `temp.constr.order/class-template-partial-specializations.cpp`.
 - *Non-deducible arguments* (CWG526, [temp.deduct.type]/5.3). A non-type
   argument that is not just the parameter's name, such as `(N)`, is a
   non-deduced context. A call cannot deduce it, and a partial

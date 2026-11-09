@@ -490,11 +490,13 @@ impl Sema<'_, '_> {
                 .zip(&conv_args)
                 .all(|(&p, &a)| {
                     // A parameter pack's argument is converted to a pack
-                    // of one expansion (`G<Ts...>`).
+                    // of one expansion (`G<Ts...>`), not of one element
+                    // (`E<M>` for `template <int... N> struct E`).
                     let a = match a.view() {
-                        ArgView::Pack(l) if self.ast.types.args(l).len() == 1 => {
-                            self.ast.types.args(l)[0]
-                        }
+                        ArgView::Pack(l) => match self.ast.types.args(l) {
+                            &[e] if self.is_pack_arg(e) => e,
+                            _ => return false,
+                        },
                         _ => a,
                     };
                     self.arg_names_param(p, a) && self.same_nttp_type(p, a)
@@ -559,11 +561,14 @@ impl Sema<'_, '_> {
         }
         let var = self.kind_of(p) == DeclKind::Var;
         let note = self.diag(DiagId::note_template_decl_here, self.ast.decls.get(tmpl).loc());
-        let d = self
+        let mut d = self
             .diag(DiagId::sema_partial_spec_not_more_specialized, loc)
             .range(range)
             .arg(u32::from(var))
             .with_note(note);
+        for n in self.primary_constraint_notes(p) {
+            d = d.with_note(n);
+        }
         self.emit(d);
     }
 
