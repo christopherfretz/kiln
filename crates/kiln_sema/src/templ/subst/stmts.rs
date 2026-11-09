@@ -293,42 +293,50 @@ impl Substituter<'_, '_, '_> {
             StmtKind::WhileStmt => {
                 let l = *self.sema.ast.stmts.loop_data(s);
                 self.sema.push_scope(ScopeKind::Control);
+                // The loop is open from its condition (spec/sema.md §7.4a).
+                self.sema.act_on_start_loop();
                 let r = (|| {
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
                     let c = self.sema.act_on_condition_at(c.ok_or(SubstFail)?, loc);
-                    self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
-                    self.sema.act_on_end_loop();
                     let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
-                    Ok(self.sema.act_on_while(var, c, body, loc))
+                    Ok((var, c, body))
                 })();
+                self.sema.act_on_end_loop();
                 self.sema.pop_scope();
-                r
+                let (var, c, body) = r?;
+                Ok(self.sema.act_on_while(var, c, body, loc))
             }
             StmtKind::DoStmt => {
                 let l = *self.sema.ast.stmts.loop_data(s);
+                // The loop is open through its condition (spec/sema.md
+                // §7.4a).
                 self.sema.act_on_start_loop();
-                let body = l.body.map(|b| self.sub_stmt(b));
+                let r = (|| {
+                    let body = l.body.map(|b| self.sub_stmt(b));
+                    let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
+                    let c = self.expr(l.cond.ok_or(SubstFail)?)?;
+                    Ok((body, self.sema.act_on_condition_at(c, loc)))
+                })();
                 self.sema.act_on_end_loop();
-                let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
-                let c = self.expr(l.cond.ok_or(SubstFail)?)?;
-                let c = self.sema.act_on_condition_at(c, loc);
+                let (body, c) = r?;
                 Ok(self.sema.act_on_do(body, c, loc, self.sema.ast.stmts.do_rparen(s)))
             }
             StmtKind::ForStmt => {
                 let l = *self.sema.ast.stmts.loop_data(s);
                 self.sema.push_scope(ScopeKind::Control);
+                let init = self.opt_stmt(l.init);
+                // The loop is open from its condition (spec/sema.md §7.4a).
+                self.sema.act_on_start_loop();
                 let r = (|| {
-                    let init = self.opt_stmt(l.init);
                     let (var, c) = self.condition(l.cond_var, l.cond, loc)?;
                     let c = c.map(|c| self.sema.act_on_condition_at(c, loc));
                     let inc = self.recovering_expr(l.inc, loc)?;
-                    self.sema.act_on_start_loop();
                     let body = l.body.map(|b| self.sub_stmt(b));
-                    self.sema.act_on_end_loop();
                     let body = body.unwrap_or_else(|| self.sema.act_on_null_stmt(loc));
                     Ok(self.sema.act_on_for(init, var, c, inc, body, loc))
                 })();
+                self.sema.act_on_end_loop();
                 self.sema.pop_scope();
                 r
             }

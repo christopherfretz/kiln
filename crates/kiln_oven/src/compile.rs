@@ -2194,16 +2194,20 @@ impl Compiler<'_> {
                 } else {
                     self.breakables.iter().rposition(|b| b.conts.is_some())
                 };
-                let Some(idx) = idx else {
-                    self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
-                    return;
-                };
+                // A jump leaving a statement expression is unsupported
+                // (clang `note_constexpr_stmt_expr_unsupported`): one in
+                // a loop or switch header leaves it for the statement,
+                // whose breakable is not open yet (spec/sema.md §7.4a).
                 if let Some(&(at, outside)) = self.stmt_exprs.last()
-                    && idx < outside
+                    && idx.is_none_or(|i| i < outside)
                 {
                     self.trap_loc(at, STMT_EXPR_UNSUPPORTED.into());
                     return;
                 }
+                let Some(idx) = idx else {
+                    self.trap_loc(n.loc(), "kiln: 'break' or 'continue' outside a loop".into());
+                    return;
+                };
                 let depth =
                     if brk { self.breakables[idx].depth } else { self.breakables[idx].cont_depth };
                 self.exit_scopes(depth);
@@ -5854,6 +5858,32 @@ impl Compiler<'_> {
             && let Some(r) = self.builtin_call(e, bid, &args)
         {
             return r;
+        }
+        // WP-940: a C library function clang's evaluator knows (clang
+        // `VisitBuiltinCallExpr`'s `BIstrlen`, `BImemcmp`, `BIstrchr`,
+        // `BImemcpy` cases) evaluates as its `__builtin_` twin after a
+        // note that makes it no constant expression: a fold continues
+        // past the note (`Op::Cce`), so codegen and `__builtin_constant_p`
+        // fold `strlen("abc")` as clang does.
+        if let Some(d) = direct
+            && let Some(bid) = self
+                .ast()
+                .decls
+                .lib_builtin(d)
+                .filter(|&b| kiln_ast::decl::builtin::lib_evaluated(b))
+        {
+            let loc = self.begin(e);
+            // clang `getQuotedName` of the library builtin.
+            let name = kiln_ast::decl::builtin::info(bid)
+                .and_then(|i| i.name.strip_prefix("__builtin_"))
+                .unwrap_or_default();
+            let msg =
+                format!("non-constexpr function '{name}' cannot be used in a constant expression");
+            let t = self.trap_index(loc, msg);
+            self.emit_loc(Op::Cce, cce::CHECK, &[0, 0, t], loc);
+            if let Some(r) = self.builtin_call(e, bid, &args) {
+                return r;
+            }
         }
         // Reflection intrinsics (WP-267 spike; spec/oven.md "Reflection
         // runtime"): recognized by the bridge, run natively.

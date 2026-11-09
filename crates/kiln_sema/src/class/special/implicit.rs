@@ -1358,7 +1358,16 @@ impl Sema<'_, '_> {
                 }
             });
         }
-        let overridden = if k == K::Dtor { self.overridden_destructors(d) } else { Vec::new() };
+        // [class.virtual]/2, /7: an implicit destructor overrides the
+        // bases' virtual destructors, an implicit assignment operator a
+        // base's virtual `operator=` with its parameter-type-list (clang
+        // `DeclareImplicitCopyAssignment` → `AddOverriddenMethods`; such
+        // a class is dynamic, so the operator is declared at `}`).
+        let overridden = match k {
+            K::Dtor => self.overridden_destructors(d),
+            K::CopyAssign | K::MoveAssign => self.overridden_methods(d, name, fty),
+            _ => Vec::new(),
+        };
         if !overridden.is_empty() {
             spec = spec.with_virtual(true);
         }
