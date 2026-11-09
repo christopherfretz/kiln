@@ -33,8 +33,8 @@ use kiln_ast::decl::{
 use kiln_ast::modules::Owner;
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals, TagKeyword, TypeView};
-use kiln_ast::{DeclHead, DeclId, QualType, TypeId};
+use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TypeView};
+use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 use kiln_source::{FileId, Loc};
 
@@ -46,7 +46,7 @@ mod body;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 3;
+pub(crate) const IMAGE_VERSION: u32 = 4;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -96,6 +96,10 @@ enum TyRec {
     IArray(QRef),
     Paren(QRef),
     Elab(u8, QRef),
+    /// A type named through a nested-name-specifier (`ns::S`,
+    /// `Outer::Inner`): keyword, the qualifier's steps outermost first,
+    /// and the named type.
+    ElabQ(u8, Vec<NnsRec>, QRef),
     Func {
         ret: QRef,
         params: Vec<QRef>,
@@ -114,6 +118,17 @@ enum TyRec {
     Sugar(u8),
     /// The class declared by a record.
     Record(u32),
+}
+
+/// One step of a type's nested-name-specifier.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NnsRec {
+    /// `::` (only as the first step).
+    Global,
+    /// A namespace record.
+    Ns(u32),
+    /// A type, and whether `template` preceded it.
+    Ty(QRef, bool),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -668,6 +683,23 @@ fn encode(img: &Image) -> Vec<u8> {
             }
             TyRec::Sugar(k) => (w.u8(12), w.u8(*k)).1,
             TyRec::Record(d) => (w.u8(13), w.u32(*d)).1,
+            TyRec::ElabQ(k, steps, q) => {
+                w.u8(14);
+                w.u8(*k);
+                w.len(steps.len());
+                for st in steps {
+                    match st {
+                        NnsRec::Global => w.u8(0),
+                        NnsRec::Ns(d) => (w.u8(1), w.u32(*d)).1,
+                        NnsRec::Ty(q, t) => {
+                            w.u8(2);
+                            w.q(*q);
+                            w.u8(u8::from(*t));
+                        }
+                    }
+                }
+                w.q(*q);
+            }
         }
     }
     // Declarations: an offset table into the record blob, so a reader
@@ -878,8 +910,8 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
     Ok(DeclRec { flags, owner, access, name, ctx, lexical, loc, prev, payload })
 }
 
-/// The type references a type record uses, and the record it names.
-fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
+/// The type references a type record uses, and the records it names.
+fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
     match t {
         TyRec::Pointer(q)
         | TyRec::LRef(q)
@@ -888,15 +920,26 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Option<u32>) {
         | TyRec::IArray(q)
         | TyRec::Paren(q)
         | TyRec::Elab(_, q)
-        | TyRec::QArray(_, q) => (vec![*q], None),
+        | TyRec::QArray(_, q) => (vec![*q], Vec::new()),
+        TyRec::ElabQ(_, steps, q) => {
+            let (mut qs, mut ds) = (vec![*q], Vec::new());
+            for st in steps {
+                match st {
+                    NnsRec::Global => {}
+                    NnsRec::Ns(d) => ds.push(*d),
+                    NnsRec::Ty(q, _) => qs.push(*q),
+                }
+            }
+            (qs, ds)
+        }
         TyRec::Func { ret, params, .. } => {
             let mut v = Vec::with_capacity(params.len() + 1);
             v.push(*ret);
             v.extend_from_slice(params);
-            (v, None)
+            (v, Vec::new())
         }
-        TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) => (Vec::new(), Some(*d)),
-        TyRec::Sugar(_) => (Vec::new(), None),
+        TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) => (Vec::new(), vec![*d]),
+        TyRec::Sugar(_) => (Vec::new(), Vec::new()),
     }
 }
 
@@ -1004,6 +1047,32 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 _ => return bad("unknown builtin typedef"),
             },
             13 => TyRec::Record(r.u32()?),
+            14 => {
+                let k = r.u8()?;
+                if tag_keyword(k).is_none() {
+                    return bad("bad tag keyword");
+                }
+                let n = r.count(1)?;
+                if n == 0 {
+                    return bad("an empty qualifier");
+                }
+                let mut steps = Vec::with_capacity(n);
+                for i in 0..n {
+                    steps.push(match r.u8()? {
+                        0 if i == 0 => NnsRec::Global,
+                        1 => NnsRec::Ns(r.u32()?),
+                        2 => {
+                            let q = r.q()?;
+                            match r.u8()? {
+                                t @ 0..=1 => NnsRec::Ty(q, t == 1),
+                                _ => return bad("bad qualifier step"),
+                            }
+                        }
+                        _ => return bad("bad qualifier step"),
+                    });
+                }
+                TyRec::ElabQ(k, steps, r.q()?)
+            }
             _ => return bad("unknown type kind"),
         };
         img.types.push(t);
@@ -1047,7 +1116,7 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
     for _ in 0..64 {
         let j = t.checked_sub(BUILTINS + 1)? as usize;
         t = match img.types.get(j)? {
-            TyRec::Elab(_, q) | TyRec::Paren(q) => q.ty,
+            TyRec::Elab(_, q) | TyRec::ElabQ(_, _, q) | TyRec::Paren(q) => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
                 Payload::Typedef { underlying, .. } => underlying.ty,
                 _ => return None,
@@ -1082,13 +1151,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if refs.iter().any(|&q| !qref_ok(q, j as u64)) {
             return bad("bad type reference");
         }
-        if let Some(d) = decl {
+        for d in decl {
             let ok = img.decls.get(d as usize).is_some_and(|r| {
                 matches!(
                     (t, &r.payload),
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
+                        | (TyRec::ElabQ(..), Payload::Namespace)
                 )
             });
             if !ok {
@@ -1245,7 +1315,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 for x in inits {
                     let ok = match x.kind {
                         0 => (x.target as usize) < nbases,
-                        2 => kind_of(x.target).is_some_and(|f| {
+                        // The field may follow the constructor in its
+                        // class: inits are applied after every record.
+                        2 => img.decls.get(x.target as usize).is_some_and(|f| {
                             matches!(f.payload, Payload::Field { .. }) && f.ctx == d.ctx
                         }),
                         4 => x.target == 0,
@@ -1440,6 +1512,39 @@ impl Writer<'_, '_, '_> {
         }
     }
 
+    /// A type's qualifier, outermost step first.
+    fn nns_steps(&mut self, n: NnsId) -> W<Vec<NnsRec>> {
+        let mut chain = Vec::new();
+        let mut cur = Some(n);
+        while let Some(id) = cur {
+            if chain.len() > 1024 {
+                return Err("a malformed qualifier");
+            }
+            let v = self.s.ast.types.nns_view(id);
+            cur = match v {
+                Nns::Global => None,
+                Nns::Namespace { prefix, .. } | Nns::Type { prefix, .. } => prefix,
+                _ => return Err("a qualifier naming a namespace alias, dependent name or splice"),
+            };
+            chain.push(v);
+        }
+        let mut steps = Vec::with_capacity(chain.len());
+        for v in chain.into_iter().rev() {
+            steps.push(match v {
+                Nns::Global => NnsRec::Global,
+                Nns::Namespace { ns, .. } => match self.recs.get(&ns) {
+                    Some(&r) if matches!(self.img.decls[r as usize].payload, Payload::Namespace) => {
+                        NnsRec::Ns(r)
+                    }
+                    _ => return Err("a qualifier naming a namespace outside the image"),
+                },
+                Nns::Type { ty, template_kw, .. } => NnsRec::Ty(self.qref(ty)?, template_kw),
+                _ => return Err("a malformed qualifier"),
+            });
+        }
+        Ok(steps)
+    }
+
     fn ty(&mut self, t: TypeId) -> W<u32> {
         if let Some(&i) = self.tmemo.get(&t) {
             return Ok(i);
@@ -1461,6 +1566,10 @@ impl Writer<'_, '_, '_> {
             TypeView::Paren(q) => TyRec::Paren(self.qref(q)?),
             TypeView::Elaborated { keyword, nns: None, named } => {
                 TyRec::Elab(keyword as u8, self.qref(named)?)
+            }
+            TypeView::Elaborated { keyword, nns: Some(n), named } => {
+                let steps = self.nns_steps(n)?;
+                TyRec::ElabQ(keyword as u8, steps, self.qref(named)?)
             }
             TypeView::Function(p) => {
                 let exc = match types.exc_spec(&p) {
@@ -1868,7 +1977,10 @@ impl Writer<'_, '_, '_> {
                     if ast.decls.get(f).ctx() != Some(class) {
                         return Err("a ctor-initializer of an anonymous union member");
                     }
-                    *self.recs.get(&f).ok_or("a ctor-initializer of a field outside the image")?
+                    // The field may follow the constructor: resolved when
+                    // the declarations are all recorded.
+                    self.bs.init_fields.push((i, k as u32, f));
+                    NONE
                 }
                 CtorInitKind::Delegating => 0,
                 CtorInitKind::VirtualBase => return Err("a virtual base class"),
@@ -2150,6 +2262,14 @@ impl Writer<'_, '_, '_> {
             });
             self.recs.insert(d, i);
         }
+        for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
+            let r = *self.recs.get(&f).ok_or("a ctor-initializer of a field outside the image")?;
+            if let Payload::Function { inits, .. } = &mut self.img.decls[i as usize].payload
+                && let Some(x) = inits.get_mut(k as usize)
+            {
+                x.target = r;
+            }
+        }
         self.walk_roots()
     }
 }
@@ -2243,8 +2363,7 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if let Err(e) = decode(&bytes) {
-            eprintln!("DEBUG1065 {e:?}");
+        if decode(&bytes).is_err() {
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -2687,6 +2806,25 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, None, q)
+            }
+            TyRec::ElabQ(k, steps, q) => {
+                let mut cur: Option<NnsId> = None;
+                for st in steps {
+                    let n = match *st {
+                        NnsRec::Global => Nns::Global,
+                        NnsRec::Ns(d) => match ids.get(d as usize) {
+                            Some(&ns) => Nns::Namespace { prefix: cur, ns },
+                            None => Nns::Global,
+                        },
+                        NnsRec::Ty(q, template_kw) => {
+                            Nns::Type { prefix: cur, ty: qt(self, q), template_kw }
+                        }
+                    };
+                    cur = Some(self.ast.types.nns(n));
+                }
+                let q = qt(self, *q);
+                let k = tag_keyword(*k).unwrap_or_default();
+                self.ast.types.elaborated(k, cur, q)
             }
             TyRec::Func { ret, params, info, exc } => {
                 let r = qt(self, *ret);

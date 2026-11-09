@@ -125,8 +125,8 @@ pub(super) enum Dc {
     Label,
     Let,
     Param,
-    /// A function (an implicit special member too), or the translation
-    /// unit.
+    /// A declaration context: a function (an implicit special member
+    /// too), class, namespace, export block or the translation unit.
     Ctx,
     Namespace,
     /// A class member: a field, member function, static data member or
@@ -758,7 +758,16 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
         Dc::Param => false,
-        Dc::Ctx => matches!(d.payload, Payload::Function { .. } | Payload::Implicit { .. }),
+        // A default argument or member initializer's use context: any
+        // declaration context the image carries.
+        Dc::Ctx => matches!(
+            d.payload,
+            Payload::Function { .. }
+                | Payload::Implicit { .. }
+                | Payload::Record { .. }
+                | Payload::Namespace
+                | Payload::Export
+        ),
         Dc::Namespace => matches!(d.payload, Payload::Namespace),
     }
 }
@@ -975,6 +984,9 @@ pub(super) struct BodyState {
     /// Base-specifiers (global index) of carried class definitions:
     /// (class record, position).
     pub(super) bspec: FxHashMap<u32, (u32, u32)>,
+    /// Field ctor-initializers to resolve once every record exists:
+    /// (constructor record, initializer position, field).
+    pub(super) init_fields: Vec<(u32, u32, DeclId)>,
     emap: FxHashMap<ExprId, u32>,
     smap: FxHashMap<StmtId, u32>,
     cmap: FxHashMap<ConstValueId, u32>,
