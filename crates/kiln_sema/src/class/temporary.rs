@@ -520,6 +520,19 @@ impl Sema<'_, '_> {
     /// (its temporaries then stay with the call's full-expression).
     /// Nested full-expressions and unevaluated operands are not entered,
     /// as in [`Sema::extend_init_temporaries`].
+    ///
+    /// Evaluated kinds left uncopied, whose temporaries stay with the
+    /// call's full-expression: `CXXDefaultInitExpr` (the member's
+    /// initializer is shared, also outside a default argument; clang 22
+    /// rebuilds it: a WP-1166 follow-up) and the vendor builtins
+    /// `AtomicExpr`, `ShuffleVectorExpr`, `GenericSelectionExpr` and
+    /// `PseudoObjectExpr`. The others cannot hold a temporary of a used
+    /// default argument: C-only `DesignatedInitUpdateExpr`;
+    /// `ArrayInitLoopExpr` and `CXXInheritedCtorInitExpr` (lambda
+    /// captures, implicit members, bindings, inherited constructors);
+    /// `CoawaitExpr` and `CoyieldExpr` (ill-formed there, [expr.await]/2,
+    /// [expr.yield]/1); dependent and invalid kinds (never used); an
+    /// `OpaqueValueExpr` (rebound with its owner).
     fn fresh_temporaries(&mut self, e: ExprId, depth: u32) -> Option<ExprId> {
         const MAX_DEPTH: u32 = 64;
         if depth > MAX_DEPTH {
