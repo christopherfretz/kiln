@@ -7040,7 +7040,7 @@ impl Sema<'_, '_> {
     /// member function defined outside an instantiation, in a class with
     /// virtual bases, is an error with a note per virtual base; the
     /// function is invalid. Before C++26 only (P3533R2).
-    fn check_constexpr_virtual_base(&mut self, f: DeclId) {
+    pub(crate) fn check_constexpr_virtual_base(&mut self, f: DeclId) {
         let kind = self.kind_of(f);
         let member = matches!(
             kind,
@@ -7674,7 +7674,6 @@ impl Sema<'_, '_> {
         if self.ast.definition(f).is_none() {
             let _ = self.builder().set_body(f, body);
         }
-        self.check_constexpr_virtual_base(f);
         self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
             && let Some(class) = self.ast.decls.get(f).ctx()
