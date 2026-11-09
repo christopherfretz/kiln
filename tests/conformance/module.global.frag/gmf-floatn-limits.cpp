@@ -5,10 +5,12 @@
 // compiler predefines __FLT32_DIG__ and __FLT64_DIG__ (kiln does, clang
 // does not), are one entity each: no redefinition. Found building the
 // fmt_module OSS row against libstdc++ (docs/status/oss/fmt_module.md).
+// The two units' specialization tokens differ (glibc's <math.h> defines
+// `__builtin_nansf32` as a macro first), so they merge as entities, not by
+// position (spec/modules.md §6, WP-1156).
 //@ expect: compile-ok
 //@ std: c++20
 //@ module: gfm=Inputs/gmf-floatn-math.cppm
-//@ xfail(kiln): WP-1148 follow-up, kiln reports "redefinition of 'numeric_limits<_Float32>'" (and _Float64) at libstdc++ <limits>: the GMF's specializations, declared after glibc's skipped `typedef float _Float32;`, are not merged with the importer's
 #include <limits>
 import gfm;
 static_assert(gfm_get() == 1);

@@ -2675,8 +2675,8 @@ interface or `stdapp`'s source never rebuilds the std module.
   `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
   with Ninja through kiln-scan-deps against a clang 19 control
   (docs/status/oss/{cmake_modules,fmt_module}.md);
-  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
-  libstdc++ failure, xfail.
+  `module.global.frag/gmf-floatn-limits.cpp` reduces the `fmt_module`
+  libstdc++ failure, fixed by WP-1156 (§6).
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz
