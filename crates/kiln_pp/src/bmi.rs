@@ -909,7 +909,22 @@ mod tests {
                 },
                 bytes: Some(vec![1, 2, 3]),
             }],
+            sections: vec![],
         }
+    }
+
+    /// A kind-2 file: [`sample`] with a carried-constants section.
+    fn sample2() -> Capsule {
+        let mut c = sample();
+        c.sections.push(Section { tag: SECTION_CONSTS, bytes: vec![7, 0, 0, 0, 9] });
+        c
+    }
+
+    /// Re-frames `body` (a file without its checksum) with a valid one.
+    fn resum(mut body: Vec<u8>) -> Vec<u8> {
+        let s = checksum(&body);
+        body.extend_from_slice(&s.to_le_bytes());
+        body
     }
 
     #[test]
@@ -975,6 +990,68 @@ mod tests {
             m.extend_from_slice(&s.to_le_bytes());
             let _ = read(&m);
         }
+    }
+
+    /// Kind 2 round-trips, is deterministic, and is kind 1 plus the
+    /// sections: the kind byte is the only other difference.
+    #[test]
+    fn kind2_round_trip() {
+        let c = sample2();
+        let b = write(&c);
+        assert_eq!(b[12], KIND_SECTIONS);
+        assert_eq!(read(&b), Ok(c.clone()));
+        assert_eq!(write(&c), b, "deterministic");
+        assert_eq!(peek(&b).unwrap().module, "m:p");
+        let one = write(&sample());
+        assert_eq!(one[12], KIND_CAPSULE);
+        assert_eq!(b[13..one.len() - 8], one[13..one.len() - 8]);
+    }
+
+    /// Kind 2: every truncation and flip is an error, never a panic.
+    #[test]
+    fn kind2_truncate_and_flip() {
+        let b = write(&sample2());
+        for n in 0..b.len() {
+            assert!(read(&b[..n]).is_err(), "truncated to {n}");
+        }
+        for i in 0..b.len() {
+            for bit in [0x01u8, 0x80, 0xff] {
+                let mut m = b.clone();
+                m[i] ^= bit;
+                assert!(read(&m).is_err(), "flip {bit:#x} at {i}");
+            }
+        }
+    }
+
+    /// Behind a valid checksum: a kind-2 file without sections, an
+    /// unknown (reserved) section tag, sections out of order, and a kind-1
+    /// file with trailing section bytes are all errors.
+    #[test]
+    fn kind2_section_framing() {
+        let one = write(&sample());
+        let body1 = one[..one.len() - 8].to_vec();
+        let with = |kind: u8, tail: &[u8]| {
+            let mut m = body1.clone();
+            m[12] = kind;
+            m.extend_from_slice(tail);
+            read(&resum(m))
+        };
+        let sec = |tag: u32, bytes: &[u8]| {
+            let mut v = tag.to_le_bytes().to_vec();
+            v.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            v.extend_from_slice(bytes);
+            v
+        };
+        let count = |n: u32| n.to_le_bytes().to_vec();
+        assert!(with(KIND_SECTIONS, &count(0)).is_err(), "no sections");
+        assert!(with(KIND_SECTIONS, &[count(1), sec(0, &[1])].concat()).is_err(), "tag 0");
+        let reserved = [count(1), sec(SECTION_MAX + 1, &[1])].concat();
+        assert!(with(KIND_SECTIONS, &reserved).is_err(), "reserved tag");
+        let twice = [count(2), sec(1, &[1]), sec(1, &[2])].concat();
+        assert!(with(KIND_SECTIONS, &twice).is_err(), "out of order");
+        assert!(with(KIND_SECTIONS, &[count(1), sec(1, &[])].concat()).is_ok(), "empty section");
+        assert!(with(KIND_CAPSULE, &[count(1), sec(1, &[1])].concat()).is_err(), "kind 1");
+        assert!(with(3, &[]).is_err(), "unknown kind");
     }
 
     #[test]

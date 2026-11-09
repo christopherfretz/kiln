@@ -546,6 +546,9 @@ pub struct Args {
     /// template arguments mangle (spec/reflection.md §8.3; the hidden
     /// `kiln-hashed` is a prototype; the last one wins).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
+    /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
+    pub bmi_kind: Option<u8>,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -988,6 +991,14 @@ impl Args {
                             "-fkiln-source-path-style=".to_owned(),
                             v.to_owned(),
                         )),
+                    }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
+                    match v {
+                        "1" => self.bmi_kind = Some(1),
+                        "2" => self.bmi_kind = Some(2),
+                        _ => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-reflection-mangling=") {
                     match kiln_abi::ReflectionMangling::parse(v) {
