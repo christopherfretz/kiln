@@ -5,9 +5,10 @@
 # skipped when none is built), checks the JSONL fields, and runs
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
 # --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
-# wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++. Prints one
-# PASS/FAIL line per check and exits 1 on any FAIL. With a kiln++, it also
-# builds fixtures/modules with CMake and Ninja (WP-982, cmake_modules).
+# wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++, and a CMake
+# target_precompile_headers project (WP-1023). Prints one PASS/FAIL line
+# per check and exits 1 on any FAIL. With a kiln++, it also builds
+# fixtures/modules with CMake and Ninja (WP-982, cmake_modules).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX="$HERE/fixtures"
@@ -171,6 +172,40 @@ if [ -n "$KILN_CXX" ]; then
 else
   echo "SKIP kiln: no kiln++ (set KILN_OSS_CXX or build --profile harness)"
 fi
+# CMake target_precompile_headers (WP-1023): CMake's Clang PCH flags
+# (`-Xclang -emit-pch`, `-Xclang -include-pch`, `-Xclang -include`) over a
+# prefix header with no include guard, two TUs, built and run; the build is
+# timed with PCH on and with -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON plus
+# `-include pch.hpp` (the same TUs, textually; PCH is
+# for correctness, not speed, in kiln 1.0: TIME lines are informational).
+PC="$TMP/pch"
+mkdir -p "$PC"
+printf 'cmake_minimum_required(VERSION 3.20)\nproject(pchdemo CXX)\nset(CMAKE_CXX_STANDARD 20)\nadd_executable(app main.cpp other.cpp)\ntarget_precompile_headers(app PRIVATE pch.hpp)\n' > "$PC/CMakeLists.txt"
+printf '#include <algorithm>\n#include <map>\n#include <string>\n#include <vector>\nstruct Unguarded { int v; };\ninline int twice(int x) { return 2 * x; }\n#define PCH_GREETING "hello pch"\n' > "$PC/pch.hpp"
+printf '#include <cstdio>\nint other();\nint main() { std::vector<int> v{3, 1, 2}; std::sort(v.begin(), v.end()); Unguarded u{twice(v[2])}; std::printf("%%s %%d\\n", PCH_GREETING, u.v + other()); }\n' > "$PC/main.cpp"
+printf 'int other() { std::map<std::string, int> m{{"a", 1}}; return m["a"] + twice(0); }\n' > "$PC/other.cpp"
+pch_one() { # <label> <compiler or empty>
+  local label="$1" cxx="$2" b
+  for mode in on off; do
+    b="$PC/b-$label-$mode"
+    local extra=()
+    [ "$mode" = off ] && extra=(-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON "-DCMAKE_CXX_FLAGS=-include $PC/pch.hpp")
+    KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$TMP/pch-$label.jsonl" cmake -S "$PC" -B "$b" -G "Unix Makefiles" -DCMAKE_CXX_COMPILER="$HERE/kiln-cxx" "${extra[@]}" > "$b.configure.log" 2>&1
+    local t0 t1
+    t0=$(date +%s.%N)
+    KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$TMP/pch-$label.jsonl" make -C "$b" VERBOSE=1 > "$b.build.log" 2>&1
+    t1=$(date +%s.%N)
+    echo "TIME $label PCH $mode: $(python3 -c "print(f'{$t1 - $t0:.2f}')")s"
+  done
+  check "$label: CMake PCH build runs" "[ \"\$('$PC/b-$label-on/app')\" = 'hello pch 7' ]"
+  check "$label: CMake PCH flags reached the compiler" "grep -q -- '-Xclang -emit-pch' '$PC/b-$label-on.build.log' && grep -q -- '-Xclang -include-pch' '$PC/b-$label-on.build.log' && [ -s '$PC/b-$label-on/CMakeFiles/app.dir/cmake_pch.hxx.pch' ]"
+  check "$label: CMake build without PCH runs" "[ \"\$('$PC/b-$label-off/app')\" = 'hello pch 7' ] && ! grep -q -- '-include-pch' '$PC/b-$label-off.build.log'"
+}
+pch_one clang ""
+if [ -n "$KILN_CXX" ]; then
+  pch_one kiln "$KILN_CXX"
+fi
+
 (cd "$TMP" && KILN_OSS_LOG="$TMP/to.jsonl" KILN_OSS_TIMEOUT=0.01 "$HERE/kiln-cxx" -O2 -c hello.cpp -o t.o >/dev/null 2>&1)
 check "timeout: rc 124 and kind timeout" "[ $? -eq 124 ] && field '$TMP/to.jsonl' 0 'r[\"kind\"]==\"timeout\"'"
 

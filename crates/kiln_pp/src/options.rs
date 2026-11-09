@@ -107,6 +107,10 @@ pub struct PpOptions {
     /// `-dI`: queue a [`crate::Marker::Include`] for every `#include`,
     /// `#include_next` and `#import`.
     pub dump_includes: bool,
+    /// The main file is a header (clang `LangOptions::IsHeaderFile`: a
+    /// `-x c++-header` input being precompiled, WP-1023): `#pragma once`
+    /// in it is not `-Wpragma-once-outside-header`.
+    pub main_is_header: bool,
 }
 
 impl PpOptions {
@@ -131,6 +135,7 @@ impl PpOptions {
             suppress_include_not_found: false,
             dump_defines: false,
             dump_includes: false,
+            main_is_header: false,
         }
     }
 

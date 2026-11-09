@@ -489,7 +489,10 @@ impl<'a> AstNames<'a> {
             {
                 self.write_name(ctx, out);
                 if let Some(args) = self.ast.spec_print_args(ctx) {
-                    crate::types::write_arg_list_of(&self.ast.types, self, ctx, args, out);
+                    // clang's `AppendScope` prints the specialization's
+                    // converted arguments, whose types are canonical and
+                    // so fully scoped (`a::S<b::P>::N`, not `a::S<P>::N`).
+                    crate::types::write_arg_list_scoped_of(&self.ast.types, self, ctx, args, out);
                 }
                 out.push_str("::");
             }

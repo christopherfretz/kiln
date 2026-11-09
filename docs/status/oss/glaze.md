@@ -39,10 +39,22 @@ cmake --fresh -S .oss/src/glaze -B . -G "Unix Makefiles" \
   -DCMAKE_CXX_STANDARD=23 -DCMAKE_BUILD_TYPE=Release \
   -Dglaze_DEVELOPER_MODE=ON -DBUILD_TESTING=ON -Dglaze_ENABLE_SANITIZERS=OFF \
   -Dglaze_BUILD_NETWORKING_TESTS=OFF -Dglaze_BUILD_PERFORMANCE_TESTS=OFF \
-  -Dglaze_ENABLE_FUZZING=OFF -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+  -Dglaze_ENABLE_FUZZING=OFF
 nice -n 10 make -k
 ctest --output-on-failure -j 4 --timeout 300
 ```
+
+## Precompiled headers (WP-1023)
+
+The row no longer passes `-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON`. glaze
+v9.1.0 calls no `target_precompile_headers`, so the flag never had any
+effect: neither build log contains `-include-pch`. A rebuild on
+2026-11-09 of both compilers, with the harness's kiln++ at the WP-1023
+head, gives the same result as below. 87 of 89 TUs compile, the same two
+TUs fail, and 100 of 102 ctest tests pass, the other two being
+`cbor_test` and `msgpack_test` "Not Run". The rebuild's wall times were
+372 s for kiln and 426 s for clang. Its peak TU RSS was 1712 MB for kiln
+(`yaml_test.cpp`) and 2232 MB for clang.
 
 ## Results
 
