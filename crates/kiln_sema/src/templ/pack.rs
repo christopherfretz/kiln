@@ -681,9 +681,9 @@ impl Substituter<'_, '_, '_> {
         Ok(self.sema.act_on_paren(acc, loc, end))
     }
 
-    /// `sizeof...(P)` (§7.4): the length of the substituted pack, a
     /// `pack...[index]` ([expr.prim.pack.index]): the selected element.
-    /// Gap (spec §7.4): clang keeps a `PackIndexingExpr` around it.
+    /// Gap (spec §7.4): clang keeps a `PackIndexingExpr` around it; the
+    /// element is recorded in `pack_index_origin` for mangling.
     pub(crate) fn pack_indexing_expr(
         &mut self,
         e: ExprId,
@@ -713,6 +713,11 @@ impl Substituter<'_, '_, '_> {
                     name = format!("'{name}'");
                 }
                 let i = self.pack_index_value(index, v.len(), &name, loc)?;
+                // The element was built for this pack index alone; it
+                // stands for clang's non-dependent `PackIndexingExpr`,
+                // which a dependent signature still mangles as nothing
+                // (`Y<1, 2>::g`'s `decltype(u + I...[1])` is `DTplfp_E`).
+                let _ = self.sema.ast.templates.pack_index_origin.insert(v[i], e);
                 Ok(v[i])
             }
         }
@@ -800,6 +805,7 @@ impl Substituter<'_, '_, '_> {
         }
     }
 
+    /// `sizeof...(P)` (§7.4): the length of the substituted pack, a
     /// `SizeOfPackExpr` that is no longer dependent.
     pub(crate) fn size_of_pack(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         use crate::templ::args::ArgLookup;
