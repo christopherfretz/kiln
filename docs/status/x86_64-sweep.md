@@ -5,7 +5,8 @@ the libc++ 22 suite and ten OSS projects on GitHub's `ubuntu-24.04`
 x86_64 runners, in the CI reference container `gcc:16.1.0-trixie`
 (Debian 13, clang 19 and 22, GCC 14's libstdc++), with kiln++ from
 `cargo xtask dist`. How to run it: docs/VALIDATION.md "x86_64 sweep".
-This page records the first sweep (2026-11-08/09) and its triage.
+This page records the first sweep (2026-11-08/09) and its triage; the
+gRPC results were filled in from its artifacts by WP-1002.
 
 ## Runs
 
@@ -70,10 +71,13 @@ Tests are "passed / total".
   10 fail under both).
 - **grpc** `v1.85.1`: x86-2 0/118, 65/918 TUs: 822 TUs hit the WP-873
   regression through abseil's headers and 31 the missing `__rdtsc`
-  (fixed). The full builds, kiln with the one-off flag (x86-4) and the
-  clang control (x86-2), were still running when this page was written
-  (5732 TUs on a 4-vCPU runner; the aarch64 builds took 4–5 h); their
-  `oss-grpc-*` artifacts hold the result.
+  (fixed). With the one-off flag (x86-4): **117/118, 5732/5732 TUs, 120/120
+  links**; clang (x86-2) 117/118, 5732/5732 TUs, 120/120 links. The one
+  failure is the same under both: `end2end_http2_test` killed at the
+  harness's 300 s limit (rc 137), as on aarch64
+  ([oss/grpc.md](oss/grpc.md)). Neither job came near the 355-minute job
+  limit (kiln 2 h 10 min, clang 2 h 21 min), so the job is not sharded.
+  Details in "gRPC on x86_64" below.
 - **bitcoin_core** `v32.1`: x86-2 220/357 (WP-873). With the one-off flag
   (x86-3, x86-4): 357/357, 475/475 TUs; clang 357/357, 487/487 TUs. The
   12 TUs are the SSE4.1/AVX2/SHA-NI/SSE4.2/CLMUL code that CMake's
@@ -89,6 +93,35 @@ Tests are "passed / total".
 - **daw_json_link** `v3.38.1`: x86-2 0/147, 0/159 TUs: every TU rejected
   `-mbranches-within-32B-boundaries` (the project's x86 flag; fixed). x86-3
   7/147 (WP-873). x86-4: 147/147, 159/159 TUs; clang 147/147.
+
+## gRPC on x86_64
+
+The `oss-grpc-kiln` artifact of x86-4 (kiln++ `9afe2a822`, the
+`kiln-nic` dist binary, `-Wno-invalid-constexpr` added for WP-873) and the
+`oss-grpc-clang` artifact of x86-2 (`/usr/bin/clang++-19`), both
+libstdc++ 14, `-std=c++17` (the project's), `oss-build.sh grpc --jobs 4`
+on a 4-vCPU `ubuntu-24.04` runner in `gcc:16.1.0-trixie`. Merged with
+`oss-report.py --root <dir> --perf grpc` after laying the two artifacts
+out as `<dir>/build/grpc/{kiln,clang}/`.
+
+| | kiln | clang 19 |
+|---|---|---|
+| TUs ok / failed | 5732 / 0 | 5732 / 0 |
+| links ok / failed | 120 / 0 | 120 / 0 |
+| tests passed / total | 117 / 118 | 117 / 118 |
+| wall (configure, build, tests) | 7712 s | 8353 s |
+| peak TU RSS | 311 MB | 796 MB |
+
+Over the 1636 sources compiled by both: geomean kiln/clang-19 CPU time
+**0.96×**, RSS **0.44×**; total 8598 s vs 9508 s. The heaviest TU by
+peak RSS is `test/core/end2end/end2end_test_suites.cc` under both (310 MB
+vs 796 MB, 28.8 s vs 32.0 s). 5 of the 1495 sources that take clang at
+least 0.5 s are over 1.2× its time, all small (1.6–7 s under clang):
+googlemock's `gmock_main.cc` 1.32×, abseil's `cord_rep_consume.cc` 1.29×
+and `cord_rep_crc.cc` 1.27×, `src/compiler/python_generator.cc` 1.26×,
+abseil's `mutex.cc` 1.26×. On aarch64 the same comparison is 1.17× time
+and 0.44× RSS ([oss/grpc.md](oss/grpc.md) "Performance"); the runners'
+CPU and load differ, so only the RSS ratio carries across.
 
 ## Triage
 
@@ -134,6 +167,32 @@ Tests are "passed / total".
 - `std/atomics/atomics.types.operations/atomics.types.operations.wait/lost_wakeup.pass.cpp`:
   TIMEOUT (run) in x86-2 and x86-4, passes on aarch64. A run-time stress
   test on a 4-vCPU runner under `-j 4`. **Flaky / load**.
+
+- x86 builtins that the standard libraries reach without an intrinsics
+  header (WP-529, WP-1002). Every `__builtin_*` named in libstdc++ 14's
+  x86-64 headers and glibc's x86-64 headers (Debian's
+  `libstdc++-14-dev-amd64-cross` / `libc6-dev-amd64-cross`), outside
+  `<experimental/simd>` (which includes `<x86intrin.h>`), against the
+  aarch64 set: the only x86-only one reached is `__builtin_ia32_pause`
+  (`<bits/atomic_wait.h>` `__thread_relax`, `<stop_token>`); glibc's
+  `__builtin_fabsq` / `__builtin_copysignq` / `__builtin_infq` are under
+  a GCC < 7 guard. libc++ 19 and 22 name no x86 builtin. `__builtin_ia32_pause`
+  has been implemented since WP-610 (codegen `x86_intrinsics.rs:390`;
+  not a constant expression, as in clang): **WP-529 was already fixed**.
+  Every libstdc++ 14 header, together and with `<x86intrin.h>` and
+  `<ext/random>` (which includes `<emmintrin.h>` under `__SSE2__`),
+  compiles to IR for `--target=x86_64-linux-gnu` at `-std=c++20/23/26`
+  as under clang 19 (C++17: the same `<coroutine>` `#error`). A local
+  cross compile needed the driver to find Debian's `gcc-cross`
+  installation as clang does (fixed, spec/driver.md "Toolchain").
+  Tests: `atomics.wait/run-libstdcxx-wait-notify-x86_64.cpp` (x86-64
+  lane; atomic/flag wait, semaphore, latch, barrier, stop_source,
+  `<memory>`), `target.x86/ia32-pause-spin-pinned-ir{,-19}.cpp` (both
+  lanes, IR vs clang). `expr.prim.lambda/run-init-capture-unique-ptr.cpp`
+  is back on the default libstdc++ (gated to libc++ in PR #231).
+  Instantiating libstdc++'s `<experimental/simd>` found a kiln template
+  bug on both arches (a dependent conversion-function-id is looked up at
+  definition), xfail `temp.dep.expr/conversion-function-id-dependent-run.cpp`.
 
 ### Both arches: main regressions
 

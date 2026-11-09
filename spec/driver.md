@@ -648,6 +648,8 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `--gcc-toolchain=<dir>` (a trailing `/` dropped) if given, else
   `<sysroot>/usr`. Under it, for `lib64` then `lib` and the target's
   candidate triples in clang's order, every `<prefix>/<lib>/gcc/<triple>/<version>`
+  and then `<prefix>/<lib>/gcc-cross/<triple>/<version>` (Debian's cross
+  compilers, such as `libstdc++-14-dev-amd64-cross`; WP-1002)
   whose name parses as a GCC version is a candidate (`-v`: `Found
   candidate GCC installation: <path>` for each, sorted, as clang's
   `CandidateGCCInstallPaths` set); the newest with a `crtbegin.o` and a
@@ -655,8 +657,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
   `Selected GCC installation: <path>`). `--gcc-install-dir=<dir>` skips
   the search and names the installation (triple and version are the
   names of `<dir>`'s parent and of `<dir>`). Test:
-  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` (a
-  fake tree; `-v` compared with clang 19). A build with
+  `crates/kiln_driver/tests/driver.rs` `gcc_toolchain_matches_clang` and
+  `gcc_cross_toolchain_matches_clang` (fake trees; `-v` compared with
+  clang 19). A build with
   `KILN_DEFAULT_GCC=<driver>` in its environment (`toolchain::DEFAULT_GCC`;
   for a distribution whose C++ compiler is a GCC outside `/usr` behind a
   wrapper, such as RHEL's gcc-toolset) instead takes, when there is no
@@ -671,7 +674,10 @@ toolchain's (clang 19 `Linux::AddClangCXXStdlibIncludeArgs` followed by
 `AddClangSystemIncludeArgs`):
 
 1. C++ only, unless `-nostdinc++` or `-nostdlibinc`:
-   - **libstdc++:** `<gcc>/../../../../include/c++/<v>`, then
+   - **libstdc++:** if `<gcc>/../../../../<triple>/include/c++/<v>`
+     exists (a cross GCC's), it, `.../<v>/<triple>` and `.../backward`
+     (clang `addGCCLibStdCxxIncludePaths`'s first form; WP-1002). Else
+     `<gcc>/../../../../include/c++/<v>`, then
      `.../<v>/<triple>` if it exists (Debian multiarch), else
      `.../<v>/<triple>/<multilib>` (listed even when missing, as clang
      `addLibStdCXXIncludePaths`), and `.../backward`. With
