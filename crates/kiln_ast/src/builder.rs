@@ -1549,8 +1549,14 @@ impl<'a> AstBuilder<'a> {
                 if let Some(v) = self.ast.decls.var(d) {
                     // The `const` may come from a typedef (bsl's
                     // `typedef const bool Cbool; static Cbool k = ...;`).
+                    // A reference is potentially-constant too
+                    // ([expr.const]/3): `const int &i = k;` of a `k`
+                    // initialized by `n` is value-dependent.
                     let potentially_constant = v.spec.is_constexpr()
-                        || n.ty().is_some_and(|t| self.ast.types.effective_quals(t).is_const());
+                        || n.ty().is_some_and(|t| {
+                            self.ast.types.effective_quals(t).is_const()
+                                || self.ast.types.is_reference(t)
+                        });
                     if potentially_constant
                         && v.init.is_some_and(|i| self.deps(i).contains(ExprDeps::VALUE))
                     {

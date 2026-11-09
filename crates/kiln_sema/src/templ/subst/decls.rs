@@ -196,8 +196,10 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn var_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.named_decl_ty(d, t, loc)?;
-        let ty = self.sema.apply_pattern_mode(d, ty);
+        let outer = self.ctad_typename.replace(t.without_quals());
+        let ty = self.named_decl_ty(d, t, loc);
+        self.ctad_typename = outer;
+        let ty = self.sema.apply_pattern_mode(d, ty?);
         self.var_function_type(ty, loc, ctx)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, ctx)?;
@@ -978,11 +980,23 @@ impl Substituter<'_, '_, '_> {
             return self.unimplemented("function declared with a typedef of function type", loc);
         };
         let info = p.info();
-        let params = self.param_infos(pat);
+        // [temp.deduct.general]/7: substitution proceeds in lexical order
+        // and stops at the first failure, so a leading return type is
+        // substituted before the parameters and a trailing one after
+        // (clang `TransformFunctionProtoType`).
+        let leading_ret = (!info.trailing_return()).then(|| self.ret_ty(pat, p.ret(), loc));
+        let (params, leading_ret) = match leading_ret {
+            Some(Err(e)) => (Err(e), None),
+            Some(Ok(r)) => (self.param_infos(pat), Some(r)),
+            None => (self.param_infos(pat), None),
+        };
         let method = self.sema.kind_of(pat) == DeclKind::CXXMethod;
         let this = self.sema.act_on_start_this_scope(method, info.this_quals());
         let sig = params.and_then(|params| {
-            let ret = self.ret_ty(pat, p.ret(), loc)?;
+            let ret = match leading_ret {
+                Some(r) => r,
+                None => self.ret_ty(pat, p.ret(), loc)?,
+            };
             self.check_return_type(ret, loc)?;
             let ret_loc = self.sema.type_spec_locs.get(&pat).copied().unwrap_or(loc);
             self.check_volatile_return(p.ret(), ret, ret_loc);

@@ -102,7 +102,7 @@ impl Sema<'_, '_> {
         let v = self
             .ast
             .consts
-            .push_scalar(Scalar::Pointer { ty, base, offset, designated: None })
+            .push_scalar(Scalar::Pointer { ty, base, offset, designated: None, past: false })
             .ok()?;
         let o = self.builder().opaque_value_of(ty, kiln_ast::expr::ValueCategory::PRValue, loc);
         let c = self.builder().constant_expr(o, Some(v));

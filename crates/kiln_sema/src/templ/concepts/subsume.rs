@@ -5,8 +5,9 @@ use crate::Sema;
 use kiln_ast::{DeclId, ExprId};
 use kiln_diag::{Diag, DiagId};
 
-/// Most clauses a DNF/CNF conversion may produce (§8.5); beyond it the
-/// check answers "does not subsume".
+/// Most clauses a DNF/CNF conversion may produce (§8.5); when both forms
+/// a subsumption check could use are past it, the check answers "does not
+/// subsume".
 const MAX_CLAUSES: usize = 65_536;
 
 type Clauses = Vec<Vec<NormId>>;
@@ -24,12 +25,7 @@ impl Sema<'_, '_> {
             return r;
         }
         self.inst.concepts.counters.subsume += 1;
-        let r = match (self.clauses(p, true), self.clauses(q, false)) {
-            (Some(dnf), Some(cnf)) => {
-                self.clauses_subsume(&dnf, &cnf, &mut |s: &mut Self, a, b| s.leaf_subsumes(a, b))
-            }
-            _ => false,
-        };
+        let r = self.subsumes_by(p, q, &mut |s: &mut Self, a, b| s.leaf_subsumes(a, b));
         self.inst.concepts.subsume_cache.insert((p, q), r);
         r
     }
@@ -193,10 +189,7 @@ impl Sema<'_, '_> {
         if depth > 64 {
             return false;
         }
-        let (Some(dnf), Some(cnf)) = (self.clauses(p, true), self.clauses(q, false)) else {
-            return false;
-        };
-        self.clauses_subsume(&dnf, &cnf, &mut |s: &mut Self, x, y| {
+        self.subsumes_by(p, q, &mut |s: &mut Self, x, y| {
             if x == y {
                 return true;
             }
@@ -341,6 +334,55 @@ impl Sema<'_, '_> {
             }
         }
         self.begin_loc(e)
+    }
+
+    /// Whether `p` subsumes `q` with leaf relation `eq` ([temp.constr.order]/1),
+    /// building only one clause form (§8.5). Leaves are never negated, so
+    /// a normal form is a monotone function of its leaves: a DNF clause
+    /// `Pi` of `p` subsumes every CNF clause of `q` exactly when `q` is
+    /// true with the leaves some leaf of `Pi` subsumes true and the rest
+    /// false; dually, `p` subsumes the CNF clause `Qj` of `q` exactly when
+    /// `p` is false with the leaves subsuming a leaf of `Qj` false. So a
+    /// four-of-eight majority, whose CNF before absorption has `4^70`
+    /// clauses, is compared through its 70-clause DNF. `false` when
+    /// neither form fits [`MAX_CLAUSES`].
+    fn subsumes_by(
+        &mut self,
+        p: NormId,
+        q: NormId,
+        eq: &mut dyn FnMut(&mut Self, NormId, NormId) -> bool,
+    ) -> bool {
+        if let Some(dnf) = self.clauses(p, true) {
+            return dnf.iter().all(|pi| {
+                let mut memo = kiln_source::fx::FxHashMap::default();
+                self.eval_norm(q, &mut |s, b| pi.iter().any(|&a| eq(s, a, b)), &mut memo)
+            });
+        }
+        let Some(cnf) = self.clauses(q, false) else { return false };
+        cnf.iter().all(|qj| {
+            let mut memo = kiln_source::fx::FxHashMap::default();
+            !self.eval_norm(p, &mut |s, a| !qj.iter().any(|&b| eq(s, a, b)), &mut memo)
+        })
+    }
+
+    /// The truth of normal form `n` with each leaf's value given by
+    /// `leaf` (memoized per node in `memo`: normal forms share subtrees).
+    fn eval_norm(
+        &mut self,
+        n: NormId,
+        leaf: &mut dyn FnMut(&mut Self, NormId) -> bool,
+        memo: &mut kiln_source::fx::FxHashMap<NormId, bool>,
+    ) -> bool {
+        if let Some(&v) = memo.get(&n) {
+            return v;
+        }
+        let v = match self.inst.concepts.norm.get(n) {
+            NormNode::And(a, b) => self.eval_norm(a, leaf, memo) && self.eval_norm(b, leaf, memo),
+            NormNode::Or(a, b) => self.eval_norm(a, leaf, memo) || self.eval_norm(b, leaf, memo),
+            NormNode::Atomic { .. } | NormNode::Fold { .. } => leaf(self, n),
+        };
+        memo.insert(n, v);
+        v
     }
 
     /// clang's `subsumes(PDNF, QCNF, E)` over precomputed clauses, with

@@ -864,6 +864,17 @@ impl Sema<'_, '_> {
             if !self.require_complete_silent(to, Loc::INVALID) {
                 return Ics::bad(BadKind::InitList, void_from, to);
             }
+            // /3: one element of the class or a class derived from it:
+            // that element's conversion, for every class (CWG1467,
+            // CWG2076; clang `TryListConversion`), so `{A()}` to `A` is
+            // an identity conversion, not a constructor call.
+            if let Some(e) = self.single_elem_of_class(l, c) {
+                let a = self.arg_info(e);
+                return match self.try_implicit_conversion(&a, to, opts) {
+                    Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, to),
+                    x => x,
+                };
+            }
             // /7: a non-aggregate class: constructors ([over.match.list]).
             if !self.is_aggregate(to) {
                 // /2: a designated-initializer-list converts only to an
@@ -880,15 +891,6 @@ impl Sema<'_, '_> {
                     return Ics::bad(BadKind::InitList, void_from, to);
                 }
                 return self.list_ctor_conversion(l, c, to, opts);
-            }
-            // /3: an aggregate from one element of its class or a class
-            // derived from it: that element's conversion (CWG2076).
-            if let Some(e) = self.single_elem_of_class(l, c) {
-                let a = self.arg_info(e);
-                return match self.try_implicit_conversion(&a, to, opts) {
-                    Ics::Bad(_) => Ics::bad(BadKind::InitList, void_from, to),
-                    x => x,
-                };
             }
             // /8: an aggregate.
             if self.aggregate_list_fits(l, to) {

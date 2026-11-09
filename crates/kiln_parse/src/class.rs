@@ -2332,7 +2332,7 @@ impl Parser<'_, '_> {
         // ([class.derived.general]/2): a function of the same scope does
         // not hide the class (clang's `getTypeName` with `isClassName`
         // looks it up as a nested-name-specifier name).
-        let NameClass::Type(ty, d) = self.s.classify_nested_name(name, q) else {
+        let NameClass::Type(ty, d) = self.s.classify_base_class_name(name, q) else {
             // `N::B` with `N` a member class of the current instantiation
             // that has a dependent base: a member of an unknown
             // specialization ([temp.dep.type]/6), looked up at

@@ -2,7 +2,7 @@
 // parameter whose lifetime ended is undefined. Found by the clang negative-
 // test run (WP-912).
 //@ std: c++23
-//@ xfail(kiln): WP-912 follow-up, the evaluator accepts member calls on objects outside their lifetime
+//@ xfail(kiln): WP-948 follow-up, by-value parameter objects live to the end of the full-expression, not callee return ([expr.call]/7)
 //@ expect: compile-fail
 //@ diag: 13:15 error "constexpr variable 'k' must be initialized by a constant expression"
 struct Q {

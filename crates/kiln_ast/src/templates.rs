@@ -2366,12 +2366,24 @@ impl AstBuilder<'_> {
     /// the converted argument expression. It has the replacement's
     /// category and type and none of the pattern's dependence.
     pub fn subst_nttp_expr(&mut self, param: DeclId, replacement: ExprId, loc: Loc) -> ExprId {
+        self.subst_nttp_expr_flagged(param, replacement, loc, ExprFlags::NONE)
+    }
+
+    /// [`Self::subst_nttp_expr`] with `flags`
+    /// ([`ExprFlags::REFERENCE_PARAMETER`]).
+    pub fn subst_nttp_expr_flagged(
+        &mut self,
+        param: DeclId,
+        replacement: ExprId,
+        loc: Loc,
+        flags: ExprFlags,
+    ) -> ExprId {
         let n = *self.ast.exprs.get(replacement);
         self.push_expr(
             ExprKind::SubstNonTypeTemplateParmExpr,
             n.value_category(),
             n.object_kind(),
-            ExprFlags::NONE,
+            flags,
             n.deps(),
             0,
             n.ty(),
