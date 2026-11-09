@@ -1809,9 +1809,10 @@ impl Sema<'_, '_> {
             // dependent base ([temp.dep.type]/6, [temp.dep.expr]/3;
             // clang's `wasNotFoundInCurrentInstantiation`), looked up again
             // at instantiation (libc++ test support's
-            // `return (UnwrapAdaptor::c);`).
+            // `return (UnwrapAdaptor::c);`), as is `E::x` with `E` an
+            // opaque member enumeration of a class template.
             if let (Some(ctx), Some(nns), Some(b)) = (qualifier, nns, begin)
-                && self.kind_of(ctx) == DeclKind::CXXRecord
+                && matches!(self.kind_of(ctx), DeclKind::CXXRecord | DeclKind::Enum)
                 && let Some(n) =
                     self.unknown_specialization_nns(crate::using::Qualifier { ctx, nns, loc: b })
             {

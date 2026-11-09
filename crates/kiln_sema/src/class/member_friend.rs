@@ -164,15 +164,19 @@ impl Sema<'_, '_> {
     /// a dependent qualifier that names none of the innermost open head's
     /// parameters leaves that head to the befriended member template
     /// itself ([temp.friend]/1), not to the qualifier's class template
-    /// (WP-1110).
+    /// (WP-1110). So does the invented head of an abbreviated friend
+    /// with no written head (`friend int B<T>::g(auto);`, [dcl.fct]/22):
+    /// no head is written for the qualifier's class template (WP-1145).
     pub(crate) fn friend_head_is_own(&self, d: &Declarator) -> bool {
         let Some(nns) = d.qualifier_nns else { return false };
         if !self.ast.types.nns_flags(nns).intersects(TypeFlags::DEPENDENT) {
             return false;
         }
-        self.member_friend_shape(nns).is_some_and(|(_, args, _)| {
-            !self.open_written_heads().is_empty() && self.member_friend_head(&args).is_none()
-        })
+        if self.open_written_heads().is_empty() {
+            return self.open_invented_head_list().is_some();
+        }
+        self.member_friend_shape(nns)
+            .is_some_and(|(_, args, _)| self.member_friend_head(&args).is_none())
     }
 
     /// `template<class T> friend class A<T>::Member;` in class `record`
@@ -592,8 +596,12 @@ impl Sema<'_, '_> {
     /// deduced, its member template level kept), the member's with its
     /// class's (`member_constraints`), so both name the member template's
     /// parameters at the same depth. A friend whose levels outside its
-    /// head are not all known (a pattern in a class template) is not
-    /// compared.
+    /// head are not all known is still in a class template's pattern
+    /// (`enclosing` is `None`) and is not compared: each instantiation of
+    /// that class registers it again with every level known
+    /// (`instantiate_member_friend`), and that friend is compared, so a
+    /// friend of a member class template instantiated for two arguments
+    /// is compared in each (WP-1145).
     fn member_friend_constraints_match(
         &mut self,
         mf: &MemberFriend,

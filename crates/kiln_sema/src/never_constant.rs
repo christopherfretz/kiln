@@ -28,23 +28,38 @@
 //! on destroying any local variable or temporary fails quietly
 //! (`HandleDestruction`), and so does destroying one with a non-trivial
 //! destructor at any time (the call is refused): the walk stops at the
-//! end of such a block or full-expression ([`Walk`]). Conditions must be
-//! known; loops run while theirs is (a `break` ends one, a loop whose
-//! iteration repeats ends at clang's step limit, `-fconstexpr-steps`,
-//! with clang's note at the statement clang would be on); a `switch`
-//! runs its body from the selected label, searching nested statements as
-//! clang does; a `try` runs its try-block; a `goto` fails ("not valid").
-//! The walk stops at a `return`, an `[[assume]]`, a condition variable, a
+//! end of such a block or full-expression ([`Walk`]). A discarded
+//! expression that only names a parameter or local variable (`x;`,
+//! `(void)x;`, `s.m;`, `&x;`) is evaluated as an lvalue and notes no side
+//! effect (clang `EvaluateIgnoredValue`); one naming a reference
+//! parameter or `this` does. Conditions must be known; loops run while
+//! theirs is (a `break` ends one, a loop whose iteration repeats ends at
+//! clang's step limit, `-fconstexpr-steps`, with clang's note at the
+//! statement clang would be on); a `switch` runs its body from the
+//! selected label, searching nested statements as clang does, and fails
+//! when the label is inside a statement clang does not search (a
+//! `try`-block, a statement expression: clang `EvaluateSwitch`'s
+//! "statement expressions" note); a `try` runs its try-block; a `goto`
+//! fails ("not valid"). The walk stops at a `return`, an `[[assume]]`, a
 //! range-based `for`, a structured binding and an unknown value naming a
-//! local variable. It fails at the definition of a static or thread-local
-//! variable not usable in constant expressions and at the end of a
-//! non-`void` function's body; a constructor's body is walked only if
-//! each of its mem-initializers (default member initializers included)
-//! is known.
+//! local variable it does not track. It fails at the definition of a
+//! static or thread-local variable not usable in constant expressions and
+//! at the end of a non-`void` function's body; a constructor's body is
+//! walked only if each of its mem-initializers (default member
+//! initializers included) is known.
 //!
-//! The walk treats every local variable as unknown, where clang tracks
-//! their values, so it misses some functions clang reports; it never
-//! reports one clang accepts (WP-873).
+//! Local variables and condition variables have values, as in clang's
+//! call frame (WP-1150): until the first side effect (after which clang
+//! fails quietly to access any of them), a local variable of a type no
+//! evaluation can leave a pointer in (arithmetic, enumeration, and arrays
+//! and classes of those without a destructor) is a frame object
+//! ([`kiln_oven::Oven::frame_local`]), initialized and later read and
+//! modified by the Oven ([`Sema::eval_in_frame`]) with the parameters
+//! still unknown; a reference variable bound to one names it. Any other
+//! local variable is unknown, so the walk misses some functions clang
+//! reports; it never reports one clang accepts. A loop whose iteration
+//! leaves the frame as it found it repeats forever; any other runs
+//! iteration by iteration.
 //!
 //! Builtin calls follow clang's table, never the Oven, which folds more
 //! (the P0533 `<cmath>` builtins and their library twins) and notes some
@@ -59,12 +74,12 @@
 //! system header is not checked.
 
 use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind};
-use kiln_ast::expr::{BinaryOp, ExprKind};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::DiagId;
-use kiln_oven::{EvalFailure, FailKind, Note};
+use kiln_oven::{EvalFailure, FailKind, FrameEval, FrameObject, Note};
 use kiln_source::Loc;
 
 use crate::Sema;
@@ -152,6 +167,53 @@ enum Flow {
 /// (its own budget: clang's `-fconstexpr-steps` limit is far larger).
 const MAX_WORK: usize = 1 << 16;
 
+/// The most Oven evaluations in the walk's frame; past them the walk
+/// knows no local variable's value (as after a side effect).
+const MAX_FRAME_EVALS: u32 = 1 << 12;
+
+/// What a full-expression names ([`Sema::nc_names`]).
+#[derive(Clone, Copy, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent facts about one expression")]
+struct Names {
+    /// A local variable the walk knows the value of.
+    tracked: bool,
+    /// Any other local variable, other than a parameter.
+    untracked: bool,
+    /// A parameter.
+    param: bool,
+    /// A reference parameter.
+    reference: bool,
+    /// `this`.
+    this: bool,
+}
+
+impl Names {
+    /// Whether it names something whose value the walk does not know.
+    fn unknown(self) -> bool {
+        self.untracked || self.param || self.reference || self.this
+    }
+}
+
+/// A full-expression's outcome ([`Sema::nc_full`]).
+struct Full {
+    /// Its value.
+    v: Value,
+    /// What it names.
+    names: Names,
+    /// It was evaluated in the walk's frame: an unknown value is clang's
+    /// quiet failure.
+    framed: bool,
+    /// It initialized a tracked variable's object (no value, known).
+    done: bool,
+}
+
+impl Full {
+    /// Whether it came out known.
+    fn known(&self) -> bool {
+        self.done || matches!(self.v, Value::Known(_))
+    }
+}
+
 /// The locals a block scope holds (clang `BlockScopeRAII`: every
 /// local variable and lifetime-extended temporary registers a cleanup).
 #[derive(Clone, Copy, Default)]
@@ -160,6 +222,20 @@ struct Scope {
     locals: bool,
     /// One has a non-trivial destructor (whose call clang refuses).
     dtor: bool,
+    /// The length of [`Walk::frame`] when it opened: its locals follow.
+    mark: usize,
+}
+
+/// A local variable the walk knows the value of (WP-1150).
+#[derive(Clone, Copy)]
+struct Tracked {
+    /// The variable.
+    d: DeclId,
+    /// Its object (a reference: its referent's).
+    obj: FrameObject,
+    /// The object is the variable's own (freed with it), not a
+    /// referent's.
+    own: bool,
 }
 
 /// The state of clang's evaluator along the walk.
@@ -180,25 +256,68 @@ struct Walk {
     /// A statement expression ran, whose statements clang counts as
     /// steps and the walk does not: no step-limit failure is reported.
     no_steps: bool,
+    /// Local variables have values (the Oven is in, not the strict pass).
+    track: bool,
+    /// The local variables the walk knows the values of, in scope order.
+    tracked: Vec<Tracked>,
+    /// The frame `tracked` makes (each variable and its object).
+    frame: Vec<(DeclId, FrameObject)>,
+    /// Objects of variables whose scope ended, to free.
+    dead: Vec<FrameObject>,
+    /// Oven evaluations in the frame so far.
+    evals: u32,
 }
 
 impl Walk {
     /// Opens a block scope.
     fn open(&mut self) {
-        self.scopes.push(Scope::default());
+        self.scopes.push(Scope { mark: self.tracked.len(), ..Scope::default() });
+    }
+
+    /// Ends the tracked variables of the block scope `s` closes.
+    fn end_scope(&mut self, s: Scope) {
+        if s.mark >= self.tracked.len() {
+            return;
+        }
+        for t in self.tracked.drain(s.mark..) {
+            if t.own {
+                self.dead.push(t.obj);
+            }
+        }
+        self.frame.truncate(s.mark);
     }
 
     /// Closes the innermost block scope without destroying its locals
     /// (clang `ScopeRAII::destroy(false)`).
     fn discard(&mut self) {
-        self.scopes.pop();
+        let s = self.scopes.pop().unwrap_or_default();
+        self.end_scope(s);
     }
 
     /// Closes the innermost block scope, destroying its locals: whether
     /// that succeeds (clang `ScopeRAII::destroy`).
     fn destroy(&mut self) -> bool {
         let s = self.scopes.pop().unwrap_or_default();
+        self.end_scope(s);
         !(s.dtor || (self.side && s.locals))
+    }
+
+    /// Tracks local variable `d` (its object `obj`, its own if `own`).
+    fn track_var(&mut self, d: DeclId, obj: FrameObject, own: bool) {
+        self.tracked.push(Tracked { d, obj, own });
+        self.frame.push((d, obj));
+    }
+
+    /// The object of tracked variable `d`.
+    fn object_of(&self, d: DeclId) -> Option<FrameObject> {
+        self.tracked.iter().rev().find(|t| t.d == d).map(|t| t.obj)
+    }
+
+    /// Whether the values of local variables are known: they are tracked
+    /// and no side effect happened (from then on clang fails quietly to
+    /// access any, C++14 `findCompleteObject`).
+    fn knows_locals(&self) -> bool {
+        self.track && !self.side
     }
 
     /// Closes the innermost block scope after its statement ended with
@@ -386,8 +505,25 @@ impl Sema<'_, '_> {
             limit,
             trace: Vec::new(),
             no_steps: false,
+            track: !self.nc_strict_only && self.oven.is_some(),
+            tracked: Vec::new(),
+            frame: Vec::new(),
+            dead: Vec::new(),
+            evals: 0,
         };
-        match self.nc_stmt(&mut w, body, 0, None) {
+        let r = self.nc_stmt(&mut w, body, 0, None);
+        if w.track {
+            for t in std::mem::take(&mut w.tracked) {
+                if t.own {
+                    self.frame_free(t.obj);
+                }
+            }
+            for o in std::mem::take(&mut w.dead) {
+                self.frame_free(o);
+            }
+            self.frame_end();
+        }
+        match r {
             Flow::Fails(fail) => Some(fail),
             Flow::Next if self.nc_reaches_end_fails(f, body) => Some(EvalFailure {
                 kind: FailKind::NotConstant,
@@ -508,39 +644,207 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Records the full-expression `e`, whose value came out `v`, in
-    /// `w`: whether the walk can go on past it. An unknown value (clang
+    /// Records the full-expression `e`, whose outcome is `f`, in `w`:
+    /// whether the walk can go on past it. An unknown value (clang
     /// fails, notes a side effect and goes on) or a possible side effect
-    /// ([`Sema::nc_impure`], an unknown name) sets [`Walk::side`]; kiln
-    /// sets it in more cases than clang, which only makes the walk stop
-    /// sooner. An unknown value naming a local variable, whose value
-    /// clang knows (and may fail on), ends the walk.
-    fn nc_full_expr(&self, w: &mut Walk, e: ExprId, v: &Value) -> bool {
+    /// ([`Sema::nc_impure`], a name whose value the walk does not know)
+    /// sets [`Walk::side`]; kiln sets it in more cases than clang, which
+    /// only makes the walk stop sooner. An unknown value naming a local
+    /// variable, whose value clang knows (and may fail on), ends the
+    /// walk, unless the Oven found it unknown in the walk's frame.
+    fn nc_full_expr(&self, w: &mut Walk, e: ExprId, f: &Full) -> bool {
         if self.nc_has_stmt_expr(e, 0) {
             w.no_steps = true;
         }
-        let known = matches!(v, Value::Known(_));
-        if !known || self.names_unknown(e, 0) || self.nc_impure(e, 0) {
+        let known = f.known();
+        if !known || f.names.unknown() || self.nc_impure(e, 0) {
             w.side = true;
         }
-        known || !self.names_local(e, 0)
+        known || !(f.names.untracked || (f.names.tracked && !f.framed))
     }
 
-    /// Whether `e` names a local variable other than a parameter.
-    fn names_local(&self, e: ExprId, depth: u32) -> bool {
+    /// What `e` names (outside unevaluated operands it is the same): the
+    /// local variables `w` tracks, other local variables, parameters and
+    /// `this`.
+    fn nc_names(&self, w: &Walk, e: ExprId, depth: u32, out: &mut Names) {
         if depth > 256 {
-            return true;
+            out.untracked = true;
+            return;
         }
         let ex = &self.ast.exprs;
         match ex.get(e).kind() {
+            ExprKind::CXXThisExpr => out.this = true,
             ExprKind::DeclRefExpr => {
                 let d = ex.decl(e);
-                self.kind_of(d) != DeclKind::ParmVar && self.has_local_storage(d)
+                if !self.has_local_storage(d) {
+                    return;
+                }
+                if self.kind_of(d) == DeclKind::ParmVar {
+                    out.param = true;
+                    out.reference |= self.nc_is_reference(d);
+                } else if w.object_of(d).is_some() {
+                    out.tracked = true;
+                } else {
+                    out.untracked = true;
+                }
+            }
+            ExprKind::CXXDefaultInitExpr => {
+                let field = ex.default_init_field(e);
+                if let Some(i) = self.ast.decls.field(field).and_then(|fd| fd.init) {
+                    self.nc_names(w, i, depth + 1, out);
+                }
             }
             _ => {
-                ex.children(e, &self.ast.lists).into_iter().any(|c| self.names_local(c, depth + 1))
+                for c in ex.children(e, &self.ast.lists) {
+                    self.nc_names(w, c, depth + 1, out);
+                }
             }
         }
+    }
+
+    /// Whether `d` is declared with reference type.
+    fn nc_is_reference(&self, d: DeclId) -> bool {
+        self.ast.decls.get(d).ty().is_some_and(|t| self.ast.types.is_reference(t))
+    }
+
+    /// Whether the Oven can evaluate `e` in the walk's frame as clang
+    /// would: no statement expression (whose statements the walk counts),
+    /// no `throw` ([`Sema::nc_throw`]), no builtin call clang evaluates
+    /// its own way ([`BuiltinCalls`]).
+    fn nc_frame_ok(&mut self, e: ExprId) -> bool {
+        let calls = self.builtin_calls(e, 0);
+        !calls.strict && !calls.opaque && !self.nc_has_stmt_expr(e, 0) && !self.nc_has_throw(e, 0)
+    }
+
+    /// Whether `e` contains a `throw` (outside lambda bodies and
+    /// unevaluated operands).
+    fn nc_has_throw(&self, e: ExprId, depth: u32) -> bool {
+        let ex = &self.ast.exprs;
+        match ex.get(e).kind() {
+            ExprKind::CXXThrowExpr => true,
+            ExprKind::LambdaExpr
+            | ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::RequiresExpr => false,
+            _ if depth > 256 => true,
+            _ => {
+                ex.children(e, &self.ast.lists).into_iter().any(|c| self.nc_has_throw(c, depth + 1))
+            }
+        }
+    }
+
+    /// Full-expression `e` evaluated as `how`: in the walk's frame when
+    /// it names a local variable the walk knows the value of (WP-1150),
+    /// else with the parameters and locals unknown ([`Sema::nc_expr`]).
+    fn nc_full(&mut self, w: &mut Walk, e: ExprId, depth: u32, how: FrameEval) -> Full {
+        let mut names = Names::default();
+        self.nc_names(w, e, 0, &mut names);
+        if names.tracked && w.knows_locals() && self.nc_frame_ok(e) {
+            if w.evals < MAX_FRAME_EVALS {
+                w.evals += 1;
+                let at = self.begin_loc(e);
+                let v = match self.eval_in_frame(e, &w.frame, how, at) {
+                    Ok(v) => Value::Known(v),
+                    Err(f) => self.nc_frame_failure(f, names, e, depth),
+                };
+                return Full { v, names, framed: true, done: false };
+            }
+            w.side = true;
+        }
+        Full { v: self.nc_expr(e, depth + 1), names, framed: false, done: false }
+    }
+
+    /// The outcome of `e` (naming `names`) whose evaluation in the walk's
+    /// frame failed with `f`: the failure when clang reports it (with
+    /// every name known, it is clang's), else a failure the walk finds
+    /// with the unknown names unknown, else unknown.
+    fn nc_frame_failure(&mut self, f: EvalFailure, names: Names, e: ExprId, depth: u32) -> Value {
+        if Self::reportable(&f) && !names.unknown() {
+            return Value::Fails(f);
+        }
+        match self.nc_expr(e, depth + 1) {
+            p @ Value::Fails(_) => p,
+            _ => Value::Unknown,
+        }
+    }
+
+    /// Whether discarded expression `e` is evaluated by clang as an
+    /// lvalue that names a parameter or a local variable (not of
+    /// reference type), or one's non-static data member or address
+    /// (clang `EvaluateIgnoredValue` of a glvalue: `EvaluateLValue`
+    /// succeeds without reading it), so it notes no side effect.
+    fn nc_discard_ok(&self, e: ExprId, depth: u32) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let ex = &self.ast.exprs;
+        let n = ex.get(e);
+        let sub = |s: &Self| ex.children(e, &s.ast.lists).first().copied();
+        match n.kind() {
+            ExprKind::DeclRefExpr => {
+                let d = ex.decl(e);
+                matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar)
+                    && self.has_local_storage(d)
+                    && !self.nc_is_reference(d)
+            }
+            ExprKind::MemberExpr => {
+                let f = ex.decl(e);
+                !n.has(ExprFlags::ARROW)
+                    && self.kind_of(f) == DeclKind::Field
+                    && !self.nc_is_reference(f)
+                    && sub(self).is_some_and(|b| self.nc_discard_ok(b, depth + 1))
+            }
+            ExprKind::ParenExpr => sub(self).is_some_and(|b| self.nc_discard_ok(b, depth + 1)),
+            ExprKind::ImplicitCastExpr
+            | ExprKind::CStyleCastExpr
+            | ExprKind::CXXStaticCastExpr
+            | ExprKind::CXXFunctionalCastExpr
+                if matches!(ex.cast_kind(e), CastKind::ToVoid | CastKind::NoOp) =>
+            {
+                sub(self).is_some_and(|b| self.nc_discard_ok(b, depth + 1))
+            }
+            ExprKind::UnaryOperator if ex.unary_op(e) == UnaryOp::AddrOf => {
+                sub(self).is_some_and(|b| self.nc_discard_ok(b, depth + 1))
+            }
+            ExprKind::BinaryOperator if ex.binary_op(e) == BinaryOp::Comma => {
+                let [l, r] = ex.operands(e);
+                self.nc_discard_ok(l, depth + 1) && self.nc_discard_ok(r, depth + 1)
+            }
+            _ => false,
+        }
+    }
+
+    /// Discarded expression `e` past the parentheses, casts to `void` and
+    /// comma left operands clang evaluates as such
+    /// ([`Sema::nc_discard_ok`]).
+    fn nc_discard_strip(&self, mut e: ExprId) -> ExprId {
+        let ex = &self.ast.exprs;
+        for _ in 0..MAX_DEPTH {
+            match ex.get(e).kind() {
+                ExprKind::ParenExpr => {
+                    let Some(&c) = ex.children(e, &self.ast.lists).first() else { break };
+                    e = c;
+                }
+                ExprKind::ImplicitCastExpr
+                | ExprKind::CStyleCastExpr
+                | ExprKind::CXXStaticCastExpr
+                | ExprKind::CXXFunctionalCastExpr
+                    if ex.cast_kind(e) == CastKind::ToVoid =>
+                {
+                    let Some(&c) = ex.children(e, &self.ast.lists).first() else { break };
+                    e = c;
+                }
+                ExprKind::BinaryOperator if ex.binary_op(e) == BinaryOp::Comma => {
+                    let [l, r] = ex.operands(e);
+                    if !self.nc_discard_ok(l, 0) {
+                        break;
+                    }
+                    e = r;
+                }
+                _ => break,
+            }
+        }
+        e
     }
 
     /// The temporaries of `e` clang registers cleanups for, added to
@@ -602,7 +906,7 @@ impl Sema<'_, '_> {
             | ExprKind::CStyleCastExpr
             | ExprKind::CXXStaticCastExpr
             | ExprKind::CXXFunctionalCastExpr
-                if ex.cast_kind(e) == kiln_ast::expr::CastKind::ToVoid =>
+                if ex.cast_kind(e) == CastKind::ToVoid =>
             {
                 for c in ops {
                     self.nc_temps(c, true, in_ewc, out, depth + 1);
@@ -646,13 +950,19 @@ impl Sema<'_, '_> {
     /// The expression statement or `for` increment `e`, its value
     /// discarded (clang `EvaluateIgnoredValue` in a full-expression
     /// scope): it fails, or clang goes on unless destroying a temporary
-    /// fails ([`Walk::destroy`]).
+    /// fails ([`Walk::destroy`]). What clang evaluates as an lvalue
+    /// naming a local or parameter ([`Sema::nc_discard_ok`]) does
+    /// nothing.
     fn nc_ignored(&mut self, w: &mut Walk, e: ExprId, depth: u32) -> Flow {
-        let v = self.nc_expr(e, depth + 1);
-        if let Value::Fails(fail) = v {
+        let x = self.nc_discard_strip(e);
+        if self.nc_discard_ok(x, 0) {
+            return Flow::Next;
+        }
+        let f = self.nc_full(w, x, depth, FrameEval::Discard);
+        if let Value::Fails(fail) = f.v {
             return Flow::Fails(fail);
         }
-        if !self.nc_full_expr(w, e, &v) {
+        if !self.nc_full_expr(w, x, &f) {
             return Flow::Stop;
         }
         let mut t = Temps::default();
@@ -664,10 +974,10 @@ impl Sema<'_, '_> {
     /// full-expression scope): its value when known and its temporaries
     /// are destroyed, else how the walk ends.
     fn nc_cond(&mut self, w: &mut Walk, c: ExprId, depth: u32) -> Result<ConstValueId, Flow> {
-        let v = self.nc_expr(c, depth + 1);
+        let f = self.nc_full(w, c, depth, FrameEval::Value);
         // An unknown value stops the walk here anyway.
-        let _ = self.nc_full_expr(w, c, &v);
-        let v = match v {
+        let _ = self.nc_full_expr(w, c, &f);
+        let v = match f.v {
             Value::Fails(fail) => return Err(Flow::Fails(fail)),
             Value::Unknown => return Err(Flow::Stop),
             Value::Known(v) => v,
@@ -1167,10 +1477,10 @@ impl Sema<'_, '_> {
     }
 
     /// A loop iteration that began at `w.trace[start]`, with
-    /// [`Walk::side`] the same at its end as at its start, has finished
-    /// and the loop goes on: every later iteration executes the same
-    /// statements (the walk's values do not depend on the iteration), so
-    /// clang runs out of steps at a statement of that sequence.
+    /// [`Walk::side`] and the frame the same at its end as at its start
+    /// ([`Sema::nc_repeats`]), has finished and the loop goes on: every
+    /// later iteration executes the same statements, so clang runs out
+    /// of steps at a statement of that sequence.
     fn nc_cycle(&self, w: &Walk, start: usize) -> Flow {
         let seq = &w.trace[start..];
         if seq.is_empty() || self.nc_strict_only || w.no_steps {
@@ -1199,29 +1509,64 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// A `while` loop from its condition.
+    /// The state a loop iteration starts in: [`Walk::side`], the trace
+    /// length and the frame's objects ([`Sema::frame_snapshot`]).
+    fn nc_iter_start(&self, w: &Walk) -> (bool, usize, Vec<u8>) {
+        (w.side, w.trace.len(), self.frame_snapshot(&w.frame))
+    }
+
+    /// Whether an iteration that started in `start`
+    /// ([`Sema::nc_iter_start`]) left the walk as it found it: the loop
+    /// repeats it forever.
+    fn nc_repeats(&self, w: &Walk, start: &(bool, usize, Vec<u8>)) -> bool {
+        start.0 == w.side && start.2 == self.frame_snapshot(&w.frame)
+    }
+
+    /// A `while` loop from its condition: each iteration's condition
+    /// variable lives in a block scope of its own (clang `EvaluateStmt`
+    /// `WhileStmt`).
     fn nc_while(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let d = *self.ast.stmts.loop_data(s);
-        let (None, Some(cond), Some(body)) = (d.cond_var, d.cond, d.body) else {
-            return Flow::Stop;
-        };
+        let (Some(cond), Some(body)) = (d.cond, d.body) else { return Flow::Stop };
         loop {
-            let (side, start) = (w.side, w.trace.len());
+            let start = self.nc_iter_start(w);
+            w.open();
+            if let Some(cv) = d.cond_var {
+                match self.nc_var_def(w, cv, depth, true) {
+                    Flow::Next => {}
+                    r => {
+                        w.discard();
+                        return r;
+                    }
+                }
+            }
             let v = match self.nc_cond(w, cond, depth) {
                 Ok(v) => v,
-                Err(r) => return r,
+                Err(r) => {
+                    w.discard();
+                    return r;
+                }
             };
             match self.const_truth(v) {
                 Some(true) => {}
-                Some(false) => return Flow::Next,
-                None => return Flow::Stop,
+                Some(false) => {
+                    w.discard();
+                    return Flow::Next;
+                }
+                None => {
+                    w.discard();
+                    return Flow::Stop;
+                }
             }
             match self.nc_loop_body(w, body, depth, None) {
                 Flow::Continue => {}
-                r => return r,
+                r => return w.close(r),
             }
-            if side == w.side {
-                return self.nc_cycle(w, start);
+            if !w.destroy() {
+                return Flow::Stop;
+            }
+            if self.nc_repeats(w, &start) {
+                return self.nc_cycle(w, start.1);
             }
         }
     }
@@ -1231,7 +1576,7 @@ impl Sema<'_, '_> {
         let d = *self.ast.stmts.loop_data(s);
         let (Some(cond), Some(body)) = (d.cond, d.body) else { return Flow::Stop };
         loop {
-            let (side, start, whole) = (w.side, w.trace.len(), case.is_none());
+            let (start, whole) = (self.nc_iter_start(w), case.is_none());
             match self.nc_loop_body(w, body, depth, case) {
                 Flow::Continue => {}
                 r => return r,
@@ -1246,17 +1591,18 @@ impl Sema<'_, '_> {
                 Some(false) => return Flow::Next,
                 None => return Flow::Stop,
             }
-            if whole && side == w.side {
-                return self.nc_cycle(w, start);
+            if whole && self.nc_repeats(w, &start) {
+                return self.nc_cycle(w, start.1);
             }
         }
     }
 
-    /// A `for` loop (its init statement and condition run in a block
-    /// scope of their own).
+    /// A `for` loop: its init statement in a block scope of its own, and
+    /// each iteration's condition variable, condition, body and increment
+    /// in another (clang `EvaluateStmt` `ForStmt`).
     fn nc_for(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let d = *self.ast.stmts.loop_data(s);
-        let (None, Some(body)) = (d.cond_var, d.body) else { return Flow::Stop };
+        let Some(body) = d.body else { return Flow::Stop };
         w.open();
         if let Some(init) = d.init {
             match self.nc_stmt(w, init, depth + 1, None) {
@@ -1264,32 +1610,55 @@ impl Sema<'_, '_> {
                 r => return w.close(r),
             }
         }
+        // Ends the iteration's scope and the loop's quietly.
+        let quit = |w: &mut Walk, r: Flow| {
+            w.discard();
+            w.discard();
+            r
+        };
         loop {
-            let (side, start) = (w.side, w.trace.len());
+            let start = self.nc_iter_start(w);
+            w.open();
+            if let Some(cv) = d.cond_var {
+                match self.nc_var_def(w, cv, depth, true) {
+                    Flow::Next => {}
+                    r => return quit(w, r),
+                }
+            }
             if let Some(cond) = d.cond {
                 let v = match self.nc_cond(w, cond, depth) {
                     Ok(v) => v,
-                    Err(r) => return w.close(r),
+                    Err(r) => return quit(w, r),
                 };
                 match self.const_truth(v) {
                     Some(true) => {}
-                    Some(false) => return w.close(Flow::Next),
-                    None => return w.close(Flow::Stop),
+                    Some(false) => {
+                        w.discard();
+                        return w.close(Flow::Next);
+                    }
+                    None => return quit(w, Flow::Stop),
                 }
             }
             match self.nc_loop_body(w, body, depth, None) {
                 Flow::Continue => {}
-                r => return w.close(r),
+                r => {
+                    let r = w.close(r);
+                    return w.close(r);
+                }
             }
             if let Some(inc) = d.inc {
                 match self.nc_ignored(w, inc, depth) {
                     Flow::Next => {}
-                    r => return w.close(r),
+                    r => return quit(w, r),
                 }
             }
-            if side == w.side {
+            if !w.destroy() {
                 w.discard();
-                return self.nc_cycle(w, start);
+                return Flow::Stop;
+            }
+            if self.nc_repeats(w, &start) {
+                w.discard();
+                return self.nc_cycle(w, start.1);
             }
         }
     }
@@ -1337,10 +1706,16 @@ impl Sema<'_, '_> {
             return Flow::Stop;
         }
         let d = *st.if_data(s);
-        let (None, Some(cond)) = (d.cond_var, d.cond) else { return Flow::Stop };
+        let Some(cond) = d.cond else { return Flow::Stop };
         w.open();
         if let Some(init) = d.init {
             match self.nc_stmt(w, init, depth + 1, None) {
+                Flow::Next => {}
+                r => return w.close(r),
+            }
+        }
+        if let Some(cv) = d.cond_var {
+            match self.nc_var_def(w, cv, depth, true) {
                 Flow::Next => {}
                 r => return w.close(r),
             }
@@ -1389,12 +1764,15 @@ impl Sema<'_, '_> {
     /// condition selects.
     fn nc_switch(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let d = *self.ast.stmts.switch_data(s);
-        if d.cond_var.is_some() {
-            return Flow::Stop;
-        }
         w.open();
         if let Some(init) = d.init {
             match self.nc_stmt(w, init, depth + 1, None) {
+                Flow::Next => {}
+                r => return w.close(r),
+            }
+        }
+        if let Some(cv) = d.cond_var {
+            match self.nc_var_def(w, cv, depth, true) {
                 Flow::Next => {}
                 r => return w.close(r),
             }
@@ -1429,9 +1807,18 @@ impl Sema<'_, '_> {
         let r = self.nc_stmt(w, d.body, depth + 1, Some(found));
         match w.close(r) {
             Flow::Break => Flow::Next,
-            // clang fails ("statement expression not supported") at a
-            // label it cannot reach; kiln does not mirror that note.
-            Flow::CaseNotFound => Flow::Stop,
+            // A label inside a statement the search does not enter (a
+            // `try`-block, a statement expression): clang
+            // `EvaluateSwitch` fails with this note at the label.
+            Flow::CaseNotFound if self.nc_strict_only => Flow::Stop,
+            Flow::CaseNotFound => Flow::Fails(EvalFailure {
+                kind: FailKind::NotConstant,
+                notes: vec![Note::new(
+                    self.stmt_begin_loc(found),
+                    "this use of statement expressions is not supported in a constant \
+                     expression",
+                )],
+            }),
             r => r,
         }
     }
@@ -1444,42 +1831,126 @@ impl Sema<'_, '_> {
         self.fold_int(e)
     }
 
-    /// A declaration statement: each variable is defined in turn (a
-    /// static or thread-local one is checked; a local one is registered
-    /// in the block scope, then initialized as a full-expression).
+    /// A declaration statement: each variable is defined in turn
+    /// ([`Sema::nc_var_def`]).
     fn nc_decl_stmt(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let decls: Vec<DeclId> =
             self.ast.lists.iter::<DeclId>(self.ast.stmts.decl_stmt_decls(s)).collect();
         for d in decls {
-            match self.nc_local_decl(w, d) {
-                Some(Flow::Next) => {}
-                Some(r) => return r,
-                None => continue,
-            }
-            let Some(init) = self.ast.decls.var(d).and_then(|v| v.init) else { continue };
-            let v = self.nc_expr(init, depth + 1);
-            if let Value::Fails(fail) = v {
-                return Flow::Fails(fail);
-            }
-            if !self.nc_full_expr(w, init, &v) {
-                return Flow::Stop;
-            }
-            let mut t = Temps::default();
-            self.nc_temps(init, false, false, &mut t, 0);
-            if t.extended {
-                w.local(t.extended_dtor);
-            }
-            if !Self::nc_temps_destroyed(w, t) {
-                return Flow::Stop;
+            match self.nc_var_def(w, d, depth, false) {
+                Flow::Next => {}
+                r => return r,
             }
         }
         Flow::Next
     }
 
+    /// The definition of variable `d` (`cond`: a condition variable): a
+    /// static or thread-local one is checked; a local one is registered
+    /// in the block scope, then initialized as a full-expression. One
+    /// the walk can track gets its object in the frame
+    /// ([`Sema::frame_local`]), a reference bound to a tracked variable
+    /// names its object. clang notes a side effect and goes on past an
+    /// initializer that fails quietly, except a condition variable's
+    /// (`EvaluateCond` fails).
+    fn nc_var_def(&mut self, w: &mut Walk, d: DeclId, depth: u32, cond: bool) -> Flow {
+        match self.nc_local_decl(w, d) {
+            Some(Flow::Next) => {}
+            Some(r) => return r,
+            None => return Flow::Next,
+        }
+        let init = self.ast.decls.var(d).and_then(|v| v.init);
+        let mut t = Temps::default();
+        let mut names = Names::default();
+        if let Some(i) = init {
+            self.nc_temps(i, false, false, &mut t, 0);
+            self.nc_names(w, i, 0, &mut names);
+        }
+        if w.track
+            && let Some(i) = init
+            && self.nc_is_reference(d)
+            && let Some(o) = self.nc_alias(w, i)
+        {
+            w.track_var(d, o, false);
+            return Flow::Next;
+        }
+        if w.knows_locals()
+            && !t.extended
+            && w.evals < MAX_FRAME_EVALS
+            && init.is_none_or(|i| self.nc_frame_ok(i))
+        {
+            w.evals += 1;
+            let at = init.map_or_else(|| self.ast.decls.get(d).loc(), |i| self.begin_loc(i));
+            let (v, done) = match self.frame_local(d, init, &w.frame, at) {
+                Ok(Some(o)) => {
+                    w.track_var(d, o, true);
+                    (Some(Value::Unknown), true)
+                }
+                Ok(None) => (None, false),
+                Err(f) => (
+                    Some(match init {
+                        Some(i) => self.nc_frame_failure(f, names, i, depth),
+                        None => Value::Unknown,
+                    }),
+                    false,
+                ),
+            };
+            if let Some(v) = v {
+                let f = Full { v, names, framed: true, done };
+                return self.nc_init_done(w, init, f, t, cond);
+            }
+        }
+        let Some(i) = init else { return Flow::Next };
+        let f = self.nc_full(w, i, depth, FrameEval::Discard);
+        self.nc_init_done(w, init, f, t, cond)
+    }
+
+    /// The end of variable definition `init` with outcome `f` and
+    /// temporaries `t` ([`Sema::nc_var_def`]).
+    fn nc_init_done(
+        &mut self,
+        w: &mut Walk,
+        init: Option<ExprId>,
+        f: Full,
+        t: Temps,
+        cond: bool,
+    ) -> Flow {
+        let Some(i) = init else { return Flow::Next };
+        let known = f.known();
+        if let Value::Fails(fail) = f.v {
+            return Flow::Fails(fail);
+        }
+        if !self.nc_full_expr(w, i, &f) || (cond && !known) {
+            return Flow::Stop;
+        }
+        if t.extended {
+            w.local(t.extended_dtor);
+        }
+        if Self::nc_temps_destroyed(w, t) { Flow::Next } else { Flow::Stop }
+    }
+
+    /// The object of the tracked variable reference initializer `init`
+    /// names (`int &r = k;`).
+    fn nc_alias(&self, w: &Walk, init: ExprId) -> Option<FrameObject> {
+        let ex = &self.ast.exprs;
+        let mut e = init;
+        for _ in 0..MAX_DEPTH {
+            match ex.get(e).kind() {
+                ExprKind::ParenExpr => e = *ex.children(e, &self.ast.lists).first()?,
+                ExprKind::ImplicitCastExpr if ex.cast_kind(e) == CastKind::NoOp => {
+                    e = *ex.children(e, &self.ast.lists).first()?;
+                }
+                ExprKind::DeclRefExpr => return w.object_of(ex.decl(e)),
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// A declaration statement searched for a `case` label: clang checks
     /// each static variable and starts the lifetime of each local one
     /// without an initializer.
-    fn nc_decl_case(&mut self, w: &mut Walk, s: StmtId) -> Flow {
+    fn nc_decl_case(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let decls: Vec<DeclId> =
             self.ast.lists.iter::<DeclId>(self.ast.stmts.decl_stmt_decls(s)).collect();
         for d in decls {
@@ -1490,9 +1961,9 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
-            match self.nc_local_decl(w, d) {
-                Some(Flow::Next) | None => {}
-                Some(r) => return r,
+            match self.nc_var_def(w, d, depth, false) {
+                Flow::Next => {}
+                r => return r,
             }
         }
         Flow::CaseNotFound
@@ -1527,6 +1998,26 @@ impl Sema<'_, '_> {
         Some(Flow::Next)
     }
 
+    /// A `return` statement `s`: its value is evaluated (a scalar for
+    /// its value, anything else for its side effects) and the walk stops.
+    fn nc_return(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
+        let Some(v) = self.ast.stmts.return_value(s) else { return Flow::Stop };
+        let n = self.ast.exprs.get(v);
+        let types = &self.ast.types;
+        let how = if !n.value_category().is_glvalue()
+            && (types.is_arithmetic(n.ty())
+                || matches!(types.canonical_view(n.ty()), TypeView::Enum(_)))
+        {
+            FrameEval::Value
+        } else {
+            FrameEval::Discard
+        };
+        match self.nc_full(w, v, depth, how).v {
+            Value::Fails(fail) => Flow::Fails(fail),
+            _ => Flow::Stop,
+        }
+    }
+
     /// Statement `s` executed with the parameters, locals and `this`
     /// unknown (clang `EvaluateStmt`), searching for `case` label
     /// `case` when it is set.
@@ -1539,6 +2030,9 @@ impl Sema<'_, '_> {
         }
         w.steps += 1;
         w.trace.push(s);
+        while let Some(o) = w.dead.pop() {
+            self.frame_free(o);
+        }
         let kind = self.ast.stmts.get(s).kind();
         let mut case = case;
         if let Some(c) = case {
@@ -1562,7 +2056,7 @@ impl Sema<'_, '_> {
                     };
                 }
                 StmtKind::ForStmt => return self.nc_for_case(w, s, depth, c),
-                StmtKind::DeclStmt => return self.nc_decl_case(w, s),
+                StmtKind::DeclStmt => return self.nc_decl_case(w, s, depth),
                 _ => return Flow::CaseNotFound,
             }
         }
@@ -1606,10 +2100,7 @@ impl Sema<'_, '_> {
                 }
             }
             StmtKind::ExprStmt => self.nc_ignored(w, st.expr_stmt_expr(s), depth),
-            StmtKind::ReturnStmt => match st.return_value(s).map(|v| self.nc_expr(v, depth + 1)) {
-                Some(Value::Fails(fail)) => Flow::Fails(fail),
-                _ => Flow::Stop,
-            },
+            StmtKind::ReturnStmt => self.nc_return(w, s, depth),
             StmtKind::DeclStmt => self.nc_decl_stmt(w, s, depth),
             StmtKind::IfStmt => self.nc_if(w, s, depth),
             StmtKind::WhileStmt => self.nc_while(w, s, depth),
