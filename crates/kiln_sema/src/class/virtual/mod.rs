@@ -912,10 +912,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // An implicit or defaulted one; not an instantiation's written
+        // one, substituted only now ([temp.inst]/14).
         let computed = matches!(
             self.ast.decls.get(m).ty().map(|t| self.written_exc_spec(t)),
             Some(ExcSpec::Deferred(_))
-        );
+        ) && !self.uninstantiated_exc.contains_key(&self.ast.first(m));
         let os: Vec<DeclId> = overridden(&self.ast, m).collect();
         for o in os {
             let oloc = self.ast.decls.get(o).loc();

@@ -306,7 +306,7 @@ impl Substituter<'_, '_, '_> {
         let framed = dependent
             && self.sema.inst.stack.is_sfinae()
             && self.sema.push_inst_frame(FrameKind::ExceptionSpec, call_op, call_op, loc);
-        let exc = self.exc_spec(&p, loc);
+        let exc = self.exc_spec(&p, call_op, loc);
         if framed {
             self.sema.pop_inst_frame();
         }
