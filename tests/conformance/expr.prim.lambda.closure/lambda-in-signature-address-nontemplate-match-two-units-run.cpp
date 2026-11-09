@@ -3,15 +3,14 @@
 // template's specialization from the target type even when a
 // non-template matches it ([over.over]/5 then prefers the non-template),
 // and forming `fd<long>` numbers its return type's lambda in the pattern
-// (spec/abi.md §8.15): the later `fd<double>`'s closure is `UlvE0_`. Kiln
-// skips the templates once a non-template matches, so it numbers
-// `fd<double>` `UlvE_` and Inputs/lambda-in-signature-address-nontemplate-
-// match-defs.cpp, which calls clang's name, does not link.
+// (spec/abi.md §8.15, spec/sema-lambda.md §3.5): the later `fd<double>`'s
+// closure is `UlvE0_`. Inputs/lambda-in-signature-address-nontemplate-
+// match-defs.cpp calls clang's name, so the program links only if kiln
+// deduces the templates too (WP-1143).
 //@ std: c++20
 //@ expect: run
 //@ args: %{test_dir}/Inputs/lambda-in-signature-address-nontemplate-match-defs.cpp
 //@ stdout: 2 1
-//@ xfail(kiln): WP-1086 follow-up, overload/address.rs does not deduce the function templates for an address once a non-template matches the target, so their specializations take no lambda numbers
 #include <cstdio>
 template <class T> auto fd(T) -> decltype([] { return 1; }) { return {}; }
 int fd(long) { return 1; }
