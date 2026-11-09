@@ -1253,6 +1253,54 @@ importer calls two of the functions.
   `/usr/lib/llvm-19/share/libc++/v1/std.cppm`. clang the same, without
   the kiln flag.
 
+**Part 2a, stage S2: bodies (WP-1064).** Same method (load ~22, so
+compare columns, not absolute times). Four workloads: `import std;` as
+above; the corpus's largest module (`module.interface/Inputs/img-bodies.cppm`,
+65 image records); a constexpr module (a sieve plus an FNV hash,
+imported by `static_assert(work(20000))`, also included textually); and a
+synthetic interface inside S2's coverage: 200 exported namespaces of 10
+`constexpr`/`inline` functions with loop bodies, a scoped enumeration and
+initialized variables (13,201 lines, 8800 image records), whose importer
+calls two of the functions in a `static_assert` and at run time.
+
+| run | `import std;` (libc++ 19) | largest corpus module | constexpr module | S2-eligible module |
+|---|---|---|---|---|
+| kiln `--precompile`, image off | 1.18 s, 99.1 MiB, 9,129,636 B | 0.06 s, 9.8 MiB, 25,872 B | 0.05 s, 9.8 MiB, 23,309 B | 0.17 s, 18.3 MiB, 671,566 B |
+| kiln `--precompile`, image on | 1.28 s, 97.6 MiB, 9,129,636 B (no image) | 0.05 s, 11.1 MiB, 41,403 B | 0.04 s, 10.7 MiB, 26,929 B | 0.21 s, 40.8 MiB, 4,595,063 B |
+| kiln import, image off, `-fsyntax-only` | 1.26 s, 96.0 MiB | 0.06 s, 10.2 MiB | 0.07 s, 10.3 MiB | 0.16 s, 16.0 MiB |
+| kiln import, image on, `-fsyntax-only` | 1.28 s, 96.7 MiB (replay) | 0.05 s, 11.3 MiB | **0.04 s, 11.0 MiB** | **0.09 s**, 25.8 MiB |
+| kiln import, image off, `-c` | 1.64 s, 95.4 MiB | 0.07 s, 61.9 MiB | 0.09 s, 60.6 MiB | 0.20 s, 61.3 MiB |
+| kiln import, image on, `-c` | 1.63 s, 96.5 MiB (replay) | 0.07 s, 61.8 MiB | 0.08 s, 60.6 MiB | **0.13 s**, 61.4 MiB |
+| kiln textual, `-fsyntax-only` | | | 0.06 s, 11.1 MiB | |
+| clang 19 `--precompile` | 1.62 s, 261.6 MiB, 31,179,192 B | 0.01 s, 85.8 MiB, 32,708 B | 0.02 s, 84.2 MiB, 23,524 B | 0.13 s, 91.2 MiB, 1,811,184 B |
+| clang 19 import, `-fsyntax-only` | 0.21 s, 142.9 MiB | 0.01 s, 84.5 MiB | 0.33 s, 84.2 MiB | 0.01 s, 84.0 MiB |
+| clang 19 import, `-c` | 0.38 s, 160.4 MiB | 0.02 s, 93.3 MiB | 0.34 s, 90.4 MiB | 0.02 s, 92.0 MiB |
+| clang 19 textual, `-fsyntax-only` | | | 0.36 s, 84.8 MiB | |
+
+- `std` still falls back (its global module fragment, S5), so "on" is
+  the replay and matches "off" within noise; the rest of what it needs
+  is listed in "What `import std;` still needs after S2".
+- An imported `constexpr` function evaluates no slower from the image
+  than textually included: 0.04 s against 0.06 s textual and 0.07 s for
+  the replay (clang 19: 0.33 s and 0.36 s with
+  `-fconstexpr-steps=100000000`).
+- The S2-eligible module's import drops from 0.16 s to 0.09 s
+  (`-fsyntax-only`) and from 0.20 s to 0.13 s (`-c`), but the file grows
+  6.8x (671,566 B to 4,595,063 B, about 0.5 KB per record and 2 KB per
+  small body) and the importer's peak RSS rises from 16.0 MiB to
+  25.8 MiB (precompile 18.3 to 40.8 MiB): S2's fixed-width `u32` records
+  and the eager decode. The compact encoding and building straight from
+  the bytes are a follow-up under WP-1064.
+- Use of the image was verified by blanking the capsule's source text
+  (and recomputing the checksum): the importer still compiles, links and
+  runs. Two pitfalls hid it at first: a namespace named like its module
+  (`import m;` interns `m`, so the gate in "ODR" always replays: a
+  follow-up), and pre-interned short names (`c`). The corpus inputs
+  therefore use namespaces `ib` and `ic`.
+- Commands as for Part 2a; the textual runs compile the module's body
+  as a header; clang adds `-fconstexpr-steps=100000000` for the
+  constexpr module.
+
 #### Part 2
 
 Next, in order:
@@ -1282,20 +1330,18 @@ hidden `-fkiln-bmi-image` (spec/driver.md), **off by default**: when it
 is off at precompile no section is written, and when it is off at import
 a section that is present is ignored.
 
-**Arenas serialised.** Declarations (the purview's, in id order), the
-types they name, and the per-context name tables. Expressions and
-statements are not serialised in 2a. Every node kind whose meaning to an
-importer depends on a body or an initializer falls back: inline,
-`constexpr` and `consteval` functions, deduced return types, `const` and
-`constexpr` variables, and templates. A non-inline function's body is
-not needed by an importer, because the module's object file defines it
-(§7, deviation 7). The writer drops it, and the reader gives the function
-an empty body `{}` at the original brace positions, so "is defined" is as
-it was; codegen never emits it, since its owner is an imported named
-unit. A variable with an initializer falls back in 2a, even a non-`const`
-one: the writer stays conservative until expression records (S2) can
-carry the initializer. A variable without one (`export int counter;`) is
-carried as a definition.
+**Arenas serialised.** Declarations (the purview's, in id order, plus
+the locals of carried bodies), the types they name, the per-context name
+tables, and since S2 (WP-1064, "Bodies" below) the expressions,
+statements, constants and string literals of every carried body and
+initializer. The body of an inline, `constexpr` or `consteval` function,
+every variable initializer and every default argument are carried as
+records, because an importer evaluates and inlines them. A non-inline
+function's body is not needed by an importer, because the module's
+object file defines it (§7, deviation 7). The writer drops it, and the
+reader gives the function an empty body `{}` at the original brace
+positions, so "is defined" is as it was; codegen never emits it, since
+its owner is an imported named unit. Templates still fall back (S4).
 
 **Coverage (2a).** A unit qualifies when all of these hold:
 
@@ -1307,13 +1353,18 @@ carried as a definition.
   of the following:
   - a named, non-inline namespace;
   - an `export` declaration;
-  - a namespace-scope function that is not a template, not inline,
-    `constexpr` or `consteval`, not deleted or defaulted, not `static`
-    and not `main`, with an identifier name and C++ linkage, no default
-    arguments, no attributes, and no undeduced return type;
-  - a namespace-scope variable that is not `const`, `constexpr`,
-    `inline`, `thread_local` or `static`, and is not `extern` with an
-    initializer;
+  - a namespace-scope function that is not a template, not deleted or
+    defaulted, not a coroutine and has no contract assertions, and is
+    not `main`, with an identifier name and C++ linkage, no attributes,
+    and a compound body (no function-try-block). Since S2 it may be
+    inline, `constexpr` or `consteval` (its body is carried, "Bodies"),
+    have a deduced return type, and have default arguments;
+  - a namespace-scope variable that is not a template or
+    `thread_local`. Since S2 it may be `const`, `constexpr`,
+    `constinit` or `inline`, and have an initializer (carried as
+    records, with its evaluated value when that is a scalar);
+  - a `static_assert` declaration, which is checked when the module is
+    compiled and not carried (since S2);
   - an enumeration (scoped or unscoped, fixed or not) or an enumerator;
   - a `typedef` or alias declaration that is not a template;
 - no declaration is invalid or implicit, or carries attributes;
@@ -1329,12 +1380,10 @@ carried as a definition.
 The first offending node's reason is the `-v` note's (see "Fallback").
 Before the per-kind checks, a declaration kind 2a never carries names
 its family: "a class", "a template", "a using-declaration,
-using-directive or namespace alias", "a linkage specification", "a
-static_assert declaration", or "a declaration the image does not carry
-yet" for the rest. A variable with an initializer is not carried in 2a
-(its value would need expression records), so the coverage list above is
-exact only with that addition: every carried variable has no
-initializer.
+using-directive or namespace alias", "a linkage specification", or "a
+declaration the image does not carry yet" for the rest. Inside a carried
+body, the expression, statement and local-declaration kinds are those of
+"Bodies" below; any other node falls back with its own reason.
 
 **Remapping per id space.** This is the "Identity" design, restricted to
 what 2a carries:
@@ -1356,10 +1405,16 @@ what 2a carries:
   Diagnostics, `-g` and `__builtin_source_location` therefore point at
   the module source. Only that one file is mapped, and the other capsule
   files are not loaded at all.
-- `ExprId` / `StmtId`: none in 2a. Each empty body is a new
-  `CompoundStmt`.
+- `ExprId` / `StmtId` (S2): one index space per arena, in post order,
+  so an operand or sub-statement is always a lower index. The reader
+  appends each record through `AstBuilder` and maps index i to the id
+  it gets. A dropped non-inline body is a new empty `CompoundStmt`.
 - `ConstValueId`: an enumerator's value, as (signed, 128-bit integer)
-  re-interned with the enumerator's type.
+  re-interned with the enumerator's type; since S2 also a constant
+  table (integer, `bool`, floating, null pointer) for literals, constant
+  expressions and evaluated variables, re-interned through the constant
+  pool.
+- `StringLitId` (S2): a string table of (encoding, bytes), re-interned.
 
 **ODR merging.** A 2a image has no global module fragment, so it has no
 GMF entity to merge with other imports (WP-460's merge-by-entity case
@@ -1372,7 +1427,9 @@ earlier declaration's name was a token, or a builtin's name, so it is
 interned. A fresh name cannot meet an earlier declaration, and later
 declarations and imports find the image's declarations through ordinary
 lookup, as they would find the replay's. Any overlap replays, so the
-semantics are part A's by construction. Real merging needs WP-460
+semantics are part A's by construction. The names of a carried body's
+locals (S2) are not gated: they are in the parameter-name table, since
+no lookup outside the body can find them. Real merging needs WP-460
 semantics without a second parse: an ODR key per GMF entity, and a
 structural hash for definitions. It is follow-up S5.
 
@@ -1391,9 +1448,9 @@ lazy":
 Laziness needs a materialisation hook with `&mut` access on the lookup
 path: a pending-name table that the parser drains before classifying a
 token, or a lookup miss that queues the name and retries. That is
-follow-up S-lazy. A 2a unit carries no bodies, so its eager load costs
-one record per declaration and the replay's lexing, parsing and checking
-are gone (measured in "Measurements": 0.11 s to 0.03 s for 4800
+follow-up S-lazy. Since S2 the eager load also builds every carried
+body; it still costs one record per node, and the replay's lexing,
+parsing and checking are gone (measured in "Measurements": 0.11 s to 0.03 s for 4800
 records).
 
 **Templates as patterns** (follow-up S4). A template's record will carry
@@ -1404,7 +1461,7 @@ interface are merged by (template, remapped arguments) and keep their
 carried constants (WP-1046).
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 1`, rejected if different). The file
+format word (`IMAGE_VERSION = 2` since S2, rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
 not part of the fingerprint: a file with an image can be used by an
@@ -1416,10 +1473,20 @@ bytes left before anything is allocated):
 ```
 image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            names:u32 str*            declared names (the pp's gate)
-           pnames:u32 str*           parameter names (not gated)
+           pnames:u32 str*           parameter and local names (not gated)
            types:u32 type*
            decls:u32 offset:u32*decls blob_len:u32 decl*
            lookup:u32 (ctx:u32 name:u32 decl:u32)*   sorted
+           consts:u32 const*         S2 bodies (empty arenas if none)
+           strings:u32 (enc:u8 len:u32 byte*)*
+           exprs:u32 offset:u32*exprs blob_len:u32 expr*
+           stmts:u32 offset:u32*stmts blob_len:u32 stmt*
+const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
+         | 1 qref value:u8                   bool
+         | 2 qref kind:u8 bits:u128          floating
+         | 3 qref kind:u8                    null pointer / member
+expr    := kind:u8 bits:u8 aux:u8 cold:u8 ty:qref loc:u32 n:u32 word*n
+stmt    := kind:u8 aux:u16 loc:u32 n:u32 word*n
 str     := len:u32 utf8*
 qref    := type:u32 quals:u8         0 = none, 1..=90 builtin, else 91+i
 type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
@@ -1430,7 +1497,8 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                        info:u16, exc:u8),
                                      9 enum(decl:u32),
                                      10 typedef(decl:u32),
-                                     11 qarray(cv:u8, qref)
+                                     11 qarray(cv:u8, qref),
+                                     12 sugar(k:u8)
 decl    := kind:u8 flags:u8 owner:u8 name:u32 ctx:u32 lexical:u32
            loc:u32 prev:u32 payload
 ```
@@ -1448,16 +1516,104 @@ carries no nested-name-specifier. The exception byte is 0 (none), 1
 The owner byte holds bit 0 = in the purview and bit 1 = exported (the
 `ModuleTable` owner point of the record). The payloads are:
 
-- function: type, `FnSpec` bits (u8), the parameters (n, then per
+- function: type, `FnSpec` bits (u32), the parameters (n, then per
   parameter: name index into `pnames` or none, location, type, the
-  parameter flags u16 and the storage flags u8), then the body: 0, or 1
-  and the offsets of its braces;
-- variable: type and `VarSpec` bits;
+  parameter flags u16, the storage flags u8 and the default argument, an
+  expression index or `u32::MAX`), then the body: 0 (none), 1 and the
+  offsets of its braces (a dropped non-inline body), or 2 and a
+  statement index (a carried body, S2);
+- variable: type, `VarSpec` bits (u32), the initializer (an expression
+  index or `u32::MAX`) and the evaluation state (`u32::MAX` not
+  evaluated, `u32::MAX - 1` not a constant, else a constant index);
+- label (S2, local only): nothing;
+- lifetime-extended temporary (S2, local only): type, the extending
+  variable (an earlier local variable record of the same function) and
+  the temporary's index;
 - enumeration: scoped, the fixed underlying and promotion types (or 0),
   and when complete the computed ones;
 - enumerator: its type and the value (16 bytes, little-endian `i128`);
 - typedef and alias: the underlying type;
 - namespace and export: nothing.
+
+**Bodies (S2, WP-1064).** The four body sections follow the lookup
+table. Every expression and statement record is the AST node's header
+plus its two payload slots, written as the fields a per-kind schema
+names (`expr_shape`, `stmt_shape` in `kiln_sema::bmi_image::body`). The
+writer, the decoder's validator and the reader walk the same schema, so
+there is no second encoding. A field is one of: a raw word, a bool, an
+expression or statement index (or an optional one, `u32::MAX` for
+none), a declaration reference of a given class, a constant or string
+index, a location, a type (`qref`, two words), a counted list of
+expressions, statements, declarations or types, a cast's base path (0
+none, 1 empty), a nested-name-specifier (a count, then components:
+0 `::`, 1 namespace and record, 2 type and `qref` and bool), and a
+statement's attribute list. A declaration reference is a record index,
+`0x8000_0000 | i` for the image's i-th parameter (counting the
+parameters of the function records in order), or `u32::MAX - 1` for the
+translation unit. The expression record's `cold` byte says which cold
+annotations follow the slots: 1 end location, 2 written type, 4
+operator location, 8 begin location.
+
+The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
+record's kind byte is the index):
+
+- expressions: integer, floating, character, string, `bool`,
+  `nullptr` and `__null` literals; declaration references; predefined
+  names (`__func__`); unary, binary, compound-assignment and conditional
+  operators; `__builtin_choose_expr`; subscripts; parentheses; calls and
+  operator calls; implicit, C-style, functional, `static_cast`,
+  `const_cast` and `reinterpret_cast` casts; initializer lists, implicit
+  value initialization and `T()`; `sizeof`/`alignof`, type traits and
+  `noexcept`; constant expressions; materialized temporaries,
+  expressions with cleanups and opaque values; GNU statement
+  expressions; `throw`; default arguments; `&&label`; array init loops
+  and their index;
+- statements: compound, declaration, expression, null, `if`, `switch`,
+  `case`, `default`, `break`, `continue`, `while`, `do`, `for`,
+  range-`for`, `return`, label, `goto`, and attributed statements whose
+  attributes take no arguments (`[[fallthrough]]`, `[[likely]]`,
+  `[[unlikely]]`, in C++11 or GNU syntax);
+- local declarations: variables (including `static` locals and
+  range-`for` variables), labels and lifetime-extended temporaries
+  (`const int& r = 4;`). A local is a declaration record whose context
+  is a function record; it is not in the lookup table.
+
+Records are in post order, so every operand and sub-statement has a
+lower index. The one edge from an expression to a statement, a GNU
+statement expression, is checked to point below the expression, so a
+decoded image is acyclic. Decoding validates each record against its
+schema (kind in range, value-category bits, `aux`, cold mask, every
+index and reference of the right class) before anything is built. Each
+type that a builtin spells through sugar (`__size_t`,
+`__signed_size_t`, `__ptrdiff_t`, the types of `sizeof` and pointer
+differences) is type tag 12, which the reader maps to its own sugar
+node.
+
+The reader builds the records through `AstBuilder` in order, after the
+declarations they refer to: parameters and locals first, then the
+expressions and statements, then it attaches each function's body, each
+parameter's default argument and each variable's initializer. A carried
+constant value is restored as the variable's evaluated state (scalar
+values only; an aggregate is recomputed by the importer on first use).
+The importer's constant evaluator and codegen then see the same tree as
+the replay's, so `static_assert`, constant evaluation and inlining
+behave identically.
+
+Falls back (each with its `-v` reason):
+
+- any expression on a class (member access, `this`, construction,
+  temporaries with destructors, `new`/`delete`, `typeid`,
+  `dynamic_cast`): S3;
+- lambdas, which declare a local class ("a local declaration the image
+  does not carry"): S3;
+- template expressions, requires-expressions and concepts: S4;
+- `try` blocks and function-try-blocks, coroutines, expansion
+  statements, `asm`, contract assertions, computed `goto`, and
+  attributes with arguments (`[[assume(...)]]`): follow-ups under
+  WP-1064 in the backlog;
+- a lifetime-extended temporary with a constant value (bound to a
+  `static` or `constexpr` reference) or at namespace scope;
+- any location in a macro expansion or another file: S7.
 
 **The reader.** When the module's `UnitBegin` event carries an image, the
 parser calls `act_on_unit_begin` and then the image load. The load
@@ -1481,7 +1637,9 @@ module replays, and that includes `std` (it has a global module fragment,
 classes and templates). The follow-ups, in priority order:
 
 1. S2: expression and statement records, and inline, `constexpr` and
-   `consteval` functions with lazily loaded bodies;
+   `consteval` functions. **Done (WP-1064)**, see "Bodies"; bodies are
+   loaded eagerly, but every record stays addressable by index for
+   S-lazy (WP-1069);
 2. S3: classes (fields, methods, bases, special members, vtables);
 3. S4: templates as patterns;
 4. S5: global module fragments with ODR merging (replacing the name
@@ -1489,6 +1647,29 @@ classes and templates). The follow-ups, in priority order:
 5. S6: imports, re-exports and partitions;
 6. S-lazy: the lazy lookup hook (see above);
 7. S7: locations in other files and in macro expansions.
+
+**What `import std;` still needs after S2.** libc++'s `std.cppm` falls
+back on its first node, the global module fragment (S5): every header is
+included there, and the purview is only `export namespace std { using
+std::...; }`. With S2 in, the constructs between `std` and the image
+are, by stage:
+
+- S3: classes (all of the containers, `string`, iterators, allocators,
+  `format`), and in bodies member access, `this`, constructors,
+  destructors, temporaries and `new`/`delete`, and lambdas (a local
+  class);
+- S4: templates, concepts and requires-expressions, which are most of
+  the headers;
+- S5: the global module fragment itself, and entity merging with other
+  imports;
+- S6: the purview's using-declarations ("a using-declaration,
+  using-directive or namespace alias") and re-exports;
+- S7: locations in the headers (other files) and in macro expansions
+  (`_LIBCPP_*`);
+- follow-ups under WP-1064: attributes with arguments
+  (`__attribute__((__visibility__(...), __abi_tag__(...)))` through
+  `_LIBCPP_HIDE_FROM_ABI`, `[[__assume__]]`), `try`/`catch` (in
+  `<ios>`, `<locale>`, `<future>`), and `asm`.
 
 ### 11.12 `import std;` module files: the cache and CMake (WP-984)
 
@@ -1531,13 +1712,18 @@ length-prefixed, so no two configurations collide by concatenation.
 `-O2` builds have separate entries. `-g`, `-fPIC` and warnings do not
 change it.
 
-**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line, the
-module file's name, and one `<size> <mtime> <path>` line for every file
-the build read. These are the dependency list of an `-MD` with system
-headers, plus the source. A hit needs the stamp valid, every file
-unchanged, and the module file's first bytes kiln's magic. So a libc++
-header edited in place, or a damaged module file, is a miss. This is
-clang's module-cache validation (size and mtime, not content).
+**Stamp.** Beside `<name>.pcm`, `<name>.stamp` holds a magic line
+(`kiln-module-cache-stamp 2`), then `<size> <checksum> <path>` for the
+module file, where `<checksum>` is its trailing §11.3 checksum in hex,
+then one `<size> <mtime> <path>` line for every file the build read.
+These are the dependency list of an `-MD` with system headers, plus the
+source. A hit needs the stamp valid, the module file's size and checksum
+the stamp's, every other file unchanged, and the module file's first
+bytes kiln's magic. So a libc++ header edited in place, or a damaged
+module file, is a miss. This is clang's module-cache validation (size
+and mtime, not content) for the inputs; the module file itself is named
+by its content, because racing compiles each rename their own copy of
+it into place (see "Concurrency").
 
 **Miss.** The driver runs `--precompile` of the libc++ source in-process
 on its own thread, with the importer's stack size and stack guard. The
@@ -1554,13 +1740,59 @@ build go to a buffer. A build with errors removes its empty entry and
 falls back to part A, which reports the module's errors in the
 importer's context, as before WP-984.
 
-**Concurrency.** The module file goes to a unique temporary file
-(`.tmp.<pid>.<thread>.<nanos>`) and is renamed into place, then the
-stamp the same way. A reader reads the stamp first and the module file
-second, so it never sees a torn file. Compiles that miss together all
-build, all rename, and all succeed. The builds are deterministic, so
-any of the files is right. No lock is taken, so a stuck compile cannot
-block others.
+**Concurrency** (WP-1074). Parallel builds (`make -j`, ninja) start
+many compiles that miss the same entry at once. The rules:
+
+- **A hit takes no lock.** It reads the stamp, then the module file.
+  Each is replaced only by a rename of a complete temporary file, so
+  neither is ever torn, and the stamp names the module file by its
+  content. A module file renamed into place after the stamp was read
+  either has the same bytes (the writer is deterministic: every compile
+  of one key writes the same file) or fails the stamp and is a miss.
+- **A miss takes the entry lock.** `<name>.lock` in the entry, an
+  advisory exclusive lock (`flock`, `File::try_lock`, polled with a
+  back-off of 1 to 50 ms). The kernel releases it when its holder exits,
+  a SIGKILL included. Holding it, the compile checks the entry again: a
+  compile that waited finds what the holder published and uses it. So
+  one compile per entry builds and the others wait, instead of every one
+  of them building.
+- **The holder clears and publishes.** Only a holder writes the
+  temporary files of `<name>` (`<name>.pcm.tmp.*`, written by
+  `--precompile`, and `<name>.stamp.tmp.*`), so any it finds were left by
+  a killed holder, and it removes them. It then builds into
+  `<name>.pcm` (renamed into place) and writes the stamp (renamed into
+  place) last. A failed build removes the entry directory when nothing
+  else is in it.
+- **The lock file does not outlive its holder.** The holder removes
+  `<name>.lock` while it still holds the lock, then releases it. A
+  waiter that then gets the lock checks that the file it locked is still
+  the one at the path (device and inode); if not, it opens the path
+  again. A lock file left by a killed holder is removed by the next
+  compile that takes it, or by the next hit when no one holds it. A
+  settled entry holds exactly `<name>.pcm` and `<name>.stamp`.
+- **Waiting is bounded.** A waiter gives up after 120 seconds
+  (`KILN_MODULE_CACHE_WAIT_MS` replaces the limit, in milliseconds; for
+  kiln's tests) and builds the module from its source (part A), leaving
+  the entry alone. So a stuck compile delays the others, never fails
+  them. An error taking the lock (a file system without locks, an
+  unwritable entry) also falls back to part A.
+- **Where locks do not exclude.** Some file systems accept `flock` but
+  do not enforce it between processes (a macOS directory mounted into a
+  Linux container). There every racer builds, renames and writes its
+  stamp, as before WP-1074. The content-named stamp keeps that correct:
+  whichever module file and stamp are renamed last, they match. A
+  temporary file removed by another racer's clean-up only fails that
+  racer's build, which falls back to part A.
+- `std.compat` is built under its own lock and imports `std` through
+  the cache, taking `std`'s lock inside it. Locks are always taken in
+  that order and held only for one lookup, so two compiles cannot
+  deadlock.
+
+Before WP-1074 there was no lock and the stamp named the module file by
+its modification time. The module file and the stamp renamed into place
+last could then come from different racers, and the entry left behind
+was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
+about 1 in 12 of 16).
 
 **Fallback.** An unwritable root (a read-only directory, a path through
 a regular file), a failed build, or a failed stamp write is never an
@@ -1675,7 +1907,12 @@ interface or `stdapp`'s source never rebuilds the std module.
   - `std.compat` filling both entries;
   - invalidation by a header edit, a damaged module file, a new
     `std.cppm`, `-D` and `-fno-exceptions`;
-  - four racing misses;
+  - four racing misses, and (WP-1074) sixteen that build once, racers
+    with one killed (SIGKILL) at three points, a miss waiting on a held
+    entry lock and clearing a killed holder's temporary files, a stuck
+    holder's waiter falling back to part A, and a hit removing a stale
+    lock file (the lock tests skip where `flock` does not exclude, after
+    trying the system's temporary directory);
   - an unwritable root;
   - location and switches;
   - `-print-file-name=libc++.modules.json`.

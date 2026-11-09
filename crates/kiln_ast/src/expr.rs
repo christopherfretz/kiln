@@ -993,6 +993,27 @@ impl ExprNode {
         let bits = vk as u8 | ((ok as u8) << 2) | flags.0;
         ExprNode { kind, bits, deps, aux, ty, loc, a, b }
     }
+    /// A header from its stored fields, for the module image's loader
+    /// (`kiln_sema` `bmi_body`, spec/modules.md §11.11 "Part 2a"), which
+    /// validated them; `bits` is [`ExprNode::raw_bits`].
+    #[allow(clippy::too_many_arguments, reason = "one argument per header field")]
+    pub const fn from_raw(
+        kind: ExprKind,
+        bits: u8,
+        deps: ExprDeps,
+        aux: u8,
+        ty: QualType,
+        loc: Loc,
+        a: u32,
+        b: u32,
+    ) -> Self {
+        ExprNode { kind, bits, deps, aux, ty, loc, a, b }
+    }
+    /// The packed value category (bits 0-1), object kind (bits 2-3) and
+    /// per-kind flags (bits 4-7), as stored (the module image).
+    pub const fn raw_bits(&self) -> u8 {
+        self.bits
+    }
     /// The kind.
     pub const fn kind(&self) -> ExprKind {
         self.kind
@@ -1547,22 +1568,27 @@ impl ExprArena {
         &self.nodes[e.index() as usize]
     }
 
-    pub(crate) fn push(&mut self, n: ExprNode) -> ExprId {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push(&mut self, n: ExprNode) -> ExprId {
         let id = ExprId::new(self.nodes.len() as u32);
         self.nodes.push(n);
         id
     }
 
-    pub(crate) fn push_cond_arms(&mut self, then: ExprId, els: ExprId) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_cond_arms(&mut self, then: ExprId, els: ExprId) -> u32 {
         push_side(&mut self.cond_arms, [then, els])
     }
-    pub(crate) fn push_declref_extra(&mut self, x: DeclRefExtra) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_declref_extra(&mut self, x: DeclRefExtra) -> u32 {
         push_side(&mut self.declref_extras, x)
     }
-    pub(crate) fn push_compound_assign(&mut self, x: CompoundAssignExtra) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_compound_assign(&mut self, x: CompoundAssignExtra) -> u32 {
         push_side(&mut self.compound_assigns, x)
     }
-    pub(crate) fn push_init_list(&mut self, x: InitListExtra) -> u32 {
+    /// Appends a record (the builder; the module image's loader).
+    pub fn push_init_list(&mut self, x: InitListExtra) -> u32 {
         push_side(&mut self.init_lists, x)
     }
     pub(crate) fn push_new_extra(&mut self, x: NewExtra) -> u32 {

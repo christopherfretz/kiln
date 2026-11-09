@@ -109,6 +109,7 @@ InvalidStaticAssertMessage = "invalid-static-assert-message" [];
 KilnAnalysisSkipped = "kiln-analysis-skipped" [];
 LiteralConversion = "literal-conversion" [];
 LiteralRange = "literal-range" [];
+Main = "main" [];
 MainAttachedToNamedModule = "main-attached-to-named-module" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
 MicrosoftExceptionSpec = "microsoft-exception-spec" [];
