@@ -1966,6 +1966,66 @@ last could then come from different racers, and the entry left behind
 was a miss, rebuilt by the next compile (1 in 100 races of 4 compiles,
 about 1 in 12 of 16).
 
+**Pruning** (WP-1050). The key covers kiln's identity, so every rebuilt
+kiln, like every other configuration, starts new entries of about 9 MiB
+each. The cache is pruned as clang prunes its implicit module cache
+(`maybePruneImpl` in clang/lib/Serialization/ModuleCache.cpp, clang 22;
+`pruneModuleCache` in clang/lib/Frontend/CompilerInstance.cpp, clang
+19; the rules are the same in both):
+
+- **When.** After a compile's first lookup in the cache, hit or miss, it
+  looks at `<root>/modules.timestamp` (clang's name). Missing: it is
+  created and nothing more happens, so the first pruning comes one
+  interval after the cache's first use. Modified no longer ago than
+  `-fmodules-prune-interval=` (default 604800 s, 7 days): nothing.
+  Otherwise its modification time is set to now and the cache is pruned.
+  An interval or a prune-after of 0 turns pruning off. The values are
+  clang's `unsigned` seconds: decimal, `0x` hex or `0` octal, up to
+  4294967295, else clang's "invalid integral value" error.
+- **One pruner per interval.** clang rewrites the timestamp and lets two
+  compiles that noticed it at once both prune ("a benign race"). kiln
+  takes an advisory lock on the timestamp file, never waiting, checks
+  its age again under the lock, and only then updates it. A timestamp
+  that cannot be updated (a cache another user owns) means no pruning,
+  not pruning on every compile.
+- **What.** Only directories of the root named as keys (32 lowercase hex
+  digits), found with `lstat`: a link is never followed, and anything
+  else in the root (clang's own cache, if the root is shared) is left
+  alone. The compile's own entry is skipped. clang walks every
+  subdirectory and removes `.pcm`, `.timestamp` and `modules.idx` files
+  one by one; kiln removes whole entries.
+- **Last use.** An entry is unused when the newest modification time of
+  its files (lock files aside) is older than `-fmodules-prune-after=`
+  (default 2678400 s, 31 days). clang reads each module file's access
+  time instead. kiln does not, because `noatime` mounts never update it,
+  `relatime` ones only once a day, and anything that reads the files (a
+  backup, an indexer) would keep them forever. Instead a hit sets its
+  stamp's modification time to now when it is older than a day (or than
+  half the prune-after, when that is shorter), so a used entry writes at
+  most once a day. The module file is never touched: importers'
+  dependency files list it, and a newer time would rebuild them.
+- **Safety.** The pruner takes the entry locks (`std.lock`,
+  `std.compat.lock`, and the lock of any other module the entry has
+  files for) without waiting. A lock another compile holds, because it
+  builds or waits to, keeps the entry, as does a file of a module it did
+  not lock. Holding the locks, it renames each `<name>.stamp` to
+  `<name>.stamp.pruning` and checks the last use again. A hit notes its
+  use through a handle it opened on the stamp and then checks that the
+  file is still at the stamp's path. So a hit either touched the stamp
+  before that second check, which keeps the entry (the stamps are
+  renamed back), or finds its stamp gone and is a miss, which waits for
+  the locks and rebuilds. Then the pruner removes every file of the
+  entry (links as links; it never descends into a directory), releases
+  the locks, which removes their files, and removes the directory. A
+  miss that creates its lock file there once the locks are released
+  keeps the directory; one whose directory was removed between its
+  `mkdir` and its lock makes the directory again. A holder of an entry lock removes a
+  `<name>.stamp.pruning` a killed pruner left.
+- **Failure is silent.** A removal that fails is said under `-v` (`cannot
+  remove '<path>': <reason>`) and otherwise ignored; so is a cache that
+  cannot be read. `-v` also says `pruning '<root>'` and `removed unused
+  '<entry>'`.
+
 **Dependency output** (WP-1051). The hook returns the module file and
 the files its build read, as the stamp lists them (on a miss, the list
 the new stamp is written from). `kiln_pp` reports the read through
@@ -2098,6 +2158,12 @@ interface or `stdapp`'s source never rebuilds the std module.
     lock file (the lock tests skip where `flock` does not exclude, after
     trying the system's temporary directory);
   - an unwritable root;
+  - (WP-1050) pruning: the timestamp created on first use, no scan
+    within the interval, an unused entry removed, a young one, a locked
+    one, a non-entry directory, a link's target and the compile's own
+    entry kept, a hit refreshing its stamp and not its module file, and
+    the flags (0 turns pruning off, short values, an invalid value,
+    `--help`);
   - location and switches;
   - `-print-file-name=libc++.modules.json`.
 - `scripts/oss/selftest.sh` `cmake_modules`: `CXX_MODULE_STD` through
