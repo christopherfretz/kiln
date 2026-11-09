@@ -106,8 +106,7 @@ impl Oven {
         }
         let ty = self.types.intern(bridge, q);
         let size = self.types.size(ty);
-        if size == 0 || !self.frame_trackable(ty, 0) || self.frame.bytes + size > MAX_FRAME_BYTES
-        {
+        if size == 0 || !self.frame_trackable(ty, 0) || self.frame.bytes + size > MAX_FRAME_BYTES {
             return Ok(None);
         }
         let p = self.mem.alloc_static(ty, size, 0, Origin::Var(d));
@@ -275,4 +274,3 @@ impl Oven {
         }
     }
 }
-

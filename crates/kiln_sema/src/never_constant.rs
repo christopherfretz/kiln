@@ -727,10 +727,9 @@ impl Sema<'_, '_> {
             | ExprKind::CXXNoexceptExpr
             | ExprKind::RequiresExpr => false,
             _ if depth > 256 => true,
-            _ => ex
-                .children(e, &self.ast.lists)
-                .into_iter()
-                .any(|c| self.nc_has_throw(c, depth + 1)),
+            _ => {
+                ex.children(e, &self.ast.lists).into_iter().any(|c| self.nc_has_throw(c, depth + 1))
+            }
         }
     }
 
