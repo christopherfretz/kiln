@@ -68,7 +68,6 @@ impl Expect {
         })
     }
 
-    #[cfg(test)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CompileOk => "compile-ok",

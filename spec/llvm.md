@@ -59,6 +59,12 @@ packed), function types (with varargs), `label`, `metadata`, `token`.
 - Identified struct definitions print in LLVM's `TypeFinder` order (first
   reference from globals, then functions, then metadata), named ones first
   as `%struct.S = type { i32, [4 x i8] }`, unnamed ones as `%0 = type ...`.
+  After those come the types that only the global and function metadata
+  attachments reach (a class-type `DITemplateValueParameter` value in a
+  `DISubprogram`), which LLVM's `TypeFinder` does not walk: LLVM's own
+  text of such a module does not parse back (WP-910,
+  spec/landed/codegen/WP-910.md). Any module whose LLVM text parses
+  prints the same.
 
 ### 2.2 Module header
 `Module::new(source_filename)` or `Module::with_target(name, spec)`;
