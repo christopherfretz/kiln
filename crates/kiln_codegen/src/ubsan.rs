@@ -372,7 +372,13 @@ impl Cg<'_> {
         };
         let (kind, info) =
             if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
-        let nkey = (ast.types.canonical(q), key, name.clone().into_boxed_str());
+        // clang keys the descriptor by the `QualType`: a substituted
+        // template parameter is its own (uniqued) sugar node, so `T` in
+        // `get<ns::H<>>` does not share the descriptor of a written
+        // `ns::H<>` that prints the same (WP-1158).
+        let subst = matches!(ast.types.view(q.ty()), TypeView::SubstTemplateTypeParm { .. });
+        let nkey =
+            (ast.types.canonical(q), key | (u8::from(subst) << 7), name.clone().into_boxed_str());
         if let Some(&g) = self.ub_type_names.get(&nkey) {
             self.ub_types.insert((q, key), g);
             return Ok(Value::global(g));

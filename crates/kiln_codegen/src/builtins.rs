@@ -2065,7 +2065,8 @@ impl Cg<'_> {
     /// getMaxAlignment()`, e.g. libc++ `atomic_ref`'s `_Aligned_Tp*`).
     pub(crate) fn natural_pointee_align(&mut self, pq: QualType) -> u64 {
         let Some(p) = self.ast.types.pointee(pq) else { return 1 };
-        if let Some(a) = self.ast.types.pointee_sugared(pq).and_then(|s| self.typedef_align_attr(s)) {
+        if let Some(a) = self.ast.types.pointee_sugared(pq).and_then(|s| self.typedef_align_attr(s))
+        {
             return a;
         }
         self.pointee_layout(p).1
