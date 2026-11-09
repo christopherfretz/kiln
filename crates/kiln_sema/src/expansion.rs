@@ -90,6 +90,34 @@ enum ExpansionSource {
 /// declaration statement (an iterating form's `iter`), and the element.
 type Element = (Option<StmtId>, ExprId);
 
+/// How a `constexpr` expansion statement's range (the iterating form's
+/// `__range`, the destructuring form's `auto&& [__u...]`) is declared
+/// ([`Sema::expansion_fallback`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RangeBind {
+    /// `static constexpr auto&&`: a reference to an object with static
+    /// storage duration or to a static lifetime-extended temporary.
+    Static,
+    /// `constexpr auto&&` with automatic storage duration, as
+    /// [stmt.expand]/5 declares it: a reference to an automatic object
+    /// of the same function, constexpr-referenceable by P2686R5
+    /// ([expr.const.init]/2; C++26). The iterating form's `__begin`,
+    /// `__end` and `__iter` are then automatic `constexpr` variables
+    /// too: one with static storage duration could not point into it
+    /// ([expr.const.init]/4).
+    Automatic,
+    /// `static constexpr auto`: a copy of the range (a prvalue, or the
+    /// last resort for a glvalue that is neither, such as an enclosing
+    /// function's local named in a lambda).
+    Copy,
+}
+
+impl RangeBind {
+    fn by_ref(self) -> bool {
+        self != Self::Copy
+    }
+}
+
 impl Sema<'_, '_> {
     /// `template for ( init-statement_opt for-range-declaration :
     /// expansion-initializer )` ([stmt.expand]/1): opens the synthetic
@@ -182,16 +210,16 @@ impl Sema<'_, '_> {
         sub.expand_expansion(h.init, src, &data, h.depth, h.loc).ok()
     }
 
-    /// An implicit `static constexpr` variable of an iterating expansion
-    /// statement ([stmt.expand]/5.2), not found by lookup.
-    fn expansion_var(&mut self, name: &str, ty: QualType, loc: Loc) -> DeclId {
+    /// An implicit `constexpr` variable of an iterating expansion
+    /// statement ([stmt.expand]/5.2), not found by lookup: `static`
+    /// unless `automatic` ([`RangeBind::Automatic`]).
+    fn expansion_var(&mut self, name: &str, ty: QualType, automatic: bool, loc: Loc) -> DeclId {
         let sym = self.intern(name);
         let mut h = DeclHead::new(self.ctx, DeclName::ident(sym), loc);
         h.flags = h.flags.with(DeclFlags::IMPLICIT);
-        let spec = VarSpec::new()
-            .with_storage(VarStorage::Static)
-            .with_constexpr(true)
-            .with_init_style(InitStyle::C);
+        let storage = if automatic { VarStorage::None } else { VarStorage::Static };
+        let spec =
+            VarSpec::new().with_storage(storage).with_constexpr(true).with_init_style(InitStyle::C);
         self.builder().var(h, ty, spec, None)
     }
 
@@ -202,44 +230,60 @@ impl Sema<'_, '_> {
             && !self.ast.decls.get(v).has(DeclFlags::INVALID)
     }
 
-    /// The `static constexpr` variable over `e`, built by `f(by_ref)`: a
-    /// prvalue initializes an object (`auto`, which is const, so its
-    /// value is usable in constant expressions; a non-const lifetime-
-    /// extended temporary is not). A glvalue is bound by reference
-    /// (`auto&&`); when that fails, a copy (`auto`) is tried, its
-    /// diagnostics replacing the first attempt's only if it succeeds.
-    /// The copy stands in for P2686's constexpr references to automatic
-    /// variables (spec/sema.md "Expansion statements").
+    /// The `constexpr` range variable over `e`, built by `f(bind)`
+    /// (spec/sema.md "Expansion statements"): a prvalue initializes a
+    /// `static` object ([`RangeBind::Copy`]: `auto`, which is const, so
+    /// its value is usable in constant expressions; a non-const
+    /// lifetime-extended temporary is not). A glvalue is bound by
+    /// reference: `static` first ([`RangeBind::Static`]), then, at
+    /// C++26 and when the for-range-declaration is `constexpr`
+    /// (`constexpr_decl`), automatic ([`RangeBind::Automatic`], P2686R5:
+    /// the `constexpr` reference [stmt.expand]/5 declares then, to a
+    /// local of this function). When neither binds, a copy is the last
+    /// resort, its diagnostics replacing the first attempt's only if it
+    /// succeeds.
     fn expansion_fallback<T>(
         &mut self,
         e: ExprId,
-        f: impl Fn(&mut Self, bool) -> Option<T>,
+        constexpr_decl: bool,
+        f: impl Fn(&mut Self, RangeBind) -> Option<T>,
     ) -> Option<T> {
-        let attempt = |s: &mut Self, by_ref: bool| {
-            let (r, stash) = s.capturing(|s| f(s, by_ref));
+        let attempt = |s: &mut Self, bind: RangeBind| {
+            let (r, stash) = s.capturing(|s| f(s, bind));
             let r = r.filter(|_| !s.stash_has_error(&stash));
             (r, stash)
         };
         let glvalue = self.ast.exprs.get(e).value_category().is_glvalue();
-        let (r, stash) = attempt(self, glvalue);
+        let first = if glvalue { RangeBind::Static } else { RangeBind::Copy };
+        let (r, stash) = attempt(self, first);
         if r.is_some() || !glvalue {
             self.release(stash, Vec::new());
             return r;
         }
-        let (r2, stash2) = attempt(self, false);
+        if constexpr_decl && self.std >= kiln_lex::Std::Cxx26 {
+            let (r2, stash2) = attempt(self, RangeBind::Automatic);
+            if r2.is_some() {
+                self.release(stash2, Vec::new());
+                return r2;
+            }
+        }
+        let (r2, stash2) = attempt(self, RangeBind::Copy);
         self.release(if r2.is_some() { stash2 } else { stash }, Vec::new());
         r2
     }
 
     /// The iterating form ([stmt.expand]/5.2): the prelude
-    /// `static constexpr auto&& range = init;` (or `auto`, see
-    /// [`Sema::expansion_fallback`]) and
+    /// `static constexpr auto&& range = init;` (or automatic, or `auto`,
+    /// see [`Sema::expansion_fallback`]) and
     /// `static constexpr auto begin = begin-expr, end = end-expr;`, then
     /// per element `static constexpr auto iter = begin + i;` and the
-    /// element `*iter`. The prelude and the elements.
+    /// element `*iter` (none `static` when the range is automatic, which
+    /// needs a `constexpr` for-range-declaration, `constexpr_decl`). The
+    /// prelude and the elements.
     fn expansion_iterating(
         &mut self,
         e: ExprId,
+        constexpr_decl: bool,
         colon: Loc,
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
         let range_loc = self.begin_loc(e);
@@ -247,13 +291,16 @@ impl Sema<'_, '_> {
         let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
         let rref = self.ast.types.rvalue_ref_to(auto);
         let cauto = self.ast.types.qualify(auto, Quals::CONST);
-        let range = self.expansion_fallback(e, |s, by_ref| {
-            let v = s.expansion_var("__range", if by_ref { rref } else { auto }, range_loc);
+        let (range, bind) = self.expansion_fallback(e, constexpr_decl, |s, bind| {
+            let ty = if bind.by_ref() { rref } else { auto };
+            let automatic = bind == RangeBind::Automatic;
+            let v = s.expansion_var("__range", ty, automatic, range_loc);
             s.init_expansion_var(v, e, range_loc, DiagId::sema_for_range_deduction_failure)
-                .then_some(v)
+                .then_some((v, bind))
         })?;
-        let begin = self.expansion_var("__begin", cauto, colon);
-        let end = self.expansion_var("__end", cauto, colon);
+        let automatic = bind == RangeBind::Automatic;
+        let begin = self.expansion_var("__begin", cauto, automatic, colon);
+        let end = self.expansion_var("__end", cauto, automatic, colon);
         let br = self.build_decl_ref(range, colon);
         let er = self.build_decl_ref(range, colon);
         if !self.expansion_begin_end(br, er, range_ty, (begin, end), colon) {
@@ -268,7 +315,7 @@ impl Sema<'_, '_> {
         ];
         let fast = self.expansion_size_difference(begin, end, colon);
         if fast.is_none()
-            && let Some(one) = self.expansion_count_elements(begin, end, colon)
+            && let Some(one) = self.expansion_count_elements(begin, end, automatic, colon)
         {
             return match one {
                 OnePass::Elements(elems) => Some((prelude, elems)),
@@ -281,7 +328,7 @@ impl Sema<'_, '_> {
         };
         let mut elems = Vec::new();
         for i in 0..n {
-            let iter = self.expansion_iter(begin, i, colon)?;
+            let iter = self.expansion_iter(begin, i, automatic, colon)?;
             let ds = self.act_on_decl_stmt(&[iter], colon);
             elems.push((Some(ds), self.expansion_deref(iter, colon)?));
         }
@@ -289,14 +336,21 @@ impl Sema<'_, '_> {
     }
 
     /// Element `i`'s `static constexpr auto __iter = begin + i;`
-    /// ([stmt.expand]/5.2), initialized; `None` after an error.
-    fn expansion_iter(&mut self, begin: DeclId, i: u64, colon: Loc) -> Option<DeclId> {
+    /// ([stmt.expand]/5.2; not `static` when `automatic`), initialized;
+    /// `None` after an error.
+    fn expansion_iter(
+        &mut self,
+        begin: DeclId,
+        i: u64,
+        automatic: bool,
+        colon: Loc,
+    ) -> Option<DeclId> {
         let cauto = {
             let auto = self.ast.types.auto_type(AutoKeyword::Auto, None, None, None, false);
             self.ast.types.qualify(auto, Quals::CONST)
         };
         let pd = QualType::unqual(self.target.ptrdiff_t);
-        let iter = self.expansion_var("__iter", cauto, colon);
+        let iter = self.expansion_var("__iter", cauto, automatic, colon);
         let b = self.build_decl_ref(begin, colon);
         let lit = self.builder().int_literal(pd, i, Radix::Decimal, colon);
         let add = self.act_on_binary(BinaryOp::Add, b, lit, colon);
@@ -331,6 +385,7 @@ impl Sema<'_, '_> {
         &mut self,
         begin: DeclId,
         end: DeclId,
+        automatic: bool,
         colon: Loc,
     ) -> Option<OnePass> {
         let (r, stash) = self.capturing(|s| {
@@ -339,7 +394,7 @@ impl Sema<'_, '_> {
             }
             let mut elems = Vec::new();
             for i in 0..MAX_ITERATING {
-                let iter = s.expansion_iter(begin, i, colon)?;
+                let iter = s.expansion_iter(begin, i, automatic, colon)?;
                 if i > 0 && !s.expansion_more(iter, end, colon)? {
                     return Some(OnePass::Elements(elems));
                 }
@@ -500,30 +555,33 @@ impl Sema<'_, '_> {
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
         if constexpr {
             // Each attempt's bindings stay out of the enclosing scope.
-            return self.expansion_fallback(e, |s, by_ref| {
+            return self.expansion_fallback(e, true, |s, bind| {
                 s.push_scope(ScopeKind::Block);
-                let r = s.expansion_decomp(e, true, by_ref, colon);
+                let r = s.expansion_decomp(e, Some(bind), colon);
                 s.pop_scope();
                 r
             });
         }
-        self.expansion_decomp(e, false, true, colon)
+        self.expansion_decomp(e, None, colon)
     }
 
-    /// `[static constexpr] auto&& [__u...] = e;` (`auto` without `&&`
-    /// unless `by_ref`) and its bindings.
+    /// `auto&& [__u...] = e;`, or for a `constexpr` one (`bind` given)
+    /// `[static] constexpr auto[&&] [__u...] = e;` as `bind` says, and
+    /// its bindings.
     fn expansion_decomp(
         &mut self,
         e: ExprId,
-        constexpr: bool,
-        by_ref: bool,
+        bind: Option<RangeBind>,
         colon: Loc,
     ) -> Option<(Vec<StmtId>, Vec<Element>)> {
+        let by_ref = bind.is_none_or(RangeBind::by_ref);
         let mut ds = DeclSpec::new(colon);
         let _ = ds.set_base(TypeSpecKind::Auto, None, colon);
-        if constexpr {
+        if let Some(bind) = bind {
             ds.constexpr = Some(colon);
-            let _ = ds.set_storage(StorageSpec::Static, colon);
+            if bind != RangeBind::Automatic {
+                let _ = ds.set_storage(StorageSpec::Static, colon);
+            }
         }
         let mut d = Declarator::new(DeclaratorContext::Block, colon);
         if by_ref {
@@ -700,12 +758,13 @@ impl Substituter<'_, '_, '_> {
                 if self.sema.is_err_expr(e) || self.sema.ast.exprs.get(e).is_type_dependent() {
                     return Err(SubstFail);
                 }
+                let constexpr =
+                    self.sema.ast.decls.var(data.decl).is_some_and(|v| v.spec.is_constexpr());
                 if self.sema.expansion_iterable(e, colon) {
-                    let (p, el) = self.sema.expansion_iterating(e, colon).ok_or(SubstFail)?;
+                    let (p, el) =
+                        self.sema.expansion_iterating(e, constexpr, colon).ok_or(SubstFail)?;
                     (ExpansionForm::Iterating, p, el)
                 } else {
-                    let constexpr =
-                        self.sema.ast.decls.var(data.decl).is_some_and(|v| v.spec.is_constexpr());
                     let (p, el) =
                         self.sema.expansion_destructuring(e, constexpr, colon).ok_or(SubstFail)?;
                     (ExpansionForm::Destructuring, p, el)
