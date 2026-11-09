@@ -237,6 +237,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // [class.temporary]/8 (CWG3043): an enumerating expansion
+        // statement's element temporaries all live as long as `v`
+        // (`extend_init_temporaries`).
+        if self.expansion_element_init {
+            return;
+        }
         let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         // A dependent entity type is initialized at instantiation (clang's
         // dependent `InitializationSequence` checks nothing).

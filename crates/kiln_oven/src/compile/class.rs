@@ -282,21 +282,30 @@ impl Compiler<'_> {
             self.init(x, r, ty);
             return Place::Mem(r);
         }
-        match storage {
-            StorageDuration::FullExpression => {
-                let is_const = super::const_object(self.ast(), self.ast().exprs.get(e).ty());
-                Place::Mem(self.materialize_as(x, ty, is_const))
-            }
-            // Extended by a variable outside this evaluation, or by one
-            // whose storage was not preallocated: lives until the
-            // evaluation ends.
-            _ => {
-                let r = self.reg();
-                self.alloc(r, ty, Origin::Temp(x), false, x);
-                self.init(x, r, ty);
-                Place::Mem(r)
-            }
+        // A temporary a non-reference variable outside this evaluation
+        // extends (an enumerating expansion statement's element,
+        // [class.temporary]/8, CWG3043) is destroyed within it: the
+        // variable's value cannot point to it, and its destruction is
+        // part of what makes the initializer constant (clang's
+        // `discardCleanups` refuses one with a side effect).
+        let own_full_expr = storage == StorageDuration::Automatic && {
+            let ast = self.ast();
+            ast.exprs
+                .lifetime_extended_temporary(e)
+                .and_then(|t| ast.decls.lifetime_extended(t))
+                .is_some_and(|l| !super::is_reference_decl(ast, l.extending))
+        };
+        if storage == StorageDuration::FullExpression || own_full_expr {
+            let is_const = super::const_object(self.ast(), self.ast().exprs.get(e).ty());
+            return Place::Mem(self.materialize_as(x, ty, is_const));
         }
+        // Extended by a reference outside this evaluation, or by one
+        // whose storage was not preallocated: lives until the evaluation
+        // ends.
+        let r = self.reg();
+        self.alloc(r, ty, Origin::Temp(x), false, x);
+        self.init(x, r, ty);
+        Place::Mem(r)
     }
 
     /// The `MaterializeTemporaryExpr`s whose temporaries initializer
