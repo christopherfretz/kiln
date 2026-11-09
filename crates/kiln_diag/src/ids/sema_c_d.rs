@@ -110,6 +110,7 @@ sema_constexpr_virtual_base = Error (3) "constexpr {0:member function|constructo
 sema_constinit_local = Error (0) "local variable cannot be declared 'constinit'";
 sema_constinit_non_constant = Error (0) "variable does not have a constant initializer";
 sema_constraint_depends_on_self = Error (1) "satisfaction of constraint '{0}' depends on itself";
+sema_continue_from_cond_var_init = Error (0) "cannot jump from this continue statement to the loop increment; jump bypasses initialization of loop condition variable";
 sema_continue_not_in_loop = Error (0) "'continue' statement not in loop statement";
 sema_contract_const_modify = Error (1) "cannot modify '{0}' in a contract predicate: it is implicitly const";
 sema_contract_coroutine_post_param = Error (1) "a postcondition of a coroutine cannot odr-use the non-reference parameter '{0}'";
