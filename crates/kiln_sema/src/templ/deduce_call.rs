@@ -418,11 +418,12 @@ impl Sema<'_, '_> {
     /// parameter pack keeps its pattern; a non-trailing one expands to its
     /// explicit elements, counted in the third result), and, for `whole`
     /// (`Some` the template's function type), the whole function type.
-    /// `ret`: a return type written before the parameters, substituted
-    /// first and only checked (clang `SubstituteExplicitTemplateArguments`
-    /// substitutes the return type for a call too, so
-    /// `enable_if_t<C<A>, R> f(const S<A>&)` with `A` explicit fails
-    /// before the conversion to `S<A>` instantiates it, CWG1391).
+    /// `ret`: the return type, substituted and only checked (clang
+    /// `SubstituteExplicitTemplateArguments` substitutes the return type
+    /// for a call too, so `enable_if_t<C<A>, R> f(const S<A>&)` with `A`
+    /// explicit fails before the conversion to `S<A>` instantiates it,
+    /// CWG1391): first when written before the parameters, after them
+    /// when trailing ([`ExplicitRet`]).
     /// Runs under the caller's `ExplicitArgSubstitution` frame.
     #[inline(never)]
     #[allow(clippy::too_many_arguments, reason = "the step's inputs")]
@@ -432,7 +433,7 @@ impl Sema<'_, '_> {
         levels: &crate::templ::args::MultiLevelArgs,
         tys: &[QualType],
         whole: Option<QualType>,
-        ret: Option<QualType>,
+        ret: Option<ExplicitRet<'_>>,
         partial: Option<(u16, u16)>,
         (name_loc, loc): (Loc, Loc),
     ) -> Result<(Vec<QualType>, Option<QualType>, usize), crate::templ::subst::SubstFail> {
@@ -450,7 +451,7 @@ impl Sema<'_, '_> {
         self.in_template_context(ft, |s| {
             let mut sub = Substituter::new(s, levels);
             sub.final_subst = true;
-            if let Some(r) = ret {
+            if let Some(ExplicitRet::Leading(r)) = ret {
                 sub.ty(r, loc)?;
             }
             // A function parameter pack keeps its pattern: the
@@ -496,6 +497,13 @@ impl Sema<'_, '_> {
                 }
                 None => None,
             };
+            // A trailing return type, after the parameters (clang
+            // substitutes in lexical order).
+            if let Some(ExplicitRet::Trailing(r, levels)) = ret {
+                let mut sub = Substituter::new(s, levels);
+                sub.final_subst = true;
+                sub.ty(r, loc)?;
+            }
             Ok((v, f, kept))
         })
     }
@@ -705,17 +713,23 @@ impl Sema<'_, '_> {
                 DeduceTarget::None => call.is_none(),
                 DeduceTarget::Conversion(_) => false,
             } && !fn_has_pack;
-            // A call substitutes the leading return type too (not a
-            // trailing one, which may name the parameters).
+            // A call substitutes the leading return type too. clang
+            // substitutes a trailing one as well, after the parameter
+            // types; kiln does only when it holds a lambda-expression,
+            // whose closures that substitution numbers (the finished
+            // specialization's are the next numbers: spec/sema-lambda.md
+            // §3.5, WP-1086). Any other is left to the specialization.
             let ret = if whole {
                 None
             } else {
-                self.ast
-                    .types
-                    .proto_of(pfn.ty())
-                    .filter(|p| !p.info().trailing_return())
-                    .map(kiln_ast::types::FuncProto::ret)
-                    .filter(|&r| self.is_dependent_type(r))
+                self.ast.types.proto_of(pfn.ty()).and_then(|p| {
+                    let r = p.ret();
+                    if p.info().trailing_return() {
+                        self.trailing_return_has_lambda(r).then_some((r, true))
+                    } else {
+                        self.is_dependent_type(r).then_some((r, false))
+                    }
+                })
             };
             // clang substitutes the explicit arguments as written
             // (`SubstituteExplicitTemplateArguments` is `Final`): a
@@ -769,6 +783,22 @@ impl Sema<'_, '_> {
             // [temp.arg.explicit]/9: the explicitly given pack deduction
             // may extend (clang's partially substituted pack).
             let partial = self.explicit_pack(params, &d).map(|(i, _)| (d.depth, i));
+            // A trailing return type sees an explicitly given pack that
+            // deduction may extend as still open (clang keeps the
+            // partially substituted pack's expansions): kiln leaves the
+            // pack unsubstituted there.
+            let trailing_levels = match (ret, partial) {
+                (Some((_, true)), Some((_, i))) => {
+                    let mut a = sugared.clone();
+                    a[usize::from(i)] = TemplateArg::NULL;
+                    Some(self.prior_levels(ft, depth, &a))
+                }
+                _ => None,
+            };
+            let ret = ret.map(|(r, trailing)| match (trailing, &trailing_levels) {
+                (false, _) => ExplicitRet::Leading(r),
+                (true, l) => ExplicitRet::Trailing(r, l.as_ref().unwrap_or(&sugared_levels)),
+            });
             let r = self.in_sfinae_held(
                 FrameKind::ExplicitArgSubstitution,
                 ft,
@@ -2395,4 +2425,16 @@ fn ordinal(n: u32) -> String {
         _ => "th",
     };
     format!("{n}{suffix}")
+}
+
+/// The return type the explicit-argument step (§6.1 step 1) substitutes
+/// for a call, besides the parameter types.
+#[derive(Clone, Copy)]
+enum ExplicitRet<'a> {
+    /// Written before the parameters: substituted first.
+    Leading(QualType),
+    /// A trailing return type holding a lambda-expression: substituted
+    /// after the parameters with these arguments, only for the closures
+    /// it numbers (WP-1086).
+    Trailing(QualType, &'a crate::templ::args::MultiLevelArgs),
 }
