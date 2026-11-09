@@ -443,8 +443,11 @@ impl CodegenJob<'_> {
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
             // WP-1032: the ignorelists the driver validated.
-            opts.ignorelist =
-                a.sanitize.ignorelist(opts.sanitize.kinds, &job.toolchain.resource_dir);
+            opts.ignorelist = a.sanitize.ignorelist(
+                opts.sanitize.kinds,
+                &job.toolchain.resource_dir,
+                opts.clang_compat >= 22,
+            );
             // Sema sets the level on each evaluation it runs; a unit that
             // ran none still folds at its level (WP-416).
             tu.oven.set_clang_compat(opts.clang_compat);

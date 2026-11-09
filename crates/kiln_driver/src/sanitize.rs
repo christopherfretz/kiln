@@ -422,27 +422,32 @@ impl SanitizeFlags {
 
     /// clang's `validateSpecialCaseListFormat`, of the user lists and of
     /// the default lists apart: "malformed sanitizer ignorelist" with
-    /// LLVM's message.
+    /// LLVM's message (list versions read as clang 22 or 19 does).
     #[must_use]
-    pub fn ignorelist_errors(&self, kinds: S, resource_dir: &str) -> Vec<ArgError> {
+    pub fn ignorelist_errors(&self, kinds: S, resource_dir: &str, clang22: bool) -> Vec<ArgError> {
         let (user, system) = self.ignorelist_paths(kinds, resource_dir);
         [system, user]
             .iter()
             .filter(|l| !l.is_empty())
-            .filter_map(|l| read_ignorelists(l).and_then(|t| parse_ignorelists(&t)).err())
+            .filter_map(|l| read_ignorelists(l).and_then(|t| parse_ignorelists(&t, clang22)).err())
             .collect()
     }
 
     /// The parsed ignorelists codegen applies, `None` when there is none
     /// (or one is malformed: [`Self::ignorelist_errors`] reported it).
     #[must_use]
-    pub fn ignorelist(&self, kinds: S, resource_dir: &str) -> Option<Arc<SanitizerIgnorelist>> {
+    pub fn ignorelist(
+        &self,
+        kinds: S,
+        resource_dir: &str,
+        clang22: bool,
+    ) -> Option<Arc<SanitizerIgnorelist>> {
         let (mut paths, system) = self.ignorelist_paths(kinds, resource_dir);
         paths.extend(system);
         if paths.is_empty() {
             return None;
         }
-        let l = read_ignorelists(&paths).and_then(|t| parse_ignorelists(&t)).ok()?;
+        let l = read_ignorelists(&paths).and_then(|t| parse_ignorelists(&t, clang22)).ok()?;
         (!l.is_empty()).then(|| Arc::new(l))
     }
 }
@@ -462,11 +467,12 @@ fn read_ignorelists(paths: &[String]) -> Result<Vec<(String, String)>, ArgError>
         .collect()
 }
 
-fn parse_ignorelists(files: &[(String, String)]) -> Result<SanitizerIgnorelist, ArgError> {
-    SanitizerIgnorelist::parse(files).map_err(|e| match e {
-        IgnorelistError::Malformed(m) => ArgError::MalformedIgnorelist(m),
-        IgnorelistError::Regex(p) => ArgError::RegexIgnorelist(p),
-    })
+fn parse_ignorelists(
+    files: &[(String, String)],
+    clang22: bool,
+) -> Result<SanitizerIgnorelist, ArgError> {
+    SanitizerIgnorelist::parse(files, clang22)
+        .map_err(|IgnorelistError::Malformed(m)| ArgError::MalformedIgnorelist(m))
 }
 
 /// The values' union, unknown names ignored.

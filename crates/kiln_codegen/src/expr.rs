@@ -2534,7 +2534,7 @@ impl Cg<'_> {
             // `<identifier>.<current function>` when first emitted.
             ExprKind::PredefinedExpr => self.predefined_lvalue(e, q),
             ExprKind::StringLiteral => {
-                let g = self.lit_global(ast.exprs.string_lit(e));
+                let g = self.lit_global(ast.exprs.string_lit(e), e);
                 let ty = self.m.global(g).value_type();
                 let align = self.m.global(g).align.unwrap_or(1);
                 Ok(LV {
@@ -2624,9 +2624,9 @@ impl Cg<'_> {
                 let mut bytes = bytes;
                 let total = ast.strings.object_bytes(lit);
                 bytes.resize(total as usize, 0);
-                self.string_global_named(&bytes, 1, total, &name)
+                self.lit_string_global(&bytes, 1, total, &name, e)
             }
-            None => self.lit_global(lit),
+            None => self.lit_global(lit, e),
         };
         let ty = self.m.global(g).value_type();
         let align = self.m.global(g).align.unwrap_or(1);
@@ -4622,7 +4622,7 @@ impl Cg<'_> {
                 // A literal initializing a (possibly longer) char array:
                 // copy from the literal's constant padded to the array.
                 let size = self.size_align(q).0;
-                let g = self.lit_global_sized(ast.exprs.string_lit(e), size);
+                let g = self.lit_global_sized(ast.exprs.string_lit(e), size, e);
                 let align = self.m.global(g).align.unwrap_or(1);
                 self.memcpy(dest, V::C(gval(g)), align, size, false);
                 Ok(())

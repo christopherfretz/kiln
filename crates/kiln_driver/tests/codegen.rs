@@ -1977,9 +1977,9 @@ fn sanitizer_ignorelist_asan() {
 }
 
 /// spec/driver.md "Sanitizers" (WP-1032): a malformed ignorelist is
-/// clang's driver error, word for word (LLVM `SpecialCaseList`'s message);
-/// a regular-expression (`#!special-case-list-v1`) list is kiln's error.
-/// No job runs.
+/// clang's driver error, word for word (LLVM `SpecialCaseList`'s message,
+/// `llvm::regerror`'s in a `#!special-case-list-v1` regular-expression
+/// list). No job runs.
 #[test]
 fn sanitizer_ignorelist_errors() {
     let d = scratch("ignorelist-err");
@@ -2005,9 +2005,9 @@ fn sanitizer_ignorelist_errors() {
         ),
         (
             "v1.txt",
-            "#!special-case-list-v1\nfun:a.*\n",
-            "sanitizer ignorelist 'v1.txt' uses regular expressions ('#!special-case-list-v1'), \
-             which kiln does not support; use glob patterns",
+            "#!special-case-list-v1\nfun:a.*\nfun:(b\n",
+            "malformed sanitizer ignorelist: 'error parsing file 'v1.txt': malformed regex in \
+             line 3: '(b': parentheses not balanced'",
         ),
     ] {
         std::fs::write(d.join(name), body).unwrap();

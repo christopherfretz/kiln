@@ -74,8 +74,6 @@ drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";
 drv_precompile_not_module = Error (0) "--precompile requires a module interface or partition unit";
-// WP-1032: a `#!special-case-list-v1` ignorelist (POSIX regular expressions).
-drv_regex_sanitizer_ignorelist = Error (1) "sanitizer ignorelist '{0}' uses regular expressions ('#!special-case-list-v1'), which kiln does not support; use glob patterns";
 // WP-982: kiln-scan-deps (spec/modules.md §11.9).
 drv_scan_one_job = Error (1) "unable to handle compilation, expected exactly one compiler job in '{0}'";
 drv_treating_input_as_cxx = Warning [Deprecated] (2) "treating '{0}' input as '{1}' when in C++ mode, this behavior is deprecated";

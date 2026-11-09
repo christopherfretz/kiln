@@ -182,9 +182,6 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::MalformedIgnorelist(m) => {
             Diag::new(DiagId::drv_malformed_sanitizer_ignorelist, Span::INVALID).arg(m)
         }
-        ArgError::RegexIgnorelist(f) => {
-            Diag::new(DiagId::drv_regex_sanitizer_ignorelist, Span::INVALID).arg(f)
-        }
         ArgError::PatchableEntryOffset => {
             Diag::new(DiagId::drv_unsupported_fpatchable_function_entry_argument, Span::INVALID)
         }
@@ -642,7 +639,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }
     }
     // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
-    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir) {
+    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
+    {
         emit_arg_error(e, &drv);
     }
     if args.help {

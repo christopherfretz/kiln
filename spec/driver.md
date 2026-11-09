@@ -395,7 +395,19 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   `kiln_codegen::ignorelist`, clang's `NoSanitizeList`): LLVM special
   case lists, `prefix:glob[=category]` lines under optional
   `[<sanitizer glob>]` sections (none: every sanitizer), `#` comments,
-  LLVM's `GlobPattern` (`*`, `?`, `[...]`, `{a,b}`, `\`). Every file is
+  LLVM's `GlobPattern` (`*`, `?`, `[...]`, `{a,b}`, `\`). A file's
+  version comes from its first line (WP-1043): at `-fclang-compat=19`
+  it is 1 when the file starts with exactly `#!special-case-list-v1`
+  and a newline, else 2; at `-fclang-compat=22` (LLVM 20+) the decimal
+  digits after a leading `#!special-case-list-v` (`consumeUnsignedInteger`:
+  no digit is 0, so `-vx` is 1's regex mode; `-v1\r`, `-v1x`, `-v01` are
+  1), 2 without that prefix. Version 0 and 1 patterns, section names
+  included, are POSIX extended regular expressions (`llvm::Regex`): each
+  `*` becomes `.*` and the whole is anchored `^(...)$`, so `[undef]`
+  names no sanitizer while `[address|thread]` names two. From version 3
+  (clang 22) the `src:` and `mainfile:` queries lose their leading `./`
+  (`sys::path::remove_leading_dotslash`), so `src:t.cpp` matches
+  `./t.cpp` and `src:./t.cpp` no longer does. Every file is
   read; a later `=sanitize` category entry takes an earlier match back
   (clang 20+ precedence, at `-fclang-compat=22`). What each prefix
   suppresses, per sanitizer the section names:
@@ -420,11 +432,9 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   `no such file or directory: '<f>'`, a malformed one `malformed
   sanitizer ignorelist: 'error parsing file '<f>': <LLVM message>'`
   (`malformed line <n>: '<line>'`, `malformed section header on line
-  <n>: <text>`, `malformed glob in line <n>: '<glob>': <reason>`, ...),
-  and a `#!special-case-list-v1` (regular expression) list is
-  `drv_regex_sanitizer_ignorelist`, `sanitizer ignorelist '<f>' uses
-  regular expressions ('#!special-case-list-v1'), which kiln does not
-  support; use glob patterns` (a deviation; clang 19 reads them).
+  <n>: <text>`, `malformed glob in line <n>: '<glob>': <reason>`,
+  `malformed regex in line <n>: '<re>': <regerror>` (`parentheses not
+  balanced`, ...), `Supplied regex was blank`, ...).
 - `-f[no-]sanitize-address-use-after-scope`,
   `-fsanitize-address-use-after-return=never|runtime|always`,
   `-f[no-]sanitize-memory-track-origins[=0|1|2]`, `-shared-libsan`,

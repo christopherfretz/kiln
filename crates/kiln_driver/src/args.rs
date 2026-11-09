@@ -406,9 +406,6 @@ pub enum ArgError {
     /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
     /// message (WP-1032).
     MalformedIgnorelist(String),
-    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
-    /// path (WP-1032).
-    RegexIgnorelist(String),
 }
 
 /// The parsed command line.
@@ -909,7 +906,7 @@ impl Args {
 
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
     /// default) rather than clang 19's.
-    fn clang22(&self) -> bool {
+    pub(crate) fn clang22(&self) -> bool {
         self.predef.clang_compat != ClangCompat::Clang19
     }
 
