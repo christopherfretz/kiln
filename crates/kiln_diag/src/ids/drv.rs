@@ -10,6 +10,8 @@ drv_cannot_execute = Error (2) "unable to execute command: {0}: {1}";
 drv_cannot_open_output = Error (2) "unable to open output file '{0}': '{1}'";
 drv_cannot_read_input = Fatal (2) "cannot read '{0}': {1}";
 drv_cannot_read_predefines = Fatal (2) "cannot read the predefined macros '{0}': {1}";
+// WP-1000: clang's x86 `-m3dnow` / `-m3dnowa` (accepted, dropped).
+drv_clang_unsupported = Warning (1) "the clang compiler does not support '{0}'";
 drv_command_failed = Error (2) "{0} command failed with exit code {1} (use -v to see invocation)";
 drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to see invocation)";
 // WP-920: `-MJ <file>` (clang's JSON compilation-database fragment).

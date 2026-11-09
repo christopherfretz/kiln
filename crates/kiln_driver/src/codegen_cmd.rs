@@ -359,8 +359,10 @@ impl CodegenJob<'_> {
                     .outline_atomics
                     .or_else(|| job.toolchain.aarch64_outline_atomics_default().then_some(true)),
                 target_features: feats.extra.clone(),
+                target_cpu_features: feats.x86_cpu_features.clone(),
+                target_features_written: feats.x86_written.clone(),
                 target_attr: Some(if job.toolchain.target.is_aarch64() {
-                    crate::features::target_attr_features as kiln_codegen::TargetAttrParser
+                    crate::features::target_attr_parser as kiln_codegen::TargetAttrParser
                 } else {
                     crate::features::x86_target_attr_features
                 }),
