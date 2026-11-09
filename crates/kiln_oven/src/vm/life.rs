@@ -17,7 +17,7 @@ use crate::kbc::{Op, ak};
 use kiln_ast::Ast;
 use kiln_ast::decl::DeclKind;
 
-use crate::mem::{MemFault, Origin, Ptr, flags};
+use crate::mem::{MemFault, Origin, Ptr, Sp, flags};
 use crate::ty::{OTy, TyKind};
 
 /// Which of a frame's objects `Oven::scope_life` checks.
@@ -124,7 +124,9 @@ impl Oven {
         }
         for &s in self.mem.live.get(n..).unwrap_or_default().iter().rev() {
             let a = &self.mem.slots[s as usize];
-            if a.flags & flags::LIFE == 0 {
+            // A parameter object `EndParam` ended is released with its
+            // full-expression's scope, its destruction already checked.
+            if a.flags & flags::LIFE == 0 || !a.live {
                 continue;
             }
             let param = matches!(a.origin, Origin::Var(d)
@@ -135,6 +137,25 @@ impl Oven {
             let raw = Ptr { slot: s, generation: a.generation, past: false, off: 0 }.encode();
             self.destroy_check(raw, a.ty)?;
         }
+        Ok(())
+    }
+
+    /// `Op::EndParam`: the lifetime of the parameter object at `raw`
+    /// ends when its call returns ([expr.call]/7, WP-1018). One with no
+    /// registered destructor (`dtor` false) is destroyed here, so its
+    /// lifetime is checked as a scope's objects' are. Its allocation dies
+    /// (a later access is to an "object outside its lifetime" while the
+    /// caller runs); its storage is released with the caller's scope.
+    pub(super) fn end_param_life(&mut self, raw: u64, dtor: bool) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        if raw == 0 || p.is_fn() || p.space() != Sp::Frame {
+            return Ok(());
+        }
+        let Ok(a) = self.mem.alloc_of(p) else { return Ok(()) };
+        if !dtor && a.flags & flags::LIFE != 0 {
+            self.destroy_check(Ptr { off: 0, past: false, ..p }.encode(), a.ty)?;
+        }
+        self.mem.kill(p);
         Ok(())
     }
 
