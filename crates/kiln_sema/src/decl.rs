@@ -9846,6 +9846,23 @@ impl Sema<'_, '_> {
         self.classify_found(&found)
     }
 
+    /// The [`NameClass`] of the class-name of a base-specifier: a
+    /// type-only lookup ([class.derived.general]/2), so a namespace of an
+    /// inner scope does not hide a class of an outer one (clang 22; clang
+    /// 19 looks it up as a nested-name-specifier name).
+    pub fn classify_base_class_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        let class = self.classify_nested_name(name, qualifier);
+        if self.clang_compat < 22 || !matches!(class, NameClass::Namespace(_)) {
+            return class;
+        }
+        let q = qualifier.map(|q| self.type_name_qualifier(q));
+        let found = match q {
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Type),
+            None => self.lookup_name(name, LookupKind::Type),
+        };
+        if found.decls.is_empty() { class } else { self.classify_found(&found) }
+    }
+
     /// The [`NameClass`] of a non-empty ordinary (or nested-name) lookup
     /// result.
     pub(crate) fn classify_found(&self, found: &crate::lookup::Found) -> NameClass {

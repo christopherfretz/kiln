@@ -533,6 +533,29 @@ impl Substituter<'_, '_, '_> {
                     self.sema.emit(d);
                     return Err(SubstFail);
                 };
+                if self.sema.kind_of(d) == DeclKind::ClassTemplate
+                    && self.sema.is_ctad_template(d)
+                {
+                    // `typename T::X x = e;` with `X` a member class
+                    // template: a placeholder for a deduced class type
+                    // ([dcl.type.class.deduct]/1, [temp.res.general]/5),
+                    // only as a variable's whole declared type.
+                    if self.ctad_typename != Some(q.without_quals()) {
+                        let at = self.sema.ast.decls.get(d).loc();
+                        let note = self.sema.diag(DiagId::note_template_decl_here, at);
+                        let d = self
+                            .sema
+                            .diag(DiagId::sema_typename_deduced_tst, loc)
+                            .arg("0")
+                            .arg(self.ctx_arg(ctx))
+                            .with_note(note);
+                        self.sema.emit(d);
+                        return Err(SubstFail);
+                    }
+                    self.sema.mark_type_referenced(d);
+                    self.sema.check_found_access(&found, loc);
+                    return Ok(self.sema.ctad_placeholder(d, Some(n), (loc, loc)));
+                }
                 if !matches!(
                     self.sema.kind_of(d),
                     DeclKind::Typedef | DeclKind::TypeAlias | DeclKind::CXXRecord | DeclKind::Enum

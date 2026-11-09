@@ -34,6 +34,10 @@ pub enum LookupKind {
     /// A using-declarator's target ([namespace.udecl]/1): everything,
     /// tags and non-tags alike (no hiding).
     All,
+    /// A type-only lookup ([basic.lookup.general]/4): types and type
+    /// templates; namespaces and non-types are skipped (the class-name of
+    /// a base-specifier, [class.derived.general]/2).
+    Type,
 }
 
 /// The result of a lookup.
@@ -149,6 +153,15 @@ impl Sema<'_, '_> {
                         DeclKind::Namespace
                             | DeclKind::NamespaceAlias
                             | DeclKind::ClassTemplate
+                            | DeclKind::TypeAliasTemplate
+                            | DeclKind::TemplateTemplateParm
+                    )
+            }
+            LookupKind::Type => {
+                is_type_kind(k)
+                    || matches!(
+                        k,
+                        DeclKind::ClassTemplate
                             | DeclKind::TypeAliasTemplate
                             | DeclKind::TemplateTemplateParm
                     )
@@ -383,7 +396,7 @@ impl Sema<'_, '_> {
                 let found = self.filter(v, kind);
                 return (!found.is_empty()).then_some(found);
             }
-            LookupKind::Nested => s
+            LookupKind::Nested | LookupKind::Type => s
                 .locals
                 .iter()
                 .rev()

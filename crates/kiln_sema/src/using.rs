@@ -366,6 +366,12 @@ impl Sema<'_, '_> {
             return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
         }
         if self.ast.first(q.ctx) == self.ast.first(class) {
+            if self.has_dependent_bases(class) {
+                // clang's `isProvablyNotDerivedFrom` cannot prove a class
+                // with a dependent base is not derived from itself: the
+                // check waits for the instantiation.
+                return Some(self.dependent_class_using(class, q, name, name_loc, inheriting));
+            }
             self.error(DiagId::sema_using_decl_refers_to_own_class, q.loc);
             // clang 22 stops there; clang 19 also looks the name up.
             if self.clang_compat < 22 && self.lookup_in_dn(q.ctx, name, LookupKind::All).is_empty()

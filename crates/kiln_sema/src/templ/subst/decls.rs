@@ -196,8 +196,10 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn var_decl(&mut self, d: DeclId, ctx: DeclaratorContext) -> SubstResult<DeclId> {
         let loc = self.sema.ast.decls.get(d).loc();
         let t = self.decl_ty(d);
-        let ty = self.named_decl_ty(d, t, loc)?;
-        let ty = self.sema.apply_pattern_mode(d, ty);
+        let outer = self.ctad_typename.replace(t.without_quals());
+        let ty = self.named_decl_ty(d, t, loc);
+        self.ctad_typename = outer;
+        let ty = self.sema.apply_pattern_mode(d, ty?);
         self.var_function_type(ty, loc, ctx)?;
         let ds = self.pattern_declspec(d, ty);
         let mut dr = self.pattern_declarator(d, ctx)?;

@@ -72,6 +72,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// (clang's diagnostics name it: "'a' declared as an array with a
     /// negative size").
     pub(crate) declarator_name: Option<(Symbol, Loc)>,
+    /// The pattern type of the variable being declared when it is a
+    /// typename-specifier, which may then name a class template as a
+    /// placeholder for a deduced class type ([dcl.type.class.deduct]/1;
+    /// clang's `DeducedTSTContext`).
+    pub(crate) ctad_typename: Option<QualType>,
     /// The start of the declarator's type (the declaration's
     /// decl-specifiers, clang's `FunctionTypeLoc` begin): where a
     /// substituted function type returning an array or function is
@@ -181,6 +186,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             entity: None,
             pairs: Vec::new(),
             declarator_name: None,
+            ctad_typename: None,
             type_begin: None,
             ref_loc: None,
             chunk_loc: None,
