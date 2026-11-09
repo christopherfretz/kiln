@@ -1222,6 +1222,15 @@ follow.
    - Values found in the class (static members, member functions,
      enumerators) are still bound at definition time. Only a type
      defers.
+   - The lookahead classifies a member of a specialization that is not
+     instantiated yet by the template's pattern (WP-276). Once a
+     qualifier component is a non-dependent class, or a class or alias
+     template with non-dependent arguments (`O<int>::M::N`), no class
+     below it is dependent, even though it is found in the pattern.
+   - `friend T::X;` and `friend Outer::value_type;` ([class.friend]/3),
+     where the name is the whole friend declaration, name a type without
+     `typename`. This is clang's implicit typename in a class member
+     declaration.
 
    **Instantiation.** When a `DependentScopeDeclRefExpr` whose name now
    finds a type is instantiated, kiln reports clang's `err_typename_missing`.
@@ -1268,7 +1277,8 @@ Tests:
 - `tests/conformance/temp.dep/local-class-dependent-patterns-run.cpp`,
   which covers the valid patterns: CTAD, a local class as a template
   argument, `typename L::N`, qualified access into a dependent base, a
-  non-dependent base, and a local class of a member function template.
+  non-dependent base, and a local class of a member function template;
+- `tests/conformance/temp.dep/nondependent-spec-member-and-friend-type-run.cpp`.
 
 ### 3.2 Expression dependence (`ExprDeps`)
 
