@@ -153,6 +153,7 @@ sema_illegal_initializer = Error (0) "illegal initializer (only variables can be
 sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";
 sema_illegal_storage_class_on_function = Error (0) "illegal storage class on function";
 sema_illegal_storage_class_on_var = Error (0) "illegal storage class on file-scoped variable";
+sema_illegal_union_or_anon_struct_member = Error (3) "{0:anonymous struct|union} member '{1}' has a non-trivial {2:default constructor|copy constructor|move constructor|copy assignment operator|move assignment operator|destructor}";
 sema_imaginary_constant = Extension [GnuImaginaryConstant] (0) "imaginary constants are a GNU extension";
 sema_immediate_address = Error (2) "cannot take address of {0:immediate|consteval} function '{1}' outside of an immediate invocation";
 sema_immediate_call_non_constant = Error (2) "call to {0:immediate|consteval} function '{1}' is not a constant expression";

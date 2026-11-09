@@ -3,6 +3,7 @@
 //! enumerators, namespaces, linkage specifications, `static_assert` and
 //! attributes.
 
+use crate::class::SpecialKind;
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{
     ConstexprKind, DeclFlags, DeclKind, DeclMisc, DefinitionBits, EnumData, FieldData, FnSpec,
@@ -5333,7 +5334,9 @@ impl Sema<'_, '_> {
             QualType::ERROR
         } else if !invalid
             && (self.require_non_abstract(d.name_loc(), ty, crate::class::AbstractUse::Field)
-                || self.union_reference_member(ctx, ty, nm.as_deref(), d.name_loc()))
+                || self.union_reference_member(ctx, ty, nm.as_deref(), d.name_loc())
+                || (self.is_union(ctx)
+                    && self.cxx03_nontrivial_member(ty, nm.as_deref(), d.name_loc(), true)))
         {
             QualType::ERROR
         } else {
@@ -5407,6 +5410,55 @@ impl Sema<'_, '_> {
             .diag(DiagId::sema_union_member_reference, loc)
             .arg(name.unwrap_or_default().to_owned())
             .arg(self.ty_arg(ty));
+        self.emit(msg);
+        true
+    }
+
+    /// C++03 [class.union]/1: a member of a union, or of an anonymous
+    /// struct, may not be of (an array of) a class with a non-trivial
+    /// default constructor, copy constructor, copy assignment operator
+    /// or destructor (clang `CheckNontrivialField`, at the name, naming
+    /// the first of those, copy constructor first). C++11 lifted this
+    /// (unrestricted unions; clang only has a C++98-compat warning,
+    /// off by default). True when diagnosed.
+    pub(crate) fn cxx03_nontrivial_member(
+        &mut self,
+        ty: QualType,
+        name: Option<&str>,
+        loc: Loc,
+        union: bool,
+    ) -> bool {
+        if self.std >= kiln_lex::Std::Cxx11 || ty == QualType::ERROR {
+            return false;
+        }
+        let elem = self.base_element(ty);
+        if self.is_dependent_type(elem) {
+            return false;
+        }
+        let Some(r) = self.ast.types.as_record(elem) else {
+            return false;
+        };
+        if self.ast.definition(r).is_none() {
+            return false;
+        }
+        let k = if !self.has_trivial(r, SpecialKind::CopyCtor) {
+            SpecialKind::CopyCtor
+        } else if !(self.has_special(r, SpecialKind::DefaultCtor)
+            && self.has_trivial(r, SpecialKind::DefaultCtor))
+        {
+            SpecialKind::DefaultCtor
+        } else if !self.has_trivial(r, SpecialKind::CopyAssign) {
+            SpecialKind::CopyAssign
+        } else if !self.has_trivial(r, SpecialKind::Dtor) {
+            SpecialKind::Dtor
+        } else {
+            return false;
+        };
+        let msg = self
+            .diag(DiagId::sema_illegal_union_or_anon_struct_member, loc)
+            .arg(u8::from(union))
+            .arg(name.unwrap_or_default().to_owned())
+            .arg(k as u8);
         self.emit(msg);
         true
     }
@@ -9764,6 +9816,26 @@ impl Sema<'_, '_> {
                 None => d,
             };
             self.emit(d);
+        }
+        // C++03 [class.union]/1 for the members of an anonymous struct
+        // (a union's were checked as they were declared; clang
+        // `BuildAnonymousStructOrUnion`).
+        if !union && self.std < kiln_lex::Std::Cxx11 {
+            let fields: Vec<DeclId> = self
+                .ast
+                .decls
+                .members(rec)
+                .filter(|&m| self.kind_of(m) == DeclKind::Field)
+                .collect();
+            for f in fields {
+                let n = *self.ast.decls.get(f);
+                if n.flags().contains(DeclFlags::INVALID) {
+                    continue;
+                }
+                let nm = n.name().as_ident().map(|x| sym_str(self, x));
+                let fty = n.ty().unwrap_or(QualType::ERROR);
+                self.cxx03_nontrivial_member(fty, nm.as_deref(), n.loc(), false);
+            }
         }
         if in_class && let Some(x) = self.first_default_init(rec) {
             let loc = self.ast.decls.get(x).loc();
