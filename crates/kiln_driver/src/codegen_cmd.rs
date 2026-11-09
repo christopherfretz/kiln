@@ -24,6 +24,7 @@ use kiln_source::{SourceManager, Span};
 use crate::args::{Action, Args, Input, Lang, LinkOptKind};
 use crate::link::Command;
 use crate::pp_cmd::{Job, PpInputs, SharedDeps, SharedSkips};
+use crate::time_trace::{self, InputTrace};
 use crate::toolchain::{StdLib, Tool, Toolchain};
 use crate::{Io, input_std, make_engine, print_version, report_output_error, write_output};
 
@@ -1164,8 +1165,19 @@ fn render(step: &Step<'_>, quote_all: bool) -> String {
     }
 }
 
+/// Starts `input`'s trace (spec/driver.md "Time trace"): its path is
+/// derived from the job's output, the object file when linking.
+fn start_trace(args: &Args, s: time_trace::Settings, input: &str) -> InputTrace {
+    let phase = Phase::of(args);
+    let output = match phase {
+        Phase::Link => default_output(input, Phase::Object),
+        _ => args.output.clone().unwrap_or_else(|| default_output(input, phase)),
+    };
+    InputTrace::start(s, time_trace::path(args, Some(phase), input, &output))
+}
+
 /// Runs the plan; returns the exit status.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn execute(
     args: &Args,
     tc: &Toolchain,
@@ -1181,6 +1193,19 @@ fn execute(
     // feeds `llc` directly (`ir_passes`).
     let mut ir: Option<Vec<u8>> = None;
     let mut skip_piped = false;
+    // spec/driver.md "Time trace": one trace per source input, from its
+    // frontend step to its last step before the next input or the link.
+    let trace_settings = time_trace::settings(args).ok().flatten();
+    let mut trace: Option<InputTrace> = None;
+    let mut traced_children = 0usize;
+    let mut child = |trace: &mut Option<InputTrace>, cmd: &Command| -> Command {
+        let Some(t) = trace.as_mut() else { return cmd.clone() };
+        if !matches!(cmd.tool, Tool::Llc | Tool::Opt) || temp.create().is_err() {
+            return cmd.clone();
+        }
+        traced_children += 1;
+        t.child(cmd, temp.file(&format!("time-trace-{traced_children}.json")))
+    };
     for step in plan {
         if args.verbose {
             let mut err = io.stderr.clone();
@@ -1188,7 +1213,16 @@ fn execute(
         }
         match step {
             Step::Frontend { input, dest } => {
-                let text = frontend(args, tc, input, stdin_text, diag_opts, io);
+                failed |= end_trace(trace.take(), args, diag_opts, io);
+                trace = trace_settings.map(|s| start_trace(args, s, &input.path));
+                let text = {
+                    let _frontend = kiln_source::trace::Scope::new("Frontend");
+                    frontend(args, tc, input, stdin_text, diag_opts, io)
+                };
+                if let Some(t) = trace.as_mut() {
+                    t.failed |= text.is_none();
+                    t.begin_backend();
+                }
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
                 let Some(cmds) = text.as_deref().and_then(|t| ir_passes(args, tc, t)) else {
@@ -1215,11 +1249,17 @@ fn execute(
                         let _ = err.write_all(cmd.render(false).as_bytes());
                     }
                     let mut out = Vec::new();
-                    ok = cmd.run(Some(&data), &mut out, &io.stderr, drv);
+                    let cmd = child(&mut trace, cmd);
+                    ok = InputTrace::run_child(&cmd, || {
+                        cmd.run(Some(&data), &mut out, &io.stderr, drv)
+                    });
                     if !ok {
                         break;
                     }
                     data = out;
+                }
+                if let Some(t) = trace.as_mut() {
+                    t.failed |= !ok;
                 }
                 ir = ok.then_some(data);
                 skip_piped = ir.is_none();
@@ -1245,9 +1285,27 @@ fn execute(
                     failed = true;
                     continue;
                 }
-                failed |= !cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv);
+                let cmd = child(&mut trace, cmd);
+                let ok = InputTrace::run_child(&cmd, || {
+                    cmd.run(ir.as_deref(), &mut io.stdout, &io.stderr, drv)
+                });
+                if let Some(t) = trace.as_mut() {
+                    t.failed |= !ok;
+                }
+                failed |= !ok;
+            }
+            Step::External { cmd, piped: false } if !matches!(cmd.tool, Tool::Linker) => {
+                // `-gz`'s in-place `llvm-objcopy`: part of the input.
+                if !failed {
+                    let ok = cmd.run(None, &mut io.stdout, &io.stderr, drv);
+                    if let Some(t) = trace.as_mut() {
+                        t.failed |= !ok;
+                    }
+                    failed |= !ok;
+                }
             }
             Step::External { cmd, piped: false } => {
+                failed |= end_trace(trace.take(), args, diag_opts, io);
                 // The link step: only when everything before it worked.
                 if !failed {
                     failed |= !cmd.run(None, &mut io.stdout, &io.stderr, drv);
@@ -1255,7 +1313,21 @@ fn execute(
             }
         }
     }
+    failed |= end_trace(trace.take(), args, diag_opts, io);
     i32::from(failed)
+}
+
+/// Finishes an input's time trace and writes it; `true` when writing
+/// failed (reported as clang's `cannot open output file`).
+fn end_trace(trace: Option<InputTrace>, args: &Args, diag_opts: &DiagOptions, io: &Io) -> bool {
+    let Some(t) = trace else { return false };
+    match t.finish(&args.program) {
+        Ok(()) => false,
+        Err((path, e)) => {
+            report_output_error(diag_opts, &io.stderr, &path, &e);
+            true
+        }
+    }
 }
 
 /// The frontend on one source input; `None` after an error. Writes the

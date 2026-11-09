@@ -2,9 +2,8 @@
 // template, `friend int B::f(W<T>&);` befriends the member of the
 // non-template class B whose type matches in each specialization; the
 // match depends on T, so it is made when W<A> is instantiated, not when W
-// is defined. clang and g++ print 42 43.
+// is defined (WP-1110). clang and g++ print 42 43.
 //@ expect: run
-//@ xfail(kiln): WP-1071 follow-up, a dependent-type friend of a non-template class's member is matched at definition ("does not match any declaration in 'B'")
 //@ stdout: 42 43
 #include <cstdio>
 template <class T> class W;

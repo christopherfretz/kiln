@@ -258,6 +258,17 @@ impl Sema<'_, '_> {
                 }
             }
             ExprKind::VAArgExpr => self.used_in_type(ex.va_arg(e).1, u, d)?,
+            ExprKind::GenericSelectionExpr => {
+                let lists = &self.ast.lists;
+                if let kiln_ast::expr::GenericControl::Type(t, _) = ex.generic_control(e, lists) {
+                    self.used_in_type(t, u, d)?;
+                }
+                for a in ex.generic_assocs(e, lists) {
+                    if let Some(t) = a.ty {
+                        self.used_in_type(t, u, d)?;
+                    }
+                }
+            }
             ExprKind::CXXReflectExpr => match ex.reflect_operand(e) {
                 Reflectee::Type(t) => self.used_in_type(t, u, d)?,
                 Reflectee::Decl(p) => self.used_decl(p, u)?,

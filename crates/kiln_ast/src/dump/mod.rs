@@ -879,6 +879,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CoyieldExpr
             | ExprKind::DependentCoawaitExpr
             | ExprKind::ChooseExpr
+            | ExprKind::GenericSelectionExpr
             | ExprKind::OffsetOfExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
