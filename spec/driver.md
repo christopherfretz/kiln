@@ -126,7 +126,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
-| `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
+| `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
@@ -1457,8 +1457,22 @@ and `codegen`.
   directory (`-resource-dir`, else the default, "Toolchain") and a
   newline to standard output and exits 0, whatever else is given, as
   clang does (WP-667). It is one of the toolchain probes below.
-- `--help` prints a short summary of the implemented options and the
-  two names' language rule (the usage line says `kiln` under both names).
+- `--help` prints the option summary (`kiln_driver::help::HELP`, WP-1027)
+  in clang's `--help` layout: `OVERVIEW: kiln, ...`, the usage lines of
+  both names (`kiln++` and `kiln`), the two names' language rule, then
+  the options by group (actions, language, preprocessor, dependency
+  output, target and toolchain, code generation, debug information,
+  sanitizers and coverage, modules, linking, diagnostics, compile-time
+  evaluation, kiln development, information). `[kiln]` opens the
+  description of an option clang does not have. It is a summary: this
+  section's "Options" is the complete list, and hidden options
+  (`--driver-mode=`, `-fkiln-crash-for-testing=`) are not in it.
+- Every option `--help` names is accepted: a unit test expands each
+  listed form (`[...]` with and without, `<...>` with a sample value),
+  parses it with an input, and requires no argument error and no
+  diagnostic-option error. The reverse (every accepted option is listed)
+  is not required. The text never calls kiln clang ("Identity") and fits
+  80 columns.
 
 ## Version
 
