@@ -167,7 +167,7 @@ impl Job<'_> {
         cfg.pthread = p.pthread;
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
         cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
-        cfg.kiln_version = crate::version_pair();
+        cfg.kiln_version = crate::version::triple();
         cfg.clang_compat = p.clang_compat;
         cfg.reflection = p.reflection;
         cfg.std_float_aliases =
@@ -261,7 +261,7 @@ impl Job<'_> {
             let _ = write!(
                 err,
                 "kiln -cc1 version {} default target {}\n{}",
-                env!("CARGO_PKG_VERSION"),
+                crate::version::VERSION,
                 self.toolchain.target.triple,
                 list.verbose_text()
             );

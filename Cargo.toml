@@ -82,6 +82,16 @@ codegen-units = 1
 [profile.bench]
 inherits = "release"
 
+# What `cargo xtask dist` builds the release tarballs with (WP-927,
+# spec/driver.md "Installation layout"): exactly `release` (thin LTO, line
+# tables), in its own directory so a dist build never overwrites a local
+# `release` binary. xtask splits the debug info off afterwards (`objcopy
+# --only-keep-debug`, `--strip-debug --add-gnu-debuglink`), so the profile
+# keeps it.
+[profile.dist]
+inherits = "release"
+strip = false
+
 # What `cargo xtask libcxx` / `libstdcxx` build by default (WP-319,
 # spec/libcxx.md "Build profiles"): optimized like `release`, but without LTO
 # and with more codegen units so a clean build stays cheap (and runs ~7%

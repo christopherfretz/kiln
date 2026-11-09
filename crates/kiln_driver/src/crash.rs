@@ -34,9 +34,14 @@ use crate::{SharedWriter, input_std, make_engine, rsp};
 /// Where bug reports go.
 pub const BUG_REPORT_URL: &str = "https://github.com/christopherfretz/kiln/issues";
 
-/// `kiln <version> (<git sha>)`: the compiler's identity in a report.
+/// `kiln <version> (<git sha>)`: the compiler's identity in a report
+/// (`unknown` when the build recorded no commit, [`crate::version::GIT_SHA`]).
 pub fn version_line() -> String {
-    format!("kiln {} ({})", env!("CARGO_PKG_VERSION"), env!("KILN_GIT_SHA"))
+    format!(
+        "kiln {} ({})",
+        crate::version::VERSION,
+        crate::version::GIT_SHA.filter(|s| !s.is_empty()).unwrap_or("unknown")
+    )
 }
 
 /// The exit code after a crash with the reproducer written (or
