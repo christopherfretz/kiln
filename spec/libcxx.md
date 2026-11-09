@@ -557,6 +557,7 @@ are removed afterwards unless `--keep` is given. Compiles use the flags below, t
 ```
 kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
      -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL \
+     -fclang-compat=<N> -fno-crash-diagnostics \
      -I <llvm-project>/libcxx/test/support  <warning flags>  \
      -D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER  <ADDITIONAL_COMPILE_FLAGS>  \
      (-fsyntax-only | -c -o t.o)  <test>
@@ -629,8 +630,11 @@ The verdict is reached in this order:
 | ERROR (reason) | The test could not be evaluated, or a process could not be spawned. |
 
 A compiler crash is a FAIL with a `crash:` cluster key, flagged as a crash.
-It happens when kiln (or llc, during link) panics (`panicked at`), prints
-LLVM's `PLEASE submit a bug report` banner, or dies from a signal. `XFAIL`
+It happens when kiln (or llc, during link) panics (kiln's `internal
+compiler error:` banner, spec/driver.md "Internal compiler errors", or a
+raw `panicked at` from an older build), prints LLVM's `PLEASE submit a bug
+report` banner, or dies from a signal. kiln compiles get
+`-fno-crash-diagnostics`, so a crash writes no reproducer. `XFAIL`
 never hides KILLED, TIMEOUT or a crash. A test binary that aborts (a failed
 `assert`) is an ordinary run FAIL.
 
@@ -708,8 +712,11 @@ If a step has no `error:` line, the key falls back as follows:
 
 An expected-fail test that succeeded gets the key `compile.fail: compiled
 successfully` or `link.fail: linked successfully`. A crash's first key is
-`crash: panicked at <file>: <normalized message>` (or `crash: <signal>`). The
-`error:` keys printed before the crash follow it.
+`crash: panicked at <file>: <normalized message>` (or `crash: <signal>`); for
+kiln's banner, `<file>` comes from its `note: in compiler source <file>:L:C`
+line and the message from its `internal compiler error:` line, which is
+itself never an `error:` key. The `error:` keys printed before the crash
+follow it.
 
 Each cluster counts **first** (tests whose first key it is) and **any** (tests
 that have it anywhere). Clusters are ranked by first, then any, then text.

@@ -892,6 +892,9 @@ pub struct Sema<'a, 'sm> {
     /// check allocates no stack per call (WP-645). A nested walk finds it
     /// empty and starts its own.
     pub(crate) walk_stack: std::cell::RefCell<Vec<ExprId>>,
+    /// The name-classification memo ([`Sema::classify_name`], spec/parse.md
+    /// §2.5): results valid while [`Sema::lookup_stamp`] is unchanged.
+    pub(crate) classify_memo: std::cell::RefCell<decl::ClassifyMemo>,
     /// [`Sema::walk_stack`] for the implicit-conversion walk, whose work
     /// items carry the context location.
     pub(crate) conv_walk_stack: Vec<(ExprId, Loc, bool)>,
@@ -927,6 +930,12 @@ pub struct Sema<'a, 'sm> {
     /// taken by the outermost list constructor call, whose explicit or
     /// deleted constructor error carries it (clang `PrintInitLocationNote`).
     pub(crate) list_param_note: Option<Diag>,
+    /// The (class, `{` of the list) pairs whose initializer-list
+    /// constructor call is being built (`init_list_ctor_init`): the
+    /// visited guard that stops a list re-entering the same class's
+    /// initializer-list constructor selection through a reference
+    /// parameter's temporary (WP-962, an unbounded recursion).
+    pub(crate) list_ctor_active: Vec<(DeclId, Loc)>,
     /// The aggregate temporary (and the reference's location) being
     /// list-initialized for a reference: the first `excess elements`
     /// error inside it takes clang's reference note (spec/sema.md).
@@ -1374,6 +1383,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             module_vtables: kiln_source::fx::FxHashSet::default(),
             synth_noted: std::cell::Cell::new(0),
             walk_stack: std::cell::RefCell::new(Vec::new()),
+            classify_memo: std::cell::RefCell::default(),
             conv_walk_stack: Vec::new(),
             equiv_scratch: std::cell::RefCell::default(),
             cand_scratch: Vec::new(),
@@ -1384,6 +1394,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             ctor_entity: None,
             ctor_diag_ty: None,
             list_param_note: None,
+            list_ctor_active: Vec::new(),
             ref_temp_note: std::cell::Cell::new(None),
             mem_inits: class::MemInitState::default(),
             extend_collector: None,

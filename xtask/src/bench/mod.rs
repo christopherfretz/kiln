@@ -5,6 +5,7 @@
 
 mod compare;
 pub(crate) mod entry;
+mod generate;
 mod perf_md;
 pub(crate) mod record;
 mod scaling;
@@ -618,7 +619,23 @@ fn measure_all(
                 errs.iter().map(|d| format!("{}: {d}", e.arg)).collect::<Vec<_>>().join("\n")
             })
         };
-        let hash = entry::source_hash(&source);
+        let mut hash = entry::source_hash(&source);
+        // A `generate:` entry measures its generated source, written into the
+        // run's scratch; its hash covers both texts (spec/bench.md
+        // "Generated entries").
+        let generated;
+        let (e, spec) = match spec {
+            Ok(s) => match s.generate.as_ref().map(|g| write_generated(cx, e, g, &source)) {
+                Some(Ok((g, h))) => {
+                    generated = g;
+                    hash = h;
+                    (&generated, Ok(s))
+                }
+                Some(Err(why)) => (e, Err(why)),
+                None => (e, Ok(s)),
+            },
+            Err(why) => (e, Err(why)),
+        };
         let progress = format!(
             "[{:>w$}/{}] {}",
             i + 1,
@@ -644,6 +661,27 @@ fn measure_all(
         }
     }
     Ok((test_run, oracle_run, specs, loads))
+}
+
+/// Writes a `generate:` entry's source to `<scratch>/generated/<id>.cpp` and
+/// returns the entry to measure (that file) and the combined source hash.
+fn write_generated(
+    cx: &Ctx<'_>,
+    e: &Entry,
+    g: &generate::Generator,
+    header: &[u8],
+) -> Result<(Entry, String), String> {
+    let text = g.source();
+    let path = cx.layout.scratch.join("generated").join(format!("{}.cpp", e.id));
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
+    }
+    std::fs::write(&path, &text)
+        .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
+    let hash = entry::source_hash(&[header, text.as_bytes()].concat());
+    let arg = path.display().to_string();
+    Ok((Entry { path, arg, ..e.clone() }, hash))
 }
 
 /// Compares the measurements with the baselines of the compiler's kind and

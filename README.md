@@ -74,6 +74,41 @@ scripts/fetch-libcxx-tests.sh           # once: libc++ 19.1.7 tests into .toolch
 cargo xtask libcxx --gate m3            # libc++'s own tests with kiln (manual gate, not in ci)
 ```
 
+## Installing
+
+Release archives for Linux on aarch64 and x86_64 are attached to each
+[GitHub release](https://github.com/christopherfretz/kiln/releases):
+`kiln-<version>-<triple>.tar.xz`, a `-symbols` archive with the full debug
+information, and `SHA256SUMS`. Unpack one anywhere and put its `bin/` on
+`PATH`:
+
+```
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xJf kiln-<version>-<triple>.tar.xz
+export PATH=$PWD/kiln-<version>-<triple>/bin:$PATH
+kiln++ -std=c++26 hello.cpp -o hello
+```
+
+The tree is relocatable: `bin/kiln`, `bin/kiln++`, the builtin headers and
+predefines in `lib/kiln/<major>/`, and these documents in
+`share/doc/kiln/` (layout and resource lookup:
+[spec/driver.md](spec/driver.md) "Installation layout"). kiln writes LLVM
+IR and needs an LLVM 19 (or 22) installation at run time for `llc`,
+`llvm-as` and the `clang++` link step, plus the system's libstdc++ (or
+libc++); see spec/driver.md "Installation layout" for the run-time
+dependencies. `cargo xtask dist` builds the same archives from a checkout.
+
+What a version number promises (driver flags, diagnostic ids, predefined
+macros, ABI; not diagnostic wording or IR text) is in
+[docs/STABILITY.md](docs/STABILITY.md).
+
+## Reporting bugs
+
+File issues at https://github.com/christopherfretz/kiln/issues. A crash
+prints an "internal compiler error" report and writes a reproducer (a
+preprocessed `.ii` and a `.sh` that reruns the command). Attach both
+files. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
+
 ## License
 
 Dual-licensed under MIT or Apache-2.0, at your option. `resource/include`

@@ -57,6 +57,18 @@ pub enum TagUse {
     Friend,
 }
 
+/// The bound on [`ClassifyMemo`]'s entries: the table is cleared when
+/// full, so it never holds more than this many results.
+const CLASSIFY_MEMO_MAX: usize = 4096;
+
+/// [`Sema::classify_name`]'s memo: (name, qualifier, nested-name lookup)
+/// to the class, valid while [`Sema::lookup_stamp`] is `stamp`.
+#[derive(Debug, Default)]
+pub(crate) struct ClassifyMemo {
+    stamp: u64,
+    map: kiln_source::fx::FxHashMap<(Symbol, Option<DeclId>, bool), NameClass>,
+}
+
 /// What a name denotes, for the parser's decisions
 /// ([basic.lookup], clang's `Sema::ClassifyName`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -7643,7 +7655,7 @@ impl Sema<'_, '_> {
                 }
             }
         }
-        let ctx = qualifier.unwrap_or_else(|| self.tag_decl_context(use_));
+        let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         if plain_ref
             && !conflict
@@ -7725,6 +7737,48 @@ impl Sema<'_, '_> {
     /// invalid and kept out of lookup, so later uses find the first one
     /// (clang's `ActOnTag` makes it anonymous and invalid), and the parser
     /// skips its body ([`Sema::tag_body_skipped`]; spec/sema.md §4.4).
+    /// [dcl.fct]/17: "'X' cannot be defined in a parameter type" for tag
+    /// `d`, just defined in a parameter-declaration's decl-specifier-seq
+    /// (clang `GetFullTypeForDeclarator`, `err_type_defined_in_param_type`
+    /// at the tag's location).
+    pub fn diag_type_defined_in_param(&mut self, d: DeclId) {
+        let loc = self.ast.decls.get(d).loc();
+        // clang streams the tag's (empty) name, not its type: an unnamed
+        // tag prints as `(null)`.
+        let what = if self.ast.decls.get(d).name().is_empty() {
+            "(null)".to_string()
+        } else {
+            self.ty_arg(self.tag_type(d))
+        };
+        let msg = self.diag(DiagId::sema_type_defined_in_param_type, loc).arg(what);
+        self.emit(msg);
+    }
+
+    /// Where a tag defined while `ctx` is the current context goes: `ctx`
+    /// itself, unless it is a complete class, whose member list is frozen
+    /// (spec/ast.md §2.4). That happens only for an ill-formed tag (one
+    /// defined in the parameter clause of an out-of-line member function,
+    /// [dcl.fct]/17, diagnosed by the caller): it is declared in the
+    /// nearest enclosing context that is not a class instead (clang adds it
+    /// to the class, WP-962).
+    fn tag_home(&self, mut ctx: DeclId) -> DeclId {
+        for _ in 0..256 {
+            let complete = self
+                .ast
+                .decls
+                .record(ctx)
+                .is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+            if !complete {
+                break;
+            }
+            match self.ast.decls.get(ctx).ctx() {
+                Some(c) => ctx = c,
+                None => break,
+            }
+        }
+        ctx
+    }
+
     fn diag_tag_redefinition(&mut self, p: DeclId, n: Symbol, nloc: Loc) -> bool {
         let Some(def) = self.ast.definition(p) else {
             return false;
@@ -9662,7 +9716,51 @@ impl Sema<'_, '_> {
     /// What an identifier names here (for parser decisions,
     /// [basic.lookup.unqual]); `qualifier` is the context named by a
     /// preceding nested-name-specifier.
+    ///
+    /// Memoized under [`Sema::lookup_stamp`] (spec/parse.md §2.5): the
+    /// parser's lookahead classifies each name of a nested template-id
+    /// several times before parsing it.
     pub fn classify_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        self.classify_memoized(name, qualifier, false, || {
+            self.classify_name_uncached(name, qualifier)
+        })
+    }
+
+    /// [`Sema::classify_name`] through the memo; `nested` keys
+    /// [`Sema::classify_nested_name`]'s results apart.
+    fn classify_memoized(
+        &self,
+        name: Symbol,
+        qualifier: Option<DeclId>,
+        nested: bool,
+        f: impl FnOnce() -> NameClass,
+    ) -> NameClass {
+        let stamp = self.lookup_stamp();
+        let key = (name, qualifier, nested);
+        {
+            let mut m = self.classify_memo.borrow_mut();
+            if m.stamp != stamp {
+                m.stamp = stamp;
+                m.map.clear();
+            }
+            if let Some(&c) = m.map.get(&key) {
+                return c;
+            }
+        }
+        let c = f();
+        let mut m = self.classify_memo.borrow_mut();
+        // A nested classification may have refreshed the memo; keep only
+        // results computed under the current stamp, and bound the table.
+        if m.stamp == stamp {
+            if m.map.len() >= CLASSIFY_MEMO_MAX {
+                m.map.clear();
+            }
+            let _ = m.map.insert(key, c);
+        }
+        c
+    }
+
+    fn classify_name_uncached(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
         let qualifier = qualifier.map(|q| self.type_name_qualifier(q));
         if let Some(q) = qualifier
             && self.kind_of(q) == DeclKind::ClassTemplate
@@ -9760,6 +9858,12 @@ impl Sema<'_, '_> {
     /// whose specializations are types ([basic.lookup.qual]/1), so a
     /// variable `fs` does not hide the namespace alias in `fs::path(..)`.
     pub fn classify_nested_name(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
+        self.classify_memoized(name, qualifier, true, || {
+            self.classify_nested_name_uncached(name, qualifier)
+        })
+    }
+
+    fn classify_nested_name_uncached(&self, name: Symbol, qualifier: Option<DeclId>) -> NameClass {
         let class = self.classify_name(name, qualifier);
         if !matches!(class, NameClass::Value(_) | NameClass::FunctionTemplate(_)) {
             return class;

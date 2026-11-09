@@ -48,6 +48,10 @@ pub enum Expect {
     /// and/or `lldb` scripts and check their output (spec/harness.md
     /// "Debugger tests"; WP-814).
     Debugger,
+    /// kiln only: the compile crashes on purpose (`-fkiln-crash-for-testing=`)
+    /// and its internal-compiler-error banner and crash reproducer are
+    /// checked (spec/harness.md "ice tests"; WP-911).
+    Ice,
 }
 
 impl Expect {
@@ -64,11 +68,11 @@ impl Expect {
             "no-crash" => Self::NoCrash,
             "cfg" => Self::Cfg,
             "debugger" => Self::Debugger,
+            "ice" => Self::Ice,
             _ => return None,
         })
     }
 
-    #[cfg(test)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CompileOk => "compile-ok",
@@ -82,6 +86,7 @@ impl Expect {
             Self::NoCrash => "no-crash",
             Self::Cfg => "cfg",
             Self::Debugger => "debugger",
+            Self::Ice => "ice",
         }
     }
 }
@@ -353,6 +358,9 @@ pub struct TestSpec {
     pub gdb: DebuggerScript,
     /// `lldb:` / `lldb-check:` (`expect: debugger`).
     pub lldb: DebuggerScript,
+    /// `ice:` (`expect: ice`): substrings the crash report's stderr must
+    /// contain in order, each after the end of the previous one.
+    pub ice: Vec<String>,
 }
 
 /// A clang that a test runs, for `requires: clang>=`: what it is to the
@@ -548,6 +556,9 @@ struct Parser {
     meta_header_skip: Option<String>,
     gdb: DebuggerScript,
     lldb: DebuggerScript,
+    ice: Vec<String>,
+    /// Lines of the `ice:` directives.
+    ice_lines: Vec<usize>,
     /// Lines of directives whose validity depends on `expect`.
     run_only: Vec<(usize, &'static str)>,
     debugger_only: Vec<(usize, &'static str)>,
@@ -609,6 +620,8 @@ impl Parser {
             run_only: Vec::new(),
             gdb: DebuggerScript::default(),
             lldb: DebuggerScript::default(),
+            ice: Vec::new(),
+            ice_lines: Vec::new(),
             debugger_only: Vec::new(),
             pp_only: Vec::new(),
             ast_only: Vec::new(),
@@ -761,6 +774,13 @@ impl Parser {
                 let list =
                     if name.ends_with("-check") { &mut script.checks } else { &mut script.commands };
                 list.push(value.to_owned());
+            }
+            "ice" => {
+                if value.is_empty() {
+                    self.err(line, "`ice` requires a value");
+                }
+                self.ice.push(value.to_owned());
+                self.ice_lines.push(line);
             }
             "env" => self.env_directive(line, value),
             "oracle" => self.oracle_directive(line, value),
@@ -1199,6 +1219,16 @@ impl Parser {
                 self.err(line, format!("`{key}` only applies to `expect: debugger`"));
             }
         }
+        if expect == Expect::Ice {
+            if self.diag_line != 0 {
+                let line = self.diag_line;
+                self.err(line, "`diag` does not apply to `ice` tests (use `ice:`)");
+            }
+        } else {
+            for line in std::mem::take(&mut self.ice_lines) {
+                self.err(line, "`ice` only applies to `expect: ice`");
+            }
+        }
         if expect != Expect::Pp {
             for (line, key) in std::mem::take(&mut self.pp_only) {
                 self.err(line, format!("`{key}` only applies to `expect: pp`"));
@@ -1298,6 +1328,7 @@ impl Parser {
             meta_header_skip: self.meta_header_skip,
             gdb: self.gdb,
             lldb: self.lldb,
+            ice: self.ice,
         })
     }
 }
@@ -1377,6 +1408,7 @@ fn is_known_key(k: &str) -> bool {
             | "gdb-check"
             | "lldb"
             | "lldb-check"
+            | "ice"
     )
 }
 
@@ -2061,6 +2093,23 @@ mod tests {
                 "line 2: `lldb-check` without `lldb:` commands"
             ]
         );
+    }
+
+    #[test]
+    fn ice_directives() {
+        let src = "//@ expect: ice\n//@ args: -fkiln-crash-for-testing=parse\n\
+                   //@ ice: internal compiler error\n//@ ice: phase: parse\n";
+        let s = parse(src, Lang::Cxx).unwrap();
+        assert_eq!(s.expect, Expect::Ice);
+        assert_eq!(s.expect.as_str(), "ice");
+        assert_eq!(s.ice, ["internal compiler error", "phase: parse"]);
+        assert!(!s.oracle);
+        assert_eq!(errs("//@ ice: x\n"), ["line 1: `ice` only applies to `expect: ice`"]);
+        assert_eq!(
+            errs("//@ expect: ice\n//@ diag: 1 error \"x\"\n"),
+            ["line 2: `diag` does not apply to `ice` tests (use `ice:`)"]
+        );
+        assert_eq!(errs("//@ expect: ice\n//@ ice:\n"), ["line 2: `ice` requires a value"]);
     }
 
     #[test]

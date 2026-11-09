@@ -554,10 +554,7 @@ impl<'a> Cg<'a> {
         self.check_aliases();
         self.ub_strip_noreturn_decls();
         self.trailer();
-        match self.take_debug_info_error() {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        Ok(())
     }
 
     /// Class definition `def` is incomplete to code emitted now: the

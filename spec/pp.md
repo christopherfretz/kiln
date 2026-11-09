@@ -732,7 +732,8 @@ belong to WP-017, which builds them on `macro_defined` and
 
   `kiln_pp::build_predefines(base, &PredefConfig, &[CmdMacro])` (WP-014,
   `predef.rs`) builds the buffer clang's way, in this order:
-  - `__KILN__`, `__KILN_MAJOR__` and `__KILN_MINOR__`;
+  - `__KILN__`, `__KILN_MAJOR__`, `__KILN_MINOR__` and `__KILN_PATCH__`
+    (`PredefConfig::kiln_version`; spec/driver.md "Version");
   - `# 1 "<built-in>" 3`;
   - the sorted base macros, adjusted for the dialect and the
     macro-changing flags (`PredefConfig`; the effects are measured in

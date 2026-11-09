@@ -19,6 +19,7 @@ cargo xtask test [options] [paths...]
 | `--gcc <path>` | The GCC oracle of `oracle: gcc` tests (see "GCC oracle"). Default `$KILN_GCC`, else `g++-16` on `PATH`. A GCC named by the flag or by `KILN_GCC` that does not run or does not identify as GCC is a usage error (exit 2); the default one missing drops the GCC comparisons. |
 | `--no-gcc` | Drop the GCC comparisons only. |
 | `--meta-header` | The header-differential mode: the reflection tests compile against GCC 16.1's real `<meta>` instead of kiln's `tests/support/kiln_meta.h` (see "Header-differential mode"). Needs kiln as the compiler under test and a GCC oracle whose install prefix can be found (a usage error, exit 2, otherwise). |
+| `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -67,7 +68,7 @@ directives are also ERRORs.
 
 | Directive | Semantics |
 |---|---|
-| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| debugger \| no-crash` | Test kind. Default `compile-ok`. |
+| `expect: compile-ok \| compile-fail \| run \| pp \| ast \| cfg \| layout \| vtables \| ir \| debugger \| no-crash \| ice` | Test kind. Default `compile-ok`. |
 | `std: <std>` | `c++98 c++03 c++11 c++14 c++17 c++20 c++23 c++26` (C++), `c89 c99 c11 c17 c23` (C). Default `c++26` / `c17`. Passed as `-std=<std>`. |
 | `args: <flags>` | Extra compiler flags, split shell-style (quotes, backslash). It may be repeated, and the flags accumulate. Placeholders are substituted in each flag (below). |
 | `diag: <line>[:<col>] <sev> "<substring>" [dup(clang)]` | Expected diagnostic. `<sev>` is one of `error fatal warning note remark`. If the column is omitted, any column matches. `dup(clang)`, after the substring and only on a primary (non-note) directive, says clang prints this group twice where kiln's engine prints it once (spec/diag.md §7.4.1); see "Diagnostics". |
@@ -77,6 +78,7 @@ directives are also ERRORs.
 | `stdout-file: <path>` | `run` only. The expected stdout is the file's exact contents. The path is relative to the test's directory. It cannot be combined with `stdout:`. |
 | `exit: <code>` | `run` only. Expected exit code. Default 0. |
 | `gdb: <command>` / `lldb: <command>` | `debugger` only. One line of the gdb (lldb) command script, in order; repeatable. See "Debugger tests". |
+| `ice: <text>` | `ice` only. A substring the crash report's stderr must contain, each after the end of the previous one's match (so two may sit on one line); repeatable. `diag:` and `strict-diags` do not apply to `ice` tests (an ERROR). See "ice tests". |
 | `gdb-check: <text>` / `lldb-check: <text>` | `debugger` only. A substring that must appear in the debugger's output, each check on a line after the previous check's line; repeatable. Commands without checks, checks without commands, and a `debugger` test with neither debugger are ERRORs. |
 | `run-args: <args>` | `run` only. Program arguments, split shell-style as for `args:`. It may be repeated, and the arguments accumulate. |
 | `run-stdin: <text>` | `run` only. Each line contributes its value, trimmed, plus `\n`, to the program's stdin, as for `stdout:`. Repeated lines concatenate in order. |
@@ -178,10 +180,14 @@ last (see "kiln-specific tests").
 Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
 
 - the compile is killed by a signal or times out, or
-- stderr contains `panicked at` or `PLEASE submit a bug report`.
+- stderr contains `internal compiler error: ` (kiln's crash banner,
+  spec/driver.md "Internal compiler errors"), `panicked at` or `PLEASE
+  submit a bug report`.
 
-This holds whatever the expectation is. An internal compiler error never
-satisfies `compile-fail`.
+This holds whatever the expectation is, except under `expect: ice`. An
+internal compiler error never satisfies `compile-fail`. kiln gets
+`-fno-crash-diagnostics` right after `-std=`, so a crashing test writes no
+reproducer into `$TMPDIR`.
 
 | Kind | Mode | Pass condition |
 |---|---|---|
@@ -196,6 +202,7 @@ satisfies `compile-fail`.
 | `vtables` | kiln: `-fsyntax-only -fdump-vtable-layouts`; clang: `-S -emit-llvm -o <scratch>/test.ll -Xclang -fdump-vtable-layouts` | exit 0; the diags match; the dump has at least one vtable block; the oracle's dump has the same set of blocks. See "Layout and vtable tests". |
 | `ir` | `-S -emit-llvm -O0 -o <scratch>/test.ll` (the oracle: `<scratch>/oracle.ll`) | exit 0; the diags match; the module defines at least one function; it equals the oracle's after normalization. See "IR tests". |
 | `debugger` | compile and link with `-O0 -g` to `<scratch>/test.out`, then run gdb and/or lldb over it | the compile succeeds and the diags match; each debugger's output contains its checks in order. See "Debugger tests". |
+| `ice` | kiln only: `-fsyntax-only` (none when `args:` hold `-c` or `-S`; then `-o <scratch>/ice.out`), `-fcrash-diagnostics -fcrash-diagnostics-dir=<scratch>/crash` | the compile crashes with kiln's internal-compiler-error banner and exits 1 (70 under `-fno-crash-diagnostics`); the `ice:` texts appear in order; the reproducer files the banner lists are exactly the files in `<scratch>/crash` (none under `-fno-crash-diagnostics`). See "ice tests". |
 | `no-crash` | `-fsyntax-only -ferror-limit=0` (before the test's `args:`, so an explicit `-ferror-limit=N` there wins; a crash must not hide behind the error limit, WP-145) | exit 0 or 1 (errors anywhere are fine, in the test file or not), and the diags match; any other exit code (an internal-error exit such as 70 or 101) is a FAIL, as is a crash or hang (above). For robustness tests over input the compiler cannot fully handle yet, e.g. whole headers with `-ferror-limit=0` (WP-141). |
 
 The `run` binary runs with cwd = its scratch dir, the `run-args:` arguments,
@@ -368,6 +375,32 @@ A test whose answer through the real header is known to differ guards
 the difference with `#if defined(__KILN__) && !defined(KILN_REAL_META)`
 or opts out with `meta-header: skip`. The mode is a local and release
 check (docs/VALIDATION.md), not part of `cargo xtask ci`.
+
+### Debug-info sweep
+
+`cargo xtask test --debug-sweep [paths...]` (WP-910) checks that `-g`
+never breaks a program kiln compiles. For each test it:
+
+- **SKIP**s a test that is not `compile-ok`, `run`, `ir`, `layout`,
+  `vtables` or `debugger` (reason ``not swept (`expect: <kind>`,
+  `--debug-sweep`)``), after the usual `requires`/`skip` gates;
+- compiles the test with its `args` and `-c` to an object, without
+  `-g`. A test that does not compile to an object (an `xfail(kiln)`, a
+  `-fsyntax-only` in its `args`) is a **SKIP**, ``does not compile to an
+  object without -g (<end>)``;
+- compiles it again with `-c -g`, which must succeed and write the
+  object, else **FAIL** with the compiler's stderr;
+- runs `llvm-dwarfdump --verify` on the `-g` object (the toolchain's
+  `bin/llvm-dwarfdump`, else `llvm-dwarfdump-N` on `PATH` for the
+  toolchain's major version, else none, and the sweep only compiles); a
+  verifier error is a **FAIL** with its output.
+
+`xfail` does not apply (a test is swept only when it compiles), and
+neither do diagnostics, oracles, run output or `oven:` budgets. Both
+compiles run under the test's memory cap and the compile timeout; a
+crash or hang is a FAIL as in any mode. The sweep is a local and release
+check (docs/VALIDATION.md), not part of `cargo xtask ci`: the whole
+conformance corpus takes several minutes.
 
 ### verify tests
 
@@ -600,6 +633,30 @@ blocked), so lldb scripts start with `settings set target.disable-aslr
 false`; prefer `frame variable` / `target variable` to `expression`,
 which needs a JIT. gdb `-batch` does not print `finish`'s "Run till
 exit" banner. The corpus is `tests/debuginfo/`.
+
+### ice tests
+
+`expect: ice` checks kiln's crash path (spec/driver.md "Internal compiler
+errors"; WP-911): the test's `args:` name the hidden
+`-fkiln-crash-for-testing=<phase>`, which makes kiln panic on purpose in
+that phase. The harness removes `<scratch>/crash`, compiles with
+`-fcrash-diagnostics -fcrash-diagnostics-dir=<scratch>/crash` (after the
+default `-fno-crash-diagnostics`, before the test's `args:`, so a test's own
+`-fno-crash-diagnostics` wins), and the test PASSes when:
+
+- stderr contains `error: internal compiler error: ` (the crash checks
+  of "Test kinds" do not apply);
+- the exit code is 1, or 70 when the last `-f[no-]crash-diagnostics[=…]`
+  of `args:` turns crash diagnostics off;
+- each `ice:` text is found after the previous one's match;
+- the absolute paths on the banner's `note: diagnostic msg: ` lines (its
+  other `diagnostic msg:` lines are messages, as clang's) are exactly the
+  files in `<scratch>/crash`: at least one normally, none when crash
+  diagnostics are off.
+
+Any other compiler is a SKIP with the reason "not supported by this
+compiler (`expect: ice` needs kiln)". The corpus is
+`tests/conformance/driver.crash/`.
 
 ### kiln-specific tests
 
@@ -1088,6 +1145,70 @@ from `tests/conformance/stress/`, with
 `tests/stress/dump-friend-template-cycle.cpp`, the AST dumper cycle of
 2026-10-31, under `mem<=512`); and the E0463 retry (WP-124).
 
+## Dist
+
+`cargo xtask dist [--target <triple>] [--out <dir>] [--check] [--keep]`
+(`xtask/src/dist.rs`, WP-927) builds the release archives of the install
+layout (spec/driver.md "Installation layout"). It is not part of `ci`: a
+`dist` build is a full thin-LTO release build, several minutes. The
+tag-only workflow `.github/workflows/release.yml` runs it with `--check`
+on both CI architectures and attaches the results to a draft GitHub
+release; a run of `cargo xtask dist --check` locally is the pre-tag check.
+
+1. **Build.** `cargo build --locked --profile dist -p kiln_driver
+   --features dist [--target <triple>]`. The `dist` profile
+   (`Cargo.toml`) is `release` (thin LTO, line-table debug information)
+   unstripped; the `dist` feature compiles the source-tree resource
+   fallback out (spec/driver.md "Toolchain"). `CARGO_ENCODED_RUSTFLAGS`
+   gets the caller's flags plus `--remap-path-prefix` for the checkout
+   (`/kiln`), the target directory (`/kiln/target`), `$CARGO_HOME`
+   (`/cargo`) and `$RUSTUP_HOME` (`/rustup`), each as given and
+   canonicalized.
+2. **Split.** `objcopy --only-keep-debug` the binary to `kiln.debug`, then
+   `objcopy --strip-debug --add-gnu-debuglink=kiln.debug` it to
+   `bin/kiln` (`$OBJCOPY`, else `objcopy`, else `llvm-objcopy-19`).
+3. **Assemble** `kiln-<version>-<triple>/` (`dist::assemble`): `bin/kiln`,
+   `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
+   `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
+   `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
+   binary 0755.
+4. **Archive** (`dist::tar_xz`), into `--out` (default
+   `<target-dir>/kiln-dist`): `kiln-<version>-<triple>.tar.xz` with the
+   stripped binary and `kiln-<version>-<triple>-symbols.tar.xz` with the
+   unstripped one, then `SHA256SUMS` (`sha256sum` of both). Archives are
+   reproducible: GNU tar `--sort=name --format=gnu --owner=0 --group=0
+   --numeric-owner --mtime=@<epoch>`, normalized modes, `xz -9 -T1`; the
+   epoch is `$SOURCE_DATE_EPOCH`, else HEAD's commit time, else 0. The
+   sizes are printed. `<version>` is the workspace version
+   (spec/driver.md "Version").
+5. **`--check`** extracts both archives under `<out>/check-<pid>/` and
+   runs, in a directory outside the checkout (beside the extraction when
+   `<out>` is outside it, else the system temporary directory), with
+   every `KILN_*` variable removed from the environment and the
+   extracted `bin/` first on `PATH`:
+   - the layout (step 3) is there and `bin/kiln++` links to `kiln`;
+   - `kiln++ --version` names the version;
+   - `-print-resource-dir` through `PATH`, `bin/kiln` and a symlink to
+     `bin/kiln++` from elsewhere prints `<prefix>/lib/kiln/<major>`;
+   - hello world (`<iostream>`) compiles, links and prints its line;
+   - a constexpr-heavy TU (a sieve over `new[]` and a `std::vector`
+     sort, `-std=c++26 -O1 -fconstexpr-steps=100000000`) compiles and
+     runs;
+   - a `<meta>` reflection TU compiles at `-std=c++26 -freflection` with
+     `--gcc-toolchain=` of the GCC 16.1 oracle ("GCC oracle"; skipped
+     without one unless `KILN_REQUIRE_GCC=1`, which makes it an error);
+   - no build-host path (step 1's list) appears in either archive's
+     binary or in anything the steps printed (the extracted prefix and
+     the scratch directory blanked out first);
+   - the stripped binary's `.gnu_debuglink` names `kiln.debug` with the
+     CRC-32 of `objcopy --only-keep-debug` of the symbols archive's
+     binary.
+
+   The directories are removed afterwards unless `--keep`. Tests:
+   `xtask/src/dist.rs` `tests` (options, the CRC, the path scan, the
+   layout and a byte-identical re-archive) run in `cargo test`; the build
+   and `--check` run in release.yml and by hand.
+
 ## Feature table
 
 `docs/STANDARD_SUPPORT.md` is the standard support table: what kiln
@@ -1181,6 +1302,8 @@ or infrastructure error. Parse errors name their line.
   (tests.rs), `gcc_install_prefix_is_four_up_from_install` and
   `gcc_args_drop_gcc_toolchain` (oracle.rs); the corpus run under
   `--meta-header` (docs/VALIDATION.md).
+- Debug-info sweep (WP-910): `debug_sweep_mode_selection` (tests.rs);
+  the sweep of `tests/conformance` (docs/VALIDATION.md).
 - `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`
   (directives.rs) and the `xtask/fixtures/basic` fixtures
   `pass-module.cpp` (two chained units precompiled by clang),
@@ -1254,6 +1377,9 @@ or infrastructure error. Parse errors name their line.
     lldb-19);
   - `--filter`;
   - `--update` (pp and ast goldens).
+- WP-911: `ice_directives` (directives.rs) and
+  `crash_diagnostics_off_takes_the_last_flag` (runner.rs);
+  `tests/conformance/driver.crash/` runs `expect: ice` end to end.
 - `debugger_directives` (directives.rs) and
   `debugger_checks_match_successive_lines_in_order` (runner.rs): the
   `gdb:`/`lldb:` directive errors and the in-order check matcher;

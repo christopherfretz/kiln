@@ -121,6 +121,9 @@ starting with `-` are inputs.
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name is accepted and ignored |
 | `-f[no-]fast-math`, its parts, `-ffp-model=`, `-ffp-contract=`, `-fdenormal-fp-math=`, the FP environment flags | see "Floating-point flags" (WP-806) |
 | `-fstack-protector*`, `-f[no-]unwind-tables`, `-f[no-]asynchronous-unwind-tables`, `-f[no-]plt`, `-ffunction-sections`, `-fdata-sections`, `-mtune=`, `-f[no-]wrapv`, `-f[no-]strict-overflow`, `-f[no-]delete-null-pointer-checks`, `-Wp,<list>`, `-Xpreprocessor <arg>`, and the ignored and rejected sets | see "Codegen flags" (WP-605) |
+| `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
+| `-fcrash-diagnostics-dir=<dir>` | where the crash reproducer is written (default `$TMPDIR`, else `/tmp`) (WP-911) |
+| `-fkiln-crash-for-testing=<phase>` | hidden (kiln's tests): panic on purpose in `<phase>`; see "Internal compiler errors" (WP-911) |
 
 ### Response files (WP-799)
 
@@ -420,14 +423,78 @@ behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
 and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
 (`-fsyntax-only`, codegen) is "not implemented yet" (WP-243).
 
+## Installation layout
+
+`cargo xtask dist` (spec/harness.md "Dist") packages kiln as a
+relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
+
+```
+<prefix>/bin/kiln
+<prefix>/bin/kiln++ -> kiln              relative symlink ("Driver modes")
+<prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
+                                         headers, contracts, module.modulemap
+<prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
+<prefix>/share/doc/kiln/                 README.md, LICENSE-MIT, LICENSE-APACHE,
+                                         COMPATIBILITY.md, STABILITY.md
+```
+
+- `<major>` is the major version ("Version"): two major versions install
+  side by side under one prefix, each binary finding its own resource
+  directory. `lib/kiln/<major>` is the resource directory: `kiln
+  -print-resource-dir` prints it ("Toolchain", step 3), and it holds what
+  a source checkout's `resource/` holds except the test-only reference
+  data (`include-paths/`, `predefines/structure.diff`).
+- Nothing else is read from the tree, and nothing in it names the build
+  host: the `dist` build compiles the source-tree fallback out and remaps
+  the checkout, target directory, `$CARGO_HOME` and `$RUSTUP_HOME`
+  prefixes in panic locations and debug information
+  (`--remap-path-prefix` to `/kiln`, `/kiln/target`, `/cargo`, `/rustup`).
+  `--version`'s `InstalledDir:` is the directory the executable was run
+  from.
+- `bin/kiln` is stripped of debug information but keeps its symbol table
+  (so backtraces and the ICE report name functions) and carries a
+  `.gnu_debuglink` to `kiln.debug`. The `-symbols` archive is the same
+  tree with the unstripped binary; `objcopy --only-keep-debug
+  <symbols>/bin/kiln <prefix>/bin/kiln.debug` makes the file the link
+  names (its CRC matches; `cargo xtask dist --check` checks it), or the
+  symbols tree can be used directly.
+- **Run-time dependencies.** kiln runs LLVM's tools and links through
+  `clang++` ("Code generation", "Tools"): an LLVM 19 (or 22) installation
+  with `llc`, `llvm-as` and `clang++`, found through `$KILN_LLVM_DIR`
+  (default `/usr/lib/llvm-19`) or the versioned names on `PATH`. The C++ standard
+  library is the system's libstdc++ (GCC's installation, "Toolchain") or
+  libc++ (`-stdlib=libc++`, from the LLVM directory). The binary itself
+  needs only the C library: the newest glibc symbol version it references
+  (`readelf -V bin/kiln`) is the floor, GLIBC_2.39 for the aarch64 build
+  of WP-927 (Rust's `std::process` uses `pidfd_spawnp`), built in the CI
+  container (Debian trixie, glibc 2.41).
+
 ## Toolchain
 
 `Toolchain::new(target, sysroot, resource_dir)` locates:
 
-- **Resource directory:** `-resource-dir`, else `$KILN_RESOURCE_DIR`, else
-  the nearest `resource/` with a `predefines/` directory above the
-  executable, else the source tree's `resource/`. kiln's predefines base
-  files are `<resource>/predefines/<triple>.<std>.txt`.
+- **Resource directory:** the first of (WP-927; "Installation layout"):
+  1. `-resource-dir=<dir>` (or `-resource-dir <dir>`);
+  2. `$KILN_RESOURCE_DIR`, when set and not empty;
+  3. the install layout's `<prefix>/lib/kiln/<major>`, where `<prefix>` is
+     the parent of the directory holding the executable after resolving
+     every symlink (`std::env::current_exe`, then canonicalized: a
+     `kiln++` symlink, a symlink to it on `PATH` and a hard link all find
+     the tree they belong to), when it has a `predefines/` directory;
+  4. the nearest `resource/` with a `predefines/` directory above the
+     executable (a source checkout whose target directory is inside it);
+  5. in a source build, the source tree's `resource/` (compiled in from
+     `CARGO_MANIFEST_DIR`). A `dist` build (`kiln_driver`'s cargo feature
+     `dist`, which `cargo xtask dist` sets) has no such path, so that a
+     release binary never holds or prints the build host's checkout; its
+     last resort is step 3's directory even though it is missing, so that
+     the error names where the files belong.
+
+  `toolchain::default_resource_dir` is steps 2-5;
+  `toolchain::install_resource_dir(exe)` is step 3's path. kiln's
+  predefines base files are `<resource>/predefines/<triple>.<std>.txt`
+  and its builtin headers `<resource>/include`. Test:
+  `crates/kiln_driver/tests/install_layout.rs`.
 - **LLVM:** `$KILN_LLVM_DIR`, default `/usr/lib/llvm-19` (a build with
   `KILN_DEFAULT_LLVM_DIR` set in its environment uses that instead, for a
   package whose LLVM is installed elsewhere; `toolchain::DEFAULT_LLVM_DIR`).
@@ -580,7 +647,8 @@ The `<built-in>` buffer is `kiln_pp::build_predefines(base, cfg, -D/-U)`.
 - `-freflection` at C++26: `__cpp_impl_reflection 202603L` (GCC 16.1's
   value, `g++-16 -std=c++26 -freflection -dM -E`; libstdc++ 16's `<meta>`
   keys on it; spec/reflection.md §1 item 5).
-- kiln adds `__KILN__ 1`, `__KILN_MAJOR__` and `__KILN_MINOR__`. kiln
+- kiln adds `__KILN__ 1`, `__KILN_MAJOR__`, `__KILN_MINOR__` and
+  `__KILN_PATCH__` (WP-927), the components of the version ("Version"). kiln
   defines `__clang__` and the clang version macros exactly as clang 19 does,
   so headers take their clang paths.
 
@@ -930,8 +998,9 @@ This is clang's `DependencyCollector` and `DependencyFileGenerator`.
   (typically a `ulimit -v` cap below the reservation) the driver prints
   `<prog>: error: cannot create the compile thread with a <n>-byte stack:
   <os reason> (lower it with -fkiln-stack-size=)` and exits with status 70
-  (WP-682); it never exits silently. A panic on the compile thread, already
-  reported by the panic hook, also exits with 70.
+  (WP-682); it never exits silently. A panic (an internal compiler
+  error) exits with 1, or 70 under `-fno-crash-diagnostics`; see
+  "Internal compiler errors".
 - With errors, `-o <file>` is not written and neither are dependency
   files. Standard output still receives the text, as clang does.
 - An output that cannot be opened reports
@@ -961,6 +1030,165 @@ Driver diagnostics, in clang's wording:
 - warning `'<arch>' does not support '<flag>'; flag ignored [-Woption-ignored]`
 - warning `treating '<c type>' input as '<c++ type>' when in C++ mode, this behavior is deprecated [-Wdeprecated]`
 
+## Internal compiler errors
+
+A panic anywhere in the compiler is an internal compiler error (ICE): a
+kiln bug, never the program's fault. The `kiln` binary installs a panic
+hook before it does anything else (`crates/kiln_driver/src/crash.rs`,
+WP-911), so an ICE is reported the way clang reports a crash and not as
+Rust's `thread '...' panicked at` text. In-process users of the driver
+library (the tests) install no hook and see Rust's default behaviour.
+
+### The report
+
+On standard error, each line prefixed with the program's basename like
+other driver diagnostics:
+
+```
+kiln++: error: internal compiler error: <panic message, first line>
+  <further lines of the message, indented>
+kiln++: note: while compiling '<input>' (phase: <phase>, at <file>:<line>:<col>)
+kiln++: note: in compiler source <crate file>:<line>:<col> (thread '<name>')
+kiln <version> (<git sha>)
+kiln++: note: please submit a bug report to https://github.com/christopherfretz/kiln/issues and include the crash reproducer
+kiln++: note: set KILN_BACKTRACE=1 to include the compiler backtrace
+kiln++: note: preprocessed source and associated run script are located at:
+kiln++: note: diagnostic msg: <dir>/<stem>-<random>.ii
+kiln++: note: diagnostic msg: <dir>/<stem>-<random>.sh
+```
+
+- `<input>` is the input being compiled, `<stdin>` for `-`. A panic
+  outside any input (argument handling, linking) says `while running the
+  driver`.
+- `<phase>` and the location come from the current-activity breadcrumb
+  (`kiln_source::activity`), a thread-local cell holding a phase and a
+  `Loc`. The pipeline updates it at a few coarse points, and an update is
+  one thread-local store:
+  - `preprocess`: when an `-E` job starts;
+  - `parse`: at each top-level declaration, with its location (so the
+    location is the start of the declaration being parsed);
+  - `oven`: around each constant evaluation, with the expression's
+    location, restoring the previous activity afterwards;
+  - `sema`: end-of-translation-unit analysis (pending instantiations,
+    final checks);
+  - `codegen`: LLVM IR generation;
+  - `driver`: everything else.
+
+  `, at <loc>` is left out when no location is known. The location is
+  resolved, as a presumed location, only after the panic, in the
+  input's own source manager.
+- The `in compiler source` line gives the panic's location in kiln's
+  source and the thread's name (the compile thread is `kiln`).
+- The version line is `kiln <version> (<sha>)`: the version and the
+  commit of "Version" (`kiln_driver::version::GIT_SHA`), with `unknown`
+  when the build recorded no commit.
+- The backtrace: with `KILN_BACKTRACE` or `RUST_BACKTRACE` set to
+  anything other than empty or `0`, the backtrace note is replaced by
+  `note: compiler backtrace:` followed by the Rust backtrace of the
+  panicking thread. Otherwise none is captured.
+- The last three lines are the reproducer (below). Under
+  `-fno-crash-diagnostics` they are left out.
+
+### Exit status
+
+kiln matches clang 19's driver:
+
+- **1** after the reproducer is written, or after an attempt to write
+  it that failed. clang's driver exits 1 once it has printed its
+  `diagnostic msg:` lines.
+- **70** (`EX_SOFTWARE`) under `-fno-crash-diagnostics`. clang's driver
+  then passes on the status of the crashed `-cc1`, and its driver treats
+  70 as a `-cc1` crash. Before WP-911 every kiln panic exited 70.
+
+A failure to create the compile thread still exits 70 (see "Output,
+diagnostics, exit status").
+
+### The reproducer
+
+Unless `-fno-crash-diagnostics` (or `-fcrash-diagnostics=off`) is given,
+kiln writes two files:
+
+- `<dir>/<stem>-<random>.ii`: the crashing input, preprocessed as `-E`
+  would do it with the same flags (same macros, include paths and
+  `-std=`; dependency output, `-o` and `-v` are dropped), with
+  linemarkers. It is `.i` for a C input.
+- `<dir>/<stem>-<random>.sh`: a POSIX shell script with three comment
+  lines (the compiler identity, the original command line after
+  response-file expansion, and the working directory), then `cd` to that
+  directory, then the same command with the input replaced by the
+  `.ii`. Each word is quoted for the shell. A relative program path is
+  made absolute, and the program keeps its name so the driver mode is
+  the same.
+
+The parts of the names:
+
+- `<dir>` is `-fcrash-diagnostics-dir=<dir>`, else `$TMPDIR` (when set
+  and not empty), else `/tmp`. It is created if missing, as clang does.
+- `<stem>` is the input's file stem (`stdin` for `-`).
+- `<random>` is six hexadecimal digits. The `.sh` is created exclusively,
+  and a name that already exists is retried with new digits.
+
+Edge cases:
+
+- The `.ii` is produced on a separate thread whose panics are caught. If
+  preprocessing the input also panics, only the `.sh` is written (it
+  runs the original command on the original input), and the report says
+  `note: diagnostic msg: preprocessing the input also crashed; only the
+  run script was written`.
+- For a panic outside any input, only the `.sh` is written, with a
+  similar `diagnostic msg:`.
+- A directory that cannot be created or a file that cannot be written
+  is reported as a `diagnostic msg:` line naming the reason.
+- A file on a `diagnostic msg:` line is `<dir>` joined with its name, so
+  it is absolute when `<dir>` is. The other `diagnostic msg:` lines are
+  prose (the harness tells them apart this way).
+
+`-fcrash-diagnostics` and `-fcrash-diagnostics=compiler|all` turn the
+reproducer back on. The last of these flags, `-fno-crash-diagnostics`
+and `-fcrash-diagnostics=off` wins.
+
+### Threads
+
+The hook records only the first panic of the process and prints nothing
+itself. The panic unwinds to `main`, which prints the report once:
+
+- A panic on a helper thread that the compile thread re-raises (as
+  `std::thread::scope` does) is the same crash, so the second record is
+  dropped. The link step's scoped threads are the only helper threads
+  today; codegen is single-threaded.
+- A second panic on the panicking thread before `main` has reported
+  (a panic in a destructor during unwinding) makes the Rust runtime
+  abort. The hook therefore prints the banner at once, followed by
+  `note: a second panic while unwinding aborts the compiler: <message>`,
+  with no reproducer. The process then aborts with `SIGABRT`.
+
+### Constraints
+
+- Every Cargo profile keeps `panic = "unwind"`. With `abort` the report
+  could still print from the hook, but the reproducer (written after
+  unwinding to `main`) and the exit code would be lost.
+- Stack exhaustion is not a panic. The stack guard reports it as a fatal
+  diagnostic (§1 P4), and an overflow it misses is a `SIGSEGV` that no
+  hook sees.
+- On the non-crashing path the cost is the breadcrumb stores plus one
+  `catch_unwind` frame and a recorded input path per input.
+
+### The test hook
+
+The hidden `-fkiln-crash-for-testing=<phase>` makes kiln panic on purpose
+with `crash requested by -fkiln-crash-for-testing=<phase>`. The phases
+are `driver`, `preprocess` (also `lex` or `pp`), `parse`, `sema`, `oven`
+and `codegen`.
+
+- The panic happens when that phase is entered. For `parse` it happens
+  at the first top-level declaration, for `oven` at the first constant
+  evaluation, and for `driver` right after argument parsing.
+- The request is per thread. A `preprocess` request also crashes the
+  reproducer's own preprocessing, which is how the `.sh`-only path is
+  tested.
+- An unknown phase is `invalid value`. The flag is not listed in
+  `--help`.
+
 ## `-v`, `--version`, `--help`
 
 - `--version` prints to standard output:
@@ -986,6 +1214,28 @@ Driver diagnostics, in clang's wording:
   clang does (WP-667).
 - `--help` prints a short summary of the implemented options and the
   two names' language rule (the usage line says `kiln` under both names).
+
+## Version
+
+kiln's version is the workspace's `[workspace.package] version`
+(`Cargo.toml`), semantic versioning with the compatibility scope of
+docs/STABILITY.md; it is changed there and nowhere else (WP-927).
+`kiln_driver::version` is the only reader:
+
+- `VERSION` (`CARGO_PKG_VERSION`) is what `--version`, `-v`,
+  `!llvm.ident` (`kiln version <v>`) and the release archive names
+  (`kiln-<v>-<triple>.tar.xz`) show;
+- `MAJOR`, `MINOR`, `PATCH` are `__KILN_MAJOR__`, `__KILN_MINOR__`,
+  `__KILN_PATCH__` ("Predefines") and `MAJOR` names the installed
+  resource directory `lib/kiln/<major>` ("Installation layout");
+- `GIT_SHA` is the 12-digit commit the binary was built from, recorded
+  by `crates/kiln_driver/build.rs`: `$KILN_GIT_SHA` at build time when it
+  is 7-40 hex digits, else `git rev-parse --short=12 HEAD` when the
+  workspace is the root of a git work tree (a source archive unpacked
+  inside another repository does not take that repository's commit),
+  else none; a build without git or `.git` records nothing and succeeds.
+  `long_version()` is `<v> (<sha>)`. The identity text that shows it is
+  WP-920's.
 
 ## Reproducible time
 
@@ -1130,6 +1380,23 @@ Each deviation is covered by a test or a test note.
   `-Wp,-MD,<f>` and a `-ffunction-sections` object. The IR effects are
   `tests/codegen/{stack_protector*,unwind_tables_*,no_plt*,wrapv,no_strict_overflow,no_delete_null_pointer_checks}.cpp`;
   `-Wp,-D` is `tests/conformance/cpp.predefined/wp-preprocessor-args.cpp`.
+- `crates/kiln_driver/tests/crash.rs` (WP-911): internal compiler
+  errors through the real `kiln++` with `-fkiln-crash-for-testing=`. It
+  checks:
+  - the banner line by line and exit 1;
+  - the `.ii` (linemarkers, the source) and the `.sh` (quoting, the input
+    replaced), and that replaying the `.sh` crashes again;
+  - `$TMPDIR` as the default directory;
+  - `-fno-crash-diagnostics` (exit 70, nothing written);
+  - backtraces only on request;
+  - a preprocessing crash (`.sh` only);
+  - a crash outside any input (`.sh` only);
+  - standard input.
+
+  The `crash.rs` unit tests cover quoting, the run script, the
+  suffixes and the thread funnel. The `kiln_source::activity` unit tests
+  cover the breadcrumb, and `tests/conformance/driver.crash/` the
+  harness's `expect: ice` tests (spec/harness.md).
 - `crates/kiln_driver/tests/record_layouts.rs`: the `tests/layout/`
   corpus (at least 40 programs). Each is dumped by
   `kiln++ -fdump-record-layouts` and by `clang -Xclang

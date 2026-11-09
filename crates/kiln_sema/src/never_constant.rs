@@ -150,14 +150,13 @@ impl Sema<'_, '_> {
         !fail.notes.is_empty()
             && !fail.notes.iter().any(|n| {
                 n.msg.starts_with("in call to ")
-                    // An oven gap ("kiln: ... is not supported yet") is
-                    // not proof the body never produces a constant.
-                    || n.msg.starts_with("kiln: ")
                     || n.msg.contains("uninitialized")
                     || n.msg.contains("was not deallocated")
                     || n.msg.starts_with("initializer of ")
                     || n.msg.starts_with("undefined ")
                     || n.msg.starts_with("unhandled exception")
+                    // A kiln limitation, not a clang failure (WP-962).
+                    || n.msg.starts_with("kiln:")
             })
     }
 
@@ -295,9 +294,16 @@ impl Sema<'_, '_> {
         }
         let evaluable = self.nc_evaluable(e);
         if !self.names_unknown(e, 0) {
-            return if evaluable { self.nc_eval(e) } else { Value::Unknown };
-        }
-        if evaluable && let Value::Known(v) = self.nc_eval_trial(e) {
+            if !evaluable {
+                return Value::Unknown;
+            }
+            match self.nc_eval(e) {
+                // A failure that may stem from a builtin clang evaluates
+                // but kiln's Oven may not: the operands decide (WP-962).
+                Value::Fails(_) if self.calls_opaque_builtin(e, 0) => {}
+                v => return v,
+            }
+        } else if evaluable && let Value::Known(v) = self.nc_eval_trial(e) {
             // An unknown name in an unevaluated operand, or one whose
             // value is not needed (a `const` local usable in constant
             // expressions).
@@ -342,23 +348,27 @@ impl Sema<'_, '_> {
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXDefaultInitExpr => {
-                let ops = if kind == ExprKind::CXXDefaultInitExpr {
+                let mut ops = if kind == ExprKind::CXXDefaultInitExpr {
                     let field = ex.default_init_field(e);
                     self.ast.decls.field(field).and_then(|fd| fd.init).into_iter().collect()
                 } else {
-                    let mut ops = ex.children(e, &self.ast.lists);
-                    if matches!(kind, ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr)
-                        && self.is_direct_callee(ex.callee(e))
-                    {
-                        // A named function is the callee, never a value
-                        // the call reads: clang evaluates a direct callee
-                        // without forming a pointer, so neither a
-                        // consteval function nor a builtin is a failure.
-                        let callee = ex.callee(e);
-                        ops.retain(|&c| c != callee);
-                    }
-                    ops
+                    ex.children(e, &self.ast.lists)
                 };
+                if let Some((callee, f)) = self.nc_direct_callee(e) {
+                    // The callee of a direct call is not a value
+                    // (clang evaluates it as the call's target, so a
+                    // builtin or a consteval function named there is
+                    // no failure); the arguments are evaluated.
+                    ops.retain(|&c| c != callee);
+                    if self.opaque_builtin(f) {
+                        for c in ops {
+                            if let p @ Value::Fails(_) = self.nc_expr(c, depth + 1) {
+                                return p;
+                            }
+                        }
+                        return Value::Unknown;
+                    }
+                }
                 // Every operand, the first never-constant one deciding.
                 for c in ops {
                     if let p @ Value::Fails(_) = self.nc_expr(c, depth + 1) {
@@ -371,26 +381,69 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Whether callee `c` names a function directly (a function name,
-    /// possibly parenthesized and decayed to a pointer).
-    fn is_direct_callee(&self, c: ExprId) -> bool {
+    /// The callee operand of call `e` and the function it names, when
+    /// `e` is a `CallExpr` or `CXXOperatorCallExpr` whose callee is a
+    /// (decayed, parenthesized) reference to a function.
+    fn nc_direct_callee(&self, e: ExprId) -> Option<(ExprId, DeclId)> {
         let ex = &self.ast.exprs;
-        let mut c = c;
-        for _ in 0..8 {
-            match ex.get(c).kind() {
+        if !matches!(ex.get(e).kind(), ExprKind::CallExpr | ExprKind::CXXOperatorCallExpr) {
+            return None;
+        }
+        let callee = *ex.children(e, &self.ast.lists).first()?;
+        let mut r = callee;
+        for _ in 0..16 {
+            match ex.get(r).kind() {
                 ExprKind::ImplicitCastExpr | ExprKind::ParenExpr => {
-                    c = ex.children(c, &self.ast.lists)[0];
+                    r = *ex.children(r, &self.ast.lists).first()?;
                 }
                 ExprKind::DeclRefExpr => {
+                    let d = ex.decl(r);
                     return matches!(
-                        self.kind_of(ex.decl(c)),
-                        DeclKind::Function | DeclKind::CXXMethod
-                    );
+                        self.kind_of(d),
+                        DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion
+                    )
+                    .then_some((callee, d));
                 }
-                _ => return false,
+                _ => return None,
             }
         }
-        false
+        None
+    }
+
+    /// Whether `f` is a builtin function whose failure in kiln's Oven
+    /// does not show that clang fails: every builtin except the ones
+    /// clang 19 does not constant-evaluate (the `Oven::No` rows of the
+    /// builtin table, which clang's evaluator rejects as "subexpression
+    /// not valid in a constant expression"; each checked against clang
+    /// 19's `__has_constexpr_builtin`). A builtin outside the table is
+    /// opaque too: when in doubt, possibly constant (WP-962).
+    fn opaque_builtin(&self, f: DeclId) -> bool {
+        use crate::templ::builtins::table::{self, Oven};
+        let Some(id) = self.ast.decls.builtin_id(f) else { return false };
+        let Some(info) = kiln_ast::decl::builtin::info(id) else { return true };
+        table::lookup(info.name).is_none_or(|r| r.oven != Oven::No)
+    }
+
+    /// Whether `e` calls an [opaque](Self::opaque_builtin) builtin
+    /// directly (outside unevaluated operands and lambda bodies).
+    fn calls_opaque_builtin(&self, e: ExprId, depth: u32) -> bool {
+        if depth > 256 {
+            return true;
+        }
+        let ex = &self.ast.exprs;
+        match ex.get(e).kind() {
+            ExprKind::UnaryExprOrTypeTraitExpr
+            | ExprKind::CXXNoexceptExpr
+            | ExprKind::LambdaExpr
+            | ExprKind::RequiresExpr => return false,
+            _ => {}
+        }
+        if let Some((_, f)) = self.nc_direct_callee(e)
+            && self.opaque_builtin(f)
+        {
+            return true;
+        }
+        ex.children(e, &self.ast.lists).into_iter().any(|c| self.calls_opaque_builtin(c, depth + 1))
     }
 
     /// `e`, which names an unknown, evaluated on its own: only a success

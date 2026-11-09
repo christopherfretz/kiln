@@ -188,6 +188,10 @@ pub struct Parser<'a, 'sm> {
     /// Selects clang's recovery for an unqualified `typename T`
     /// (spec/parse.md, typename-specifiers).
     pub(crate) param_recovery: Option<bool>,
+    /// Set while a non-type template parameter's decl-specifier-seq is
+    /// parsed (a `Prototype` context that is not a parameter type for
+    /// "cannot be defined in a parameter type", WP-962).
+    pub(crate) nttp_specs: bool,
     /// Set when an unqualified `typename` ended a parameter's
     /// decl-specifier-seq without consuming its name: the parameter list
     /// stops there (clang's "expected ')'").
@@ -250,7 +254,8 @@ struct DecltypeScope {
     loc: Loc,
 }
 
-/// The template-argument scan memo: the `<` index → the scan's result,
+/// The lookahead scan memo: the template-argument scan by its `<` index
+/// and the name scan by its first token's index → the scan's result,
 /// valid while [`Sema::lookup_stamp`] is `stamp` (name classification
 /// unchanged) and the token stream is unchanged (cleared when a replay
 /// starts or ends and when [`Parser::split_greater`] rewrites a token).
@@ -258,19 +263,30 @@ struct DecltypeScope {
 struct TemplateArgsMemo {
     stamp: u64,
     map: kiln_source::fx::FxHashMap<usize, Option<(usize, bool)>>,
+    /// [`Parser::scan_name_walk`]'s results (WP-919), at most
+    /// [`NAME_MEMO_MAX`] of them.
+    names: kiln_source::fx::FxHashMap<usize, Result<ScannedName, ScanStop>>,
 }
 
+/// The bound on the name-scan memo: it is emptied when full.
+const NAME_MEMO_MAX: usize = 4096;
+
 impl TemplateArgsMemo {
-    /// The results valid under `stamp`; a different stamp empties the
-    /// memo first.
+    /// Empties the memo unless its results are valid under `stamp`.
+    fn refresh(&mut self, stamp: u64) {
+        if self.stamp != stamp {
+            self.stamp = stamp;
+            self.map.clear();
+            self.names.clear();
+        }
+    }
+
+    /// The template-argument scans valid under `stamp`.
     fn valid_for(
         &mut self,
         stamp: u64,
     ) -> &mut kiln_source::fx::FxHashMap<usize, Option<(usize, bool)>> {
-        if self.stamp != stamp {
-            self.stamp = stamp;
-            self.map.clear();
-        }
+        self.refresh(stamp);
         &mut self.map
     }
 }
@@ -356,6 +372,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             named_cast_type_id: false,
             param_typename: ParamTypename::Implicit,
             param_recovery: None,
+            nttp_specs: false,
             param_abort: false,
             typename_failed: false,
             typename_pack_index: None,
@@ -942,8 +959,34 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     }
 
     /// [`Parser::scan_name_qual_at`], saying why there is no name.
+    ///
+    /// Memoized per token index like [`Parser::skip_template_args`]
+    /// (spec/parse.md §2.5): each component of a nested template-id is
+    /// scanned by several lookahead predicates before it is parsed. Not
+    /// while a decltype qualifier is pending (the walk reads it) or after
+    /// the stack guard halted the parse.
     fn scan_name_walk(&self, i: usize) -> Result<ScannedName, ScanStop> {
-        self.scan_name_walk_in(i, None)
+        let memoizable = || self.decltype_scope.is_none() && self.halt.get().is_none();
+        if !memoizable() {
+            return self.scan_name_walk_in(i, None);
+        }
+        let stamp = self.s.lookup_stamp();
+        {
+            let mut m = self.targs_memo.borrow_mut();
+            m.refresh(stamp);
+            if let Some(&r) = m.names.get(&i) {
+                return r;
+            }
+        }
+        let r = self.scan_name_walk_in(i, None);
+        let mut m = self.targs_memo.borrow_mut();
+        if m.stamp == stamp && memoizable() {
+            if m.names.len() >= NAME_MEMO_MAX {
+                m.names.clear();
+            }
+            let _ = m.names.insert(i, r);
+        }
+        r
     }
 
     /// [`Parser::scan_name_walk`] from token `i`, the first component
@@ -1208,7 +1251,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// Clears the template-argument memo: the token indices or the
     /// tokens themselves changed.
     fn forget_scans(&mut self) {
-        self.targs_memo.get_mut().map.clear();
+        let m = self.targs_memo.get_mut();
+        m.map.clear();
+        m.names.clear();
     }
 
     /// The token after splice `[: r :]` at `j` inside a template argument
@@ -1390,35 +1435,38 @@ impl<'a, 'sm> Parser<'a, 'sm> {
     /// component of a nested-name-specifier; [dcl.type.pack.index]).
     /// `decltype(auto)` is never one.
     pub(crate) fn decltype_scope_end(&self, i: usize) -> Option<usize> {
-        // A splice-scope-specifier `template [: r :] < args > ::`
-        // ([expr.prim.id.qual]/1, P2996): `template` is required before
-        // the arguments (as GCC 16.1).
-        if self.kw_of(self.tok_at(i)) == Some(Kw::Template)
-            && let Some(after) = self.splice_end(i + 1)
-        {
-            if self.tok_at(after).kind != TokKind::Punct(Punct::Less) {
-                return None;
+        let t = self.tok_at(i);
+        match self.kw_of(t) {
+            // A splice-scope-specifier `template [: r :] < args > ::`
+            // ([expr.prim.id.qual]/1, P2996): `template` is required
+            // before the arguments (as GCC 16.1).
+            Some(Kw::Template) => {
+                let after = self.splice_end(i + 1)?;
+                if self.tok_at(after).kind != TokKind::Punct(Punct::Less) {
+                    return None;
+                }
+                let (end, split) = self.skip_template_args(after)?;
+                (!split && self.tok_at(end + 1).kind == TokKind::Punct(Punct::ColonColon))
+                    .then_some(end + 1)
             }
-            let (end, split) = self.skip_template_args(after)?;
-            return (!split && self.tok_at(end + 1).kind == TokKind::Punct(Punct::ColonColon))
-                .then_some(end + 1);
+            Some(Kw::Decltype) => {
+                if self.tok_at(i + 1).kind != TokKind::Punct(Punct::LParen)
+                    || (self.kw_of(self.tok_at(i + 2)) == Some(Kw::Auto)
+                        && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen))
+                {
+                    return None;
+                }
+                let after = self.skip_balanced(i + 1)?;
+                (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
+            }
+            Some(_) => None,
+            None if matches!(t.kind, TokKind::Identifier(_)) => self.pack_index_scope_end(i),
+            // A splice-scope-specifier `[: r :] ::` ([expr.prim.id.qual]/1).
+            None => {
+                let after = self.splice_end(i)?;
+                (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
+            }
         }
-        // A splice-scope-specifier `[: r :] ::` ([expr.prim.id.qual]/1).
-        if let Some(after) = self.splice_end(i) {
-            return (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after);
-        }
-        if self.ident_of(self.tok_at(i)).is_some() {
-            return self.pack_index_scope_end(i);
-        }
-        if self.kw_of(self.tok_at(i)) != Some(Kw::Decltype)
-            || self.tok_at(i + 1).kind != TokKind::Punct(Punct::LParen)
-            || (self.kw_of(self.tok_at(i + 2)) == Some(Kw::Auto)
-                && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen))
-        {
-            return None;
-        }
-        let after = self.skip_balanced(i + 1)?;
-        (self.tok_at(after).kind == TokKind::Punct(Punct::ColonColon)).then_some(after)
     }
 
     /// [`Parser::decltype_scope_end`] for `T ... [ expression ] ::` with
@@ -1962,6 +2010,7 @@ pub(crate) fn is_template_class(c: NameClass) -> bool {
 type ScannedName = (usize, bool, NameClass, Symbol, Option<DeclId>);
 
 /// Why [`Parser::scan_name_walk`] found no name.
+#[derive(Copy, Clone)]
 enum ScanStop {
     /// No name, or one lookahead cannot classify.
     NoName,
