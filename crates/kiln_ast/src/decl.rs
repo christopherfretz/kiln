@@ -1838,6 +1838,10 @@ pub struct DeclArena {
     /// order: the last member of the translation unit's member list and
     /// the class-completion epoch there ([`DeclArena::end_top_level_decl`]).
     top_level_ends: Vec<(Option<DeclId>, u32)>,
+    /// Function definitions instantiated, in the order they completed,
+    /// each with the number of top-level ends recorded by then
+    /// ([`DeclArena::note_fn_def_inst`]).
+    fn_def_insts: Vec<(DeclId, u32)>,
     /// Cold per-declaration data.
     pub cold: ColdDeclData,
     /// Every declaration [`DeclArena::set_ty`] retypes (WP-658; see
@@ -1937,6 +1941,7 @@ impl Default for DeclArena {
             }],
             completed_records: Vec::new(),
             top_level_ends: Vec::new(),
+            fn_def_insts: Vec::new(),
             cold: ColdDeclData::default(),
             ty_journal: crate::journal::Journal::default(),
         }
@@ -2944,6 +2949,23 @@ impl DeclArena {
         &self.top_level_ends
     }
 
+    /// Sema finished instantiating the definition of function `f`: clang
+    /// hands it to code generation there (`HandleTopLevelDecl`), before
+    /// the top-level declaration being parsed, whose index is recorded
+    /// (`top_level_ends().len()`; the count of all ends for one done at
+    /// the end of the translation unit).
+    pub fn note_fn_def_inst(&mut self, f: DeclId) {
+        let k = u32::try_from(self.top_level_ends.len()).unwrap_or(u32::MAX);
+        self.fn_def_insts.push((f, k));
+    }
+
+    /// The instantiated function definitions in completion order, each
+    /// with the index of the top-level declaration it precedes
+    /// ([`DeclArena::note_fn_def_inst`]).
+    pub fn fn_def_insts(&self) -> &[(DeclId, u32)] {
+        &self.fn_def_insts
+    }
+
     /// Sets a field's default member initializer (write-once).
     pub fn set_field_init(&mut self, f: DeclId, init: ExprId) -> Result<(), AlreadySet> {
         set_once(&mut self.field_mut(f).init, init, "FieldData.init", RawId::raw)
@@ -3101,7 +3123,7 @@ impl DeclArena {
         all - VecDims::of("min_args", &self.min_args).live_bytes()
     }
 
-    fn vec_rows(&self) -> [VecDims; 18] {
+    fn vec_rows(&self) -> [VecDims; 19] {
         [
             VecDims::of("nodes", &self.nodes),
             VecDims::of("functions", &self.functions),
@@ -3121,6 +3143,7 @@ impl DeclArena {
             VecDims::of("ctor_inits", &self.ctor_inits),
             VecDims::of("completed_records", &self.completed_records),
             VecDims::of("top_level_ends", &self.top_level_ends),
+            VecDims::of("fn_def_insts", &self.fn_def_insts),
         ]
     }
 }
@@ -4046,7 +4069,7 @@ pub mod builtin {
         // WP-902: `abort` (`NoThrow`, `NoReturn`: only a declaration whose
         // type is `noreturn`, `__attribute__((noreturn))`, matches), the
         // `<complex.h>` functions (`cproj` is `Const`; `creal` / `cimag` /
-        // `conj` are lowered inline by clang and are left out). The ids are
+        // `conj` are below, WP-1073). The ids are
         // kiln-private. The GNU `string.h` / `strings.h` rows are above
         // (WP-1055).
         row(2060, "abort", "v", N | R),
@@ -4107,6 +4130,41 @@ pub mod builtin {
         row(2115, "ctanh", "XdXd", N),
         row(2116, "ctanhf", "XfXf", N),
         row(2117, "ctanhl", "XLdXLd", N),
+        // WP-1073: clang's allocation functions (no implicit attribute
+        // but `AddKnownFunctionAttributes`'s `alloc_size` / `alloc_align`,
+        // [`lib_alloc`]; `memalign` GNU only), the `scanf` family (an
+        // implicit `format(scanf, ...)`, [`lib_scanf_format`]), the GNU
+        // `alloca` and `mempcpy`, `finite` (GNU) and glibc's `__finite`
+        // (all dialects), and `creal` / `cimag` / `conj`, all lowered
+        // inline by clang ([`lib_twin`]). The ids are kiln-private.
+        row(2118, "malloc", "v*z", 0),
+        row(2119, "calloc", "v*zz", 0),
+        row(2120, "realloc", "v*v*z", 0),
+        row(2121, "aligned_alloc", "v*zz", 0),
+        row(2122, "memalign", "v*zz", 0),
+        row(2123, "scanf", "icC*.", 0),
+        row(2124, "fscanf", "iP*cC*.", 0),
+        row(2125, "sscanf", "icC*cC*.", 0),
+        row(2126, "vscanf", "icC*a", 0),
+        row(2127, "vfscanf", "iP*cC*a", 0),
+        row(2128, "vsscanf", "icC*cC*a", 0),
+        row(2129, "alloca", "v*z", N),
+        row(2130, "mempcpy", "v*v*vC*z", 0),
+        row(2131, "finite", "id", N | C),
+        row(2132, "finitef", "if", N | C),
+        row(2133, "finitel", "iLd", N | C),
+        row(2134, "__finite", "id", N | C),
+        row(2135, "__finitef", "if", N | C),
+        row(2136, "__finitel", "iLd", N | C),
+        row(2137, "creal", "dXd", N | C),
+        row(2138, "crealf", "fXf", N | C),
+        row(2139, "creall", "LdXLd", N | C),
+        row(2140, "cimag", "dXd", N | C),
+        row(2141, "cimagf", "fXf", N | C),
+        row(2142, "cimagl", "LdXLd", N | C),
+        row(2143, "conj", "XdXd", N | C),
+        row(2144, "conjf", "XfXf", N | C),
+        row(2145, "conjl", "XLdXLd", N | C),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
@@ -4131,6 +4189,47 @@ pub mod builtin {
         })
     }
 
+    /// WP-1073: the implicit `format(scanf, F, A)` indices of the [`LIB`]
+    /// function `name` (clang `Builtins.td` `ScanfFormat` /
+    /// `VScanfFormat`), as [`lib_printf_format`].
+    pub fn lib_scanf_format(name: &str) -> Option<(u16, u16)> {
+        Some(match name {
+            "scanf" => (1, 2),
+            "fscanf" | "sscanf" => (2, 3),
+            "vscanf" => (1, 0),
+            "vfscanf" | "vsscanf" => (2, 0),
+            _ => return None,
+        })
+    }
+
+    /// WP-1073: the implicit `alloc_size` and `alloc_align` of the [`LIB`]
+    /// allocation function `name` (clang `AddKnownFunctionAttributes`):
+    /// the one-based `alloc_size` indices (second 0 when absent) and the
+    /// one-based `alloc_align` index (0 when absent).
+    pub fn lib_alloc(name: &str) -> Option<([u32; 2], u32)> {
+        Some(match name {
+            "malloc" => ([1, 0], 0),
+            "calloc" => ([1, 2], 0),
+            "realloc" => ([2, 0], 0),
+            "aligned_alloc" | "memalign" => ([2, 0], 1),
+            _ => return None,
+        })
+    }
+
+    /// The `__builtin_` twin of the [`LIB`] function `name` at
+    /// `-fclang-compat` level `compat` (WP-419: `ceil` ->
+    /// `__builtin_ceil`); WP-1073: `finite` and glibc's `__finite` lower
+    /// as `__builtin_isfinite` (clang `EmitBuiltinExpr`'s `BIfinite`
+    /// family), with their `f` / `l` variants.
+    pub fn lib_twin(name: &str, compat: u32) -> Option<u32> {
+        match name {
+            "finite" | "finitef" | "finitel" | "__finite" | "__finitef" | "__finitel" => {
+                Some(ISFINITE)
+            }
+            _ => by_name_at(&format!("__builtin_{name}"), compat),
+        }
+    }
+
     /// WP-419: the lowest `-fclang-compat` level that recognizes the
     /// [`LIB`] function `id` (clang 19 lacks the `fmaximum_num` /
     /// `fminimum_num` and `sincos` library builtins).
@@ -4141,10 +4240,12 @@ pub mod builtin {
     /// WP-419: whether the [`LIB`] function `id` is recognized in the GNU
     /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`; WP-1055: the
     /// `GNULibBuiltin` string functions `bcmp`, `bcopy`, `bzero`, `index`,
-    /// `rindex`, `stpcpy`, `stpncpy`, `strdup` and `strndup`).
+    /// `rindex`, `stpcpy`, `stpncpy`, `strdup` and `strndup`; WP-1073:
+    /// `memalign`, `alloca`, `mempcpy` and `finite`).
     pub fn lib_gnu_only(id: u32) -> bool {
         (2057..=2059).contains(&id)
-            || matches!(id, 178 | 183 | 185 | 671 | 1015 | 1129 | 1132 | 1145 | 1175)
+            || (2129..=2133).contains(&id)
+            || matches!(id, 178 | 183 | 185 | 671 | 1015 | 1129 | 1132 | 1145 | 1175 | 2122)
     }
 
     /// WP-940: whether a call of a C library function whose `__builtin_` twin
@@ -5552,7 +5653,44 @@ pub mod builtin {
         row(PRINTF_CHK, "__builtin___printf_chk", "iicC*R.", F),
         row(VFPRINTF_CHK, "__builtin___vfprintf_chk", "iP*RicC*Ra", F),
         row(VPRINTF_CHK, "__builtin___vprintf_chk", "iicC*Ra", F),
+        row(BZERO, "__builtin_bzero", "vv*z", N | F),
+        row(BCOPY, "__builtin_bcopy", "vvC*v*z", N | F),
+        row(CREAL, "__builtin_creal", "dXd", N | C | F),
+        row(CREALF, "__builtin_crealf", "fXf", N | C | F),
+        row(CREALL, "__builtin_creall", "LdXLd", N | C | F),
+        row(CIMAG, "__builtin_cimag", "dXd", N | C | F),
+        row(CIMAGF, "__builtin_cimagf", "fXf", N | C | F),
+        row(CIMAGL, "__builtin_cimagl", "LdXLd", N | C | F),
+        row(CONJ, "__builtin_conj", "XdXd", N | C | F),
+        row(CONJF, "__builtin_conjf", "XfXf", N | C | F),
+        row(CONJL, "__builtin_conjl", "XLdXLd", N | C | F),
     ];
+
+    // WP-1073: library builtins clang lowers inline (`EmitBuiltinExpr`)
+    // that kiln lacked; kiln-private ids. A recognized `bzero` / `bcopy`
+    // / `creal` / `cimag` / `conj` ([`LIB`]) lowers as its twin.
+    /// `__builtin_bzero` (`llvm.memset` of zero).
+    pub const BZERO: u32 = 2400;
+    /// `__builtin_bcopy` (`llvm.memmove`, source first).
+    pub const BCOPY: u32 = 2401;
+    /// `__builtin_creal` (the real part).
+    pub const CREAL: u32 = 2402;
+    /// `__builtin_crealf`.
+    pub const CREALF: u32 = 2403;
+    /// `__builtin_creall`.
+    pub const CREALL: u32 = 2404;
+    /// `__builtin_cimag` (the imaginary part).
+    pub const CIMAG: u32 = 2405;
+    /// `__builtin_cimagf`.
+    pub const CIMAGF: u32 = 2406;
+    /// `__builtin_cimagl`.
+    pub const CIMAGL: u32 = 2407;
+    /// `__builtin_conj` (the imaginary part negated).
+    pub const CONJ: u32 = 2408;
+    /// `__builtin_conjf`.
+    pub const CONJF: u32 = 2409;
+    /// `__builtin_conjl`.
+    pub const CONJL: u32 = 2410;
 
     /// WP-282: the `__float128` (`LLd`) math builtins (clang 19
     /// `Builtins.td` `F128` variants), one row each. The ones with a
