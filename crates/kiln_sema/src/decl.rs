@@ -311,6 +311,29 @@ impl Sema<'_, '_> {
         cv
     }
 
+    /// A decl-specifier `__restrict` on the `auto` (or `C auto`) of a
+    /// parameter, before it becomes an invented template parameter
+    /// ([dcl.fct]/22): as for a variable's placeholder, "restrict requires
+    /// a pointer or reference ('auto' is invalid)" at the qualifier, which
+    /// is dropped (clang checks the decl-specifier before inventing the
+    /// parameter; WP-1091).
+    pub fn reject_placeholder_restrict(&mut self, ds: &mut DeclSpec) {
+        let Some(rloc) = ds.cv_locs[2] else { return };
+        if !ds.cv.contains(Quals::RESTRICT) || ds.base != TypeSpecKind::Auto {
+            return;
+        }
+        let (c, args) = match &ds.auto_constraint {
+            Some((c, a)) if a.is_empty() => (Some(*c), None),
+            Some((c, a)) => (Some(*c), Some(self.ast.types.arg_list(a))),
+            None => (None, None),
+        };
+        let t = self.ast.types.auto_type(AutoKeyword::Auto, None, c, args, false);
+        let msg = self.diag(DiagId::sema_typecheck_invalid_restrict_not_pointer, rloc);
+        let msg = msg.arg(self.ty_arg(t));
+        self.emit(msg);
+        ds.cv = ds.cv - Quals::RESTRICT;
+    }
+
     /// The `__restrict` error the decl-specifier-seq whose type was formed
     /// last reported, if any: the parser repeats it
     /// ([`Sema::report_restrict_not_pointer`]) for each later declarator
@@ -357,10 +380,12 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// A placeholder (`auto`, `C auto`) is no pointer: clang checks the
+    /// decl-specifier before deduction, so `auto __restrict p = &i;` and
+    /// `this auto __restrict self` are rejected (WP-1091).
     fn restrict_ok(&self, ty: QualType) -> bool {
         self.is_error_type(ty)
-            || self.is_dependent_type(ty)
-            || self.is_undeduced_auto(ty)
+            || (self.is_dependent_type(ty) && !self.is_undeduced_auto(ty))
             || self.ast.types.is_pointer(ty)
             || self.ast.types.is_reference(ty)
             || self.ast.types.canonical_kind(ty) == kiln_ast::types::TypeKind::MemberPointer
@@ -577,8 +602,7 @@ impl Sema<'_, '_> {
             return false;
         };
         let t = self.this_class_type(class);
-        let t = if quals.is_empty() { t } else { self.ast.types.qualify(t, quals) };
-        let p = self.ast.types.pointer_to(t);
+        let p = self.this_pointer_type(t, quals);
         self.nsdmi_this.push((class, p));
         true
     }
@@ -1923,25 +1947,49 @@ impl Sema<'_, '_> {
     /// member function `explicit_object`) quotes them (cv first) at the
     /// first one written and drops them from the type, so an
     /// instantiation does not report them again.
+    /// A function declarator whose only method qualifier is a
+    /// nullability keyword (`void f() _Nonnull;`, [`Declarator::
+    /// fn_nullability`]): clang's qualifier checks still see a qualifier
+    /// list and report it with an empty spelling at the start of the
+    /// declaration (`begin`): "non-member function cannot have ''
+    /// qualifier" (`id`).
+    ///
+    /// [`Declarator::fn_nullability`]: crate::declspec::Declarator::fn_nullability
+    pub(crate) fn diag_nullability_only_fn_quals(
+        &mut self,
+        id: DiagId,
+        d: &Declarator,
+        begin: Loc,
+    ) {
+        if d.fn_nullability.is_none() {
+            return;
+        }
+        let at = if begin.is_valid() { begin } else { d.loc };
+        let msg = self.diag(id, at).arg("");
+        self.emit(msg);
+    }
+
     pub(crate) fn drop_invalid_fn_quals(
         &mut self,
         ty: QualType,
         d: &Declarator,
         explicit_object: bool,
+        begin: Loc,
     ) -> QualType {
         let Some(p) = self.ast.types.proto(ty).copied() else { return ty };
         let info = p.info();
         let (q, r) = (info.this_quals(), info.ref_qual());
-        if q.is_empty() && r == RefQual::None {
-            return ty;
-        }
-        let spelled = crate::class::members::method_quals_spelling(q, r);
-        let at = first_fn_qual_loc(d).unwrap_or(d.loc);
         let id = if explicit_object {
             DiagId::sema_explicit_object_param_qualifier
         } else {
             DiagId::sema_nonmember_fn_quals
         };
+        if q.is_empty() && r == RefQual::None {
+            self.diag_nullability_only_fn_quals(id, d, begin);
+            return ty;
+        }
+        let spelled = crate::class::members::method_quals_spelling(q, r);
+        let at = first_fn_qual_loc(d).unwrap_or(d.loc);
         let msg = self.diag(id, at).arg(spelled);
         self.emit(msg);
         let params = self.ast.types.params(&p).to_vec();
@@ -3991,9 +4039,9 @@ impl Sema<'_, '_> {
         });
         let fn_chunk = matches!(d.chunks.first(), Some(Chunk::Function { .. }));
         let ty = if (!method || explicit_object) && fn_chunk {
-            self.drop_invalid_fn_quals(ty, d, method)
+            self.drop_invalid_fn_quals(ty, d, method, ds.loc)
         } else if in_class && spec.storage() == FnStorage::Static {
-            self.check_static_method_quals(ty, d)
+            self.check_static_method_quals(ty, d, ds.loc)
         } else {
             ty
         };
@@ -7845,6 +7893,23 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// [`Sema::act_on_tag`]'s elaborated-type-specifier `struct n` whose
+    /// unqualified lookup finds a type or template template parameter:
+    /// "declaration of 'n' shadows template parameter" (clang
+    /// `DiagnoseTemplateParameterShadow` from `ActOnTag`). True if so.
+    fn diagnose_tag_ref_template_param(&mut self, n: Symbol, nloc: Loc) -> bool {
+        if !self.in_template() {
+            return false;
+        }
+        let found = self.lookup_name(n, LookupKind::Ordinary);
+        let [p] = found.decls[..] else { return false };
+        if !matches!(self.kind_of(p), DeclKind::TemplateTypeParm | DeclKind::TemplateTemplateParm) {
+            return false;
+        }
+        self.diag_template_param_shadow(n, nloc, p);
+        true
+    }
+
     /// A qualified tag name `A::X` that names no tag of `A`: another kind
     /// of member redefined (`struct A<T>::D` for a member template `D`),
     /// else clang's `err_not_tag_in_scope`.
@@ -8104,6 +8169,7 @@ impl Sema<'_, '_> {
         // anonymous tag).
         let mut conflict = false;
         let mut respecialized = false;
+        let mut param_shadow = false;
         if let Some((n, nloc)) = name {
             // [class.mem.general]/22: a member class, enumeration or
             // class template named as its class is diagnosed and declared
@@ -8115,7 +8181,16 @@ impl Sema<'_, '_> {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found = if class_shadow {
+            // [temp.local]/6, [dcl.type.elab]/2: `struct T *p;` whose
+            // name finds a type or template template parameter redeclares
+            // it (clang `ActOnTag`: diagnosed, then the lookup result is
+            // dropped and a new tag declared). Tag lookup does not find a
+            // non-type parameter.
+            param_shadow = use_ == TagUse::Reference
+                && qualifier.is_none()
+                && !class_shadow
+                && self.diagnose_tag_ref_template_param(n, nloc);
+            let found = if class_shadow || param_shadow {
                 Vec::new()
             } else {
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
@@ -8243,6 +8318,25 @@ impl Sema<'_, '_> {
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
+        // The parameter hid the lookup: the tag the reference declares is
+        // the home context's own, if it has one (clang's redeclaration
+        // lookup in the injection scope).
+        if param_shadow
+            && let Some((n, _)) = name
+            && let Some(p) = self
+                .ast
+                .lookup_local(ctx, DeclName::ident(n))
+                .iter()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .find(|&d| is_tag_kind(self.kind_of(d)))
+        {
+            if !self.tag_matches(p, keyword) {
+                self.diag_wrong_tag(sym_str(self, n), loc, p);
+            }
+            return p;
+        }
         let plain_ref = use_ == TagUse::Reference && qualifier.is_none() && prev.is_none();
         if plain_ref
             && !conflict

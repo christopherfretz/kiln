@@ -327,7 +327,7 @@ impl Sema<'_, '_> {
         };
         // An explicit object member function takes no cv-/ref-qualifiers
         // ([dcl.fct]/6): reported and dropped as for any other.
-        let ty = if xobj_member { self.drop_invalid_fn_quals(ty, d, true) } else { ty };
+        let ty = if xobj_member { self.drop_invalid_fn_quals(ty, d, true, ds.loc) } else { ty };
         let class_ty = self.class_type(class);
         let canon = self.ast.types.canonical(class_ty).ty();
         let name = match shape {

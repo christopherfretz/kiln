@@ -5,7 +5,7 @@
 
 use kiln_ast::decl::{DeclFlags, DeclKind, FnStorage, PayloadClass};
 use kiln_ast::templates::is_template_kind;
-use kiln_ast::types::RefQual;
+use kiln_ast::types::{Quals, RefQual};
 use kiln_ast::{DeclId, ExprId, QualType, TemplateParamListId};
 
 use crate::Sema;
@@ -220,7 +220,9 @@ impl Sema<'_, '_> {
                 return false;
             }
         } else if both_non_static
-            && (po.info().this_quals() != pn.info().this_quals()
+            // No overloading on a GNU `__restrict` method qualifier
+            // (clang `IsOverloadOrOverrideImpl`'s `removeRestrict`).
+            && (po.info().this_quals() - Quals::RESTRICT != pn.info().this_quals() - Quals::RESTRICT
                 || po.info().ref_qual() != pn.info().ref_qual())
         {
             return false;

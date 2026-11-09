@@ -747,7 +747,12 @@ points, thunks and method indices are clang's.
 - **Mangling** (`mangle.rs`): the Itanium mangler covers classes,
   templates, structor variants (C1/C2/D0/D1/D2), local entities and
   member pointer types. It is checked against clang by
-  `kiln_codegen/tests/mangle_vs_clang.rs` over `tests/mangle/`.
+  `kiln_codegen/tests/mangle_vs_clang.rs` over `tests/mangle/`. A GNU
+  `__restrict` method qualifier is left out of a member function's
+  nested-name (`int T::f() const __restrict` is `_ZNK1T1fEv`, as clang's
+  `mangleNestedName` writes only `V` and `K`) but kept in a
+  pointer-to-member function type (`M1TrKFivE`; WP-1091,
+  `tests/mangle/restrict_method.cpp`).
 - **Member pointers** (Itanium §2.3; clang `ItaniumCXXABI` with
   `UseARMMethodPtrABI` on AArch64):
   - A data member pointer is an `i64` byte offset. Null is `-1`.
