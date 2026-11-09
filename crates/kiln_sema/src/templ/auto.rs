@@ -403,8 +403,8 @@ impl Sema<'_, '_> {
                 }
                 (TypeView::Pointer(p), TypeView::Pointer(x))
                 | (TypeView::LValueRef(p), TypeView::LValueRef(x))
-                | (TypeView::RValueRef(p), TypeView::RValueRef(x)) => (d, a) = (p, x),
-                (
+                | (TypeView::RValueRef(p), TypeView::RValueRef(x))
+                | (
                     TypeView::MemberPointer { pointee: p, .. },
                     TypeView::MemberPointer { pointee: x, .. },
                 ) => (d, a) = (p, x),

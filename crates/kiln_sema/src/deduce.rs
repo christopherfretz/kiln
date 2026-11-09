@@ -462,8 +462,7 @@ impl Sema<'_, '_> {
             // (no derived-to-base adjustment, [temp.deduct.call]/4), the
             // pointee recurses. The written class keeps its sugar.
             TypeView::MemberPointer { pointee, class } => {
-                let TypeView::MemberPointer { pointee: ap, class: ac } = t.canonical_view(a)
-                else {
+                let TypeView::MemberPointer { pointee: ap, class: ac } = t.canonical_view(a) else {
                     return None;
                 };
                 if t.canonical(class.into()).ty() != t.canonical(ac.into()).ty() {
