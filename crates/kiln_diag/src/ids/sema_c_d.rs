@@ -343,6 +343,7 @@ sema_dtor_access_base = Error (2) "base class {0} has {1:private|protected} dest
 sema_dtor_access_field = Error (2) "field of type {0} has {1:private|protected} destructor";
 sema_dtor_access_var = Error (2) "variable of type {0} has {1:private|protected} destructor";
 sema_dtor_class_name = Error (0) "expected the class name after '~' to name the enclosing class";
+sema_dtor_name_not_template = Error (1) "destructor name '{0}' does not refer to a template";
 sema_dtor_name_undeclared = Error (1) "undeclared identifier '{0}' in destructor name";
 sema_dtor_not_member = Error (0) "destructor must be a non-static member function";
 sema_dtor_params = Error (0) "destructor cannot have any parameters";
