@@ -1737,9 +1737,9 @@ Out-of-class partial specializations of a member template (WP-150):
     default arguments for the remaining parameters (`args.rs`
     `open_expansion`, clang `PackExpansionIntoNonPack`). So `X0<Ts...>`
     for `template<class T, class U, class V = U>` is a complete list.
-  - With `expansions`, a template template parameter deduces a whole
-    template pack expansion (`deduce_arg`), so `Q<T, int, Cs...>` stays
-    more specialized.
+  - A template template pack expansion is deduced as a whole
+    (`deduce_template_from_expansion`, WP-1053), so `Q<T, int, Cs...>`
+    stays more specialized.
   - In /9.3 ("does not specialize any template argument"),
     `arg_names_param` names a non-type or template template pack only by
     its expansion (`Q<N...>`, `S<TT...>`), never by a single element

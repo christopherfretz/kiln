@@ -691,17 +691,6 @@ impl Sema<'_, '_> {
                 _ => mismatch(d),
             },
             ArgView::Template(pn) => {
-                // With `expansions`, a template template parameter against
-                // an `A` element that is a template pack expansion takes it
-                // as a whole (the template counterpart of
-                // `deduce_pattern_from_expansion`; `Cs...` from `Cs...`).
-                if d.expansions
-                    && matches!(a.view(), ArgView::TemplateExpansion { .. })
-                    && let Some(parm) = self.template_parm_of_name(pn)
-                    && parm.depth == d.depth
-                {
-                    return self.record_deduction(parm.index, parm.pack, a, d);
-                }
                 let ArgView::Template(an) = a.view() else { return mismatch(d) };
                 self.deduce_template_name(pn, an, d)
             }
