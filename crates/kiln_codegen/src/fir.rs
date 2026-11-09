@@ -770,6 +770,14 @@ impl Fir {
         }
     }
 
+    /// The options of call or invoke `i`.
+    pub fn call_opts_mut(&mut self, i: u32) -> Option<&mut CallOpts> {
+        match &mut self.insts[i as usize].op {
+            Op::Call { opts, .. } | Op::Invoke { opts, .. } => Some(opts),
+            _ => None,
+        }
+    }
+
     /// Replaces argument `idx` of call `i` (clang `setArgOperand`).
     pub fn set_call_arg(&mut self, i: u32, idx: usize, v: V) {
         if let Op::Call { args, .. } = &mut self.insts[i as usize].op {

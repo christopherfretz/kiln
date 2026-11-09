@@ -7,8 +7,12 @@
 //! `DiagnoseFloatingImpCast` with `IsLiteral`); and `-Wconstant-conversion`,
 //! an integral constant implicitly converted to a narrower integer type
 //! whose value changes (clang's `warn_impcast_integer_precision_constant`);
+//! `-Wimplicit-int-float-conversion` and
+//! `-Wimplicit-const-int-float-conversion`, an integer whose likely range
+//! (`int_range.rs`) does not fit a floating type's significand;
 //! and `-Wnull-conversion` for GNU `__null` and `nullptr` (`gnu_null.rs`).
 
+use kiln_ast::consts::FloatKind;
 use kiln_ast::expr::{BinaryOp, ExprDeps, ExprKind, UnaryOp};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
@@ -40,16 +44,18 @@ impl Sema<'_, '_> {
         }
         let mut work = std::mem::take(&mut self.conv_walk_stack);
         work.clear();
-        work.push((root, cc));
+        work.push((root, cc, false));
         let mut seen = 0usize;
-        while let Some((e, cc)) = work.pop() {
+        while let Some((e, cc, list)) = work.pop() {
             seen += 1;
             if seen > MAX_NODES {
                 break;
             }
+            // clang's `IsListInit`: everything under a braced list.
+            let list = list || self.ast.exprs.get(e).kind() == ExprKind::InitListExpr;
             let s = self.strip_impcast(e);
             if s != e {
-                self.check_conversion(e, s, cc);
+                self.check_conversion(e, s, cc, list);
             }
             let n = *self.ast.exprs.get(s);
             match n.kind() {
@@ -68,8 +74,8 @@ impl Sema<'_, '_> {
                 {
                     let [l, r] = self.ast.exprs.operands(s);
                     let at = n.loc();
-                    work.push((self.strip_impcast(r), at));
-                    work.push((l, at));
+                    work.push((self.strip_impcast(r), at, list));
+                    work.push((l, at, list));
                     continue;
                 }
                 k if k.is_explicit_cast() => {
@@ -86,7 +92,7 @@ impl Sema<'_, '_> {
                             sub = self.strip_impcast(only);
                         }
                     }
-                    work.push((sub, cc));
+                    work.push((sub, cc, list));
                     continue;
                 }
                 _ => {}
@@ -99,7 +105,7 @@ impl Sema<'_, '_> {
             let mut kids = self.walk_stack.take();
             kids.clear();
             self.ast.exprs.children_into(s, &self.ast.lists, &mut kids);
-            work.extend(kids.iter().map(|&k| (k, at)));
+            work.extend(kids.iter().map(|&k| (k, at, list)));
             self.put_walk_stack(kids);
         }
         self.conv_walk_stack = work;
@@ -123,7 +129,7 @@ impl Sema<'_, '_> {
 
     /// The conversion of `src` (implicit casts and parentheses stripped)
     /// to the type of `e`.
-    fn check_conversion(&mut self, e: ExprId, src: ExprId, cc: Loc) {
+    fn check_conversion(&mut self, e: ExprId, src: ExprId, cc: Loc, list: bool) {
         let to = self.ast.exprs.get(e).ty();
         let from = self.ast.exprs.get(src).ty();
         self.null_conversion(src, to, cc, 0);
@@ -147,6 +153,15 @@ impl Sema<'_, '_> {
             Some(v) => v.elem,
             None => to,
         };
+        if let Some(tk) = self.ast.types.builtin(to).and_then(|b| float_kind(self, b)) {
+            if !list
+                && let Some(fb) = self.ast.types.builtin(from)
+                && fb.is_integral()
+            {
+                self.int_float_imp_cast(src, tk, shown, cc);
+            }
+            return;
+        }
         let bit_int = matches!(self.ast.types.canonical_view(to), TypeView::BitInt { .. });
         if !bit_int && self.ast.types.builtin(to).is_none_or(|b| !b.is_integral()) {
             return;
@@ -303,6 +318,97 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang's `CheckImplicitConversion` for integer `e` converted to
+    /// floating type `to` (`kind`) outside a braced list: when the likely
+    /// range of `e` (`GetExprRange`) needs more bits than `to`'s
+    /// significand, a constant whose value changes is diagnosed
+    /// (`-Wimplicit-const-int-float-conversion`, a runtime-behavior
+    /// diagnostic), and any other value may lose precision
+    /// (`-Wimplicit-int-float-conversion`).
+    fn int_float_imp_cast(&mut self, e: ExprId, kind: FloatKind, shown: QualType, cc: Loc) {
+        let constant = self.diags.is_enabled(DiagId::sema_impcast_integer_float_precision_constant);
+        let lossy = self.diags.is_enabled(DiagId::sema_impcast_integer_float_precision);
+        if !constant && !lossy {
+            return;
+        }
+        let n = *self.ast.exprs.get(e);
+        // clang's `CheckConditionalOperand`: each integer arm separately.
+        let arms = match n.kind() {
+            ExprKind::ConditionalOperator => Some(self.ast.exprs.cond_arms(e)),
+            ExprKind::BinaryConditionalOperator => {
+                let [common, _, _, f] =
+                    self.ast.exprs.binary_conditional_operands(e, &self.ast.lists);
+                Some([common, f])
+            }
+            _ => None,
+        };
+        if let Some(arms) = arms {
+            for arm in arms {
+                let a = self.strip_impcast(arm);
+                if self
+                    .ast
+                    .types
+                    .builtin(self.ast.exprs.get(a).ty())
+                    .is_some_and(BuiltinType::is_integral)
+                {
+                    self.int_float_imp_cast(a, kind, shown, cc);
+                }
+            }
+            return;
+        }
+        let from = n.ty();
+        if n.deps().intersects(ExprDeps::VALUE.with(ExprDeps::TYPE).with(ExprDeps::ERROR)) {
+            return;
+        }
+        let prec = soft::params(kind).0;
+        let width = self.int_range_of_type(from).width;
+        // A range is at most one bit wider than its type.
+        if width < prec {
+            return;
+        }
+        if self.expr_int_range(e, width).width <= prec {
+            return;
+        }
+        let range = self.expr_range(e);
+        let ctx = Span::new(cc, self.token_end(cc).unwrap_or(cc));
+        let Some(v) = self.fold_int(e) else {
+            if lossy {
+                let d = self
+                    .diag(DiagId::sema_impcast_integer_float_precision, n.loc())
+                    .arg(self.ty_arg(from))
+                    .arg(self.ty_arg(shown))
+                    .range(range)
+                    .range(ctx);
+                // An instantiation checks its full-expressions again and
+                // warns again.
+                let d = if self.inst.stack.is_empty() { d } else { d.allow_duplicate() };
+                self.emit(d);
+            }
+            return;
+        };
+        if !constant || self.immediate > 0 || self.runtime_diag_quiet() {
+            return;
+        }
+        let signed = int_signed(self, from);
+        #[allow(clippy::cast_sign_loss, reason = "an unsigned value's bits")]
+        let (neg, mag) = if signed { (v < 0, v.unsigned_abs()) } else { (false, v as u128) };
+        let r = soft::from_int(kind, neg, mag);
+        if !r.inexact && !r.overflow {
+            return;
+        }
+        let shown_v = if neg { format!("-{mag}") } else { mag.to_string() };
+        let d = self
+            .diag(DiagId::sema_impcast_integer_float_precision_constant, n.loc())
+            .arg(shown_v)
+            .arg(soft::apfloat_string(kind, r.bits, prec))
+            .arg(self.ty_arg(from))
+            .arg(self.ty_arg(shown))
+            .range(range)
+            .range(ctx);
+        let d = if self.inst.stack.is_empty() { d } else { d.allow_duplicate() };
+        self.diag_if_reachable(d, e);
+    }
+
     /// Whether `e` is an integer literal spelled in hexadecimal, octal or
     /// binary.
     fn non_decimal_literal(&self, e: ExprId) -> bool {
@@ -386,7 +492,7 @@ impl Sema<'_, '_> {
 
     /// The value of a floating literal, possibly under a unary `+`/`-`
     /// (clang's `IsLiteral` case).
-    fn float_literal_value(&self, e: ExprId) -> Option<(kiln_ast::consts::FloatKind, u128)> {
+    fn float_literal_value(&self, e: ExprId) -> Option<(FloatKind, u128)> {
         let n = self.ast.exprs.get(e);
         let (lit, negate) = match n.kind() {
             ExprKind::FloatingLiteral => (e, false),

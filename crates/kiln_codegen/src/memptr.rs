@@ -343,6 +343,15 @@ impl Cg<'_> {
         // §5.4).
         let fty = ast.types.exc_pointee(rq).unwrap_or(fty);
         let this = self.mp_object(bo)?;
+        if self.ub_type_check_on() {
+            // clang `EmitCXXMemberPointerCallExpr`: the member pointer's
+            // class, as a record type.
+            let loc = self.ub_expr_loc(e);
+            let cq = self.class_type(rd);
+            let tc = crate::ubsan::TypeCheck::new(crate::ubsan::Tck::MemberCall, loc, cq)
+                .desc(crate::ubsan::UbDesc::Record);
+            self.ub_type_check(this.v, tc)?;
+        }
         let mfp = self.emit_scalar(r)?;
         let arm = self.arm_mp();
         let one = self.i64c(1);

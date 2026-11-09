@@ -238,7 +238,7 @@ impl Sema<'_, '_> {
         None
     }
 
-    fn is_method_kind(&self, d: DeclId) -> bool {
+    pub(crate) fn is_method_kind(&self, d: DeclId) -> bool {
         matches!(
             self.ast.decls.get(d).kind(),
             DeclKind::CXXMethod

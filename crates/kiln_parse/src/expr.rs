@@ -1474,9 +1474,7 @@ impl Parser<'_, '_> {
             } else {
                 None
             };
-            return Some(
-                self.s.act_on_template_member_q(e, qual, name, targs, true, nl, loc, arrow),
-            );
+            return Some(self.s.act_on_template_kw_member_q(e, qual, name, targs, nl, loc, arrow));
         }
         let mut e = self.s.act_on_member_q(e, qual, name, nl, loc, arrow);
         // `e.f<args>` naming a member function template ([temp.names]/3).
@@ -2042,6 +2040,7 @@ impl Parser<'_, '_> {
     /// ([temp.dep.expr]/3); an undeclared name before `(` in a template
     /// is found by argument-dependent lookup at instantiation
     /// ([temp.dep.general]/2).
+    #[allow(clippy::too_many_lines, reason = "the id-expression forms in one place")]
     fn parse_id_expression_rest(&mut self) -> PExpr {
         let start = self.pos();
         let begin = self.name_begin();
@@ -2061,6 +2060,11 @@ impl Parser<'_, '_> {
         if let Some(q) = qual
             && let Some(nns) = self.s.dep_member_nns(q, name, template_kw && self.at(Punct::Less))
         {
+            // `T::template f` with no template argument list
+            // ([temp.names]/6; clang's `TNK_Dependent_template_name`).
+            if template_kw && !self.at(Punct::Less) {
+                self.s.diag_missing_template_arg_list(nl);
+            }
             let targs = if template_kw && self.at(Punct::Less) {
                 let (args, _, _) = self.parse_template_arg_list()?;
                 Some(self.s.ast.types.arg_list(&args))
@@ -2072,6 +2076,17 @@ impl Parser<'_, '_> {
             return Some(e);
         }
         let class = self.s.classify_name(name, qual.map(|q| q.ctx));
+        // `N::template f` naming a function or variable template must be
+        // followed by a template argument list ([temp.names]/6).
+        if template_kw
+            && !self.at(Punct::Less)
+            && matches!(
+                class,
+                NameClass::FunctionTemplate(..) | NameClass::VarTemplate(..) | NameClass::Dependent
+            )
+        {
+            self.s.diag_missing_template_arg_list(nl);
+        }
         if self.at(Punct::Less) && (template_kw || is_template_class(class)) {
             return Some(self.template_id_expr(qual, (class, name, nl), begin, template_loc));
         }
