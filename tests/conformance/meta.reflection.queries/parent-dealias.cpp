@@ -6,13 +6,13 @@
 // namespace, an entity with C language linkage, and a type that is
 // neither a class nor an enumeration nor an alias. dealias strips every
 // level of alias and returns anything else unchanged. Answers checked
-// against GCC 16.1 (-freflection). The parent_of example's bases_of and
-// is_union_type lines wait for WP-478 and WP-477 (kept, disabled). A
-// `^^T &&` parses as `^^(T&&)`, hence the parentheses.
+// against GCC 16.1 (-freflection). A `^^T &&` parses as `^^(T&&)`,
+// hence the parentheses.
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 #include "kiln_meta_queries.h"
+#include "kiln_meta_traits.h"
 using namespace std::meta;
 
 // [meta.reflection.queries], parent_of's example.
@@ -28,18 +28,14 @@ struct F : I {
   };
 };
 
-#if 0  // enable with bases_of (WP-478) and is_union_type (WP-477)
 constexpr auto ctx = std::meta::access_context::current();
-#endif
 
 static_assert(parent_of(^^F) == ^^::);
-#if 0  // enable with bases_of (WP-478) and is_union_type (WP-477)
 static_assert(parent_of(bases_of(^^F, ctx)[0]) == ^^F);
 static_assert(is_union_type(parent_of(^^F::o)));
-#endif
 static_assert(parent_of(^^F::N) == ^^F);
 static_assert(parent_of(^^F::A) == ^^F::N);
-// What the disabled line checks, without is_union_type:
+// The same, without is_union_type:
 static_assert(is_type(parent_of(^^F::o)) && parent_of(^^F::o) != ^^F);
 static_assert(parent_of(parent_of(^^F::o)) == ^^F);
 
