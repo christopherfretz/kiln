@@ -147,9 +147,13 @@ impl Compiler<'_> {
         } else if !args.is_empty() {
             self.trap(e, "this placement new expression is not supported in constant expressions ");
             return;
-        } else if !is_replaceable_global_alloc(ast, op_new) {
+        } else if !is_replaceable_global_alloc(ast, op_new)
+            && !is_type_aware_global_alloc(ast, op_new)
+        {
             // [expr.const]/5.20: only a replaceable global allocation
-            // function may be called (`note_constexpr_new_non_replaceable`).
+            // function, or a global type-aware one that would be one
+            // without its type-identity parameter (P2719), may be called
+            // (`note_constexpr_new_non_replaceable`).
             let msg = non_replaceable_note(ast, op_new);
             self.trap(e, &msg);
             return;
@@ -351,7 +355,7 @@ impl Compiler<'_> {
             self.unsupported(e);
             return;
         };
-        if !is_replaceable_global_alloc(ast, op_del) {
+        if !is_replaceable_global_alloc(ast, op_del) && !is_type_aware_global_alloc(ast, op_del) {
             let msg = non_replaceable_note(ast, op_del);
             self.trap(e, &msg);
             return;
@@ -532,6 +536,45 @@ pub(crate) fn is_replaceable_global_alloc(ast: &Ast, d: DeclId) -> bool {
         rest = &rest[1..];
     }
     rest.is_empty()
+}
+
+/// Whether `d` is a type-aware allocation or deallocation function
+/// (P2719) at global scope that is usable in constant evaluation as a
+/// replaceable one ([expr.const]/10.18.1 as P2719 amends it; clang
+/// `isUsableAsGlobalAllocationFunctionInConstantEvaluation`): exactly
+/// `(type_identity<T>, size_t, align_val_t)` /
+/// `(type_identity<T>, void*, size_t, align_val_t)`, optionally followed
+/// by a `const std::nothrow_t&`.
+pub(crate) fn is_type_aware_global_alloc(ast: &Ast, d: DeclId) -> bool {
+    let decls = &ast.decls;
+    let node = decls.get(d);
+    if node.kind() != DeclKind::Function {
+        return false;
+    }
+    let required = match node.name().as_operator() {
+        Some(OverloadedOperator::New | OverloadedOperator::ArrayNew) => 3,
+        Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete) => 4,
+        _ => return false,
+    };
+    let mut ctx = node.ctx();
+    while let Some(c) = ctx
+        && matches!(decls.get(c).kind(), DeclKind::LinkageSpec | DeclKind::Export)
+    {
+        ctx = decls.get(c).ctx();
+    }
+    if !ctx.is_some_and(|c| decls.get(c).kind() == DeclKind::TranslationUnit) {
+        return false;
+    }
+    let Some(proto) = node.ty().and_then(|t| ast.types.proto(t)) else {
+        return false;
+    };
+    let params = ast.types.params(proto);
+    if proto.variadic() || !params.first().is_some_and(|&t| is_std_record(ast, t, "type_identity"))
+    {
+        return false;
+    }
+    params.len() == required
+        || (params.len() == required + 1 && is_std_record(ast, params[required], "nothrow_t"))
 }
 
 /// Whether `d` is a replaceable global allocation (`Some(true)`) or

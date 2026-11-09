@@ -1322,19 +1322,75 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> (Option<DeclId>, bool) {
         use kiln_ast::names::OverloadedOperator as OO;
-        let fns = self.alloc_fns(promise_ty, OO::New, global, loc);
+        let mut fns = self.alloc_fns(promise_ty, OO::New, global, loc);
+        // A type-aware allocation function is never used for the frame
+        // (P2719; clang passes no type identity, so they drop out).
+        fns.fns.retain(|&d| !self.is_type_aware_alloc_fn(d));
+        fns.templates.retain(|&d| !self.is_type_aware_alloc_fn(d));
         // Templates join the overload set as in a new-expression
         // (`template <class A> operator new(size_t, allocator_arg_t, A)`).
         let found = if fns.templates.is_empty() {
             self.find_operator_new(&fns.fns, place, pass_align)
         } else {
             let all: Vec<DeclId> = fns.fns.iter().chain(&fns.templates).copied().collect();
-            self.find_operator_new_template(&all, place, pass_align, loc, &mut None)
+            self.find_operator_new_template(&all, place, pass_align, (None, loc), &mut None)
         };
         match found {
             Some((n, a)) => (Some(n), a),
             None => (None, false),
         }
+    }
+
+    /// clang `DiagnoseTypeAwareAllocators`: `d` with, for each
+    /// type-aware `op` the promise class `rec` declares, the `id` line
+    /// once and a `type aware ... declared here` note.
+    fn coro_type_aware_notes(
+        &mut self,
+        mut d: Diag,
+        rec: DeclId,
+        op: kiln_ast::names::OverloadedOperator,
+        id: DiagId,
+        loc: Loc,
+    ) -> Diag {
+        let name = DeclName::operator(op);
+        let found = self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls;
+        let mut first = true;
+        for f in found {
+            if !self.is_type_aware_alloc_fn(f) {
+                continue;
+            }
+            if first {
+                d = d.with_note(self.diag(id, loc).arg(format!("'operator {}'", op.spelling())));
+                first = false;
+            }
+            d = d.with_note(self.type_aware_operator_note(f));
+        }
+        d
+    }
+
+    /// `type aware 'operator new' will not be used for coroutine
+    /// allocation` (clang `warn_coroutine_type_aware_allocator_ignored`)
+    /// with its notes, when the promise class declares a type-aware `op`.
+    fn coro_type_aware_ignored(
+        &mut self,
+        rec: DeclId,
+        op: kiln_ast::names::OverloadedOperator,
+        loc: Loc,
+    ) {
+        let name = DeclName::operator(op);
+        let found = self.lookup_in_class_dn(rec, name, LookupKind::Ordinary).decls;
+        let typed: Vec<DeclId> =
+            found.into_iter().filter(|&f| self.is_type_aware_alloc_fn(f)).collect();
+        if typed.is_empty() {
+            return;
+        }
+        let mut d = self
+            .diag(DiagId::sema_coroutine_type_aware_allocator_ignored, loc)
+            .arg(format!("'operator {}'", op.spelling()));
+        for f in typed {
+            d = d.with_note(self.type_aware_operator_note(f));
+        }
+        self.emit(d);
     }
 
     /// The frame's allocation and deallocation calls
@@ -1425,6 +1481,13 @@ impl Sema<'_, '_> {
                     .diag(DiagId::sema_coroutine_unusable_new, loc)
                     .arg(self.ty_arg(promise_ty))
                     .arg(callee_name);
+                let d = self.coro_type_aware_notes(
+                    d,
+                    rec,
+                    OO::New,
+                    DiagId::note_coroutine_unusable_type_aware_allocators,
+                    loc,
+                );
                 self.emit(d);
             } else if requires_nothrow {
                 let d = self
@@ -1435,6 +1498,7 @@ impl Sema<'_, '_> {
             }
             return None;
         };
+        self.coro_type_aware_ignored(rec, OO::New, loc);
         if requires_nothrow {
             self.resolve_exception_spec(new, loc);
             if !self.decl_is_nothrow(new) {
@@ -1455,11 +1519,15 @@ impl Sema<'_, '_> {
         }
         // findDeleteForPromise: the class's, else the global one; the
         // sized form is preferred.
+        self.coro_type_aware_ignored(rec, OO::Delete, loc);
         let dels = self.alloc_fns(promise_ty, OO::Delete, false, loc);
-        let mut del = self.usual_delete(&dels.fns, false, aligned, true, false);
+        let untyped: Vec<DeclId> =
+            dels.fns.iter().copied().filter(|&d| !self.is_type_aware_alloc_fn(d)).collect();
+        let mut del = self.usual_delete(&untyped, false, aligned, true, false);
         if del.is_none() && dels.in_class {
             let rty = self.tag_type(rec);
-            self.no_suitable_delete(OO::Delete, rty, &dels.fns, loc);
+            let all: Vec<DeclId> = dels.fns.iter().chain(&dels.templates).copied().collect();
+            self.no_suitable_delete(OO::Delete, rty, &all, loc);
             return None;
         }
         if del.is_none() {

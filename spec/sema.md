@@ -1994,9 +1994,9 @@ instantiation unless stated.
   template. A delete-expression that finds one considers only destroying
   candidates, rejects a deleted selection, accepts a cv-qualified operand
   and (CWG2889, clang 20+) does not need a non-virtual destructor to be
-  accessible. Type-aware (`std::type_identity`, P2719) forms and
-  undeduced return types are not checked. Tests: basic.stc.dynamic/,
-  expr.delete/destroying-delete-*.cpp.
+  accessible. Type-aware forms (P2719, WP-1088; §5.9) are checked by
+  `check_type_aware_signature`. Undeduced return types are not checked.
+  Tests: basic.stc.dynamic/, expr.delete/destroying-delete-*.cpp.
 - **The main function** ([basic.start.main], `main_decl.rs`): the
   parameter forms `()`, `(int, char**)`, `(int, char**, char**)` (with
   clang's `const` extension) and no more than three; not a template; not
@@ -6095,6 +6095,79 @@ and aggregate element types.
   the destructor (`dtor_dealloc_fn`) and, for a destroying one, stores
   `this` converted to its first parameter in `Ast::dtor_delete_this`
   for codegen (spec/codegen.md §7u).
+- **Type-aware allocation** (P2719, C++26 DIS; WP-1088). The oracle is
+  clang 22, which implements the paper (clang 19 rejects it), and clang's
+  `type-aware-*.cpp` tests are ported. There is no feature-test macro.
+  - *Declarations* (`alloc_decl.rs`). An allocation or deallocation
+    function whose first parameter is a specialization of
+    `std::type_identity` (`is_type_identity`) is type-aware. It needs at
+    least 3 (new) or 4 (delete) parameters: `type_identity<T>`, then
+    `std::size_t` (new) or `void *, std::size_t` (delete), then
+    `std::align_val_t`, each non-dependent. A template's `T` may be
+    deduced only through the first parameter. A destroying form is an
+    error. Every such declaration warns
+    `ext_cxx_type_aware_allocators` (`-Wext-cxx-type-aware-allocators`,
+    as clang 22). The first one sets `GlobalOps::seen_type_aware`, which
+    enables the typed lookups below. At class completion, a class that
+    declares a type-aware `operator new` (or `new[]`) without a
+    type-aware `operator delete` of the same form, or the reverse, is
+    an error at the class with an `unmatched` note
+    (`check_type_aware_allocator_pairs`).
+  - *Selection* (`new_delete.rs`, `overload/alloc.rs`; clang
+    `resolveAllocationOverload`). In typed mode a new-expression first
+    tries `(std::type_identity<T>{}, size[, align], placement...)`. A
+    failed aligned attempt is retried without the alignment. Only then is
+    the untyped call tried. A deleted typed best candidate is
+    `call to deleted function 'operator new'`, with every candidate's
+    note. The lookup for an array of class type is in the element class.
+    A delete-expression, a deleting destructor and a new-expression's
+    cleanup choose among typed usual deallocation functions first
+    (`typed_usual_delete`). The cleanup must be typed exactly when the
+    `operator new` is, with the same placement form
+    (`sema_mismatching_type_aware_cleanup_deallocator`). A global cleanup
+    prefers the sized form, and the aligned form only for an over-aligned
+    type, even though a typed `operator new` always takes the alignment
+    (clang `FindAllocationFunctions`). The check applies only with
+    exceptions enabled; clang's cc1 tests run without them, so the
+    ports that depend on it pass `-fno-exceptions`. Under exceptions,
+    a deleted cleanup delete makes the new-expression invalid.
+  - *Codegen* (`kiln_codegen/src/new_delete.rs`). The calls pass an
+    empty `std::type_identity<T>` temporary first. The cleanup on a
+    throwing initialization passes it too, plus the saved size for a
+    placement form. The cleanup reuses the new-expression's
+    `type_identity` temporary. A typed `operator new[]` always gets an
+    array cookie, as clang does. With a cookie, the alignment that is
+    passed is at least `size_t`'s (clang `cookieAlign`).
+  - *Constant evaluation* ([expr.const]/10.18.1 as P2719R5 amends it). A
+    namespace-scope type-aware function that is not variadic and, apart
+    from the `type_identity` parameter, has the signature of a replaceable
+    one (3 or 4 parameters, optionally plus `std::nothrow_t`) is usable
+    in constant evaluation. The Oven treats it like the replaceable
+    function: the storage is its own, and the function is never called
+    (`is_type_aware_global_alloc` in `kiln_oven/src/compile/new_delete.rs`).
+    A class-scope typed function is not usable (`call to class-specific
+    'operator new'`), the same as an untyped one. This follows the DIS and
+    clang 22 (`type-aware-new-constexpr.cpp`).
+  - *Coroutines* ([dcl.fct.def.coroutine]/10-12, `coroutine.rs`). The
+    frame's `operator new` and `operator delete` lookups skip type-aware
+    functions. When typed ones exist, it warns
+    `type aware 'operator new' will not be used for coroutine allocation`
+    (`-Wcoro-type-aware-allocation-function`), or adds a note to the
+    unusable-new error, with a note per declaration.
+  - *Access through a using-declaration* (WP-1089, [namespace.udecl]/19).
+    `AllocFns::via` records the using-shadow a class-scope function was
+    found through. The access checks of the new- and delete-expression,
+    the cleanup and the deleting destructor check the shadow
+    (`found_decl`), not its target. For a destroying delete,
+    `check_destructor_delete` forms `this` at the first parameter. A
+    failed conversion (a private base) gets the note `while checking
+    implicit 'delete this' for virtual destructor` at the destructor.
+  - Tests: `basic.stc.dynamic/type-aware-*.cpp`,
+    `class.free/type-aware-mismatched-constraints.cpp`,
+    `expr.new/type-aware-*.cpp`, `expr.new/ir-type-aware.cpp`,
+    `expr.const/type-aware-new.cpp`,
+    `dcl.fct.def.coroutine/type-aware-allocators.cpp`,
+    `expr.delete/destroying-delete-using-access.cpp`.
 - **Access to class allocation functions** ([class.access]/4,
   [expr.new]/28, [class.dtor]/7.3; WP-457): a class-specific `operator
   new` / `operator delete` (usual or destroying) selected by a
