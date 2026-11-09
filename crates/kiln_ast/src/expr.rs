@@ -2251,22 +2251,23 @@ impl ExprArena {
             }
             ExprKind::CompoundAssignOperator => {
                 c.a = kids.first()?.raw();
-                let x = self.compound_assigns[n.b as usize];
-                c.b = self.push_compound_assign(CompoundAssignExtra { rhs: *kids.get(1)?, ..x });
+                let extra = self.compound_assigns[n.b as usize];
+                c.b =
+                    self.push_compound_assign(CompoundAssignExtra { rhs: *kids.get(1)?, ..extra });
             }
             ExprKind::CXXNewExpr => {
-                let mut x = self.news[n.a as usize];
-                let mut k = kids.iter().copied();
-                if x.array_size.is_some() {
-                    x.array_size = k.next();
+                let mut extra = self.news[n.a as usize];
+                let mut rest = kids.iter().copied();
+                if extra.array_size.is_some() {
+                    extra.array_size = rest.next();
                 }
-                if x.init.is_some() {
-                    x.init = k.next();
+                if extra.init.is_some() {
+                    extra.init = rest.next();
                 }
-                if x.placement.is_some() {
-                    x.placement = Some(lists.push_iter(k));
+                if extra.placement.is_some() {
+                    extra.placement = Some(lists.push_iter(rest));
                 }
-                c.a = self.push_new_extra(x);
+                c.a = self.push_new_extra(extra);
             }
             ExprKind::ConditionalOperator | ExprKind::ChooseExpr => {
                 c.a = kids.first()?.raw();
@@ -2308,6 +2309,13 @@ impl ExprArena {
             _ => return None,
         }
         let id = self.push(c);
+        self.copy_cold_records(e, id);
+        Some(id)
+    }
+
+    /// Copies `e`'s location and side records onto its clone `id`
+    /// ([`ExprArena::clone_with_children`]).
+    fn copy_cold_records(&mut self, e: ExprId, id: ExprId) {
         let cold = &mut self.cold;
         if let Some(&l) = cold.end_loc.get(e) {
             let _ = cold.end_loc.insert(id, l);
@@ -2327,7 +2335,6 @@ impl ExprArena {
         if let Some(&x) = cold.trait_rhs_loc.get(e) {
             let _ = cold.trait_rhs_loc.insert(id, x);
         }
-        Some(id)
     }
 
     /// A copy of the `OpaqueValueExpr` `e` bound to `source` instead: a
