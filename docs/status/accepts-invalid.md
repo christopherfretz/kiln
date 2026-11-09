@@ -437,6 +437,18 @@ against clang 19 and clang 22) and one follow-up row in
    `expr.const/reference-past-end-clang22.cpp`,
    `expr.const/initializer-not-yet-seen.cpp`,
    `dcl.constexpr/extern-constexpr-declaration.cpp`.
+   **Fixed in WP-948** (`spec/oven.md`, "Undefined behaviour checks"):
+   all of them but `call-out-of-lifetime.cpp`, which stays an xfail (a
+   by-value parameter object lives to the end of the full-expression, not
+   to the callee's return, [expr.call]/7). Volatile locals and heap objects
+   are not marked yet (`expr.const/read-volatile-local-and-heap.cpp`,
+   xfail). `cargo xtask clang-neg` for `CXX/expr/expr.const` and
+   `SemaCXX/constant-expression*`: missed errors 154 to 104 of 1228 lines
+   (expr.const unchanged at 5 of 78; constant-expression* 149 to 99 of
+   1150). The past-the-end pointer identity also removes eight false
+   rejections in `constant-expression-cxx11.cpp` (`pb3a`, `pd3n`, `pd9n`,
+   `pd0n`, ...), so these numbers are not reflected in the totals above
+   until the next full run.
 8. **Clang attribute checks** (`unavailable` 24, argument counts 33 + 28 + 26,
    `require_constant_initialization`, `annotate`, `carries_dependency` on a
    redeclaration; [dcl.attr.depend]/2). Most of these are the

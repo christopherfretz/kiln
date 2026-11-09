@@ -537,6 +537,7 @@ impl Sema<'_, '_> {
                 base: PtrBase::Decl(m),
                 offset: 0,
                 designated: None,
+                past: false,
             })
             .map_err(|_| MetaError::memory())?;
         *out = MetaOut::Deref(p);
