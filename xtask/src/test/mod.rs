@@ -165,6 +165,10 @@ pub struct Options {
     /// "Module-file kinds"): only `module:` tests, kiln always two-step,
     /// writing module files of this kind.
     pub bmi_kind: Option<u8>,
+    /// `--bmi-image`: with `--bmi-kind 2` (which it implies), kiln writes
+    /// and reads the declaration image (`-fkiln-bmi-image`,
+    /// spec/modules.md §11.11 "Part 2a").
+    pub bmi_image: bool,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -200,6 +204,7 @@ impl Default for Options {
             meta_header: false,
             debug_sweep: false,
             bmi_kind: None,
+            bmi_image: false,
             external: None,
             filter: None,
             shard: None,
@@ -236,6 +241,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--external" => o.external = Some(PathBuf::from(value("--external")?)),
             "--filter" => o.filter = Some(value("--filter")?),
             "--shard" => o.shard = Some(Shard::parse(&value("--shard")?)?),
+            "--bmi-image" => o.bmi_image = true,
             "--bmi-kind" => {
                 let v = value("--bmi-kind")?;
                 o.bmi_kind = Some(match v.as_str() {
@@ -286,6 +292,12 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "-v" | "--verbose" => o.verbose = true,
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
             _ => o.paths.push(PathBuf::from(arg)),
+        }
+    }
+    if o.bmi_image {
+        match o.bmi_kind {
+            None | Some(2) => o.bmi_kind = Some(2),
+            Some(_) => return Err("--bmi-image needs --bmi-kind 2".into()),
         }
     }
     Ok(Some(o))
@@ -450,6 +462,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
             dwarfdump: debug_sweep_dwarfdump(&toolchain.llvm_dir()),
         }),
         bmi_kind: opts.bmi_kind,
+        bmi_image: opts.bmi_image,
     };
     let jobs = opts
         .jobs
