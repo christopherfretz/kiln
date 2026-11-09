@@ -757,7 +757,7 @@ impl Sema<'_, '_> {
         match n.kind() {
             ExprKind::DeclRefExpr => out.push(e),
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
-                self.potential_results(x.operand(e), out)
+                self.potential_results(x.operand(e), out);
             }
             ExprKind::UnaryOperator if x.unary_op(e) == UnaryOp::Extension => {
                 self.potential_results(x.operand(e), out);
