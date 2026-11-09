@@ -106,13 +106,17 @@ pub(super) struct Bodies {
 }
 
 /// Cold annotations carried: `end_loc`, `cast_written`, `trait_rhs_loc`,
-/// `expr_begin`, `member_op_loc`, in this order after the slots.
+/// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, in this order
+/// after the slots.
 const COLD_END: u8 = 1;
 const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
 const COLD_BEGIN: u8 = 8;
 const COLD_OP: u8 = 16;
-const COLD_ALL: u8 = 31;
+/// The lifetime-extended copy of a default argument (WP-1149, spec/sema.md
+/// §7.6a): an expression field, so the copy is written before its use.
+const COLD_REWRITE: u8 = 32;
+const COLD_ALL: u8 = 63;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -464,6 +468,7 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
         (COLD_RHS, F::Loc),
         (COLD_BEGIN, F::Loc),
         (COLD_OP, F::Loc),
+        (COLD_REWRITE, F::E),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -918,6 +923,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
             || e.cold & !COLD_ALL != 0
+            || (e.cold & COLD_REWRITE != 0 && k != ExprKind::CXXDefaultArgExpr)
             || e.deps & !ExprDeps::TYPE_VALUE_INST.bits() != 0
         {
             return bad("bad expression bits");
@@ -1264,6 +1270,10 @@ impl Writer<'_, '_, '_> {
                 if let Some(&l) = t.member_op_loc.get(e) {
                     cold |= COLD_OP;
                     v.push(Fv::Loc(l));
+                }
+                if let Some(r) = ast.exprs.default_arg_rewritten(e) {
+                    cold |= COLD_REWRITE;
+                    v.push(Fv::E(Some(r)));
                 }
                 Ok((ki as u8, n.raw_bits(), u16::from(n.aux()), cold, v))
             }
@@ -1896,6 +1906,14 @@ impl Sema<'_, '_> {
             }
             if e.cold & COLD_OP != 0 {
                 let _ = self.ast.templates.member_op_loc.insert(id, Loc::from_raw(next()));
+            }
+            // Only on a default-argument use (the copy precedes it, so it
+            // is already built); anything else is dropped.
+            if e.cold & COLD_REWRITE != 0
+                && k == ExprKind::CXXDefaultArgExpr
+                && let Some(r) = ExprId::from_raw(next())
+            {
+                let _ = self.ast.exprs.set_default_arg_rewritten(id, r);
             }
         }
         for (i, s) in b.stmts.iter().enumerate() {
