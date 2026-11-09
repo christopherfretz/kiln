@@ -3,6 +3,7 @@
 // calls are `call`s under a pending cleanup (clang's
 // `AddKnownFunctionAttributes`).
 //@ expect: ir
+//@ min-oracle: 22
 //@ std: c++20
 extern "C" double _Complex csqrt(double _Complex);
 extern "C" float _Complex cexpf(float _Complex);

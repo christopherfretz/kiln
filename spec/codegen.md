@@ -591,6 +591,21 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       are `__builtin_printf`, `__builtin_vprintf`, `__builtin_vsprintf`
       and the `scanf`, `sscanf`, `vscanf`, `vsscanf` forms (WP-841,
       `tests/conformance/ext.gnu.builtins/printf-scanf-family-run.cpp`).
+    - the `__builtin_` C library aliases of WP-1104 (`builtin::is_libc_fwd`;
+      spec/sema.md "Library functions"): `__builtin_malloc`, `calloc`,
+      `realloc`, `free`, `fprintf`, `vfprintf`, `fscanf`, `vfscanf` and
+      the string functions are calls of the library function without the
+      prefix (`builtins::lib_name`), declared with the builtin's type, so
+      the `NoThrow` ones are `nounwind` and a call under a pending
+      cleanup is a `call`; no `allocsize` and no `noalias` return, as
+      clang. `__builtin_alloca_uninitialized` and
+      `__builtin_alloca_with_align_uninitialized` are emitted as
+      `__builtin_alloca` / `__builtin_alloca_with_align` (`emit_alloca`),
+      never initialized under `-ftrivial-auto-var-init` (clang's
+      `memset` of `__builtin_alloca` under that flag is not modelled
+      yet: WP-1104 follow-up). `tests/codegen/lib_builtin_fwd.cpp`,
+      `ext.gnu.builtins/library-fwd-*-ir.cpp`,
+      `alloca-uninitialized-ir.cpp`, `library-fwd-alloc-scanf-run.cpp`.
     - recognized C library functions (WP-419, clang `EmitBuiltinExpr`
       for a library builtin; spec/sema.md §5.4): a direct call of a
       declaration with a `lib_builtin` twin whose `__builtin_` form is an

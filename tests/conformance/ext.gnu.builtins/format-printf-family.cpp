@@ -2,8 +2,8 @@
 // __builtin_vprintf (1, 0) and __builtin_vsprintf (2, 0), and the
 // signatures of the printf/scanf family builtins (clang 19 Builtins.td:
 // the printf ones NoThrow, the scanf ones not; GNU [dcl.attr] extension).
-// clang 19 declares no __builtin_fprintf, __builtin_vfprintf,
-// __builtin_fscanf or __builtin_vfscanf. A va_list format that is not a
+// No __builtin_fprintf, vfprintf, fscanf or vfscanf without a FILE type
+// (WP-1104, format-scanf-builtins.cpp). A va_list format that is not a
 // literal is only -Wformat-nonliteral's (off by default). Verified
 // against clang 19.
 //@ expect: compile-fail

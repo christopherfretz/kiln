@@ -241,6 +241,8 @@ impl Cg<'_> {
                 b,
                 id::ALLOCA
                     | id::ALLOCA_WITH_ALIGN
+                    | id::ALLOCA_UNINITIALIZED
+                    | id::ALLOCA_WITH_ALIGN_UNINITIALIZED
                     | id::VA_START
                     | id::FRAME_ADDRESS
                     | id::RETURN_ADDRESS

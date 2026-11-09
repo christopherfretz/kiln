@@ -972,6 +972,15 @@ literal is one instruction and one step, not an interpreted loop.
   (`__builtin_constant_p`, a GNU-folded array bound, codegen's
   `fold_rvalue` and constant initializers) continues, so `strlen("abc")`
   folds to 3 as in clang 19 and 22.
+- **`__builtin_` library aliases (WP-1104):** `__builtin_malloc`,
+  `calloc`, `realloc`, `free`, `fprintf`, `vfprintf`, `fscanf`,
+  `vfscanf`, the string aliases (`__builtin_strcpy`, ...) and the
+  `_uninitialized` allocas (`builtin::is_libc_fwd`) are never
+  evaluated: a call traps with clang's note "subexpression not valid
+  in a constant expression" (plus "in call to" inside a function), so
+  `constexpr void *p = __builtin_malloc(4);` is "constexpr variable 'p'
+  must be initialized by a constant expression", as in clang 19 and 22
+  (`ext.gnu.builtins/library-fwd-constexpr.cpp`).
 - **Atomics (WP-154):** `__atomic_always_lock_free`, `__atomic_is_lock_free`
   and `__c11_atomic_is_lock_free` fold through `bi::LOCK_FREE` as clang
   19's `IntExprEvaluator`: a power-of-two size within the target's inline

@@ -627,6 +627,13 @@ impl Sema<'_, '_> {
         }
         let info = builtin::info(id)?;
         let (ret, params, variadic) = self.builtin_signature(info.sig);
+        // WP-1104: a builtin whose type names `FILE` is not declared while
+        // no `FILE` type is (clang `GetBuiltinType`'s `GE_Missing_stdio`:
+        // `LazilyCreateBuiltin` declares nothing in C++, so the name is
+        // undeclared).
+        if info.sig.contains('P') && self.file_type() == QualType::ERROR {
+            return None;
+        }
         let has = |a: u8| info.attrs & a != 0;
         let fi =
             FuncInfo::new().with_variadic(variadic).with_noreturn(has(builtin::attr::NORETURN));
@@ -660,9 +667,14 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &pds);
         }
         let mut attrs = vec![self.ast.attrs.push(implicit(AttrKind::BUILTIN, Loc::INVALID, id))];
-        if let Some((fmt, first)) = builtin::printf_format(id) {
+        // WP-1104: and the scanf family's implicit `format(scanf)`.
+        let format = match builtin::printf_format(id) {
+            Some(f) => Some((crate::vector::FORMAT_PRINTF, f)),
+            None => builtin::scanf_format(id).map(|f| (crate::vector::FORMAT_SCANF, f)),
+        };
+        if let Some((a, (fmt, first))) = format {
             let b = u32::from(fmt) | u32::from(first) << 16;
-            let node = AttrNode { b, ..implicit(AttrKind::FORMAT, loc, 0) };
+            let node = AttrNode { b, ..implicit(AttrKind::FORMAT, loc, a) };
             attrs.push(self.ast.attrs.push(node));
         }
         let early = has(builtin::attr::CONST_EARLY);
@@ -1209,7 +1221,7 @@ impl Sema<'_, '_> {
         if arm {
             return self.check_arm_builtin(id, callee, args);
         }
-        if id == builtin::ALLOCA_WITH_ALIGN
+        if matches!(id, builtin::ALLOCA_WITH_ALIGN | builtin::ALLOCA_WITH_ALIGN_UNINITIALIZED)
             && let Some(&a) = args.get(1)
             && !self.expr_is_value_dependent(a)
         {
