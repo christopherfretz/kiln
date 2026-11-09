@@ -248,3 +248,393 @@ fn scanner_options_and_names() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(o.stdout.starts_with("p.o: p.cppm"), "{}", o.stdout);
 }
+
+// ---- WP-1148: `-compilation-database`, `-format=experimental-full`, the
+// `clang-scan-deps-19` name, and a differential run against the real
+// clang-scan-deps 19 and 22 when they are installed.
+
+/// A JSON string literal.
+fn js(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// `sources` plus `sub/s.cppm` (an interface unit in another directory
+/// that includes `../hdr.h`).
+fn db_sources(name: &str) -> PathBuf {
+    let d = sources(name);
+    std::fs::create_dir_all(d.join("sub")).unwrap();
+    std::fs::write(d.join("sub/s.cppm"), "module;\n#include \"../hdr.h\"\nexport module s;\n")
+        .unwrap();
+    d.canonicalize().unwrap()
+}
+
+/// Writes `compile_commands.json` from `(directory, file, words-or-command,
+/// output)` entries: `Ok(words)` is an `arguments` array, `Err(text)` a
+/// `command` string.
+fn write_db(d: &Path, entries: &[(&Path, &str, Result<&[&str], &str>, Option<&str>)]) -> PathBuf {
+    let items: Vec<String> = entries
+        .iter()
+        .map(|(dir, file, cmd, out)| {
+            let mut s =
+                format!("{{\"directory\": {}, \"file\": {}", js(&dir.to_string_lossy()), js(file));
+            match cmd {
+                Ok(words) => {
+                    let w: Vec<String> = words.iter().map(|w| js(w)).collect();
+                    s.push_str(&format!(", \"arguments\": [{}]", w.join(", ")));
+                }
+                Err(text) => s.push_str(&format!(", \"command\": {}", js(text))),
+            }
+            if let Some(o) = out {
+                s.push_str(&format!(", \"output\": {}", js(o)));
+            }
+            s + "}"
+        })
+        .collect();
+    let path = d.join("compile_commands.json");
+    std::fs::write(&path, format!("[\n{}\n]\n", items.join(",\n"))).unwrap();
+    path
+}
+
+fn rule(primary: &str, rest: &[String]) -> String {
+    let mut s = format!("    {{\n      \"primary-output\": \"{primary}\"");
+    for r in rest {
+        s.push_str(",\n");
+        s.push_str(r);
+    }
+    s + "\n    }"
+}
+
+/// `-compilation-database`: every entry is scanned in its own
+/// `directory`; `arguments` wins over `command`, which is split as a
+/// shell would; a rule's primary output is the entry's `output` (empty
+/// without one); the rules are sorted by it; and an import of a module
+/// another entry provides names that entry's source (clang-scan-deps
+/// 22's P1689 output for the same database, [module.unit],
+/// [module.import]).
+#[test]
+fn compilation_database_p1689() {
+    let d = db_sources("cdb-p1689");
+    let kpp = bin("kiln++");
+    let k = kpp.to_str().unwrap();
+    let main_cmd = format!("{k} -std=c++20 -c 'main.cpp' -o \"main.o\" -DX=\\\"q\\\"");
+    let sub_cmd = format!("{k} -std=c++20 -c s.cppm -o s.o");
+    let db = write_db(
+        &d,
+        &[
+            (&d, "m.cppm", Ok(&[k, "-std=c++20", "-c", "m.cppm", "-o", "m.o"]), None),
+            (&d, "main.cpp", Err(&main_cmd), Some("main.o")),
+            (&d.join("sub"), "s.cppm", Err(&sub_cmd), Some("s.o")),
+            (&d, "p.cppm", Ok(&[k, "-std=c++20", "-c", "p.cppm"]), Some("p.o")),
+        ],
+    );
+    let o = scan_with(
+        "clang-scan-deps-22",
+        &d,
+        &["-format=p1689", "-compilation-database", db.to_str().unwrap()],
+        None,
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let req = |n: &str, src: Option<&str>| match src {
+        Some(s) => format!(
+            "        {{\n          \"logical-name\": \"{n}\",\n          \"source-path\": \"{s}\"\n        }}"
+        ),
+        None => format!("        {{\n          \"logical-name\": \"{n}\"\n        }}"),
+    };
+    let requires =
+        |items: &[String]| format!("      \"requires\": [\n{}\n      ]", items.join(",\n"));
+    let rules = [
+        rule(
+            "",
+            &[
+                provides("m", true, "m.cppm"),
+                requires(&[req("m:p", Some("p.cppm")), req("m:impl", None)]),
+            ],
+        ),
+        // kiln lists `import m; import m;` once (clang twice).
+        rule("main.o", &[requires(&[req("m", Some("m.cppm"))])]),
+        rule("p.o", &[provides("m:p", true, "p.cppm")]),
+        rule("s.o", &[provides("s", true, "s.cppm")]),
+    ];
+    let want = format!(
+        "{{\n  \"revision\": 0,\n  \"rules\": [\n{}\n  ],\n  \"version\": 1\n}}\n",
+        rules.join(",\n")
+    );
+    assert_eq!(o.stdout, want);
+
+    // An empty database is the empty document.
+    std::fs::write(d.join("empty.json"), "[]\n").unwrap();
+    let o = scan_with(
+        "kiln-scan-deps",
+        &d,
+        &["-format=p1689", "-compilation-database=empty.json"],
+        None,
+    );
+    assert_eq!((o.code, o.stdout.as_str(), o.stderr.as_str()), (0, EMPTY, ""));
+}
+
+/// The make format of a database: one rule per entry in database order,
+/// each entry's files named from its `directory`; a failing entry is
+/// reported under its `file` name and leaves the others (exit 1).
+#[test]
+fn compilation_database_make() {
+    let d = db_sources("cdb-make");
+    let kpp = bin("kiln++");
+    let k = kpp.to_str().unwrap();
+    let db = write_db(
+        &d,
+        &[
+            (&d.join("sub"), "s.cppm", Ok(&[k, "-std=c++20", "-c", "s.cppm", "-o", "s.o"]), None),
+            (&d, "missing.cpp", Ok(&[k, "-c", "missing.cpp"]), None),
+            (&d, "m.cppm", Ok(&[k, "-std=c++20", "-c", "m.cppm"]), None),
+        ],
+    );
+    let o = scan_with("kiln-scan-deps", &d, &["-compilation-database", db.to_str().unwrap()], None);
+    assert_eq!(o.code, 1);
+    let ds = d.to_str().unwrap();
+    // (Long rules wrap at clang's column limit; compare unwrapped.)
+    assert_eq!(
+        o.stdout.replace(" \\\n  ", " "),
+        format!("s.o: {ds}/sub/s.cppm {ds}/sub/../hdr.h\nm.o: {ds}/m.cppm {ds}/hdr.h\n")
+    );
+    assert!(
+        o.stderr.starts_with(
+            "Diagnostics while scanning dependencies for 'missing.cpp':\nerror: no such file or directory: 'missing.cpp'\n"
+        ),
+        "{}",
+        o.stderr
+    );
+    // Under clang-scan-deps-19 the header is clang 19's.
+    let o =
+        scan_with("clang-scan-deps-19", &d, &["-compilation-database", db.to_str().unwrap()], None);
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.starts_with("Error while scanning dependencies for missing.cpp:\n"),
+        "{}",
+        o.stderr
+    );
+}
+
+/// The database errors are clang-scan-deps's messages (exit 1, nothing
+/// printed); a database and a command after `--` together are an error.
+#[test]
+fn compilation_database_errors() {
+    let d = sources("cdb-errors");
+    let cases: &[(&str, &str)] = &[
+        ("", "Expected array."),
+        ("{}", "Expected array."),
+        ("[3]", "Expected object."),
+        (r#"[{"directory": "."}]"#, "Missing key: \"file\"."),
+        (r#"[{"file": "a"}]"#, "Missing key: \"command\" or \"arguments\"."),
+        (r#"[{"file": "a", "command": "x"}]"#, "Missing key: \"directory\"."),
+        (r#"[{"directory": ".", "file": "a", "arguments": "x"}]"#, "Expected sequence as value."),
+        (r#"[{"directory": ".", "file": "a", "command": ["x"]}]"#, "Expected string as value."),
+        (
+            r#"[{"directory": ".", "file": "a", "command": "x", "zork": 1}]"#,
+            "Unknown key: \"\"zork\"\"",
+        ),
+        ("[{\"directory\" 1}]", "bad.json:1:15: error: expected ':'"),
+    ];
+    for (text, msg) in cases {
+        std::fs::write(d.join("bad.json"), text).unwrap();
+        let o = scan_with("kiln-scan-deps", &d, &["-compilation-database", "bad.json"], None);
+        assert_eq!((o.code, o.stdout.as_str()), (1, ""), "{text}");
+        assert_eq!(o.stderr, format!("{msg}\n"), "{text}");
+    }
+    let o = scan_with("kiln-scan-deps", &d, &["-compilation-database", "nope.json"], None);
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr, "Error while opening JSON database: No such file or directory\n");
+    let o = scan_with(
+        "kiln-scan-deps",
+        &d,
+        &["-compilation-database", "bad.json"],
+        Some(&["-c", "p.cppm"]),
+    );
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "The compilation command line must be provided either via '-compilation-database' or after '--'.\n"
+    );
+}
+
+/// `-format=experimental-full`: one object per translation unit with its
+/// command line, compiler, absolute file deps, and (clang 22) the named
+/// module it provides and the ones it imports; the shapes of clang 22
+/// (streamed keys, no final newline) and clang 19 (sorted keys, no named
+/// modules, final newline) under their program names.
+#[test]
+fn experimental_full_shapes() {
+    let d = sources("full").canonicalize().unwrap();
+    let ds = d.to_str().unwrap();
+    let kpp = bin("kiln++");
+    let k = kpp.to_str().unwrap();
+    let run = |scanner: &str| {
+        let o = scan_with(
+            scanner,
+            &d,
+            &["-format=experimental-full"],
+            Some(&["-c", "m.cppm", "-o", "m.o"]),
+        );
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        // The hash is kiln's own; check its form and blank it.
+        let at = o.stdout.find("\"clang-context-hash\": \"").unwrap() + 23;
+        let len = o.stdout[at..].find('"').unwrap();
+        assert!(
+            o.stdout[at..at + len].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        );
+        format!("{}H{}", &o.stdout[..at], &o.stdout[at + len..])
+    };
+    let head = "{\n  \"modules\": [],\n  \"translation-units\": [\n    {\n      \"commands\": [\n        {\n          \"clang-context-hash\": \"H\",\n";
+    let cmd = format!(
+        "          \"clang-module-deps\": [],\n          \"command-line\": [\n            \"-std=c++20\",\n            \
+         \"-c\",\n            \"m.cppm\",\n            \"-o\",\n            \"m.o\"\n          ],\n          \
+         \"executable\": \"{k}\",\n          \"file-deps\": [\n            \"{ds}/./m.cppm\",\n            \
+         \"{ds}/./hdr.h\"\n          ],\n          \"input-file\": \"m.cppm\"\n        }}\n      ]\n    }}\n  ]\n}}"
+    );
+    let named = "          \"named-module\": \"m\",\n          \"named-module-deps\": [\n            \"m:p\",\n            \"m:impl\"\n          ],\n";
+    assert_eq!(run("clang-scan-deps-22"), format!("{head}{named}{cmd}"));
+    assert_eq!(run("clang-scan-deps-19"), format!("{head}{cmd}\n"));
+    // A failed scan is a translation unit without commands.
+    let o = scan_with(
+        "kiln-scan-deps",
+        &d,
+        &["-format=experimental-full"],
+        Some(&["-c", "nofile.cpp"]),
+    );
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stdout,
+        "{\n  \"modules\": [],\n  \"translation-units\": [\n    {\n      \"commands\": []\n    }\n  ]\n}"
+    );
+}
+
+/// Whether the real `clang-scan-deps-<v>` runs here (the differential
+/// test is skipped without it: `apt-get install clang-tools-19`).
+fn have(tool: &str) -> bool {
+    Command::new(tool)
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// An `experimental-full` document reduced to what kiln matches: per
+/// translation unit, its command objects with the `command-line` (clang's
+/// is `-cc1`) and the hash blanked, equal consecutive commands merged
+/// (clang 19 splits a module interface into two), trailing commas gone.
+fn full_shape(text: &str) -> Vec<Vec<Vec<String>>> {
+    let mut tus: Vec<Vec<Vec<String>>> = Vec::new();
+    let mut block: Option<Vec<String>> = None;
+    let mut skip = false;
+    for line in text.lines() {
+        let l = line.trim_end_matches(',');
+        if l == "      \"commands\": [" || l == "      \"commands\": []" {
+            tus.push(Vec::new());
+        } else if l == "        {" {
+            block = Some(Vec::new());
+        } else if l == "        }" {
+            let b = block.take().unwrap();
+            let cmds = tus.last_mut().unwrap();
+            if cmds.last() != Some(&b) {
+                cmds.push(b);
+            }
+        } else if let Some(b) = &mut block {
+            if l.starts_with("          \"command-line\": [") {
+                skip = !l.ends_with("[]");
+                b.push("command-line".into());
+            } else if skip {
+                skip = l != "          ]";
+            } else if l.starts_with("          \"clang-context-hash\"") {
+                b.push("hash".into());
+            } else {
+                b.push(l.to_owned());
+            }
+        }
+    }
+    tus
+}
+
+/// Differential: the same compilation database (a module graph across
+/// two directories: interface, partitions, implementation unit,
+/// consumer, plain unit) through the real clang-scan-deps 19 and 22 and
+/// through kiln-scan-deps under the same names gives the same make
+/// rules, the same P1689 document, and the same `experimental-full`
+/// documents up to the command lines (clang's `-cc1` jobs, kiln's driver
+/// command) and context hashes.
+#[test]
+fn differential_against_clang_scan_deps() {
+    let d = db_sources("differential");
+    // No unit imports a module twice (kiln lists it once, clang twice).
+    std::fs::write(d.join("main.cpp"), "import m;\nint main() { return f(); }\n").unwrap();
+    let cxx: &[&str] = &["clang++", "-std=c++20", "-c"];
+    fn with<'a>(cxx: &[&'a str], src: &'a str, o: &[&'a str]) -> Vec<&'a str> {
+        let mut v = cxx.to_vec();
+        v.push(src);
+        v.extend(o);
+        v
+    }
+    let (m, main, p, imp, mi, plain) = (
+        with(cxx, "m.cppm", &["-o", "m.o"]),
+        with(cxx, "main.cpp", &[]),
+        with(cxx, "p.cppm", &["-o", "p.o"]),
+        with(cxx, "impl.cppm", &["-o", "impl.o"]),
+        with(cxx, "m.cpp", &[]),
+        with(cxx, "plain.cpp", &["-o", "plain.o"]),
+    );
+    let s_cmd = "clang++ -std=c++20 -c s.cppm -o 's.o'";
+    let db = write_db(
+        &d,
+        &[
+            (&d, "m.cppm", Ok(&m), None),
+            (&d, "main.cpp", Ok(&main), Some("main.o")),
+            (&d.join("sub"), "s.cppm", Err(s_cmd), Some("s.o")),
+            (&d, "p.cppm", Ok(&p), Some("p.o")),
+            (&d, "impl.cppm", Ok(&imp), Some("impl.o")),
+            (&d, "m.cpp", Ok(&mi), Some("mi.o")),
+            (&d, "plain.cpp", Ok(&plain), None),
+        ],
+    );
+    let db = db.to_str().unwrap();
+    let mut ran = 0;
+    for v in ["19", "22"] {
+        let real = format!("clang-scan-deps-{v}");
+        if !have(&real) || !have("clang++") {
+            eprintln!("note: {real} or clang++ not installed; skipping its differential");
+            continue;
+        }
+        ran += 1;
+        for format in ["make", "p1689", "experimental-full"] {
+            let fmt = format!("-format={format}");
+            let opts = ["-j", "1", fmt.as_str(), "-compilation-database", db];
+            let c = Command::new(&real).args(opts).current_dir(&d).output().unwrap();
+            let k = scan_with(&real, &d, &opts, None);
+            let c_out = String::from_utf8_lossy(&c.stdout).into_owned();
+            assert_eq!((k.code, c.status.code()), (0, Some(0)), "{real} {format}: {}", k.stderr);
+            if format == "experimental-full" {
+                let shape = full_shape(&k.stdout);
+                assert!(shape.len() == 7 && shape.iter().all(|t| t.len() == 1), "{shape:?}");
+                assert_eq!(shape, full_shape(&c_out), "{real} {format}");
+                assert_eq!(k.stdout.ends_with('\n'), c_out.ends_with('\n'), "{real} {format}");
+            } else if format == "make" && v == "19" {
+                // clang 19 names an interface unit's rule by its temporary
+                // `.pcm` job; compare the prerequisites.
+                let deps = |t: &str| -> Vec<String> {
+                    t.replace("\\\n", " ")
+                        .lines()
+                        .map(|l| {
+                            l.split_once(": ")
+                                .map_or(l, |x| x.1)
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect()
+                };
+                assert_eq!(deps(&k.stdout), deps(&c_out), "{real} {format}");
+            } else {
+                assert_eq!(k.stdout, c_out, "{real} {format}");
+            }
+        }
+    }
+    eprintln!("differential: {ran} clang-scan-deps versions compared");
+}
