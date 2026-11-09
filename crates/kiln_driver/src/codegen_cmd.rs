@@ -87,6 +87,7 @@ pub fn is_source(input: &Input) -> bool {
             | "ii"
             | "cppm"
             | "ixx"
+            | "pcm"
             | "h"
             | "hh"
             | "hpp"
@@ -304,8 +305,8 @@ impl CodegenJob<'_> {
         if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
-        let main_id = inputs.main;
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+        let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
             std: job.std.lex,
@@ -333,8 +334,11 @@ impl CodegenJob<'_> {
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
-        let (mut tu, pp) =
+        let (mut tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if engine.error_count() == 0 {
+            job.write_module_file(&mut pp, engine);
+        }
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
@@ -394,7 +398,7 @@ impl CodegenJob<'_> {
                 cxx_modules: job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20,
                 debug: kiln_codegen::DebugOptions {
                     main_file: if job.path == "-" { String::new() } else { job.path.to_owned() },
-                    main_id: Some(main_id),
+                    main_id,
                     language: kiln_codegen::DebugOptions::language_for(
                         job.std.cplusplus,
                         job.std.lex >= kiln_lex::Std::Cxx11,

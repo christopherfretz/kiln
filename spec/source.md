@@ -65,6 +65,14 @@ Buffers:
 - `load_regular_file(&Path)`: `load_file` that also refuses anything but
   a regular file (header search: a device or FIFO found under a header's
   name is not read as one).
+- `load_regular_file_expecting(&Path, text: String) -> Result<(FileId,
+  Option<String>), (LoadError, String)>` (WP-917, module-file replay,
+  spec/modules.md §11.2): when the path is a regular file of exactly
+  `text.len()` bytes and is not loaded yet, `text` becomes its buffer
+  under the file's identity without reading it (`(id, None)`).
+  Otherwise the file is loaded as `load_regular_file` does, and `text`
+  is handed back (`(id, Some(text))`, or the error with `text`) so that
+  the caller can compare it with the file's text.
 - `read_open_file(&mut File, &Metadata) -> io::Result<Vec<u8>>`: reads an
   opened file whole in one sized read, the length from the metadata
   already fetched (no second `fstat` or probe read as `fs::read` makes).

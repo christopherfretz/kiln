@@ -398,6 +398,9 @@ fn write_results(
     let mut status = i32::from(errors > 0);
     let out_path = if args.deps.only.is_some() {
         args.deps.file.as_deref().or(args.output.as_deref())
+    } else if args.action == Action::Precompile {
+        // `-o` names the module file, written by the job.
+        None
     } else {
         args.output.as_deref()
     };
@@ -642,6 +645,18 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         return 1;
     }
 
+    if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
+        let sm = SourceManager::new();
+        let e = make_engine(
+            &sm,
+            &codegen_cmd::driver_diag_options(&diag_opts),
+            io.stderr.clone(),
+            Some(&args.program),
+        );
+        Diag::new(DiagId::drv_out_file_multiple, Span::INVALID).emit(&e);
+        e.flush();
+        return 1;
+    }
     let stdin_text = inputs.iter().any(|i| i.path == "-").then(|| read_stdin(&mut io.stdin));
     if matches!(args.action, Action::Compile | Action::Link) && args.deps.only.is_none() {
         return codegen_cmd::compile(
@@ -684,7 +699,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 continue;
             }
         };
-        if args.action == Action::SyntaxOnly {
+        if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
             let r = syntax_only(&args, &tc, std, lang, &input.path, stdin, &diag_opts, &io);
             errors += r.errors;
