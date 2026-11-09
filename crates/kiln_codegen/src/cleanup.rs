@@ -437,7 +437,7 @@ impl Cg<'_> {
     /// `mark` belong to the cleanup on top of the stack.
     pub(crate) fn add_aux_allocas(&mut self, mark: u32) {
         let a = self.f.fir.allocas_from(mark);
-        self.f.cl.stack.last_mut().expect("cleanup scope").aux.extend(a);
+        self.f.cl.stack.last_mut().expect("a cleanup was pushed").aux.extend(a);
     }
 
     /// `pushFullExprCleanup`: outside a conditional branch a plain
@@ -458,7 +458,7 @@ impl Cg<'_> {
 
     /// `initFullExprCleanupWithFlag` on the innermost cleanup.
     pub(crate) fn init_full_expr_cleanup_with_flag(&mut self, flag: Addr) {
-        let s = self.f.cl.stack.last_mut().expect("cleanup scope");
+        let s = self.f.cl.stack.last_mut().expect("a cleanup was pushed");
         s.active_flag = Some(flag);
         s.test_flag = s.normal;
         s.test_flag_eh = s.eh;
@@ -467,7 +467,7 @@ impl Cg<'_> {
     /// `createCleanupActiveFlag`: a `cleanup.cond` flag cleared before
     /// the outermost conditional and set at the current location.
     pub(crate) fn create_cleanup_active_flag(&mut self) -> Addr {
-        let outer = *self.f.conds.first().expect("in a conditional branch");
+        let outer = *self.f.conds.first().expect("caller: in a conditional");
         let flag = self.f.fir.alloca(LTy::I1, 1);
         let f0 = V::C(self.m.const_bool(false));
         self.f.fir.insert_before_last(
@@ -604,7 +604,7 @@ impl Cg<'_> {
     /// `EHScopeStack::popTerminate`.
     pub(crate) fn pop_terminate(&mut self) {
         let s = self.f.cl.stack.pop();
-        debug_assert!(matches!(s.map(|s| s.kind), Some(Kind::Terminate)));
+        debug_assert!(matches!(s.map(|s| s.kind), Some(Kind::Terminate)), "push_terminate");
     }
 
     /// `EHScopeStack::pushCatch`.
@@ -614,8 +614,11 @@ impl Cg<'_> {
 
     /// `EHScopeStack::popCatch`.
     pub(crate) fn pop_catch(&mut self) -> Scope {
-        let s = self.f.cl.stack.pop().expect("catch scope");
-        debug_assert!(matches!(s.kind, Kind::Catch(_)));
+        let s = self.f.cl.stack.pop().expect("pop_catch: the scope stack holds the catch scope");
+        assert!(
+            matches!(s.kind, Kind::Catch(_)),
+            "pop_catch: every cleanup pushed inside the handler's scope was popped first"
+        );
         s
     }
 
@@ -744,7 +747,7 @@ impl Cg<'_> {
 
     /// `TransitionToCleanupSwitch`.
     fn transition_to_cleanup_switch(&mut self, b: Blk) -> u32 {
-        let t = self.f.fir.terminator(b).expect("terminator");
+        let t = self.f.fir.terminator(b).expect("block ends in a branch");
         if let Op::Br { dest } = *self.f.fir.op(t) {
             let slot = self.dest_slot();
             let ld = self.f.fir.insert_before(
@@ -833,7 +836,7 @@ impl Cg<'_> {
                 && cases.len() == 1
                 && default == unr
             {
-                let b = self.f.fir.inst_block(t).expect("live switch");
+                let b = self.f.fir.inst_block(t).expect("cleanup switch is placed");
                 let _ = b;
                 self.f.fir.insert_before(t, Op::Br { dest: cases[0].1 }, LTy::VOID);
                 self.f.fir.erase(t);
@@ -879,7 +882,7 @@ impl Cg<'_> {
             None
         };
         let (is_active, flag, eh_flag, fixup_depth, has_existing_branches, is_normal, eh_entry) = {
-            let s = self.f.cl.stack.last().expect("cleanup scope");
+            let s = self.f.cl.stack.last().expect("a cleanup was pushed");
             (
                 s.active,
                 s.active_flag.filter(|_| s.test_flag),
@@ -913,9 +916,9 @@ impl Cg<'_> {
                 self.emit_block(b, false);
                 b
             };
-            let entry = self.f.cl.stack[top - 1].normal_block.expect("normal entry");
-            let src = fallthrough_source.expect("source");
-            let t = self.f.fir.terminator(src).expect("terminator");
+            let entry = self.f.cl.stack[top - 1].normal_block.expect("fallthrough has an entry");
+            let src = fallthrough_source.expect("fallthrough has a source");
+            let t = self.f.fir.terminator(src).expect("block ends in a branch");
             self.f.fir.set_successor(t, entry, pre_dest);
         }
 
@@ -1004,7 +1007,7 @@ impl Cg<'_> {
                 self.f.fir.erase(crate::fir::Fir::last_inst(slot));
                 self.f.cl.dest_slot = None;
             }
-            Exit::Br(after0.expect("branch-after").0)
+            Exit::Br(after0.expect("checked above: one branch-after").0)
         } else if n_afters > 0
             || (has_fallthrough && !fallthrough_is_branch_through)
             || (has_fixups && !has_enclosing)
@@ -1046,12 +1049,12 @@ impl Cg<'_> {
             }
             Exit::Switch { default, cases }
         } else {
-            Exit::Br(through_dest.expect("branch-through destination"))
+            Exit::Br(through_dest.expect("checked above: has a dest"))
         };
 
         self.f.cl.pop();
         self.emit_cleanup(cleanup, flag, false);
-        let normal_exit = self.f.fir.cur().expect("cleanup ends with an insertion point");
+        let normal_exit = self.f.fir.cur().expect("cleanup body leaves an open block");
         match exit {
             Exit::Br(b) => {
                 self.f.fir.push(Op::Br { dest: b }, LTy::VOID);
@@ -1269,7 +1272,7 @@ impl Cg<'_> {
             let empty = self.icmp(IntPredicate::Eq, begin, end);
             self.cond_br(empty, out, body);
         }
-        let entry = self.f.fir.cur().expect("insertion point");
+        let entry = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.emit_block(body, false);
         let phi = self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(end, entry)] }, LTy::PTR);
         let m1 = self.i64c(-1);
@@ -1286,7 +1289,7 @@ impl Cg<'_> {
             self.pop_cleanup_block(false);
         }
         let done = self.icmp(IntPredicate::Eq, el, begin);
-        let cur = self.f.fir.cur().expect("insertion point");
+        let cur = self.f.fir.cur().expect(crate::fir::OPEN_BLOCK);
         self.f.fir.add_incoming(crate::fir::Fir::last_inst(phi), el, cur);
         self.cond_br(done, out, body);
         self.emit_block(out, false);

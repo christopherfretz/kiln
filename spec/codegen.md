@@ -599,6 +599,8 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_readcyclecounter()` is `call i64 @llvm.readcyclecounter()`
+      on every target (WP-1057, `builtin_readcyclecounter{,-19}.cpp`).
       `__builtin_thread_pointer()` is `call ptr @llvm.thread.pointer()`,
       `@llvm.thread.pointer.p0()` when the consuming LLVM
       (`CodegenOptions::llvm_major`) is 20 or later, where the intrinsic
@@ -1181,6 +1183,11 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
 - Block layout, forwarding-block removal and the dead-block cleanup
   follow clang -O0. A statement with no insertion point is skipped unless
   it contains a label (`ContainsLabel`).
+- A declaration in unreachable code is still emitted. A local variable's
+  alloca and NRVO flag, and a VLA's bound computation, first reopen a
+  block with `ensure_insert_point` (clang `EnsureInsertPoint` in
+  `EmitAutoVarAlloca` and `EmitVariablyModifiedType`). Every
+  `fir.cur().expect(fir::OPEN_BLOCK)` depends on this (WP-971).
 - Each loop gets a distinct `!llvm.loop` node with
   `llvm.loop.mustprogress`. A loop with a constant-true or absent
   condition and an empty body clears `mustprogress` on the function and

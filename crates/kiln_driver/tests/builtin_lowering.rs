@@ -3,6 +3,15 @@
 //! `kiln_codegen::UNLOWERED_BUILTINS`, the builtins kiln declares but
 //! cannot lower (which `__has_builtin` reports as absent), is exact.
 //!
+//! `__has_builtin` = 1 also implies sema declares the name on that
+//! target (WP-1057): no reported name in the reserved `__` namespace is
+//! a "use of undeclared identifier" when called, except the library
+//! builtins a header declares (`kiln_driver::pp_cmd::
+//! RESERVED_LIBRARY_BUILTINS`) and the keywords (`__is_identifier` 0:
+//! type traits and transforms) other than `__builtin_*` ones. Library
+//! builtins outside `__` (`strlen`, `std::move`) need their header in
+//! clang too.
+//!
 //! Per target and clang version: the reported set is read back from a
 //! translation unit that `#pragma message`s each name of clang's
 //! `__has_builtin` table kiln answers 1 for. Each name is called with
@@ -76,13 +85,9 @@ impl Probe {
         String::from_utf8_lossy(&out.stderr).into_owned()
     }
 
-    /// The names of clang's `__has_builtin` table kiln reports.
-    fn reported(&self) -> Vec<String> {
-        let mut src = String::new();
-        for n in kiln_pp::table_keys(kiln_pp::FeatureTable::Builtin) {
-            let _ = write!(src, "#if __has_builtin({n})\n#pragma message \"HB {n}\"\n#endif\n");
-        }
-        std::fs::write(self.dir.join("probe.cpp"), &src).unwrap();
+    /// The names `src` `#pragma message`s as `"<tag> <name>"`.
+    fn pragma_names(&self, src: &str, tag: &str) -> Vec<String> {
+        std::fs::write(self.dir.join("probe.cpp"), src).unwrap();
         let out = Command::new(env!("CARGO_BIN_EXE_kiln"))
             .args(["-std=c++26", "-fsyntax-only"])
             .arg(format!("-fclang-compat={}", self.compat))
@@ -92,31 +97,62 @@ impl Probe {
             .output()
             .unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
-        let names: Vec<String> = err
-            .lines()
-            .filter_map(|l| {
-                l.split_once("warning: HB ")?.1.split_once(' ').map(|(n, _)| n.to_string())
-            })
-            .collect();
+        let pat = format!("warning: {tag} ");
+        err.lines()
+            .filter_map(|l| l.split_once(&pat)?.1.split_once(' ').map(|(n, _)| n.to_string()))
+            .collect()
+    }
+
+    /// The names of clang's `__has_builtin` table kiln reports.
+    fn reported(&self) -> Vec<String> {
+        let mut src = String::new();
+        for n in kiln_pp::table_keys(kiln_pp::FeatureTable::Builtin) {
+            let _ = write!(src, "#if __has_builtin({n})\n#pragma message \"HB {n}\"\n#endif\n");
+        }
+        let names = self.pragma_names(&src, "HB");
         assert!(names.len() > 500, "{}: only {} builtins reported", self.target, names.len());
         names
+    }
+
+    /// The names of `names` kiln's `__is_identifier` answers 0 for.
+    fn keywords(&self, names: &[String]) -> BTreeSet<String> {
+        let mut src = String::new();
+        for n in names {
+            let _ = write!(src, "#if !__is_identifier({n})\n#pragma message \"KW {n}\"\n#endif\n");
+        }
+        self.pragma_names(&src, "KW").into_iter().collect()
     }
 
     /// The calls `return name(Any{}, ...)` sema accepts, with the fewest
     /// operands that work; the names no operand count satisfies drop out.
     fn callable(&self, names: &[String]) -> Vec<(String, usize)> {
+        self.callable_and_undeclared(names).0
+    }
+
+    /// [`Probe::callable`], and the names sema does not declare at all:
+    /// their call is a "use of undeclared identifier" (WP-1057).
+    fn callable_and_undeclared(&self, names: &[String]) -> (Vec<(String, usize)>, Vec<String>) {
         let mut left: Vec<&String> = names.iter().collect();
         let mut ok = Vec::new();
+        let mut undeclared = Vec::new();
         for k in 0..7 {
             let args = vec!["Any{}"; k].join(", ");
             let mut src = ANY.to_string();
             for (i, n) in left.iter().enumerate() {
                 let _ = writeln!(src, "auto f{i}() {{ return {n}({args}); }}");
             }
-            let bad: BTreeSet<usize> = errors(&self.run(&src, &["-fsyntax-only"]))
-                .into_iter()
-                .filter_map(|(l, _)| l.checked_sub(2))
-                .collect();
+            let errs = errors(&self.run(&src, &["-fsyntax-only"]));
+            if k == 0 {
+                for (l, msg) in &errs {
+                    if let Some(n) = l.checked_sub(2).and_then(|i| left.get(i))
+                        && msg.starts_with("use of undeclared identifier")
+                    {
+                        undeclared.push((*n).clone());
+                    }
+                }
+            }
+            let bad: BTreeSet<usize> =
+                errs.into_iter().filter_map(|(l, _)| l.checked_sub(2)).collect();
             let mut next = Vec::new();
             for (i, n) in left.into_iter().enumerate() {
                 if bad.contains(&i) {
@@ -127,7 +163,7 @@ impl Probe {
             }
             left = next;
         }
-        ok
+        (ok, undeclared)
     }
 
     /// The calls of `calls` codegen rejects as unlowered, with the error.
@@ -168,7 +204,23 @@ fn check(target: &'static str, compat: u32) -> BTreeSet<&'static str> {
     let p = Probe::new(target, compat);
     let names: Vec<String> =
         p.reported().into_iter().filter(|n| !n.starts_with("__builtin_coro_")).collect();
-    let calls = p.callable(&names);
+    let (calls, undeclared) = p.callable_and_undeclared(&names);
+    let keywords = p.keywords(&undeclared);
+    let undeclared: Vec<&String> = undeclared
+        .iter()
+        .filter(|n| {
+            n.starts_with("__")
+                && kiln_driver::pp_cmd::RESERVED_LIBRARY_BUILTINS
+                    .binary_search(&n.as_str())
+                    .is_err()
+                && (n.starts_with("__builtin_") || !keywords.contains(*n))
+        })
+        .collect();
+    assert!(
+        undeclared.is_empty(),
+        "{target} @{compat}: builtins __has_builtin reports that sema does not declare \
+         (declare them, or make __has_builtin answer 0): {undeclared:?}"
+    );
     let bad = p.unlowered(&calls);
     assert!(
         bad.is_empty(),

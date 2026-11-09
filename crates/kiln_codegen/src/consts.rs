@@ -10,7 +10,7 @@
 use kiln_abi::irtype::IrType;
 use kiln_ast::consts::{ConstValue, NullKind, PtrBase, Reloc, Scalar, UnionMember};
 use kiln_ast::decl::{DeclKind, VarStorage};
-use kiln_ast::expr::{CastKind, ExprKind};
+use kiln_ast::expr::{CastKind, ExprKind, UnaryOp};
 use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_llvm::{ConstData, GepFlags, IntValue, TypeId as LTy, Value};
 
@@ -890,6 +890,9 @@ impl Cg<'_> {
             let n = self.ast.exprs.get(e);
             match n.kind() {
                 ExprKind::ParenExpr | ExprKind::ConstantExpr => e = self.ast.exprs.operand(e),
+                ExprKind::UnaryOperator if self.ast.exprs.unary_op(e) == UnaryOp::Extension => {
+                    e = self.ast.exprs.operand(e);
+                }
                 ExprKind::ExprWithCleanups => e = ExprId::new(n.a()),
                 ExprKind::ImplicitCastExpr if self.ast.exprs.cast_kind(e) == CastKind::NoOp => {
                     e = self.ast.exprs.operand(e);

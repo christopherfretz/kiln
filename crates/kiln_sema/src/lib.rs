@@ -25,6 +25,7 @@ pub mod attr_triage;
 mod bit_int;
 mod bitfield_constant;
 mod bmi_ast;
+mod bmi_image;
 mod builtins;
 mod cconv;
 pub mod cfg;
@@ -147,12 +148,13 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use bmi_ast::CarriedSection as CarriedConstants;
+pub use bmi_image::ModuleImage;
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
-pub use decl::{NameClass, TagUse};
+pub use decl::{NameClass, TagDefinedIn, TagUse};
 pub use declspec::{
     BindingId, Chunk, DeclSite, DeclSpec, Declarator, DeclaratorContext, Decomposition, DefaultArg,
-    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TypeSpecKind, Width,
+    NullSpec, ParamInfo, Sign, SpecialName, StorageSpec, TagSite, TypeSpecKind, Width,
 };
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit};
@@ -753,6 +755,11 @@ pub struct Sema<'a, 'sm> {
     /// operator whose built-in fallback fails, spec/sema-overload.md
     /// §6.2): set and cleared around the fallback.
     pub(crate) trailing_notes: std::cell::RefCell<Vec<Diag>>,
+    /// The errors [`Sema::emit`] was given, whether it printed, captured
+    /// (a SFINAE context, a held-back typo) or suppressed them: what
+    /// proves a failed instantiation step was diagnosed
+    /// ([`Sema::failure_mark`]; spec/sema-templates.md §4.6, WP-1054).
+    pub(crate) failures: std::cell::Cell<u64>,
     /// The designator warnings of a braced list checked in a template
     /// definition, by its semantic `InitListExpr`: an instantiation
     /// shares the non-dependent list but issues them again, as clang's
@@ -1078,6 +1085,12 @@ pub struct Sema<'a, 'sm> {
     /// naming a non-template class is also clang's "specialization of
     /// member does not specialize an instantiated member".
     pub extraneous_tag_head: Option<Diag>,
+    /// Set by the parser for a class declared inside another declaration
+    /// (a parameter, a type-id, a condition): it consumes no template
+    /// head, which belongs to the enclosing declaration ([temp.pre]/1;
+    /// `template<class T> using A = struct S {};` declares no class
+    /// template). Read and cleared by [`Sema::act_on_tag`].
+    pub nested_tag: bool,
     /// Set when the last declarator's type was diagnosed invalid in a
     /// way clang records on its `Declarator` (an unexpanded pack,
     /// [temp.variadic]/12): clang's `ParseDeclGroup` reuses the
@@ -1365,6 +1378,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             spare_oven: None,
             ovl: overload::OverloadScratch::default(),
             trailing_notes: std::cell::RefCell::new(Vec::new()),
+            failures: std::cell::Cell::new(0),
             designator_rewarn: kiln_source::fx::FxHashMap::default(),
             null_deref_rewarn: kiln_source::fx::FxHashMap::default(),
             null_compare_rewarn: kiln_source::fx::FxHashMap::default(),
@@ -1447,6 +1461,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             member_refs: kiln_source::fx::FxHashMap::default(),
             friend_tag: None,
             extraneous_tag_head: None,
+            nested_tag: false,
             declarator_type_invalid: false,
             lambda_packs: kiln_source::fx::FxHashMap::default(),
             declspec_restrict_error: None,
@@ -1522,6 +1537,21 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.diags.error_count() > 0
     }
 
+    /// A point to check, with [`Sema::failed_silently_since`], that a
+    /// failure after it was diagnosed.
+    pub(crate) fn failure_mark(&self) -> u64 {
+        self.failures.get()
+    }
+
+    /// Whether a step begun at `mark` that failed did so without any
+    /// diagnostic: no error was given to [`Sema::emit`] since (printed,
+    /// captured or suppressed), and none was ever printed (a failure
+    /// that names a declaration an earlier error left invalid stays
+    /// quiet, clang's `hasUncompilableErrorOccurred`).
+    pub(crate) fn failed_silently_since(&self, mark: u64) -> bool {
+        self.failures.get() == mark && self.diags.error_count() == 0
+    }
+
     // -- diagnostics helpers ---------------------------------------------
 
     /// A diagnostic `id` with its caret at `loc`.
@@ -1536,6 +1566,14 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     /// here` note (spec/sema-class.md §4.5) goes first, as the innermost
     /// code-synthesis context.
     pub fn emit(&self, mut d: Diag) {
+        if d.id().is_some_and(|id| {
+            id.class() == kiln_diag::DiagClass::Error
+                || id.is_default_error()
+                || is_sfinae_failure(id)
+                || self.diags.severity_at(id, d.loc()) >= kiln_diag::Severity::Error
+        }) {
+            self.failures.set(self.failures.get() + 1);
+        }
         // The overload candidates' notes go with the error they explain,
         // also when a range-based `for` holds it back.
         if !self.trailing_notes.borrow().is_empty()
