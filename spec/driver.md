@@ -132,6 +132,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fcrash-diagnostics[=compiler\|all\|off]`, `-fno-crash-diagnostics` | whether an internal compiler error writes the crash reproducer (default on; `=off` and the negative turn it off, the last wins); see "Internal compiler errors" (WP-911) |
 | `-fcrash-diagnostics-dir=<dir>` | where the crash reproducer is written (default `$TMPDIR`, else `/tmp`) (WP-911) |
 | `-fkiln-crash-for-testing=<phase>` | hidden (kiln's tests): panic on purpose in `<phase>`; see "Internal compiler errors" (WP-911) |
+| `-fkiln-bmi-kind=<1\|2>` | hidden (kiln's tests and measurements): the kind of module file `--precompile` / `-fmodule-output` writes. `1`: the source capsule only; `2` (the default): the capsule plus the carried constant results when at least one is carried, else kind 1. `-v` names the kind written and why (spec/modules.md §11.11). Any other value is `invalid value`; the last one wins (WP-985) |
 
 ### Response files (WP-799)
 
