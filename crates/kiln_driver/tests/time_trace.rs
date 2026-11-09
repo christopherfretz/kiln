@@ -350,3 +350,54 @@ fn unwound_calls_end_at_the_next_call() {
         );
     }
 }
+
+/// An immediate invocation is evaluated exactly once (WP-1140; spec/oven.md
+/// "Valued immediate invocations"): its stored value is a leaf for the
+/// initializer's whole fold, the variable's constant-initialization check
+/// and codegen. One `ConstevalCall` per invocation, for a scalar and a
+/// class result, in a local, a constexpr, a constinit and a dynamically
+/// initialized variable, and the body of an immediate-escalating function.
+#[test]
+fn immediate_invocation_evaluated_once() {
+    let d = setup("once");
+    std::fs::write(
+        d.join("o.cpp"),
+        "struct P { int v[3]; const char* s; };\n\
+         consteval P mk(int k) { return P{{k, k + 1, k + 2}, \"p\"}; }\n\
+         consteval int sq(int k) { return k * k; }\n\
+         #define PAIR(n) consteval P n##_p(int k) { return mk(k); } \\\n\
+         \x20 consteval int n##_s(int k) { return sq(k); }\n\
+         PAIR(lo) PAIR(cx) PAIR(ci) PAIR(dy) PAIR(es)\n\
+         constexpr P cx = cx_p(2); constexpr int cxs = cx_s(2);\n\
+         constinit P ci = ci_p(3); constinit int cis = ci_s(3);\n\
+         int id(int x) { return x; } P idp(P p) { return p; }\n\
+         P dy = idp(dy_p(4)); int dys = id(dy_s(4));\n\
+         template <class T> constexpr int esc(T k) { P p = es_p(k); return es_s(k) + p.v[2]; }\n\
+         int main() {\n\
+         \x20 P lo = lo_p(1); int los = lo_s(1); int e = esc(5);\n\
+         \x20 return lo.v[0] + los + cx.v[1] + cxs + ci.v[2] + cis + dy.v[0] + dys + e;\n\
+         }\n",
+    )
+    .unwrap();
+    let args = [
+        "-std=c++20",
+        "-S",
+        "-emit-llvm",
+        "-ftime-trace",
+        "-ftime-trace-verbose",
+        "-ftime-trace-granularity=0",
+    ];
+    run(&kilnpp(), &d, &[&args[..], &["o.cpp"]].concat());
+    let j = Json::parse(&std::fs::read_to_string(d.join("o.json")).unwrap()).unwrap();
+    check_structure(&j);
+    let ev = events(&j);
+    let count = |f: &str| ev.iter().filter(|e| e.name == "ConstevalCall" && e.detail() == f).count();
+    for ctx in ["lo", "cx", "ci", "dy", "es"] {
+        for kind in ["p", "s"] {
+            let f = format!("{ctx}_{kind}");
+            assert_eq!(count(&f), 1, "{f} evaluated {} times", count(&f));
+        }
+    }
+    assert_eq!(count("esc<int>"), 1);
+    assert_eq!((count("mk"), count("sq")), (5, 5));
+}

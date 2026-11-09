@@ -3761,6 +3761,42 @@ value for a `void` `ConstantExpr` and codegen emits no code for it
 `tests/conformance/expr.const/immediate-invocation-nested-void{-run,-neg,-reflection}.cpp`,
 `tests/conformance/expr.const/immediate-invocation-void-run.cpp`.
 
+### Valued immediate invocations — Landed (WP-1140)
+An immediate invocation is evaluated exactly once. Sema stores each
+outermost invocation's value (`set_constant_value`, sema.md §5.10)
+as soon as it is evaluated, before any fold of the enclosing
+initializer, and a value is stored only for a successful evaluation,
+so a stored value is final. The compiler then treats a `ConstantExpr`
+with a value as a leaf wherever it is compiled, instead of compiling
+its operand again: the whole-initializer fold of a constant-initialized
+variable (`try_fold`), the variable's own constant-initialization check
+(`check_constexpr_init`, `check_constinit`), `fold_constant_init` for
+codegen, and every enclosing evaluation that reaches the wrapper.
+- `rv_inner`: a scalar with bits (`scalar_bits`) is a constant; a
+  pointer is the address of its thawed object (`THAW_PTR`).
+- `init_inner` (`valued_leaf`): a scalar (not a vector, complex or wide
+  integer) is stored as `rv_inner` reads it; a class object is copied
+  (`Op::Copy`, aux 1) from the static object its value thaws to
+  (`bi::THAW_OBJ`, cached per `ConstValueId` in `Oven::thawed`, so the
+  bytes and relocations are written once per compilation). The copy is
+  the guaranteed-elision initialization the call itself would perform:
+  no constructor runs.
+- Not leaves (the call is evaluated again): a glvalue (`lv`; the value
+  is the address it designates), a vector, complex or wide integer, a
+  class with a `mutable` member (its thawed object is not readable,
+  [expr.const]/5.9) or a virtual table pointer, a nested invocation
+  (`CONSTANT_ELIDED`, never valued), and an invocation in a default
+  argument or default member initializer: those are elided where they
+  are written and evaluated at each use (sema.md §5.10), because the
+  use site (`source_location::current()`) can change the value.
+
+The trial folds that run before the full-expression ends
+(`int_overflow.rs` `overflow_value_inner`) see the wrapper still
+unvalued and evaluate the call themselves (clang's
+`EvaluateForOverflow` does too). Tests:
+`tests/conformance/expr.const/immediate-invocation-evaluated-once-run.cpp`,
+`crates/kiln_driver/tests/time_trace.rs` (`immediate_invocation_evaluated_once`).
+
 ### Reflection runtime (M6; `-freflection`)
 Specified in **`spec/reflection.md`** §3:
 - the `info` value (`TyKind::Reflection`, bits `index - 1`) and the

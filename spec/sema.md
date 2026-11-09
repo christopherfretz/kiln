@@ -6542,7 +6542,13 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   whose member owns heap, `flat().d` with `consteval P flat()` and `P`
   holding a vector) is accepted when the whole initializer is constant:
   the temporary is destroyed at the end of the full-expression and only
-  the final value is checked. The rule:
+  the final value is checked. Each outermost invocation is evaluated
+  once (WP-1140): `finish_immediate_invocations` stores every successful
+  value before it folds the initializer (`try_fold`, at most once), and
+  that fold, the variable's own check and codegen read the stored value
+  as a leaf (oven.md "Valued immediate invocations"); a value stored
+  for a deferred initializer is `CONSTANT_VALUE_HIDDEN`, so the dump
+  still prints the wrapper unvalued, as clang's. The rule:
   - constexpr or constinit `v` (namespace scope, local, static data
     member, variable template specialization): a failing outermost
     invocation waits in `after_var`; `report_deferred_immediates(v,
@@ -6550,8 +6556,8 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     evaluated value (`VarEvalState::Value`) or `check_constinit`
     returned `true` (constant initializer; a destruction-only failure
     counts), and otherwise re-evaluates and reports it after the
-    variable's own error (the WP-465 order). Wrappers keep no value, as
-    clang leaves them unvalued.
+    variable's own error (the WP-465 order). A failed invocation's
+    wrapper keeps no value, as clang leaves it unvalued.
   - any other variable that `checks_constant_init` (static or thread
     storage duration, not constexpr/constinit): a failing invocation is
     not reported when the initializer folds (`try_fold`), since it is

@@ -5182,6 +5182,14 @@ impl Compiler<'_> {
             return self.trap(e, "");
         }
         match n.kind() {
+            // A valued immediate invocation is a leaf (WP-1140): a scalar
+            // goes through `rv_inner`'s value below, an aggregate is
+            // copied from its thawed value.
+            ExprKind::ConstantExpr if let Some((cv, aggr)) = self.valued_leaf(e, ty) => {
+                if aggr {
+                    return self.thaw_obj_init(e, cv, p, ty);
+                }
+            }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
@@ -6511,6 +6519,48 @@ impl Compiler<'_> {
             e,
             loc,
         );
+    }
+
+    /// The stored value of immediate invocation `e` initializing an
+    /// object of type `ty`, when it is used as a leaf (WP-1140; spec/oven.md
+    /// "Valued immediate invocations"): `(cv, true)` for a class object
+    /// copied from its thawed value, `(cv, false)` for a scalar
+    /// `rv_inner` reads. A value is stored only once the invocation has
+    /// been evaluated successfully, so it is final. `None` (the call is
+    /// evaluated again): a glvalue, a vector, complex or wide integer, and
+    /// a class with a `mutable` member (its thawed copy is not readable,
+    /// [expr.const]/5.9) or a virtual table pointer.
+    fn valued_leaf(&self, e: ExprId, ty: OTy) -> Option<(kiln_ast::ConstValueId, bool)> {
+        let ast = self.ast();
+        if self.node(e).value_category().is_glvalue() {
+            return None;
+        }
+        let cv = ast.exprs.constant_value(e)?;
+        if let Some(s) = ast.consts.scalar(cv) {
+            let ok = (scalar_bits(&s).is_some() || matches!(s, Scalar::Pointer { .. }))
+                && !self.o.types.is_aggregate(ty)
+                && self.o.types.wide(ty).is_none()
+                && self.lanes(ty).is_none()
+                && self.cx_elem(ty).is_none();
+            return ok.then_some((cv, false));
+        }
+        let info = self.o.types.info(ty);
+        (ast.consts.aggregate(cv).is_some()
+            && matches!(info.kind, TyKind::Record { .. })
+            && !info.has_mutable
+            && !info.has_vptr)
+            .then_some((cv, true))
+    }
+
+    /// Initializes the object of type `ty` at `p` from the stored value
+    /// `cv` of immediate invocation `e`: a copy of its thawed static object
+    /// ([`Self::valued_leaf`]).
+    fn thaw_obj_init(&mut self, e: ExprId, cv: kiln_ast::ConstValueId, p: u32, ty: OTy) {
+        let r = self.reg();
+        let raw = kiln_ast::RawId::raw(cv);
+        let loc = self.begin(e);
+        self.emit_site(Op::Builtin, crate::kbc::bi::THAW_OBJ, &[r, r, r, r, raw, ty.0], e, loc);
+        self.emit_at(Op::Copy, 1, &[p, r, ty.0], e);
     }
 }
 
