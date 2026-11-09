@@ -25,11 +25,14 @@
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; spec/driver.md "Codegen flags");
-//! 3. rejected with "'<flag>' is not supported by kiln" (
-//!    `-fshort-enums`, the other `-fxray-*` options,
-//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`). The floating-point flags are
-//!    `crate::fp_flags`'s; the coverage and profiling flags
-//!    `crate::coverage_flags`'s (WP-941).
+//! 3. rejected with "'<flag>' is not supported by kiln"
+//!    (`-fshort-enums`, the other `-fxray-*` options,
+//!    `-finstrument-functions-exclude-*` and `-ffat-lto-objects`).
+//!
+//! The floating-point flags are `crate::fp_flags`'s, the coverage and
+//! profiling flags `crate::coverage_flags`'s (WP-941), and the sanitizer
+//! flags, `-f[no-]sanitize-merge[=]` and `-fsanitize-ignorelist=` among
+//! them, `crate::sanitize`'s.
 //!
 //! `-Wp,<args>` and `-Xpreprocessor <arg>` are spliced into the command
 //! line before parsing ([`splice_preprocessor_args`]).

@@ -1361,6 +1361,22 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   marks trap and handler calls at `-O0`/`optnone` and for checks outside
   the default merge set (the unsigned checks), and `@llvm.ubsantrap` is
   `memory(inaccessiblemem: write)` from LLVM 22.
+- **`-ftrapv`, `-ftrapv-handler=`, `-fsanitize-merge=`** (WP-1032;
+  `CodegenOptions::trapv`, `trapv_handler`, `SanitizeOptions::merge`;
+  spec/driver.md). `-ftrapv` checks the signed operations the sanitizer
+  leaves alone with the empty kind: `with.overflow` plus a bare trap,
+  clang's `EmitTrapCheck`, whose trap block is shared like the
+  sanitizer's. With `-ftrapv`, a handler name routes every overflow check through
+  clang's `EmitOverflowCheckedBinOp` handler block. The merge set
+  splits trap blocks and adds `nomerge` as clang 20+.
+- **Ignorelists** (WP-1032; `ignorelist.rs`, `class_b.rs`
+  `ignored_sanitizers` / `global_sanitizer`): a function an entry
+  names for some sanitizers is treated as `no_sanitize` of them (its
+  `sanitize_*` attributes and UBSan checks go, including in its
+  outlined and implicit helpers); a global loses its address/hwaddress
+  instrumentation and, for `=init`, `sanitize_address_dyninit`; at
+  `-fclang-compat=22` a `type:` entry elides overflow and implicit
+  conversion checks of that type. Rules in spec/driver.md "Sanitizers".
 
 - **UBSan type and value checks** (WP-871; docs/design/sanitizers.md
   §1.5 has the coverage table). Each is clang 19's function of the
