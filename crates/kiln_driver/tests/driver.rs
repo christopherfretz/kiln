@@ -331,6 +331,76 @@ fn argument_errors() {
     );
 }
 
+/// The `-ftrapv` family's spellings (spec/driver.md "Code-generation
+/// flags", WP-1044), as clang 19 and 22 read them: clang has no
+/// `-fno-trapv` ("did you mean '-fno-wrapv'?"); the separate
+/// `-ftrapv-handler <name>` is cc1-only, so as a driver option it takes
+/// its value and is "argument unused during compilation", while behind
+/// `-Xclang` it sets the handler and beats every `-ftrapv-handler=`
+/// whatever the order; a trailing one is missing its value.
+#[test]
+fn trapv_spellings_like_clang() {
+    let src = "int f(int a, int b) { return a + b; }\n";
+    let ir = |extra: &[&str]| {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-ftrapv"];
+        args.extend(extra);
+        args.push("-");
+        kiln(&args, src)
+    };
+    let o = kiln(&["-fsyntax-only", "-fno-trapv", "-"], src);
+    assert_eq!(
+        (o.code, o.stderr.as_str()),
+        (1, "kiln++: error: unknown argument '-fno-trapv'; did you mean '-fno-wrapv'?\n")
+    );
+    let o = ir(&["-ftrapv-handler", "aa", "-ftrapv-handler=bb"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        o.stderr,
+        "kiln++: warning: argument unused during compilation: '-ftrapv-handler aa' \
+         [-Wunused-command-line-argument]\n"
+    );
+    assert!(o.stdout.contains("@bb(") && !o.stdout.contains("@aa("), "{}", o.stdout);
+    let o = ir(&["-Qunused-arguments", "-ftrapv-handler", "aa"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    assert!(!o.stdout.contains("@aa("), "{}", o.stdout);
+    for args in [
+        ["-Xclang", "-ftrapv-handler", "-Xclang", "aa", "-ftrapv-handler=bb"],
+        ["-ftrapv-handler=bb", "-Xclang", "-ftrapv-handler", "-Xclang", "aa"],
+    ] {
+        let o = ir(&args);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+        assert!(o.stdout.contains("@aa(") && !o.stdout.contains("@bb("), "{}", o.stdout);
+    }
+    let o = kiln(&["-fsyntax-only", "-", "-ftrapv-handler"], src);
+    assert_eq!(
+        (o.code, o.stderr.as_str()),
+        (1, "kiln++: error: argument to '-ftrapv-handler' is missing (expected 1 value)\n")
+    );
+}
+
+/// `-f[no-]sanitize-merge[=<list>]` are clang 20 options: at
+/// `-fclang-compat=19` each is clang 19's "unknown argument", wherever
+/// `-fclang-compat=` stands (spec/driver.md "Sanitizers", WP-1044).
+#[test]
+fn sanitize_merge_unknown_at_compat_19() {
+    let flags = ["-fsanitize-merge", "-fno-sanitize-merge", "-fsanitize-merge=undefined"];
+    let mut args = vec!["-fsyntax-only", "-fsanitize=undefined"];
+    args.extend(flags);
+    args.extend(["-fno-sanitize-merge=alignment", "-fclang-compat=19", "-"]);
+    let o = kiln(&args, "int f();\n");
+    assert_eq!(o.code, 1);
+    assert_eq!(
+        o.stderr,
+        "kiln++: error: unknown argument: '-fsanitize-merge'\n\
+         kiln++: error: unknown argument: '-fno-sanitize-merge'\n\
+         kiln++: error: unknown argument: '-fsanitize-merge=undefined'\n\
+         kiln++: error: unknown argument: '-fno-sanitize-merge=alignment'\n"
+    );
+    args.retain(|a| *a != "-fclang-compat=19");
+    let o = kiln(&args, "int f();\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
 /// The visibility and interposition flags (spec/driver.md "Options",
 /// "Visibility"): all accepted silently, as by clang; an unknown
 /// `-fvisibility=` value is clang's per-input `-cc1` error, unless a later

@@ -1172,12 +1172,12 @@ fn codegen_flags_classes() {
         &["-gz"],
         &["-gz=zlib"],
         &["-fno-short-enums"],
-        // WP-1032: `-ftrapv` and its handler, `-fno-trapv` (GCC's), and
-        // the merge lists in every spelling.
+        // WP-1032: `-ftrapv` and its handler, and the merge lists in
+        // every spelling (clang 22's; WP-1044 has `-fno-trapv` and
+        // compat 19).
         &["-ftrapv"],
-        &["-fno-trapv"],
-        &["-ftrapv", "-fno-trapv"],
         &["-ftrapv", "-ftrapv-handler=overflow_handler"],
+        &["-ftrapv", "-Xclang", "-ftrapv-handler", "-Xclang", "overflow_handler"],
         &["-fsanitize-merge"],
         &["-fno-sanitize-merge"],
         &["-fsanitize-merge=undefined"],

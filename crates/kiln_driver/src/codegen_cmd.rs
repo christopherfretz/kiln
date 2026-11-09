@@ -203,7 +203,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         trapv: f.trapv,
-        trapv_handler: f.trapv_handler.clone().filter(|h| f.trapv && !h.is_empty()),
+        trapv_handler: f.trapv_handler(),
         wrapv_pointer: f.wrapv_pointer(a.predef.clang_compat == ClangCompat::Clang22),
         null_pointer_is_valid: f.null_pointer_is_valid(),
         no_builtin: a.no_builtin(),

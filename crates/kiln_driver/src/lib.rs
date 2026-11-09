@@ -141,6 +141,9 @@ pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl W
 pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     let d = match e {
         ArgError::Unknown(a) => Diag::new(DiagId::drv_unknown_argument, Span::INVALID).arg(a),
+        ArgError::UnknownSuggest(a, s) => {
+            Diag::new(DiagId::drv_unknown_argument_suggest, Span::INVALID).arg(a).arg(s)
+        }
         ArgError::MissingValue(o) => {
             Diag::new(DiagId::drv_missing_argument, Span::INVALID).arg(o).arg(1)
         }
@@ -478,6 +481,8 @@ fn driver_warnings(
     // `-ftime-trace`.
     if !args.quiet_unused_arguments {
         unused_xray.extend(time_trace::unused(args).iter().cloned());
+        // WP-1044: the driver's separate `-ftrapv-handler <name>`.
+        unused_xray.extend(args.codegen.trapv_handler_separate.iter().cloned());
     }
     // WP-1000: the x86 feature flags clang claims on `AArch64` without an
     // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
