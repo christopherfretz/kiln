@@ -990,6 +990,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-952 | accepts-invalid (WP-912): redeclarations: ref-qualifier overloads, using-declaration redeclaration, qualified members | WP-912 | done (#423, WP-1015) |
 | WP-953 | accepts-invalid (WP-912): default-argument, block-scope `inline`, lambda shadowing and friend-template default restrictions | WP-912 | done (#423, WP-1015) |
 | WP-954 | accepts-invalid (WP-912): clang attribute semantic/argument checks (unavailable, carries_dependency, require_constant_initialization, annotate); overlaps WP-674/675 | WP-912 | done (#468) |
+| WP-1134 | accepts-invalid: C++20 keywords and `operator auto` gated on the language mode as clang | WP-1123 | in progress |
 | WP-1113 | `[[clang::annotate]]` codegen: llvm.global.annotations, llvm.var.annotation, llvm.ptr.annotation | WP-954 | done (#478) |
 | WP-955 | accepts-invalid (WP-912): access/abstract/deleted checks (friend private, abstract temporary, deleted operator delete, virtual base with private dtor) | WP-912 | done (#428, WP-1017) |
 | WP-1017 | accepts-invalid part 3: access/abstract/deleted checks, template declaration rules, lookup and exception specs (WP-955–957) | WP-955 | done (#428) |

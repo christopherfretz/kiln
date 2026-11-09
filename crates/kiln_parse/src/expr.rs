@@ -101,12 +101,13 @@ pub(crate) enum TraitOperand {
 }
 
 /// True for a simple-type-specifier keyword that can begin a functional
-/// cast (`int(x)`; not `__typeof_unqual`, as clang).
+/// cast (`int(x)`; not `__typeof_unqual` or `__auto_type`, as clang).
 fn is_simple_type_kw(k: Kw) -> bool {
     is_type_specifier_kw(k)
         && !matches!(
             k,
             Kw::Const
+                | Kw::GnuAutoType
                 | Kw::TypeofUnqual
                 | Kw::Volatile
                 | Kw::Restrict

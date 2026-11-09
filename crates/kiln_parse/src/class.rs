@@ -2123,7 +2123,9 @@ impl Parser<'_, '_> {
         self.parse_conversion_declarator(&mut cd);
         let base = self.s.type_from_declspec(&ds);
         let ty = self.s.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), &cd);
-        if ds.invalid || cd.invalid {
+        // A rejected placeholder (`operator auto()` before C++14) makes
+        // the conversion function invalid, as clang's `setInvalidType`.
+        if ds.invalid || cd.invalid || (ds.base.is_placeholder() && ty == QualType::ERROR) {
             d.invalid = true;
         }
         d.special = Some((SpecialName::Conversion(ty), loc));

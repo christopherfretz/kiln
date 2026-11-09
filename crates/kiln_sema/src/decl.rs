@@ -248,11 +248,11 @@ impl Sema<'_, '_> {
                 );
                 return QualType::ERROR;
             }
-            TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto => {
-                let kw = if ds.base == TypeSpecKind::Auto {
-                    AutoKeyword::Auto
-                } else {
-                    AutoKeyword::DecltypeAuto
+            TypeSpecKind::Auto | TypeSpecKind::DecltypeAuto | TypeSpecKind::GnuAutoType => {
+                let kw = match ds.base {
+                    TypeSpecKind::Auto => AutoKeyword::Auto,
+                    TypeSpecKind::DecltypeAuto => AutoKeyword::DecltypeAuto,
+                    _ => AutoKeyword::GnuAutoType,
                 };
                 let (c, args) = match &ds.auto_constraint {
                     Some((c, a)) if a.is_empty() => (Some(*c), None),
@@ -1443,17 +1443,19 @@ impl Sema<'_, '_> {
                         }
                         ty = ret;
                         info = info.with_trailing_return(true);
+                    } else if self.gnu_auto_type_return_check(ty, spec_loc) {
+                        fail!();
                     } else if i == 0
-                        && d.name.is_some()
+                        && !d.lambda
                         && self.std < kiln_lex::Std::Cxx14
                         && let Some(id) = self.cxx11_deduced_return(base)
                     {
                         // [dcl.spec.auto] in C++11: the declarator of a
                         // function with a placeholder decl-specifier has a
                         // trailing return type (clang
-                        // `GetFullTypeForDeclarator`, the chunk next to the
-                        // name; recovers as `int`; a lambda declarator has
-                        // no name and an implicit `auto`). WP-1123.
+                        // `GetFullTypeForDeclarator`, the innermost chunk;
+                        // recovers as `int`; a lambda's implicit `auto` is
+                        // exempt). WP-1123, WP-1134.
                         self.error(id, spec_loc);
                         ty = QualType::INT;
                     }
@@ -3408,7 +3410,7 @@ impl Sema<'_, '_> {
             // has no deduced return type (clang `ActOnConversionDeclarator`).
             let m = self
                 .diag(DiagId::sema_auto_not_allowed, d.conv_type_loc)
-                .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                .arg(kw as u8)
                 .arg(crate::templ::ctad_site::site::CONVERSION_TEMPLATE);
             self.emit(m);
         }
@@ -5580,7 +5582,7 @@ impl Sema<'_, '_> {
                 };
                 let msg = self
                     .diag(DiagId::sema_auto_not_allowed, ds.type_loc.unwrap_or(ds.loc))
-                    .arg(u8::from(kw == AutoKeyword::DecltypeAuto))
+                    .arg(kw as u8)
                     .arg(s);
                 // Once per declarator of a group (as clang).
                 self.emit(msg.allow_duplicate());
