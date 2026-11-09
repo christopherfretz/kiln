@@ -671,6 +671,7 @@ impl Sema<'_, '_> {
         {
             let t = self.with_exc_spec(ty, ExcSpec::Deferred(f));
             self.ast.decls.set_ty(f, t);
+            self.implicit_exc_dtors.insert(f);
         }
         if shape == Shape::Ctor && !*invalid && !redecl_invalid {
             self.check_copy_ctor_by_value(f, class, &fparams);

@@ -188,19 +188,24 @@ impl Sema<'_, '_> {
     /// `-Wdynamic-exception-spec`). Before C++17 it is valid (deprecated:
     /// clang's `-Wdeprecated-dynamic-exception-spec` is off by default and
     /// not implemented). `ok` is false after a syntax error in the list.
+    /// `types` pairs each type-id with its first token, where an invalid
+    /// one is reported ([`Sema::check_specified_exception_type`]);
     /// `rparen` is the closing `)`.
     pub fn act_on_dynamic_exception_spec(
         &mut self,
-        types: &[QualType],
+        types: &[(QualType, Loc)],
         ok: bool,
         loc: Loc,
-        _rparen: Loc,
+        rparen: Loc,
     ) -> ExcSpec {
         // clang `ParseDynamicExceptionSpecification` keeps only the valid
-        // type-ids: `throw(struct S {})` is `throw()`.
-        let types: Vec<QualType> =
-            types.iter().copied().filter(|&t| !self.is_error_type(t)).collect();
-        if types.is_empty() && ok {
+        // type-ids: `throw(struct S {})` is `throw()`; `checkException-
+        // Specification` drops the ones `CheckSpecifiedExceptionType`
+        // rejects (`throw(Inc)` is `throw()`).
+        // The C++17 error is the parser's, before the types are checked.
+        let parsed: Vec<(QualType, Loc)> =
+            types.iter().copied().filter(|&(t, _)| !self.is_error_type(t)).collect();
+        if parsed.is_empty() && ok {
             return ExcSpec::DynamicNone;
         }
         if self.std >= kiln_lex::Std::Cxx17 {
@@ -212,7 +217,76 @@ impl Sema<'_, '_> {
         if !ok {
             return ExcSpec::None;
         }
-        ExcSpec::Dynamic(self.ast.types.type_list(&types))
+        let mut kept = Vec::with_capacity(parsed.len());
+        for (t, at) in parsed {
+            if let Some(t) = self.check_specified_exception_type(t, at) {
+                kept.push(t);
+            }
+        }
+        if kept.is_empty() {
+            return ExcSpec::DynamicNone;
+        }
+        if kept.iter().any(|&t| self.is_dependent_type(t)) {
+            self.dyn_exc_rparen.entry(kept.clone()).or_default().push(rparen);
+        }
+        ExcSpec::Dynamic(self.ast.types.type_list(&kept))
+    }
+
+    /// clang `CheckSpecifiedExceptionType` ([except.spec]/2): a type in a
+    /// dynamic exception specification, adjusted (`T[]` and `T()` to
+    /// pointers), or `None` (diagnosed at `at`) when it is an rvalue
+    /// reference or a (pointer or reference to an) incomplete type other
+    /// than `cv void *` or a class being defined. Dependent types pass;
+    /// [`Sema::instantiate_exception_spec`] checks their substitutions.
+    pub(crate) fn check_specified_exception_type(
+        &mut self,
+        t: QualType,
+        at: Loc,
+    ) -> Option<QualType> {
+        let t = if self.ast.types.is_array(t) {
+            conv::array_decayed(self, t)
+        } else if self.ast.types.is_function(t) {
+            self.ast.types.pointer_to(t)
+        } else {
+            t
+        };
+        let (kind, pointee) = match self.ast.types.canonical_kind(t) {
+            TypeKind::Pointer => {
+                let p = self.ast.types.pointee(t).unwrap_or(QualType::ERROR);
+                if self.ast.types.is_void(p) {
+                    return Some(t);
+                }
+                ("1", p)
+            }
+            TypeKind::LValueRef => ("2", self.ast.types.pointee(t).unwrap_or(QualType::ERROR)),
+            TypeKind::RValueRef => {
+                let d = self.diag(DiagId::sema_rref_in_exception_spec, at).arg(self.ty_arg(t));
+                self.emit(d);
+                return None;
+            }
+            _ => ("0", t),
+        };
+        if self.is_error_type(pointee)
+            || self.is_dependent_type(pointee)
+            || self.ast.types.is_function(pointee)
+        {
+            return Some(t);
+        }
+        let being_defined = self
+            .ast
+            .types
+            .as_record(pointee)
+            .and_then(|r| self.ast.definition(r))
+            .is_some_and(|def| self.defining.contains(&def));
+        if being_defined || self.require_complete(pointee, at) {
+            return Some(t);
+        }
+        let msg = self
+            .diag(DiagId::sema_incomplete_in_exception_spec, at)
+            .arg(kind)
+            .arg(self.ty_arg(pointee));
+        self.emit(self.incomplete_note(msg, pointee));
+        None
     }
 
     /// `noexcept ( e )` ([expr.unary.noexcept]): a `bool` prvalue, `true`
@@ -610,11 +684,75 @@ impl Sema<'_, '_> {
     /// substituted at once.
     pub(crate) fn lazy_exc_spec(&self, d: DeclId, p: &FuncProto) -> bool {
         let tmpl = self.ast.described_template(d).is_some();
-        matches!(
+        (matches!(
             self.ast.types.exc_spec(p),
             ExcSpec::NoexceptExpr { value: NoexceptValue::Dependent(_), .. }
-        ) && self.ast.templates.dependent_depth <= u32::from(tmpl)
+        ) || (self.deferred_dynamic_exc_spec(p) && !self.decl_in_local_scope(d)))
+            && self.ast.templates.dependent_depth <= u32::from(tmpl)
             && !self.ast.decls.get(self.ctx).has(DeclFlags::DEPENDENT_CTX)
+    }
+
+    /// Whether `p`'s dynamic exception specification names a dependent
+    /// type, so that an instantiation substitutes it only when needed: as
+    /// a dependent `noexcept(expr)`, from C++11 on (clang
+    /// `InitFunctionInstantiation`, DR1330). Before C++11 it is
+    /// substituted with the declaration ([`Substituter::exc_spec`]).
+    ///
+    /// [`Substituter::exc_spec`]: crate::templ::subst::Substituter
+    pub(crate) fn deferred_dynamic_exc_spec(&self, p: &FuncProto) -> bool {
+        self.std >= kiln_lex::Std::Cxx11
+            && match self.ast.types.exc_spec(p) {
+                ExcSpec::Dynamic(l) => {
+                    self.ast.types.type_list_types(l).iter().any(|&t| self.is_dependent_type(t))
+                }
+                _ => false,
+            }
+    }
+
+    /// Checks the substituted types of dynamic exception specification
+    /// `l` (clang `TreeTransform::TransformExceptionSpec`): each is
+    /// checked as written ([`Sema::check_specified_exception_type`]) at the
+    /// `)` of `pattern`'s specification (or `fallback`). The first invalid one is
+    /// reported and makes the whole specification `None` (clang drops
+    /// it: `SubstExceptionSpec` -> `EST_None`); an empty expansion is
+    /// `throw()` ([except.spec]/12 as of C++14).
+    pub(crate) fn finish_substituted_dynamic_exc(
+        &mut self,
+        l: TypeList,
+        tys: &[QualType],
+        pattern: DeclId,
+        fallback: Loc,
+    ) -> ExcSpec {
+        let at = self.dyn_exc_rparen_of(l, pattern).unwrap_or(fallback);
+        let mut out = Vec::with_capacity(tys.len());
+        for &t in tys {
+            match self.check_specified_exception_type(t, at) {
+                Some(t) => out.push(t),
+                None => return ExcSpec::None,
+            }
+        }
+        if out.is_empty() {
+            return ExcSpec::DynamicNone;
+        }
+        if out.iter().any(|&t| self.is_dependent_type(t)) {
+            self.dyn_exc_rparen.entry(out.clone()).or_default().push(at);
+        }
+        ExcSpec::Dynamic(self.ast.types.type_list(&out))
+    }
+
+    /// The `)` of the dynamic exception specification `l` of `pattern`,
+    /// naming a dependent type ([`Sema::act_on_dynamic_exception_spec`]):
+    /// of the specifications written with these types (function types
+    /// are interned, so `l` may be another declaration's), the first
+    /// after `pattern`'s name.
+    fn dyn_exc_rparen_of(&self, l: TypeList, pattern: DeclId) -> Option<Loc> {
+        let all = self.dyn_exc_rparen.get(self.ast.types.type_list_types(l))?;
+        let name = self.ast.decls.get(pattern).loc().to_raw();
+        all.iter()
+            .copied()
+            .filter(|r| r.to_raw() > name)
+            .min_by_key(|r| r.to_raw())
+            .or_else(|| all.first().copied())
     }
 
     /// The exception specification of function template specialization
@@ -653,7 +791,14 @@ impl Sema<'_, '_> {
         let spec = match self.ast.types.exc_spec(&pp) {
             ExcSpec::NoexceptExpr { expr, value: NoexceptValue::Dependent(_) } => {
                 let quals = pp.info().this_quals();
-                let resolved = self.substitute_exception_spec(f, pattern, expr, quals, poi);
+                let what = ExcSource::Noexcept(expr, quals);
+                let resolved = self.substitute_exception_spec(f, pattern, what, poi);
+                resolved.unwrap_or(ExcSpec::None)
+            }
+            ExcSpec::Dynamic(l) if self.deferred_dynamic_exc_spec(&pp) => {
+                let quals = pp.info().this_quals();
+                let what = ExcSource::Dynamic(l, quals);
+                let resolved = self.substitute_exception_spec(f, pattern, what, poi);
                 resolved.unwrap_or(ExcSpec::None)
             }
             ExcSpec::Deferred(_) => return,
@@ -678,8 +823,7 @@ impl Sema<'_, '_> {
         &mut self,
         f: DeclId,
         pattern: DeclId,
-        expr: ExprId,
-        quals: Quals,
+        what: ExcSource,
         poi: Loc,
     ) -> Option<ExcSpec> {
         use crate::templ::stack::FrameKind;
@@ -722,8 +866,10 @@ impl Sema<'_, '_> {
         // implicit object member function has one, constructors,
         // destructors and conversion functions included (WP-792).
         let method = self.is_implicit_object_member(f);
-        let at = self.ast.exprs.get(expr).loc();
-        let start = self.begin_loc(expr);
+        let quals = match what {
+            ExcSource::Noexcept(_, q) | ExcSource::Dynamic(_, q) => q,
+        };
+        let pattern_loc = self.ast.decls.get(pattern).loc();
         // A friend's is in its class ([class.friend]/7), whose members it
         // may name. A function template specialization takes its template's
         // (the friend template declared in the class specialization).
@@ -745,8 +891,21 @@ impl Sema<'_, '_> {
             sub.entity = Some(spec);
             sub.map_contexts(&pairs);
             sub.map_params(&pp, &fp);
-            let e = sub.expr(expr);
-            let r = e.ok().map(|e| sub.sema.act_on_noexcept_spec(e, at, start));
+            let r = match what {
+                ExcSource::Noexcept(expr, _) => {
+                    let e = sub.expr(expr);
+                    let at = sub.sema.ast.exprs.get(expr).loc();
+                    let start = sub.sema.begin_loc(expr);
+                    e.ok().map(|e| sub.sema.act_on_noexcept_spec(e, at, start))
+                }
+                ExcSource::Dynamic(l, _) => {
+                    let tys = sub.sema.ast.types.type_list_types(l).to_vec();
+                    let at = sub.sema.dyn_exc_rparen_of(l, pattern).unwrap_or(pattern_loc);
+                    sub.expand_types(&tys, at).ok().map(|tys| {
+                        sub.sema.finish_substituted_dynamic_exc(l, &tys, pattern, pattern_loc)
+                    })
+                }
+            };
             s.act_on_end_this_scope(this);
             r
         });
@@ -1141,9 +1300,11 @@ impl Sema<'_, '_> {
     ) -> QualType {
         let (pe, ne) = (self.written_exc_spec(pty), self.written_exc_spec(ty));
         let first = self.ast.first(p);
-        let computed = matches!(pe, ExcSpec::Deferred(_))
-            && !self.uninstantiated_exc.contains_key(&first)
-            && !self.unparsed_exc.contains(&first);
+        // Written without one, whether or not it was computed since.
+        let computed = self.implicit_exc_dtors.contains(&first)
+            || (matches!(pe, ExcSpec::Deferred(_))
+                && !self.uninstantiated_exc.contains_key(&first)
+                && !self.unparsed_exc.contains(&first));
         let dependent = self.ast.decls.get(p).has(DeclFlags::DEPENDENT_CTX);
         let old_implicit = dtor && computed && !dependent;
         let new_implicit = dtor && ne == ExcSpec::None && !dependent;
@@ -1298,18 +1459,12 @@ impl Sema<'_, '_> {
 
     /// Whether `thrown` names an exception the dynamic list `base_list`
     /// does not allow (clang `CheckExceptionSpecSubset`, each type
-    /// matched with [`Self::handler_can_catch`]). False when either side
-    /// has a dependent type or a pack expansion (checked at
-    /// instantiation).
+    /// matched with [`Self::handler_can_catch`]). A dependent type (or
+    /// pack expansion) is caught only by itself, as in clang, so an
+    /// overrider's `throw(T)` against a base's `throw(int)` is diagnosed in
+    /// the template definition and again in each instantiation it fails.
     pub(crate) fn list_allows_more(&self, base_list: TypeList, thrown: &[QualType]) -> bool {
-        let t = &self.ast.types;
-        let handlers: Vec<QualType> = t.type_list_types(base_list).to_vec();
-        let unknown = |q: &QualType| {
-            self.is_dependent_type(*q) || t.canonical_kind(*q) == TypeKind::PackExpansion
-        };
-        if handlers.iter().chain(thrown).any(unknown) {
-            return false;
-        }
+        let handlers: Vec<QualType> = self.ast.types.type_list_types(base_list).to_vec();
         thrown.iter().any(|&e| {
             let e = self.non_reference(e);
             !handlers.iter().any(|&h| self.handler_can_catch(h, e))
@@ -1546,4 +1701,14 @@ impl Sema<'_, '_> {
         let Some(f) = t.exc_pointee(ty) else { return false };
         t.is_function(f) && self.written_exc_spec(f) != ExcSpec::None
     }
+}
+
+/// The pattern specification [`Sema::substitute_exception_spec`]
+/// instantiates, with the pattern's `this` qualifiers.
+#[derive(Clone, Copy)]
+enum ExcSource {
+    /// A dependent `noexcept(expr)`.
+    Noexcept(ExprId, Quals),
+    /// A dynamic exception specification naming a dependent type.
+    Dynamic(TypeList, Quals),
 }

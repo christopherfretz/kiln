@@ -3756,7 +3756,32 @@ specification as written (`TypeNames` prints ` noexcept`,
   with a `use 'noexcept(false)' instead` note, then `Dynamic(types)`;
   before C++17 it is valid and silent (clang's off-by-default
   `-Wdeprecated-dynamic-exception-spec` is not implemented; WP-709).
+  The C++17 error is decided on the types the parser accepted, before
+  the checks below drop any (clang `ParseDynamicExceptionSpecification`).
   Template substitution substitutes the type-id-list (WP-709).
+- **Listed types** (WP-1052; C++14 [except.spec]/2, clang
+  `CheckSpecifiedExceptionType`, `check_specified_exception_type`): an
+  array type is adjusted to a pointer, a function type to a pointer to
+  function. An rvalue reference is `rvalue reference type 'int &&' is
+  not allowed in exception specification`. An incomplete type, or a
+  pointer or reference to one other than cv `void *`, is
+  `{pointer to |reference to }incomplete type 'Inc' is not allowed in
+  exception specification` plus `forward declaration of 'Inc'`, at the
+  type's first token. A class being defined, a dependent type and a
+  function pointee pass. A failing type is dropped from the list (an
+  emptied list is `throw()`).
+- **Dependent lists at instantiation** (WP-1052; clang
+  `InitFunctionInstantiation`, `SubstExceptionSpec`, `TransformExceptionSpec`).
+  From C++11 a list naming a dependent type is substituted when the
+  specification is needed, like a dependent `noexcept(expr)` (DR1330,
+  `deferred_dynamic_exc_spec`, `lazy_exc_spec`), except in a local
+  scope (DR1484). Each substituted type is checked as above
+  (`finish_substituted_dynamic_exc`); the first failure makes the
+  specification `ExcSpec::None` (clang's `EST_None`), reported at the
+  list's `)` (`dyn_exc_rparen`) with `in instantiation of exception
+  specification for 'f3<Inc>' requested here`. Under C++98 the list is
+  substituted with the declaration. Inside template argument deduction
+  (SFINAE) the substituted list is not checked (follow-up).
 - **GNU `nothrow`** (WP-186, `apply_nothrow_attrs` in `decl_attrs.rs`;
   clang `handleFunctionTypeAttr` `AT_NoThrow`): `__attribute__((nothrow))`
   or `[[gnu::nothrow]]` anywhere in a declaration whose declared type is
@@ -3856,9 +3881,12 @@ specification as written (`TypeNames` prints ` noexcept`,
   of the base's, by [except.handle]/3 (`handler_can_catch`): the same
   type, an unambiguous public base, a pointer qualification or
   derived-to-base conversion, `void *`, or `std::nullptr_t` for a pointer
-  handler. A reference handler to a pointer must be `const`. Lists with a
-  dependent type or a pack expansion are checked only at instantiation.
-  Clang also rejects some of those at definition time; kiln does not.
+  handler. A reference handler to a pointer must be `const`. As in clang
+  there is no dependent exemption: a dependent overrider type is caught
+  only by an identical base type, so `void k() throw(T);` against a base
+  `throw(int)` is an error at the template definition and again in each
+  specialization whose `T` is not caught (WP-1052). A deferred written
+  list (above) is not an implicit specification.
   The checks clang runs when the overrider is declared (no written
   specification) are reported before the delayed ones, across the whole
   outermost class. Each overridden function is checked, one error per
@@ -3872,7 +3900,18 @@ specification as written (`TypeNames` prints ` noexcept`,
   lax against a non-throwing base; before C++17 a computed type list
   (`implicit_thrown_types`: the union of the implicit callees' dynamic
   lists, any type when one is noexcept(false)) is compared type by type
-  (`list_allows_more`). An implicit overrider is also held to the
+  (`list_allows_more`). The same computed list is compared with a
+  redeclaration's dynamic list ([except.spec]/4, WP-1052,
+  `check_special_redecl_exc`, `redecl_exc_equiv`): a destructor first
+  declared without a specification (`implicit_exc_dtors`, clang
+  `hasImplicitExceptionSpec`, which reads the written type) and defined
+  with `throw(E1)` must list the same set of adjusted types, else
+  `exception specification in declaration does not match previous
+  declaration`. A matching one written on only one side is
+  `function previously declared with an {explicit|implicit} exception
+  specification redeclared with an {implicit|explicit} exception
+  specification` (`-Wimplicit-exception-spec-mismatch`, C++11 on).
+  An implicit overrider is also held to the
   calling-convention, `final` and return-type rules ([class.virtual]/4,
   /8; WP-1078, WP-1103, `check_implicit_overrider`): clang's `virtual
   function '~D' has different calling convention attributes`
