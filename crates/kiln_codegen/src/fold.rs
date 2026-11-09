@@ -264,6 +264,19 @@ fn is_scalar(ast: &Ast, d: DeclId) -> bool {
     })
 }
 
+/// Whether a member access of type `q` is visited by clang's
+/// `ScalarExprEmitter::VisitMemberExpr` (vectors are left to the load).
+fn is_scalar_member(ast: &Ast, q: QualType) -> bool {
+    matches!(
+        ast.types.canonical_view(q),
+        TypeView::Builtin(_)
+            | TypeView::BitInt { .. }
+            | TypeView::Pointer(_)
+            | TypeView::MemberPointer { .. }
+            | TypeView::Enum(_)
+    )
+}
+
 /// Whether initializer `e` is an initializer list: clang's
 /// `ConstExprEmitter` emits each element with `tryEmitPrivateForMemory`,
 /// which folds an element it cannot emit directly with `EvaluateAsRValue`
@@ -636,24 +649,26 @@ impl Collect<'_> {
                 }
             }
             // clang `ScalarExprEmitter::VisitMemberExpr` tries
-            // `EvaluateAsInt` on an integral member access.
-            ExprKind::MemberExpr
-                if ast.types.is_integral(n.ty())
-                    || matches!(ast.types.canonical_view(n.ty()), TypeView::Enum(_)) =>
-            {
-                self.out.push(e);
+            // `tryEmitAsConstant` on a scalar member access, then
+            // `EvaluateAsInt` on an integral one.
+            ExprKind::MemberExpr if is_scalar_member(ast, n.ty()) => {
+                let integral = ast.types.is_integral(n.ty())
+                    || matches!(ast.types.canonical_view(n.ty()), TypeView::Enum(_));
                 // clang `tryEmitAsConstant(MemberExpr)` converts a named
                 // `const` static data member to its variable first
                 // (`tryToConvertMemberExprToDeclRefExpr`): the value is the
-                // variable's, whatever the base (`this->b.w`).
+                // variable's, whatever the base (`this->b.w`), for any
+                // scalar type (`static constexpr const char *name`, WP-940).
                 let d = ast.exprs.decl(e);
-                if ast.decls.get(d).kind() == DeclKind::Var
-                    && let Some(init) = ast.decls.var(d).and_then(|v| v.init)
+                let stat = ast.decls.get(d).kind() == DeclKind::Var
                     && ast.decls.get(d).ty().is_some_and(|t| {
                         let q = ast.types.effective_quals(t);
                         q.is_const() && !q.is_volatile()
-                    })
-                {
+                    });
+                if integral || stat {
+                    self.out.push(e);
+                }
+                if stat && let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
                     self.out.push(init);
                     self.inits.insert(init, d);
                     self.statics.push((e, init));
