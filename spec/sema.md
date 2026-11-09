@@ -1813,7 +1813,9 @@ and returns the scope it names:
     (§3), a qualified `S::m`, a member access `s.m` and a call
     included. A scoped enumeration's enumerators never clash. Printed
     names skip an unscoped enumeration (`N::f`, not `N::E::f`; clang
-    `printNestedNameSpecifier`). Tests:
+    `printNestedNameSpecifier`): at compat 19 only an enumerator's own
+    enumeration (a type defined in an enumerator's initializer prints
+    `E::S`), at 22 every unscoped one (`S`). Tests:
     `basic.scope.scope/enumerator-after-overload-set{,-ambiguous}.cpp`.
 - **Bit-fields** ([class.bit]; `bit_width`, clang `VerifyBitField`):
   - a named bit-field's type must be integral or an enumeration, checked
