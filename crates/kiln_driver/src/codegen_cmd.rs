@@ -1309,7 +1309,7 @@ mod tests {
     fn searched_toolchain() -> Toolchain {
         Toolchain {
             gcc_from_driver: false,
-            ..Toolchain::new(crate::toolchain::Target::host(), None, None)
+            ..Toolchain::new(crate::toolchain::Target::host(), None, None, None)
         }
     }
 

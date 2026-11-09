@@ -376,10 +376,16 @@ fn missing_tools() {
         .env("PATH", d.join("no-bin"))
         .output()
         .unwrap();
+    // An explicit KILN_LLVM_DIR that is not an installation is an error
+    // before anything runs (spec/driver.md "LLVM discovery", WP-1016).
     assert_eq!(o.status.code(), Some(1));
     assert_eq!(
         text(&o.stderr),
-        "kiln++: error: unable to execute command: Executable \"llc-19\" doesn't exist!\n"
+        format!(
+            "kiln++: error: '{}' (from KILN_LLVM_DIR) is not a usable LLVM installation: \
+             no such directory\n",
+            d.join("no-llvm").display()
+        )
     );
     assert!(!d.join("add.o").exists());
 }
@@ -581,7 +587,9 @@ fn coro_wrappers_before_passes_match_clang19() {
     }
     args.extend(["-o", "-", src]);
     let d = scratch("coro-wrappers");
-    let mut kargs = vec!["-fclang-compat=19"];
+    // clang 19's IR is LLVM 19's: drive that backend (kiln's default is
+    // LLVM 22, spec/driver.md "LLVM discovery").
+    let mut kargs = vec!["-fclang-compat=19", "--llvm-dir=/usr/lib/llvm-19"];
     kargs.extend(&args);
     let k = kiln_in(&d, &kargs);
     assert_eq!(k.status.code(), Some(0), "{}", text(&k.stderr));

@@ -231,8 +231,16 @@ fn min_oracle(file: &Path) -> Option<u32> {
     src.lines().find_map(|l| l.strip_prefix("//@ min-oracle:")).and_then(|v| v.trim().parse().ok())
 }
 
+/// The LLVM installation kiln drives here: LLVM 19's, named explicitly
+/// (kiln's own default is 22 since WP-1016, spec/driver.md "LLVM
+/// discovery"), since the oracle-19 byte-exact comparison and the
+/// [`DEVIATIONS`] that cite `llvm_major` assume LLVM 19 IR. Without it,
+/// discovery picks.
+const KILN_LLVM_DIR: &str = "/usr/lib/llvm-19";
+
 /// Compiles `file` for `triple` with the in-process driver, at the
-/// oracle's compat level (`kiln++` defaults to 22 since WP-394).
+/// oracle's compat level (`kiln++` defaults to 22 since WP-394), driving
+/// [`KILN_LLVM_DIR`].
 fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     let out = SharedBuffer::new();
     let err = SharedBuffer::new();
@@ -258,6 +266,9 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     .chain(extra_flags(file))
     .chain(
         module_inputs(file).into_iter().map(|(n, p)| format!("-fmodule-file={n}={}", p.display())),
+    )
+    .chain(
+        Path::new(KILN_LLVM_DIR).is_dir().then(|| format!("--llvm-dir={KILN_LLVM_DIR}")),
     )
     .chain(std::iter::once(file.display().to_string()))
     .collect();

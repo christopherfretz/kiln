@@ -15,6 +15,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::Span;
 
 use crate::SharedWriter;
+use crate::llvm::LlvmError;
 use crate::toolchain::{Tool, Toolchain};
 
 /// One external command.
@@ -27,12 +28,21 @@ pub struct Command {
     pub program: Option<PathBuf>,
     /// The arguments.
     pub args: Vec<String>,
+    /// Why there is no program when no LLVM installation was found:
+    /// running the command reports that instead of `unable to execute`
+    /// (spec/driver.md "LLVM discovery").
+    pub missing_llvm: Option<LlvmError>,
 }
 
 impl Command {
     /// `tool` with no arguments yet.
     pub fn new(tc: &Toolchain, tool: Tool) -> Command {
-        Command { tool, program: tc.find_tool(tool), args: Vec::new() }
+        let program = tc.find_tool(tool);
+        let missing_llvm = match &tc.llvm {
+            Err(e) if program.is_none() => Some(e.clone()),
+            _ => None,
+        };
+        Command { tool, program, args: Vec::new(), missing_llvm }
     }
 
     /// Appends an argument.
@@ -74,6 +84,10 @@ impl Command {
         drv: &DiagEngine<'_>,
     ) -> bool {
         let Some(program) = &self.program else {
+            if let Some(e) = &self.missing_llvm {
+                e.emit(drv);
+                return false;
+            }
             Diag::new(DiagId::drv_unable_to_execute, Span::INVALID).arg(self.tool.name()).emit(drv);
             return false;
         };
@@ -183,6 +197,7 @@ mod tests {
             tool: Tool::Llc,
             program: program.map(PathBuf::from),
             args: args.iter().map(|a| (*a).to_owned()).collect(),
+            missing_llvm: None,
         }
     }
 
@@ -191,7 +206,7 @@ mod tests {
         let c = cmd(Some("/usr/bin/llc-19"), &["-O0", "a b", "x\"$\\"]);
         assert_eq!(c.render(true), " \"/usr/bin/llc-19\" \"-O0\" \"a b\" \"x\\\"\\$\\\\\"\n");
         assert_eq!(c.render(false), " \"/usr/bin/llc-19\" -O0 \"a b\" \"x\\\"\\$\\\\\"\n");
-        assert_eq!(cmd(None, &[]).render(true), " \"llc-19\"\n");
+        assert_eq!(cmd(None, &[]).render(true), " \"llc\"\n");
     }
 
     #[test]
@@ -206,7 +221,7 @@ mod tests {
         drv.flush();
         assert_eq!(
             buf.contents(),
-            "kiln: error: unable to execute command: Executable \"llc-19\" doesn't exist!\n"
+            "kiln: error: unable to execute command: Executable \"llc\" doesn't exist!\n"
         );
     }
 }

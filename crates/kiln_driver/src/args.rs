@@ -497,6 +497,9 @@ pub struct Args {
     /// `--gcc-install-dir=<dir>`: the GCC installation itself
     /// (`<prefix>/lib/gcc/<triple>/<version>`).
     pub gcc_install_dir: Option<String>,
+    /// `--llvm-dir=<dir>`: the LLVM installation (spec/driver.md "LLVM
+    /// discovery").
+    pub llvm_dir: Option<String>,
     /// `-stdlib=`.
     pub stdlib: Option<StdLib>,
     /// `-f[no-]experimental-library`: `__has_feature(experimental_library)`
@@ -1038,9 +1041,12 @@ impl Args {
 
     /// The standard library flags: `-stdlib=` (also `--stdlib=`),
     /// `-f[no-]experimental-library`, `--gcc-toolchain=` and
-    /// `--gcc-install-dir=` (joined only, as clang).
+    /// `--gcc-install-dir=` (joined only, as clang), and kiln's
+    /// `--llvm-dir=` (joined only).
     fn stdlib_flag(&mut self, arg: &str) -> bool {
-        if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
+        if let Some(v) = arg.strip_prefix("--llvm-dir=") {
+            self.llvm_dir = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
             self.gcc_toolchain = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("--gcc-install-dir=") {
             self.gcc_install_dir = Some(v.to_owned());
@@ -1480,6 +1486,15 @@ mod tests {
         assert_eq!(a.errors, []);
         let a = parse("--gcc-toolchain /opt/gcc t.cpp");
         assert_eq!(a.errors, [ArgError::Unknown("--gcc-toolchain".into())]);
+    }
+
+    /// WP-1016: kiln's joined-only `--llvm-dir=`; the last one wins.
+    #[test]
+    fn llvm_dir_option() {
+        let a = parse("--llvm-dir=/a --llvm-dir=/opt/llvm-22 t.cpp");
+        assert_eq!((a.llvm_dir.as_deref(), a.errors.as_slice()), (Some("/opt/llvm-22"), &[][..]));
+        let a = parse("--llvm-dir /opt/llvm-22 t.cpp");
+        assert_eq!(a.errors, [ArgError::Unknown("--llvm-dir".into())]);
     }
 
     #[test]
