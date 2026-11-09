@@ -6753,6 +6753,15 @@ impl Sema<'_, '_> {
         if self.uninit_incomplete(v, ty, loc) {
             return;
         }
+        // [class.abstract]/3 for a class template specialization the
+        // declarator could not yet tell to be abstract: now instantiated
+        // (clang `ActOnUninitializedDecl`'s `RequireNonAbstractType`, of
+        // the base element type).
+        let abs = if self.ast.types.is_array(ty) { self.base_element(ty) } else { ty };
+        if self.require_non_abstract(loc, abs, crate::class::AbstractUse::Variable) {
+            self.ast.decls.set_flags(v, DeclFlags::INVALID);
+            return;
+        }
         let quals = self.ast.types.effective_quals(ty);
         let elem = self.base_element(ty);
         if spec.is_constexpr() {

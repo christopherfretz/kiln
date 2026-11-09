@@ -1944,6 +1944,12 @@ impl Sema<'_, '_> {
         if let Some(naming) = naming {
             self.check_member_access(op, naming, None, loc);
         }
+        // A deleted one is used ([dcl.fct.def.delete]/2; clang
+        // `FindDeallocationFunction`'s `DiagnoseUseOfDecl`).
+        if self.is_deleted_fn(op) {
+            self.diagnose_deleted_use(op, loc);
+            return;
+        }
         self.mark_function_referenced(op, loc);
         if self.ast.is_destroying_operator_delete(op)
             && let Some((ps, _)) = self.fn_params(op)
@@ -1984,6 +1990,7 @@ impl Sema<'_, '_> {
         let loc = self.ast.decls.get(class).loc();
         match self.dtor_dealloc_fn(class, loc) {
             None => false,
+            Some((op, _)) if self.is_deleted_fn(op) => false,
             Some((op, Some(naming))) => self.member_accessible_from(op, naming, class),
             Some((_, None)) => true,
         }

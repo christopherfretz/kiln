@@ -6431,6 +6431,10 @@ impl Sema<'_, '_> {
             if x == e {
                 return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
             }
+            // [class.abstract]/3: a temporary of an abstract class.
+            if self.require_non_abstract_alloc(loc, ty) {
+                return self.recover(ty, &[x], loc);
+            }
             let x = self.maybe_bind_temporary(x);
             return self.explicit_cast(style, CastKind::ConstructorConversion, x, ty, loc, rparen);
         }
@@ -6473,6 +6477,12 @@ impl Sema<'_, '_> {
                 if self.ast.exprs.get(x).kind() == ExprKind::ImplicitCastExpr {
                     self.mark_explicit(x, e);
                     return self.explicit_cast(style, CastKind::NoOp, x, ty, loc, rparen);
+                }
+                // [class.abstract]/3: a temporary of an abstract class
+                // (clang's `checkAbstractType` for the constructor call,
+                // at the cast's location).
+                if self.require_non_abstract_alloc(loc, ty) {
+                    return self.recover(ty, &[x], loc);
                 }
                 let kind = if self.ast.exprs.get(x).kind() == ExprKind::CXXParenListInitExpr {
                     CastKind::NoOp
