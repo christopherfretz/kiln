@@ -1890,9 +1890,13 @@ whose context is the class and whose lexical context is the enclosing
 namespace, after the class's end, with the in-class declaration as
 `prev`. What is carried and what is recomputed:
 
-- carried: the `DefinitionBits` of the definition (triviality, the
-  implicit members' constexpr-ness and parameter shapes, empty/standard
-  layout, ...), frozen as sema computed them at the closing brace, so
+- carried: the `DefinitionBits` of the definition (triviality, both
+  bits per special-member kind: `TRIVIAL_*` and WP-1109's
+  `NONTRIVIAL_*`, bits 57-61, [special]/6; the implicit members'
+  constexpr-ness and parameter shapes, empty/standard layout, ...) and
+  each member function's `FnSpec`, including `not_selected` (an
+  ineligible special member or a prospective destructor that was not
+  selected, [special]/6, [class.dtor]/4; WP-1119), frozen as sema computed them at the closing brace, so
   the importer does not redo [class.prop] or [class.default.ctor]
   analysis; the base-specifiers; every field with its default member
   initializer and bit-field width; every member function's body as for

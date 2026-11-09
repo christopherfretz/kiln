@@ -8,17 +8,13 @@
 //! [`kiln_ast::AstBuilder`] instead of replaying the unit's source: one
 //! builder call per record, no lexing, parsing or semantic analysis.
 //!
-//! Coverage. Only what can be rebuilt exactly is written: namespaces,
-//! export declarations, non-inline non-constexpr functions (the body is
-//! not needed by an importer, which neither emits nor evaluates it: only
-//! its existence and braces are kept), variables without initializers,
-//! enumerations and their enumerators (with their values), and typedefs;
-//! types built from builtins, pointers, references, arrays, function
-//! types, enumerations and typedefs. Anything else (a class, a template,
-//! an `inline` or `constexpr` function, an initializer, an attribute, a
-//! global module fragment, an import, a declaration outside the unit's
-//! main file, ...) makes the writer emit no image, and the importer
-//! replays the source as before (the fallback; correctness first).
+//! Coverage. Only what can be rebuilt exactly is written: the list is
+//! spec/modules.md §11.11 "Part 2a" (declarations, function bodies,
+//! initializers and, since S3, non-template non-polymorphic classes).
+//! Anything else (a template, a polymorphic class, a global module
+//! fragment, an import, a declaration outside the unit's main file, ...)
+//! makes the writer emit no image, and the importer replays the source as
+//! before (the fallback; correctness first; `-v` prints the reason).
 //!
 //! Reading is total: [`decode`] validates every index, offset and length
 //! before anything is built; a malformed image is the module file's
@@ -358,12 +354,13 @@ const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 const FIELD_FLAGS: u32 =
     kiln_ast::decl::FieldData::MUTABLE | (3 << 2) | kiln_ast::decl::FieldData::HAS_DEFAULT_INIT;
 
-/// `DefinitionBits` a carried class may have: not a lambda, polymorphic,
+/// `DefinitionBits` a carried class may have: every defined bit (through
+/// WP-1109's `NONTRIVIAL_*`, bits 57-61) except a lambda, polymorphic,
 /// abstract, anonymous, with virtual or inherited members, or
 /// `trivial_abi` (spec/modules.md §11.11 "Classes").
 const DEF_BITS: u64 = {
     use kiln_ast::decl::DefinitionBits as B;
-    ((1u64 << 57) - 1)
+    ((B::NONTRIVIAL_MOVE_ASSIGN.bits() << 1) - 1)
         & !(B::BEING_DEFINED.bits()
             | B::COMPLETE.bits()
             | B::ANONYMOUS.bits()
@@ -380,8 +377,9 @@ const DEF_BITS: u64 = {
 /// Function specifier bits carried: storage, inline (written and
 /// implicit), `constexpr`/`consteval`, explicitly defaulted, deleted,
 /// `explicit`, trivial, immediate-escalating, escalated, `...`, inherited
-/// storage, deduced return type. Anything else (virtual, implicitly
-/// defaulted, coroutine, contracts, ...) is not carried yet.
+/// storage, not selected ([special]/6, WP-1109), deduced return type.
+/// Anything else (virtual, implicitly defaulted, coroutine, contracts,
+/// ...) is not carried yet.
 fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
         0 => FnStorage::None,
@@ -409,6 +407,7 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_escalated(bit(16))
         .with_variadic(bit(17))
         .with_storage_inherited(bit(22))
+        .with_not_selected(bit(23))
         .with_return_deduced(bit(24));
     (spec.bits() == bits).then_some(spec)
 }
@@ -3199,6 +3198,36 @@ mod tests {
     fn class_round_trip() {
         let img = class_sample();
         assert_eq!(decode(&encode(&img)), Ok(img));
+    }
+
+    /// [special]/6 (WP-1109, WP-1119): a class's `NONTRIVIAL_*` bits
+    /// (57-61) and a special member's `not_selected` round-trip; a class
+    /// bit past them is still an error.
+    #[test]
+    fn carries_eligibility_bits() {
+        use kiln_ast::decl::DefinitionBits as B;
+        let nontrivial = B::NONTRIVIAL_DEFAULT_CTOR.bits()
+            | B::NONTRIVIAL_COPY_CTOR.bits()
+            | B::NONTRIVIAL_MOVE_CTOR.bits()
+            | B::NONTRIVIAL_COPY_ASSIGN.bits()
+            | B::NONTRIVIAL_MOVE_ASSIGN.bits();
+        assert_eq!(DEF_BITS & nontrivial, nontrivial);
+        let set_bits = |i: &mut Image, v: u64| {
+            if let Payload::Record { def: Some(d), .. } = &mut i.decls[11].payload {
+                d.bits = v;
+            }
+        };
+        let spec = FnSpec::new().with_not_selected(true);
+        assert_eq!(fn_spec(spec.bits()), Some(spec));
+        let mut img = class_sample();
+        set_bits(&mut img, nontrivial | B::TRIVIAL_DEFAULT_CTOR.bits());
+        if let Payload::Function { spec: s, .. } = &mut img.decls[13].payload {
+            *s = spec.bits();
+        }
+        assert_eq!(decode(&encode(&img)), Ok(img));
+        let mut img = class_sample();
+        set_bits(&mut img, B::NONTRIVIAL_MOVE_ASSIGN.bits() << 1);
+        assert!(decode(&encode(&img)).is_err());
     }
 
     /// spec/modules.md §11.11 "Part 2a" (stage S3): a class record that
