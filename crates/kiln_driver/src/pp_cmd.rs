@@ -496,7 +496,7 @@ impl Job<'_> {
                 ),
             ),
             ("freestanding", on(p.freestanding.unwrap_or(false), "-ffreestanding", "-fhosted")),
-            ("reflection", on(p.reflection, "-freflection", "-fno-reflection")),
+            ("reflection", on(p.reflection_for(&self.std), "-freflection", "-fno-reflection")),
             ("reflection-mangling", format!("-fkiln-reflection-mangling={mangling}")),
             ("clang-compat", format!("-fclang-compat={}", p.clang_compat.major())),
         ];
