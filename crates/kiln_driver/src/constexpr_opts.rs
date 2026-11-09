@@ -24,7 +24,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_oven::Oven;
 use kiln_oven::profile::{Level, RenderOptions};
 use kiln_parse::ConstexprLimits;
-use kiln_source::{Loc, SourceManager, Span};
+use kiln_source::{FileId, Loc, SourceManager, Span};
 
 use crate::args::ArgError;
 
@@ -132,23 +132,30 @@ impl ConstexprOpts {
     /// `-fconstexpr-stats` summary of `oven` (the end of a translation
     /// unit whose main file is `main`), in that order, to `err` (the
     /// profile to its file if it names one; a write failure is an error
-    /// diagnostic).
+    /// diagnostic), after flushing `engine`. Nothing without the flags.
     pub fn write_profile(
         &self,
         oven: &Oven,
         ast: &Ast,
         sm: &SourceManager,
-        main: &str,
+        main: Option<FileId>,
         engine: &DiagEngine<'_>,
         err: &mut dyn std::io::Write,
     ) {
+        if !self.profiling() {
+            return;
+        }
+        engine.flush();
+        let main = main.map_or("", |f| sm.file_name(f));
         if let Some(out) = &self.profile
             && let Some(rows) = oven.profile_rows(ast)
         {
             let json = match out {
                 ProfileOut::Text => false,
                 ProfileOut::Json => true,
-                ProfileOut::File(f) => f.ends_with(".json"),
+                ProfileOut::File(f) => std::path::Path::new(f)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("json")),
             };
             let limit = self.profile_limit.unwrap_or(DEFAULT_PROFILE_LIMIT);
             let loc = |l: Loc| {

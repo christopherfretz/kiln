@@ -469,12 +469,8 @@ impl CodegenJob<'_> {
         }
         // After IR generation too: it can evaluate more constants.
         a.constexpr.write_report(&tu.oven, sm, engine);
-        if a.constexpr.profiling() {
-            engine.flush();
-            let main = main_id.map_or("", |f| sm.file_name(f));
-            let mut err = job.stderr.clone();
-            a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main, engine, &mut err);
-        }
+        let mut err = job.stderr.clone();
+        a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);
         if !tu.inst_report.is_empty() {
             engine.flush();
             let mut err = job.stderr.clone();

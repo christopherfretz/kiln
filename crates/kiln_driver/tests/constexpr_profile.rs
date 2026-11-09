@@ -333,7 +333,7 @@ fn text_report_limit_and_files() {
 fn stats_lines_are_stable() {
     let d = tu("stats", &format!("{DOWN}static_assert(down(3) == 3);\n"));
     let err = ok(&d, &["-fsyntax-only", "-fconstexpr-stats", "t.cpp"]);
-    let heads: Vec<&str> = err.lines().map(|l| l.split(" ").take(2).last().unwrap()).collect();
+    let heads: Vec<&str> = err.lines().map(|l| l.split(' ').take(2).last().unwrap()).collect();
     assert_eq!(
         heads,
         ["evaluations", "steps", "calls", "memory", "interned", "meta-ops", "trials", "compile"]

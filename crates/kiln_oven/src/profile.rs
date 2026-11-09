@@ -497,6 +497,7 @@ mod tests {
         ProfileRow { name: name.into(), immediate: false, loc: Loc::from_raw(loc), row }
     }
 
+    #[allow(clippy::unnecessary_wraps, reason = "the `render` callback's signature")]
     fn locs(l: Loc) -> Option<(String, u32, u32)> {
         Some(("dir/t.cpp".into(), l.to_raw(), 1))
     }
