@@ -126,6 +126,7 @@ pp_pragma_poison_malformed = Error (0) "can only poison identifier tokens";
 pp_pragma_pop_without_push = Warning [UnknownPragmas] (1) "pragma pop_macro could not pop '{0}', no matching push_macro";
 pp_pragma_push_pop_malformed = Error (1) "pragma {0} requires a parenthesized string";
 pp_pragma_system_header_in_main = Warning [PragmaSystemHeaderOutsideHeader] (0) "#pragma system_header ignored in main file";
+pp_scan_header_unit = Error (1) "header unit {0} cannot be imported: kiln-scan-deps does not support header units yet";
 pp_string_udl = Error (0) "string literal with user-defined suffix cannot be used here";
 pp_undef_identifier = WarningOff [Undef] (1) "'{0}' is not defined, evaluates to 0";
 pp_unknown_pragma = WarningOff [UnknownPragmas] (0) "unknown pragma ignored";

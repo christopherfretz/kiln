@@ -188,7 +188,9 @@ default pipeline, which decides itself by `-O` level) and
 `-f[no-]strict-vtable-pointers` (clang adds `invariant.group` loads and
 `launder.invariant.group` barriers; deliberately ignored: the IR without
 them is valid, only less optimized). Each is a deviation from clang's IR
-for that flag (WP-873 follow-ups). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
+for that flag (WP-873 follow-ups). WP-982: `-f[no-]modules-reduced-bmi`
+(clang 18+ writes a smaller BMI; kiln's module file has one form, the
+source capsule, spec/modules.md §11.9). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
@@ -466,6 +468,11 @@ any other value is the error `unsupported argument '<v>' to option
 '--driver-mode='`. `kiln_driver::run` runs as `kiln++`;
 `kiln_driver::run_as(argv0, ...)` takes the name.
 
+A third mode is the dependency scanner: a basename `kiln-scan-deps`,
+`clang-scan-deps` or `clang-scan-deps-<version>` runs
+`kiln_driver::scan_deps` instead of the compiler ("Dependency scanning";
+the build script makes these links too, WP-982).
+
 The program's basename, as invoked, prefixes the driver diagnostics
 (`kiln++: error: no input files`, `kiln: warning: ...`), as clang prints
 `clang++-19: error:`; `--driver-mode=` does not change it. `--version`
@@ -502,6 +509,9 @@ relocatable tree, unpacked anywhere as `<prefix>` (WP-927):
 ```
 <prefix>/bin/kiln
 <prefix>/bin/kiln++ -> kiln              relative symlink ("Driver modes")
+<prefix>/bin/kiln-scan-deps -> kiln      the dependency scanner, also as
+<prefix>/bin/clang-scan-deps-22 -> kiln  the names CMake looks for
+<prefix>/bin/clang-scan-deps -> kiln     ("Dependency scanning")
 <prefix>/lib/kiln/<major>/include/       resource/include: clang 19's builtin
                                          headers, contracts, module.modulemap
 <prefix>/lib/kiln/<major>/predefines/    resource/predefines/*.txt
@@ -1109,9 +1119,37 @@ its module file): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm
 main.cpp`, or in two steps `kiln++ -std=c++20 -c m.cppm -fmodule-output -o
 m.o && kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o`. An importer
 emits only declarations for the non-inline functions and variables of the
-units it imports. `-fmodule-header`, header-unit module files and
-dependency scanning (`-fmodules-reduced-bmi`, P1689 output) are not
-supported yet (spec/modules.md §11.9).
+units it imports. `-fmodule-header` and header-unit module files are not
+supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
+accepted and ignored ("Codegen flags").
+
+## Dependency scanning
+
+`kiln-scan-deps` (WP-982; design, output and deviations in
+spec/modules.md §11.9) is clang-scan-deps for CMake and other build
+tools: `kiln-scan-deps [options] -- <compiler> <compile flags>` runs
+kiln's preprocessor on the one compile after `--` and prints its module
+dependencies. It is the `kiln` binary under another name ("Driver
+modes"); `clang-scan-deps-22` and `clang-scan-deps` are the same links,
+installed beside `kiln++` so CMake finds it without configuration;
+`-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<prefix>/bin/kiln-scan-deps`
+names it explicitly. The compiler after `--` is parsed as `kiln++`
+whatever its name (`clang++`, a path to `kiln++`); its flags are kiln's.
+
+| option | effect |
+|---|---|
+| `-format=p1689` (`--format`, `-format p1689`) | P1689r5 JSON, as clang-scan-deps 22 |
+| `-format=make` (the default) | the make rule `<obj>: <src> <headers>` |
+| `-o <file>` | write the output to `<file>` instead of stdout |
+| `-MT`/`-MD`/`-MF`/`-MMD`/`-MQ` in the command | the dependency file of the scanned files, after a clean scan ("Dependency output") |
+| `-j <n>`, `-mode <m>`, `-resource-dir-recipe <r>`, `-optimize-args[=...]`, `-eager-load-pcm`, `-reuse-filemanager`, `-skip-excluded-pp-ranges`, `-brief-result`, `-round-trip-args` | accepted and ignored (clang-scan-deps tuning; one input is one scan) |
+| `-compilation-database <f>`, `-format=experimental-full` | an error (not supported) |
+| `-help`, `--help` | the option summary, exit 0 |
+| anything else | `<prog>: Unknown command line argument '<a>'.  Try: '<prog> --help'`, exit 1 |
+
+Exit status 0 after a clean scan, 1 otherwise (diagnostics under
+`Diagnostics while scanning dependencies for '<src>':`, the empty
+document on stdout). Warnings are not printed.
 
 ## Dependency output
 
@@ -1678,6 +1716,10 @@ Each deviation is covered by a test or a test note.
   (spec/abi.md §7).
 - `crates/kiln_codegen/tests/ir_vs_clang.rs`: the IR-diff corpus through
   `kiln_driver::run` (spec/codegen.md §6).
+- `crates/kiln_driver/tests/scan_deps.rs` (WP-982): the dependency
+  scanner against clang-scan-deps 22's output (spec/modules.md Tests);
+  `scripts/oss/selftest.sh` `cmake_modules`: a CMake `FILE_SET
+  CXX_MODULES` build with Ninja, run and rebuilt incrementally.
 - `run` conformance tests compile and link through the driver.
 - Unit tests sit in each module.
 - Parity: `cargo xtask test tests/differential/pp tests/conformance/cpp.*
