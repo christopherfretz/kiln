@@ -242,6 +242,13 @@ pub(crate) mod flags {
     /// `mutable` subobjects: reads of them are diagnosed
     /// ([expr.const]/5.9, `Oven::mutable_path`).
     pub const MUTABLE_OUTSIDE: u8 = 32;
+    /// A frame or heap object that is volatile, or holds a volatile
+    /// member subobject: its accesses take `Oven::mutable_path`, which
+    /// diagnoses one of a volatile (sub)object ([expr.const]/10.8,
+    /// `Oven::volatile_path`, WP-1019). It shares its bit with
+    /// [`MUTABLE_OUTSIDE`], which only static objects carry, so every
+    /// fast path's existing bit test covers it.
+    pub const VOLATILE: u8 = MUTABLE_OUTSIDE;
     /// A heap allocation made by `std::allocator<T>::allocate`: storage
     /// for `T[n]` whose elements are outside their lifetime until
     /// constructed (`Space::life`, spec/oven.md "Transient allocation").
@@ -1266,6 +1273,23 @@ impl Memory {
         Ok(a)
     }
 
+    /// Ends the lifetime of the live frame object `p` designates before
+    /// its scope releases it (a parameter object, `Op::EndParam`): its
+    /// storage stays allocated, and an access to it is to a dead object.
+    pub fn kill(&mut self, p: Ptr) {
+        let Some(a) = self.slots.get(p.slot as usize) else { return };
+        if p.space() != Sp::Frame || a.generation != p.generation || !a.live {
+            return;
+        }
+        if self.in_trial()
+            && let Some(cp) = self.trial.cps.last()
+            && !self.fresh(cp, Sp::Frame, a)
+        {
+            self.trial.log.push(Undo::Kill(p.slot));
+        }
+        self.slots[p.slot as usize].live = false;
+    }
+
     pub fn alloc_of_mut(&mut self, p: Ptr) -> &mut Alloc {
         match p.space() {
             Sp::Static => &mut self.statics[(p.slot & !STATIC_BIT) as usize],
@@ -1944,6 +1968,8 @@ enum Undo {
     UnionAlts(UKey, Option<u64>),
     /// An allocation's flags.
     Flags { sp: Sp, idx: u32, old: u8 },
+    /// A frame object [`Memory::kill`] ended.
+    Kill(u32),
     /// A heap slot (reused, or freed).
     HSlot(u32, Box<Alloc>),
     /// The heap structure before the first heap allocation or
@@ -2088,6 +2114,7 @@ impl Memory {
                     };
                     a.flags = old;
                 }
+                Undo::Kill(s) => self.slots[s as usize].live = true,
                 Undo::HSlot(i, a) => self.hslots[i as usize] = *a,
                 Undo::HeapMeta(m) => {
                     let m = *m;

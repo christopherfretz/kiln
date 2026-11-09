@@ -100,6 +100,10 @@ pub(crate) struct RunState {
     pub impure: u64,
     /// Nested global initializations in progress.
     pub nesting: u32,
+    /// The parameter object whose destructor an `EndParam` entered: the
+    /// instruction executes again on its return and ends the object's
+    /// lifetime without looking for its registration (0: none).
+    pub end_param: u64,
     /// The evaluation is manifestly constant-evaluated ([expr.const]/20):
     /// `__builtin_is_constant_evaluated()` yields true. A trial fold
     /// ([`crate::Oven::try_fold`]) yields false.
@@ -329,6 +333,14 @@ pub(crate) enum Fault {
     Mutable {
         ak: u32,
         field: DeclId,
+    },
+    /// An access of a volatile object ([expr.const]/10.8): a subobject of
+    /// volatile member `member`, else the object of the allocation of
+    /// `p` (`Oven::volatile_path`).
+    Volatile {
+        ak: u32,
+        member: Option<DeclId>,
+        p: u64,
     },
     /// [expr.static.cast]/14: the `void *` `p` designates an object of
     /// type `from`, not similar to `to`.
@@ -1281,6 +1293,7 @@ impl Oven {
                 | Op::MpFn
                 | Op::MpCmp
                 | Op::RefChk
+                | Op::EndParam
                 | Op::SetVptr
                 | Op::CovAdj
                 | Op::DynCast
@@ -1733,6 +1746,36 @@ impl Oven {
                     fail!(Fault::Mem { f: MemFault::PastEnd, ak: ak::READ, ty, p: raw });
                 }
                 pc += 3;
+            }
+            Op::EndParam => {
+                let raw = reg!(0) as u64;
+                if aux & 1 != 0 && self.run.end_param != raw {
+                    let depth = self.stack.len() as u32;
+                    let n = self.cleanups.len();
+                    // The registration is near the top: below it only the
+                    // temporaries of the arguments after it.
+                    let at = self
+                        .cleanups
+                        .iter()
+                        .rev()
+                        .take_while(|c| c.depth == depth)
+                        .position(|c| c.this == raw);
+                    if let Some(i) = at {
+                        let c = self.cleanups.remove(n - 1 - i);
+                        self.cleanups.push(c);
+                        self.run.end_param = raw;
+                        match self.run_cleanup(b, pc, pc, fb, false) {
+                            Ok(Some(x)) => return Ok(x),
+                            Ok(None) => {}
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+                self.run.end_param = 0;
+                if let Err(f) = self.end_param_life(raw, aux & 1 != 0) {
+                    fail!(f);
+                }
+                pc += 2;
             }
             Op::MpFn => match self.mp.get(reg!(1)) {
                 Some(e) if e.virt => {
@@ -2280,7 +2323,9 @@ impl Oven {
             (self.types.array_of(elem, n), flags::ARRAY_NEW)
         };
         let info = *self.types.info(ty);
-        let fl = fl | if info.has_union { flags::HAS_UNION } else { 0 };
+        let fl = fl
+            | if info.has_union { flags::HAS_UNION } else { 0 }
+            | if info.has_volatile || aux & new_aux::VOLATILE != 0 { flags::VOLATILE } else { 0 };
         let raw = self.mem.heap_alloc(ty, info.size, fl, origin).map_err(|f| match f {
             MemFault::Speculative => Fault::Mem { f, ak: ak::INIT, ty, p: 0 },
             _ => Fault::Memory,
@@ -2841,10 +2886,15 @@ impl Oven {
     /// `mutable` member on the path from the allocation root, nor (a
     /// whole-object read of a class, a trivial copy) contain one that it
     /// reads (clang `diagnoseMutableFields`). The slow path of a load:
-    /// only allocations with the flag take it.
+    /// only allocations with the flag take it. A frame or heap allocation
+    /// with the bit is one marked [`flags::VOLATILE`] instead
+    /// ([`Oven::volatile_path`]).
     #[cold]
     pub(crate) fn mutable_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
         let p = Ptr::decode(raw);
+        if p.space() != Sp::Static {
+            return self.volatile_path(raw, ty, k);
+        }
         let Some(a) = self.alloc_any(p) else { return Ok(()) };
         let (mut t, mut base) = (a.ty, 0u64);
         let target = u64::from(p.off);
@@ -2910,6 +2960,95 @@ impl Oven {
                 _ => return Ok(()),
             }
         }
+    }
+
+    /// [expr.const]/10.8: an access `k` of the object of type `ty` at
+    /// `raw`, in a frame or heap allocation marked [`flags::VOLATILE`],
+    /// must not be of a volatile object: the allocation's object if it is
+    /// volatile (`Oven::volatile_decls`, `volatile_exprs`), or a subobject
+    /// of a volatile member, on the path from the allocation root to it.
+    /// An object under construction or destruction is not volatile
+    /// ([class.ctor.general]/5, [class.dtor]/5): one a constructor or
+    /// destructor on the stack has as `this`. Only the accessed object's
+    /// volatility counts, as clang's `findSubobject` checks it: a
+    /// whole-object copy of a class with a volatile member reads no
+    /// volatile object. The walk is uncached: only allocations with the
+    /// flag take it.
+    #[cold]
+    #[inline(never)]
+    fn volatile_path(&self, raw: u64, ty: OTy, k: u32) -> Result<(), Fault> {
+        let p = Ptr::decode(raw);
+        let Some(a) = self.alloc_any(p) else { return Ok(()) };
+        let key = Ptr::alloc_key(raw);
+        // The offsets of the objects in this allocation a constructor or
+        // destructor is running for.
+        let structors: Vec<u32> = self
+            .stack
+            .iter()
+            .filter_map(|fr| {
+                let f = &self.funcs[fr.func as usize];
+                let r = f.this_reg.filter(|_| f.structor)?;
+                let this = self.regs.get((fr.fb + r) as usize).map(|&v| v as u64)?;
+                (this != 0 && Ptr::alloc_key(this) == key).then(|| Ptr::decode(this).off)
+            })
+            .collect();
+        let mut vol = match a.origin {
+            Origin::Var(d) => self.volatile_decls.contains(&d),
+            Origin::Temp(e) | Origin::Heap(e, _) => self.volatile_exprs.contains(&e),
+            _ => false,
+        };
+        let mut member = None;
+        let (mut t, mut base) = (a.ty, 0u64);
+        let target = u64::from(p.off);
+        loop {
+            if vol
+                && matches!(self.types.kind(t), TyKind::Record { .. })
+                && u32::try_from(base).is_ok_and(|b| structors.contains(&b))
+            {
+                vol = false;
+            }
+            if t == ty && base == target {
+                break;
+            }
+            match self.types.kind(t) {
+                TyKind::Array { elem, n } => {
+                    let es = self.types.size(elem).max(1);
+                    let i = (target - base) / es;
+                    if i >= n {
+                        break;
+                    }
+                    base += i * es;
+                    t = elem;
+                }
+                TyKind::Record { union, .. } => {
+                    let rel = target - base;
+                    let contains = |f: &&crate::ty::FieldInfo| {
+                        rel >= f.offset && rel < f.offset + self.types.size(f.ty).max(1)
+                    };
+                    // A union's active member, else the first holding the byte.
+                    let active = union
+                        .then(|| self.mem.unions.get(&Ptr::union_key(raw, base, t)).copied())
+                        .flatten()
+                        .and_then(|i| self.types.fields(t).get(i as usize))
+                        .filter(|f| contains(f));
+                    let Some(f) = active.or_else(|| self.types.near(t, rel).find(|f| contains(f)))
+                    else {
+                        break;
+                    };
+                    if f.volatile {
+                        vol = true;
+                        member = Some(f.decl);
+                    }
+                    if f.width.is_some() {
+                        break;
+                    }
+                    base += f.offset;
+                    t = f.ty;
+                }
+                _ => break,
+            }
+        }
+        if vol { Err(Fault::Volatile { ak: k, member, p: raw }) } else { Ok(()) }
     }
 
     /// The first `mutable` member a read of a whole object of type `t`
@@ -3404,6 +3543,9 @@ impl Oven {
             self.mem.check(dst, size, true).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;
         if !init && let Some(f) = write_fault(ds, a, ty) {
             return Err(Fault::Mem { f, ak: k, ty, p: dst });
+        }
+        if !init && a.flags & flags::VOLATILE != 0 && ds != Sp::Static {
+            self.volatile_path(dst, ty, k)?;
         }
         let Some((ss, sa)) = src_at.filter(|_| size != 0) else { return Ok(()) };
         self.mem.trial_write(dst, size).map_err(|f| Fault::Mem { f, ak: k, ty, p: dst })?;

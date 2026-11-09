@@ -1130,6 +1130,28 @@ closure type at each use ([temp.param]/10, as clang), numbered then per
 file scope. Non-member unresolved names (`gs`, `sr`, `srN`) were audited
 against clang for global-, nested- and template-qualified names and need
 no change. Details: `spec/landed/abi/WP-1060.md`.
+**Closures in function template signatures (WP-1077).** A lambda in
+a function template's return type, parameter type or NTTP type is
+substituted with the signature whenever deduction forms a
+specialization (clang runs `DeduceTemplateArguments` in the pattern's
+context): the closure is numbered per <lambda-sig> in the pattern,
+shared across specializations, and mangles as the pattern's local
+entity, `_ZZ3retT_ENKUlvE_clEv` for `ret<int>`, `UlvE0_` for the next
+specialization. A repeat of an existing specialization numbers nothing.
+A member's signature substituted while its class template is
+instantiated is numbered in the class specialization
+(`_ZNK1SIiEUlvE1_clEv`). Such a closure has its owner's linkage
+(`closure_signature_fn`: the pattern's, through `tag_externally_visible`
+and `has_internal_linkage`), so it and the specializations naming it are
+`linkonce_odr`. The specialization's own name keeps the pattern's
+unnumbered closure, `_Z3retIiEDTL3$_0EET_`, as clang. Two differences
+remain (xfail repros): kiln substitutes a trailing return type only once
+for a call with explicit template arguments, where clang substitutes it
+twice and the lambda takes two numbers (`ret2<int>` is `UlvE0_` in clang,
+`UlvE_` in kiln); and a member template's return type substituted during
+class instantiation stays instantiation-dependent, `DTLNS0_UlvE_EEE`
+where clang (`LDK_NeverDependent`) writes the closure, `NS0_UlvE_E`.
+Details: `spec/landed/abi/WP-1077.md`.
 
 ### 8.16 Landed (WP-204): constrained templates (`mangle/constraint.rs`)
 clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
