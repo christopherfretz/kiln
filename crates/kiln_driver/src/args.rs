@@ -367,6 +367,9 @@ pub enum LinkOptKind {
 pub enum ArgError {
     /// An option kiln does not know.
     Unknown(String),
+    /// An option kiln does not know, with clang's suggestion: `(option,
+    /// the nearest known spelling)` (`-fno-trapv`, WP-1044).
+    UnknownSuggest(String, String),
     /// An option whose value is missing.
     MissingValue(String),
     /// An option with a bad value: `(option as written, value)`.
@@ -406,9 +409,6 @@ pub enum ArgError {
     /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
     /// message (WP-1032).
     MalformedIgnorelist(String),
-    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
-    /// path (WP-1032).
-    RegexIgnorelist(String),
     /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
     /// (WP-1138; clang's "requires hardware support (+memtag)").
     MemtagStackRequiresMte,
@@ -646,6 +646,10 @@ pub struct Args {
     /// `-Qunused-arguments`: no `-Wunused-command-line-argument` warning
     /// for an unused linker input or link option (clang's driver option).
     pub quiet_unused_arguments: bool,
+    /// The `-f[no-]sanitize-merge[=<list>]` flags as written: clang 19
+    /// has none of them, so at `-fclang-compat=19` each is an unknown
+    /// argument (WP-1044).
+    pub sanitize_merge_written: Vec<String>,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
     /// `+outline-atomics` target feature; ignored on x86-64, with clang's
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
@@ -861,7 +865,10 @@ const SEPARATE_OR_EQ: &[&str] = &[
 
 /// Options taking a separate value only (`-include-pch foo`; clang's
 /// `Separate` kind: `-include-pchfoo` is not this option).
-const SEPARATE: &[&str] = &["-include-pch"];
+/// `-ftrapv-handler <name>` is the cc1 spelling (WP-1044): behind
+/// `-Xclang` it sets the handler, as a driver option it is claimed by
+/// nothing ([`crate::codegen_flags::CodegenFlags::trapv_handler_separate`]).
+const SEPARATE: &[&str] = &["-ftrapv-handler", "-include-pch"];
 
 impl Input {
     /// The input `path` under the `-x` in force (its language, and
@@ -965,16 +972,15 @@ impl Args {
             // Valued options.
             if let Some((opt, value)) = split_valued(arg, argv.get(i).map(String::as_str)) {
                 let given = !matches!(value, Valued::Missing);
-                match value {
-                    Valued::Joined(v) => a.valued(opt, v, &mut x),
-                    Valued::Next => {
-                        i += 1;
-                        a.valued(opt, &argv[i - 1], &mut x);
-                    }
-                    Valued::Missing => a.errors.push(ArgError::MissingValue(opt.to_owned())),
+                if let Valued::Next = value {
+                    i += 1;
                 }
+                a.split_valued_arg(opt, value, argv.get(i - 1), xclang, &mut x);
                 a.pch.note_valued(opt, given, xclang, a.includes.len());
                 continue;
+            }
+            if is_sanitize_merge(arg) {
+                a.sanitize_merge_written.push(arg.to_owned());
             }
             if let Some(r) = a
                 .coverage
@@ -1012,6 +1018,7 @@ impl Args {
         }
         a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
+        a.errors.extend(a.unknown_at_compat_19());
         a
     }
 
@@ -1031,9 +1038,18 @@ impl Args {
         self.fp.resolve(self.predef.ofast, self.clang22(), &mut Vec::new())
     }
 
+    /// The options clang 19 does not know, as its "unknown argument" at
+    /// `-fclang-compat=19` (WP-1044: the sanitize-merge flags).
+    fn unknown_at_compat_19(&self) -> Vec<ArgError> {
+        if self.clang22() {
+            return Vec::new();
+        }
+        self.sanitize_merge_written.iter().cloned().map(ArgError::Unknown).collect()
+    }
+
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
     /// default) rather than clang 19's.
-    fn clang22(&self) -> bool {
+    pub(crate) fn clang22(&self) -> bool {
         self.predef.clang_compat != ClangCompat::Clang19
     }
 
@@ -1065,6 +1081,28 @@ impl Args {
             .filter(|i| i.lang.is_none())
             .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
             .collect()
+    }
+
+    /// A valued option [`split_valued`] found: `next` is the argument
+    /// after it, its value when `value` is [`Valued::Next`].
+    fn split_valued_arg(
+        &mut self,
+        opt: &str,
+        value: Valued<'_>,
+        next: Option<&String>,
+        xclang: bool,
+        x: &mut Option<(Lang, bool)>,
+    ) {
+        match (value, next) {
+            (Valued::Next, Some(v)) if opt == "-ftrapv-handler" => {
+                self.codegen.trapv_handler_arg(v, xclang);
+            }
+            (Valued::Joined(v), _) => self.valued(opt, v, x),
+            (Valued::Next, Some(v)) => self.valued(opt, v, x),
+            (Valued::Next | Valued::Missing, _) => {
+                self.errors.push(ArgError::MissingValue(opt.to_owned()));
+            }
+        }
     }
 
     fn valued(&mut self, opt: &str, v: &str, x: &mut Option<(Lang, bool)>) {
@@ -1759,6 +1797,13 @@ pub(crate) fn split_valued<'a>(
         }
     }
     best
+}
+
+/// `-f[no-]sanitize-merge[=<list>]` (clang 20+; WP-1044).
+fn is_sanitize_merge(arg: &str) -> bool {
+    ["-fsanitize-merge", "-fno-sanitize-merge"]
+        .iter()
+        .any(|f| arg.strip_prefix(f).is_some_and(|r| r.is_empty() || r.starts_with('=')))
 }
 
 /// `v` as clang's `-cc1` reads an `unsigned` option value

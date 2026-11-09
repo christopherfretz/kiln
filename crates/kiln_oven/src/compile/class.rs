@@ -324,6 +324,9 @@ impl Compiler<'_> {
                     }
                     work.push(ast.exprs.operand(e));
                 }
+                // A default argument rebuilt for this use holds
+                // temporaries of its own (spec/sema.md §7.6a).
+                ExprKind::CXXDefaultArgExpr => work.extend(ast.exprs.default_arg_rewritten(e)),
                 // Not part of this initializer's evaluation.
                 ExprKind::LambdaExpr | ExprKind::StmtExpr => {}
                 _ => ast.exprs.children_into(e, &ast.lists, &mut work),

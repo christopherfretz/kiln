@@ -252,9 +252,13 @@ impl Sema<'_, '_> {
             // its pattern's constraints, whose own parameters are deeper
             // than an out-of-line redeclaration's (`template<> template<
             // class U> void A<short>::f(U) requires C<U>;`,
-            // [temp.expl.spec]/16): compare them substituted.
+            // [temp.expl.spec]/16): compare them substituted. So does a
+            // deferred friend member template instantiated with its class
+            // (`template <C U> friend int A<T>::f(U);` in W<T> naming
+            // A<int>::f, [temp.friend]/1, WP-1145): its constraints are
+            // substituted, the member's are the pattern's.
             let Some(x) = old_head.and_then(|_| self.template_of(old)) else { return false };
-            if !self.inst.stack.is_empty()
+            if (!self.inst.stack.is_empty() && !self.instantiating_friend_template)
                 || !self.inst.concepts.member_constraints.contains_key(&x)
             {
                 return false;

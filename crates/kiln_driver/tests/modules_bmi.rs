@@ -434,6 +434,77 @@ fn kind2_carries_instantiation_results() {
     }
 }
 
+const CV: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cv.cppm");
+const CV_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-pointers-run.cpp");
+const CR: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cr.cppm");
+const CR_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-reflections-run.cpp");
+
+/// WP-1047: kind 2 carries pointer, reference, member-pointer and
+/// reflection values and the results inside specializations keyed on
+/// them (`X<&g>`, `HW<h>`, `Wrap<^^S>`): a kind-2 importer re-evaluates
+/// none of the module's initializers, and its IR (the specializations'
+/// mangled names and addresses) is that of kind 1.
+#[test]
+fn kind2_carries_pointer_and_reflection_values() {
+    let d = scratch("kind2-values");
+    let support = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support");
+    for (m, src, run, extra) in [("cv", CV, CV_RUN, false), ("cr", CR, CR_RUN, true)] {
+        std::fs::write(d.join(format!("{m}.cppm")), src).unwrap();
+        std::fs::write(d.join(format!("{m}-run.cpp")), run).unwrap();
+        let mut base = vec!["-std=c++26"];
+        if extra {
+            base.extend(["-freflection", "-I", support]);
+        }
+        let args = |more: &[&str]| -> Vec<String> {
+            base.iter().chain(more).map(|s| (*s).to_owned()).collect()
+        };
+        let kiln =
+            |d: &Path, a: Vec<String>| kiln(d, &a.iter().map(String::as_str).collect::<Vec<_>>());
+        let ok = |d: &Path, a: Vec<String>| {
+            let o = kiln(d, a);
+            assert_eq!(o.code, 0, "{}", o.stderr);
+        };
+        let cppm = format!("{m}.cppm");
+        let o = kiln(&d, args(&["-v", "--precompile", &cppm, "-o", &format!("{m}2.pcm")]));
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stderr.contains(" inside template instantiations"), "{}", o.stderr);
+        ok(&d, args(&["-fkiln-bmi-kind=1", "--precompile", &cppm, "-o", &format!("{m}1.pcm")]));
+        // A trial evaluation of `bases_of(...)` / `parameters_of(...)` on
+        // its own fails (its vector is not a constant) and is not carried.
+        let failed: Vec<String> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("_of(^^"))
+            .map(|(i, _)| format!("{m}.cppm:{}:", i + 1))
+            .collect();
+        let mut irs = Vec::new();
+        for k in ["1", "2"] {
+            std::fs::copy(d.join(format!("{m}{k}.pcm")), d.join(format!("{m}.pcm"))).unwrap();
+            let file = format!("-fmodule-file={m}={m}.pcm");
+            let rep = format!("-fconstexpr-report={m}{k}.json");
+            let run = format!("{m}-run.cpp");
+            ok(&d, args(&["-fsyntax-only", &file, &rep, &run]));
+            let lines = report(&d.join(format!("{m}{k}.json")));
+            let module: Vec<_> = lines
+                .iter()
+                .filter(|(l, _)| l.starts_with(&format!("{m}.cppm:")))
+                .filter(|(l, _)| !failed.iter().any(|f| l.starts_with(f.as_str())))
+                .collect();
+            if k == "1" {
+                assert!(module.len() >= 15, "kind 1 re-evaluates: {lines:?}");
+            } else {
+                assert!(module.is_empty(), "kind 2 re-evaluated: {module:?}");
+            }
+            let ll = format!("{m}{k}.ll");
+            ok(&d, args(&["-S", "-emit-llvm", &file, &run, "-o", &ll]));
+            irs.push(std::fs::read_to_string(d.join(&ll)).unwrap());
+        }
+        assert!(irs[0] == irs[1], "{m}: IR differs between kinds");
+    }
+}
+
 /// An interface the declaration image carries entirely (spec/modules.md
 /// §11.11 "Part 2a").
 const IM: &str = "export module im;\n\
@@ -621,6 +692,70 @@ fn kind2_declaration_image_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGCT: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-class-template.cppm");
+const IMGCT_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-class-template-run.cpp");
+
+/// Stage S4 (§11.11 "Class template patterns", WP-1139): class templates
+/// come from the image as patterns, with members defined in the class and
+/// out of line, static data members, nested types, default arguments and
+/// dependent bases. With the unit's source blanked, an importer still
+/// instantiates them, its IR is the replay's, the interface's own
+/// specializations keep their carried constants, and an ill-formed
+/// member instantiation is diagnosed exactly as after a replay.
+#[test]
+fn kind2_declaration_image_class_templates() {
+    let d = scratch("image-class-templates");
+    std::fs::write(d.join("t.cppm"), IMGCT).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGCT_RUN).unwrap();
+    std::fs::write(
+        d.join("err.cpp"),
+        "import imgct;\nstruct S {};\n\
+         int main() { ct::Box<S> b{}; b.twice(); return ct::Derived<S>{}.dy(); }\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "t.cppm", "-o", "t.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of 73 declarations"), "{}", o.stderr);
+    ok(&d, &["-c", "t.pcm", "-o", "t.o"]);
+    blank_source(&d, "t.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgct=blank.pcm", "u.cpp", "t.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgct' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "8 7 4 3 9 9 1 6 12 6766 6765 | 8 2.5 4\n");
+
+    // The same IR from the image (blank source) as from the replay.
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "t.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        let m = "-fmodule-file=imgct=m.pcm";
+        ok(&d, &[flag, m, "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+        // `Heavy<int>::get`'s `k` is the interface's carried constant:
+        // the importer evaluates nothing of the module's.
+        ok(&d, &[flag, m, "-fsyntax-only", "-fconstexpr-report=r.json", "u.cpp"]);
+        let fib: u64 = report(&d.join("r.json"))
+            .iter()
+            .filter(|(l, _)| l.starts_with("t.cppm:"))
+            .map(|(_, s)| s)
+            .sum();
+        assert!(fib < 1_000, "{flag}: re-evaluated fib(20): {fib} steps");
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    // Member instantiation diagnostics, with the real source: identical.
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgct=t.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(errs[0].contains("in instantiation of member function"), "{}", errs[0]);
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 /// WP-1096 (§11.11 "Part 2a", "ODR merging"): names interned only as
 /// module-name components do not count as seen, so a namespace named
 /// like its module (plain or dotted) is built from the image; a real
@@ -751,6 +886,7 @@ fn kind2_declaration_image_classes() {
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
+#[allow(clippy::too_many_lines)] // a table of (unit, reason) cases
 fn kind2_declaration_image_fallback() {
     let d = scratch("image-fallback");
     for (src, why) in [
@@ -787,17 +923,40 @@ fn kind2_declaration_image_fallback() {
             "a new or delete expression",
         ),
         (
-            "export module f;\nexport template <class T> struct B { T v; };\n",
-            "a template or closure type",
+            "export module f;\nexport template <class T> struct B { T v; };\n\
+             template <> struct B<int> { int w; };\n",
+            "an explicit or partial specialization",
+        ),
+        (
+            "export module f;\nexport template <int N = 1> struct B { int f() { return N; } };\n",
+            "a default template argument of a non-type parameter",
+        ),
+        (
+            "export module f;\nexport template <class T> struct B { T v; B(T t) : v(t) {} };\n",
+            "mem-initializers of a constructor in a class template",
+        ),
+        (
+            "export module f;\nexport template <class T> struct B { template <class U> U m(U u) { return u; } };\n",
+            "a member template or a template in a template",
+        ),
+        (
+            "export module f;\nexport template <int N> struct B { static constexpr int v = N; };\n\
+             export inline int g() { return B<2>::v; }\n",
+            "a template argument the image does not carry",
+        ),
+        (
+            "export module f;\nexport template <int N> struct B { int a[N]; };\n",
+            "a type the image does not carry",
+        ),
+        (
+            "export module f;\nexport template <class T> struct A { int f() { return 1; } };\n\
+             export inline int h() { A<int> a; return a.f(); }\n",
+            "an implicit member of a class template specialization",
         ),
         ("export module f;\nexport template <class T> constexpr T v = T(1);\n", "a template"),
         (
             "export module f;\nexport template <class... T> int n(T...) { return sizeof...(T); }\n",
             "a template parameter pack",
-        ),
-        (
-            "export module f;\nexport template <class T = int> T id(T t) { return t; }\n",
-            "a default template argument",
         ),
         (
             "export module f;\nexport template <class T> requires (sizeof(T) > 1) T id(T t) { return t; }\n",
@@ -821,11 +980,6 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport template <class T> T g(T t) { return t; }\n\
              export template <class T> T h(T t) { return g(t); }\n",
             "a template expression",
-        ),
-        (
-            "export module f;\nexport template <class T> constexpr T g(T t) { return t; }\n\
-             export constexpr int k = g(1);\n",
-            "a body referring to a declaration outside the image",
         ),
         (
             "export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n",

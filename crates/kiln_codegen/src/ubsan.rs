@@ -951,7 +951,14 @@ impl Cg<'_> {
         let pair = self.intrinsic_call_ty(f, vec![l, r], rty);
         let v = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 0 }, ty);
         let ovf = self.f.fir.push(Op::ExtractValue { agg: pair, idx: 1 }, LTy::I1);
-        if let Some(name) = self.opts.trapv_handler.clone() {
+        // The handler's `i64` operands cannot carry a wider operation's:
+        // clang sign-"extends" an `i128` to `i64` (invalid IR, a backend
+        // crash in clang 19 and 22), so such an overflow keeps the check
+        // it would have without the handler (WP-1044).
+        let narrow = self.m.types.int_width(ty).is_some_and(|w| w <= 64);
+        if let Some(name) = self.opts.trapv_handler.clone()
+            && narrow
+        {
             let r = self.ub_overflow_handler(&name, op, signed, l, r, v, ovf);
             self.ub_end(outer);
             return r;
@@ -1005,12 +1012,10 @@ impl Cg<'_> {
             }
         };
         let w = self.m.types.int_width(ty).unwrap_or(64);
-        // clang's `CreateSExt` to `i64` (a wider operand is narrowed).
-        let wide = |cg: &mut Self, x: V| match w.cmp(&64) {
-            std::cmp::Ordering::Less => cg.cast(CastOp::SExt, x, LTy::I64),
-            std::cmp::Ordering::Equal => x,
-            std::cmp::Ordering::Greater => cg.cast(CastOp::Trunc, x, LTy::I64),
-        };
+        // clang's `CreateSExt` to `i64` (only an operation of at most 64
+        // bits gets here: `ub_overflow`).
+        let wide =
+            |cg: &mut Self, x: V| if w < 64 { cg.cast(CastOp::SExt, x, LTy::I64) } else { x };
         let (l64, r64) = (wide(self, l), wide(self, r));
         let id = match op {
             BinaryOp::Add => 1,
@@ -1033,11 +1038,7 @@ impl Cg<'_> {
             LTy::I64,
         );
         self.f.calls.push((Fir::last_inst(res), Some(f), true));
-        let res = match w.cmp(&64) {
-            std::cmp::Ordering::Less => self.cast(CastOp::Trunc, res, ty),
-            std::cmp::Ordering::Equal => res,
-            std::cmp::Ordering::Greater => self.cast(CastOp::SExt, res, ty),
-        };
+        let res = if w < 64 { self.cast(CastOp::Trunc, res, ty) } else { res };
         self.f.fir.push(Op::Br { dest: cont }, LTy::VOID);
         self.f.fir.set_cur(Some(cont));
         Ok(self.f.fir.push(Op::Phi { ty, inc: vec![(v, initial), (res, ovf_bb)] }, ty))
