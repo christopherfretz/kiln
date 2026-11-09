@@ -346,6 +346,7 @@ impl CodegenJob<'_> {
         let limits = a.constexpr.limits();
         let (mut tu, mut pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        job.note_image_imports(&pp);
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
