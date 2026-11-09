@@ -1915,6 +1915,20 @@ and returns the scope it names:
     such a type name in the innermost enclosing namespace gets the same
     error (`diagnose_friend_tag_non_tag`); one outside it declares a new
     class there. Tests: `dcl.type.elab/tag-hidden-by-type-name{,-ok}.cpp`.
+  - *Forward reference to an enumeration* (WP-1078, [dcl.enum]/2,
+    [dcl.type.elab]/3; clang `ext_forward_ref_enum` as an error, C++
+    mode without `-fms-compatibility`, which kiln does not have). An
+    unscoped enum without an enum-base that is not a definition, `enum
+    F;` or a first-use `enum K *`, gets `ISO C++ forbids forward
+    references to 'enum' types` at the name (`check_forward_ref_enum`),
+    unless it names an enumeration already defined or already declared
+    with a fixed underlying type (scoped ones are fixed). The tag is
+    still declared, so later uses do not cascade. It covers members,
+    parameters, typedefs, `friend enum E;` (after `-Wfriend-enum`), a
+    local declaration hiding an outer enumeration and every repeat of
+    `enum Z;`; a class template reports it once, at the template.
+    Not done: clang's pedantic `-Wgnu-redeclared-enum` for `enum E;`
+    after a definition. Tests: `dcl.enum/forward-ref-enum{,-ok}.cpp`.
   - *Unknown specialization*. `struct A<T>::K` naming a member of another
     class template's unknown specialization ([temp.dep.type]/6) is
     dependent and is not looked up. It used to be rejected when the
@@ -3717,9 +3731,32 @@ specification as written (`TypeNames` prints ` noexcept`,
   lax against a non-throwing base; before C++17 a computed type list
   (`implicit_thrown_types`: the union of the implicit callees' dynamic
   lists, any type when one is noexcept(false)) is compared type by type
-  (`list_allows_more`). Not checked: the nested function-type rule
-  (`CheckParamExceptionSpec`), and `final` or return-type rules for an
-  implicit overrider. Tests: `class.virtual/exception-spec-dynamic.cpp`,
+  (`list_allows_more`). An implicit overrider is also held to the
+  `final` and return-type rules ([class.virtual]/4, /8; WP-1078,
+  `check_implicit_overrider`): clang's `declaration of 'operator=' overrides
+  a 'final' function` and `virtual function 'operator=' has a different
+  return type`, at the class name, once per overridden function. They run
+  inside a `SynthKind::Declaring` context, so the first error of each
+  implicit declaration carries `while declaring the implicit copy
+  assignment operator for 'D'` (clang `DeclaringSpecialMember`); in a
+  class template specialization it precedes the instantiation note.
+  *Nested function types* (WP-1078; clang `CheckParamExceptionSpec`,
+  C++14 [except.spec]/5, kept by clang in every mode): when the
+  overrider's specification passes the subset check (or is
+  non-throwing), function types among the return and parameter types
+  (through a pointer, reference or pointer to member) must have
+  equivalent specifications (`override_nested_exc_spec_error`):
+  `exception specifications of return types differ` / `... of argument
+  types differ`, at the overrider, no note. Equivalent means both
+  non-throwing, both throwing (but no specification and
+  `noexcept(false)` differ), or the same set of listed types. Like clang
+  19 and 22 (whose loop indexes the source with a constant), each of the
+  base's parameter types is compared with the overrider's FIRST
+  parameter type; [conv.fctptr] conversions share the helper
+  (`param_exc_specs_error`) and the quirk. Tests:
+  `class.virtual/implicit-overrider{,-ok}.cpp`,
+  `except.spec/override-nested-exception-spec-{cxx14,cxx17,ok}.cpp`,
+  `class.virtual/exception-spec-dynamic.cpp`,
   `class.virtual/exception-spec-dynamic-pack-nested.cpp`,
   `class.virtual/exception-spec-implicit{,-dynamic}{,-ok}.cpp`,
   `class.virtual/implicit-assignment-override-run.cpp`.

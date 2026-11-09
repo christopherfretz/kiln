@@ -1397,6 +1397,7 @@ impl Sema<'_, '_> {
             let _ = self.builder().set_params(f, &ps);
         }
         let _ = self.builder().set_overrides(f, &overridden);
+        self.check_implicit_overrider(f, k, fty, loc, &overridden);
         let t = self.with_exc_spec(fty, ExcSpec::Deferred(f));
         self.ast.decls.set_ty(f, t);
         if self.should_delete(f, k, false) {
