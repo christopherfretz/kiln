@@ -682,7 +682,13 @@ impl Mangler<'_, '_> {
             ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => {
                 let code = binary_code(ast.exprs.binary_op(expr));
                 self.out.push_str(code);
-                let [lhs, rhs] = ast.exprs.operands(expr);
+                let [lhs, rhs] = if node.kind() == ExprKind::CompoundAssignOperator {
+                    // The left operand is `a`, the right in the side record.
+                    let Some(lhs) = ExprId::try_new(node.a()) else { return false };
+                    [lhs, ast.exprs.compound_assign(expr).rhs]
+                } else {
+                    ast.exprs.operands(expr)
+                };
                 return self.expression(lhs) && self.expression(rhs);
             }
             ExprKind::ConditionalOperator => {
