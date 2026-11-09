@@ -99,7 +99,12 @@ impl TargetFeatures {
             return None;
         }
         let entries = self.extra.iter().filter(|e| !option(e));
-        Some(entries.filter_map(|e| e.split_at_checked(1)).map(|(s, n)| (n.to_owned(), s == "+")).collect())
+        Some(
+            entries
+                .filter_map(|e| e.split_at_checked(1))
+                .map(|(s, n)| (n.to_owned(), s == "+"))
+                .collect(),
+        )
     }
 
     /// The finally enabled feature names: the base `fp-armv8` and `neon`
@@ -429,6 +434,75 @@ impl ExtensionSet {
     }
 }
 
+/// [`resolve`] on x86-64 (spec/driver.md "x86-64 target features").
+fn resolve_x86(args: &Args, target: &Target, f: &mut TargetFeatures, errors: &mut Vec<ArgError>) {
+    let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
+    // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
+    // or `native`. A CPU clang 21 knows has its features
+    // (`x86_targets::CPUS`, with clang 19's / 22's differences);
+    // `native` on a Linux x86-64 host has the host's `/proc/cpuinfo`
+    // features, elsewhere none (spec/driver.md "x86-64 target
+    // features"). Any other value stays unsupported.
+    let v22 = args.predef.clang_compat == ClangCompat::Clang22;
+    let mut cpu_features: Option<Vec<&'static str>> = None;
+    match args.march.as_deref() {
+        Some("native") => {
+            f.cpu = Some("native".to_owned());
+            if std::env::consts::ARCH == "x86_64" {
+                cpu_features = std::fs::read_to_string("/proc/cpuinfo")
+                    .ok()
+                    .map(|c| x86_features::native_features(&c, v22));
+            }
+        }
+        Some(v) if is_x86_cpu(v, v22) => {
+            f.cpu = Some(v.to_owned());
+            cpu_features = x86_cpu(v).map(|c| x86_features::cpu_features(c, v22));
+        }
+        Some(v) => errors.push(unsupported("-march=", v)),
+        None => {}
+    }
+    // WP-1000: the `-m[no-]<feature>` flags this clang lacks are
+    // unknown arguments; the others, deduplicated as clang's driver
+    // does, build clang's `initFeatureMap` over the CPU's features
+    // (spec/driver.md "x86-64 target features"). `-Xclang
+    // -target-feature` stays ignored on x86-64.
+    for a in &args.x86_feature_flags {
+        if x86_features::unknown_at(a, v22) {
+            errors.push(ArgError::Unknown(a.clone()));
+        } else if let Some((opt, v)) = x86_features::bad_value(a) {
+            errors.push(unsupported(&opt, &v));
+        }
+    }
+    let items = x86_features::driver_items(&args.x86_feature_flags, v22);
+    f.x86_cpu_features = cpu_features.iter().flatten().map(|&c| c.to_owned()).collect();
+    if cpu_features.is_some() || !items.is_empty() {
+        let cpu = cpu_features.unwrap_or_else(|| X86_64_FEATURES.to_vec());
+        let map = x86_features::feature_map(&cpu, &items, v22);
+        f.extra =
+            map.into_iter().map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' })).collect();
+    }
+    f.x86_written = items;
+    // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
+    // thunks for `-mspeculative-load-hardening`.
+    if args.codegen.speculative_load_hardening {
+        f.extra.push("+retpoline-indirect-calls".to_owned());
+        f.x86_written.push("+retpoline-indirect-calls".to_owned());
+    }
+    if args.mcpu.is_some() {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-mcpu=".to_owned(), t.into()));
+    }
+    if args.sve_vector_bits.is_some() {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
+    }
+    // WP-846: clang's target-specific `-mbranch-protection=`.
+    if args.codegen.mbranch_protection_given {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
+    }
+}
+
 /// Resolves the target features of `args` for `target`. Off `AArch64`,
 /// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
 /// unsupported option and `-target-feature` is ignored. Every error is
@@ -439,71 +513,7 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
     if !target.is_aarch64() {
-        // x86: `-march=<cpu>` names one of clang's CPUs (`getX86TargetCPU`)
-        // or `native`. A CPU clang 21 knows has its features
-        // (`x86_targets::CPUS`, with clang 19's / 22's differences);
-        // `native` on a Linux x86-64 host has the host's `/proc/cpuinfo`
-        // features, elsewhere none (spec/driver.md "x86-64 target
-        // features"). Any other value stays unsupported.
-        let v22 = args.predef.clang_compat == ClangCompat::Clang22;
-        let mut cpu_features: Option<Vec<&'static str>> = None;
-        match args.march.as_deref() {
-            Some("native") => {
-                f.cpu = Some("native".to_owned());
-                if std::env::consts::ARCH == "x86_64" {
-                    cpu_features = std::fs::read_to_string("/proc/cpuinfo")
-                        .ok()
-                        .map(|c| x86_features::native_features(&c, v22));
-                }
-            }
-            Some(v) if is_x86_cpu(v, v22) => {
-                f.cpu = Some(v.to_owned());
-                cpu_features = x86_cpu(v).map(|c| x86_features::cpu_features(c, v22));
-            }
-            Some(v) => errors.push(unsupported("-march=", v)),
-            None => {}
-        }
-        // WP-1000: the `-m[no-]<feature>` flags this clang lacks are
-        // unknown arguments; the others, deduplicated as clang's driver
-        // does, build clang's `initFeatureMap` over the CPU's features
-        // (spec/driver.md "x86-64 target features"). `-Xclang
-        // -target-feature` stays ignored on x86-64.
-        for a in &args.x86_feature_flags {
-            if x86_features::unknown_at(a, v22) {
-                errors.push(ArgError::Unknown(a.clone()));
-            } else if let Some((opt, v)) = x86_features::bad_value(a) {
-                errors.push(unsupported(&opt, &v));
-            }
-        }
-        let items = x86_features::driver_items(&args.x86_feature_flags, v22);
-        f.x86_cpu_features =
-            cpu_features.iter().flatten().map(|&c| c.to_owned()).collect();
-        if cpu_features.is_some() || !items.is_empty() {
-            let cpu = cpu_features.unwrap_or_else(|| X86_64_FEATURES.to_vec());
-            let map = x86_features::feature_map(&cpu, &items, v22);
-            f.extra = map.into_iter().map(|(n, on)| format!("{}{n}", if on { '+' } else { '-' })).collect();
-        }
-        f.x86_written = items;
-        // WP-813: clang's `getX86TargetFeatures` adds the retpoline call
-        // thunks for `-mspeculative-load-hardening`.
-        if args.codegen.speculative_load_hardening {
-            f.extra.push("+retpoline-indirect-calls".to_owned());
-            f.x86_written.push("+retpoline-indirect-calls".to_owned());
-        }
-        if args.mcpu.is_some() {
-            let t = args.target.as_deref().unwrap_or(target.triple);
-            errors.push(ArgError::UnsupportedForTarget("-mcpu=".to_owned(), t.into()));
-        }
-        if args.sve_vector_bits.is_some() {
-            let t = args.target.as_deref().unwrap_or(target.triple);
-            errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
-        }
-        // WP-846: clang's target-specific `-mbranch-protection=`.
-        if args.codegen.mbranch_protection_given {
-            let t = args.target.as_deref().unwrap_or(target.triple);
-            errors
-                .push(ArgError::UnsupportedForTarget("-mbranch-protection=".to_owned(), t.into()));
-        }
+        resolve_x86(args, target, &mut f, &mut errors);
         return (f, errors);
     }
     let v22 = args.predef.clang_compat == ClangCompat::Clang22;
@@ -689,14 +699,24 @@ pub fn x86_macros(f: &TargetFeatures, v22: bool) -> Vec<(String, Option<String>)
     let Some(map) = f.x86_map() else { return Vec::new() };
     let cpu = f.cpu.as_deref().and_then(x86_cpu);
     let own = |n: &&str| n.bytes().any(|b| b.is_ascii_lowercase());
-    let base = x86_features::feature_macros(&x86_features::feature_map(&X86_64_FEATURES, &[], v22), v22);
+    let base =
+        x86_features::feature_macros(&x86_features::feature_map(&X86_64_FEATURES, &[], v22), v22);
     let new = x86_features::feature_macros(&map, v22);
     let mut out: Vec<(String, Option<String>)> = Vec::new();
-    for c in cpu.iter() {
-        out.extend(c.define.iter().filter(|(n, _)| own(n)).map(|(n, v)| (n.to_owned(), Some(v.to_owned()))));
+    if let Some(c) = &cpu {
+        out.extend(
+            c.define
+                .iter()
+                .filter(|(n, _)| own(n))
+                .map(|(n, v)| (n.to_owned(), Some(v.to_owned()))),
+        );
     }
-    out.extend(new.iter().filter(|(n, v)| base.get(*n) != Some(v)).map(|(n, v)| (n.clone(), Some(v.clone()))));
-    for c in cpu.iter() {
+    out.extend(
+        new.iter()
+            .filter(|(n, v)| base.get(*n) != Some(v))
+            .map(|(n, v)| (n.clone(), Some(v.clone()))),
+    );
+    if let Some(c) = &cpu {
         out.extend(c.undef.iter().filter(own).map(|n| (n.to_owned(), None)));
     }
     out.extend(base.keys().filter(|n| !new.contains_key(*n)).map(|n| (n.clone(), None)));
@@ -762,7 +782,9 @@ pub fn x86_target_attr_features(
     let own: Vec<String> = attr
         .split(',')
         .map(str::trim)
-        .filter(|i| !i.is_empty() && !["arch=", "tune=", "fpmath="].iter().any(|p| i.starts_with(p)))
+        .filter(|i| {
+            !i.is_empty() && !["arch=", "tune=", "fpmath="].iter().any(|p| i.starts_with(p))
+        })
         .map(|i| match i.strip_prefix("no-") {
             Some(f) => format!("-{f}"),
             None => format!("+{i}"),
@@ -1164,7 +1186,11 @@ mod tests {
             v22: true,
         };
         let has = |a: &str, f: &str| {
-            x86_target_attr_features(a, &m).features.iter().rev().any(|e| e[1..] == *f && e.starts_with('+'))
+            x86_target_attr_features(a, &m)
+                .features
+                .iter()
+                .rev()
+                .any(|e| e[1..] == *f && e.starts_with('+'))
         };
         assert!(has("sha", "sha") && has("sha", "avx2") && !has("sha", "crc32"));
         assert!(!has("arch=haswell", "crc32") && has("arch=haswell", "movbe"));

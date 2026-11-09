@@ -955,10 +955,17 @@ fn x86_target_feature_gating() {
     .unwrap();
     let cases: [(&[&str], &[&str]); 3] = [
         (&["-msse4.2", "-msha"], &[]),
-        (&["-msse4.2"], &["t.cpp:4:42: error: always_inline function '_mm_sha1msg1_epu32' requires target feature 'sha'"]),
+        (
+            &["-msse4.2"],
+            &[
+                "t.cpp:4:42: error: always_inline function '_mm_sha1msg1_epu32' requires target feature 'sha'",
+            ],
+        ),
         (
             &["-march=x86-64-v3", "-msha", "-mno-crc32"],
-            &["t.cpp:2:50: error: always_inline function '_mm_crc32_u8' requires target feature 'crc32'"],
+            &[
+                "t.cpp:2:50: error: always_inline function '_mm_crc32_u8' requires target feature 'crc32'",
+            ],
         ),
     ];
     for (flags, errors) in cases {
@@ -972,9 +979,15 @@ fn x86_target_feature_gating() {
         for (g, w) in got.iter().zip(errors) {
             assert!(g.starts_with(w), "{flags:?}: {err}");
         }
-        assert_eq!(o.status.code(), Some(if errors.is_empty() { 0 } else { 1 }), "{flags:?}");
+        assert_eq!(o.status.code(), Some(i32::from(!errors.is_empty())), "{flags:?}");
         if have("clang++-19") {
-            let c = Command::new("clang++-19").current_dir(&d).args(&args[1..]).arg("-o").arg("c.ll").output().unwrap();
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
             assert_eq!(err, text(&c.stderr), "{flags:?}");
         }
     }
@@ -991,20 +1004,36 @@ fn x86_flag_driver_diagnostics() {
     let d = scratch("x86flags");
     std::fs::write(d.join("e.cpp"), "int x;\n").unwrap();
     let cases: [(&str, &str, &str); 7] = [
-        ("aarch64-linux-gnu", "-mavx2", "error: unsupported option '-mavx2' for target 'aarch64-linux-gnu'"),
+        (
+            "aarch64-linux-gnu",
+            "-mavx2",
+            "error: unsupported option '-mavx2' for target 'aarch64-linux-gnu'",
+        ),
         (
             "aarch64-linux-gnu",
             "-mapx-features=egpr",
             "error: unsupported option '-mapx-features=' for target 'aarch64-linux-gnu'",
         ),
-        ("aarch64-linux-gnu", "-march=haswell", "error: unsupported argument 'haswell' to option '-march='"),
-        ("x86_64-linux-gnu", "-mcpu=cortex-a57", "error: unsupported option '-mcpu=' for target 'x86_64-linux-gnu'"),
+        (
+            "aarch64-linux-gnu",
+            "-march=haswell",
+            "error: unsupported argument 'haswell' to option '-march='",
+        ),
+        (
+            "x86_64-linux-gnu",
+            "-mcpu=cortex-a57",
+            "error: unsupported option '-mcpu=' for target 'x86_64-linux-gnu'",
+        ),
         (
             "x86_64-linux-gnu",
             "-msve-vector-bits=256",
             "error: unsupported option '-msve-vector-bits=' for target 'x86_64-linux-gnu'",
         ),
-        ("x86_64-linux-gnu", "-mapx-features=bogus", "error: unsupported argument 'bogus' to option '-mapx-features='"),
+        (
+            "x86_64-linux-gnu",
+            "-mapx-features=bogus",
+            "error: unsupported argument 'bogus' to option '-mapx-features='",
+        ),
         ("x86_64-linux-gnu", "-m3dnow", "warning: the clang compiler does not support '-m3dnow'"),
     ];
     for (target, flag, want) in cases {
@@ -1013,7 +1042,7 @@ fn x86_flag_driver_diagnostics() {
         let o = kiln_in(&d, &args);
         let err = text(&o.stderr);
         assert_eq!(err, format!("kiln++: {want}\n"), "{target} {flag}");
-        assert_eq!(o.status.code(), Some(if want.starts_with("error") { 1 } else { 0 }), "{flag}");
+        assert_eq!(o.status.code(), Some(i32::from(want.starts_with("error"))), "{flag}");
         if have("clang++-19") {
             let c = Command::new("clang++-19").current_dir(&d).args(&args[1..]).output().unwrap();
             assert_eq!(err.replacen("kiln++", "clang++-19", 1), text(&c.stderr), "{target} {flag}");
@@ -1042,10 +1071,16 @@ fn x86_avx_calling_convention() {
     )
     .unwrap();
     let diag = |l: &str| {
-        l.split_once(": ").map(|(loc, rest)| format!("{loc} {}", &rest[..rest.find(':').unwrap_or(0)])).unwrap_or_default()
+        l.split_once(": ")
+            .map(|(loc, rest)| format!("{loc} {}", &rest[..rest.find(':').unwrap_or(0)]))
+            .unwrap_or_default()
     };
     let cases: [(&str, &[&str], &[&str]); 3] = [
-        ("19", &[], &["t.cpp:5:22 warning", "t.cpp:6:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"]),
+        (
+            "19",
+            &[],
+            &["t.cpp:5:22 warning", "t.cpp:6:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"],
+        ),
         ("22", &[], &["t.cpp:5:22 warning", "t.cpp:7:53 error", "t.cpp:8:22 error"]),
         ("19", &["-mavx"], &[]),
     ];
@@ -1056,11 +1091,20 @@ fn x86_avx_calling_convention() {
         args.extend_from_slice(&["-S", "-emit-llvm", "-o", "k.ll", "t.cpp"]);
         let o = kiln_in(&d, &args);
         let err = text(&o.stderr);
-        let got: Vec<String> =
-            err.lines().filter(|l| l.starts_with("t.cpp:") && l.contains("changes the ABI")).map(diag).collect();
+        let got: Vec<String> = err
+            .lines()
+            .filter(|l| l.starts_with("t.cpp:") && l.contains("changes the ABI"))
+            .map(diag)
+            .collect();
         assert_eq!(got, want, "{compat} {flags:?}: {err}");
         if compat.ends_with("19") && have("clang++-19") {
-            let c = Command::new("clang++-19").current_dir(&d).args(&args[1..]).arg("-o").arg("c.ll").output().unwrap();
+            let c = Command::new("clang++-19")
+                .current_dir(&d)
+                .args(&args[1..])
+                .arg("-o")
+                .arg("c.ll")
+                .output()
+                .unwrap();
             assert_eq!(err, text(&c.stderr), "{flags:?}");
         }
     }

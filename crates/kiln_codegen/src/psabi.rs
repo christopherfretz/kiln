@@ -72,9 +72,9 @@ impl Cg<'_> {
         feature: &str,
     ) -> bool {
         let has = |m: &crate::target_features::FeatureMap| m.get(feature) == Some(&true);
-        let caller = has(&self.feature_map(self.f.decl));
-        let callee_has = has(&self.feature_map(Some(callee)));
-        let id = match (caller, callee_has) {
+        let caller_on = has(&self.feature_map(self.f.decl));
+        let target_on = has(&self.feature_map(Some(callee)));
+        let id = match (caller_on, target_on) {
             (true, true) => return false,
             (false, false) if self.opts.clang_compat >= 22 && self.fn_internal(callee) => {
                 return false;

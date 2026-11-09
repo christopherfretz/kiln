@@ -22,19 +22,110 @@ use std::sync::OnceLock;
 /// and `3dnowa` are spelt differently from their features (see
 /// [`flag_items`]).
 const FLAGS: &[&str] = &[
-    "3dnow", "3dnowa", "80387", "adx", "aes", "amx-bf16", "amx-complex", "amx-fp16",
-    "amx-int8", "amx-tile", "apxf", "avx", "avx10.1", "avx2", "avx512bf16", "avx512bitalg",
-    "avx512bw", "avx512cd", "avx512dq", "avx512f", "avx512fp16", "avx512ifma", "avx512vbmi",
-    "avx512vbmi2", "avx512vl", "avx512vnni", "avx512vp2intersect", "avx512vpopcntdq",
-    "avxifma", "avxneconvert", "avxvnni", "avxvnniint16", "avxvnniint8", "bmi", "bmi2",
-    "cldemote", "clflushopt", "clwb", "clzero", "cmpccxadd", "crc32", "cx16", "enqcmd", "f16c",
-    "fma", "fma4", "fsgsbase", "fxsr", "gfni", "hreset", "invpcid", "kl", "lwp", "lzcnt", "mmx",
-    "movbe", "movdir64b", "movdiri", "mwaitx", "pclmul", "pconfig", "pku", "popcnt",
-    "prefetchi", "prfchw", "ptwrite", "raoint", "rdpid", "rdpru", "rdrnd", "rdseed", "rtm",
-    "sahf", "serialize", "sgx", "sha", "sha512", "shstk", "sm3", "sm4", "sse", "sse2", "sse3",
-    "sse4", "sse4.1", "sse4.2", "sse4a", "ssse3", "tbm", "tsxldtrk", "uintr", "usermsr", "vaes",
-    "vpclmulqdq", "vzeroupper", "waitpkg", "wbnoinvd", "widekl", "x87", "xop", "xsave",
-    "xsavec", "xsaveopt", "xsaves",
+    "3dnow",
+    "3dnowa",
+    "80387",
+    "adx",
+    "aes",
+    "amx-bf16",
+    "amx-complex",
+    "amx-fp16",
+    "amx-int8",
+    "amx-tile",
+    "apxf",
+    "avx",
+    "avx10.1",
+    "avx2",
+    "avx512bf16",
+    "avx512bitalg",
+    "avx512bw",
+    "avx512cd",
+    "avx512dq",
+    "avx512f",
+    "avx512fp16",
+    "avx512ifma",
+    "avx512vbmi",
+    "avx512vbmi2",
+    "avx512vl",
+    "avx512vnni",
+    "avx512vp2intersect",
+    "avx512vpopcntdq",
+    "avxifma",
+    "avxneconvert",
+    "avxvnni",
+    "avxvnniint16",
+    "avxvnniint8",
+    "bmi",
+    "bmi2",
+    "cldemote",
+    "clflushopt",
+    "clwb",
+    "clzero",
+    "cmpccxadd",
+    "crc32",
+    "cx16",
+    "enqcmd",
+    "f16c",
+    "fma",
+    "fma4",
+    "fsgsbase",
+    "fxsr",
+    "gfni",
+    "hreset",
+    "invpcid",
+    "kl",
+    "lwp",
+    "lzcnt",
+    "mmx",
+    "movbe",
+    "movdir64b",
+    "movdiri",
+    "mwaitx",
+    "pclmul",
+    "pconfig",
+    "pku",
+    "popcnt",
+    "prefetchi",
+    "prfchw",
+    "ptwrite",
+    "raoint",
+    "rdpid",
+    "rdpru",
+    "rdrnd",
+    "rdseed",
+    "rtm",
+    "sahf",
+    "serialize",
+    "sgx",
+    "sha",
+    "sha512",
+    "shstk",
+    "sm3",
+    "sm4",
+    "sse",
+    "sse2",
+    "sse3",
+    "sse4",
+    "sse4.1",
+    "sse4.2",
+    "sse4a",
+    "ssse3",
+    "tbm",
+    "tsxldtrk",
+    "uintr",
+    "usermsr",
+    "vaes",
+    "vpclmulqdq",
+    "vzeroupper",
+    "waitpkg",
+    "wbnoinvd",
+    "widekl",
+    "x87",
+    "xop",
+    "xsave",
+    "xsavec",
+    "xsaveopt",
+    "xsaves",
 ];
 
 /// The flag names only clang 19 accepts (clang 22: unknown argument).
@@ -45,8 +136,14 @@ const FLAGS_22: &[&str] = &["amx-avx512", "amx-fp8", "amx-movrs", "amx-tf32", "a
 
 /// The table features clang 19 does not have.
 const NOT_19: &[&str] = &[
-    "amx-avx512", "amx-fp8", "amx-movrs", "amx-tf32", "amx-transpose", "avx10.2-256",
-    "avx10.2-512", "movrs",
+    "amx-avx512",
+    "amx-fp8",
+    "amx-movrs",
+    "amx-tf32",
+    "amx-transpose",
+    "avx10.2-256",
+    "avx10.2-512",
+    "movrs",
 ];
 
 /// The table features clang 22 does not have.
@@ -162,7 +259,7 @@ pub fn non_x86_spelling(arg: &str, v22: bool) -> Option<String> {
 
 /// clang's driver `unifyTargetFeatures`: the last item naming each
 /// feature wins, the survivors keeping their order.
-fn unify(items: Vec<String>) -> Vec<String> {
+fn unify(items: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (i, f) in items.iter().enumerate() {
         let later = items[i + 1..].iter().any(|g| g.get(1..) == f.get(1..));
@@ -178,9 +275,9 @@ fn unify(items: Vec<String>) -> Vec<String> {
 /// driver dedup. Flags that clang lacks are skipped (the caller reports
 /// them).
 pub fn driver_items(flags: &[String], v22: bool) -> Vec<String> {
-    let items =
+    let items: Vec<String> =
         flags.iter().filter(|f| !unknown_at(f, v22)).flat_map(|f| flag_items(f, v22)).collect();
-    unify(items)
+    unify(&items)
 }
 
 /// The implication graph of clang 19 (`v22` false) or clang 22: each
@@ -257,7 +354,8 @@ const CPU_19: &[(&str, &[&str], &[&str])] = &[
     ("pantherlake", &["cldemote", "kl", "widekl"], &[]),
     ("raptorlake", &["cldemote"], &[]),
 ];
-const CPU_22: &[(&str, &[&str], &[&str])] = &[("diamondrapids", &[], &["usermsr"]), ("pantherlake", &[], &["prefetchi"])];
+const CPU_22: &[(&str, &[&str], &[&str])] =
+    &[("diamondrapids", &[], &["usermsr"]), ("pantherlake", &[], &["prefetchi"])];
 
 /// The features of `-march=` CPU `cpu` as clang 19 (`v22` false) or clang
 /// 22 has them: the clang 21 row with [`CPU_19`] / [`CPU_22`] applied.
@@ -312,10 +410,10 @@ pub fn native_features(cpuinfo: &str, v22: bool) -> Vec<&'static str> {
     let g = graph(v22);
     for flag in flags.split_whitespace() {
         let name = CPUINFO.iter().find(|(c, _)| *c == flag).map_or(flag, |(_, n)| n);
-        if let Some((&n, _)) = g.get_key_value(name) {
-            if !out.contains(&n) {
-                out.push(n);
-            }
+        if let Some((&n, _)) = g.get_key_value(name)
+            && !out.contains(&n)
+        {
+            out.push(n);
         }
     }
     out
@@ -436,8 +534,17 @@ const FLT16: &[(&str, &str)] = &[
 
 /// The features defining no macro.
 const NO_MACRO: &[&str] = &[
-    "cmov", "cx8", "x87", "evex512", "vzeroupper", "retpoline-indirect-calls", "retpoline-indirect-branches",
-    "retpoline-external-thunk", "lvi-cfi", "seses", "inline-asm-use-gpr32",
+    "cmov",
+    "cx8",
+    "x87",
+    "evex512",
+    "vzeroupper",
+    "retpoline-indirect-calls",
+    "retpoline-indirect-branches",
+    "retpoline-external-thunk",
+    "lvi-cfi",
+    "seses",
+    "inline-asm-use-gpr32",
 ];
 
 /// The feature macros (name, value) of feature map `map` at clang 19 or
@@ -518,7 +625,10 @@ mod tests {
         assert_eq!(driver_items(&f("-mavx -mno-avx"), true), ["-avx"]);
         assert_eq!(driver_items(&f("-mavx2 -mno-avx -mavx2"), true), ["-avx", "+avx2"]);
         assert_eq!(driver_items(&f("-msse4 -mno-sse4"), true), ["+sse4.2", "-sse4.1"]);
-        assert_eq!(driver_items(&f("-mavx10.1 -mevex512 -mmovrs"), false), ["+avx10.1-256", "+evex512"]);
+        assert_eq!(
+            driver_items(&f("-mavx10.1 -mevex512 -mmovrs"), false),
+            ["+avx10.1-256", "+evex512"]
+        );
         assert_eq!(driver_items(&f("-mavx10.1 -mevex512 -mmovrs"), true), ["+avx10.1", "+movrs"]);
     }
 
@@ -567,7 +677,13 @@ mod tests {
     fn native() {
         let info = "processor\t: 0\nflags\t\t: fpu cx8 sse4_1 sse4_2 pni abm bmi1 sha_ni avx2 lm nx_bogus\nflags : avx512f\n";
         let f = native_features(info, true);
-        assert_eq!(f, ["cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87", "sse4.1", "sse4.2", "sse3", "lzcnt", "bmi", "sha", "avx2"]);
+        assert_eq!(
+            f,
+            [
+                "cmov", "cx8", "fxsr", "mmx", "sse", "sse2", "x87", "sse4.1", "sse4.2", "sse3",
+                "lzcnt", "bmi", "sha", "avx2"
+            ]
+        );
         let map = feature_map(&f, &[], true);
         assert_eq!(map.get("avx"), Some(&true));
         assert_eq!(map.get("avx512f"), None);

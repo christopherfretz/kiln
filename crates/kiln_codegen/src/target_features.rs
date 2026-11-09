@@ -93,14 +93,13 @@ impl Cg<'_> {
         const OPTION_FEATURES: [&str; 1] = ["+retpoline-indirect-calls"];
         let mut f: FeatureMap = FeatureMap::new();
         let attr = d.and_then(|d| self.target_attr_features(d));
-        let features = match &attr {
-            Some(a) => &a.features,
-            None => {
-                if self.opts.target_features.iter().all(|e| OPTION_FEATURES.contains(&&**e)) {
-                    f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
-                }
-                &self.opts.target_features
+        let features = if let Some(a) = &attr {
+            &a.features
+        } else {
+            if self.opts.target_features.iter().all(|e| OPTION_FEATURES.contains(&&**e)) {
+                f.extend(X86_64.iter().map(|n| ((*n).to_owned(), true)));
             }
+            &self.opts.target_features
         };
         for e in features {
             if let Some((sign, name)) = e.split_at_checked(1) {
