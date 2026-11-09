@@ -794,6 +794,78 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A `while`, `for` or `do` loop.
+    fn nc_loop(&mut self, s: StmtId, depth: u32) -> Flow {
+        // The first iteration's body, when it is known to run;
+        // what follows depends on how many iterations run.
+        let do_loop = self.ast.stmts.get(s).kind() == StmtKind::DoStmt;
+        let d = *self.ast.stmts.loop_data(s);
+        if d.cond_var.is_some() {
+            return Flow::Stop;
+        }
+        if let Some(init) = d.init {
+            match self.nc_stmt(init, depth + 1) {
+                Flow::Next => {}
+                other => return other,
+            }
+        }
+        if !do_loop && let Some(cond) = d.cond {
+            match self.nc_expr(cond, depth + 1) {
+                Value::Fails(fail) => return Flow::Fails(fail),
+                Value::Known(v) if self.const_truth(v) == Some(true) => {}
+                _ => return Flow::Stop,
+            }
+        }
+        match d.body.map(|b| self.nc_stmt(b, depth + 1)) {
+            Some(Flow::Fails(fail)) => Flow::Fails(fail),
+            _ => Flow::Stop,
+        }
+    }
+
+    /// A declaration statement: each variable is defined in turn.
+    fn nc_decl_stmt(&mut self, s: StmtId, depth: u32) -> Flow {
+        let decls: Vec<DeclId> =
+            self.ast.lists.iter::<DeclId>(self.ast.stmts.decl_stmt_decls(s)).collect();
+        for d in decls {
+            match self.kind_of(d) {
+                DeclKind::Var => {}
+                _ => continue,
+            }
+            if self
+                .ast
+                .decls
+                .var(d)
+                .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern)
+            {
+                // A block-scope `extern` declaration defines nothing.
+                continue;
+            }
+            if !self.has_local_storage(d) {
+                // A static or thread-local variable fails before
+                // its initializer runs (WP-1123).
+                return match self.nc_static_local(d) {
+                    Some(fail) => Flow::Fails(fail),
+                    None => Flow::Stop,
+                };
+            }
+            if self.nc_destroyed(d) {
+                self.nc_unknown_local = true;
+            }
+            let init = self.ast.decls.var(d).and_then(|v| v.init);
+            if let Some(init) = init {
+                match self.nc_expr(init, depth + 1) {
+                    Value::Fails(fail) => return Flow::Fails(fail),
+                    Value::Unknown => {
+                        self.nc_unknown_local = true;
+                        self.nc_note_unknown(init);
+                    }
+                    Value::Known(_) => {}
+                }
+            }
+        }
+        Flow::Next
+    }
+
     /// Statement `s` executed with the parameters, locals and `this`
     /// unknown.
     fn nc_stmt(&mut self, s: StmtId, depth: u32) -> Flow {
@@ -848,48 +920,7 @@ impl Sema<'_, '_> {
                 Some(Value::Fails(fail)) => Flow::Fails(fail),
                 _ => Flow::Stop,
             },
-            StmtKind::DeclStmt => {
-                let decls: Vec<DeclId> =
-                    self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).collect();
-                for d in decls {
-                    match self.kind_of(d) {
-                        DeclKind::Var => {}
-                        _ => continue,
-                    }
-                    if self
-                        .ast
-                        .decls
-                        .var(d)
-                        .is_some_and(|v| v.spec.storage() == kiln_ast::decl::VarStorage::Extern)
-                    {
-                        // A block-scope `extern` declaration defines nothing.
-                        continue;
-                    }
-                    if !self.has_local_storage(d) {
-                        // A static or thread-local variable fails before
-                        // its initializer runs (WP-1123).
-                        return match self.nc_static_local(d) {
-                            Some(fail) => Flow::Fails(fail),
-                            None => Flow::Stop,
-                        };
-                    }
-                    if self.nc_destroyed(d) {
-                        self.nc_unknown_local = true;
-                    }
-                    let init = self.ast.decls.var(d).and_then(|v| v.init);
-                    if let Some(init) = init {
-                        match self.nc_expr(init, depth + 1) {
-                            Value::Fails(fail) => return Flow::Fails(fail),
-                            Value::Unknown => {
-                                self.nc_unknown_local = true;
-                                self.nc_note_unknown(init);
-                            }
-                            Value::Known(_) => {}
-                        }
-                    }
-                }
-                Flow::Next
-            }
+            StmtKind::DeclStmt => self.nc_decl_stmt(s, depth),
             StmtKind::IfStmt => {
                 if !matches!(st.if_kind(s), IfKind::Ordinary | IfKind::Constexpr) {
                     return Flow::Stop;
@@ -917,32 +948,7 @@ impl Sema<'_, '_> {
                     },
                 }
             }
-            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
-                // The first iteration's body, when it is known to run;
-                // what follows depends on how many iterations run.
-                let do_loop = st.get(s).kind() == StmtKind::DoStmt;
-                let d = *st.loop_data(s);
-                if d.cond_var.is_some() {
-                    return Flow::Stop;
-                }
-                if let Some(init) = d.init {
-                    match self.nc_stmt(init, depth + 1) {
-                        Flow::Next => {}
-                        other => return other,
-                    }
-                }
-                if !do_loop && let Some(cond) = d.cond {
-                    match self.nc_expr(cond, depth + 1) {
-                        Value::Fails(fail) => return Flow::Fails(fail),
-                        Value::Known(v) if self.const_truth(v) == Some(true) => {}
-                        _ => return Flow::Stop,
-                    }
-                }
-                match d.body.map(|b| self.nc_stmt(b, depth + 1)) {
-                    Some(Flow::Fails(fail)) => Flow::Fails(fail),
-                    _ => Flow::Stop,
-                }
-            }
+            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => self.nc_loop(s, depth),
             // clang `EvaluateStmt`'s default: not valid (WP-915).
             StmtKind::GCCAsmStmt => Flow::Fails(Self::not_valid(st.get(s).loc())),
             _ => Flow::Stop,
