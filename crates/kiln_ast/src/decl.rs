@@ -1311,8 +1311,9 @@ pub struct FieldData {
     /// The default member initializer (write-once: parsed after the class
     /// is complete, [class.mem]/7).
     pub init: Option<ExprId>,
-    /// [`FieldData::MUTABLE`], [`FieldData::NO_UNIQUE_ADDRESS`], and the
-    /// in-class-initializer style in bits 2..=3 ([`InitStyle`]).
+    /// [`FieldData::MUTABLE`], [`FieldData::NO_UNIQUE_ADDRESS`], the
+    /// in-class-initializer style in bits 2..=3 ([`InitStyle`]), and
+    /// [`FieldData::HAS_DEFAULT_INIT`].
     pub flags: u32,
 }
 
@@ -1321,6 +1322,10 @@ impl FieldData {
     pub const MUTABLE: u32 = 1;
     /// `[[no_unique_address]]`.
     pub const NO_UNIQUE_ADDRESS: u32 = 2;
+    /// A default member initializer was written (known as the member is
+    /// declared; the initializer itself is parsed after the class is
+    /// complete).
+    pub const HAS_DEFAULT_INIT: u32 = 16;
 
     /// `mutable`.
     pub const fn is_mutable(&self) -> bool {

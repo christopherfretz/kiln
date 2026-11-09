@@ -19,6 +19,7 @@ pub(crate) mod friend;
 pub(crate) mod inhctor;
 mod member_expr;
 mod member_name;
+mod member_rules;
 pub(crate) mod members;
 mod special;
 mod temporary;

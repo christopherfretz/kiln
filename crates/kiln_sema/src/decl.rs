@@ -5021,7 +5021,7 @@ impl Sema<'_, '_> {
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
             // replayed after the class is complete.
-            flags |= (style as u32) << 2;
+            flags |= (style as u32) << 2 | FieldData::HAS_DEFAULT_INIT;
             if let Some(c) = self.classes.last_mut()
                 && c.record == ctx
             {
@@ -5115,6 +5115,20 @@ impl Sema<'_, '_> {
         // (every such path has diagnosed) leaves the field invalid.
         field_invalid |= d.bit_width.is_some() && width.is_none();
         field_invalid |= invalid || failed_spec || self.is_error_type(ty);
+        // [class.bit]/1 (CWG2229): an unnamed bit-field is not
+        // cv-qualified (clang `err_anon_bitfield_qualifiers`, at the
+        // field's location; the field is invalid).
+        if !field_invalid
+            && name.is_none()
+            && d.bit_width.is_some()
+            && self.ast.types.canonical(ty).quals().bits() != 0
+        {
+            self.error(DiagId::sema_anon_bitfield_qualifiers, d.name_loc());
+            field_invalid = true;
+        }
+        if d.init_style.is_some() {
+            self.check_union_default_inits(ctx, d.name_loc());
+        }
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
@@ -6080,7 +6094,7 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
-        if self.extern_init_redefines(v, spec, loc) {
+        if self.extern_init_redefines(v, spec, loc) || self.static_member_reinit(v, &init) {
             self.discard_initializer(&init);
             return;
         }
@@ -9395,6 +9409,10 @@ impl Sema<'_, '_> {
                 None => d,
             };
             self.emit(d);
+        }
+        if in_class && let Some(x) = self.first_default_init(rec) {
+            let loc = self.ast.decls.get(x).loc();
+            self.check_union_default_inits(ctx, loc);
         }
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);

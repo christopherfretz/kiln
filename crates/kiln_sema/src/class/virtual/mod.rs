@@ -97,6 +97,13 @@ impl Sema<'_, '_> {
                 self.error(DiagId::sema_virtual_not_member_fn, vloc);
             } else if !site.in_class {
                 self.error(DiagId::sema_virtual_out_of_class, vloc);
+            } else if self.is_union(site.class) {
+                // [class.union.general]/2: a union has no virtual
+                // functions (clang `err_virtual_in_union`, which wins
+                // over the template rule below); the function is
+                // declared non-virtual and invalid.
+                self.error(DiagId::sema_union_virtual, vloc);
+                out.invalid = true;
             } else if self.templ.cur.is_some() {
                 // [temp.mem]/3: a member function template is not virtual
                 // (clang `err_virtual_member_function_template`; the
