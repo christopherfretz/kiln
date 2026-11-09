@@ -799,6 +799,15 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         self.oven = Some(oven);
     }
 
+    /// Records the constant-evaluation profile at `level`
+    /// (`-fconstexpr-stats`, `-fconstexpr-profile`; spec/oven.md
+    /// "Profile counters"). Call before parsing.
+    pub fn set_constexpr_profile(&mut self, level: crate::ProfileLevel) {
+        if let Some(o) = &mut self.oven {
+            o.set_profile(level);
+        }
+    }
+
     /// The AST and the evaluator, at the end of the translation unit (the
     /// evaluator's [`Oven::stats`] are its `-fconstexpr-report=`).
     pub fn into_parts(self) -> (Ast, Oven) {

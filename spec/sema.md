@@ -1276,8 +1276,8 @@ Redeclaration and linkage rules:
 - `auto` and `decltype(auto)` variables ([dcl.type.auto.deduct]): a
   top-level placeholder deduces the decayed, cv-stripped initializer
   type plus the written cv-qualifiers, or `decltype(e)`. A
-  placeholder under pointer and reference declarators (`auto *`,
-  `const auto &`, `auto &&`) is deduced as for a function call
+  placeholder under pointer, member-pointer and reference declarators
+  (`auto *`, `auto Q::*`, `const auto &`, `auto &&`) is deduced as for a function call
   ([temp.deduct.call]/2-4) with `auto` as the template parameter.
   A type-constraint on the placeholder (`C<A> decltype(auto) x = e;`)
   is checked against the deduced placeholder type
@@ -4963,6 +4963,32 @@ Names there are not odr-used.
     marked `non_odr_use_constant`. So is a reference usable in constant
     expressions.
   - Every other queued variable is marked `used`.
+- **Potential results** (`l2r_potential_results`, WP-1144; clang 19/22
+  `Sema::CheckLValueToRValueConversionOperand` and
+  `rebuildPotentialResultsAsNonOdrUsed`, SemaExpr.cpp):
+  - An operand that is volatile or of class type yields none (clang
+    skips both; a class operand is copied, not converted).
+  - The set of `e` ([basic.def.odr]/3) is `e` for a DeclRefExpr, and
+    recurses through `(e)`, `__extension__ e`, a `ConstantExpr`, both
+    arms of `?:`, the right operand of a comma, the left operand of `.*`,
+    `e.m` for a non-static data member (not `->`, which reads a pointer),
+    the array operand of a subscript (`e[i]` and `i[e]`, implicit nodes
+    stripped first), and every association of `_Generic`.
+  - Deviations kept for clang compatibility: `__builtin_choose_expr`
+    recurses into its first operand only (clang rebuilds the LHS twice,
+    so the RHS stays an odr-use); a variable whose class type has a
+    mutable member stays an odr-use, but only the variable's own type is
+    checked (an array of such a class is not); the discarded-value
+    bullet is never applied (clang leaves `NOUR_Discarded` unused), so
+    `(void)ca` odr-uses `ca`; in a generic lambda with a deduced return
+    type `return ca.v` has no conversion until instantiation, so `ca` is
+    captured.
+  - Codegen (spec/codegen.md): a non-odr-used local named from a
+    lambda or local class reads the variable's `__const` global.
+  - Tests `basic.def.odr/potential-results-closure-run.cpp` (closure
+    size per form), `basic.def.odr/potential-results-lambda-ir.cpp`,
+    `expr.prim.lambda.capture/no-capture-default-odr-use.cpp`,
+    `expr.prim.lambda.capture/constant-member-access-not-captured.cpp`.
 - Names inside unevaluated operands are marked
   `non_odr_use_unevaluated`.
 - A default template argument substituted during deduction
@@ -6597,7 +6623,13 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   whose member owns heap, `flat().d` with `consteval P flat()` and `P`
   holding a vector) is accepted when the whole initializer is constant:
   the temporary is destroyed at the end of the full-expression and only
-  the final value is checked. The rule:
+  the final value is checked. Each outermost invocation is evaluated
+  once (WP-1140): `finish_immediate_invocations` stores every successful
+  value before it folds the initializer (`try_fold`, at most once), and
+  that fold, the variable's own check and codegen read the stored value
+  as a leaf (oven.md "Valued immediate invocations"); a value stored
+  for a deferred initializer is `CONSTANT_VALUE_HIDDEN`, so the dump
+  still prints the wrapper unvalued, as clang's. The rule:
   - constexpr or constinit `v` (namespace scope, local, static data
     member, variable template specialization): a failing outermost
     invocation waits in `after_var`; `report_deferred_immediates(v,
@@ -6605,8 +6637,8 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     evaluated value (`VarEvalState::Value`) or `check_constinit`
     returned `true` (constant initializer; a destruction-only failure
     counts), and otherwise re-evaluates and reports it after the
-    variable's own error (the WP-465 order). Wrappers keep no value, as
-    clang leaves them unvalued.
+    variable's own error (the WP-465 order). A failed invocation's
+    wrapper keeps no value, as clang leaves it unvalued.
   - any other variable that `checks_constant_init` (static or thread
     storage duration, not constexpr/constinit): a failing invocation is
     not reported when the initializer folds (`try_fold`), since it is
@@ -9712,11 +9744,20 @@ not supported yet`.
     implements the earlier resolution (no extension: `~D2 x2`), and
     upstream clang implements the DIS (llvm#218710; clang 22 has no
     P1306), so the run tests carry kiln goldens (`oracle: none`).
-    *Left* (`element-discarded-temporary-run.cpp`, `xfail(kiln)`): a
-    discarded class prvalue (`(void)D{1}`, a comma's left operand) is
-    bound (`CXXBindTemporaryExpr`) but never materialized, so it still
-    dies with the declaration's full-expression; and a default
-    argument's temporaries stay with the call's full-expression.
+    A discarded class prvalue (`(void)D{1}`, a comma's left operand) is
+    a temporary created in the element too ([expr.context]/2,
+    [expr.static.cast]/6): the expansion-init-list is a
+    lifetime-extending context (the parser, and `expansion_stmt` when it
+    substitutes a pattern's list, open an `extend_collector`), so
+    `materialize_discarded` materializes it and it is extended like any
+    other (WP-1117; spec/sema-class.md §5.4;
+    `element-discarded-temporary{,-constexpr}-run.cpp`). In an ordinary
+    declaration it is only bound and dies with the full-expression.
+    *Left*: a default argument's temporaries stay with the call's
+    full-expression; a destructuring statement's expansion-initializer
+    (`auto&& [u...] = ((void)D{1}, t)`) is not a lifetime-extending
+    context at parse time, so its discarded class prvalues are not
+    materialized.
   - *Element immediate invocations* (WP-1106; [expr.const]/16): an
     immediate invocation in an element is evaluated at the end of its
     declaration's full-expression. The element's `ConstantExpr` was built

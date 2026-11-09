@@ -1096,6 +1096,10 @@ pub(crate) struct Compiler<'a> {
     /// each being evaluated, and how many breakables were open outside it
     /// (a `return`, or a `break`/`continue` leaving it, is unsupported).
     stmt_exprs: Vec<(Loc, usize)>,
+    /// The enclosing switch statements, innermost last: the labels of
+    /// each nested in sub-statements of its body (`None`: all its labels
+    /// are direct children of the body).
+    switches: Vec<Option<NestedLabels>>,
     /// Mark registers of the open scopes (`None`: allocates nothing).
     scopes: Vec<Option<u32>>,
     ret: RetKind,
@@ -1201,6 +1205,7 @@ impl<'a> Compiler<'a> {
             catch_obj: None,
             breakables: Vec::new(),
             stmt_exprs: Vec::new(),
+            switches: Vec::new(),
             scopes: Vec::new(),
             ret: RetKind::Void,
             ret_ref: false,
@@ -1902,22 +1907,132 @@ fn attributed_label(ast: &kiln_ast::Ast, s: StmtId) -> bool {
         )
 }
 
-/// Whether `s` contains a `case`/`default` label (stopping at nested
-/// switches).
-fn has_case(ast: &kiln_ast::Ast, s: StmtId) -> bool {
+/// The `case`/`default` labels of a switch nested in sub-statements of
+/// its body ([stmt.switch]/2 places no restriction; Duff's device): the
+/// dispatch reaches each through the scope entries of the statements
+/// enclosing it (spec/oven.md "Switch dispatch").
+struct NestedLabels {
+    /// The selected label's index plus one while a jump descends through
+    /// the enclosing statements' scope entries; 0 otherwise.
+    sel: u32,
+    labels: Vec<NestedLabel>,
+    /// Each statement enclosing a nested label inside the switch body,
+    /// with the indices of the labels in it.
+    paths: FxHashMap<StmtId, Vec<usize>>,
+}
+
+struct NestedLabel {
+    stmt: StmtId,
+    /// The jumps toward the label not yet patched: each lands on the next
+    /// hunt site of the label's path ([`Compiler::hunt_site`]), or on the
+    /// label's pad once the label is compiled.
+    open: Vec<usize>,
+    /// The out-of-line pad clearing `sel` and jumping to the label: its
+    /// pc and the operand of its jump.
+    pad: u32,
+    pad_jmp: usize,
+    reached: bool,
+}
+
+/// Collects the `case`/`default` labels nested in `s` (not those of a
+/// nested switch) in source order into `out`, recording in `paths` each
+/// statement on the way to one (`path` holds the enclosing ones).
+fn nested_labels(
+    ast: &kiln_ast::Ast,
+    s: StmtId,
+    path: &mut Vec<StmtId>,
+    out: &mut Vec<StmtId>,
+    paths: &mut FxHashMap<StmtId, Vec<usize>>,
+) {
     let n = *ast.stmts.get(s);
     match n.kind() {
-        StmtKind::CaseStmt | StmtKind::DefaultStmt => true,
-        StmtKind::LabelStmt | StmtKind::AttributedStmt => has_case(ast, StmtId::new(n.b())),
+        StmtKind::CaseStmt | StmtKind::DefaultStmt => {
+            for &p in path.iter() {
+                paths.entry(p).or_default().push(out.len());
+            }
+            out.push(s);
+            let sub = if n.kind() == StmtKind::CaseStmt {
+                ast.stmts.case_data(s).sub
+            } else {
+                ast.stmts.default_sub(s)
+            };
+            nested_labels(ast, sub, path, out, paths);
+        }
+        StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+            nested_labels(ast, StmtId::new(n.b()), path, out, paths);
+        }
         StmtKind::CompoundStmt => {
-            ast.lists.get(ast.stmts.compound_body(s)).iter().any(|&c| has_case(ast, StmtId::new(c)))
+            path.push(s);
+            for &c in ast.lists.get(ast.stmts.compound_body(s)) {
+                nested_labels(ast, StmtId::new(c), path, out, paths);
+            }
+            path.pop();
         }
         StmtKind::DoStmt | StmtKind::WhileStmt | StmtKind::ForStmt => {
-            ast.stmts.loop_data(s).body.is_some_and(|x| has_case(ast, x))
+            if let Some(b) = ast.stmts.loop_data(s).body {
+                path.push(s);
+                nested_labels(ast, b, path, out, paths);
+                path.pop();
+            }
         }
         StmtKind::IfStmt => {
             let d = *ast.stmts.if_data(s);
-            d.then.into_iter().chain(d.els).any(|x| has_case(ast, x))
+            path.push(s);
+            for x in d.then.into_iter().chain(d.els) {
+                nested_labels(ast, x, path, out, paths);
+            }
+            path.pop();
+        }
+        _ => {}
+    }
+}
+
+/// The values a `case` label selects (`lo..=hi`; `None` for `default`).
+fn case_range(ast: &kiln_ast::Ast, s: StmtId) -> Option<(u128, u128)> {
+    if ast.stmts.get(s).kind() != StmtKind::CaseStmt {
+        return None;
+    }
+    let cd = *ast.stmts.case_data(s);
+    let lo = eval_int(ast, cd.lhs).unwrap_or(0);
+    let hi = cd.rhs.and_then(|r| eval_int(ast, r)).unwrap_or(lo);
+    Some((lo, hi))
+}
+
+/// The steps clang charges hunting for the label `target` nested in `s`
+/// (`EvaluateStmt` with a non-null `Case`: it descends labels, compound
+/// statements, loop bodies and `if` branches, stepping into a `for`'s or
+/// an `if`'s init-statement on the way), pushed on `locs`; whether
+/// `target` was found. The label's own step is charged at the label.
+fn hunt_to(ast: &kiln_ast::Ast, s: StmtId, target: StmtId, locs: &mut Vec<Loc>) -> bool {
+    if s == target {
+        return true;
+    }
+    let n = *ast.stmts.get(s);
+    locs.push(n.loc());
+    match n.kind() {
+        StmtKind::CaseStmt => hunt_to(ast, ast.stmts.case_data(s).sub, target, locs),
+        StmtKind::DefaultStmt => hunt_to(ast, ast.stmts.default_sub(s), target, locs),
+        StmtKind::LabelStmt | StmtKind::AttributedStmt => {
+            hunt_to(ast, StmtId::new(n.b()), target, locs)
+        }
+        StmtKind::CompoundStmt => ast
+            .lists
+            .get(ast.stmts.compound_body(s))
+            .iter()
+            .any(|&c| hunt_to(ast, StmtId::new(c), target, locs)),
+        StmtKind::DoStmt | StmtKind::WhileStmt | StmtKind::ForStmt => {
+            let d = *ast.stmts.loop_data(s);
+            if let Some(i) = d.init {
+                hunt_to(ast, i, target, locs);
+            }
+            d.body.is_some_and(|b| hunt_to(ast, b, target, locs))
+        }
+        StmtKind::IfStmt => {
+            let d = *ast.stmts.if_data(s);
+            if let Some(i) = d.init {
+                hunt_to(ast, i, target, locs);
+            }
+            d.then.into_iter().chain(d.els).any(|x| hunt_to(ast, x, target, locs))
         }
         _ => false,
     }
@@ -1929,6 +2044,9 @@ struct CaseTarget {
     range: Option<(u128, u128)>,
     pre: Vec<Loc>,
     stub_jmp: usize,
+    /// The index of a label nested in a sub-statement of the body
+    /// ([`NestedLabels`]).
+    nested: Option<usize>,
 }
 
 impl Compiler<'_> {
@@ -2222,7 +2340,9 @@ impl Compiler<'_> {
             StmtKind::CompoundStmt => {
                 let children = ast.lists.get(ast.stmts.compound_body(s)).to_vec();
                 let decls = self.block_decls(&children);
+                let hunt = self.hunt_begin(s);
                 self.open_scope(&decls, false);
+                self.hunt_site(s, hunt);
                 for c in children {
                     self.stmt(StmtId::new(c));
                 }
@@ -2251,7 +2371,9 @@ impl Compiler<'_> {
                 let d = *ast.stmts.if_data(s);
                 let kind = ast.stmts.if_kind(s);
                 let decls = self.stmt_decls(d.init, d.cond_var);
+                let hunt = self.hunt_begin(s);
                 self.open_scope(&decls, false);
+                self.hunt_site(s, hunt);
                 if let Some(i) = d.init {
                     self.stmt(i);
                 }
@@ -2407,6 +2529,16 @@ impl Compiler<'_> {
                 }
                 self.next = m;
             }
+            StmtKind::CaseStmt | StmtKind::DefaultStmt if self.is_nested_label(s) => {
+                self.nested_label(s);
+                let ast = self.b.ast();
+                let sub = if n.kind() == StmtKind::CaseStmt {
+                    ast.stmts.case_data(s).sub
+                } else {
+                    ast.stmts.default_sub(s)
+                };
+                self.stmt(sub);
+            }
             StmtKind::CaseStmt | StmtKind::DefaultStmt => {
                 self.trap_loc(
                     n.loc(),
@@ -2491,7 +2623,9 @@ impl Compiler<'_> {
     fn loop_stmt(&mut self, s: StmtId, kind: StmtKind) {
         let d = *self.b.ast().stmts.loop_data(s);
         let decls = self.stmt_decls(d.init, None);
+        let hunt = self.hunt_begin(s);
         self.open_scope(&decls, false);
+        self.hunt_site(s, hunt);
         if let Some(i) = d.init {
             self.stmt(i);
         }
@@ -2500,7 +2634,9 @@ impl Compiler<'_> {
         let break_depth = self.scopes.len();
         if iter {
             let decls: Vec<DeclId> = d.cond_var.into_iter().collect();
+            let hunt = self.hunt_begin(s).map(|_| top);
             self.open_scope(&decls, true);
+            self.hunt_site(s, hunt);
         }
         let mut exit = None;
         if kind != StmtKind::DoStmt {
@@ -2700,6 +2836,82 @@ impl Compiler<'_> {
         self.close_scope();
     }
 
+    /// Where a hunt site of statement `s` begins ([`Compiler::hunt_site`]):
+    /// `Some(pc)` before `s` opens a scope when `s` encloses a label
+    /// nested in the innermost switch's body.
+    fn hunt_begin(&mut self, s: StmtId) -> Option<u32> {
+        let on_path = matches!(self.switches.last(), Some(Some(ns)) if ns.paths.contains_key(&s));
+        on_path.then(|| self.here())
+    }
+
+    /// A hunt site: statement `s`, enclosing nested labels of the
+    /// innermost switch, opened a scope from `begin`. A jump toward one
+    /// of those labels lands at `begin`, so the scope's objects are
+    /// allocated as on entry, then goes on toward its label (one test of
+    /// `sel` on the ordinary path). Nothing is emitted when the scope
+    /// allocated nothing: the jump goes on past it.
+    fn hunt_site(&mut self, s: StmtId, begin: Option<u32>) {
+        let Some(begin) = begin else { return };
+        if self.o.code.len() as u32 == begin {
+            return;
+        }
+        let Some(Some(ns)) = self.switches.last_mut() else { return };
+        let Some(ks) = ns.paths.get(&s).cloned() else { return };
+        let sel = ns.sel;
+        let ks: Vec<usize> = ks.into_iter().filter(|&k| !ns.labels[k].reached).collect();
+        if ks.is_empty() {
+            return;
+        }
+        for &k in &ks {
+            for j in std::mem::take(&mut ns.labels[k].open) {
+                self.o.code[j] = begin;
+            }
+        }
+        let skip = self.jmp_if(sel, false);
+        let mut out = Vec::new();
+        if let [k] = ks[..] {
+            out.push((k, self.jmp()));
+        } else {
+            let t = self.reg();
+            for &k in &ks {
+                self.konst(t, k as u128 + 1);
+                self.emit(Op::ICmp, int_aux(32, false) | cmp::EQ << 9, &[t, sel, t]);
+                out.push((k, self.jmp_if(t, true)));
+            }
+        }
+        self.patch_here(skip);
+        if let Some(Some(ns)) = self.switches.last_mut() {
+            for (k, j) in out {
+                ns.labels[k].open.push(j);
+            }
+        }
+    }
+
+    /// Whether `s` is a label nested in a sub-statement of the innermost
+    /// switch's body.
+    fn is_nested_label(&self, s: StmtId) -> bool {
+        matches!(self.switches.last(), Some(Some(ns)) if ns.labels.iter().any(|l| l.stmt == s))
+    }
+
+    /// The nested label `s` ([`Compiler::is_nested_label`]): the jumps
+    /// toward it land on its pad, which clears `sel`.
+    fn nested_label(&mut self, s: StmtId) {
+        let Some(Some(ns)) = self.switches.last() else { return };
+        let Some(k) = ns.labels.iter().position(|l| l.stmt == s) else { return };
+        // The label is before its own step, as a direct child's.
+        let own = self.pending.pop();
+        let label = self.here();
+        self.pending.extend(own);
+        let Some(Some(ns)) = self.switches.last_mut() else { return };
+        let l = &mut ns.labels[k];
+        l.reached = true;
+        let (pad, pad_jmp, open) = (l.pad, l.pad_jmp, std::mem::take(&mut l.open));
+        self.o.code[pad_jmp] = label;
+        for j in open {
+            self.o.code[j] = pad;
+        }
+    }
+
     fn switch_stmt(&mut self, s: StmtId) {
         let ast = self.b.ast();
         let d = *ast.stmts.switch_data(s);
@@ -2710,9 +2922,11 @@ impl Compiler<'_> {
         } else {
             vec![body]
         };
-        // Collect the case labels: direct children of the body and their chains.
+        // Collect the case labels: direct children of the body and their
+        // chains, then those nested in sub-statements of the body.
         let mut targets: Vec<CaseTarget> = Vec::new();
-        let mut nested = false;
+        let mut nested: Vec<StmtId> = Vec::new();
+        let mut paths: FxHashMap<StmtId, Vec<usize>> = FxHashMap::default();
         let mut pre = Vec::new();
         if body_is_compound {
             pre.push(ast.stmts.get(body).loc());
@@ -2723,12 +2937,7 @@ impl Compiler<'_> {
             loop {
                 let k = ast.stmts.get(cur).kind();
                 let (range, sub) = match k {
-                    StmtKind::CaseStmt => {
-                        let cd = *ast.stmts.case_data(cur);
-                        let lo = eval_int(ast, cd.lhs).unwrap_or(0);
-                        let hi = cd.rhs.and_then(|r| eval_int(ast, r)).unwrap_or(lo);
-                        (Some((lo, hi)), cd.sub)
-                    }
+                    StmtKind::CaseStmt => (case_range(ast, cur), ast.stmts.case_data(cur).sub),
                     StmtKind::DefaultStmt => (None, ast.stmts.default_sub(cur)),
                     // `[[likely]] case 1:`: one step on the way in.
                     _ if attributed_label(ast, cur) => {
@@ -2736,14 +2945,27 @@ impl Compiler<'_> {
                         cur = ast.stmts.sub_stmt(cur);
                         continue;
                     }
-                    _ => {
-                        nested |= has_case(ast, cur);
-                        break;
-                    }
+                    _ => break,
                 };
-                targets.push(CaseTarget { stmt: cur, range, pre: chain.clone(), stub_jmp: 0 });
+                targets.push(CaseTarget {
+                    stmt: cur,
+                    range,
+                    pre: chain.clone(),
+                    stub_jmp: 0,
+                    nested: None,
+                });
                 chain.push(ast.stmts.get(cur).loc());
                 cur = sub;
+            }
+            // The labels nested in the child's statement, each reached
+            // after the steps of hunting through it.
+            let first = nested.len();
+            nested_labels(ast, cur, &mut Vec::new(), &mut nested, &mut paths);
+            for (i, &l) in nested.iter().enumerate().skip(first) {
+                let mut at = chain.clone();
+                hunt_to(ast, cur, l, &mut at);
+                let range = case_range(ast, l);
+                targets.push(CaseTarget { stmt: l, range, pre: at, stub_jmp: 0, nested: Some(i) });
             }
             hunt_cost(ast, c, &mut pre);
         }
@@ -2764,10 +2986,6 @@ impl Compiler<'_> {
         let c = if wide_cond { self.wide_place(d.cond) } else { self.rv(d.cond) };
         // [stmt.pre]/4 (P0963): tuple-like bindings after the condition.
         self.cond_bindings(d.cond_var);
-        if nested {
-            let loc = self.b.ast().stmts.get(s).loc();
-            self.trap_loc(loc, "kiln: a 'case' label nested in a sub-statement of the switch body is not supported yet".into());
-        }
         let block_decls = if body_is_compound {
             let ch: Vec<u32> = children.iter().map(|s| s.index()).collect();
             self.block_decls(&ch)
@@ -2775,6 +2993,15 @@ impl Compiler<'_> {
             Vec::new()
         };
         self.open_scope(&block_decls, false);
+        // A label nested in a sub-statement is reached by a jump that
+        // descends through the scope entries on its way: `sel` names it.
+        let sel = if nested.is_empty() {
+            None
+        } else {
+            let r = self.reg();
+            self.konst(r, 0);
+            Some(r)
+        };
         // Dispatch.
         let t = self.reg();
         let mut stubs: Vec<(usize, usize)> = Vec::new();
@@ -2823,11 +3050,30 @@ impl Compiler<'_> {
             stubs.push((di, none));
         }
         // Stubs charging the hunt's steps.
+        let mut labels: Vec<NestedLabel> = nested
+            .iter()
+            .map(|&stmt| NestedLabel { stmt, open: Vec::new(), pad: 0, pad_jmp: 0, reached: false })
+            .collect();
         for &(i, j) in &stubs {
             self.patch_here(j);
             let pre = targets[i].pre.clone();
             self.pending.extend(pre);
-            targets[i].stub_jmp = self.jmp();
+            match (targets[i].nested, sel) {
+                (Some(k), Some(sel)) => {
+                    self.konst(sel, k as u128 + 1);
+                    let j = self.jmp();
+                    labels[k].open.push(j);
+                }
+                _ => targets[i].stub_jmp = self.jmp(),
+            }
+        }
+        // The nested labels' pads, out of line.
+        if let Some(sel) = sel {
+            for l in &mut labels {
+                l.pad = self.here();
+                self.konst(sel, 0);
+                l.pad_jmp = self.jmp();
+            }
         }
         let mut end_jumps = Vec::new();
         if default.is_none() {
@@ -2841,6 +3087,7 @@ impl Compiler<'_> {
             depth,
             cont_depth: depth,
         });
+        self.switches.push(sel.map(|sel| NestedLabels { sel, labels, paths }));
         for &ch in &children {
             let mut cur = ch;
             loop {
@@ -2871,14 +3118,35 @@ impl Compiler<'_> {
             }
         }
         let b = self.breakables.pop().map(|b| b.breaks).unwrap_or_default();
+        let ns = self.switches.pop().flatten();
         self.close_scope();
         let end = self.here();
         for j in b.into_iter().chain(end_jumps) {
             self.patch(j, end);
         }
+        // A nested label the body did not compile (one in a statement
+        // the descent does not enter, which sema rejects): selecting it
+        // fails the evaluation.
+        if let Some(ns) = ns
+            && ns.labels.iter().any(|l| !l.reached)
+        {
+            let over = self.jmp();
+            for l in ns.labels.iter().filter(|l| !l.reached) {
+                let at = self.here();
+                for &j in l.open.iter().chain([&l.pad_jmp]) {
+                    self.patch(j, at);
+                }
+                let loc = self.b.ast().stmts.get(l.stmt).loc();
+                self.trap_loc(
+                    loc,
+                    "kiln: a 'case' label in this statement is not supported yet".into(),
+                );
+            }
+            self.patch_here(over);
+        }
         // A target whose stub was never reached by the linear pass (cannot
         // happen for direct children) would jump to 0: point it at the end.
-        for tg in &targets {
+        for tg in targets.iter().filter(|t| t.nested.is_none()) {
             if tg.stub_jmp != 0 && self.o.code[tg.stub_jmp] == 0 {
                 self.o.code[tg.stub_jmp] = end;
             }
@@ -5248,6 +5516,14 @@ impl Compiler<'_> {
             return self.trap(e, "");
         }
         match n.kind() {
+            // A valued immediate invocation is a leaf (WP-1140): a scalar
+            // goes through `rv_inner`'s value below, an aggregate is
+            // copied from its thawed value.
+            ExprKind::ConstantExpr if let Some((cv, aggr)) = self.valued_leaf(e, ty) => {
+                if aggr {
+                    return self.thaw_obj_init(e, cv, p, ty);
+                }
+            }
             ExprKind::ParenExpr | ExprKind::ConstantExpr => {
                 let op = self.ast().exprs.operand(e);
                 return self.init_inner(op, p, ty);
@@ -6577,6 +6853,48 @@ impl Compiler<'_> {
             e,
             loc,
         );
+    }
+
+    /// The stored value of immediate invocation `e` initializing an
+    /// object of type `ty`, when it is used as a leaf (WP-1140; spec/oven.md
+    /// "Valued immediate invocations"): `(cv, true)` for a class object
+    /// copied from its thawed value, `(cv, false)` for a scalar
+    /// `rv_inner` reads. A value is stored only once the invocation has
+    /// been evaluated successfully, so it is final. `None` (the call is
+    /// evaluated again): a glvalue, a vector, complex or wide integer, and
+    /// a class with a `mutable` member (its thawed copy is not readable,
+    /// [expr.const]/5.9) or a virtual table pointer.
+    fn valued_leaf(&self, e: ExprId, ty: OTy) -> Option<(kiln_ast::ConstValueId, bool)> {
+        let ast = self.ast();
+        if self.node(e).value_category().is_glvalue() {
+            return None;
+        }
+        let cv = ast.exprs.constant_value(e)?;
+        if let Some(s) = ast.consts.scalar(cv) {
+            let ok = (scalar_bits(&s).is_some() || matches!(s, Scalar::Pointer { .. }))
+                && !self.o.types.is_aggregate(ty)
+                && self.o.types.wide(ty).is_none()
+                && self.lanes(ty).is_none()
+                && self.cx_elem(ty).is_none();
+            return ok.then_some((cv, false));
+        }
+        let info = self.o.types.info(ty);
+        (ast.consts.aggregate(cv).is_some()
+            && matches!(info.kind, TyKind::Record { .. })
+            && !info.has_mutable
+            && !info.has_vptr)
+            .then_some((cv, true))
+    }
+
+    /// Initializes the object of type `ty` at `p` from the stored value
+    /// `cv` of immediate invocation `e`: a copy of its thawed static object
+    /// ([`Self::valued_leaf`]).
+    fn thaw_obj_init(&mut self, e: ExprId, cv: kiln_ast::ConstValueId, p: u32, ty: OTy) {
+        let r = self.reg();
+        let raw = kiln_ast::RawId::raw(cv);
+        let loc = self.begin(e);
+        self.emit_site(Op::Builtin, crate::kbc::bi::THAW_OBJ, &[r, r, r, r, raw, ty.0], e, loc);
+        self.emit_at(Op::Copy, 1, &[p, r, ty.0], e);
     }
 }
 
