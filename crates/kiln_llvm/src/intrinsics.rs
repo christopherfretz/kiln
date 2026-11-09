@@ -379,6 +379,12 @@ pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
 }
 
+/// `i64 @llvm.readcyclecounter()`: `nocallback nofree nosync nounwind
+/// willreturn`, as LLVM declares it (WP-1057).
+pub fn readcyclecounter(m: &mut Module) -> FuncId {
+    declare(m, "llvm.readcyclecounter", TypeId::I64, &[], &[], Shape::Basic(None))
+}
+
 /// `void @llvm.instrprof.increment(ptr, i64, i32, i32)` (WP-941):
 /// `nounwind`, as LLVM 19 declares it.
 pub fn instrprof_increment(m: &mut Module) -> FuncId {

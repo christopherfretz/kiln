@@ -708,7 +708,7 @@ pub(crate) fn finish_deps(
 /// `__sigsetjmp`, `__finite`, `__exp10`, Apple libm's `__sinpi` family,
 /// `std::__addressof`, `<ia32intrin.h>`'s `__rdtsc`). Kiln calls the
 /// declared function, so they keep clang's answer. Sorted.
-const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
+pub const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
     "__addressof",
     "__cospi",
     "__cospif",
@@ -723,6 +723,16 @@ const RESERVED_LIBRARY_BUILTINS: &[&str] = &[
     "__sinpif",
     "__tanpi",
     "__tanpif",
+];
+
+/// WP-1057: the `__builtin_` keywords of clang's `__has_builtin` table
+/// kiln's parser does not implement, so a use is a "use of undeclared
+/// identifier": `__has_builtin` answers 0 for them. Sorted.
+pub const UNPARSED_KEYWORD_BUILTINS: &[&str] = &[
+    "__builtin_available",
+    "__builtin_omp_required_simd_align",
+    "__builtin_ptrauth_type_discriminator",
+    "__builtin_vectorelements",
 ];
 
 /// clang 19's feature answers with kiln's builtin staging applied
@@ -755,12 +765,16 @@ impl StagedFeatures {
     }
 
     /// Whether `name`, which clang answers `__has_builtin` for, is a
-    /// builtin kiln neither handles (a keyword, a preprocessor builtin, a
-    /// staged sema builtin, a declared function) nor lowers. A library
+    /// builtin kiln neither handles (a keyword other than
+    /// [`UNPARSED_KEYWORD_BUILTINS`], a preprocessor builtin, a staged
+    /// sema builtin, a declared function) nor lowers. A library
     /// builtin outside the reserved `__` namespace (`malloc`,
     /// `std::move`, `_Exit`) is a call to the function its header
     /// declares, so it keeps clang's answer.
     fn unavailable_builtin(&self, name: &str) -> bool {
+        if UNPARSED_KEYWORD_BUILTINS.binary_search(&name).is_ok() {
+            return true;
+        }
         let compat = self.0.compat().major();
         let declared = kiln_ast::decl::builtin::by_name_at(name, compat).is_some()
             || kiln_ast::decl::builtin::lib_by_name(name).is_some();

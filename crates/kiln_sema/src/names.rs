@@ -152,6 +152,16 @@ impl<'s> SemaNames<'s> {
                     chain.push(self.simple(c).unwrap_or_else(|| "(anonymous namespace)".into()));
                     name_in_scope = n.name();
                 }
+                // [dcl.enum]/11: an unscoped enumerator is declared in the
+                // scope enclosing its enumeration, so clang's
+                // `printNestedNameSpecifier` skips an unscoped enumeration
+                // (`S::m`, not `S::(unnamed enum ...)::m`; WP-929).
+                DeclKind::Enum
+                    if !self
+                        .ast
+                        .decls
+                        .enumeration(self.ast.definition(c).unwrap_or(c))
+                        .is_some_and(kiln_ast::decl::EnumData::is_scoped) => {}
                 DeclKind::CXXRecord | DeclKind::Enum => {
                     let mut s = String::new();
                     self.write_unscoped(c, &mut s);

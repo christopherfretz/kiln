@@ -858,6 +858,8 @@ impl Compiler<'_> {
             | id::RETURN_ADDRESS
             // WP-782: nor the thread pointer.
             | id::THREAD_POINTER
+            // WP-1057: nor the cycle counter.
+            | id::READCYCLECOUNTER
             // WP-610: nor `__builtin_prefetch`.
             | id::PREFETCH
             // WP-630: nor the nontemporal accesses and
