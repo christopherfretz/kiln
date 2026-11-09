@@ -3482,7 +3482,7 @@ impl Compiler<'_> {
                 let xty = self.ety(x);
                 self.inc_dec(place, xty, op, Some(dst), e);
             }
-            _ => self.unsupported(e),
+            UnaryOp::Coawait => self.unsupported(e),
         }
     }
 

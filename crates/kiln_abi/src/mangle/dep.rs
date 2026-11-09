@@ -606,9 +606,10 @@ impl Mangler<'_, '_> {
                 self.float_hex(kind.bits(), bits);
                 imag = std::mem::replace(&mut self.out, saved);
             }
-            ExprKind::IntegerLiteral => match ast.exprs.int_value(sub) {
-                Some(v) => imag = v.to_string(),
-                None => {
+            ExprKind::IntegerLiteral => {
+                if let Some(v) = ast.exprs.int_value(sub) {
+                    imag = v.to_string();
+                } else {
                     let Some(c) = ast.exprs.literal_const(sub) else { return false };
                     let kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Int {
                         bits,
@@ -620,7 +621,7 @@ impl Mangler<'_, '_> {
                     // A literal is never negative: its value as unsigned.
                     bits.write_decimal(false, &mut imag);
                 }
-            },
+            }
             _ => return false,
         }
         self.out.push('L');
