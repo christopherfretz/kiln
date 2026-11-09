@@ -937,6 +937,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
 | WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | in progress (operator 11-09: gcc is the default) |
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
+| WP-1127 | spec/driver.md truth-up: every accepted/ignored/rejected flag claim checked against the driver code | WP-1125 | in progress |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
 | WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
