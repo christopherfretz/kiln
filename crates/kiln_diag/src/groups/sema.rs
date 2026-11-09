@@ -165,6 +165,7 @@ UnreachableCodeBreak = "unreachable-code-break" [];
 UnreachableCodeFallthrough = "unreachable-code-fallthrough" [];
 UnreachableCodeLoopIncrement = "unreachable-code-loop-increment" [];
 UnreachableCodeReturn = "unreachable-code-return" [];
+UnsupportedFriend = "unsupported-friend" [];
 UnusablePartialSpecialization = "unusable-partial-specialization" [];
 // ----- WP-217 (unused / fallthrough / constant-conversion warnings)
 UnusedButSetParameter = "unused-but-set-parameter" [];

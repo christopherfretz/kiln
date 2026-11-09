@@ -225,6 +225,11 @@ namespace of the definition.
 `private` for `class`, else `public`); cold map `friends: record → ListId`
 (befriended functions' first decls and classes), built at `}`, used only by
 access checks — friend name lookup goes through the namespace table (§2.3).
+A [temp.friend]/5 friend (`template<class T> friend class A<T>::Member;`,
+`template<class T> friend void A<T>::f();`) is its `FriendDecl` in that list;
+whether it befriends a member of a specialization of `A` is decided by
+deduction when the context is built (`EffectiveContext::member_friends`;
+sema-templates.md §4.8, WP-1072).
 In a class nested in a class template (or a partial specialization),
 `friend class X;`, `friend X;` and `friend class X<P...>;` naming the
 enclosing template's injected-class-name or its own parameters befriend the
