@@ -891,6 +891,12 @@ pub(super) enum Root {
     Init(u32, ExprId),
     /// Global parameter index, default argument.
     Default(u32, ExprId),
+    /// Field record, bit-field width.
+    FieldWidth(u32, ExprId),
+    /// Field record, default member initializer.
+    FieldInit(u32, ExprId),
+    /// Constructor record, ctor-initializer position, initializer.
+    CtorInit(u32, u32, ExprId),
 }
 
 /// The writer's body state.
@@ -900,6 +906,9 @@ pub(super) struct BodyState {
     pub(super) params: FxHashMap<DeclId, u32>,
     pub(super) param_pos: Vec<(u32, u32)>,
     pub(super) roots: Vec<Root>,
+    /// Base-specifiers (global index) of carried class definitions:
+    /// (class record, position).
+    pub(super) bspec: FxHashMap<u32, (u32, u32)>,
     emap: FxHashMap<ExprId, u32>,
     smap: FxHashMap<StmtId, u32>,
     cmap: FxHashMap<ConstValueId, u32>,
@@ -1463,7 +1472,17 @@ impl Writer<'_, '_, '_> {
             }
             _ => self.var_payload(d, i)?,
         };
-        self.img.decls.push(DeclRec { flags, owner, name, ctx, lexical, loc, prev: NONE, payload });
+        self.img.decls.push(DeclRec {
+            flags,
+            owner,
+            access: 0,
+            name,
+            ctx,
+            lexical,
+            loc,
+            prev: NONE,
+            payload,
+        });
         self.recs.insert(d, i);
         Ok(i)
     }
@@ -1493,6 +1512,27 @@ impl Writer<'_, '_, '_> {
                         &mut self.img.decls[rec as usize].payload
                     {
                         params[k as usize].default = i;
+                    }
+                }
+                Root::FieldWidth(rec, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Field { width, .. } = &mut self.img.decls[rec as usize].payload
+                    {
+                        *width = i;
+                    }
+                }
+                Root::FieldInit(rec, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Field { init, .. } = &mut self.img.decls[rec as usize].payload {
+                        *init = i;
+                    }
+                }
+                Root::CtorInit(rec, k, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Function { inits, .. } =
+                        &mut self.img.decls[rec as usize].payload
+                    {
+                        inits[k as usize].init = i;
                     }
                 }
             }

@@ -398,6 +398,34 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
     (spec.bits() == bits).then_some(spec)
 }
 
+/// `Access` from its `u8` (validated `<= 3`).
+fn access_of(a: u8) -> Access {
+    match a {
+        1 => Access::Public,
+        2 => Access::Protected,
+        3 => Access::Private,
+        _ => Access::None,
+    }
+}
+
+/// `TagKind` from its `u8` (validated `<= 2`).
+fn tag_of(t: u8) -> TagKind {
+    match t {
+        1 => TagKind::Class,
+        2 => TagKind::Union,
+        _ => TagKind::Struct,
+    }
+}
+
+/// `CtorInitKind` from a carried initializer's kind (0, 2 or 4).
+fn init_kind_of(k: u8) -> CtorInitKind {
+    match k {
+        0 => CtorInitKind::Base,
+        2 => CtorInitKind::Field,
+        _ => CtorInitKind::Delegating,
+    }
+}
+
 /// Variable specifier bits carried: storage (none, static, extern), the
 /// initialization style, `constexpr`, `constinit`, `inline`, NRVO and
 /// range-`for` variables. Thread-local storage is not carried yet.
@@ -1061,6 +1089,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
+                )
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -1326,6 +1355,17 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
 
 type W<T> = Result<T, &'static str>;
 
+/// The header fields every record shares (see [`DeclRec`]).
+struct Head {
+    flags: u8,
+    access: u8,
+    name: u32,
+    ctx: u32,
+    lexical: u32,
+    loc: u32,
+    prev: u32,
+}
+
 struct Writer<'s, 'a, 'b> {
     s: &'s Sema<'a, 'b>,
     main: FileId,
@@ -1434,6 +1474,7 @@ impl Writer<'_, '_, '_> {
                 TyRec::Func { ret, params, info, exc }
             }
             TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
+            TypeView::Record(d) => TyRec::Record(self.type_decl(self.s.ast.first(d), t)?),
             TypeView::Typedef { .. } if self.s.builtin_sugar().iter().any(|q| q.ty() == t) => {
                 let k = self.s.builtin_sugar().iter().position(|q| q.ty() == t).unwrap_or(0);
                 TyRec::Sugar(k as u8)
@@ -1457,9 +1498,50 @@ impl Writer<'_, '_, '_> {
         Ok(i)
     }
 
-    /// Checks the header fields every record shares; returns
-    /// (flags, name, ctx, lexical, loc, prev).
-    fn head(&mut self, d: DeclId) -> W<(u8, u32, u32, u32, u32, u32)> {
+    /// The name word of `d`: a name index, [`NONE`], or a special name
+    /// (constructor, destructor, conversion, operator) the importer
+    /// recomputes from the class and the function type.
+    fn name_word(&mut self, d: DeclId) -> W<u32> {
+        use kiln_ast::names::DeclNameView as V;
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        let class_canon = || {
+            n.ctx()
+                .and_then(|c| ast.decls.get(c).ty())
+                .map(|q| ast.types.canonical(q).ty())
+        };
+        Ok(match ast.names.view(n.name()) {
+            V::Empty => NONE,
+            V::Identifier(sym) => {
+                let s = ast.symbols().as_str(sym).to_owned();
+                if reserved(&s) || s == "std" || s == "main" {
+                    return Err("a reserved or special name");
+                }
+                Self::name_ix(&mut self.names, &mut self.img.names, &s)
+            }
+            V::Operator(op) => N_OP + u32::from(op as u8),
+            V::Constructor(t) if n.kind() == DeclKind::CXXConstructor && class_canon() == Some(t) => {
+                N_CTOR
+            }
+            V::Destructor(t) if n.kind() == DeclKind::CXXDestructor && class_canon() == Some(t) => {
+                N_DTOR
+            }
+            V::Conversion(q) if n.kind() == DeclKind::CXXConversion => {
+                let ret = n.ty().and_then(|f| match ast.types.view(f.ty()) {
+                    TypeView::Function(p) => Some(ast.types.canonical(p.ret())),
+                    _ => None,
+                });
+                if ret != Some(q) {
+                    return Err("a conversion function declared through a typedef");
+                }
+                N_CONV
+            }
+            _ => return Err("a declaration not named by an identifier"),
+        })
+    }
+
+    /// Checks the header fields every record shares.
+    fn head(&mut self, d: DeclId) -> W<Head> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let extra = n.flags().bits() & !(DECL_FLAGS | DeclFlags::HAS_LEXICAL_CTX.bits());
@@ -1467,24 +1549,16 @@ impl Writer<'_, '_, '_> {
             return Err("an implicit, invalid or attributed declaration");
         }
         let m = n.misc();
-        if m.access() != Access::None
-            || m.friend() != FriendKind::None
-            || m.local_extern()
+        if m.friend() != FriendKind::None {
+            return Err("a friend declaration");
+        }
+        if m.local_extern()
             || m.name_independent()
             || m.module_ownership() != ModuleOwnership::Unowned
         {
-            return Err("a declaration with access, friendship or local scope");
+            return Err("a declaration with local scope");
         }
-        let name = match n.name() {
-            x if x == DeclName::EMPTY => NONE,
-            x => {
-                let s = self.ident(x).ok_or("a declaration not named by an identifier")?;
-                if reserved(&s) || s == "std" || s == "main" {
-                    return Err("a reserved or special name");
-                }
-                Self::name_ix(&mut self.names, &mut self.img.names, &s)
-            }
-        };
+        let access = m.access() as u8;
         let ctx = match n.ctx() {
             Some(c) if c == ast.tu => NONE,
             Some(c) => {
@@ -1510,7 +1584,9 @@ impl Writer<'_, '_, '_> {
                 .copied()
                 .ok_or("a redeclaration of an entity outside the image")?,
         };
-        Ok((n.flags().bits() & DECL_FLAGS, name, ctx, lexical, loc, prev))
+        let flags = n.flags().bits() & DECL_FLAGS;
+        let name = self.name_word(d)?;
+        Ok(Head { flags, access, name, ctx, lexical, loc, prev })
     }
 
     #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
@@ -1527,59 +1603,11 @@ impl Writer<'_, '_, '_> {
                 Payload::Namespace
             }
             DeclKind::Export => Payload::Export,
-            DeclKind::Function => {
-                let fd = *ast.decls.function(d).ok_or("a malformed function")?;
-                if !fd.templ.is_none() {
-                    return Err("a template");
-                }
-                let s = fd.spec;
-                let bits = s.bits();
-                if fn_spec(bits) != Some(s) {
-                    return Err("a deleted, defaulted, coroutine or contract-checked function");
-                }
-                if ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some() {
-                    return Err("a builtin or library function");
-                }
-                let fty = n.ty().ok_or("a malformed function")?;
-                if !matches!(ast.types.view(fty.ty()), TypeView::Function(_)) {
-                    return Err("a function declared through a typedef");
-                }
-                let ty = self.qref(fty)?;
-                let plist: Vec<DeclId> = ast.lists.iter::<DeclId>(fd.params).collect();
-                let mut params = Vec::with_capacity(plist.len());
-                for p in plist {
-                    let g = self.bs.param_pos.len() as u32;
-                    self.bs.param_pos.push((i, params.len() as u32));
-                    if self.bs.params.insert(p, g).is_some() {
-                        return Err("a parameter shared between declarations");
-                    }
-                    params.push(self.param(p, g)?);
-                }
-                let nproto = match self.img.types.get((ty.ty - BUILTINS - 1) as usize) {
-                    Some(TyRec::Func { params, .. }) => params.len(),
-                    _ => usize::MAX,
-                };
-                if nproto != params.len() {
-                    return Err("a function whose parameters do not match its type");
-                }
-                let body = match fd.body {
-                    None => FnBody::None,
-                    Some(b) => {
-                        let st = &self.s.ast.stmts;
-                        if st.get(b).kind() != StmtKind::CompoundStmt {
-                            return Err("a function-try-block");
-                        }
-                        if Self::carries_body(s) {
-                            // Patched by `walk_roots`.
-                            self.bs.roots.push(Root::Body(i, b));
-                            FnBody::None
-                        } else {
-                            FnBody::Braces(self.loc(st.get(b).loc())?, self.loc(st.rbrace(b))?)
-                        }
-                    }
-                };
-                Payload::Function { ty, spec: bits, params, body }
-            }
+            DeclKind::Function
+            | DeclKind::CXXMethod
+            | DeclKind::CXXConstructor
+            | DeclKind::CXXDestructor
+            | DeclKind::CXXConversion => self.function(d, i)?,
             DeclKind::Var => self.var_payload(d, i)?,
             DeclKind::Enum => {
                 let ed = *ast.decls.enumeration(d).ok_or("a malformed enumeration")?;
@@ -1638,11 +1666,280 @@ impl Writer<'_, '_, '_> {
                     underlying: self.qref(td.underlying)?,
                 }
             }
-            DeclKind::CXXRecord
-            | DeclKind::ClassTemplateSpecialization
-            | DeclKind::ClassTemplatePartialSpecialization => return Err("a class"),
+            DeclKind::CXXRecord => self.class(d, i)?,
+            DeclKind::Field => {
+                let fd = *ast.decls.field(d).ok_or("a malformed field")?;
+                if fd.flags & !FIELD_FLAGS != 0 {
+                    return Err("a field with [[no_unique_address]]");
+                }
+                if n.name() == DeclName::EMPTY && fd.bit_width.is_none() {
+                    return Err("an anonymous union or struct member");
+                }
+                // Patched by `walk_roots`.
+                if let Some(e) = fd.bit_width {
+                    self.bs.roots.push(Root::FieldWidth(i, e));
+                }
+                if let Some(e) = fd.init {
+                    self.bs.roots.push(Root::FieldInit(i, e));
+                }
+                let ty = self.qref(n.ty().ok_or("a malformed field")?)?;
+                Payload::Field { ty, flags: fd.flags, width: NONE, init: NONE }
+            }
+            DeclKind::AccessSpec => Payload::Access,
             _ => return Err("a declaration the image does not carry yet"),
         })
+    }
+
+    /// Rejects declarations whose cold side data the image does not carry.
+    fn cold_gate(&self, d: DeclId) -> W<()> {
+        let c = &self.s.ast.decls.cold;
+        if c.friends.get(d).is_some_and(|&l| !self.s.ast.lists.is_empty(l)) {
+            return Err("a friend declaration");
+        }
+        if c.overrides.contains(d) || c.key_function.contains(d) || c.dtor_delete.contains(d)
+            || c.dtor_delete_this.contains(d)
+        {
+            return Err("a virtual function");
+        }
+        if c.inheriting_ctor.contains(d) || c.inherited_ctor.contains(d) {
+            return Err("an inherited constructor");
+        }
+        if c.typedef_for_anon.contains(d) {
+            return Err("a typedef naming an unnamed class");
+        }
+        if c.delete_message.contains(d)
+            || c.explicit_expr.contains(d)
+            || c.record_pack.contains(d)
+            || c.requires_clause.contains(d)
+            || c.contracts.contains(d)
+            || c.asm_label.contains(d)
+            || c.alignment.contains(d)
+            || c.deprecation.contains(d)
+            || c.instantiated_from.contains(d)
+            || c.injection_point.contains(d)
+            || c.conversion_spec_target.contains(d)
+        {
+            return Err("a declaration with side data the image does not carry");
+        }
+        Ok(())
+    }
+
+    /// A function record (namespace scope or a member), record `i`.
+    #[allow(clippy::too_many_lines)] // the checks, the type, parameters, body and initializers
+    fn function(&mut self, d: DeclId, i: u32) -> W<Payload> {
+        let s = self.s;
+        let ast = &s.ast;
+        let n = ast.decls.get(d);
+        let kind = FN_KINDS.iter().position(|&k| k == n.kind()).ok_or("a malformed function")?;
+        let fd = *ast.decls.function(d).ok_or("a malformed function")?;
+        if !fd.templ.is_none() {
+            return Err("a template");
+        }
+        let spec = fd.spec;
+        let bits = spec.bits();
+        if spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final() {
+            return Err("a virtual function");
+        }
+        if fn_spec(bits) != Some(spec) {
+            return Err("a coroutine, contract-checked or implicitly defaulted function");
+        }
+        if ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some() {
+            return Err("a builtin or library function");
+        }
+        if s.inh_ctor_base.contains_key(&d) {
+            return Err("an inherited constructor");
+        }
+        if kind == 1
+            && matches!(
+                ast.names.view(n.name()),
+                kiln_ast::names::DeclNameView::Operator(
+                    OverloadedOperator::New
+                        | OverloadedOperator::Delete
+                        | OverloadedOperator::ArrayNew
+                        | OverloadedOperator::ArrayDelete
+                )
+            )
+        {
+            return Err("a class-specific allocation function");
+        }
+        let first = ast.first(d) == d;
+        // An explicitly defaulted special member on its first
+        // declaration: the importer defines it again (its body and
+        // ctor-initializers are synthesized, spec/modules.md §11.11).
+        let defaulted = spec.defaulted() == Defaulted::Explicit;
+        if defaulted && (!first || s.special_kind_of(d).is_none()) {
+            return Err("a defaulted comparison or an out-of-line defaulted function");
+        }
+        let fty = n.ty().ok_or("a malformed function")?;
+        let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
+            return Err("a function declared through a typedef");
+        };
+        let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d));
+        let ty = if deferred {
+            // The exception specification names the function itself:
+            // build the type without it (the importer defers it again).
+            let ps: Vec<QualType> = ast.types.params(&proto).to_vec();
+            let info = proto.info().bits();
+            let ret = self.qref(proto.ret())?;
+            let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
+            let t = BUILTINS + 1 + self.img.types.len() as u32;
+            self.img.types.push(TyRec::Func { ret, params, info, exc: 0 });
+            QRef { ty: t, quals: fty.quals_bits() }
+        } else {
+            self.qref(fty)?
+        };
+        if ty.quals != 0 {
+            return Err("a function declared through a typedef");
+        }
+        let plist: Vec<DeclId> = ast.lists.iter::<DeclId>(fd.params).collect();
+        let mut params = Vec::with_capacity(plist.len());
+        for p in plist {
+            let g = self.bs.param_pos.len() as u32;
+            self.bs.param_pos.push((i, params.len() as u32));
+            if self.bs.params.insert(p, g).is_some() {
+                return Err("a parameter shared between declarations");
+            }
+            params.push(self.param(p, g)?);
+        }
+        let nproto = match self.img.types.get((ty.ty - BUILTINS - 1) as usize) {
+            Some(TyRec::Func { params, .. }) => params.len(),
+            _ => usize::MAX,
+        };
+        if nproto != params.len() {
+            return Err("a function whose parameters do not match its type");
+        }
+        let mut inits = Vec::new();
+        let body = match fd.body {
+            _ if defaulted => FnBody::None,
+            None => FnBody::None,
+            Some(b) => {
+                let st = &s.ast.stmts;
+                if st.get(b).kind() != StmtKind::CompoundStmt {
+                    return Err("a function-try-block");
+                }
+                if Self::carries_body(spec) {
+                    // Patched by `walk_roots`.
+                    self.bs.roots.push(Root::Body(i, b));
+                    if kind == 2 {
+                        inits = self.ctor_inits(d, i)?;
+                    }
+                    FnBody::None
+                } else {
+                    if kind != 0 {
+                        return Err("an out-of-line member function definition");
+                    }
+                    FnBody::Braces(self.loc(st.get(b).loc())?, self.loc(st.rbrace(b))?)
+                }
+            }
+        };
+        if inits.is_empty() && !defaulted && ast.decls.ctor_inits(d, &ast.lists).len() != 0 {
+            return Err("ctor-initializers of a constructor without a carried body");
+        }
+        Ok(Payload::Function { kind: kind as u8, ty, spec: bits, deferred, params, body, inits })
+    }
+
+    /// The ctor-initializers of constructor `d`, record `i`.
+    fn ctor_inits(&mut self, d: DeclId, i: u32) -> W<Vec<InitRec>> {
+        let ast = &self.s.ast;
+        let class = ast.decls.get(d).ctx().ok_or("a malformed constructor")?;
+        let bases: Vec<u32> =
+            ast.decls.record(class).map(|r| ast.lists.get(r.bases).to_vec()).unwrap_or_default();
+        let list: Vec<kiln_ast::decl::CtorInit> =
+            ast.decls.ctor_inits(d, &ast.lists).copied().collect();
+        let mut out = Vec::with_capacity(list.len());
+        for (k, x) in list.into_iter().enumerate() {
+            let target = match x.kind {
+                CtorInitKind::Base => {
+                    let pos = bases.iter().position(|&b| {
+                        let q = ast.decls.base_spec(b).ty;
+                        ast.types.canonical(q).ty().index() == x.target
+                    });
+                    pos.ok_or("a ctor-initializer of an indirect base")? as u32
+                }
+                CtorInitKind::Field => {
+                    let f = DeclId::try_new(x.target).ok_or("a malformed ctor-initializer")?;
+                    if ast.decls.get(f).ctx() != Some(class) {
+                        return Err("a ctor-initializer of an anonymous union member");
+                    }
+                    *self.recs.get(&f).ok_or("a ctor-initializer of a field outside the image")?
+                }
+                CtorInitKind::Delegating => 0,
+                CtorInitKind::VirtualBase => return Err("a virtual base class"),
+                CtorInitKind::IndirectField => return Err("an anonymous union member"),
+            };
+            // Patched by `walk_roots`.
+            self.bs.roots.push(Root::CtorInit(i, k as u32, x.init));
+            out.push(InitRec {
+                kind: x.kind as u8,
+                target,
+                written: x.written_index,
+                init: NONE,
+                loc: self.loc(x.loc)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Ends the definition of class record `r` before the next record.
+    fn close_class(&mut self, r: u32) {
+        let end = self.img.decls.len() as u32;
+        if let Payload::Record { def: Some(df), .. } = &mut self.img.decls[r as usize].payload {
+            df.end = end;
+        }
+    }
+
+    /// A class record (`CXXRecord`), record `i`. A definition's `end` is
+    /// patched by `collect` when the class closes.
+    fn class(&mut self, d: DeclId, i: u32) -> W<Payload> {
+        let ast = &self.s.ast;
+        let rd = ast.decls.record(d).ok_or("a malformed class")?;
+        if !rd.templ.is_none() || rd.lambda.is_some() {
+            return Err("a template or closure type");
+        }
+        self.cold_gate(d)?;
+        let tag = rd.tag as u8;
+        if ast.definition(d) != Some(d) {
+            return Ok(Payload::Record { tag, def: None });
+        }
+        let b = rd.defn;
+        if !b.contains(DefinitionBits::COMPLETE) || b.contains(DefinitionBits::BEING_DEFINED) {
+            return Err("an incomplete class definition");
+        }
+        if b.contains(DefinitionBits::POLYMORPHIC) {
+            return Err("a polymorphic class");
+        }
+        if b.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
+            return Err("a virtual base class");
+        }
+        if b.contains(DefinitionBits::HAS_INHERITED_CTOR)
+            || b.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
+        {
+            return Err("an inherited constructor or assignment operator");
+        }
+        if b.contains(DefinitionBits::ANONYMOUS) {
+            return Err("an anonymous union or struct member");
+        }
+        if crate::class::SpecialKind::any_needs_overload(b) {
+            return Err("a class whose implicit special members need overload resolution");
+        }
+        let bits = b.without(DefinitionBits::COMPLETE).bits();
+        if bits & !DEF_BITS != 0 {
+            return Err("a class with properties the image does not carry yet");
+        }
+        let list: Vec<u32> = ast.lists.get(rd.bases).to_vec();
+        let mut bases = Vec::with_capacity(list.len());
+        for (pos, g) in list.into_iter().enumerate() {
+            let bs = *ast.decls.base_spec(g);
+            if bs.is_virtual {
+                return Err("a virtual base class");
+            }
+            if bs.pack_expansion {
+                return Err("a pack expansion");
+            }
+            let _ = self.bs.bspec.insert(g, (i, pos as u32));
+            bases.push(BaseRec { ty: self.qref(bs.ty)?, loc: self.loc(bs.loc)?, access: bs.access as u8 });
+        }
+        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, bases }) })
     }
 
     /// Parameter `p`, the image's parameter `g`.
@@ -1724,6 +2021,10 @@ impl Writer<'_, '_, '_> {
         }
         self.img.main = sm.file_name(self.main).to_owned();
         let mut open_enum: Option<u32> = None;
+        // The open class definitions, innermost last; the implicitly
+        // declared special members, recorded after every class closed.
+        let mut open: Vec<u32> = Vec::new();
+        let mut implicit: Vec<(DeclId, u32, u8)> = Vec::new();
         for d in ast.decls.ids() {
             let n = ast.decls.get(d);
             let o = mt.owner(d);
@@ -1748,30 +2049,98 @@ impl Writer<'_, '_, '_> {
                 // Checked when the module was compiled; nothing to import.
                 continue;
             }
+            if n.has(DeclFlags::IMPLICIT) {
+                // An implicitly declared special member: the importer
+                // declares it again (spec/modules.md §11.11 "Classes").
+                if n.kind() == DeclKind::IndirectField {
+                    return Err("an anonymous union or struct member");
+                }
+                let k = s.special_kind_of(d).ok_or("an implicit declaration")?;
+                let implicit_default = ast
+                    .decls
+                    .function(d)
+                    .is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
+                let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
+                match class {
+                    Some(c) if implicit_default && n.flags().bits() & !DECL_FLAGS == DeclFlags::IMPLICIT.bits() => {
+                        implicit.push((d, c, k as u8));
+                    }
+                    _ => return Err("an implicit declaration"),
+                }
+                continue;
+            }
             kind_gate(n.kind())?;
-            let (flags, name, ctx, lexical, loc, prev) = self.head(d)?;
+            self.cold_gate(d)?;
+            let h = self.head(d)?;
             let i = self.img.decls.len() as u32;
             let payload = self.record(d, i)?;
             match &payload {
                 Payload::Enumerator { .. } => {
-                    if open_enum != Some(ctx) {
+                    if open_enum != Some(h.ctx) {
                         return Err("an enumerator outside its enumeration's definition");
                     }
                 }
                 Payload::Enum { def: Some(_), .. } => open_enum = Some(i),
                 _ => open_enum = None,
             }
-            if !matches!(payload, Payload::Enumerator { .. })
-                && ctx != NONE
-                && !matches!(
-                    self.img.decls[ctx as usize].payload,
-                    Payload::Namespace | Payload::Export
-                )
-            {
-                return Err("a declaration in an unsupported context");
+            if !matches!(payload, Payload::Enumerator { .. }) {
+                // Close the classes this declaration is not a member of.
+                while let Some(&top) = open.last() {
+                    if h.lexical == NONE && h.ctx == top {
+                        break;
+                    }
+                    self.close_class(top);
+                    let _ = open.pop();
+                }
+                let class_ctx = h.ctx != NONE
+                    && matches!(self.img.decls[h.ctx as usize].payload, Payload::Record { .. });
+                if class_ctx && open.is_empty() && (h.lexical == NONE || h.prev == NONE) {
+                    return Err("a class member outside its class definition");
+                }
+                if h.ctx != NONE
+                    && !matches!(
+                        self.img.decls[h.ctx as usize].payload,
+                        Payload::Namespace | Payload::Export | Payload::Record { .. }
+                    )
+                {
+                    return Err("a declaration in an unsupported context");
+                }
             }
+            let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
             let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
-            self.img.decls.push(DeclRec { flags, owner, name, ctx, lexical, loc, prev, payload });
+            self.img.decls.push(DeclRec {
+                flags: h.flags,
+                owner,
+                access: h.access,
+                name: h.name,
+                ctx: h.ctx,
+                lexical: h.lexical,
+                loc: h.loc,
+                prev: h.prev,
+                payload,
+            });
+            self.recs.insert(d, i);
+            if class_def {
+                open.push(i);
+            }
+        }
+        while let Some(top) = open.pop() {
+            self.close_class(top);
+        }
+        for (d, ctx, kind) in implicit {
+            let o = mt.owner(d);
+            let i = self.img.decls.len() as u32;
+            self.img.decls.push(DeclRec {
+                flags: ast.decls.get(d).flags().bits() & DECL_FLAGS,
+                owner: u8::from(o.purview) | (u8::from(o.exported) << 1),
+                access: 0,
+                name: NONE,
+                ctx,
+                lexical: NONE,
+                loc: NONE,
+                prev: NONE,
+                payload: Payload::Implicit { kind },
+            });
             self.recs.insert(d, i);
         }
         self.walk_roots()
@@ -1790,18 +2159,19 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::Enum
         | K::EnumConstant
         | K::Typedef
-        | K::TypeAlias => Ok(()),
-        K::CXXRecord
-        | K::ClassTemplateSpecialization
-        | K::ClassTemplatePartialSpecialization
+        | K::TypeAlias
+        | K::CXXRecord
         | K::Field
-        | K::IndirectField
         | K::AccessSpec
-        | K::Friend
         | K::CXXMethod
         | K::CXXConstructor
         | K::CXXDestructor
-        | K::CXXConversion => Err("a class"),
+        | K::CXXConversion => Ok(()),
+        K::IndirectField => Err("an anonymous union or struct member"),
+        K::Friend => Err("a friend declaration"),
+        K::ClassTemplateSpecialization | K::ClassTemplatePartialSpecialization => {
+            Err("a template")
+        }
         K::ClassTemplate
         | K::FunctionTemplate
         | K::VarTemplate
@@ -1884,11 +2254,18 @@ impl Sema<'_, '_> {
             let mut offs = vec![img.kw, img.name_loc];
             for d in &img.decls {
                 offs.push(d.loc);
-                if let Payload::Function { params, body, .. } = &d.payload {
-                    offs.extend(params.iter().map(|p| p.loc));
-                    if let FnBody::Braces(l, r) = body {
-                        offs.extend([*l, *r]);
+                match &d.payload {
+                    Payload::Function { params, body, inits, .. } => {
+                        offs.extend(params.iter().map(|p| p.loc));
+                        offs.extend(inits.iter().map(|x| x.loc));
+                        if let FnBody::Braces(l, r) = body {
+                            offs.extend([*l, *r]);
+                        }
                     }
+                    Payload::Record { def: Some(df), .. } => {
+                        offs.extend(df.bases.iter().map(|b| b.loc));
+                    }
+                    _ => {}
                 }
             }
             body::body_locs(&img, &mut offs);
@@ -1934,11 +2311,24 @@ impl Sema<'_, '_> {
         let mut params_all: Vec<DeclId> = Vec::new();
         let mut fbodies: Vec<(DeclId, u32)> = Vec::new();
         let mut inits: Vec<(DeclId, u32, u32)> = Vec::new();
+        // Open class definitions (class, end, frozen bits); fields with a
+        // width or initializer; constructors with ctor-initializers;
+        // defaulted and implicit members to define again once used.
+        let mut classes: Vec<(DeclId, usize, u64)> = Vec::new();
+        let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
+        let mut ctors: Vec<(DeclId, usize)> = Vec::new();
+        let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
         for (i, r) in img.decls.iter().enumerate() {
             if !matches!(r.payload, Payload::Enumerator { .. })
                 && let Some((e, computed)) = open.take()
             {
                 self.image_complete_enum(img, &mut tys, &ids, e, computed);
+            }
+            while let Some(&(c, end, bits)) = classes.last()
+                && end <= i
+            {
+                classes.pop();
+                self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
             }
             let owner = Owner { unit, purview: r.owner & 1 != 0, exported: r.owner & 2 != 0 };
             let next = self.ast.decls.next_id();
@@ -1955,6 +2345,9 @@ impl Sema<'_, '_> {
             if r.flags & DeclFlags::IMPLICIT.bits() != 0 {
                 h.flags = DeclFlags::IMPLICIT;
             }
+            if r.access != 0 {
+                h = h.access(access_of(r.access));
+            }
             h.lexical = match r.lexical {
                 NONE => None,
                 LEX_TU => Some(self.ast.tu),
@@ -1964,10 +2357,24 @@ impl Sema<'_, '_> {
             let d = match &r.payload {
                 Payload::Namespace => self.builder().namespace(h, false, prev),
                 Payload::Export => self.builder().export_decl(ctx, h.loc),
-                Payload::Function { ty, spec, params, body } => {
-                    let fty = self.image_ty(img, &mut tys, &ids, *ty);
+                Payload::Function { kind, ty, spec, deferred, params, body, inits: ci } => {
+                    let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = fn_spec(*spec).unwrap_or_default();
-                    let f = self.builder().function(h, DeclKind::Function, fty, spec, prev);
+                    let kind = FN_KINDS[usize::from(*kind)];
+                    h.name = self.image_special_name(r.name, kind, ctx, fty).unwrap_or(h.name);
+                    if *deferred {
+                        // The exception specification names the function
+                        // itself (its first declaration).
+                        let next = self.ast.decls.next_id();
+                        fty = self.with_exc_spec(fty, ExcSpec::Deferred(prev.map_or(next, |p| self.ast.first(p))));
+                    }
+                    let f = self.builder().function(h, kind, fty, spec, prev);
+                    if !ci.is_empty() {
+                        ctors.push((f, i));
+                    }
+                    if spec.defaulted() == Defaulted::Explicit {
+                        defaulted.push((f, r.flags));
+                    }
                     let mut ps = Vec::with_capacity(params.len());
                     for (k, p) in params.iter().enumerate() {
                         let pty = self.image_ty(img, &mut tys, &ids, p.ty);
@@ -2033,6 +2440,48 @@ impl Sema<'_, '_> {
                     let kind = if *alias { DeclKind::TypeAlias } else { DeclKind::Typedef };
                     self.builder().typedef(h, kind, u, prev)
                 }
+                Payload::Record { tag, def } => {
+                    let tag = tag_of(*tag);
+                    let c = self.builder().record(h, tag, prev);
+                    if let Some(df) = def {
+                        let _ = self.builder().begin_record_definition(c);
+                        let bases: Vec<kiln_ast::decl::BaseSpec> = df
+                            .bases
+                            .iter()
+                            .map(|b| kiln_ast::decl::BaseSpec {
+                                ty: self.image_ty(img, &mut tys, &ids, b.ty),
+                                loc: lo(self, b.loc),
+                                is_virtual: false,
+                                access: access_of(b.access),
+                                pack_expansion: false,
+                            })
+                            .collect();
+                        let _ = self.ast.decls.set_bases(c, &bases, &mut self.ast.lists);
+                        classes.push((c, df.end as usize, df.bits));
+                    }
+                    c
+                }
+                Payload::Field { ty, flags, width, init } => {
+                    let fty = self.image_ty(img, &mut tys, &ids, *ty);
+                    let f = self.builder().field(h, fty, None, *flags);
+                    if *init != NONE {
+                        let _ = self.special.nsdmi.insert(f);
+                    }
+                    if *width != NONE || *init != NONE {
+                        fields.push((f, *width, *init));
+                    }
+                    f
+                }
+                Payload::Access => {
+                    let a = access_of(r.access);
+                    self.builder().access_spec(ctx, a, h.loc)
+                }
+                Payload::Implicit { kind } => {
+                    let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
+                    let f = self.declare_implicit(ctx, k);
+                    defaulted.push((f, r.flags));
+                    f
+                }
             };
             image_flags(self, d, r.flags);
             debug_assert_eq!(ids.len(), i);
@@ -2041,7 +2490,48 @@ impl Sema<'_, '_> {
         if let Some((e, computed)) = open.take() {
             self.image_complete_enum(img, &mut tys, &ids, e, computed);
         }
+        while let Some((c, _, bits)) = classes.pop() {
+            self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
+        }
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        for (f, width, init) in fields {
+            if width != NONE {
+                let _ = self.ast.decls.set_field_bit_width(f, built.expr(width));
+            }
+            if init != NONE {
+                let _ = self.ast.decls.set_field_init(f, built.expr(init));
+            }
+        }
+        for (f, i) in ctors {
+            let Payload::Function { inits: ci, .. } = &img.decls[i].payload else { continue };
+            let class = self.ast.decls.get(f).ctx();
+            let bases: Vec<u32> = class
+                .and_then(|c| self.ast.decls.record(c))
+                .map(|r| self.ast.lists.get(r.bases).to_vec())
+                .unwrap_or_default();
+            let list: Vec<kiln_ast::decl::CtorInit> = ci
+                .iter()
+                .map(|x| {
+                    let kind = init_kind_of(x.kind);
+                    let target = match kind {
+                        CtorInitKind::Base => bases.get(x.target as usize).map_or(0, |&g| {
+                            let q = self.ast.decls.base_spec(g).ty;
+                            q.ty().index()
+                        }),
+                        CtorInitKind::Field => ids[x.target as usize].index(),
+                        _ => 0,
+                    };
+                    kiln_ast::decl::CtorInit {
+                        target,
+                        kind,
+                        written_index: x.written,
+                        init: built.expr(x.init),
+                        loc: lo(self, x.loc),
+                    }
+                })
+                .collect();
+            let _ = self.builder().set_ctor_inits(f, &list);
+        }
         for (f, s) in fbodies {
             let _ = self.builder().set_body(f, built.stmt(s));
         }
@@ -2067,7 +2557,47 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        // Defaulted and implicit special members the module used are
+        // defined again (spec/modules.md §11.11 "Classes").
+        for (f, flags) in defaulted {
+            let loc = self.ast.decls.get(f).ctx().map_or(Loc::INVALID, |c| self.ast.decls.get(c).loc());
+            if flags & DeclFlags::USED.bits() != 0 {
+                self.mark_function_referenced(f, loc);
+            } else if flags & DeclFlags::REFERENCED.bits() != 0 {
+                self.exc_spec_needed(f, loc);
+            }
+        }
         self.module_owner_changed();
+    }
+
+    /// The constructor, destructor or conversion function name of a
+    /// function of kind `kind` in class `ctx` with type `fty`, or an
+    /// operator's name, for the special name words; `None` otherwise.
+    fn image_special_name(
+        &mut self,
+        word: u32,
+        kind: DeclKind,
+        ctx: DeclId,
+        fty: QualType,
+    ) -> Option<DeclName> {
+        let class = || self.ast.decls.get(ctx).ty().map(|q| self.ast.types.canonical(q).ty());
+        match word {
+            N_CTOR if kind == DeclKind::CXXConstructor => Some(self.ast.names.constructor(class()?)),
+            N_DTOR if kind == DeclKind::CXXDestructor => Some(self.ast.names.destructor(class()?)),
+            N_CONV if kind == DeclKind::CXXConversion => {
+                let ret = match self.ast.types.view(fty.ty()) {
+                    TypeView::Function(p) => p.ret(),
+                    _ => return None,
+                };
+                let ret = self.ast.types.canonical(ret);
+                Some(self.ast.names.conversion(ret))
+            }
+            n if (N_OP..N_CTOR).contains(&n) => {
+                let op = OverloadedOperator::from_u8(u8::try_from(n - N_OP).ok()?)?;
+                Some(DeclName::operator(op))
+            }
+            _ => None,
+        }
     }
 
     fn image_complete_enum(
@@ -2196,6 +2726,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 1,
+                    access: 0,
                     name: 0,
                     ctx: NONE,
                     lexical: NONE,
@@ -2206,6 +2737,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 1,
+                    access: 0,
                     name: NONE,
                     ctx: 0,
                     lexical: NONE,
@@ -2216,12 +2748,16 @@ mod tests {
                 DeclRec {
                     flags: 4,
                     owner: 3,
+                    access: 0,
                     name: 1,
                     ctx: 1,
                     lexical: NONE,
                     loc: 40,
                     prev: NONE,
                     payload: Payload::Function {
+                        kind: 0,
+                        deferred: false,
+                        inits: vec![],
                         ty: q(BUILTINS + 1),
                         spec: 0,
                         params: vec![ParamRec {
@@ -2238,6 +2774,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
+                    access: 0,
                     name: 2,
                     ctx: 1,
                     lexical: NONE,
@@ -2252,6 +2789,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
+                    access: 0,
                     name: 3,
                     ctx: 3,
                     lexical: NONE,
@@ -2262,6 +2800,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
+                    access: 0,
                     name: 4,
                     ctx: 1,
                     lexical: NONE,
@@ -2272,6 +2811,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 1,
+                    access: 0,
                     name: 5,
                     ctx: 0,
                     lexical: LEX_TU,
@@ -2283,12 +2823,16 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
+                    access: 0,
                     name: 6,
                     ctx: 1,
                     lexical: NONE,
                     loc: 100,
                     prev: NONE,
                     payload: Payload::Function {
+                        kind: 0,
+                        deferred: false,
+                        inits: vec![],
                         ty: q(BUILTINS + 1),
                         spec: 0x18,
                         params: vec![ParamRec {
@@ -2305,6 +2849,7 @@ mod tests {
                 DeclRec {
                     flags: 4,
                     owner: 3,
+                    access: 0,
                     name: 2,
                     ctx: 7,
                     lexical: NONE,
@@ -2315,6 +2860,7 @@ mod tests {
                 DeclRec {
                     flags: 0,
                     owner: 3,
+                    access: 0,
                     name: 3,
                     ctx: 7,
                     lexical: NONE,
