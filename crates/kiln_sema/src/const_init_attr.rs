@@ -21,8 +21,8 @@ use kiln_diag::DiagId;
 use kiln_oven::EvalContext;
 use kiln_source::{Loc, Span};
 
-use crate::class::SpecialKind;
 use crate::Sema;
+use crate::class::SpecialKind;
 
 impl Sema<'_, '_> {
     /// Whether variable `v` has static or thread storage duration (clang
@@ -74,8 +74,10 @@ impl Sema<'_, '_> {
         else {
             return true;
         };
-        let note = self.diag(DiagId::note_require_constant_init_missing_here, self.ast.decls.get(init).loc());
-        let msg = self.diag(DiagId::sema_require_const_init_added_too_late, node.loc).with_note(note);
+        let note = self
+            .diag(DiagId::note_require_constant_init_missing_here, self.ast.decls.get(init).loc());
+        let msg =
+            self.diag(DiagId::sema_require_const_init_added_too_late, node.loc).with_note(note);
         self.emit(msg);
         false
     }
@@ -145,7 +147,13 @@ impl Sema<'_, '_> {
     /// construction and the no-op conversions are walked; any other
     /// expression is constant if it folds (`for_ref`: if the whole
     /// reference binding evaluated, `full_ok`).
-    fn cxx03_culprit(&mut self, e: ExprId, for_ref: bool, full_ok: bool, depth: u32) -> Option<Loc> {
+    fn cxx03_culprit(
+        &mut self,
+        e: ExprId,
+        for_ref: bool,
+        full_ok: bool,
+        depth: u32,
+    ) -> Option<Loc> {
         if depth > 256 {
             return None;
         }

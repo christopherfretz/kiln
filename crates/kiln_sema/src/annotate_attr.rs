@@ -16,9 +16,9 @@ use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalKind};
 use kiln_source::Loc;
 
+use crate::Sema;
 use crate::decl::AttrArg;
 use crate::templ::pack::PackOperand;
-use crate::Sema;
 
 impl Sema<'_, '_> {
     /// `unavailable` / `unavailable("message")`: `a` is the message.

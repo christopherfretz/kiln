@@ -15,8 +15,8 @@ use kiln_ast::attr::AttrKind;
 use kiln_ast::{AttrId, DeclId};
 use kiln_diag::DiagId;
 
-use crate::declspec::ParamInfo;
 use crate::Sema;
+use crate::declspec::ParamInfo;
 
 impl Sema<'_, '_> {
     /// [dcl.attr.depend]/1 for parameter `p` of a function declarator that
