@@ -1032,7 +1032,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1019 | oven: mark volatile locals, heap objects and volatile members (Alloc flag bit); flips expr.const/read-volatile-local-and-heap.cpp | WP-948 | open |
 | WP-1020 | oven: `qb[3].x` at member offset 0 skips the Field op (compile.rs ~4843), so past-end note wording differs (wording only) | WP-948 | open |
 | WP-1021 | oven: RefChk for reference parameters/members and clang-compat 19 mode | WP-948 | open |
-| WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | open |
+| WP-982 | modules step 2: kiln-scan-deps (P1689r5, clang-scan-deps-<major> name), CMake FILE_SET CXX_MODULES end-to-end test | WP-917 | done (#420) |
 | WP-983 | modules: header units as BMIs (-fmodule-header[=user|system], header-unit capsule kind, import "h" finds the .pcm) | WP-917 | open |
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | open |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | in progress |
@@ -1044,3 +1044,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1024 | driver: list kiln-only `--llvm-dir=<dir>` in `--help` (lib.rs:116 HELP; WP-1016 kept help byte-identical) | WP-1016 | open |
 | WP-1025 | codegen tests: drive backend 22 under oracle 22 in ir_vs_clang (ir_vs_clang.rs:239), then prune the llvm_major DEVIATIONS entries (line 81) | WP-1016 | open |
 | WP-1026 | driver: verify the Fedora package names in COMPATIBILITY.md Runtime dependencies (llvm22 clang22 compiler-rt22); collapse the noisy nothing-found note list in llvm.rs Search::run | WP-1016 | open |
+| WP-1033 | oss harness: build module-using projects with `-G Ninja` (oss-build.sh:176 uses Unix Makefiles) and pass `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` when the compiler is the kiln-cxx wrapper | WP-982 | open |
+| WP-1034 | CI: install cmake 3.28+ and ninja in the CI image and run the selftest.sh `cmake_modules` modules e2e under CI | WP-982 | open |
+| WP-1035 | kiln-scan-deps: `-compilation-database` (scan_deps.rs:102), `-format=experimental-full` (scan_deps.rs:82), and a `clang-scan-deps-19` alias for `-fclang-compat=19` (build.rs:44, dist.rs:108) | WP-982 | open |

@@ -367,7 +367,8 @@ impl Job<'_> {
                 .iter()
                 .map(|(n, p)| (n.clone(), std::path::PathBuf::from(p)))
                 .collect();
-            for path in &a.nameless_module_files {
+            // A scan reads no module file (they may not exist yet).
+            for path in a.nameless_module_files.iter().filter(|_| !a.scan_deps) {
                 module_files.push((nameless_module_name(path, engine)?, path.into()));
             }
             opts.modules = Some(kiln_pp::ModuleOptions {
@@ -375,7 +376,8 @@ impl Job<'_> {
                 prebuilt_paths: a.prebuilt_module_paths.iter().map(Into::into).collect(),
                 std_dir: Some(self.toolchain.libcxx_module_dir()),
                 fingerprint: self.fingerprint(),
-                record: a.precompile || a.module_output.is_some(),
+                record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
+                scan: a.scan_deps,
             });
         } else if let MainInput::Capsule(_) = &main {
             let what =

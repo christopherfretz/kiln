@@ -24,6 +24,7 @@ pub mod llvm;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
+pub mod scan_deps;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
@@ -163,7 +164,7 @@ pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl W
     let _ = out.write_all(s.as_bytes());
 }
 
-fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
+pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     let d = match e {
         ArgError::Unknown(a) => Diag::new(DiagId::drv_unknown_argument, Span::INVALID).arg(a),
         ArgError::MissingValue(o) => {
@@ -577,6 +578,11 @@ pub fn run(command_line: &[String], io: Io) -> i32 {
 #[allow(clippy::too_many_lines, reason = "the driver's phases in order, one dispatch per action")]
 pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let command_line = rsp::expand(command_line);
+    // `kiln-scan-deps` and its `clang-scan-deps*` aliases (spec/modules.md
+    // §11.9).
+    if scan_deps::is_scanner_name(args::program_basename(argv0)) {
+        return scan_deps::run(argv0, &command_line, io);
+    }
     let args = Args::parse_as(argv0, &command_line);
     // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
     // compiler errors"); per thread, so set (or cleared) on every run.

@@ -492,6 +492,9 @@ pub struct Args {
     pub module_output: Option<(String, Option<String>)>,
     /// `-fprebuilt-module-path=<dir>`, in order.
     pub prebuilt_module_paths: Vec<String>,
+    /// Set by `kiln-scan-deps` (not an option): the preprocessor records
+    /// module directives instead of importing (spec/modules.md §11.9).
+    pub scan_deps: bool,
     /// `-nostdinc`.
     pub nostdinc: bool,
     /// `-nostdinc++`.
