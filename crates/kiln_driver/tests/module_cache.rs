@@ -20,23 +20,31 @@ fn kilnpp() -> PathBuf {
     Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
 }
 
-/// Whether an advisory lock (`flock`) on a file in `dir` excludes another
-/// open of it. It does not on some virtualised file systems (a macOS
-/// directory mounted into a Linux container), where racing compiles all
-/// build (spec/modules.md §11.12 "Concurrency").
+/// Whether an advisory lock (`flock`) on a fresh file in `dir` excludes
+/// another open of it. It does not on some virtualised file systems (a
+/// macOS directory mounted into a Linux container), where racing compiles
+/// all build (spec/modules.md §11.12 "Concurrency"). There it sometimes
+/// does for one file, so every one of several fresh files must exclude.
 fn locks_exclude(dir: &Path) -> bool {
-    let probe = dir.join(format!("kiln-lock-probe-{}", std::process::id()));
-    let open = || {
-        std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&probe)
-    };
-    let excludes = match (open(), open()) {
-        (Ok(a), Ok(b)) => {
-            a.lock().is_ok() && matches!(b.try_lock(), Err(std::fs::TryLockError::WouldBlock))
-        }
-        _ => false,
-    };
-    let _ = std::fs::remove_file(&probe);
-    excludes
+    (0..8).all(|i| {
+        let probe = dir.join(format!("kiln-lock-probe-{}-{i}", std::process::id()));
+        let open = || {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&probe)
+        };
+        let excludes = match (open(), open()) {
+            (Ok(a), Ok(b)) => {
+                a.lock().is_ok() && matches!(b.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+            }
+            _ => false,
+        };
+        let _ = std::fs::remove_file(&probe);
+        excludes
+    })
 }
 
 /// Where the tests' directories go: the target directory, unless locks do
