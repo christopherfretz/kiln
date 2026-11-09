@@ -344,6 +344,9 @@ impl Job<'_> {
             diag_opts.ignore_warnings = true;
         }
         let engine = make_engine(&sm, &diag_opts, self.stderr.clone(), None);
+        // An `-include-pch` that cannot be read is this job's error; the
+        // job goes on without it (clang `AddImplicitIncludePCH`, WP-1153).
+        crate::pch::emit(&self.args.pch.unread, &engine);
         let mut result = JobResult::default();
         crate::crash::catching(self.path, self.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = self.pp_inputs(&sm, &engine) {

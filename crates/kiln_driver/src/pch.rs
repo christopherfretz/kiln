@@ -389,11 +389,22 @@ pub(crate) fn consumer(
     } else {
         pch
     };
-    let Some(rec) = read(pch, &e) else {
-        finish(e);
-        return Err(());
-    };
     let preprocess = args.action == Action::Preprocess || args.deps.only.is_some();
+    let rec = match load(pch, preprocess) {
+        Ok(rec) => rec,
+        Err(diags) if preprocess => {
+            // clang `-E` reports the PCH in each job and preprocesses
+            // without it (WP-1153); the job emits the error.
+            let mut out = args.clone();
+            out.pch.unread = diags;
+            return Ok(Some(out));
+        }
+        Err(diags) => {
+            emit(&diags, &e);
+            finish(e);
+            return Err(());
+        }
+    };
     let here = cwd();
     let resolve = |spelled: &str| {
         if Path::new(spelled).is_absolute() || here == Path::new(&rec.cwd) {
@@ -527,7 +538,7 @@ pub(crate) fn probe(
     }
     let mut warnings = Vec::new();
     let mut first = None;
-    for (k, &idx) in args.pch.probed.iter().enumerate() {
+    for (k, &(idx, spelling)) in args.pch.probed.iter().enumerate() {
         let h = &args.includes[idx];
         let pch = format!("{h}.pch");
         let found = if Path::new(&pch).exists() {
@@ -538,7 +549,7 @@ pub(crate) fn probe(
         };
         match found {
             Some(p) if k == 0 => first = Some((idx, p)),
-            Some(p) => warnings.push(ProbeWarning::NotFirst(p, format!("-include {h}"))),
+            Some(p) => warnings.push(ProbeWarning::NotFirst(p, format!("{spelling}{h}"))),
             None => {}
         }
     }
@@ -581,9 +592,18 @@ pub(crate) fn probe(
     Ok(Some(out))
 }
 
-/// Reads and parses `pch`, reporting clang's errors for an unreadable or
-/// foreign file.
-fn read(pch: &str, e: &kiln_diag::DiagEngine<'_>) -> Option<Record> {
+/// One diagnostic of an unreadable PCH, kept to be emitted later: its id
+/// and its arguments.
+pub(crate) type PchDiag = (DiagId, Vec<String>);
+
+/// Reads and parses `pch`; on failure, clang's errors for an unreadable
+/// or foreign file. With `preprocess` (`-E`, `-M`), only the first of
+/// them: clang's `-E` reads only the header's name from the PCH
+/// (`ASTReader::getOriginalSourceFile`), reports a file it cannot read
+/// (`unable to read PCH file`) or one that is not a PCH (`input is not a
+/// PCH file`) and goes on (WP-1153).
+fn load(pch: &str, preprocess: bool) -> Result<Record, Vec<PchDiag>> {
+    let one = |id: DiagId, args: &[&str]| (id, args.iter().map(|&a| a.to_owned()).collect());
     let bytes = match std::fs::read(pch) {
         Ok(b) => b,
         Err(err) => {
@@ -592,36 +612,31 @@ fn read(pch: &str, e: &kiln_diag::DiagEngine<'_>) -> Option<Record> {
             } else {
                 err.to_string()
             };
-            Diag::new(DiagId::drv_pch_unreadable, Span::INVALID).arg(pch).arg(why).emit(e);
-            Diag::new(DiagId::drv_pch_not_found, Span::INVALID).arg(pch).emit(e);
-            return None;
+            let mut d = vec![one(DiagId::drv_pch_unreadable, &[pch, &why])];
+            if !preprocess {
+                d.push(one(DiagId::drv_pch_not_found, &[pch]));
+            }
+            return Err(d);
         }
     };
-    match Record::parse(&bytes) {
-        Ok(r) => Some(r),
-        Err(ReadError::NotPch) => {
-            Diag::new(DiagId::drv_pch_not_pch, Span::INVALID).arg(pch).emit(e);
-            Diag::new(DiagId::drv_pch_invalid, Span::INVALID).arg(pch).emit(e);
-            None
+    Record::parse(&bytes).map_err(|err| match err {
+        ReadError::NotPch if preprocess => vec![one(DiagId::drv_pch_not_pch, &[pch])],
+        ReadError::NotPch => {
+            vec![one(DiagId::drv_pch_not_pch, &[pch]), one(DiagId::drv_pch_invalid, &[pch])]
         }
-        Err(ReadError::Clang) => {
-            Diag::new(DiagId::drv_pch_clang, Span::INVALID).arg(pch).emit(e);
-            None
+        ReadError::Clang => vec![one(DiagId::drv_pch_clang, &[pch])],
+        ReadError::Older => vec![one(DiagId::drv_pch_older, &[pch])],
+        ReadError::Newer => vec![one(DiagId::drv_pch_newer, &[])],
+        ReadError::Corrupt(why) => {
+            vec![one(DiagId::drv_pch_corrupt, &[&format!("{why} in kiln PCH record '{pch}'")])]
         }
-        Err(ReadError::Older) => {
-            Diag::new(DiagId::drv_pch_older, Span::INVALID).arg(pch).emit(e);
-            None
-        }
-        Err(ReadError::Newer) => {
-            Diag::new(DiagId::drv_pch_newer, Span::INVALID).emit(e);
-            None
-        }
-        Err(ReadError::Corrupt(why)) => {
-            Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)
-                .arg(format!("{why} in kiln PCH record '{pch}'"))
-                .emit(e);
-            None
-        }
+    })
+}
+
+/// Emits diagnostics [`load`] kept.
+pub(crate) fn emit(diags: &[PchDiag], e: &kiln_diag::DiagEngine<'_>) {
+    for (id, args) in diags {
+        args.iter().fold(Diag::new(*id, Span::INVALID), |d, a| d.arg(a.as_str())).emit(e);
     }
 }
 
