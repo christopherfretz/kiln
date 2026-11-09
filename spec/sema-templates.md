@@ -1876,6 +1876,15 @@ Out-of-class partial specializations of a member template (WP-150):
   `V<int, B>` is accepted there; a non-convertible one is still rejected,
   with kiln's wording rather than clang 19's `value of type 'int*' is not
   implicitly convertible to 'int'`.
+  A primary non-type pack (`template<auto... Vs>`) is checked element-wise
+  (`pack_nttp_type_mismatch`; an expansion element has its pattern's
+  type): a placeholder-typed partial pack (`auto *...Ps`) must match each
+  synthesized element's type, so it is more specialized; a fixed-type one
+  (`int...`, `int *...`) is not more specialized than an `auto...` primary
+  (clang 22), while `-fclang-compat=19` accepts it as clang 19 did
+  (`.../placeholder-pack-partial-run.cpp`,
+  `.../placeholder-pack-fixed-type-not-more-specialized.cpp`,
+  `.../placeholder-pack-fixed-type-clang19.cpp`).
 - *Deducible* ([temp.spec.partial.general]/8, `check_partial_deducible`):
   the arguments are deduced from themselves; a parameter left undeduced
   gets `contains a template parameter that cannot be deduced`

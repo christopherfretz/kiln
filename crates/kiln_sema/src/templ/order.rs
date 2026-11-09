@@ -719,6 +719,43 @@ impl Sema<'_, '_> {
         ok && !failed
     }
 
+    /// [`Self::deduced_nttp_type_mismatch`] for a non-type parameter pack
+    /// of type `pt` deduced as `a`. Clang 22 checks only a placeholder
+    /// type against the elements' (`template<auto *... P>` does not deduce
+    /// from a synthesized `auto... V`); clang 19 also failed a fixed type
+    /// against a synthesized placeholder-typed element, so `template<int...
+    /// I> S<I...>` of `template<auto... V> S` is more specialized only
+    /// under `-fclang-compat=19`.
+    fn pack_nttp_type_mismatch(&mut self, pt: QualType, a: TemplateArg) -> bool {
+        let pt = match self.ast.types.canonical_view(pt) {
+            TypeView::PackExpansion { pattern, .. } => pattern,
+            _ => pt,
+        };
+        let es: Vec<TemplateArg> = match a.view() {
+            ArgView::Pack(l) => self.ast.types.args(l).to_vec(),
+            _ => vec![a],
+        };
+        let placeholder = self.nttp_type_has_placeholder(pt);
+        if !placeholder && (self.clang_compat >= 22 || self.ast.types.is_dependent(pt)) {
+            return false;
+        }
+        for e in es {
+            // An expansion `V...` has the type of its pattern `V`.
+            let e = self.arg_expansion_pattern(e).unwrap_or(e);
+            let Some(at) = self.nttp_arg_type(e) else { continue };
+            let at = self.ast.types.canonical(crate::conv::strip_cv(self, at));
+            let bad = if placeholder {
+                !self.nttp_placeholder_matches(pt, at)
+            } else {
+                self.nttp_type_has_placeholder(at)
+            };
+            if bad {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The type of non-type template argument `a` (`None` for another
     /// kind, or an erroneous one).
     fn nttp_arg_type(&self, a: TemplateArg) -> Option<QualType> {
@@ -854,6 +891,12 @@ impl Sema<'_, '_> {
                 continue;
             }
             let Some(pt) = self.ast.decls.get(x).ty() else { continue };
+            if self.is_pack_decl(x) {
+                if self.pack_nttp_type_mismatch(pt, a) {
+                    return true;
+                }
+                continue;
+            }
             let Some(at) = self.nttp_arg_type(a) else { continue };
             let at = self.ast.types.canonical(crate::conv::strip_cv(self, at));
             if self.nttp_type_has_placeholder(pt) {
