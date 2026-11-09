@@ -3,5 +3,6 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 // ----- WP-228 (driver flags a target does not support)
+EagerLoadCxxNamedModules = "eager-load-cxx-named-modules" [];
 OptionIgnored = "option-ignored" [];
 UnusedCommandLineArgument = "unused-command-line-argument" [];
