@@ -1574,8 +1574,11 @@ fn sanitizer_frontend_attributes() {
 #[test]
 fn sanitizer_ignorelist_asan() {
     let d = scratch("ignorelist-asan");
-    std::fs::write(d.join("h.h"), "int src_g[3];\ninline int from_header(int *p) { return p[1]; }\n")
-        .unwrap();
+    std::fs::write(
+        d.join("h.h"),
+        "int src_g[3];\ninline int from_header(int *p) { return p[1]; }\n",
+    )
+    .unwrap();
     std::fs::write(
         d.join("list.txt"),
         "fun:_Z4skipPi\nfun:*skip_tmpl*\nglobal:skip_g\ntype:Skipped\ntype:ns::Inner\n\

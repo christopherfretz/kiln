@@ -822,7 +822,8 @@ impl Cg<'_> {
         };
         let s = print_type(&self.ast.types, &names, q, PrintOptions::SUGARED);
         let mut s = s.as_str();
-        while let Some(r) = ["const ", "volatile ", "restrict "].iter().find_map(|p| s.strip_prefix(p))
+        while let Some(r) =
+            ["const ", "volatile ", "restrict "].iter().find_map(|p| s.strip_prefix(p))
         {
             s = r;
         }
@@ -844,11 +845,7 @@ impl Cg<'_> {
     /// `signed`): a signed check the function could make but elided keeps
     /// `nsw` even under `-fwrapv` (clang `EmitAdd`'s fallthrough).
     pub(crate) fn ub_nsw(&self, q: QualType, signed: bool) -> Flags {
-        if signed && self.ub_overflow_kind(q).is_some() {
-            Flags::NSW
-        } else {
-            self.nsw_if(signed)
-        }
+        if signed && self.ub_overflow_kind(q).is_some() { Flags::NSW } else { self.nsw_if(signed) }
     }
 
     /// The checked `l op r` (`+ - *` of the binary or compound assignment
@@ -897,7 +894,9 @@ impl Cg<'_> {
     /// `-ftrapv` (`SOB_Trapping`).
     pub(crate) fn ub_atomic_unsigned_checked(&self, vq: QualType) -> bool {
         self.opts.trapv
-            || (self.ub_on(San::UNSIGNED_INTEGER_OVERFLOW) && self.ub_int(vq) && !self.is_signed(vq))
+            || (self.ub_on(San::UNSIGNED_INTEGER_OVERFLOW)
+                && self.ub_int(vq)
+                && !self.is_signed(vq))
     }
 
     /// The checked increment or decrement `old ± 1` of `e`, or `None`.

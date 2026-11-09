@@ -407,8 +407,7 @@ impl SanitizeFlags {
     /// lists of the enabled `kinds` under `resource_dir`.
     #[must_use]
     pub fn ignorelist_paths(&self, kinds: S, resource_dir: &str) -> (Vec<String>, Vec<String>) {
-        let user =
-            self.ignorelists.iter().filter(|f| Path::new(f).exists()).cloned().collect();
+        let user = self.ignorelists.iter().filter(|f| Path::new(f).exists()).cloned().collect();
         let mut system = Vec::new();
         if !self.no_default_ignorelists {
             for &(file, mask) in DEFAULT_IGNORELISTS {

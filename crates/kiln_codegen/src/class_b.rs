@@ -127,9 +127,9 @@ impl Cg<'_> {
         let Some(list) = self.opts.ignorelist.as_deref() else { return San::NONE };
         let main = self.opts.source_filename.as_str();
         let file = match (self.sm, loc) {
-            (Some(sm), Some(l)) => sm
-                .offset_of(sm.expansion_loc(l))
-                .map_or(main, |(fid, _)| sm.file_name(fid)),
+            (Some(sm), Some(l)) => {
+                sm.offset_of(sm.expansion_loc(l)).map_or(main, |(fid, _)| sm.file_name(fid))
+            }
             _ => main,
         };
         let newer = self.opts.clang_compat >= 22;
@@ -180,8 +180,7 @@ impl Cg<'_> {
         let no_address = no.has_any(San::ADDRESS) || listed(kinds.intersect(San::ADDRESS), "");
         GlobalSanitizer {
             no_address,
-            no_hwaddress: no.has_any(San::HWADDRESS)
-                || listed(kinds.intersect(San::HWADDRESS), ""),
+            no_hwaddress: no.has_any(San::HWADDRESS) || listed(kinds.intersect(San::HWADDRESS), ""),
             memtag: kinds.has_any(San::MEMTAG_GLOBALS)
                 && !no.has_any(San::MEMTAG)
                 && !listed(kinds.intersect(San::MEMTAG), ""),

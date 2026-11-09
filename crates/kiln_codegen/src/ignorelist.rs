@@ -98,9 +98,8 @@ impl SanitizerIgnorelist {
                 let Some(name) = rest.strip_suffix(']') else {
                     return Err(format!("malformed section header on line {line}: {l}"));
                 };
-                let mask = section_mask(name).map_err(|e| {
-                    format!("malformed section at line {line}: '{name}': {e}")
-                })?;
+                let mask = section_mask(name)
+                    .map_err(|e| format!("malformed section at line {line}: '{name}': {e}"))?;
                 self.sections.push(Section { mask, file, entries: Vec::new() });
                 continue;
             }
@@ -131,7 +130,13 @@ impl SanitizerIgnorelist {
     /// `prefix` and `category` whose glob matches `query` (LLVM 21+
     /// `inSectionBlame`).
     #[must_use]
-    pub fn blame(&self, mask: San, prefix: &str, query: &str, category: &str) -> Option<(u32, u32)> {
+    pub fn blame(
+        &self,
+        mask: San,
+        prefix: &str,
+        query: &str,
+        category: &str,
+    ) -> Option<(u32, u32)> {
         let mut best = None;
         for s in self.sections.iter().filter(|s| s.mask.has_any(mask)) {
             for e in &s.entries {
@@ -478,7 +483,10 @@ mod tests {
 
     #[test]
     fn list_errors_word_for_word() {
-        assert_eq!(malformed("# c\nbadline\n"), "error parsing file 'l.txt': malformed line 2: 'badline'");
+        assert_eq!(
+            malformed("# c\nbadline\n"),
+            "error parsing file 'l.txt': malformed line 2: 'badline'"
+        );
         assert_eq!(
             malformed("[address\n"),
             "error parsing file 'l.txt': malformed section header on line 1: [address"
@@ -487,10 +495,7 @@ mod tests {
             malformed("\n[]\n"),
             "error parsing file 'l.txt': malformed section at line 2: '': Supplied glob was blank"
         );
-        assert_eq!(
-            malformed("fun:\n"),
-            "error parsing file 'l.txt': malformed line 1: 'fun:'"
-        );
+        assert_eq!(malformed("fun:\n"), "error parsing file 'l.txt': malformed line 1: 'fun:'");
         assert_eq!(
             malformed("fun:=init\n"),
             "error parsing file 'l.txt': malformed glob in line 1: '': Supplied glob was blank"
