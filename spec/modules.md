@@ -1294,9 +1294,10 @@ calls two of the functions in a `static_assert` and at run time.
 - Use of the image was verified by blanking the capsule's source text
   (and recomputing the checksum): the importer still compiles, links and
   runs. Two pitfalls hid it at first: a namespace named like its module
-  (`import m;` interns `m`, so the gate in "ODR" always replays: a
-  follow-up), and pre-interned short names (`c`). The corpus inputs
-  therefore use namespaces `ib` and `ic`.
+  (`import m;` interned `m`, so the gate in "ODR merging" always
+  replayed; fixed by WP-1096's unseen names), and pre-interned short
+  names (`c`). The S2 corpus inputs therefore use namespaces `ib` and
+  `ic`.
 - Commands as for Part 2a; the textual runs compile the module's body
   as a header; clang adds `-fconstexpr-steps=100000000` for the
   constexpr module.
@@ -1422,12 +1423,45 @@ needs one, so it falls back). It could still collide with the importer's
 own declarations, or with another import's (for example, two modules
 that both open `namespace util`). 2a does not merge. Instead the image
 lists every declared name up front, and the preprocessor uses the image
-only if **none of those names is interned yet** (`Interner::get`). Any
-earlier declaration's name was a token, or a builtin's name, so it is
-interned. A fresh name cannot meet an earlier declaration, and later
-declarations and imports find the image's declarations through ordinary
-lookup, as they would find the replay's. Any overlap replays, so the
-semantics are part A's by construction. The names of a carried body's
+only if **none of those names has been seen yet**. A name is seen when
+it is interned (`Interner::get`) and is not one of the preprocessor's
+*unseen names* (WP-1096):
+
+- A component of a module or partition name (`m`, `a` and `b` of
+  `a.b`, `p` of `:p`) that the module or import directive interned for
+  the first time joins the unseen names: the directive is consumed by
+  the preprocessor, so the name is no token the parser sees, and it
+  declares nothing. The test is that the symbol's index is at least the
+  interner's length just after the directive's first keyword (`export`,
+  `import`, `module`) was read (symbols are dense, in interning
+  order); a name
+  interned before, by any token, macro, builtin or sema, stays seen.
+  `std` never joins: sema declares namespace `std` implicitly (`new`,
+  `typeid`, structured bindings), with no token.
+- An unseen name becomes seen when the preprocessor returns it as an
+  identifier token (`Preprocessor::next_item`), when it is among a
+  pragma's tokens (they reach the parser too), and when an image that is
+  used declares it.
+
+So `export module m; export namespace m { ... }` and the dotted
+`export module a.b; export namespace a { namespace b { ... } }` are
+built from their images, while an importer that declared `namespace m`
+or `int g;` before `import m;`, a global module fragment `#include` that
+declares `namespace m`, or an earlier image or replay that declared `m`,
+still replays. The rule tracks what reached the parser rather than what
+sema declared because the gate runs in the preprocessor, ahead of the
+parser's lookahead: sema may not yet have declared the tokens before
+the `import`. Any earlier declaration's name was such a token, or a
+builtin's or sema's own name interned before the directive, so it is
+seen. Other names that reach no parser (macro names, `#if` operands)
+still count as seen; that only costs a replay. A fresh name cannot meet
+an earlier declaration, and later declarations and imports find the
+image's declarations through ordinary lookup, as they would find the
+replay's. Any overlap replays, so the semantics are part A's by
+construction. With `-v` the driver notes each import whose module file
+holds an image: `imported 'm' from its declaration image`, or
+`replayed 'm': ` and why (the first seen name, an import of other
+units, or another main file). The names of a carried body's
 locals (S2) are not gated: they are in the parameter-name table, since
 no lookup outside the body can find them. Real merging needs WP-460
 semantics without a second parse: an ODR key per GMF entity, and a

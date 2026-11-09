@@ -8,7 +8,8 @@
 // uncompressed: the comparison asks clang for the same
 // (`-mllvm -enable-name-compression=false`, added by ir_vs_clang), so the
 // TU hash agrees. No `&&`/`||` or constant-folded condition: clang 20+
-// maps those differently and kiln follows clang 19 (WP-1003 follow-up).
+// maps those differently, and the coverage_logical_gaps and
+// coverage_folded_branches cases pin both modes (WP-1082).
 //@ args: -fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=/cov -Xclang -disable-llvm-passes
 #define TWICE(x) ((x) + (x))
 #if 0

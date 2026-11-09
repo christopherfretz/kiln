@@ -1974,6 +1974,9 @@ impl Preprocessor<'_, '_> {
     /// With modules enabled the directive is consumed instead
     /// (`crate::modules`) and true is returned.
     pub(crate) fn maybe_module_directive(&mut self, t: Token, s: Symbol) -> bool {
+        // Symbols from here on are first interned by this directive
+        // (spec/modules.md §11.11, "ODR merging").
+        let mark = u32::try_from(self.interner.len()).unwrap_or(u32::MAX);
         let top = self.frames.len() - 1;
         let same = |x: &Token| {
             !x.flags.contains(TokFlags::START_OF_LINE)
@@ -2018,7 +2021,7 @@ impl Preprocessor<'_, '_> {
             return false;
         }
         if self.modules.is_some() {
-            self.module_directive(t, export, import);
+            self.module_directive(t, export, import, mark);
             return true;
         }
         if import && !matches!(next.kind, TokKind::Identifier(_) | TokKind::Punct(Punct::Colon)) {

@@ -445,6 +445,101 @@ fn kind2_declaration_image_bodies() {
     assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
 }
 
+/// `pcm` with its unit's source blanked (same length): only an importer
+/// that builds the unit from its declaration image still compiles.
+fn blank_source(d: &Path, pcm: &str, out: &str) {
+    use kiln_pp::bmi;
+    let mut c = bmi::read(&std::fs::read(d.join(pcm)).unwrap()).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    std::fs::write(d.join(out), bmi::write(&c)).unwrap();
+}
+
+/// The import notes of an image-enabled `-v` compile of `args`, which
+/// succeeds.
+fn image_notes(d: &Path, args: &[&str]) -> Vec<String> {
+    let o = kiln(d, &[&["-v", "-fkiln-bmi-image"], args].concat());
+    assert_eq!(o.code, 0, "{args:?}: {}", o.stderr);
+    o.stderr
+        .lines()
+        .filter(|l| l.starts_with("note: imported '") || l.starts_with("note: replayed '"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// WP-1096 (§11.11 "Part 2a", "ODR merging"): names interned only as
+/// module-name components do not count as seen, so a namespace named
+/// like its module (plain or dotted) is built from the image; a real
+/// earlier declaration of an image's name still replays, as do a second
+/// image declaring the same name and a global module fragment's
+/// declaration of it.
+#[test]
+fn kind2_image_gate_module_names() {
+    let d = scratch("image-gate");
+    let w = |n: &str, t: &str| std::fs::write(d.join(n), t).unwrap();
+    w(
+        "m.cppm",
+        "export module m;\n\
+         export namespace m { constexpr int f() { return 40; } int g() { return 2; } }\n",
+    );
+    w(
+        "ab.cppm",
+        "export module a.b;\n\
+         export namespace a { namespace b { consteval int h() { return 2; } } }\n",
+    );
+    w("n.cppm", "export module n;\nexport namespace m { inline int k() { return 1; } }\n");
+    w("hm.h", "namespace m { inline int z() { return 1; } }\n");
+    for (src, pcm) in [("m.cppm", "m.pcm"), ("ab.cppm", "ab.pcm"), ("n.cppm", "n.pcm")] {
+        ok(&d, &["-fkiln-bmi-image", "--precompile", src, "-o", pcm]);
+    }
+    blank_source(&d, "m.pcm", "mb.pcm");
+    blank_source(&d, "ab.pcm", "abb.pcm");
+    let (m, mb, abb, n) = (
+        "-fmodule-file=m=m.pcm",
+        "-fmodule-file=m=mb.pcm",
+        "-fmodule-file=a.b=abb.pcm",
+        "-fmodule-file=n=n.pcm",
+    );
+    let image = |k: &str| vec![format!("note: imported '{k}' from its declaration image")];
+    let replay = |k: &str, name: &str| {
+        vec![format!("note: replayed '{k}': its image declares '{name}', already seen")]
+    };
+
+    // The module's own namespace: the image alone builds the program.
+    w(
+        "u.cpp",
+        "import m;\nstatic_assert(m::f() == 40);\n\
+         int main() { return m::f() + m::g() == 42 ? 0 : 1; }\n",
+    );
+    assert_eq!(image_notes(&d, &["-fsyntax-only", mb, "u.cpp"]), image("m"));
+    ok(&d, &["-c", "m.pcm", "-o", "m.o"]);
+    ok(&d, &["-fkiln-bmi-image", mb, "u.cpp", "m.o", "-o", "u"]);
+    assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
+    // A dotted name: both components name namespaces of the unit.
+    w("uab.cpp", "import a.b;\nstatic_assert(a::b::h() == 2);\n");
+    assert_eq!(image_notes(&d, &["-fsyntax-only", abb, "uab.cpp"]), image("a.b"));
+    // An implementation unit's implicit import of its interface.
+    w("impl.cpp", "module m;\nnamespace m { int k() { return f() + g(); } }\n");
+    assert_eq!(image_notes(&d, &["-fsyntax-only", mb, "impl.cpp"]), image("m"));
+
+    // True clashes replay: the importer's namespace, its variable,
+    // another image's namespace, a global module fragment's namespace.
+    w("c1.cpp", "namespace m { int mine(); }\nimport m;\nint main() { return m::f() - 40; }\n");
+    assert_eq!(image_notes(&d, &["-fsyntax-only", m, "c1.cpp"]), replay("m", "m"));
+    w("c2.cpp", "int g;\nimport m;\nint main() { return m::f() - 40 + g; }\n");
+    assert_eq!(image_notes(&d, &["-fsyntax-only", m, "c2.cpp"]), replay("m", "g"));
+    w("c3.cpp", "import m;\nimport n;\nint main() { return m::f() + m::k() - 41; }\n");
+    let notes = image_notes(&d, &["-fsyntax-only", m, n, "c3.cpp"]);
+    assert_eq!(notes, [image("m"), replay("n", "m")].concat());
+    w(
+        "c4.cppm",
+        "module;\n#include \"hm.h\"\nexport module x;\nimport m;\n\
+         export int xx() { return m::z() + m::f(); }\n",
+    );
+    let notes = image_notes(&d, &["--precompile", m, "c4.cppm", "-o", "x.pcm"]);
+    assert_eq!(notes, replay("m", "m"));
+}
+
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
