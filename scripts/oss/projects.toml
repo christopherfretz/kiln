@@ -502,12 +502,12 @@ url = "https://github.com/stephenberry/glaze"
 tag = "v9.1.0"
 build = "cmake"
 cxx_std = 23
-configure = ["-Dglaze_DEVELOPER_MODE=ON", "-DBUILD_TESTING=ON", "-Dglaze_ENABLE_SANITIZERS=OFF", "-Dglaze_BUILD_NETWORKING_TESTS=OFF", "-Dglaze_BUILD_PERFORMANCE_TESTS=OFF", "-Dglaze_ENABLE_FUZZING=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON"]
+configure = ["-Dglaze_DEVELOPER_MODE=ON", "-DBUILD_TESTING=ON", "-Dglaze_ENABLE_SANITIZERS=OFF", "-Dglaze_BUILD_NETWORKING_TESTS=OFF", "-Dglaze_BUILD_PERFORMANCE_TESTS=OFF", "-Dglaze_ENABLE_FUZZING=OFF"]
 test = "ctest --output-on-failure -j 4 --timeout 300"
 c_compiler = "clang-19"
 wave = 4
 verified = true
-notes = "WP-792. C++23 (the library requires it). Sanitizers (on by default for clang), networking tests (OpenSSL) and performance tests are off; standalone Asio is fetched at configure time (FetchContent)."
+notes = "WP-792. C++23 (the library requires it). Sanitizers (on by default for clang), networking tests (OpenSSL) and performance tests are off; standalone Asio is fetched at configure time (FetchContent). Precompiled headers on (WP-1023)."
 
 [mp_units]
 url = "https://github.com/mpusz/mp-units"
@@ -556,13 +556,13 @@ url = "https://github.com/getml/reflect-cpp"
 tag = "v0.27.1"
 build = "cmake"
 cxx_std = 20
-configure = ["-DREFLECTCPP_BUILD_TESTS=ON", "-DREFLECTCPP_USE_VCPKG=OFF", "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON", "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -Wno-error"]
+configure = ["-DREFLECTCPP_BUILD_TESTS=ON", "-DREFLECTCPP_USE_VCPKG=OFF", "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -g0 -Wno-error"]
 deps = ["googletest"]
 test = "ctest --output-on-failure -j 4 --timeout 300"
 c_compiler = "clang-19"
 wave = 4
 verified = true
-notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNCTION__ (not P2996). JSON only (bundled yyjson); googletest is a dependency built with the same compiler. Precompiled headers off for both compilers; the test flags' -ggdb and -Werror are overridden by -g0 -Wno-error in CMAKE_CXX_FLAGS_RELEASE."
+notes = "WP-792. C++20 field reflection by structured bindings and __PRETTY_FUNCTION__ (not P2996). JSON only (bundled yyjson); googletest is a dependency built with the same compiler. Precompiled headers on for both compilers (WP-1023); the test flags' -ggdb and -Werror are overridden by -g0 -Wno-error in CMAKE_CXX_FLAGS_RELEASE."
 
 # Boost: one checkout (`checkout = "boost"`) of the superproject for every
 # boost_* row; the rows differ only in BOOST_INCLUDE_LIBRARIES and
