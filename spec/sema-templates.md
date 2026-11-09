@@ -4381,9 +4381,10 @@ Tests: `dcl.spec.auto/nested-return-placeholder-run.cpp`,
 placeholder. The placeholder checked is the decl-specifier's own, or, when
 the declarator's function declarator nearest the name has a trailing return
 type, the one contained in that trailing type (`declarator_placeholder`;
-`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). GNU
-`__auto_type` is not checked here. The position comes from the
-declarator (`auto_declarator_site`):
+`using F = auto (*)(int) -> int;` is fine, `-> auto` is not). The
+diagnostic's first selector is the keyword (`auto`, `decltype(auto)`, GNU
+`__auto_type`). The position comes from the declarator
+(`auto_declarator_site`):
 
 | Declarator | Position |
 |---|---|
@@ -4407,6 +4408,26 @@ deduction not allowed". Positions that deduce or invent are unaffected:
 variables, `new`, NTTPs, return types, structured bindings (a `typedef` one
 gets only the decomposition error, `dcl.struct.bind/specifiers.cpp`), conditions,
 range-for, conversion functions, generic lambdas and abbreviated templates.
+
+Those positions are language-mode and keyword gated as clang's
+`GetDeclSpecTypeForDeclarator` / `GetFullTypeForDeclarator` (WP-1134;
+`auto_declarator_check`, `param_placeholder_site`,
+`cxx11_deduced_return_check`, `gnu_auto_type_return_check`):
+
+| Position | Rejected |
+|---|---|
+| conversion-type-id | `__auto_type` always, any placeholder before C++14: "in conversion function type"; the conversion function is then invalid (no candidate) |
+| trailing return type | `auto` before C++14: "in function return type" |
+| return type (decl-specifier or trailing) | `__auto_type` always: "in function return type" |
+| function declarator nearest the name, no trailing return type, before C++14 | `auto`: "'auto' return without trailing return type; deduced return types are a C++14 extension"; `decltype(auto)`: "deduced return types are a C++14 extension" (not a lambda's implied `auto`, `Declarator::lambda`) |
+| `new` type-id | `__auto_type`: "in type allocated by 'new'" |
+| NTTP | any placeholder before C++17: "in template parameter until C++17" |
+| function parameter | `auto` before C++20: "in function prototype" |
+| lambda parameter | `auto` before C++14: "in lambda parameter before C++14"; `__auto_type` like `decltype(auto)`: "in lambda parameter" |
+
+Tests: `dcl.spec.auto/placeholders-cxx11.cpp`, `placeholders-cxx14.cpp`,
+`gnu-auto-type.cpp`, `gnu-auto-type-deduction.cpp`,
+`class.conv.fct/operator-auto-cxx11.cpp`, `operator-auto-cxx14.cpp`.
 Tests: `dcl.spec.auto/p5-auto-not-allowed.cpp` (every position above),
 `dcl.spec.auto/p5-auto-allowed.cpp`,
 `expr.prim.req.general/p4-auto-param.cpp`.
@@ -6906,8 +6927,8 @@ ambiguity errors.
 - "use 'template' keyword to treat 'f' as a dependent template name".
 - "no member named 'x' in 'A<int>'".
 - "type 'int' cannot be used prior to '::' because it has no members".
-- "'auto' not allowed in template parameter until C++17" (not reachable
-  under C++26, but kept).
+- "'auto' not allowed in template parameter until C++17" (before C++17;
+  §6.3).
 
 ## 11. Interfaces and memory accounting
 
