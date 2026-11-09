@@ -5,7 +5,7 @@
 // (WP-1163). spec/sema.md "Never constant".
 //@ expect: compile-fail
 //@ std: c++20
-//@ args: -Wno-unused-value -Wno-c++23-extensions -ferror-limit=0
+//@ args: -Wno-unused-value -Wno-c++23-extensions -Wno-unsequenced -ferror-limit=0
 //@ strict-diags
 //@ diag: 55:15 error "constexpr function never produces a constant expression"
 //@ diag: 55:47 note "division by zero"
