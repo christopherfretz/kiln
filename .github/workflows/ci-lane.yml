@@ -21,6 +21,10 @@ env:
   KILN_GCC: /usr/local/bin/g++
   KILN_REQUIRE_GCC: "1"
   KILN_REQUIRE_DEBUGGERS: "1"
+  # And a `requires: sanitizer-runtime` run test (WP-1032) whose clangs find
+  # no compiler-rt: the corpus jobs pass `sanitizer-runtimes: "true"`
+  # (`ci_tests::workflow_installs_the_sanitizer_runtimes`, WP-1034).
+  KILN_REQUIRE_SANITIZER_RUNTIME: "1"
 defaults:
   run: { shell: bash }
 jobs:
@@ -84,7 +88,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
+        with:
+          cache-key: "${{ inputs.cache-key }}"
+          debuggers: "true"
+          sanitizer-runtimes: "true"
       - run: cargo xtask ci --step self-check --shard ${{ matrix.shard }}/${{ strategy.job-total }}
   # The kiln corpus run, oracle clang 22, in S shards. S is the length of
   # this list (THE constant to retune; kiln-19 reuses it via the anchor):
@@ -101,8 +108,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
+        with:
+          cache-key: "${{ inputs.cache-key }}"
+          debuggers: "true"
+          sanitizer-runtimes: "true"
+          cmake: "${{ matrix.shard == 1 }}"
       - run: cargo xtask ci --step kiln --shard ${{ matrix.shard }}/${{ strategy.job-total }}
+      # The CMake modules end-to-end (WP-982, WP-1034): the kiln++ the step
+      # above built, as CMAKE_CXX_COMPILER with Ninja, in shard 1 only.
+      - if: ${{ !cancelled() && matrix.shard == 1 }}
+        run: KILN_OSS_CXX="$PWD/target/debug/kiln++" scripts/oss/selftest.sh --cmake-modules
   # The two-oracle policy (spec/harness.md "Oracle toolchain", WP-355): the
   # kiln corpus also stays green with clang 19 as the oracle.
   kiln-19:
@@ -116,7 +131,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/kiln-ci
-        with: { cache-key: "${{ inputs.cache-key }}", debuggers: "true" }
+        with:
+          cache-key: "${{ inputs.cache-key }}"
+          debuggers: "true"
+          sanitizer-runtimes: "true"
       - run: >-
           KILN_ORACLE=19 cargo xtask ci --oracle-only --step kiln
           --shard ${{ matrix.shard }}/${{ strategy.job-total }}

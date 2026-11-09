@@ -138,7 +138,8 @@ usage: cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard <K/N>]
   --step <steps> run only these steps (comma list, or repeat the flag; default all):
                    lints       diag-split --check, the spec/landed lint, fmt, clippy
                    unit        cargo test --workspace (--oracle-only: its KILN_ORACLE
-                               targets)
+                               targets), the mangling differential (mangle_vs_clang)
+                               as its own command
                    self-check  the clang++-N corpus self-check
                    kiln        cargo build -p kiln_driver, then the kiln corpus run
                  an unselected step prints `skipped (--step)`
@@ -153,6 +154,8 @@ KILN_REQUIRE_GCC=1: no usable GCC oracle (KILN_GCC, else g++-16) is an error
 KILN_REQUIRE_DEBUGGERS=1: in the corpus runs, a `debugger` test (tests/debuginfo)
 whose gdb or lldb-19 is not on PATH is an ERROR, not a SKIP (spec/harness.md
 \"Debugger tests\").
+KILN_REQUIRE_SANITIZER_RUNTIME=1: in the corpus runs, a `requires: sanitizer-runtime`
+test whose clangs find no UBSan/ASan runtime (compiler-rt) is an ERROR, not a SKIP.
 ";
 
 /// The cargo test targets whose outcome depends on `KILN_ORACLE`, as
@@ -174,6 +177,16 @@ const ORACLE_TESTS: &[(&str, &str)] = &[("kiln_codegen", "ir_vs_clang")];
 /// `.github/workflows/ci-lane.yml` lists the same names
 /// (`ci_tests::workflow_lists_the_unit_groups`).
 const UNIT_GROUPS: &[(&str, &[&str])] = &[("xtask", &["xtask"]), ("codegen", &["kiln_codegen"])];
+
+/// The Itanium mangling differential (`crates/kiln_codegen/tests/
+/// mangle_vs_clang.rs`, WP-980) as `(package, test target, test name)`.
+/// The unit step runs it as a step of its own, after the package's other
+/// tests (which `--skip` it), with `--nocapture`, so its per-triple file and
+/// symbol counts reach the log (WP-1034, spec/harness.md "The mangling
+/// differential"); under `KILN_REQUIRE_LLVM=1` a missing `clang++-19` fails
+/// it instead of skipping it.
+const MANGLE_TEST: (&str, &str, &str) =
+    ("kiln_codegen", "mangle_vs_clang", "mangling_matches_clang");
 
 /// The unit group of every workspace package no [`UNIT_GROUPS`] entry names.
 const UNIT_REST: &str = "rest";
@@ -290,7 +303,9 @@ fn ci_lint_steps() -> Vec<Vec<String>> {
 
 /// The `cargo` commands of the `unit` step: `cargo test --workspace`, or one
 /// [`UNIT_GROUPS`] group of it, or under `--oracle-only` the
-/// [`ORACLE_TESTS`] targets.
+/// [`ORACLE_TESTS`] targets. When the selection includes the
+/// [`MANGLE_TEST`] package, the differential is split out into a second,
+/// `--nocapture` command.
 fn ci_unit_steps(oracle_only: bool, group: Option<&str>) -> Vec<Vec<String>> {
     let own = |v: &[&str]| v.iter().map(|&a| a.to_owned()).collect::<Vec<String>>();
     if oracle_only {
@@ -314,7 +329,16 @@ fn ci_unit_steps(oracle_only: bool, group: Option<&str>) -> Vec<Vec<String>> {
             }
         }
     }
-    vec![step]
+    let (pkg, target, name) = MANGLE_TEST;
+    let has_mangle = match named {
+        Some((_, pkgs)) => pkgs.contains(&pkg),
+        None => group.is_none(),
+    };
+    if !has_mangle {
+        return vec![step];
+    }
+    step.extend(own(&["--", "--skip", name]));
+    vec![step, own(&["test", "-p", pkg, "--test", target, "--", "--nocapture"])]
 }
 
 #[allow(clippy::too_many_lines, reason = "one linear sequence of gate steps")]
@@ -500,6 +524,7 @@ fn ci_corpus(
         compiler,
         require_gcc,
         require_debuggers: test::require_debuggers_from_env(),
+        require_sanitizer_runtime: test::require_sanitizer_runtime_from_env(),
         shard,
         bmi_kind,
         ..test::Options::default()
@@ -611,9 +636,19 @@ mod ci_tests {
             [["test", "-p", "kiln_codegen", "--test", "ir_vs_clang"]],
             "--oracle-only"
         );
-        assert_eq!(ci_unit_steps(false, None), [["test", "--workspace"]]);
+        let mangle =
+            ["test", "-p", "kiln_codegen", "--test", "mangle_vs_clang", "--", "--nocapture"];
+        let skip = ["--", "--skip", "mangling_matches_clang"];
+        let own = |v: &[&str]| v.iter().map(|&a| a.to_owned()).collect::<Vec<String>>();
+        assert_eq!(
+            ci_unit_steps(false, None),
+            [own(&[&["test", "--workspace"][..], &skip].concat()), own(&mangle)]
+        );
         assert_eq!(ci_unit_steps(false, Some("xtask")), [["test", "-p", "xtask"]]);
-        assert_eq!(ci_unit_steps(false, Some("codegen")), [["test", "-p", "kiln_codegen"]]);
+        assert_eq!(
+            ci_unit_steps(false, Some("codegen")),
+            [own(&[&["test", "-p", "kiln_codegen"][..], &skip].concat()), own(&mangle)]
+        );
         assert_eq!(
             ci_unit_steps(false, Some(UNIT_REST)),
             [["test", "--workspace", "--exclude", "xtask", "--exclude", "kiln_codegen"]]
@@ -740,19 +775,12 @@ mod ci_tests {
         }
     }
 
-    /// The debugger tests cannot silently skip in GitHub CI (WP-816,
-    /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
-    /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
-    /// step installs gdb and lldb-19 (`debuggers: "true"`) in a container
-    /// with `CAP_SYS_PTRACE`.
-    #[test]
-    fn workflow_installs_the_debuggers() {
+    /// ci-lane.yml's text and its jobs, each a two-space-indented `name:`
+    /// line and the lines that follow it.
+    fn lane_workflow() -> (String, Vec<(String, String)>) {
         let path = util::repo_root().join(".github/workflows/ci-lane.yml");
         let yml = std::fs::read_to_string(&path).unwrap();
-        assert!(yml.contains("\n  KILN_REQUIRE_DEBUGGERS: \"1\"\n"), "{}", path.display());
-        assert!(yml.contains("options: --cap-add=SYS_PTRACE"), "{}", path.display());
         let jobs = &yml[yml.find("\njobs:\n").expect("a jobs: map")..];
-        // Each job is a two-space-indented `name:` line and what follows.
         let mut blocks: Vec<(String, String)> = Vec::new();
         for line in jobs.lines().skip(2) {
             let top = line.len() > 2 && !line[2..].starts_with([' ', '#']);
@@ -763,14 +791,67 @@ mod ci_tests {
                 b.push('\n');
             }
         }
+        (yml, blocks)
+    }
+
+    /// The jobs that run the corpus (self-check, kiln-22, kiln-19).
+    fn corpus_jobs(blocks: &[(String, String)]) -> Vec<&(String, String)> {
         let corpus: Vec<&(String, String)> = blocks
             .iter()
             .filter(|(_, b)| b.contains("--step kiln") || b.contains("--step self-check"))
             .collect();
-        assert!(corpus.len() >= 3, "self-check, kiln-22, kiln-19 in {}", path.display());
-        for (name, b) in corpus {
+        assert!(corpus.len() >= 3, "self-check, kiln-22, kiln-19 in ci-lane.yml");
+        corpus
+    }
+
+    /// The debugger tests cannot silently skip in GitHub CI (WP-816,
+    /// spec/harness.md "Debugger tests"): `.github/workflows/ci-lane.yml`
+    /// sets `KILN_REQUIRE_DEBUGGERS: "1"`, and every job that runs a corpus
+    /// step installs gdb and lldb-19 (`debuggers: "true"`) in a container
+    /// with `CAP_SYS_PTRACE`.
+    #[test]
+    fn workflow_installs_the_debuggers() {
+        let (yml, blocks) = lane_workflow();
+        assert!(yml.contains("\n  KILN_REQUIRE_DEBUGGERS: \"1\"\n"));
+        assert!(yml.contains("options: --cap-add=SYS_PTRACE"));
+        for (name, b) in corpus_jobs(&blocks) {
             assert!(b.contains("debuggers: \"true\""), "job `{name}` installs no debuggers");
             assert!(b.contains("container: *debugger-container"), "job `{name}` lacks ptrace");
         }
+    }
+
+    /// WP-1034: the `requires: sanitizer-runtime` tests run in CI on both
+    /// lanes rather than skip (spec/harness.md "Directives").
+    #[test]
+    fn workflow_installs_the_sanitizer_runtimes() {
+        let (yml, blocks) = lane_workflow();
+        let env = format!("\n  {}: \"1\"\n", test::REQUIRE_SANITIZER_RUNTIME_ENV);
+        assert!(yml.contains(&env), "ci-lane.yml sets no {env}");
+        for (name, b) in corpus_jobs(&blocks) {
+            assert!(b.contains("sanitizer-runtimes: \"true\""), "job `{name}` lacks compiler-rt");
+        }
+        let action = util::repo_root().join(".github/actions/kiln-ci/action.yml");
+        let action = std::fs::read_to_string(action).unwrap();
+        assert!(action.contains("libclang-rt-19-dev libclang-rt-22-dev"));
+    }
+
+    /// WP-1034: one corpus job runs the `CMake` modules end-to-end with the
+    /// kiln++ it built, and installs cmake and ninja for it.
+    #[test]
+    fn workflow_runs_the_cmake_modules_e2e() {
+        let (_, blocks) = lane_workflow();
+        let runs: Vec<&String> = blocks
+            .iter()
+            .filter(|(_, b)| b.contains("scripts/oss/selftest.sh --cmake-modules"))
+            .map(|(n, _)| n)
+            .collect();
+        assert!(!runs.is_empty(), "no ci-lane.yml job runs selftest.sh --cmake-modules");
+        for (name, b) in blocks.iter().filter(|(n, _)| runs.contains(&n)) {
+            assert!(b.contains("cmake: "), "job `{name}` installs no cmake");
+            assert!(b.contains("--step kiln"), "job `{name}` builds no kiln++ first");
+        }
+        let action = util::repo_root().join(".github/actions/kiln-ci/action.yml");
+        let action = std::fs::read_to_string(action).unwrap();
+        assert!(action.contains("cmake ninja-build"));
     }
 }
