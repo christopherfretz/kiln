@@ -1433,8 +1433,17 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     qualifier, its prefix, the object's class) and goes to
     `Sema::act_on_member_destructor_type_q`. If the name is not a
     template, the argument list is skipped and
-    `Sema::diagnose_destructor_non_template` reports it (WP-1152). A
-    template-id on the pseudo-destructor path is still `unsupported`.
+    `Sema::diagnose_destructor_non_template` reports it (WP-1152). On
+    the pseudo-destructor path either type-name may be a
+    simple-template-id (`p->~A<int>()`, `p->N::I::~B<int>()`,
+    `p->A<int>::~A()`; a template-id first type-name is taken there only
+    on a non-dependent object, as `C<T>::` on a dependent one stays a
+    nested-name-specifier): `parse_pseudo_dtor_template_id` classifies
+    the template-name with `Sema::classify_pseudo_destructor_template`
+    (in the prefix `S`, else here), forms the type, or reports a
+    non-template with `Sema::diagnose_pseudo_destructor_non_template`;
+    after a dependent `S` it forms `S::template Q<args>`. The types go to
+    `Sema::act_on_pseudo_destructor_type_q` (WP-1155).
     `~decltype(e)`
     after `.`/`->` ([expr.prim.id.dtor]/1, a computed-type-specifier) is
     parsed with `parse_decltype_specifier` and passed to
