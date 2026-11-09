@@ -1584,7 +1584,9 @@ silently (`diag = None`) at those sites. S3O lists them.
    `.../constrained-partial-selection-run.cpp`). In each direction a pack expansion
    among the synthesized arguments is deduced as a whole by a pack
    expansion of the other partial ([temp.deduct.type]/9,
-   `DeducedArgs::expansions`), so `template <class... P> X<0, T<P...>>`
+   `DeducedArgs::expansions`; a type or template template pattern from
+   the pattern of the other's expansion, a non-type one as the
+   expansion itself), so `template <class... P> X<0, T<P...>>`
    is more specialized than `template <int R, class... P> X<R, T<P...>>`
    whatever the indices of the two `P`s (WP-292; test
    `templates/spec/temp.spec.partial.order-pack-expansion.cpp`). Each
