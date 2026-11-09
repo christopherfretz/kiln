@@ -837,7 +837,7 @@ impl Sema<'_, '_> {
     /// referenced type.
     fn special_param(&self) -> Option<(DeclId, QualType)> {
         let f = self.func.as_ref()?.decl;
-        let p = *self.param_decls(f).first()?;
+        let p = *self.special_params(f).first()?;
         let ty = self.ast.decls.get(p).ty()?;
         Some((p, self.non_reference(ty)))
     }
@@ -1472,8 +1472,19 @@ impl Sema<'_, '_> {
             .unwrap_or_else(|| self.ast.decls.get(f).loc());
         let moving = kind == SpecialKind::MoveAssign;
         let Some((p, other_ty)) = self.special_param() else { return false };
-        let Some(this_ty) = self.func.as_ref().and_then(|s| s.this_ty) else { return false };
-        let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
+        // The object assigned to: `*this`, or an explicit object parameter
+        // (`S &operator=(this S &, const S &) = default;`, [dcl.fct]/6).
+        let explicit = self.has_explicit_object(f).then(|| self.param_decls(f)[0]);
+        let (this_ty, obj_ty) = match explicit {
+            Some(o) => {
+                let t = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
+                (QualType::ERROR, self.non_reference(t))
+            }
+            None => {
+                let Some(t) = self.func.as_ref().and_then(|s| s.this_ty) else { return false };
+                (t, self.ast.types.pointee(t).unwrap_or(QualType::ERROR))
+            }
+        };
         let obj_q = self.ast.types.effective_quals(obj_ty);
         let other_q = self.ast.types.effective_quals(other_ty);
         let mut stmts: Vec<StmtId> = Vec::new();
@@ -1496,9 +1507,7 @@ impl Sema<'_, '_> {
                 vk,
                 Some(path),
             );
-            let this = self.builder().this_expr(this_ty, false, loc);
-            let obj =
-                self.builder().unary(UnaryOp::Deref, this, obj_ty, loc, ExprFlags::CANNOT_OVERFLOW);
+            let obj = self.assign_object(explicit, this_ty, obj_ty, loc);
             let to_ty =
                 if obj_q.is_empty() { spec.ty } else { self.ast.types.qualify(spec.ty, obj_q) };
             let to = conv::raw_cast(
@@ -1548,8 +1557,16 @@ impl Sema<'_, '_> {
             }
             let fq = self.ast.types.effective_quals(self.ety(from));
             let from = self.field_access(from, m, fq, false, loc);
-            let this = self.builder().this_expr(this_ty, false, loc);
-            let to = self.field_access(this, m, obj_q, true, loc);
+            let to = match explicit {
+                Some(o) => {
+                    let obj = self.param_ref(o, obj_ty, loc);
+                    self.field_access(obj, m, obj_q, false, loc)
+                }
+                None => {
+                    let this = self.builder().this_expr(this_ty, false, loc);
+                    self.field_access(this, m, obj_q, true, loc)
+                }
+            };
             match self.assign_subobject(fty, to, from, loc) {
                 Some(s) => stmts.push(s),
                 None => invalid = true,
@@ -1558,13 +1575,27 @@ impl Sema<'_, '_> {
         if invalid {
             return false;
         }
-        let this = self.builder().this_expr(this_ty, false, loc);
-        let obj =
-            self.builder().unary(UnaryOp::Deref, this, obj_ty, loc, ExprFlags::CANNOT_OVERFLOW);
+        let obj = self.assign_object(explicit, this_ty, obj_ty, loc);
         stmts.push(self.builder().return_stmt(Some(obj), None, loc));
         let body = self.builder().compound(&stmts, loc, loc);
         let _ = self.builder().set_body(f, body);
         true
+    }
+
+    /// The object a defaulted assignment operator assigns to, an lvalue of
+    /// `obj_ty`: its explicit object parameter `explicit`, else `*this`.
+    fn assign_object(
+        &mut self,
+        explicit: Option<DeclId>,
+        this_ty: QualType,
+        obj_ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        if let Some(o) = explicit {
+            return self.param_ref(o, obj_ty, loc);
+        }
+        let this = self.builder().this_expr(this_ty, false, loc);
+        self.builder().unary(UnaryOp::Deref, this, obj_ty, loc, ExprFlags::CANNOT_OVERFLOW)
     }
 
     /// clang `buildSingleCopyAssign`: the assignment of the subobject `to`
