@@ -1073,7 +1073,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | open |
 | WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | done (#455) |
 | WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
-| WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | open |
+| WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | in progress |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | done (#467) |
 | WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | done (#437, WP-914) |
 | WP-1056 | constexpr int f(){__builtin_unreachable();} reports never-constant where clang reports err_constexpr_body_no_return (never_constant.rs:177) | WP-945 | open |
