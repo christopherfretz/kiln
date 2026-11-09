@@ -644,7 +644,13 @@ fault counts and trap ids unchanged.
   `run.object`, not at resolve time. `automatic_referent(ast, value)`
   finds such a pointer anywhere in a frozen value (scalars, relocations,
   pointer-to-constant chains), which sema uses for usability
-  (spec/sema.md §4.9) and codegen to skip the fold. Left: a lambda body
+  (spec/sema.md §4.9) and codegen to skip the fold. A temporary
+  lifetime-extended by such a `constexpr` local reference (WP-1122) is an
+  automatic object too: `begin_static_extended` allocates the variable's
+  `StorageDuration::Automatic` extended temporaries as `Origin::Let`
+  objects as well as its static ones, the pointer freezes as
+  `PtrBase::Temporary(t)`, and `automatic_referent` reports a temporary
+  whose extending variable is a local. Left: a lambda body
   reading through such a pointer in its own `static_assert` is accepted
   (the evaluation point is not known to the Oven).
 - Freezing a pointer or reference to an object with thread storage
