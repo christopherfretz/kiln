@@ -1619,7 +1619,6 @@ fn sanitizer_ignorelist_asan() {
     for g in [
         "@src_g = dso_local global [3 x i32] zeroinitializer, no_sanitize_address,",
         "@skip_g = dso_local global [4 x i32] zeroinitializer, no_sanitize_address,",
-        "@kept_g = dso_local global [4 x i32] zeroinitializer, align 4",
         "@by_type = dso_local global %struct.Skipped zeroinitializer, no_sanitize_address,",
         "@by_type_arr = dso_local global [2 x %struct.Skipped] zeroinitializer, \
          no_sanitize_address,",
@@ -1631,6 +1630,12 @@ fn sanitizer_ignorelist_asan() {
     ] {
         assert!(ll.contains(g), "{g}\n{ll}");
     }
+    // The alignment differs by host (16 on x86_64 SysV, 4 on aarch64), so check only the attributes.
+    let kept = ll.lines().find(|l| l.starts_with("@kept_g = ")).unwrap();
+    assert!(
+        kept.starts_with("@kept_g = dso_local global [4 x i32] zeroinitializer, align "),
+        "{kept}"
+    );
     for (f, on) in [
         ("@_Z4skipPi", false),
         ("@_Z9skip_tmplIiET_PS0_", false),
