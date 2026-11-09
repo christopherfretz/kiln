@@ -302,8 +302,7 @@ All `-fkiln-*` flags are experimental.
 - `-fconstexpr-ops-limit=` (GCC's) is accepted and sets the step budget.
 - `-ftime-trace[=]`, `-ftime-trace-granularity=` and
   `-ftime-trace-verbose` warn and write nothing.
-- `-fcoverage-mapping` and the PGO flags are rejected (see
-  [Coverage](#coverage)).
+- The PGO flags are rejected (see [Coverage](#coverage)).
 - `--target=` accepts only aarch64 and x86_64 Linux triples.
 - `-x c` and `.c` inputs can only be preprocessed. `kiln++` warns about a
   `.c` input and compiles it as C++, as `clang++` does.
@@ -354,8 +353,21 @@ the ignorelist are not done yet; see
   same line counts as for clang 19.
 - `-fprofile-instr-generate[=<file>]` (source-based coverage counters)
   works. `llvm-profdata show --counts` matches clang 19.
-- `-fcoverage-mapping` (`llvm-cov show`/`report`) is not implemented yet
-  and is rejected.
+- `-fprofile-instr-generate -fcoverage-mapping` (source-based coverage
+  with `llvm-cov show`/`report`/`export`) works as with clang:
+
+  ```sh
+  kiln++ -fprofile-instr-generate -fcoverage-mapping -O0 app.cpp -o app
+  LLVM_PROFILE_FILE=app.profraw ./app
+  llvm-profdata merge -o app.profdata app.profraw
+  llvm-cov report ./app -instr-profile=app.profdata
+  llvm-cov show ./app -instr-profile=app.profdata
+  ```
+
+  The mapping is clang 19's in every `-fclang-compat` mode; use the
+  `llvm-profdata`/`llvm-cov` of the LLVM you link with.
+  `-fcoverage-compilation-dir=` and `-fcoverage-prefix-map=` behave as in
+  clang. Unused inline and static functions show as 0%.
 - Profile-guided optimization (`-fprofile-generate`, `-fprofile-use`,
   `-fprofile-instr-use`, `-fprofile-sample-use`, `-fcs-profile-generate`)
   is not part of 1.0 and is rejected with an error that says so.

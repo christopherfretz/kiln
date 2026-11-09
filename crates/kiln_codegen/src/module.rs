@@ -273,6 +273,8 @@ pub(crate) struct Cg<'a> {
     pub tbaa: crate::tbaa::TbaaCache,
     /// Debug information (`-g`; spec/codegen.md "Debug information").
     pub di: Option<Box<crate::debuginfo::Di<'a>>>,
+    /// Source-based coverage mapping state (WP-1003).
+    pub(crate) cov: crate::coverage::records::CovModule,
 }
 
 impl<'a> Cg<'a> {
@@ -471,6 +473,7 @@ impl<'a> Cg<'a> {
             diags: Vec::new(),
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
+            cov: crate::coverage::records::CovModule::default(),
             anon: mangle::AnonIds::with_reflection_mangling(opts.reflection_mangling),
             tbaa: crate::tbaa::TbaaCache::default(),
             vis_active: opts.visibility != Visibility::Default
@@ -725,6 +728,12 @@ impl<'a> Cg<'a> {
                 }
                 DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
                     self.emit_global_fn(d)?;
+                    // clang `EmitTopLevelDecl`: "always provide some
+                    // coverage mapping even for the functions that
+                    // aren't emitted".
+                    if !ast.decls.function(d).is_some_and(|f| f.spec.is_immediate()) {
+                        self.cov_defer_unused(d);
+                    }
                 }
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
                     self.emit_global_structor(d)?;
@@ -734,6 +743,9 @@ impl<'a> Cg<'a> {
                 // and nested classes; inline member functions are emitted
                 // when first used.
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    if n.kind() == DeclKind::CXXRecord {
+                        self.cov_defer_class(d, 0);
+                    }
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }

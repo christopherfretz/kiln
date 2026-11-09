@@ -136,9 +136,39 @@ impl Sema<'_, '_> {
             Named::Error => None,
         };
         self.cleanup = super::CleanupState::default();
+        if let Some(ci) = &built {
+            self.note_mem_init_end(ci.init, &info.init);
+        }
         match built {
             Some(ci) => self.mem_inits.inits.push(ci),
             None => self.mem_inits.any_errors = true,
+        }
+    }
+
+    /// clang's `CXXConstructExpr` of a mem-initializer ends at its `)` or
+    /// `}` (`ParenOrBraceRange`): records it when the construct has no
+    /// end yet (source-based coverage regions, WP-1003).
+    fn note_mem_init_end(&mut self, init: ExprId, written: &Initializer) {
+        let end = match written {
+            Initializer::Paren(_, _, r) => *r,
+            Initializer::List(l) => l.rbrace,
+            Initializer::Expr(_) => return,
+        };
+        let mut e = init;
+        for _ in 0..16 {
+            match self.ast.exprs.get(e).kind() {
+                ExprKind::ExprWithCleanups
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr => e = self.ast.exprs.operand(e),
+                ExprKind::CXXConstructExpr => {
+                    if end != Loc::INVALID && self.ast.exprs.end_loc(e).is_none() {
+                        let _ = self.ast.exprs.cold.end_loc.insert(e, end);
+                    }
+                    return;
+                }
+                _ => return,
+            }
         }
     }
 

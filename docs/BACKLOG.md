@@ -941,7 +941,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
 | WP-903 | sema: never-constant check tracks locals (never_constant.rs:280); oven potential mode stops after a quiet nested call (vm.rs:2058) | WP-873 | deferred |
 | WP-904 | sema accepts-invalid: `sizeof(L::N)` without `typename` for a dependent member class of a local class (clang 19 rejects) | WP-884 | open |
-| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | open |
+| WP-905 | sema SILENT DROP: a failed instantiated-decl lookup in a local class member body drops the statement silently (templ/subst/decls.rs near enum_decl ~1503) | WP-884 | done (#446) |
 | WP-906 | bench: reflect s7/s8 baselines stale vs current host load; re-baseline on a quiet host | WP-884 | deferred |
 | WP-913 | sema: promote coro_lifetimebound/coro_disable_lifetimebound out of class C into the dangling walk (crates/kiln_sema/src/attr_triage.rs:167-170) | WP-891 | open |
 | WP-914 | sema rejects-valid (compat 19): structured-binding tuple_element index is an unconverted size_t value, so `template<unsigned I, class T> struct tuple_element` misses its explicit specialization (struct_bind.rs:673); xfail dcl.struct.bind/tuple-element-unsigned-index-19.cpp | WP-891 | done (#437) |
@@ -1023,7 +1023,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
-| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | open |
+| WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
 | WP-1004 | driver: gcov filters `-fprofile-filter-files`/`-fprofile-exclude-files` (coverage_flags.rs:131) | WP-941 | open |
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
 | WP-1006 | abi: non-visible unnamed enum mangles `Ut_` vs clang `$_N` (mangle.rs:2339; xfail basic.link/unnamed-enum-internal-name-run.cpp) | WP-941 | open |
@@ -1100,3 +1100,6 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1078 | accepts-invalid: implicit copy/move assignment overriding a final function and the implicit overrider return-type check are not diagnosed (kiln_sema class/special/implicit.rs:1368, class/virtual/mod.rs:414; needs note while declaring the implicit copy assignment operator) | WP-957 | open |
 | WP-1079 | accepts-invalid: overrider nested function-type exception-spec rule (exception specifications of argument types differ) (kiln_sema except.rs:1172, class/virtual/mod.rs:785) | WP-957 | open |
 | WP-1080 | accepts-invalid: enum F; with no fixed underlying type is not diagnosed (ISO C++ forbids forward references to enum types) (kiln_sema decl.rs:7911) | WP-957 | open |
+| WP-1082 | coverage: port clang 20+ mapping for compat 22 (gaps between logical-operator operands, counters on folded branches, branch counter order, do-while(0) macro region) (kiln_codegen coverage/mapping.rs:1472, :598) | WP-1003 | open |
+| WP-1083 | coverage fidelity tail: zero records for constant-evaluation-only instantiations (coverage/records.rs:116, module.rs:735), extra records for generic lambdas (records.rs:238), duplicate zero-length regions (mapping.rs:1659), stringizing as nested expansion (mapping.rs:60), skipped-range end after init-capture (skipped.rs:113), qualified base-init start (ctorinit.rs:92), compound literal end (ast.rs:107) | WP-1003 | open |
+| WP-1084 | accepts-invalid: a local class inside a template is not a dependent type, so unqualified lookup into a dependent local base and O::In2() without typename are accepted (kiln_sema templ/actions.rs:160 is_dependent_type, class/access.rs:311 has_dependent_bases_in) | WP-905 | open |
