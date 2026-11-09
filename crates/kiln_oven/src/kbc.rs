@@ -105,7 +105,8 @@ ops! {
     // [dst, p, idx, elem type]; aux = idx width | idx signed << 8 | negate << 9
     // | element step << 10 (ptr_add_aux)
     PtrAdd = 4,
-    // [dst, p, q, elem type]
+    // [dst, p, q, elem type]; aux 1 = the pointee is a zero-size array: a
+    // subtraction within one object is undefined ([expr.add]/5, WP-948)
     PtrSub = 4,
     // [dst, p, q, pointee type]; aux = cmp
     PtrCmp = 4,
