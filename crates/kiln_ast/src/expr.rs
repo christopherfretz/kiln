@@ -1385,6 +1385,13 @@ pub struct ColdExprData {
     /// `template [: r :] < args >` (P2996 [expr.prim.splice]): the
     /// template arguments as written.
     pub splice_args: ColdMap<ExprId, ArgListId>,
+    /// A `CXXDefaultArgExpr` whose default argument was rebuilt for this
+    /// use (clang `CXXDefaultArgExpr::getRewrittenExpr`): in a
+    /// lifetime-extending context its temporaries are its own, fresh
+    /// `MaterializeTemporaryExpr`s that the extending declaration
+    /// extends, where the parameter's shared default argument keeps
+    /// those of every other call (spec/sema.md §7.6a).
+    pub default_arg_rewritten: ColdMap<ExprId, ExprId>,
 }
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
@@ -1510,6 +1517,7 @@ impl Default for ColdExprData {
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
             splice_args: ColdMap::new("splice_args"),
+            default_arg_rewritten: ColdMap::new("default_arg_rewritten"),
         }
     }
 }
@@ -2170,6 +2178,117 @@ impl ExprArena {
     /// parameter's shared default argument).
     pub fn default_arg_param(&self, e: ExprId) -> DeclId {
         DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
+    }
+
+    /// The default argument rebuilt for the `CXXDefaultArgExpr` `e`, if
+    /// any ([`ColdExprData::default_arg_rewritten`]).
+    pub fn default_arg_rewritten(&self, e: ExprId) -> Option<ExprId> {
+        self.cold.default_arg_rewritten.get(e).copied()
+    }
+
+    /// Records `rewritten` as the default argument of the
+    /// `CXXDefaultArgExpr` `e` (sema, in a lifetime-extending context).
+    /// Write-once.
+    ///
+    /// # Errors
+    /// If `e` already has one.
+    pub fn set_default_arg_rewritten(
+        &mut self,
+        e: ExprId,
+        rewritten: ExprId,
+    ) -> Result<(), AlreadySet> {
+        let _ = self.expect_kind(e, ExprKind::CXXDefaultArgExpr);
+        self.cold.default_arg_rewritten.insert(e, rewritten)
+    }
+
+    /// A copy of `e` whose children ([`ExprArena::children`] order) are
+    /// `kids`, with `e`'s side records and cold data, for rebuilding the
+    /// path from a shared initializer down to the temporaries that must
+    /// be fresh (spec/sema.md §7.6a: a default argument rebuilt for a
+    /// lifetime-extending context). `None` for a kind it does not copy,
+    /// or when `kids` does not match `e`'s children. A copied
+    /// `MaterializeTemporaryExpr` keeps `e`'s storage: callers copy
+    /// only full-expression ones.
+    pub fn clone_with_children(
+        &mut self,
+        e: ExprId,
+        lists: &mut IdLists,
+        kids: &[ExprId],
+    ) -> Option<ExprId> {
+        let n = *self.get(e);
+        let old = self.children(e, lists);
+        if old.len() != kids.len() {
+            return None;
+        }
+        let mut c = n;
+        match n.kind {
+            ExprKind::MemberExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::ParenExpr
+            | ExprKind::MaterializeTemporaryExpr
+            | ExprKind::CXXBindTemporaryExpr
+            | ExprKind::CXXStdInitializerListExpr => c.a = kids.first()?.raw(),
+            k if k.is_cast() => c.a = kids.first()?.raw(),
+            ExprKind::BinaryOperator | ExprKind::ArraySubscriptExpr => {
+                c.a = kids.first()?.raw();
+                c.b = kids.get(1)?.raw();
+            }
+            ExprKind::ConditionalOperator => {
+                c.a = kids.first()?.raw();
+                c.b = self.push_cond_arms(*kids.get(1)?, *kids.get(2)?);
+            }
+            ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                c.b = lists.push(kids).raw();
+            }
+            ExprKind::CallExpr | ExprKind::CXXMemberCallExpr | ExprKind::CXXOperatorCallExpr => {
+                let (args, callee) =
+                    if n.a == 0 { (kids, None) } else { (&kids[1..], kids.first()) };
+                c.a = callee.map_or(0, |x| x.raw());
+                c.b = lists.push(args).raw();
+            }
+            ExprKind::CXXParenListInitExpr => {
+                let (args, filler) = if n.b == 0 {
+                    (kids, None)
+                } else {
+                    kids.split_last().map(|(f, a)| (a, Some(f)))?
+                };
+                c.a = lists.push(args).raw();
+                c.b = filler.map_or(0, |x| x.raw());
+            }
+            ExprKind::InitListExpr => {
+                let mut extra = self.init_lists[n.b as usize];
+                let (inits, filler) = match extra.array_filler {
+                    None => (kids, None),
+                    Some(_) => kids.split_last().map(|(f, a)| (a, Some(*f)))?,
+                };
+                extra.array_filler = filler;
+                c.a = lists.push(inits).raw();
+                c.b = self.push_init_list(extra);
+            }
+            ExprKind::CXXDefaultArgExpr => {}
+            _ => return None,
+        }
+        let id = self.push(c);
+        let cold = &mut self.cold;
+        if let Some(&l) = cold.end_loc.get(e) {
+            let _ = cold.end_loc.insert(id, l);
+        }
+        if let Some(&x) = cold.member_extra.get(e) {
+            let _ = cold.member_extra.insert(id, x);
+        }
+        if let Some(&x) = cold.source_loc.get(e) {
+            let _ = cold.source_loc.insert(id, x);
+        }
+        if let Some(&x) = cold.union_field.get(e) {
+            let _ = cold.union_field.insert(id, x);
+        }
+        if let Some(&x) = cold.cast_written.get(e) {
+            let _ = cold.cast_written.insert(id, x);
+        }
+        if let Some(&x) = cold.trait_rhs_loc.get(e) {
+            let _ = cold.trait_rhs_loc.insert(id, x);
+        }
+        Some(id)
     }
 
     /// The identifier a `PredefinedExpr` names.
@@ -2977,6 +3096,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
         r.push(self.cold.splice_args.mem_row().prefixed("cold"));
+        r.push(self.cold.default_arg_rewritten.mem_row().prefixed("cold"));
         r
     }
 }
