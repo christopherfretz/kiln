@@ -1670,15 +1670,71 @@ body; it still costs one record per node, and the replay's lexing,
 parsing and checking are gone (measured in "Measurements": 0.11 s to 0.03 s for 4800
 records).
 
-**Templates as patterns** (follow-up S4). A template's record will carry
-its parameter list, its pattern declaration and its body as expression
-and statement records with dependent types, which the importer
-instantiates as if it had parsed them. Its instantiations made in the
-interface are merged by (template, remapped arguments) and keep their
-carried constants (WP-1046).
+**Templates as patterns (S4, WP-1066).** A template is carried as its
+pattern, never as its instantiations, so the importer instantiates it
+exactly as if it had parsed it:
+
+- *Records.* Three record kinds join the table: a template type
+  parameter (kind 15), a non-type template parameter (kind 16) and a
+  template (kind 17). A template's parameters and its pattern precede
+  it, in the order the parser created them (parameters, then the
+  pattern, then the template), so the "refers only to lower indices"
+  rule holds unchanged. The template record names the pattern record,
+  its parameter records in order, the parameter list's depth and the
+  `template`, `<` and `>` locations. The pattern is an ordinary record
+  (a function for a function template) whose header carries
+  `DEPENDENT_CTX`; its body, default arguments and locals are ordinary
+  body records whose types may be dependent (type tag 15 names a type
+  parameter record) and whose expressions carry their dependence bits
+  (the `deps` byte of a v4 expression record). Unresolved names in the
+  pattern are carried as their unresolved-lookup form (kinds
+  `UnresolvedLookupExpr`, `DependentScopeDeclRefExpr`,
+  `CXXUnresolvedConstructExpr`: the name and the candidate set found at
+  definition time, [temp.dep.candidate]), so the instantiation's second
+  phase sees the same first-phase result.
+- *Rebuilding.* The reader replays the parser's sequence through the
+  same builders: it opens a parameter scope (`dependent_depth`), builds
+  each parameter with `template_type_parm` / `non_type_template_parm`,
+  marks the next declaration as a pattern (`mark_pattern_next`, so the
+  pattern gets no member-list entry and no lookup), builds the pattern
+  and its body, then builds the parameter list and the template with
+  `template_param_list` and `template_decl`, which links the pattern
+  (`TemplLink::Pattern`) and registers the template's name. Nothing
+  else differs from a parsed template: instantiation goes through the
+  existing entry points (`get_function_spec`, `find_spec`) and the
+  existing substitution, which only reads the pattern's AST.
+  Parameters and patterns are not in the lookup table (they are not
+  found by name), like locals; their names are in `pnames`.
+- *Instantiations made in the interface* are not carried. The writer
+  skips every implicit instantiation (a declaration with an
+  `instantiated_from` link or an implicit-instantiation
+  `spec_info`), with its parameters, locals and body. The importer's
+  specialization table therefore starts empty for an image-built
+  template, and every use, in the interface's carried bodies or in the
+  importer, instantiates through `find_spec` keyed by (template,
+  canonical arguments): the merge is the table's own uniqueness, and
+  arguments made of image types are remapped by construction (they are
+  the importer's types). A carried body that names a specialization (a
+  call `add(2, 3)` resolved in the interface) needs a specialization
+  reference record, (template record, argument list), resolved by the
+  reader through `get_function_spec`; until that lands (follow-up) such
+  a body makes the unit fall back. Constants carried for instantiations
+  (WP-1046, the `-fkiln-bmi-image`-independent constant section) key on
+  the template's entity key, which is DeclId-free (kind, name, position),
+  so an image-built template matches the same keys as a replayed one and
+  keeps them.
+- *What falls back* (per declaration, with a `-v` reason; the unit then
+  replays): packs, default template arguments, template template
+  parameters, constraints and requires-clauses, concepts, variable and
+  alias templates, deduction guides, redeclared templates, explicit and
+  partial specializations, explicit instantiations, members of class
+  templates and class templates themselves (first slice), and any
+  pattern node or side table the schema does not carry (template
+  argument lists in expressions, dependent member access, dependent
+  access checks, folds).
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 3` since S3, 2 for S2; rejected if
+format word (`IMAGE_VERSION = 4` since S4, 3 for S3, 2 for S2; rejected if
 different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
