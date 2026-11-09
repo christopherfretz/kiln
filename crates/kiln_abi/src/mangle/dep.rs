@@ -392,15 +392,21 @@ impl Mangler<'_, '_> {
         true
     }
 
-    /// Parentheses, implicit casts, `ConstantExpr` and substituted
-    /// parameters do not appear in the mangling.
+    /// Parentheses, implicit casts, `ConstantExpr`, temporaries and
+    /// substituted parameters do not appear in the mangling.
     fn skip_transparent(&self, mut e: ExprId) -> ExprId {
         let ex = &self.ast.exprs;
         loop {
             e = match ex.get(e).kind() {
-                ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr => {
-                    ex.operand(e)
-                }
+                // clang `mangleExpression` mangles a temporary's
+                // materialization, binding and full-expression cleanups
+                // as their subexpression (WP-980).
+                ExprKind::ParenExpr
+                | ExprKind::ImplicitCastExpr
+                | ExprKind::ConstantExpr
+                | ExprKind::MaterializeTemporaryExpr
+                | ExprKind::CXXBindTemporaryExpr
+                | ExprKind::ExprWithCleanups => ex.operand(e),
                 ExprKind::SubstNonTypeTemplateParmExpr => ex.subst_replacement(e),
                 _ => return e,
             };

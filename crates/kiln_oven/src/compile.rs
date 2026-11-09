@@ -3517,6 +3517,21 @@ impl Compiler<'_> {
                     // C++17 removed `++` on bool; `--` never existed. Sema
                     // rejects both; treat as `= true` for robustness.
                     self.konst(new, 1);
+                } else if s && w < 32 {
+                    // [expr.pre.incr]/1: `x += 1`, computed in the
+                    // promoted `int` (which cannot overflow from a
+                    // narrower type) and converted back modulo 2^w
+                    // ([conv.integral]/3); clang's `canOverflow()` is
+                    // false here. Unsigned narrow types wrap already.
+                    let wide = self.reg();
+                    self.emit_at(
+                        if inc { Op::IAdd } else { Op::ISub },
+                        int_aux(32, true),
+                        &[wide, old, one],
+                        e,
+                    );
+                    let aux = 32 | 1 << 8 | w << 9 | 1 << 17;
+                    self.emit(Op::ICast, aux, &[new, wide]);
                 } else {
                     self.emit_at(
                         if inc { Op::IAdd } else { Op::ISub },
