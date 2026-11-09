@@ -1219,6 +1219,163 @@ mod tests {
         assert!(inst::check_key(&packs, 1).is_err());
     }
 
+    /// The declaration entity `name` at offset `off` of path 0.
+    fn decl_ent(k: &mut Vec<u8>, name: &str, off: u32) {
+        k.extend_from_slice(&[b'D', 3, 0]);
+        put_bytes(k, name.as_bytes());
+        for w in [0, off, 0, off] {
+            put_u32(k, w);
+        }
+    }
+
+    /// One hand-built value of each WP-1047 tag (spec/modules.md §11.11
+    /// "Encoding"), as an entry's bytes.
+    fn wire_values() -> Vec<Vec<u8>> {
+        use inst::{
+            BASE_CONST, BASE_DECL, BASE_TYPE_INFO, REFL_ALIAS, REFL_TYPE, TY_LREF, TY_POINTER,
+        };
+        let int = [0u8, 0, 5];
+        let mut out = Vec::new();
+        // &g + 300, one past the end, designating an int.
+        let mut v = vec![TAG_POINTER, 3, BASE_DECL];
+        decl_ent(&mut v, "g", 5);
+        put_var(&mut v, 300);
+        v.extend_from_slice(&int);
+        out.push(v.clone());
+        let pointer = v;
+        // &typeid(int), and a pointer into an int constant.
+        out.push([&[TAG_POINTER, 0, BASE_TYPE_INFO][..], &int, &[0]].concat());
+        let mut v = [&[TAG_POINTER, 0, BASE_CONST][..], &int].concat();
+        put_value(&mut v, &Carried::Int { signed: true, width: 32, words: vec![7].into() });
+        v.push(0);
+        out.push(v);
+        // &D::b through a one-step derivation path.
+        let mut v = vec![TAG_MEMBER_POINTER, 2];
+        decl_ent(&mut v, "b", 9);
+        put_var(&mut v, 1);
+        decl_ent(&mut v, "D", 11);
+        out.push(v);
+        out.push(vec![TAG_MEMBER_NULL, 2]);
+        // Reflections: a type, an alias, a declaration, null, a value and
+        // a base.
+        out.push([&[TAG_REFLECTION, 0, REFL_TYPE][..], &int].concat());
+        let mut v = vec![TAG_REFLECTION, 0, REFL_ALIAS];
+        decl_ent(&mut v, "A", 13);
+        out.push(v);
+        let mut v = vec![TAG_REFLECTION, 1];
+        decl_ent(&mut v, "S", 15);
+        out.push(v);
+        out.push(vec![TAG_REFLECTION, 2]);
+        let mut v = [&[TAG_REFLECTION, 6][..], &int].concat();
+        put_value(&mut v, &Carried::Int { signed: true, width: 32, words: vec![42].into() });
+        out.push(v);
+        let mut v = vec![TAG_REFLECTION, 8];
+        decl_ent(&mut v, "D", 11);
+        put_var(&mut v, 0);
+        out.push(v);
+        // An aggregate { int *p; int n; } with a relocation, padding and a
+        // union member.
+        let mut v = vec![TAG_AGGREGATE_EX];
+        put_bytes(&mut v, &[0; 16]);
+        put_var(&mut v, 1);
+        put_var(&mut v, 12);
+        put_var(&mut v, 4);
+        put_var(&mut v, 1);
+        put_var(&mut v, 0);
+        v.extend_from_slice(&[0, TY_POINTER, 0, 0, 5]);
+        v.extend_from_slice(&pointer);
+        put_var(&mut v, 1);
+        put_var(&mut v, 8);
+        decl_ent(&mut v, "u", 17);
+        out.push(v);
+        // A reference's value.
+        out.push([&[TAG_TYPED, 0, TY_LREF][..], &int, &pointer].concat());
+        out
+    }
+
+    /// A recorder of [`wire_values`] entries.
+    fn wire_sample() -> Recorder {
+        let mut r = Recorder { paths: vec!["m.cppm".into()], ..Recorder::default() };
+        r.insts = vec![wire_key()];
+        for (i, v) in wire_values().into_iter().enumerate() {
+            let at = LocKey([0, i as u32, 0, i as u32]);
+            let key = EvalKey { inst: (i % 2) as u32, kind: 1, at, expr: at };
+            r.entries.push((key, Some(Carried::Wire(v.into()))));
+        }
+        r
+    }
+
+    /// An instantiation key with a pointer and a reflection argument.
+    fn wire_key() -> Box<[u8]> {
+        use inst::{TY_BUILTIN, TY_POINTER};
+        let vals = wire_values();
+        let mut k = vec![b'S'];
+        decl_ent(&mut k, "X", 3);
+        put_u32(&mut k, 2);
+        k.extend_from_slice(&[b'V', 0, TY_POINTER, 0, 0, 5]);
+        k.extend_from_slice(&vals[0]);
+        k.extend_from_slice(&[b'V', 0, TY_BUILTIN, BuiltinType::MetaInfo as u8]);
+        k.extend_from_slice(&vals[7]);
+        k.into()
+    }
+
+    /// Pointer, member pointer, reflection, aggregate and reference values
+    /// (WP-1047) round-trip byte for byte and keep the older values'
+    /// bytes; each checks on its own and no truncation of one does.
+    #[test]
+    fn wire_round_trip() {
+        let rec = wire_sample();
+        let s = encode(&rec);
+        let d = decode(&s.bytes).unwrap();
+        assert_eq!(d.map.len(), rec.entries.len());
+        for (k, v) in &rec.entries {
+            let inst = if k.inst == 0 { 0 } else { d.insts[&rec.insts[0]] };
+            assert_eq!(d.map.get(&EvalKey { inst, ..*k }), v.as_ref());
+        }
+        for v in wire_values() {
+            let mut r = Rd(&v);
+            assert_eq!(inst::check_value(&mut r, 1), Ok(()));
+            assert!(r.0.is_empty());
+            for n in 0..v.len() {
+                assert!(inst::check_value(&mut Rd(&v[..n]), 1).is_err(), "truncated to {n}");
+            }
+        }
+        // A pointer to an entity at a path the section lacks.
+        assert!(inst::check_value(&mut Rd(&wire_values()[0]), 0).is_err());
+        let mut old = Vec::new();
+        put_value(&mut old, &Carried::Bool(true));
+        assert_eq!(old, [TAG_BOOL, 1], "older values keep their bytes");
+        assert_eq!(inst::check_key(&wire_key(), 1), Ok(()));
+    }
+
+    /// The same damage as [`fuzz_truncate_flip_lengths`], over WP-1047
+    /// values and keys.
+    #[test]
+    fn fuzz_wire_values() {
+        let b = encode(&wire_sample()).bytes;
+        for n in 0..b.len() {
+            assert!(decode(&b[..n]).is_err(), "truncated to {n}");
+        }
+        damage(&b, |m| {
+            let _ = decode(m);
+        });
+        let k = wire_key();
+        for n in 0..k.len() {
+            assert!(inst::check_key(&k[..n], 1).is_err(), "key truncated to {n}");
+        }
+        damage(&k, |m| {
+            let _ = inst::check_key(m, 1);
+        });
+        // Overlong and overflowing varints.
+        let mut r = Rd(&[0x80; 11]);
+        assert!(r.var().is_err());
+        let mut r = Rd(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02]);
+        assert!(r.var().is_err());
+        let mut v = Vec::new();
+        put_var(&mut v, u64::MAX);
+        assert_eq!(Rd(&v).var(), Ok(u64::MAX));
+    }
+
     #[test]
     fn rejects_malformed() {
         let b = encode(&sample()).bytes;

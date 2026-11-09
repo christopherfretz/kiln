@@ -434,6 +434,77 @@ fn kind2_carries_instantiation_results() {
     }
 }
 
+const CV: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cv.cppm");
+const CV_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-pointers-run.cpp");
+const CR: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cr.cppm");
+const CR_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-reflections-run.cpp");
+
+/// WP-1047: kind 2 carries pointer, reference, member-pointer and
+/// reflection values and the results inside specializations keyed on
+/// them (`X<&g>`, `HW<h>`, `Wrap<^^S>`): a kind-2 importer re-evaluates
+/// none of the module's initializers, and its IR (the specializations'
+/// mangled names and addresses) is that of kind 1.
+#[test]
+fn kind2_carries_pointer_and_reflection_values() {
+    let d = scratch("kind2-values");
+    let support = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support");
+    for (m, src, run, extra) in [("cv", CV, CV_RUN, false), ("cr", CR, CR_RUN, true)] {
+        std::fs::write(d.join(format!("{m}.cppm")), src).unwrap();
+        std::fs::write(d.join(format!("{m}-run.cpp")), run).unwrap();
+        let mut base = vec!["-std=c++26"];
+        if extra {
+            base.extend(["-freflection", "-I", support]);
+        }
+        let args = |more: &[&str]| -> Vec<String> {
+            base.iter().chain(more).map(|s| (*s).to_owned()).collect()
+        };
+        let kiln =
+            |d: &Path, a: Vec<String>| kiln(d, &a.iter().map(String::as_str).collect::<Vec<_>>());
+        let ok = |d: &Path, a: Vec<String>| {
+            let o = kiln(d, a);
+            assert_eq!(o.code, 0, "{}", o.stderr);
+        };
+        let cppm = format!("{m}.cppm");
+        let o = kiln(&d, args(&["-v", "--precompile", &cppm, "-o", &format!("{m}2.pcm")]));
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stderr.contains(" inside template instantiations"), "{}", o.stderr);
+        ok(&d, args(&["-fkiln-bmi-kind=1", "--precompile", &cppm, "-o", &format!("{m}1.pcm")]));
+        // A trial evaluation of `bases_of(...)` / `parameters_of(...)` on
+        // its own fails (its vector is not a constant) and is not carried.
+        let failed: Vec<String> = src
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("_of(^^"))
+            .map(|(i, _)| format!("{m}.cppm:{}:", i + 1))
+            .collect();
+        let mut irs = Vec::new();
+        for k in ["1", "2"] {
+            std::fs::copy(d.join(format!("{m}{k}.pcm")), d.join(format!("{m}.pcm"))).unwrap();
+            let file = format!("-fmodule-file={m}={m}.pcm");
+            let rep = format!("-fconstexpr-report={m}{k}.json");
+            let run = format!("{m}-run.cpp");
+            ok(&d, args(&["-fsyntax-only", &file, &rep, &run]));
+            let lines = report(&d.join(format!("{m}{k}.json")));
+            let module: Vec<_> = lines
+                .iter()
+                .filter(|(l, _)| l.starts_with(&format!("{m}.cppm:")))
+                .filter(|(l, _)| !failed.iter().any(|f| l.starts_with(f.as_str())))
+                .collect();
+            if k == "1" {
+                assert!(module.len() >= 15, "kind 1 re-evaluates: {lines:?}");
+            } else {
+                assert!(module.is_empty(), "kind 2 re-evaluated: {module:?}");
+            }
+            let ll = format!("{m}{k}.ll");
+            ok(&d, args(&["-S", "-emit-llvm", &file, &run, "-o", &ll]));
+            irs.push(std::fs::read_to_string(d.join(&ll)).unwrap());
+        }
+        assert!(irs[0] == irs[1], "{m}: IR differs between kinds");
+    }
+}
+
 /// An interface the declaration image carries entirely (spec/modules.md
 /// §11.11 "Part 2a").
 const IM: &str = "export module im;\n\
