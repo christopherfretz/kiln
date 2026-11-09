@@ -9,40 +9,134 @@
 
 **A C++26 compiler frontend in safe Rust, built around a constexpr oven.**
 
-kiln consumes C++26 source and emits LLVM IR; LLVM does optimization, code
-generation and linking. Its reason to exist is compile-time evaluation:
-constexpr, consteval and C++26 reflection workloads that make today's
-compilers slow and memory-hungry. kiln's constant evaluator (the Oven) is
-designed from the start to be the fastest and leanest available, with
-wall-clock time and peak memory tracked as part of the test suite.
+kiln compiles C++26 source to LLVM IR and leaves optimization, code
+generation and linking to LLVM. It exists for compile-time evaluation:
+constexpr, consteval and C++26 reflection code that makes compilers slow
+and memory-hungry today. kiln's constant evaluator, the Oven, was designed
+for that work from the start, and the test suite tracks its wall-clock
+time and peak memory. Every crate is `#![forbid(unsafe_code)]`, and kiln
+has no LLVM FFI: it writes IR as text and runs LLVM's tools. On the
+command line and in its predefined macros kiln looks like clang, so build
+systems and standard libraries work with it unchanged.
 
-## Goals
+## Numbers
 
-- **Memory safe end to end.** Every crate is `#![forbid(unsafe_code)]`. No
-  LLVM FFI: kiln writes LLVM IR itself and invokes LLVM tools as processes.
-- **Production grade.** Fully conforming C++26, clang-compatible on the
-  command line and in the predefined-macro/builtin surface so that libc++
-  builds unchanged. clang is the oracle for differential testing.
-- **The fastest constexpr evaluator anywhere.** Lazy bytecode compilation,
-  a flat byte-addressed abstract memory model with shadow metadata (no
-  per-value trees), per-evaluation arena reset, exact step/byte budgets,
-  memoization, and reflection as a first-class VM value.
-- **Specified and re-implementable.** Each crate has a contract in `spec/`
-  tied to behavioral tests under `tests/`.
+Each number links to the page that records how it was measured.
+
+- **Constant evaluation.** On kiln's benchmark corpus, compared with
+  clang 19 (37 entries, aarch64, 2026-11-03): geometric mean **0.21x**
+  clang's time and **0.17x** its peak memory. Constexpr-bound entries such
+  as `oven/fib` (0.05x) and `oven/churn-vector` (0.03x) gain the most.
+  [docs/status/perf.md](docs/status/perf.md)
+- **Constexpr-heavy libraries.** Built per TU against a control compiler
+  (ctre, mp-units, daw_json_link, Glaze, scnlib, reflect-cpp): **0.39x to
+  0.47x** the control's peak RSS (geomean per project), at 0.91x to 1.06x
+  its time. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#constexpr-and-compile-time-performance)
+- **libc++ 22.1.8** test suite (9247 tests, `-std=c++26`): **99.2%**
+  pass. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries),
+  [docs/status/libcxx-m5.md](docs/status/libcxx-m5.md)
+- **47 open-source projects** built with their own build systems and test
+  suites: 43 Flawless, 3 Near-perfect, 1 Partial. They include all of LLVM
+  (`check-llvm`: 38434 tests passed, at 0.94x clang's summed TU time and
+  0.63x its peak TU RSS), Boost and folly.
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications)
+- **Language support:** 257 of 260 rows of the C++98 to C++26 paper table
+  are done and 3 are partial.
+  [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md)
+
+## Quick start
+
+kiln runs on Linux, on aarch64 and x86_64. Release archives are attached
+to each [GitHub release](https://github.com/christopherfretz/kiln/releases):
+`kiln-<version>-<triple>.tar.xz`, a `-symbols` archive with full debug
+information, and `SHA256SUMS`.
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+tar -xJf kiln-<version>-<triple>.tar.xz
+export PATH=$PWD/kiln-<version>-<triple>/bin:$PATH
+```
+
+kiln needs an LLVM installation at run time, for `llc`, `llvm-as` and the
+`clang++` that links. LLVM 19 and LLVM 22 are both supported. On Debian 13:
+
+<!-- update when WP-1016 lands: default LLVM 22, discovery order, per-distro one-liners -->
+```sh
+sudo apt install clang-19 llvm-19 g++    # LLVM 19 (kiln's default today) and libstdc++
+export KILN_LLVM_DIR=/usr/lib/llvm-22    # only to use an LLVM 22 install (apt.llvm.org) instead
+```
+
+Then compile:
+
+```sh
+kiln++ -std=c++26 hello.cpp -o hello && ./hello
+CXX=kiln++ cmake -S . -B build && cmake --build build
+```
+
+CMake identifies kiln as Clang and needs no changes. Autotools works
+unchanged too. Meson needs a wrapper. The
+[user guide](docs/USER_GUIDE.md) covers installation, build systems,
+language modes, Oven limits and flags.
+
+## Building from source
+
+The Rust toolchain is pinned in `rust-toolchain.toml` (Rust 1.95.0, which
+is also the MSRV). The backend and the test oracle need clang and LLVM 19
+and 22 (`clang++-19`, `llc`, `opt`, `llvm-as`), which is what CI installs.
+
+```sh
+cargo build --release              # target/release/kiln and kiln++
+cargo xtask ci --quick             # fmt, clippy, unit tests, the corpus through kiln
+cargo xtask dist                   # release archives, as published, from this checkout
+```
+
+`cargo xtask dist --check` also extracts the archive and smoke-tests it.
+The archive layout is in [spec/driver.md](spec/driver.md) under
+"Installation layout".
 
 ## Status
 
-M6 (C++26 reflection and the reference workload) is closed and the M7
-performance campaign is running; see [docs/ROADMAP.md](docs/ROADMAP.md) for
-the milestones and [docs/BACKLOG.md](docs/BACKLOG.md) for work in progress. What kiln supports
-in each standard, C++98 to C++26, feature by feature with the tests behind
-each row, is in [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md).
+kiln is preparing its 1.0 release (version 0.0.1 until then). The
+current milestone, M8, builds real open-source projects with kiln. The
+milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-The libraries and applications kiln has been validated against (libc++,
-libstdc++, and 47 open-source projects built through their own build
-systems and test suites, including LLVM, Boost and folly), with each
-result against a control build (clang 19), are in
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
+<!-- update when WP-917 lands: Modules row (BMI, --precompile) -->
+
+| Area | State | Detail |
+|---|---|---|
+| C++98 to C++23 | done | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
+| C++26 (Croydon DIS draft), reflection, contracts | done except 3 partial papers | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
+| libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
+| Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
+| Modules | supported, built from interface sources (no BMI yet) | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
+| C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |
+| Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
+
+## Documentation
+
+For users:
+
+- [docs/USER_GUIDE.md](docs/USER_GUIDE.md): installing, build systems,
+  language modes, the Oven, flags, environment variables, debugging.
+- [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md): what does not work yet.
+- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): every library and
+  project kiln was tested against, with results.
+- [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md): the language
+  features, paper by paper.
+- [docs/STABILITY.md](docs/STABILITY.md): what a version number promises.
+- [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md): crash reports and
+  reproducers. Security issues: [SECURITY.md](SECURITY.md).
+- [CHANGELOG.md](CHANGELOG.md).
+
+For contributors:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): building, testing and sending
+  changes.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the crate pipeline and the
+  Oven's design.
+- [spec/](spec/): one contract per crate.
+- [docs/ROADMAP.md](docs/ROADMAP.md),
+  [docs/BACKLOG.md](docs/BACKLOG.md): milestones and work packages.
 
 ## Layout
 
@@ -54,63 +148,30 @@ result against a control build (clang 19), are in
 | `crates/kiln_oven` | the constant evaluator |
 | `crates/kiln_abi`, `kiln_llvm`, `kiln_codegen` | Itanium ABI, IR model, lowering |
 | `crates/kiln_driver` | the `kiln` and `kiln++` commands |
-| `xtask/` | test, bench and libc++ harness (`cargo xtask ...`) |
+| `xtask/` | test, bench, libc++, OSS and release harness (`cargo xtask ...`) |
 | `spec/` | per-crate contracts |
-| `docs/` | architecture, roadmap, validation, contributor model, the standard support table (`STANDARD_SUPPORT.md`), the compatibility table (`COMPATIBILITY.md`) |
-| `resource/` | clang 19 builtin headers and predefined macro sets |
-| `tests/`, `bench/` | conformance/differential corpus, perf corpus |
+| `docs/` | user and contributor documentation, status pages |
+| `resource/` | clang's builtin headers and predefined macro sets |
+| `tests/`, `bench/` | conformance and differential corpus, perf corpus |
 
-## Building
+## Development
 
-Requires Rust (pinned in `rust-toolchain.toml`) and clang/LLVM 19 on PATH
-(`clang++-19`, `llc`, `opt`, `lld`) for the backend and as the test oracle.
-
-```
-cargo build
-cargo xtask ci                          # fmt, clippy, unit tests, corpus as clang self-check + kiln-mode (--quick skips the self-check)
-cargo xtask test --compiler clang++-19  # validate the corpus against the oracle
-cargo xtask test                        # run it through kiln
-scripts/fetch-libcxx-tests.sh           # once: libc++ 19.1.7 tests into .toolchain/
-cargo xtask libcxx --gate m3            # libc++'s own tests with kiln (manual gate, not in ci)
-```
-
-## Installing
-
-Release archives for Linux on aarch64 and x86_64 are attached to each
-[GitHub release](https://github.com/christopherfretz/kiln/releases):
-`kiln-<version>-<triple>.tar.xz`, a `-symbols` archive with the full debug
-information, and `SHA256SUMS`. Unpack one anywhere and put its `bin/` on
-`PATH`:
-
-```
-sha256sum -c --ignore-missing SHA256SUMS
-tar -xJf kiln-<version>-<triple>.tar.xz
-export PATH=$PWD/kiln-<version>-<triple>/bin:$PATH
-kiln++ -std=c++26 hello.cpp -o hello
-```
-
-The tree is relocatable: `bin/kiln`, `bin/kiln++`, the builtin headers and
-predefines in `lib/kiln/<major>/`, and these documents in
-`share/doc/kiln/` (layout and resource lookup:
-[spec/driver.md](spec/driver.md) "Installation layout"). kiln writes LLVM
-IR and needs an LLVM 19 (or 22) installation at run time for `llc`,
-`llvm-as` and the `clang++` link step, plus the system's libstdc++ (or
-libc++); see spec/driver.md "Installation layout" for the run-time
-dependencies. `cargo xtask dist` builds the same archives from a checkout.
-
-What a version number promises (driver flags, diagnostic ids, predefined
-macros, ABI; not diagnostic wording or IR text) is in
-[docs/STABILITY.md](docs/STABILITY.md).
+kiln is written by agents working on work packages, coordinated by a
+supervisor. Their contract is [docs/AGENTS.md](docs/AGENTS.md). The test
+layers, the test directive format and perf tracking are described in
+[docs/VALIDATION.md](docs/VALIDATION.md). Human contributors start with
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Reporting bugs
 
-File issues at https://github.com/christopherfretz/kiln/issues. A crash
-prints an "internal compiler error" report and writes a reproducer (a
-preprocessed `.ii` and a `.sh` that reruns the command). Attach both
-files. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
+File issues at https://github.com/christopherfretz/kiln/issues. When kiln
+crashes it prints an "internal compiler error" report and writes a
+reproducer: a preprocessed `.ii` and a `.sh` that reruns the command.
+Attach both. See [docs/REPORTING-BUGS.md](docs/REPORTING-BUGS.md).
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option. `resource/include`
-is a copy of clang's builtin headers under the Apache-2.0 with LLVM
+Dual-licensed under MIT ([LICENSE-MIT](LICENSE-MIT)) or Apache-2.0
+([LICENSE-APACHE](LICENSE-APACHE)), at your option. `resource/include` is
+a copy of clang's builtin headers under the Apache-2.0 with LLVM
 exceptions license; see `resource/include/LICENSE.TXT`.
