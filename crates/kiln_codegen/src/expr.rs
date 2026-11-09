@@ -3505,8 +3505,19 @@ impl Cg<'_> {
 
     // ---- ignored expressions -------------------------------------------
 
-    /// clang `EmitIgnoredExpr`.
+    /// clang `EmitIgnoredExpr`. Its aggregate slots are its own
+    /// (`AggValueSlot::ignored()`, not destructed by an owner): the
+    /// enclosing slot's `dest_destructed` does not apply, else the bound
+    /// temporary of a comma's left operand in a variable's initializer
+    /// (`P q = ((void)D{1}, P{2});`) would never be destroyed (WP-1117).
     pub(crate) fn emit_ignored(&mut self, e: ExprId) -> R<()> {
+        let saved = std::mem::take(&mut self.f.dest_destructed);
+        let r = self.emit_ignored_x(e);
+        self.f.dest_destructed = saved;
+        r
+    }
+
+    fn emit_ignored_x(&mut self, e: ExprId) -> R<()> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         if matches!(ast.exprs.get(e).kind(), ExprKind::CoawaitExpr | ExprKind::CoyieldExpr) {
