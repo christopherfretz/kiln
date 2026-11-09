@@ -6,7 +6,10 @@ the language by extension (see "Driver modes"). C++ is kiln's language, so
 `kiln++` is the name to use; xtask, the docs and the examples here invoke
 it. A command line that clang 19 accepts
 for preprocessing means the same thing to kiln. An option kiln does not
-implement is an error, never silently ignored. The oracle is Debian's
+implement is an error, never silently ignored (the exceptions are listed
+where they apply: "Codegen flags" class 2, the debug flags with no effect,
+the PCH flags with no effect, `-target-feature` on x86-64 and the options
+the dependency scanner ignores). The oracle is Debian's
 `clang++-19` / `clang-19` on aarch64 and x86_64 Linux.
 
 Three actions are implemented:
@@ -86,9 +89,9 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fclang-compat=<major>` | kiln: which clang release's observable output to reproduce, `19` or `22` (default since WP-394, the oracle switch; the library-level defaults, `ClangCompat::default()` and every crate's `clang_compat`, follow it since WP-413): predefined macros and `__has_*` answers (spec/pp.md "clang compatibility level"), diagnostic text and names, AST dump types and deprecation warnings (spec/sema.md §1.1, spec/ast-dump.md §2, spec/codegen.md); any other value is an error |
 | `-W...`, `-w`, `-pedantic`, `-ferror-limit=`, `-fdiagnostics-format=`, `-f[no-]color-diagnostics`, `-f[no-]caret-diagnostics`, ... | diagnostic options, validated and applied by `kiln_diag::DiagOptions` (`spec/diag.md`) |
 | `-fkiln-reproducible-time` | see "Reproducible time" |
-| `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is `invalid value`; the last one wins |
+| `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is an error, printed as `language not recognized: '<v>'` (the `lib.rs:146` wording defect, see `-fmacro-prefix-map=`); the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
-| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
+| `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is an error, printed as `language not recognized: '<v>'` (clang: `invalid argument '<v>' to -fmacro-prefix-map=`; a wording defect, `crates/kiln_driver/src/lib.rs:146` renders every `ArgError::InvalidValue` so; deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
@@ -98,7 +101,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-ftemplate-depth=N`, `-ftemplate-backtrace-limit=N`, `-fkiln-instantiation-report[=all\|json\|text]` | template limits and the instantiation report (spec/sema-templates.md §10.3, §11.3) |
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
-| `-F <dir>` | accepted; warns `ignoring framework directory` |
+| `-F <dir>` | accepted; warns `ignoring framework directory '<dir>' (kiln does not search frameworks)` (`drv_framework_dir_ignored`, no `-W` group: `-w` silences it, `-Qunused-arguments` does not) |
 | `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | accepted, as build systems add them for clang (glaze's tests); each warns `'<flag>' ignored: kiln writes no time trace` (`drv_time_trace_ignored`, group `-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), and no file is written (WP-792) |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
@@ -170,13 +173,13 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-fno-plt`, `-fplt` | `nonlazybind` on every function declared but not defined in the TU, the `"RtLibUseGOT"` module flag, and under `-fno-pic` function declarations are not assumed `dso_local` (clang `shouldAssumeDSOLocal`) (`CodegenOptions::no_plt`) |
 | `-ffunction-sections`, `-fdata-sections` | `llc -function-sections` / `-data-sections` (see "Code generation") |
 | `-fc++-static-destructors[=all\|thread-local\|none]`, `-fno-c++-static-destructors` | which static and thread-local variables register their destructors (`CodegenOptions::static_destructors`, clang `RegisterStaticDestructorsKind`; WP-805): `all` (the default, and the bare flag), `thread-local` (only `thread_local` ones), `none` (= `-fno-`; `[[clang::always_destroy]]` variables still register); the last wins; another value is `invalid value '<v>' in '-fc++-static-destructors=<v>'`. spec/landed/sema/WP-805.md |
-| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); its features and predefined macros are clang 19's or clang 22's ("x86-64 target features"; spec/landed/driver/WP-630.md, WP-1000.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); on a Linux x86-64 host x86 `-march=native` takes its features from `/proc/cpuinfo`, otherwise kiln does not inspect the host. `-mtune=<cpu>` sets `"tune-cpu"`; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
+| `-march=<cpu>` (x86-64), `-march=native`, `-mcpu=native` (AArch64, without `-march=`), `-mtune=<cpu>` | x86-64: `-march=` names one of clang's x86 CPUs (`x86-64`, `x86-64-v2`..`v4`, `skylake`, `znver4`, ...; clang 22 adds `wildcatlake`, `novalake`, `diamondrapids`) and sets `"target-cpu"` (the default `"tune-cpu"="generic"` is then omitted, as clang); its features and predefined macros are clang 19's or clang 22's ("x86-64 target features"; spec/landed/driver/WP-630.md, WP-1000.md, table layout spec/landed/codegen/WP-660.md; `wildcatlake` and `novalake` are not expanded, deviation). `native` on either target emits no `"target-cpu"` and passes `llc -mcpu=native` (the IR attribute would override `-mcpu`); on a Linux x86-64 host x86 `-march=native` takes its features from `/proc/cpuinfo`, otherwise kiln does not inspect the host. `-mtune=<cpu>` sets `"tune-cpu"` to any non-empty value as written, unchecked against a CPU list; `-mtune=native` is accepted and adds nothing. The triple is unchanged |
 | `-fwrapv`, `-fno-wrapv`, `-f[no-]wrapv-pointer`, `-fno-strict-overflow`, `-fstrict-overflow` | signed overflow wraps (`CodegenOptions::wrapv`): the last of `-f[no-]wrapv`, else `-fno-strict-overflow`; no `nsw` on signed arithmetic, increments, negation, shifts or VLA sizes. Pointer overflow wraps (`wrapv_pointer`): at `-fclang-compat=19` exactly when `wrapv`; at 22 the last of `-f[no-]wrapv-pointer`, else `-fno-strict-overflow`; no `inbounds` on pointer arithmetic and subscripts, and at 22 none on field GEPs either. The Oven is unchanged: signed overflow in a constant expression stays non-constant ([expr.const]/5), unlike GCC, which folds it as wrapping under `-fwrapv` (deliberate divergence, deferred) |
 | `-ftrapv`, `-fno-trapv`, `-ftrapv-handler=<name>` (WP-1032) | `CodegenOptions::trapv` / `trapv_handler`, clang's `SOB_Trapping`: the last of `-ftrapv` / `-fno-trapv` (a kiln spelling; clang has none and GCC's cancels `-ftrapv`). Signed `+ - *`, unary `-` (checked as `0 - x`), `++`/`--` and compound assignment use `llvm.s{add,sub,mul}.with.overflow` and, on overflow, a bare `@llvm.ubsantrap(<id>)` (clang `EmitTrapCheck`: add 0, sub 21, mul 12), with no handler call and no `.src` data; `-ftrapv` beats `-fwrapv` and `-fno-strict-overflow`. Under `-fsanitize=signed-integer-overflow` the sanitizer's check wins for the signed operations it covers. An `_Atomic` signed operand takes the compare-exchange loop. `-ftrapv-handler=<name>`, with `-ftrapv` (alone it has no effect, as clang), replaces the trap or `__ubsan_handle_*` call of every overflow check, `-ftrapv`'s and signed/unsigned-integer-overflow's, by `<name>(i64 sext l, i64 sext r, i8 op, i8 width, ...)` in a block at the function's end whose `i64` result, truncated, is the operation's value (`op` is add 1, sub 2, mul 3, shifted left once, plus 1 when signed). Test: `tests/conformance/driver.sanitize/trapv-*.cpp`, `crates/kiln_driver/tests/codegen.rs` |
 | `-fno-delete-null-pointer-checks`, `-fdelete-null-pointer-checks` | `CodegenOptions::null_pointer_is_valid`: every definition gets `null_pointer_is_valid`; reference parameters, returns and `this` lose `nonnull` (`this` gets `dereferenceable_or_null`), `nonnull`/`returns_nonnull` attributes, the `operator new` result and loaded references lose `nonnull` (and `!nonnull` metadata), as clang |
 | `-fpatchable-function-entry=N[,M]`, `-fzero-call-used-regs=<kind>`, `-mfunction-return=keep\|thunk-extern` (x86), `-fcf-protection[=full\|branch\|return\|none]` (x86), `-mspeculative-load-hardening`, `-fsplit-stack`, `-finstrument-functions`, `-finstrument-functions-after-inlining`, `-finstrument-function-entry-bare`, `-fxray-instrument`, `-fxray-instruction-threshold=N`, `-fxray-ignore-loops` (WP-813) | `CodegenOptions::hardening` (`kiln_codegen::Hardening`): the function attributes and module flags clang 19 emits for each, with the class B attributes overriding them per function (spec/landed/codegen/WP-813.md). `-mspeculative-load-hardening` on x86 also adds `+retpoline-indirect-calls` to the target features; `-finstrument-functions*` at `-O0` runs `default<O0>` so ee-instrument emits the calls; `-fxray-instrument` is passed on to the link. Errors as clang: a bad `-fpatchable-function-entry=` (`invalid argument 'x' to -fpatchable-function-entry=`, or the offset larger than the count), `-fxray-instrument` with `-fpatchable-function-entry=`, a bad `-fxray-instruction-threshold=` under `-fxray-instrument` are driver errors; a bad `-mfunction-return=` / `-fzero-call-used-regs=` / `-fcf-protection=` value (the last of each wins), `-mfunction-return=` off x86 and (when generating code) `-fcf-protection` off x86 are clang's `-cc1` errors, printed without the `kiln++:` prefix and in cc1's order (an invalid `-mfunction-return=` on x86 is reported twice, as clang 19 does). Without `-fxray-instrument` the other `-fxray-*` options are `argument unused during compilation` |
 | `-mbranches-within-32B-boundaries` (x86; WP-961) | `llc -x86-branches-within-32B-boundaries`, as clang 19's `addX86AlignBranchArgs`: the integrated assembler pads so no branch (fused, `jcc`, `jmp`) crosses or ends on a 32-byte boundary. Off x86, clang's driver error `unsupported option '-mbranches-within-32B-boundaries' for target '<triple>'`. There is no negative form (clang has none). Test: `crates/kiln_driver/tests/hardening.rs` `branches_within_32b_boundaries`, `flag_errors` |
-| `-flto`, `-flto=full\|thin\|auto\|jobserver`, `-fno-lto`, `-f[no-]split-lto-unit` (WP-873) | the last of `-flto[=...]` / `-fno-lto` decides (clang `getLTOMode`: `auto` and `jobserver` are full LTO; another value is `unsupported argument`). The module is an LTO unit (spec/codegen.md "LTO": the `ThinLTO` / `EnableSplitLTOUnit` module flags and vtable `!type` metadata); `opt` runs the level's pre-link pipeline (`lto-pre-link<Ox>` / `thinlto-pre-link<Ox>`, at `-O0` too) instead of `default<Ox>`. `-c` (and each compile before a link) writes a bitcode-only `.o` through `opt`: full LTO with `-module-summary`, thin LTO with `--thinlto-bc` (plus `--thinlto-split-lto-unit` under `-fsplit-lto-unit`, default off for thin, always on for full), as clang; `-S -emit-llvm` carries the summary too; `-S` alone writes textual IR as clang does. `-flto[=thin]` is passed on to the link (lld or the system linker with the LLVM gold plugin). `-disable-llvm-passes` runs no pipeline and writes no summary. `-ffat-lto-objects` is accepted and ignored (the object stays bitcode only; follow-up), `-fno-fat-lto-objects` is the default |
+| `-flto`, `-flto=full\|thin\|auto\|jobserver`, `-fno-lto`, `-f[no-]split-lto-unit` (WP-873) | the last of `-flto[=...]` / `-fno-lto` decides (clang `getLTOMode`: `auto` and `jobserver` are full LTO; another value is `unsupported argument`). The module is an LTO unit (spec/codegen.md "LTO": the `ThinLTO` / `EnableSplitLTOUnit` module flags and vtable `!type` metadata); `opt` runs the level's pre-link pipeline (`lto-pre-link<Ox>` / `thinlto-pre-link<Ox>`, at `-O0` too) instead of `default<Ox>`. `-c` (and each compile before a link) writes a bitcode-only `.o` through `opt`: full LTO with `-module-summary`, thin LTO with `--thinlto-bc` (plus `--thinlto-split-lto-unit` under `-fsplit-lto-unit`, default off for thin, always on for full), as clang; `-S -emit-llvm` carries the summary too; `-S` alone writes textual IR as clang does. `-flto[=thin]` is passed on to the link (lld or the system linker with the LLVM gold plugin). `-disable-llvm-passes` runs no pipeline and writes no summary. `-ffat-lto-objects` is rejected, `'-ffat-lto-objects' is not supported by kiln` (class 3 below; fat objects are a WP-899 follow-up); `-fno-fat-lto-objects`, the default, is accepted and ignored (class 2) |
 | `-mbranch-protection=<spec>`, `-msign-return-address=none\|non-leaf\|all` (AArch64; WP-846) | `CodegenOptions::branch_protection` (`kiln_abi::BranchProtection`, clang 19 `CollectARMPACBTIOptions` and `ARM::parseBranchProtection`): the last of the two wins. `<spec>` is `none`, `standard` (`pac-ret+bti+gcs`) or a `+`-separated list of `bti`, `gcs` and `pac-ret` followed by any of `leaf`, `b-key`, `pc`; `-msign-return-address=` signs with the A key only. Every definition, declaration and call site gets clang's `"sign-return-address"`/`"sign-return-address-key"`, `"branch-target-enforcement"`, `"branch-protection-pauth-lr"` and `"guarded-control-stack"` attributes, the module gets the matching `Min` flags (value 1; 2 at `-fclang-compat=22`, as clang 22), and the predefines gain `__ARM_FEATURE_PAC_DEFAULT` (bit 0 A key, 1 B key, 2 leaf, 3 PAuth-LR), `__ARM_FEATURE_BTI_DEFAULT` and `__ARM_FEATURE_GCS_DEFAULT` (spec/pp.md "AArch64 target macros"). `__attribute__((target("branch-protection=<spec>")))` replaces the function's attributes (an invalid spec is `invalid or misplaced branch protection specification '<item>'`; off AArch64 the attribute is ignored with `unsupported 'branch-protection' in the 'target' attribute string`). An invalid spec is `unsupported argument '<item>' to option '-mbranch-protection='`; off AArch64 `-mbranch-protection=` is `unsupported option '-mbranch-protection=' for target '<triple>'` and `-msign-return-address=` is unused. kiln models no `-march=` extension enabling PAuth-LR, so `standard` never adds `pc` (spec/landed/codegen/WP-846.md) |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
 
@@ -196,13 +199,15 @@ default pipeline, which decides itself by `-O` level) and
 them is valid, only less optimized). Each is a deviation from clang's IR
 for that flag (WP-873 follow-ups). WP-982: `-f[no-]modules-reduced-bmi`
 (clang 18+ writes a smaller BMI; kiln's module file has one form, the
-source capsule, spec/modules.md §11.9). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
+source capsule, spec/modules.md §11.9). WP-873: `-fno-fat-lto-objects`
+(the default; an LTO object is bitcode only). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-fshort-enums`, the `-fsanitize*` and `-fno-sanitize*`
+`-fshort-enums`, `-ffat-lto-objects` (WP-873; bitcode plus object code in
+one `.o` is WP-899), the `-fsanitize*` and `-fno-sanitize*`
 options "Sanitizers" below does not list (`-fsanitize-coverage=`,
 `-fsanitize-cfi-*`, ...), and under
 `-fxray-instrument` every `-fxray-*` option but the threshold and
@@ -233,7 +238,9 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
 - **Paths:** `-fdebug-prefix-map=<old>=<new>` and
   `-ffile-prefix-map=<old>=<new>` remap file and directory names (clang
   `remapDIPath`: the last matching entry wins); a value without `=` is
-  `invalid value`. `-fdebug-compilation-dir=` /
+  an error, printed as `language not recognized: '<v>'` (clang:
+  `invalid argument '<v>' to -fdebug-prefix-map=`; the `lib.rs:146`
+  wording defect, deviation 20). `-fdebug-compilation-dir=` /
   `-ffile-compilation-dir=` name the compilation directory (default:
   the working directory).
 - **Output:** `-gsplit-dwarf[=split]` writes the `.dwo` next to the
@@ -370,9 +377,13 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   unreachable, vla-bound, null, alignment, object-size, array-bounds,
   bool, enum, float-cast-overflow, pointer-overflow, nonnull-attribute,
   returns-nonnull-attribute and builtin checks, and the implicit
-  conversion checks (spec/codegen.md §5.2; WP-675, WP-871). vptr,
-  function, the nullability checks and local-bounds are accepted and
-  emit no check yet (spec/landed/codegen/WP-871.md).
+  conversion checks (spec/codegen.md §5.2; WP-675, WP-871). vptr and
+  function are accepted and emit no check yet
+  (spec/landed/codegen/WP-871.md). The nullability checks
+  (`nullability-arg`, `-assign`, `-return`, the `nullability` group),
+  `local-bounds` and so `bounds` are not in `KILN_SUPPORTED`
+  (`crates/kiln_ast/src/sanitize.rs`): each is `'-fsanitize=<name>' is
+  not supported by kiln`.
 - `-f[no-]sanitize-merge[=<list>]` (WP-1032, clang 20+): the checks whose
   traps and handler calls may merge, read like the recover list (no
   value is `all`; default the `undefined` group at `-fclang-compat=22`,
@@ -829,9 +840,9 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   `-mcpu=` and `-msve-vector-bits=` are
   `unsupported option '<opt>' for target '<triple>'` (the
   `--target` as written; `drv_unsupported_opt_for_target`) and
-  `-target-feature` is ignored. A `-target-feature` value without a sign
-  is `unsupported argument`. An unknown `+name` is passed through to
-  `"target-features"`.
+  `-target-feature` is ignored, whatever its value. On AArch64 a
+  `-target-feature` value without a sign is `unsupported argument`, and an
+  unknown `+name` is passed through to `"target-features"`.
 
 ## x86-64 target features (WP-1000)
 
@@ -904,9 +915,11 @@ differences).
   `-mfp-ret-in-387`, `-mretpoline`, `-mretpoline-external-thunk`,
   `-mlvi-cfi`, `-mseses`, `-mx32` stay unknown arguments; `-Xclang
   -target-feature` is ignored; clang's `-Winvalid-feature-combination`
-  is not emitted; a bad `-march=` / `-mtune=` CPU is the driver's
-  `unsupported argument` (clang: cc1 `unknown target CPU` with a note),
-  and a bad `-mtune=` is accepted.
+  is not emitted; a bad `-march=` CPU is the driver's
+  `unsupported argument` (clang: cc1 `unknown target CPU` with a note).
+  `-mtune=` is not checked: any non-empty value is accepted and becomes
+  `"tune-cpu"` as written (an empty one is `unsupported argument`;
+  "Codegen flags").
 - Tests: `tests/conformance/cpp.predefined/x86-feature-macros-*.cpp`
   (per CPU level and flag combination, `-19` siblings),
   `tests/conformance/target.x86/ir-target-features-*.cpp`,
@@ -1224,9 +1237,19 @@ an earlier compile (spec/modules.md §11; WP-917). A module (or partition
    as `<dir>/M-P.*`.
 3. A module that an imported module file itself imported, at the path that
    file recorded.
-4. `std` and `std.compat` only: `<llvm>/share/libc++/v1/std.cppm` /
-   `std.compat.cppm`, where `<llvm>` is the toolchain's LLVM directory
-   ("LLVM discovery"; clang 19's and 22's libc++ have the
+4. `std` and `std.compat` only: `<dir>/std.cppm` / `std.compat.cppm`
+   when that file exists (`ModuleOptions::std_dir`), where `<dir>` is
+   `Toolchain::libcxx_module_dir` (`crates/kiln_driver/src/toolchain.rs:486`):
+   the share directory beside the libc++ headers. Its base is the first of
+   `<llvm>/bin/../include`, `<sysroot>/usr/local/include` and
+   `<sysroot>/usr/include` that holds `c++/v1` (the libc++ header base of
+   `-stdlib=libc++`, "Toolchain"); `<base>/c++/v1` is canonicalized
+   (symlinks resolved), and three levels above it is `<prefix>`. When
+   `<prefix>/share/libc++/v1` is a directory it is `<dir>`; otherwise (no
+   libc++ headers, or no share directory there) `<dir>` is
+   `<llvm>/share/libc++/v1`, `<llvm>` the toolchain's LLVM directory ("LLVM
+   discovery"), or `/usr/share/libc++/v1` without one. The lookup is the
+   same whatever `-stdlib=` says (clang 19's and 22's libc++ have the
    same layout). The module file comes from the module cache ("Module
    cache"), which builds it from that source on a miss.
 
@@ -1270,8 +1293,8 @@ its module file): `kiln++ -std=c++20 -fmodule-file=m=m.cppm m.cppm
 main.cpp`, or in two steps `kiln++ -std=c++20 -c m.cppm -fmodule-output -o
 m.o && kiln++ -std=c++20 -fmodule-file=m=m.pcm main.cpp m.o`. An importer
 emits only declarations for the non-inline functions and variables of the
-units it imports. `-fmodule-header` and header-unit module files are not
-supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
+units it imports. `-fmodule-header` is an unknown argument and
+header-unit module files are not supported yet (spec/modules.md §11.10); `-fmodules-reduced-bmi` is
 accepted and ignored ("Codegen flags").
 
 ### Module cache (WP-984)
@@ -2016,9 +2039,11 @@ Each deviation is covered by a test or a test note.
    preprocessing. An input with an unknown extension is C++ for `-E` and
    `-fsyntax-only` (clang takes it as a linker input). Pass `-x c++` to
    compile a C header as C++ without the deprecation warning.
-3. **`-dD` and `-dI` are not implemented** (WP-017). Neither is `-MG`
-   (unknown argument).
-4. **`-F` is ignored** with a warning. kiln does not search frameworks.
+3. **(none remains)** `-dD`, `-dI` and `-MG`, once listed here, are
+   implemented (the `-dD` / `-dI` rows above and "Dependency output").
+4. **`-F` is ignored** with the warning `ignoring framework directory
+   '<dir>' (kiln does not search frameworks)`, which `-Qunused-arguments`
+   does not silence. kiln does not search frameworks.
 5. **No `note: use '...' for '...' standard`** list after an invalid
    `-std=`.
 6. **`-v` output differs** except the search-list block. kiln prints no
@@ -2066,8 +2091,8 @@ Each deviation is covered by a test or a test note.
     not model (`sme*`, `fp8*`, clang 19's `b16b16`/`sve-b16b16`, ...) are
     errors where clang accepts them; on x86-64 `-target-feature` is
     ignored (clang passes it on), and the flags listed under "x86-64
-    target features", "Not modelled", differ; a `-target-feature` value without
-    `+`/`-` is an error (clang warns).
+    target features", "Not modelled", differ; on AArch64 a `-target-feature`
+    value without `+`/`-` is an error (clang warns).
 19. **Codegen flags** ("Codegen flags" above, WP-605): `-fno-plt` puts
     `nonlazybind` only on functions with no definition in the TU, where
     clang also marks a function used before its later definition and
