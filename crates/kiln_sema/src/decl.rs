@@ -1938,6 +1938,19 @@ impl Sema<'_, '_> {
         true
     }
 
+    /// [dcl.fct.default]/3: a default argument on parameter `p` of a
+    /// function declarator that is not a function declaration's (a
+    /// function pointer, a `typedef`, a type-id, a parameter's own
+    /// declarator): clang's `err_param_default_argument_nonfunc` at the
+    /// parameter's name (or where it would be); the argument is dropped.
+    pub fn act_on_nonfunc_default_arg(&mut self, p: &mut ParamInfo, at: Loc) {
+        if p.default_arg == DefaultArg::None {
+            return;
+        }
+        self.error(DiagId::sema_param_default_argument_nonfunc, at);
+        p.default_arg = DefaultArg::None;
+    }
+
     pub fn act_on_param_default_init(&mut self, p: &mut ParamInfo, init: Initializer) {
         let roots: Vec<ExprId> = match &init {
             Initializer::Expr(e) => vec![*e],
@@ -2008,6 +2021,12 @@ impl Sema<'_, '_> {
             s.note_default_init_full_expr();
             s.act_on_full_expr(e)
         });
+        if !self.check_default_arg_locals(e) {
+            p.invalid = true;
+            if let Some(d) = p.decl {
+                self.ast.decls.set_flags(d, DeclFlags::INVALID);
+            }
+        }
         self.store_param_default(p, e);
     }
 
@@ -2031,23 +2050,48 @@ impl Sema<'_, '_> {
     /// Lambda bodies are not searched (their captures are checked with
     /// the lambda).
     pub fn check_default_arg_refs(&mut self, e: ExprId) -> bool {
+        use kiln_ast::expr::NonOdrUse;
+        let mut ok = true;
         let mut stack = vec![e];
         while let Some(x) = stack.pop() {
             let n = self.ast.exprs.get(x);
             match n.kind() {
-                ExprKind::LambdaExpr => continue,
+                ExprKind::LambdaExpr => {
+                    // [expr.prim.lambda.capture]/9: a lambda in a default
+                    // argument captures nothing; an init-capture's
+                    // initializer is checked; the body is not.
+                    let caps = self.ast.exprs.lambda(x).captures.clone();
+                    for c in &caps {
+                        if c.init {
+                            if let Some(i) = c.var.and_then(|v| self.ast.decls.var(v)?.init) {
+                                stack.push(i);
+                            }
+                            continue;
+                        }
+                        let m = self.diag(DiagId::sema_lambda_capture_default_arg, c.loc);
+                        self.emit(m);
+                        ok = false;
+                        break;
+                    }
+                    continue;
+                }
+                ExprKind::CXXThisExpr => {
+                    // [dcl.fct.default]/8.
+                    self.error(DiagId::sema_param_default_argument_references_this, n.loc());
+                    ok = false;
+                }
                 ExprKind::DeclRefExpr => {
                     let d = self.ast.exprs.decl(x);
-                    if self.kind_of(d) == DeclKind::ParmVar
-                        && self.ast.exprs.non_odr_use(x) != kiln_ast::expr::NonOdrUse::Unevaluated
-                    {
+                    let nou = self.ast.exprs.non_odr_use(x);
+                    let kind = self.kind_of(d);
+                    if kind == DeclKind::ParmVar && nou != NonOdrUse::Unevaluated {
                         let name = self.ast.decls.get(d).name();
                         let text = self.decl_name_str(name);
                         let msg = self
                             .diag(DiagId::sema_param_default_argument_references_param, n.loc())
                             .arg(text);
                         self.emit(msg);
-                        return false;
+                        ok = false;
                     }
                 }
                 _ => {}
@@ -2056,7 +2100,91 @@ impl Sema<'_, '_> {
             kids.reverse();
             stack.extend(kids);
         }
-        true
+        ok
+    }
+
+    /// [dcl.fct.default]/7: a local variable is not odr-used in a default
+    /// argument (clang's `CheckDefaultArgumentVisitor`, "default argument
+    /// references local variable"). Run on the converted full-expression
+    /// `e`, so a use the lvalue-to-rvalue conversion makes a constant
+    /// non-odr-use is accepted. Every use is reported; false then. Lambda
+    /// bodies are not searched, init-captures are; not re-run when
+    /// instantiating.
+    pub(crate) fn check_default_arg_locals(&mut self, e: ExprId) -> bool {
+        use kiln_ast::expr::NonOdrUse;
+        if !self.inst.stack.is_empty() {
+            return true;
+        }
+        let mut ok = true;
+        // Inside a template definition uses are not marked; the
+        // lvalue-to-rvalue operands are the constant candidates
+        // ([basic.def.odr]/5), as `act_on_full_expr` computes them.
+        let mut constant = Vec::new();
+        let templ = self.in_template();
+        let mut stack = vec![e];
+        while let Some(x) = stack.pop() {
+            let n = self.ast.exprs.get(x);
+            match n.kind() {
+                ExprKind::ImplicitCastExpr
+                    if templ && self.ast.exprs.cast_kind(x) == CastKind::LValueToRValue =>
+                {
+                    self.potential_results(self.ast.exprs.operand(x), &mut constant);
+                }
+                ExprKind::LambdaExpr => {
+                    let caps = self.ast.exprs.lambda(x).captures.clone();
+                    for c in caps.iter().rev().filter(|c| c.init) {
+                        if let Some(i) = c.var.and_then(|v| self.ast.decls.var(v)?.init) {
+                            stack.push(i);
+                        }
+                    }
+                    continue;
+                }
+                ExprKind::DeclRefExpr => {
+                    let d = self.ast.exprs.decl(x);
+                    if self.ast.exprs.non_odr_use(x) == NonOdrUse::None
+                        && self.is_local_var_entity(d)
+                        && !(templ && self.constant_in_template(d, x, &constant))
+                    {
+                        let name = self.ast.decls.get(d).name();
+                        let text = self.decl_name_str(name);
+                        let at = self.begin_loc(x);
+                        let msg = self
+                            .diag(DiagId::sema_param_default_argument_references_local, at)
+                            .arg(text);
+                        self.emit(msg);
+                        ok = false;
+                    }
+                }
+                _ => {}
+            }
+            let mut kids = self.ast.exprs.children(x, &self.ast.lists);
+            kids.reverse();
+            stack.extend(kids);
+        }
+        ok
+    }
+
+    /// Whether reference `x` to `d` in a template definition would not be
+    /// an odr-use (`constant`: the lvalue-to-rvalue operands).
+    fn constant_in_template(&mut self, d: DeclId, x: ExprId, constant: &[ExprId]) -> bool {
+        let is_ref =
+            self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
+        (is_ref || constant.contains(&x)) && self.usable_in_constant_expressions(d)
+    }
+
+    /// A variable declared at block scope (clang `VarDecl::isLocalVarDecl`,
+    /// including `static`, `extern` and `thread_local` ones), or a
+    /// structured binding of one.
+    fn is_local_var_entity(&self, d: DeclId) -> bool {
+        let v = match self.kind_of(d) {
+            DeclKind::Var => d,
+            DeclKind::Binding => match self.ast.decls.binding_decomp(d) {
+                Some(v) => v,
+                None => return false,
+            },
+            _ => return false,
+        };
+        self.ast.decls.lexical_ctx(v).is_some_and(|c| self.kind_of(c).is_function())
     }
 
     /// Attaches clang's "passing argument to parameter 'p' here" note.
@@ -2836,6 +2964,21 @@ impl Sema<'_, '_> {
         };
         if d.qualifier.is_none() {
             self.check_template_param_shadow(name, name_loc);
+        }
+        // [class.mem.general]/22: a static data member, member typedef or
+        // member variable template named as its class (a member function
+        // so named is a constructor declarator, diagnosed as one). clang
+        // drops such a typedef.
+        if d.qualifier.is_none()
+            && ds.friend.is_none()
+            && d.ctx == DeclaratorContext::Member
+            && (ds.is_typedef() || !self.ast.types.is_function(ty))
+            && (ds.is_typedef() || matches!(ds.storage, Some((StorageSpec::Static, _))))
+            && self.diagnose_class_name_shadow(self.ctx, name, name_loc)
+            && ds.is_typedef()
+        {
+            self.templ.cur = None;
+            return None;
         }
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
@@ -3644,7 +3787,13 @@ impl Sema<'_, '_> {
         let ty = self.apply_vector_attrs(ty, &mut attrs, true, VectorAttrPos::Decl);
         attrs.extend(type_attrs);
         let ty = self.apply_cc_attrs(ty, &mut attrs, false);
+        // [class.mem.general]/22: a member alias (template) named as its
+        // class.
+        let shadow = self.diagnose_class_name_shadow(self.ctx, name, name_loc);
         let td = self.act_on_typedef(&ds, ty, &d, name, true);
+        if shadow {
+            self.ast.decls.set_flags(td, DeclFlags::INVALID);
+        }
         // [temp.variadic]/12: `using U = Ts;`.
         if self.diagnose_unexpanded_declarator(ty, "declaration type", name_loc) {
             self.declarator_type_invalid = false;
@@ -3780,8 +3929,14 @@ impl Sema<'_, '_> {
             }
             _ => ty,
         };
-        if ds.inline.is_some() {
-            spec = spec.with_inline(true);
+        if let Some(l) = ds.inline {
+            // [dcl.inline]/5: not on a block-scope function declaration
+            // (clang `err_inline_declaration_block_scope`, at `inline`).
+            if block && !method {
+                self.inline_block_scope(d, l);
+            } else {
+                spec = spec.with_inline(true);
+            }
         }
         if ds.constexpr.is_some() {
             spec = spec.with_constexpr_kind(ConstexprKind::Constexpr).with_implicit_inline(true);
@@ -3790,10 +3945,13 @@ impl Sema<'_, '_> {
         }
         let variadic = self.ast.types.proto(ty).is_some_and(|p| p.info().variadic());
         spec = spec.with_variadic(variadic);
-        // [basic.start.main]/2: `main` returns `int`.
-        if sym_str(self, name) == "main"
-            && self.ast.redecl_context(ctx) == self.ast.tu
-            && let Some(p) = self.ast.types.proto(ty)
+        // [basic.start.main]/2: `main` returns `int`. clang's `CheckMain`
+        // makes a `main` with a wrong return type or parameter list
+        // invalid: it redeclares nothing and is not reported as a
+        // template.
+        let mut main_invalid = false;
+        if self.is_global_main_name(ctx, name)
+            && let Some(p) = self.ast.types.proto(ty).copied()
         {
             // [basic.start.main]/3: `main` is not static or inline (clang's
             // `CheckMain` diagnoses and keeps the declaration).
@@ -3806,7 +3964,9 @@ impl Sema<'_, '_> {
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
                 self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
+                main_invalid = true;
             }
+            main_invalid |= self.check_main_params(&p, d.name_loc());
             // P3618R0 ([basic.start.main]/3): `main` is attached to the
             // global module; clang 22 warns in a named module's purview
             // outside a linkage specification (clang 19 is silent).
@@ -3825,6 +3985,10 @@ impl Sema<'_, '_> {
                 let m = self.diag(DiagId::sema_constexpr_main, l).arg(which);
                 self.emit(m);
                 spec = spec.with_constexpr_kind(ConstexprKind::None).with_implicit_inline(false);
+            }
+            if !main_invalid && self.templ.cur.is_some() {
+                self.diagnose_main_template(d.name_loc());
+                main_invalid = true;
             }
         }
         let mut prev_ok = None;
@@ -3877,6 +4041,7 @@ impl Sema<'_, '_> {
         let global_new_delete = d.op_name.is_some_and(|op| {
             !method
                 && !friend
+                && self.kind_of(self.ast.redecl_context(ctx)) != DeclKind::Namespace
                 && matches!(
                     op,
                     OverloadedOperator::New
@@ -3915,7 +4080,12 @@ impl Sema<'_, '_> {
         // An invalid declaration (an illegal storage class, an invalid
         // parameter) redeclares nothing either: clang checks it against no
         // previous declaration (`ActOnFunctionDeclarator`).
-        let prev = if global_new_delete || deferred_friend || invalid_decl || bad_local_friend {
+        let prev = if global_new_delete
+            || deferred_friend
+            || invalid_decl
+            || bad_local_friend
+            || main_invalid
+        {
             None
         } else if let LocalFriend::Redeclares(p) = local_friend
             && !self.in_templated_class(Some(lexical))
@@ -3983,6 +4153,7 @@ impl Sema<'_, '_> {
             None if !method
                 && !friend
                 && !invalid_decl
+                && !main_invalid
                 && d.qualifier.is_none()
                 && self.templ.cur.is_none()
                 && dname.as_ident().is_some() =>
@@ -3990,9 +4161,22 @@ impl Sema<'_, '_> {
                 // WP-803: a `pass_object_size` overload is never the C
                 // entity of its name (clang `IsOverload`).
                 let own = new_fn.is_static || new_fn.pass_object_size;
-                let p = self.extern_c_prev(name, false, own, d.name_loc());
+                // `main` is not overloaded: another signature conflicts
+                // ([basic.start.main]/3).
+                let main = self.is_global_main_name(ctx, name);
+                let p = match self.main_overload_prev(name).filter(|_| main) {
+                    Some(p) => Some(p),
+                    None => self.extern_c_prev(name, false, own, d.name_loc()),
+                };
                 extern_c_redecl = p.is_some();
                 p
+            }
+            p => p,
+        };
+        // [over.load]/2.3 (C++20), [basic.scope.scope]/3 (C++23).
+        let prev = match prev {
+            None if method && in_class && !friend && !invalid_decl && !explicit_object => {
+                self.ref_qualifier_mix(dname, new_fn, d.name_loc())
             }
             p => p,
         };
@@ -4029,6 +4213,25 @@ impl Sema<'_, '_> {
             let (t, p) = self.act_on_global_new_delete_decl(op, ty);
             ty = t;
             prev_ok = p;
+            // A static redeclaration of a global allocation function
+            // (clang `MergeFunctionDecl`, ahead of the scope check).
+            if let Some(p) = p
+                && spec.storage() == FnStorage::Static
+                && self.ast.decls.function(p).is_some_and(|x| x.spec.storage() != FnStorage::Static)
+            {
+                let msg =
+                    self.diag(DiagId::sema_static_non_static, d.name_loc()).arg(fname.clone());
+                let msg = if self.ast.decls.get(p).has(DeclFlags::IMPLICIT) {
+                    msg.with_note(
+                        self.diag(DiagId::note_previous_implicit_declaration, d.name_loc()),
+                    )
+                } else {
+                    self.note_prev(msg, p, false)
+                };
+                self.emit(msg);
+                prev_ok = None;
+                invalid_redecl = true;
+            }
             if let Some(p) = p {
                 let pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 if !self.same_type_and_exc(pty, ty)
@@ -4507,7 +4710,23 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(f, DeclFlags::INVALID);
             }
         } else if let Some(op) = d.op_name {
-            if !global_new_delete
+            if matches!(
+                op,
+                OverloadedOperator::New
+                    | OverloadedOperator::ArrayNew
+                    | OverloadedOperator::Delete
+                    | OverloadedOperator::ArrayDelete
+            ) {
+                // [basic.stc.dynamic.allocation]/1,
+                // [basic.stc.dynamic.deallocation]/1-2 (`alloc_decl`).
+                if !friend
+                    && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
+                    && (self.check_new_delete_scope(f, &fname)
+                        || !self.check_new_delete_signature(f, op, new_fn.head.is_some(), &fname))
+                {
+                    self.ast.decls.set_flags(f, DeclFlags::INVALID);
+                }
+            } else if !global_new_delete
                 && !self.ast.decls.get(f).flags().contains(DeclFlags::INVALID)
                 && !self.check_operator_decl(f)
             {
@@ -4949,7 +5168,7 @@ impl Sema<'_, '_> {
         if let Some(style) = d.init_style {
             // A default member initializer ([class.mem.general]/11),
             // replayed after the class is complete.
-            flags |= (style as u32) << 2;
+            flags |= (style as u32) << 2 | FieldData::HAS_DEFAULT_INIT;
             if let Some(c) = self.classes.last_mut()
                 && c.record == ctx
             {
@@ -5043,6 +5262,20 @@ impl Sema<'_, '_> {
         // (every such path has diagnosed) leaves the field invalid.
         field_invalid |= d.bit_width.is_some() && width.is_none();
         field_invalid |= invalid || failed_spec || self.is_error_type(ty);
+        // [class.bit]/1 (CWG2229): an unnamed bit-field is not
+        // cv-qualified (clang `err_anon_bitfield_qualifiers`, at the
+        // field's location; the field is invalid).
+        if !field_invalid
+            && name.is_none()
+            && d.bit_width.is_some()
+            && self.ast.types.canonical(ty).quals().bits() != 0
+        {
+            self.error(DiagId::sema_anon_bitfield_qualifiers, d.name_loc());
+            field_invalid = true;
+        }
+        if d.init_style.is_some() {
+            self.check_union_default_inits(ctx, d.name_loc());
+        }
         let h = DeclHead::new(ctx, name.map_or(DeclName::EMPTY, DeclName::ident), d.name_loc())
             .misc(DeclMisc::new().with_name_independent(independent));
         let f = self.builder().field(h, ty, width, flags);
@@ -5573,6 +5806,8 @@ impl Sema<'_, '_> {
         if self.kind_of(ctx) == DeclKind::CXXRecord {
             return self.act_on_static_member(ds, ty, d, name, spec);
         }
+        let local_extern = spec.storage() == VarStorage::Extern;
+        self.check_main_variable(ctx, name, local_extern, ds.loc);
         let mut prev_ok = None;
         // A redefinition (or a redeclaration with another type) is invalid
         // (clang `setInvalidDecl`), so a later lookup that also finds the
@@ -6006,7 +6241,7 @@ impl Sema<'_, '_> {
         }
         let spec = self.ast.decls.var(v).map(|x| x.spec).unwrap_or_default();
         let loc = vn.loc();
-        if self.extern_init_redefines(v, spec, loc) {
+        if self.extern_init_redefines(v, spec, loc) || self.static_member_reinit(v, &init) {
             self.discard_initializer(&init);
             return;
         }
@@ -7619,12 +7854,21 @@ impl Sema<'_, '_> {
         let mut conflict = false;
         let mut respecialized = false;
         if let Some((n, nloc)) = name {
+            // [class.mem.general]/22: a member class, enumeration or
+            // class template named as its class is diagnosed and declared
+            // as a new member (it redeclares nothing).
+            let class_shadow = qualifier.is_none()
+                && use_ != TagUse::Reference
+                && self.diagnose_class_name_shadow(self.ctx, n, nloc);
             if qualifier.is_none() && use_ != TagUse::Reference {
                 self.check_template_param_shadow(n, nloc);
             }
             let opaque_enum = is_enum && fixed.is_some();
-            let found =
-                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc);
+            let found = if class_shadow {
+                Vec::new()
+            } else {
+                self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
+            };
             if found.is_empty() && qualifier.is_none() {
                 conflict = self.diagnose_tag_kind_conflict(
                     keyword,
@@ -7654,6 +7898,10 @@ impl Sema<'_, '_> {
             if let (Some(p), true) = (prev, is_enum) {
                 self.check_enum_redecl(p, scoped, fixed, nloc, use_);
             }
+            let qualified_member = prev.is_some()
+                && !member_class_spec
+                && !extraneous_head
+                && matches!(use_, TagUse::Definition | TagUse::Declaration);
             if let Some(p) = prev {
                 if member_class_spec && !self.check_member_tag_spec(p, nloc) {
                     // [temp.expl.spec]/7, diagnosed: a definition is
@@ -7700,6 +7948,9 @@ impl Sema<'_, '_> {
                     // instantiates a member class ([temp.explicit]/3).
                     let inst =
                         qualifier.is_some() && self.act_on_explicit_member_class_inst(p, nloc);
+                    if head.is_none() {
+                        self.check_member_tag_redeclared(p, nloc);
+                    }
                     // A class template redeclaration is a new decl with a
                     // `ClassTemplateDecl` of its own (clang
                     // `CheckClassTemplate`; `finish_template_pattern`
@@ -7719,6 +7970,9 @@ impl Sema<'_, '_> {
                 if !self.diagnose_tag_reference_non_tag(keyword, n, &o, nloc) {
                     self.diag_qualified_tag_not_found(keyword, n, nloc, q, use_, head.is_some());
                 }
+            }
+            if qualified_member && let Some(q) = qualifier {
+                self.check_qualified_member_tag(q, n, nloc);
             }
         }
         let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
@@ -7977,6 +8231,7 @@ impl Sema<'_, '_> {
         ns: DeclId,
     ) -> DeclId {
         let head = self.take_template_head(None);
+        self.check_friend_class_template_defaults(head);
         // [namespace.memdef]/3 stops the search at the innermost enclosing
         // namespace, so a member class template of an enclosing class
         // (or its injected-class-name) is found by ordinary lookup and
@@ -8098,7 +8353,8 @@ impl Sema<'_, '_> {
         }
         // The friend's own template head declares nothing (clang matches
         // it against the template's only on instantiation).
-        let _ = self.take_template_head(None);
+        let head = self.take_template_head(None);
+        self.check_friend_class_template_defaults(head);
         self.templ.cur = None;
         let Some((t, p)) = t.and_then(|t| self.pattern_of(t).map(|p| (t, p))) else {
             let msg = if let Some(&other) = found.first() {
@@ -8285,6 +8541,7 @@ impl Sema<'_, '_> {
     }
 
     pub fn act_on_finish_record_definition(&mut self, r: DeclId, then_semi: bool) {
+        self.check_field_named_as_class(r);
         self.scopes.pop();
         let mut build = self.classes.pop_if(|c| c.record == r);
         self.defining.retain(|&d| d != r);
@@ -8505,6 +8762,11 @@ impl Sema<'_, '_> {
             let msg = self.diag(id, loc).arg(sym_str(self, name));
             let msg = self.note_prev(msg, p, true);
             self.emit(msg);
+        }
+        // [class.mem.general]/22: an enumerator of an unscoped member
+        // enumeration named as the class.
+        if !scoped && let Some(parent) = self.ast.decls.get(e).ctx() {
+            let _ = self.diagnose_class_name_shadow(parent, name, loc);
         }
         // An enumerator of a dependent enumeration (a member of a template)
         // keeps its initializer as written and has no value until
@@ -9376,6 +9638,10 @@ impl Sema<'_, '_> {
             };
             self.emit(d);
         }
+        if in_class && let Some(x) = self.first_default_init(rec) {
+            let loc = self.ast.decls.get(x).loc();
+            self.check_union_default_inits(ctx, loc);
+        }
         let ty = self.tag_type(rec);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
@@ -9410,7 +9676,10 @@ impl Sema<'_, '_> {
                 self.lookup_current_scope(name)
             }
             .into_iter()
-            .find(|&d| !is_tag_kind(self.kind_of(d)));
+            .find(|&d| !is_tag_kind(self.kind_of(d)))
+            // [class.mem.general]/22: the injected-class-name is a member
+            // of the class too (clang `CheckAnonMemberRedeclaration`).
+            .or_else(|| (in_class && self.is_class_named(ctx, name)).then_some(ctx));
             if let Some(p) = prev {
                 let msg = self
                     .diag(DiagId::sema_anon_record_member_redecl, mn.loc())

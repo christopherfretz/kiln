@@ -974,6 +974,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-947 | accepts-invalid (WP-912): empty braced list for a user `initializer_list` type rejected, then stack overflow (cwg10xx crash); crates/kiln_sema/src/init.rs:686 std_initializer_list_init | WP-912 | open |
 | WP-948 | accepts-invalid (WP-912): Oven UB checks: past-end member access and calls, out-of-lifetime calls, volatile read via cast, zero-size array pointer subtraction, virtual member-pointer compare; not-yet-visible initializers | WP-912 | done (#417) |
 | WP-949 | accepts-invalid (WP-912): member with the name of its class [class.mem]/22 | WP-912 | open |
+| WP-1015 | accepts-invalid part 2: declaration rules (class-name members, new/delete + main, unions/static members/bit-fields, redeclarations, default args) | WP-949 | in progress |
 | WP-950 | accepts-invalid (WP-912): allocation-function and `main` declaration rules | WP-912 | open |
 | WP-951 | accepts-invalid (WP-912): union, static data member and bit-field rules | WP-912 | open |
 | WP-952 | accepts-invalid (WP-912): redeclarations: ref-qualifier overloads, using-declaration redeclaration, qualified members | WP-912 | open |

@@ -18,6 +18,8 @@ mod ctorinit;
 pub(crate) mod friend;
 pub(crate) mod inhctor;
 mod member_expr;
+mod member_name;
+mod member_rules;
 pub(crate) mod members;
 mod special;
 mod temporary;
@@ -327,6 +329,10 @@ impl Sema<'_, '_> {
     /// is the C++26 string-literal message.
     pub fn act_on_deleted(&mut self, f: DeclId, loc: Loc, msg: Option<ExprId>) {
         self.no_builtin_defined(f, true);
+        // clang's `SetDeclDeleted`: on a valid first declaration.
+        if self.ast.prev(f).is_none() && !self.ast.decls.get(f).has(DeclFlags::INVALID) {
+            self.check_deleted_main(f, loc);
+        }
         self.deleted_impl(f, loc, msg);
     }
 
