@@ -1078,7 +1078,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1055 | never-constant: bcmp missing from the library-builtin rows (kiln_ast decl.rs:3821), so bcmp(p,p,1)+x in gnu++20 is not reported (accepts-invalid) | WP-945 | open |
 | WP-1056 | constexpr int f(){__builtin_unreachable();} reports never-constant where clang reports err_constexpr_body_no_return (never_constant.rs:177) | WP-945 | open |
 | WP-1057 | __has_builtin(__builtin_readcyclecounter) is 1 but Sema leaves the builtin undeclared on aarch64 (features_table.rs:2032; rejects-valid) | WP-945 | open |
-| WP-1060 | mangling: template substitution folds a pack-index expression inside a dependent decltype to its element (kiln_sema templ/pack.rs:687 pack_indexing_expr); xfail dcl.type.pack.index/substituted-expr-mangling-two-units-run.cpp | WP-1029 | open |
+| WP-1060 | mangling: template substitution folds a pack-index expression inside a dependent decltype to its element (kiln_sema templ/pack.rs:687 pack_indexing_expr); xfail dcl.type.pack.index/substituted-expr-mangling-two-units-run.cpp | WP-1029 | in progress |
 | WP-1061 | abi: audit qualifier spelling in non-member unresolved names (kiln_abi mangle/dep.rs:1344 unresolved_prefix_in; WP-1029 fixed member access only) | WP-1029 | open |
 | WP-1062 | abi: mangle a lambda expression in a template parameter type (kiln_codegen module.rs:526); xfail temp.param/lambda-in-parameter-type-mangle-run.cpp | WP-946 | open |
 | WP-1063 | accepts-invalid: `template<class T> enum E {}` lacks enumeration cannot be a template; nested template-id lacks templates can only be declared in namespace or class scope (kiln_sema decl.rs:7911 act_on_tag) | WP-946 | open |
