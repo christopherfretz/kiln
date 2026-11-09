@@ -934,7 +934,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-907 | sema: complete a variable template specialization of unknown array bound for sizeof/type_of (xfail temp.inst/p4-var-template-unknown-bound.cpp) | WP-879 | done (#442) |
 | WP-908 | perf: frontend ~3x slower than g++-16 on large repeated nested template-ids (5.1 MB TU: 1.28 s vs 0.44 s -fsyntax-only; docs/status/perf.md WP-879) | WP-879 | done (#407, via WP-919) |
 | WP-919 | perf: frontend throughput on large nested template-id TUs (profile dup8 + real TUs, fix hotspots, dup bench entry) | WP-908 | done (#407) |
-| WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | open |
+| WP-909 | decision: default -fkiln-reflection-mangling form (WP-879 study recommends gcc; operator decides) | WP-879 | in progress (operator 11-09: gcc is the default) |
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
