@@ -64,6 +64,7 @@ mod fmv;
 mod for_loop_analysis;
 mod format_string;
 mod forms;
+mod generic_sel;
 mod gnu;
 mod gnu_null;
 mod gnu_typeof;

@@ -12,7 +12,7 @@ use crate::consts::{
     Scalar, Shape,
 };
 use crate::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use crate::expr::{CharKind, ExprFlags, ExprKind, ValueCategory};
+use crate::expr::{CharKind, ExprFlags, ExprKind, GenericControl, ValueCategory};
 use crate::ids::{ConstValueId, DeclId, ExprId, ListId, QualType, RawId, TypeId};
 use crate::names::{DeclName, DeclNameView};
 use crate::strings::{StringEncoding, push_char_literal};
@@ -966,6 +966,26 @@ impl<'a> AstNames<'a> {
                         out.push_str(", ");
                     }
                     self.expr(c, d, out);
+                }
+                out.push(')');
+            }
+            // clang `StmtPrinter::VisitGenericSelectionExpr`.
+            ExprKind::GenericSelectionExpr => {
+                out.push_str("_Generic(");
+                match exprs.generic_control(e, &ast.lists) {
+                    GenericControl::Expr(c) => self.expr(c, d, out),
+                    GenericControl::Type(t, _) => {
+                        write_type(&ast.types, self, t, self.expr_types, out);
+                    }
+                }
+                for a in exprs.generic_assocs(e, &ast.lists) {
+                    out.push_str(", ");
+                    match a.ty {
+                        Some(t) => write_type(&ast.types, self, t, self.expr_types, out),
+                        None => out.push_str("default"),
+                    }
+                    out.push_str(": ");
+                    self.expr(a.expr, d, out);
                 }
                 out.push(')');
             }

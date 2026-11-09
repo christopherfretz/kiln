@@ -161,6 +161,11 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   details that differ between releases. `-fclang-compat=19` selects
   clang 19's instead. This flag is independent of which LLVM installation
   is used.
+- **clang extensions in C++** are accepted as clang accepts them, warned
+  only under `-pedantic`. One example is C11 `_Generic(e, T: x, default: y)`,
+  which also takes clang's type-operand form `_Generic(T, ...)`
+  (`__has_extension(c_generic_selections)` is 1). Only the selected
+  association is evaluated, including in constant expressions.
 - **C**: `kiln` (not `kiln++`) treats `.c`, `.h` and `.i` as C, and can
   only preprocess them (`-E`). See
   [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode).
