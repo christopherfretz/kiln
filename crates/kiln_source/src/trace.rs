@@ -173,6 +173,15 @@ impl Recorder {
     fn us_since_start(&self, t: Instant) -> u64 {
         micros(t.saturating_duration_since(self.start))
     }
+
+    /// An event's `ts` and `dur` from its two clock readings. Both ends are
+    /// truncated against the trace start (not the duration on its own), so
+    /// an event that ends with or inside its parent never ends after it in
+    /// the file: nesting survives the rounding.
+    fn ts_dur(&self, start: Instant, end: Instant) -> (u64, u64) {
+        let ts = self.us_since_start(start);
+        (ts, self.us_since_start(end).saturating_sub(ts))
+    }
 }
 
 fn micros(d: std::time::Duration) -> u64 {
@@ -257,15 +266,15 @@ pub fn end_at(
     detail: impl FnOnce() -> String,
     args: impl FnOnce() -> Vec<(Cow<'static, str>, Arg)>,
 ) {
-    let dur = micros(now.saturating_duration_since(span.start));
     // Decide under the borrow, format outside it: a detail may read the
     // recorder's state (`enabled`) but must never find it borrowed.
     let keep = REC.with(|r| {
         let mut r = r.borrow_mut();
         let r = r.as_mut()?;
-        r.close(span.name, dur).then(|| r.us_since_start(span.start))
+        let (ts, dur) = r.ts_dur(span.start, now);
+        r.close(span.name, dur).then_some((ts, dur))
     });
-    let Some(ts) = keep else { return };
+    let Some((ts, dur)) = keep else { return };
     let ev = Event {
         name: Cow::Borrowed(span.name),
         detail: detail(),
@@ -323,9 +332,8 @@ pub fn source_end() {
         let mut r = r.borrow_mut();
         let Some(r) = r.as_mut() else { return };
         let Some((start, detail)) = r.sources.pop() else { return };
-        let dur = micros(now.saturating_duration_since(start));
+        let (ts, dur) = r.ts_dur(start, now);
         if r.close("Source", dur) {
-            let ts = r.us_since_start(start);
             r.events.push(Event {
                 name: Cow::Borrowed("Source"),
                 detail,
