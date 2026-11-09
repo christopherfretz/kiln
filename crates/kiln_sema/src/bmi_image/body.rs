@@ -23,8 +23,9 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::decl::{DeclMisc, NewDecl, Payload as AstPayload, VarEvalState};
 use kiln_ast::expr::{
-    BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructionKind, DeclRefExtra, ExprDeps, ExprKind, ExprNode,
-    InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind, TraitKind, TypeTrait, UnaryOp,
+    BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructionKind, DeclRefExtra, ExprDeps,
+    ExprKind, ExprNode, InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind, TraitKind,
+    TypeTrait, UnaryOp,
 };
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::{CaseData, IfData, LoopData, RangeForData, StmtKind, StmtNode, SwitchData};
@@ -748,7 +749,10 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         }
         Dc::Field => matches!(d.payload, Payload::Field { .. }),
         Dc::Ctor => {
-            matches!(d.payload, Payload::Function { kind: 2, .. } | Payload::Implicit { kind: 0..=2 })
+            matches!(
+                d.payload,
+                Payload::Function { kind: 2, .. } | Payload::Implicit { kind: 0..=2 }
+            )
         }
         Dc::Dtor => {
             matches!(d.payload, Payload::Function { kind: 3, .. } | Payload::Implicit { kind: 5 })
@@ -1659,13 +1663,11 @@ pub(super) const LOCAL_FLAGS: u8 =
 fn expr_reason(k: ExprKind) -> &'static str {
     use ExprKind as X;
     match k {
-        X::CXXInheritedCtorInitExpr
-        | X::CXXStdInitializerListExpr
-        | X::CXXNewExpr
-        | X::CXXDeleteExpr
-        | X::CXXPseudoDestructorExpr
-        | X::CXXTypeidExpr
-        | X::CXXDynamicCastExpr => "an expression using a class (S3)",
+        X::CXXNewExpr | X::CXXDeleteExpr => "a new or delete expression",
+        X::CXXTypeidExpr | X::CXXDynamicCastExpr => "a typeid or dynamic_cast expression",
+        X::CXXStdInitializerListExpr => "a std::initializer_list",
+        X::CXXInheritedCtorInitExpr => "an inherited constructor",
+        X::CXXPseudoDestructorExpr => "a pseudo-destructor call",
         X::LambdaExpr => "a lambda expression",
         X::RequiresExpr | X::ConceptSpecializationExpr => "a requires-expression or concept",
         X::CoawaitExpr | X::DependentCoawaitExpr | X::CoyieldExpr => "a coroutine",

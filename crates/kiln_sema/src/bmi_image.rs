@@ -176,8 +176,9 @@ struct RecDef {
     bases: Vec<BaseRec>,
 }
 
-/// A ctor-initializer: `kind` is `CtorInitKind` (`Base` 0: `target` a
-/// type reference; `Field` 2: a field record; `Delegating` 4: 0).
+/// A ctor-initializer: `kind` is `CtorInitKind` (`Base` 0: `target` the
+/// base's position in its class's base list; `Field` 2: a field record of
+/// the class, possibly after the constructor; `Delegating` 4: 0).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct InitRec {
     kind: u8,
@@ -354,9 +355,8 @@ const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
 /// `FieldData.flags` carried: `mutable`, the initializer style, a
 /// default member initializer (`[[no_unique_address]]` is an attribute).
-const FIELD_FLAGS: u32 = kiln_ast::decl::FieldData::MUTABLE
-    | (3 << 2)
-    | kiln_ast::decl::FieldData::HAS_DEFAULT_INIT;
+const FIELD_FLAGS: u32 =
+    kiln_ast::decl::FieldData::MUTABLE | (3 << 2) | kiln_ast::decl::FieldData::HAS_DEFAULT_INIT;
 
 /// `DefinitionBits` a carried class may have: not a lambda, polymorphic,
 /// abstract, anonymous, with virtual or inherited members, or
@@ -900,9 +900,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::Record { tag, def }
         }
-        K_FIELD => {
-            Payload::Field { ty: r.q()?, flags: r.u32()?, width: r.u32()?, init: r.u32()? }
-        }
+        K_FIELD => Payload::Field { ty: r.q()?, flags: r.u32()?, width: r.u32()?, init: r.u32()? },
         K_ACCESS => Payload::Access,
         K_IMPLICIT => Payload::Implicit { kind: r.u8()? },
         _ => return bad("unknown declaration kind"),
@@ -975,9 +973,10 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
 fn same_kind(a: &Payload, b: &Payload) -> bool {
     match (a, b) {
         (Payload::Function { kind: x, .. }, Payload::Function { kind: y, .. }) => x == y,
-        (Payload::Field { .. } | Payload::Access | Payload::Implicit { .. } | Payload::Export, _) => {
-            false
-        }
+        (
+            Payload::Field { .. } | Payload::Access | Payload::Implicit { .. } | Payload::Export,
+            _,
+        ) => false,
         _ => a.code() == b.code(),
     }
 }
@@ -1259,7 +1258,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // complete class and a previous declaration; an implicit
             // member names a complete class.
             let ok = match (&d.payload, d.lexical) {
-                (Payload::Implicit { .. }, _) => top.is_none() && closed(d.ctx) && d.lexical == NONE,
+                (Payload::Implicit { .. }, _) => {
+                    top.is_none() && closed(d.ctx) && d.lexical == NONE
+                }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
             };
@@ -1288,7 +1289,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 N_DTOR => *kind == 3,
                 N_CONV => *kind == 4,
                 n if (N_OP..N_CTOR).contains(&n) => {
-                    *kind < 2 && u8::try_from(n - N_OP).ok().and_then(OverloadedOperator::from_u8).is_some()
+                    *kind < 2
+                        && u8::try_from(n - N_OP)
+                            .ok()
+                            .and_then(OverloadedOperator::from_u8)
+                            .is_some()
                 }
                 n => *kind < 2 && ident(n),
             },
@@ -1381,9 +1386,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         return bad("a class defined twice");
                     }
                     def_end[chain[i]] = end;
-                    let complete = |x: u32| {
-                        chain.get(x as usize).is_some_and(|&c| def_end[c] <= i)
-                    };
+                    let complete = |x: u32| chain.get(x as usize).is_some_and(|&c| def_end[c] <= i);
                     for b in &df.bases {
                         if b.access > 3 || base_class(img, b.ty, &complete).is_none() {
                             return bad("bad base class");
@@ -1533,7 +1536,9 @@ impl Writer<'_, '_, '_> {
             steps.push(match v {
                 Nns::Global => NnsRec::Global,
                 Nns::Namespace { ns, .. } => match self.recs.get(&ns) {
-                    Some(&r) if matches!(self.img.decls[r as usize].payload, Payload::Namespace) => {
+                    Some(&r)
+                        if matches!(self.img.decls[r as usize].payload, Payload::Namespace) =>
+                    {
                         NnsRec::Ns(r)
                     }
                     _ => return Err("a qualifier naming a namespace outside the image"),
@@ -1617,11 +1622,8 @@ impl Writer<'_, '_, '_> {
         use kiln_ast::names::DeclNameView as V;
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
-        let class_canon = || {
-            n.ctx()
-                .and_then(|c| ast.decls.get(c).ty())
-                .map(|q| ast.types.canonical(q).ty())
-        };
+        let class_canon =
+            || n.ctx().and_then(|c| ast.decls.get(c).ty()).map(|q| ast.types.canonical(q).ty());
         Ok(match ast.names.view(n.name()) {
             V::Empty => NONE,
             V::Identifier(sym) => {
@@ -1632,7 +1634,9 @@ impl Writer<'_, '_, '_> {
                 Self::name_ix(&mut self.names, &mut self.img.names, &s)
             }
             V::Operator(op) => N_OP + u32::from(op as u8),
-            V::Constructor(t) if n.kind() == DeclKind::CXXConstructor && class_canon() == Some(t) => {
+            V::Constructor(t)
+                if n.kind() == DeclKind::CXXConstructor && class_canon() == Some(t) =>
+            {
                 N_CTOR
             }
             V::Destructor(t) if n.kind() == DeclKind::CXXDestructor && class_canon() == Some(t) => {
@@ -1808,7 +1812,9 @@ impl Writer<'_, '_, '_> {
         if c.friends.get(d).is_some_and(|&l| !self.s.ast.lists.is_empty(l)) {
             return Err("a friend declaration");
         }
-        if c.overrides.contains(d) || c.key_function.contains(d) || c.dtor_delete.contains(d)
+        if c.overrides.contains(d)
+            || c.key_function.contains(d)
+            || c.dtor_delete.contains(d)
             || c.dtor_delete_this.contains(d)
         {
             return Err("a virtual function");
@@ -1948,7 +1954,8 @@ impl Writer<'_, '_, '_> {
         if inits.is_empty()
             && !defaulted
             && !matches!(body, FnBody::Braces(..))
-            && ast.decls.ctor_inits(d, &ast.lists).len() != 0 {
+            && ast.decls.ctor_inits(d, &ast.lists).len() != 0
+        {
             return Err("ctor-initializers of a constructor without a carried body");
         }
         Ok(Payload::Function { kind: kind as u8, ty, spec: bits, deferred, params, body, inits })
@@ -2056,7 +2063,11 @@ impl Writer<'_, '_, '_> {
                 return Err("a pack expansion");
             }
             let _ = self.bs.bspec.insert(g, (i, pos as u32));
-            bases.push(BaseRec { ty: self.qref(bs.ty)?, loc: self.loc(bs.loc)?, access: bs.access as u8 });
+            bases.push(BaseRec {
+                ty: self.qref(bs.ty)?,
+                loc: self.loc(bs.loc)?,
+                access: bs.access as u8,
+            });
         }
         Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, bases }) })
     }
@@ -2181,7 +2192,10 @@ impl Writer<'_, '_, '_> {
                     .is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
                 let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
                 match class {
-                    Some(c) if implicit_default && n.flags().bits() & !DECL_FLAGS == DeclFlags::IMPLICIT.bits() => {
+                    Some(c)
+                        if implicit_default
+                            && n.flags().bits() & !DECL_FLAGS == DeclFlags::IMPLICIT.bits() =>
+                    {
                         implicit.push((d, c, k as u8));
                     }
                     _ => return Err("an implicit declaration"),
@@ -2296,9 +2310,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXConversion => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
         K::Friend => Err("a friend declaration"),
-        K::ClassTemplateSpecialization | K::ClassTemplatePartialSpecialization => {
-            Err("a template")
-        }
+        K::ClassTemplateSpecialization | K::ClassTemplatePartialSpecialization => Err("a template"),
         K::ClassTemplate
         | K::FunctionTemplate
         | K::VarTemplate
@@ -2495,7 +2507,10 @@ impl Sema<'_, '_> {
                         // The exception specification names the function
                         // itself (its first declaration).
                         let next = self.ast.decls.next_id();
-                        fty = self.with_exc_spec(fty, ExcSpec::Deferred(prev.map_or(next, |p| self.ast.first(p))));
+                        fty = self.with_exc_spec(
+                            fty,
+                            ExcSpec::Deferred(prev.map_or(next, |p| self.ast.first(p))),
+                        );
                     }
                     let f = self.builder().function(h, kind, fty, spec, prev);
                     if !ci.is_empty() {
@@ -2689,7 +2704,8 @@ impl Sema<'_, '_> {
         // Defaulted and implicit special members the module used are
         // defined again (spec/modules.md §11.11 "Classes").
         for (f, flags) in defaulted {
-            let loc = self.ast.decls.get(f).ctx().map_or(Loc::INVALID, |c| self.ast.decls.get(c).loc());
+            let loc =
+                self.ast.decls.get(f).ctx().map_or(Loc::INVALID, |c| self.ast.decls.get(c).loc());
             if flags & DeclFlags::USED.bits() != 0 {
                 self.mark_function_referenced(f, loc);
             } else if flags & DeclFlags::REFERENCED.bits() != 0 {
@@ -2711,7 +2727,9 @@ impl Sema<'_, '_> {
     ) -> Option<DeclName> {
         let class = || self.ast.decls.get(ctx).ty().map(|q| self.ast.types.canonical(q).ty());
         match word {
-            N_CTOR if kind == DeclKind::CXXConstructor => Some(self.ast.names.constructor(class()?)),
+            N_CTOR if kind == DeclKind::CXXConstructor => {
+                Some(self.ast.names.constructor(class()?))
+            }
             N_DTOR if kind == DeclKind::CXXDestructor => Some(self.ast.names.destructor(class()?)),
             N_CONV if kind == DeclKind::CXXConversion => {
                 let ret = match self.ast.types.view(fty.ty()) {
@@ -3102,6 +3120,141 @@ mod tests {
         let mut img = sample();
         img.decls[9].ctx = 0; // a label outside a function
         assert!(decode(&encode(&img)).is_err());
+    }
+
+    /// Stage S3: `sample` plus classes. `struct B {}; struct S : B { int m;
+    /// S() : B(), m(7) {} };` with S's implicit destructor, and a
+    /// variable of type `ns::S`.
+    fn class_sample() -> Image {
+        let q = |ty| QRef { ty, quals: 0 };
+        let int = BuiltinType::Int as u32;
+        let void = BuiltinType::Void as u32;
+        let mut img = sample();
+        let base = img.names.len() as u32;
+        img.names.extend(["B", "S", "m", "w"].map(String::from));
+        let t = BUILTINS + 1 + img.types.len() as u32;
+        img.types.extend([
+            TyRec::Record(10),
+            TyRec::Record(11),
+            TyRec::Func { ret: q(void), params: vec![], info: 0, exc: 0 },
+            TyRec::ElabQ(0, vec![NnsRec::Ns(0)], q(t + 1)),
+        ]);
+        let head = |name, ctx, access, loc, payload| DeclRec {
+            flags: 0,
+            owner: 3,
+            access,
+            name,
+            ctx,
+            lexical: NONE,
+            loc,
+            prev: NONE,
+            payload,
+        };
+        let def =
+            |end, bases| Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end, bases }) };
+        img.decls.extend([
+            head(base, 1, 0, 200, def(11, vec![])),
+            head(base + 1, 1, 0, 210, def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0 }])),
+            head(
+                base + 2,
+                11,
+                1,
+                214,
+                Payload::Field { ty: q(int), flags: 0, width: NONE, init: NONE },
+            ),
+            head(
+                N_CTOR,
+                11,
+                1,
+                216,
+                Payload::Function {
+                    kind: 2,
+                    deferred: false,
+                    inits: vec![
+                        InitRec { kind: 0, target: 0, written: 0, init: 0, loc: 220 },
+                        InitRec { kind: 2, target: 12, written: 1, init: 0, loc: 224 },
+                    ],
+                    ty: q(t + 2),
+                    spec: 0,
+                    params: vec![],
+                    body: FnBody::Braces(230, 231),
+                },
+            ),
+            head(NONE, 11, 1, 210, Payload::Implicit { kind: 5 }),
+            head(
+                base + 3,
+                1,
+                0,
+                240,
+                Payload::Var { ty: q(t + 3), spec: 0, init: NONE, eval: NONE },
+            ),
+        ]);
+        img
+    }
+
+    #[test]
+    fn class_round_trip() {
+        let img = class_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
+    }
+
+    /// spec/modules.md §11.11 "Part 2a" (stage S3): a class record that
+    /// is malformed or inconsistent with its class is an error.
+    #[test]
+    fn rejects_corrupt_class_records() {
+        let corrupt: [(&str, fn(&mut Image)); 13] = [
+            ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 6 }),
+            ("duplicate implicit", |i| {
+                let d = i.decls[14].clone();
+                i.decls.insert(15, d);
+            }),
+            ("implicit inside its class", |i| i.decls[13].payload = Payload::Implicit { kind: 0 }),
+            ("field outside a class", |i| i.decls[12].ctx = 1),
+            ("namespace-scope access", |i| i.decls[10].access = 1),
+            ("end before the record", |i| set_end(i, 11, 11)),
+            ("end past the parent", |i| set_end(i, 11, 99)),
+            ("base access", |i| set_base(i, |b| b.access = 4)),
+            ("base not a class", |i| set_base(i, |b| b.ty.ty = BuiltinType::Int as u32)),
+            ("base of itself", |i| set_base(i, |b| b.ty.ty = BUILTINS + 1 + 4)),
+            ("base init position", |i| set_init(i, 0, 1)),
+            ("field init target", |i| set_init(i, 1, 10)),
+            ("constructor name", |i| i.decls[13].name = i.names.len() as u32 - 1),
+        ];
+        for (what, f) in corrupt {
+            let mut img = class_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+        // A qualifier naming a class as a namespace, and `::` after
+        // another step.
+        let mut img = class_sample();
+        img.types[6] = TyRec::ElabQ(0, vec![NnsRec::Ns(10)], QRef { ty: BUILTINS + 5, quals: 0 });
+        assert!(decode(&encode(&img)).is_err());
+        let mut img = class_sample();
+        img.types[6] = TyRec::ElabQ(
+            0,
+            vec![NnsRec::Ns(0), NnsRec::Global],
+            QRef { ty: BUILTINS + 5, quals: 0 },
+        );
+        assert!(decode(&encode(&img)).is_err());
+    }
+
+    fn set_end(img: &mut Image, r: usize, end: u32) {
+        if let Payload::Record { def: Some(df), .. } = &mut img.decls[r].payload {
+            df.end = end;
+        }
+    }
+
+    fn set_base(img: &mut Image, f: fn(&mut BaseRec)) {
+        if let Payload::Record { def: Some(df), .. } = &mut img.decls[11].payload {
+            f(&mut df.bases[0]);
+        }
+    }
+
+    fn set_init(img: &mut Image, k: usize, target: u32) {
+        if let Payload::Function { inits, .. } = &mut img.decls[13].payload {
+            inits[k].target = target;
+        }
     }
 
     /// [module.import] / spec/modules.md §11.11 "Part 2a": a damaged image

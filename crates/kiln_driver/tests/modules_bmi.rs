@@ -445,6 +445,63 @@ fn kind2_declaration_image_bodies() {
     assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
 }
 
+/// Stage S3 (§11.11 "Part 2a", WP-1065): non-template classes, their
+/// members, bases, constructors, destructor and implicit special members
+/// come from the image alone. With the unit's source blanked in the
+/// capsule, an importer still derives from, constant-evaluates and runs
+/// them.
+#[test]
+fn kind2_declaration_image_classes() {
+    use kiln_pp::bmi;
+    let d = scratch("image-classes");
+    let src = "export module c;\n\
+               namespace n {\n\
+               export struct P { int x = 1, y = 2; constexpr P() = default;\n\
+                 constexpr P(int a, int b) : x(a), y(b) {}\n\
+                 constexpr P operator+(const P &o) const { return {x + o.x, y + o.y}; }\n\
+                 static constexpr int kDims = 2; static int made; };\n\
+               int P::made = 0;\n\
+               export class C { public: struct Step { long by = 1; };\n\
+                 constexpr C &tick(Step s) { v += s.by; return *this; }\n\
+                 constexpr C &tick() { return tick(Step{}); }\n\
+                 constexpr long get() const { return v; } int twice() const;\n\
+                 private: long v = 0; };\n\
+               int C::twice() const { return int(v) * 2; }\n\
+               export struct B1 { int b = 3; };\n\
+               export struct F final : B1 {};\n\
+               export struct D : B1 { P p; constexpr int sum() const { return b + p.x + p.y; } };\n\
+               export long trace = 0;\n\
+               export struct T { int id; explicit T(int i) : id(i) {} ~T() { trace = trace * 10 + id; } };\n\
+               export constexpr P kP = P(3, 4) + P();\n\
+               export constexpr long kTicks = C().tick().tick(C::Step{5}).get();\n\
+               }\n";
+    std::fs::write(d.join("c.cppm"), src).unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import c;\n\
+         using namespace n;\n\
+         static_assert(kP.x == 4 && kP.y == 6 && kTicks == 6 && P::kDims == 2 && D().sum() == 6);\n\
+         struct E : D { constexpr int all() const { return sum() + 1; } };\n\
+         static_assert(E().all() == 7 && sizeof(E) == 3 * sizeof(int) && F().b == 3);\n\
+         int main() { { T t(4); (void)T(5).id; } C c; c.tick(); P::made += 1;\n\
+           return trace == 54 && c.twice() == 2 && P::made == 1 && E().all() == 7 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "c.cppm", "-o", "c.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    let good = std::fs::read(d.join("c.pcm")).unwrap();
+    ok(&d, &["-c", "c.pcm", "-o", "c.o"]);
+    let mut c = bmi::read(&good).unwrap();
+    let text = &mut c.files[0].text;
+    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
+    ok(&d, &["-fkiln-bmi-image", "-fmodule-file=c=blank.pcm", "u.cpp", "c.o", "-o", "u"]);
+    assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
+    let o = kiln(&d, &["-fsyntax-only", "-fmodule-file=c=blank.pcm", "u.cpp"]);
+    assert_eq!(o.code, 1, "replaying a blank source fails: {}", o.stderr);
+}
+
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
@@ -463,14 +520,36 @@ fn kind2_declaration_image_fallback() {
             "export module f;\n#define ONE 1\nexport constexpr int g() { return ONE; }\n",
             "in a macro expansion",
         ),
-        ("export module f;\nexport struct S { int x; };\n", "a class"),
+        (
+            "export module f;\nexport struct S { virtual int f() const { return 1; } };\nexport constexpr int k = 1;\n",
+            "a polymorphic class",
+        ),
+        (
+            "export module f;\nexport struct B {};\nexport struct D : virtual B {};\nexport constexpr int k = 1;\n",
+            "a virtual base class",
+        ),
+        (
+            "export module f;\nexport struct S { int x; friend int g(S s) { return s.x; } };\nexport constexpr int k = 1;\n",
+            "a friend declaration",
+        ),
+        (
+            "export module f;\nexport struct S { union { int a; float b; }; };\nexport constexpr int k = 1;\n",
+            "an anonymous union or struct member",
+        ),
+        (
+            "export module f;\nexport inline int *g() { return new int(1); }\nexport constexpr int k = 1;\n",
+            "a new or delete expression",
+        ),
         ("export module f;\nexport template <class T> T id(T t) { return t; }\n", "a template"),
         (
             "export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n",
             "a using-declaration",
         ),
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
-        ("export module f;\nstruct S { int x; };\nexport constexpr S v{3};\n", "a class"),
+        (
+            "export module f;\nstruct S { int x; bool operator==(const S &) const = default; };\nexport constexpr S v{3};\n",
+            "a defaulted comparison",
+        ),
     ] {
         std::fs::write(d.join("f.cppm"), src).unwrap();
         let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "f.cppm", "-o", "f.pcm"]);
