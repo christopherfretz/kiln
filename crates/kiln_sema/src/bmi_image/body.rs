@@ -142,6 +142,9 @@ pub(super) enum Dc {
     Ctor,
     /// A destructor (an implicit one too).
     Dtor,
+    /// A declaration reference's found declaration: a [`Dc::Value`] or
+    /// the function template a specialization was named through.
+    Found,
 }
 
 /// A field: how one or more words are read.
@@ -235,7 +238,7 @@ fn side_fields(s: Side) -> &'static [F] {
         Side::Arms => &[E, E],
         Side::CompoundAssign => &[E, Qt, Qt],
         Side::InitList => &[OE, Loc],
-        Side::DeclRef => &[Nns, OD(Dc::Value)],
+        Side::DeclRef => &[Nns, OD(Dc::Found)],
         Side::If => &[OS, OD(Dc::Var), OE, OS, OS],
         Side::Switch => &[OS, OD(Dc::Var), E, S, SL],
         Side::Case => &[E, OE, S],
@@ -726,11 +729,31 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(dc, Dc::Value | Dc::Param) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
+    if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
+        return true;
+    }
+    // A specialization or member reference (S4b) names what its pattern
+    // declares: a function template's pattern function, a class
+    // template's pattern member.
+    let d = match d.payload {
+        Payload::Spec { template, .. } => match img.decls.get(template as usize) {
+            Some(DeclRec { payload: Payload::Template { pattern, .. }, .. }) => {
+                let Some(p) = img.decls.get(*pattern as usize) else { return false };
+                p
+            }
+            _ => return false,
+        },
+        Payload::Member { pattern, .. } => {
+            let Some(p) = img.decls.get(pattern as usize) else { return false };
+            p
+        }
+        _ => d,
+    };
     let in_class = || {
         img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Record { .. }))
     };
     match dc {
-        Dc::Value => {
+        Dc::Value | Dc::Found => {
             matches!(
                 d.payload,
                 Payload::Function { .. }
@@ -1108,7 +1131,7 @@ impl Writer<'_, '_, '_> {
                     if x.template_args.is_some() {
                         return Err("a template argument list");
                     }
-                    vec![Fv::Nns(x.qualifier), Fv::D(x.found_decl, Dc::Value)]
+                    vec![Fv::Nns(x.qualifier), Fv::D(x.found_decl, Dc::Found)]
                 }
             },
             (Side::If, _, Some(s)) => {
@@ -1493,6 +1516,12 @@ impl Writer<'_, '_, '_> {
             LEX_TU
         } else if self.local(d) {
             self.local_rec(d)?
+        } else if let Some(r) = self.spec_rec(d)? {
+            // S4b: a function template specialization.
+            r
+        } else if let Some(r) = self.member_rec(d)? {
+            // S4b: a member of a class template specialization.
+            r
         } else {
             return Err(OUTSIDE);
         };
