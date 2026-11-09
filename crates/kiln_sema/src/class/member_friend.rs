@@ -175,7 +175,8 @@ impl Sema<'_, '_> {
         if self.open_written_heads().is_empty() {
             return self.open_invented_head_list().is_some();
         }
-        self.member_friend_shape(nns).is_some_and(|(_, args, _)| self.member_friend_head(&args).is_none())
+        self.member_friend_shape(nns)
+            .is_some_and(|(_, args, _)| self.member_friend_head(&args).is_none())
     }
 
     /// `template<class T> friend class A<T>::Member;` in class `record`
