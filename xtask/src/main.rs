@@ -11,6 +11,7 @@ mod clang_ast;
 mod clang_neg;
 mod diag_split;
 mod dist;
+mod doclinks;
 mod entity_lint;
 mod features;
 mod gen_pp;

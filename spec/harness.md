@@ -1202,7 +1202,21 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `bin/kiln++ -> kiln`, `lib/kiln/<major>/include/` (all of
    `resource/include`), `lib/kiln/<major>/predefines/*.txt`,
    `share/doc/kiln/` (`dist::DOCS`); directories 0755, files 0644, the
-   binary 0755.
+   binary 0755. The docs install flat (WP-1027): `README.md`,
+   `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, the two licenses and
+   `docs/{COMPATIBILITY,KNOWN_ISSUES,STABILITY,USER_GUIDE}.md` all land in
+   `share/doc/kiln/`. Each Markdown file's relative links
+   (`[t](target)`, `![a](target)`, HTML `src="..."`/`href="..."`, outside
+   code; `xtask/src/doclinks.rs`) are rewritten by
+   `dist::rewrite_links`: a link to another shipped doc becomes its file
+   name (anchor kept), a link to any other checkout path becomes
+   `https://github.com/christopherfretz/kiln/{blob,tree,raw}/v<version>/<path>`
+   (`raw` for `src=`, `tree` for a directory), and a link to a path the
+   checkout lacks fails the step. Then `doclinks::check_tree` checks the
+   installed tree: every relative link names a file in it, and every
+   `#anchor` is a heading slug (GitHub's rule: lower case, punctuation
+   but `-`/`_` dropped, spaces as `-`, repeats numbered `-1`, `-2`, ...)
+   or an HTML `id`/`name` of the target; a broken link fails the step.
 4. **Archive** (`dist::tar_xz`), into `--out` (default
    `<target-dir>/kiln-dist`): `kiln-<version>-<triple>.tar.xz` with the
    stripped binary and `kiln-<version>-<triple>-symbols.tar.xz` with the
@@ -1217,7 +1231,8 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
    `<out>` is outside it, else the system temporary directory), with
    every `KILN_*` variable removed from the environment and the
    extracted `bin/` first on `PATH`:
-   - the layout (step 3) is there and `bin/kiln++` links to `kiln`;
+   - the layout (step 3) is there, `bin/kiln++` links to `kiln`, and
+     the doc link check (step 3) passes on the extracted tree;
    - `kiln++ --version` names the version;
    - `-print-resource-dir` through `PATH`, `bin/kiln` and a symlink to
      `bin/kiln++` from elsewhere prints `<prefix>/lib/kiln/<major>`;
@@ -1237,7 +1252,9 @@ release; a run of `cargo xtask dist --check` locally is the pre-tag check.
 
    The directories are removed afterwards unless `--keep`. Tests:
    `xtask/src/dist.rs` `tests` (options, the CRC, the path scan, the
-   layout and a byte-identical re-archive) run in `cargo test`; the build
+   layout with the installed docs' link check, the link rewriting, and a
+   byte-identical re-archive) and `xtask/src/doclinks.rs` `tests` run in
+   `cargo test`; the build
    and `--check` run in release.yml and by hand.
 
 ## Feature table
