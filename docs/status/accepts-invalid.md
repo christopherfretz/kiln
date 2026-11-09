@@ -493,9 +493,10 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
     `U<Ts..., T>` and `X1<0, N + 1 ...>` non-deducible), `_Complex`,
     vector, `void` and `_Atomic` NTTPs, and conversion function template
     rules (dependent `operator T()`, ordering in explicit instantiations,
-    specializations and calls). Its share (against its base run):
-    accepts-invalid 64 to 63 files, 75 to 74 cases; missed errors 3905 to
-    3844 lines; no new accepts-invalid or rejects-valid case. Constrained
+    specializations and calls). Its share (against main e028068c4, after
+    WP-1053 landed the overlapping pack checks): accepts-invalid files and
+    cases unchanged (63, 74); missed errors 3837 to 3811 lines
+    (`temp.mem/p5.cpp`, `temp.param/p7.cpp`); no new accepts-invalid or rejects-valid case. Constrained
     and member-template partial specializations remain (WP-1053).
 11. **Lookup and type checks** (enum must use `enum` 31, elaborated enum
     friend 30, ambiguous qualified elaborated specifier, `alignas` of an
