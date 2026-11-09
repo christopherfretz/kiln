@@ -960,7 +960,9 @@ is exactly part A's. It no longer runs the Oven for an evaluation whose
 result the file carries. That is the work kiln most wants to avoid
 repeating, and the constexpr report shows when it is avoided. Part 2
 replaces the replay with the image designed below, behind the same
-section framing.
+section framing. Its item 1 (WP-1046) is done: the section also carries
+results of evaluations inside template instantiations (see
+"Instantiation keys").
 
 #### Inventory
 
@@ -1001,9 +1003,64 @@ The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
 takes it from its own replayed copy of the expression. A result is used
 only while the importer reads the unit the file holds
-(`module_current_unit` is that unit's and no instantiation is in
-progress), so the same header text read by the importer itself never
-matches.
+(`module_current_unit` is that unit's), so the same header text read by
+the importer itself never matches. Outside any instantiation the two
+positions are the whole key (instantiation index 0). Inside one they
+are positions within the pattern, shared by every instantiation of it,
+so the key also names the instantiation.
+
+#### Instantiation keys (Part 2 item 1, WP-1046)
+
+An evaluation made while an instantiation is in progress is keyed by
+the innermost instantiation frame (spec/ast.md §8.4, `InstFrame`),
+written as a byte string that names no `DeclId`, so the
+producing compile and the importer's replay build the same bytes for
+the same specialization and compare them as they are:
+
+- **Entity frames** (class, member class, member function, function
+  specialization, static data member, variable template and its
+  initializer, enumeration, default member initializer, default function
+  argument, exception specification, lambda): the frame's entity.
+  - `S` template, canonical arguments: a specialization (a class,
+    function or variable template's).
+  - `M` context, pattern: a member of a specialization instantiated
+    from member `pattern`; `P` context, pattern: any other declaration
+    instantiated from a pattern (a local class, a closure type, a
+    local variable).
+  - `D` kind, name kind, name (identifier bytes or operator code),
+    position: a declaration that was not instantiated, inside nothing
+    that was (a template, the namespace scope). Its position is the
+    replay-stable (path index, offset) pair of "Identity". Implicit
+    declarations have no `D` key, and a top-level key is never `D`.
+- **Substitution frames** that record their arguments (concept check,
+  constraint check, deduced, explicit and prior argument substitution,
+  default template argument): `F`, a one-byte frame code, the template,
+  the entity (the template or the parameter), the canonical arguments.
+  Only a template whose parameters are its outermost level (depth 0) is
+  keyed; then the arguments are all the substitution uses.
+- **Arguments**: a count, then per argument `T` type, `V` type and value
+  (part 1's value encoding; a pointer, reference or reflection argument
+  has no key, WP-1047), `N` template (an entity), `K` pack (an argument
+  list).
+- **Types** structurally: the canonical type's cv byte, then a tag and
+  its operands (builtin, `_BitInt`, pointer, references, member pointer,
+  arrays, function with parameters, flags and a `noexcept` bit, record
+  and enumeration as entities, `_Complex`, `_Atomic`, vectors). A
+  dependent or other type gives no key.
+- Keys nest at most 48 levels and 16 KiB; deeper or longer keys are not
+  formed.
+
+The frames this leaves out are not keyed, and their evaluations stay
+uncarried: alias template substitution and default-argument checking
+(they record no arguments), and the other substitution frames
+(constraint substitution, partial specialization deduction).
+
+The writer interns each distinct key once and caches the key per frame
+(entity, template, arguments), so a frame's key is built once however
+many evaluations it makes. The reader does the same per table, and an
+unknown key costs one hash lookup per frame. The evaluation's two
+positions stay part of the key: within one instantiation they tell its
+evaluations apart.
 
 Part 2's remapping, one table per id space, built as the image loads:
 
@@ -1048,8 +1105,12 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
+marker   u32 0xffffffff, then u32 version (2)
 paths    u32 count, then each path (u32 length, UTF-8)
+insts    u32 count, then each instantiation key (u32 length, bytes,
+         see "Instantiation keys"), numbered from 1 in first-use order
 entries  u32 count (at least 1), then each entry:
+  inst   u32     (0: outside any instantiation; else an index into insts)
   kind   u8      (see "Identity"; low nibble 0..6, bits 6-7 zero)
   at     4 x u32 (expansion path index, offset, spelling path index, offset)
   expr   4 x u32 (the same, for the expression's first token)
@@ -1063,6 +1124,12 @@ entries  u32 count (at least 1), then each entry:
                       not adjacent, within the bytes
 ```
 
+- **Versioned.** Version 1 (WP-985) had no marker, version or
+  instantiation table, and no `inst` field; its first word is the path
+  count, never `0xffffffff`. The reader reads version 1 as written (every
+  entry at index 0) and rejects any version but 1 and 2 (`unsupported
+  section version`). Only carried keys are written: an instantiation key
+  no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
   the same bytes, and the driver test checks this.
@@ -1070,7 +1137,9 @@ entries  u32 count (at least 1), then each entry:
   bytes left before sizing anything by it, validates UTF-8, flags,
   widths, words (`IntBits::from_words`: no bits above the width),
   float bits, padding ranges, path indices, duplicate keys and trailing
-  bytes. Any failure is a `SectionError`, turned into §11.4's
+  bytes. Each instantiation key is parsed in full against the grammar of
+  "Instantiation keys" (tags, nesting depth, path indices, values),
+  duplicate keys and out-of-range `inst` indices are rejected. Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1121,7 +1190,8 @@ file and does not force kind 1. Sema then records every evaluation
 `eval_const` makes while it reads the main unit (`module_current_unit()
 == 0`), and keeps a result only if all of these hold:
 
-- no template instantiation is in progress (one position, many results);
+- no template instantiation is in progress, or the innermost one has an
+  instantiation key (see "Instantiation keys");
 - a key exists (see "Identity");
 - the evaluation is pure: it added no declaration, expression or
   statement and emitted no error or warning (a carried result would
@@ -1129,7 +1199,9 @@ file and does not force kind 1. Sema then records every evaluation
   instantiated a template must still instantiate it);
 - it succeeded, its value's type is its expression's, and the value is
   self-contained (see "Inventory");
-- no other evaluation had the same key.
+- no other evaluation with the same key gave a different result (the
+  same evaluation made again, a constraint checked twice, keeps its
+  result).
 
 The rest are evaluated again by the importer, as in kind 1.
 
@@ -1141,13 +1213,15 @@ is the default. The choice is never a warning. Under `-v` the driver
 prints one of:
 
 ```
-note: wrote module file 'm.pcm' as kind 2, carrying N constant results
+note: wrote module file 'm.pcm' as kind 2, carrying N constant results[, M inside template instantiations]
 note: wrote module file 'm.pcm' as kind 1: no constant result to carry (first not carried: <reason>)
 note: wrote module file 'm.pcm' as kind 1, as -fkiln-bmi-kind=1 requests
 ```
 
 The `<reason>` is the first evaluation that was not carried, one of: `an
-evaluation inside a template instantiation`, `a consteval block`, `an
+evaluation in a substitution that is not an instantiation` (a frame
+"Instantiation keys" leaves out), `an instantiation whose arguments have
+no key`, `a consteval block`, `an
 evaluation at a position a replay does not reproduce`, `an evaluation that
 changed the AST`, `an evaluation that emitted a diagnostic`, `an
 evaluation that failed`, `a value whose type is not its expression's`, `a
@@ -1305,9 +1379,9 @@ calls two of the functions in a `static_assert` and at run time.
 
 Next, in order:
 
-1. carried results for evaluations inside instantiations, keyed by the
-   instantiation (template, remapped arguments) rather than the position:
-   the 10,142 above, and the bulk of a template-heavy constexpr workload;
+1. **done (WP-1046)**: carried results for evaluations inside
+   instantiations, keyed by the instantiation (see "Instantiation keys");
+   measured under "Measurements", "Part 2 item 1";
 2. pointer, reference and reflection values (they need `DeclId`
    remapping);
 3. the declaration and type image with ODR merging (see "Identity"),
