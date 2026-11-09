@@ -88,7 +88,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file's absolute path with empty and `.` components dropped and `dir/..` folded through a real directory (`/p/inc/x.h`; spec/reflection.md §3.9). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is `invalid value`; the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by the reference workload's generator compile) sets the step budget too |
 | `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is `invalid value` (deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
-| `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. Until WP-707 only `ignore` compiles a program with contracts to IR; the others are `unsupported: contract evaluation (WP-707)` (spec/contracts.md §6) |
+| `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
 | `-fkiln-reflection-mangling=<kiln\|gcc\|kiln-hashed>` | kiln: how a `std::meta::info` template argument is spelled in a symbol (`kiln_abi::ReflectionMangling`, `CodegenOptions::reflection_mangling`; WP-501). `kiln` (the default): `L u6__info <kind> <operand> E`; `gcc`: GCC 16.1's `L Dm <kind> <operand> E` with `info` itself `Dm`, link-compatible with `g++-16`; `kiln-hashed`: `L u6__info h<32 hex> E`, a prototype. All three give the reflection its reflectee's linkage (spec/reflection.md §8.3). Any other value is `invalid value`; the last one wins. Codegen jobs only |
@@ -360,9 +360,13 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   safe-stack, kcfi, memtag, the kernel variants, ...) is
   `drv_unsupported_flag` (`'-fsanitize=<x>' is not supported by kiln`).
   Of `undefined`, codegen emits signed-integer-overflow,
-  integer-divide-by-zero, shift-base, shift-exponent, return, unreachable
-  and vla-bound checks (spec/codegen.md "Sanitizers"); the other members
-  are accepted and emit no check yet (spec/landed/codegen/WP-675.md).
+  integer-divide-by-zero, shift-base, shift-exponent, return,
+  unreachable, vla-bound, null, alignment, object-size, array-bounds,
+  bool, enum, float-cast-overflow, pointer-overflow, nonnull-attribute,
+  returns-nonnull-attribute and builtin checks, and the implicit
+  conversion checks (spec/codegen.md §5.2; WP-675, WP-871). vptr,
+  function, the nullability checks and local-bounds are accepted and
+  emit no check yet (spec/landed/codegen/WP-871.md).
 - `-fsanitize-ignorelist=`/`-fsanitize-blacklist=` (the file must exist:
   `no such file or directory: '<f>'`; not applied yet),
   `-fno-sanitize-ignorelist`, `-f[no-]sanitize-address-use-after-scope`,
@@ -1049,7 +1053,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
   then 1.
 
 Not implemented: `-###` with `-E` or `-fsyntax-only` ("not implemented
-yet") and debug information.
+yet"). Debug information (`-g` and its levels, `-gdwarf-N`) is
+implemented; see "Debug information flags" (WP-814).
 
 ## Modules
 

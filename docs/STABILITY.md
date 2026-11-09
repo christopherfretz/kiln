@@ -22,9 +22,11 @@ of any of these. It may add new ones.
   and its effect. Flags kiln accepts only for clang compatibility keep
   matching clang's meaning. A flag kiln accepts but spec/driver.md does
   not document carries no promise.
-- **Exit status.** 0 for success, 1 when an error was reported, and 70
-  for an internal compiler error (spec/driver.md "Output, diagnostics,
-  exit status").
+- **Exit status.** 0 for success and 1 when an error was reported,
+  including after an internal compiler error, as with clang. 70 after
+  an internal compiler error under `-fno-crash-diagnostics`, and when
+  the compile thread cannot be created (spec/driver.md
+  "Output, diagnostics, exit status" and "Internal compiler errors").
 - **Diagnostic identifiers.** The diagnostic ids (`sema_...`, `pp_...`:
   the stable names in the JSON output and in `-verify` expectations;
   [spec/diag.md](../spec/diag.md) §2.1), the warning groups and the
