@@ -826,7 +826,7 @@ from the heap and were never returned. With the threshold pinned
 (`MALLOC_MMAP_THRESHOLD_=131072`) the same reader measured 86 MiB. The
 streaming reader (§11.3) never allocates a whole-file buffer.
 
-### 11.9 Dependency scanning and CMake (WP-982)
+### 11.9 Dependency scanning and CMake (WP-982, WP-1148)
 
 CMake 3.28+ identifies kiln as clang (it defines `__clang__`; the version
 it computes, `CMAKE_CXX_COMPILER_VERSION`, follows `__clang_major__`, so 22
@@ -861,17 +861,25 @@ sees) and double the install size; a link costs nothing and cannot drift
 from the compiler it scans for. The install tree (`cargo xtask dist`,
 spec/driver.md "Installation layout") and the dev tree (`kiln_driver`'s
 build script, in the cargo profile directory) both hold `kiln-scan-deps`,
-`clang-scan-deps-22` and `clang-scan-deps` beside `kiln++`, so CMake's
-search finds kiln's scanner before any system clang's with nothing set.
-To name it explicitly (another compat major, or a wrapper as
-`CMAKE_CXX_COMPILER`), pass
+`clang-scan-deps-22`, `clang-scan-deps-19` (the name CMake looks for
+under `-fclang-compat=19`, WP-1148) and `clang-scan-deps` beside
+`kiln++`, so CMake's search finds kiln's scanner before any system
+clang's with nothing set. To name it explicitly (a wrapper as
+`CMAKE_CXX_COMPILER`, as the OSS harness's kiln-cxx), pass
 `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=<kiln prefix>/bin/kiln-scan-deps`.
+
+**Flavour.** Under the program name `clang-scan-deps-19` (or
+`clang-scan-deps-19.<minor>`) the scanner behaves as clang-scan-deps 19
+where 19 and 22 differ: the failure header (`Error while scanning
+dependencies for <src>:`, unquoted, in place of 22's `Diagnostics while
+scanning dependencies for '<src>':`) and the `-format=experimental-full`
+shape below. Every other name behaves as 22.
 
 The scanner behaves as clang-scan-deps 22 for the options CMake and
 build tools pass (spec/driver.md "Dependency scanning"):
 
-- The command after `--` is parsed by kiln's driver; it must be one
-  compile of one input (otherwise clang's `unable to handle compilation,
+- The command after `--` (or each entry of `-compilation-database`) is
+  parsed by kiln's driver; it must be one compile of one input (otherwise clang's `unable to handle compilation,
   expected exactly one compiler job in '<command>'`).
 - `-format=p1689`: the P1689r5 document, byte for byte clang's: keys
   sorted, two-space indent, `revision` 0, `version` 1, one rule with
@@ -899,18 +907,77 @@ build tools pass (spec/driver.md "Dependency scanning"):
 - `import "h";` / `import <h>;` (a header unit) is `error: header unit "h"
   cannot be imported: kiln-scan-deps does not support header units yet`
   at the header name, a scan failure; header units are §11.10.
-- No `--` is clang's `The compilation command line must be provided
-  either via '-compilation-database' or after '--'.` (exit 1); an unknown
-  `-format` value is `<prog>: for the --format option: Cannot find option
-  named '<v>'`.
+- No `--` and no `-compilation-database`, or both, is clang's `The
+  compilation command line must be provided either via
+  '-compilation-database' or after '--'.` (exit 1); an unknown `-format`
+  value is `<prog>: for the --format option: Cannot find option named
+  '<v>'`.
+- `-compilation-database <file>` (WP-1148) scans every entry of a JSON
+  compilation database, as clang-scan-deps 19 and 22 do. Each entry is
+  an object with `directory`, `file` and either `arguments` (a list,
+  which wins when both are present) or `command` (one string, split as a
+  POSIX shell does: quotes, backslash escapes, no expansion), and
+  optionally `output`; a missing key is checked in the order `file`,
+  `command`/`arguments`, `directory`, and an unknown key is an error,
+  with clang's wording (`Error while opening JSON database: <reason>` on
+  stderr, exit 1, nothing on stdout: `Expected array.`, `Expected
+  object.`, `Missing key: "file".`, `Missing key: "command" or
+  "arguments".`, `Missing key: "directory".`, `Expected sequence as
+  value.`, `Expected string as value.`, `Unknown key: ""<k>""`, or the
+  open error). Trailing commas are accepted, a scalar is taken by its
+  text and a repeated key keeps its first value, as LLVM's YAML-based
+  JSON reader does; `[]` is a clean empty scan. Each entry is scanned
+  in its `directory` (relative to the scanner's working directory),
+  which is restored before the output is written. The outputs, in
+  entry order: `make` concatenates one rule per entry, its files
+  spelled as the directory joined with the path (so `./p.cppm` for
+  `"directory": "."`); `p1689` is one document whose rules are sorted
+  (stably) by `primary-output` (the entry's `output`, else empty), each
+  `source-path` is the entry's `file`, and a `requires` of a module
+  another rule provides gets that rule's `source-path`;
+  `experimental-full` is one translation unit per entry. A failed entry
+  prints its diagnostics under the header, is left out of the output
+  (an empty `commands` in `experimental-full`), and makes the exit
+  status 1; the other entries are still scanned.
+- `-format=experimental-full` (WP-1148) is clang's build-system JSON:
+  `{"modules": [], "translation-units": [...]}` with one element per
+  input, each `{"commands": [{...}]}` holding `clang-context-hash`,
+  `clang-module-deps` (always `[]`: kiln scans no Clang module maps),
+  `command-line` (the compile's arguments after the program name),
+  `executable` (the program, resolved on `PATH` when it has no `/`),
+  `file-deps` (every file the scan read, absolute: relative ones joined
+  to `<cwd>/.` after `--`, as clang spells them, or to the entry's
+  directory), and `input-file` (as given); for clang 22 also
+  `named-module` (the unit's module, `M` or `M:P`, for an interface or
+  any partition) and `named-module-deps` (the imports, as in `requires`;
+  omitted when empty). The 22 flavour prints the keys in that streaming
+  order, `named-module` and `named-module-deps` before
+  `clang-module-deps`, with no newline at the end; the 19 flavour sorts
+  the keys, has no named-module fields and ends with a newline. Both use
+  LLVM's two-space JSON layout. `clang-context-hash` is kiln's: the
+  FNV-1a 64-bit hash of the kiln version and the compile's arguments
+  without its inputs, `-o`, the dependency-file options and their
+  values, printed in uppercase base 36, so two compiles that would build
+  the same module agree.
 
 Deviations: the `-format=make` output names files as kiln's `-M` does
 (`hdr.h`) where clang-scan-deps normalises them (`./hdr.h`); the
 header-unit and one-job messages are kiln's (clang's header-unit error
 says the header "is not known to be a header unit"; its one-job message
 quotes its own expanded command); system headers in the dependency file
-are spelled with kiln's toolchain paths. `-compilation-database` and
-`-format=experimental-full` are not supported (an error).
+are spelled with kiln's toolchain paths. With `-compilation-database`:
+a JSON syntax error is reported as `Error while opening JSON database:
+<file>:<line>:<col>: error: <what>` (clang's text is its YAML parser's);
+an entry whose directory does not exist fails with `error: cannot change
+to directory '<dir>': <reason>` under the header (clang scans through a
+virtual working directory and reports the missing input instead); the
+make rules come in entry order (clang's come in completion order, the
+same only with `-j 1`); and each module or import is listed once, where
+clang repeats a duplicated `import M;` (kiln's preprocessor records an
+import once, `kiln_pp::modules`). In `experimental-full`, `command-line`
+is the compile as given, where clang prints its own expanded `-cc1`
+line, and an interface unit is one command, where clang 19 prints two (a
+`-cc1` that builds the module file, then the object compile).
 
 Every flag CMake 3.31 puts on these lines was already kiln's (WP-917,
 WP-799): `-x c++` / `-x c++-module`, `-fmodule-output=`,
@@ -928,6 +995,17 @@ compiler; the program runs, the scanner CMake found must be kiln's link,
 and touching the interface recompiles it, the implementation unit and the
 consumer but not the partition. `import std;` through CMake
 (`CXX_MODULE_STD`) is §11.12.
+
+Real builds go through the OSS harness (WP-1148, spec/harness.md): a
+`modules = true` row of `scripts/oss/projects.toml` is generated for
+Ninja and given `-DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=` (kiln-scan-deps
+beside the kiln++ under test, or clang-scan-deps-19 for the clang 19
+control), with `-DCMAKE_CXX_FLAGS=-stdlib=libc++` under `--stdlib
+libc++` because the scanner is run directly, not through kiln-cxx.
+`fmt_module` builds {fmt} 12.1.0 as the named module `fmt` with an
+importer, and `cmake_modules` builds the fixture above (with `import
+std;` under libc++); their results are docs/status/oss/fmt_module.md and
+docs/status/oss/cmake_modules.md.
 
 ### 11.10 Step 2 (follow-up work packages)
 
@@ -974,7 +1052,7 @@ What an image must hold, the id it is keyed by, and where it stands:
 | types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
 | expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
 | template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
-| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers, aggregates without pointers or unions | pointers, references, member pointers, reflections (they name declarations) |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); not yet pointers to string literals, temporaries and labels, nor data member specification and annotation reflections | the same encoding, its entities remapped; the values part 1 leaves out |
 | Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
 | source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
 | identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
@@ -1001,7 +1079,11 @@ evaluation happens, which the replay reproduces exactly:
 
 The value's type is not stored. It is the canonical, unqualified type of
 the evaluated expression; the writer checks that it is, and the reader
-takes it from its own replayed copy of the expression. Outside any instantiation the two positions are the whole key
+takes it from its own replayed copy of the expression. The one exception
+is a reference's value (a reference variable's initializer, a reference
+template argument), whose type is the reference type while the
+expression's is the referee: it is written `typed`, with the reference
+type, and both sides check that its referee is the expression's type. Outside any instantiation the two positions are the whole key
 (instantiation index 0), and a result is used only while the importer
 reads the unit the file holds (`module_current_unit` is that unit's), so
 the same header text read by the importer itself never matches. Inside
@@ -1038,6 +1120,8 @@ the same specialization and compare them as they are:
     that was (a template, the namespace scope). Its position is the
     replay-stable (path index, offset) pair of "Identity". Implicit
     declarations have no `D` key, and a top-level key is never `D`.
+  - `U`: the translation unit itself (the global namespace, as a
+    reflection or a `D` key's context).
 - **Substitution frames** that record their arguments (concept check,
   constraint check, deduced, explicit and prior argument substitution,
   default template argument): `F`, a one-byte frame code, the template,
@@ -1045,9 +1129,13 @@ the same specialization and compare them as they are:
   Only a template whose parameters are its outermost level (depth 0) is
   keyed; then the arguments are all the substitution uses.
 - **Arguments**: a count, then per argument `T` type, `V` type and value
-  (part 1's value encoding; a pointer, reference or reflection argument
-  has no key, WP-1047), `N` template (an entity), `K` pack (an argument
-  list).
+  (part 1's value encoding, extended by WP-1047 to the values that
+  name entities, see "Encoding": a pointer or reference argument is its
+  object's entity plus its byte offset, a reflection argument its
+  reflectee's entity, type or value, so `X<&g>` and `Wrap<^^S>` merge),
+  `N` template (an entity), `K` pack (an argument list). A value naming
+  something without a key (a string literal, an unkeyed entity) gives
+  the argument list no key.
 - **Types** structurally: the canonical type's cv byte, then a tag and
   its operands (builtin, `_BitInt`, pointer, references, member pointer,
   arrays, function with parameters, flags and a `noexcept` bit, record
@@ -1111,7 +1199,7 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
-marker   u32 0xffffffff, then u32 version (2)
+marker   u32 0xffffffff, then u32 version (3)
 paths    u32 count, then each path (u32 length, UTF-8)
 insts    u32 count, then each instantiation key (u32 length, bytes,
          see "Instantiation keys"), numbered from 1 in first-use order
@@ -1128,13 +1216,44 @@ entries  u32 count (at least 1), then each entry:
          4 aggregate: bytes (u32 length), u32 padding count, then
                       (u32 start, u32 length) ranges, sorted, non-empty,
                       not adjacent, within the bytes
+         the values naming entities (version 3, WP-1047); `var` is an
+         unsigned LEB128 varint (at most 10 bytes), `ty` a type and `ent`
+         an entity as in "Instantiation keys":
+         5 member null:    u8 NullKind (a null pointer to member)
+         6 pointer:        u8 flags (bit 0 past the end, bit 1 designated),
+                           u8 base, then
+                             0 declaration (a variable): ent
+                             1 function: ent
+                             2 typeid object: ty
+                             3 template parameter object: ty, value
+                             4 constant object: ty, value
+                           var byte offset, [ty designated subobject]
+         7 member pointer: u8 flags (bit 0 function, bit 1 derived),
+                           ent member, var count, count x ent path
+         8 reflection:     u8 reflectee tag (`Reflectee::tag`), then
+                             type: u8 0 then ty, or 1 then ent (an alias)
+                             declaration, namespace, namespace alias,
+                             template: ent
+                             null: nothing
+                             value, object: ty, value
+                             base, parameter: ent, var index
+         9 aggregate+:     bytes (u32 length), var padding count, then
+                           (var start, var length); var reloc count, then
+                           (var at, ty, value); var union count, then
+                           (var at, ent active member)
+        10 typed:          ty (a reference type), then the value
 ```
+
+A value part 1 could carry keeps part 1's bytes (tags 0-4), also inside
+an aggregate+ or a key; tags 5-10 appear only in version 3 sections.
+Values nest at most 48 levels, like keys (an entry's value has no length cap).
 
 - **Versioned.** Version 1 (WP-985) had no marker, version or
   instantiation table, and no `inst` field; its first word is the path
   count, never `0xffffffff`. The reader reads version 1 as written (every
-  entry at index 0) and rejects any version but 1 and 2 (`unsupported
-  section version`). Only carried keys are written: an instantiation key
+  entry at index 0) and rejects any version but 1, 2 and 3 (`unsupported
+  section version`). Version 2 (WP-1046) is version 3 without tags 5-10
+  and the `U` entity. Only carried keys are written: an instantiation key
   no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
@@ -1145,7 +1264,16 @@ entries  u32 count (at least 1), then each entry:
   float bits, padding ranges, path indices, duplicate keys and trailing
   bytes. Each instantiation key is parsed in full against the grammar of
   "Instantiation keys" (tags, nesting depth, path indices, values),
-  duplicate keys and out-of-range `inst` indices are rejected. Any failure is a `SectionError`, turned into §11.4's
+  duplicate keys and out-of-range `inst` indices are rejected, and so is
+  every value of tags 5-10 (tags, flags, varints over 10 bytes or
+  64 bits, offsets and counts beyond `u32`, entities, types). An entity
+  in a value resolves to the importer's own declaration: a `D` entity
+  by its kind and position (among the first, non-implicit declarations;
+  two at one position resolve to neither), an `S` among its template's
+  specializations, an `M`/`P` through the specialization's members.
+  Every resolved declaration is checked by writing its key again and
+  comparing the bytes, so a value names exactly the writer's entity or
+  is not used (`bmi_ast/value.rs`). Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1203,8 +1331,11 @@ file and does not force kind 1. Sema then records every evaluation
   statement and emitted no error or warning (a carried result would
   silence a diagnostic the importer must give, and an evaluation that
   instantiated a template must still instantiate it);
-- it succeeded, its value's type is its expression's, and the value is
-  self-contained (see "Inventory");
+- it succeeded, its value's type is its expression's (or it is a
+  reference's value, see "Identity"), and every entity, type and value it
+  names has a key (see "Encoding"); a pointer to a string literal, a
+  temporary or a label, and a data member specification or annotation
+  reflection have none;
 - no other evaluation with the same key gave a different result (the
   same evaluation made again, a constraint checked twice, keeps its
   result).
@@ -1231,14 +1362,18 @@ no key`, `a consteval block`, `an
 evaluation at a position a replay does not reproduce`, `an evaluation that
 changed the AST`, `an evaluation that emitted a diagnostic`, `an
 evaluation that failed`, `a value whose type is not its expression's`, `a
-pointer or reference value`, `a pointer-to-member value`, `a reflection
-value`, `an aggregate holding a pointer`, `an aggregate holding a union`,
-`two evaluations at one position`. When the unit made no evaluation at
+pointer or reference value whose object has no key`, `a pointer-to-member
+value whose member has no key`, `a reflection value with no key`, `an
+aggregate holding a value with no key`, `a reference value` (a reference's
+value naming something without a key), `two evaluations at one
+position`. The reason is printed only when nothing was carried. When the unit made no evaluation at
 all, the parenthesis is left out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
 On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
-item 1 carries 8774, 5744 of them inside template instantiations (most
+item 1 carries 8774, 5744 of them inside template instantiations
+(WP-1047 adds one: the file grows by 167 bytes, from
+9,840,072 to 9,840,239) (most
 of the rest in alias template substitution and default-argument checking
 frames, which record no arguments). Before part 2, of the evaluations
 that were not carried, 10142 happened inside a template instantiation, 141
@@ -2560,8 +2695,28 @@ interface or `stdapp`'s source never rebuilds the std module.
   the names, option parsing and JSON quoting. `xtask/src/dist.rs`
   checks the links in the install layout and scans a unit with the
   installed `clang-scan-deps-22` in its smoke test.
+- Compilation databases and the full format (WP-1148, §11.9):
+  `crates/kiln_driver/tests/scan_deps.rs` `compilation_database_p1689`
+  (per-entry `directory`, `arguments` over `command`, `output`, rule
+  order, an import naming another entry's source; the empty database),
+  `compilation_database_make` (database order, a failing entry beside
+  good ones, clang 19's header under `clang-scan-deps-19`),
+  `compilation_database_errors` (clang's messages for an unreadable,
+  malformed or ill-shaped database and for both `--` and a database),
+  `experimental_full_shapes` (the 22 and 19 shapes) and
+  `differential_against_clang_scan_deps`: one module graph across
+  directories through kiln and the real clang-scan-deps 19 and 22
+  (where installed), P1689, make and full compared after the documented
+  deviations; `kiln_driver::scan_deps_cdb` unit tests cover the database
+  parser and shell splitting.
 - CMake (WP-982): `scripts/oss/selftest.sh` `cmake_modules` builds
-  `scripts/oss/fixtures/modules` (§11.9).
+  `scripts/oss/fixtures/modules` (§11.9). WP-1148: the OSS harness rows
+  `cmake_modules` (that fixture, `import std` under libc++) and
+  `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
+  with Ninja through kiln-scan-deps against a clang 19 control
+  (docs/status/oss/{cmake_modules,fmt_module}.md);
+  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
+  libstdc++ failure, xfail.
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz
@@ -2579,6 +2734,18 @@ interface or `stdapp`'s source never rebuilds the std module.
   kinds), `kind2_falls_back_to_kind1` (the fallback reason and the forced
   kind) and `kind2_damaged_files_are_diagnosed` (truncated and flipped
   kind-2 files are fatal errors, and 24 damaged sections behind a valid
-  checksum give a diagnostic or a fallback evaluation, never a panic);
+  checksum give a diagnostic or a fallback evaluation, never a panic),
+  `kind2_carries_pointer_and_reflection_values` (WP-1047: the importer
+  of `module.interface/Inputs/cv.cppm` and `cr.cppm` re-evaluates none of
+  their constant evaluations under kind 2 but the failed trial
+  evaluations, and its IR is the same under both kinds);
+  `crates/kiln_sema/src/bmi_ast.rs` `wire_*` and `fuzz_wire_values`
+  (every value of tags 5-10 and a key holding pointer and reflection
+  arguments round-trip; their truncations, flips and overlong varints are
+  rejected without a panic); the `-run` tests
+  `module.interface/carried-pointers-run.cpp` and
+  `carried-reflections-run.cpp` (address and specialization identity
+  across the two units, `&X<&g>::x`, `&Wrap<^^S>::x`, template parameter
+  objects);
   and every `module:` test under `cargo xtask test --bmi-kind 1` and
   `--bmi-kind 2` (spec/harness.md "Module-file kinds"), both in `ci`.

@@ -397,7 +397,7 @@ diagnostic pragmas are inert (they are not); spec/parse.md:403-405 say `pack` un
 Code: crates/kiln_driver/src/args.rs, codegen_flags.rs. Unknown flags are a hard error
 (`ArgError::Unknown`, args.rs:658; also for `-Xclang` args). Explicit ignore table
 codegen_flags.rs:60 (`-f[no-]stack-clash-protection`, `-fcf-protection[=]`, `-f[no-]common`,
-`-f[no-]math-errno`, `-fstack-usage`, `-gz[=]`, `-fno-trapv`, `-fno-short-enums`, `-m64`, `-pipe`)
+`-f[no-]math-errno`, `-fstack-usage`, `-gz[=]`, `-fno-short-enums`, `-m64`, `-pipe`)
 + `-fexcess-precision=` (:165). `-g*` and `-gz[=]` are implemented since WP-814
 (crates/kiln_driver/src/debug_flags.rs; each unimplemented debug flag is an error). Explicit reject tables
 codegen_flags.rs:79/94 (`-ftrapv`, `-fshort-enums`, `-fsanitize*`, `-fprofile-*`, coverage).

@@ -17,7 +17,7 @@ use kiln_pp::CmdMacro;
 use kiln_pp::bmi;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, DepHeaders, Input};
+use crate::args::{Action, Args, DepHeaders, IncludePchOrder, Input};
 use crate::codegen_cmd::{self, Phase};
 use crate::deps::DepList;
 use crate::toolchain::{LangStd, Toolchain};
@@ -362,6 +362,10 @@ pub(crate) fn consumer(
     let Some(pch) = args.pch.include.as_deref() else { return Ok(None) };
     let sm = SourceManager::new();
     let e = make_engine(&sm, diag_opts, stderr.clone(), None);
+    let std = inputs
+        .first()
+        .and_then(|i| input_std(args, args.input_lang(i)).ok())
+        .unwrap_or_else(|| LangStd::default_for(true));
     let finish = |e: kiln_diag::DiagEngine<'_>| {
         e.flush();
         if let Some(s) = e.summary()
@@ -370,6 +374,20 @@ pub(crate) fn consumer(
             let mut err = stderr.clone();
             let _ = std::io::Write::write_fmt(&mut err, format_args!("{s}\n"));
         }
+    };
+    // WP-1037: `-include-pch <dir>` uses the first acceptable PCH in it
+    // (clang `FrontendAction::BeginSourceFile`).
+    let picked;
+    let pch = if Path::new(pch).is_dir() {
+        let Some(p) = pick_in_dir(args, tc, std, pch, diag_opts) else {
+            Diag::new(DiagId::drv_pch_dir_no_pch, Span::INVALID).arg(pch).emit(&e);
+            finish(e);
+            return Err(());
+        };
+        picked = p;
+        picked.as_str()
+    } else {
+        pch
     };
     let Some(rec) = read(pch, &e) else {
         finish(e);
@@ -391,15 +409,9 @@ pub(crate) fn consumer(
         out.includes = std::iter::once(resolve(&rec.main)).chain(args.includes.clone()).collect();
         return Ok(Some(out));
     }
-    if !args.pch.no_validate {
-        let std = inputs
-            .first()
-            .and_then(|i| input_std(args, args.input_lang(i)).ok())
-            .unwrap_or_else(|| LangStd::default_for(true));
-        if !check(args, tc, std, pch, &rec, &e) {
-            finish(e);
-            return Err(());
-        }
+    if !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
+        finish(e);
+        return Err(());
     }
     drop(e);
     let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
@@ -407,6 +419,165 @@ pub(crate) fn consumer(
     includes.extend(args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned());
     out.includes = includes;
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+    Ok(Some(out))
+}
+
+/// The first file in the directory `dir`, by name, that is a kiln PCH
+/// whose configuration matches the compile ([`check_config`], silently;
+/// any readable record with `-fno-validate-pch`). clang takes the
+/// directory's own order, which is unspecified; kiln sorts by name so the
+/// choice is reproducible.
+fn pick_in_dir(
+    args: &Args,
+    tc: &Toolchain,
+    std: LangStd,
+    dir: &str,
+    diag_opts: &DiagOptions,
+) -> Option<String> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|d| d.path())
+        .filter(|p| p.is_file())
+        .collect();
+    entries.sort();
+    let sm = SourceManager::new();
+    let quiet = make_engine(&sm, diag_opts, SharedWriter::new(std::io::sink()), None);
+    entries.into_iter().map(|p| p.display().to_string()).find(|p| {
+        let Ok(rec) = std::fs::read(p).map_err(drop).and_then(|b| Record::parse(&b).map_err(drop))
+        else {
+            return false;
+        };
+        args.pch.no_validate || check_config(args, tc, std, p, &rec, &quiet)
+    })
+}
+
+/// Whether `path` starts with a PCH's magic, kiln's or clang's (clang's
+/// `maybeHasClangPchSignature`; a clang PCH is then reported by the
+/// consumer as one kiln cannot read, as an explicit `-include-pch` is).
+fn has_pch_magic(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 8];
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let mut n = 0;
+    while n < head.len() {
+        match f.read(&mut head[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    let head = &head[..n];
+    head.starts_with(&bmi::CLANG_MAGIC) || head.starts_with(format!("{MAGIC} ").as_bytes())
+}
+
+/// A warning of the driver's `-include` probe.
+enum ProbeWarning {
+    /// `<h>.gch` is a file without a PCH's magic.
+    GchFile(String),
+    /// `<h>.gch` is a directory with no PCH in it.
+    GchDir(String),
+    /// The PCH found for an `-include` that is not the first: the PCH and
+    /// the option as clang renders it.
+    NotFirst(String, String),
+}
+
+/// clang's `gchProbe`: whether `gch` is a PCH (a file with a PCH's magic,
+/// or a directory holding one), else the warning when it exists.
+fn gch_probe(gch: &str, warnings: &mut Vec<ProbeWarning>) -> bool {
+    let Ok(md) = std::fs::metadata(gch) else { return false };
+    if md.is_dir() {
+        let any = std::fs::read_dir(gch)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|d| has_pch_magic(&d.path()));
+        if !any {
+            warnings.push(ProbeWarning::GchDir(gch.to_owned()));
+        }
+        return any;
+    }
+    if has_pch_magic(Path::new(gch)) {
+        return true;
+    }
+    warnings.push(ProbeWarning::GchFile(gch.to_owned()));
+    false
+}
+
+/// clang's driver probe of `-include <h>` for a precompiled `<h>`
+/// (WP-1037, Clang.cpp `AddPreprocessingOptions`; spec/driver.md
+/// "Precompiled headers"). Each of the driver's own `-include`s is
+/// looked up as given (not in the include path): `<h>.pch` if that path
+/// exists, else `<h>.gch` if it is a PCH ([`gch_probe`]). The first
+/// `-include` that finds one becomes `-include-pch` of it, unless it is
+/// not the first `-include`, which is only a warning. As in clang's
+/// frontend, the last `-include-pch` wins, so an explicit one after it
+/// (or behind `-Xclang`) replaces it, and the `-include` is gone either
+/// way. The warnings are the driver's, once per compile job (`jobs`).
+/// `Ok(None)` when the arguments do not change; `Err(())` when a warning
+/// was an error (`-Werror`).
+pub(crate) fn probe(
+    args: &Args,
+    jobs: usize,
+    diag_opts: &DiagOptions,
+    stderr: &SharedWriter,
+) -> Result<Option<Args>, ()> {
+    if jobs == 0 || args.pch.probed.is_empty() {
+        return Ok(None);
+    }
+    let mut warnings = Vec::new();
+    let mut first = None;
+    for (k, &idx) in args.pch.probed.iter().enumerate() {
+        let h = &args.includes[idx];
+        let pch = format!("{h}.pch");
+        let found = if Path::new(&pch).exists() {
+            Some(pch)
+        } else {
+            let gch = format!("{h}.gch");
+            gch_probe(&gch, &mut warnings).then_some(gch)
+        };
+        match found {
+            Some(p) if k == 0 => first = Some((idx, p)),
+            Some(p) => warnings.push(ProbeWarning::NotFirst(p, format!("-include {h}"))),
+            None => {}
+        }
+    }
+    if !warnings.is_empty() {
+        let sm = SourceManager::new();
+        let e = make_engine(
+            &sm,
+            &codegen_cmd::driver_diag_options(diag_opts),
+            stderr.clone(),
+            Some(&args.program),
+        );
+        for _ in 0..jobs {
+            for w in &warnings {
+                let d = match w {
+                    ProbeWarning::GchFile(p) => {
+                        Diag::new(DiagId::drv_pch_ignoring_gch_file, Span::INVALID).arg(p)
+                    }
+                    ProbeWarning::GchDir(p) => {
+                        Diag::new(DiagId::drv_pch_ignoring_gch_dir, Span::INVALID).arg(p)
+                    }
+                    ProbeWarning::NotFirst(p, opt) => {
+                        Diag::new(DiagId::drv_pch_not_first_include, Span::INVALID).arg(p).arg(opt)
+                    }
+                };
+                d.emit(&e);
+            }
+        }
+        e.flush();
+        if e.error_count() > 0 {
+            return Err(());
+        }
+    }
+    let Some((idx, p)) = first else { return Ok(None) };
+    let mut out = args.clone();
+    out.includes.remove(idx);
+    out.pch.probed.clear();
+    if args.pch.include_order == IncludePchOrder::BeforeProbe {
+        out.pch.include = Some(p);
+    }
     Ok(Some(out))
 }
 
@@ -458,6 +629,20 @@ fn read(pch: &str, e: &kiln_diag::DiagEngine<'_>) -> Option<Record> {
 /// options (first mismatch), the target, the macros (first mismatch);
 /// then, when those pass, the input files (first stale one).
 fn check(
+    args: &Args,
+    tc: &Toolchain,
+    std: LangStd,
+    pch: &str,
+    rec: &Record,
+    e: &kiln_diag::DiagEngine<'_>,
+) -> bool {
+    check_config(args, tc, std, pch, rec, e) && check_files(pch, rec, e)
+}
+
+/// The configuration half of [`check`]: the compiler, the language
+/// options, the target and the macros (clang's `isAcceptableASTFile`
+/// with strict option matches, which picks a PCH from a directory).
+fn check_config(
     args: &Args,
     tc: &Toolchain,
     std: LangStd,
@@ -530,9 +715,13 @@ fn check(
         ok = false;
         break;
     }
-    if !ok {
-        return false;
-    }
+    ok
+}
+
+/// clang's input-file check (after [`check_config`] passed): the first
+/// non-system file whose size or content changed, or that is gone, is
+/// fatal.
+fn check_files(pch: &str, rec: &Record, e: &kiln_diag::DiagEngine<'_>) -> bool {
     for f in rec.files.iter().filter(|f| !f.system) {
         let Ok(bytes) = std::fs::read(&f.abs) else {
             Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)

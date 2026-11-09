@@ -367,6 +367,9 @@ pub enum LinkOptKind {
 pub enum ArgError {
     /// An option kiln does not know.
     Unknown(String),
+    /// An option kiln does not know, with clang's suggestion: `(option,
+    /// the nearest known spelling)` (`-fno-trapv`, WP-1044).
+    UnknownSuggest(String, String),
     /// An option whose value is missing.
     MissingValue(String),
     /// An option with a bad value: `(option as written, value)`.
@@ -406,9 +409,6 @@ pub enum ArgError {
     /// "malformed sanitizer ignorelist: '{0}'": LLVM `SpecialCaseList`'s
     /// message (WP-1032).
     MalformedIgnorelist(String),
-    /// A `#!special-case-list-v1` (regular expression) ignorelist: its
-    /// path (WP-1032).
-    RegexIgnorelist(String),
     /// `-fsanitize=memtag-stack` on `AArch64` without the `mte` feature
     /// (WP-1138; clang's "requires hardware support (+memtag)").
     MemtagStackRequiresMte,
@@ -646,6 +646,10 @@ pub struct Args {
     /// `-Qunused-arguments`: no `-Wunused-command-line-argument` warning
     /// for an unused linker input or link option (clang's driver option).
     pub quiet_unused_arguments: bool,
+    /// The `-f[no-]sanitize-merge[=<list>]` flags as written: clang 19
+    /// has none of them, so at `-fclang-compat=19` each is an unknown
+    /// argument (WP-1044).
+    pub sanitize_merge_written: Vec<String>,
     /// `-m[no-]outline-atomics` (the last wins): `AArch64`'s
     /// `+outline-atomics` target feature; ignored on x86-64, with clang's
     /// `-Woption-ignored` warning naming the last spelling. `None` is the
@@ -727,6 +731,45 @@ pub struct PchArgs {
     /// The input is a header being precompiled (clang's `IsHeaderFile`;
     /// set by `crate::pch` on its producer's copy of the arguments).
     pub header_main: bool,
+    /// The indices in [`Args::includes`] of the driver's own `-include`s,
+    /// the ones clang's driver probes for `<file>.pch` / `<file>.gch`
+    /// (WP-1037). An `-Xclang -include` goes to clang's frontend as is.
+    pub probed: Vec<usize>,
+    /// Whether the last `-include-pch` overrides a PCH the first probed
+    /// `-include` turns into.
+    pub include_order: IncludePchOrder,
+}
+
+/// Where the last `-include-pch` sits against the probed `-include`s
+/// (WP-1037; clang's frontend uses the last `-include-pch` it sees).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum IncludePchOrder {
+    /// None was given, or it precedes every probed `-include`: a probed
+    /// PCH replaces it.
+    #[default]
+    BeforeProbe,
+    /// It follows a probed `-include`, or it is an `-Xclang` one (clang's
+    /// frontend sees those after the driver's options): it wins.
+    OverridesProbe,
+}
+
+impl PchArgs {
+    /// Records which `-include`s clang's driver probes for a PCH, and
+    /// where the last `-include-pch` comes (WP-1037). `includes` is the
+    /// number of `-include`s parsed so far, this one included.
+    fn note_valued(&mut self, opt: &str, given: bool, xclang: bool, includes: usize) {
+        match opt {
+            "-include" if given && !xclang => self.probed.push(includes - 1),
+            "-include-pch" if given => {
+                self.include_order = if xclang || !self.probed.is_empty() {
+                    IncludePchOrder::OverridesProbe
+                } else {
+                    IncludePchOrder::BeforeProbe
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Options taking a value, joined (`-Ifoo`) or separate (`-I foo`).
@@ -767,7 +810,10 @@ const SEPARATE_OR_EQ: &[&str] = &[
 
 /// Options taking a separate value only (`-include-pch foo`; clang's
 /// `Separate` kind: `-include-pchfoo` is not this option).
-const SEPARATE: &[&str] = &["-include-pch"];
+/// `-ftrapv-handler <name>` is the cc1 spelling (WP-1044): behind
+/// `-Xclang` it sets the handler, as a driver option it is claimed by
+/// nothing ([`crate::codegen_flags::CodegenFlags::trapv_handler_separate`]).
+const SEPARATE: &[&str] = &["-ftrapv-handler", "-include-pch"];
 
 impl Input {
     /// The input `path` under the `-x` in force (its language, and
@@ -785,6 +831,7 @@ impl Args {
 
     /// Parses `argv` (without the program name) for the program `argv0`,
     /// which sets [`Args::program`] and the default [`Args::mode`].
+    #[allow(clippy::too_many_lines, reason = "one pass over argv, in clang's order")]
     pub fn parse_as(argv0: &str, argv: &[String]) -> Args {
         let spliced = crate::codegen_flags::splice_preprocessor_args(argv);
         let argv = spliced.as_slice();
@@ -845,15 +892,16 @@ impl Args {
             }
             // Valued options.
             if let Some((opt, value)) = split_valued(arg, argv.get(i).map(String::as_str)) {
-                match value {
-                    Valued::Joined(v) => a.valued(opt, v, &mut x),
-                    Valued::Next => {
-                        i += 1;
-                        a.valued(opt, &argv[i - 1], &mut x);
-                    }
-                    Valued::Missing => a.errors.push(ArgError::MissingValue(opt.to_owned())),
+                let given = !matches!(value, Valued::Missing);
+                if let Valued::Next = value {
+                    i += 1;
                 }
+                a.split_valued_arg(opt, value, argv.get(i - 1), xclang, &mut x);
+                a.pch.note_valued(opt, given, xclang, a.includes.len());
                 continue;
+            }
+            if is_sanitize_merge(arg) {
+                a.sanitize_merge_written.push(arg.to_owned());
             }
             if let Some(r) = a
                 .coverage
@@ -891,6 +939,7 @@ impl Args {
         }
         a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
+        a.errors.extend(a.unknown_at_compat_19());
         a
     }
 
@@ -910,9 +959,18 @@ impl Args {
         self.fp.resolve(self.predef.ofast, self.clang22(), &mut Vec::new())
     }
 
+    /// The options clang 19 does not know, as its "unknown argument" at
+    /// `-fclang-compat=19` (WP-1044: the sanitize-merge flags).
+    fn unknown_at_compat_19(&self) -> Vec<ArgError> {
+        if self.clang22() {
+            return Vec::new();
+        }
+        self.sanitize_merge_written.iter().cloned().map(ArgError::Unknown).collect()
+    }
+
     /// Whether clang 22's driver rules apply (`-fclang-compat=22`, the
     /// default) rather than clang 19's.
-    fn clang22(&self) -> bool {
+    pub(crate) fn clang22(&self) -> bool {
         self.predef.clang_compat != ClangCompat::Clang19
     }
 
@@ -944,6 +1002,28 @@ impl Args {
             .filter(|i| i.lang.is_none())
             .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
             .collect()
+    }
+
+    /// A valued option [`split_valued`] found: `next` is the argument
+    /// after it, its value when `value` is [`Valued::Next`].
+    fn split_valued_arg(
+        &mut self,
+        opt: &str,
+        value: Valued<'_>,
+        next: Option<&String>,
+        xclang: bool,
+        x: &mut Option<(Lang, bool)>,
+    ) {
+        match (value, next) {
+            (Valued::Next, Some(v)) if opt == "-ftrapv-handler" => {
+                self.codegen.trapv_handler_arg(v, xclang);
+            }
+            (Valued::Joined(v), _) => self.valued(opt, v, x),
+            (Valued::Next, Some(v)) => self.valued(opt, v, x),
+            (Valued::Next | Valued::Missing, _) => {
+                self.errors.push(ArgError::MissingValue(opt.to_owned()));
+            }
+        }
     }
 
     fn valued(&mut self, opt: &str, v: &str, x: &mut Option<(Lang, bool)>) {
@@ -1640,6 +1720,13 @@ pub(crate) fn split_valued<'a>(
     best
 }
 
+/// `-f[no-]sanitize-merge[=<list>]` (clang 20+; WP-1044).
+fn is_sanitize_merge(arg: &str) -> bool {
+    ["-fsanitize-merge", "-fno-sanitize-merge"]
+        .iter()
+        .any(|f| arg.strip_prefix(f).is_some_and(|r| r.is_empty() || r.starts_with('=')))
+}
+
 /// `v` as clang's `-cc1` reads an `unsigned` option value
 /// (`StringRef::getAsInteger` with radix 0): decimal, `0x`/`0X` hex,
 /// `0b`/`0B` binary, `0o` or a leading `0` octal; no sign, no blanks, and
@@ -1877,6 +1964,31 @@ mod tests {
         assert_eq!(a.errors, []);
         assert_eq!(a.includes, ["a.h", "b.h"]);
         assert_eq!(parse("t.cpp -include").errors, [ArgError::MissingValue("-include".into())]);
+    }
+
+    /// WP-1037: the driver's own `-include`s are probed for a PCH, an
+    /// `-Xclang -include` is not; an `-include-pch` after the first probed
+    /// `-include`, or through `-Xclang`, overrides the probed PCH.
+    #[test]
+    fn probed_includes() {
+        let a = parse("-Xclang -include -Xclang x.h -include a.h -includeb.h t.cpp");
+        assert_eq!(a.includes, ["x.h", "a.h", "b.h"]);
+        assert_eq!(a.pch.probed, [1, 2]);
+        assert_eq!(a.pch.include_order, IncludePchOrder::BeforeProbe);
+        assert_eq!(
+            parse("-include-pch p.pch -include a.h t.cpp").pch.include_order,
+            IncludePchOrder::BeforeProbe
+        );
+        assert_eq!(
+            parse("-include a.h -include-pch p.pch t.cpp").pch.include_order,
+            IncludePchOrder::OverridesProbe
+        );
+        let a = parse("-Xclang -include-pch -Xclang p.pch -include a.h t.cpp");
+        assert_eq!(a.pch.include_order, IncludePchOrder::OverridesProbe);
+        // The last `-include-pch` decides.
+        let a = parse("-include a.h -include-pch p.pch -include-pch q.pch t.cpp");
+        assert_eq!(a.pch.include_order, IncludePchOrder::OverridesProbe);
+        assert_eq!(parse("t.cpp -include").pch.probed, [0usize; 0]);
     }
 
     #[test]

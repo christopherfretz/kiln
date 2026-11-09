@@ -141,6 +141,9 @@ pub(crate) fn write_memory_report(r: &kiln_ast::mem::MemReport, out: &mut impl W
 pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
     let d = match e {
         ArgError::Unknown(a) => Diag::new(DiagId::drv_unknown_argument, Span::INVALID).arg(a),
+        ArgError::UnknownSuggest(a, s) => {
+            Diag::new(DiagId::drv_unknown_argument_suggest, Span::INVALID).arg(a).arg(s)
+        }
         ArgError::MissingValue(o) => {
             Diag::new(DiagId::drv_missing_argument, Span::INVALID).arg(o).arg(1)
         }
@@ -181,9 +184,6 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::NoSuchFile(f) => Diag::new(DiagId::drv_no_such_file, Span::INVALID).arg(f),
         ArgError::MalformedIgnorelist(m) => {
             Diag::new(DiagId::drv_malformed_sanitizer_ignorelist, Span::INVALID).arg(m)
-        }
-        ArgError::RegexIgnorelist(f) => {
-            Diag::new(DiagId::drv_regex_sanitizer_ignorelist, Span::INVALID).arg(f)
         }
         ArgError::MemtagStackRequiresMte => {
             Diag::new(DiagId::drv_stack_tagging_requires_hardware_feature, Span::INVALID)
@@ -484,6 +484,8 @@ fn driver_warnings(
     // `-ftime-trace`.
     if !args.quiet_unused_arguments {
         unused_xray.extend(time_trace::unused(args).iter().cloned());
+        // WP-1044: the driver's separate `-ftrapv-handler <name>`.
+        unused_xray.extend(args.codegen.trapv_handler_separate.iter().cloned());
     }
     // WP-1000: the x86 feature flags clang claims on `AArch64` without an
     // error (`-msse4`, `-msse4.2`, `-m[no-]3dnow[a]`), and on x86 its
@@ -647,7 +649,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }
     }
     // WP-1032: the lists LLVM's `SpecialCaseList` rejects.
-    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir) {
+    for e in &args.sanitize.ignorelist_errors(sanitize.opts.kinds, &tc.resource_dir, args.clang22())
+    {
         emit_arg_error(e, &drv);
     }
     // WP-1138: clang checks the target feature after the option errors.
@@ -701,12 +704,30 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     if driver_warnings(&args, &tc, &inputs, &diag_opts, &io.stderr) {
         return 1;
     }
-    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
-    // checked PCH replays as `-include`s.
-    let Ok(pch_args) = pch::consumer(&args, &tc, &inputs, &diag_opts, &io.stderr) else {
+    // WP-1037: clang's driver turns the first `-include <h>` into
+    // `-include-pch <h>.pch` (or `.gch`) when there is one; it probes once
+    // per job that preprocesses (not for `.i`/`.ii`, objects, module files).
+    let jobs = inputs
+        .iter()
+        .filter(|i| codegen_cmd::is_source(i) || args.is_header_input(i))
+        .filter(|i| {
+            i.lang.is_some()
+                || !matches!(
+                    std::path::Path::new(&i.path).extension().and_then(|e| e.to_str()),
+                    Some("i" | "ii")
+                )
+        })
+        .count();
+    let Ok(probed) = pch::probe(&args, jobs, &diag_opts, &io.stderr) else {
         return 1;
     };
-    let args: &Args = pch_args.as_ref().unwrap_or(&args);
+    let args: &Args = probed.as_ref().unwrap_or(&args);
+    // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
+    // checked PCH replays as `-include`s.
+    let Ok(pch_args) = pch::consumer(args, &tc, &inputs, &diag_opts, &io.stderr) else {
+        return 1;
+    };
+    let args: &Args = pch_args.as_ref().unwrap_or(args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {
         let sm = SourceManager::new();
