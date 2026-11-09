@@ -997,8 +997,14 @@ impl Cg<'_> {
         {
             if self.dbg_on() {
                 let mut s = s;
-                while self.ast.exprs.get(s).kind() == ExprKind::ParenExpr {
-                    s = self.ast.exprs.operand(s);
+                loop {
+                    match self.ast.exprs.get(s).kind() {
+                        ExprKind::ParenExpr => s = self.ast.exprs.operand(s),
+                        ExprKind::SubstNonTypeTemplateParmExpr => {
+                            s = self.ast.exprs.subst_replacement(s);
+                        }
+                        _ => break,
+                    }
                 }
                 if matches!(
                     self.ast.exprs.get(s).kind(),
@@ -3652,6 +3658,19 @@ impl Cg<'_> {
             && let Some(a) = ast.lists.iter::<ExprId>(ast.exprs.call_args(e)).next()
         {
             return Ok(Some(self.emit_lvalue(a)?.addr.v));
+        }
+        // WP-940: clang `EmitBuiltinExpr` first folds a library builtin
+        // call its evaluator evaluates (`strlen("abc")` is `i64 3`); the
+        // arguments are not emitted. Not where `no_builtin` names it.
+        if let Some(d) = direct
+            && crate::builtins::lib_fold_callee(ast, e).is_some()
+            && let Some(c) = self.folds.get(e)
+            && !self.no_builtin_here(d)
+        {
+            let q = ast.exprs.get(e).ty();
+            if ast.types.is_integral(q) || ast.types.is_floating(q) {
+                return Ok(Some(V::C(self.const_scalar_value(c, q)?)));
+            }
         }
         let mut lib = None;
         // WP-419: a recognized C library function clang lowers as its

@@ -105,6 +105,7 @@ impl<'a> Preprocessor<'a, '_> {
     pub(crate) fn handle_directive(&mut self, hash: Token) {
         crate::profile::time!(t_directive_ns);
         crate::profile::count!(directives);
+        self.dir_hash = hash.span.lo;
         self.start_directive();
         // For include-guard detection: were tokens read before this
         // directive? (Its own tokens count as read from here on.)
@@ -981,7 +982,9 @@ impl Preprocessor<'_, '_> {
     pub(crate) fn skip_excluded(&mut self, if_span: Span, found_non_skip: bool, found_else: bool) {
         crate::profile::time!(t_skip_ns);
         self.push_cond(Cond { span: if_span, found_non_skip, found_else, was_skipping: false });
-        let start = if_span.lo;
+        // clang reports the range from the `#` of the directive that
+        // started skipping (`HashTokenLoc`).
+        let start = if self.dir_hash.is_valid() { self.dir_hash } else { if_span.lo };
         let old_q = std::mem::replace(&mut self.quiet_lex, true);
         loop {
             if !self.in_file() {
