@@ -914,8 +914,22 @@ impl Sema<'_, '_> {
         if ka.is_function() && kb.is_function() {
             // A `pass_object_size` function overloads one without
             // (spec/sema-overload.md §4.3a; WP-803).
+            // Functions conflict when their parameter-type-lists (and
+            // trailing requires-clauses) correspond; the return type
+            // does not take part ([namespace.udecl]/11 per CWG101,
+            // [basic.scope.scope]/4; clang `IsOverload`): `int f();`
+            // conflicts with a using-declared `void f();`.
+            // kiln: not at the instantiation of a block scope, where
+            // clang's lookup of the earlier declaration misses a local
+            // function declaration (and gcc accepts too; clang's
+            // namespace.udecl/p11.cpp FIXME, test5).
+            if self.in_local_scope() && !self.inst.stack.is_empty() {
+                return false;
+            }
             let ps = |me: &Self, d| me.ast.pass_object_size_params(d).is_empty();
-            return ps(self, a) == ps(self, b) && self.same_ignoring_exc_spec(ta, tb);
+            return ps(self, a) == ps(self, b)
+                && (self.same_ignoring_exc_spec(ta, tb)
+                    || self.signatures_correspond(a, b, false));
         }
         // A function template overloads with functions and with other
         // function templates unless the signatures, including the
