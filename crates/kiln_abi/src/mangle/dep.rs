@@ -461,11 +461,14 @@ impl Mangler<'_, '_> {
             ExprKind::CXXBoolLiteralExpr
             | ExprKind::CharacterLiteral
             | ExprKind::FloatingLiteral
+            | ExprKind::ImaginaryLiteral
             | ExprKind::StringLiteral
             | ExprKind::CXXNullPtrLiteralExpr
             | ExprKind::GNUNullExpr
             // A reflection is a literal (`L <info-type> <reflection> E`).
-            | ExprKind::CXXReflectExpr => true,
+            | ExprKind::CXXReflectExpr
+            // A pack index has no encoding and no `X…E` wrapper.
+            | ExprKind::PackIndexingExpr => true,
             // An enumerator is its value's literal.
             ExprKind::DeclRefExpr => matches!(
                 ast.decls.get(ast.exprs.decl(e)).kind(),
@@ -575,6 +578,63 @@ impl Mangler<'_, '_> {
         true
     }
 
+    /// A GNU imaginary literal `2i` / `2.0i` (clang `mangleExpression`,
+    /// `ImaginaryLiteralClass`, "mangle as if a complex literal"):
+    /// `L <complex type> <real> _ <imag> E`. The real part is a zero of
+    /// the element type: `0` for an integer, the hex encoding of `+0.0`
+    /// for a floating type; the imaginary part is the literal's number
+    /// (decimal) or encoding (hex). `t + 2i` is `plfp_LCi0_2E`.
+    fn imaginary_literal(&mut self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let sub = ast.exprs.operand(e);
+        let ty = ast.exprs.get(e).ty();
+        let mut imag = String::new();
+        let mut zero_width = None;
+        match ast.exprs.get(sub).kind() {
+            ExprKind::FloatingLiteral => {
+                let Some(c) = ast.exprs.literal_const(sub) else { return false };
+                let kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Float {
+                    kind,
+                    bits,
+                    ..
+                }) = ast.consts.get(c)
+                else {
+                    return false;
+                };
+                zero_width = Some(kind.bits());
+                let saved = std::mem::take(&mut self.out);
+                self.float_hex(kind.bits(), bits);
+                imag = std::mem::replace(&mut self.out, saved);
+            }
+            ExprKind::IntegerLiteral => match ast.exprs.int_value(sub) {
+                Some(v) => imag = v.to_string(),
+                None => {
+                    let Some(c) = ast.exprs.literal_const(sub) else { return false };
+                    let kiln_ast::consts::ConstValue::Scalar(kiln_ast::consts::Scalar::Int {
+                        bits,
+                        ..
+                    }) = ast.consts.get(c)
+                    else {
+                        return false;
+                    };
+                    // A literal is never negative: its value as unsigned.
+                    bits.write_decimal(false, &mut imag);
+                }
+            },
+            _ => return false,
+        }
+        self.out.push('L');
+        self.ty(ty);
+        match zero_width {
+            Some(w) => self.float_hex(w, 0),
+            None => self.out.push('0'),
+        }
+        self.out.push('_');
+        self.out.push_str(&imag);
+        self.out.push('E');
+        true
+    }
+
     fn expression_node(&mut self, e: ExprId, arity: usize) -> bool {
         let ast = self.ast;
         if self.substituted_value(e) {
@@ -585,6 +645,13 @@ impl Mangler<'_, '_> {
         let n = ast.exprs.get(e);
         match n.kind() {
             ExprKind::IntegerLiteral => return self.integer_literal(e),
+            ExprKind::ImaginaryLiteral => return self.imaginary_literal(e),
+            // P2662 `pack...[i]`: clang 19 and 22 write nothing for it, in
+            // a `decltype` (`DTE`, not `Dt`), an operand (`DTplfp_E`) and
+            // a template argument (`1SIE`, without `X…E`), dependent or
+            // substituted. The Itanium ABI has no production for it yet;
+            // kiln matches clang's names (spec/landed/abi/WP-1029.md).
+            ExprKind::PackIndexingExpr => {}
             ExprKind::CharacterLiteral => {
                 self.out.push('L');
                 self.ty(n.ty());
