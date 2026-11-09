@@ -359,6 +359,11 @@ ops! {
     // conditional (`Compiler::bcp_fold_enter`): aux = 1 saves
     // `RunState::fold` in `saved` and enters a fold; aux = 0 restores it.
     Fold = 1,
+    // [p, global]: the thunk evaluating a variable's initializer made its
+    // result object at `p`: from here to the end of the evaluation, the
+    // variable (`global`) designates it (`GState::Bound`; [basic.life]/1,
+    // clang's `EvaluatingDecl`; WP-1100)
+    BindObject = 2,
 }
 
 /// The sub-operations of `Op::Wide`. Binary ones are `*d = *a op *b`
