@@ -4,6 +4,7 @@
 // list (or the introducer, without one), ahead of the lambda-specifiers and
 // the noexcept-specifier; `[[noreturn]]` ahead of the parameter list.
 //@ expect: compile-ok
+//@ skip(gcc): clang's GNU-attribute placements in a lambda-declarator, which GCC 16.1 rejects
 //@ strict-diags
 //@ std: c++23
 void a2() { auto l = []() __attribute__((noreturn)) noexcept { __builtin_abort(); }; }

@@ -7,6 +7,7 @@
 // conversion of a constant variable, and an unevaluated operand, are no
 // odr-uses. The closure's size shows the members.
 //@ expect: compile-ok
+//@ skip(gcc): pins clang's closure layout (which entities are captured by reference); a closure's size is unspecified ([expr.prim.lambda.closure]/2)
 //@ std: c++20
 void f(int r) {
   const int n = 10;

@@ -63,7 +63,8 @@ impl Test<'_> {
         c.args(self.meta_header_flags(false));
         let args: Vec<String> =
             spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
-        c.args(crate::oracle::gcc_args(&args));
+        let warnings = GccWarnings::of(gcc, self.case.lang == Lang::C);
+        c.args(crate::oracle::gcc_args_with(&args, warnings.as_deref()));
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);

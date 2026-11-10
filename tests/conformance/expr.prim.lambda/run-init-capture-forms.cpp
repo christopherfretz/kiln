@@ -5,6 +5,7 @@
 // direct-initialization calls an explicit copy constructor, which
 // copy-initialization (`[q = ox]`) could not.
 //@ expect: run
+//@ xfail(gcc): GCC 16.1 rejects a direct-initialized init-capture `[q(x)]`/`[q{x}]` of a class with an explicit copy constructor ([expr.prim.lambda.capture]/6)
 //@ stdout: 15 107 107 321 2 7
 #include <cstdio>
 #include <initializer_list>

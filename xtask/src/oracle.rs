@@ -13,7 +13,9 @@
 //! test's kiln/clang flags to GCC's. `KILN_REQUIRE_GCC=1` (GitHub CI) makes
 //! a missing GCC an infrastructure error instead of dropped comparisons.
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 /// The environment variable that names the GCC oracle.
 pub const GCC_ENV: &str = "KILN_GCC";
@@ -51,10 +53,25 @@ pub fn require_gcc_from_env() -> bool {
 /// `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`, `-resource-dir`,
 /// `-Xclang <arg>`, `--gcc-toolchain=`: GCC is its own toolchain), and the two limits GCC spells differently are
 /// renamed (`-ferror-limit=N` is `-fmax-errors=N`, `-fconstexpr-steps=N`
-/// is `-fconstexpr-ops-limit=N`). `-freflection`, `-I`, `-D`, `-W...` and
-/// the rest pass through: GCC 16.1 spells reflection `-std=c++26
-/// -freflection` as kiln does.
+/// is `-fconstexpr-ops-limit=N`). clang's diagnostic-only flags, which GCC
+/// has no equivalent for and which change neither a verdict nor a binary,
+/// are dropped too (WP-1261): `-Qunused-arguments`, the `-R<remark>`
+/// remarks, `-f[no-]crash-diagnostics[=...]` and `-fcrash-diagnostics-dir=`,
+/// and `-Weverything`; `-Wno-everything` is GCC's `-w`. `-freflection`,
+/// `-I`, `-D`, `-W...` and the rest pass through: GCC 16.1 spells
+/// reflection `-std=c++26 -freflection` as kiln does. [`gcc_args_with`]
+/// also drops the warning flags a given GCC does not know.
 pub fn gcc_args(args: &[String]) -> Vec<String> {
+    gcc_args_with(args, None)
+}
+
+/// [`gcc_args`], and with `warnings` (the GCC's own warning options,
+/// [`GccWarnings::of`]) every `-W<name>`, `-Wno-<name>`, `-Werror=<name>`
+/// and `-Wno-error=<name>` whose `<name>` that GCC does not know is dropped
+/// (clang's warning groups, such as `-Wshadow-all`: GCC rejects an unknown
+/// `-W` option). Warnings change no verdict except under `-Werror`, and a
+/// clang group's `-Werror=` has nothing to promote in GCC.
+pub fn gcc_args_with(args: &[String], warnings: Option<&GccWarnings>) -> Vec<String> {
     let mut out = Vec::with_capacity(args.len());
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -64,17 +81,91 @@ pub fn gcc_args(args: &[String]) -> Vec<String> {
             out.push(format!("-fmax-errors={n}"));
         } else if let Some(n) = a.strip_prefix("-fconstexpr-steps=") {
             out.push(format!("-fconstexpr-ops-limit={n}"));
+        } else if a == "-Wno-everything" {
+            out.push("-w".to_owned());
         } else if !(a.starts_with("-fclang-compat=")
             || a.starts_with("-fkiln-")
             || a.starts_with("-fconstexpr-report")
             || a.starts_with("-stdlib=")
             || a.starts_with("-resource-dir=")
-            || a.starts_with("--gcc-toolchain="))
+            || a.starts_with("--gcc-toolchain=")
+            || clang_diagnostic_only(a)
+            || warnings.is_some_and(|w| w.unknown(a)))
         {
             out.push(a.clone());
         }
     }
     out
+}
+
+/// A clang flag that only shapes diagnostics (or crash reports), with no
+/// GCC equivalent ([`gcc_args`]).
+fn clang_diagnostic_only(a: &str) -> bool {
+    a == "-Qunused-arguments"
+        || a == "-Weverything"
+        || a == "-fno-crash-diagnostics"
+        || a.starts_with("-fcrash-diagnostics")
+        || a.strip_prefix("-R").is_some_and(|r| r.starts_with(|c: char| c.is_ascii_lowercase()))
+}
+
+/// The warning options a GCC knows, by name (`-W<name>` and `-W<name>=`
+/// alike): the ones `<gcc> -Q --help=warnings -fsyntax-only -x <lang>
+/// /dev/null` lists for the test's language (an `[available in ...]` line
+/// is another language's, which GCC warns about and `-Werror` rejects).
+#[derive(Debug, Default)]
+pub struct GccWarnings(std::collections::BTreeSet<String>);
+
+impl GccWarnings {
+    /// The options of a `-Q --help=warnings` listing.
+    pub fn parse(help: &str) -> Self {
+        let names = help
+            .lines()
+            .filter(|l| !l.contains("[available in "))
+            .filter_map(|l| l.split_whitespace().next()?.strip_prefix("-W"))
+            .map(|n| n.split(['=', '<']).next().unwrap_or(n))
+            .filter(|n| !n.is_empty())
+            .map(str::to_owned)
+            .collect();
+        GccWarnings(names)
+    }
+
+    /// The warning options the GCC at `gcc` knows for C (`c`) or C++,
+    /// asked once per process, path and language; `None` when it cannot be
+    /// run or lists none (then no warning flag is dropped).
+    pub fn of(gcc: &Path, c: bool) -> Option<Arc<GccWarnings>> {
+        type Cache = Mutex<HashMap<(PathBuf, bool), Option<Arc<GccWarnings>>>>;
+        static CACHE: OnceLock<Cache> = OnceLock::new();
+        let cache = CACHE.get_or_init(Default::default);
+        let mut map = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.entry((gcc.to_path_buf(), c))
+            .or_insert_with(|| {
+                let lang = if c { "c" } else { "c++" };
+                let o = std::process::Command::new(gcc)
+                    .args(["-Q", "--help=warnings", "-fsyntax-only", "-x", lang, "/dev/null"])
+                    .output()
+                    .ok()?;
+                let w = GccWarnings::parse(&String::from_utf8_lossy(&o.stdout));
+                (!w.0.is_empty()).then(|| Arc::new(w))
+            })
+            .clone()
+    }
+
+    /// Whether `a` is a `-W` warning flag naming an option this GCC does
+    /// not know. `-Werror`, `-Wno-error`, `-W` and the `-Wl,`/`-Wa,`/`-Wp,`
+    /// pass-throughs are not warning names.
+    pub fn unknown(&self, a: &str) -> bool {
+        let Some(w) = a.strip_prefix("-W") else { return false };
+        if w.is_empty() || w == "error" || w == "no-error" || w.as_bytes().get(1) == Some(&b',') {
+            return false;
+        }
+        let name = w
+            .strip_prefix("error=")
+            .or_else(|| w.strip_prefix("no-error="))
+            .or_else(|| w.strip_prefix("no-"))
+            .unwrap_or(w);
+        let base = |n: &'_ str| n.split('=').next().unwrap_or(n).to_owned();
+        !self.0.contains(&base(name)) && !self.0.contains(&base(w))
+    }
 }
 
 /// The installation prefix of a GCC, from its `-print-search-dirs`
@@ -94,7 +185,7 @@ pub fn gcc_install_prefix(search_dirs: &str) -> Option<PathBuf> {
 
 /// [`gcc_install_prefix`] of the GCC at `gcc`, canonicalized; `None` when
 /// it cannot be run or names no existing prefix.
-pub fn gcc_toolchain_of(gcc: &std::path::Path) -> Option<PathBuf> {
+pub fn gcc_toolchain_of(gcc: &Path) -> Option<PathBuf> {
     let o = std::process::Command::new(gcc).arg("-print-search-dirs").output().ok()?;
     let prefix = gcc_install_prefix(&String::from_utf8_lossy(&o.stdout))?;
     std::fs::canonicalize(prefix).ok().filter(|p| p.is_dir())
@@ -206,6 +297,58 @@ mod tests {
         let a: Vec<String> =
             ["--gcc-toolchain=/g", "-freflection"].iter().map(|s| (*s).to_owned()).collect();
         assert_eq!(gcc_args(&a), ["-freflection"]);
+    }
+
+    /// WP-1261: clang's diagnostic-only flags never reach GCC, and with a
+    /// GCC's warning list the `-W` flags it does not know are dropped
+    /// (spec/harness.md "GCC oracle").
+    #[test]
+    fn gcc_args_drop_clang_diagnostic_flags() {
+        let v = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let args = v(&[
+            "-Qunused-arguments",
+            "-Rpass=inline",
+            "-Rauto-var-init",
+            "-fno-crash-diagnostics",
+            "-fcrash-diagnostics=off",
+            "-fcrash-diagnostics-dir=/x",
+            "-Weverything",
+            "-Wno-everything",
+            "-Wshadow-all",
+            "-Werror=invalid-static-assert-message",
+            "-Wall",
+            "-Werror",
+            "-Wl,--as-needed",
+            "-O2",
+        ]);
+        let all = v(&[
+            "-w",
+            "-Wshadow-all",
+            "-Werror=invalid-static-assert-message",
+            "-Wall",
+            "-Werror",
+            "-Wl,--as-needed",
+            "-O2",
+        ]);
+        assert_eq!(gcc_args(&args), all);
+        let help = "The following options control compiler warning messages:\n  \
+                    -Wall                       \t\t\n  -Wshadow                    \t\t[disabled]\n  \
+                    -Wformat=<0,2>              \t\t0\n  \
+                    -Wno-frame-larger-than      \t\t-Wframe-larger-than=18EiB\n  \
+                    -Wzerotrip                  \t\t[available in Fortran]\n";
+        let w = GccWarnings::parse(help);
+        assert_eq!(
+            gcc_args_with(&args, Some(&w)),
+            v(&["-w", "-Wall", "-Werror", "-Wl,--as-needed", "-O2"])
+        );
+        let known = |a: &str| !w.unknown(a);
+        assert!(known("-Wshadow") && known("-Wno-shadow") && known("-Werror=shadow"));
+        assert!(
+            known("-Wno-error=shadow") && known("-Wformat=2") && known("-Wno-frame-larger-than")
+        );
+        assert!(known("-Werror") && known("-Wno-error") && known("-Wa,-x") && known("-I"));
+        assert!(!known("-Wshadow-all") && !known("-Wno-shadow-all") && !known("-Wzerotrip"));
+        assert!(!known("-Wno-error=unknown") && !known("-Wfoo=1"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ template <class T> void* voidify(T& x) {
 }
 template <class T, class A> T* construct_at(T* p, A a) { return ::new (n::voidify(*p)) T(a); }
 }  // namespace n
-void* operator new(decltype(sizeof 0), void* p) noexcept;
+#include <new>
 int main() {
   Holder<Incomplete>* p = nullptr;
   Holder<Incomplete>** q = n::addr(p);

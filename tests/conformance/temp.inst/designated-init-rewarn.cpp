@@ -1,9 +1,9 @@
-// [temp.inst], [dcl.init.aggr]/3.1: a designated initializer list in a
-// template whose type is not dependent is checked in the definition and
-// again at each instantiation (clang rebuilds it), so the order and override
-// warnings repeat under the instantiation note, in every context the list
-// appears in. The C99-extension warnings belong to the written designators
-// and fire once. Ranges cover the designated clause.
+// [temp.inst], [dcl.init.aggr]/3.1: a designated initializer list in a template
+// whose type is not dependent is checked in the definition and again at each
+// instantiation (clang rebuilds it), so the order and override warnings repeat under
+// the instantiation note, in every context the list appears in. The C99-extension
+// warnings belong to the written designators and fire once. Ranges cover the clause.
+//@ skip(gcc): relies on clang's C99 designator extensions (out-of-order, nested, array and mixed designators)
 //@ expect: compile-ok
 //@ strict-diags
 //@ diag: 47:23 warning "ISO C++ requires field designators to be specified in declaration order; field 'b' will be initialized after field 'a'"
