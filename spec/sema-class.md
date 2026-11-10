@@ -2959,10 +2959,44 @@ access, out-of-line declarator scope.**
     when `Self::F` is the object's class. clang 22 accepts and diagnoses
     each mismatch as kiln; clang 19 rejects ("use of undeclared
     identifier 'Self'"); GCC 16 rejects some valid forms ("is not a
-    base"). `p->Self::template TI<int>::~TI<int>()` is valid (clang 22
-    accepts) but kiln still rejects it at the definition: the
-    template-name after a dependent unresolved prefix is not deferred
-    (xfail).
+    base").
+  - `p->Self::template TI<int>::~Q<args>()` and
+    `p->Self::template TI<int>::~Q()` on a dependent object, the prefix
+    `Self::` dependent (WP-1192): kept dependent at the definition and
+    checked at instantiation, as clang 22 (`ParseOptionalCXXScopeSpecifier`
+    with `MayBePseudoDestructor` stops before the last `template-id ::`;
+    `ActOnPseudoDestructorExpr` builds a dependent
+    `CXXPseudoDestructorExpr` whose scope type and destroyed type are both
+    `Self::TI<int>`/`Self::Q<args>`, or the dependent name `Self::Q`;
+    `TreeTransform::TransformCXXPseudoDestructorExpr` substitutes the
+    destroyed type, then the scope type, both in the object's scope, and
+    `RebuildCXXPseudoDestructorExpr` looks `~Q` up as a member of the
+    scope type). The parser asks `Sema::dependent_destructor_prefix`
+    (an object-dependent member qualifier `P::F` with `P` dependent) and
+    calls `act_on_dependent_qualified_destructor_template`; the
+    destroyed type is the dependent template specialization `P::Q<args>`
+    (or the dependent name `P::Q` from `member_destructor_in` when `Q`
+    is not `F`'s last name), the first type-name `P::F` goes in
+    `pseudo_dtor_first`, and the qualifier's location in `expr_begin`.
+    At instantiation both are rebuilt by `member_rooted_type`: a failed
+    lookup of the member-qualified root (`Self`) is reported at the
+    qualifier, a template-id destroyed name's member errors at the
+    qualifier, `Q` not a template as "'Q' does not refer to a template"
+    (not the `template`-keyword wording) with the "declared as a
+    non-template here" note. Both type-names are completed before the
+    destroyed type is compared with the object's class, and a first
+    type-name that is not a class (`p->Self::I::~I()`, `I` = int) is
+    "'Self::I' (aka 'int') is not a class, namespace, or enumeration".
+    Inside a generic lambda whose object is still dependent after the
+    enclosing template's substitution, both type-names stay dependent
+    (`member_rooted_type` rebuilds them unchanged except for their
+    arguments). A first type-name with no prefix not found at the
+    definition (`p->Inner::~Inner()`) is diagnosed there as clang ("'Inner'
+    does not refer to a type name in pseudo-destructor expression;
+    expected the name of type 'T'"). `p->Self::template TI<int>::~TI()`
+    (the identifier naming the qualifier's template) is accepted by the
+    rule of the first bullet; clang 22 rejects it ("typename specifier
+    refers to class template member"), an open question.
   GCC 16 accepts `p->template A<T>::~A()` and `p->A<int>::~A()`;
   kiln rejects them, as clang. With `T = int` the call does nothing but
   evaluate its object expression; in constant evaluation it ends the
@@ -2978,8 +3012,9 @@ access, out-of-line declarator scope.**
   `xfail(clang)`), `dependent-object-first-type-name.cpp` (clang>=22),
   `run-dependent-object-destructor-template-id.cpp`,
   `dependent-object-destructor-template-id-lookup.cpp` and
-  `run-dependent-object-qualified-destructor-template-id.cpp`
-  (clang>=22, `xfail(kiln)`).
+  `run-dependent-object-qualified-destructor-template-id.cpp` and
+  `dependent-object-qualified-destructor-template-id-errors.cpp`
+  (clang>=22).
   Inside a class template (its pattern, a partial specialization, or an
   out-of-line member), a destructor name found as the pattern's
   injected-class-name names the injected-class-name type
