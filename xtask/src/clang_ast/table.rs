@@ -120,6 +120,9 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("OffsetOfExpr", Keep),
     // `__builtin_choose_expr` (WP-316).
     ("ChooseExpr", Keep),
+    // `_Generic` (WP-1114): the controlling expression, then one `case` /
+    // `default` line per association (WP-1131).
+    ("GenericSelectionExpr", Keep),
     // Templates as written (WP-069, spec/ast-dump.md §5).
     ("ClassTemplateDecl", Keep),
     ("FunctionTemplateDecl", Keep),
@@ -426,6 +429,9 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         | "PseudoObjectExpr"
         | "OffsetOfExpr"
         | "ChooseExpr" => &[],
+        // The association pseudo-nodes have no `kind`; they are printed by
+        // the `GenericSelectionExpr` printer.
+        "GenericSelectionExpr" => &["resultDependent"],
         // `hasExplicitParameters` (clang 22+): whether the lambda spells a
         // parameter list; ignored, the parameters are the call operator's
         // (WP-262, spec/harness.md "Oracle toolchain").
@@ -669,6 +675,7 @@ pub const M2_KINDS: &[&str] = &[
     "PseudoObjectExpr",
     "OffsetOfExpr",
     "ChooseExpr",
+    "GenericSelectionExpr",
     "CompoundStmt",
     "DeclStmt",
     "NullStmt",

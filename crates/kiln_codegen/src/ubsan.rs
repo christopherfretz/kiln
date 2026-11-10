@@ -11,6 +11,7 @@
 
 use kiln_abi::mangle::Structor;
 use kiln_ast::decl::{DeclKind, DefinitionBits};
+use kiln_ast::diag_names::DiagNames;
 use kiln_ast::dump::AstNames;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprKind};
 use kiln_ast::lambda::CaptureDefault;
@@ -332,21 +333,17 @@ impl Cg<'_> {
             }
             _ => (0xffff, 0),
         };
-        let names = match self.sm {
-            Some(sm) => AstNames::with_sources(ast, sm),
-            None => AstNames::new(ast),
-        };
+        // clang `ConvertArgToString(ak_qualtype)`: the diagnostic
+        // engine's own type-argument formatting (WP-1158).
+        let names = DiagNames::new(ast, self.sm, self.opts.clang_compat);
         // A canonical type (`getRecordType`, `getThisType`, the
         // canonicalized types of `EmitScalarConversion`) has no written
         // qualifier or elaboration: clang prints its tags with full scope.
-        let opts = if desc == UbDesc::Written {
-            PrintOptions::SUGARED
-        } else {
-            PrintOptions { full_scope: true, ..PrintOptions::SUGARED }
-        };
-        let s = print_type(&ast.types, &names, q, opts);
-        let name = match (desc, aka(&ast.types, &names, q)) {
-            (UbDesc::ThisPtr(cv), _) => {
+        let full = PrintOptions { full_scope: true, ..PrintOptions::SUGARED };
+        let name = match desc {
+            UbDesc::Written => names.type_arg(q, None),
+            UbDesc::ThisPtr(cv) => {
+                let s = print_type(&ast.types, &names, q, full);
                 let cv = Quals::from_bits(cv);
                 let mut p = String::new();
                 for (on, w) in [
@@ -360,17 +357,29 @@ impl Cg<'_> {
                 }
                 format!("'{p}{s} *'")
             }
-            (_, a) => match vector_diag_arg(&ast.types, &names, q, self.opts.clang_compat >= 22) {
-                Some(v) => v,
-                None => match a {
-                    Some(a) => format!("'{s}' (aka '{a}')"),
-                    None => format!("'{s}'"),
-                },
-            },
+            UbDesc::Record => {
+                if let Some(v) =
+                    vector_diag_arg(&ast.types, &names, q, self.opts.clang_compat >= 22)
+                {
+                    v
+                } else {
+                    let s = print_type(&ast.types, &names, q, full);
+                    match aka(&ast.types, &names, q) {
+                        Some(a) => format!("'{s}' (aka '{a}')"),
+                        None => format!("'{s}'"),
+                    }
+                }
+            }
         };
         let (kind, info) =
             if matches!(desc, UbDesc::ThisPtr(_)) { (0xffff, 0) } else { (kind, info) };
-        let nkey = (ast.types.canonical(q), key, name.clone().into_boxed_str());
+        // clang keys the descriptor by the `QualType`: a substituted
+        // template parameter is its own (uniqued) sugar node, so `T` in
+        // `get<ns::H<>>` does not share the descriptor of a written
+        // `ns::H<>` that prints the same (WP-1158).
+        let subst = matches!(ast.types.view(q.ty()), TypeView::SubstTemplateTypeParm { .. });
+        let nkey =
+            (ast.types.canonical(q), key | (u8::from(subst) << 7), name.clone().into_boxed_str());
         if let Some(&g) = self.ub_type_names.get(&nkey) {
             self.ub_types.insert((q, key), g);
             return Ok(Value::global(g));
