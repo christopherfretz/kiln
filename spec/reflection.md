@@ -192,6 +192,25 @@ instantiation of static data member" note at the reading call. Tests:
 `meta.reflection.substitute/substitute-static-member-init.cpp`,
 `meta.reflection.extract/static-member-instantiate{,-neg}.cpp`.
 
+**Using a function through a reflection** (WP-1244; [basic.def.odr]/4,
+[temp.inst]/5 and /8, [meta.reflection.extract]): `extract` of a function
+reflection to a function pointer or a pointer to member function forms
+the pointer as `&f` / `&C::f` would, so it odr-uses the function: once
+the extract succeeds, `Sema::use_reflected_function`
+(`crates/kiln_sema/src/meta/mod.rs`) runs `mark_used_at` with the Oven
+lent back, potentially evaluated whatever context the evaluation runs in.
+A member of a class template specialization, or a function template
+specialization, has its definition instantiated, at once when it is
+constexpr (it may be needed for constant evaluation; the end-of-TU queue
+otherwise), with the "in instantiation of member function" note at the
+`extract` call (as GCC 16.1). A splice in a call, `obj.[: r :]` and
+`&[: r :]` name the function and take the ordinary path. A failed
+`extract` (a type mismatch; a reference `T`, which `extract` rejects for
+a function) and the declaration queries (`members_of`, `type_of`,
+`parameters_of`, ...) instantiate nothing, so a body ill-formed for the
+specialization stays reflectable. Tests:
+`meta.reflection.extract/function-{instantiate-neg,no-instantiate,instantiate-run}.cpp`.
+
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
   a direct call to a declaration that sema recognizes compiles to one KBC

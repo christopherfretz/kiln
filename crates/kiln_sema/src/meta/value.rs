@@ -39,7 +39,11 @@ impl Sema<'_, '_> {
             ValueOp::Extract => {
                 let r = info_arg(args, 0)?;
                 self.use_reflected_var(r, loc, oven);
-                self.extract(r, ret, loc)?
+                let out = self.extract(r, ret, loc)?;
+                if let Some(f) = self.extracted_function(r, &out) {
+                    self.use_reflected_function(f, loc, oven);
+                }
+                out
             }
             ValueOp::ReflectConstant | ValueOp::ReflectConstantInfo => {
                 let t = self.referenced(p0()?);
@@ -688,6 +692,20 @@ impl Sema<'_, '_> {
         u.without_quals() == t.without_quals()
             && t.quals().contains(u.quals())
             && (!konst || t.quals().is_const())
+    }
+
+    /// The function `extract` of declaration reflection `r` formed a
+    /// pointer (or pointer to member) to, `out` being its result.
+    fn extracted_function(&self, r: ReflectionId, out: &MetaOut) -> Option<DeclId> {
+        if !matches!(self.ast.reflections.get(r), Reflectee::Decl(_)) {
+            return None;
+        }
+        let MetaOut::Frozen(cv) = *out else { return None };
+        match self.ast.consts.scalar(cv)? {
+            Scalar::Pointer { base: PtrBase::Function(f), .. } => Some(f),
+            Scalar::MemberPtr { member, kind: MemberKind::Function, .. } => Some(member),
+            _ => None,
+        }
     }
 
     /// `extract<T>` of a non-member (or static member) function: a
