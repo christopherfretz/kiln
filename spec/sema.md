@@ -8657,6 +8657,16 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   `dcl.constexpr/potential-constant-builtin-off-path-cxx20.cpp`,
   `dcl.constexpr/potential-constant-system-header-cxx20.cpp`,
   `dcl.constexpr/constexpr-asm-never-constant.cpp`.
+- **Instantiations the check's evaluation requires (WP-1258).** A
+  reflection query in the body (`is_complete_type(^^C<T>)`) may
+  instantiate a specialization while the check evaluates it, and an
+  error in that instantiation is real and reported. Its context names
+  only the program's frames: the check's evaluation of the function is
+  no call of the program's, so it adds no "in call to" note
+  (`Oven::paused_call_notes` is empty for a potential-constant
+  evaluation's mark, spec/sema-templates.md §10.2): the error prints as
+  an instantiation outside any evaluation does.
+  Test: `meta.reflection.queries/is-complete-type-never-constant-frames.cpp`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

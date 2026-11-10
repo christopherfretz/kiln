@@ -358,13 +358,18 @@ impl InstantiationStack {
 
     /// The context notes for a diagnostic emitted now, or none when this
     /// depth was already printed (§10.2). `name` renders an entity;
-    /// `note` picks the frame's note.
+    /// `note` picks the frame's note; `extra` gives the notes that follow
+    /// it and go with it when `limit` elides it; `keep` gives the notes
+    /// that follow it and stay when it is elided, after the "(skipping N
+    /// contexts in backtrace)" note (the call frames of an evaluation the
+    /// frame was required from, WP-1258).
     pub(crate) fn context_notes(
         &self,
         limit: u32,
         name: &dyn Fn(&InstFrame) -> Option<String>,
         note: &dyn Fn(&InstFrame) -> DiagId,
         extra: &dyn Fn(&InstFrame) -> Vec<Diag>,
+        keep: &dyn Fn(&InstFrame) -> Vec<Diag>,
     ) -> Vec<Diag> {
         let n = self.frames.len() as u32;
         if n == 0 || self.last_emitted.get() == n {
@@ -395,6 +400,7 @@ impl InstantiationStack {
                 );
             }
             if i >= skip_lo && i < skip_hi {
+                out.extend(keep(f));
                 continue;
             }
             let id = note(f);
@@ -404,6 +410,7 @@ impl InstantiationStack {
             }
             out.push(d);
             out.extend(extra(f));
+            out.extend(keep(f));
         }
         out
     }
@@ -570,11 +577,8 @@ impl Sema<'_, '_> {
             self.inst.limits.backtrace,
             &|f| Some(self.frame_name(f)),
             &|f| self.frame_note(f),
-            &|f| {
-                let mut v: Vec<Diag> = self.frame_extra_note(f).into_iter().collect();
-                v.extend(self.meta_call_notes(f));
-                v
-            },
+            &|f| self.frame_extra_note(f).into_iter().collect(),
+            &|f| self.meta_call_notes(f),
         )
     }
 
@@ -583,20 +587,25 @@ impl Sema<'_, '_> {
     /// innermost first, in the Oven's "in call to 'f(args)'" wording and
     /// elision, so the context reaches the outermost evaluation (the
     /// `static_assert`) as GCC's "in 'constexpr' expansion of" lines do
-    /// (spec/sema-templates.md §10.2, WP-1248). None when the Oven held
-    /// is not paused in that call (a nested evaluation runs).
+    /// (spec/sema-templates.md §10.2, WP-1248). Every paused call whose
+    /// frame `f` is counts, innermost first, a nested evaluation's
+    /// (one the call's work started) as the outermost one's (WP-1258).
+    /// None for a call the Oven held does not hold paused, nor for a
+    /// never-constant check's evaluation (its frames are its own).
     fn meta_call_notes(&self, f: &InstFrame) -> Vec<Diag> {
-        let Some(&(depth, mark)) = self.inst.meta_calls.last() else { return Vec::new() };
-        if !self.inst.stack.frames.get(depth).is_some_and(|g| std::ptr::eq(g, f)) {
-            return Vec::new();
+        let Some(oven) = self.oven.as_deref() else { return Vec::new() };
+        let mut out = Vec::new();
+        for &(depth, mark) in self.inst.meta_calls.iter().rev() {
+            if !self.inst.stack.frames.get(depth).is_some_and(|g| std::ptr::eq(g, f)) {
+                continue;
+            }
+            out.extend(
+                oven.paused_call_notes(mark, &self.ast, Some(self.diags.sm()))
+                    .into_iter()
+                    .map(|n| Diag::text_note(n.msg, kiln_source::Span::empty(n.loc))),
+            );
         }
-        let Some(oven) = self.oven.as_deref().filter(|o| o.frame_mark() == mark) else {
-            return Vec::new();
-        };
-        oven.paused_call_notes(&self.ast, Some(self.diags.sm()))
-            .into_iter()
-            .map(|n| Diag::text_note(n.msg, kiln_source::Span::empty(n.loc)))
-            .collect()
+        out
     }
 
     /// The second note of a frame that prints two: a template template
@@ -897,16 +906,33 @@ mod tests {
         let mut s = InstantiationStack::default();
         s.push(frame(FrameKind::ClassInstantiation, 1));
         assert_eq!(
-            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| Vec::new())
+            s.context_notes(
+                10,
+                &|_| Some("A<int>".into()),
+                &|f| f.kind.note(),
+                &|_| Vec::new(),
+                &|_| Vec::new()
+            )
+            .len(),
+            1
+        );
+        assert!(
+            s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new(), &|_| Vec::new())
+                .is_empty()
+        );
+        s.push(frame(FrameKind::MemberFunction, 2));
+        assert_eq!(
+            s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new(), &|_| Vec::new())
+                .len(),
+            2
+        );
+        let _ = s.pop();
+        // Popped below the printed depth: prints again.
+        assert_eq!(
+            s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new(), &|_| Vec::new())
                 .len(),
             1
         );
-        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).is_empty());
-        s.push(frame(FrameKind::MemberFunction, 2));
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 2);
-        let _ = s.pop();
-        // Popped below the printed depth: prints again.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 1);
     }
 
     #[test]
@@ -916,9 +942,48 @@ mod tests {
             s.push(frame(FrameKind::ClassInstantiation, i + 1));
         }
         // 5 + skip note + 5.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 11);
+        assert_eq!(
+            s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new(), &|_| Vec::new())
+                .len(),
+            11
+        );
         s.last_emitted.set(0);
-        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 15);
+        assert_eq!(
+            s.context_notes(0, &|_| None, &|f| f.kind.note(), &|_| Vec::new(), &|_| Vec::new())
+                .len(),
+            15
+        );
+    }
+
+    #[test]
+    fn elided_frames_keep_their_kept_notes() {
+        let mut s = InstantiationStack::default();
+        for i in 0..15 {
+            s.push(frame(FrameKind::ClassInstantiation, i + 1));
+        }
+        // Frame 3 (the third outermost, elided under a limit of 4) keeps
+        // its call note after the skip note; frame 10's extra note goes
+        // with it.
+        let tagged = |f: &InstFrame, at: u32| f.poi == Loc::from_raw(at);
+        let keep = |f: &InstFrame| {
+            if tagged(f, 3) {
+                vec![Diag::text_note("kept", kiln_source::Span::empty(f.poi))]
+            } else {
+                Vec::new()
+            }
+        };
+        let extra = |f: &InstFrame| {
+            if tagged(f, 10) {
+                vec![Diag::text_note("extra", kiln_source::Span::empty(f.poi))]
+            } else {
+                Vec::new()
+            }
+        };
+        let v = s.context_notes(4, &|_| None, &|f| f.kind.note(), &extra, &keep);
+        // 2 + skip note + kept + 2.
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[2].id(), Some(DiagId::note_instantiation_contexts_suppressed));
+        assert!(v[3].message().contains("kept"));
     }
 
     #[test]

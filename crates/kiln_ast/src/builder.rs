@@ -2579,9 +2579,15 @@ impl<'a> AstBuilder<'a> {
         let mut operand = operand;
         match operand {
             Reflectee::Type(t) => {
+                // An instantiation-dependent type (`ND<T>` with
+                // `template <class T> using ND = int;`) is not a dependent
+                // type, but its reflection still names the alias
+                // specialization of the template's own parameters, so the
+                // value differs per specialization: value-dependent, so
+                // substitution rebuilds it ([temp.dep.constexpr]).
                 let d = self.type_deps(t);
                 deps |= d.without(ExprDeps::TYPE);
-                if d.contains(ExprDeps::TYPE) {
+                if d.intersects(ExprDeps::TYPE | ExprDeps::INSTANTIATION) {
                     deps |= ExprDeps::VALUE_INST;
                 }
                 if !deps.contains(ExprDeps::VALUE_INST) {

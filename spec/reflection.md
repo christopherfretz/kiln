@@ -1362,9 +1362,10 @@ built without the flag matches a consumer built without it.
   specialization writes the alias's own arguments. In gcc mode it writes
   the arguments of the underlying class specialization, as g++-16 does,
   when those determine the alias's (every alias parameter appears
-  deducibly in the defining-type-id, `alias_args_recoverable`), and the
-  alias's own otherwise, where g++-16's spelling collides (spec/abi.md
-  §8.14, WP-1250).
+  deducibly in the defining-type-id, `alias_args_recoverable`, or, with
+  a dependent argument, in a dependent qualifier or decltype that keeps
+  it, `alias_args_preserved`, WP-1260), and the alias's own otherwise,
+  where g++-16's spelling collides (spec/abi.md §8.14, WP-1250).
 - **Linkage.** A reflection takes its reflectee's linkage
   (`reflect::reflection_externally_visible`, which `value_externally_visible`
   calls). A namespace-scope or class-member entity, a type, or a value is
