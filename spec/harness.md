@@ -1246,7 +1246,10 @@ layout (spec/driver.md "Installation layout"). It is not part of `ci`: a
 `dist` build is a full thin-LTO release build, several minutes. The
 tag-only workflow `.github/workflows/release.yml` runs it with `--check`
 on both CI architectures and attaches the results to a draft GitHub
-release; a run of `cargo xtask dist --check` locally is the pre-tag check.
+release; a run of `cargo xtask dist --check` locally is the pre-tag check,
+and a manual run of the workflow (`gh workflow run release.yml --ref
+<branch>`) is the same pipeline without the release, the pre-tag check of
+the workflow itself.
 
 1. **Build.** `cargo build --locked --profile dist -p kiln_driver
    --features dist [--target <triple>]`. The `dist` profile

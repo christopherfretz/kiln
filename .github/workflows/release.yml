@@ -8,10 +8,13 @@ name: release
 # last job attaches the four archives and the merged SHA256SUMS to a DRAFT
 # GitHub release for the tag, which a maintainer reviews and publishes.
 # The tag must name the workspace version (`v` + Cargo.toml's
-# [workspace.package] version); the build job checks it.
+# [workspace.package] version); the build job checks it. A manual run
+# (workflow_dispatch, any ref) is a dry run: it builds, checks and merges
+# the archives exactly as a tag push does and stops before the release.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -46,6 +49,7 @@ jobs:
       - uses: ./.github/actions/kiln-ci
         with: { cache-key: "${{ matrix.cache-key }}" }
       - name: the tag names the workspace version
+        if: github.event_name == 'push'
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           echo "tag $GITHUB_REF_NAME, workspace version $version"
@@ -55,12 +59,19 @@ jobs:
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           cargo xtask dist --check --out "$RUNNER_TEMP/dist"
           ls -l "$RUNNER_TEMP/dist"
+          mkdir dist-out
+          cp "$RUNNER_TEMP"/dist/*.tar.xz "$RUNNER_TEMP"/dist/SHA256SUMS dist-out/
+      # Upload from the workspace: in a container job `runner.temp` is the
+      # host's path, which the action does not resolve inside the container
+      # (the v1.0.0 run uploaded the archives under __w/_temp/dist/ and no
+      # SHA256SUMS; WP-1253). The archives are built outside the checkout,
+      # where the --check smoke wants its extracted trees.
       - uses: actions/upload-artifact@v4
         with:
           name: dist-${{ matrix.arch }}
           path: |
-            ${{ runner.temp }}/dist/*.tar.xz
-            ${{ runner.temp }}/dist/SHA256SUMS
+            dist-out/*.tar.xz
+            dist-out/SHA256SUMS
           if-no-files-found: error
   release:
     name: draft release
@@ -75,6 +86,7 @@ jobs:
         run: |
           mkdir out
           for d in dist/dist-*; do
+            test -f "$d/SHA256SUMS"
             cp "$d"/*.tar.xz out/
             cat "$d/SHA256SUMS"
           done | LC_ALL=C sort -k2 > out/SHA256SUMS
@@ -82,6 +94,7 @@ jobs:
           (cd out && sha256sum -c SHA256SUMS)
           test "$(ls out/*.tar.xz | wc -l)" -eq 4
       - name: create the draft release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
