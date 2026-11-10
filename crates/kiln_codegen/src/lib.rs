@@ -68,6 +68,7 @@ mod visibility;
 mod vla;
 mod vtable;
 mod x86;
+mod x86_gen;
 mod x86_intrinsics;
 mod x86_mmx;
 

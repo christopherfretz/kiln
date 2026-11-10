@@ -134,6 +134,14 @@ const FLAGS_19: &[&str] = &["avx10.1-256", "avx10.1-512", "evex512"];
 /// The flag names only clang 22 accepts (clang 19: unknown argument).
 const FLAGS_22: &[&str] = &["amx-avx512", "amx-fp8", "amx-movrs", "amx-tf32", "avx10.2", "movrs"];
 
+/// Every `-m<feature>` flag name clang `v22` (else 19) accepts, but
+/// `3dnow` / `3dnowa` (which only warn): the all-features probe of
+/// `tests/builtin_lowering.rs` (WP-1242).
+pub fn all_flags(v22: bool) -> Vec<&'static str> {
+    let only = if v22 { FLAGS_22 } else { FLAGS_19 };
+    FLAGS.iter().copied().filter(|f| !f.starts_with("3dnow")).chain(only.iter().copied()).collect()
+}
+
 /// The table features clang 19 does not have.
 const NOT_19: &[&str] = &[
     "amx-avx512",

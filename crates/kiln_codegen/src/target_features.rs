@@ -179,13 +179,20 @@ impl Cg<'_> {
         if req.is_empty() {
             return true;
         }
+        // clang 22 has no `evex512` feature, and its builtin table no
+        // `,evex512` term (kiln's table is clang 19's; WP-1242).
+        let req = if self.opts.clang_compat >= 22 {
+            std::borrow::Cow::Owned(req.replace(",evex512", ""))
+        } else {
+            std::borrow::Cow::Borrowed(req)
+        };
         let on = self.feature_map(self.f.decl);
-        if neon::features_hold(req, |n| on.get(n) == Some(&true)) {
+        if neon::features_hold(&req, |n| on.get(n) == Some(&true)) {
             return true;
         }
         let d = Diag::new(DiagId::cg_builtin_needs_feature, Span::empty(self.ast.begin_loc(e)))
             .arg(name.to_owned())
-            .arg(req.to_owned());
+            .arg(req.into_owned());
         self.diags.push(d);
         false
     }
