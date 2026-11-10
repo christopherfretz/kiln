@@ -625,9 +625,9 @@ answers as of that point.
   definition else its latest declaration, a parameter in the
   definition's declarator.
 - **Known differences from GCC 16.1's names** (not yet matched):
-  `display_string_of` of a value or object reflection keeps kiln's
-  spelling (above; GCC's constant style is used for constants inside a
-  type); a canonical template parameter GCC names after the first
+  `display_string_of` of a scalar value or object reflection keeps
+  kiln's spelling for characters, pointers and subobjects (below); a
+  canonical template parameter GCC names after the first
   template that formed it (`is_integral<t_TYPE>` from another template)
   prints by its name in the template being printed; `source_location_of`
   of `^^S::f` for a member function or `^^f` for a function template is
@@ -645,12 +645,15 @@ answers as of that point.
   declarations disagree (P3096 makes `has_identifier` false then;
   `meta.reflection.names/parameter-identifier-instantiation.cpp`).
 
-- **`display_string_of` of a value or object** (WP-564): the shortest
-  source spelling that re-parses as a constant of that value, from the
+- **`display_string_of` of a value or object** (WP-564, WP-1229): the
   diagnostic constant printer (spec/ast.md §9.3, template-argument style
-  with no literal suffix and `enum_cast`; `Sema::value_spelling`,
-  `object_spelling` in `kiln_sema/src/meta/names.rs`). GCC 16.1 prints
-  the same except where noted (`meta.reflection.names/display-string-of-values*.cpp`):
+  with no integer literal suffix and `enum_cast`; `Sema::value_spelling`,
+  `value_spelling_gcc`, `object_spelling` in `kiln_sema/src/meta/names.rs`).
+  A class value, and every constant inside a type's name, uses GCC 16.1's
+  constant style (`PrintOptions::gcc`); a scalar value uses kiln's
+  spelling with GCC's floating form (`PrintOptions::gcc_float`). GCC
+  16.1 prints the same except where noted
+  (`meta.reflection.names/display-string-of-{values,floating,class-args,reflection-args}*.cpp`):
   - integers in decimal with no suffix (`86400` for `86400L`, `5` for a
     `short`); `true`/`false`; `nullptr`;
   - characters as literals with diagnostics' escapes and the encoding
@@ -659,30 +662,56 @@ answers as of that point.
   - an enumeration value as its enumerator, qualified as diagnostics
     qualify it (`Col::red`, `ns::e1` for an unscoped one), else as a cast
     of the fully scoped type (`(ns::F)9`);
-  - floating point as the shortest round-tripping decimal in Rust `{:e}`
-    form (`1.5e0`, `1e-1`; GCC prints `1.5e+0`,
-    `1.0000000000000001e-1`): kiln's contract is the round trip, not
-    GCC's digits;
+  - floating point exactly as GCC's `pp_c_floating_constant` (WP-1229;
+    `kiln_ast::consts::format_float_gcc`): the value rounded
+    half-to-even to `max_digits10` = `2 + p*643/2136` significant digits
+    (9 for `float`, 17 for `double`, 21 for x87 `long double`, 36 for
+    binary128) as `d.ddd` with trailing zeros cropped to one after the
+    point, then `e` and the signed decimal exponent (`1.0e+0`,
+    `1.0000000000000001e-1`, `-2.5e-30`); zero `0.0` / `-0.0`; infinity
+    `+Inf` / `-Inf`; NaN `+QNaN` / `-QNaN` (`SNaN` when the quiet bit is
+    clear); then the type's suffix (`f` for `float`, `l` for
+    `long double`, none for `double` and `__bf16`, `f16` `f32` `f64`
+    `f128` `f32x` `f64x` for the `_FloatN[x]` types; `-Inff`). Inside a
+    specialization's name the suffix is kept, so `W<1.0e+0f>` and
+    `W<1.0e+0>` differ (binary128 on aarch64: `0.1L` is
+    `1.00000000000000000000000000000000005e-1l`);
   - pointers as `&x` plus the designator (`&arr[1]`, `&fn`; GCC
     `& gv`, `fn`), member pointers `&S::m`, a null pointer of any type
-    `nullptr` (GCC `0`), a reflection `^^int`, or for a reflection of a
-    value or object the call making it (`std::meta::reflect_constant(5)`);
-  - a class value as `T{...}` with `T` canonical and fully scoped,
-    members in order, nested arrays as `{...}`, a union as `U{.f = 2e0}`
-    (`ns::In{7}`; no element limit or depth cut);
+    `nullptr` (GCC `0`);
+  - a reflection as `^^` and its operand as GCC prints it in a constant
+    (`Sema::gcc_reflection_operand` in `kiln_sema/src/meta/gcc_names.rs`):
+    a type as `display_string_of` prints it without ` {aka ...}`
+    (`^^const ns::S*`, `^^int [2]`); a namespace, alias, variable, data
+    member or enumerator fully qualified, inline and unnamed namespaces
+    shown (`^^ns::in::Q`, `^^ns::{anonymous}::An`, `^^::`); a non-member
+    function with its parameter types (`^^ns::g(int, double)`), a member
+    function by its qualified name (`^^ns::S::mf`); a member of a class
+    template specialization through the specialization
+    (`^^ns::TT<int>::t`); a class or function template or concept by its
+    qualified name, a variable template with its parameters
+    (`^^ns::vt<T>`); a value reflection as `^^` and its spelling
+    (`^^5`, `^^1.5e+0f`, `^^ns::In{3}`), an object reflection as `^^`
+    and the object (`^^gv`). So `derived_from_<^^tie::Anchor>`;
+  - a class value (a class-type template argument, `reflect_constant` of
+    a class value, a member of one) as `T{...}` with `T` as
+    `display_string_of` prints the type, members in order, a `char`
+    array as a string literal (`fixed_string<12>{"CopyInFiles"}`), any
+    other array with its type (`Nested{Pt{4}, int [2]{5, 6}}`), a union
+    as its active member's value with no designator (`U{2.0e+0f}`), a
+    union with no active member or an empty class as `T()` (`E0()`), a
+    null pointer member as `0` (`NP{0}`), a non-null pointer member as
+    `&x` (GCC `((const int*)(& gv))`);
   - an object (`reflect_object`, a reference template argument) as its
     qualified name and designator (`ns::nv`, `arr[1]`, `pt.x`; GCC
-    `pt.Pt::x`); a template parameter object (a class-type template
-    argument, `reflect_constant` of a class value) as its value
-    (`Pt{3}`).
+    `pt.Pt::x`); a template parameter object as its value (`Pt{3}`).
 
   The `^^(value of type T)` / `^^(object of type T)` placeholder is kept
-  only where no part has a source spelling: an infinity or NaN, an
-  unnamed class or closure type, a temporary or `Const` base, a
-  subobject of a template parameter object, an undecodable subobject, a
-  nested reflection of a base specifier, parameter, data member spec or
-  annotation. `identifier_of` / `has_identifier` are unchanged (a value
-  has no identifier).
+  only where no part has a source spelling: an unnamed class or closure
+  type, a temporary or `Const` base, a subobject of a template parameter
+  object, an undecodable subobject, a nested reflection of a base
+  specifier, parameter, data member spec or annotation. `identifier_of`
+  / `has_identifier` are unchanged (a value has no identifier).
 - Template parameters and lambdas (their `identifier_of`) are deferred,
   with type aliases as reflections distinct from their types (§2.2).
 
