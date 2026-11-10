@@ -2086,7 +2086,8 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   `basic.stc.thread/local-lvalue-run.cpp`).
 - **NRVO marking (clang 19 `Scope::updateNRVOCandidate` / `applyNRVO` /
   `computeNRVO`).** A copy-elision candidate of `return e` is `e` (through
-  parentheses) naming a non-volatile, non-reference local variable with
+  clang's `IgnoreParens`: parentheses, `__extension__`, a resolved
+  `_Generic`/`__builtin_choose_expr`; spec/sema.md §5.5) naming a non-volatile, non-reference local variable with
   automatic storage (not a parameter, not `thread_local`, not an exception
   variable) whose type is the class return type ignoring cv (or either is
   dependent). `ReturnStmt.b` = that candidate (dump `nrvo_candidate(Var 'x'
@@ -2833,9 +2834,21 @@ access, out-of-line declarator scope.**
   and a base class's destructor is allowed: `this->B::~B()`). A
   destructor template-id (`c->N::C<int>::~C<int>()`, `c->~C<int>()`,
   also on a dependent `N::C<X>*`; WP-1152) names its template through
-  `classify_member_destructor_template`: the qualifier's class, its
-  prefix, then the object's class (non-dependent, or the dependent
-  object type's own template, [temp.local]/1), then here. A name found
+  `classify_member_destructor_template`: when the qualifier has a
+  non-dependent prefix `S` (`p->N::C<int>::~Q<int>()`), the qualifier's
+  class and then `S` only (4.2; WP-1173), a template found only here
+  being clang's "no template named 'CA' in 'N::C<int>'; did you mean
+  simply 'CA'?" with its declared-here note
+  (`classify_destructor_template_in`, the dependent qualifier printed as
+  written); otherwise the qualifier's class, the object's class
+  (non-dependent, or the dependent object type's own template,
+  [temp.local]/1), then here. On a dependent object a template-name found
+  nowhere at the definition (`p->~TI<int>()`, 4.4: member-qualified) is
+  kept with its arguments (`act_on_dependent_destructor_template`: the
+  identifier in `pseudo_dtor_name`, the arguments in `expr_targs`) and
+  looked up in the object's class at instantiation
+  (`act_on_member_destructor_template_late`; clang's errors: "no member
+  named 'TI' in 'N::Inner'", "'V' does not refer to a template"). A name found
   that is no template is `sema_dtor_name_not_template` ("destructor name
   'v' does not refer to a template") when qualified, else clang's
   "'v' does not refer to a template" with the non-template note; a name
@@ -2878,22 +2891,77 @@ access, out-of-line declarator scope.**
   `TemplateTables::pseudo_dtor_first`, and instantiation
   (`rebuild_pseudo_destructor_first`) checks the substituted `F` against
   a scalar object after the destroyed type (clang's `ScopeType`; both
-  mismatches are reported, destroyed first). On a dependent object with
+  mismatches are reported, destroyed first); against a class object it
+  is the qualifier of a class member access (`rebuild_class_destructor_first`:
+  `F` must be a class, "'S::I' (aka 'int') is not a class, namespace, or
+  enumeration", and `~Q` is looked up in it and accessed as a qualified
+  member: "no member named '~Inner' in 'S::Other'", "'S::Other::~Other'
+  is not a member of class 'S::Inner'"; WP-1173). A non-dependent `S`
+  with a dependent object (`p->S::Other::~Inner()`) records `F` the same
+  way when it differs from `Q`. A first component that is a
+  member-qualified name of the object's class (`p->Self::Inner::~Inner()`,
+  `Self` a member typedef there) is looked up in the object's class at
+  instantiation before both type-names are substituted
+  (`Substituter::member_rooted_type` over `member_nns`, as for a member
+  qualifier; WP-1173). On a dependent object with
   no prefix, a name found nowhere (`p->C<T>::~D()`) is looked up in the
   object's class at instantiation (4.3, `dependent_destructor_name`).
-  Deliberate divergences: on a dependent object, clang 19/22 reject
-  `p->T::Inner::~Inner()` and `p->N::I::~B<T>()` at instantiation ("use
-  of undeclared identifier 'T'/'N'": no unqualified fallback for a
-  member-qualified name, /2); kiln accepts both, as GCC 16 does the
-  first. GCC 16 accepts `p->template A<T>::~A()` and `p->A<int>::~A()`;
+  Decisions per form (WP-1173; the rule is the standard, else clang 22;
+  GCC acceptance alone is no reason to accept; CWG399 is resolved by
+  P1787R6's rewrite of /4, CWG1920 concerns cv-qualification of the
+  destroyed type (ignored, [expr.prim.id.dtor]/2), CWG2017 and CWG2886
+  are unrelated to destructor names):
+  - `p->T::Inner::~Inner()`, `p->T::I::~I()`,
+    `p->T::template TI<int>::~TI()` on a dependent object: valid. `T` is
+    the terminal name of a member-qualified nested-name-specifier, looked
+    up in the (dependent) object type at instantiation and, found
+    nothing there, by unqualified lookup ([basic.lookup.qual.general]/2,
+    /3 last sentence; /3 note 2: during instantiation no names are
+    dependent; [temp.dep.type]/5.2). clang 19/22 reject ("use of
+    undeclared identifier 'T'") though they accept `p->T::Inner::f()`;
+    GCC 16 accepts; kiln accepts (a documented divergence from clang).
+  - `p->N::I::~I()` (`N` a namespace, `I` a class or a scalar typedef)
+    and `p->N::I::~B<T>()` on a dependent object: valid by the same rule
+    (the non-dependent forms are accepted by all three). clang 19/22
+    reject ("use of undeclared identifier 'N'"); GCC 16 accepts the
+    non-template forms and rejects the template-id ("'N::I' is not a
+    class member"); kiln accepts. `p->::N::I::~I()` is accepted by all.
+  - `p->N::C<int>::~CA<int>()` with `CA` declared only outside `N`:
+    ill-formed (4.2: `CA` is looked up in `N` only). clang 19/22 reject
+    with typo correction; GCC 16 accepts; kiln rejects as clang (it
+    accepted before WP-1173). The non-template `p->N::C::~CA()` is also
+    ill-formed; clang accepts it with -Wdtor-name ("qualified destructor
+    name only found in lexical scope"), GCC accepts, kiln accepts
+    without the warning (a known gap).
+  - `p->N::C<int>::~CB<int>()` with `N::CB` an alias of `C`: valid (4.2,
+    4.6). clang 19/22 reject ("did you mean 'N::CB'?": they look the
+    template-name up only in `N::C<int>`); GCC 16 accepts; kiln accepts
+    (a documented divergence).
+  - `p->Self::F::~Q()` with `Self` a member of the object's class: valid
+    when `Self::F` is the object's class. clang 22 accepts and diagnoses
+    each mismatch as kiln; clang 19 rejects ("use of undeclared
+    identifier 'Self'"); GCC 16 rejects some valid forms ("is not a
+    base"). `p->Self::template TI<int>::~TI<int>()` is valid (clang 22
+    accepts) but kiln still rejects it at the definition: the
+    template-name after a dependent unresolved prefix is not deferred
+    (xfail).
+  GCC 16 accepts `p->template A<T>::~A()` and `p->A<int>::~A()`;
   kiln rejects them, as clang. With `T = int` the call does nothing but
   evaluate its object expression; in constant evaluation it ends the
   object's lifetime ([expr.prim.id.dtor]/2). Tests:
   `expr.prim.id.dtor/run-pseudo-destructor-template-id.cpp`,
   `pseudo-destructor-template-id-errors.cpp`,
   `pseudo-destructor-template-id-lifetime-constexpr.cpp`,
-  `run-dependent-scope-pseudo-destructor.cpp` (GCC oracle) and
-  `run-dependent-object-prefix-pseudo-destructor.cpp` (kiln only).
+  `run-dependent-scope-pseudo-destructor.cpp` (GCC oracle,
+  `xfail(clang)`), `run-dependent-object-prefix-pseudo-destructor.cpp`
+  (no oracle, `xfail(clang)`, `xfail(gcc)`),
+  `qualified-destructor-template-id-prefix-lookup.cpp`,
+  `run-qualified-destructor-template-id-prefix.cpp` (GCC oracle,
+  `xfail(clang)`), `dependent-object-first-type-name.cpp` (clang>=22),
+  `run-dependent-object-destructor-template-id.cpp`,
+  `dependent-object-destructor-template-id-lookup.cpp` and
+  `run-dependent-object-qualified-destructor-template-id.cpp`
+  (clang>=22, `xfail(kiln)`).
   Inside a class template (its pattern, a partial specialization, or an
   out-of-line member), a destructor name found as the pattern's
   injected-class-name names the injected-class-name type

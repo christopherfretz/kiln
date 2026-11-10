@@ -304,11 +304,24 @@ impl Sema<'_, '_> {
         levels.push(kiln_ast::ids::ArgListId::EMPTY, pt, LevelMode::Retain);
         let pairs = self.inst_context_pairs(ctx);
         let loc = self.ast.decls.get(x).loc();
+        let fparams: Vec<DeclId> = self
+            .templated_function(pt)
+            .filter(|&f| self.ast.templates.trailing_requires.contains(f))
+            .and_then(|f| self.ast.decls.function(f))
+            .map(|f| self.ast.lists.iter::<DeclId>(f.params).collect())
+            .unwrap_or_default();
         let kind = crate::templ::stack::FrameKind::ConstraintSubstitution;
         let _ = self.in_sfinae(kind, x, None, loc, |s| {
             s.in_inst_context(ctx, |s| {
                 let mut sub = crate::templ::subst::Substituter::new(s, &levels);
                 sub.map_contexts(&pairs);
+                // A trailing requires-clause naming the function's
+                // parameters (`requires (sizeof(u) > 1)`): parameters
+                // with the substituted types stand for them, as for the
+                // redeclaration's own ([temp.over.link]/5; WP-1146).
+                for &p in &fparams {
+                    let _ = sub.nested_prototype_param(p, loc);
+                }
                 for c in cs {
                     if let Ok(e) = sub.expr(c) {
                         m.insert(c, e);

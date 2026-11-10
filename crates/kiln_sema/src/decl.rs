@@ -3234,7 +3234,7 @@ impl Sema<'_, '_> {
         let d = match if d.dropped {
             QualifiedDecl::Keep
         } else {
-            self.diagnose_qualified_declaration(ds, d, head.is_some())
+            self.diagnose_qualified_declaration(ds, d)
         } {
             QualifiedDecl::Keep => d,
             QualifiedDecl::Unqualify => {
@@ -8731,8 +8731,11 @@ impl Sema<'_, '_> {
             }
             if qualified_member && let Some(q) = qualifier {
                 self.check_qualified_member_tag(q, n, nloc);
-                // `export struct S::N {}` ([module.interface]/1; WP-1159).
                 let s = self.ast.symbols().as_str(n).to_owned();
+                if self.templ.member_spec.is_none() {
+                    self.diagnose_qualified_tag(q, &s, nloc);
+                }
+                // `export struct S::N {}` ([module.interface]/1; WP-1159).
                 self.module_check_export_member(q, &s, nloc);
             }
         }
