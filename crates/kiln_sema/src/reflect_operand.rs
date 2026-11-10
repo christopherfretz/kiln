@@ -88,6 +88,7 @@ impl Sema<'_, '_> {
             None => s.lookup_name_dn(name, k),
         };
         let mut found = lookup(self, LookupKind::Ordinary);
+        found = self.conversion_template_fallback(found, qual.map(|q| q.ctx), name, name_loc);
         if found.decls.is_empty() && name.as_ident().is_some() {
             found = lookup(self, LookupKind::Nested);
         }
@@ -299,9 +300,13 @@ impl Sema<'_, '_> {
                 let d = self.ast.exprs.decl(e);
                 self.reflect_entity(d, name_loc, loc, end)
             }
+            // `^^ns::f<T>` in a template: a dependent `CXXReflectExpr`
+            // over the template-id, which substitution resolves to its
+            // single specialization (spec/reflection-repr.md §2).
             ExprKind::UnresolvedLookupExpr if self.expr_is_value_dependent(e) => {
-                self.unsupported("reflection of a dependent template-id", name_loc);
-                self.recover(info, &[], loc)
+                let r = self.builder().dependent_reflect_expr(e, info, loc, end);
+                self.note_consteval_only(r);
+                r
             }
             ExprKind::UnresolvedLookupExpr => self.reflect_overload_set(name_loc, loc),
             _ => self.reflect_bad_operand(name_loc, loc),

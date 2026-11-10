@@ -2518,7 +2518,7 @@ impl Parser<'_, '_> {
     /// by `q`, after `template` at `template_kw`) starts its template
     /// argument list ([temp.names]/3): after `template`, or when the name
     /// is a template-name (otherwise `<` is the less-than operator).
-    fn at_operator_template_args(
+    pub(crate) fn at_operator_template_args(
         &mut self,
         name: DeclName,
         q: Option<kiln_sema::using::Qualifier>,

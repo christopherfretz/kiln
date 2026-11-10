@@ -427,6 +427,35 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A lookup of the conversion-function-id `name` that found nothing,
+    /// as the qualified-id `C::operator T` (`qualifier` the class `C`) or
+    /// unqualified in a member function of `*this`'s class: the conversion
+    /// function template specializations it names there ([temp.mem]/6;
+    /// `&S::operator int*`, `^^S::operator int*`). `found` otherwise.
+    pub(crate) fn conversion_template_fallback(
+        &mut self,
+        found: crate::lookup::Found,
+        qualifier: Option<DeclId>,
+        name: kiln_ast::names::DeclName,
+        loc: Loc,
+    ) -> crate::lookup::Found {
+        if !found.decls.is_empty() {
+            return found;
+        }
+        let kiln_ast::names::DeclNameView::Conversion(to) = self.ast.names.view(name) else {
+            return found;
+        };
+        let class = match qualifier {
+            Some(q) if crate::overload::adl::is_class_kind(self.kind_of(q)) => q,
+            None => match self.this_class() {
+                Some((_, c)) => c,
+                None => return found,
+            },
+            Some(_) => return found,
+        };
+        self.conversion_template_specs(class, to, loc).unwrap_or(found)
+    }
+
     /// `e.operator T()` naming a specialization of a conversion function
     /// template ([temp.mem]/6): it is not found by name lookup; instead
     /// each conversion function template of class `c` itself whose
@@ -2855,7 +2884,7 @@ impl Sema<'_, '_> {
         let d = r.decl;
         let class = self.declaring_class(d)?;
         self.member_refs.remove(&e);
-        if self.kind_of(d) == DeclKind::CXXMethod {
+        if matches!(self.kind_of(d), DeclKind::CXXMethod | DeclKind::CXXConversion) {
             let at = self.eloc(e);
             self.resolve_exc_for_type(d, at);
         }
@@ -2881,7 +2910,9 @@ impl Sema<'_, '_> {
             }
             x
         };
-        if self.kind_of(d) == DeclKind::CXXMethod {
+        // A conversion function is a member function too: `&S::operator
+        // int*` odr-uses (and instantiates) it ([basic.def.odr]/7).
+        if matches!(self.kind_of(d), DeclKind::CXXMethod | DeclKind::CXXConversion) {
             let at = self.eloc(e);
             if self.unevaluated == 0 {
                 self.mark_function_referenced(d, at);

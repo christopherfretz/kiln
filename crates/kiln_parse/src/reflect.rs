@@ -95,9 +95,9 @@ impl Parser<'_, '_> {
         Some(self.s.act_on_reflect_name(qual, name, name_loc, loc, end))
     }
 
-    /// After `^^ nns`, an operand that is not an identifier: an operator-
-    /// or conversion-function-id or a destructor name ([expr.reflect]/7),
-    /// else the bad-operand error.
+    /// After `^^ nns`, an operand that is not an identifier: an operator-,
+    /// literal-operator- or conversion-function-id, an operator template-id,
+    /// or a destructor name ([expr.reflect]/7), else the bad-operand error.
     fn parse_reflect_special_name(
         &mut self,
         loc: Loc,
@@ -121,6 +121,22 @@ impl Parser<'_, '_> {
                     loc,
                     end,
                 ));
+            }
+            // `^^ns::operator== <int>`, `^^operator""_x<'1'>`: an
+            // operator- or literal-operator-id template-id ([temp.names]/1)
+            // names the specialization its arguments select, as an
+            // identifier template-id does (/7, [over.over]/3).
+            if self.at_operator_template_args(name, qual, None) {
+                let (args, _, _) = self.parse_template_arg_list()?;
+                let ctx = qual.map(|q| q.ctx);
+                let e = self.s.act_on_operator_template_id(name, &args, nl, ctx, false);
+                if let Some(q) = qual {
+                    self.s.set_template_id_begin(e, operand, nl);
+                    self.s.set_template_id_qualifier(e, q.nns);
+                }
+                let end = self.prev_end();
+                let r = TemplateIdRef::Overload(e);
+                return Some(self.s.act_on_reflect_template_id(r, nl, loc, end));
             }
             let end = self.prev_end();
             return Some(self.s.act_on_reflect_dn(qual, name, nl, loc, end));

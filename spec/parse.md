@@ -1663,9 +1663,13 @@ for `^^`, §5 for splices).
 - **`^^` operand** ([expr.reflect]). If the operand can be a type-id (the
   test is the trailing-return-type one, so `void (*)(int)` is a type), it
   is parsed as a type-id → `act_on_reflect_type`. Otherwise it is an
-  optional nested-name-specifier and an identifier →
-  `act_on_reflect_name`. A template-id operand is
-  "unsupported: reflection of a template-id".
+  optional nested-name-specifier and an unqualified-id →
+  `act_on_reflect_name` / `act_on_reflect_dn`. The unqualified-id is an
+  identifier, an operator-function-id, a conversion-function-id or a
+  literal-operator-id, each optionally followed by template arguments
+  (`at_operator_template_args`, as in an id-expression, [temp.names]/1)
+  → `act_on_reflect_template_id` (WP-1246:
+  `^^ns::operator== <int>`, `^^ns::operator""_x<'1'>`).
 - **Splice brackets.** `splice-specifier: [: constant-expression :]`.
   `splice_end` finds the matching `:]` (nested splices balance), and the
   tentative-parse scanner and template-argument scan use it to skip a

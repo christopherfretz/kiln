@@ -1834,6 +1834,7 @@ impl Sema<'_, '_> {
             Some(q) => self.lookup_qualified_dn(q, name, LookupKind::Ordinary),
             None => self.lookup_name_dn(name, LookupKind::Ordinary),
         };
+        let found = self.conversion_template_fallback(found, qualifier, name, loc);
         if self.diagnose_member_ambiguity(&found, name, loc) {
             return self.recover_err(&[], loc);
         }
