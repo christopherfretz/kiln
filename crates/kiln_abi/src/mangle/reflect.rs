@@ -18,9 +18,13 @@ use kiln_ast::Ast;
 use kiln_ast::consts::{ConstValue, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 use kiln_ast::expr::ExprKind;
-use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, DmsId, ExprId, QualType, ReflectionId};
+use kiln_ast::ids::{
+    ArgListId, ConstValueId, DeclId, DmsId, ExprId, NnsId, QualType, ReflectionId,
+};
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::{ArgView, BuiltinType, ExprOperand, TemplateName, TypeView};
+use kiln_ast::types::{
+    ArgView, BuiltinType, ExprOperand, Nns, TemplateArg, TemplateName, TypeFlags, TypeView,
+};
 
 use super::{
     Mangler, Structor, StructorSpelling, enclosing_function, has_internal_linkage, in_anon_ns,
@@ -173,6 +177,7 @@ fn deducible_params(ast: &Ast, q: QualType, depth: u16, seen: &mut [bool], level
         | TypeView::Typedef { underlying: x, .. }
         | TypeView::Using { underlying: x, .. }
         | TypeView::Elaborated { named: x, .. }
+        | TypeView::SubstTemplateTypeParm { replacement: x, .. }
         | TypeView::PackExpansion { pattern: x, .. }
         | TypeView::ExtQual { base: x, .. } => rec(x, seen),
         TypeView::ConstantArray(a) => rec(a.elem, seen),
@@ -252,6 +257,191 @@ fn deducible_nttp(ast: &Ast, e: ExprId, depth: u16, seen: &mut [bool]) {
         {
             *s = true;
         }
+    }
+}
+
+/// Whether the specialization of alias template `t` with arguments
+/// `args` keeps every argument in its aliased type (WP-1260): each
+/// parameter is deducible from the defining-type-id
+/// ([temp.deduct.type]/8), or appears in a nested-name-specifier
+/// ([temp.deduct.type]/5.1, a non-deduced context) that names a
+/// parameter whose argument is dependent. Such a qualifier stays a
+/// dependent name after substitution ([temp.dep.type]/7), written
+/// structurally, so the aliased type determines `args` and GCC's `ta`
+/// form (the aliased type, no alias arguments) is injective for it:
+/// `^^D<T>` with `D = typename RC<T>::type`. A qualifier whose
+/// parameters all take non-dependent arguments names a member of a
+/// concrete specialization and loses them (`^^D<int>` and
+/// `^^D<const int>` alias one `int`). A pack argument counts as
+/// dependent when it is non-empty and every element is. Conservative,
+/// as [`alias_args_recoverable`]: other non-deduced contexts (a
+/// `decltype`, a non-bare expression) recover nothing.
+pub(super) fn alias_args_preserved(ast: &Ast, t: DeclId, args: ArgListId) -> bool {
+    let Some(info) = ast.template_info(t) else { return false };
+    let list = *ast.templates.param_list(info.params);
+    let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
+    let given = ast.types.args(args);
+    if params.is_empty() || given.len() != params.len() {
+        return false;
+    }
+    let Some(rhs) = info.pattern.and_then(|p| ast.decls.typedef(p)).map(|t| t.underlying) else {
+        return false;
+    };
+    let dependent = |a: TemplateArg| ast.types.arg_flags(a).intersects(TypeFlags::DEPENDENT);
+    let dep: Vec<bool> = given
+        .iter()
+        .map(|&a| match a.view() {
+            ArgView::Pack(l) => {
+                let elems = ast.types.args(l);
+                !elems.is_empty() && elems.iter().all(|&e| dependent(e))
+            }
+            _ => dependent(a),
+        })
+        .collect();
+    let mut seen = vec![false; params.len()];
+    deducible_params(ast, rhs, list.depth, &mut seen, 0);
+    preserved_params(ast, rhs, list.depth, &dep, &mut seen, 0);
+    seen.iter().all(|&b| b)
+}
+
+/// Marks in `seen` the parameters at `depth` that `q` names inside a
+/// dependent name's qualifier or a `decltype` operand that substitution
+/// keeps (see [`alias_args_preserved`]); `dep` says which parameters
+/// take a dependent argument. An alias template-id is looked through to
+/// its aliased type, which is what the mangling writes.
+fn preserved_params(ast: &Ast, q: QualType, depth: u16, dep: &[bool], seen: &mut [bool], level: u32) {
+    if level > 64 {
+        return;
+    }
+    let rec = |q: QualType, seen: &mut [bool]| preserved_params(ast, q, depth, dep, seen, level + 1);
+    // The parameters `inner` names, marked only when one of them takes a
+    // dependent argument: the qualifier or operand then stays dependent
+    // and is written structurally.
+    let keep = |inner: Vec<bool>, seen: &mut [bool]| {
+        if inner.iter().zip(dep).any(|(&s, &d)| s && d) {
+            for (s, i) in seen.iter_mut().zip(inner) {
+                *s |= i;
+            }
+        }
+    };
+    let decltype = |e: ExprId, seen: &mut [bool]| {
+        let mut inner = vec![false; seen.len()];
+        expr_params(ast, e, depth, dep, &mut inner, level + 1);
+        keep(inner, seen);
+    };
+    match ast.types.view(q.ty()) {
+        TypeView::DependentName { nns, .. } => {
+            let mut inner = vec![false; seen.len()];
+            qualifier_params(ast, nns, depth, dep, &mut inner, level + 1);
+            keep(inner, seen);
+        }
+        // `Q::template X<A>`: `A` is kept when `Q` is.
+        TypeView::DependentTemplateSpecialization { nns, args, .. } => {
+            let mut inner = vec![false; seen.len()];
+            qualifier_params(ast, nns, depth, dep, &mut inner, level + 1);
+            if inner.iter().zip(dep).any(|(&s, &d)| s && d) {
+                deducible_args(ast, args, depth, &mut inner, level + 1);
+                for a in ast.types.args(args) {
+                    if let ArgView::Type(x) = a.view() {
+                        preserved_params(ast, x, depth, dep, &mut inner, level + 1);
+                    }
+                }
+                keep(inner, seen);
+            }
+        }
+        TypeView::Decltype { expr, .. } => decltype(expr, seen),
+        TypeView::DependentDecltype(p) => {
+            if let Some(e) = ast.types.profile_expr(p) {
+                decltype(e, seen);
+            }
+        }
+        TypeView::Pointer(x)
+        | TypeView::LValueRef(x)
+        | TypeView::RValueRef(x)
+        | TypeView::Paren(x)
+        | TypeView::IncompleteArray(x)
+        | TypeView::Typedef { underlying: x, .. }
+        | TypeView::Using { underlying: x, .. }
+        | TypeView::Elaborated { named: x, .. }
+        | TypeView::SubstTemplateTypeParm { replacement: x, .. }
+        | TypeView::PackExpansion { pattern: x, .. }
+        | TypeView::ExtQual { base: x, .. } => rec(x, seen),
+        TypeView::ConstantArray(a) => rec(a.elem, seen),
+        TypeView::DependentSizedArray { elem, .. } => rec(elem, seen),
+        TypeView::MemberPointer { pointee, class } => {
+            rec(pointee, seen);
+            rec(QualType::unqual(class), seen);
+        }
+        TypeView::Function(p) => {
+            rec(p.ret(), seen);
+            for &x in ast.types.params(&p) {
+                rec(x, seen);
+            }
+        }
+        TypeView::TemplateSpecialization { underlying: Some(u), alias: true, .. } => rec(u, seen),
+        TypeView::TemplateSpecialization { args, alias: false, .. } => {
+            for a in ast.types.args(args) {
+                match a.view() {
+                    ArgView::Type(x) => rec(x, seen),
+                    ArgView::Pack(l) => {
+                        for b in ast.types.args(l) {
+                            if let ArgView::Type(x) = b.view() {
+                                rec(x, seen);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The parameters at `depth` that the type components of qualifier `n`
+/// (and its prefixes) name in a kept position.
+fn qualifier_params(ast: &Ast, n: NnsId, depth: u16, dep: &[bool], seen: &mut [bool], level: u32) {
+    let mut n = Some(n);
+    let mut level = level;
+    while let Some(id) = n {
+        if level > 64 {
+            return;
+        }
+        n = match ast.types.nns_view(id) {
+            Nns::Type { prefix, ty, .. } => {
+                deducible_params(ast, ty, depth, seen, level);
+                preserved_params(ast, ty, depth, dep, seen, level);
+                prefix
+            }
+            Nns::Identifier { prefix, .. } => prefix,
+            _ => None,
+        };
+        level += 1;
+    }
+}
+
+/// The parameters at `depth` that expression `e` names (a `decltype`
+/// operand, written as an expression in the mangling): a bare non-type
+/// parameter, and the parameters of each subexpression's type (and a
+/// `sizeof`/`alignof` type operand) in a kept position. Bounded: a larger operand recovers nothing more.
+fn expr_params(ast: &Ast, e: ExprId, depth: u16, dep: &[bool], seen: &mut [bool], level: u32) {
+    let mut stack = vec![e];
+    let mut budget = 4096u32;
+    while let Some(x) = stack.pop() {
+        budget = match budget.checked_sub(1) {
+            Some(b) => b,
+            None => return,
+        };
+        deducible_nttp(ast, x, depth, seen);
+        let mut types = vec![ast.exprs.get(x).ty()];
+        if ast.exprs.get(x).kind() == ExprKind::UnaryExprOrTypeTraitExpr {
+            types.extend(ast.exprs.trait_type_arg(x));
+        }
+        for ty in types {
+            deducible_params(ast, ty, depth, seen, level);
+            preserved_params(ast, ty, depth, dep, seen, level);
+        }
+        stack.extend(ast.exprs.children(x, &ast.lists));
     }
 }
 
@@ -484,9 +674,15 @@ impl Mangler<'_, '_> {
                         // `^^F<T, long>` collide), so gcc mode writes GCC's
                         // form only for an alias whose every parameter is
                         // deducible from its defining-type-id
-                        // (`alias_args_recoverable`), and kiln's (the
-                        // alias's own arguments) otherwise (WP-1250).
-                        if !self.gcc() || !alias_args_recoverable(ast, t) {
+                        // (`alias_args_recoverable`) or kept in a
+                        // dependent qualifier for these arguments
+                        // (`alias_args_preserved`, WP-1260: `^^D<T>`, `D =
+                        // typename RC<T>::type`), and kiln's (the alias's
+                        // own arguments) otherwise (WP-1250).
+                        let gcc_form = self.gcc()
+                            && (alias_args_recoverable(ast, t)
+                                || alias_args_preserved(ast, t, args));
+                        if !gcc_form {
                             self.template_args(args);
                         } else {
                             self.underlying_spec_args(u);
