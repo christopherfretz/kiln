@@ -68,7 +68,11 @@ impl Sema<'_, '_> {
         let Some((f, body)) = self.cfg_body.at else { return };
         let graph = std::mem::take(&mut self.cfg_body.graph);
         let req = std::mem::take(&mut self.cfg_body.req);
-        let graph = self.build_cfg(Some(f), body, graph, req, self.cfg_max_elems);
+        let graph = {
+            // clang `CFG::buildCFG` (spec/driver.md "Time trace").
+            let _t = kiln_source::trace::Scope::new("BuildCFG");
+            self.build_cfg(Some(f), body, graph, req, self.cfg_max_elems)
+        };
         let too_large = graph.status == Status::TooLarge;
         self.cfg_body.graph = graph;
         self.cfg_body.built = true;

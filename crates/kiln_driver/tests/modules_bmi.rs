@@ -822,12 +822,16 @@ fn kind2_declaration_image_class_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
-/// WP-1096 (§11.11 "Part 2a", "ODR merging"): names interned only as
-/// module-name components do not count as seen, so a namespace named
-/// like its module (plain or dotted) is built from the image; a real
-/// earlier declaration of an image's name still replays, as do a second
-/// image declaring the same name and a global module fragment's
-/// declaration of it.
+/// WP-1096, WP-1162 (§11.11 "Part 2a", "ODR merging"): the gate counts
+/// only identifiers that reached the parser at global namespace scope,
+/// against only the image's global-scope names. So a namespace named like
+/// its module (plain or dotted) is built from the image, as is a unit
+/// whose names the importer spelled only in a macro, as members, in its
+/// own namespace or as locals, or declared in another scope; a real
+/// earlier declaration of an image's global-scope name still replays (also
+/// inside a linkage specification, an enumeration or an inline
+/// namespace), as do a second image declaring the same name and a global
+/// module fragment's declaration of it.
 #[test]
 fn kind2_image_gate_module_names() {
     let d = scratch("image-gate");
@@ -881,8 +885,9 @@ fn kind2_image_gate_module_names() {
     // another image's namespace, a global module fragment's namespace.
     w("c1.cpp", "namespace m { int mine(); }\nimport m;\nint main() { return m::f() - 40; }\n");
     assert_eq!(image_notes(&d, &["-fsyntax-only", m, "c1.cpp"]), replay("m", "m"));
+    // `::g` is no redeclaration of the image's `m::g`.
     w("c2.cpp", "int g;\nimport m;\nint main() { return m::f() - 40 + g; }\n");
-    assert_eq!(image_notes(&d, &["-fsyntax-only", m, "c2.cpp"]), replay("m", "g"));
+    assert_eq!(image_notes(&d, &["-fsyntax-only", m, "c2.cpp"]), image("m"));
     w("c3.cpp", "import m;\nimport n;\nint main() { return m::f() + m::k() - 41; }\n");
     let notes = image_notes(&d, &["-fsyntax-only", m, n, "c3.cpp"]);
     assert_eq!(notes, [image("m"), replay("n", "m")].concat());
@@ -893,7 +898,68 @@ fn kind2_image_gate_module_names() {
     );
     let notes = image_notes(&d, &["--precompile", m, "c4.cppm", "-o", "x.pcm"]);
     assert_eq!(notes, replay("m", "m"));
+
+    // WP-1162: `m` spelled without a global-scope declaration of it.
+    let tail = "import m;\nint main() { return m::f() - 40; }\n";
+    for (idx, head) in [
+        "#define M m::f\n",
+        "struct S { int m; };\n",
+        "namespace o { namespace m { int k; } }\n",
+        "void z() { int m = 0; (void)m; }\n",
+        "int arr[] = { [] { int m = 1; return m; }() };\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let file = format!("s{idx}.cpp");
+        w(&file, &format!("{head}{tail}"));
+        let notes = image_notes(&d, &["-fsyntax-only", m, &file]);
+        assert_eq!(notes, image("m"), "{head}");
+    }
+    // ... and with one at global scope, however it is nested.
+    for (idx, head) in [
+        "extern \"C++\" { namespace m { int k; } }\n",
+        "inline namespace v { namespace m { int k; } }\n",
+        "namespace { namespace m { int k; } }\n",
+        "enum { m };\n",
+        "struct T {};\nusing m = T;\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let file = format!("r{idx}.cpp");
+        w(&file, &format!("{head}{tail}"));
+        let out = kiln(&d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", m, &file]);
+        let notes: Vec<&str> =
+            out.stderr.lines().filter(|l| l.starts_with("note: replayed '")).collect();
+        assert_eq!(notes, replay("m", "m"), "{head}: {}", out.stderr);
+    }
 }
+
+/// WP-1162 (§11.11 "Part 2a", "ODR merging"): the corpus pair over
+/// `img-gate-scope.cppm`. Names spelled before the import without a
+/// global-scope declaration use the image; a global overload and a
+/// reopened namespace replay.
+#[test]
+fn kind2_image_gate_scopes() {
+    let d = scratch("image-gate-scopes");
+    std::fs::write(d.join("s.cppm"), IMGS).unwrap();
+    std::fs::write(d.join("scope.cpp"), IMGS_SCOPE).unwrap();
+    std::fs::write(d.join("over.cpp"), IMGS_OVER).unwrap();
+    ok(&d, &["-fkiln-bmi-image", "--precompile", "s.cppm", "-o", "s.pcm"]);
+    let m = "-fmodule-file=imgs=s.pcm";
+    let notes = image_notes(&d, &["-fsyntax-only", m, "scope.cpp"]);
+    assert_eq!(notes, ["note: imported 'imgs' from its declaration image"]);
+    let notes = image_notes(&d, &["-fsyntax-only", m, "over.cpp"]);
+    assert_eq!(notes, ["note: replayed 'imgs': its image declares 'twice', already seen"]);
+}
+
+const IMGS: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-gate-scope.cppm");
+const IMGS_SCOPE: &str =
+    include_str!("../../../tests/conformance/module.interface/image-gate-scope-run.cpp");
+const IMGS_OVER: &str =
+    include_str!("../../../tests/conformance/module.interface/image-gate-overload-run.cpp");
 
 /// Stage S3 (§11.11 "Part 2a", WP-1065): non-template classes, their
 /// members, bases, constructors, destructor and implicit special members

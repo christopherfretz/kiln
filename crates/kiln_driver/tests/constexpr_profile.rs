@@ -197,6 +197,38 @@ fn heap_peak_and_reclaimed() {
     assert_eq!(n(sites(&p)[0], "peak_bytes"), 40);
 }
 
+/// `-fconstexpr-report`'s `reclaimed_bytes` (spec/oven.md "Reporting
+/// protocol", WP-1147): the bytes an evaluation freed before it ended.
+/// `new int[10]` / `new int[5]` then `delete[]` ([expr.new],
+/// [expr.delete], [expr.const]/10.18) reclaim both blocks (40 + 24, the
+/// 8-byte granule); a returning call's frame array is reclaimed with its
+/// frame (16); an evaluation that allocates nothing reclaims nothing.
+/// The total is the sum, and every row's count is within its `bytes`.
+#[test]
+fn report_rows_carry_reclaimed_bytes() {
+    let d = tu(
+        "reclaimed",
+        "constexpr int heap() {\n  int *p = new int[10];\n  delete[] p;\n\
+         \x20 int *q = new int[5];\n  delete[] q;\n  return 0;\n}\n\
+         static_assert(heap() == 0);\n\
+         constexpr int leaf(int a) { int b[4] = {a, a, a, a}; return b[3]; }\n\
+         static_assert(leaf(2) == 2);\nstatic_assert(1 + 1 == 2);\n",
+    );
+    ok(&d, &["-fsyntax-only", "-fconstexpr-report=r.json", "t.cpp"]);
+    let r = ndjson(&std::fs::read_to_string(d.join("r.json")).unwrap());
+    let at = |l: &str| r.iter().find(|j| j.get("loc").and_then(Json::as_str) == Some(l)).unwrap();
+    assert_eq!(n(at("t.cpp:8:1"), "reclaimed_bytes"), 64);
+    assert_eq!(n(at("t.cpp:10:1"), "reclaimed_bytes"), 16);
+    assert_eq!(n(at("t.cpp:11:1"), "reclaimed_bytes"), 0);
+    let (rows, total) = r.split_at(r.len() - 1);
+    for j in rows {
+        assert!(n(j, "reclaimed_bytes") <= n(j, "bytes"), "{j:?}");
+    }
+    let sum: u64 = rows.iter().map(|j| n(j, "reclaimed_bytes")).sum();
+    assert_eq!(n(total[0].get("total").unwrap(), "reclaimed_bytes"), sum);
+    assert_eq!(sum, 80);
+}
+
 /// A failing evaluation ([expr.const]/5.25: a throw that is not caught)
 /// counts as failed; a failing trial (the constant initialization of a
 /// `const int`, [basic.start.static]/2) is a failed trial, not an
@@ -453,4 +485,46 @@ fn importer_reports_its_own_evaluations() {
     assert_eq!(n(func(&p, "tri"), "calls"), 4);
     assert_eq!(s(func(&p, "tri"), "loc"), "m.cppm:2:22");
     assert_eq!((n(total(&p), "evaluations"), s(total(&p), "file")), (1, "u.cpp"));
+}
+
+/// A module unit named by its source, `-fmodule-file=m=m.cppm`
+/// ([module.unit], [module.import]), is compiled into the importer's own
+/// translation unit and Oven: its evaluations are the importer's and both
+/// the profile and `-fconstexpr-report` list them, located in the module
+/// source (spec/driver.md "Constexpr profile"). A BMI's (prebuilt, the
+/// test above; cache-built, `tests/module_cache.rs`) are never listed.
+#[test]
+fn module_source_named_directly_is_the_importers() {
+    let d = scratch("modsrc");
+    std::fs::write(
+        d.join("m.cppm"),
+        "export module m;\nexport constexpr int tri(int n) { return n == 0 ? 0 : n + tri(n - 1); }\n\
+         export constexpr int mk = tri(5);\nstatic_assert(mk == 15);\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import m;\nstatic_assert(tri(3) == 6);\nint main() { return mk; }\n",
+    )
+    .unwrap();
+    let p = ndjson(&ok(
+        &d,
+        &[
+            "-fsyntax-only",
+            "-fmodule-file=m=m.cppm",
+            "-fconstexpr-profile=json",
+            "-fconstexpr-report=r.json",
+            "u.cpp",
+        ],
+    ));
+    let mut at: Vec<&str> = sites(&p).iter().map(|j| s(j, "loc")).collect();
+    at.sort_unstable();
+    assert_eq!(at, ["m.cppm:3:22", "m.cppm:4:1", "u.cpp:2:1"]);
+    assert_eq!(s(func(&p, "tri"), "loc"), "m.cppm:2:22");
+    assert_eq!((n(total(&p), "evaluations"), s(total(&p), "file")), (3, "u.cpp"));
+    let r = ndjson(&std::fs::read_to_string(d.join("r.json")).unwrap());
+    let mut locs: Vec<&str> =
+        r.iter().filter_map(|j| j.get("loc").and_then(Json::as_str)).collect();
+    locs.sort_unstable();
+    assert_eq!(locs, at);
 }
