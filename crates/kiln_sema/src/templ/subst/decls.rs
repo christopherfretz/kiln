@@ -1635,7 +1635,7 @@ impl Substituter<'_, '_, '_> {
         let r = self.sema.static_assert_checked(c, m, loc);
         let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
         let own = self.sema.diags.error_count().saturating_sub(errors).saturating_sub(nested);
-        self.sema.inst.static_assert_errors += own;
+        self.sema.inst.checked_decl_errors += own;
         Ok(r)
     }
 
@@ -1648,7 +1648,16 @@ impl Substituter<'_, '_, '_> {
         self.sema.enter_constant_evaluated();
         let c = self.expr(sa.cond);
         self.sema.exit_constant_evaluated(c.as_ref().ok().copied());
-        Ok(self.sema.consteval_block_checked(c?, loc))
+        let c = c?;
+        // As for a `static_assert`: a failed evaluation leaves the
+        // declaration, so the errors of the check are no error of the
+        // enclosing body (a lambda's stays valid; WP-1257).
+        let (errors, body_errors) = (self.sema.diags.error_count(), self.sema.inst.body_errors);
+        let r = self.sema.consteval_block_checked(c, loc);
+        let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+        let own = self.sema.diags.error_count().saturating_sub(errors).saturating_sub(nested);
+        self.sema.inst.checked_decl_errors += own;
+        Ok(r)
     }
 
     /// An enumeration of the pattern: an unscoped one is defined now
