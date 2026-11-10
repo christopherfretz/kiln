@@ -716,6 +716,42 @@ impl SourceManager {
         self.file_kind(loc).is_system()
     }
 
+    /// Whether `loc` was written in a token-paste or stringizing buffer,
+    /// `<scratch space>` (clang `isWrittenInScratchSpace`: the presumed
+    /// file name of `loc`).
+    pub fn is_written_in_scratch_space(&self, loc: Loc) -> bool {
+        self.presumed_line_col(loc).is_some_and(|p| p.file_name == "<scratch space>")
+    }
+
+    /// Whether `loc` is a macro location spelled in a system header
+    /// (clang `isInSystemMacro`): the body of a macro defined in a system
+    /// header, but not an argument written in a user file. A location
+    /// spelled in `<scratch space>` (the result of a `##` paste) takes the
+    /// first macro caller outward that is not spelled there. False for
+    /// file and invalid locations.
+    pub fn is_in_system_macro(&self, mut loc: Loc) -> bool {
+        loop {
+            if !loc.is_macro() {
+                return false;
+            }
+            if !self.is_written_in_scratch_space(self.spelling_loc(loc)) {
+                return self.is_in_system_header(self.spelling_loc(loc));
+            }
+            // Walk out of the pasted tokens (there may be several levels
+            // of pasting), then apply the rule again to the caller.
+            loop {
+                let caller = self.immediate_macro_caller_loc(loc);
+                if caller == loc {
+                    return false;
+                }
+                loc = caller;
+                if !self.is_written_in_scratch_space(self.spelling_loc(loc)) {
+                    break;
+                }
+            }
+        }
+    }
+
     fn file(&self, id: FileId) -> &FileEntry {
         self.files
             .get(id.0)

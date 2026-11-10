@@ -403,9 +403,12 @@ impl Substituter<'_, '_, '_> {
             ..PackState::default()
         };
         // What the sweep substitutes is discarded, and so are its
-        // diagnostics: only the mismatch is reported, as expanding reports
-        // it.
-        let held = self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new())));
+        // diagnostics, also those of the checking frames it pushes (the
+        // prior-argument substitution of `ic<T, v>` with `T` = void and an
+        // empty `v`, which clang never forms; WP-1222): only the mismatch
+        // is reported, as expanding reports it.
+        let held =
+            self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new(), true)));
         let swept = f(self);
         let _ = self.sema.diag_capture.replace(held);
         if let Some((n, second, loc)) = self.pack.sweep_mismatch.take() {

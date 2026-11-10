@@ -1019,8 +1019,12 @@ pub struct Sema<'a, 'sm> {
     /// instantiation the step started (a SFINAE context traps those,
     /// [temp.deduct.general]/8, also WP-271's converting-constructor
     /// deduction for a rewritten `operator==`; a hard error keeps its
-    /// context notes).
-    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>)>>,
+    /// context notes). With the `bool` set (the empty-pack length
+    /// sweep, `templ/pack.rs`), diagnostics of the checking frames the
+    /// held step pushes (prior-argument substitution and the like, not an
+    /// instantiation nor a SFINAE boundary) are held too: what the step
+    /// substitutes is discarded, and clang never forms it.
+    pub(crate) diag_capture: std::cell::RefCell<Option<(usize, Vec<Diag>, bool)>>,
     /// The "no member named" errors of qualified-ids held back until the
     /// end of the enclosing expression statement (clang's delayed typo
     /// correction, `TypoExpr`), while `typo_delay` is non-zero
@@ -1647,8 +1651,9 @@ impl<'a, 'sm> Sema<'a, 'sm> {
                 d = d.with_note(n);
             }
         }
-        if let Some((depth, held)) = self.diag_capture.borrow_mut().as_mut()
-            && *depth == self.inst.stack.len()
+        if let Some((depth, held, checks)) = self.diag_capture.borrow_mut().as_mut()
+            && (*depth == self.inst.stack.len()
+                || (*checks && self.inst.stack.only_checks_above(*depth)))
         {
             held.push(d);
             return;

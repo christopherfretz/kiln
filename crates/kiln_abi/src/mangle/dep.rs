@@ -397,34 +397,54 @@ impl Mangler<'_, '_> {
         }
     }
 
-    /// The integer literal a non-dependent `sizeof`/`alignof` stands for
-    /// (clang `mangleExpression`, `UnaryExprOrTypeTraitExprClass`).
+    /// The integer literal a non-dependent `sizeof`/`alignof`/
+    /// `__alignof__`/`__datasizeof` stands for (clang `mangleExpression`,
+    /// `UnaryExprOrTypeTraitExprClass`, `EvaluateKnownConstInt`).
     fn trait_value(&mut self, e: ExprId, converted: Option<QualType>) -> bool {
         let ast = self.ast;
-        let operand = match ast.exprs.trait_type_arg(e) {
-            Some(t) => t,
+        let kind = ast.exprs.trait_kind(e);
+        let target = crate::Target::for_types(ast.types.target());
+        let (operand, sub) = match ast.exprs.trait_type_arg(e) {
+            Some(t) => (t, None),
             None => match ast.exprs.first_child(e, &ast.lists) {
-                Some(sub) if ast.exprs.trait_kind(e) == TraitKind::SizeOf => {
-                    ast.exprs.get(sub).ty()
-                }
-                _ => return false,
+                Some(sub) => (ast.exprs.get(sub).ty(), Some(sub)),
+                None => return false,
             },
         };
+        // `alignof e` naming a variable or data member is that
+        // declaration's alignment, an `alignas` on it included (clang
+        // `GetAlignOfExpr`).
+        let decl = sub.and_then(|sub| {
+            let op = self.skip_transparent(sub);
+            matches!(ast.exprs.get(op).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+                .then(|| ast.exprs.decl(op))
+                .filter(|&d| matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::Field))
+        });
         // `sizeof` and `alignof` of a reference are those of the referee.
         let c = ast.types.canonical(operand);
         let operand = match ast.types.view(c.ty()) {
             TypeView::LValueRef(r) | TypeView::RValueRef(r) => r,
             _ => operand,
         };
-        let layout = crate::layout::type_size_align(
-            ast,
-            operand,
-            &crate::Target::for_types(ast.types.target()),
-        );
-        let value = match ast.exprs.trait_kind(e) {
-            TraitKind::SizeOf => layout.size,
-            TraitKind::AlignOf => layout.align,
-            _ => return false,
+        let layout = || crate::layout::type_size_align(ast, operand, &target);
+        let value = match kind {
+            TraitKind::SizeOf => layout().size,
+            // The preferred alignment is the ABI one on every supported
+            // target (aarch64, x86-64).
+            TraitKind::AlignOf | TraitKind::PreferredAlignOf => match decl {
+                Some(d) => crate::layout::decl_align(ast, d, &target, true),
+                None => layout().align,
+            },
+            // A class's `dsize` (without the tail padding a derived class
+            // may reuse), any other type's size (clang
+            // `getTypeInfoDataSizeInChars`).
+            TraitKind::DataSizeOf => {
+                match ast.types.as_record(operand).and_then(|r| ast.definition(r)) {
+                    Some(def) => crate::layout::record_layout(ast, def, &target).data_size,
+                    None => layout().size,
+                }
+            }
+            TraitKind::VecStep => return false,
         };
         let ty = converted
             .filter(|&t| ast.types.is_integral(t))
@@ -802,7 +822,8 @@ impl Mangler<'_, '_> {
     }
 
     /// `sizeof`/`alignof` of a type (`st`/`at`) or an expression
-    /// (`sz`/`az`). `converted` is the type `expr` is implicitly
+    /// (`sz`/`az`), GNU `__alignof__` (`u11__alignof__ ... E`; spec/abi.md
+    /// "Mangling", WP-1226). `converted` is the type `expr` is implicitly
     /// converted to.
     fn trait_expression(&mut self, expr: ExprId, converted: Option<QualType>) -> bool {
         let ast = self.ast;
@@ -817,7 +838,28 @@ impl Mangler<'_, '_> {
         let (type_code, expr_code) = match ast.exprs.trait_kind(expr) {
             TraitKind::SizeOf => ("st", "sz"),
             TraitKind::AlignOf => ("at", "az"),
-            _ => return false,
+            // GNU `__alignof__` (the preferred alignment) is the vendor
+            // extended expression `u11__alignof__ <type> E` or
+            // `u11__alignof__ <template-arg> E` (clang 12 and later; both
+            // oracles, every `-fclang-compat=` kiln accepts).
+            TraitKind::PreferredAlignOf => {
+                self.out.push_str("u11__alignof__");
+                if let Some(arg) = ast.exprs.trait_type_arg(expr) {
+                    self.ty(arg);
+                } else {
+                    let Some(sub) = ast.exprs.first_child(expr, &ast.lists) else {
+                        return false;
+                    };
+                    if !self.vendor_template_arg(sub) {
+                        return false;
+                    }
+                }
+                self.out.push('E');
+                return true;
+            }
+            // clang: "cannot yet mangle __datasizeof / vec_step
+            // expression".
+            TraitKind::DataSizeOf | TraitKind::VecStep => return false,
         };
         if let Some(arg) = ast.exprs.trait_type_arg(expr) {
             self.out.push_str(type_code);
@@ -828,6 +870,28 @@ impl Mangler<'_, '_> {
             };
             self.out.push_str(expr_code);
             return self.expression(sub);
+        }
+        true
+    }
+
+    /// A vendor extended expression's argument (clang
+    /// `mangleTemplateArgExpr`): a primary expression as is, anything
+    /// else wrapped in `X ... E`. Unlike [`Self::template_arg_expr`], a
+    /// failure is the caller's.
+    fn vendor_template_arg(&mut self, e: ExprId) -> bool {
+        if self.substituted_value(e) {
+            return true;
+        }
+        let e = self.skip_transparent(e);
+        let primary = self.is_primary(e);
+        if !primary {
+            self.out.push('X');
+        }
+        if !self.expression(e) {
+            return false;
+        }
+        if !primary {
+            self.out.push('E');
         }
         true
     }

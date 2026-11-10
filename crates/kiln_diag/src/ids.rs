@@ -201,6 +201,15 @@ impl DiagId {
             )
     }
 
+    /// True unless the id is dropped when its location is spelled in a
+    /// macro defined in a system header (clang's `ShowInSystemMacro`,
+    /// default on; the ids clang 19 marks `SuppressInSystemMacro` are
+    /// `warn_decl_shadow`, `warn_old_style_cast` and
+    /// `ext_cxx_designated_init`, of which kiln has the first).
+    pub const fn shows_in_system_macro(self) -> bool {
+        !matches!(self, DiagId::sema_decl_shadow)
+    }
+
     /// The group whose name is shown in `[-W...]` and in JSON output:
     /// [`group`](Self::group), or `pedantic` for an extension diagnostic
     /// without a group (clang puts those in `-Wpedantic`).
