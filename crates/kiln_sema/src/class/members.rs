@@ -350,8 +350,18 @@ impl Sema<'_, '_> {
         let Some(rec) = self.ast.decls.record(def) else { return msg };
         let bits = rec.defn;
         // clang streams the `CXXRecordDecl` (`getNameForDiagnostic`), not its type.
-        let rd = format!("'{}'", self.name_for_diagnostic(def));
+        // A closure type prints as its type, `'(lambda at F:L:C)'`.
+        let rd = if rec.lambda.is_some() {
+            format!("'{}'", self.ty_str(self.ast.types.canonical(elem).without_quals()))
+        } else {
+            format!("'{}'", self.name_for_diagnostic(def))
+        };
         let def_loc = self.ast.decls.get(def).loc();
+        // [expr.prim.lambda.closure]/3 before C++17 (P0170R1), ahead of
+        // every other reason as in clang. WP-1225.
+        if rec.lambda.is_some() && self.std < kiln_lex::Std::Cxx17 {
+            return msg.with_note(self.diag(DiagId::note_non_literal_lambda, def_loc));
+        }
         // Not a reason in C++26 (P3533R2).
         if self.vbases_forbid_constexpr(bits) {
             let vbases = self.virtual_bases(def);
@@ -369,7 +379,6 @@ impl Sema<'_, '_> {
         if !bits.contains(DefinitionBits::AGGREGATE)
             && !bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
             && !bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
-            && !bits.contains(DefinitionBits::LAMBDA)
         {
             return msg.with_note(
                 self.diag(DiagId::note_non_literal_no_constexpr_ctors, def_loc).arg(rd),

@@ -36,6 +36,7 @@ note_next_field_declaration = Note (0) "next field declaration is here";
 note_non_deducible_parameter = Note (1) "non-deducible template parameter '{0}'";
 note_non_literal_base_class = Note (2) "{0} is not literal because it has base class {1} of non-literal type";
 note_non_literal_field = Note (4) "{0} is not literal because it has data member {1} of {3:non-literal|volatile} type {2}";
+note_non_literal_lambda = Note (0) "lambda closure types are non-literal types before C++17";
 note_non_literal_no_constexpr_ctors = Note (1) "{0} is not literal because it is not an aggregate and has no constexpr constructors other than copy or move constructors";
 note_non_literal_non_constexpr_dtor = Note (1) "{0} is not literal because its destructor is not constexpr";
 note_non_literal_user_provided_dtor = Note (1) "{0} is not literal because it has a user-provided destructor";

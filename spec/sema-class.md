@@ -1133,7 +1133,17 @@ not `constexpr` when a member's selected ctor is not; a destructor only when
 every subobject's is, clang `defaultedDestructorIsConstexpr`; none before
 C++20). `HAS_CONSTEXPR_CTOR` and
 `LITERAL` are computed from these. `DEFAULTED_DEFAULT_CTOR_CONSTEXPR` records
-the default ctor's answer before it is declared.
+the default ctor's answer before it is declared. A closure type
+([expr.prim.lambda.closure]/3, P0170R1; clang `CXXRecordDecl::isLiteral`)
+needs no constructor to be literal from C++17: it is literal when its
+destructor and its members are (a reference capture always is), and never
+before C++17, where `RequireLiteralType`'s first note is "lambda closure
+types are non-literal types before C++17" at the closure. A closure that
+is not literal from C++17 gets the generic "not an aggregate and has no
+constexpr constructors" note (as clang), naming the class as its type,
+`'(lambda at F:L:C)'` (WP-1225). Tests
+`tests/conformance/expr.prim.lambda.closure/p3-literal-closure-cxx{14,17,20,23}.cpp`,
+`p3-literal-closure-cxx17-run.cpp`.
 
 WP-400 models clang's `DefaultedDefaultConstructorIsConstexpr` and
 `defaultedSpecialMemberIsConstexpr` (`defaulted_is_constexpr`):
