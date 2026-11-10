@@ -105,11 +105,12 @@ enum Fam {
 /// The size suffixes of a family name (`""`, `"128"`, ...).
 fn sized<'a>(n: &'a str, stem: &str, sizes: &[&str]) -> Option<&'a str> {
     let rest = n.strip_prefix(stem)?;
-    sizes.iter().any(|s| *s == rest).then_some(rest)
+    sizes.contains(&rest).then_some(rest)
 }
 
 /// The family of x86 builtin `n` (without `__builtin_ia32_`).
 #[allow(clippy::too_many_lines, reason = "one arm per family, as clang's switch")]
+#[allow(clippy::enum_glob_use, reason = "every arm names a family")]
 fn family(n: &str) -> Option<Fam> {
     use Fam::*;
     const V3: &[&str] = &["128", "256", "512"];
@@ -276,33 +277,32 @@ fn masked_mem(n: &str) -> Option<Fam> {
         ["qi", "hi", "si", "di"].iter().any(|t| sized(s, t, &["128", "256", "512"]).is_some())
     };
     let v = |s: &str| ["128", "256", "512"].contains(&s);
-    Some(if m.strip_prefix("loadu").is_some_and(ty) {
+    let p = |stem: &str| m.strip_prefix(stem);
+    let load_u = p("loadu").is_some_and(ty)
+        || p("loaddqu").is_some_and(ty_dq)
+        || matches!(m, "loadsh128" | "loadss128" | "loadsd128");
+    let load_a =
+        p("loada").is_some_and(ty) || p("movdqa32load").or(p("movdqa64load")).is_some_and(v);
+    let store_u = p("storeu").is_some_and(ty)
+        || p("storedqu").is_some_and(ty_dq)
+        || matches!(m, "storesh128" | "storess128" | "storesd128");
+    let store_a =
+        p("storea").is_some_and(ty) || p("movdqa32store").or(p("movdqa64store")).is_some_and(v);
+    Some(if load_u {
         Fam::MaskedLoad(false)
-    } else if m.strip_prefix("loada").is_some_and(ty) {
+    } else if load_a {
         Fam::MaskedLoad(true)
-    } else if m.strip_prefix("loaddqu").is_some_and(ty_dq) {
-        Fam::MaskedLoad(false)
-    } else if matches!(m, "loadsh128" | "loadss128" | "loadsd128") {
-        Fam::MaskedLoad(false)
-    } else if m.strip_prefix("movdqa32load").or(m.strip_prefix("movdqa64load")).is_some_and(v) {
-        Fam::MaskedLoad(true)
-    } else if m.strip_prefix("storeu").is_some_and(ty) {
+    } else if store_u {
         Fam::MaskedStore(false)
-    } else if m.strip_prefix("storea").is_some_and(ty) {
+    } else if store_a {
         Fam::MaskedStore(true)
-    } else if m.strip_prefix("storedqu").is_some_and(ty_dq) {
-        Fam::MaskedStore(false)
-    } else if matches!(m, "storesh128" | "storess128" | "storesd128") {
-        Fam::MaskedStore(false)
-    } else if m.strip_prefix("movdqa32store").or(m.strip_prefix("movdqa64store")).is_some_and(v) {
-        Fam::MaskedStore(true)
-    } else if m.strip_prefix("expandload").is_some_and(ty) {
+    } else if p("expandload").is_some_and(ty) {
         Fam::ExpandLoad
-    } else if m.strip_prefix("compressstore").is_some_and(ty) {
+    } else if p("compressstore").is_some_and(ty) {
         Fam::CompressStore
-    } else if m.strip_prefix("expand").is_some_and(ty) {
+    } else if p("expand").is_some_and(ty) {
         Fam::CompressExpand(false)
-    } else if m.strip_prefix("compress").is_some_and(ty) {
+    } else if p("compress").is_some_and(ty) {
         Fam::CompressExpand(true)
     } else {
         return None;
@@ -526,7 +526,10 @@ impl Cg<'_> {
             Fam::IntToFp(signed) => {
                 let t = ty(self, ops[1]);
                 let st = ty(self, ops[0]);
-                let r = if k(self, ops[3]) != 4 {
+                let r = if k(self, ops[3]) == 4 {
+                    let op = if signed { CastOp::SIToFP } else { CastOp::UIToFP };
+                    self.cast(op, ops[0], t)
+                } else {
                     let base = if signed {
                         "llvm.x86.avx512.sitofp.round"
                     } else {
@@ -536,9 +539,6 @@ impl Cg<'_> {
                     let p = [(st, false), (LTy::I32, true)];
                     let f = intrinsics::target_intrinsic(&mut self.m, &iid, t, &p, Mem::None);
                     self.intrinsic_call(f, vec![ops[0], ops[3]])
-                } else {
-                    let op = if signed { CastOp::SIToFP } else { CastOp::UIToFP };
-                    self.cast(op, ops[0], t)
                 };
                 self.x86_select(ops[2], r, ops[1])
             }
@@ -572,7 +572,15 @@ impl Cg<'_> {
                 }
             }
             Fam::ScalarSqrt => {
-                if k(self, ops[4]) != 4 {
+                if k(self, ops[4]) == 4 {
+                    let a = self.extract_elt(ops[1], z64);
+                    let et = ty(self, a);
+                    let f = intrinsics::fp_op(&mut self.m, "llvm.sqrt", et, 1);
+                    let a = self.intrinsic_call(f, vec![a]);
+                    let src = self.extract_elt(ops[2], z64);
+                    let a = self.x86_scalar_select(ops[3], a, src);
+                    self.insert_elt(ops[0], a, z64)
+                } else {
                     let iid = match n {
                         "sqrtsh_round_mask" => "llvm.x86.avx512fp16.mask.sqrt.sh",
                         "sqrtsd_round_mask" => "llvm.x86.avx512.mask.sqrt.sd",
@@ -581,14 +589,6 @@ impl Cg<'_> {
                     let p = self.x86_params(&ops, &[4]);
                     let f = intrinsics::target_intrinsic(&mut self.m, iid, rty, &p, Mem::None);
                     self.intrinsic_call(f, ops)
-                } else {
-                    let a = self.extract_elt(ops[1], z64);
-                    let et = ty(self, a);
-                    let f = intrinsics::fp_op(&mut self.m, "llvm.sqrt", et, 1);
-                    let a = self.intrinsic_call(f, vec![a]);
-                    let src = self.extract_elt(ops[2], z64);
-                    let a = self.x86_scalar_select(ops[3], a, src);
-                    self.insert_elt(ops[0], a, z64)
                 }
             }
             Fam::Reduce => {
