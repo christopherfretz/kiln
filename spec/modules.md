@@ -1062,7 +1062,7 @@ What an image must hold, the id it is keyed by, and where it stands:
 | types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
 | expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
 | template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
-| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); pointers to string literals, lifetime-extended temporaries and labels, and reflections of alias template specializations, data member specifications and annotations (WP-1160); not an alias template specialization with a non-type argument, nor an annotation `define_aggregate` made | the same encoding, its entities remapped; the values part 1 leaves out |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); pointers to string literals, lifetime-extended temporaries and labels, and reflections of alias template specializations (non-type arguments as converted values, WP-1168), data member specifications and annotations (WP-1160); not an annotation `define_aggregate` made | the same encoding, its entities remapped; the values part 1 leaves out |
 | Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
 | source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
 | identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
@@ -1424,12 +1424,11 @@ same entity:
   specialization with its canonical arguments and aliased type
   (`Ast::reflection_type`), and the type store interns it, so the
   importer's rebuilt type is its own `^^Ptr<int>`. A non-type argument is
-  kept as written (an expression), which has no key, so a reflection of
-  `Arr<char, 3>` falls back (`a reflection of an alias template
-  specialization with no key`); that spelling is not even equal to
-  itself within one unit yet
-  (`tests/conformance/expr.reflect/alias-spec-value-arg-identity.cpp`,
-  xfail).
+  its converted value there (sema-templates.md §4.10, WP-1168), so
+  `^^Arr<char, 1 + 2>` is carried and equals the importer's
+  `^^Arr<char, 3>`. A specialization whose list still is not canonical
+  falls back (`a reflection of an alias template specialization with no
+  key`).
 - **Data member specification.** The Oven interns specifications by
   their contents ([meta.reflection.define.aggregate]: two calls with
   equal arguments give one reflection), so the importer interning the
