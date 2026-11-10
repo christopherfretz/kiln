@@ -8,6 +8,7 @@
 //@ skip(clang): clang does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1's access_context::via rejects a union (its is_class_type check excludes unions)
 #include "kiln_meta.h"
 using namespace std::meta;
 

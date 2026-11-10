@@ -10,6 +10,7 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ args: -Wno-uninitialized
+//@ xfail(gcc): GCC 16.1 has no __builtin_is_within_lifetime
 #define L __builtin_is_within_lifetime
 
 struct A { bool a, b; };

@@ -4,6 +4,7 @@
 //@ xfail(kiln): needs member splices (WP-474), nonstatic_data_members_of (WP-478) and define_static_array (WP-479)
 //@ strict-diags
 //@ stdout: a=3 bb=4
+//@ xfail(gcc): GCC 16.1 rejects the run-time comparison with nonstatic_data_members_of(...)[0] as consteval-only
 // [meta.reflection.define.aggregate], [stmt.expand] (P2996R13): a run-time
 // expansion statement over the members of a defined class reads each
 // member through a splice.

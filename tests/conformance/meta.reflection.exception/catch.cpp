@@ -8,6 +8,7 @@
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): what() is kiln's message wording, which GCC 16.1's library does not share
 #include "kiln_meta.h"
 using namespace std::meta;
 
@@ -26,13 +27,13 @@ static_assert(by_type());
 
 consteval unsigned where_line() {
   try {
-    (void)u8identifier_of(^^S*);  // line 29
+    (void)u8identifier_of(^^S*);  // line 30
   } catch (std::meta::exception e) {
     return e.from() == ^^u8identifier_of ? e.where().line() : 0;
   }
   return 0;
 }
-static_assert(where_line() == 29);
+static_assert(where_line() == 30);
 
 consteval bool as_base() {
   try {

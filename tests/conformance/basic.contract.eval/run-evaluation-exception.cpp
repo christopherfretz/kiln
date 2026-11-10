@@ -13,6 +13,7 @@
 //@ stdout: next 4
 //@ stdout: handler 1 1 0
 //@ stdout: caught 42
+//@ xfail(gcc): GCC 16.1 reports predicate_false for an exception escaping the predicate (spec/contracts.md §9)
 #include <contracts>
 #include <cstdio>
 #include <exception>
