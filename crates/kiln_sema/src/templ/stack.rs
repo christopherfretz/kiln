@@ -646,7 +646,7 @@ impl Sema<'_, '_> {
             FrameKind::DefaultTemplateArg if f.args.is_some() => {
                 let mut s = self.qualified_decl_name(f.template);
                 if let Some(l) = f.args {
-                    let names = crate::names::SemaNames::new(self);
+                    let names = crate::names::sema_names(self);
                     kiln_ast::types::write_arg_list(&self.ast.types, &names, l, &mut s);
                 }
                 s
@@ -699,7 +699,7 @@ impl Sema<'_, '_> {
             FrameKind::DefaultFunctionArg | FrameKind::ExceptionSpec | FrameKind::Annotation => {
                 let mut s = self.decl_name(f.entity);
                 if let Some(l) = f.args {
-                    let names = crate::names::SemaNames::new(self);
+                    let names = crate::names::sema_names(self);
                     kiln_ast::types::write_arg_list(&self.ast.types, &names, l, &mut s);
                 }
                 s
@@ -708,7 +708,7 @@ impl Sema<'_, '_> {
             FrameKind::BindingInit => self.decl_name(f.entity),
             // A local class (or a class nested in one) is named as a
             // declaration, through its function (`f()::L::N`).
-            FrameKind::MemberClass => crate::names::SemaNames::new(self)
+            FrameKind::MemberClass => crate::names::sema_names(self)
                 .local_class_decl_name(f.entity)
                 .unwrap_or_else(|| self.qualified_decl_name(f.entity)),
             _ => self.qualified_decl_name(f.entity),

@@ -61,6 +61,16 @@ pub trait TypeNames {
         None
     }
 
+    /// The template arguments written on explicit specialization or
+    /// explicit instantiation `decl`, printed in place of
+    /// [`Self::specialization_args`] unless canonical arguments are asked
+    /// for (clang `TypePrinter::printTag`: `getTemplateArgsAsWritten`
+    /// when set and not `PrintCanonicalTypes`).
+    fn args_as_written(&self, decl: DeclId) -> Option<ArgListId> {
+        let _ = decl;
+        None
+    }
+
     /// All the converted template arguments of class template
     /// specialization `decl`, trailing defaults included (`None` for
     /// other records): clang's `getTemplateArgs()`, which a failed
@@ -1440,12 +1450,20 @@ impl Printer<'_> {
                 self.decl(d, self.scope);
                 // clang's `printTo` keeps trailing default arguments
                 // under `PrintCanonicalTypes`.
+                let written = if self.canon_args { None } else { self.names.args_as_written(d) };
                 let args = if self.canon_args {
                     self.names.converted_args(d).map(|l| self.ctx.canonical_args(l))
                 } else {
                     self.names.specialization_args(d)
                 };
-                if let Some(args) = args {
+                if let Some(w) = written {
+                    // The written arguments print as written (their
+                    // elaborated sugar keeps the written qualifier), in
+                    // clang 22 too: `'n::X<TA>'`.
+                    self.with_scope(false, |p| {
+                        p.arg_list_prefix(w, false, usize::MAX, Some(d), false);
+                    });
+                } else if let Some(args) = args {
                     if self.c22 {
                         // clang 22: the specialization's (canonical)
                         // arguments print fully scoped, whatever the

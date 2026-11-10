@@ -1109,7 +1109,7 @@ impl Cg<'_> {
             // [expr.static.cast]/11: the object is of the derived type.
             if self.ub_type_check_on() {
                 let loc = self.ub_expr_loc(e);
-                let dq = ast.types.pointee(q).expect("Sema: pointer type");
+                let dq = ast.types.pointee_sugared(q).expect("Sema: pointer type");
                 self.ub_type_check(v, TypeCheck::new(Tck::DowncastPointer, loc, dq))?;
             }
             return Ok(v);
@@ -3004,7 +3004,10 @@ impl Cg<'_> {
         let (base_addr, btb) = if n.has(ExprFlags::ARROW) {
             // clang `EmitMemberExpr`: `EmitPointerWithAlignment` of the
             // base (`this` included: a class's pointer alignment).
-            let pq = ast.types.pointee(ast.exprs.get(base).ty()).expect("Sema: pointer type");
+            // clang `getPointeeType`: the written pointee, its sugar kept
+            // for the UBSan type descriptor.
+            let pq =
+                ast.types.pointee_sugared(ast.exprs.get(base).ty()).expect("Sema: pointer type");
             let (p, align) = self.ptr_align(base)?;
             if self.ub_type_check_on() {
                 let skip = self.ub_member_skips(base);
