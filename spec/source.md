@@ -116,6 +116,10 @@ File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
 - `file_kind(Loc) -> FileKind` (clang `getFileCharacteristic`): of
   `expansion_loc(loc)`; `User` for invalid/unknown locations.
   `is_in_system_header(Loc)` is `file_kind(loc).is_system()`.
+  `is_in_system_macro(Loc)` (clang `isInSystemMacro`) is true for a macro
+  location whose spelling is in a system header, stepping out of
+  `<scratch space>` spellings first; `is_written_in_scratch_space(Loc)`
+  tests the presumed file name.
 - kiln_pp marks: the start of an inclusion range entered as a system
   header, the `system_header` token of `#pragma GCC system_header`, and
   the line after a line marker (flags 3 / `3 4`, or neither: `User`).

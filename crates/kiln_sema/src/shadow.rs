@@ -30,6 +30,13 @@ impl Sema<'_, '_> {
         {
             return;
         }
+        // clang `shouldWarnIfShadowedDecl` asks at the name's location,
+        // so a declaration spelled in a system macro (the nested
+        // `__ret`s of the NEON intrinsics) is not checked at all, for
+        // `-Wshadow-uncaptured-local` either (spec/diag.md §5.4).
+        if !self.diags.is_enabled_at(DiagId::sema_decl_shadow, self.ast.decls.get(d).loc()) {
+            return;
+        }
         let Some((old, found)) = self.shadow_lookup(name) else { return };
         let typedef = |k| matches!(k, DeclKind::Typedef | DeclKind::TypeAlias);
         let ok = self.kind_of(old);
@@ -61,7 +68,7 @@ impl Sema<'_, '_> {
     /// declared, that hides a variable, function, field or enumerator.
     /// clang diagnoses even one it then rejects as a redefinition.
     pub(crate) fn check_enumerator_shadow(&mut self, en: DeclId, name: Symbol, loc: Loc) {
-        if !self.diags.is_enabled(DiagId::sema_decl_shadow)
+        if !self.diags.is_enabled_at(DiagId::sema_decl_shadow, loc)
             || self.inst.stack.in_instantiation_record()
         {
             return;

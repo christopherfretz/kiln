@@ -202,14 +202,16 @@ impl<'sm> DiagEngine<'sm> {
         self.severity_at(id, loc) != Severity::Ignored && !self.suppressed_in_system_header(id, loc)
     }
 
-    /// clang's system-header rule (the tail of `getDiagnosticSeverity`):
-    /// a diagnostic that does not show in system headers, whose location's
-    /// expansion is in one, is ignored unless `-Wsystem-headers`.
+    /// clang's system-header rules (the tail of `getDiagnosticSeverity`),
+    /// both off under `-Wsystem-headers`: a diagnostic that does not show
+    /// in system headers, whose location's expansion is in one, is
+    /// ignored; so is one that does not show in system macros, whose
+    /// location is spelled in a macro from a system header (§5.4).
     fn suppressed_in_system_header(&self, id: DiagId, loc: Loc) -> bool {
         self.policy.suppress_system
-            && !id.shows_in_system_header()
             && loc.is_valid()
-            && self.sm.is_in_system_header(loc)
+            && ((!id.shows_in_system_header() && self.sm.is_in_system_header(loc))
+                || (!id.shows_in_system_macro() && self.sm.is_in_system_macro(loc)))
     }
 
     /// Whether `id` would be emitted at all: enabled by the options or
