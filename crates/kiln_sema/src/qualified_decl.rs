@@ -82,6 +82,9 @@ impl Sema<'_, '_> {
             }
         }
         let cur_kind = self.kind_of(cur);
+        if let Some(r) = self.diagnose_exported_qualified(d, dc, cur) {
+            return r;
+        }
         if self.ast.first(cur) == self.ast.first(dc) {
             // DR482: a qualifier naming the scope the declaration is in.
             // `struct X { void X::f(); };` is an error (clang's
@@ -153,6 +156,43 @@ impl Sema<'_, '_> {
             return QualifiedDecl::Keep;
         }
         QualifiedDecl::Keep
+    }
+
+    /// [module.interface]/1, /6 (WP-1159): directly in an export
+    /// declaration clang's scope is the export, which encloses nothing. A
+    /// member of a class is diagnosed and still declared; the global scope
+    /// cannot be named; a namespace member is checked as an exported
+    /// redeclaration (and gets no extra-qualification warning). A
+    /// template-id declarator is exempt, as in clang. `None`: not in an
+    /// export, or a namespace member of a scope other than `cur`, checked
+    /// as usual.
+    fn diagnose_exported_qualified(
+        &mut self,
+        d: &Declarator,
+        dc: DeclId,
+        cur: DeclId,
+    ) -> Option<QualifiedDecl> {
+        if d.spec_id.is_some() || !self.module_in_export_decl() {
+            return None;
+        }
+        let Some((n, loc)) = self.qualified_declarator_name(d) else {
+            return Some(QualifiedDecl::Keep);
+        };
+        match self.kind_of(dc) {
+            DeclKind::TranslationUnit => {
+                let m = self.diag(DiagId::sema_invalid_declarator_global_scope, loc).arg(&n);
+                self.emit(m);
+                Some(QualifiedDecl::Drop)
+            }
+            DeclKind::Namespace if self.ast.first(cur) == self.ast.first(dc) => {
+                Some(QualifiedDecl::Keep)
+            }
+            DeclKind::Namespace => None,
+            _ => {
+                self.module_check_export_member(dc, &n, loc);
+                Some(QualifiedDecl::Keep)
+            }
+        }
     }
 
     /// The declarator-id of `d` as clang prints it in the qualified

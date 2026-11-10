@@ -13,6 +13,16 @@
 //! bytes, so a value names exactly the entity the writer's did or is not
 //! used (the evaluation runs). Types are rebuilt in canonical form.
 //!
+//! A string literal or label address is the importer's own expression at
+//! the written position, through a second index of the `StringLiteral`
+//! and `AddrLabelExpr` expressions at each position (two at one position
+//! resolve to neither: a template's expression an instantiation formed
+//! again). A temporary is the importer's own for the extending
+//! declaration and mangling index, and takes the carried value when it
+//! has none yet. An annotation is found among its entity's by position
+//! and ordinal; a data member specification is interned by its contents
+//! (WP-1160).
+//!
 //! The section was checked when it was installed ([`super::inst`]'s value
 //! grammar), but decoding is total all the same: anything unexpected is
 //! `None`, never a panic.
@@ -23,14 +33,20 @@ use kiln_ast::consts::{
     ByteImage, ByteRange, IntBits, MemberKind, NullKind, PtrBase, Reloc, Scalar, UnionMember,
 };
 use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::{AnnId, ArgListId, ExprId, RawId};
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::{BuiltinType, ExcSpec, FuncInfo, Quals, TypeView, VectorKind};
+use kiln_ast::types::{
+    BuiltinType, ExcSpec, FuncInfo, Quals, TemplateArg, TemplateName, TypeView, VectorKind,
+};
 use kiln_ast::{ConstValueId, DeclId, QualType};
+use kiln_oven::Dms;
 use kiln_source::fx::{FxHashMap, FxHasher};
 
 use super::inst::{
-    self, BASE_CONST, BASE_DECL, BASE_FUNCTION, BASE_PARAM_OBJECT, BASE_TYPE_INFO, ENT_DECL,
-    ENT_MEMBER, ENT_PATTERN, ENT_SPEC, ENT_TU, REFL_ALIAS, REFL_TYPE, TY_ARRAY, TY_ATOMIC,
+    self, BASE_CONST, BASE_DECL, BASE_FUNCTION, BASE_LABEL, BASE_PARAM_OBJECT, BASE_STRING,
+    BASE_TEMPORARY, BASE_TYPE_INFO, DMS_ALIGN, DMS_NAME, DMS_NUA, DMS_WIDTH, ENT_DECL, ENT_MEMBER,
+    ENT_PATTERN, ENT_SPEC, ENT_TU, REFL_ALIAS, REFL_ALIAS_SPEC, REFL_TYPE, TY_ARRAY, TY_ATOMIC,
     TY_BITINT, TY_BUILTIN, TY_COMPLEX, TY_ENUM, TY_FUNCTION, TY_INCOMPLETE_ARRAY, TY_LREF,
     TY_MEMBER_POINTER, TY_POINTER, TY_RECORD, TY_RREF, TY_VECTOR,
 };
@@ -56,6 +72,29 @@ pub(super) struct Index {
     ents: FxHashMap<Box<[u8]>, DeclId>,
     /// Template -> how many of its specializations' keys are in `ents`.
     specs: FxHashMap<DeclId, usize>,
+    /// (first extending declaration, mangling index) of each
+    /// lifetime-extended temporary below `cursor` -> the temporary,
+    /// `None` when more than one has it.
+    lets: FxHashMap<(DeclId, u32), Option<DeclId>>,
+    /// Expressions below this id are in `by_expr`.
+    expr_cursor: u32,
+    /// [`pos_hash`] of a `StringLiteral` ([`EXPR_STRING`]) or
+    /// `AddrLabelExpr` ([`EXPR_LABEL`]) position -> the expression,
+    /// `None` when more than one has it.
+    by_expr: FxHashMap<u64, Option<ExprId>>,
+}
+
+/// The kinds of [`Index::by_expr`].
+const EXPR_STRING: u8 = 0;
+const EXPR_LABEL: u8 = 1;
+
+/// The position at the start of `r`.
+fn wire_at(r: &mut Rd<'_>) -> Option<LocKey> {
+    let mut at = [0u32; 4];
+    for w in &mut at {
+        *w = r.u32().ok()?;
+    }
+    Some(LocKey(at))
 }
 
 fn pos_hash(at: LocKey, kind: u8) -> u64 {
@@ -136,6 +175,19 @@ impl Sema<'_, '_> {
                         let ct = self.wire_ty(t, r, d)?;
                         PtrBase::Const(self.wire_value(t, ct, r, d)?)
                     }
+                    BASE_STRING => {
+                        let origin = self.wire_expr(t, r, EXPR_STRING)?;
+                        PtrBase::StringLit { lit: self.ast.exprs.string_lit(origin), origin }
+                    }
+                    BASE_LABEL => {
+                        let label = self.wire_first(t, r, d)?;
+                        let origin = self.wire_expr(t, r, EXPR_LABEL)?;
+                        if self.ast.first(self.ast.exprs.addr_label(origin)) != label {
+                            return None;
+                        }
+                        PtrBase::Label { label: self.ast.exprs.addr_label(origin), origin }
+                    }
+                    BASE_TEMPORARY => PtrBase::Temporary(self.wire_temporary(t, r, d)?),
                     _ => return None,
                 };
                 let offset = r.var().ok()?;
@@ -225,6 +277,21 @@ impl Sema<'_, '_> {
                     let u = self.ast.types.canonical(n.ty()?);
                     Reflectee::Type(self.ast.types.typedef_type(a, u).into())
                 }
+                REFL_ALIAS_SPEC => {
+                    // As [`kiln_ast::Ast::reflection_type`] keeps it.
+                    let x = self.wire_first(t, r, d)?;
+                    if self.ast.decls.get(x).kind() != DeclKind::TypeAliasTemplate {
+                        return None;
+                    }
+                    let args = self.wire_args(t, r, d)?;
+                    let u = self.wire_ty(t, r, d)?;
+                    let n = self.template_name_for(x);
+                    let n = self.ast.types.canonical_template_name(n);
+                    if self.ast.types.template_name_view(n) != TemplateName::Template(x) {
+                        return None;
+                    }
+                    Reflectee::Type(self.ast.types.template_specialization(n, args, Some(u), true))
+                }
                 _ => return None,
             },
             1 => Reflectee::Decl(self.wire_first(t, r, d)?),
@@ -246,8 +313,180 @@ impl Sema<'_, '_> {
                 let i = u32::try_from(r.var().ok()?).ok()?;
                 if tag == 8 { Reflectee::BaseSpec(x, i) } else { Reflectee::FnParam(x, i) }
             }
+            9 => self.wire_dms(t, r, d)?,
+            10 => Reflectee::Annotation(self.wire_annotation(t, r, d)?),
             _ => return None,
         })
+    }
+
+    /// A template argument list (canonical), interned.
+    fn wire_args(&mut self, t: usize, r: &mut Rd<'_>, depth: u32) -> Option<ArgListId> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let d = depth + 1;
+        let n = r.count(2).ok()?;
+        let mut args = Vec::with_capacity(n);
+        for _ in 0..n {
+            args.push(match r.u8().ok()? {
+                b'T' => TemplateArg::ty(self.wire_ty(t, r, d)?),
+                b'V' => {
+                    let ty = self.wire_ty(t, r, d)?;
+                    TemplateArg::value(ty, self.wire_value(t, ty, r, d)?)
+                }
+                b'N' => {
+                    let x = self.wire_first(t, r, d)?;
+                    let n = self.template_name_for(x);
+                    TemplateArg::template(self.ast.types.canonical_template_name(n))
+                }
+                b'K' => TemplateArg::pack(self.wire_args(t, r, d)?),
+                _ => return None,
+            });
+        }
+        let l = self.ast.types.arg_list(&args);
+        (self.ast.types.canonical_args(l) == l).then_some(l)
+    }
+
+    /// A data member specification, interned in the Oven by its contents
+    /// (and checked as `data_member_spec` checks its options).
+    fn wire_dms(&mut self, t: usize, r: &mut Rd<'_>, d: u32) -> Option<Reflectee> {
+        let ty = self.wire_ty(t, r, d)?;
+        let flags = r.u8().ok()?;
+        let name = if flags & DMS_NAME != 0 {
+            let b = r.bytes().ok()?;
+            let s = std::str::from_utf8(b).ok().filter(|s| kiln_lex::is_identifier(s))?;
+            Some(self.ast.symbols().intern(s))
+        } else {
+            None
+        };
+        let alignment = if flags & DMS_ALIGN != 0 { Some(r.u32().ok()?) } else { None };
+        let bit_width = if flags & DMS_WIDTH != 0 { Some(r.u32().ok()?) } else { None };
+        let nua = flags & DMS_NUA != 0;
+        let ok = (name.is_some() || bit_width.is_some())
+            && !(alignment.is_some() && bit_width.is_some())
+            && !(nua && bit_width.is_some())
+            && !(bit_width == Some(0) && name.is_some())
+            && alignment.is_none_or(u32::is_power_of_two);
+        if !ok {
+            return None;
+        }
+        let n = r.var_count(1).ok()?;
+        let mut annots = Vec::with_capacity(n);
+        for _ in 0..n {
+            let a = self.wire_reflectee(t, r, d + 1)?;
+            if !matches!(a, Reflectee::Value(_) | Reflectee::Object(_)) {
+                return None;
+            }
+            annots.push(self.ast.reflections.intern(a).ok()?);
+        }
+        let oven = self.oven.as_mut()?;
+        let annots = oven.dms_annots_intern(&annots);
+        Some(Reflectee::DataMemberSpec(oven.dms_intern(Dms {
+            ty,
+            name,
+            alignment,
+            bit_width,
+            nua,
+            annots,
+        })))
+    }
+
+    /// An annotation: the `k`-th of its entity's (or base-specifier's)
+    /// annotations at the written position.
+    fn wire_annotation(&mut self, t: usize, r: &mut Rd<'_>, d: u32) -> Option<AnnId> {
+        let base = match r.u8().ok()? {
+            0 => None,
+            1 => Some(u32::try_from(r.var().ok()?).ok()?),
+            _ => return None,
+        };
+        let owner = self.wire_first(t, r, d)?;
+        let at = wire_at(r)?;
+        let k = usize::try_from(r.var().ok()?).ok()?;
+        let list: Vec<AnnId> = match base {
+            // An instantiated entity's annotations not substituted yet:
+            // the replay's evaluation would substitute them, so this one
+            // runs ([`Sema::require_annotations`]).
+            None if self.uninstantiated_annots.contains_key(&owner) => return None,
+            None => self.ast.annots.of_entity(&self.ast, owner),
+            Some(i) => self.ast.lists.iter::<AnnId>(self.ast.annots.of_base(owner, i)).collect(),
+        };
+        let sm = self.diags.sm();
+        let mut seen = 0;
+        for a in list {
+            let loc = self.ast.annots.get(a).loc;
+            let bmi = &mut self.bmi;
+            if loc_key(sm, loc, |f| file_index(bmi, Some(t), sm, f)) == Some(at) {
+                if seen == k {
+                    return Some(a);
+                }
+                seen += 1;
+            }
+        }
+        None
+    }
+
+    /// The temporary of a [`BASE_TEMPORARY`] pointer, given the carried
+    /// value when it has none yet.
+    fn wire_temporary(&mut self, t: usize, r: &mut Rd<'_>, d: u32) -> Option<DeclId> {
+        let ext = self.wire_first(t, r, d)?;
+        let index = u32::try_from(r.var().ok()?).ok()?;
+        let lt = self.wire_ty(t, r, d)?;
+        let value = if r.flag().ok()? {
+            let vt = self.wire_ty(t, r, d)?;
+            Some(self.wire_value(t, vt, r, d)?)
+        } else {
+            None
+        };
+        self.index_decls(t);
+        let let_ = (*self.bmi.tables[t].ix.lets.get(&(ext, index))?)?;
+        if self.ast.types.canonical(self.ast.decls.get(let_).ty()?) != lt {
+            return None;
+        }
+        if let Some(v) = value {
+            match self.ast.decls.lifetime_extended(let_)?.value {
+                Some(old) if old != v => return None,
+                Some(_) => {}
+                None => {
+                    let _ = self.ast.decls.set_lifetime_extended_value(let_, v);
+                }
+            }
+        }
+        Some(let_)
+    }
+
+    /// The importer's expression of `kind` at the position at the start of
+    /// `r`.
+    fn wire_expr(&mut self, t: usize, r: &mut Rd<'_>, kind: u8) -> Option<ExprId> {
+        let at = wire_at(r)?;
+        self.index_exprs(t);
+        self.bmi.tables[t].ix.by_expr.get(&pos_hash(at, kind)).copied().flatten()
+    }
+
+    /// Adds the string literals and label addresses made since the last
+    /// call to table `t`'s expression index.
+    fn index_exprs(&mut self, t: usize) {
+        let sm = self.diags.sm();
+        let end = self.ast.exprs.len() as u32 + 1;
+        let mut cur = self.bmi.tables[t].ix.expr_cursor.max(1);
+        while cur < end {
+            let Some(e) = ExprId::from_raw(cur) else { break };
+            cur += 1;
+            let n = self.ast.exprs.get(e);
+            let kind = match n.kind() {
+                ExprKind::StringLiteral => EXPR_STRING,
+                ExprKind::AddrLabelExpr => EXPR_LABEL,
+                _ => continue,
+            };
+            let bmi = &mut self.bmi;
+            let Some(at) = loc_key(sm, n.loc(), |f| file_index(bmi, Some(t), sm, f)) else {
+                continue;
+            };
+            let slot = bmi.tables[t].ix.by_expr.entry(pos_hash(at, kind)).or_insert(Some(e));
+            if *slot != Some(e) {
+                *slot = None;
+            }
+        }
+        self.bmi.tables[t].ix.expr_cursor = cur;
     }
 
     /// A structural type, rebuilt canonical.
@@ -416,12 +655,9 @@ impl Sema<'_, '_> {
             }
             _ => {}
         }
-        let mut at = [0u32; 4];
-        for w in &mut at {
-            *w = r.u32().ok()?;
-        }
+        let at = wire_at(&mut r)?;
         self.index_decls(t);
-        self.bmi.tables[t].ix.by_pos.get(&pos_hash(LocKey(at), kind)).copied().flatten()
+        self.bmi.tables[t].ix.by_pos.get(&pos_hash(at, kind)).copied().flatten()
     }
 
     /// Adds the declarations made since the last call to table `t`'s
@@ -434,6 +670,14 @@ impl Sema<'_, '_> {
             let d = DeclId::new(cur);
             cur += 1;
             let n = self.ast.decls.get(d);
+            if let Some(l) = self.ast.decls.lifetime_extended(d) {
+                let k = (self.ast.first(l.extending), l.mangling_index);
+                let slot = self.bmi.tables[t].ix.lets.entry(k).or_insert(Some(d));
+                if *slot != Some(d) {
+                    *slot = None;
+                }
+                continue;
+            }
             if n.has(DeclFlags::IMPLICIT) || self.ast.first(d) != d {
                 continue;
             }
