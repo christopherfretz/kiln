@@ -4606,7 +4606,20 @@ specializations still checks them, comparing a defaulted non-type
 argument by value: the partial specialization `lambda<protect<T>, Tag>`
 keeps `protect<T>`'s default `0` as an expression, which equals the
 completed default `0`, so it is more specialized than
-`lambda<F<T1>, Tag>` (Boost.MPL). Tests:
+`lambda<F<T1>, Tag>` (Boost.MPL). In that ordering, when `A` is the
+other partial's synthesized template template parameter `U'<V', A'>`,
+`U<V>` deduces with `A'` bound as `U`'s default, so finishing the
+deduction ([temp.deduct.partial]/12) compares the substituted `U'<V'>`
+with `U'<V', A'>` as equal: a template-id of a synthesized template
+template parameter with a prefix of the other's arguments, through
+pointers, references, arrays, member pointers and template arguments
+(`same_type_with_deduced_defaults`). So `R<Cont<V, A>, U>` of `template
+<class, class> class Cont` is more specialized than `R<Cont<V>, U>` of
+`template <class> class Cont` (clang 19 and 22, GCC), and the
+container-rebind trio of Boost.Container with a variadic `R<Cont<V, A,
+An...>, U>` as well is not ambiguous for `vec<int>` (WP-1212,
+`tests/conformance/temp.spec.partial.order/ttp-deduced-defaults-rebind-run.cpp`).
+Tests:
 `tests/conformance/temp.arg.template/p0522-deduce-defaulted-args-run.cpp`,
 `tests/conformance/temp.arg.template/p0522-partial-order-defaulted-args-run.cpp`,
 `tests/conformance/temp.arg.template/p0522-partial-spec-order-defaulted-value.cpp`,
