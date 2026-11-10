@@ -8,14 +8,15 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
-//@ diag: 21:25 error "declaration adds function contract specifiers to 'f'"
-//@ diag: 20:18 note "previous declaration is here"
-//@ diag: 25:27 error "function contract specifiers of 'f' do not match the previous declaration"
-//@ diag: 24:18 note "previous declaration is here"
-//@ diag: 30:27 error "declaration adds function contract specifiers to 'g'"
-//@ diag: 29:18 note "previous declaration is here"
-//@ diag: 33:33 error "declaration adds function contract specifiers to 'm'"
-//@ diag: 32:26 note "previous declaration is here"
+//@ diag: 22:25 error "declaration adds function contract specifiers to 'f'"
+//@ diag: 21:18 note "previous declaration is here"
+//@ diag: 26:27 error "function contract specifiers of 'f' do not match the previous declaration"
+//@ diag: 25:18 note "previous declaration is here"
+//@ diag: 31:27 error "declaration adds function contract specifiers to 'g'"
+//@ diag: 30:18 note "previous declaration is here"
+//@ diag: 34:33 error "declaration adds function contract specifiers to 'm'"
+//@ diag: 33:26 note "previous declaration is here"
+//@ xfail(gcc): GCC 16.1 diagnoses neither redeclaration of an explicit specialization (spec/contracts.md §9)
 template <class T> void f(T) {}
 template <> void f(int);
 template <> void f(int) pre(true) {}

@@ -16,6 +16,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): the rows where kiln's display_string_of deliberately differs from GCC 16.1's (spec/reflection.md §3.9)
 #include "kiln_meta.h"
 using namespace std::meta;
 

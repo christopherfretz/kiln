@@ -9,6 +9,7 @@
 //@ std: c++26
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 has no __builtin_is_within_lifetime
 #define L __builtin_is_within_lifetime
 struct VB { int v; constexpr VB(int x) : v(x) {} };
 struct VD : virtual VB {

@@ -10,6 +10,7 @@
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 keeps the -I spelling `//Inputs/../Inputs/./` in the file name
 #include "kiln_meta.h"
 #include <slo-header.h>
 using namespace std::meta;

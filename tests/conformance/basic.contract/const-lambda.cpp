@@ -8,10 +8,11 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
-//@ diag: 18:27 error "cannot modify 'm' in a contract predicate: it is implicitly const"
-//@ diag: 19:24 error "cannot modify 'm' in a contract predicate: it is implicitly const"
-//@ diag: 21:25 error "cannot modify 'glob' in a contract predicate: it is implicitly const"
-//@ diag: 25:32 error "cannot modify 'i' in a contract predicate: it is implicitly const"
+//@ diag: 19:27 error "cannot modify 'm' in a contract predicate: it is implicitly const"
+//@ diag: 20:24 error "cannot modify 'm' in a contract predicate: it is implicitly const"
+//@ diag: 22:25 error "cannot modify 'glob' in a contract predicate: it is implicitly const"
+//@ diag: 26:32 error "cannot modify 'i' in a contract predicate: it is implicitly const"
+//@ xfail(gcc): GCC 16.1 does not make id-expressions inside a lambda in a predicate const (spec/contracts.md §9)
 int glob;
 struct S {
   int m;

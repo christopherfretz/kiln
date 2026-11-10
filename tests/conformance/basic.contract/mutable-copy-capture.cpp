@@ -8,6 +8,7 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
+//@ xfail(gcc): GCC 16.1 makes an explicit by-copy capture of a mutable lambda in a predicate const (spec/contracts.md §9)
 void k(int a) {
   int n = 0;
   contract_assert([=]() mutable { ++n; return ++a; }());

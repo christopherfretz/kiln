@@ -16,6 +16,7 @@
 //@ stdout: handler x > 0
 //@ stdout: handler x > 0
 //@ stdout: 4 4
+//@ xfail(gcc): GCC 16.1 drops the seq of an explicit specialization's first declaration when its definition omits it (spec/contracts.md §9)
 #include <contracts>
 #include <cstdio>
 void handle_contract_violation(const std::contracts::contract_violation& v) {
