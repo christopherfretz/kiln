@@ -38,7 +38,7 @@ use crate::decl::{
     ParamData, TagKind, TlsKind, VarEvalState, VarStorage,
 };
 use crate::expr::{
-    ExprDeps, ExprFlags, ExprKind, NonOdrUse, ObjectKind, StringKind, ValueCategory,
+    ExprDeps, ExprFlags, ExprKind, GenericControl, NonOdrUse, ObjectKind, StringKind, ValueCategory,
 };
 use crate::ids::{AttrId, DeclId, ExprId, ListId, QualType, RawId, StmtId, StringLitId, TypeId};
 use crate::stmt::{IfKind, StmtKind};
@@ -166,6 +166,10 @@ enum Node {
     InheritedFrom(DeclId),
     /// Requirement `i` of `RequiresExpr` `e` (`SimpleRequirement`, ...).
     Req(ExprId, u32),
+    /// Association `i` of `GenericSelectionExpr` `e` (`case 'int'
+    /// selected`, `default`; clang's `GenericSelectionExpr::Association`
+    /// lines), with its expression as the child.
+    GenericAssoc(ExprId, u32),
     /// An explicit specialization or instantiation listed under its
     /// template (`ClassTemplateSpecialization 'X'`); its tree prints at
     /// its lexical position.
@@ -494,6 +498,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.decl_ref(o);
                 }
                 Node::Req(e, i) => self.req_line(e, i),
+                Node::GenericAssoc(e, i) => self.generic_assoc_line(e, i),
                 Node::SpecRef(d) => {
                     self.line.push_str(self.class_name(d));
                     self.id('d', d.raw());
@@ -565,6 +570,12 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 }
             }
             Node::Req(e, i) => self.req_children(e, i, kids),
+            Node::GenericAssoc(e, i) => {
+                let assocs = self.ast.exprs.generic_assocs(e, &self.ast.lists);
+                if let Some(a) = assocs.get(i as usize) {
+                    kids.push((Node::Expr(a.expr), None));
+                }
+            }
             Node::Attr(a) => {
                 // `CXXAssumeAttr`: the assumption; `LoopHintAttr`: the
                 // value as written.
@@ -879,12 +890,22 @@ impl<'a, W: io::Write> Dumper<'a, W> {
             | ExprKind::CoyieldExpr
             | ExprKind::DependentCoawaitExpr
             | ExprKind::ChooseExpr
-            | ExprKind::GenericSelectionExpr
             | ExprKind::OffsetOfExpr
             | ExprKind::CXXNewExpr
             | ExprKind::CXXDeleteExpr => {
                 for c in exprs.children(e, lists) {
                     kids.push((Node::Expr(c), None));
+                }
+            }
+            // clang `ASTNodeTraverser::VisitGenericSelectionExpr`: the
+            // controlling expression (a type operand is the line's
+            // `type_operand=`), then one line per association.
+            ExprKind::GenericSelectionExpr => {
+                if let GenericControl::Expr(c) = exprs.generic_control(e, lists) {
+                    kids.push((Node::Expr(c), None));
+                }
+                for i in 0..exprs.generic_assocs(e, lists).len() {
+                    kids.push((Node::GenericAssoc(e, i as u32), None));
                 }
             }
             ExprKind::StmtExpr => kids.push((self.stmt_node(exprs.stmt_expr_body(e)), None)),
@@ -1980,6 +2001,27 @@ impl<'a, W: io::Write> Dumper<'a, W> {
         }
     }
 
+    /// An association of a `GenericSelectionExpr`: `case 'T' [selected]`
+    /// or `default [selected]` (clang `TextNodeDumper::Visit(
+    /// GenericSelectionExpr::ConstAssociation)`; no id or location, as
+    /// clang prints none).
+    fn generic_assoc_line(&mut self, e: ExprId, i: u32) {
+        let exprs = &self.ast.exprs;
+        let Some(a) = exprs.generic_assocs(e, &self.ast.lists).get(i as usize).copied() else {
+            return;
+        };
+        match a.ty {
+            Some(t) => {
+                self.line.push_str("case");
+                self.ty(t);
+            }
+            None => self.line.push_str("default"),
+        }
+        if exprs.selected_operand(e) == Some(a.expr) {
+            self.line.push_str(" selected");
+        }
+    }
+
     /// clang's `CXXCtorInitializer` line: the member (`Field 'm' 'int'`),
     /// the base class (`'B'`) or the delegated-to class (`'D'`).
     fn ctor_init_line(&mut self, c: DeclId, i: u32) {
@@ -2417,6 +2459,18 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     self.line.push_str(" implicit");
                 }
                 self.line.push_str(" this");
+            }
+            // clang `TextNodeDumper::VisitGenericSelectionExpr`; the type
+            // operand of `_Generic(type-name, ...)` is a type-tree child in
+            // clang, a field here (as `CXXTypeidExpr`'s).
+            ExprKind::GenericSelectionExpr => {
+                if exprs.selected_operand(e).is_none() {
+                    self.line.push_str(" result_dependent");
+                }
+                if let GenericControl::Type(t, _) = exprs.generic_control(e, &ast.lists) {
+                    self.line.push_str(" type_operand=");
+                    self.bare_ty(t);
+                }
             }
             ExprKind::CXXTypeidExpr => {
                 if let crate::expr::TypeidOperand::Type(t) = exprs.typeid_operand(e) {
