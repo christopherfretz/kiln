@@ -868,7 +868,7 @@ mod ci_tests {
 
     /// A workflow's text and its jobs, each a two-space-indented `name:`
     /// line and the lines that follow it.
-    fn workflow_jobs(path: &std::path::Path) -> (String, Vec<(String, String)>) {
+    fn workflow_jobs(path: &Path) -> (String, Vec<(String, String)>) {
         let yml = std::fs::read_to_string(path).unwrap();
         let jobs = &yml[yml.find("\njobs:\n").expect("a jobs: map")..];
         let mut blocks: Vec<(String, String)> = Vec::new();
