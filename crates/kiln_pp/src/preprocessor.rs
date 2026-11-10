@@ -854,6 +854,28 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         eod
     }
 
+    /// Ends a module or import directive after its `;` without
+    /// discarding the rest of the line (spec/modules.md §3): what follows
+    /// the `;` on the same line is ordinary text, as clang lexes it
+    /// (`import M; int x;` declares `x`). When the line already ended
+    /// (a missing `;`), this is [`Self::finish_directive`].
+    pub(crate) fn end_directive_at_semi(&mut self) {
+        if !self.in_directive || self.dir_eod.is_some() {
+            self.finish_directive();
+            return;
+        }
+        while matches!(self.frames.last(), Some(Frame::Macro(_))) {
+            self.pop_macro();
+        }
+        self.in_directive = false;
+        let keep = self.lex_opts.keep_comments;
+        if let Some(Frame::File(f)) = self.frames.last_mut() {
+            f.lx.set_in_directive(false);
+            f.lx.set_mode(kiln_lex::LexMode::Normal);
+            f.lx.set_keep_comments(keep);
+        }
+    }
+
     /// Pushes `t` back onto the top file frame.
     pub(crate) fn unlex_file_tok(&mut self, t: Token) {
         if let Some(Frame::File(f)) = self.frames.last_mut() {

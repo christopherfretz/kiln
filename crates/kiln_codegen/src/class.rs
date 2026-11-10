@@ -577,6 +577,13 @@ impl Cg<'_> {
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }
+        if !self.discardable_fn(def) && ast.modules.is_imported_named_unit_decl(def) {
+            // spec/modules.md §7: the imported unit's object defines the
+            // variant (alias or function), so here it is a declaration,
+            // as clang references `D1` of an imported class (WP-1198).
+            let (val, _) = self.declare_structor(first, v)?;
+            return Ok((V::C(val), None));
+        }
         // An alias defined later in the translation unit (only once it is
         // used, for a discardable `weak` one).
         if self.discardable_fn(def) {
