@@ -1102,7 +1102,10 @@ impl Cg<'_> {
             let x = s.bin(op, Flags::NONE, l, r);
             s.cast(CastOp::BitCast, x, t)
         };
-        let stem = n.trim_end_matches(['q', 'h', 's', 'd', 'i', 'b', 'w']);
+        let stem = ["qi", "hi", "si", "di", "b", "w", "d", "q"]
+            .iter()
+            .find_map(|s| n.strip_suffix(s))
+            .unwrap_or(n);
         match stem {
             "kand" => logic(self, BinOp::And, false),
             "kandn" => logic(self, BinOp::And, true),
