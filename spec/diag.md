@@ -384,9 +384,27 @@ dropped too), when all of these hold:
   on, line-marker flag 3 from the next line on).
 
 A warning in a user file produced by a macro defined in a system header
-is kept (its expansion location is in the user file). clang also drops
-`SuppressInSystemMacro` warnings whose spelling is in a system macro;
-kiln has none of those ids yet. Notes go with their parent.
+is kept (its expansion location is in the user file), except that clang's
+second rule (WP-1227) also drops it, under the same flag, when:
+
+- the id does not show in system macros: `DiagId::shows_in_system_macro`
+  is false only for the ids clang 19 marks `SuppressInSystemMacro`, of
+  which kiln has `sema_decl_shadow` (`warn_decl_shadow`; clang's other two,
+  `warn_old_style_cast` and `ext_cxx_designated_init`, have no kiln id
+  yet). Every other id, `sema_decl_shadow_uncaptured_local` included,
+  shows;
+- `SourceManager::is_in_system_macro(lo)` (clang `isInSystemMacro`): the
+  caret is a macro location whose spelling location is in a system header,
+  so a macro-body token of a system macro, not a macro argument written in
+  a user file. A caret spelled in `<scratch space>` (a `##` paste) first
+  steps outward with `immediate_macro_caller_loc` until it is spelled
+  elsewhere, then the rule applies to that location.
+
+sema's `-Wshadow` check asks `is_enabled_at(sema_decl_shadow, name loc)`
+before looking anything up (clang `shouldWarnIfShadowedDecl`), so a
+declaration spelled in a system macro is not checked for
+`-Wshadow-uncaptured-local` either (the nested `__ret` locals of the
+NEON intrinsic macros in `arm_neon.h`). Notes go with their parent.
 `DiagEngine::suppress_system_warnings()` exposes the flag (kiln_pp skips
 macro-redefinition checks in system headers when it is set, as clang
 does) and `is_enabled_at(id, loc)` combines §5.2 with this rule.
