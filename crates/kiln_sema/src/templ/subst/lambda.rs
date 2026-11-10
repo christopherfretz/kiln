@@ -314,6 +314,11 @@ impl Substituter<'_, '_, '_> {
         let exc = exc.ok()?;
         let mut d = Declarator::new(DeclaratorContext::Member, data.lbracket);
         d.op_name = Some(OverloadedOperator::Call);
+        // A lambda's call operator: its return type is the implied `auto`
+        // of [expr.prim.lambda.closure]/3, not a written decl-specifier,
+        // so the C++11 deduced-return gate exempts it as in the pattern
+        // (WP-1213).
+        d.lambda = true;
         // The trailing requires-clause, unsubstituted (checked through
         // `member_constraints`).
         d.trailing_requires = self.sema.ast.templates.trailing_requires.get(call_op).copied();
