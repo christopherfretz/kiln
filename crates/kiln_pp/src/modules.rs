@@ -348,7 +348,11 @@ impl Preprocessor<'_, '_> {
         let kind = self.read_directive_body(import, kw);
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
         let d = ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive };
-        self.finish_directive();
+        if matches!(d.kind, DirectiveKind::Invalid) {
+            self.finish_directive();
+        } else {
+            self.end_directive_at_semi();
+        }
         let perform = match &d.kind {
             DirectiveKind::Module { name, partition, name_span } => {
                 if let Some(m) = &mut self.modules {
