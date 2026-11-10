@@ -2977,6 +2977,24 @@ and the §6.2 tests.
 - The result is `TemplateSpecialization{name: A, args: as written,
   aliased: result}`, which is sugar (types.md §5.3). The canonical type
   is the canonical aliased type.
+- **Identity (WP-1168).** The written arguments are kept for printing
+  only. The specialization's identity is its *converted* argument list
+  ([temp.alias]/2, [temp.type]/1: one argument per parameter, a non-type
+  argument as its converted value, defaults filled in, a trailing pack as
+  one `Pack`; clang's `CheckTemplateArgumentList`). A non-dependent
+  specialization whose canonical written list differs records the
+  canonical converted list (`TypeContext::note_alias_converted`, read by
+  `alias_converted`), and `Ast::reflection_type` keys `^^A<args>` on it,
+  so `^^Arr<char, 1 + 2>`, `^^Arr<char, (short)3>` and `^^Arr<char, 3>`
+  are one reflection, `template_arguments_of` gives the values, and a
+  kind-2 module file carries the reflection (modules.md §11.11). Type
+  identity and mangling are unaffected: the alias is transparent there
+  (its canonical type is the aliased type). A dependent specialization
+  keeps the written list (`reflected_type_words`).
+- Deduction through an alias sees the aliased type
+  ([temp.deduct.type]/8): `template<int N> void f(A<N>&)` with `A<N> =
+  int[N]` deduces `N` from `int[3]`; the bound may be `bool` or any
+  integral type (`tests/conformance/temp.deduct.type/alias-array-bound-deduction-run.cpp`).
 - `alias_cache: (alias, canonical args) → canonical result` makes repeated
   forms cost one probe.
 - Alias substitution is in the immediate context: a failure inside a
