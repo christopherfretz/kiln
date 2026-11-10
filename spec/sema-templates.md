@@ -7126,6 +7126,27 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
   initializer instantiated while an exception specification is evaluated:
   the initializer's note, then the specification's; WP-238,
   tests/conformance/class.mem/nsdmi-lazy-context-notes.cpp).
+- **Instantiations a reflection query requires** (WP-1248). An
+  instantiation that sema runs inside `SemaBridge::meta` (a class made
+  complete by `is_complete_type`, `members_of`, `size_of`,
+  `alignment_of`, or by a query of a `substitute` result; a static data
+  member's definition read by `extract`; whatever else an intrinsic
+  instantiates) happens inside a constant evaluation, whose call frames
+  are the only clue to which compile-time walk asked. `Bridge::meta`
+  records, for the call, the stack depth and `Oven::frame_mark` of the
+  paused evaluation (`InstState::meta_calls`, one shared hook for every
+  op). The context notes of an error then print, after the outermost
+  frame pushed during the call, the evaluation's call frames
+  (`Oven::paused_call_notes`: the "in call to 'f(args)'" notes and
+  `-fconstexpr-backtrace-limit` elision of a failing evaluation's
+  backtrace, innermost first, the last at the outermost evaluation, e.g.
+  the `static_assert`), then the frames older than the call. GCC 16.1
+  prints the same chain as "in 'constexpr' expansion of" lines. The
+  frames render only when such an error prints, and only while the Oven
+  sema holds is the one paused in that call (the mark matches): an error
+  reached through a nested evaluation the call started prints its
+  instantiation notes alone. A frame elided by
+  `-ftemplate-backtrace-limit` takes the call frames with it.
 
 **Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,

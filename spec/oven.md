@@ -4073,6 +4073,11 @@ impl Oven {
     pub fn footprint(&self) -> usize;
     pub fn memory(&self) -> kiln_ast::mem::MemReport;             // WP-663
     pub fn disassemble(&self) -> String;                          // debugging aid
+    // The evaluation paused in a bridge callback (WP-1248): a token for it,
+    // and its call stack as "in call to 'f(args)'" notes, innermost first,
+    // elided as a failure's backtrace (-fconstexpr-backtrace-limit).
+    pub fn frame_mark(&self) -> FrameMark;
+    pub fn paused_call_notes(&self, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
 }
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }
 ```

@@ -151,7 +151,14 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<(), MetaError> {
-        self.sema.meta(op, args, out, ctx, oven)
+        // The one hook for every op that instantiates (WP-1248): an error
+        // in an instantiation the op requires names the evaluation's call
+        // frames (`Sema::meta_call_notes`).
+        let depth = self.sema.inst.stack.len();
+        self.sema.inst.meta_calls.push((depth, oven.frame_mark()));
+        let r = self.sema.meta(op, args, out, ctx, oven);
+        self.sema.inst.meta_calls.pop();
+        r
     }
 
     fn meta_shape(

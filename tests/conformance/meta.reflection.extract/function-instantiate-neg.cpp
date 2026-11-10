@@ -4,8 +4,7 @@
 // function or a function pointer odr-uses it, so the definition of a
 // member of a class template specialization (or of a function template
 // specialization) is instantiated, at once for a constexpr function; one
-// ill-formed for the specialization is diagnosed there, with the
-// instantiation's note at the `extract` call (as GCC 16.1).
+// ill-formed is diagnosed there, noting the `extract` call and the calls.
 //@ expect: compile-fail
 //@ args: -freflection --gcc-toolchain=%{gcc_toolchain}
 //@ skip(clang): clang does not implement P2996 reflection
@@ -13,6 +12,7 @@
 //@ strict-diags
 //@ diag: 32:19 error "static assertion failed due to requirement '2 == 1': MEMBER_BODY"
 //@ diag: 47:13 note "in instantiation of member function 'Panel<2>::operator[]' requested here"
+//@ diag: 52:15 note "in call to 'walk()'"
 //@ diag: 36:19 error "static assertion failed due to requirement '3 == 1': STATIC_BODY"
 //@ diag: 53:21 note "in instantiation of member function 'Panel<3>::make' requested here"
 //@ diag: 41:63 error "static assertion failed due to requirement '4 == 1': FREE_BODY"
