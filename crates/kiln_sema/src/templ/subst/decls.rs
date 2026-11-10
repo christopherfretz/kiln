@@ -1628,7 +1628,15 @@ impl Substituter<'_, '_, '_> {
         let Some(sa) = self.sema.ast.decls.static_assert(d).copied() else { return Err(SubstFail) };
         let c = self.expr(sa.cond)?;
         let m = self.opt_expr(sa.message)?;
-        Ok(self.sema.static_assert_checked(c, m, loc))
+        // The errors of the check itself (a failed assertion, a condition
+        // that is not constant) leave a declaration; those of a body
+        // instantiated by its evaluation are counted there.
+        let (errors, body_errors) = (self.sema.diags.error_count(), self.sema.inst.body_errors);
+        let r = self.sema.static_assert_checked(c, m, loc);
+        let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+        let own = self.sema.diags.error_count().saturating_sub(errors).saturating_sub(nested);
+        self.sema.inst.static_assert_errors += own;
+        Ok(r)
     }
 
     /// A consteval block of the pattern: substituted and evaluated once
