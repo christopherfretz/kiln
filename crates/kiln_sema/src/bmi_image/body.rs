@@ -525,7 +525,7 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
                 for _ in 0..n {
                     q += match *words.get(q)? {
                         0 => 1,
-                        1 => 2,
+                        1 | 3 => 2,
                         2 => 4,
                         _ => return None,
                     };
@@ -782,6 +782,20 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
         return true;
     }
+    // S6: a declaration found through a using-declaration's shadow (of
+    // a shadow ...): the declaration it ends in.
+    if dc == Dc::Found && matches!(d.payload, Payload::Shadow { .. }) {
+        let mut at = w;
+        while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) =
+            img.decls.get(at as usize)
+        {
+            if *target >= at {
+                return false;
+            }
+            at = *target;
+        }
+        return dc_ok(img, nparams, at, Dc::Found);
+    }
     // A specialization or member reference (S4b) names what its pattern
     // declares: a function template's pattern function, a class
     // template's pattern member.
@@ -919,6 +933,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     let ok = match w[p] {
                         0 => true,
                         1 => dc_ok(img, nparams, w[p + 1], Dc::Namespace),
+                        // S6: a namespace alias.
+                        3 => img
+                            .decls
+                            .get(w[p + 1] as usize)
+                            .is_some_and(|d| matches!(d.payload, Payload::NsAlias { .. })),
                         _ => {
                             w[p + 3] <= 1
                                 && w[p + 2] <= 7
@@ -928,7 +947,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     if !ok {
                         return false;
                     }
-                    p += [1, 2, 4][w[p] as usize];
+                    p += [1, 2, 4, 2][w[p] as usize];
                 }
                 true
             }
@@ -1601,8 +1620,10 @@ impl Writer<'_, '_, '_> {
             let v = types.nns_view(id);
             cur = match v {
                 Nns::Global => None,
-                Nns::Namespace { prefix, .. } | Nns::Type { prefix, .. } => prefix,
-                _ => return Err("a qualifier naming a namespace alias, dependent name or splice"),
+                Nns::Namespace { prefix, .. }
+                | Nns::Type { prefix, .. }
+                | Nns::NamespaceAlias { prefix, .. } => prefix,
+                _ => return Err("a qualifier naming a dependent name or splice"),
             };
             chain.push(v);
         }
@@ -1617,6 +1638,20 @@ impl Writer<'_, '_, '_> {
                 Nns::Type { ty, template_kw, .. } => {
                     let q = self.qref(ty)?;
                     out.extend([2, q.ty, u32::from(q.quals), u32::from(template_kw)]);
+                }
+                // S6: an alias of the image, over the namespace it
+                // denotes (rebuilt from the alias).
+                Nns::NamespaceAlias { alias, ns, .. } => {
+                    let w = self
+                        .recs
+                        .get(&alias)
+                        .copied()
+                        .filter(|&r| {
+                            matches!(self.img.decls[r as usize].payload, Payload::NsAlias { .. })
+                        })
+                        .filter(|_| self.s.ast.resolve_alias(alias) == ns)
+                        .ok_or("a qualifier naming a namespace alias outside the image")?;
+                    out.extend([3, w]);
                 }
                 _ => return Err("a malformed qualifier"),
             }
@@ -2162,6 +2197,14 @@ impl Sema<'_, '_> {
                                 None => Nns::Global,
                             }
                         }
+                        3 => match DeclId::from_raw(decl(self, w[p + 1])) {
+                            Some(alias) => Nns::NamespaceAlias {
+                                prefix: cur,
+                                alias,
+                                ns: self.ast.resolve_alias(alias),
+                            },
+                            None => Nns::Global,
+                        },
                         _ => Nns::Type {
                             prefix: cur,
                             ty: self.image_ty(
@@ -2173,7 +2216,7 @@ impl Sema<'_, '_> {
                             template_kw: w[p + 3] != 0,
                         },
                     };
-                    p += [1, 2, 4][(w[p] as usize).min(2)];
+                    p += [1, 2, 4, 2][(w[p] as usize).min(3)];
                     cur = Some(self.ast.types.nns(n));
                 }
                 RawId::raw_opt(cur)

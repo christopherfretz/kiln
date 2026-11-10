@@ -198,7 +198,12 @@ qualified and class-scope name lookup), by ADL, and by redeclaration lookup:
 
 A using-declaration is filtered by its own owner, not its target's: `export
 namespace std { using std::vector; }` makes `std::vector` visible to an
-importer although the class template, declared in std's GMF, is not.
+importer although the class template, declared in std's GMF, is not. A
+purview shadow is filtered the same way, so the shadow of a non-exported
+using-declaration is invisible even when its target is visible (WP-1068).
+A global-module shadow (a header's `using ::size_t;`) is exempt, like every
+implicit declaration, since an importer's own `#include` of the guarded
+header does not redeclare it (`module.import/import-std-compat.cpp`).
 
 ADL ([basic.lookup.argdep]/4, `Sema::module_adl_visible`) uses the same
 predicate plus: a function that is *exported*, attached to a named module
@@ -2272,8 +2277,192 @@ variable templates, unresolved-lookup expressions (a dependent call
 (`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
 calls, and every construct the first slice lists.
 
+**Imports, partitions and using-declarations (S6, WP-1068).** S6
+lets three new shapes produce an image: a unit with imports, a unit
+that re-exports (`export import`), and a module partition. It also
+carries the using family in the purview.
+
+*Imports and re-exports: a replayed preamble.* An image does not
+encode what a unit imports. The importer replays the unit's
+*preamble* instead: the main file from byte 0 up to the end of the
+unit's last top-level module or import directive. That covers the
+module declaration and every `import`, `export import` and header-unit
+import, with the replay's own preprocessor and parser. Each import
+therefore runs through the importer's ordinary path: the module file
+is found from the capsule's recorded imports (§11.2), and an image or
+a replay of that module is used as for any other import. The import
+declarations are made by sema as in a replay. As a result, the
+following are those of the replay by construction:
+
+- visibility ([module.import]/2, an `export import` making the
+  imported unit's exports visible to importers of this one, §5);
+- reachability ([module.reach], the interface dependency set);
+- entity identity and cross-unit merging (§6, WP-460);
+- the `import` tracking that `-fmodule-file-deps` and codegen read.
+
+When the replay reaches the preamble's end, the preprocessor stops
+lexing the main file. The parser then builds the records after it from
+the image, with the unit (and its module directive) already entered.
+
+The image header carries a `preamble` word after `name_loc`: the
+main-file offset just past the newline ending the last module or
+import directive. It is `u32::MAX` when the unit imports nothing. For
+that case the S1–S5 path is unchanged: nothing is replayed, and the
+reader applies the module directive itself. The writer takes the
+offset from the preprocessor, which records where each module and
+import directive of the main unit's own main file ends (include
+depth 0, `ModuleDirective::end`). A directive in an included file or
+in a macro expansion leaves no usable offset, and such a unit falls
+back ("an import outside the module's main file, or code after its
+`;`"). So does a directive followed on its line by anything but blanks
+and a `//` comment (`import M; int x;`, which since WP-1198 declares
+`x`): the preamble must end at a line start. Every record of an
+image with a preamble must lie after it ("a declaration before the
+module's last import").
+
+The writer skips every declaration owned by another unit: imported
+ones, and those of the units the preamble's imports replayed. A record
+that refers to one of them falls back, with the existing reasons
+(each pinned by `kind2_declaration_image_imports`):
+
+- a body naming an imported declaration ("a body referring to a
+  declaration outside the image");
+- a qualifier naming an imported namespace ("a qualifier naming a
+  namespace outside the image"), a type naming an imported class ("a
+  type declared outside the image"), an alias or directive naming an
+  imported namespace ("a using-directive or alias naming a namespace
+  outside the image");
+- a namespace reopened from an import, and an implicit member or
+  instantiation of an imported class or template ("a declaration in an
+  unsupported context").
+
+S6 thus carries the declarations a unit adds on top of its imports, as
+long as they do not refer to them. Referring to imported entities
+needs an external-reference record (a module key and a source
+position, like the AST capsule's position-keyed resolver,
+`bmi_ast::value`), and that is a follow-up. A unit made only of
+imports and re-exports (an umbrella `export module M; export import
+A; export import :P;`) has an empty record list and is fully carried.
+
+The name gate (Part 2a, "ODR merging") is checked twice. The first
+check runs before the preamble is replayed. The second runs at its
+end, because the preamble's imports may have made a gated name seen.
+If the second check fails, or the stop lies inside an open `#if`, the
+preprocessor does not stop. It goes on lexing the rest of the main
+file and the unit replays, with the reason logged ("its image declares
+'X', already seen", "its preamble ends in a conditional"). A preamble
+past the end of the recorded main file, or off a character boundary,
+replays from the start ("its image has a bad preamble").
+
+Mechanics. `try_image_unit` enters the unit with the ordinary
+`replay_capsule_unit` and then gives the unit's main-file frame a
+lexer over bytes `0..preamble` and an `ImageStop`. At that lexer's end
+of file, `image_stop_reached` decides: on success the frame pops as at
+any end of file, and `Marker::UnitEnd` (and the parser's
+`Event::UnitEnd`) carries the image, which the parser hands to
+`Sema::load_module_image` (`after_preamble = true`) before
+`act_on_unit_end`; otherwise the frame's lexer is replaced by one over
+`preamble..len` and lexing goes on. The reader checks that
+`after_preamble` matches the image (a preamble word iff a preamble
+mode load) and that the unit sema entered has the image's key; either
+mismatch is a corrupt file ("a preamble that does not match the
+import", "a preamble that does not enter the image's unit"). The
+writer's offset is `ModuleDirective::end`, which the parser passes to
+`Sema::module_note_directive_end` after each module or import
+directive of the main unit; a `None` there (an include or a macro
+expansion) makes the unit fall back.
+
+*Partitions.* An interface partition (`export module M:P;`) and an
+implementation partition (`module M:P;`) produce images like a
+primary interface. The image's `module` string is then the unit's key
+(`M:P`). The partition's own module directive is part of its preamble,
+so a partition always takes the preamble path, even without imports.
+After the stop, the reader checks that the unit sema entered has the
+image's key, and reports a mismatch as a corrupt file. The kind and
+the partition name come from the replayed directive, so a primary that
+imports its partitions (`export import :P;`, `import :Q;`) gets
+module linkage across the partitions as the replay does. Every record
+is owned by the partition's unit with its purview and export bits
+(§5). A module implementation unit (`module M;`) and a private module
+fragment still fall back ("a unit that is not a module interface or
+partition", "a private module fragment").
+
+*Using-declarations, using-directives, using-enum and namespace
+aliases.* These are carried at namespace scope, including inside
+`export` and `export namespace`. Each is a record whose owner byte
+holds its purview and export bits. An importer's lookup finds an
+exported shadow exactly as in the replay, and a non-exported one stays
+invisible ([module.interface]/2, [basic.lookup]/4). There are five
+kinds:
+
+- kind 20, *using-declaration*: a named record whose payload is the
+  qualifier, as steps (`::`, a namespace record of the image, a class
+  type). It is not in the lookup table: the declaration itself is
+  found through its shadows.
+- kind 21, *using-shadow*: the payload is the target, an earlier
+  record of a declaration (a function, variable, class, enumeration,
+  enumerator, typedef, alias, template or shadow). Its name is the
+  target's. Its `prev` is the earlier shadow of the same target in the
+  same scope that it replaces in lookup (a repeated using-declarator).
+  The reader rebuilds each one with `AstBuilder::using_shadow`, so the
+  shadow set of a using-declarator is the records that follow it.
+- kind 22, *using-directive*: an unnamed record whose payload is the
+  nominated namespace's first record. The reader adds the directive to
+  the lookup tables of its context's namespace (or the translation
+  unit) as `using_directive` does. As in the replay, an imported
+  directive is then seen by later lookups of that namespace.
+- kind 23, *namespace alias*: a named record whose payload is the
+  target, a namespace or alias record. Its `prev` is the earlier alias
+  of the same namespace that it redeclares.
+- kind 24, *using-enum*: a named (the enumeration's name) unlisted
+  record whose payload is the complete enumeration's definition record.
+  Its enumerators' shadows follow it.
+
+Qualifier step 3 (`3 alias:u32`) names a namespace alias record. It
+is used in a type's or body's nested-name-specifier and in a
+using-declaration. The importer rebuilds it as `Nns::NamespaceAlias`
+over the alias's namespace.
+
+The importer rebuilds the exported `using std::X;` shape of `std.cppm`
+from these records once the target is in the image or reachable
+through an external reference. Until S5 and the external-reference
+follow-up land, a using-declaration whose target lies outside the
+image falls back ("a using-declaration naming a declaration outside
+the image"), and so does a directive or alias naming a namespace
+outside it ("a using-directive or alias naming a namespace outside the
+image").
+
+The following still fall back:
+
+- using-declarations in a class: member shadows, access, hiding, and
+  inheriting constructors ("a using-declaration in a class");
+- dependent and pack using-declarations (`UnresolvedUsing*`,
+  `UsingPack`);
+- block-scope using-declarations and directives in bodies.
+
+*S6, measured* (WP-1068; harness profile, aarch64, `/usr/bin/time -v`,
+median of 5 interleaved). An ad hoc project: two interface partitions
+and an implementation partition of 400 classes, 400 `constexpr`
+functions and 400 aliases each (about 2400 records), a primary of 1600
+records that re-exports the first two and imports the third, a module
+that re-exports the primary, and a consumer that uses all of them in a
+`static_assert` and `main`.
+
+- Import, `-fsyntax-only`: 0.11 s and 20.3 MiB replayed, 0.04 s and
+  15.0 MiB from the images (clang 19: 0.01 s, 85.5 MiB). `-c`: 0.12 s
+  to 0.05 s, peak RSS unchanged at 60.0 MiB (LLVM's).
+- Precompiling the primary and the re-exporting module, whose imports
+  now come from images: 0.12 s to 0.07 s and 0.10 s to 0.04 s, peak
+  RSS 19.8 to 15.4 MiB and 20.3 to 14.3 MiB. A partition's own
+  precompile, which imports nothing, grows from 0.04 s and 13.9 MiB to
+  0.05 to 0.07 s and 16.6 MiB (writing about 2400 records), and its
+  module file from 78 KiB to 461 KiB (about 160 B per record).
+- On/off equivalence: identical LLVM IR and identical visibility errors
+  (`kind2_declaration_image_imports`, `image-part-run.cpp`,
+  `image-part-hidden.cpp`).
+
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 10` since WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 11` since WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2285,6 +2474,8 @@ bytes left before anything is allocated):
 
 ```
 image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
+           preamble:u32              S6: end of the replayed preamble
+                                     (u32::MAX: none)
            names:u32 str*            declared names
            gated:u32 u32*            ascending indices into names: the
                                      global-scope names (the pp's gate)
@@ -2327,6 +2518,7 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                        index:u32, pack:u32)   S4b
 targ    := 0 qref | 1 qref value:i128   a type, an integral value
 step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
+         | 3 decl:u32                namespace alias (S6)
 decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
            lexical:u32 loc:u32 prev:u32 payload
 ```
@@ -2357,7 +2549,9 @@ enumerator, 7 typedef, 8 alias, 9 label, 10 lifetime-extended
 temporary, 11 class, 12 field, 13 access specifier, 14 implicit
 special member, 15 template type parameter, 16 non-type template
 parameter, 17 template (S4), 18 specialization reference and 19 member
-reference (S4b, WP-1139). The flags byte may hold `DEPENDENT_CTX`
+reference (S4b, WP-1139), and since S6 (WP-1068) 20 using-declaration,
+21 using-shadow, 22 using-directive, 23 namespace alias and 24
+using-enum. The flags byte may hold `DEPENDENT_CTX`
 (64) on parameters and patterns of templates and on the members of a
 class template's pattern (S4). The payloads are:
 
@@ -2426,6 +2620,9 @@ class template's pattern (S4). The payloads are:
   byte and the arguments (n, then `targ`s);
 - member reference (S4b): the specialization reference record and the
   pattern member record.
+- using-declaration (S6): the qualifier (n, then `step`s);
+- using-shadow, namespace alias and using-enum (S6): the target record;
+- using-directive (S6): the nominated namespace's first record.
 
 **Bodies (S2, WP-1064).** The four body sections follow the lookup
 table. Every expression and statement record is the AST node's header
@@ -2680,7 +2877,11 @@ classes and templates). The follow-ups, in priority order:
    "Templates as patterns" and its follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
-5. S6: imports, re-exports and partitions;
+5. S6: imports, re-exports and partitions. **Landed (WP-1068)**, see
+   "Imports, partitions and using-declarations (S6)"; its follow-ups:
+   external references to imported entities (and with them
+   using-declarations of imported or global-module-fragment entities),
+   namespaces reopened across units, class-scope using-declarations;
 6. S-lazy: the lazy lookup hook (see above);
 7. S7: locations in other files and in macro expansions.
 
@@ -2706,8 +2907,10 @@ are, by stage:
   the headers;
 - S5: the global module fragment itself, and entity merging with other
   imports;
-- S6: the purview's using-declarations ("a using-declaration,
-  using-directive or namespace alias") and re-exports;
+- S6: the purview's using-declarations are carried since WP-1068, but
+  `std`'s name entities of its global module fragment ("a
+  using-declaration naming a declaration outside the image"), so they
+  wait for S5 and the external-reference follow-up;
 - S7: locations in the headers (other files) and in macro expansions
   (`_LIBCPP_*`);
 - follow-ups under WP-1064: attributes with arguments

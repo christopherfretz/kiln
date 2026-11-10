@@ -96,6 +96,11 @@ pub(crate) struct ModSema {
     /// Set while a failed lookup is redone ignoring visibility, to
     /// diagnose a missing import ([`Sema::module_hidden_lookup`]).
     see_hidden: std::cell::Cell<bool>,
+    /// The main-file offset just past the main unit's last module or
+    /// import directive, and whether one of them left no offset (the
+    /// declaration image's preamble, spec/modules.md §11.11 "Imports,
+    /// partitions and using-declarations").
+    preamble: (Option<u32>, bool),
 }
 
 impl ModSema {
@@ -596,11 +601,21 @@ impl Sema<'_, '_> {
     /// The namespace-scope declaration whose owner decides whether `raw`
     /// is visible: `raw` itself, or the enumeration of an unscoped
     /// enumerator; `None` for anything not at namespace scope (a scoped
-    /// enumerator included), and namespaces.
+    /// enumerator included), and namespaces. A using-declaration's shadow
+    /// is implicit but has the using-declaration's owner: a shadow of a
+    /// non-exported using-declaration is not visible to an importer even
+    /// when its target is ([module.interface]/7, [namespace.udecl]/1).
+    /// Only a purview shadow is filtered: a global-module shadow (a
+    /// header's `using ::size_t;`) stays judged by its target, as before
+    /// S6, since a later unit's own `#include` of a guarded header does
+    /// not redeclare it.
     fn module_scope_decl(&self, raw: DeclId) -> Option<DeclId> {
         let mut d = raw;
         let n = self.ast.decls.get(d);
-        if n.kind() == DeclKind::Namespace || n.has(DeclFlags::IMPLICIT) || !n.loc().is_valid() {
+        let purview_shadow =
+            n.kind() == DeclKind::UsingShadow && self.ast.modules.owner(raw).purview;
+        let implicit = n.has(DeclFlags::IMPLICIT) && !purview_shadow;
+        if n.kind() == DeclKind::Namespace || implicit || !n.loc().is_valid() {
             return None;
         }
         let mut c = n.ctx()?;
@@ -740,7 +755,10 @@ impl Sema<'_, '_> {
     pub(crate) fn module_diagnose_hidden(&mut self, found: &Found, name: DeclName, loc: Loc) {
         let (Some(&raw), Some(&d)) = (found.found.first(), found.decls.first()) else { return };
         let text = self.decl_name_str(name);
-        let note = self.diag(DiagId::note_module_decl_not_visible, self.ast.decls.get(d).loc());
+        // A declaration found through a using-declaration is noted at
+        // the using-declaration's shadow (clang 22).
+        let at = if self.kind_of(raw) == DeclKind::UsingShadow { raw } else { d };
+        let note = self.diag(DiagId::note_module_decl_not_visible, self.ast.decls.get(at).loc());
         let mt = &self.ast.modules;
         let scope = self.module_scope_decl(raw);
         let o = scope.map(|s| mt.owner(s)).unwrap_or_default();
@@ -1015,6 +1033,30 @@ impl Sema<'_, '_> {
     pub(crate) fn module_main_frame(&self) -> Option<(Loc, Loc, bool)> {
         let f = self.modules.frames.first()?;
         Some((f.module_kw, f.module_loc, f.private_loc.is_valid()))
+    }
+
+    /// A module or import directive of the current unit ended at main-file
+    /// offset `end` (`None`: in an included file or a macro expansion);
+    /// kept for the main unit only ([`Sema::module_preamble`]).
+    pub fn module_note_directive_end(&mut self, end: Option<u32>) {
+        if self.modules.frames.len() > 1 {
+            return;
+        }
+        match end {
+            Some(e) => self.modules.preamble.0 = Some(e),
+            None => self.modules.preamble.1 = true,
+        }
+    }
+
+    /// The main unit's preamble end and whether a directive left no
+    /// offset ([`Sema::module_note_directive_end`]).
+    pub(crate) fn module_preamble(&self) -> (Option<u32>, bool) {
+        self.modules.preamble
+    }
+
+    /// The current unit's key (`M`, `M:P`; empty for the main file).
+    pub(crate) fn module_current_key(&self) -> &str {
+        self.ast.modules.units.get(usize::from(self.modules.cur())).map_or("", |u| u.key.as_str())
     }
 
     /// The current unit's index (spec/modules.md §6 dedup records).

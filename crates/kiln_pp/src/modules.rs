@@ -112,6 +112,12 @@ pub struct ModuleDirective {
     /// `#warning` or `#ident` preceded this one in the unit's own file
     /// ([cpp.pre]/1 as amended by P3868R1; clang 22's first pp-token).
     pub after_directive: Option<Loc>,
+    /// The offset just past the newline ending the directive, for one of
+    /// the main unit's own main file outside any `#include` and macro
+    /// expansion (the preamble of a declaration image, spec/modules.md
+    /// §11.11 "Imports, partitions and using-declarations"); `None`
+    /// otherwise.
+    pub end: Option<u32>,
 }
 
 /// The kinds of [`ModuleDirective`].
@@ -148,6 +154,18 @@ pub enum DirectiveKind {
     },
     /// A malformed directive (already diagnosed).
     Invalid,
+}
+
+/// An imported unit whose image takes over after its preamble (S6,
+/// spec/modules.md §11.11 "Imports, partitions and using-declarations"):
+/// what [`Preprocessor::image_stop_reached`] needs at the preamble's end.
+pub(crate) struct ImageStop {
+    key: String,
+    path: String,
+    bytes: Vec<u8>,
+    preamble: u32,
+    gated: Vec<String>,
+    span: Span,
 }
 
 /// How an imported module file that holds a declaration image was read,
@@ -347,12 +365,14 @@ impl Preprocessor<'_, '_> {
         let kw = if import { "import" } else { "module" };
         let kind = self.read_directive_body(import, kw);
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
-        let d = ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive };
+        let mut d =
+            ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive, end: None };
         if matches!(d.kind, DirectiveKind::Invalid) {
             self.finish_directive();
         } else {
             self.end_directive_at_semi();
         }
+        d.end = self.main_directive_end();
         let perform = match &d.kind {
             DirectiveKind::Module { name, partition, name_span } => {
                 if let Some(m) = &mut self.modules {
@@ -407,6 +427,40 @@ impl Preprocessor<'_, '_> {
         if let Some((key, _, span)) = header {
             self.import_header(key, span);
         }
+    }
+
+    /// The offset just past the newline ending the directive just read,
+    /// when it is the main unit's own, in its main file at include depth
+    /// 0 with no token lexed ahead ([`ModuleDirective::end`]).
+    fn main_directive_end(&self) -> Option<u32> {
+        let m = self.modules.as_ref()?;
+        if !m.building.is_empty() || self.include_depth != 0 {
+            return None;
+        }
+        let Some(Frame::File(f)) = self.frames.last() else { return None };
+        if Some(f.file) != self.main_file || !f.back.is_empty() {
+            return None;
+        }
+        // The directive ends after its `;`; the rest of its line may hold
+        // blanks and a `//` comment. Anything else on the line (`import M;
+        // int x;`) leaves the end unknown, so the image falls back.
+        let off = f.lx.offset() as usize;
+        let text = self.sm.text(f.file).as_bytes();
+        let mut i = off + text.get(off..)?.iter().take_while(|&&c| c == b' ' || c == b'\t').count();
+        if text.get(i..).is_some_and(|r| r.starts_with(b"//")) {
+            i += text[i..].iter().take_while(|&&c| c != b'\n' && c != b'\r').count();
+        }
+        let rest = &text[i..];
+        let end = if rest.starts_with(b"\r\n") {
+            i + 2
+        } else if rest.starts_with(b"\n") || rest.starts_with(b"\r") {
+            i + 1
+        } else if rest.is_empty() {
+            i
+        } else {
+            return None;
+        };
+        u32::try_from(end).ok()
     }
 
     /// A directive starting at `at` in the current file, at include depth
@@ -797,8 +851,8 @@ impl Preprocessor<'_, '_> {
         let Some(bytes) = take(&mut c).filter(|_| on) else {
             return Some(c);
         };
-        if !c.imports.is_empty() || c.files.is_empty() {
-            self.log_image(key, Some("it imports other units".to_owned()));
+        if c.files.is_empty() {
+            self.log_image(key, Some("it has no main file".to_owned()));
             return Some(c);
         }
         // An image names its unit's main file; one that is not the
@@ -806,23 +860,45 @@ impl Preprocessor<'_, '_> {
         // importer may have declared there (§11.11 "Part 2a", ODR
         // merging), replays. A header that does not decode is used
         // anyway: sema then reports the file as corrupt ("The reader").
-        if let Some((main_path, names)) = bmi::image_header(&bytes) {
-            if c.files[0].path != main_path {
+        if let Some(h) = bmi::image_header(&bytes) {
+            if c.files[0].path != h.main {
                 self.log_image(key, Some("its image names another main file".to_owned()));
                 return Some(c);
             }
-            if let Some(n) = names.iter().find(|n| self.name_seen(n)) {
+            if let Some(n) = h.gated.iter().find(|n| self.name_seen(n)) {
                 self.log_image(key, Some(format!("its image declares '{n}', already seen")));
                 return Some(c);
             }
-            // Seen from now on, so that a later import in the same
-            // lookahead whose image declares one of them replays instead.
-            for n in names {
-                let s = self.interner.intern(n);
-                if let Some(g) = &mut self.name_gate {
-                    g.see(s);
+            // S6: the unit's module and import directives replay first,
+            // up to the preamble's end, where the image takes over
+            // (§11.11 "Imports, partitions and using-declarations").
+            if let Some(p) = h.preamble {
+                let text = &c.files[0].text;
+                if p as usize > text.len() || !text.is_char_boundary(p as usize) {
+                    self.log_image(key, Some("its image has a bad preamble".to_owned()));
+                    return Some(c);
                 }
+                let gated: Vec<String> = h.gated.iter().map(|&n| n.to_owned()).collect();
+                let stop = ImageStop {
+                    key: key.to_owned(),
+                    path: path.to_owned(),
+                    bytes,
+                    preamble: p,
+                    gated,
+                    span,
+                };
+                self.replay_capsule_unit(key.to_owned(), path.to_owned(), c, span);
+                self.set_image_stop(stop);
+                return None;
             }
+            if !c.imports.is_empty() {
+                self.log_image(key, Some("it imports other units".to_owned()));
+                return Some(c);
+            }
+            self.see_gated(&h.gated);
+        } else if !c.imports.is_empty() {
+            self.log_image(key, Some("it imports other units".to_owned()));
+            return Some(c);
         }
         self.log_image(key, None);
         let carried = take_carried(path, &mut c);
@@ -842,8 +918,88 @@ impl Preprocessor<'_, '_> {
             carried,
             image: Some(image),
         });
-        self.queue(Marker::UnitEnd { key: key.to_owned() });
+        self.queue(Marker::UnitEnd { key: key.to_owned(), image: None });
         None
+    }
+
+    /// Marks `names` (an image's gated names) seen from now on, so that a
+    /// later import in the same lookahead whose image declares one of them
+    /// replays instead.
+    fn see_gated<S: AsRef<str>>(&mut self, names: &[S]) {
+        for n in names {
+            let s = self.interner.intern(n.as_ref());
+            if let Some(g) = &mut self.name_gate {
+                g.see(s);
+            }
+        }
+    }
+
+    /// Cuts the main file of the unit [`Self::replay_capsule_unit`] just
+    /// entered at `stop.preamble` (S6): its lexer reads the preamble only,
+    /// and [`Self::image_stop_reached`] decides at its end.
+    fn set_image_stop(&mut self, stop: ImageStop) {
+        let interner = self.interner;
+        let opts = self.lex_opts;
+        let sm = self.sm;
+        let record = self.comment_handler.is_some();
+        let unit_file = self.frames.iter_mut().rev().find_map(|f| match f {
+            Frame::File(f) if f.unit.is_some() => Some(f),
+            _ => None,
+        });
+        let Some(f) = unit_file else { return };
+        f.lx = kiln_lex::Lexer::new_in_range(sm, interner, f.file, 0..stop.preamble, f.base, opts);
+        if record {
+            f.lx.set_record_comments(true);
+        }
+        f.image_stop = Some(Box::new(stop));
+    }
+
+    /// The main file of a unit cut by [`Self::set_image_stop`] reached the
+    /// preamble's end (the top frame). With no conditional open and none of
+    /// the image's gated names seen meanwhile (the preamble's imports may
+    /// have declared one), the unit ends here and its image is built:
+    /// returns true. Otherwise the lexer goes on through the rest of the
+    /// file, and the unit replays.
+    pub(crate) fn image_stop_reached(&mut self) -> bool {
+        let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
+        let Some(stop) = f.image_stop.take() else { return false };
+        let open = !f.conds.is_empty();
+        let why = if open {
+            Some("its preamble ends in a conditional".to_owned())
+        } else {
+            stop.gated
+                .iter()
+                .find(|n| self.name_seen(n))
+                .map(|n| format!("its image declares '{n}', already seen"))
+        };
+        if let Some(why) = why {
+            self.log_image(&stop.key, Some(why));
+            let interner = self.interner;
+            let opts = self.lex_opts;
+            let sm = self.sm;
+            let record = self.comment_handler.is_some();
+            let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
+            let len = sm.text(f.file).len() as u32;
+            f.lx = kiln_lex::Lexer::new_in_range(
+                sm,
+                interner,
+                f.file,
+                stop.preamble..len,
+                f.base,
+                opts,
+            );
+            if record {
+                f.lx.set_record_comments(true);
+            }
+            return false;
+        }
+        self.see_gated(&stop.gated);
+        self.log_image(&stop.key, None);
+        let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
+        let image =
+            Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, main_file: f.file });
+        f.image_done = Some((image, stop.span));
+        true
     }
 
     /// Whether the importer may have declared the name `n` at global
@@ -1209,7 +1365,11 @@ impl Preprocessor<'_, '_> {
 
     /// The file of a unit ended: restores the importer's state and
     /// queues [`Marker::UnitEnd`].
-    pub(crate) fn end_unit(&mut self, save: Box<UnitSave>) {
+    pub(crate) fn end_unit(
+        &mut self,
+        save: Box<UnitSave>,
+        image: Option<(Rc<bmi::ImageSection>, Span)>,
+    ) {
         let save = *save;
         let exported: Vec<Rc<MacroDef>> = if save.header {
             let mut v: Vec<Rc<MacroDef>> = self
@@ -1247,7 +1407,7 @@ impl Preprocessor<'_, '_> {
         }
         self.apply_header_macros(&exported);
         self.callbacks.module_unit(false, save.from_module_file);
-        self.queue(Marker::UnitEnd { key: save.key });
+        self.queue(Marker::UnitEnd { key: save.key, image });
     }
 
     /// [cpp.import]/5: the macros of a header unit become visible.

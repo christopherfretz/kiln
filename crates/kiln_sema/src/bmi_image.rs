@@ -27,7 +27,7 @@ use kiln_ast::decl::{
     FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
     VarSpec, VarStorage,
 };
-use kiln_ast::modules::Owner;
+use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
@@ -47,7 +47,7 @@ mod spec;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 10;
+pub(crate) const IMAGE_VERSION: u32 = 11;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -170,6 +170,8 @@ enum NnsRec {
     Ns(u32),
     /// A type, and whether `template` preceded it.
     Ty(QRef, bool),
+    /// A namespace alias record (S6).
+    Alias(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -371,6 +373,28 @@ enum Payload {
         spec: u32,
         pattern: u32,
     },
+    /// A using-declaration (S6): its qualifier; its shadows follow it.
+    Using {
+        steps: Vec<NnsRec>,
+    },
+    /// The shadow a using-declarator introduces (S6) for `target`.
+    Shadow {
+        target: u32,
+    },
+    /// A using-directive (S6) nominating namespace record `ns` (a first
+    /// declaration).
+    UsingDir {
+        ns: u32,
+    },
+    /// A namespace alias (S6) of a namespace or alias record.
+    NsAlias {
+        target: u32,
+    },
+    /// A using-enum-declaration (S6) of an enumeration's definition; the
+    /// shadows of its enumerators follow it.
+    UsingEnum {
+        e: u32,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -399,6 +423,11 @@ struct Image {
     module: String,
     kw: u32,
     name_loc: u32,
+    /// S6: the main-file offset just past the unit's last top-level
+    /// module or import directive, which an importer replays before it
+    /// builds the records; [`NONE`] for a primary interface without
+    /// imports (the reader then applies the module directive itself).
+    preamble: u32,
     /// The unit's declared names.
     names: Vec<String>,
     /// The names (indices into `names`, ascending) of its declarations at
@@ -430,6 +459,11 @@ const K_NTTP: u8 = 16;
 const K_TEMPLATE: u8 = 17;
 const K_SPEC: u8 = 18;
 const K_MEMBER: u8 = 19;
+const K_USING: u8 = 20;
+const K_SHADOW: u8 = 21;
+const K_USING_DIR: u8 = 22;
+const K_NS_ALIAS: u8 = 23;
+const K_USING_ENUM: u8 = 24;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -453,6 +487,11 @@ impl Payload {
             Payload::Template { .. } => K_TEMPLATE,
             Payload::Spec { .. } => K_SPEC,
             Payload::Member { .. } => K_MEMBER,
+            Payload::Using { .. } => K_USING,
+            Payload::Shadow { .. } => K_SHADOW,
+            Payload::UsingDir { .. } => K_USING_DIR,
+            Payload::NsAlias { .. } => K_NS_ALIAS,
+            Payload::UsingEnum { .. } => K_USING_ENUM,
         }
     }
 }
@@ -647,6 +686,22 @@ impl Wr {
         self.u32(q.ty);
         self.u8(q.quals);
     }
+    /// A qualifier: `n`, then the steps.
+    fn steps(&mut self, steps: &[NnsRec]) {
+        self.len(steps.len());
+        for st in steps {
+            match st {
+                NnsRec::Global => self.u8(0),
+                NnsRec::Ns(d) => (self.u8(1), self.u32(*d)).1,
+                NnsRec::Ty(q, t) => {
+                    self.u8(2);
+                    self.q(*q);
+                    self.u8(u8::from(*t));
+                }
+                NnsRec::Alias(d) => (self.u8(3), self.u32(*d)).1,
+            }
+        }
+    }
     fn pair(&mut self, p: Option<(QRef, QRef)>) {
         match p {
             None => self.u8(0),
@@ -795,6 +850,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*spec);
             w.u32(*pattern);
         }
+        Payload::Using { steps } => w.steps(steps),
+        Payload::Shadow { target: x }
+        | Payload::UsingDir { ns: x }
+        | Payload::NsAlias { target: x }
+        | Payload::UsingEnum { e: x } => w.u32(*x),
     }
 }
 
@@ -806,6 +866,7 @@ fn encode(img: &Image) -> Vec<u8> {
     w.str(&img.module);
     w.u32(img.kw);
     w.u32(img.name_loc);
+    w.u32(img.preamble);
     w.len(img.names.len());
     for s in &img.names {
         w.str(s);
@@ -874,18 +935,7 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::ElabQ(k, steps, q) => {
                 w.u8(14);
                 w.u8(*k);
-                w.len(steps.len());
-                for st in steps {
-                    match st {
-                        NnsRec::Global => w.u8(0),
-                        NnsRec::Ns(d) => (w.u8(1), w.u32(*d)).1,
-                        NnsRec::Ty(q, t) => {
-                            w.u8(2);
-                            w.q(*q);
-                            w.u8(u8::from(*t));
-                        }
-                    }
-                }
+                w.steps(steps);
                 w.q(*q);
             }
         }
@@ -1004,6 +1054,30 @@ impl<'a> Rd<'a> {
             });
         }
         Ok(v)
+    }
+    /// A qualifier ([`Wr::steps`]): never empty, `::` only first.
+    fn steps(&mut self) -> Res<Vec<NnsRec>> {
+        let n = self.count(1)?;
+        if n == 0 {
+            return bad("an empty qualifier");
+        }
+        let mut steps = Vec::with_capacity(n);
+        for i in 0..n {
+            steps.push(match self.u8()? {
+                0 if i == 0 => NnsRec::Global,
+                1 => NnsRec::Ns(self.u32()?),
+                2 => {
+                    let q = self.q()?;
+                    match self.u8()? {
+                        t @ 0..=1 => NnsRec::Ty(q, t == 1),
+                        _ => return bad("bad qualifier step"),
+                    }
+                }
+                3 => NnsRec::Alias(self.u32()?),
+                _ => return bad("bad qualifier step"),
+            });
+        }
+        Ok(steps)
     }
     fn pair(&mut self) -> Res<Option<(QRef, QRef)>> {
         match self.u8()? {
@@ -1153,6 +1227,11 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             Payload::Spec { template, complete, args: r.args()? }
         }
         K_MEMBER => Payload::Member { spec: r.u32()?, pattern: r.u32()? },
+        K_USING => Payload::Using { steps: r.steps()? },
+        K_SHADOW => Payload::Shadow { target: r.u32()? },
+        K_USING_DIR => Payload::UsingDir { ns: r.u32()? },
+        K_NS_ALIAS => Payload::NsAlias { target: r.u32()? },
+        K_USING_ENUM => Payload::UsingEnum { e: r.u32()? },
         _ => return bad("unknown declaration kind"),
     };
     Ok(DeclRec { flags, owner, access, name, ctx, lexical, loc, prev, payload })
@@ -1174,7 +1253,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             for st in steps {
                 match st {
                     NnsRec::Global => {}
-                    NnsRec::Ns(d) => ds.push(*d),
+                    NnsRec::Ns(d) | NnsRec::Alias(d) => ds.push(*d),
                     NnsRec::Ty(q, _) => qs.push(*q),
                 }
             }
@@ -1209,7 +1288,18 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Implicit { .. }
         | Payload::Template { .. }
         | Payload::Member { .. }
+        | Payload::Shadow { .. }
+        | Payload::UsingDir { .. }
+        | Payload::NsAlias { .. }
+        | Payload::UsingEnum { .. }
         | Payload::Record { def: None, .. } => Vec::new(),
+        Payload::Using { steps } => steps
+            .iter()
+            .filter_map(|s| match s {
+                NnsRec::Ty(q, _) => Some(*q),
+                _ => None,
+            })
+            .collect(),
         Payload::Ttp { default, .. } => default.iter().copied().collect(),
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
@@ -1246,7 +1336,10 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
             | Payload::Nttp { .. }
             | Payload::Template { .. }
             | Payload::Spec { .. }
-            | Payload::Member { .. },
+            | Payload::Member { .. }
+            | Payload::Using { .. }
+            | Payload::UsingDir { .. }
+            | Payload::UsingEnum { .. },
             _,
         ) => false,
         _ => a.code() == b.code(),
@@ -1265,6 +1358,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     let mut img = Image { main: r.str()?, module: r.str()?, ..Image::default() };
     img.kw = r.u32()?;
     img.name_loc = r.u32()?;
+    img.preamble = r.u32()?;
     for which in 0..2 {
         let n = r.count(4)?;
         let mut v = Vec::with_capacity(n);
@@ -1356,25 +1450,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 if tag_keyword(k).is_none() {
                     return bad("bad tag keyword");
                 }
-                let n = r.count(1)?;
-                if n == 0 {
-                    return bad("an empty qualifier");
-                }
-                let mut steps = Vec::with_capacity(n);
-                for i in 0..n {
-                    steps.push(match r.u8()? {
-                        0 if i == 0 => NnsRec::Global,
-                        1 => NnsRec::Ns(r.u32()?),
-                        2 => {
-                            let q = r.q()?;
-                            match r.u8()? {
-                                t @ 0..=1 => NnsRec::Ty(q, t == 1),
-                                _ => return bad("bad qualifier step"),
-                            }
-                        }
-                        _ => return bad("bad qualifier step"),
-                    });
-                }
+                let steps = r.steps()?;
                 TyRec::ElabQ(k, steps, r.q()?)
             }
             _ => return bad("unknown type kind"),
@@ -1457,7 +1533,29 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
 /// Whether record `d` stays out of the lookup table: a local, a template
 /// parameter, or a pattern (its template is looked up in its place).
 fn unlisted(img: &Image, d: &DeclRec) -> bool {
-    body::is_local(img, d) || d.flags & DEP != 0
+    body::is_local(img, d)
+        || d.flags & DEP != 0
+        // Found through their shadows (S6).
+        || matches!(d.payload, Payload::Using { .. } | Payload::UsingEnum { .. })
+}
+
+/// Whether every step of a qualifier names a record below `below` of its
+/// kind: a namespace step a namespace, an alias step an alias (S6).
+fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
+    steps.iter().all(|s| match *s {
+        NnsRec::Global | NnsRec::Ty(..) => true,
+        NnsRec::Ns(x) => {
+            (x as usize) < below
+                && matches!(img.decls.get(x as usize).map(|r| &r.payload), Some(Payload::Namespace))
+        }
+        NnsRec::Alias(x) => {
+            (x as usize) < below
+                && matches!(
+                    img.decls.get(x as usize).map(|r| &r.payload),
+                    Some(Payload::NsAlias { .. })
+                )
+        }
+    })
 }
 
 /// The structural checks of [`decode`].
@@ -1493,7 +1591,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
-                        | (TyRec::ElabQ(..), Payload::Namespace)
+                        | (TyRec::ElabQ(..), Payload::Namespace | Payload::NsAlias { .. })
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
                         | (
                             TyRec::Injected(_) | TyRec::Tst { .. },
@@ -1507,6 +1605,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 return bad("bad declaration reference in a type");
             }
             acc = acc.max(d as usize + 1);
+        }
+        if let TyRec::ElabQ(_, steps, _) = t
+            && !steps_ok(img, steps, nd)
+        {
+            return bad("bad qualifier step");
         }
         if let TyRec::Func { info, .. } = t
             && FuncInfo::from_bits(*info).bits() != *info
@@ -1747,13 +1850,27 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         let ident = |n: u32| (n as usize) < img.names.len();
         let name_ok = match &d.payload {
-            Payload::Export | Payload::Access | Payload::Implicit { .. } => d.name == NONE,
+            Payload::Export
+            | Payload::Access
+            | Payload::Implicit { .. }
+            | Payload::UsingDir { .. } => d.name == NONE,
+            // The target's, the enumeration's or the pattern's name
+            // (checked below); a using-declarator may name an operator.
+            Payload::Shadow { .. } | Payload::UsingEnum { .. } | Payload::Template { .. } => true,
+            Payload::Using { .. } => match d.name {
+                n if n >= N_OP => {
+                    n < N_CTOR
+                        && u8::try_from(n - N_OP)
+                            .ok()
+                            .and_then(OverloadedOperator::from_u8)
+                            .is_some()
+                }
+                n => ident(n),
+            },
             // Template parameters name `pnames`, like function parameters.
             Payload::Ttp { .. } | Payload::Nttp { .. } => {
                 d.name == NONE || (d.name as usize) < img.pnames.len()
             }
-            // Its pattern's name (checked below).
-            Payload::Template { .. } => true,
             Payload::Field { .. } => d.name == NONE || ident(d.name),
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
@@ -1963,6 +2080,55 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     claimed[x as usize] = true;
                 }
             }
+            // S6: the using family, at namespace scope only.
+            Payload::Using { steps } => {
+                if in_class || !steps_ok(img, steps, i) {
+                    return bad("bad using-declaration");
+                }
+            }
+            Payload::Shadow { target } => {
+                let ok = kind_of(*target).is_some_and(|t| {
+                    t.flags & DEP == 0
+                        && t.name == d.name
+                        && matches!(
+                            t.payload,
+                            Payload::Function { kind: 0, .. }
+                                | Payload::Var { .. }
+                                | Payload::Enum { .. }
+                                | Payload::Enumerator { .. }
+                                | Payload::Typedef { .. }
+                                | Payload::Record { .. }
+                                | Payload::Template { .. }
+                                | Payload::Shadow { .. }
+                        )
+                });
+                if in_class || !ok {
+                    return bad("bad using-shadow");
+                }
+            }
+            Payload::UsingDir { ns } => {
+                let ok = kind_of(*ns)
+                    .is_some_and(|n| matches!(n.payload, Payload::Namespace) && n.prev == NONE);
+                if in_class || !ok {
+                    return bad("bad using-directive");
+                }
+            }
+            Payload::NsAlias { target } => {
+                let ok = kind_of(*target).is_some_and(|t| {
+                    matches!(t.payload, Payload::Namespace | Payload::NsAlias { .. })
+                });
+                if in_class || !ok {
+                    return bad("bad namespace alias");
+                }
+            }
+            Payload::UsingEnum { e } => {
+                let ok = kind_of(*e).is_some_and(|t| {
+                    t.name == d.name && matches!(t.payload, Payload::Enum { def: Some(_), .. })
+                });
+                if in_class || !ok {
+                    return bad("bad using-enum-declaration");
+                }
+            }
             Payload::Namespace
             | Payload::Export
             | Payload::Typedef { .. }
@@ -2021,6 +2187,9 @@ struct Writer<'s, 'a, 'b> {
     /// (the targets may follow, implicit members last; WP-1120).
     overrides: Vec<(u32, Vec<DeclId>)>,
     keys: Vec<(u32, DeclId)>,
+    /// S6: per lookup context, name and entity, the latest shadow or
+    /// namespace alias record (what a redeclaration replaces in lookup).
+    usings: FxHashMap<(DeclId, DeclName, DeclId), u32>,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -2139,8 +2308,10 @@ impl Writer<'_, '_, '_> {
             let v = self.s.ast.types.nns_view(id);
             cur = match v {
                 Nns::Global => None,
-                Nns::Namespace { prefix, .. } | Nns::Type { prefix, .. } => prefix,
-                _ => return Err("a qualifier naming a namespace alias, dependent name or splice"),
+                Nns::Namespace { prefix, .. }
+                | Nns::Type { prefix, .. }
+                | Nns::NamespaceAlias { prefix, .. } => prefix,
+                _ => return Err("a qualifier naming a dependent name or splice"),
             };
             chain.push(v);
         }
@@ -2157,6 +2328,18 @@ impl Writer<'_, '_, '_> {
                     _ => return Err("a qualifier naming a namespace outside the image"),
                 },
                 Nns::Type { ty, template_kw, .. } => NnsRec::Ty(self.qref(ty)?, template_kw),
+                // S6: the importer resolves the alias again.
+                Nns::NamespaceAlias { alias, ns, .. } => match self.recs.get(&alias) {
+                    Some(&r)
+                        if matches!(
+                            self.img.decls[r as usize].payload,
+                            Payload::NsAlias { .. }
+                        ) && self.s.ast.resolve_alias(alias) == ns =>
+                    {
+                        NnsRec::Alias(r)
+                    }
+                    _ => return Err("a qualifier naming a namespace alias outside the image"),
+                },
                 _ => return Err("a malformed qualifier"),
             });
         }
@@ -2238,6 +2421,88 @@ impl Writer<'_, '_, '_> {
     /// The name word of `d`: a name index, [`NONE`], or a special name
     /// (constructor, destructor, conversion, operator) the importer
     /// recomputes from the class and the function type.
+    /// S6: the payload of a using-declaration, using-shadow,
+    /// using-directive, namespace alias or using-enum-declaration at
+    /// namespace scope, whose target must be a record of the image.
+    fn using_record(&mut self, d: DeclId) -> W<Payload> {
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        let in_class = n
+            .ctx()
+            .and_then(|c| self.recs.get(&c))
+            .is_some_and(|&c| matches!(self.img.decls[c as usize].payload, Payload::Record { .. }));
+        if in_class {
+            return Err("a using-declaration in a class");
+        }
+        let rec = |x: Option<DeclId>| x.and_then(|x| self.recs.get(&x).copied());
+        let payload_of = |r: u32| &self.img.decls[r as usize].payload;
+        Ok(match n.kind() {
+            DeclKind::Using => {
+                let q = ast.using_qualifier(d).ok_or("a using-declaration without a qualifier")?;
+                Payload::Using { steps: self.nns_steps(q)? }
+            }
+            DeclKind::UsingShadow => {
+                let t = rec(ast.using_target(d))
+                    .ok_or("a using-declaration naming a declaration outside the image")?;
+                if self.img.decls[t as usize].flags & DEP != 0 {
+                    return Err("a using-declaration naming a template pattern");
+                }
+                Payload::Shadow { target: t }
+            }
+            DeclKind::UsingDirective => {
+                let ns = rec(ast.using_target(d).map(|x| ast.first(x)))
+                    .filter(|&r| matches!(payload_of(r), Payload::Namespace))
+                    .ok_or("a using-directive or alias naming a namespace outside the image")?;
+                Payload::UsingDir { ns }
+            }
+            DeclKind::NamespaceAlias => {
+                let target = rec(ast.using_target(d))
+                    .filter(|&r| {
+                        matches!(payload_of(r), Payload::Namespace | Payload::NsAlias { .. })
+                    })
+                    .ok_or("a using-directive or alias naming a namespace outside the image")?;
+                Payload::NsAlias { target }
+            }
+            _ => {
+                let e = rec(ast.using_target(d))
+                    .filter(|&r| matches!(payload_of(r), Payload::Enum { def: Some(_), .. }))
+                    .ok_or("a using-declaration naming a declaration outside the image")?;
+                Payload::UsingEnum { e }
+            }
+        })
+    }
+
+    /// S6: the lookup context, name and entity of shadow or namespace
+    /// alias `d`, which a later one of the same entity replaces in lookup
+    /// (sema's `introduce_shadow` and `act_on_namespace_alias`).
+    fn using_key(&self, d: DeclId) -> Option<(DeclId, DeclName, DeclId)> {
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        let target = ast.using_target(d)?;
+        let entity = match n.kind() {
+            DeclKind::UsingShadow => ast.first(ast.strip_shadow(target)),
+            DeclKind::NamespaceAlias => ast.resolve_alias(target),
+            _ => return None,
+        };
+        let mut c = n.ctx()?;
+        for _ in 0..1024 {
+            if !matches!(ast.decls.get(c).kind(), DeclKind::Export | DeclKind::LinkageSpec) {
+                break;
+            }
+            c = ast.decls.get(c).ctx()?;
+        }
+        Some((ast.primary_context(ast.redecl_context(c)), n.name(), entity))
+    }
+
+    /// S6: the earlier shadow or alias record `d` replaces in lookup, or
+    /// [`NONE`]. Its entity is a record of the image, so an earlier one
+    /// can only be a record of the image too (an import cannot name it,
+    /// and a global module fragment is refused).
+    fn using_prev(&self, d: DeclId) -> W<u32> {
+        let k = self.using_key(d).ok_or("a malformed using-declaration")?;
+        Ok(self.usings.get(&k).copied().unwrap_or(NONE))
+    }
+
     fn name_word(&mut self, d: DeclId) -> W<u32> {
         use kiln_ast::names::DeclNameView as V;
         let ast = &self.s.ast;
@@ -2280,7 +2545,11 @@ impl Writer<'_, '_, '_> {
     fn head(&mut self, d: DeclId) -> W<Head> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
-        let extra = n.flags().bits() & !(DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits());
+        let mut extra = n.flags().bits() & !(DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits());
+        if n.kind() == DeclKind::UsingShadow {
+            // Every shadow is implicit; the reader's builder marks it.
+            extra &= !DeclFlags::IMPLICIT.bits();
+        }
         if extra != 0 {
             return Err("an implicit, invalid or attributed declaration");
         }
@@ -2327,6 +2596,9 @@ impl Writer<'_, '_, '_> {
         };
         let loc = self.loc(n.loc())?;
         let prev = match ast.decls.redecl(d).and_then(|r| r.prev) {
+            None if matches!(n.kind(), DeclKind::UsingShadow | DeclKind::NamespaceAlias) => {
+                self.using_prev(d)?
+            }
             None => NONE,
             Some(p) => self
                 .recs
@@ -2366,6 +2638,11 @@ impl Writer<'_, '_, '_> {
                 Payload::Namespace
             }
             DeclKind::Export => Payload::Export,
+            DeclKind::Using
+            | DeclKind::UsingShadow
+            | DeclKind::UsingDirective
+            | DeclKind::NamespaceAlias
+            | DeclKind::UsingEnum => self.using_record(d)?,
             DeclKind::Function
             | DeclKind::CXXMethod
             | DeclKind::CXXConstructor
@@ -2947,13 +3224,26 @@ impl Writer<'_, '_, '_> {
         let mt = &ast.modules;
         let sm = s.diags.sm();
         let unit = mt.units.first().ok_or("no module unit")?;
-        if mt.units.len() != 1 || !unit.imports.is_empty() {
-            return Err("an import");
+        let partition = match unit.kind {
+            UnitKind::Interface => false,
+            UnitKind::PartitionInterface | UnitKind::PartitionImplementation => true,
+            _ => return Err("a unit that is not a module interface or partition"),
+        };
+        let module = unit.module.clone().ok_or("no module declaration")?;
+        // S6: a unit with imports, or a partition, is entered by replaying
+        // its preamble; the records follow it (spec/modules.md §11.11
+        // "Imports, partitions and using-declarations").
+        if partition || !unit.imports.is_empty() || mt.units.len() != 1 {
+            let (end, bad) = s.module_preamble();
+            if bad {
+                return Err("an import outside the module's main file, or code after its `;`");
+            }
+            self.img.preamble = end.ok_or("an import outside the module's main file")?;
         }
-        if unit.kind != kiln_ast::modules::UnitKind::Interface || unit.partition.is_some() {
-            return Err("a unit that is not a primary module interface");
-        }
-        self.img.module = unit.module.clone().ok_or("no module declaration")?;
+        self.img.module = match &unit.partition {
+            Some(p) if partition => format!("{module}:{p}"),
+            _ => module,
+        };
         let (kw, kw_loc, private) = s.module_main_frame().ok_or("no module declaration")?;
         if private {
             return Err("a private module fragment");
@@ -2982,6 +3272,10 @@ impl Writer<'_, '_, '_> {
                 continue;
             }
             let o = mt.owner(d);
+            if o.unit != 0 {
+                // Imported, or replayed for an import of the preamble.
+                continue;
+            }
             if !o.purview {
                 // Predefined declarations have no location in a real
                 // file; anything else is a global module fragment.
@@ -3013,7 +3307,7 @@ impl Writer<'_, '_, '_> {
                 let _ = skipped.insert(d);
                 continue;
             }
-            if n.has(DeclFlags::IMPLICIT) {
+            if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
                 // An implicitly declared special member: the importer
                 // declares it again (spec/modules.md §11.11 "Classes").
                 if n.kind() == DeclKind::IndirectField {
@@ -3041,6 +3335,11 @@ impl Writer<'_, '_, '_> {
             }
             kind_gate(n.kind())?;
             self.cold_gate(d)?;
+            let at = self.loc(n.loc())?;
+            if self.img.preamble != NONE && at != NONE && at < self.img.preamble {
+                // Before the preamble's end: the importer replays it.
+                return Err("a declaration before the module's last import");
+            }
             let h = self.head(d)?;
             // The specialization references its types name come first
             // (S4b): `record` must not add records before its own.
@@ -3098,6 +3397,9 @@ impl Writer<'_, '_, '_> {
                 payload,
             });
             self.recs.insert(d, i);
+            if let Some(k) = self.using_key(d) {
+                self.usings.insert(k, i);
+            }
             if class_def {
                 open.push(i);
             }
@@ -3172,7 +3474,12 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::FunctionTemplate
         | K::ClassTemplate
         | K::TemplateTypeParm
-        | K::NonTypeTemplateParm => Ok(()),
+        | K::NonTypeTemplateParm
+        | K::NamespaceAlias
+        | K::UsingDirective
+        | K::Using
+        | K::UsingEnum
+        | K::UsingShadow => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
         K::Friend => Err("a friend declaration"),
         K::ClassTemplateSpecialization
@@ -3185,13 +3492,10 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::FriendTemplate
         | K::CXXDeductionGuide
         | K::TemplateTemplateParm => Err("a template"),
-        K::NamespaceAlias
-        | K::UsingDirective
-        | K::Using
-        | K::UsingEnum
-        | K::UsingShadow
-        | K::ConstructorUsingShadow
-        | K::UsingPack => Err("a using-declaration, using-directive or namespace alias"),
+        K::ConstructorUsingShadow => Err("an inheriting constructor"),
+        K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
+            Err("a dependent using-declaration")
+        }
         K::LinkageSpec => Err("a linkage specification"),
         _ => Err("a declaration the image does not carry yet"),
     }
@@ -3226,10 +3530,11 @@ impl Sema<'_, '_> {
             names: FxHashMap::default(),
             pnames: FxHashMap::default(),
             tmemo: FxHashMap::default(),
-            img: Image::default(),
+            img: Image { preamble: NONE, ..Image::default() },
             bs: BodyState::default(),
             overrides: Vec::new(),
             keys: Vec::new(),
+            usings: FxHashMap::default(),
         };
         if let Err(why) = w.collect() {
             return none(why);
@@ -3251,9 +3556,26 @@ impl Sema<'_, '_> {
     /// `main` (spec/modules.md §11.11 "Part 2a"). A malformed image is
     /// the module file's corrupt-file fatal error at `at`, and nothing is
     /// built.
-    pub fn load_module_image(&mut self, path: &str, bytes: &[u8], main: FileId, at: Loc) {
+    pub fn load_module_image(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        main: FileId,
+        at: Loc,
+        after_preamble: bool,
+    ) {
         let len = self.diags.sm().text(main).len();
+        let key = self.module_current_key().to_owned();
         let checked = decode(bytes).and_then(|img| {
+            // S6: an image with a preamble is built at its end, in the
+            // unit the replayed preamble entered, which must be the
+            // image's; one without is built in place of the unit.
+            if after_preamble != (img.preamble != NONE) {
+                return bad("a preamble that does not match the import");
+            }
+            if after_preamble && (key != img.module || img.preamble as usize > len) {
+                return bad("a preamble that does not enter the image's unit");
+            }
             let off_ok = |o: u32| o == NONE || (o as usize) <= len;
             let mut offs = vec![img.kw, img.name_loc];
             for d in &img.decls {
@@ -3301,11 +3623,13 @@ impl Sema<'_, '_> {
         let lo =
             |s: &Self, o: u32| if o == NONE { Loc::INVALID } else { s.diags.sm().loc(main, o) };
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
-        self.act_on_module_directive(
-            kw,
-            true,
-            Directive::Module { name: &img.module, partition: None, kw_loc: name_loc },
-        );
+        if img.preamble == NONE {
+            self.act_on_module_directive(
+                kw,
+                true,
+                Directive::Module { name: &img.module, partition: None, kw_loc: name_loc },
+            );
+        }
         let unit = self.module_current_unit();
         let names: Vec<DeclName> =
             img.names.iter().map(|n| DeclName::ident(self.intern(n))).collect();
@@ -3566,6 +3890,29 @@ impl Sema<'_, '_> {
                     self.image_spec(img, &mut tys, &ids, r, loc).unwrap_or(self.ast.tu)
                 }
                 Payload::Member { .. } => self.image_member(&ids, r),
+                Payload::Using { steps } => {
+                    if let Some(op) = r
+                        .name
+                        .checked_sub(N_OP)
+                        .and_then(|o| u8::try_from(o).ok())
+                        .and_then(OverloadedOperator::from_u8)
+                    {
+                        h.name = DeclName::operator(op);
+                    }
+                    let nns =
+                        self.image_nns(steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
+                    self.builder().using_decl(h, nns)
+                }
+                Payload::Shadow { target } => {
+                    let t = ids[*target as usize];
+                    h.name = self.ast.decls.get(t).name();
+                    self.builder().using_shadow(h, t, prev)
+                }
+                Payload::UsingDir { ns } => self.image_using_directive(h, ids[*ns as usize]),
+                Payload::NsAlias { target } => {
+                    self.builder().namespace_alias(h, ids[*target as usize], prev)
+                }
+                Payload::UsingEnum { e } => self.builder().using_enum(h, ids[*e as usize]),
             };
             if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
                 image_flags(self, d, r.flags);
@@ -3777,6 +4124,76 @@ impl Sema<'_, '_> {
         if q.quals == 0 { base } else { self.ast.types.qualify(base, Quals::from_bits(q.quals)) }
     }
 
+    /// S6: a using-directive nominating namespace `ns` (a first
+    /// declaration), as [`Sema::using_directive`] makes one at namespace
+    /// scope: in its context's member list and in the lookup tables of
+    /// the namespace (or translation unit) it appears in.
+    fn image_using_directive(&mut self, h: DeclHead, ns: DeclId) -> DeclId {
+        let d = self.ast.decls.push(
+            kiln_ast::decl::NewDecl {
+                kind: DeclKind::UsingDirective,
+                flags: h.flags,
+                misc: kiln_ast::decl::DeclMisc::default(),
+                name: DeclName::EMPTY,
+                ctx: Some(h.ctx),
+                loc: h.loc,
+                ty: None,
+            },
+            kiln_ast::decl::Payload::None(kiln_ast::ids::RawId::raw(ns)),
+        );
+        if self.ast.decls.member_list(h.ctx).is_some() {
+            self.ast.decls.append_member(h.ctx, d);
+        }
+        // An `export` block is transparent: the directive is the
+        // enclosing namespace's.
+        let mut at = h.ctx;
+        for _ in 0..1024 {
+            if self.ast.decls.get(at).kind() != DeclKind::Export {
+                break;
+            }
+            match self.ast.decls.get(at).ctx() {
+                Some(c) => at = c,
+                None => break,
+            }
+        }
+        self.ast.add_using_directive(at, ns);
+        d
+    }
+
+    /// The nested-name-specifier of qualifier `steps`; `ty` builds a
+    /// type step's type.
+    fn image_nns(
+        &mut self,
+        steps: &[NnsRec],
+        ids: &[DeclId],
+        ty: &mut dyn FnMut(&mut Self, QRef) -> QualType,
+    ) -> Option<NnsId> {
+        let mut cur: Option<NnsId> = None;
+        for st in steps {
+            let n = match *st {
+                NnsRec::Global => Nns::Global,
+                NnsRec::Ns(d) => match ids.get(d as usize) {
+                    Some(&ns) => Nns::Namespace { prefix: cur, ns },
+                    None => Nns::Global,
+                },
+                NnsRec::Ty(q, template_kw) => {
+                    Nns::Type { prefix: cur, ty: ty(self, q), template_kw }
+                }
+                // S6: an alias step, over the namespace it denotes.
+                NnsRec::Alias(d) => match ids.get(d as usize) {
+                    Some(&alias) => Nns::NamespaceAlias {
+                        prefix: cur,
+                        alias,
+                        ns: self.ast.resolve_alias(alias),
+                    },
+                    None => Nns::Global,
+                },
+            };
+            cur = Some(self.ast.types.nns(n));
+        }
+        cur
+    }
+
     fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
         let qt = |s: &mut Self, q: QRef| -> QualType {
             let base = if q.ty <= BUILTINS {
@@ -3820,20 +4237,7 @@ impl Sema<'_, '_> {
                 self.ast.types.elaborated(k, None, q)
             }
             TyRec::ElabQ(k, steps, q) => {
-                let mut cur: Option<NnsId> = None;
-                for st in steps {
-                    let n = match *st {
-                        NnsRec::Global => Nns::Global,
-                        NnsRec::Ns(d) => match ids.get(d as usize) {
-                            Some(&ns) => Nns::Namespace { prefix: cur, ns },
-                            None => Nns::Global,
-                        },
-                        NnsRec::Ty(q, template_kw) => {
-                            Nns::Type { prefix: cur, ty: qt(self, q), template_kw }
-                        }
-                    };
-                    cur = Some(self.ast.types.nns(n));
-                }
+                let cur = self.image_nns(steps, ids, &mut |s, q| qt(s, q));
                 let q = qt(self, *q);
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, cur, q)
@@ -3901,6 +4305,7 @@ mod tests {
             module: "m".into(),
             kw: 0,
             name_loc: 7,
+            preamble: NONE,
             names: ["ns", "f", "E", "a", "T", "v", "g"].map(String::from).to_vec(),
             gated: Vec::new(),
             pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),
@@ -4404,6 +4809,101 @@ mod tests {
         fuzz(&encode(&sample()));
         fuzz(&encode(&class_sample()));
         fuzz(&encode(&template_sample()));
+    }
+
+    /// Stage S6: `sample` plus, at global scope, `export using ns::f;`
+    /// (with its shadow), `export namespace na = ns;`, `export using
+    /// enum ns::E;`, `using namespace ns;`, `export using na::v;` (an
+    /// alias step) and a shadow of the first shadow.
+    fn using_sample() -> Image {
+        let mut img = sample();
+        let na = img.names.len() as u32;
+        img.names.push("na".into());
+        let rec = |name, payload| DeclRec {
+            flags: 0,
+            owner: 3,
+            access: 0,
+            name,
+            ctx: NONE,
+            lexical: NONE,
+            loc: 200,
+            prev: NONE,
+            payload,
+        };
+        img.decls.extend([
+            rec(1, Payload::Using { steps: vec![NnsRec::Ns(0)] }),
+            rec(1, Payload::Shadow { target: 2 }),
+            rec(na, Payload::NsAlias { target: 0 }),
+            rec(2, Payload::UsingEnum { e: 3 }),
+            rec(NONE, Payload::UsingDir { ns: 0 }),
+            rec(5, Payload::Using { steps: vec![NnsRec::Global, NnsRec::Alias(12)] }),
+            rec(5, Payload::Shadow { target: 6 }),
+            rec(1, Payload::Shadow { target: 11 }),
+        ]);
+        img.decls[14].owner = 1;
+        img.gated = gated_names(&img);
+        img
+    }
+
+    /// [namespace.udecl], [enum.udecl], [namespace.alias],
+    /// [namespace.udir] (S6, WP-1068): the using family round-trips; a
+    /// record naming the wrong kind of target, a later one, or carrying
+    /// the wrong name is an error.
+    #[test]
+    fn carries_a_preamble() {
+        // S6: the preamble word and a partition's key round-trip (the
+        // preprocessor's read of the header is checked by the driver's
+        // kind2_declaration_image_imports; spec/modules.md §11.11
+        // "Imports, partitions and using-declarations").
+        let mut img = using_sample();
+        img.module = "m:p".to_owned();
+        img.preamble = 40;
+        let bytes = encode(&img);
+        assert_eq!(decode(&bytes), Ok(img.clone()));
+        // A truncated header is corrupt, not a panic.
+        for n in [0, 4, 12, 20] {
+            assert!(decode(&bytes[..n.min(bytes.len())]).is_err());
+        }
+    }
+
+    #[test]
+    fn carries_using_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let img = using_sample();
+        assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
+        assert_eq!(decode(&encode(&img)), Ok(img));
+        let corrupt: [Corrupt; 12] = [
+            ("shadow of a later declaration", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 16 }
+            }),
+            ("shadow of itself", |i| i.decls[11].payload = Payload::Shadow { target: 11 }),
+            ("shadow of a namespace", |i| i.decls[11].payload = Payload::Shadow { target: 0 }),
+            ("shadow under another name", |i| i.decls[11].name = 2),
+            ("directive naming an export block", |i| {
+                i.decls[14].payload = Payload::UsingDir { ns: 1 };
+            }),
+            ("directive with a name", |i| i.decls[14].name = 0),
+            ("alias of a function", |i| i.decls[12].payload = Payload::NsAlias { target: 2 }),
+            ("alias of a later alias", |i| i.decls[12].payload = Payload::NsAlias { target: 12 }),
+            ("using-enum of a typedef", |i| i.decls[13].payload = Payload::UsingEnum { e: 5 }),
+            ("using-enum under another name", |i| i.decls[13].name = 0),
+            ("alias step naming a namespace", |i| {
+                i.decls[15].payload = Payload::Using { steps: vec![NnsRec::Alias(0)] };
+            }),
+            ("namespace step naming an alias", |i| {
+                i.decls[15].payload = Payload::Using { steps: vec![NnsRec::Ns(12)] };
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = using_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+        // A global step after the first is not a qualifier.
+        let mut img = using_sample();
+        img.decls[15].payload = Payload::Using { steps: vec![NnsRec::Alias(12), NnsRec::Global] };
+        assert!(decode(&encode(&img)).is_err());
+        fuzz(&encode(&using_sample()));
     }
 
     /// Stage S4: `sample` plus `namespace ns { template <class T, int N>
