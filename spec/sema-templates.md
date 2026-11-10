@@ -4663,6 +4663,14 @@ clang's `getUnconstrainedType`), so it may name another template's
 `same_as<T> auto V`, whose type depends on that template's `T`. Clang
 takes `TemplateParams->getParam(Index)` the same way (WP-1217,
 tests/conformance/temp.spec.partial.match/nttp-param-type-own-template-run.cpp).
+An undeduced placeholder in that type deduces nothing: a placeholder
+whose type-constraint names an earlier parameter (`template<auto R,
+C<R> auto V>`) is dependent and so reaches the type match, where it
+matches any `A`, as clang's `DeduceTemplateArgumentsByTypeMatch` returns
+success for `Type::Auto`; the constraint is checked when the arguments
+are substituted. The copy deduction candidate of such a class template
+and function templates over its specializations deduce (WP-1235,
+tests/conformance/temp.deduct.type/constrained-placeholder-nttp-prior-param-run.cpp).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -6449,6 +6457,13 @@ the index of the failed requirement.
   `TransformAutoType`, so the placeholder is no longer dependent and the
   argument for `V` is deduced and evaluated: `box<7, make()>` and
   `box<7, zero>` are one specialization (WP-792).
+  A placeholder return type deduced from a type-dependent `return`
+  (`template<int N> struct s { template<class T> C<N> auto get(); }`)
+  has its type-constraint's arguments substituted the same way when the
+  class is instantiated, so the explicit-argument substitution of the
+  member template's own parameters at that depth ([temp.deduct.general]/2)
+  never sees the class's `N` (WP-1235,
+  tests/conformance/temp.arg.explicit/member-constrained-auto-return-outer-param-run.cpp).
 
 ### 8.7 Note chains (clang's exact texts; used by §10.4)
 
