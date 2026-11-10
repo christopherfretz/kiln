@@ -1630,7 +1630,8 @@ impl Substituter<'_, '_, '_> {
                     return Ok(t.dependent_template_specialization(keyword, nns, name, args));
                 }
                 let (_, n) = self.member_nns(nns, base, arrow, root_at)?;
-                let t = self.sema.ast.types.dependent_template_specialization(keyword, n, name, args);
+                let t =
+                    self.sema.ast.types.dependent_template_specialization(keyword, n, name, args);
                 self.ty(t, loc)
             }
             _ => self.ty(q, loc),

@@ -981,11 +981,7 @@ impl Substituter<'_, '_, '_> {
         } else {
             DiagId::sema_template_kw_refers_to_non_template
         };
-        let d = self
-            .sema
-            .diag(id, loc)
-            .arg(crate::decl::sym_str(self.sema, name))
-            .with_note(note);
+        let d = self.sema.diag(id, loc).arg(crate::decl::sym_str(self.sema, name)).with_note(note);
         self.sema.emit(d);
         Err(SubstFail)
     }

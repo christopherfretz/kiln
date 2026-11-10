@@ -1725,7 +1725,9 @@ impl Sema<'_, '_> {
         // TJ<int>::~TJ<int>()`) is instantiated for the member lookup in
         // it (WP-1192).
         for t in [first, destroyed] {
-            if obj.def.is_some() && !self.is_dependent_type(t) && self.ast.types.as_record(t).is_some()
+            if obj.def.is_some()
+                && !self.is_dependent_type(t)
+                && self.ast.types.as_record(t).is_some()
             {
                 let _ = self.require_complete_silent(t, loc);
             }
