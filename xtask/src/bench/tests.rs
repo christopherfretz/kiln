@@ -519,3 +519,24 @@ fn perf_md_merges_across_recordings() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn gcc_flags_are_mapped_like_the_gcc_oracle() {
+    let spec = entry::parse_spec(
+        "//@ mode: syntax\n//@ std: c++26\n//@ args: -stdlib=libc++ -fconstexpr-steps=200000000 -freflection\n",
+    )
+    .unwrap();
+    let e = Entry {
+        path: PathBuf::from("/bench/oven/x.cpp"),
+        id: "oven/x".into(),
+        group: "oven".into(),
+        name: "x".into(),
+        arg: "bench/oven/x.cpp".into(),
+    };
+    let clang = ["-std=c++26", "-fsyntax-only", "-stdlib=libc++", "-fconstexpr-steps=200000000"];
+    assert_eq!(subject_flags(CompilerKind::Clang, &e, &spec)[..4], clang);
+    assert_eq!(
+        subject_flags(CompilerKind::Gcc, &e, &spec),
+        ["-std=c++26", "-fsyntax-only", "-fconstexpr-ops-limit=200000000", "-freflection"]
+    );
+}

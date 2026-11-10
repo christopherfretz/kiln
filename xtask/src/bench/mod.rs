@@ -63,7 +63,8 @@ options:
                            --compare-with, also merge the ratio table into
                            docs/status/perf.md
   --compare-with <path>    also measure this compiler (e.g. clang++-22, the libc++
-                           slice's oracle, or clang++-19) and print
+                           slice's oracle, clang++-19, or g++-16, whose flags are
+                           mapped as for the GCC oracle) and print
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
   --runs <N>               runs per entry (default: 5; the fastest and slowest are
@@ -970,16 +971,31 @@ fn build_program(
 }
 
 /// Runs one entry `cx.runs` times with one compiler.
-fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -> Outcome {
+/// The command-line flags of entry `e` for a compiler of `kind`: `-std=`,
+/// the mode's flags and the entry's `args`, plus kiln's own flags for a
+/// reflection shape. For GCC (`--compare-with g++-16`) they go through
+/// [`crate::oracle::gcc_args`], the GCC oracle's mapping: kiln/clang-only
+/// flags (`-stdlib=`, `-fkiln-*`) are dropped and `-fconstexpr-steps=N`
+/// is GCC's `-fconstexpr-ops-limit=N`. An entry GCC still cannot compile
+/// (`mode: emit-llvm`, `-ftime-trace`) is reported as failed for GCC.
+fn subject_flags(kind: CompilerKind, e: &Entry, spec: &BenchSpec) -> Vec<String> {
     let mut flags = vec![format!("-std={}", spec.std)];
     flags.extend(spec.mode.flags().iter().map(|f| (*f).to_owned()));
     flags.extend(spec.args.iter().cloned());
-    if s.id.kind == CompilerKind::Kiln
+    if kind == CompilerKind::Kiln
         && e.group == "reflect"
         && let Some(shape) = crate::gen_reflect::shape(&e.name)
     {
         flags.extend(crate::gen_reflect::kiln_flags(shape));
     }
+    if kind == CompilerKind::Gcc {
+        flags = crate::oracle::gcc_args(&flags);
+    }
+    flags
+}
+
+fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -> Outcome {
+    let flags = subject_flags(s.id.kind, e, spec);
     let run = spec.mode == entry::Mode::Run;
     let mut cmd = Command::new(&s.path);
     cmd.args(&flags);

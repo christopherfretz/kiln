@@ -161,6 +161,14 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   (GCC's spelling) selects the semantic for the translation unit. The
   default is `enforce`. A violation calls the default handler from
   kiln's `<contracts>`, or your own `handle_contract_violation`.
+- **Erroneous behaviour** (P2795) at C++26: an automatic variable of at
+  most 4096 bytes that has no initializer is zero-filled at its
+  declaration, so reading it gives zero instead of an indeterminate
+  value. This differs from clang 22, which leaves it uninitialized.
+  `[[indeterminate]]` on the variable opts that variable out, and
+  `-ftrivial-auto-var-init=uninitialized` opts out the whole translation
+  unit. Below C++26 nothing changes. Erroneous reads are still not
+  constant expressions.
 - **clang compatibility level.** kiln reproduces clang 22's observable
   behaviour by default: predefined macros, `__has_*` answers and the IR
   details that differ between releases. `-fclang-compat=19` selects
@@ -240,6 +248,17 @@ values per CMake version are in
 
 `-fmodule-header` and header-unit module files are not supported yet.
 See [KNOWN_ISSUES.md](KNOWN_ISSUES.md#modules).
+
+**The declaration image (experimental).** `-fkiln-bmi-image` is an
+opt-in, off by default. At `--precompile` or `-fmodule-output` it also
+writes a serialized image of the module's declarations into the module
+file, and an import of that file builds the module from the image instead
+of replaying the interface. Pass it on both the producing and the
+importing compiles. Either side alone is harmless: no image is written,
+or a present one is ignored. `-v` says whether an image was written and,
+if not, why. It does not cover `import std;` yet, and the flag and the
+format may change in any release
+([STABILITY.md](STABILITY.md#not-covered-may-change-in-any-release)).
 
 #### The `std` module cache
 
@@ -491,6 +510,7 @@ The full list is spec/driver.md, "Options".
 | `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | constexpr profile (above) |
 | `-f[no-]kiln-module-cache` | use the `std` module cache (default on; see [The `std` module cache](#the-std-module-cache)) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
+| `-f[no-]kiln-bmi-image` | experimental, off by default: write and use the declaration image in module files (see [Modules](#modules)) |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |
 | `-fkiln-outline-expansions=N`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=N` | internal tuning and debugging of the codegen CFG |
 
@@ -501,6 +521,11 @@ All `-fkiln-*` flags are experimental.
 - `-fcontract-evaluation-semantic=` uses GCC's spelling. clang 22 has no
   P2900 contracts.
 - `-fconstexpr-ops-limit=` (GCC's) is accepted and sets the step budget.
+- At `-std=c++26`, uninitialized automatic variables are zero-filled
+  (P2795 erroneous behaviour; see [Language modes](#language-modes)), as
+  if `-ftrivial-auto-var-init=zero` were given. clang 22 does not do
+  this. `-ftrivial-auto-var-init=uninitialized` and `[[indeterminate]]`
+  opt out.
 - The PGO flags are rejected (see [Coverage](#coverage)).
 - `--target=` accepts only aarch64 and x86_64 Linux triples.
 - `-x c` and `.c` inputs can only be preprocessed. `kiln++` warns about a

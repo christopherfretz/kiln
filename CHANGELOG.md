@@ -14,18 +14,25 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ### Language
 
-- C++98 through C++23, and C++26 as in the Croydon DIS draft: 257 of the
-  260 rows of [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) are
-  done. P2686, P2786 and P3394 are partial.
+- C++98 through C++23, and C++26 as in the Croydon DIS draft: 260 of the
+  261 rows of [docs/STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) are
+  done. The one partial row is P2786 (trivial relocatability), which was
+  removed from C++26 at Kona and is not in the DIS.
 - C++26 static reflection (P2996, `<meta>`), on by default at
   `-std=c++26` (`-fno-reflection` turns it off).
 - C++26 contracts (P2900): `pre`, `post`, `contract_assert`, the four
   evaluation semantics (`-fcontract-evaluation-semantic=`), and a
   replaceable violation handler.
+- C++26 erroneous behaviour (P2795): at `-std=c++26` an uninitialized
+  automatic variable (up to 4096 bytes) is zero-filled at its
+  declaration. clang 22 does not do this. `[[indeterminate]]` on the
+  variable, or `-ftrivial-auto-var-init=uninitialized`, opts out.
 - C++20 modules, header units and `import std;`, in one invocation or in
   clang's two-step build: `--precompile`, `-fmodule-output`,
   `-fmodule-file=`, `-fprebuilt-module-path=`. kiln's module files are
-  its own format.
+  its own format. The declaration image (`-fkiln-bmi-image`, which builds
+  an imported module from a serialized image instead of replaying it) is
+  experimental and off by default; it does not yet cover `import std;`.
 - Dependency scanning: `kiln-scan-deps` (also installed as
   `clang-scan-deps-22` and `clang-scan-deps`) writes P1689r5, so CMake
   3.28+ with Ninja builds C++20 module targets unchanged.
