@@ -229,6 +229,24 @@ the standard here. Test:
 `meta.reflection.result/reflect-constant-info-no-instantiate.cpp`
 (`xfail(gcc)`).
 
+**The type of a reflected constant** (WP-1255; [meta.syn],
+[expr.reflect]/5.6.2, [basic.pre]/8, [expr.eq]/7.4,
+[meta.reflection.result]/2-4, [meta.reflection.queries]/2.2, /54 and
+/59, [temp.param]/11 and /13): `type_of(reflect_constant(^^int)) ==
+^^std::meta::info` is false. `std::meta::info` is the type alias
+`using info = decltype(^^::);`, and `^^std::meta::info` reflects the
+alias, an entity distinct from its underlying type, so the two compare
+unequal. `reflect_constant(v)` with a non-class `T` reflects the value
+of `TCls<V>`'s template argument. type_of returns that value's type,
+which is the cv-unqualified `T` (a type, never an alias), here
+`decltype(^^::)` == `dealias(^^std::meta::info)`. With a class `T`, the
+result is the template parameter object, whose type is `const T`, so
+`type_of(reflect_constant(S{})) == ^^const S`. kiln and GCC 16.1 agree
+on every probe, including `display_string_of`, which both spell
+`std::meta::info`. Test:
+`meta.reflection.result/reflect-constant-type-of-alias-run.cpp`
+(`oracle: gcc`).
+
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
   a direct call to a declaration that sema recognizes compiles to one KBC
