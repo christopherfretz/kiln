@@ -944,8 +944,9 @@ Redeclaration and linkage rules:
   scope is diagnosed the same way and still declared (clang marks it
   invalid and goes on); only a member class specialization (`template<>
   struct A::S<int>::N {}`, also with an extraneous `template<>`) is
-  exempt, and a class template (partial) specialization, a template-id,
-  is checked by `check_spec_scope`. In a namespace a tag's qualifier
+  exempt (checked as a member specialization, below), and a class
+  template (partial) specialization, a template-id, is checked by
+  `check_spec_scope`. In a namespace a tag's qualifier
   naming that namespace is `-Wextra-qualification`. Directly in an
   export, `export struct ::X {}` is "cannot name the global scope" (clang
   checks `TranslationUnitDecl` before `ExportDecl`) and the redeclaration
@@ -953,11 +954,36 @@ Redeclaration and linkage rules:
   `tests/conformance/dcl.meaning/qualified-template-not-enclosing.cpp`,
   `qualified-template-enclosing-run.cpp`,
   `tests/conformance/module.interface/export-qualified-tag-errors.cpp`.
-  **Gap:** a member class specialization outside a namespace enclosing
-  its class template is accepted (clang's "member class specialization
-  of 'N' not in class 'S' or an enclosing namespace").
-  **Deviation:** a class template specialization scope prints without its
-  arguments (`'TT'`, clang `'TT<int>'`).
+  A class template specialization scope prints with its arguments
+  (`'A<int>'`, clang's `getNameForDiagnostic`; WP-1178).
+  **Member specializations (WP-1178)**, clang's
+  `CheckTemplateSpecializationScope` ([temp.expl.spec]/3,
+  [temp.spec.partial.general]/4): an entity whose context is a class is
+  specialized in that class or in a namespace enclosing it
+  (`check_member_spec_scope`), else "%select{class template|class
+  template partial|variable template|variable template partial|function
+  template|...|member class|member enumeration} specialization of 'X'
+  not in class 'C' or an enclosing namespace" with "explicitly
+  specialized declaration is here" at the specialized member. A member
+  class or enumeration specialization (`template<> struct N::A<int>::I`,
+  scoped or unscoped, opaque or defined, a declaration or a definition;
+  clang's `CheckMemberSpecialization`, after its after-instantiation
+  check) names the pattern's class (`'A'`); an explicit or partial
+  specialization of a member class, function or variable template
+  (`template<> template<> struct N::A<int>::C<int>`) names the
+  specialization (`'A<int>'`). An inline namespace of `N`, or one nested
+  in it, does not enclose `N::A`; the global scope and `N` do. In another
+  class the qualifier is "non-friend class member 'I' cannot have a
+  qualified name" first, and the specialization is not declared (kiln:
+  an invalid, hidden tag). At namespace scope a diagnosed specialization
+  is still declared, as clang's recovery, for namespace templates
+  (`check_spec_scope`) too. A member function or static data member
+  specialization, and a member template declared without a template-id
+  (`template<> template<class U> struct N::A<int>::C {}`, clang's
+  `CheckClassTemplate`), get the does-not-enclose error above instead.
+  Tests: `tests/conformance/temp.expl.spec/member-spec-not-enclosing-errors.cpp`,
+  `member-template-spec-not-enclosing-errors.cpp`,
+  `member-spec-enclosing-scope-run.cpp`.
 - **Default-initialization without a default constructor**
   (`check_class_default_init`, WP-191): a class variable with no
   initializer whose default constructor is missing is resolved as
