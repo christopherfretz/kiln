@@ -258,9 +258,11 @@ const CSUM: &str =
 /// overflow and implicit-conversion warnings) read the values of its
 /// immediate invocations evaluated first ([expr.const]/16: each is
 /// evaluated once, WP-1129), so the trials cost no steps; and codegen
-/// reuses a default argument's value: one evaluation per use. (The
-/// overflow trial of `def() + def()` would still evaluate the default
-/// argument before failing on the non-constexpr `def`.)
+/// reuses a default argument's value: one evaluation per use. The
+/// overflow trial of `def() + def()` reads each use's stored value
+/// instead of evaluating the default argument again, and a shift count
+/// that is an invocation is evaluated once, when the operator is built
+/// (WP-1171).
 #[test]
 fn immediate_invocations_are_not_folded_again() {
     let one = tu("imm-one", &format!("{CSUM}int f(int x) {{ return x + csum(50); }}\n"));
@@ -274,12 +276,20 @@ fn immediate_invocations_are_not_folded_again() {
          bool cmp(int x) {{ return x < csum(50); }}\n\
          int cond() {{ return csum(50) ? 1 : 2; }}\n\
          int def(int x = csum(50)) {{ return x; }}\n\
-         int uses() {{ def(); return def(); }}\n"
+         int uses() {{ def(); return def(); }}\n\
+         int both() {{ return def() + def(); }}\n"
     );
     let d = tu("imm-trials", &src);
     let err = ok(&d, &["-S", "-emit-llvm", "-o", "t.ll", "-fconstexpr-stats", "t.cpp"]);
-    assert_eq!(stat_n(&err, "evaluations", "immediate"), 6, "{err}");
-    assert_eq!(stat_n(&err, "steps", "count"), 6 * cost, "{err}");
+    assert_eq!(stat_n(&err, "evaluations", "immediate"), 8, "{err}");
+    assert_eq!(stat_n(&err, "steps", "count"), 8 * cost, "{err}");
+    assert_eq!(stat_n(&err, "trials", "steps"), 0, "{err}");
+
+    let src = format!("{CSUM}int sh(int x) {{ return x << csum(7); }}\n");
+    let d = tu("imm-shift", &src);
+    let err = ok(&d, &["-S", "-emit-llvm", "-o", "t.ll", "-fconstexpr-stats", "t.cpp"]);
+    assert_eq!(stat_n(&err, "evaluations", "immediate"), 1, "{err}");
+    assert_eq!(stat_n(&err, "evaluations", "count"), 1, "{err}");
     assert_eq!(stat_n(&err, "trials", "steps"), 0, "{err}");
 }
 

@@ -3669,12 +3669,33 @@ impl Sema<'_, '_> {
     /// constant shift count outside `[0, width)` of the promoted left
     /// operand type `lty` ([expr.shift]/1), a run-time behavior
     /// diagnostic (clang `DiagnoseBadShiftValues`).
+    ///
+    /// clang folds the count as the operator is built (`EvaluateAsInt`),
+    /// an immediate invocation's unvalued `ConstantExpr` included, and
+    /// evaluates that invocation again at the end of the full-expression.
+    /// Kiln evaluates a count that is one, under promotions, once: the
+    /// result is kept for the end of the full-expression
+    /// ([`Sema::prefold_immediate`], WP-1171).
     fn diagnose_shift_count(&mut self, r: ExprId, lty: QualType, loc: Loc) {
         if self.runtime_diag_quiet() {
             return;
         }
         let Some((width, _)) = int_info(&self.ast, lty) else { return };
-        let Some(v) = self.fold_int(r) else { return };
+        let mut c = r;
+        while match self.ast.exprs.get(c).kind() {
+            ExprKind::ParenExpr => true,
+            ExprKind::ImplicitCastExpr => {
+                matches!(self.ast.exprs.cast_kind(c), CastKind::IntegralCast | CastKind::NoOp)
+            }
+            _ => false,
+        } {
+            c = self.ast.exprs.operand(c);
+        }
+        let v = match self.prefold_immediate(c) {
+            Some(v) => v.and_then(|v| self.const_int(v)),
+            None => self.fold_int(r),
+        };
+        let Some(v) = v else { return };
         let id = if v < 0 {
             DiagId::sema_shift_negative
         } else if v >= i128::from(width) {

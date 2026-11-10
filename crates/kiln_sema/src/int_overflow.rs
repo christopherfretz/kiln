@@ -36,7 +36,8 @@ enum Leaf {
 struct Walk {
     budget: u32,
     depth: u32,
-    /// The full-expression.
+    /// The full-expression (for a default argument checked again at a
+    /// use, the use: [`Sema::check_default_arg_overflow`]).
     root: ExprId,
     /// The overflows diagnosed so far.
     count: u32,
@@ -63,6 +64,22 @@ impl Sema<'_, '_> {
     /// a call or a construction, an array index, a compound literal's
     /// initializer and an array `new`'s size are looked at in turn.
     pub(crate) fn check_for_int_overflow(&mut self, root: ExprId, var_init: Option<DeclId>) {
+        self.check_for_int_overflow_as(root, root, var_init);
+    }
+
+    /// The default argument `root` used by `use_expr`, checked again
+    /// there: clang rebuilds a default argument with an immediate
+    /// invocation or a source-location builtin at each use and completes
+    /// it again (`BuildCXXDefaultArgExpr` → `ConvertParamDefaultArgument`
+    /// → `CheckCompletedExpr`), so its overflows warn at each such use
+    /// too, before the use's invocations are checked (WP-1171).
+    pub(crate) fn check_default_arg_overflow(&mut self, use_expr: ExprId, root: ExprId) {
+        self.check_for_int_overflow_as(root, use_expr, None);
+    }
+
+    /// [`Sema::check_for_int_overflow`] of `root`, its warnings told
+    /// apart from another check's by `key` (the full-expression checked).
+    fn check_for_int_overflow_as(&mut self, root: ExprId, key: ExprId, var_init: Option<DeclId>) {
         if self.constant_full_expr > 0
             || self.unevaluated > 0
             || self.in_constant_evaluated()
@@ -82,7 +99,7 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        let mut w = Walk { budget: BUDGET, depth: 0, root, count: 0 };
+        let mut w = Walk { budget: BUDGET, depth: 0, root: key, count: 0 };
         let mut work = vec![root];
         while let Some(orig) = work.pop() {
             if !w.take() {
@@ -483,6 +500,23 @@ impl Sema<'_, '_> {
                 continue;
             }
             let k = self.ast.exprs.get(x).kind();
+            // A valued immediate invocation is a leaf (clang's
+            // `VisitConstantExpr` reads the value): one of a default
+            // argument too, valued at the use (WP-1171).
+            if k == ExprKind::ConstantExpr
+                && (self.ast.exprs.constant_value(x).is_some()
+                    || self.ast.exprs.default_immediate_value(x).is_some())
+            {
+                continue;
+            }
+            // A default argument is evaluated with the call, whatever the
+            // callee (clang's `handleCallExpr` evaluates the arguments
+            // before it checks the callee is `constexpr`): its overflows
+            // are found again (WP-1171).
+            if k == ExprKind::CXXDefaultArgExpr {
+                stack.extend(self.ast.default_arg_expr(x));
+                continue;
+            }
             if x != e && self.overflow_call(x) {
                 found = true;
                 let _ = self.overflow_value(x, w, false);

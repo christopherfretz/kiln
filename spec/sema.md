@@ -6595,18 +6595,46 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   warnings) run after `evaluate_immediates_early`, which evaluates the
   outermost invocations, stores each successful value and keeps every
   result in `ImmState::early` for `finish_immediate_invocations` to
-  report (in the same place and order as before; nothing is reported
-  early). Those folds read a valued wrapper as a leaf, and a scalar
-  prvalue call reached through a stripped wrapper (`strip_impcast`)
-  from `ImmState::early_values` (`early_immediate_value`, checked by
-  `try_fold`, `fold_rvalue` and `fold_for_overflow`). A default
-  argument's or default member initializer's invocation is evaluated at
-  each use (below); its first successful value is stored in the
-  wrapper's `default_immediate_value`, which codegen's fold prepass
-  reads for a use without source-location values instead of evaluating
-  the call again. Not covered: the shift-count check of `<<`/`>>`
-  (`diagnose_shift_count`) folds its operand when the operator is
-  built, before the full-expression ends.
+  report (in the same place and order as before). Those folds read a
+  valued wrapper as a leaf, and a scalar prvalue call reached through a
+  stripped wrapper (`strip_impcast`) from `ImmState::early_values`
+  (`early_immediate_value`, checked by `try_fold`, `fold_rvalue` and
+  `fold_for_overflow`). A default argument's or default member
+  initializer's invocation is evaluated at each use (below); its first
+  successful value is stored in the wrapper's `default_immediate_value`,
+  which codegen's fold prepass and the Oven (`Compiler::stored_value`,
+  outside a use with source-location values) read instead of evaluating
+  the call again.
+  **Default arguments (WP-1171).** clang rebuilds a default argument
+  that holds an immediate invocation or a source-location builtin at
+  each use (`BuildCXXDefaultArgExpr`, `ImmediateCallVisitor`,
+  `EnsureImmediateInvocationInDefaultArgs`), completes it there
+  (`ConvertParamDefaultArgument` → `CheckCompletedExpr`, so its
+  `-Winteger-overflow` warnings repeat at the use) and pops its
+  evaluation context (`HandleImmediateInvocations`), all while the call
+  is built. So `evaluate_immediates_early` checks each live default use
+  of a parameter outside an immediate-escalating function then and
+  there: its invocations are evaluated in order and valued, the rebuilt
+  argument is checked for overflow with the use as the context key
+  (`check_default_arg_overflow`), and a failure is reported
+  (`check_default_use_with`), before the full-expression's own checks;
+  `finish_immediate_invocations` skips the use (`ImmState::
+  early_defaults`). In an immediate-escalating function the results are
+  kept and the check (which may escalate instead) runs at the finish, as
+  before. A default member initializer (`default_init`) is not rebuilt
+  this way for the checks (`ConvertMemberDefaultInitExpression` does not
+  complete it).
+  **Shift counts (WP-1171).** `diagnose_shift_count` runs when the
+  operator is built; clang's `DiagnoseBadShiftValues` calls
+  `EvaluateAsInt` there, which evaluates an unvalued `ConstantExpr`'s
+  operand, so clang evaluates a count `x << f()` twice. kiln evaluates a
+  count that is itself a pending invocation (parentheses and integral
+  conversions aside) once: `prefold_immediate` evaluates it and keeps the
+  result in `ImmPending::prefolded`, and the full-expression's
+  `evaluate_immediates_early` / `immediate_result` take it from there
+  instead of evaluating again (the failure is reported once, at the
+  finish). A count with the invocation under an operator (`x << (f() +
+  1)`) is still folded at the operator, as clang.
   The initializer of a variable that is constant-initialized keeps its
   wrappers unvalued (clang's deferred mode). A failure reports `call to
   consteval|immediate function 'f' is not a constant expression` with
@@ -8300,6 +8328,19 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   constexpr call found under it is evaluated in turn. A call that is the
   full-expression itself is not evaluated (only its arguments), as
   clang. Shifts, division and `<<=` never warn here.
+- **Default arguments and valued invocations (WP-1171).** clang's
+  `handleCallExpr` evaluates a call's arguments before it looks at the
+  callee and `VisitCXXDefaultArgExpr` visits the default argument, so
+  an overflow in a default argument warns at each use under an operator
+  (`f() + 1` with `int f(int = INT_MAX + 1)`), whatever the callee. The
+  search descends into a `CXXDefaultArgExpr`'s argument
+  (`default_arg_expr`) instead of evaluating the call, and reads a
+  `ConstantExpr` that has a value (or a default-use value) as a leaf,
+  never evaluating the invocation again (clang `VisitConstantExpr`). A
+  default argument rebuilt at the use (§5.10) is also checked on its own
+  there, before the call's full-expression. Test: driver
+  `immediate_invocations_are_not_folded_again`; corpus
+  `dcl.fct.default/integer-overflow-in-default-argument.cpp`.
 - **Reporting.** The warning carries the operation's source range and is
   reported as clang's `Diags.Report`: no instantiation notes (in a
   template a non-dependent overflow warns at the definition and in each
