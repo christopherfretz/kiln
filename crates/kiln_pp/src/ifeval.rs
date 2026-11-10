@@ -14,7 +14,7 @@
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::{
     EncodingParams, IntSize, LitDiag, LiteralOptions, NumberClass, Radix, classify_number,
-    decode_char,
+    decode_char_from_source, invalid_utf8,
 };
 use kiln_lex::{Encoding, LexDiagKind, LexOptions, Punct, Std, Symbol, TokFlags, TokKind, Token};
 use kiln_source::Span;
@@ -422,12 +422,15 @@ impl<'c> Ev<'c> {
     fn char_lit(&mut self) -> R<Val> {
         let tok = self.tok;
         let spelling = self.cx.spelling(&tok);
-        let lit = decode_char(
+        let sm = self.cx.source_manager();
+        let invalid = invalid_utf8(sm, &tok, &spelling, &LexOptions::new(self.std));
+        let lit = decode_char_from_source(
             &spelling,
             LiteralOptions {
                 char8: Some(self.char8),
                 ..LiteralOptions::new(self.std, self.params)
             },
+            &invalid,
         );
         if lit.ud_suffix.is_some() {
             self.cx.emit(Diag::new(DiagId::pp_invalid_udl, tok.span).arg(0));

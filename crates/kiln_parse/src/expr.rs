@@ -13,8 +13,8 @@ use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
-    CodeUnits, NumberClass, StringLiteral, classify_number, decode_char, decode_string,
-    decode_unevaluated_string,
+    CodeUnits, NumberClass, SourceBytes, StringLiteral, classify_number, decode_char_from_source,
+    decode_string_from_source, invalid_utf8,
 };
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
@@ -2849,7 +2849,8 @@ impl Parser<'_, '_> {
     fn parse_char(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
-        let c = decode_char(&sp, self.lit_opts);
+        let invalid = invalid_utf8(self.sm, &t, &sp, &self.lex_opts);
+        let c = decode_char_from_source(&sp, self.lit_opts, &invalid);
         self.literal_diags(&t, &sp, &c.diags, Some(c.encoding));
         if c.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);
@@ -2879,12 +2880,15 @@ impl Parser<'_, '_> {
         }
         let mut pieces: Vec<(StringLiteral<'_>, Loc)> = Vec::new();
         let mut error = false;
+        // Invalid UTF-8 in an unprefixed piece is an error if another
+        // piece has an encoding prefix (clang decides on the whole
+        // concatenation).
+        let concat_prefixed = toks.len() > 1
+            && spellings.iter().any(|sp| matches!(sp.as_bytes().first(), Some(b'u' | b'U' | b'L')));
         for (t, sp) in toks.iter().zip(&spellings) {
-            let s = if unevaluated {
-                decode_unevaluated_string(sp, self.lit_opts)
-            } else {
-                decode_string(sp, self.lit_opts)
-            };
+            let invalid = invalid_utf8(self.sm, t, sp, &self.lex_opts);
+            let src = SourceBytes { invalid: &invalid, concat_prefixed };
+            let s = decode_string_from_source(sp, self.lit_opts, unevaluated, src);
             self.literal_diags(t, sp, &s.diags, None);
             error |= s.has_error;
             pieces.push((s, t.span.lo));
@@ -2924,7 +2928,9 @@ impl Parser<'_, '_> {
     /// linkage specification), lossily as UTF-8.
     pub(crate) fn unevaluated_text(&self, t: &Token) -> String {
         let sp = self.spelling_of(t);
-        let s = decode_unevaluated_string(&sp, self.lit_opts);
+        let invalid = invalid_utf8(self.sm, t, &sp, &self.lex_opts);
+        let src = SourceBytes { invalid: &invalid, concat_prefixed: false };
+        let s = decode_string_from_source(&sp, self.lit_opts, true, src);
         self.literal_diags(t, &sp, &s.diags, None);
         match &s.units {
             CodeUnits::U8(b) => String::from_utf8_lossy(b).into_owned(),
