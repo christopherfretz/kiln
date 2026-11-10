@@ -406,6 +406,12 @@ impl Sema<'_, '_> {
         if flat(&out) == flat(want) {
             return true;
         }
+        if ordering
+            && out.len() == want.len()
+            && out.iter().zip(want).all(|(&x, &y)| self.same_arg_with_deduced_defaults(x, y))
+        {
+            return true;
+        }
         // In partial ordering both sides name `a`'s synthesized
         // parameters: nothing to convert, except the elements of an
         // expanded pack, which come back as expressions (`P<0, D...>`
@@ -419,6 +425,82 @@ impl Sema<'_, '_> {
         match self.check_template_args(p.template, &out, &[], loc) {
             Ok(conv) => conv.canonical == canonical,
             Err(()) => false,
+        }
+    }
+
+    /// Whether substituted argument `x` of partial ordering
+    /// ([`Self::partial_at_least_as_specialized`]) is the synthesized
+    /// argument `y` once a template template parameter deduced from a
+    /// longer template-id of a synthesized one takes that template-id's
+    /// extra arguments as its defaults ([temp.deduct.partial]/12 with
+    /// [temp.arg.template]/3; clang's `DeducedTemplateName`, CWG2398 /
+    /// P3310R5, as `deduce_ttp_id_args` deduces it): `Cont<V>` of
+    /// `template <template <class> class Cont, class V> R<Cont<V>>`
+    /// deduced from `Cont'<V', A'>` substitutes to `Cont'<V'>`, which is
+    /// `Cont'<V', A'>`, so `R<Cont<V, A>>` of `template <class, class>
+    /// class Cont` is more specialized (WP-1212, Boost.Container's
+    /// `container_rebind`).
+    fn same_arg_with_deduced_defaults(&self, x: TemplateArg, y: TemplateArg) -> bool {
+        let t = &self.ast.types;
+        let (x, y) = (t.canonical_arg(x), t.canonical_arg(y));
+        if x == y {
+            return true;
+        }
+        match (x.view(), y.view()) {
+            (ArgView::Type(qx), ArgView::Type(qy)) => self.same_type_with_deduced_defaults(qx, qy),
+            _ => false,
+        }
+    }
+
+    /// [`Self::same_arg_with_deduced_defaults`] for canonical types,
+    /// through pointers, references, arrays and template arguments
+    /// (`Cont<V> *` against `Cont'<V', A'> *`).
+    fn same_type_with_deduced_defaults(&self, x: QualType, y: QualType) -> bool {
+        let t = &self.ast.types;
+        let (x, y) = (t.canonical(x), t.canonical(y));
+        if x == y {
+            return true;
+        }
+        if x.quals() != y.quals() {
+            return false;
+        }
+        let same = |a: QualType, b: QualType| self.same_type_with_deduced_defaults(a, b);
+        match (t.canonical_view(x), t.canonical_view(y)) {
+            (TypeView::Pointer(a), TypeView::Pointer(b))
+            | (TypeView::LValueRef(a), TypeView::LValueRef(b))
+            | (TypeView::RValueRef(a), TypeView::RValueRef(b))
+            | (TypeView::IncompleteArray(a), TypeView::IncompleteArray(b)) => same(a, b),
+            (TypeView::ConstantArray(a), TypeView::ConstantArray(b)) => {
+                a.size == b.size && same(a.elem, b.elem)
+            }
+            (
+                TypeView::MemberPointer { pointee: a, class: ca },
+                TypeView::MemberPointer { pointee: b, class: cb },
+            ) => {
+                let (ca, cb) = (QualType::unqual(ca), QualType::unqual(cb));
+                same(ca, cb) && same(a, b)
+            }
+            (
+                TypeView::TemplateSpecialization { name: nx, args: ax, .. },
+                TypeView::TemplateSpecialization { name: ny, args: ay, .. },
+            ) => {
+                let ny = t.canonical_template_name(ny);
+                if t.canonical_template_name(nx) != ny {
+                    return false;
+                }
+                let (ax, ay) = (t.args(ax), t.args(ay));
+                // Only a synthesized template template parameter has
+                // deduced defaults; any other template-id compares its
+                // arguments one to one.
+                let ttp = matches!(
+                    t.template_name_view(ny),
+                    TemplateName::CanonTemplateTemplateParm { .. }
+                );
+                (ax.len() == ay.len() || (ttp && ax.len() < ay.len()))
+                    && !ay[ax.len()..].iter().any(|&a| self.is_pack_arg(a))
+                    && ax.iter().zip(ay).all(|(&a, &b)| self.same_arg_with_deduced_defaults(a, b))
+            }
+            _ => false,
         }
     }
 

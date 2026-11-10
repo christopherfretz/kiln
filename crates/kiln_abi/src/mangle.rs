@@ -3569,6 +3569,12 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             // A type-dependent GNU `typeof(e)` (clang: a bare vendor name).
             TypeView::TypeOf { .. } => self.out.push_str("u6typeof"),
+            // A type pack substituted into a pattern that still names an
+            // unexpanded dependent pack (`tl<T, U>...` in a member template
+            // of `ty<T...>`): clang 19 and 22 write the vendor token
+            // `_SUBSTPACK_` (`mangleType(const SubstTemplateTypeParmPackType
+            // *)`), a substitution candidate like any type (WP-1214).
+            TypeView::SubstTemplateTypeParmPack { .. } => self.out.push_str("_SUBSTPACK_"),
             // A dependent transform: `u <vendor builtin name> I <base> E`.
             TypeView::UnaryTransform { kind, base, .. } => {
                 self.out.push('u');

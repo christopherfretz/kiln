@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
     }
 
     /// Whether `attrs` holds an annotation.
-    fn has_annotations(&self, attrs: &[AttrId]) -> bool {
+    pub(crate) fn has_annotations(&self, attrs: &[AttrId]) -> bool {
         attrs.iter().any(|&a| self.ast.attrs.get(a).kind == AttrKind::ANNOTATION)
     }
 
@@ -386,7 +386,14 @@ impl Sema<'_, '_> {
     /// `substitute_exception_spec`).
     fn instantiate_annotations(&mut self, f: DeclId, pattern: DeclId, poi: Loc) {
         use crate::templ::stack::FrameKind;
-        let anns = self.ast.annots.of_entity(&self.ast, pattern);
+        // An explicit specialization has only its own (its parameters
+        // keep the pattern's, as GCC 16.1; `drop_pattern_annotations`).
+        let explicit = self
+            .ast
+            .spec_info(f)
+            .is_some_and(|(_, x)| x.kind == kiln_ast::templates::SpecKind::ExplicitSpecialization);
+        let anns =
+            if explicit { Vec::new() } else { self.ast.annots.of_entity(&self.ast, pattern) };
         let Some((tmpl, args)) = self.spec_args(f) else { return };
         let pairs = self.inst_context_pairs(self.spec_pairs_ctx(f, tmpl));
         let frame_args = self.ast.spec_info(f).map(|(_, i)| i.args);

@@ -1143,6 +1143,32 @@ closure type at each use ([temp.param]/10, as clang), numbered then per
 file scope. Non-member unresolved names (`gs`, `sr`, `srN`) were audited
 against clang for global-, nested- and template-qualified names and need
 no change. Details: `spec/landed/abi/WP-1060.md`.
+**Substituted packs, default arguments, new initializers (WP-1214).**
+A pack substituted while a class template is instantiated, into a
+member template's signature that still expands the member's own pack
+(`R<S, I>` in `tup<R<C, I>...>` of a member of `conn<idx<I...>>`), has
+no Itanium production; clang 19 and 22 write the vendor token
+`_SUBSTPACK_`: a non-type pack (`SubstNonTypeTemplateParmPackExpr`) is
+`X_SUBSTPACK_E` as a template argument and no substitution candidate, a
+type pack (`SubstTemplateTypeParmPackType`) a bare `_SUBSTPACK_` and a
+candidate like any type (`tl<T, U>...` in a member of `ty<T...>` is
+`2tlIJ_SUBSTPACK_T_EE`). A default argument (`CXXDefaultArgExpr`) or
+default member initializer (`CXXDefaultInitExpr`) in a non-dependent
+subexpression of a dependent operand mangles as the expression it stands
+for (`h()` is `clL_Z1hiELi3EE` for `int h(int = 3)`). A braced list
+mangles its elements as written (clang `mangleInitListElements` on the
+syntactic form): the value- and default-member-initialized members the
+semantic form fills in are dropped, `A{}` is `tl1AE`. A new-expression
+with any initializer is `pi` (`il` when braced) with a constructor
+call's arguments inlined, default arguments included, so a
+default-initialized class with its implicit constructor call is `new B`
+`nw_1BpiLi1ELi2EE` for `B(int = 1, int = 2)` and `new Q` `nw_1QpiE` for
+an aggregate, while `new int` stays `nw_iE`; the expression profile
+keeps the initialization style (`new B(3)` and `new B{3}` are not
+equivalent). Tests: `tests/mangle/substituted_pack.cpp`,
+`tests/mangle/default_arg_operand.cpp`,
+`tests/codegen/mangle_substituted_pack.cpp`,
+`tests/conformance/temp.over.link/substituted-pack-two-units-run.cpp`.
 **Closures in function template signatures (WP-1077).** A lambda in
 a function template's return type, parameter type or NTTP type is
 substituted with the signature whenever deduction forms a

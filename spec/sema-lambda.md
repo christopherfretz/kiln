@@ -676,6 +676,10 @@ own. The substituter replays the lambda through the parser's actions:
    one level shallower per substituted level), as for a member template.
 3. The call operator's declarator, with substituted parameter types,
    *noexcept-specifier* and trailing return type, and the specifiers.
+   The rebuilt declarator is marked as a lambda's (`Declarator::lambda`,
+   as the parser marks it), so its implied `auto` return type is exempt
+   from the C++11 "'auto' return without trailing return type" gate
+   ([dcl.spec.auto], WP-1123/1134) in every instantiation (WP-1213).
 4. The constraints are not substituted: the new call operator (or its
    template) is entered in `ConceptState::member_constraints` with the
    pattern and the current arguments, so they are checked with this
