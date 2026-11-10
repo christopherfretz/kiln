@@ -3732,12 +3732,25 @@ recomputed exactly as for non-template code (clang's
   body triggered do not count (`inst.body_errors`). Neither do the
   errors of a `static_assert` whose condition substituted, the
   assertion failing or the condition not being constant
-  (`inst.static_assert_errors`; WP-1247): clang's
+  (`inst.checked_decl_errors`; WP-1247): clang's
   `BuildStaticAssertDeclaration` returns the failed declaration, not
   `StmtError`, so the body is valid. The closure stays, and a constant
   evaluation that calls it, or reads a variable template it initializes,
   goes on to report its next independent error, as GCC 16.1 and clang
-  do. Consequences of a body that does fail:
+  do. A consteval block whose expression substituted but whose
+  evaluation fails (not a constant expression, an uncaught exception;
+  [dcl.pre]/P3289R1) is counted the same way (`consteval_block_decl`;
+  WP-1257): it is one error, the program is ill-formed, and the lambda
+  is not invalidated, so a later call or copy of it, or a closure
+  returned from a function template, reports nothing more. A block in a
+  function template body, a class template member function or a generic
+  lambda's call operator already failed only itself (the failed
+  declaration is no statement error). GCC 16.1 reports one error per
+  block too, but where a constant evaluation runs through such a lambda
+  it treats the enclosing body as erroneous: its next error names no
+  independent cause, and a consteval caller gets a further "called in a
+  constant expression" error. kiln follows the standard and reports only
+  the independent next error. Consequences of a body that does fail:
   - The closure type is discarded (`act_on_lambda_error`), so no cascade
     follows from a closure whose call operator returns `void`. Neither a
     `return l();` nor an NSDMI `int m = [] { ... }();` gets one.
@@ -3747,7 +3760,10 @@ recomputed exactly as for non-template code (clang's
 
   Test `expr.prim.lambda/lambda-body-substitution-failure.cpp`; the
   `static_assert` case `temp.inst/failed-static-assert-lambda-next-error.cpp`
-  and `temp.inst/failed-static-assert-lambda-keeps-evaluating.cpp`.
+  and `temp.inst/failed-static-assert-lambda-keeps-evaluating.cpp`; the
+  consteval-block cases `dcl.pre/consteval-block-lambda-no-cascade.cpp`,
+  `dcl.pre/consteval-block-lambda-next-error.cpp` and
+  `dcl.pre/run-consteval-block-lambda-template.cpp`.
 - **A condition over a failed local** (WP-826). The condition of an
   `if` (not `if constexpr`), `while`, `for` or `switch`, or a `for`
   increment, that fails without a new error (it names a local whose
