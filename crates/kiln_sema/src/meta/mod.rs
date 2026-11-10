@@ -120,6 +120,30 @@ impl Sema<'_, '_> {
         });
     }
 
+    /// Forming the address of (or pointer to member) function `d` through
+    /// a reflection, at `loc`: `extract` to a function pointer or a
+    /// pointer to member function odr-uses `d` as `&C::f` would
+    /// ([basic.def.odr]/4, [temp.inst]/5 and /8; spec/reflection.md §3
+    /// "Using a function through a reflection", WP-1244), so a member of a
+    /// class template specialization (or a function template
+    /// specialization) has its definition instantiated, at once when it
+    /// is constexpr (needed for constant evaluation). Potentially
+    /// evaluated whatever context the evaluation runs in, as
+    /// [`Self::use_reflected_var`]. Declaration queries (`type_of`,
+    /// `members_of`, ...) do not come here.
+    pub(super) fn use_reflected_function(&mut self, d: DeclId, loc: Loc, oven: &mut Oven) {
+        let d = self.ast.first(d);
+        self.lend_oven(oven, |s| {
+            let unevaluated = std::mem::take(&mut s.unevaluated);
+            let discarded = s.func.as_mut().map(|f| std::mem::take(&mut f.discarded));
+            s.mark_used_at(d, loc);
+            s.unevaluated = unevaluated;
+            if let (Some(f), Some(n)) = (s.func.as_mut(), discarded) {
+                f.discarded = n;
+            }
+        });
+    }
+
     /// The reflection intrinsic `f` is (spec/reflection.md §3.1): a
     /// function declared in `std::meta` (inline namespaces at any level
     /// skipped), or a member of a class declared there, whose name and
