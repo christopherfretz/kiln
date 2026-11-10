@@ -46,9 +46,10 @@ pub(crate) const SENTINEL: u32 = EXC_FREE;
 /// base within its lifetime (clang's `HandleDestructionImpl`; `run_cleanup`).
 pub(crate) const LIFE_CHECK: u32 = u32::MAX - 4;
 
-/// The most characters of an uncaught exception's `what()` its note
-/// prints whole; past it the note prints this many and then
-/// "… [N more characters]" (spec/oven.md §Exceptions).
+/// The most bytes of an uncaught exception's `what()` its note prints
+/// whole; past it the note prints this many (fewer when that would split
+/// a UTF-8 character) and then "… [N more bytes]" (spec/oven.md
+/// §Exceptions).
 pub(crate) const WHAT_CAP: usize = 64 * 1024;
 
 /// An exception object.
@@ -459,12 +460,21 @@ impl Oven {
         r.ok()?;
         let mut s = self.regs[top] as u64;
         let mut out = Vec::new();
-        // Characters past the cap are counted, not kept: the scan is
-        // bounded by the string's allocation (a load past its end
-        // faults), so it ends on any program the Oven could run.
+        // Bytes past the cap are counted, not kept: the scan is bounded
+        // by the string's allocation (a load past its end faults), so it
+        // ends on any program the Oven could run. A fault after the first
+        // byte keeps the bytes read and says why the scan stopped (as the
+        // `static_assert` message path prints what it read).
         let mut more = 0u64;
+        let mut stop = None;
         loop {
-            let c = self.load(s, ch, ak::READ).ok()?;
+            let c = match self.load(s, ch, ak::READ) {
+                Ok(c) => c,
+                Err(f) => {
+                    stop = Some(f);
+                    break;
+                }
+            };
             if c == 0 {
                 break;
             }
@@ -473,13 +483,68 @@ impl Oven {
             } else {
                 more += 1;
             }
-            s = self.ptr_add(s, 1, ch).ok()?;
+            match self.ptr_add(s, 1, ch) {
+                Ok(p) => s = p,
+                Err(f) => {
+                    stop = Some(f);
+                    break;
+                }
+            }
+        }
+        if out.is_empty() && stop.is_some() {
+            return None;
+        }
+        if more > 0 {
+            // Cut at a UTF-8 character boundary: a multi-byte character
+            // the cap would split is counted with the rest.
+            let keep = utf8_boundary(&out);
+            more += (out.len() - keep) as u64;
+            out.truncate(keep);
         }
         let mut w = String::from_utf8_lossy(&out).into_owned();
-        if more > 0 {
+        let reason = stop.map(|f| {
+            let why = self.what_stop_reason(b.ast(), f);
+            why.map_or_else(
+                || "end of what() string not reached".to_owned(),
+                |r| format!("end of what() string not reached: {r}"),
+            )
+        });
+        {
             use std::fmt::Write as _;
-            let _ = write!(w, "\u{2026} [{more} more characters]");
+            match (more, reason) {
+                (0, None) => {}
+                (0, Some(r)) => {
+                    let _ = write!(w, "\u{2026} [{r}]");
+                }
+                (n, None) => {
+                    let _ = write!(w, "\u{2026} [{n} more bytes]");
+                }
+                (n, Some(r)) => {
+                    let _ = write!(w, "\u{2026} [{n} more bytes; {r}]");
+                }
+            }
         }
         Some(w.into())
     }
+}
+
+/// The length of the longest prefix of `b` that does not end inside a
+/// UTF-8 character: `b.len()` less the bytes of a trailing multi-byte
+/// sequence its lead byte says is incomplete (at most 3 bytes looked at).
+fn utf8_boundary(b: &[u8]) -> usize {
+    let n = b.len();
+    for back in 1..=n.min(3) {
+        let c = b[n - back];
+        if c & 0xC0 == 0x80 {
+            continue;
+        }
+        let need = match c {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1,
+        };
+        return if need > back { n - back } else { n };
+    }
+    n
 }

@@ -1235,6 +1235,18 @@ impl Oven {
     /// as clang's `APValue` prints it), without the content when the
     /// operand's type has size 1 (an empty class, a `char`, a `bool`). The type is named as the throw-expression's
     /// operand's (as written, `site.e` the throw-expression).
+    /// Why the scan of an uncaught exception's `what()` string stopped
+    /// before its terminating null character (`Oven::exc_what`): the
+    /// note a read of that character would carry (as the `static_assert`
+    /// message path prints its failure note after the characters read),
+    /// without the extra notes. A fault that is not a memory access gets
+    /// no reason.
+    pub(crate) fn what_stop_reason(&self, ast: &Ast, f: Fault) -> Option<String> {
+        let Fault::Mem { f, ak: k, ty, p } = f else { return None };
+        let site = Site { pc: 0, loc: Loc::INVALID, e: None };
+        Some(self.mem_msg(ast, site, f, k, ty, p, &mut Vec::new()).1)
+    }
+
     fn uncaught_note(
         &self,
         ast: &Ast,
