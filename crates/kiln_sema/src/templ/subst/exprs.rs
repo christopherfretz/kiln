@@ -649,15 +649,31 @@ impl Substituter<'_, '_, '_> {
                     }
                     return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
                 }
-                let destroyed = self.member_rooted_type(destroyed, base, arrow, loc)?;
+                // `p->S::F::~Q<args>()`: `S::template Q<args>`, written
+                // without `template`; a member-rooted `S` is looked up at
+                // the qualifier, and a template-id's destructor member is
+                // diagnosed there, clang's location of its type (WP-1192).
+                let first = self.sema.ast.templates.pseudo_dtor_first.get(e).copied();
+                let begin = self.sema.ast.templates.expr_begin.get(e).copied();
+                let tid = matches!(
+                    self.sema.ast.types.view(destroyed.ty()),
+                    kiln_ast::types::TypeView::DependentTemplateSpecialization { .. }
+                );
+                self.dtor_template_name = first.is_some();
+                let destroyed =
+                    self.member_rooted_type(destroyed, base, arrow, (begin.unwrap_or(loc), loc));
+                self.dtor_template_name = false;
+                let destroyed = destroyed?;
                 // `p->T::F::~Q()`: the first type-name `T::F` too (WP-1155).
-                if let Some(&(first, fl)) = self.sema.ast.templates.pseudo_dtor_first.get(e) {
-                    let first = self.member_rooted_type(first, base, arrow, fl)?;
+                if let Some((first, fl)) = first {
+                    let first =
+                        self.member_rooted_type(first, base, arrow, (begin.unwrap_or(fl), fl))?;
+                    let at = if tid { begin.unwrap_or(loc) } else { loc };
                     return Ok(self.sema.rebuild_pseudo_destructor_first(
                         base,
                         (first, fl),
                         destroyed,
-                        loc,
+                        at,
                         op,
                         arrow,
                     ));
@@ -1477,23 +1493,46 @@ impl Substituter<'_, '_, '_> {
     /// not found at the definition (`p->Self::Inner::~Inner()`, `Self`
     /// a member of the object's class): the component is looked up in
     /// the object's class now, as for a member qualifier
-    /// ([basic.lookup.qual.general]/2, WP-1173).
+    /// ([basic.lookup.qual.general]/2, WP-1173), diagnosed at `root_at`
+    /// (the qualifier), the rest of the type at `loc`.
     fn member_rooted_type(
         &mut self,
         q: QualType,
         base: ExprId,
         arrow: bool,
-        loc: Loc,
+        (root_at, loc): (Loc, Loc),
     ) -> SubstResult<QualType> {
-        if let kiln_ast::types::TypeView::DependentName { keyword, nns, name } =
-            self.sema.ast.types.view(q.ty())
-            && self.rooted_in_member(nns)
-        {
-            let (_, n) = self.member_nns(nns, base, arrow, loc)?;
-            let t = self.sema.ast.types.dependent_name(keyword, n, name);
-            return self.ty(t, loc);
+        use kiln_ast::types::TypeView;
+        // Still dependent (`q->Self::Inner::~Inner()` in a generic lambda
+        // of a template being instantiated): kept for the next
+        // instantiation, the template arguments substituted (WP-1192).
+        let bt = self.sema.ety(base);
+        let obj = if arrow { self.sema.ast.types.pointee(bt) } else { Some(bt) };
+        let dependent = self.sema.ast.types.is_dependent(obj.unwrap_or(bt));
+        match self.sema.ast.types.view(q.ty()) {
+            TypeView::DependentName { keyword, nns, name } if self.rooted_in_member(nns) => {
+                if dependent {
+                    return Ok(q);
+                }
+                let (_, n) = self.member_nns(nns, base, arrow, root_at)?;
+                let t = self.sema.ast.types.dependent_name(keyword, n, name);
+                self.ty(t, loc)
+            }
+            // `Self::template TI<int>` (WP-1192).
+            TypeView::DependentTemplateSpecialization { keyword, nns, name, args }
+                if self.rooted_in_member(nns) =>
+            {
+                if dependent {
+                    let args = self.args(args, loc)?;
+                    let t = &mut self.sema.ast.types;
+                    return Ok(t.dependent_template_specialization(keyword, nns, name, args));
+                }
+                let (_, n) = self.member_nns(nns, base, arrow, root_at)?;
+                let t = self.sema.ast.types.dependent_template_specialization(keyword, n, name, args);
+                self.ty(t, loc)
+            }
+            _ => self.ty(q, loc),
         }
-        self.ty(q, loc)
     }
 
     /// True if specifier `n` starts with a dependent `name::` of a

@@ -750,6 +750,8 @@ impl Substituter<'_, '_, '_> {
                 }
             }
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
+                // Not for a template-id among the arguments (WP-1192).
+                let no_kw = std::mem::take(&mut self.dtor_template_name);
                 let n = self.nns(nns, loc)?;
                 let args = self.args(args, loc)?;
                 if self.nns_still_dependent(n) {
@@ -764,6 +766,7 @@ impl Substituter<'_, '_, '_> {
                 // A non-class qualifier is diagnosed at the `T` (§5.8).
                 self.nns_context(n, self.written(WrittenKey::Nns(nns), loc))?;
                 let loc = self.written(WrittenKey::Type(q), loc);
+                self.dtor_template_name = no_kw;
                 let d = self.member_template_named(n, name, loc)?;
                 let underlying = self.sema.template_name_for(d);
                 let tn = self.sema.ast.types.template_name(TemplateName::Qualified {
@@ -899,6 +902,7 @@ impl Substituter<'_, '_, '_> {
         name: kiln_source::symbol::Symbol,
         loc: Loc,
     ) -> SubstResult<DeclId> {
+        let no_kw = std::mem::take(&mut self.dtor_template_name);
         let ctx = self.nns_context(n, loc)?;
         let found = self.sema.lookup_qualified(ctx, name, LookupKind::Ordinary);
         let Some(&d) = found.decls.first() else {
@@ -928,9 +932,14 @@ impl Substituter<'_, '_, '_> {
         }
         let at = self.sema.ast.decls.get(d).loc();
         let note = self.sema.diag(DiagId::note_declared_non_template, at);
+        let id = if no_kw {
+            DiagId::sema_does_not_refer_to_template
+        } else {
+            DiagId::sema_template_kw_refers_to_non_template
+        };
         let d = self
             .sema
-            .diag(DiagId::sema_template_kw_refers_to_non_template, loc)
+            .diag(id, loc)
             .arg(crate::decl::sym_str(self.sema, name))
             .with_note(note);
         self.sema.emit(d);
