@@ -944,9 +944,9 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                     kids.push((Node::Expr(c), None));
                 }
             }
+            // The field's initializer, or the copy rebuilt for this use.
             ExprKind::CXXDefaultInitExpr => {
-                let field = exprs.default_init_field(e);
-                if let Some(c) = self.ast.decls.field(field).and_then(|f| f.init) {
+                if let Some(c) = self.ast.default_init_expr(e) {
                     kids.push((Node::Expr(c), None));
                 }
             }

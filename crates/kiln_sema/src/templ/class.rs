@@ -2314,6 +2314,16 @@ impl Substituter<'_, '_, '_> {
     /// invalid, so a constructor using it is quiet ([class.base.init]/9.1,
     /// clang `InstantiateInClassInitializer`).
     pub(crate) fn nsdmi(&mut self, field: DeclId, init: kiln_ast::ExprId) {
+        // The pattern's full-expression is rebuilt without its
+        // `ExprWithCleanups` (clang `TransformInitializer`), so the
+        // initializer's conversion to the field's type is inside the
+        // instantiated one, as for a non-template class: a non-dependent
+        // operand reused whole kept its own, inside the conversion, and a
+        // use in a lifetime-extending context could not rebuild its
+        // temporaries (spec/sema.md §7.6a, WP-1177).
+        let ex = &self.sema.ast.exprs;
+        let init =
+            if ex.get(init).kind() == ExprKind::ExprWithCleanups { ex.operand(init) } else { init };
         self.sema.act_on_start_field_init(field);
         let style = self
             .sema

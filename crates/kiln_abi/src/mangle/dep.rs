@@ -1542,9 +1542,15 @@ impl Mangler<'_, '_> {
                     return None;
                 };
                 self.symbol(s);
-                // A specialization is its template-id: `sr1BIiEE1f`.
-                if let Some((_, args)) = self.spec_of(d) {
-                    self.template_args(self.written_args(ty).unwrap_or(args));
+                // A specialization written as a template-id keeps it:
+                // `sr1BIiEE1f`. One the qualifier names without its
+                // arguments (the current instantiation, `C::f` or
+                // `C<X>::f` in a member of `C<int>`) is clang's
+                // `Type::Record` case, the bare name `sr1CE1f` (WP-1169).
+                if self.spec_of(d).is_some()
+                    && let Some(args) = self.written_args(ty)
+                {
+                    self.template_args(args);
                 }
                 Some(false)
             }

@@ -1015,6 +1015,74 @@ fn kind2_declaration_image_classes() {
     assert_eq!(o.code, 1, "replaying a blank source fails: {}", o.stderr);
 }
 
+const IMGP: &str = include_str!("../../../tests/conformance/module.interface/Inputs/img-poly.cppm");
+const IMGP_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-poly-run.cpp");
+
+/// The vtable, VTT, construction-vtable, RTTI and thunk lines of `ir`
+/// (their symbols and linkage), sorted.
+fn vtable_lines(ir: &str) -> Vec<&str> {
+    let mut v: Vec<&str> = ir
+        .lines()
+        .filter(|l| {
+            ["@_ZTV", "@_ZTT", "@_ZTC", "@_ZTI", "@_ZTS"].iter().any(|p| l.starts_with(p))
+                || (l.starts_with("define ") || l.starts_with("declare "))
+                    && (l.contains("@_ZTh") || l.contains("@_ZTv"))
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// Stage S3 (§11.11 "Classes (S3)", WP-1120): polymorphic classes come
+/// from the image: virtual and pure virtual functions, overriders,
+/// `final`, virtual destructors, a key function defined in the unit, a
+/// diamond of virtual bases and an inline-only polymorphic class. With
+/// the unit's source blanked, the importer runs them, and its IR (vtables,
+/// VTTs, RTTI and thunks with their linkage, [class.virtual], Itanium
+/// key-function placement) is the replay's and a kind-1 import's.
+#[test]
+fn kind2_declaration_image_polymorphic() {
+    let d = scratch("image-polymorphic");
+    std::fs::write(d.join("p.cppm"), IMGP).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGP_RUN).unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "p.cppm", "-o", "p.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    assert!(!o.stderr.contains("no declaration image"), "{}", o.stderr);
+    ok(&d, &["-c", "p.pcm", "-o", "p.o"]);
+    ok(&d, &["-fkiln-bmi-kind=1", "--precompile", "p.cppm", "-o", "k1.pcm"]);
+    blank_source(&d, "p.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgp=blank.pcm", "u.cpp", "p.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgp' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "animal 0 0, dog 4 8, animal 2 4, puppy 4 8, 1211321 | 9 18 | 117 117 117 21 7 | 6 2\n"
+    );
+
+    // The same IR from the image (blank source), the replay and kind 1.
+    let mut irs = Vec::new();
+    for (flag, pcm) in [
+        ("-fkiln-bmi-image", "blank.pcm"),
+        ("-fno-kiln-bmi-image", "p.pcm"),
+        ("-fno-kiln-bmi-image", "k1.pcm"),
+    ] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgp=m.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    let vt = vtable_lines(&irs[0]);
+    assert_eq!(vt, vtable_lines(&irs[2]), "vtables and RTTI differ from a kind-1 import");
+    // The key function is in the unit: the vtable is the unit's; an
+    // importer's own class gets a vague-linkage one.
+    assert!(vt.iter().any(|l| l.starts_with("@_ZTVN2ipW4imgp6AnimalE = external ")), "{vt:#?}");
+    assert!(vt.iter().any(|l| l.starts_with("@_ZTV5Puppy = linkonce_odr ")), "{vt:#?}");
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+    assert!(irs[0] == irs[2], "IR differs between the image and a kind-1 import");
+}
+
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
@@ -1035,12 +1103,12 @@ fn kind2_declaration_image_fallback() {
             "in a macro expansion",
         ),
         (
-            "export module f;\nexport struct S { virtual int f() const { return 1; } };\nexport constexpr int k = 1;\n",
-            "a polymorphic class",
+            "export module f;\nexport template <class T> struct S { virtual T f() const { return T(); } };\n",
+            "a polymorphic class template",
         ),
         (
-            "export module f;\nexport struct B {};\nexport struct D : virtual B {};\nexport constexpr int k = 1;\n",
-            "a virtual base class",
+            "export module f;\nexport struct B { ~B() {} };\nexport struct D : B {};\nexport constexpr int k = 1;\n",
+            "a class whose implicit special members need overload resolution",
         ),
         (
             "export module f;\nexport struct S { int x; friend int g(S s) { return s.x; } };\nexport constexpr int k = 1;\n",

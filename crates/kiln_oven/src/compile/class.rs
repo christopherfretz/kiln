@@ -331,7 +331,9 @@ impl Compiler<'_> {
                 }
                 // A default argument rebuilt for this use holds
                 // temporaries of its own (spec/sema.md §7.6a).
-                ExprKind::CXXDefaultArgExpr => work.extend(ast.exprs.default_arg_rewritten(e)),
+                ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                    work.extend(ast.exprs.default_arg_rewritten(e));
+                }
                 // Not part of this initializer's evaluation.
                 ExprKind::LambdaExpr | ExprKind::StmtExpr => {}
                 _ => ast.exprs.children_into(e, &ast.lists, &mut work),
@@ -1361,11 +1363,10 @@ impl Compiler<'_> {
     // ---- aggregates ---------------------------------------------------------
 
     /// The initializer a `CXXDefaultInitExpr` stands for: its field's
-    /// default member initializer.
+    /// default member initializer, or the copy sema rebuilt for this use
+    /// in a lifetime-extending context (spec/sema.md §7.6a).
     pub(super) fn default_init_of(&self, e: ExprId) -> Option<ExprId> {
-        let ast = self.ast();
-        let f = ast.exprs.default_init_field(e);
-        ast.decls.field(f).and_then(|x| x.init)
+        self.ast().default_init_expr(e)
     }
 
     /// Whether `x` is a default member initializer use (its `this` is the

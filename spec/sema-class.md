@@ -1706,7 +1706,7 @@ a port of the clang 19 function it names.
 | `MaterializeTemporaryExpr` | sub | 0 or `LifetimeExtendedTemporary` `DeclId` | storage duration(2: full-expression, automatic, static, thread), `bound_to_lvalue_ref` |
 | `CXXBindTemporaryExpr` | sub | dtor `DeclId` | |
 | `ExprWithCleanups` | sub | — | `side_effects` |
-| `CXXDefaultInitExpr` | field `DeclId` | used_ctx `DeclContextId` | `rewritten` (always set, as clang 19 dumps it); child = the field's shared NSDMI |
+| `CXXDefaultInitExpr` | field `DeclId` | used_ctx `DeclContextId` | `rewritten` (always set, as clang 19 dumps it); child = the field's shared NSDMI, or the use's copy in a lifetime-extending context (`Ast::default_init_expr`, spec/sema.md §7.6a) |
 | `CXXDefaultArgExpr` | param `DeclId` | used_ctx `DeclContextId` | owned by sema-overload.md §7: child = the shared `ParamData.default_arg` |
 | `CXXThisExpr` | — | — | `implicit` |
 | `CXXMemberCallExpr` | callee `MemberExpr` | args `ListId` | object = callee's base |
@@ -1868,7 +1868,10 @@ and extends those to `__range`, so `for (int x : mk())` with
 do not extend them in a template, nor clang 22 a nested one
 (`stmt.ranged/p2718-default-argument-run.cpp`, GCC oracle). The copy, the
 walks that enter it and the module image's carry of it (WP-1166) are in
-spec/sema.md §7.6a.
+spec/sema.md §7.6a. A default member initializer that an aggregate
+initialization in the initializer uses (`mk(Agg{})`, `struct Agg { int x =
+D{4}.v; }`) is rebuilt and extended the same way (WP-1177;
+`stmt.ranged/p2718-default-member-initializer{,-nested}-run.cpp`).
 
 A discarded class prvalue in a lifetime-extending context (an open
 `extend_collector`: the for-range-initializer from C++23, and an enumerating
@@ -2023,6 +2026,11 @@ field 'f' with default member initializer`, and the capture notes:
   supported; ...` [-Wdangling] at the closing brace once per member (and
   once for an array filler), with the default-member-initializer note;
   with `-fclang-compat>=20` it is extended and not diagnosed (WP-874).
+  Either way kiln extends it: the use gets its own copy of the member's
+  initializer, keeping its `ExprWithCleanups`, whose bound temporaries
+  are extended with the variable (`rebuilt_default_init`, spec/sema.md
+  §7.6a, WP-1177; before that the shared initializer's temporary died at
+  its end, `class.temporary/cwg1815-default-member-initializer-run.cpp`).
 - *mem-initializer*: a temporary is `{reference|backing array for
   'std::initializer_list'} {|subobject of }member 'f' binds to a
   temporary object whose lifetime is shorter than the lifetime of the
@@ -3089,7 +3097,22 @@ access, out-of-line declarator scope.**
   member of a dependent base or a template-id stays dependent). Tests:
   `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`,
   `temp.dep.type/out-of-line-current-instantiation-expr-run.cpp`,
-  `-expr-members-run.cpp`, `-expr-neg.cpp`. After a
+  `-expr-members-run.cpp`, `-expr-neg.cpp`. WP-1169 extends the rebuild
+  to a template-id (`C<X>::template f<U>()`, `C<X>::template vt<2>`:
+  `ci_member_ref` forms the class's own template-id, keeping `template`),
+  a `typeof`/`__typeof__` operand (top-level or nested), a pack-indexing
+  type `Ts...[I]` nested in a type (a top-level pack-indexing decl-spec
+  is not rebuilt, as in clang, so `Ts...[C<Ts...>::N]` there does not
+  match the in-class `Ts...[N]`), the index of a pack-indexing
+  expression and a dependent array bound stored only as a profile. A
+  rebuilt pack index that is not value-dependent keeps the written
+  index: clang converts the index only when it is not
+  instantiation-dependent, and the rebuilt one stays so through its
+  qualifier, so `Ns...[sizeof(typename D<Ns...>::T)]` does not match the
+  in-class `Ns...[sizeof(T)]` (`ci_index_value_dependent`). Tests:
+  `temp.dep.type/out-of-line-current-instantiation-{template-id,typeof,pack-index}-{run,neg}.cpp`,
+  `ir-out-of-line-current-instantiation-template-id-typeof-mangling.cpp`;
+  spec/landed/sema-class/WP-1169.md. After a
   parenthesized declarator holding the qualified declarator-id
   (`X (*C<X>::f())(T)`), the parser enters the declarator scope again for
   the outer suffixes, so `T` there is found in `C<X>` (WP-1152,
@@ -3246,11 +3269,13 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
   arguments at every use (`has rewritten init`). S3O §7 already shares
   default arguments, cloning only in a lifetime-extending context
   (WP-1149: a use gets a copy with its own extended temporaries,
-  `default_arg_rewritten`). *Recommend* the same for NSDMIs: the use
-  node carries `used_ctx`; if the stored initializer is an
-  `ExprWithCleanups`, the use site sets `cleanup.needs`; `SourceLocExpr` and
-  immediate invocations are evaluated against the nearest enclosing
-  default-arg/default-init node's location and context (the Oven tracks it).
+  `default_arg_rewritten`). *Resolved*: NSDMIs are shared the same way
+  and copied in the same lifetime-extending contexts, P2718 range-for and
+  CWG1815 (WP-1177, spec/sema.md §7.6a). Elsewhere the use node carries
+  `used_ctx`; if the stored initializer is an `ExprWithCleanups`, the use
+  site sets `cleanup.needs`; `SourceLocExpr` and immediate invocations are
+  evaluated against the nearest enclosing default-arg/default-init node's
+  location and context (the Oven tracks it).
 - **Q4 Explicit object parameters (P0847).** *Resolved* (WP-149) for
   member functions (§2.5), and (WP-356) for lambdas, spec/sema-lambda.md
   §3.1.
