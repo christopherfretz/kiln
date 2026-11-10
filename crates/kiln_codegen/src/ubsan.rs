@@ -358,14 +358,15 @@ impl Cg<'_> {
                 format!("'{p}{s} *'")
             }
             UbDesc::Record => {
-                match vector_diag_arg(&ast.types, &names, q, self.opts.clang_compat >= 22) {
-                    Some(v) => v,
-                    None => {
-                        let s = print_type(&ast.types, &names, q, full);
-                        match aka(&ast.types, &names, q) {
-                            Some(a) => format!("'{s}' (aka '{a}')"),
-                            None => format!("'{s}'"),
-                        }
+                if let Some(v) =
+                    vector_diag_arg(&ast.types, &names, q, self.opts.clang_compat >= 22)
+                {
+                    v
+                } else {
+                    let s = print_type(&ast.types, &names, q, full);
+                    match aka(&ast.types, &names, q) {
+                        Some(a) => format!("'{s}' (aka '{a}')"),
+                        None => format!("'{s}'"),
                     }
                 }
             }

@@ -1,6 +1,6 @@
 //! [`TypeNames`] over a [`Sema`]'s AST: how declarations, expressions and
 //! values print inside types in diagnostics. The printer lives in
-//! `kiln_ast` ([`kiln_ast::diag_names::DiagNames`]) so that codegen's UBSan
+//! `kiln_ast` ([`kiln_ast::diag_names::DiagNames`]) so that codegen's sanitizer
 //! type descriptors print with it too (WP-1158).
 
 pub use kiln_ast::diag_names::DiagNames as SemaNames;

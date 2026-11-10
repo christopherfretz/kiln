@@ -2,7 +2,7 @@
 //! values print inside types in a diagnostic argument (clang's
 //! `FormatASTNodeDiagnosticArgument` with the context's printing policy).
 //! Sema's diagnostics use it (`kiln_sema::names::SemaNames`), and so do
-//! the UBSan type descriptors of codegen, whose names clang formats with
+//! the sanitizer type descriptors of codegen, whose names clang formats with
 //! the same diagnostic printer (`EmitCheckTypeDescriptor`; spec/codegen.md
 //! "Sanitizers", WP-1158).
 
