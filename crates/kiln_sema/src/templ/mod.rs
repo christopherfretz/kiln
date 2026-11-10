@@ -1279,6 +1279,23 @@ impl Sema<'_, '_> {
         list
     }
 
+    /// The `template` keyword of the outermost untaken written head
+    /// around the declaration being declared (a [temp.friend]/5 friend's
+    /// own head; WP-1146).
+    pub(crate) fn outermost_open_head_loc(&self) -> Option<Loc> {
+        let floor = self.lambda_head_floor();
+        let mut at = None;
+        for (i, h) in self.templ.heads.iter().enumerate().rev() {
+            if h.taken || i < floor {
+                break;
+            }
+            if !h.invented {
+                at = Some(h.template_loc);
+            }
+        }
+        at
+    }
+
     /// The untaken written heads directly around the declaration being
     /// declared, outermost first: each one's depth and parameter count
     /// (the heads [`Self::take_template_head`] would match).

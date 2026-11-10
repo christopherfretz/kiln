@@ -1,0 +1,27 @@
+//@ expect: ast
+//@ oracle: clang
+// [class.copy.elision]/3: the implicit-move xvalue cast wraps the whole
+// return or throw operand, including a resolved `_Generic`,
+// `__builtin_choose_expr` or GNU `__extension__` (all looked through by
+// clang `IgnoreParens`): an `ImplicitCastExpr <NoOp>` xvalue around the
+// operand, which stays an lvalue (WP-1176). The dependent case is
+// implicit-move-through-choose-expr-dependent-ast.cpp.
+struct M {
+  M(M &&) = default;
+  M(const M &) = delete;
+};
+// Parameters: implicitly movable, and no NRVO candidates (clang's JSON
+// dump omits `nrvo_candidate`; NRVO is pinned by
+// nrvo-through-generic-selection-ir.cpp).
+M choose(M m) { return (__builtin_choose_expr(1, m, 0)); }
+M generic(M m) { return _Generic(0, int: m, default: 0); }
+M generic_parens(M m) { return (_Generic(0, default: (m))); }
+M extension(M m) { return __extension__ m; }
+void thrown(M &&r) {
+  M m = static_cast<M &&>(r);
+  throw __builtin_choose_expr(0, 0, m);
+}
+void thrown_generic(M &&r) {
+  M m = static_cast<M &&>(r);
+  throw _Generic(0, int: m);
+}
