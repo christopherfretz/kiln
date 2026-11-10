@@ -7034,6 +7034,14 @@ and takes the specializations that deduce as the lookup result; the
 bases' conversion templates are not searched, as clang 19's
 `LookupDirect` (`Sema::conversion_template_specs`, WP-803,
 `tests/conformance/temp.mem/conversion-template-named-explicitly-run.cpp`).
+The same holds for a conversion-function-id in an id-expression
+(WP-1246): `&S::operator int*`, a call `S::operator int*()` and the
+unqualified `operator int*()` inside a member of S name the deduced
+specialization when lookup finds no member of that name
+(`Sema::conversion_template_fallback`; the class is the qualifier, or
+the enclosing class when unqualified), and so does the `^^` operand
+(spec/reflection-repr.md §2). A pointer to it odr-uses it, so it is
+instantiated (`temp.mem/conversion-template-qualified-id-run.cpp`).
 
 WP-956 makes several changes to conversion function templates.
 - **Overload resolution.** A specialization found by deduction like this
