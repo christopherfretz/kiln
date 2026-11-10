@@ -777,13 +777,14 @@ mod ci_tests {
                 .find(|(n, _)| n == name)
                 .unwrap_or_else(|| panic!("sweep.yml has no `{name}` job"));
             // Code only: a comment may quote the old shapes.
-            b.lines()
-                .filter(|l| !l.trim_start().starts_with('#'))
-                .fold(String::new(), |mut acc, l| {
+            b.lines().filter(|l| !l.trim_start().starts_with('#')).fold(
+                String::new(),
+                |mut acc, l| {
                     acc.push_str(l.trim());
                     acc.push('\n');
                     acc
-                })
+                },
+            )
         };
         let has = |block: &str, name: &str, line: &str| {
             assert!(block.lines().any(|l| l == line), "sweep.yml job `{name}` lacks `{line}`");
@@ -851,7 +852,8 @@ mod ci_tests {
         for (name, block) in [("oss", &oss), ("oss-summary", &summary)] {
             for l in block.lines().filter(|l| l.contains("fromJSON(")) {
                 assert!(
-                    l.matches("fromJSON(").count() == l.matches("fromJSON(needs.oss-matrix.outputs.").count(),
+                    l.matches("fromJSON(").count()
+                        == l.matches("fromJSON(needs.oss-matrix.outputs.").count(),
                     "sweep.yml job `{name}` reads a list other than oss-matrix's: `{l}`"
                 );
             }
