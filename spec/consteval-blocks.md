@@ -49,11 +49,13 @@ consteval-block-declaration:
   `templ/class.rs`, function bodies in `templ/subst/stmts.rs`) and
   evaluated once per instantiation. A failure in a class template
   instantiation marks the class invalid, as a failed `static_assert`
-  does.
+  does. In a substituted function or lambda body a failure is the
+  block's error only: the body, and a lambda holding it, stay valid
+  (spec/sema-templates.md §5.5; WP-1257).
 - **Never codegen'd.** The declaration produces no IR; the lambda is an
   immediate function.
 
-Tests: `tests/conformance/dcl.pre/consteval-block-{namespace,block,class,template,errors,cxx23}.cpp`.
+Tests: `tests/conformance/dcl.pre/consteval-block-{namespace,block,class,template,errors,cxx23,lambda-no-cascade,lambda-next-error}.cpp`, `dcl.pre/run-consteval-block-lambda-template.cpp`.
 
 ## 3. The plainly constant-evaluated bit
 
