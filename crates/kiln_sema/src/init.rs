@@ -2968,7 +2968,7 @@ impl Sema<'_, '_> {
     fn field_arg(&self, f: DeclId) -> String {
         if self.ast.decls.get(f).name().is_empty() {
             // clang names an anonymous member by its type, without `aka`.
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             let t = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
             let s = kiln_ast::types::print_type(
                 &self.ast.types,

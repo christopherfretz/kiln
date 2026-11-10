@@ -1075,7 +1075,10 @@ stores ids.
   Comparison category types are made by sema, not written, and clang
   prints them as `'std::strong_ordering'`. kiln gives them `Elaborated`
   sugar with the enclosing non-inline namespaces as the qualifier
-  (`scoped_class_type`, WP-082). A type's scope and a
+  (`scoped_class_type`, WP-082); a class nested in a class takes its
+  enclosing class's scoped type as the qualifier (the object of a
+  member access converted to a nested base, `'ns::Outer::B *'`,
+  WP-1158). A type's scope and a
   declaration's own qualified name (`qualified_decl_name`) skip an
   inline namespace only when it is redundant for the name printed after
   it, as clang's `AppendScope` and `printNestedNameSpecifier` do
@@ -1202,6 +1205,12 @@ Printing:
 - Defaulted template arguments are not tracked by the type layer:
   `TypeNames::specialization_args` must return the argument list with
   defaulted arguments already removed.
+- `TypeNames::args_as_written` (clang `getTemplateArgsAsWritten`,
+  `TypePrinter::printTag`): an explicit specialization or explicit
+  instantiation of a class template prints the arguments written on it,
+  unscoped as written, in place of `specialization_args` (not under
+  canonical arguments). The diagnostic names (`DiagNames`) supply them;
+  the AST-dump names do not yet (WP-1158; spec/codegen.md "Sanitizers").
 - Nesting deeper than 400 prints `...` (balanced) instead of recursing.
 - `ExtQual` prints `__attribute__((address_space(N))) T` (approximate: the
   ext-qual word is printed raw).

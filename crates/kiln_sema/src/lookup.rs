@@ -1036,7 +1036,7 @@ impl Sema<'_, '_> {
                     } else if is_type_kind(k) {
                         // clang prints the class's type with its scope
                         // (`getTypeDeclType`), without an `aka`.
-                        let names = crate::names::SemaNames::new(self);
+                        let names = crate::names::sema_names(self);
                         let ty = kiln_ast::types::print_type(
                             &self.ast.types,
                             &names,

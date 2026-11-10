@@ -16,7 +16,7 @@ use kiln_ast::{DeclId, QualType};
 use std::fmt::Write as _;
 
 use crate::Sema;
-use crate::names::SemaNames;
+use crate::names::sema_names;
 
 /// A template specialization as the diff sees it (clang's
 /// `TemplateSpecializationType` with its sugared and desugared argument
@@ -256,7 +256,7 @@ impl Sema<'_, '_> {
 
     /// clang's `TreeToString` for the printed (`from`) side.
     fn print_node(&self, node: &Node, from_default: bool, out: &mut String) {
-        let names = SemaNames::new(self);
+        let names = sema_names(self);
         let ctx = &self.ast.types;
         match node {
             Node::Template { from, from_quals, to_quals, children } => {
@@ -350,7 +350,7 @@ impl Sema<'_, '_> {
         from_default: bool,
         out: &mut String,
     ) {
-        let names = SemaNames::new(self);
+        let names = sema_names(self);
         let ctx = &self.ast.types;
         let Some(f) = from else {
             out.push_str("(no argument)");

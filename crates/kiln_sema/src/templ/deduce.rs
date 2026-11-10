@@ -1896,7 +1896,7 @@ impl Sema<'_, '_> {
     /// Template name `n` as written (clang's `TemplateName::print` with
     /// `Qualified::AsWritten` over a written name).
     fn written_name_str(&self, n: kiln_ast::ids::TemplateNameId) -> String {
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let mut s = String::new();
         kiln_ast::types::write_template_name(&self.ast.types, &names, n, &mut s);
         s
@@ -1906,7 +1906,7 @@ impl Sema<'_, '_> {
         if let ArgView::Type(q) = a.view() {
             return self.ty_str(q);
         }
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let mut s = String::new();
         kiln_ast::types::write_template_arg(&self.ast.types, &names, a, &mut s);
         s

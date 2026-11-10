@@ -18,6 +18,7 @@ pub mod builder;
 pub mod class;
 pub mod consts;
 pub mod decl;
+pub mod diag_names;
 pub mod dump;
 pub mod expr;
 pub mod fp;
