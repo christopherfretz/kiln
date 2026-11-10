@@ -1207,5 +1207,5 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1189 | profile_expr.rs:282 reflected_type_words uses the written argument list (low) | WP-1168 | open |
 | WP-1190 | Decide: C++26 kiln zero-fills all locals including NRVO (codegen_cmd.rs:162 AutoVarInit::Zero) where clang 22 does not | WP-1176 | open |
 | WP-1191 | Miscompile: the module image does not carry member_like_friend (bmi_image.rs:2333), so an imported constrained friend template mangles without F; mangle.rs:1510 latest-decl edge | WP-1146 | open |
-| WP-1192 | Rejects-valid xfail expr.prim.id.dtor/run-dependent-object-qualified-destructor-template-id.cpp (`p->Self::template TI<int>::~TI<int>()`): defer to instantiation in kiln_parse expr.rs:1559 and member_expr.rs:1357 | WP-1173 | open |
+| WP-1192 | Rejects-valid xfail expr.prim.id.dtor/run-dependent-object-qualified-destructor-template-id.cpp (`p->Self::template TI<int>::~TI<int>()`): defer to instantiation in kiln_parse expr.rs:1559 and member_expr.rs:1357 | WP-1173 | in progress |
 | WP-1193 | Wording: `not yet implemented: dependent name` for invalid pseudo-destructor forms (templ/subst/mod.rs:709); -Wdtor-name missing (member_expr.rs:1227); `typename S::Inner` wording | WP-1173 | open |
