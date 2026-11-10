@@ -130,6 +130,13 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
 - `^^T` in a template: dependent; the `CXXReflectExpr` stores the
   pattern operand and substitution remaps it (`templ/subst/exprs.rs`),
   so a member of a class template reflects the instantiated member.
+  An instantiation-dependent type operand that is not a dependent type
+  (`^^ND<T>`, `template <class T> using ND = int;`) is value-dependent
+  too ([temp.dep.constexpr]): its reflection is the alias specialization
+  of the template's own parameter, so a parameter type `K<^^ND<T>>` is
+  substituted (and deduced through the other parameters) rather than
+  compared with its definition-time value (`Builder::reflect_expr`,
+  WP-1260; `temp.dep.constexpr/reflect-instantiation-dependent-alias-run.cpp`).
 
 Ill-formed operands, each one error:
 
@@ -222,13 +229,18 @@ template-argument printing use the same `<form>` (`dump/names.rs`):
 | Reflectee | Form |
 |---|---|
 | `Null` | `std::meta::info()` |
-| `Type` | `^^` + the type as kept (`^^I`, `^^const int *`, `^^Tm<int>`) |
+| `Type` | `^^` + the type as kept, its sugar (an alias, a template specialization) printed with its full scope (`^^I`, `^^const int *`, `^^Tm<int>`, `^^const S<int>::In *`): the reflect-expression keeps no qualifier as written |
 | global namespace | `^^::` |
-| `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name (`^^ns::f`, `^^S::m`) |
+| `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name, each class template specialization in its scope followed by its arguments as clang's `printQualifiedName` names a declaration in a diagnostic (`^^ns::f`, `^^S::m`, `^^S<int>::m`, `^^ns::R<char, 3>::Q::y`; WP-1258) |
 | `Value` / `Object` | `^^(value of type T)` / `^^(object of type T)` |
 | `BaseSpec` | `^^(base #i of C)` |
 | `FnParam` | `^^(parameter #i of f)` |
 | `DataMemberSpec` / `Annotation` | `^^(data member spec #n)` / `^^(annotation #n)` |
+
+A constant naming a declaration (a template argument `X<&S<int>::m>`, an
+"in call to" argument) names it the same way (`PrintEnv::decl_name`).
+`display_string_of` follows GCC 16.1 instead (spec/reflection.md §3.9),
+which also prints the arguments (`S<int>::m`, `ns::vt<int>`).
 
 The form is stable: tests may match it. Golden:
 `tests/conformance/expr.reflect/ast-dump.cpp.expected`.
