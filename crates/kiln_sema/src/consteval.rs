@@ -926,8 +926,7 @@ impl Sema<'_, '_> {
             // A default argument clang rebuilds at the use is completed
             // again there, its invocations unvalued (so evaluated again by
             // clang's trial; read as leaves here).
-            if rebuilt
-                && let Some(root) = self.ast.decls.param(u.decl).and_then(|p| p.default_arg)
+            if rebuilt && let Some(root) = self.ast.decls.param(u.decl).and_then(|p| p.default_arg)
             {
                 self.check_default_arg_overflow(u.expr, root);
             }

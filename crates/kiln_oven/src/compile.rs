@@ -6591,7 +6591,8 @@ impl Compiler<'_> {
     /// again (WP-1171; spec/oven.md "Valued immediate invocations").
     fn stored_value(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
         let x = &self.ast().exprs;
-        x.constant_value(e).or_else(|| self.srcloc.is_none().then(|| x.default_immediate_value(e))?)
+        x.constant_value(e)
+            .or_else(|| self.srcloc.is_none().then(|| x.default_immediate_value(e))?)
     }
 
     /// Enters default argument (or default member initializer use) `e`:
