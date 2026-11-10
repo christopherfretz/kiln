@@ -354,6 +354,17 @@ impl Checker<'_, '_, '_> {
                 }
             }
             ExprKind::AddrLabelExpr => self.indirect_targets.push(ast.exprs.addr_label(e)),
+            // The copy of a default argument rebuilt for a lifetime-extending
+            // use (spec/sema.md §7.6a): its extended temporaries live as long
+            // as the enclosing statement's scope, so an indirect goto out of
+            // it skips their destructors. clang 19/22 do not look (their
+            // `CXXDefaultArgExpr` has no children). WP-1166.
+            ExprKind::CXXDefaultArgExpr => {
+                if let Some(r) = ast.exprs.default_arg_rewritten(e) {
+                    self.expr(r, parent);
+                }
+                return;
+            }
             _ => {}
         }
         for c in ast.exprs.children(e, &ast.lists) {
