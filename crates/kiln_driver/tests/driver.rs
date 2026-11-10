@@ -2190,3 +2190,106 @@ fn mcpu_table_covers_clang() {
         ["error: unsupported argument 'cortex-a1' to option '-mcpu='"]
     );
 }
+
+/// The `target-features` of `-S -emit-llvm` output `ir`, or the
+/// `#define __ARM_` lines of `-E -dM` output, sorted.
+fn arm_target_state(out: &str) -> Vec<String> {
+    let k = "\"target-features\"=\"";
+    let mut v: Vec<String> = match out.find(k) {
+        Some(i) => {
+            out[i + k.len()..].split('"').next().unwrap_or("").split(',').map(Into::into).collect()
+        }
+        None => out.lines().filter(|l| l.starts_with("#define __ARM_")).map(Into::into).collect(),
+    };
+    v.sort();
+    v
+}
+
+/// spec/driver.md "Target features" (WP-1167): every `+ext` / `+noext`
+/// modifier clang 19 / clang 22 lists (where installed; plus the `rdma`
+/// alias), on a bare `-march=armv8-a`, removed from the newest
+/// architecture and from all of them at once, and on `-mcpu=cortex-a53`,
+/// gives clang's `target-features` and `__ARM_*` predefines.
+#[test]
+fn march_modifiers_match_clang() {
+    // The rejects-valid that motivated the generated table.
+    let o = kiln(
+        &["--target=aarch64-linux-gnu", "-march=armv9-a+sme2", "-E", "-dM", "-x", "c++", "-"],
+        "",
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("#define __ARM_FEATURE_SME2 1\n"), "{}", o.stdout);
+    for (v, top) in [("19", "armv9.5-a"), ("22", "armv9.7-a")] {
+        let cxx = format!("clang++-{v}");
+        let Some((out, _)) =
+            oracle(&cxx, &["--target=aarch64-linux-gnu", "--print-supported-extensions"], "")
+        else {
+            continue;
+        };
+        let body = out.split_once("Description").map_or("", |(_, b)| b);
+        let mut names: Vec<&str> = body
+            .lines()
+            .filter(|l| l.starts_with("    "))
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        assert!(names.len() > 70, "{cxx}: {names:?}");
+        names.push("rdma");
+        let all = names.join("+");
+        let cases: Vec<String> = names
+            .iter()
+            .flat_map(|n| {
+                [
+                    format!("-march=armv8-a+{n}"),
+                    format!("-march={top}+no{n}"),
+                    format!("-march=armv8-a+{all}+no{n}"),
+                    format!("-mcpu=cortex-a53+{n}"),
+                ]
+            })
+            .collect();
+        let compat = format!("-fclang-compat={v}");
+        let check = |flag: &str| -> Vec<String> {
+            let mut bad = Vec::new();
+            for kind in [["-S", "-emit-llvm", "-o", "-"], ["-E", "-dM", "-o", "-"]] {
+                let mut args = vec!["--target=aarch64-linux-gnu", flag];
+                args.extend(kind);
+                args.extend(["-x", "c++", "-"]);
+                let mut k = vec![compat.as_str()];
+                k.extend(&args);
+                let o = kiln(&k, "int f() { return 0; }\n");
+                let Some((c, cerr)) = oracle(&cxx, &args, "int f() { return 0; }\n") else {
+                    continue;
+                };
+                let (got, want) = (arm_target_state(&o.stdout), arm_target_state(&c));
+                if o.code != 0 || got != want {
+                    let only = |a: &[String], b: &[String]| -> Vec<String> {
+                        a.iter().filter(|x| !b.contains(x)).cloned().collect()
+                    };
+                    bad.push(format!(
+                        "{cxx} {} {}: kiln-only {:?} clang-only {:?} {}{cerr}",
+                        flag.replace(&all, "ALL"),
+                        kind[1],
+                        only(&got, &want),
+                        only(&want, &got),
+                        o.stderr
+                    ));
+                }
+            }
+            bad
+        };
+        let bad: Vec<String> = std::thread::scope(|s| {
+            let chunk = cases.len().div_ceil(4);
+            let hs: Vec<_> = cases
+                .chunks(chunk)
+                .map(|c| s.spawn(|| c.iter().flat_map(|f| check(f)).collect::<Vec<_>>()))
+                .collect();
+            hs.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        });
+        assert!(
+            bad.is_empty(),
+            "{} of {} cases differ:\n{}",
+            bad.len(),
+            cases.len(),
+            bad.join("\n")
+        );
+    }
+}
