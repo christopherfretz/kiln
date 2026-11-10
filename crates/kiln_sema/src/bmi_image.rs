@@ -47,7 +47,7 @@ mod spec;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 9;
+pub(crate) const IMAGE_VERSION: u32 = 10;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -3893,7 +3893,7 @@ mod tests {
     use super::*;
 
     #[allow(clippy::too_many_lines)] // a literal image covering every record and type kind
-    fn sample() -> Image {
+    pub(super) fn sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;
         Image {
