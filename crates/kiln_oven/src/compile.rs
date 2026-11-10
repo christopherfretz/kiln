@@ -3585,7 +3585,7 @@ impl Compiler<'_> {
                 let ast = self.ast();
                 // A glvalue's value is the address it designates
                 // (`Oven::evaluate`, WP-640), not a value of its type.
-                let cv = ast.exprs.constant_value(e).filter(|_| !n.value_category().is_glvalue());
+                let cv = self.stored_value(e).filter(|_| !n.value_category().is_glvalue());
                 let scalar = cv.and_then(|c| ast.consts.scalar(c));
                 let v = scalar.as_ref().and_then(scalar_bits);
                 let ptr = matches!(scalar, Some(Scalar::Pointer { .. }));
@@ -6078,7 +6078,7 @@ impl Compiler<'_> {
             // evaluated with the enclosing initializer. Evaluated in place,
             // as `rv_inner` does for a value (spec/oven.md "Nested
             // immediate invocations").
-            ExprKind::ConstantExpr if self.ast().exprs.constant_value(e).is_none() => {
+            ExprKind::ConstantExpr if self.stored_value(e).is_none() => {
                 let op = self.ast().exprs.operand(e);
                 self.effect(op);
             }
@@ -6585,6 +6585,18 @@ fn default_arg_of(ast: &kiln_ast::Ast, e: ExprId) -> Option<ExprId> {
 }
 
 impl Compiler<'_> {
+    /// The stored value of immediate invocation `e`: its own, else, outside
+    /// a use with source-location values, the one sema found for it at the
+    /// uses of its default argument or default member initializer
+    /// (`default_immediate_value`, read as codegen reads it): a trial fold
+    /// through such a use reads it as a leaf instead of running the call
+    /// again (WP-1171; spec/oven.md "Valued immediate invocations").
+    fn stored_value(&self, e: ExprId) -> Option<kiln_ast::ConstValueId> {
+        let x = &self.ast().exprs;
+        x.constant_value(e)
+            .or_else(|| self.srcloc.is_none().then(|| x.default_immediate_value(e))?)
+    }
+
     /// Enters default argument (or default member initializer use) `e`:
     /// the source-location builtins in it
     /// take the values of this use unless an enclosing default argument
@@ -6880,7 +6892,7 @@ impl Compiler<'_> {
         if self.node(e).value_category().is_glvalue() {
             return None;
         }
-        let cv = ast.exprs.constant_value(e)?;
+        let cv = self.stored_value(e)?;
         if let Some(s) = ast.consts.scalar(cv) {
             let ok = (scalar_bits(&s).is_some() || matches!(s, Scalar::Pointer { .. }))
                 && !self.o.types.is_aggregate(ty)
