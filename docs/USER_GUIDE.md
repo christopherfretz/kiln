@@ -156,7 +156,10 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   names that installation:
   `kiln++ -std=c++26 --gcc-toolchain=<GCC 16.1 prefix> refl.cpp`, where
   the prefix is the directory holding `lib/gcc/<triple>/16.1.0`. `^^`
-  and splices need no header.
+  and splices need no header. Without it, the `'meta' file not found`
+  error at C++26 carries a note naming the GCC installation (or libc++)
+  kiln selected, and the prefix of a GCC 16 installation that `g++-16`
+  or `g++` on `PATH` reports, if any.
   `-fkiln-reflection-mangling=gcc|kiln|kiln-hashed` chooses how a
   `std::meta::info` template argument is mangled. The default is `gcc`,
   GCC 16.1's `L Dm … E` form: objects that use reflections link with

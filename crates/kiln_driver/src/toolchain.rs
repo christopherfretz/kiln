@@ -667,6 +667,29 @@ fn driver_gcc_install(gcc: &str) -> Option<GccInstall> {
     gcc_install_dir(dir)
 }
 
+/// The major version of a GCC version directory name (`14`, `16.1.0`);
+/// 0 if it does not start with a number.
+pub fn gcc_major(v: &str) -> u32 {
+    let end = v.find(|c: char| !c.is_ascii_digit()).unwrap_or(v.len());
+    v[..end].parse().unwrap_or(0)
+}
+
+/// A GCC 16 installation on `PATH`, for the note after a missing
+/// `#include <meta>` (WP-1210): the first of `g++-16`, `g++` whose
+/// `-print-search-dirs` names a GCC 16 installation, as its
+/// `--gcc-toolchain` prefix (four levels above
+/// `<prefix>/lib/gcc/<triple>/<version>`, canonicalized) and the executable's name. Run
+/// only on that error path.
+pub fn gcc16_on_path() -> Option<(String, String)> {
+    ["g++-16", "g++"].into_iter().find_map(|exe| {
+        let g = driver_gcc_install(exe).filter(|g| gcc_major(&g.version) == 16)?;
+        let prefix = Path::new(&g.path).ancestors().nth(4)?;
+        // `install:` is often `<prefix>/bin/../lib/gcc/...`.
+        let prefix = std::fs::canonicalize(prefix).unwrap_or_else(|_| prefix.to_path_buf());
+        Some((prefix.display().to_string(), exe.to_owned()))
+    })
+}
+
 /// clang `GCCVersion::isOlderThan` on the parsed version directory name
 /// `v` (`GCCVersion::Parse`: up to three `.`-separated numbers, a
 /// missing minor or patch is "any", so `9` is not older than 9.3.1; an

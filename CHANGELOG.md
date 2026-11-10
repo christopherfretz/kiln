@@ -21,7 +21,9 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - C++26 static reflection (P2996, `<meta>`), on by default at
   `-std=c++26` (`-fno-reflection` turns it off). The `<meta>` header is
   GCC 16.1's libstdc++ one, selected with `--gcc-toolchain=`; libstdc++
-  14 and libc++ 22 do not ship it.
+  14 and libc++ 22 do not ship it. When `#include <meta>` is not found at
+  C++26, a note names the GCC installation (or libc++) kiln selected, and
+  a GCC 16 found through `g++-16` or `g++` on `PATH`.
 - C++26 contracts (P2900): `pre`, `post`, `contract_assert`, the four
   evaluation semantics (`-fcontract-evaluation-semantic=`), and a
   replaceable violation handler.

@@ -1232,6 +1232,29 @@ impl Preprocessor<'_, '_> {
 
     /// `#include`, `#include_next`, `#import` ([cpp.include]): asks the
     /// [`IncludeResolver`] and enters the file.
+    /// `d` (a missing include) with the note on where `<meta>` comes from
+    /// when the request is `#include <meta>` and the driver set
+    /// [`crate::PpOptions::meta_hint`] (C++26; WP-1210, spec/pp.md
+    /// "Missing `<meta>`"). The `PATH` probe runs only here.
+    fn meta_note(&self, d: Diag, req: &IncludeRequest) -> Diag {
+        use crate::options::MetaHintLib;
+        let Some(hint) = self.opts.meta_hint.as_ref().filter(|_| req.angled && req.name == "meta")
+        else {
+            return d;
+        };
+        let found = (hint.probe)().map_or_else(String::new, |(prefix, exe)| {
+            format!("; a GCC 16 installation was found at '{prefix}' (from {exe} on PATH)")
+        });
+        let note = match &hint.lib {
+            MetaHintLib::Gcc { dir, version } => {
+                Diag::new(DiagId::note_pp_meta_gcc, Span::INVALID).arg(dir).arg(version)
+            }
+            MetaHintLib::LibCxx => Diag::new(DiagId::note_pp_meta_libcxx, Span::INVALID),
+            MetaHintLib::NoGcc => Diag::new(DiagId::note_pp_meta_no_gcc, Span::INVALID),
+        };
+        d.with_note(note.arg(found))
+    }
+
     fn do_include(&mut self, name: PpTok, d: Dir) {
         crate::profile::time!(t_include_ns);
         let (dir, kind) = match d {
@@ -1277,7 +1300,8 @@ impl Preprocessor<'_, '_> {
         let Some(r) = res else {
             // `-MG`: a generated header; the dependency callbacks saw it.
             if !self.opts.suppress_include_not_found {
-                self.emit(Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name));
+                let d = Diag::new(DiagId::pp_file_not_found, ft.tok.span).arg(&req.name);
+                self.emit(self.meta_note(d, &req));
             }
             return;
         };
