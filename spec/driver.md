@@ -103,7 +103,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-stack-size=N[k\|m\|g]` | kiln: the stack reserved for the compiling thread (default 1 GiB; at least 4 MiB; the last valid value wins). Running out is the fatal "kiln: stack exhausted during …" (spec/sema-templates.md §10.3), never a crash |
 | `-v`, `--verbose`, `--version`, `--help` | see below |
 | `-F <dir>` | accepted; warns `ignoring framework directory '<dir>' (kiln does not search frameworks)` (`drv_framework_dir_ignored`, no `-W` group: `-w` silences it, `-Qunused-arguments` does not) |
-| `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | write a Chrome trace per compiled input where clang writes it (see "Time trace"; WP-1115). Without a compiler job that writes one (`-fsyntax-only`, a header precompile), each spelling is `argument unused during compilation` (`-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), as clang; granularity and verbose are unused without `-ftime-trace`. A granularity that is not an unsigned integer is `invalid integral value '<v>' in '<flag>'` (`drv_invalid_int_value`) |
+| `-ftime-trace[=<path>]`, `-ftime-trace-granularity=<n>`, `-ftime-trace-verbose` | write a Chrome trace per compiled input where clang writes it (see "Time trace"; WP-1115). Without a compiler job that writes one (`-fsyntax-only`), each spelling is `argument unused during compilation` (`-Wunused-command-line-argument`, silenced by `-Qunused-arguments`), as clang; granularity and verbose are unused without `-ftime-trace`. A granularity that is not an unsigned integer is `invalid integral value '<v>' in '<flag>'` (`drv_invalid_int_value`) |
 | `-fsyntax-only` | parse and check (see "Syntax checking") |
 | `-verify[=<prefixes>]`, `-verify-ignore-unexpected[=<levels>]` | with `-fsyntax-only`: check the diagnostics against `expected-*` comments (see "-verify") |
 | `-Xclang <arg>` | `<arg>` is parsed as a driver option (kiln has no separate `cc1`), so `-Xclang -verify` is `-verify` |
@@ -1897,8 +1897,8 @@ the recorder is thread-local, so in-process parallel compiles never mix),
 monotonic (`Instant`), dependency-free, safe Rust.
 
 **Which runs.** A run with a compiler job: `-c`, `-S`, linking, `-E`,
-`-M`/`-MM`. `-fsyntax-only` and a header precompile write nothing and
-warn (the options table). One trace per input; nothing is written for an
+`-M`/`-MM`, `--precompile`, a header precompile (WP-1128).
+`-fsyntax-only` writes nothing and warns (the options table). One trace per input; nothing is written for an
 input whose compile, `opt` or `llc` step failed (clang's failing `cc1`
 writes none).
 
@@ -1908,13 +1908,16 @@ writes none).
 |---|---|
 | `-ftime-trace=<dir>` (an existing directory) | `<dir>/<output file name>` with the extension replaced by `.json` |
 | `-ftime-trace=<file>` | `<file>` (every input writes it; the last wins, as clang) |
-| `-ftime-trace`, linking | `<-o or a>-<input file name>`, extension `.json` (clang's implicit `-dumpdir`): `-o out/app x.cpp` gives `out/app-x.json` |
-| `-ftime-trace`, otherwise | the job's output with the extension `.json`: `x.o` gives `x.json`, `-o out/o1.o` gives `out/o1.json`, `-E` to standard output gives `-.json` |
+| `-ftime-trace=<dir>`, linking | `<dir>/<input stem>-<6 hex digits>.json`, named after the input's temporary object as clang's (`x-2d3b26.json`; the digits differ per input and per run, WP-1128) |
+| `-ftime-trace`, linking | `<-o or a>-<input file name>`, extension `.json` (clang's implicit `-dumpdir`): `-o out/app x.cpp` gives `out/app-x.json`; a header precompile is a link's final phase too (`-o h.pch h.h` gives `h.pch-h.json`) |
+| `-ftime-trace`, otherwise | the job's output with the extension `.json`: `x.o` gives `x.json`, `-o out/o1.o` gives `out/o1.json`, `-E` to standard output gives `-.json`, `--precompile -o m.pcm` gives `m.json` |
 
 An extension is replaced as LLVM's `sys::path::replace_extension` does (a
 dot in a directory is not one; a name with none gets `.json`). A trace
 that cannot be written is `unable to open output file '<path>': '<os
-error>'`, as clang's; kiln then exits 1 (clang 22 exits 0).
+error>'`, as clang's (an error line), and the exit status is unchanged:
+0 when the compile succeeded, the output written (clang 19 and 22;
+WP-1128).
 
 **Format.** `{"traceEvents":[...],"beginningOfTime":N}` (N: the start, µs
 since the Unix epoch). Events, in clang's order: the complete events
@@ -1955,23 +1958,35 @@ clang 19 accepts the flag too; it behaves the same under
 | `InstantiateClass`, `InstantiateFunction` | `kiln_sema` `push_inst_frame` .. `pop_inst_frame` (class / member class; function / member function specialization) | the specialization (`Box<int>::get`) |
 | `PerformPendingInstantiations` | `end_of_tu_instantiations` | — |
 | `EvaluateAsConstantExpr`, `EvaluateAsInitializer`, `EvaluateAsRValue` | the Oven's top-level evaluations (spec/oven.md "Trace hook"): a variable's initializer, a `static_assert` condition, any other | the variable's qualified name, or the expression's range (`<t.cpp:3:19, col:25>`) |
+| `EvaluateForOverflow` | `kiln_sema` `check_for_int_overflow`, one per operator root of the walk (as clang's `CheckForIntOverflow` worklist; the walk's own folds record nothing). kiln walks only a full-expression that can overflow, and only with `-Winteger-overflow` enabled, so a comparison of constants or a `-w` run records none where clang records one | the operator's range |
+| `EvaluateAsRValue`, `EvaluateAsInt` | `kiln_sema` `fold_rvalue` / `fold_rvalue_int` (`oven_bridge.rs`): the semantic checks' folds (a switch condition, a shift's count, a builtin's argument, ...) | the expression's range |
+| `EvaluateAsBooleanCondition` | a CFG branch's condition fold (`cfg/truth.rs` `known_truth`), holding its `EvaluateAsRValue`, as clang's `tryEvaluateBool` | the condition's range |
+| `CheckConstraintSatisfaction` | `kiln_sema` `check_constraints` / `check_concept`, cache hits included, as clang 22 (clang 19 has no such event; kiln records it under `-fclang-compat=19` too). A concept-id met while an enclosing check substitutes its atoms records none (clang 22 normalizes it into that check): `f(3L)` with `template <C T> int f(T)` is one event holding the atom's `EvaluateAsConstantExpr` | the template-id's location (`<t.cpp:4:11>`) |
+| `BuildCFG` | `kiln_sema` `cfg_ensure`: a body's graph, built only when an analysis asks for one (the fall-off-end check, `-Wunreachable-code`, `-Wuninitialized`, ...); clang builds one per analyzed function, kiln fewer | — |
 | `CodeGen Function` | `kiln_codegen` `emit_fn_def` | the qualified name |
+| `DebugType` | `-g`: `kiln_codegen` `di_type`, cache hits included (clang's `getOrCreateType`) | the type as written (sugared) |
+| `DebugGlobalVariable` | `-g`: `di_global_var`, a namespace-scope or static variable's descriptor | the qualified name |
+| `WriteAST` | driver: writing a module file (`--precompile`, `-fmodule-output`; inside `Frontend`, as clang's for a module interface) or a PCH (after `Frontend`, as clang's). kiln's PCH is a replay record ("Precompiled headers"), not a serialized AST | the output path |
 | `Backend` | driver, from after the frontend to the end of `llc` | — |
 | `Optimizer` | driver, the `opt` child (its `OptModule`, `OptFunction`, `RunPass`, ... merged) | — |
 | `CodeGenPasses` | driver, the `llc` child (its passes merged) | — |
 | `OvenCompile`, `ConstevalCall`, `ConstexprCall`, `OvenMetaOp` | kiln only: spec/oven.md "Trace hook" | |
 
 Not recorded (no kiln counterpart, or a follow-up): `ParseTemplate` (clang
-records it only for `-fdelayed-template-parsing`), the folds clang traces
-as `EvaluateAsRValue` / `EvaluateAsInt` / `EvaluateAsBooleanCondition` /
-`EvaluateForOverflow` (kiln folds outside the Oven's entry points),
-`CheckConstraintSatisfaction`, `BuildCFG`, `DebugType`, and the
-`PCH`/module events.
+records it only for `-fdelayed-template-parsing`); the folds of
+`kiln_codegen`'s prepass (clang's `EvaluateAsInt` / `EvaluateAsRValue`
+inside `CodeGen Function`; kiln folds once before emission) and of
+`try_fold`'s other callers; `EvaluateKnownConstInt` (kiln's case labels
+are Oven evaluations, `EvaluateAsConstantExpr`); `DebugFunction` (clang
+records it only for `EmitFunctionDecl`'s declarations); the module
+import events `Module Load` / `ReadAST` / `Read Loaded AST` (a
+follow-up: their hook points are the module loader's).
 
 **Deviations.** An event's `ts`/`dur` are kiln's, so the trace differs
-from clang's in its numbers, not its shape. Linking with
-`-ftime-trace=<dir>` names the trace after the input's object
-(`<dir>/x.json`), not clang's temporary. An `EvaluateAs*` range ends at
+from clang's in its numbers, not its shape, and in the events above
+that kiln records fewer of because it does less work (a CFG only for a
+body that needs one, the overflow walk only where an overflow is
+possible). An `EvaluateAs*` range ends at
 the start of the last token, as clang's. An immediate invocation inside a
 `constexpr` variable's initializer is its own `EvaluateAsConstantExpr`
 inside the initializer's `EvaluateAsInitializer` (clang folds it into
@@ -1989,7 +2004,12 @@ the profile is written first, then the summary. A module interface built
 in-process for an importer (a module cache miss, "Module cache") prints
 neither: the importer reports only its own evaluations. A module source
 named directly by `-fmodule-file=<name>=<source>` is compiled in the
-importer's own Oven, so its evaluations are the importer's. Without
+importer's own Oven, so its evaluations are the importer's: the
+profile, the summary and the `-fconstexpr-report` rows list them at the
+module source's locations (WP-1147). A prebuilt module file
+(`-fmodule-file=<name>=<path>.pcm`) and a module cache build contribute
+none: their evaluations ran in their own build, and a cache miss's
+in-process build also writes no `-fconstexpr-report`. Without
 either flag nothing is printed and no counter is kept (spec/oven.md
 "Profile counters").
 

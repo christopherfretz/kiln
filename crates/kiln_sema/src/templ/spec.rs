@@ -636,7 +636,7 @@ impl Sema<'_, '_> {
     pub(crate) fn partial_spec_name(&self, p: DeclId) -> String {
         let mut s = self.unqualified_decl_name(p);
         if let Some((_, info)) = self.ast.partial_spec_info(p) {
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             kiln_ast::types::write_arg_list(&self.ast.types, &names, info.args, &mut s);
         }
         s
@@ -736,6 +736,13 @@ impl Sema<'_, '_> {
                     self.emit(d);
                     return Err(());
                 }
+                // clang 19 `ActOnClassTemplateSpecialization` resets the
+                // written arguments at the definition; clang 22 keeps the
+                // first declaration's.
+                if use_ == TagUse::Definition && self.clang_compat < 22 {
+                    let w = self.ast.types.arg_list(args);
+                    self.ast.templates.set_args_as_written(spec, w, true);
+                }
                 self.take_spec_class_key(spec, keyword);
                 return Ok(spec);
             }
@@ -744,6 +751,10 @@ impl Sema<'_, '_> {
             s.kind = SpecKind::ExplicitSpecialization;
             s.from = spec;
         });
+        // clang `setTemplateArgsAsWritten`: the type printer prints these
+        // (`std::coroutine_handle<void>`, not `<>`).
+        let w = self.ast.types.arg_list(args);
+        self.ast.templates.set_args_as_written(spec, w, true);
         self.take_spec_class_key(spec, keyword);
         let lexical = self.ctx;
         self.builder().declare_spec_in(spec, lexical, name_loc);
@@ -838,6 +849,10 @@ impl Sema<'_, '_> {
             matches!(info.kind, SpecKind::Undeclared | SpecKind::ImplicitInstantiation);
         if first_explicit {
             self.builder().relocate_spec(spec, name_loc);
+            // clang `ActOnExplicitInstantiation`: the first explicit
+            // instantiation's written arguments.
+            let w = self.ast.types.arg_list(args);
+            self.ast.templates.set_args_as_written(spec, w, false);
         }
         if self.ast.definition(spec).is_none() && !self.instantiate_explicit(spec, name_loc) {
             return Err(());

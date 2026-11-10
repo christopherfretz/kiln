@@ -228,7 +228,7 @@ impl Sema<'_, '_> {
                 kiln_ast::types::ArgView::Type(q)
                     if deduced && self.ast.types.canonical(q) == q =>
                 {
-                    let names = crate::names::SemaNames::new(self);
+                    let names = crate::names::sema_names(self);
                     let opts = kiln_ast::types::PrintOptions {
                         full_scope: true,
                         ..kiln_ast::types::PrintOptions::SUGARED
@@ -861,7 +861,7 @@ impl Sema<'_, '_> {
             let mut name = self.decl_name(s);
             if let Some(i) = self.ast.spec_info(s).map(|(_, i)| *i) {
                 name = self.decl_name(i.template);
-                let names = crate::names::SemaNames::new(self);
+                let names = crate::names::sema_names(self);
                 let canon = self.ast.types.canonical_args(i.print_args);
                 kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut name);
             }
@@ -916,7 +916,7 @@ impl Sema<'_, '_> {
             // clang: the specialization `NamedDecl`, unqualified with its
             // arguments (`f<int>`, also for a member of `N::X<short>`).
             let mut name = self.decl_name(info.template);
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             let canon = self.ast.types.canonical_args(info.print_args);
             kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut name);
             let e = self

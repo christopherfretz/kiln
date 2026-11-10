@@ -215,7 +215,9 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> Option<ExprId> {
-        let r = self.ast.types.pointee(ty)?;
+        // clang `getNonReferenceType`: the written referent, its sugar
+        // kept (`static_cast<DT &>(b)` is an lvalue of type `DT`).
+        let r = self.ast.types.pointee_sugared(ty)?;
         let ec = self.ast.types.as_record(et)?;
         let rc = self.ast.types.as_record(r)?;
         match self.class_relation(style, et, ec, r, rc, loc) {

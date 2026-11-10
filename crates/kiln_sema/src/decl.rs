@@ -3862,7 +3862,7 @@ impl Sema<'_, '_> {
         // Both clangs print the partial specialization's canonical
         // arguments here (its qualified name, not a type).
         let mut desc = self.decl_name(pc);
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let args = self.ast.types.canonical_args(info.args);
         kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut desc);
         let outer = self.qualified_decl_name(pc);
@@ -11628,7 +11628,7 @@ impl Sema<'_, '_> {
             if c22 {
                 let mut n = String::new();
                 kiln_ast::types::TypeNames::write_decl_name(
-                    &crate::names::SemaNames::new(s),
+                    &crate::names::sema_names(s),
                     q,
                     true,
                     &mut n,
@@ -11640,7 +11640,7 @@ impl Sema<'_, '_> {
         };
         if let Some((_, info)) = self.ast.partial_spec_info(first) {
             let mut s = name(self);
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             let args = if c22 { info.args } else { self.ast.types.canonical_args(info.args) };
             kiln_ast::types::write_arg_list(&self.ast.types, &names, args, &mut s);
             return Some(s);
@@ -11676,7 +11676,7 @@ impl Sema<'_, '_> {
             }
             // An explicit specialization prints its arguments as written.
             DeclKind::CXXRecord
-                if let Some(s) = crate::names::SemaNames::new(self).explicit_spec_context(q) =>
+                if let Some(s) = crate::names::sema_names(self).explicit_spec_context(q) =>
             {
                 format!("'{s}'")
             }
@@ -12854,7 +12854,7 @@ impl Sema<'_, '_> {
     pub(crate) fn class_context_str(&mut self, c: DeclId) -> String {
         let t = self.this_class_type(c);
         let injected = t != self.tag_type(c);
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let opts = kiln_ast::types::PrintOptions {
             // clang 22 scopes the injected class name too (`'N::A<T>'`).
             full_scope: !injected || self.clang_compat >= 22,
