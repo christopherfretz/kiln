@@ -20,8 +20,7 @@ different number, update those pages in the same change.
 
 The commands were checked on a subset when this page was written
 (WP-1202): one bench entry per compiler, one libc++ test, one corpus
-directory. For the RC, the archive gate and (b) to (g) are filled in,
-apart from the grpc and opencv rows of (c); (a) is still running.
+directory. For the RC, the archive gate and (a) to (g) are filled in.
 
 ## RC gate: the release archive
 
@@ -116,14 +115,45 @@ as the ratio table does.
 
 | compared with | entries both measured | geomean time kiln/other | geomean peak RSS kiln/other | results file | load |
 |---|---|---|---|---|---|
-| clang++-19 (19.1.7) | | | | | |
-| clang++-22 (22.1.8) | | | | | |
-| g++-16 (16.1.0) | | | | | |
+| clang++-19 (19.1.7) | 40 | 0.10x | 0.19x | `2026-11-10T102941.json` | 9.1 at start, 7.9 at end |
+| clang++-22 (22.1.8) | 40 | 0.11x | 0.19x | `2026-11-10T110007.json` | 8.1 at start, 8.0 at end |
+| g++-16 (16.1.0) | 46 | 0.23x | 0.19x | `2026-11-10T112010.json` | 8.0 at start, 7.5 at end |
 
-The README's and CHANGELOG's 0.21x / 0.17x are the clang 19 row of
-[perf.md](perf.md) (2026-11-03). To make this run the new reference, add
-`--record` to the clang 19 run, which also merges its table into
-perf.md, and commit the baselines with it.
+The RC run: the release archive's `kiln++` 1.0.0 built from
+`e6199e693`, aarch64, 24 CPUs, 55 entries, 5 runs each, no `--record`.
+The host was shared (load 7.5 to 13 during the runs); memory is the peak
+RSS from `/usr/bin/time -f %M`. No entry regressed in any of the three
+runs. Each verdict was `FAILED` only because the other compiler failed
+entries:
+
+- clang 19 and clang 22 fail 15: the 10 `reflect/*` entries,
+  `frontend/expansion-giant-obj`, `frontend/expansion-outline-obj`,
+  `frontend/nested-template-ids-dup`, `frontend/reflection-mangle` and
+  `oven/inplace-union` (clang has no reflection or expansion
+  statements).
+- GCC 16.1 fails 9: two use clang builtins kiln also has
+  (`__make_integer_seq`, `__builtin_char_memchr`), one exceeds GCC's
+  default template depth, one passes `-ftime-trace`, four
+  (`churn-string`, `churn-vector`, `switch-dense`, `builtins-memcpy`)
+  hit GCC's constexpr limits, and `trial-rollback` is rejected with
+  "allocated storage has not been deallocated".
+
+Against clang 19, `frontend/registration-wide-obj` takes 7.2 s against
+168.6 s (0.04x time, 0.59x memory), `oven/time-trace` 0.41 s against
+77.6 s (0.01x, 0.02x), `oven/churn-string` 0.40 s against 18.4 s,
+`oven/churn-vector` 0.52 s against 19.9 s and `frontend/virtual-lattice`
+25 ms against 2.2 s. kiln is slower than clang 19 on two entries:
+`frontend/constant-table-emit` (1.19x the time) and
+`frontend/trial-folds` (1.20x), while using less memory on both (0.73x
+and 0.80x). The per-entry table and the other runs' slow entries are in
+[perf.md](perf.md) "1.0 release measurements".
+
+The README's and CHANGELOG's 0.21x / 0.17x are the clang 19 recording at
+the top of [perf.md](perf.md) (2026-11-03, 37 entries, which include the
+`overload/`, `pp/` and `runtime/` entries this run leaves out). This run
+was not recorded, so that recording is still the reference. To make a
+run the new reference, add `--record` to the clang 19 run, which also
+merges its table into perf.md, and commit the baselines with it.
 
 `bench` exits `FAILED` when any entry regressed against
 `bench/baselines/`; that verdict is about kiln against its own
@@ -223,10 +253,10 @@ How to read the run (Actions tab, the `sweep` workflow):
 | abseil | 232/232, 413/413 TUs | 232/232, 413/413 | yes |
 | llvm_project (`SupportTests`, `ADTTests`, `IRTests`) | all three build and pass (`IRTests` 732), 1504/1504 TUs, 4/4 links | the same | yes |
 | duckdb | 4618/4628, 421/421 TUs | 4618/4628, 421/421 | yes (the same 10 fail under both) |
-| grpc | (running) | (running) | |
+| grpc | 117/118 tests, 5732/5732 TUs, 120/120 links | 117/118, 5732/5732, 120/120 | yes (identical to the control) |
 | bitcoin_core (TU count too) | 357/357, 487/487 TUs | 357/357, 487/487 | yes, TUs included |
 | cmake_app | 721/723, 587/587 TUs | 721/723, 587/587 | yes (the same 2 fail under both) |
-| opencv (TU count too) | (re-run: the clone failed) | 7/7, 537/537 TUs | |
+| opencv (TU count too) | **regression**: 12 of the 98 TUs it built failed, so 0/7 tests ran | 7/7, 537/537 TUs | no: x86_64 regression, WP-1242 |
 | daw_json_link | 147/147, 159/159 TUs | 147/147, 159/159 | yes |
 
 Record the run in [x86_64-sweep.md](x86_64-sweep.md) (run id, commit,
@@ -237,9 +267,17 @@ The RC run: `sweep/rc-1.0.0`, run `42788235805`, `e6199e693`, recorded
 in [x86_64-sweep.md](x86_64-sweep.md) "1.0 RC sweep". The x86-2 gaps are
 closed: libc++ went from 8714 pass and 38 fail (99.0%) to 99.4%,
 `IRTests` builds, and bitcoin_core compiles all 487 TUs now that the
-`-m<feature>` flags are accepted (WP-1000). The grpc and opencv rows are
-still to be filled in: the opencv kiln job could not clone the source (a
-DNS failure on the runner), so it has no report and is re-run.
+`-m<feature>` flags are accepted (WP-1000). Every project is at parity
+except opencv (the opencv kiln job was re-run after its first attempt
+could not clone the source).
+
+opencv regressed on x86_64. Twelve `modules/core/*.avx2.cpp` dispatch
+TUs use x86 builtins that kiln does not lower yet
+(`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
+`__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
+`__builtin_ia32_vfmaddps256`). Before WP-1000 kiln rejected `-mavx2`, so
+opencv's build did not compile those TUs. aarch64 is not affected. The
+fix is WP-1242, in progress.
 
 ## (d) Open-source projects (aarch64)
 

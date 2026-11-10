@@ -71,13 +71,20 @@ x86-2's 38 failures only the 4 environment ones are left.
 - **cmake_app**: 721/723, 587/587 TUs; clang the same (the same 2 fail
   under both).
 - **daw_json_link**: 147/147, 159/159 TUs; clang the same.
-- **opencv**: clang 7/7, 537/537 TUs. The kiln job could not clone the
-  source (a DNS failure on the runner) and still reported success, so it
-  has no report; it is re-run. Result: to be filled in.
-- **grpc**: to be filled in (the job was still running when this was
-  written).
+- **grpc**: 117/118, 5732/5732 TUs, 120/120 links; clang the same.
+- **opencv**: **regression**. kiln built 98 TUs, 12 of them failed, and
+  0/7 tests ran; clang 7/7, 537/537 TUs. The 12 are
+  `modules/core/*.avx2.cpp` dispatch TUs that use x86 builtins kiln does
+  not lower yet: `__builtin_ia32_extract128i256`,
+  `__builtin_ia32_permti256`, `__builtin_ia32_vcvtph2ps256`,
+  `__builtin_ia32_vfmaddpd256` and `__builtin_ia32_vfmaddps256`. The
+  first sweep never compiled them (7/7 with 473 TUs: kiln rejected
+  `-mavx2` then); WP-1000 made kiln accept the flag and exposed them. The
+  fix is WP-1242. aarch64 is not affected. (The kiln job's first attempt
+  could not clone the source, a DNS failure on the runner; this is the
+  re-run.)
 
-Every project with a result is at parity with clang, TU counts included.
+Every other project is at parity with clang, TU counts included.
 
 ## libc++ 22.1.8 (x86-2; x86-4 is identical)
 

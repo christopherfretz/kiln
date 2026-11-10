@@ -277,7 +277,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | project | version / tag | scope validated | std lib(s) | rating and result vs clang | notes / WP |
 |---|---|---|---|---|---|
 | [Bitcoin Core](status/oss/bitcoin_core.md) | `v32.1` | ctest suite, `bench_bitcoin -sanity-check`, functional tests | libstdc++ 14 | **Flawless**: ctest 357/357 (clang 357/358); 380 functional tests pass | the 2 functional tests that failed in the parallel run pass when run alone. The same filesystem failure also happens under clang. WP-811 |
-| [Boost, compiled libraries](status/oss/boost_compiled.md) (25: system, filesystem, thread, regex, serialization, json, log, locale, context, fiber, wave, test, ...) | `boost-1.90.0` | CMake superproject, the libraries and their CTest tests | libstdc++ 14 | **Flawless**: same 1898/1917 TUs and 1215/1227 links as the control; 1326/1327 tests | the one failure is a test-ordering flake of the harness. 41 tests that fail under the control are excluded. WP-804 |
+| [Boost, compiled libraries](status/oss/boost_compiled.md) (25: system, filesystem, thread, regex, serialization, json, log, locale, context, fiber, wave, test, ...) | `boost-1.90.0` | CMake superproject, the libraries and their CTest tests | libstdc++ 14 | **Flawless** in the 1.0 run: 1904/1923 TUs, as the control; 1325/1330 tests, and the same 5 fail under the control | the earlier run had 1898/1917 TUs and 1326/1327 tests (its one failure was a test-ordering flake of the harness). 41 tests that fail under the control are excluded. WP-804 |
 | [Boost, heavy libraries](status/oss/boost_heavy.md) (Asio, Beast, Cobalt, Graph, Geometry, Math) | `boost-1.90.0` | CMake superproject, the six libraries' CTest tests | libstdc++ 14 | **Flawless**: 602/602 | WP-812 |
 | [Boost, metaprogramming libraries](status/oss/boost_meta.md) (20: mp11, hana, fusion, mpl, pfr, describe, variant2, spirit, yap, hof, ...) | `boost-1.90.0` | CMake superproject, CTest tests | libstdc++ 14 | **Near-perfect** in the 1.0 run: 2235/2253 TUs (clang 2240); tests 2002/2007 of those ctest started (the 5 not run belong to failed TUs), and the 79 serial compile-fail and link-fail tests it did not start pass when run alone (clang 2087/2087) | of the 18 failed TUs, 13 also fail under the control. The other 5 diverge from clang 19 but match clang 22 (not a bug). The earlier run had 2230/2253 TUs and 2079/2087 tests. ctest's skipped serial tests are WP-1238. WP-787, WP-802 |
 | [CMake](status/oss/cmake_app.md) | `v4.4.5` | whole CTest suite | libstdc++ 14 | **Flawless**: 689/714 (clang 690/714) | the one difference passes on rerun. WP-811 |
@@ -293,7 +293,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [LLVM self-host](status/oss/llvm_selfhost.md) | `llvmorg-19.1.7` | the kiln-built clang (stage 1) builds clang and lld again (stage 2); stage 2 runs `check-clang` and `check-lld`; stage-2/stage-3 IR comparison | libstdc++ 14 | **Flawless**: 35229 and 2193 passed, with the control's 7 environmental failures | stage-2/stage-3 IR is byte-identical after two documented normalizations. No miscompile found. WP-815 |
 | [mp-units](status/oss/mp_units.md) | `v2.5.0` | full ctest suite | libstdc++ 14 | **Flawless** (against **g++-16**): 25/25 | clang 19 cannot build mp-units. WP-792 |
 | [oneTBB](status/oss/onetbb.md) | `v2022.3.0` | full CTest suite | libstdc++ 14 | **Flawless**: 139/139 | WP-803. Re-run on the 1.0 RC `e6199e693`: 139/139, as clang. The C driver is clang-22, since the Release build uses `-flto` and kiln's bitcode needs an LLVM 22 linker plugin (WP-1231) |
-| [OpenCV](status/oss/opencv.md) | `4.12.0` | modules core, imgproc, imgcodecs, features2d, flann, calib3d, ts | libstdc++ 14 | **Flawless**: 7/7 | WP-803 |
+| [OpenCV](status/oss/opencv.md) | `4.12.0` | modules core, imgproc, imgcodecs, features2d, flann, calib3d, ts | libstdc++ 14 | **Flawless**: 7/7 | WP-803. On x86_64 it does not build in the 1.0 sweep (WP-1242; see [x86_64](#x86_64)) |
 | [reflect-cpp](status/oss/reflect_cpp.md) | `v0.27.1` | full ctest suite | libstdc++ 14 | **Flawless**: 484/484 under both in the 1.0 run, 326/326 TUs | the project's test selection grew since the earlier run (219/220, the same 4 test TUs failing under both). WP-792 |
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
@@ -361,7 +361,7 @@ runners, with the clang 19 control on an identical runner. The first
 sweep (WP-961, 2026-11-09), its triage and the sweep of the 1.0 release
 candidate (`e6199e693`, 2026-11-10, with no added flags) are in
 [status/x86_64-sweep.md](status/x86_64-sweep.md). The table is the 1.0
-sweep where it has a result. The x86_64-only gaps the first sweep found
+sweep. The x86_64-only gaps the first sweep found
 are fixed or have a follow-up WP.
 
 | suite / project | result on x86_64 vs clang 19 | rating |
@@ -369,7 +369,7 @@ are fixed or have a follow-up WP.
 | libc++ 22.1.8 (9247 tests) | 99.4%, as aarch64; the same 4 root-permission failures as aarch64, and one flaky timeout (`lost_wakeup`). The first sweep had 99.0% | **Near-perfect** |
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test and TU as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357 and 487/487 TUs, as clang (the first sweep built 475: the `-m<feature>` flags, added by WP-1000, were not accepted) | **Flawless** |
-| OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap (WP-1000, not re-swept yet) | **Flawless** (tests); TU count to re-measure |
+| OpenCV | **regression** in the 1.0 sweep: 12 `modules/core/*.avx2.cpp` dispatch TUs use x86 builtins kiln does not lower yet (`__builtin_ia32_extract128i256`, `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`), so the build stops after 98 TUs and 0/7 tests run (clang 7/7, 537/537 TUs). WP-1000's `-mavx2` exposed them; the first sweep skipped those TUs (7/7, 473 TUs). The fix is WP-1242. aarch64 is not affected | **Broken** on x86_64 |
 | LLVM Support, ADT, IR | all three binaries build and pass as clang, 1504/1504 TUs (at the first sweep `IRTests` did not build, a `_Float128` gap fixed by WP-1058) | **Flawless** |
 | gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
 

@@ -127,3 +127,122 @@ hand before 1.0 (WP-313 to WP-1171) are in
 named "WP-NNN" that used to be on this page.
 
 ## 1.0 release measurements
+
+The 1.0 release candidate's bench run (WP-1239;
+[release-1.0.md](release-1.0.md) "(a)"). It was run without
+`--record`, so the tables above and `bench/baselines/` are unchanged;
+the results files are under `bench/results/`.
+
+- kiln: the release archive's `kiln++` 1.0.0, built from `e6199e693`
+  (kiln version 1.0.0 (C++26 frontend, LLVM IR backend)).
+- Compared with: `clang++-19` (19.1.7), `clang++-22` (22.1.8) and GCC
+  16.1.0's `g++-16`, one compiler per run.
+- Command: `cargo xtask bench --compiler <kiln++> --compare-with <cc>
+  bench/oven bench/reflect bench/frontend`, 55 entries, 5 runs per entry.
+- Host: aarch64, 24 CPUs, shared; load average 7.5 to 13 during the runs.
+  Memory is the peak RSS from `/usr/bin/time -f %M`.
+
+| compared with | entries both built | geomean time kiln/other | geomean peak RSS kiln/other | regressed | results file |
+|---|--:|--:|--:|--:|---|
+| clang++-19 (19.1.7) | 40 | 0.10x | 0.19x | 0 | `2026-11-10T102941.json` |
+| clang++-22 (22.1.8) | 40 | 0.11x | 0.19x | 0 | `2026-11-10T110007.json` |
+| g++-16 (16.1.0) | 46 | 0.23x | 0.19x | 0 | `2026-11-10T112010.json` |
+
+Each run's verdict was `FAILED` only because the other compiler failed
+entries; no entry regressed against kiln's baselines.
+
+The entries with no comparison:
+
+- **clang 19 and clang 22** fail the same 15: the 10 `reflect/*`
+  entries, `frontend/expansion-giant-obj`,
+  `frontend/expansion-outline-obj`, `frontend/nested-template-ids-dup`,
+  `frontend/reflection-mangle` and `oven/inplace-union`. clang has no
+  reflection or expansion statements.
+- **GCC 16.1** fails 9:
+  - `frontend/simd-generate` and `oven/builtins-strlen` use the
+    clang builtins `__make_integer_seq` and `__builtin_char_memchr`,
+    which kiln also has;
+  - `frontend/templates_deep` nests 1,000 instantiations, over GCC's
+    default `-ftemplate-depth` of 900;
+  - `oven/time-trace` passes `-ftime-trace`, which GCC does not have;
+  - `oven/churn-string`, `oven/churn-vector`, `oven/switch-dense` and
+    `oven/builtins-memcpy` hit GCC's constexpr limits ("non-constant
+    condition for static assertion");
+  - `oven/trial-rollback` is rejected with "allocated storage has not
+    been deallocated".
+
+Against clang 19, the largest gains are `frontend/registration-wide-obj`
+(7.2 s against 168.6 s: 0.04x time, 0.59x memory), `oven/time-trace`
+(0.41 s against 77.6 s: 0.01x time, 0.02x memory), `oven/churn-string`
+(0.40 s against 18.4 s), `oven/churn-vector` (0.52 s against 19.9 s) and
+`frontend/virtual-lattice` (25 ms against 2.2 s).
+
+kiln is slower than clang 19 on two entries:
+`frontend/constant-table-emit` (1.19x the time) and
+`frontend/trial-folds` (1.20x). It uses less memory on both (0.73x and
+0.80x). Against clang 22 they are 1.30x and 1.11x, and against GCC
+`frontend/constant-table-emit` is 1.74x. `frontend/format-like-g` is
+level with clang 19 (1.01x). Every other entry is faster than every
+compiler that built it.
+
+Every entry, against clang 19 (the "time" and "memory" columns are
+kiln/clang 19; the last two columns are the kiln/other ratios of the
+clang 22 and GCC runs, from their own kiln measurements):
+
+| Entry | Mode | kiln ms | clang 19 ms | time | kiln MB | clang 19 MB | memory | time / memory vs clang 22 | time / memory vs GCC 16.1 |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|
+| `frontend/accessor-wide-emit` | emit-llvm | 1569.7 | 3213.6 | 0.49x | 117.8 | 252.0 | 0.47x | 0.55x / 0.46x | 0.49x / 0.25x |
+| `frontend/constant-table-emit` | emit-llvm | 1214.4 | 1020.9 | 1.19x | 124.1 | 170.5 | 0.73x | 1.30x / 0.74x | 1.74x / 0.49x |
+| `frontend/expansion-giant-obj` | obj | 1164.5 | FAIL | - | 85.5 | - | - | FAIL | 0.46x / 0.28x |
+| `frontend/expansion-outline-obj` | obj | 1689.6 | FAIL | - | 90.9 | - | - | FAIL | 0.13x / 0.19x |
+| `frontend/format-like-g` | emit-llvm | 885.4 | 873.7 | 1.01x | 89.4 | 167.4 | 0.53x | 0.88x / 0.40x | 0.68x / 0.31x |
+| `frontend/nested-template-ids` | syntax | 252.2 | 456.9 | 0.55x | 22.4 | 199.7 | 0.11x | 0.69x / 0.11x | 0.24x / 0.20x |
+| `frontend/nested-template-ids-dup` | syntax | 120.5 | FAIL | - | 15.0 | - | - | FAIL | 0.99x / 0.22x |
+| `frontend/reflection-mangle` | emit-llvm | 75.5 | FAIL | - | 25.2 | - | - | FAIL | 0.27x / 0.31x |
+| `frontend/registration-wide-obj` | obj | 7212.5 | 168593.1 | 0.04x | 239.4 | 403.0 | 0.59x | 0.08x / 0.61x | 0.53x / 0.32x |
+| `frontend/simd-generate` | syntax | 549.2 | 853.4 | 0.64x | 64.3 | 175.8 | 0.37x | 0.63x / 0.39x | FAIL |
+| `frontend/templates` | syntax | 277.9 | 424.3 | 0.65x | 47.8 | 231.9 | 0.21x | 0.63x / 0.20x | 0.70x / 0.25x |
+| `frontend/templates-wide-g` | emit-llvm | 508.5 | 653.2 | 0.78x | 123.5 | 252.1 | 0.49x | 0.76x / 0.48x | 0.80x / 0.36x |
+| `frontend/templates_deep` | syntax | 62.9 | 142.9 | 0.44x | 42.1 | 139.5 | 0.30x | 0.32x / 0.30x | FAIL |
+| `frontend/templates_wide` | syntax | 321.7 | 457.6 | 0.70x | 75.4 | 203.4 | 0.37x | 0.68x / 0.37x | 0.76x / 0.26x |
+| `frontend/trial-folds` | syntax | 974.7 | 812.3 | 1.20x | 129.8 | 162.9 | 0.80x | 1.11x / 0.79x | 0.79x / 0.30x |
+| `frontend/virtual-dtor-chain` | syntax | 227.4 | 1065.8 | 0.21x | 23.3 | 95.7 | 0.24x | 0.21x / 0.24x | 0.43x / 0.19x |
+| `frontend/virtual-lattice` | syntax | 25.2 | 2228.8 | 0.01x | 13.1 | 91.1 | 0.14x | 0.01x / 0.14x | 0.02x / 0.18x |
+| `frontend/virtual-lattice-emit` | emit-llvm | 116.5 | 787.3 | 0.15x | 27.1 | 96.0 | 0.28x | 0.16x / 0.28x | 0.26x / 0.45x |
+| `oven/builtins-memcpy` | syntax | 16.3 | 1482.8 | 0.01x | 12.0 | 83.3 | 0.14x | 0.01x / 0.14x | FAIL |
+| `oven/builtins-popcount` | syntax | 66.1 | 1483.0 | 0.04x | 12.0 | 83.7 | 0.14x | 0.04x / 0.14x | 0.06x / 0.06x |
+| `oven/builtins-strlen` | syntax | 17.0 | 1252.1 | 0.01x | 12.0 | 84.0 | 0.14x | 0.02x / 0.14x | FAIL |
+| `oven/churn-list` | syntax | 27.6 | 607.1 | 0.05x | 12.1 | 84.1 | 0.14x | 0.05x / 0.14x | 0.07x / 0.09x |
+| `oven/churn-mixed` | syntax | 16.2 | 143.3 | 0.11x | 12.0 | 85.8 | 0.14x | 0.12x / 0.14x | 0.29x / 0.36x |
+| `oven/churn-string` | syntax | 404.9 | 18391.2 | 0.02x | 12.5 | 95.7 | 0.13x | 0.03x / 0.13x | FAIL |
+| `oven/churn-tree` | syntax | 38.7 | 815.6 | 0.05x | 12.4 | 85.4 | 0.14x | 0.05x / 0.14x | 0.08x / 0.12x |
+| `oven/churn-vector` | syntax | 522.8 | 19945.8 | 0.03x | 12.4 | 95.0 | 0.13x | 0.02x / 0.14x | FAIL |
+| `oven/class-churn` | syntax | 140.4 | 3355.2 | 0.04x | 14.0 | 155.2 | 0.09x | 0.05x / 0.09x | 0.04x / 0.02x |
+| `oven/fib` | syntax | 12.8 | 583.7 | 0.02x | 12.0 | 83.3 | 0.14x | 0.02x / 0.14x | 0.40x / 0.44x |
+| `oven/inplace-alloc` | syntax | 145.2 | 1505.5 | 0.10x | 22.2 | 113.2 | 0.20x | 0.10x / 0.20x | 0.13x / 0.07x |
+| `oven/inplace-union` | syntax | 156.3 | FAIL | - | 22.2 | - | - | FAIL | 0.12x / 0.09x |
+| `oven/sieve` | syntax | 72.3 | 619.2 | 0.12x | 18.4 | 116.7 | 0.16x | 0.15x / 0.16x | 0.13x / 0.14x |
+| `oven/sieve-nohdr` | syntax | 17.7 | 253.4 | 0.07x | 12.0 | 89.0 | 0.13x | 0.08x / 0.13x | 0.09x / 0.34x |
+| `oven/soa` | syntax | 57.8 | 2275.9 | 0.03x | 12.2 | 145.7 | 0.08x | 0.03x / 0.09x | 0.10x / 0.14x |
+| `oven/sort` | syntax | 169.8 | 765.8 | 0.22x | 26.0 | 135.5 | 0.19x | 0.23x / 0.20x | 0.18x / 0.10x |
+| `oven/sort-nohdr` | syntax | 26.7 | 404.1 | 0.07x | 12.0 | 90.9 | 0.13x | 0.11x / 0.13x | 0.07x / 0.13x |
+| `oven/string` | syntax | 172.5 | 1158.5 | 0.15x | 26.4 | 112.2 | 0.24x | 0.17x / 0.24x | 0.24x / 0.16x |
+| `oven/switch-dense` | syntax | 224.2 | 5657.2 | 0.04x | 12.0 | 83.3 | 0.14x | 0.04x / 0.14x | FAIL |
+| `oven/table` | syntax | 98.1 | 1238.2 | 0.08x | 20.6 | 118.2 | 0.17x | 0.12x / 0.18x | 0.13x / 0.11x |
+| `oven/table-nohdr` | syntax | 48.9 | 1330.9 | 0.04x | 12.3 | 90.2 | 0.14x | 0.04x / 0.14x | 0.10x / 0.22x |
+| `oven/time-trace` | emit-llvm | 406.7 | 77608.5 | 0.01x | 13.0 | 818.1 | 0.02x | 0.01x / 0.02x | FAIL |
+| `oven/trial-rollback` | syntax | 43.1 | 967.6 | 0.04x | 12.0 | 88.6 | 0.14x | 0.05x / 0.14x | FAIL |
+| `oven/vector-alloc` | syntax | 379.8 | 6668.4 | 0.06x | 38.0 | 218.2 | 0.17x | 0.07x / 0.17x | 0.12x / 0.04x |
+| `oven/virtual-dispatch` | syntax | 31.0 | 401.6 | 0.08x | 12.3 | 90.7 | 0.14x | 0.07x / 0.13x | 0.10x / 0.21x |
+| `oven/wide-struct-read` | syntax | 298.8 | 5445.4 | 0.05x | 27.0 | 95.8 | 0.28x | 0.06x / 0.28x | 0.03x / 0.09x |
+| `oven/wide-struct-store` | syntax | 133.2 | 184.0 | 0.72x | 30.7 | 98.4 | 0.31x | 0.72x / 0.31x | 0.12x / 0.34x |
+| `reflect/s1` | syntax | 396.7 | FAIL | - | 48.0 | - | - | FAIL | 0.59x / 0.31x |
+| `reflect/s10` | emit-llvm | 56.4 | FAIL | - | 17.6 | - | - | FAIL | 0.51x / 0.39x |
+| `reflect/s2` | syntax | 545.4 | FAIL | - | 57.2 | - | - | FAIL | 0.81x / 0.30x |
+| `reflect/s3` | syntax | 324.0 | FAIL | - | 37.0 | - | - | FAIL | 0.33x / 0.21x |
+| `reflect/s4` | syntax | 386.7 | FAIL | - | 47.7 | - | - | FAIL | 0.57x / 0.33x |
+| `reflect/s5` | syntax | 282.1 | FAIL | - | 36.2 | - | - | FAIL | 0.43x / 0.24x |
+| `reflect/s6` | syntax | 288.3 | FAIL | - | 32.5 | - | - | FAIL | 0.17x / 0.07x |
+| `reflect/s7` | syntax | 509.9 | FAIL | - | 43.3 | - | - | FAIL | 0.19x / 0.09x |
+| `reflect/s8` | syntax | 713.6 | FAIL | - | 68.8 | - | - | FAIL | 0.72x / 0.24x |
+| `reflect/s9` | emit-llvm | 46.9 | FAIL | - | 17.9 | - | - | FAIL | 0.34x / 0.38x |

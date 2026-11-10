@@ -22,15 +22,14 @@ If you hit something not listed here, please
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
-- **x86_64 sweep results are from before the last fixes.** The first
-  x86_64 sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) found
-  that LLVM's `IRTests` did not build because glibc's x86-64 `*f128`
-  functions were not usable as `__float128` ones. WP-1058 fixed that
-  (kiln still keeps `_Float128` and `__float128` distinct, as GCC 13+
-  does), and WP-1000 added the `-m<feature>` flags Bitcoin Core and
-  OpenCV need, but the sweep has not been re-run since. The 1.0 release
-  candidate's sweep re-measures them
-  ([status/release-1.0.md](status/release-1.0.md)).
+- **OpenCV does not build on x86_64.** In the 1.0 release candidate's
+  x86_64 sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) every
+  project is at parity with clang except OpenCV: 12 of its
+  `modules/core/*.avx2.cpp` dispatch TUs use x86 builtins kiln does not
+  lower yet (`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
+  `__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
+  `__builtin_ia32_vfmaddps256`). They are compiled since WP-1000 made
+  kiln accept `-mavx2`. The fix is WP-1242. aarch64 is not affected.
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step
@@ -224,7 +223,8 @@ folly (3772 of 3773, as clang), folly::coro (616 of 618, as clang),
 simdjson (117 of 117; its one earlier failure needed `-Wuninitialized`,
 WP-696), mp-units (25 of 25) and oneTBB (139 of 139, with a clang-22 C
 driver for its LTO link; see [Build systems](#build-systems)) were
-re-run at parity for the release. The other:
+re-run at parity for the release. On x86_64, OpenCV does not build
+(see [Platforms](#platforms)). The other:
 
 - **Boost metaprogramming libraries**: 2235 of 2253 TUs (clang 19:
   2240). Of the 18 TUs that fail, 13 also fail under clang 19; the other
