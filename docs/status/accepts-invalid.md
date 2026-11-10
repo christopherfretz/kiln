@@ -358,9 +358,10 @@ against clang 19 and clang 22) and one follow-up row in
 [BACKLOG.md](../BACKLOG.md) with origin WP-912. Paths below are relative to
 `tests/conformance/`.
 
-The generated tables above are from the 1.0 release candidate (kiln
-`e6199e693`, 2026-11-10), after items 2-6 and 9-12 were fixed. Against
-this triage run, accepts-invalid fell from 89 to 57 files (7.1% to 4.6%)
+The generated tables above are from the first 1.0 release candidate
+(kiln `e6199e693`, 2026-11-10; the final release candidate `ae54fd2fa`
+differs from it only by WP-1242 to WP-1246), after items 2-6 and 9-12
+were fixed. Against this triage run, accepts-invalid fell from 89 to 57 files (7.1% to 4.6%)
 and from 110 to 68 cases; missed `expected-error` lines fell from 4930 to
 3384 (17.6% to 12.1%); rejects-valid fell from 47 to 26 cases (11.2% to
 6.2%). There were 0 crashes, timeouts or out-of-memory results: 2767 of

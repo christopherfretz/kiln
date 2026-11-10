@@ -22,14 +22,22 @@ If you hit something not listed here, please
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
-- **OpenCV does not build on x86_64.** In the 1.0 release candidate's
-  x86_64 sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) every
-  project is at parity with clang except OpenCV: 12 of its
-  `modules/core/*.avx2.cpp` dispatch TUs use x86 builtins kiln does not
-  lower yet (`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
+- **OpenCV on x86_64: fixed in the final release candidate, sweep
+  pending.** In the first release candidate's x86_64 sweep
+  ([status/x86_64-sweep.md](status/x86_64-sweep.md)) every project was
+  at parity with clang except OpenCV: 12 of its `modules/core/*.avx2.cpp`
+  dispatch TUs used x86 builtins kiln did not lower
+  (`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
   `__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
   `__builtin_ia32_vfmaddps256`). They are compiled since WP-1000 made
-  kiln accept `-mavx2`. The fix is WP-1242. aarch64 is not affected.
+  kiln accept `-mavx2`. WP-1242, in the final release candidate, lowers
+  every x86 builtin clang lowers to generic IR; the x86_64 sweep of the
+  final release candidate re-measures OpenCV. aarch64 is not affected.
+- **23 x86 builtins are not supported**: `__builtin_ia32_maskmovq`, the
+  Key Locker builtins and the AMX `t*_internal` tile builtins.
+  `__has_builtin` answers 0 for each, and a call that reaches code
+  generation is the error "code generation for `<name>` is not supported
+  yet" (WP-1242; spec/landed/codegen/WP-630.md "Generic x86 lowering").
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step
@@ -165,8 +173,9 @@ clang's help; spec/driver.md, "Options", is the complete list.
 ## Diagnostics and accepts-invalid
 
 kiln is measured on clang 22.1.8's own negative tests
-([status/accepts-invalid.md](status/accepts-invalid.md), run on the 1.0
-release candidate `e6199e693`):
+([status/accepts-invalid.md](status/accepts-invalid.md), run on the
+first 1.0 release candidate `e6199e693`; the final release candidate
+`ae54fd2fa` differs from it only by WP-1242 to WP-1246):
 
 - In 4.6% of test files (57 of 1250) where clang expects an error, kiln
   reports none in some configuration.
@@ -223,8 +232,9 @@ folly (3772 of 3773, as clang), folly::coro (616 of 618, as clang),
 simdjson (117 of 117; its one earlier failure needed `-Wuninitialized`,
 WP-696), mp-units (25 of 25) and oneTBB (139 of 139, with a clang-22 C
 driver for its LTO link; see [Build systems](#build-systems)) were
-re-run at parity for the release. On x86_64, OpenCV does not build
-(see [Platforms](#platforms)). The other:
+re-run at parity for the release. On x86_64, OpenCV did not build in
+the first release candidate's sweep (see [Platforms](#platforms)). The
+other:
 
 - **Boost metaprogramming libraries**: 2235 of 2253 TUs (clang 19:
   2240). Of the 18 TUs that fail, 13 also fail under clang 19; the other
@@ -268,6 +278,9 @@ Constant evaluation and reflection:
 - `class.union/constexpr-placement-same-type.cpp`: Oven pointers carry no
   union-member designator, so either member of one type at one offset
   may be the constructed one. [WP-517](BACKLOG.md).
+- `expr.reflect/member-template-of-specialization.cpp`: `^^W<int>::In`
+  (a member template of a specialization) parses as a type-id that needs
+  template arguments. WP-1243 follow-up.
 - `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`: no
   lenient designator for object-size folds. WP-808.
 - `meta.reflection.define.aggregate/define-run-template-for.cpp`: an

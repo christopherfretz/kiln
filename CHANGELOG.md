@@ -97,6 +97,30 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   `kiln-<version>-<triple>.tar.xz` with a stripped binary, plus a
   `-symbols` archive and `SHA256SUMS`.
 
+### Fixed in the final release candidate
+
+These landed after the first 1.0 release candidate was measured.
+
+- x86 builtins: every x86 builtin that clang lowers to generic IR is now
+  lowered (AVX and AVX2 extract, insert and `perm2x128`, F16C, the FMA
+  family and more). The builtins kiln declares but cannot lower went
+  from 595 to 23 (`maskmovq`, Key Locker, the AMX internals), and those
+  23 answer `__has_builtin` with 0. A call of an x86 builtin sets
+  `min-legal-vector-width`, which fixes an LLVM backend crash at
+  `-march=skylake-avx512 -O2`. OpenCV's AVX2 dispatch TUs now compile
+  (WP-1242).
+- Reflection: `extract` of a function now instantiates and odr-uses it
+  (WP-1244).
+- Constant evaluation: an uncaught exception in a constant evaluation
+  prints its `what()` whole, up to 64 KiB, after which it ends with
+  "… [N more characters]" (WP-1245).
+- Reflection: `^^` accepts operator, literal-operator, conversion and
+  dependent template-ids, such as `^^ns::operator==<int>` (WP-1246).
+- Reflection: `members_of` leaves out members whose type is an undeduced
+  placeholder, and `type_of` on one throws, as in GCC.
+  `display_string_of` prints requires-clauses as GCC 16.1 does
+  (WP-1243).
+
 ## Before 1.0
 
 Before 1.0 kiln was developed in the open on `main`, at version 0.0.1,

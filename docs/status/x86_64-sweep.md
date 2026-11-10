@@ -33,14 +33,14 @@ The one-off flag masks main's WP-873 never-constant regression (see
 daw_json_link. It was only on the `sweep/x86-3` and `sweep/x86-4`
 branches; `sweep.yml` on main has no such flag. All four `sweep/x86-*`
 branches are deleted (a run continues when its branch is deleted).
-- rc-1.0.0, `42788235805` (`e6199e693`, the 1.0 release candidate,
+- rc-1.0.0, `42788235805` (`e6199e693`, the first 1.0 release candidate,
   branch `sweep/rc-1.0.0`): the full sweep, libc++ 6 shards and the ten
   projects with kiln and with the clang 19 control, with `sweep.yml` as
   on main (no added flags). Results in "1.0 RC sweep".
 
 ## 1.0 RC sweep (rc-1.0.0)
 
-Run `42788235805` on `e6199e693`. kiln against the clang 19 control on
+Run `42788235805` on `e6199e693`, the first release candidate. kiln against the clang 19 control on
 an identical runner, libstdc++ 14. Tests are "passed / total".
 
 | scope | total | pass | fail | xfail | xpass | unsupported | timeout | pass rate |
@@ -80,7 +80,8 @@ x86-2's 38 failures only the 4 environment ones are left.
   `__builtin_ia32_vfmaddpd256` and `__builtin_ia32_vfmaddps256`. The
   first sweep never compiled them (7/7 with 473 TUs: kiln rejected
   `-mavx2` then); WP-1000 made kiln accept the flag and exposed them. The
-  fix is WP-1242. aarch64 is not affected. (The kiln job's first attempt
+  fix is WP-1242, in the final release candidate `ae54fd2fa` (see the
+  triage below). aarch64 is not affected. (The kiln job's first attempt
   could not clone the source, a DNS failure on the runner; this is the
   re-run.)
 

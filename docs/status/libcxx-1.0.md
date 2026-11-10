@@ -2,7 +2,8 @@
 
 The whole libc++ 22.1.8 suite (`std/` and `libcxx/`, 9247 tests) at
 `-std=c++26 -fclang-compat=22`, run with the `kiln++` of the 1.0 release
-archive (`e6199e693`) on aarch64, 2026-11-10, as
+archive of the first release candidate (`e6199e693`) on aarch64,
+2026-11-10, as
 [release-1.0.md](release-1.0.md) "(b)" describes. The earlier full runs
 and their failure clusters are in [libcxx-m5.md](libcxx-m5.md) and
 [libcxx.md](libcxx.md) "M5: libc++ 22 full suite".

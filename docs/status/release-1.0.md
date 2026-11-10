@@ -7,8 +7,15 @@ The numbers in [../COMPATIBILITY.md](../COMPATIBILITY.md),
 come from the pages the sections name; when a section's run gives a
 different number, update those pages in the same change.
 
-- Release candidate: `e6199e693` ("WP-1202: version 1.0.0"), version
-  `1.0.0`.
+- Release candidate: `ae54fd2fa`, version `1.0.0`. It is the first
+  release candidate, `e6199e693` ("WP-1202: version 1.0.0"), with five
+  fixes merged (WP-1242 to WP-1246, listed in the CHANGELOG under "Fixed
+  in the final release candidate") and these docs.
+- Results measured on `e6199e693` keep that sha below. The compiler of
+  `ae54fd2fa` differs from it only by WP-1242 to WP-1246: x86 builtin
+  lowering, reflection (`extract`, `^^` of operator and conversion
+  template-ids, `members_of` and `display_string_of`) and the Oven's
+  uncaught-exception note. A section re-run on `ae54fd2fa` says so.
 - Reference workload: the reference workload's maintainers verified
   `e6199e693`: PASS.
 - Host: aarch64 Linux unless a section says otherwise. Record the load
@@ -20,7 +27,9 @@ different number, update those pages in the same change.
 
 The commands were checked on a subset when this page was written
 (WP-1202): one bench entry per compiler, one libc++ test, one corpus
-directory. For the RC, the archive gate and (a) to (g) are filled in.
+directory. For the first RC (`e6199e693`), the archive gate and (a) to
+(g) are filled in. libc++ (both architectures), the OSS projects and the
+x86_64 sweep are re-run on `ae54fd2fa`.
 
 ## RC gate: the release archive
 
@@ -119,7 +128,7 @@ as the ratio table does.
 | clang++-22 (22.1.8) | 40 | 0.11x | 0.19x | `2026-11-10T110007.json` | 8.1 at start, 8.0 at end |
 | g++-16 (16.1.0) | 46 | 0.23x | 0.19x | `2026-11-10T112010.json` | 8.0 at start, 7.5 at end |
 
-The RC run: the release archive's `kiln++` 1.0.0 built from
+The first RC's run: the release archive's `kiln++` 1.0.0 built from
 `e6199e693`, aarch64, 24 CPUs, 55 entries, 5 runs each, no `--record`.
 The host was shared (load 7.5 to 13 during the runs); memory is the peak
 RSS from `/usr/bin/time -f %M`. No entry regressed in any of the three
@@ -188,14 +197,14 @@ failing test with its detail and cluster key. Commit both under
 
 | | total | pass | fail | xfail | unsupported (driver) | timeout | pass rate | per-directory list |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| 1.0 RC (`e6199e693`) | 9247 | 8748 | 4 (+1 xpass) | 47 | 446 (31) | 1 | 99.4% | [libcxx-1.0.md](libcxx-1.0.md) |
+| first 1.0 RC (`e6199e693`) | 9247 | 8748 | 4 (+1 xpass) | 47 | 446 (31) | 1 | 99.4% | [libcxx-1.0.md](libcxx-1.0.md) |
 | last full run (libcxx-m5.md) | 9247 | 8716 | 9 | 64 | 457 (31) | 1 | 99.2% | [libcxx-m5.md](libcxx-m5.md) |
 
 The pass rate is pass / (total - unsupported), as `--report` computes
 it. The 9 failures of the last run were fixed since (WP-460, WP-491);
 this run confirms it.
 
-The RC run: 2026-11-10, aarch64, `-j 3`, 3462 s. `std/` 8229 of 8424
+The first RC's run: 2026-11-10, aarch64, `-j 3`, 3462 s. `std/` 8229 of 8424
 (99.5%), `libcxx/` 519 of 823 (97.9%); 0 killed, 0 errors. What is left:
 
 - 4 FAIL, the environment: four filesystem run tests expect a
@@ -263,7 +272,7 @@ Record the run in [x86_64-sweep.md](x86_64-sweep.md) (run id, commit,
 the table) and delete the branch afterwards:
 `git push origin :refs/heads/sweep/rc-1.0.0`.
 
-The RC run: `sweep/rc-1.0.0`, run `42788235805`, `e6199e693`, recorded
+The first RC's run: `sweep/rc-1.0.0`, run `42788235805`, `e6199e693`, recorded
 in [x86_64-sweep.md](x86_64-sweep.md) "1.0 RC sweep". The x86-2 gaps are
 closed: libc++ went from 8714 pass and 38 fail (99.0%) to 99.4%,
 `IRTests` builds, and bitcoin_core compiles all 487 TUs now that the
@@ -277,7 +286,8 @@ TUs use x86 builtins that kiln does not lower yet
 `__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
 `__builtin_ia32_vfmaddps256`). Before WP-1000 kiln rejected `-mavx2`, so
 opencv's build did not compile those TUs. aarch64 is not affected. The
-fix is WP-1242, in progress.
+fix is WP-1242, merged into the final release candidate `ae54fd2fa`; its
+x86_64 sweep re-measures opencv.
 
 ## (d) Open-source projects (aarch64)
 
@@ -304,8 +314,8 @@ each project's `report.json`, and only the rows and sections of
 rows of the projects table were run on aarch64, 2026-11-09/10, with the
 `kiln++` of the pre-release branch (`8c18a98ca`). The projects that
 regressed there were re-run after their fixes, on a preview build with
-those fixes (`44430ce4b`) or on the RC itself (`e6199e693`); the table
-names which. Eight more ran on x86_64 in the RC sweep ((c)); grpc and
+those fixes (`44430ce4b`) or on the first RC itself (`e6199e693`); the table
+names which. Eight more ran on x86_64 in the first RC's sweep ((c)); grpc and
 opencv are in (c). The three LLVM rows (`llvm_full`, `llvm_clang`,
 `llvm_selfhost`) were not re-run and keep their last results.
 
@@ -371,7 +381,7 @@ cargo xtask features --compiler "$(command -v kiln++)"   # every done row's test
 | DR-level papers | 19 | 19 | 0 | 0 | 0 |
 | kiln extensions | 5 | 5 | 0 | 0 | 0 |
 
-The RC (`features --summary`, `summary ok`): 261 rows, 260 done, 1
+The first RC (`features --summary`, `summary ok`): 261 rows, 260 done, 1
 partial (P2786, removed from C++26 at Kona), 0 todo, 0 untested, as at
 WP-1202. `features --compiler` with the archive's `kiln++`: 607 done-row
 tests, 607 pass, 0 fail, 61 of them also compared with GCC 16; the
@@ -397,7 +407,7 @@ N xpass; N skipped; N errors; N killed; N compared with gcc; N tests`.
 | kiln `--bmi-kind 1` | 61 | 0 | 0 | 0 | 0 | — | 61 |
 | kiln `--bmi-kind 2` | 61 | 0 | 0 | 0 | 0 | — | 61 |
 
-The RC run: `cargo xtask ci` on `e6199e693`, exit 0, 2026-11-10
+The first RC's run: `cargo xtask ci` on `e6199e693`, exit 0, 2026-11-10
 (14 minutes). The two `--bmi-kind` runs repeat every `module:` test under
 each module-file kind.
 
@@ -412,10 +422,14 @@ and `cargo xtask test --compiler <archive kiln++>
 tests/conformance/basic.indet` (23 passed). The corpus line format was
 checked against a `ci --quick` log, whose kiln run had 26 xfail.
 
-The 27 xfail of the RC's kiln run are the 29 `xfail(kiln)` tests of
-KNOWN_ISSUES minus the two marked `requires: clang<22`
+The 27 xfail of the first RC's kiln run are its 29 `xfail(kiln)` tests
+minus the two marked `requires: clang<22`
 (`ir-likely-branch-weights-O1-19.cpp`, `ir-noescape-function-pointer-19.cpp`),
-which a run against the clang 22 oracle skips.
+which a run against the clang 22 oracle skips. `ae54fd2fa` adds 25 test
+files (WP-1242 to WP-1246), so its corpus counts differ from this table.
+One of them is a new `xfail(kiln)` test,
+`expr.reflect/member-template-of-specialization.cpp` (a WP-1243
+follow-up); the KNOWN_ISSUES list is the `ae54fd2fa` one (30 tests).
 
 ## (f) Accepts-invalid
 
@@ -432,14 +446,14 @@ cargo xtask clang-neg -j 4 --compiler "$(command -v kiln++)" \
 `--report` rewrites only the generated region of accepts-invalid.md; the
 triage after it is by hand.
 
-| measure | last run (`321baa9de`) | 1.0 RC (`e6199e693`) |
+| measure | last run (`321baa9de`) | first 1.0 RC (`e6199e693`) |
 |---|---|---|
 | files where clang expects an error and kiln reports none | 7.1% (89 of 1250) | 4.6% (57 of 1250) |
 | `expected-error` lines with no kiln error | 17.6% (4930 of 28065) | 12.1% (3384 of 28065) |
 | `expected-no-diagnostics` configurations kiln rejects | 11.2% (47 of 418) | 6.2% (26 of 418) |
 | crashes, timeouts, out of memory | 0 of 2850 | 0, 0, 0 of 2850 (2767 ran, 83 skipped by the driver) |
 
-The RC run: 2026-11-10, aarch64, `-j 4`, load average 12.4.
+The first RC's run: 2026-11-10, aarch64, `-j 4`, load average 12.4.
 Per RUN configuration, 68 of 1946 cases (3.5%) accept invalid code.
 
 `--filter <glob>` (relative to `clang/test`) narrows a trial run;
@@ -468,7 +482,7 @@ git grep -nE '\bunsafe *(\{|fn|impl)' -- crates xtask
 git grep -n 'allow(unsafe_code)' -- crates xtask
 ```
 
-| check | result (`e6199e693`) |
+| check | result (`e6199e693`; re-checked on `ae54fd2fa`: the same) |
 |---|---|
 | crate roots without `#![forbid(unsafe_code)]` | none: all 14 carry it |
 | `unsafe` blocks, functions or impls | 0 |

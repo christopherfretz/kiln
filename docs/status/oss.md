@@ -905,7 +905,7 @@ Failure clusters (kiln): none.
 
 Failure clusters (kiln): none.
 
-At 1.0 (`e6199e693`, C driver clang-22 for the `-flto` link, WP-1231): 184/0 TUs, 145/0 links, 139/139 tests, as clang.
+At 1.0 (the first RC `e6199e693`, C driver clang-22 for the `-flto` link, WP-1231): 184/0 TUs, 145/0 links, 139/139 tests, as clang.
 <!-- /oss:onetbb -->
 
 <!-- oss:opencv -->

@@ -292,8 +292,8 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [clang and lld](status/oss/llvm_clang.md) | `llvmorg-19.1.7` | 3565 TUs, 157 targets, `check-clang`, `check-lld` | libstdc++ 14 | **Flawless**: `check-lld` 2193 passed; `check-clang` 35229 passed, the control's count | `check-clang` reached parity after one more miscompile fix, verified on the affected binary. WP-801 |
 | [LLVM self-host](status/oss/llvm_selfhost.md) | `llvmorg-19.1.7` | the kiln-built clang (stage 1) builds clang and lld again (stage 2); stage 2 runs `check-clang` and `check-lld`; stage-2/stage-3 IR comparison | libstdc++ 14 | **Flawless**: 35229 and 2193 passed, with the control's 7 environmental failures | stage-2/stage-3 IR is byte-identical after two documented normalizations. No miscompile found. WP-815 |
 | [mp-units](status/oss/mp_units.md) | `v2.5.0` | full ctest suite | libstdc++ 14 | **Flawless** (against **g++-16**): 25/25 | clang 19 cannot build mp-units. WP-792 |
-| [oneTBB](status/oss/onetbb.md) | `v2022.3.0` | full CTest suite | libstdc++ 14 | **Flawless**: 139/139 | WP-803. Re-run on the 1.0 RC `e6199e693`: 139/139, as clang. The C driver is clang-22, since the Release build uses `-flto` and kiln's bitcode needs an LLVM 22 linker plugin (WP-1231) |
-| [OpenCV](status/oss/opencv.md) | `4.12.0` | modules core, imgproc, imgcodecs, features2d, flann, calib3d, ts | libstdc++ 14 | **Flawless**: 7/7 | WP-803. On x86_64 it does not build in the 1.0 sweep (WP-1242; see [x86_64](#x86_64)) |
+| [oneTBB](status/oss/onetbb.md) | `v2022.3.0` | full CTest suite | libstdc++ 14 | **Flawless**: 139/139 | WP-803. Re-run on the first 1.0 RC `e6199e693`: 139/139, as clang. The C driver is clang-22, since the Release build uses `-flto` and kiln's bitcode needs an LLVM 22 linker plugin (WP-1231) |
+| [OpenCV](status/oss/opencv.md) | `4.12.0` | modules core, imgproc, imgcodecs, features2d, flann, calib3d, ts | libstdc++ 14 | **Flawless**: 7/7 | WP-803. On x86_64 it did not build in the first 1.0 RC's sweep (fixed by WP-1242, sweep pending; see [x86_64](#x86_64)) |
 | [reflect-cpp](status/oss/reflect_cpp.md) | `v0.27.1` | full ctest suite | libstdc++ 14 | **Flawless**: 484/484 under both in the 1.0 run, 326/326 TUs | the project's test selection grew since the earlier run (219/220, the same 4 test TUs failing under both). WP-792 |
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
 | [stdexec](status/oss/stdexec.md) | `nvhpc-26.05` | full test suite, including the `*_fail` tests that match error text | libstdc++ 14 | **Flawless**: 907/907 | WP-789 |
@@ -359,7 +359,7 @@ Everything above runs on aarch64. The x86_64 sweep
 the libc++ 22 suite and ten of the projects above on GitHub's x86_64
 runners, with the clang 19 control on an identical runner. The first
 sweep (WP-961, 2026-11-09), its triage and the sweep of the 1.0 release
-candidate (`e6199e693`, 2026-11-10, with no added flags) are in
+candidate (`e6199e693`, the first one, 2026-11-10, with no added flags) are in
 [status/x86_64-sweep.md](status/x86_64-sweep.md). The table is the 1.0
 sweep. The x86_64-only gaps the first sweep found
 are fixed or have a follow-up WP.
@@ -369,7 +369,7 @@ are fixed or have a follow-up WP.
 | libc++ 22.1.8 (9247 tests) | 99.4%, as aarch64; the same 4 root-permission failures as aarch64, and one flaky timeout (`lost_wakeup`). The first sweep had 99.0% | **Near-perfect** |
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test and TU as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357 and 487/487 TUs, as clang (the first sweep built 475: the `-m<feature>` flags, added by WP-1000, were not accepted) | **Flawless** |
-| OpenCV | **regression** in the 1.0 sweep: 12 `modules/core/*.avx2.cpp` dispatch TUs use x86 builtins kiln does not lower yet (`__builtin_ia32_extract128i256`, `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`), so the build stops after 98 TUs and 0/7 tests run (clang 7/7, 537/537 TUs). WP-1000's `-mavx2` exposed them; the first sweep skipped those TUs (7/7, 473 TUs). The fix is WP-1242. aarch64 is not affected | **Broken** on x86_64 |
+| OpenCV | **regression** in the first 1.0 RC's sweep: 12 `modules/core/*.avx2.cpp` dispatch TUs use x86 builtins kiln does not lower yet (`__builtin_ia32_extract128i256`, `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`), so the build stops after 98 TUs and 0/7 tests run (clang 7/7, 537/537 TUs). WP-1000's `-mavx2` exposed them; the first sweep skipped those TUs (7/7, 473 TUs). The fix, WP-1242, is in the final RC `ae54fd2fa`; its sweep re-measures OpenCV. aarch64 is not affected | **Broken** on x86_64 |
 | LLVM Support, ADT, IR | all three binaries build and pass as clang, 1504/1504 TUs (at the first sweep `IRTests` did not build, a `_Float128` gap fixed by WP-1058) | **Flawless** |
 | gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
 
@@ -381,7 +381,9 @@ tests of `clang/test/CXX` and `clang/test/SemaCXX` at `llvmorg-22.1.8`, run
 through kiln by `cargo xtask clang-neg` (WP-912,
 [spec/clang-neg.md](../spec/clang-neg.md)). Only lines are compared, never
 wording: an `expected-error` counts as reported when kiln has an error on
-its line. Run on the 1.0 release candidate, kiln `e6199e693` (2026-11-10):
+its line. Run on the first 1.0 release candidate, kiln `e6199e693`
+(2026-11-10; the final release candidate `ae54fd2fa` differs from it only
+by WP-1242 to WP-1246):
 
 | measure | result |
 |---|---|

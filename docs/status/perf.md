@@ -133,8 +133,10 @@ The 1.0 release candidate's bench run (WP-1239;
 `--record`, so the tables above and `bench/baselines/` are unchanged;
 the results files are under `bench/results/`.
 
-- kiln: the release archive's `kiln++` 1.0.0, built from `e6199e693`
-  (kiln version 1.0.0 (C++26 frontend, LLVM IR backend)).
+- kiln: the release archive's `kiln++` 1.0.0, built from `e6199e693`,
+  the first release candidate (kiln version 1.0.0 (C++26 frontend, LLVM
+  IR backend)). The final release candidate `ae54fd2fa` differs from it
+  only by WP-1242 to WP-1246.
 - Compared with: `clang++-19` (19.1.7), `clang++-22` (22.1.8) and GCC
   16.1.0's `g++-16`, one compiler per run.
 - Command: `cargo xtask bench --compiler <kiln++> --compare-with <cc>
