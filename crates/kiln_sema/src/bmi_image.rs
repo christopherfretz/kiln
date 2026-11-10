@@ -46,7 +46,7 @@ mod spec;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 6;
+pub(crate) const IMAGE_VERSION: u32 = 7;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
