@@ -7,7 +7,10 @@ The numbers in [../COMPATIBILITY.md](../COMPATIBILITY.md),
 come from the pages the sections name; when a section's run gives a
 different number, update those pages in the same change.
 
-- Release candidate: `<sha>` (fill in), version `1.0.0`.
+- Release candidate: `e6199e693` ("WP-1202: version 1.0.0"), version
+  `1.0.0`.
+- Reference workload: the reference workload's maintainers verified
+  `e6199e693`: PASS.
 - Host: aarch64 Linux unless a section says otherwise. Record the load
   average of each run, since the host is shared.
 - Every command runs from the kiln checkout after
@@ -17,7 +20,8 @@ different number, update those pages in the same change.
 
 The commands were checked on a subset when this page was written
 (WP-1202): one bench entry per compiler, one libc++ test, one corpus
-directory. The full runs have not been made yet.
+directory. For the RC, the archive gate, (f) and (g) are filled in;
+(a) to (e) are still running.
 
 ## RC gate: the release archive
 
@@ -71,14 +75,14 @@ GCC16=$("$KILN_GCC" -print-search-dirs | sed -n 's|^install: \(.*\)/lib/gcc/.*|\
 kiln++ -std=c++26 --gcc-toolchain="$GCC16" refl.cpp -o refl && ./refl   # 2 P
 ```
 
-| step | result |
+| step | result (`e6199e693`, aarch64, 2026-11-10) |
 |---|---|
-| `cargo xtask dist --check` | |
-| `sha256sum -c` | |
-| `kiln++ --version` | |
-| hello world | |
-| `import std;` (`-stdlib=libc++`) | |
-| reflection | |
+| `cargo xtask dist --check` | pass: every check, including the dependency scan, the `<meta>` TU, no host paths and the debug link |
+| `sha256sum -c` | both archives OK |
+| `kiln++ --version` | `kiln version 1.0.0`, Target `aarch64-unknown-linux-gnu`, LLVM backend 22 |
+| hello world | pass: `hello` |
+| `import std;` (`-stdlib=libc++`) | pass: `import std 3` |
+| reflection | pass: `2 P` (`--gcc-toolchain` GCC 16.1) |
 
 Validated at WP-1202 (2026-11-09) on the aarch64 archive then still
 named 0.0.1: `dist --check` passed, both checksums OK, and the three
@@ -239,10 +243,10 @@ Boost, folly, gRPC) one at a time.
 
 The rows the docs depend on are the 47 libraries and applications of
 [../COMPATIBILITY.md](../COMPATIBILITY.md#libraries-and-applications)
-(43 Flawless, 3 Near-perfect, 1 Partial) and the two module rows,
-`fmt_module` and `cmake_modules`. The re-runs owed by
+(44 Flawless, 2 Near-perfect, 1 Partial) and the two module rows,
+`fmt_module` and `cmake_modules`. The re-run owed by
 [../KNOWN_ISSUES.md](../KNOWN_ISSUES.md#open-source-projects-with-gaps)
-come first: simdjson and folly::coro (WP-992).
+comes first: folly::coro (WP-992). simdjson's (117/117) is done.
 
 ## (e) Conformance
 
@@ -316,12 +320,15 @@ cargo xtask clang-neg -j 4 --compiler "$(command -v kiln++)" \
 `--report` rewrites only the generated region of accepts-invalid.md; the
 triage after it is by hand.
 
-| measure | last run (`321baa9de`) | 1.0 RC |
+| measure | last run (`321baa9de`) | 1.0 RC (`e6199e693`) |
 |---|---|---|
-| files where clang expects an error and kiln reports none | 7.1% (89 of 1250) | |
-| `expected-error` lines with no kiln error | 17.6% (4930 of 28065) | |
-| `expected-no-diagnostics` configurations kiln rejects | 11.2% (47 of 418) | |
-| crashes, timeouts, out of memory | 0 of 2850 | |
+| files where clang expects an error and kiln reports none | 7.1% (89 of 1250) | 4.6% (57 of 1250) |
+| `expected-error` lines with no kiln error | 17.6% (4930 of 28065) | 12.1% (3384 of 28065) |
+| `expected-no-diagnostics` configurations kiln rejects | 11.2% (47 of 418) | 6.2% (26 of 418) |
+| crashes, timeouts, out of memory | 0 of 2850 | 0, 0, 0 of 2850 (2767 ran, 83 skipped by the driver) |
+
+The RC run: 2026-11-10, aarch64, `-j 4`, load average 12.4.
+Per RUN configuration, 68 of 1946 cases (3.5%) accept invalid code.
 
 `--filter <glob>` (relative to `clang/test`) narrows a trial run;
 point `--report` at a copy of the page so the trial does not overwrite
@@ -349,13 +356,13 @@ git grep -nE '\bunsafe *(\{|fn|impl)' -- crates xtask
 git grep -n 'allow(unsafe_code)' -- crates xtask
 ```
 
-| check | result |
+| check | result (`e6199e693`) |
 |---|---|
-| crate roots without `#![forbid(unsafe_code)]` | |
-| `unsafe` blocks, functions or impls | |
-| `allow(unsafe_code)` | |
+| crate roots without `#![forbid(unsafe_code)]` | none: all 14 carry it |
+| `unsafe` blocks, functions or impls | 0 |
+| `allow(unsafe_code)` | 0 |
 | hermetic exceptions (ARCHITECTURE.md principle 1) | none |
-| third-party crates (`Cargo.lock`) | |
+| third-party crates (`Cargo.lock`) | `errno`, `hashbrown`, `libc`, `signal-hook`, `signal-hook-registry`, `windows-link`, `windows-sys` |
 
 The third-party crates are not covered by the attribute. At WP-1202
 `Cargo.lock` lists `errno`, `hashbrown`, `libc`, `signal-hook`,

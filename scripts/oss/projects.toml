@@ -693,10 +693,10 @@ build = "cmake"
 cxx_std = 20
 configure = ["-DTBB_TEST=ON", "-DTBB_STRICT=OFF", "-DTBBMALLOC_BUILD=ON", "-DTBB_EXAMPLES=OFF"]
 test = "ctest --output-on-failure -j 4 --timeout 300"
-c_compiler = "clang-19"
+c_compiler = "clang-22"
 wave = 4
 verified = true
-notes = "WP-803. Release, no -g. ctest -j 4, 300 s per test. test_concurrent_map aborts intermittently ('terminate called without an active exception') under the clang-19 control too (4 of 5 runs), so it is flaky in this container, not a kiln finding."
+notes = "WP-803. c_compiler is clang-22 because Release builds use -flto (TBB_IPO) and libtbbmalloc is linked by the C driver: kiln writes LLVM-22 bitcode, which clang-19's gold plugin cannot read (WP-1231); the clang-19 control's bitcode is read by LLVM 22's plugin, which accepts older bitcode. Release, no -g. ctest -j 4, 300 s per test. test_concurrent_map aborts intermittently ('terminate called without an active exception') under the clang-19 control too (4 of 5 runs), so it is flaky in this container, not a kiln finding."
 
 [opencv]
 url = "https://github.com/opencv/opencv"

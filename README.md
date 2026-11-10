@@ -36,7 +36,7 @@ Each number links to the page that records how it was measured.
   pass. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries),
   [docs/status/libcxx-m5.md](docs/status/libcxx-m5.md)
 - **47 open-source projects** built with their own build systems and test
-  suites: 43 Flawless, 3 Near-perfect, 1 Partial. They include all of LLVM
+  suites: 44 Flawless, 2 Near-perfect, 1 Partial. They include all of LLVM
   (`check-llvm`: 38434 tests passed, at 0.94x clang's summed TU time and
   0.63x its peak TU RSS), Boost and folly.
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications)

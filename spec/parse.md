@@ -665,7 +665,7 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - These memos make a TU of repeated nested template-ids linear with a
   small slope: `bench/frontend/nested-template-ids-dup.cpp` (generated at
   bench time, 1.3 MB; spec/bench.md "Generated entries") tracks it, and
-  docs/status/perf.md "WP-919" has the g++-16 comparison.
+  docs/status/perf-history.md "WP-919" has the g++-16 comparison.
 
 ## 3. Parser core (`parser.rs`)
 - **Token access:**

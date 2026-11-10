@@ -566,7 +566,7 @@ answers as of that point.
   existing counters (`steps`, `peak_bytes`, `peak_arena`, `evaluations`).
 - The reflection bench shapes (`bench/reflect/` S1–S10, spec/bench.md
   "Reflection shapes") and the 4N scaling gate are WP-483's; their
-  results are in docs/status/perf.md and
+  results are in docs/status/perf-history.md "WP-483" and
   docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
 
 ### 3.9 The names family

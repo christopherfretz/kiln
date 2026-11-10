@@ -15,7 +15,7 @@ this file is the rationale and the dependency graph.
   vs-GCC perf table, the `--scaling` sweeps and the private corpora stay
   off the queue (manual or nightly on the dev host). CI wall time must not
   grow for it: the GCC-bearing image is adopted only when it pays for its
-  own pull (docs/status/perf.md "CI time"); until then CI leaves `KILN_GCC`
+  own pull (docs/status/perf-history.md "CI time"); until then CI leaves `KILN_GCC`
   unset and the GCC comparisons are skipped, never failed.
 - **D2 `<meta>` vehicle.** libstdc++ 16.1's `<meta>` is the production target
   and is available now (`__cpp_lib_reflection 202603L`). Until WP-484 consumes

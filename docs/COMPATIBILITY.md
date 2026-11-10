@@ -228,7 +228,7 @@ passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
 
 ## Libraries and applications
 
-47 projects: 43 **Flawless**, 3 **Near-perfect** (simdjson, folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
+47 projects: 44 **Flawless**, 2 **Near-perfect** (folly, the Boost metaprogramming libraries), 1 **Partial** (folly::coro: its known failures are fixed (WP-802, WP-933), and the re-run is deferred for lack of disk). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -258,7 +258,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [EnTT](status/oss/entt.md) | `v3.15.0` | full ctest suite | libstdc++ 14 | **Flawless**: 68/68 | WP-690 |
 | [glog](status/oss/glog.md) | `v0.7.1` | full CTest suite | libstdc++ 14 | **Flawless**: 23/24 under both (`symbolize` fails under both: environment) | WP-700 |
 | [RE2](status/oss/re2.md) | `2025-11-05` | full test suite; Abseil, googletest and Benchmark built by the same compiler | libstdc++ 14 | **Flawless**: 20/20 | WP-710 |
-| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Near-perfect**: 116/117 (clang 117/117) | the failing test is a negative compile test that needs `-Wuninitialized` under `-Werror`, which WP-696 added (via WP-862) after this run; the re-run is WP-992, deferred for lack of disk. WP-691 |
+| [simdjson](status/oss/simdjson.md) | `v4.2.4` | developer-mode CTest suite (without `checkperf` and `fuzz`) | libstdc++ 14 | **Flawless**: 117/117 | WP-691. The first run (x86_64) had 116/117: a negative compile test needs `-Wuninitialized` under `-Werror`, which WP-696 added (via WP-862). The aarch64 re-run for 1.0 (2026-11-10, `44430ce4b`) passes 117/117, as clang does |
 | [Taskflow](status/oss/taskflow.md) | `v3.10.0` | full test suite | libstdc++ 14 | **Flawless**: 2462/2462 | WP-703 |
 | [yaml-cpp](status/oss/yaml_cpp.md) | `yaml-cpp-0.9.0` | full suite (1011 googletest tests), vendored googletest built by the same compiler | libstdc++ 14 | **Flawless**: 1/1 | WP-698 |
 
@@ -292,7 +292,7 @@ libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 | [clang and lld](status/oss/llvm_clang.md) | `llvmorg-19.1.7` | 3565 TUs, 157 targets, `check-clang`, `check-lld` | libstdc++ 14 | **Flawless**: `check-lld` 2193 passed; `check-clang` 35229 passed, the control's count | `check-clang` reached parity after one more miscompile fix, verified on the affected binary. WP-801 |
 | [LLVM self-host](status/oss/llvm_selfhost.md) | `llvmorg-19.1.7` | the kiln-built clang (stage 1) builds clang and lld again (stage 2); stage 2 runs `check-clang` and `check-lld`; stage-2/stage-3 IR comparison | libstdc++ 14 | **Flawless**: 35229 and 2193 passed, with the control's 7 environmental failures | stage-2/stage-3 IR is byte-identical after two documented normalizations. No miscompile found. WP-815 |
 | [mp-units](status/oss/mp_units.md) | `v2.5.0` | full ctest suite | libstdc++ 14 | **Flawless** (against **g++-16**): 25/25 | clang 19 cannot build mp-units. WP-792 |
-| [oneTBB](status/oss/onetbb.md) | `v2022.3.0` | full CTest suite | libstdc++ 14 | **Flawless**: 139/139 | WP-803 |
+| [oneTBB](status/oss/onetbb.md) | `v2022.3.0` | full CTest suite | libstdc++ 14 | **Flawless**: 139/139 | WP-803. Re-run on the 1.0 RC `e6199e693`: 139/139, as clang. The C driver is clang-22, since the Release build uses `-flto` and kiln's bitcode needs an LLVM 22 linker plugin (WP-1231) |
 | [OpenCV](status/oss/opencv.md) | `4.12.0` | modules core, imgproc, imgcodecs, features2d, flann, calib3d, ts | libstdc++ 14 | **Flawless**: 7/7 | WP-803 |
 | [reflect-cpp](status/oss/reflect_cpp.md) | `v0.27.1` | full ctest suite | libstdc++ 14 | **Flawless**: 219/220 under both | the same 4 test TUs fail under both. WP-792 |
 | [scnlib](status/oss/scnlib.md) | `v4.0.1` | full ctest suite | libstdc++ 14 | **Flawless**: 25/25 | WP-792 |
@@ -381,16 +381,18 @@ tests of `clang/test/CXX` and `clang/test/SemaCXX` at `llvmorg-22.1.8`, run
 through kiln by `cargo xtask clang-neg` (WP-912,
 [spec/clang-neg.md](../spec/clang-neg.md)). Only lines are compared, never
 wording: an `expected-error` counts as reported when kiln has an error on
-its line. Run on kiln `321baa9de` (2026-11-08):
+its line. Run on the 1.0 release candidate, kiln `e6199e693` (2026-11-10):
 
 | measure | result |
 |---|---|
-| Test files where clang expects an error and kiln reports none (in some configuration) | 7.1% (89 of 1250) |
-| `expected-error` lines with no kiln error on them | 17.6% (4930 of 28065) |
-| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 11.2% (47 of 418) |
-| Crashes, timeouts, out of memory | 0, 0, 0 of 2850 cases |
+| Test files where clang expects an error and kiln reports none (in some configuration) | 4.6% (57 of 1250) |
+| `expected-error` lines with no kiln error on them | 12.1% (3384 of 28065) |
+| Configurations of `expected-no-diagnostics` tests where kiln reports an error (rejects valid) | 6.2% (26 of 418) |
+| Crashes, timeouts, out of memory | 0, 0, 0 of 2850 cases (2767 ran; the driver skipped 83 for clang flags it does not accept) |
 
-Most of the missed errors are declaration rules: types defined where the
+The first run (`321baa9de`, 2026-11-08) had 7.1% (89 of 1250), 17.6%
+(4930 of 28065) and 11.2% (47 of 418). Most of the missed errors were
+declaration rules: types defined where the
 grammar forbids them, members named after their class, union and static
 member rules, redeclarations, and clang attribute checks. The breakdown,
 the triage clusters with their reduced tests, and the rejects-valid cases

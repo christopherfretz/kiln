@@ -70,6 +70,13 @@ clang. This is by design, not a gap
   without the `kiln++` symlink or the resource directory. Use the release
   archive or `cargo xtask dist`
   ([STABILITY.md](STABILITY.md#cratesio-not-published)).
+- **LTO with an older linker**: with `-flto`, kiln's objects are LLVM
+  bitcode of the selected LLVM (22 when it is installed), so the link
+  needs the same LLVM's driver, linker plugin or `lld`. A target linked
+  by an older driver, such as a C library linked by clang-19, fails with
+  `Unknown attribute kind ... (Producer: 'LLVM22...' Reader: 'LLVM 19...')`.
+  clang has the same rule. In a mixed C/C++ build, use a C compiler of
+  the same LLVM ([USER_GUIDE.md](USER_GUIDE.md#targets-and-llvm-versions)).
 
 ## Modules
 
@@ -159,24 +166,25 @@ clang's help; spec/driver.md, "Options", is the complete list.
 ## Diagnostics and accepts-invalid
 
 kiln is measured on clang 22.1.8's own negative tests
-([status/accepts-invalid.md](status/accepts-invalid.md), run at
-`321baa9de`):
+([status/accepts-invalid.md](status/accepts-invalid.md), run on the 1.0
+release candidate `e6199e693`):
 
-- In 7.1% of test files (89 of 1250) where clang expects an error, kiln
+- In 4.6% of test files (57 of 1250) where clang expects an error, kiln
   reports none in some configuration.
-- 17.6% of `expected-error` lines (4930 of 28065) have no kiln error on
+- 12.1% of `expected-error` lines (3384 of 28065) have no kiln error on
   them.
-- 11.2% of `expected-no-diagnostics` configurations (47 of 418) get an
+- 6.2% of `expected-no-diagnostics` configurations (26 of 418) get an
   error from kiln (rejects-valid).
-- 0 crashes, timeouts or out-of-memory results in 2850 cases.
+- 0 crashes, timeouts or out-of-memory results in 2850 cases (2767 ran;
+  the driver skipped 83 for clang flags it does not accept).
 
-Most missed errors are declaration rules: types defined where the grammar
-forbids them, members named after their class, union and static member
-rules, redeclarations, and attribute checks. The clusters are
-[WP-945](BACKLOG.md) to [WP-960](BACKLOG.md). Most of them are fixed
-since that run, so the numbers above overstate the gap; the remaining
-cluster is [WP-960](BACKLOG.md) (`-pedantic-errors` extension
-diagnostics). Valid code is not affected.
+The first triage run (`321baa9de`) found mostly declaration rules: types
+defined where the grammar forbids them, members named after their class,
+union and static member rules, redeclarations, and attribute checks. The
+clusters are [WP-945](BACKLOG.md) to [WP-960](BACKLOG.md), and most of
+them are fixed in 1.0; the largest remaining cluster is
+[WP-960](BACKLOG.md) (`-pedantic-errors` extension diagnostics). Valid
+code is not affected.
 Code that clang rejects may compile with kiln, so build with clang or GCC
 in CI too if you rely on rejection.
 
@@ -206,11 +214,12 @@ kiln passes 99.2% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`;
 ## Open-source projects with gaps
 
 Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applications),
-43 pass everything clang passes. The others:
+44 pass everything clang passes. simdjson (117 of 117; its one earlier
+failure needed `-Wuninitialized`, WP-696), mp-units (25 of 25) and oneTBB
+(139 of 139, with a clang-22 C driver for its LTO link; see
+[Build systems](#build-systems)) were re-run at parity for the 1.0
+release. The others:
 
-- **simdjson**: 116 of 117 tests. The one failure is a negative compile
-  test that needs `-Wuninitialized` under `-Werror`. That warning has
-  landed since (WP-696); the re-run is [WP-992](BACKLOG.md).
 - **folly**: 3767 of 3773 in the full run. The 6 failures (`memcpy_test`)
   were fixed by WP-763 and pass in a targeted re-run.
 - **Boost metaprogramming libraries**: 99.6% of clang's passing tests.

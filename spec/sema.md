@@ -10059,7 +10059,7 @@ not supported yet`.
     test) it is discarded and the separate count and element loop above
     run and diagnose, so diagnostics are unchanged. Per element it still
     resolves `+`, `!=` and unary `*` and evaluates `__iter`, the test and
-    the element (docs/status/perf.md "WP-467";
+    the element (docs/status/perf-history.md "WP-467";
     `tests/stress/expansion-iterating-user-iterator.cpp` budgets the
     evaluations and steps).
   - *destructuring*: otherwise, as by `auto&& [__u0, ...] = init;`

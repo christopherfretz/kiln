@@ -64,7 +64,7 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   `-std=c++26`.
 - 47 open-source projects built with their own build systems and test
   suites, including all of LLVM, Boost, folly, Abseil, DuckDB and CMake:
-  43 at parity with clang 19 on every test.
+  44 at parity with clang 19 on every test.
 - clang-compatible command line and predefined macros. CMake and
   autotools work unchanged. kiln reproduces clang 22 by default and
   clang 19 with `-fclang-compat=19`.
