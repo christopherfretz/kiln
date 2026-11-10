@@ -1410,8 +1410,8 @@ impl Sema<'_, '_> {
     /// with a prefix `S` (`p->N::C<int>::~CA<int>()`), looked up in
     /// `scopes` (`q`'s class, then `S`; [basic.lookup.qual.general]/4.2).
     /// A class template found only where the expression is (`CA` at
-    /// namespace scope) is clang's typo correction "no template named 'CA'
-    /// in 'N::C<int>'; did you mean simply 'CA'?" at the qualifier, noting
+    /// namespace scope) is clang's typo correction `no template named 'CA'
+    /// in 'N::C<int>'; did you mean simply 'CA'?` at the qualifier, noting
     /// the template, and is used (WP-1173).
     fn classify_destructor_template_in(
         &mut self,
@@ -1657,8 +1657,8 @@ impl Sema<'_, '_> {
     /// [basic.lookup.qual.general]/4.6), so `F` must be a class (else
     /// "'F' is not a class, namespace, or enumeration"), `~Q` must name
     /// `F`'s destructor ("no member named '~Q' in 'F'"), and `F` must be
-    /// the object's class or a base ("'F::~F' is not a member of class
-    /// 'X'"), as for the non-dependent `p->S::F::~Q()` (WP-1173).
+    /// the object's class or a base (`'F::~F' is not a member of class
+    /// 'X'`), as for the non-dependent `p->S::F::~Q()` (WP-1173).
     fn rebuild_class_destructor_first(
         &mut self,
         obj: DtorObject,
@@ -1669,9 +1669,8 @@ impl Sema<'_, '_> {
     ) -> ExprId {
         let fc = self.ast.types.as_record(first).map(|r| self.ast.definition(r).unwrap_or(r));
         let Some(fc) = fc else {
-            let msg = self
-                .diag(DiagId::sema_expected_class_or_namespace, floc)
-                .arg(self.ty_arg(first));
+            let msg =
+                self.diag(DiagId::sema_expected_class_or_namespace, floc).arg(self.ty_arg(first));
             self.emit(msg);
             return self.recover_err(&[obj.base], loc);
         };

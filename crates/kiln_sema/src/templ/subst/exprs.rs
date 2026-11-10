@@ -643,9 +643,9 @@ impl Substituter<'_, '_, '_> {
                     // `p->~C<args>()` (WP-1173).
                     if let Some(&l) = self.sema.ast.templates.expr_targs.get(e) {
                         let l = self.args(l, loc)?;
-                        return Ok(self
-                            .sema
-                            .act_on_member_destructor_template_late(base, name, l, loc, op, arrow));
+                        return Ok(self.sema.act_on_member_destructor_template_late(
+                            base, name, l, loc, op, arrow,
+                        ));
                     }
                     return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
                 }
