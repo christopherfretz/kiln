@@ -1854,9 +1854,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             | Payload::Access
             | Payload::Implicit { .. }
             | Payload::UsingDir { .. } => d.name == NONE,
-            // The target's or the enumeration's name (checked below);
-            // a using-declarator may name an operator.
-            Payload::Shadow { .. } | Payload::UsingEnum { .. } => true,
+            // The target's, the enumeration's or the pattern's name
+            // (checked below); a using-declarator may name an operator.
+            Payload::Shadow { .. } | Payload::UsingEnum { .. } | Payload::Template { .. } => true,
             Payload::Using { .. } => match d.name {
                 n if n >= N_OP => {
                     n < N_CTOR
@@ -1871,8 +1871,6 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Ttp { .. } | Payload::Nttp { .. } => {
                 d.name == NONE || (d.name as usize) < img.pnames.len()
             }
-            // Its pattern's name (checked below).
-            Payload::Template { .. } => true,
             Payload::Field { .. } => d.name == NONE || ident(d.name),
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
