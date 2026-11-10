@@ -6756,7 +6756,14 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
     returned `true` (constant initializer; a destruction-only failure
     counts), and otherwise re-evaluates and reports it after the
     variable's own error (the WP-465 order). A failed invocation's
-    wrapper keeps no value, as clang leaves it unvalued.
+    wrapper keeps no value, as clang leaves it unvalued. In a template
+    definition a `v` whose initializer is dependent (and has no error)
+    has no value to decide by: its entries are dropped, and each
+    instantiation or expansion, which shares the non-dependent wrapper,
+    checks it again with `v` (`recheck_shared_invocation`, below;
+    WP-1263: `constexpr int x = make().get() + sizeof(T);` and `constexpr
+    bool b = m == nonstatic_data_members_of(^^S, ctx)[0];` in a
+    `template for` body).
   - any other variable that `checks_constant_init` (static or thread
     storage duration, not constexpr/constinit): a failing invocation is
     not reported when the initializer folds (`try_fold`), since it is
@@ -6782,11 +6789,12 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   automatic variable, a static-storage variable whose initializer does
   not fold) each outermost invocation is still checked on its own.
   Clang 19 and 22 check the call individually in an in-class static
-  data member initializer, and clang 19 also in a variable template
+  data member initializer and, in a template definition, in a local
+  constexpr variable's dependent initializer, and clang 19 also in a variable template
   specialization whose call has a value-dependent argument or that is
   first instantiated from a non-constant context; kiln follows GCC 16.1
   (and clang 22 for the latter) and accepts them. Tests:
-  `expr.const/immediate-invocation-constant-init{,-run,-neg,-dependent,-static-member,-reflection,-static-array}.cpp`.
+  `expr.const/immediate-invocation-constant-init{,-run,-neg,-dependent,-dependent-local,-static-member,-reflection,-static-array}.cpp`.
 - **Default-argument temporaries** ([class.temporary]/6, WP-216): a
   default argument is its own full-expression at the definition
   (`ExprWithCleanups`), but each use takes over its cleanups: the

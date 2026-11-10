@@ -377,7 +377,18 @@ impl Sema<'_, '_> {
         let has_value = self.ast.decls.var(v).is_some_and(|x| {
             x.spec.is_constexpr() && matches!(x.eval.state(), VarEvalState::Value(_))
         });
-        if has_value || constinit_ok {
+        // A template's variable whose initializer is dependent is checked
+        // in each instantiation, which shares the wrappers and checks
+        // them again with it ([`Sema::recheck_shared_invocation`]): an
+        // invocation that is constant only as part of the whole
+        // initializer (a `std::vector` it frees) is not an error of the
+        // definition (WP-1263: `constexpr bool b = m ==
+        // nonstatic_data_members_of(^^S, ctx)[0];` in a `template for`).
+        let dependent = self.ast.decls.var(v).and_then(|x| x.init).is_some_and(|i| {
+            (self.expr_is_value_dependent(i) || self.expr_is_type_dependent(i))
+                && !self.has_errors_in(i)
+        });
+        if has_value || constinit_ok || dependent {
             return;
         }
         for (_, c, callee, again) in mine {

@@ -291,7 +291,13 @@ Codegen emits no block-scope variable of consteval-only type
 (spec/codegen.md §4 "Consteval-only variables"; WP-534).
 
 In a template, the leaves are recorded at definition time (where the
-evaluation context is known) and re-checked in each instantiation; the
+evaluation context is known) and re-checked in each instantiation and
+each expansion of an expansion statement. A reference to a variable is
+such a leaf in a template definition too (WP-1263: `m == b` of two
+`constexpr info` variables in a run-time `template for` body, or in a
+function template's body, was accepted; GCC 16.1 rejects it the same
+way; `meta.reflection.define.aggregate/define-run-template-for-neg.cpp`).
+The
 codegen backstop (`kiln_codegen/src/consts.rs` "reflection values cannot
 be emitted") is reached only through the gaps below.
 
