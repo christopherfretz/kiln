@@ -358,8 +358,9 @@ impl Checker<'_, '_, '_> {
             // use (spec/sema.md §7.6a): its extended temporaries live as long
             // as the enclosing statement's scope, so an indirect goto out of
             // it skips their destructors. clang 19/22 do not look (their
-            // `CXXDefaultArgExpr` has no children). WP-1166.
-            ExprKind::CXXDefaultArgExpr => {
+            // `CXXDefaultArgExpr` has no children). WP-1166. The same for a
+            // default member initializer rebuilt for its use (WP-1177).
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
                 if let Some(r) = ast.exprs.default_arg_rewritten(e) {
                     self.expr(r, parent);
                 }
