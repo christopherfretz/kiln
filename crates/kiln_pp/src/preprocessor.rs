@@ -364,13 +364,10 @@ pub struct Preprocessor<'a, 'd> {
     /// The main file has a line starting with `module`, `import` or
     /// `export` ([`Preprocessor::module_lines`]).
     pub(crate) module_lines: bool,
-    /// Identifiers first interned as a component of a module or
-    /// partition name in a module or import directive, and neither
-    /// returned as a token (nor in a pragma's tokens) nor declared by a
-    /// declaration image since: the image gate does not count them as
-    /// seen (spec/modules.md §11.11, "ODR merging"). Usually empty or a
-    /// few names.
-    pub(crate) unseen_names: Vec<Symbol>,
+    /// With the declaration image on (`-fkiln-bmi-image`): the
+    /// identifiers that reached the parser at global namespace scope, for
+    /// the image gate (spec/modules.md §11.11, "ODR merging").
+    pub(crate) name_gate: Option<Box<crate::name_gate::NameGate>>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -451,9 +448,12 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             comment_handler: None,
             modules: None,
             module_lines: false,
-            unseen_names: Vec::new(),
+            name_gate: None,
         };
         pp.modules = pp.opts.modules.clone().map(|o| Box::new(crate::modules::ModState::new(o)));
+        if pp.modules.as_ref().is_some_and(|m| m.opts.image) {
+            pp.name_gate = Some(Box::new(crate::name_gate::NameGate::new(pp.interner)));
+        }
         pp.define_builtins();
         pp
     }
@@ -672,10 +672,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             return PpItem::Token(t);
         }
         let t = self.lex().tok;
-        if !self.unseen_names.is_empty()
-            && let TokKind::Identifier(s) = t.kind
-        {
-            self.seen_name(s);
+        if let Some(g) = &mut self.name_gate {
+            g.token(&t);
         }
         if let Some(m) = self.markers.pop_front() {
             self.pending = Some(t);
@@ -686,25 +684,16 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     }
 
     /// A pragma's tokens reach the parser too: their identifiers count as
-    /// seen for the image gate ([`Preprocessor::seen_name`]).
+    /// seen for the image gate, wherever the pragma is.
     fn marker_out(&mut self, m: &Marker) {
-        if !self.unseen_names.is_empty()
+        if let Some(g) = &mut self.name_gate
             && let Marker::Pragma { tokens, .. } = m
         {
             for t in tokens {
                 if let TokKind::Identifier(s) = t.kind {
-                    self.seen_name(s);
+                    g.see(s);
                 }
             }
-        }
-    }
-
-    /// `s` reached the consumer (or a declaration image declares it):
-    /// from now on the image gate counts it as seen (spec/modules.md
-    /// §11.11, "ODR merging").
-    pub(crate) fn seen_name(&mut self, s: Symbol) {
-        if let Some(i) = self.unseen_names.iter().position(|&u| u == s) {
-            self.unseen_names.swap_remove(i);
         }
     }
 
