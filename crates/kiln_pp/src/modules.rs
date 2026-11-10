@@ -367,7 +367,11 @@ impl Preprocessor<'_, '_> {
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
         let mut d =
             ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive, end: None };
-        self.finish_directive();
+        if matches!(d.kind, DirectiveKind::Invalid) {
+            self.finish_directive();
+        } else {
+            self.end_directive_at_semi();
+        }
         d.end = self.main_directive_end();
         let perform = match &d.kind {
             DirectiveKind::Module { name, partition, name_span } => {
@@ -437,15 +441,26 @@ impl Preprocessor<'_, '_> {
         if Some(f.file) != self.main_file || !f.back.is_empty() {
             return None;
         }
-        let off = f.lx.offset();
-        let rest = self.sm.text(f.file).as_bytes().get(off as usize..)?;
-        Some(if rest.starts_with(b"\r\n") {
-            off + 2
+        // The directive ends after its `;`; the rest of its line may hold
+        // blanks and a `//` comment. Anything else on the line (`import M;
+        // int x;`) leaves the end unknown, so the image falls back.
+        let off = f.lx.offset() as usize;
+        let text = self.sm.text(f.file).as_bytes();
+        let mut i = off + text.get(off..)?.iter().take_while(|&&c| c == b' ' || c == b'\t').count();
+        if text.get(i..).is_some_and(|r| r.starts_with(b"//")) {
+            i += text[i..].iter().take_while(|&&c| c != b'\n' && c != b'\r').count();
+        }
+        let rest = &text[i..];
+        let end = if rest.starts_with(b"\r\n") {
+            i + 2
         } else if rest.starts_with(b"\n") || rest.starts_with(b"\r") {
-            off + 1
+            i + 1
+        } else if rest.is_empty() {
+            i
         } else {
-            off
-        })
+            return None;
+        };
+        u32::try_from(end).ok()
     }
 
     /// A directive starting at `at` in the current file, at include depth

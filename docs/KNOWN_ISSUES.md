@@ -22,13 +22,15 @@ If you hit something not listed here, please
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
-- **x86_64-only gaps** found by the first x86_64 sweep, in
-  [status/x86_64-sweep.md](status/x86_64-sweep.md):
-  - glibc's x86-64 `typedef __float128 _Float128` does not make the two
-    the same type as it does under clang, so LLVM's `IRTests` does not
-    build. kiln keeps `_Float128` and `__float128` distinct, as GCC 13+
-    does; making glibc's `*f128` functions usable as `__float128` ones
-    is [WP-1058](BACKLOG.md).
+- **x86_64 sweep results are from before the last fixes.** The first
+  x86_64 sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) found
+  that LLVM's `IRTests` did not build because glibc's x86-64 `*f128`
+  functions were not usable as `__float128` ones. WP-1058 fixed that
+  (kiln still keeps `_Float128` and `__float128` distinct, as GCC 13+
+  does), and WP-1000 added the `-m<feature>` flags Bitcoin Core and
+  OpenCV need, but the sweep has not been re-run since. The 1.0 release
+  candidate's sweep re-measures them
+  ([status/release-1.0.md](status/release-1.0.md)).
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step
@@ -41,6 +43,20 @@ kiln compiles C++ only. `kiln` can preprocess C (`-E` on `.c`, `.h`,
 `.i`, or `-x c`), but compiling C is `not implemented yet`. `kiln++`
 compiles a `.c` file as C++, with a warning, as `clang++` does. C support
 is [WP-243](BACKLOG.md) and is not part of 1.0.
+
+## Uninitialized variables at C++26
+
+kiln implements C++26 erroneous behaviour (P2795) and clang 22 does not.
+At `-std=c++26`, an automatic variable of at most 4096 bytes that has no
+initializer is zero-filled at its declaration, so a program that reads
+it sees zero where the clang 22 binary sees whatever was on the stack.
+The fill costs a store or a `memset` per declaration. To get clang's
+behaviour, mark the variable `[[indeterminate]]` or compile with
+`-ftrivial-auto-var-init=uninitialized`
+(`-ftrivial-auto-var-init-max-size=N` moves the size limit). A variable
+whose declaration a `goto` or `switch` jumps over is not written, as in
+clang. This is by design, not a gap
+([USER_GUIDE.md](USER_GUIDE.md#language-modes)).
 
 ## Build systems
 
@@ -71,8 +87,9 @@ missing (spec/modules.md §11.10):
   importer re-parses the module's text. Since WP-985 the file also
   carries the module's constant-evaluation results, so the importer does
   not evaluate those again (spec/modules.md §11.11). The declaration
-  image that replaces the re-parse is off by default and does not cover
-  `std` yet ([WP-1065](BACKLOG.md) to [WP-1070](BACKLOG.md)). Importing
+  image that replaces the re-parse (`-fkiln-bmi-image`) ships in 1.0 as
+  an experimental opt-in: it is off by default and does not cover `std`
+  yet. Making it the default is [WP-1070](BACKLOG.md). Importing
   libc++'s `std` module file costs about what compiling `std.cppm`
   in-process costs ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
 - In libc++ 22's suite, one test fails because `std.compat` imported over
@@ -113,7 +130,7 @@ These flags are the exceptions: they are accepted and have no effect.
 
 | Flag | What happens | WP |
 |---|---|---|
-| `-ffat-lto-objects` | objects are bitcode only, not fat | [WP-899](BACKLOG.md) |
+| `-fno-fat-lto-objects` | accepted; with `-flto` objects are bitcode only anyway | — |
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
@@ -201,6 +218,103 @@ Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applicat
 - **folly::coro**: 583 of 618. All 33 kiln-only failures had one cause,
   fixed by WP-802. A partial re-run found two more compile failures,
   fixed by WP-933. The full re-run is [WP-992](BACKLOG.md).
+
+## Open expected-failure tests
+
+Each gap below has a test in kiln's corpus marked `xfail(kiln)`: the test
+passes under clang 19 (or GCC 16.1 for reflection) and the harness
+expects it to fail under kiln until the fix lands. The list is every such
+test on `main`, from `git grep -l 'xfail(kiln)' tests/`; the WP is the
+one the test names (the work package it was found in, or the open row
+that tracks it). Paths are under `tests/conformance/` unless shown.
+
+Templates, lookup and overloading:
+
+- `ast/class.implicit/eager.cpp`: injected-class-names are not declared
+  as members yet (spec/sema-class.md §2.2). WP-171.
+- `ast/namespace.udecl/instantiated-shadow-order.cpp`: the same cause.
+  WP-171.
+- `expr.prim.id.dtor/run-dependent-object-qualified-destructor-template-id.cpp`:
+  `~Q<args>` after a dependent unresolved prefix is not deferred to
+  instantiation. WP-1173.
+- `over.match.best/perfect-match-reversed-member.cpp`: a member
+  `operator==` beside its own reversed form is a unique perfect match in
+  clang 22.1. [WP-635](BACKLOG.md) (deferred).
+- `temp.expl.spec/in-class-member-template-spec-of-class-template-run.cpp`:
+  instantiating an in-class explicit specialization of a member class
+  template redeclares the member as a different kind of symbol.
+  WP-1178.
+- `temp.deduct.call/explicit-args-trailing-return-sfinae-before-nondep-conversion.cpp`:
+  a trailing return type is substituted only after the CWG1391
+  conversion check. WP-804.
+- `temp.dep.type/out-of-line-current-instantiation-var-template-unqualified-run.cpp`:
+  a variable template-id keeps its written qualifier. WP-1169.
+
+Constant evaluation and reflection:
+
+- `class.union/constexpr-placement-same-type.cpp`: Oven pointers carry no
+  union-member designator, so either member of one type at one offset
+  may be the constructed one. [WP-517](BACKLOG.md).
+- `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`: no
+  lenient designator for object-size folds. WP-808.
+- `meta.reflection.define.aggregate/define-run-template-for.cpp`: an
+  expansion statement over a defined class's members. WP-474, WP-478,
+  WP-479.
+
+Attributes, calling conventions and extensions:
+
+- `dcl.attr.cconv/ir-swiftcall.cpp`: `swiftcall`/`swiftasynccall` are a
+  hard error. WP-808.
+- `dcl.attr.cconv/override-cc-clang22.cpp`: a written calling convention
+  prints after the type (clang 19's form). WP-808.
+- `dcl.attr.cconv/x86-interrupt.cpp`: the x86 `interrupt` attribute is a
+  hard error. WP-808.
+- `dcl.attr.class-b/ir-likely-branch-weights-O1-19.cpp`: no branch
+  weights for `[[likely]]`, `[[unlikely]]` or `__builtin_expect` when
+  optimizing. WP-813.
+- `dcl.attr.class-b/ir-noescape-function-pointer-19.cpp`: `noescape` on a
+  function type's parameter is not kept in the type. WP-813.
+- `dcl.attr.class-b/malloc-span-22.cpp`: `malloc_span` has no subject or
+  argument checks. WP-813.
+- `dcl.attr.grammar/gnu-attribute-before-statement.cpp`: GNU attributes
+  before a statement parse only when a declaration or `;` follows.
+  WP-805.
+- `ext.arm.sve/target-attribute-sve-locals.cpp`: the SVE type check
+  ignores a function's `target("sve")`. WP-910.
+- `ext.clang.address_space/address-space-run.cpp`: `address_space(N)` is
+  a hard error. WP-809.
+- `ext.multiversion/target-clones-x86.cpp`: x86-64 function
+  multiversioning. [WP-1059](BACKLOG.md).
+
+Code generation, ABI and sanitizers:
+
+- `basic.link/unnamed-enum-internal-name-run.cpp`: an internal unnamed
+  enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
+- `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
+  FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
+- `module.interface/vtable-alias-O1-run.cpp`: at `-O1` an
+  `available_externally` vtable references a structor alias that is not
+  emitted yet. WP-1120.
+- `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
+  are keyed by name, not by the sugared type. WP-871.
+- `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's
+  trailing `returns_nonnull` lands on `operator()`. WP-871.
+- `driver.sanitize/ubsan-noreturn-asan-ir.cpp`: value names and clang
+  22's `alloca_name_altered` annotation under ASan. WP-871.
+
+Diagnostics and dumps:
+
+- `dcl.fct.def.delete/use-uncalled-argument-no-match.cpp`: a deleted
+  function used as a call argument also draws "no matching function".
+  WP-1170.
+- `dcl.fct.def.delete/use-uncalled-comma-operand.cpp`: a deleted
+  function as a comma operand also draws two `-Wunused-value` warnings.
+  WP-1170.
+- `dcl.array/vla-warning-suppressed-by-wvla-pragma.cpp`: ignoring
+  `-Wvla` by pragma does not silence `-Wvla-cxx-extension`. WP-789.
+- `tests/stress/dump-friend-template-cycle.cpp`: `-fdump-ast` prints a
+  befriended class template's pattern where clang prints it
+  instantiated. [WP-129](BACKLOG.md).
 
 ## Crashes
 

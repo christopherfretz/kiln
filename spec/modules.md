@@ -83,7 +83,11 @@ are ordinary identifiers (`int import = 1;` keeps working).
 With modules enabled, the preprocessor consumes the directive (tokens up to
 `;`, unexpanded; module names are never macro-expanded and an object-like
 macro of that name is diagnosed) and queues a `Marker::Module` carrying a
-parsed `ModuleDirective`:
+parsed `ModuleDirective`. The directive ends at its `;`: the rest of that
+line is ordinary text, as clang lexes it (`import M; int x;` declares
+`x`; GCC 16 rejects it, "expected end of line"). Only an invalid
+directive discards the rest of its line (WP-1198, which fixed kiln
+dropping it silently):
 
 - `module;` - global module fragment introducer;
 - `[export] module M[.N][:P] [attrs];` - module declaration;
@@ -379,9 +383,17 @@ has its vtable used there even when nothing uses it (`kiln_sema`
 `mark_module_vtable_used`, which also defines its virtual members, so
 a defaulted virtual destructor is emitted `linkonce_odr`), and that
 unit's vtable is strong whether or not the class has a key function;
-every other unit declares it `external`. A global-module-fragment class
-with a key function gets its vtable from the unit defining the key
-function, the module unit itself (deviation 7). The implicit global
+every other unit declares it `external`, at every optimization level:
+an importer never copies it `available_externally` (clang
+`canSpeculativelyEmitVTable` refuses a class whose definition comes from
+a named module, `Decl::shouldEmitInExternalSource`; WP-1198). A
+global-module-fragment class with a key function gets its vtable from
+the unit defining the key function, the module unit itself (deviation
+7); at -O1 an importer may copy it `available_externally`, and its
+destructor slots then name the `D1`/`D0` declarations. Any reference to
+a constructor or destructor variant whose non-inline definition an
+imported unit owns is such a declaration from its first use (never a
+complete-object alias this unit would define later). The implicit global
 `operator new`/`operator delete` declarations are attached to the global
 module ([basic.stc.dynamic.general]/2) even when the first use is in a
 purview, so they are never `_ZW`-mangled.
@@ -2301,7 +2313,10 @@ offset from the preprocessor, which records where each module and
 import directive of the main unit's own main file ends (include
 depth 0, `ModuleDirective::end`). A directive in an included file or
 in a macro expansion leaves no usable offset, and such a unit falls
-back ("an import outside the module's main file"). Every record of an
+back ("an import outside the module's main file, or code after its
+`;`"). So does a directive followed on its line by anything but blanks
+and a `//` comment (`import M; int x;`, which since WP-1198 declares
+`x`): the preamble must end at a line start. Every record of an
 image with a preamble must lie after it ("a declaration before the
 module's last import").
 

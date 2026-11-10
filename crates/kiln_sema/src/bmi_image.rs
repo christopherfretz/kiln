@@ -3236,7 +3236,7 @@ impl Writer<'_, '_, '_> {
         if partition || !unit.imports.is_empty() || mt.units.len() != 1 {
             let (end, bad) = s.module_preamble();
             if bad {
-                return Err("an import outside the module's main file");
+                return Err("an import outside the module's main file, or code after its `;`");
             }
             self.img.preamble = end.ok_or("an import outside the module's main file")?;
         }

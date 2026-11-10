@@ -1371,7 +1371,11 @@ fn kind2_declaration_image_imports() {
         ),
         (
             "export module f;\n#include \"i.h\"\nexport int g();\n",
-            "an import outside the module's main file",
+            "an import outside the module's main file, or code after its `;`",
+        ),
+        (
+            "export module f;\nimport imgp; export int g();\n",
+            "an import outside the module's main file, or code after its `;`",
         ),
     ] {
         std::fs::write(d.join("f.cppm"), src).unwrap();
@@ -1386,6 +1390,16 @@ fn kind2_declaration_image_imports() {
             o.stderr
         );
     }
+    // A `//` comment after the `;` still leaves the preamble at a line
+    // start ([cpp.module], [cpp.import]: the rest of the line is text).
+    std::fs::write(d.join("f.cppm"), "export module f;\nimport imgp; // c\nexport int g();\n")
+        .unwrap();
+    let mut args: Vec<&str> = vec!["-v", "-fkiln-bmi-image"];
+    args.extend(mf[1..4].iter().map(String::as_str));
+    args.extend(["--precompile", "f.cppm", "-o", "f.pcm"]);
+    let o = kiln(&d, &args);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
 }
 
 /// A unit with a node the image does not carry is written without one,

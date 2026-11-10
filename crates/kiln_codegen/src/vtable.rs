@@ -240,10 +240,7 @@ impl Cg<'_> {
         // clang `isVTableExternal`: the tables of a class attached to a
         // named module are emitted, strongly, only by the unit that
         // defines it (spec/modules.md §7).
-        if let Some(def) = self.class_def(first)
-            && self.ast.module_attachment(def).is_some()
-            && !self.class_is_templated_or_instantiated(def)
-        {
+        if let Some(def) = self.module_attached_class(first) {
             return if self.ast.modules.owner(def).unit == 0 {
                 VtLinkage::Strong
             } else {
@@ -268,6 +265,25 @@ impl Cg<'_> {
                 }
             }
         }
+    }
+
+    /// The definition of `rd` when it is a non-template class attached
+    /// to a named module (its tables belong to the module's unit).
+    fn module_attached_class(&self, rd: DeclId) -> Option<DeclId> {
+        self.class_def(rd).filter(|&def| {
+            self.ast.module_attachment(def).is_some()
+                && !self.class_is_templated_or_instantiated(def)
+        })
+    }
+
+    /// clang `Decl::shouldEmitInExternalSource` in
+    /// `canSpeculativelyEmitVTable`: a class attached to an imported
+    /// named module has its tables emitted by that module's unit alone,
+    /// so an importer never copies them `available_externally`, at any
+    /// optimization level (spec/modules.md §7, WP-1198).
+    fn vtable_in_imported_module(&self, rd: DeclId) -> bool {
+        self.module_attached_class(self.ast.first(rd))
+            .is_some_and(|def| self.ast.modules.owner(def).unit != 0)
     }
 
     // ---- vtable globals ------------------------------------------------
@@ -331,6 +347,9 @@ impl Cg<'_> {
     /// itself and every dynamic virtual base can be emitted as a base.
     fn can_speculatively_emit_vtable(&mut self, rd: DeclId) -> R<bool> {
         if !self.can_speculatively_emit_vtable_as_base(rd)? {
+            return Ok(false);
+        }
+        if self.vtable_in_imported_module(rd) {
             return Ok(false);
         }
         let Some(def) = self.class_def(rd) else { return Ok(false) };
