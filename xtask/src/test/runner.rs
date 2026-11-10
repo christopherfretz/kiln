@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use super::compare::{line_diff, pp_diff};
 use super::diag_parse::{self, Diagnostic};
 use super::directives::{
-    self, CompilerKind, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect, TestSpec,
+    self, CompilerKind, DiagDirective, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect,
+    TestSpec,
 };
 use super::discover::TestCase;
 use super::inst_report;
@@ -249,6 +250,9 @@ impl Test<'_> {
         }
         if self.cfg.meta_header.is_some() {
             return meta_header_skip(spec, source);
+        }
+        if self.cfg.compiler_kind == CompilerKind::Gcc && includes_kiln_meta(source) {
+            return stand_in_skip(GCC_MODE, spec, source);
         }
         if self.cfg.debug_sweep.is_some() {
             return debug_sweep_skip(spec);
@@ -558,14 +562,23 @@ impl Test<'_> {
             // `mode`, and a test's own `args:` come last and win.
             c.arg("-fno-crash-diagnostics");
         }
-        c.args(mode);
+        let gcc = program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Gcc;
+        let args: Vec<String> =
+            spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
+        let mode: Vec<String> = mode.iter().map(|m| (*m).to_owned()).collect();
+        c.args(compiler_flags(gcc, &mode));
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
         if program == self.cfg.compiler {
             c.args(self.meta_header_flags(true));
         }
-        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        if gcc {
+            // GCC reads the stand-in `kiln_meta.h` over its own <meta>
+            // (spec/harness.md "GCC as the compiler under test").
+            c.arg(format!("-I{}", stand_in_dir(&self.cfg.root).display()));
+        }
+        c.args(compiler_flags(gcc, &args));
         c.args(self.module_flags(program, spec, spec.modules.len()));
         if spec.pch.is_some() {
             c.arg("-include-pch").arg(self.pch_file(program));
@@ -573,6 +586,13 @@ impl Test<'_> {
         c.arg(&self.case.name);
         if let Some(o) = out {
             c.arg("-o").arg(o);
+        }
+        if gcc && out.is_some() && gcc_links(&mode, &args) {
+            // GCC keeps the contract-violation handler (and the other
+            // experimental library parts) in libstdc++exp, which a link
+            // must name after the sources (spec/harness.md "GCC as the
+            // compiler under test").
+            c.arg("-lstdc++exp");
         }
         c
     }
@@ -1055,8 +1075,9 @@ impl Test<'_> {
     }
 
     fn check_diags(&self, spec: &TestSpec, diags: &[Diagnostic]) -> Check {
-        let clang = self.cfg.compiler_kind == CompilerKind::Clang;
-        let directives = diag_parse::expand_clang_dups(&spec.diags, clang);
+        let Some(directives) = diag_directives_for(spec, self.cfg.compiler_kind) else {
+            return Ok(());
+        };
         let report = diag_parse::match_diags(
             &directives,
             diags,
@@ -2037,6 +2058,28 @@ const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why a compiler of `kind` cannot run `spec` at all (a skip), if it
 /// cannot.
+/// The flags of a compile by the compiler under test, as it takes them:
+/// GCC's spelling ([`crate::oracle::gcc_args`]) when it is GCC
+/// (spec/harness.md "GCC as the compiler under test"), else unchanged.
+fn compiler_flags(gcc: bool, flags: &[String]) -> Vec<String> {
+    if gcc { crate::oracle::gcc_args(flags) } else { flags.to_vec() }
+}
+
+/// Whether a GCC compile with these flags links (no `-c`, `-S`, `-E` or
+/// `-fsyntax-only`).
+fn gcc_links(mode: &[String], args: &[String]) -> bool {
+    !mode.iter().chain(args).any(|f| matches!(f.as_str(), "-c" | "-S" | "-E" | "-fsyntax-only"))
+}
+
+/// The `diag:` directives a compile by a `kind` compiler is checked
+/// against (spec/harness.md "Diagnostics"): `None` under GCC, whose wording
+/// is not kiln's or clang's (`diag:` and `strict-diags` are not checked);
+/// otherwise the test's, with `dup(clang)` groups doubled under clang.
+fn diag_directives_for(spec: &TestSpec, kind: CompilerKind) -> Option<Vec<DiagDirective>> {
+    (kind != CompilerKind::Gcc)
+        .then(|| diag_parse::expand_clang_dups(&spec.diags, kind == CompilerKind::Clang))
+}
+
 fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     let needs = |what: &str, who: &str| {
         Some(format!("not supported by this compiler (`{what}` needs {who})"))
@@ -2339,27 +2382,46 @@ pub(super) fn debug_sweep_skip(spec: &TestSpec) -> Option<String> {
 /// [`META_HEADER_EXTENSIONS`]).
 pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> {
     const MODE: &str = "meta-header mode";
-    let includes = source.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with('#') && t.contains("include") && t.contains("\"kiln_meta")
-    });
-    if !includes {
+    if !includes_kiln_meta(source) {
         return Some(format!("{MODE}: does not include kiln_meta.h"));
     }
+    stand_in_skip(MODE, spec, source)
+}
+
+/// The skip-reason prefix of a stand-in-header test under GCC.
+const GCC_MODE: &str = "GCC under test";
+
+/// The stand-in `kiln_meta.h` directory (`tests/support/meta-header`).
+pub(super) fn stand_in_dir(root: &Path) -> PathBuf {
+    root.join("tests").join("support").join("meta-header")
+}
+
+/// Whether `source` includes a `kiln_meta*.h`.
+fn includes_kiln_meta(source: &str) -> bool {
+    source.lines().any(|l| {
+        let t = l.trim_start();
+        t.starts_with('#') && t.contains("include") && t.contains("\"kiln_meta")
+    })
+}
+
+/// Why a test that includes `kiln_meta.h` cannot run over the stand-in
+/// header (spec/harness.md "Header-differential mode", and "GCC as the
+/// compiler under test"): `MODE` prefixes the reason.
+pub(super) fn stand_in_skip(mode: &str, spec: &TestSpec, source: &str) -> Option<String> {
     if let Some(r) = &spec.meta_header_skip {
-        return Some(format!("{MODE}: {r}"));
+        return Some(format!("{mode}: {r}"));
     }
     if !matches!(
         spec.expect,
         Expect::CompileOk | Expect::CompileFail | Expect::Run | Expect::NoCrash
     ) {
         return Some(format!(
-            "{MODE}: a {:?} test compares kiln_meta.h's own declarations",
+            "{mode}: a {:?} test compares kiln_meta.h's own declarations",
             spec.expect
         ));
     }
     if spec.args.iter().any(|a| a == "-stdlib=libc++" || a.starts_with("-nostdinc")) {
-        return Some(format!("{MODE}: the test does not use libstdc++"));
+        return Some(format!("{mode}: the test does not use libstdc++"));
     }
     let mut rest = source;
     while let Some(i) = rest.find("__kiln_") {
@@ -2368,7 +2430,7 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
             tail.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(tail.len());
         let ident = &tail[..end];
         if !META_HEADER_HELPERS.contains(&ident) {
-            return Some(format!("{MODE}: uses the kiln extension `{ident}`"));
+            return Some(format!("{mode}: uses the kiln extension `{ident}`"));
         }
         rest = &tail[end..];
     }
@@ -2378,7 +2440,7 @@ pub(super) fn meta_header_skip(spec: &TestSpec, source: &str) -> Option<String> 
             .match_indices(&call)
             .any(|(i, _)| !source[..i].ends_with(|c: char| c.is_ascii_alphanumeric() || c == '_'));
         if called {
-            return Some(format!("{MODE}: uses the kiln extension `{ext}`"));
+            return Some(format!("{mode}: uses the kiln extension `{ext}`"));
         }
     }
     None
@@ -2417,10 +2479,90 @@ fn has_sanitizer_runtime(clang: &Path) -> bool {
 #[cfg(test)]
 mod compat_tests {
     use super::{
-        DumpKind, Status, compat_for, crash_diagnostics_off, debugger_gate_in, first_missing_check,
-        ir_diff, ir_normalize, ir_target_flag,
+        DumpKind, GCC_MODE, Status, compat_for, compiler_flags, crash_diagnostics_off,
+        debugger_gate_in, diag_directives_for, first_missing_check, gcc_links, includes_kiln_meta,
+        ir_diff, ir_normalize, ir_target_flag, stand_in_skip,
     };
-    use crate::test::directives::{Lang, parse};
+    use crate::test::directives::{CompilerKind, Lang, parse};
+
+    /// WP-1249: GCC as the compiler under test gets the mode's and the
+    /// test's flags in GCC's spelling (`oracle::gcc_args`); kiln and clang
+    /// get them unchanged.
+    #[test]
+    fn gcc_under_test_gets_gcc_spelling() {
+        let v = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let args = v(&[
+            "-freflection",
+            "--gcc-toolchain=/usr/local",
+            "-ferror-limit=0",
+            "-fclang-compat=19",
+            "-Xclang",
+            "-verify",
+            "-I",
+            "tests/support",
+        ]);
+        assert_eq!(
+            compiler_flags(true, &args),
+            v(&["-freflection", "-fmax-errors=0", "-I", "tests/support"])
+        );
+        assert_eq!(compiler_flags(false, &args), args);
+        let mode = v(&["-fsyntax-only", "-ferror-limit=0"]);
+        assert_eq!(compiler_flags(true, &mode), v(&["-fsyntax-only", "-fmax-errors=0"]));
+        assert_eq!(compiler_flags(false, &mode), mode);
+    }
+
+    /// WP-1249: which `diag:` directives each compiler kind is checked
+    /// against (spec/harness.md "Diagnostics"): none under GCC, the test's
+    /// under kiln, and under clang the test's with `dup(clang)` doubled.
+    #[test]
+    fn diag_directives_per_compiler_kind() {
+        let src = "//@ expect: compile-fail\n//@ strict-diags\n\
+                   //@ diag: 5 error \"once\" dup(clang)\n//@ diag: 5 note \"here\"\n\
+                   //@ diag: 6 warning \"unused\"\n";
+        let spec = parse(src, Lang::Cxx).unwrap();
+        let lines =
+            |k| diag_directives_for(&spec, k).map(|d| d.iter().map(|d| d.line).collect::<Vec<_>>());
+        assert_eq!(lines(CompilerKind::Gcc), None);
+        assert_eq!(lines(CompilerKind::Kiln), Some(vec![5, 5, 6]));
+        assert_eq!(lines(CompilerKind::Clang), Some(vec![5, 5, 5, 5, 6]));
+        assert_eq!(lines(CompilerKind::Other), Some(vec![5, 5, 6]));
+    }
+
+    /// spec/harness.md "GCC as the compiler under test": a GCC compile
+    /// links libstdc++exp only when it links.
+    #[test]
+    fn gcc_links_unless_compile_only() {
+        let v = |f: &[&str]| f.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert!(gcc_links(&[], &v(&["-O2"])));
+        assert!(!gcc_links(&v(&["-fsyntax-only"]), &[]));
+        assert!(!gcc_links(&[], &v(&["-c"])));
+        assert!(!gcc_links(&v(&["-E"]), &v(&["-P"])));
+    }
+
+    /// spec/harness.md "GCC as the compiler under test": a test that
+    /// includes `kiln_meta.h` reads the stand-in and is skipped for the
+    /// header-differential mode's reasons, under its own prefix; a test
+    /// that does not include it is not a stand-in test at all.
+    #[test]
+    fn gcc_under_test_stand_in_skip() {
+        let skip = |src: &str| {
+            let spec = parse(src, Lang::Cxx).unwrap();
+            includes_kiln_meta(src).then(|| stand_in_skip(GCC_MODE, &spec, src)).flatten()
+        };
+        assert_eq!(skip("//@ expect: compile-ok\nint main() {}\n"), None);
+        let meta = "//@ expect: compile-ok\n#include \"kiln_meta.h\"\n";
+        assert_eq!(skip(meta), None);
+        assert_eq!(
+            skip(&format!("{meta}auto r = std::meta::__kiln_reflect_range(0);\n")),
+            Some("GCC under test: uses the kiln extension `__kiln_reflect_range`".into())
+        );
+        assert_eq!(
+            skip(&format!("//@ meta-header: skip step budget\n{meta}")),
+            Some("GCC under test: step budget".into())
+        );
+        let pp = "//@ expect: pp\n#include \"kiln_meta.h\"\n";
+        assert!(skip(pp).is_some_and(|r| r.starts_with("GCC under test: a Pp test")));
+    }
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.

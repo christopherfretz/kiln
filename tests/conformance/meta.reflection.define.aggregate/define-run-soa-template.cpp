@@ -3,6 +3,7 @@
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 //@ stdout: 48 18
+//@ xfail(gcc): GCC 16.1 rejects a constexpr local's array member as a constexpr expansion statement's range
 // P2996R13 §3.11 (struct of arrays), in the paper's shape: a class
 // template's consteval block iterates the members of T with an expansion
 // statement and defines the nested `impl` with an array of N of each.

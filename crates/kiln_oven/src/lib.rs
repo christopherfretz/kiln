@@ -79,6 +79,7 @@ pub use meta::{
     MetaErrorKind, MetaOp, MetaOut, OptionsPlan, OvenFault, Purity, QueryOp, RawOptions, TemplOp,
     TraitOp, ValueOp, info_arg,
 };
+pub use notes::FrameMark;
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
 /// Whether this build checks every trial-fold walk against the full path

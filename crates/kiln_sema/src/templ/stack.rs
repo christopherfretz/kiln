@@ -364,7 +364,7 @@ impl InstantiationStack {
         limit: u32,
         name: &dyn Fn(&InstFrame) -> Option<String>,
         note: &dyn Fn(&InstFrame) -> DiagId,
-        extra: &dyn Fn(&InstFrame) -> Option<Diag>,
+        extra: &dyn Fn(&InstFrame) -> Vec<Diag>,
     ) -> Vec<Diag> {
         let n = self.frames.len() as u32;
         if n == 0 || self.last_emitted.get() == n {
@@ -570,8 +570,33 @@ impl Sema<'_, '_> {
             self.inst.limits.backtrace,
             &|f| Some(self.frame_name(f)),
             &|f| self.frame_note(f),
-            &|f| self.frame_extra_note(f),
+            &|f| {
+                let mut v: Vec<Diag> = self.frame_extra_note(f).into_iter().collect();
+                v.extend(self.meta_call_notes(f));
+                v
+            },
         )
+    }
+
+    /// After the outermost frame a reflection intrinsic call required
+    /// (`f`): the call frames of the evaluation paused in that call,
+    /// innermost first, in the Oven's "in call to 'f(args)'" wording and
+    /// elision, so the context reaches the outermost evaluation (the
+    /// `static_assert`) as GCC's "in 'constexpr' expansion of" lines do
+    /// (spec/sema-templates.md §10.2, WP-1248). None when the Oven held
+    /// is not paused in that call (a nested evaluation runs).
+    fn meta_call_notes(&self, f: &InstFrame) -> Vec<Diag> {
+        let Some(&(depth, mark)) = self.inst.meta_calls.last() else { return Vec::new() };
+        if !self.inst.stack.frames.get(depth).is_some_and(|g| std::ptr::eq(g, f)) {
+            return Vec::new();
+        }
+        let Some(oven) = self.oven.as_deref().filter(|o| o.frame_mark() == mark) else {
+            return Vec::new();
+        };
+        oven.paused_call_notes(&self.ast, Some(self.diags.sm()))
+            .into_iter()
+            .map(|n| Diag::text_note(n.msg, kiln_source::Span::empty(n.loc)))
+            .collect()
     }
 
     /// The second note of a frame that prints two: a template template
@@ -872,15 +897,16 @@ mod tests {
         let mut s = InstantiationStack::default();
         s.push(frame(FrameKind::ClassInstantiation, 1));
         assert_eq!(
-            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| None).len(),
+            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| Vec::new())
+                .len(),
             1
         );
-        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).is_empty());
+        assert!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).is_empty());
         s.push(frame(FrameKind::MemberFunction, 2));
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 2);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 2);
         let _ = s.pop();
         // Popped below the printed depth: prints again.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 1);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 1);
     }
 
     #[test]
@@ -890,9 +916,9 @@ mod tests {
             s.push(frame(FrameKind::ClassInstantiation, i + 1));
         }
         // 5 + skip note + 5.
-        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| None).len(), 11);
+        assert_eq!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 11);
         s.last_emitted.set(0);
-        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note(), &|_| None).len(), 15);
+        assert_eq!(s.context_notes(0, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).len(), 15);
     }
 
     #[test]

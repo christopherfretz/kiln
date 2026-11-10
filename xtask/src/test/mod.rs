@@ -408,7 +408,7 @@ fn meta_header_dir(
                     installation prefix holds libstdc++'s <meta>"
             .into());
     }
-    Ok(Some(root.join("tests").join("support").join("meta-header")))
+    Ok(Some(runner::stand_in_dir(root)))
 }
 
 /// Runs the selected tests, printing results and the summary to stdout.

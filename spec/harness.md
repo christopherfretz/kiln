@@ -110,7 +110,7 @@ directives are also ERRORs.
 | `requires: llvm>=N` / `requires: llvm<N` | Run only when every LLVM backend that consumes the test's IR has major version at least `N` (`>=`) or below `N` (`<`); `N` is a bare major (`llvm>=22.1` is an ERROR), each form at most once. The backends are kiln's when kiln is the compiler under test or the compared oracle (the major of the oracle release whose `/usr/lib/llvm-N` kiln gets as `KILN_LLVM_DIR`, "Oracle toolchain") and every clang the test runs (as for `clang>=`; a clang's LLVM major is its own major, an unreadable version never meets it). Otherwise **SKIP** with the reason `requires llvm>=N; kiln's backend is LLVM <M>` (or `the compiler`/`the oracle`; `... has no known LLVM`). Checked after the `clang` requirements. For IR goldens whose syntax an older LLVM rejects (clang 22's `dead_on_return`, AArch64 `"frame-pointer"="non-leaf-no-reserve"`; spec/codegen.md §6a) and for a workaround only an older backend needs. Unlike `clang>=`, it is never met vacuously by kiln: kiln's backend always counts. WP-386. |
 | `skip[(kiln\|clang\|gcc)]: <reason>` | Do not run. A qualified marker applies only to that compiler kind (`skip(gcc)`: when GCC is the compiler under test; it contradicts `oracle: gcc`, an ERROR). The oracle is a clang, so `skip(clang)` also implies `oracle: none`: a `run`, `pp` or `verify` test clang cannot compile is not compared with the oracle when kiln runs it (its own expectations, `stdout`/`exit`, `.expected` or `expected-*` comments, are the reference), and `oracle: clang` with `skip(clang)` is an error. `layout`, `vtables` and `ir` tests compare with the oracle only (no golden), so `skip(clang)` on them is an ERROR (`skip(clang)` does not apply to ... tests; a test neither compiler should run uses unqualified `skip:`). Running kiln alone would check nothing but that it compiles, which `compile-ok` already says. WP-258. |
 | `xfail[(kiln\|clang\|gcc)]: <reason>` | Expected to FAIL. Qualified as for `skip`. |
-| `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`; no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
+| `meta-header: skip <reason>` | **SKIP** the test in the header-differential mode (`--meta-header`), with the reason `meta-header mode: <reason>`, and under GCC as the compiler under test (reason `GCC under test: <reason>`, WP-1249); no effect otherwise. For a test whose answer through GCC's library code is known to differ from kiln's built-in one (a step budget the real `std::vector` exceeds, wording that names a `kiln_meta.h` signature). A missing reason, or any other value, is an ERROR. WP-484. |
 
 `expect`, `std`, `stdout-file`, `run-stdin-file`, `exit`, `oracle`,
 `pp-compare`, `pp-linemarkers`, `ast-filter`, `ast-implicit`, `inst-report`, `mem<=`, `meta-header`, each `requires` kind (`target-`, `host-`, `clang>=`, `clang<`, `sanitizer-runtime`), `min-oracle`, `verify`, `two-step`, each `module` name, `unit` path and `header-unit` spelling, and each `skip`/`xfail` qualifier may appear
@@ -178,6 +178,8 @@ Matching works as follows:
   the group's notes. Under `strict-diags`, they must match the notes exactly.
 - Under `strict-diags`, every diagnostic group whose primary is located in the
   test file must be matched.
+- With GCC as the compiler under test, no `diag:` directive is matched and
+  `strict-diags` is not applied (see "GCC as the compiler under test").
 
 ## Test kinds
 
@@ -395,6 +397,58 @@ version, and the summary counts the comparisons ("Output"), so a log
 shows whether the oracle ran. `tests/conformance/meta.reflection.ci/`
 holds the `oracle: gcc` tests that need nothing past the reflection on
 `main` when CI first ran GCC (WP-502).
+
+### GCC as the compiler under test
+
+`cargo xtask test --compiler $KILN_GCC <paths>` runs the corpus with GCC
+(kind `gcc`, detected from `--version` as for the GCC oracle) instead of
+kiln: the implementer's check that a reflection or contracts test's
+expectation is GCC 16.1's too. It is not a CI step. It mirrors
+`--compiler clang++-N`, minus what is kiln's and clang's own:
+
+- **Flags.** Every compile of the compiler under test gets the mode's
+  flags and the test's `args` in GCC's spelling, mapped exactly as for the
+  GCC oracle ("GCC oracle": `oracle::gcc_args`; `--gcc-toolchain=` and the
+  other kiln/clang-only flags dropped, `-ferror-limit=`/`-fconstexpr-steps=`
+  renamed), so `no-crash`'s `-ferror-limit=0` reaches GCC as
+  `-fmax-errors=0`. A compile that links (no `-c`, `-S`, `-E` or
+  `-fsyntax-only`) also gets `-lstdc++exp` last, since GCC keeps the
+  default contract-violation handler and
+  `invoke_default_contract_violation_handler` there. The clang oracle,
+  when the test compares with one, gets the test's flags unchanged.
+- **The stand-in `kiln_meta.h`.** `-I<repo_root>/tests/support/meta-header`
+  comes first on GCC's command line, before the test's `args`, as in the
+  header-differential mode, so a reflection test's `#include "kiln_meta.h"`
+  reads the stand-in over GCC's own `<meta>` instead of kiln's header (whose
+  intrinsics and `__kiln_*` extensions GCC does not have). A test that
+  includes a `kiln_meta*.h` is **SKIP**ped, with a reason starting `GCC
+  under test: `, for exactly the reasons that mode skips it (it says
+  `meta-header: skip <reason>`; it is not `compile-ok`, `compile-fail`,
+  `run` or `no-crash`; it passes `-stdlib=libc++` or `-nostdinc*`; it names
+  a kiln extension). A test that does not include one is unaffected.
+- **What is checked, per kind.** `compile-ok`: exit 0. `compile-fail`:
+  a non-zero exit and at least one `error`/`fatal` located in the test
+  file (GCC prints `file:line:col: error: msg`, parsed as in
+  "Diagnostics"). `no-crash`: exit 0 or 1. `run`: the
+  compile succeeds, the binary's stdout and exit code meet `stdout:`/
+  `stdout-file:`/`exit:`, and the clang oracle (`oracle: clang`, the
+  default) agrees on both. `debugger`: the debugger scripts' output, as
+  under clang. `pp`: the output and the oracle comparison, as
+  under clang. A crash or hang is a FAIL, as for any compiler.
+- **Not checked: `diag:` and `strict-diags`.** Their text is kiln's and
+  clang's wording (spec/diag.md), which GCC does not share, so under GCC
+  the `diag:` list is not matched and `strict-diags` is not applied
+  (`runner::diag_directives_for` gives `None`). No directive opts a test
+  back in; none is needed, since accept/reject and run output are what a
+  GCC run is for.
+- **Not run: SKIP**, with the reasons above: kiln-specific tests (`oven:`,
+  `inst-report:`), `verify`, `ast`, `cfg`, `layout`, `vtables`, `ir`,
+  `ice`, `module:`/`unit:`/`header-unit:` and `pch:` tests ("Test kinds",
+  "kiln-specific tests"). `oracle: gcc` is not compared (GCC is already the
+  compiler under test); such a test runs against its own expectations.
+- **Markers.** `skip(gcc)` and `xfail(gcc)` apply (a GCC disagreement
+  with kiln's expected behaviour is an `xfail(gcc): <reason>`), as do the
+  unqualified ones; `xfail(kiln)` and `skip(kiln)` do not.
 
 ### Header-differential mode
 
@@ -1458,6 +1512,12 @@ or infrastructure error. Parse errors name their line.
   (tests.rs), `gcc_install_prefix_is_four_up_from_install` and
   `gcc_args_drop_gcc_toolchain` (oracle.rs); the corpus run under
   `--meta-header` (docs/VALIDATION.md).
+- GCC as the compiler under test (WP-1249): `gcc_under_test_gets_gcc_spelling`,
+  `diag_directives_per_compiler_kind`, `gcc_links_unless_compile_only` and
+  `gcc_under_test_stand_in_skip`
+  (runner.rs), and `gcc_as_the_compiler_under_test` (tests.rs) over the
+  `xtask/fixtures/gcc-compiler` fixtures with `fake-gcc/g++`, which
+  rejects the kiln/clang-only flags as GCC does.
 - Debug-info sweep (WP-910): `debug_sweep_mode_selection` (tests.rs);
   the sweep of `tests/conformance` (docs/VALIDATION.md).
 - `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`

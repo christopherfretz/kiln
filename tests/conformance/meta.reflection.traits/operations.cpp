@@ -8,6 +8,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1's is_copy_constructible_type(^^int&) is ill-formed (`const` applied to `int&`)
 #include <type_traits>
 #include <utility>
 #include "kiln_meta_traits.h"

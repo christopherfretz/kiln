@@ -209,6 +209,16 @@ impl Diag {
         self
     }
 
+    /// A free-text note at `span`, standing alone (a context note built
+    /// from evaluator text, for [`Diag::prepend_notes`]).
+    pub fn text_note(text: impl Into<String>, span: Span) -> Diag {
+        Diag {
+            id: None,
+            text: Some(text.into()),
+            ..Diag::new(DiagId::note_previous_definition, span)
+        }
+    }
+
     /// Adds a free-text note at `span` printed and counted as an error
     /// (clang emits an evaluation note with an `err_` id at its own
     /// severity, e.g. a `-1` `__builtin_shufflevector` index in a

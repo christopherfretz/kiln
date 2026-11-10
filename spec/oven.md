@@ -3728,10 +3728,22 @@ follow clang trunk's P3068 branch.
   "unhandled exception: W" at the throw-expression, `W` the `what()`
   string of a class derived from `std::exception` (evaluated silently
   through a virtual call), printed whole up to `WHAT_CAP` (64 KiB)
-  characters and past it as its first `WHAT_CAP` characters followed by
-  "… [N more characters]" (GCC 16.1 prints any length; the cap keeps a
-  pathological string from flooding the terminal; WP-1245); else, or
-  when that call is not constant,
+  bytes and past it as its first `WHAT_CAP` bytes, backed off to a UTF-8
+  character boundary (at most 3 bytes, when the cap would split a
+  multi-byte character), followed by "… [N more bytes]", `N` the bytes
+  not printed, those of a split character included (GCC 16.1 prints any
+  length; the cap keeps a pathological string from flooding the
+  terminal; WP-1245, WP-1251). The scan reads `char`s until the null
+  character and keeps no more than the cap; when a read faults after
+  at least one character (no null character within the string's array,
+  an uninitialized or dead character), the note prints the characters
+  read, then "… [end of what() string not reached: R]" (after the cap,
+  "… [N more bytes; end of what() string not reached: R]"), `R` the
+  note that read carries elsewhere ("read of dereferenced one-past-the-end
+  pointer is not allowed in a constant expression"), as a `static_assert`
+  message prints the characters read before its failure (WP-1251;
+  `expr.throw/constexpr-uncaught-what-{unterminated,utf8-cap,fails}.cpp`); else, or
+  when that call is not constant or the first read faults,
   "unhandled exception of type 'T' thrown from here" at the operand when
   `T` has size 1 (an empty class, a `char`, a class of one `char`: the
   branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
@@ -4073,6 +4085,11 @@ impl Oven {
     pub fn footprint(&self) -> usize;
     pub fn memory(&self) -> kiln_ast::mem::MemReport;             // WP-663
     pub fn disassemble(&self) -> String;                          // debugging aid
+    // The evaluation paused in a bridge callback (WP-1248): a token for it,
+    // and its call stack as "in call to 'f(args)'" notes, innermost first,
+    // elided as a failure's backtrace (-fconstexpr-backtrace-limit).
+    pub fn frame_mark(&self) -> FrameMark;
+    pub fn paused_call_notes(&self, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
 }
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }
 ```

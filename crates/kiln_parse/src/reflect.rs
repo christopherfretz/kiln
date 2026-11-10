@@ -86,6 +86,13 @@ impl Parser<'_, '_> {
                         self.s.set_template_id_qualifier(e, q.nns);
                     }
                     r = TemplateIdRef::Overload(e);
+                } else if let (TemplateIdRef::Value(e), Some(q)) = (r, qual) {
+                    // A variable template-id keeps its qualifier as an
+                    // expression's does: `^^ns::v<T>` and `^^v<T>` are
+                    // different dependent operands, in the signature's
+                    // profile and its mangling (WP-1250).
+                    self.s.set_template_id_begin(e, operand, name_loc);
+                    self.s.set_template_id_qualifier(e, q.nns);
                 }
                 let end = self.prev_end();
                 return Some(self.s.act_on_reflect_template_id(r, name_loc, loc, end));

@@ -3,7 +3,8 @@
 //! table in both forms (`-fkiln-reflection-mangling=kiln|gcc`), a two-TU
 //! program whose reflection-keyed entities link to one definition each in
 //! either form, and link compatibility with g++-16 (skipped without
-//! `KILN_GCC`). Reflections
+//! `KILN_GCC`), including signatures with a dependent reflected
+//! template-id (WP-1250). Reflections
 //! are kiln and GCC only (clang has no `^^`), so these read the IR and the
 //! objects directly instead of comparing with an oracle.
 #![forbid(unsafe_code)]
@@ -345,5 +346,90 @@ fn gcc_link_compat() {
     let (k, g) = (names("k.o"), names("g.o"));
     assert!(g.len() >= 25, "{g:?}");
     assert_eq!(k, g);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Signatures holding a dependent reflect-expression of an alias or a
+/// variable template-id (spec/abi.md §8.14, WP-1250), in the three
+/// mangled contexts; `DEF` defines them, `CALL` only declares them.
+const TEMPLATE_ID_SIGS: &str = r"using info = decltype(^^int);
+template <info R> struct K {};
+template <class T> struct TT {};
+template <class T> using AT = TT<T*>;
+template <class T> constexpr int vt = 0;
+#ifdef DEF
+#define BODY(v) { return v; }
+#define DBODY { return {}; }
+#else
+#define BODY(v) ;
+#define DBODY ;
+#endif
+template <class T> auto d_at(T) -> decltype(K<^^AT<T>>{}) DBODY
+template <class T> auto d_vt(T) -> decltype(K<^^vt<T>>{}) DBODY
+template <class T> int p_at(T, K<^^AT<T>>) BODY(1)
+template <class T> int p_vt(T, K<^^vt<T>>) BODY(2)
+template <class T> requires(^^AT<T> != ^^int) int q_at(T) BODY(4)
+template <class T> requires(^^vt<T> != ^^int) int q_vt(T) BODY(8)
+template <class T> int p_ta(T, K<^^AT<T>>) BODY(16)
+template <class T> int p_ta(T, K<^^TT<T*>>) BODY(32)
+#ifdef DEF
+template K<^^AT<int>> d_at(int);
+template K<^^vt<int>> d_vt(int);
+template int p_at(int, K<^^AT<int>>);
+template int p_vt(int, K<^^vt<int>>);
+template int q_at(int);
+template int q_vt(int);
+template int p_ta(int, K<^^AT<int>>);
+template int p_ta(int, K<^^TT<int*>>);
+#else
+int main() {
+  d_at(1);
+  d_vt(1);
+  return p_at(1, K<^^AT<int>>{}) + p_vt(1, K<^^vt<int>>{}) + q_at(1) + q_vt(1)
+       + p_ta(1, K<^^AT<int>>{}) + p_ta(1, K<^^TT<int*>>{});
+}
+#endif
+";
+
+/// A kiln object links against a g++-16 one through signatures with a
+/// dependent reflected alias or variable template-id (spec/abi.md §8.14,
+/// [temp.over.link]/5, WP-1250): kiln defines and explicitly instantiates
+/// them under the default `-fkiln-reflection-mangling=gcc`, g++-16
+/// compiles the caller, and the program runs and returns the sum of
+/// every call; both compilers' definitions also carry the same symbols.
+/// Skipped unless `KILN_GCC` names g++-16.
+#[test]
+fn gcc_dependent_template_id_link() {
+    let Some(gcc) = std::env::var_os("KILN_GCC").filter(|g| !g.is_empty()) else {
+        eprintln!("skipping: KILN_GCC is not set");
+        return;
+    };
+    if !have("nm") {
+        eprintln!("skipping: nm not found");
+        return;
+    }
+    let d = scratch("tid");
+    std::fs::write(d.join("t.cpp"), TEMPLATE_ID_SIGS).unwrap();
+    kiln(&d, &["-DDEF", "-c", "t.cpp", "-o", "k.o"]);
+    let gcc_cmd = || {
+        let mut c = Command::new(&gcc);
+        c.args(["-std=c++26", "-freflection"]).current_dir(&d);
+        c
+    };
+    run(gcc_cmd().args(["-DDEF", "-c", "t.cpp", "-o", "g.o"]));
+    run(gcc_cmd().args(["-c", "t.cpp", "-o", "call.o"]));
+    let defined = |obj| -> BTreeSet<String> {
+        nm(&d, obj)
+            .into_iter()
+            .filter(|(n, l)| l == "W" && n.contains("Dm") && !n.ends_with("IiEiT_"))
+            .map(|(n, _)| n)
+            .collect()
+    };
+    let (k, g) = (defined("k.o"), defined("g.o"));
+    assert_eq!(k.len(), 8, "{k:?}");
+    assert_eq!(k, g);
+    run(gcc_cmd().args(["call.o", "k.o", "-o", "a.out"]));
+    let st = Command::new(d.join("a.out")).status().unwrap();
+    assert_eq!(st.code(), Some(63));
     let _ = std::fs::remove_dir_all(&d);
 }

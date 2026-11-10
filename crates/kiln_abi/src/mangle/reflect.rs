@@ -17,9 +17,10 @@ use std::fmt::Write as _;
 use kiln_ast::Ast;
 use kiln_ast::consts::{ConstValue, PrintEnv, PtrBase, Scalar, Shape};
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-use kiln_ast::ids::{ConstValueId, DeclId, DmsId, ExprId, QualType, ReflectionId};
+use kiln_ast::expr::ExprKind;
+use kiln_ast::ids::{ArgListId, ConstValueId, DeclId, DmsId, ExprId, QualType, ReflectionId};
 use kiln_ast::reflect::Reflectee;
-use kiln_ast::types::{BuiltinType, TemplateName, TypeView};
+use kiln_ast::types::{ArgView, BuiltinType, ExprOperand, TemplateName, TypeView};
 
 use super::{
     Mangler, Structor, StructorSpelling, enclosing_function, has_internal_linkage, in_anon_ns,
@@ -115,6 +116,143 @@ fn decl_visible(ast: &Ast, d: DeclId) -> bool {
 
 fn is_record(ast: &Ast, d: DeclId) -> bool {
     super::is_record_kind(ast.decls.get(d).kind())
+}
+
+/// Whether the arguments of every specialization of alias template `t`
+/// are determined by the type it aliases: each template parameter is
+/// deducible ([temp.deduct.type]/8) from the defining-type-id. Then GCC's
+/// `ta` form, which writes the aliased specialization's arguments
+/// instead of the alias's, is injective and gcc mode can use it.
+/// Conservative: a form not recognized as deducible makes it `false`.
+pub(super) fn alias_args_recoverable(ast: &Ast, t: DeclId) -> bool {
+    let Some(info) = ast.template_info(t) else { return false };
+    let list = *ast.templates.param_list(info.params);
+    let params: Vec<DeclId> = ast.lists.iter::<DeclId>(list.params).collect();
+    if params.is_empty() {
+        return true;
+    }
+    let Some(rhs) = info.pattern.and_then(|p| ast.decls.typedef(p)).map(|t| t.underlying) else {
+        return false;
+    };
+    let mut seen = vec![false; params.len()];
+    deducible_params(ast, rhs, list.depth, &mut seen, 0);
+    seen.iter().all(|&b| b)
+}
+
+/// Marks in `seen` the parameters at `depth` that `q` names in a deduced
+/// context ([temp.deduct.type]/8): the type itself, compound types built
+/// from deduced parts, and a class template specialization's type,
+/// template and bare non-type arguments.
+fn deducible_params(ast: &Ast, q: QualType, depth: u16, seen: &mut [bool], level: u32) {
+    if level > 64 {
+        return;
+    }
+    let mark = |d: DeclId, seen: &mut [bool]| {
+        if let Some(p) = ast.template_parm(d)
+            && p.depth == depth
+            && let Some(s) = seen.get_mut(usize::from(p.index))
+        {
+            *s = true;
+        }
+    };
+    let rec = |q: QualType, seen: &mut [bool]| deducible_params(ast, q, depth, seen, level + 1);
+    match ast.types.view(q.ty()) {
+        TypeView::TemplateTypeParm(d) => mark(d, seen),
+        TypeView::CanonTemplateTypeParm { depth: d, index, .. } => {
+            if d == u32::from(depth)
+                && let Some(s) = usize::try_from(index).ok().and_then(|i| seen.get_mut(i))
+            {
+                *s = true;
+            }
+        }
+        TypeView::Pointer(x)
+        | TypeView::LValueRef(x)
+        | TypeView::RValueRef(x)
+        | TypeView::Paren(x)
+        | TypeView::IncompleteArray(x)
+        | TypeView::Typedef { underlying: x, .. }
+        | TypeView::Using { underlying: x, .. }
+        | TypeView::Elaborated { named: x, .. }
+        | TypeView::PackExpansion { pattern: x, .. }
+        | TypeView::ExtQual { base: x, .. } => rec(x, seen),
+        TypeView::ConstantArray(a) => rec(a.elem, seen),
+        TypeView::DependentSizedArray { elem, size } => {
+            rec(elem, seen);
+            if let ExprOperand::Expr(e) = size {
+                deducible_nttp(ast, e, depth, seen);
+            }
+        }
+        TypeView::MemberPointer { pointee, class } => {
+            rec(pointee, seen);
+            rec(QualType::unqual(class), seen);
+        }
+        TypeView::Function(p) => {
+            rec(p.ret(), seen);
+            for &x in ast.types.params(&p) {
+                rec(x, seen);
+            }
+        }
+        // An alias's own arguments are deducible only through an alias
+        // that is itself recoverable.
+        TypeView::TemplateSpecialization { name, args, alias, .. } => {
+            if alias
+                && !ast.types.template_decl(name).is_some_and(|t| alias_args_recoverable(ast, t))
+            {
+                return;
+            }
+            if let TemplateName::Template(d) = ast.types.template_name_view(name) {
+                mark(d, seen);
+            }
+            deducible_args(ast, args, depth, seen, level + 1);
+        }
+        _ => {}
+    }
+}
+
+fn deducible_args(ast: &Ast, args: ArgListId, depth: u16, seen: &mut [bool], level: u32) {
+    for a in ast.types.args(args) {
+        match a.view() {
+            ArgView::Type(x) => deducible_params(ast, x, depth, seen, level),
+            ArgView::Template(n) | ArgView::TemplateExpansion { name: n, .. } => {
+                if let TemplateName::Template(d) = ast.types.template_name_view(n)
+                    && let Some(p) = ast.template_parm(d)
+                    && p.depth == depth
+                    && let Some(s) = seen.get_mut(usize::from(p.index))
+                {
+                    *s = true;
+                }
+            }
+            ArgView::Expr { expr, .. } => deducible_nttp(ast, expr, depth, seen),
+            ArgView::Pack(l) => deducible_args(ast, l, depth, seen, level),
+            _ => {}
+        }
+    }
+}
+
+/// Marks the non-type template parameter at `depth` that `e` names bare
+/// (through parentheses, implicit conversions and a pack expansion): a
+/// deduced context ([temp.deduct.type]/8, `TT<i>` and `T[i]`).
+fn deducible_nttp(ast: &Ast, e: ExprId, depth: u16, seen: &mut [bool]) {
+    let mut e = e;
+    while matches!(
+        ast.exprs.get(e).kind(),
+        ExprKind::ParenExpr | ExprKind::ImplicitCastExpr | ExprKind::ConstantExpr
+    ) {
+        e = ast.exprs.operand(e);
+    }
+    if ast.exprs.get(e).kind() == ExprKind::PackExpansionExpr {
+        e = ast.exprs.operand(e);
+    }
+    if ast.exprs.get(e).kind() == ExprKind::DeclRefExpr {
+        let d = ast.exprs.decl(e);
+        if ast.decls.get(d).kind() == DeclKind::NonTypeTemplateParm
+            && let Some(p) = ast.template_parm(d)
+            && p.depth == depth
+            && let Some(s) = seen.get_mut(usize::from(p.index))
+        {
+            *s = true;
+        }
+    }
 }
 
 /// The FNV-1a 128-bit hash of `s` (the `kiln-hashed` prototype).
@@ -318,12 +456,8 @@ impl Mangler<'_, '_> {
                     // template specialization (`maybe_template_info` of
                     // the alias); they are also in the type, so kiln
                     // does not.
-                    if self.gcc()
-                        && let TypeView::Record(r) =
-                            ast.types.canonical_view(ast.types.canonical(underlying))
-                        && let Some((_, args)) = self.spec_of(r)
-                    {
-                        self.template_args(args);
+                    if self.gcc() {
+                        self.underlying_spec_args(underlying);
                     }
                     self.out.push('_');
                     self.ty(underlying);
@@ -342,17 +476,20 @@ impl Mangler<'_, '_> {
                         let p = self.parent(t);
                         self.refl_prefix(p);
                         self.unqualified(t, Structor::Complete);
-                        // GCC writes the arguments of an aliased class
-                        // template specialization, not the alias's, so
-                        // its `^^A<int>` and `^^A<long>` collide when both
-                        // alias one type; kiln writes the alias's.
-                        if !self.gcc() {
+                        // GCC writes the arguments of the aliased class
+                        // template specialization, not the alias's. That
+                        // loses the alias's arguments when the aliased type
+                        // does not determine them (`template <class T, class
+                        // U> using F = C<T>`: GCC's `^^F<T, int>` and
+                        // `^^F<T, long>` collide), so gcc mode writes GCC's
+                        // form only for an alias whose every parameter is
+                        // deducible from its defining-type-id
+                        // (`alias_args_recoverable`), and kiln's (the
+                        // alias's own arguments) otherwise (WP-1250).
+                        if !self.gcc() || !alias_args_recoverable(ast, t) {
                             self.template_args(args);
-                        } else if let TypeView::Record(r) =
-                            ast.types.canonical_view(ast.types.canonical(u))
-                            && let Some((_, a)) = self.spec_of(r)
-                        {
-                            self.template_args(a);
+                        } else {
+                            self.underlying_spec_args(u);
                         }
                         self.out.push('_');
                         self.ty(u);
@@ -364,6 +501,23 @@ impl Mangler<'_, '_> {
         }
         self.out.push_str("ty");
         self.ty(q);
+    }
+
+    /// The template arguments of the class template specialization `u`
+    /// aliases (GCC's `maybe_template_info` of an alias), for a
+    /// specialization (`Record`) or a dependent one
+    /// (`TemplateSpecialization`).
+    fn underlying_spec_args(&mut self, u: QualType) {
+        let ast = self.ast;
+        match ast.types.canonical_view(ast.types.canonical(u)) {
+            TypeView::Record(r) => {
+                if let Some((_, args)) = self.spec_of(r) {
+                    self.template_args(args);
+                }
+            }
+            TypeView::TemplateSpecialization { args, alias: false, .. } => self.template_args(args),
+            _ => {}
+        }
     }
 
     fn reflected_decl(&mut self, d: DeclId) {
@@ -502,10 +656,10 @@ impl Mangler<'_, '_> {
             }
         } else {
             match ast.reflect_operand(e) {
-                Reflectee::Type(q) if ast.types.is_dependent(q) => {
-                    self.out.push_str("ty");
-                    self.ty(q);
-                }
+                // A dependent alias template specialization keeps its
+                // alias (`ta`, as g++-16 writes it): `^^A<T>` and the
+                // type it aliases are different reflections (WP-1250).
+                Reflectee::Type(q) if ast.types.is_dependent(q) => self.reflected_type(q),
                 r => self.reflection(r),
             }
         }

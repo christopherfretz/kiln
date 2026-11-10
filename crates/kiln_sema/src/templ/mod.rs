@@ -385,6 +385,12 @@ pub(crate) type DefaultArgUses = (Option<DeclId>, Vec<(DeclId, Loc)>);
 pub struct InstState {
     /// The active instantiations, innermost last (§10.1).
     pub(crate) stack: stack::InstantiationStack,
+    /// The reflection intrinsic calls in progress ([`kiln_oven::SemaBridge::meta`]),
+    /// innermost last: the instantiation stack's depth at the call and
+    /// the paused evaluation. An error in an instantiation the call
+    /// required ends its context with the evaluation's call frames
+    /// (§10.2, WP-1248).
+    pub(crate) meta_calls: Vec<(usize, kiln_oven::FrameMark)>,
     /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
     pub limits: stack::InstLimits,
     /// Member definitions whose instantiation was required at a point
