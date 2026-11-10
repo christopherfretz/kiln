@@ -38,3 +38,9 @@ consteval bool args_ok() {
          std::meta::template_of(^^Arr<char, 1 + 2>) == ^^Arr;
 }
 static_assert(args_ok());
+
+// Substituted: the dependent `Arr<char, M + 0>` becomes `Arr<char, 3>`.
+template <int M> consteval bool same() {
+  return (^^Arr<char, M + 0>) == (^^Arr<char, 3>) && (^^D<char, M>) == (^^D<char>);
+}
+static_assert(same<3>() && !same<4>());
