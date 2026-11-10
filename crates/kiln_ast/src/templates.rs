@@ -333,6 +333,13 @@ pub struct TemplateTables {
     /// type-constraint that names it (clang 22's `N <owner> <name> E`,
     /// spec/abi.md; P2841R7).
     pub ttp_owner: ColdMap<DeclId, DeclId>,
+    /// A friend function template whose constraints name a parameter of
+    /// an enclosing template ([temp.friend]/9; clang
+    /// `FriendConstraintRefersToEnclosingTemplate`), declared by a class
+    /// template specialization: that class, its mangling scope (clang 22's
+    /// `N <class> F <name>`, spec/abi.md §"Member-like constrained
+    /// friends"; WP-1146).
+    pub member_like_friend: ColdMap<DeclId, DeclId>,
     /// Set by sema right before it creates a template's pattern: the next
     /// declaration the builder adds is neither a member nor a name (its
     /// template decl is both, [`AstBuilder::template_decl`]).
@@ -457,6 +464,7 @@ impl Default for TemplateTables {
             pseudo_dtor_first: ColdMap::new("pseudo_dtor_first"),
             template_kw: ColdMap::new("template_kw"),
             ttp_owner: ColdMap::new("ttp_owner"),
+            member_like_friend: ColdMap::new("member_like_friend"),
             expr_nns: ColdMap::new("expr_nns"),
             pattern_next: false,
             dependent_depth: 0,

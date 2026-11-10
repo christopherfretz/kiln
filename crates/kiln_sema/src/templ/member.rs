@@ -260,6 +260,11 @@ impl Substituter<'_, '_, '_> {
             if self.sema.ast.instantiated_from(p).is_none() {
                 self.member_link(p, pattern);
             }
+            // Its own template, mangled in this class's scope
+            // ([temp.friend]/9; clang `isMemberLikeConstrainedFriend`).
+            if apart && let Some(c) = self.sema.ast.decls.get(fd).ctx() {
+                let _ = self.sema.ast.templates.member_like_friend.insert(x, c);
+            }
             // Defined in the class: its specializations are instantiated
             // from the class template's pattern with this specialization's
             // arguments as the enclosing level, as a member template's

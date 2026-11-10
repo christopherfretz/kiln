@@ -62,6 +62,10 @@ pub struct AnonIds {
     /// innermost unsupported subexpression), for a hard error
     /// ([`AnonIds::take_unmangleable`]; WP-818).
     unmangleable: Vec<ExprId>,
+    /// `-fclang-compat=19` (any version before 20): a member-like
+    /// constrained friend template's name has no class prefix
+    /// ([`Mangler::member_like_friend_class`]).
+    compat19: bool,
 }
 
 impl AnonIds {
@@ -74,6 +78,13 @@ impl AnonIds {
     /// (spec/reflection.md §8.3).
     pub fn with_reflection_mangling(mode: ReflectionMangling) -> Self {
         AnonIds { refl_mode: mode, ..Self::default() }
+    }
+
+    /// This table, mangling as clang `compat` (`-fclang-compat=`) does
+    /// where the versions differ (spec/abi.md §"Member-like constrained
+    /// friends").
+    pub fn with_clang_compat(self, compat: u32) -> Self {
+        AnonIds { compat19: compat < 20, ..self }
     }
 
     /// The reflection mangling form of this table.
@@ -1461,6 +1472,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         if let Some(&o) = self.ast.templates.ttp_owner.get(d) {
             return Some(o);
         }
+        if !self.anon.compat19
+            && let Some(c) = self.member_like_friend_class(d)
+        {
+            return Some(c);
+        }
         let mut c = effective_ctx(self.ast, d);
         while let Some(ctx) = c {
             match self.ast.decls.get(ctx).kind() {
@@ -1469,6 +1485,46 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
         }
         None
+    }
+
+    /// The class of member-like constrained friend template `t`, one
+    /// whose constraints name a parameter of the enclosing class template
+    /// ([temp.friend]/9; clang `FriendConstraintRefersToEnclosingTemplate`):
+    /// its name is `F`-prefixed, and from clang 20 on its template prefix
+    /// is that class's (`_ZN1AIiEF1gIiEEiS0_T_Q1CIS2_E`; clang 19's is
+    /// empty, `_ZNF1gIiEEi1AIiET_Q1CIS2_E`; WP-1146).
+    fn member_like_friend_class(&self, t: DeclId) -> Option<DeclId> {
+        let m = &self.ast.templates.member_like_friend;
+        m.get(t).or_else(|| m.get(self.ast.first(t))).copied()
+    }
+
+    /// True if the specializations of function template `t` are
+    /// member-like constrained friends ([temp.friend]/9; clang
+    /// `isMemberLikeConstrainedFriend` of the specialization): the
+    /// declaration they are instantiated from (the definition, else the
+    /// latest declaration) is a friend with a trailing requires-clause.
+    /// They take a nested name, even at namespace scope
+    /// (`_ZN1gIiEEiT_1SQ1CIS0_E`). From clang 20 on the template's first
+    /// declaration must be that friend too: a template declared at
+    /// namespace scope first is not (WP-1146).
+    fn member_like_spec(&self, t: DeclId) -> bool {
+        let ast = self.ast;
+        let Some(p) = ast.template_info(t).and_then(|i| i.pattern) else { return false };
+        if !is_function_kind(ast.decls.get(p).kind()) {
+            return false;
+        }
+        let pat = ast
+            .definition(p)
+            .filter(|&d| ast.decls.get(d).misc().is_definition())
+            .unwrap_or_else(|| ast.latest(p));
+        let friend = |d: DeclId| {
+            ast.decls.lexical_ctx(d).is_some_and(|l| {
+                is_record_kind(ast.decls.get(l).kind()) && ast.decls.get(d).ctx() != Some(l)
+            })
+        };
+        friend(pat)
+            && ast.templates.trailing_requires.contains(pat)
+            && (self.anon.compat19 || friend(ast.first(p)))
     }
 
     /// The template and arguments of `d` when it is a class, function or
@@ -2083,7 +2139,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
             Some(p) == stop || self.ast.decls.get(p).kind() == DeclKind::TranslationUnit
         });
         let spec = self.spec_of(d);
-        if at_top || parent.is_some_and(|p| self.is_std(p)) {
+        let member_like = spec.is_some_and(|(t, _)| self.member_like_spec(t));
+        if !member_like && (at_top || parent.is_some_and(|p| self.is_std(p))) {
             // <unscoped-name> / <unscoped-template-name> <template-args>
             let std = !at_top;
             if let Some((t, args)) = spec {
@@ -2101,12 +2158,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
         // <nested-name>
         self.out.push('N');
         self.method_quals(d);
-        let p = parent.expect("nested name has a parent");
         if let Some((t, args)) = spec {
             self.template_prefix(t, stop, v);
             self.template_args_of(t, args);
         } else {
-            self.prefix(p, stop);
+            self.prefix(parent.expect("nested name has a parent"), stop);
             self.l_prefix(d);
             self.unqualified(d, v);
         }
@@ -2270,7 +2326,9 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// or literal-operator names, else the <source-name>.
     fn unqualified(&mut self, d: DeclId, v: Structor) {
         self.module_prefix(d);
-        if constrained_friend_class(self.ast, d).is_some() {
+        if constrained_friend_class(self.ast, d).is_some()
+            || self.member_like_friend_class(d).is_some()
+        {
             self.out.push('F');
         }
         self.unqualified_untagged(d, v);

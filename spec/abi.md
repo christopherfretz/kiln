@@ -1217,6 +1217,27 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
 - **Member-like constrained friends** (a non-template friend with a
   trailing requires-clause, [temp.friend]/9) mangle in their lexical
   class with `F` before the name: `_ZN1XIiEF2frES0_Q1CIT_E`.
+  Friend *templates* (clang `isMemberLikeConstrainedFriend`, WP-1146):
+  - A friend template whose constraints name a parameter of the
+    enclosing class template (sema's `friend_template_apart`, recorded
+    as `TemplateTables::member_like_friend`, template → class
+    specialization) gets `F` before its source name
+    (`<unqualified-name> ::= F <source-name>`). From clang 20 on its
+    template prefix is that class's (`_ZN1AIiEF2g2IiEEiT_PS0_Q1CIS2_E`);
+    at `-fclang-compat=19` it has none (`_ZNF2g2IiEEiT_P1AIiEQ1CIS0_E`).
+    Constrained only in its template-head, its specializations stay
+    unscoped: `_ZF2g3IiQ1CIT_EEiS0_P1AIiE` under both.
+  - A specialization instantiated from a friend declaration with a
+    trailing requires-clause (the template's definition, else its latest
+    declaration) takes a nested name even at namespace scope:
+    `_ZN2n1IiEEiT_P1SQ1CIS0_E`, `_ZN2g1IiEEiT_P1AIiEQ1CITL0__E`. From
+    clang 20 on the template's first declaration must be a friend too:
+    `template<class U> int n3(U) requires C<U>;` at namespace scope,
+    then defined as a friend, is `_Z2n3IiEiT_Q1CIS0_E` (clang 19:
+    `_ZN2n3...`). `AnonIds::with_clang_compat` selects the version;
+    `tests/conformance/temp.friend/p9-member-like-friend-template-mangling-*two-units-run.cpp`
+    link against both releases' names, and `tests/mangle/constraints.cpp`
+    checks clang 19's (the differential runs the mangler at 19).
 - **Braced new-initializers (WP-231).** `new T{a, b}` is `nw _ <type>
   il <braced-expression>* E` (nested braced lists recurse as `il ... E`,
   packs as `sp`); an array new `new T[2]{...}` is `na _ <element type>
@@ -1228,13 +1249,7 @@ clang 19's mangling of C++20 constraints (cxx-abi #24, #47), checked by
   [<template-args>] E`.
 - **Not implemented:** a generic lambda's explicit template-head in its
   closure type name (`[]<class T>(){}` is clang's `UlTyvE_`, kiln's
-  `UlvE_`, which also shifts later discriminators); clang 19's
-  member-like friend *template* mangling
-  (`F` before the name when a friend template's constraint names an
-  enclosing template parameter, and a nested name with no class prefix
-  for a specialization whose friend declaration has a trailing
-  requires-clause: `_ZNF1fIiEEi1XIiET_Q1CIS2_E`, `_ZF1gIiQ1CIT_EEi1XIiES0_`,
-  `_ZN1pIiEEi1XIiET_Q1CITL0__E`); kiln mangles these unscoped without `F`.
+  `UlvE_`, which also shifts later discriminators).
 - **Anonymous unions at namespace scope (WP-204).** The unnamed variable
   of a namespace-scope anonymous union ([class.union.anon]/2) is mangled
   with the source name of the union's first named data member, found
