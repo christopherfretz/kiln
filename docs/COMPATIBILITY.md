@@ -196,6 +196,21 @@ requires its experimental gate, set before `project()`:
 `-stdlib=libc++` and `CXX_STANDARD 23`. CMake then builds `std.cppm`
 with kiln like any other module.
 
+Measured through CMake and Ninja (2026-11-09, aarch64, CMake 3.31.6,
+against clang++-19 with clang-scan-deps-19):
+
+| project | what is built | result |
+|---|---|---|
+| [fmt_module](status/oss/fmt_module.md) | {fmt} 12.1.0 with `-DFMT_MODULE=ON` (`export module fmt;`) and an importer | **Flawless** under libstdc++ 14 and libc++ 19 |
+| [cmake_modules](status/oss/cmake_modules.md) | interface, partition, implementation unit and consumer; under libc++ also `import std;` through `CXX_MODULE_STD` | **Flawless** under libstdc++ 14 and libc++ 19 |
+
+**The declaration image** (`-fkiln-bmi-image`) is experimental and off
+by default in 1.0. With it, a module file also carries a serialized image
+of the module's declarations, and an importer builds the module from the
+image instead of replaying the interface source. It does not cover
+libc++'s `std` yet, so the numbers above are without it
+([STABILITY.md](STABILITY.md#not-covered-may-change-in-any-release)).
+
 Not yet supported:
 
 - header units as module files (`-fmodule-header`), so the scanner
@@ -355,7 +370,7 @@ x86_64-only gaps found are fixed or have a follow-up WP.
 | fmt, nlohmann/json, Abseil, DuckDB, CMake, daw_json_link | every test as clang: 21/21, 97/97, 232/232, 4618/4628, 721/723, 147/147 | **Flawless** |
 | Bitcoin Core | 357/357; 475 TUs vs clang's 487: the `-m<feature>` flags were not accepted, so the SSE4.1/AVX2/SHA-NI code was configured out. WP-1000 added the flags; not re-swept yet | **Flawless** (tests); TU count to re-measure |
 | OpenCV | 7/7; 473 TUs vs 537: the SSE3…AVX2 dispatch sources, the same `-m<feature>` gap (WP-1000, not re-swept yet) | **Flawless** (tests); TU count to re-measure |
-| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` does not build: glibc's x86-64 `_Float128` functions are not `__float128` ones in kiln (WP-1058) | **Broken** for `IRTests` (follow-up) |
+| LLVM Support, ADT, IR | `SupportTests` 1337 and `ADTTests` 1576 as clang; `IRTests` did not build: glibc's x86-64 `_Float128` functions were not `__float128` ones in kiln. WP-1058 (#493) fixed that; not re-swept yet | **Broken** for `IRTests` at the sweep; fixed since, to re-measure |
 | gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
 
 ## Rejecting invalid code
@@ -451,4 +466,4 @@ time and 0.63x its peak TU RSS ([status/oss/llvm_full.md](status/oss/llvm_full.m
 
 ---
 
-Last updated 2026-11-09, reflecting kiln `main` at `5d27b9444`.
+Last updated 2026-11-10, reflecting kiln `main` at `e51da36a9`.

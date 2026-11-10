@@ -63,6 +63,14 @@ of any of these. It may add new ones.
   may change in any release, patch releases included. Build systems must
   not ship BMIs or cache them across kiln versions; rebuild them from the
   interface sources.
+- **The declaration image (`-fkiln-bmi-image`) is experimental and
+  opt-in.** It is off by default. With it, `--precompile` and
+  `-fmodule-output` also write a serialized image of the module's
+  declarations, and an import builds the module from that image instead
+  of replaying the interface. It does not yet cover `import std;`, and
+  the flag, the image format and the decision of when an image is
+  written may change or go away in any release. kiln's default build
+  does not depend on it.
 - **`-fkiln-*` flags are experimental.** The kiln-specific extensions
   (`-fkiln-stack-size`, `-fkiln-instantiation-report`,
   `-fkiln-memory-report`, the `kiln` and `kiln-hashed` values of

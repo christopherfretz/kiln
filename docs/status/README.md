@@ -28,6 +28,12 @@ Each number is from the page named, at the run that page records.
 
 ## Pages
 
+Releases:
+
+- `release-1.0.md`: the 1.0 release candidate's measurements, one
+  section per measurement with the command that fills each row, and the
+  release-archive gate (WP-1202).
+
 Standard libraries:
 
 - `libcxx.md`: libc++ 19 end to end (ROADMAP M3b), sample and full-suite

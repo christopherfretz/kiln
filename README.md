@@ -116,7 +116,7 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 | C++26 (Croydon DIS draft), reflection, contracts | done except 1 partial paper (P2786, removed from the DIS) | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
-| Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
+| Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet; the declaration image (`-fkiln-bmi-image`) is experimental and off by default | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
 | C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |
 | Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
 
