@@ -1680,6 +1680,21 @@ impl PrintEnv for AstNames<'_> {
         self.shape_at(ty, 0)
     }
 
+    fn float_suffix(&self, ty: QualType) -> &'static str {
+        use crate::types::BuiltinType as B;
+        match self.ast.types.builtin(ty) {
+            Some(B::Float) => "f",
+            Some(B::LongDouble) => "l",
+            Some(B::Float16) => "f16",
+            Some(B::Float32) => "f32",
+            Some(B::Float64) => "f64",
+            Some(B::StdFloat128) => "f128",
+            Some(B::Float32x) => "f32x",
+            Some(B::Float64x) => "f64x",
+            _ => "",
+        }
+    }
+
     fn decl_name(&self, decl: DeclId, out: &mut String) {
         self.write_qualified_name(decl, out);
     }
@@ -1830,6 +1845,10 @@ impl TypeNames for Ast {
 impl PrintEnv for Ast {
     fn shape(&self, ty: QualType) -> Shape {
         AstNames::new(self).shape(ty)
+    }
+
+    fn float_suffix(&self, ty: QualType) -> &'static str {
+        AstNames::new(self).float_suffix(ty)
     }
 
     fn decl_name(&self, decl: DeclId, out: &mut String) {

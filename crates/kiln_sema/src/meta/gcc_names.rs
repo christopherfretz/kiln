@@ -12,11 +12,11 @@
 //! `const char*`, `int [3]`, `void(int, ...)`, `ns::Al {aka ns::S}`,
 //! `void ns::S::f() const`, `template<class T> struct ns::TT`.
 //!
-//! Values (template arguments, value and object reflections) keep the
-//! constant printer of `Sema::value_spelling`, which matches GCC's for
-//! the scalar cases it prints; `signed char`, `unsigned char` and the
-//! `charN_t` types print as integers, as GCC prints any character that is
-//! not plain `char`.
+//! Values (template arguments, value and object reflections) go through
+//! the constant printer in GCC style (`PrintOptions::gcc`: GCC's floating
+//! form, class values, `signed char`, `unsigned char` and the `charN_t`
+//! types as integers); a reflection inside a constant prints its operand
+//! through `Sema::gcc_reflection_operand` below (WP-1229).
 
 use kiln_ast::decl::{DeclKind, EnumData, FriendKind};
 use kiln_ast::names::DeclNameView;
@@ -128,6 +128,58 @@ impl Sema<'_, '_> {
         let mut p = Pp::new(self);
         p.dump_decl(d, flags);
         p.out
+    }
+}
+
+impl Sema<'_, '_> {
+    /// The operand GCC 16.1 prints after `^^` for reflection `r` inside a
+    /// constant (`dump_expr` of a `REFLECT_EXPR`: a reflection-valued
+    /// template argument or member; spec/reflection.md §3.9), fully
+    /// qualified: a type as `%T` without its ` {aka ...}`
+    /// (`const ns::S*`), a namespace or alias by its scoped name
+    /// (`ns::in::Q`, `::`), a non-member function with its parameter types
+    /// (`ns::g(int, double)`), a member function, variable, data member or
+    /// enumerator by its scoped name (`ns::S::mf`, `ns::TT<int>::t`), a
+    /// template by its scoped name (`ns::TT`), a variable template with its
+    /// parameters (`ns::vt<T>`). `None` for the other reflections (values,
+    /// objects, base specifiers, parameters, specs, annotations).
+    pub(crate) fn gcc_reflection_operand(&self, r: kiln_ast::reflect::Reflectee) -> Option<String> {
+        use kiln_ast::reflect::Reflectee;
+        let mut p = Pp::new(self);
+        match r {
+            Reflectee::Type(t) => p.dump_type(t, TEMPLATE_HEADER),
+            Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => p.dump_decl(d, 0),
+            Reflectee::Decl(d) => {
+                let ast = &self.ast;
+                let k = ast.decls.get(d).kind();
+                let member = ast
+                    .decls
+                    .get(d)
+                    .ctx()
+                    .is_some_and(|c| ast.decls.get(c).kind() == DeclKind::CXXRecord);
+                if k.is_function() && member {
+                    p.dump_scope_of(d, 0);
+                    p.decl_identifier(d);
+                } else {
+                    p.dump_decl(d, NO_TEMPLATE_BINDINGS);
+                }
+            }
+            Reflectee::Template(n) => {
+                let td = self.ast.types.template_decl(n)?;
+                let pattern = self.ast.template_info(td).and_then(|i| i.pattern);
+                match pattern {
+                    Some(v) if self.ast.decls.get(td).kind() == DeclKind::VarTemplate => {
+                        p.dump_decl(v, 0);
+                    }
+                    _ => {
+                        p.dump_scope_of(td, 0);
+                        p.decl_identifier(td);
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some(p.out)
     }
 }
 

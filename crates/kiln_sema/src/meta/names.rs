@@ -274,6 +274,11 @@ impl Sema<'_, '_> {
     fn display_string(&self, r: ReflectionId) -> String {
         let s = match self.ast.reflections.get(r) {
             Reflectee::Null => "<null reflection>".to_owned(),
+            // A class or array value prints as it does inside a
+            // specialization's name (GCC's form; `fs<4>{"abc"}`).
+            Reflectee::Value(v) if self.ast.consts.scalar(v).is_none() => {
+                self.value_spelling_gcc(v).unwrap_or_default()
+            }
             Reflectee::Value(v) => self.value_spelling(v).unwrap_or_default(),
             Reflectee::Object(p) => self.object_spelling(p).unwrap_or_default(),
             Reflectee::Type(t) => self.gcc_type_string(t),
@@ -315,12 +320,13 @@ impl Sema<'_, '_> {
     /// diagnostic constant printer in template-argument style without
     /// literal suffixes (`86400`, `'a'`, `Col::red`, `Pt{3}`, `&g`,
     /// `nullptr`), an enumeration value naming no enumerator as a cast
-    /// (`(Col)5`), floating point as the shortest round-tripping decimal
-    /// (`1.5e0`), a reflection of a value or object as the
-    /// `reflect_constant` / `reflect_object` call making it. `None` when
-    /// some part has no spelling (a temporary, an opaque subobject, an
-    /// infinity or NaN, an unnamed class or closure type, a reflection
-    /// with no `^^` operand such as a base specifier).
+    /// (`(Col)5`), floating point in GCC's form with the type's suffix
+    /// (`1.5e+0f`, [`kiln_ast::consts::format_float_gcc`]), a reflection
+    /// as `^^` and its operand as GCC prints it (`^^ns::S`, `^^5`;
+    /// [`Sema::gcc_reflection_operand`]). `None` when some part has no
+    /// spelling (a temporary, an opaque subobject, an unnamed class or
+    /// closure type, a reflection with no `^^` operand such as a base
+    /// specifier).
     pub(super) fn value_spelling(&self, v: ConstValueId) -> Option<String> {
         self.value_spelling_in(v, false)
     }
@@ -341,6 +347,7 @@ impl Sema<'_, '_> {
             max_depth: u32::from(u16::MAX),
             max_elems: u32::MAX,
             gcc,
+            gcc_float: true,
             ..PrintOptions::with_style(PrintStyle::TemplateArg)
         };
         let env = SpellEnv {
@@ -368,7 +375,7 @@ impl Sema<'_, '_> {
         let PtrBase::Decl(d) = base else { return None };
         if self.kind_of(d) == DeclKind::TemplateParamObject {
             let v = self.ast.templates.param_object_value(d).filter(|_| offset == 0)?;
-            return self.value_spelling(v);
+            return self.value_spelling_gcc(v);
         }
         // The pointer `&x.m` (or `arr` for a whole array) names the object
         // without its `&`.
@@ -522,20 +529,28 @@ impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
         self.names.enumerator(ty, bits, out)
     }
 
+    fn float_suffix(&self, ty: kiln_ast::QualType) -> &'static str {
+        self.names.float_suffix(ty)
+    }
+
+    /// GCC 16.1's `^^` and operand: a type, namespace, declaration or
+    /// template fully qualified ([`Sema::gcc_reflection_operand`]), a
+    /// value or object reflection as its spelling (`^^5`, `^^gv`,
+    /// `^^ns::In{3}`).
     fn reflection(&self, id: ReflectionId, out: &mut String) {
-        let (call, s) = match self.sema.ast.reflections.get(id) {
-            Reflectee::Value(v) => ("std::meta::reflect_constant(", self.sema.value_spelling(v)),
-            Reflectee::Object(p) => ("std::meta::reflect_object(", self.sema.object_spelling(p)),
-            Reflectee::BaseSpec(..)
-            | Reflectee::DataMemberSpec(_)
-            | Reflectee::Annotation(_)
-            | Reflectee::FnParam(..) => ("", None),
-            _ => return self.names.reflection(id, out),
+        let r = self.sema.ast.reflections.get(id);
+        let s = match r {
+            Reflectee::Null => return self.names.reflection(id, out),
+            Reflectee::Value(v) if self.gcc || self.sema.ast.consts.scalar(v).is_none() => {
+                self.sema.value_spelling_gcc(v)
+            }
+            Reflectee::Value(v) => self.sema.value_spelling(v),
+            Reflectee::Object(p) => self.sema.object_spelling(p),
+            _ => self.sema.gcc_reflection_operand(r),
         };
-        if let Some(s) = s {
-            out.push_str(call);
+        if let Some(s) = s.filter(|s| !s.is_empty()) {
+            out.push_str("^^");
             out.push_str(&s);
-            out.push(')');
         } else {
             self.lossy.set(true);
             self.names.reflection(id, out);
