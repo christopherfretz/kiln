@@ -5,7 +5,9 @@
 // replaces the "tune-cpu", and `nosve2` disables the module's `sve2`.
 // clang `AArch64TargetInfo::parseTargetAttr` with
 // `reconstructFromParsedFeatures` (spec/driver.md "Target features",
-// target attribute). Host-restricted (no pinned `--target`). WP-1187.
+// target attribute). Host-restricted (no pinned `--target`). The clang
+// 22 IR (a `-19` sibling pins clang 19's). WP-1187.
+//@ requires: clang>=22
 //@ requires: target-aarch64
 //@ args: -march=armv9-a+sve -mtune=cortex-a76
 //@ expect: ir
