@@ -2,6 +2,7 @@
 // GNU attributes may appear between the lambda's parameter list and its
 // lambda-specifier-seq / noexcept-specifier; they appertain to the call
 // operator.
+//@ skip(gcc): clang's GNU-attribute placement before the lambda-specifiers, which GCC 16.1 rejects
 auto a = [](int x) __attribute__((__always_inline__)) noexcept { return x; };
 static_assert(noexcept(a(1)));
 auto c = [](int x) __attribute__((__always_inline__)) constexpr { return x; };

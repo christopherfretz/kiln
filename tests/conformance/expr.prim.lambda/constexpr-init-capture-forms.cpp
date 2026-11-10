@@ -4,6 +4,7 @@
 // included), and an explicit copy constructor selected by
 // direct-initialization.
 //@ expect: compile-ok
+//@ xfail(gcc): GCC 16.1 rejects a direct-initialized init-capture `[q(x)]`/`[q{x}]` of a class with an explicit copy constructor ([expr.prim.lambda.capture]/6)
 #include <initializer_list>
 struct X {
   int v;

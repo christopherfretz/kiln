@@ -343,7 +343,9 @@ mod tests {
         );
         let known = |a: &str| !w.unknown(a);
         assert!(known("-Wshadow") && known("-Wno-shadow") && known("-Werror=shadow"));
-        assert!(known("-Wno-error=shadow") && known("-Wformat=2") && known("-Wno-frame-larger-than"));
+        assert!(
+            known("-Wno-error=shadow") && known("-Wformat=2") && known("-Wno-frame-larger-than")
+        );
         assert!(known("-Werror") && known("-Wno-error") && known("-Wa,-x") && known("-I"));
         assert!(!known("-Wshadow-all") && !known("-Wno-shadow-all") && !known("-Wzerotrip"));
         assert!(!known("-Wno-error=unknown") && !known("-Wfoo=1"));

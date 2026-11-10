@@ -128,7 +128,8 @@ pub fn command(compiler: &Path, kind: CompilerKind, path: &Path, mode: &[&str]) 
     }
     c.arg(format!("-std={std}")).args(mode);
     if kind == CompilerKind::Gcc {
-        c.arg("-fmax-errors=0").args(crate::oracle::gcc_args(&args));
+        let warnings = crate::oracle::GccWarnings::of(compiler, lang == Lang::C);
+        c.arg("-fmax-errors=0").args(crate::oracle::gcc_args_with(&args, warnings.as_deref()));
     } else {
         c.arg("-ferror-limit=0").args(args);
     }

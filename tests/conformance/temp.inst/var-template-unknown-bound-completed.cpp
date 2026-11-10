@@ -7,8 +7,8 @@
 // sees `T[]` until something completes it, then `T[N]`. The bound comes
 // from a list, a string literal or a pack expansion; a partial or
 // explicit specialization has its own bound; a static data member
-// template and a member template of a class template behave the same.
-// WP-907.
+// template and a member template of a class template behave the same (WP-907).
+//@ skip(gcc): pins clang's choice of when the bound is completed (GCC 16.1's decltype sees T[N] at once; [temp.inst]/7 leaves the point open)
 //@ expect: compile-ok
 //@ strict-diags
 //@ diag: 23:15 warning "'alignof' applied to an expression is a GNU extension"

@@ -3,6 +3,7 @@
 // pack, explicitly or implicitly; a generic lambda keeps the outer pack
 // unexpanded until its own pack is known, and expands both together.
 //@ expect: compile-ok
+//@ xfail(gcc): GCC 16.1 rejects a capture of a pack element inside a fold over the pack ("parameter packs not expanded"; [expr.prim.lambda.capture]/17, [temp.variadic]/5)
 constexpr int g(auto... xs) { return (xs + ... + 0); }
 template <class... T> constexpr int nf(T... ts) {
   return [&] { return (... + [&] { return ts * 2; }()); }();

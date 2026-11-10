@@ -404,6 +404,11 @@ impl Test<'_> {
         if let Some(reason) = unsupported_by(&spec, kind) {
             return (Status::Skip, Some(reason), String::new());
         }
+        if kind == CompilerKind::Gcc
+            && let Some(reason) = gcc_module_syntax(&spec, &source)
+        {
+            return (Status::Skip, Some(reason), String::new());
+        }
         if let Some((status, why)) = debugger_gate(&spec, self.cfg.require_debuggers) {
             return (status, Some(why), String::new());
         }
@@ -600,7 +605,10 @@ impl Test<'_> {
     /// GCC's warning list), else unchanged. Every command of GCC under test
     /// goes through this (WP-1261).
     fn flags_for(&self, program: &Path, flags: &[String]) -> Vec<String> {
-        let warnings = self.gcc_under_test(program).then(|| GccWarnings::of(program, self.case.lang == Lang::C)).flatten();
+        let warnings = self
+            .gcc_under_test(program)
+            .then(|| GccWarnings::of(program, self.case.lang == Lang::C))
+            .flatten();
         compiler_flags(self.gcc_under_test(program), warnings.as_deref(), flags)
     }
 
@@ -650,9 +658,9 @@ impl Test<'_> {
             return None;
         }
         let stderr = o.stderr_str();
-        let line = stderr.lines().find(|l| {
-            l.split_once(": error: ").is_some_and(|(at, _)| !at.contains(':'))
-        })?;
+        let line = stderr
+            .lines()
+            .find(|l| l.split_once(": error: ").is_some_and(|(at, _)| !at.contains(':')))?;
         Some(format!("GCC under test: GCC rejects the test's flags ({})", line.trim()))
     }
 
@@ -1705,7 +1713,10 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
-        let got = o.stdout_str();
+        let mut got = o.stdout_str();
+        if self.cfg.compiler_kind == CompilerKind::Gcc {
+            got = without_gcc_preinclude(&got);
+        }
         let mut failures = String::new();
         let mut golden = self.case.path.clone().into_os_string();
         golden.push(".expected");
@@ -2198,6 +2209,68 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     None
 }
 
+/// `-E` output of GCC under test without the line marker of the header
+/// GCC includes before every hosted translation unit (`stdc-predef.h`,
+/// which holds only `#define`s). kiln and clang include nothing, so the
+/// marker is no difference in the test (WP-1261).
+fn without_gcc_preinclude(out: &str) -> String {
+    out.lines()
+        .filter(|l| {
+            !(l.starts_with("# ")
+                && l.split('"').nth(1).is_some_and(|f| f.ends_with("/stdc-predef.h")))
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect()
+}
+
+/// Why GCC under test cannot run a test written as a module unit, or one
+/// whose `args` name a clang module file (WP-1261). kiln and clang take a
+/// module-declaration or `import` with `-std=c++20` and up; GCC needs
+/// `-fmodules` and writes its CMIs to `gcm.cache/` in the working
+/// directory, which the harness does not drive, and it reads
+/// `-fmodule-file=` as a D option. This is the same rule as `module:`.
+fn gcc_module_syntax(spec: &TestSpec, source: &str) -> Option<String> {
+    let flag = spec
+        .args
+        .iter()
+        .find(|a| a.starts_with("-fmodule-file=") || a.starts_with("-fprebuilt-module-path="));
+    if let Some(flag) = flag {
+        return Some(format!(
+            "not supported by this compiler (`{flag}` is a clang module flag; modules need kiln or clang)"
+        ));
+    }
+    let line = source.lines().map(str::trim_start).find(|l| module_syntax_line(l))?;
+    Some(format!(
+        "not supported by this compiler (`{}` needs -fmodules under GCC; modules need kiln or clang)",
+        line.trim_end()
+    ))
+}
+
+/// Whether `line` (left-trimmed) opens a module-declaration, a global
+/// module fragment (`module;`) or an import-declaration
+/// ([module.unit]/1, [module.import]/1). Both words are plain
+/// identifiers elsewhere, so each counts only before a name, a `:` that
+/// does not start `::`, or (for `module`) a `;` or (for `import`) a
+/// header-name.
+fn module_syntax_line(line: &str) -> bool {
+    let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+    let opens = |kw: &str, header_name: bool| {
+        let Some(rest) = line.strip_prefix(kw) else { return false };
+        let joined = rest.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let rest = rest.trim_start();
+        let mut next = rest.chars();
+        !joined
+            && match next.next() {
+                Some(';') => kw == "module",
+                Some(':') => next.next() != Some(':'),
+                Some('<' | '"') => header_name,
+                Some(c) => c.is_alphabetic() || c == '_',
+                None => false,
+            }
+    };
+    opens("module", false) || opens("import", true)
+}
+
 /// Whether the last `-f[no-]crash-diagnostics[=…]` of `args` turns crash
 /// diagnostics off (spec/driver.md "Internal compiler errors").
 fn crash_diagnostics_off(args: &[String]) -> bool {
@@ -2573,7 +2646,8 @@ mod compat_tests {
     use super::{
         DumpKind, GCC_MODE, Status, compat_for, compiler_flags, crash_diagnostics_off,
         debugger_gate_in, diag_directives_for, first_missing_check, gcc_links, includes_kiln_meta,
-        ir_diff, ir_normalize, ir_target_flag, stand_in_skip,
+        ir_diff, ir_normalize, ir_target_flag, module_syntax_line, stand_in_skip,
+        without_gcc_preinclude,
     };
     use crate::test::directives::{CompilerKind, Lang, parse};
 
@@ -2601,6 +2675,41 @@ mod compat_tests {
         let mode = v(&["-fsyntax-only", "-ferror-limit=0"]);
         assert_eq!(compiler_flags(true, None, &mode), v(&["-fsyntax-only", "-fmax-errors=0"]));
         assert_eq!(compiler_flags(false, None, &mode), mode);
+    }
+
+    /// WP-1261: the lines that make a test a module unit, which GCC under
+    /// test skips ([module.unit]/1, [module.import]/1), and look-alikes
+    /// that use `module`/`import` as identifiers.
+    #[test]
+    fn module_syntax_lines() {
+        for l in [
+            "module;",
+            "export module M;",
+            "module m.dir;",
+            "module :private;",
+            "import std;",
+            "export import :part;",
+            "import <vector>;",
+            "import \"h.h\";",
+        ] {
+            assert!(module_syntax_line(l), "{l}");
+        }
+        for l in
+            ["module::f();", "import = 3;", "modules m;", "importer x;", "import;", "int module;"]
+        {
+            assert!(!module_syntax_line(l), "{l}");
+        }
+    }
+
+    /// WP-1261: GCC's `stdc-predef.h` marker is dropped from its `-E`
+    /// output; every other line stays.
+    #[test]
+    fn gcc_preinclude_marker_dropped() {
+        let out = "# 0 \"t.cpp\"\n# 1 \"/usr/include/stdc-predef.h\" 1 3 4\n# 0 \"<command-line>\" 2\nint x;\n";
+        assert_eq!(
+            without_gcc_preinclude(out),
+            "# 0 \"t.cpp\"\n# 0 \"<command-line>\" 2\nint x;\n"
+        );
     }
 
     /// WP-1249: which `diag:` directives each compiler kind is checked
