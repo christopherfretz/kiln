@@ -722,6 +722,18 @@ belong to WP-017, which builds them on `macro_defined` and
   - A file with a guard is not re-entered while the guard macro is
     defined. It produces no `FileChange` events, which changes the output
     of `-P`.
+- **Missing `<meta>` (WP-1210, kiln-only).** When an angled
+  `#include <meta>` (the name exactly `meta`) is not found and the driver
+  set `PpOptions::meta_hint` (C++ at `-std=c++26`/`gnu++26`/`c++2c`, the
+  standard library directories searched, and the selected GCC older than
+  16), the `pp_file_not_found` fatal error (text and location unchanged)
+  carries one location-less note: `note_pp_meta_gcc` (the selected GCC
+  installation and its version), `note_pp_meta_libcxx`
+  (`-stdlib=libc++`) or `note_pp_meta_no_gcc` (no GCC installation),
+  each ending with `; a GCC 16 installation was found at '<prefix>' (from
+  <exe> on PATH)` when `MetaHint::probe` (the driver's `g++-16`, then
+  `g++`, `-print-search-dirs` probe) finds one. The probe runs only on
+  this error path. The library selection itself does not change.
 - **`#embed`.** The core produces `prefix`, then the byte tokens
   (`is_embed_byte`: a pp-number per byte and the commas between them,
   spelled in one scratch buffer per embed), then `suffix`. An empty resource produces `if_empty`

@@ -47,6 +47,35 @@ impl ClangCompat {
     }
 }
 
+/// The standard library the driver selected, for the note after a
+/// missing `#include <meta>` at C++26 (WP-1210, spec/pp.md "Missing
+/// `<meta>`"): `<meta>` (P2996) ships only with GCC 16.1's libstdc++.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MetaHintLib {
+    /// `-stdlib=libc++`, which has no `<meta>`.
+    LibCxx,
+    /// libstdc++ from the GCC installation at `dir`, version `version`.
+    Gcc {
+        /// The installation directory (`<prefix>/lib/gcc/<triple>/<v>`).
+        dir: String,
+        /// Its version directory name (`14`).
+        version: String,
+    },
+    /// libstdc++, but no GCC installation was found.
+    NoGcc,
+}
+
+/// What the note after a missing `#include <meta>` says (WP-1210).
+#[derive(Clone, Debug)]
+pub struct MetaHint {
+    /// The selected library.
+    pub lib: MetaHintLib,
+    /// Looks for a GCC 16 installation on `PATH`: its `--gcc-toolchain`
+    /// prefix and the executable that reported it (`g++-16`). Called
+    /// only when the note is emitted, never on a successful compile.
+    pub probe: fn() -> Option<(String, String)>,
+}
+
 /// Options of one preprocessor run.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
@@ -111,6 +140,9 @@ pub struct PpOptions {
     /// `-x c++-header` input being precompiled, WP-1023): `#pragma once`
     /// in it is not `-Wpragma-once-outside-header`.
     pub main_is_header: bool,
+    /// Set by the driver at C++26: an angled `#include <meta>` that is
+    /// not found gets a note naming the selected library (WP-1210).
+    pub meta_hint: Option<MetaHint>,
 }
 
 impl PpOptions {
@@ -136,6 +168,7 @@ impl PpOptions {
             dump_defines: false,
             dump_includes: false,
             main_is_header: false,
+            meta_hint: None,
         }
     }
 
