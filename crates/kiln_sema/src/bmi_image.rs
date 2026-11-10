@@ -4178,11 +4178,19 @@ mod tests {
             prev: NONE,
             payload,
         };
-        let def =
-            |end, bases| Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end, key: NONE, bases }) };
+        let def = |end, bases| Payload::Record {
+            tag: 0,
+            def: Some(RecDef { bits: 0, end, key: NONE, bases }),
+        };
         img.decls.extend([
             head(base, 1, 0, 200, def(11, vec![])),
-            head(base + 1, 1, 0, 210, def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0, virt: false }])),
+            head(
+                base + 1,
+                1,
+                0,
+                210,
+                def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0, virt: false }]),
+            ),
             head(
                 base + 2,
                 11,
@@ -4326,15 +4334,6 @@ mod tests {
     /// relation is an error.
     #[test]
     fn carries_virtual_records() {
-        let spec = FnSpec::new()
-            .with_virtual(true)
-            .with_pure(true)
-            .with_override(true)
-            .with_final(true)
-            .with_virtual_written(true);
-        assert_eq!(fn_spec(spec.bits()), Some(spec));
-        let img = virtual_sample();
-        assert_eq!(decode(&encode(&img)), Ok(img));
         type Corrupt = (&'static str, fn(&mut Image));
         fn set_key(i: &mut Image, k: u32) {
             if let Payload::Record { def: Some(df), .. } = &mut i.decls[11].payload {
@@ -4346,6 +4345,15 @@ mod tests {
                 *overrides = o;
             }
         }
+        let spec = FnSpec::new()
+            .with_virtual(true)
+            .with_pure(true)
+            .with_override(true)
+            .with_final(true)
+            .with_virtual_written(true);
+        assert_eq!(fn_spec(spec.bits()), Some(spec));
+        let img = virtual_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
         let corrupt: [Corrupt; 6] = [
             ("key outside the class", |i| set_key(i, 14)),
             ("key not a function", |i| set_key(i, 12)),
@@ -4579,7 +4587,10 @@ mod tests {
                 1,
                 0,
                 420,
-                Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![] }) },
+                Payload::Record {
+                    tag: 0,
+                    def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![] }),
+                },
             ),
             head(
                 0,
