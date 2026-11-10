@@ -504,6 +504,7 @@ impl Sema<'_, '_> {
             // of an implicit class template specialization.
             return Ok(match inst {
                 Some((ext, _)) => {
+                    self.explicit_inst_annotations(m, ds, d, name_loc);
                     self.act_on_explicit_member_inst(m, ext.is_some(), name_loc);
                     None
                 }
@@ -520,6 +521,7 @@ impl Sema<'_, '_> {
             }
             let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
             self.explicit_inst_visibility_attrs(m.spec, &attrs);
+            self.explicit_inst_annotations(m.spec, ds, d, name_loc);
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
             return Ok(None);
         }
@@ -940,8 +942,9 @@ impl Sema<'_, '_> {
         });
         if info.kind != SpecKind::ExplicitSpecialization {
             self.ast.decls.respecify_function(s, fspec);
+            self.drop_pattern_annotations(s);
         }
-        Some(self.declare_explicit_spec(s, d, ty, fspec, name_loc))
+        Some(self.declare_explicit_spec(s, ds, d, ty, fspec, name_loc))
     }
 
     /// `[extern] template R f<args>(params);` for specialization `m.spec`
@@ -1173,12 +1176,42 @@ impl Sema<'_, '_> {
         fspec.with_storage(old.storage()).with_explicit_object(old.has_explicit_object())
     }
 
+    /// The annotations written on an explicit instantiation of function
+    /// `s`, a declaration of it ([temp.explicit], [dcl.attr.annotation]/1):
+    /// after those instantiated from the pattern, which are substituted
+    /// first (GCC 16.1 lists them in that order).
+    fn explicit_inst_annotations(&mut self, s: DeclId, ds: &DeclSpec, d: &Declarator, loc: Loc) {
+        let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+        if !self.has_annotations(&attrs) {
+            return;
+        }
+        let first = self.ast.first(s);
+        self.require_annotations(first, loc);
+        let latest = self.ast.latest(s);
+        self.take_annotations(latest, &mut attrs);
+    }
+
+    /// An explicit specialization `s` is its own entity: the annotations
+    /// instantiated from the pattern onto its first (implicitly created)
+    /// declaration are dropped; it has only those written on its own
+    /// declarations ([dcl.attr.annotation]/3 instantiates annotations
+    /// only for an instantiation; spec/annotations.md §5; GCC 16.1).
+    /// Deferred ones are skipped by `instantiate_annotations`, which
+    /// still substitutes the pattern parameters' (GCC keeps those).
+    fn drop_pattern_annotations(&mut self, s: DeclId) {
+        if self.ast.annots.has_list(s) {
+            self.ast.annots.clear(s);
+        }
+    }
+
     /// The new declaration of an explicit specialization `s` (of a
     /// function template, or a member function of a class template
-    /// specialization) with its parameters.
+    /// specialization) with its parameters and its own annotations
+    /// ([dcl.attr.annotation]/1).
     fn declare_explicit_spec(
         &mut self,
         s: DeclId,
+        ds: &DeclSpec,
         d: &Declarator,
         ty: QualType,
         fspec: kiln_ast::decl::FnSpec,
@@ -1193,6 +1226,8 @@ impl Sema<'_, '_> {
         if self.kind_of(lexical) == DeclKind::CXXRecord {
             self.set_member_access(f);
         }
+        let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
+        self.take_annotations(f, &mut attrs);
         f
     }
 
@@ -1266,8 +1301,9 @@ impl Sema<'_, '_> {
                 .with_override(old.is_override())
                 .with_final(old.is_final());
             self.ast.decls.respecify_function(m, member);
+            self.drop_pattern_annotations(m);
         }
-        Some(self.declare_explicit_spec(m, d, ty, fspec, name_loc))
+        Some(self.declare_explicit_spec(m, ds, d, ty, fspec, name_loc))
     }
 
     /// `template<> T C<args>::s ...;` for static data member `m` of an
