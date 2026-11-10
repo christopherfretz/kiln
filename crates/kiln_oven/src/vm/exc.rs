@@ -46,6 +46,11 @@ pub(crate) const SENTINEL: u32 = EXC_FREE;
 /// base within its lifetime (clang's `HandleDestructionImpl`; `run_cleanup`).
 pub(crate) const LIFE_CHECK: u32 = u32::MAX - 4;
 
+/// The most characters of an uncaught exception's `what()` its note
+/// prints whole; past it the note prints this many and then
+/// "… [N more characters]" (spec/oven.md §Exceptions).
+pub(crate) const WHAT_CAP: usize = 64 * 1024;
+
 /// An exception object.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Exc {
@@ -454,14 +459,27 @@ impl Oven {
         r.ok()?;
         let mut s = self.regs[top] as u64;
         let mut out = Vec::new();
-        while out.len() < 1024 {
+        // Characters past the cap are counted, not kept: the scan is
+        // bounded by the string's allocation (a load past its end
+        // faults), so it ends on any program the Oven could run.
+        let mut more = 0u64;
+        loop {
             let c = self.load(s, ch, ak::READ).ok()?;
             if c == 0 {
-                return Some(String::from_utf8_lossy(&out).into());
+                break;
             }
-            out.push(c as u8);
+            if out.len() < WHAT_CAP {
+                out.push(c as u8);
+            } else {
+                more += 1;
+            }
             s = self.ptr_add(s, 1, ch).ok()?;
         }
-        None
+        let mut w = String::from_utf8_lossy(&out).into_owned();
+        if more > 0 {
+            use std::fmt::Write as _;
+            let _ = write!(w, "\u{2026} [{more} more characters]");
+        }
+        Some(w.into())
     }
 }
