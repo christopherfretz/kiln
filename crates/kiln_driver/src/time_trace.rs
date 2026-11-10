@@ -23,10 +23,15 @@ pub struct Settings {
 }
 
 /// Whether this run writes time traces: `-ftime-trace` with an action
-/// clang runs a compiler job for (`-c`, `-S`, linking, `-E`, `-M`), not
-/// `-fsyntax-only` or a header precompile (clang: "argument unused").
+/// clang runs a compiler job for (`-c`, `-S`, linking, `-E`, `-M`,
+/// `--precompile`, a header precompile), not `-fsyntax-only` (clang:
+/// "argument unused").
 pub fn writes(args: &Args) -> bool {
-    args.time_trace.on && matches!(args.action, Action::Compile | Action::Link | Action::Preprocess)
+    args.time_trace.on
+        && matches!(
+            args.action,
+            Action::Compile | Action::Link | Action::Preprocess | Action::Precompile
+        )
 }
 
 /// The flags of the family as written when the run writes no trace:
@@ -242,6 +247,8 @@ mod tests {
         let a = args(&["-fsyntax-only", "-ftime-trace", "-ftime-trace-verbose", "x.cpp"]);
         assert!(!writes(&a));
         assert_eq!(unused(&a), ["-ftime-trace", "-ftime-trace-verbose"]);
+        let a = args(&["--precompile", "-ftime-trace", "m.cppm"]);
+        assert!(writes(&a));
         let a = args(&["-c", "-ftime-trace-granularity=3", "x.cpp"]);
         assert_eq!(unused(&a), ["-ftime-trace-granularity=3"]);
         let a = args(&["-c", "-ftime-trace", "-ftime-trace-granularity=3", "x.cpp"]);

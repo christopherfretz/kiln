@@ -822,10 +822,18 @@ belong to WP-017, which builds them on `macro_defined` and
     `SVE2_BITPERM` follow `sve2-aes` / `sve2-bitperm` in clang 19 and
     `sve2` with `sve-aes` / `sve-bitperm` in clang 22.
     `__ARM_FEATURE_SVE_BITS N` with `-msve-vector-bits=N`.
-  - SME and FP8 (WP-1151, reachable through `-mcpu=`): `SME` +
+  - SME, FP8 and the newer extensions (WP-1151, WP-1167; predef.rs
+    `FEATURE_MACROS`), each with its feature: `SME` +
     `LOCALLY_STREAMING` (sme), `SME2`, `SME2p1`, `SME_B16B16`,
-    `SME_F16F16`, `FP8`, `FP8FMA`, `FP8DOT2`, `FP8DOT4`, each with its
-    feature (test: predef.rs `arm_sme_fp8_macros`).
+    `SME_F16F16`, `PAUTH_LR` (pauth-lr, which also gives `PAUTH`), and
+    with clang 22 only `SME2p2`, `SME_F8F16`, `SME_F8F32`, `FP8`,
+    `FP8FMA`, `FP8DOT2`, `FP8DOT4`, `F8F16MM`, `F8F32MM`, `SSVE_AES`,
+    `SSVE_FP8FMA`, `SSVE_FP8DOT2`, `SSVE_FP8DOT4`, `SVE_BFSCALE`. clang 19
+    also turns on the FP16 arithmetic macros for `sme` and `SVE_B16B16`
+    for `sme-b16b16`. Tests: predef.rs `arm_sme_fp8_macros`,
+    crates/kiln_driver/tests/driver.rs `march_modifiers_match_clang` (every
+    modifier against clang++-19/22), and
+    tests/conformance/cpp.predefined/arm-feature-macros-sme-fp8{,-19}.cpp.
   - clang 19 (`-fclang-compat=19`) also sets `crc`, `lse` (v8.1), `rcpc`
     (v8.3), `dotprod` (v8.4), `bti` (v8.5), `bf16`, `i8mm` (v8.6) and, on
     v9, `sve2` and `fullfp16` from the level whatever the extensions say

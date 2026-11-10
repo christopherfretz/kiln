@@ -366,6 +366,10 @@ impl Cg<'_> {
         if !self.di_reduced() || self.has_fn_attr(d, AttrKind::NODEBUG) {
             return;
         }
+        // clang's `DebugGlobalVariable` (spec/driver.md "Time trace").
+        let _t = kiln_source::trace::Scope::with_detail("DebugGlobalVariable", || {
+            self.qualified_name(d)
+        });
         let ast = self.ast;
         let first = ast.first(d);
         let Some(dbg) = self.di.as_deref().map(|x| x.dbg) else { return };

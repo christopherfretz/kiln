@@ -882,3 +882,54 @@ stopped early and missed 14 reports.
 `cargo xtask bench --compiler <after> --compare-with <before>
 bench/reflect`, two runs: geometric mean after/before time 1.03x and
 0.98x, memory 1.00x both (no entry outside its own spread on both runs).
+
+### WP-1162: the image name gate counts declarations, not interning (2026-11-09)
+
+An importer that spelled one of a module's declared names anywhere
+before `import` (a member, a macro body, another namespace, a local)
+replayed the unit instead of building it from its declaration image
+(spec/modules.md §11.11 "ODR merging"). Now only a name of the image's
+global-scope declarations that reached the parser at the importer's
+global scope replays it.
+
+Workload: WP-1139's class-template-heavy synthetic interface, generated
+from the corpus module (no external project): 200 exported namespaces
+`ns0`..`ns199`, each holding the body of
+`tests/conformance/module.interface/Inputs/img-class-template.cppm`'s
+`namespace ct` (12601 lines). The importer reads five of them:
+
+```python
+# gen.py <path to Inputs/img-class-template.cppm>
+import sys
+src = open(sys.argv[1]).read()
+body = src[src.index("export namespace ct {") + len("export namespace ct {"):src.rindex("} // namespace ct")]
+open("cth.cppm", "w").write("export module cth;\n" + "\n".join("export namespace ns%d {%s}" % (i, body) for i in range(200)) + "\n")
+use = 'extern "C" int printf(const char *, ...);\nint main() {\n  long s = 0;\n' + "".join(
+    "  s += ns%d::use() + ns%d::Arr<short>{9}.size() + ns%d::Fixed<3>{}.f();\n" % (i, i, i) for i in (0, 50, 100, 150, 199)) + '  printf("%ld\\n", s);\n}\n'
+open("u-plain.cpp", "w").write("import cth;\n" + use)
+open("u-mention.cpp", "w").write("struct Opts { int size; int count; int value; int get; };\nimport cth;\n" + use)
+```
+
+Commands: `kiln++ -std=c++26 -fkiln-bmi-image --precompile cth.cppm -o
+cth.pcm`, then `kiln++ -std=c++26 -fkiln-bmi-image
+-fmodule-file=cth=cth.pcm {-fsyntax-only | -c -o /dev/null} u-*.cpp`
+(`-v` prints the image note); clang: `clang++-19 -std=c++26 --precompile
+cth.cppm -o cth.pcm` and `clang++-19 -std=c++26
+-fmodule-file=cth=cth.pcm {-fsyntax-only | -c -o /dev/null}
+u-mention.cpp`. `/usr/bin/time -f "%e %M"`, median of 3, harness
+profile, aarch64, load ~15; before = main b26b6825f.
+
+| run | kiln before | kiln after | clang++-19 |
+|---|---|---|---|
+| `--precompile cth.cppm` | 0.16 s / 30.1 MiB | 0.14 s / 29.6 MiB | 10.34 s / 98.1 MiB |
+| `u-plain`, `-fsyntax-only` (image both) | 0.03 s / 21.2 MiB | 0.03 s / 20.9 MiB | |
+| `u-mention`, `-fsyntax-only` | 0.11 s / 18.9 MiB (replayed: `get`) | **0.03 s** / 21.2 MiB (image) | 0.02 s / 84.2 MiB |
+| `u-mention`, `-c` | 0.12 s / 53.7 MiB (replayed) | **0.05 s** / 53.7 MiB (image) | 0.02 s / 92.0 MiB |
+| `u-mention`, `-fsyntax-only`, image off (replay) | 0.10 s / 18.7 MiB | 0.09 s / 18.5 MiB | |
+
+Replays of `u-mention`: 1 → 0 (`-v`: `replayed 'cth': its image declares
+'get', already seen` → `imported 'cth' from its declaration image`).
+The image costs 2.3 MiB more peak RSS than the replay at
+`-fsyntax-only` (its eager decode), as WP-1139 measured. The gate's
+per-token bookkeeping is below noise on `u-plain` and the file grows by
+the gated-name list (804 B here: a length and 200 gated namespaces, 4 B each).

@@ -33,6 +33,7 @@ mod ifeval;
 mod include;
 mod macros;
 mod modules;
+mod name_gate;
 mod options;
 mod pragma;
 mod predef;
