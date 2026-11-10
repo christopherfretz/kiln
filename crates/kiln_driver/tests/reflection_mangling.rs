@@ -433,3 +433,121 @@ fn gcc_dependent_template_id_link() {
     assert_eq!(st.code(), Some(63));
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Signatures holding a dependent reflect-expression of an alias
+/// template-id whose parameter appears in a non-deduced context of the
+/// defining-type-id ([temp.deduct.type]/5; spec/abi.md §8.14, WP-1260):
+/// a qualifier, partly dependent arguments, nested aliases, a non-type
+/// parameter and a decltype. `DEF` defines them, `CALL` only declares them.
+const NONDEDUCED_ALIAS_SIGS: &str = r"using info = decltype(^^int);
+template <info R> struct K {};
+template <class T> struct TT {};
+template <class T, class U> struct TT2 {};
+template <class T> struct RC { using type = T; };
+template <class T> struct RC<const T> { using type = T; };
+template <class T, class U> struct RC2 { using type = T; };
+template <int N> struct RN { using type = int; };
+template <class T> using D = typename RC<T>::type;
+template <class T, class U> using D2 = typename RC2<T, U>::type;
+template <class T, class U> using DP = TT2<typename RC<T>::type, U>;
+template <class T> using AT = TT<T*>;
+template <class T> using N1 = D<AT<T>>;
+template <class T> using N2 = AT<D<T>>;
+template <class T> using N3 = D<D<T>>;
+template <int N> using DN = typename RN<N>::type;
+template <class T> using DT = decltype(T{});
+template <class T> using NDS = decltype(sizeof(T));
+#ifdef DEF
+#define BODY { return 1; }
+#define DBODY { return {}; }
+#else
+#define BODY ;
+#define DBODY ;
+#endif
+template <class T> auto d_d(T) -> decltype(K<^^D<T>>{}) DBODY
+template <class T> int p_d(T, K<^^D<T>>) BODY
+template <class T> int p_dptr(T, K<^^D<T*>>) BODY
+template <class T> requires(^^D<T> != ^^int) int q_d(T) BODY
+template <class T> int p_d2a(T, K<^^D2<T, int>>) BODY
+template <class T> int p_d2b(T, K<^^D2<int, T>>) BODY
+template <class T> int p_dpa(T, K<^^DP<T, int>>) BODY
+template <class T> int p_dpb(T, K<^^DP<int, T>>) BODY
+template <class T> int p_n1(T, K<^^N1<T>>) BODY
+template <class T> int p_n2(T, K<^^N2<T>>) BODY
+template <class T> int p_n3(T, K<^^N3<T>>) BODY
+template <int N> int p_dn(K<^^DN<N>>) BODY
+template <class T> int p_dt(T, K<^^DT<T>>) BODY
+template <class T> int p_nds(T, K<^^NDS<T>>) BODY
+#ifdef DEF
+template K<^^D<int>> d_d(int);
+template int p_d(int, K<^^D<int>>);
+template int p_dptr(int, K<^^D<int*>>);
+template int q_d(int);
+template int p_d2a(int, K<^^D2<int, int>>);
+template int p_d2b(int, K<^^D2<int, int>>);
+template int p_dpa(int, K<^^DP<int, int>>);
+template int p_dpb(int, K<^^DP<int, int>>);
+template int p_n1(int, K<^^N1<int>>);
+template int p_n2(int, K<^^N2<int>>);
+template int p_n3(int, K<^^N3<int>>);
+template int p_dn<3>(K<^^DN<3>>);
+template int p_dt(int, K<^^DT<int>>);
+template int p_nds(int, K<^^NDS<int>>);
+#else
+int main() {
+  d_d(1);
+  return p_d(1, K<^^D<int>>{}) + p_dptr(1, K<^^D<int*>>{}) + q_d(1)
+       + p_d2a(1, K<^^D2<int, int>>{}) + p_d2b(1, K<^^D2<int, int>>{})
+       + p_dpa(1, K<^^DP<int, int>>{}) + p_dpb(1, K<^^DP<int, int>>{})
+       + p_n1(1, K<^^N1<int>>{}) + p_n2(1, K<^^N2<int>>{})
+       + p_n3(1, K<^^N3<int>>{}) + p_dn<3>(K<^^DN<3>>{})
+       + p_dt(1, K<^^DT<int>>{}) + p_nds(1, K<^^NDS<int>>{});
+}
+#endif
+";
+
+/// A kiln object links against a g++-16 one through signatures with a
+/// dependent reflected alias template-id whose parameter is in a
+/// non-deduced context (spec/abi.md §8.14, [temp.over.link]/5,
+/// [temp.deduct.type]/5, WP-1260): kiln writes g++-16's
+/// `ta1D_N2RCIS0_E4typeE` under the default `-fkiln-reflection-mangling=gcc`,
+/// so g++-16's caller links against kiln's definitions and the program
+/// returns the number of calls; both compilers' definitions also carry
+/// the same symbols. Skipped unless `KILN_GCC` names g++-16.
+#[test]
+fn gcc_nondeduced_alias_link() {
+    let Some(gcc) = std::env::var_os("KILN_GCC").filter(|g| !g.is_empty()) else {
+        eprintln!("skipping: KILN_GCC is not set");
+        return;
+    };
+    if !have("nm") {
+        eprintln!("skipping: nm not found");
+        return;
+    }
+    let d = scratch("ndal");
+    std::fs::write(d.join("t.cpp"), NONDEDUCED_ALIAS_SIGS).unwrap();
+    kiln(&d, &["-DDEF", "-c", "t.cpp", "-o", "k.o"]);
+    let gcc_cmd = || {
+        let mut c = Command::new(&gcc);
+        c.args(["-std=c++26", "-freflection"]).current_dir(&d);
+        c
+    };
+    run(gcc_cmd().args(["-DDEF", "-c", "t.cpp", "-o", "g.o"]));
+    run(gcc_cmd().args(["-c", "t.cpp", "-o", "call.o"]));
+    // `_Z3q_dIiEiT_` is g++-16's unconstrained compat alias (not
+    // reflection-specific, spec/abi.md §8.14); it has no `Dm`.
+    let defined = |obj| -> BTreeSet<String> {
+        nm(&d, obj)
+            .into_iter()
+            .filter(|(n, l)| l == "W" && n.contains("Dm"))
+            .map(|(n, _)| n)
+            .collect()
+    };
+    let (k, g) = (defined("k.o"), defined("g.o"));
+    assert_eq!(k.len(), 14, "{k:?}");
+    assert_eq!(k, g);
+    run(gcc_cmd().args(["call.o", "k.o", "-o", "a.out"]));
+    let st = Command::new(d.join("a.out")).status().unwrap();
+    assert_eq!(st.code(), Some(13));
+    let _ = std::fs::remove_dir_all(&d);
+}

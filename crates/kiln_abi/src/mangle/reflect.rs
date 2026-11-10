@@ -309,11 +309,19 @@ pub(super) fn alias_args_preserved(ast: &Ast, t: DeclId, args: ArgListId) -> boo
 /// keeps (see [`alias_args_preserved`]); `dep` says which parameters
 /// take a dependent argument. An alias template-id is looked through to
 /// its aliased type, which is what the mangling writes.
-fn preserved_params(ast: &Ast, q: QualType, depth: u16, dep: &[bool], seen: &mut [bool], level: u32) {
+fn preserved_params(
+    ast: &Ast,
+    q: QualType,
+    depth: u16,
+    dep: &[bool],
+    seen: &mut [bool],
+    level: u32,
+) {
     if level > 64 {
         return;
     }
-    let rec = |q: QualType, seen: &mut [bool]| preserved_params(ast, q, depth, dep, seen, level + 1);
+    let rec =
+        |q: QualType, seen: &mut [bool]| preserved_params(ast, q, depth, dep, seen, level + 1);
     // The parameters `inner` names, marked only when one of them takes a
     // dependent argument: the qualifier or operand then stays dependent
     // and is written structurally.
