@@ -1432,6 +1432,16 @@ impl Sema<'_, '_> {
             // type transforms. clang 19 also does not deduce through
             // `_Atomic(T)` (its `DeduceTemplateArgumentsByTypeMatch`
             // treats it as non-deduced: "couldn't infer template argument").
+            //
+            // An undeduced placeholder deduces nothing either ([temp.deduct.type]/20
+            // checks the parameter's type against the argument's only for
+            // template parameters in it; clang's
+            // `DeduceTemplateArgumentsByTypeMatch` returns success for
+            // `Type::Auto`). It is dependent when its type-constraint
+            // names an earlier parameter (`template <auto R, C<R> auto
+            // PO>`), so it reaches here from `deduce_nttp_type`; the
+            // constraint is checked once the arguments are substituted
+            // ([temp.param]/4, WP-1235).
             TypeView::DependentName { .. }
             | TypeView::DependentTemplateSpecialization { .. }
             | TypeView::DependentDecltype(_)
@@ -1440,7 +1450,8 @@ impl Sema<'_, '_> {
             | TypeView::TypeOf { .. }
             | TypeView::UnaryTransform { .. }
             | TypeView::Splice { .. }
-            | TypeView::Atomic(_) => Tdk::Success,
+            | TypeView::Atomic(_)
+            | TypeView::Auto { deduced: None, .. } => Tdk::Success,
             // A dependent record (a member of the current instantiation)
             // and anything else: exact match.
             _ => {
