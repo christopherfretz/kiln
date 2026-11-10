@@ -7,6 +7,10 @@
 // constraint is checked once the arguments are substituted. Before WP-1235
 // kiln matched `of<R> auto` against `int` exactly and rejected the copy
 // deduction candidate (`box b = a;`) and every function template below.
+// `point`'s reference is unconstrained here: the constrained form
+// (`any auto R`) sets off clang 19's unbounded `AutoType::Profile`
+// recursion now and then, so it lives apart, for clang 22 and kiln, in
+// constrained-placeholder-nttp-prior-param-constrained-ref-run.cpp (WP-1254).
 //@ std: c++20
 //@ expect: run
 //@ stdout: copy 1 2
@@ -18,7 +22,6 @@
 extern "C" int printf(const char *, ...);
 
 template <class T, auto V> concept of = sizeof(T) <= sizeof(V) + 8;
-template <class T> concept any = true;
 
 template <auto R, of<R> auto V> struct box {
   static constexpr auto r = R;
@@ -36,7 +39,7 @@ struct spec { int v; };
 consteval spec spec_of(spec s) { return s; }
 template <class T, auto S> concept origin_for = T::id == S.v;
 struct origin { static constexpr int id = 7; };
-template <any auto R, origin_for<spec_of(R)> auto O = origin{}, class Rep = double>
+template <auto R, origin_for<spec_of(R)> auto O = origin{}, class Rep = double>
 struct point {
   Rep value;
   static constexpr auto reference = R;

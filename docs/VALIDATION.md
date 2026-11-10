@@ -229,6 +229,17 @@ included). The defects found so far, each with the test that records it:
   of 'x' in the global module follows declaration in module m`); clang 22
   and kiln accept it. `module.interface/export-member-template-var-run.cpp`
   carries `requires: clang>=22` (WP-1159).
+- clang 19 sometimes recurses without bound in `AutoType::Profile` (a
+  segfault) on a placeholder type-constraint whose argument names an
+  earlier *constrained* placeholder parameter (`template <any auto R,
+  of<f(R)> auto O>`): profiling the reference to `R` looks up the
+  unconstrained `auto` ([temp.over.link]/6), and when that lands in the
+  folding-set bucket of `O`'s type, which depends on addresses, it
+  profiles `O` again. A few percent of compiles of one such parameter
+  crash; 400 of them crash nearly always. clang 22 and kiln are fine.
+  `temp.deduct.type/constrained-placeholder-nttp-prior-param-constrained-ref-run.cpp`
+  carries `requires: clang>=22`; its sibling without `-constrained-ref`
+  keeps the shape with an unconstrained `R` for both oracles (WP-1254).
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)
