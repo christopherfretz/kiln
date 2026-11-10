@@ -743,6 +743,14 @@ impl Oven {
                 c.konst(n, 1);
                 c.ty(QualType::BOOL)
             }
+            FrameHow::Loop(s) => {
+                // The loop's own locals live where a function body's
+                // would (WP-1163).
+                c.scan(s, &[]);
+                c.stmt(s);
+                c.konst(n, 1);
+                c.ty(QualType::BOOL)
+            }
         };
         c.close_scope();
         c.emit(Op::Ret, 1, &[n]);

@@ -524,6 +524,11 @@ pub struct Oven {
     /// is the address of the object or function it designates, as a
     /// reference's initializer (`value::eval_at`; WP-640).
     pub(crate) addr_next: bool,
+    /// The next evaluation is [`Oven::evaluate_potential`]'s: its result
+    /// is not checked (clang's `Expr::isPotentialConstantExpr` evaluates
+    /// the body, never `CheckConstantExpression`), so a result that
+    /// fails the check is quietly unknown (`value::eval_at`; WP-1163).
+    pub(crate) unchecked_next: bool,
     pub(crate) types: Types,
     pub(crate) code: Vec<u32>,
     /// `code.len()` just after its trailing fetch-window padding, while
@@ -668,6 +673,7 @@ impl Oven {
             plain_next: false,
             void_next: false,
             addr_next: false,
+            unchecked_next: false,
             types: Types::default(),
             code: Vec::new(),
             padded: 0,
@@ -987,9 +993,11 @@ impl Oven {
         }
         self.potential_next = Some(0);
         self.void_next = true;
+        self.unchecked_next = true;
         let r = self.eval_ctx(bridge, e, None, false, false, true).0;
         self.potential_next = None;
         self.void_next = false;
+        self.unchecked_next = false;
         r
     }
 

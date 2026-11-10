@@ -2226,7 +2226,7 @@ variable templates, unresolved-lookup expressions (a dependent call
 calls, and every construct the first slice lists.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 5` since WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 6` since WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2386,7 +2386,11 @@ parameters of the function records in order), or `u32::MAX - 1` for the
 translation unit. The expression record's `cold` byte says which cold
 annotations follow the slots: 1 end location, 2 written type, 4
 operator location, 8 begin location, 16 member-access operator
-location (S4b).
+location (S4b), 32 the copy of a default argument rebuilt for a
+lifetime-extending use (an expression index, written before the
+`CXXDefaultArgExpr` it belongs to and rejected on any other kind;
+spec/sema.md §7.6a, WP-1166: without it an importer gave the copy's
+temporaries full-expression lifetime).
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):

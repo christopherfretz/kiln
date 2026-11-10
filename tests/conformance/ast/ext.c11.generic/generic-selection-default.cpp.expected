@@ -1,0 +1,13 @@
+TranslationUnitDecl
+|-VarDecl referenced a 'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl z 'int' cinit
+| `-GenericSelectionExpr 'int'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|   `-default selected
+|     `-IntegerLiteral 'int' 3
+`-VarDecl w 'long' cinit
+  `-GenericSelectionExpr 'long' type_operand='char'
+    `-default selected
+      `-IntegerLiteral 'long' 4
