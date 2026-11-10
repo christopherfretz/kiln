@@ -476,7 +476,10 @@ answers as of that point.
   parameter object (the header's own `array`), where a non-empty one
   reflects a `const T[N]`. `members_of` of a namespace lists the members
   of nested `extern "C"`/`extern "C++"` and `export` blocks in place, in
-  declaration order.
+  declaration order; `members_of` of a namespace alias lists the aliased
+  namespace's, and `is_namespace` of an alias is true (WP-1228). A
+  class's list ends with the implicit `operator==` of each defaulted
+  member `operator<=>` (WP-1228).
 - **`vector<info>`.** The elements are one `ARRAY | STD` heap allocation
   of `n` `info`, exactly as `std::allocator<info>::allocate(n)` makes, and
   their lifetimes begin as by `construct_at`. The vector owns it: its

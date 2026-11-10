@@ -41,16 +41,25 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   the order default constructor, copy constructor, copy assignment, move
   constructor, move assignment, destructor (GCC 16.1's order; each only
   if [class.default.ctor], [class.copy.ctor], [class.copy.assign] and
-  [class.dtor] declare it). `members_of` declares them first (D4,
+  [class.dtor] declare it), then the implicit `operator==` of each
+  explicitly defaulted member `operator<=>` ([class.compare.default]/5:
+  same parameters, ref-qualifier, access and `constexpr`ness, returns
+  `bool`, defaulted, not user-declared; declared at the class's `}`
+  unless the class declares an `operator==`; GCC 16.1's position, after
+  the special members; WP-1228). A friend `<=>`'s implicit `==` is a
+  friend, so not a member. `members_of` declares them first (D4,
   [class.mem]/5 "implicitly-declared … as if"). Not members: friend
   declarations ([class.friend]/1), access-specifiers, using-declarations
   and -directives, static_assert-declarations, deduction guides,
   enumerators and parameters (reached by their own queries), and
-  implicit declarations other than the special members (the
-  injected-class-name). An unnamed bit-field is a member but not a data
+  implicit declarations other than the special members and the
+  implicit `operator==`s (the injected-class-name). An unnamed bit-field is a member but not a data
   member. Template specializations are not members; their templates
   are (`never_a_member`, `build_class`).
-- **Namespaces** (`^^::` included): the members declared before the
+- **Namespaces** (`^^::` included; a namespace alias, of an alias or
+  not, is dealiased first, [meta.reflection.member.queries]/1, so it
+  lists the aliased namespace's members, the same reflections; GCC 16.1
+  agrees; WP-1228): the members declared before the
   evaluation point, first declarations only, across every block of the
   namespace (reopenings, linkage specifications, export blocks), in
   the creation order of each entity's first declaration, GCC 16.1's

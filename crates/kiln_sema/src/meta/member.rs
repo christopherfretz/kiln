@@ -7,6 +7,7 @@
 //! repeated query allocates nothing but the result vector.
 
 use kiln_ast::decl::{Access, DeclFlags, DeclKind, TemplLinkKind};
+use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::{DeclId, QualType, ReflectionId};
 use kiln_oven::{
@@ -160,8 +161,8 @@ impl Sema<'_, '_> {
     }
 
     /// `members_of(r, ctx)`: a complete class's members (its implicitly
-    /// declarable special members declared first) or a namespace's
-    /// members declared so far.
+    /// declarable special members declared first) or a namespace's (or a
+    /// namespace alias's namespace's) members declared so far.
     fn members_of(
         &mut self,
         r: ReflectionId,
@@ -170,7 +171,16 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<u32, MetaError> {
         let loc = ctx.loc;
-        if let Reflectee::Namespace(ns) = self.ast.reflections.get(r) {
+        // `members_of` dealiases its operand first
+        // ([meta.reflection.member.queries]/1): a namespace alias (of an
+        // alias, ...) lists the namespace it names (GCC 16.1 agrees).
+        let ns = match self.ast.reflections.get(r) {
+            Reflectee::Namespace(ns) => Some(ns),
+            Reflectee::NamespaceAlias(a) => Some(self.ast.resolve_alias(a))
+                .filter(|&d| self.ast.decls.get(d).kind() == DeclKind::Namespace),
+            _ => None,
+        };
+        if let Some(ns) = ns {
             let ns = self.ast.first(ns);
             self.refresh_namespace(ns, loc)?;
             let items = &self
@@ -319,7 +329,9 @@ impl Sema<'_, '_> {
     }
 
     /// Builds the member and base lists of complete class `def` once,
-    /// declaring its implicit special members first ([class.mem]/5).
+    /// declaring its implicit special members first ([class.mem]/5);
+    /// the implicit `operator==`s of its defaulted `operator<=>`s come
+    /// last.
     fn build_class(&mut self, def: DeclId, oven: &mut Oven, loc: Loc) -> Result<(), MetaError> {
         if self.meta_members.cache.get(def, MemberList::Members).is_some() {
             return Ok(());
@@ -332,6 +344,11 @@ impl Sema<'_, '_> {
         let decls: Vec<DeclId> = self.ast.members(def).collect();
         let mut l = CachedList::default();
         let mut implicit: Vec<(SpecialKind, DeclId)> = Vec::new();
+        // The implicit `operator==`s of defaulted `operator<=>`s
+        // ([class.compare.default]/5), declared at the class's `}`; GCC 16.1
+        // lists them after the implicit special members.
+        let mut implicit_eq: Vec<DeclId> = Vec::new();
+        let eq = DeclName::operator(OverloadedOperator::EqualEqual);
         let dtor = self.ast.destructor(def).map(|d| self.ast.first(d));
         for m in decls {
             let n = self.ast.decls.get(m);
@@ -346,6 +363,8 @@ impl Sema<'_, '_> {
             if n.has(DeclFlags::IMPLICIT) && kind != DeclKind::Field {
                 if let Some(k) = self.special_kind_of(m) {
                     implicit.push((k, m));
+                } else if kind == DeclKind::CXXMethod && n.name() == eq {
+                    implicit_eq.push(m);
                 }
                 continue;
             }
@@ -357,12 +376,7 @@ impl Sema<'_, '_> {
             // P2996R13; GCC 16.1 skips it too): a member of a class template
             // specialization redeclared from a pattern member with a
             // trailing requires-clause that fails for these arguments.
-            if kind.is_function()
-                && self.ast.templates.trailing_requires.get(m).is_some()
-                && self.lend_oven(oven, |s| {
-                    s.check_function_constraints(m, loc).is_some_and(|sat| !s.sat_ok(sat))
-                })
-            {
+            if kind.is_function() && self.constraints_fail(m, oven, loc) {
                 continue;
             }
             if !l.seen.insert(self.ast.first(m)) {
@@ -378,6 +392,13 @@ impl Sema<'_, '_> {
                     l.items.push(e);
                 }
             }
+        }
+        for m in implicit_eq {
+            if self.constraints_fail(m, oven, loc) || !l.seen.insert(self.ast.first(m)) {
+                continue;
+            }
+            let e = self.class_entry(m, loc)?;
+            l.items.push(e);
         }
         l.seen = kiln_source::fx::FxHashSet::default();
         self.meta_members.cache.put(def, MemberList::Members, l);
@@ -395,6 +416,15 @@ impl Sema<'_, '_> {
         }
         self.meta_members.cache.put(def, MemberList::Bases, b);
         Ok(())
+    }
+
+    /// Whether member function `m` has a trailing requires-clause that is
+    /// not satisfied here.
+    fn constraints_fail(&mut self, m: DeclId, oven: &mut Oven, loc: Loc) -> bool {
+        self.ast.templates.trailing_requires.get(m).is_some()
+            && self.lend_oven(oven, |s| {
+                s.check_function_constraints(m, loc).is_some_and(|sat| !s.sat_ok(sat))
+            })
     }
 
     /// The entry of class member `m`.
