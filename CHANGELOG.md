@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-10
 
 The first release. This section summarises what kiln 1.0 does. Measured
 results are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), and the

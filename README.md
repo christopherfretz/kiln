@@ -106,8 +106,9 @@ The archive layout is in [spec/driver.md](spec/driver.md) under
 
 ## Status
 
-kiln is preparing its 1.0 release (version 0.0.1 until then). The
-current milestone, M8, builds real open-source projects with kiln. The
+kiln is at version 1.0.0; what changed is in
+[CHANGELOG.md](CHANGELOG.md), and what a version promises in
+[docs/STABILITY.md](docs/STABILITY.md). The current milestone, M8, builds real open-source projects with kiln. The
 milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 | Area | State | Detail |
