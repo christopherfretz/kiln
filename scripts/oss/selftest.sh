@@ -6,8 +6,9 @@
 # oss-report.py on the two-cluster fixture under fixtures/, plain, with
 # --perf (WP-792) and with --update, and the libc++ mode (WP-694): the
 # wrapper's `-stdlib=libc++` and oss-report.py --stdlib libc++, and a CMake
-# target_precompile_headers project (WP-1023). Prints one PASS/FAIL line
-# per check and exits 1 on any FAIL. With a kiln++, it also builds
+# target_precompile_headers project (WP-1023), and oss-report.py --expect
+# (WP-1241, the sweep summary). Prints one PASS/FAIL line per check and
+# exits 1 on any FAIL. With a kiln++, it also builds
 # fixtures/modules with CMake and Ninja (WP-982, cmake_modules);
 # `selftest.sh --cmake-modules` runs only that build, with cmake >= 3.28,
 # ninja and a kiln++ required (GitHub CI, WP-1034).
@@ -292,6 +293,19 @@ check "--stdlib libc++ --update: libc++ column and block" "grep -q '| \`demo\` |
 printf '# page\n' > "$TMP/page.md"
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --stdlib libc++ --update "$TMP/page.md" demo >/dev/null 2>&1
 check "--update adds no projects table to a page without one" "grep -q '<!-- oss:demo:libcxx -->' '$TMP/page.md' && ! grep -q 'oss:projects' '$TMP/page.md'"
+
+# --expect (WP-1241, the sweep's oss summary): every expected pair without
+# a report is listed as "no report (infrastructure)", never dropped, and a
+# missing kiln report does not read as "Failure clusters (kiln): none".
+X="$TMP/expect-root"
+mkdir -p "$X/build/half" && cp -R "$FIX/oss/build/demo" "$X/build/" && cp -R "$FIX/oss/build/demo/clang" "$X/build/half/"
+python3 "$HERE/oss-report.py" --root "$X" --toml "$FIX/projects.toml" --expect kiln,clang demo half other > "$TMP/expect.md" 2>/dev/null
+check "--expect: the lead line counts and names the missing pairs" "head -1 '$TMP/expect.md' | grep -qxF 'Reports: 3 of the 6 expected project/compiler pairs. **No report (infrastructure): 3**: \`half\` kiln, \`other\` kiln, \`other\` clang.'"
+check "--expect: a project with no report keeps its section" "grep -q '^### other (v2.0.0)\$' '$TMP/expect.md' && [ \"\$(grep -c ': no report (infrastructure).\*\*' '$TMP/expect.md')\" = 3 ]"
+check "--expect: a missing kiln report is not 'none'" "grep -q 'Failure clusters (kiln): no kiln report.' '$TMP/expect.md' && ! grep -q 'Failure clusters (kiln): none' '$TMP/expect.md'"
+python3 "$HERE/oss-report.py" --root "$X" --toml "$FIX/projects.toml" --expect kiln,clang demo > "$TMP/expect-all.md" 2>/dev/null
+check "--expect: all present, the section as without it" "head -1 '$TMP/expect-all.md' | grep -qxF 'Reports: 2 of the 2 expected project/compiler pairs.' && tail -n +3 '$TMP/expect-all.md' | diff -q '$FIX/demo.expected.md' - >/dev/null"
+check "--expect: an unknown compiler is a usage error" "! python3 '$HERE/oss-report.py' --root '$X' --expect gcc demo >/dev/null 2>&1"
 
 echo "selftest: $FAILS failed"
 [ "$FAILS" -eq 0 ]

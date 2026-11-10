@@ -739,7 +739,10 @@ mod ci_tests {
     /// The `x86_64` sweep never gates a merge (WP-961, docs/VALIDATION.md
     /// "`x86_64` sweep"): `.github/workflows/sweep.yml` triggers only on
     /// `workflow_dispatch` and pushes to `sweep/**`, and every project of its
-    /// OSS matrix is a row of `scripts/oss/projects.toml`.
+    /// OSS matrix is a row of `scripts/oss/projects.toml`. The oss summary
+    /// expects a report from every matrix pair (WP-1241): its
+    /// `OSS_PROJECTS` list is the matrix's projects and its `OSS_COMPILERS`
+    /// the matrix's compiler expression.
     #[test]
     fn sweep_never_gates() {
         let root = util::repo_root();
@@ -770,9 +773,27 @@ mod ci_tests {
             .lines()
             .find_map(|l| l.trim().strip_prefix("project: ["))
             .expect("sweep.yml has a `project: [...]` matrix line");
-        for p in line.trim_end_matches(']').split(',').map(str::trim) {
+        let matrix: Vec<&str> = line.trim_end_matches(']').split(',').map(str::trim).collect();
+        for p in &matrix {
             assert!(toml.contains(&format!("\n[{p}]\n")), "{p} is not in projects.toml");
         }
+        let env = |key: &str| {
+            yml.lines()
+                .find_map(|l| l.trim().strip_prefix(key))
+                .unwrap_or_else(|| panic!("sweep.yml has no `{key}` line"))
+        };
+        let expected: Vec<&str> = env("OSS_PROJECTS: ").split_whitespace().collect();
+        assert_eq!(
+            expected, matrix,
+            "the oss summary's OSS_PROJECTS is not the matrix's project list"
+        );
+        let compiler = env("compiler: ${{ fromJSON(").trim_end_matches(") }}");
+        let summary = env("OSS_COMPILERS: ${{ join(fromJSON(");
+        assert_eq!(
+            summary.strip_suffix("), ',') }}"),
+            Some(compiler),
+            "the oss summary's OSS_COMPILERS is not the matrix's compiler expression"
+        );
     }
 
     /// ci-lane.yml's text and its jobs, each a two-space-indented `name:`

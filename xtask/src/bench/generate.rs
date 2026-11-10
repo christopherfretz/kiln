@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Generator {
     /// `nested-dup <N> <DEPTH> <WIDTH>`: the WP-879 repeated nested
-    /// template-id TU (docs/status/perf.md "WP-879: frontend throughput on
+    /// template-id TU (docs/status/perf-history.md "WP-879: frontend throughput on
     /// repeated nested template-ids"). `N` reflection-keyed specializations
     /// of a function and of a class template, each keyed by a template-id
     /// `DEPTH` levels deep whose levels take `WIDTH` arguments and repeat
@@ -63,7 +63,7 @@ impl Generator {
 }
 
 /// The text of [`Generator::NestedDup`]; byte-identical to the Python
-/// generator in docs/status/perf.md (`gen.py N DEPTH WIDTH 1`).
+/// generator in docs/status/perf-history.md "WP-879" (`gen.py N DEPTH WIDTH 1`).
 fn nested_dup(n: usize, depth: u32, width: usize) -> String {
     let mut o = String::new();
     o.push_str(
@@ -156,7 +156,7 @@ mod tests {
         assert!(s.ends_with("::count,\n};\n"), "{s}");
         let bench = Generator::parse("nested-dup 200 6 4").unwrap().source();
         assert_eq!(bench, Generator::parse("nested-dup 200 6 4").unwrap().source());
-        // `python3 gen.py 200 6 4 1` (docs/status/perf.md) writes the same bytes.
+        // `python3 gen.py 200 6 4 1` (docs/status/perf-history.md "WP-879") writes the same bytes.
         assert_eq!(bench.len(), 1_273_799);
         assert_eq!(super::super::entry::source_hash(bench.as_bytes()), "fnv1a64:852b2d6b5d67e92f");
     }

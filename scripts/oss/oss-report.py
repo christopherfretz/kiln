@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """oss-report.py [--root DIR] [--update FILE] [--perf [--top N]] [--stdlib libc++]
-                     [project ...]
+                     [--expect kiln,clang] [project ...]
 
 Reads .oss/build/<project>/{kiln,clang}/report.json and compile.jsonl (written
 by oss-build.sh and kiln-cxx) and prints, per project, a Markdown table (kiln
@@ -13,8 +13,13 @@ comparison (spec/landed/harness/WP-792.md); --top N lists the N heaviest
 and the N slowest TUs (default 5, WP-812). With --stdlib libc++ it reads
 the libc++ builds, .oss/build/<project>/{kiln,clang}-libcxx/ (WP-694): the
 sections are `<!-- oss:<project>:libcxx -->` blocks and the statuses go to
-the projects table's `libc++` column. The projects table is regenerated only
-in a file that already has its markers. The cluster signature rule is the
+the projects table's `libc++` column. With --expect COMPILERS (WP-1241, the
+sweep's oss summary) every named project must have a report from each of
+those compilers: the output opens with how many of the expected pairs
+reported, and each pair without a report is listed, in that line and in its
+project's section, as "no report (infrastructure)" (oss-build.sh stopped
+before it measured anything), never left out. The projects table is
+regenerated only in a file that already has its markers. The cluster signature rule is the
 contract in spec/landed/harness/WP-666.md.
 """
 
@@ -32,6 +37,7 @@ sys.path.insert(0, HERE)
 import projects  # noqa: E402
 
 COMPILERS = ("kiln", "clang")
+NO_REPORT = "no report (infrastructure)"
 
 # --- the cluster signature (spec/landed/harness/WP-666.md "Clusters") ---
 LEAD_LOC_RE = re.compile(r"^\s*[^\s:]+:(?:\d+(?::\d+)?|\([^)]*\)):\s*")
@@ -151,11 +157,18 @@ def control_name(rep):
     return f"{'clang' if m.group(1) == 'clang' else 'gcc'}-{m.group(2)}"
 
 
-def render(name, data, base, stdlib="libstdc++"):
+def render(name, data, base, stdlib="libstdc++", missing=(), tag="?"):
+    """`missing`: the expected compilers without a report (--expect);
+    `tag`: the heading's tag when neither report names one."""
     kr, kl = data["kiln"]
     cr, cl = data["clang"]
-    tag = (kr or cr or {}).get("tag", "?")
+    tag = (kr or cr or {}).get("tag", tag)
     lines = [f"### {name} ({tag}){', libc++' if stdlib == 'libc++' else ''}", ""]
+    for c in missing:
+        lines.append(f"**{c}: {NO_REPORT}.** Its oss job wrote no report.json: not measured, not a pass.")
+        lines.append("")
+    if kr is None and cr is None:
+        return "\n".join(lines), []
     lines.append(f"| | kiln | {control_name(cr)} |")
     lines.append("|---|---|---|")
     lines.append(f"| configure | {cell_rc(kr, 'configure_rc')} | {cell_rc(cr, 'configure_rc')} |")
@@ -167,7 +180,9 @@ def render(name, data, base, stdlib="libstdc++"):
     lines.append(f"| peak TU RSS | {cell_rss(kr)} | {cell_rss(cr)} |")
     lines.append("")
     cs = clusters(kl, cl)
-    if not cs:
+    if kr is None:
+        lines.append("Failure clusters (kiln): no kiln report.")
+    elif not cs:
         lines.append("Failure clusters (kiln): none.")
     else:
         lines.append(f"Failure clusters (kiln): {len(cs)}.")
@@ -299,6 +314,14 @@ def projects_table(toml, statuses):
     return "\n".join(lines) + "\n"
 
 
+def toml_tag(path, name):
+    """The project's pinned tag from the toml, or `?`."""
+    try:
+        return projects.load(path)[name]["tag"]
+    except (OSError, KeyError, ValueError, SystemExit):
+        return "?"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("projects", nargs="*")
@@ -308,7 +331,14 @@ def main():
     ap.add_argument("--perf", action="store_true", help="add the per-TU kiln/clang time and RSS comparison")
     ap.add_argument("--top", type=int, default=5, metavar="N", help="with --perf, list the N heaviest and N slowest TUs (default 5)")
     ap.add_argument("--stdlib", choices=tuple(STDLIBS), default="libstdc++", help="which builds to read (WP-694)")
+    ap.add_argument("--expect", metavar="COMPILERS", help="comma-separated: each named project must have these compilers' reports (WP-1241)")
     a = ap.parse_args()
+    expect = [c for c in (a.expect or "").split(",") if c]
+    for c in expect:
+        if c not in COMPILERS:
+            ap.error(f"--expect: unknown compiler '{c}' (one of {', '.join(COMPILERS)})")
+    if a.expect is not None and not (expect and a.projects):
+        ap.error("--expect needs at least one compiler and the expected projects")
     sfx = STDLIBS[a.stdlib]
     root = os.path.abspath(a.root)
     base = os.path.dirname(root)
@@ -321,19 +351,28 @@ def main():
         )
     if not names:
         sys.exit(f"oss-report: no reports under {root}/build")
-    sections, statuses = {}, {}
+    sections, statuses, missing = {}, {}, []
     for n in names:
         data = load_project(root, n, sfx)
-        if data["kiln"][0] is None and data["clang"][0] is None:
+        miss = [c for c in expect if data[c][0] is None]
+        missing += [(n, c) for c in miss]
+        if data["kiln"][0] is None and data["clang"][0] is None and not miss:
             print(f"oss-report: no {a.stdlib} report for {n} under {root}/build/{n}", file=sys.stderr)
             continue
-        md, cs = render(n, data, base, a.stdlib)
-        if a.perf:
+        md, cs = render(n, data, base, a.stdlib, miss, toml_tag(a.toml, n))
+        if a.perf and (data["kiln"][0] or data["clang"][0]):
             md += "\n" + render_perf(data["kiln"][1], data["clang"][1], base, control_name(data["clang"][0]), a.top)
         sections[n] = md
         st = status_of(data, cs)
         if st:
             statuses[n] = st
+    if expect:
+        want = len(names) * len(expect)
+        lead = f"Reports: {want - len(missing)} of the {want} expected project/compiler pairs."
+        if missing:
+            lead += f" **{NO_REPORT.capitalize()}: {len(missing)}**: " + ", ".join(f"`{n}` {c}" for n, c in missing) + "."
+            print(f"oss-report: {len(missing)} of {want} expected reports missing", file=sys.stderr)
+        print(lead + "\n")
     print("\n".join(sections.values()), end="")
     if a.update:
         with open(a.update, encoding="utf-8") as f:

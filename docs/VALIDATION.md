@@ -498,8 +498,16 @@ jobs:
 - `oss <project> <compiler>`: `scripts/oss/oss-build.sh` for ten projects
   of `scripts/oss/projects.toml`, with kiln and with the clang 19 control
   on the same runner, trees on the runner's `/mnt`; each uploads its
-  `report.json`, `compile.jsonl`, `configure.log` and `test.log`.
-- `oss summary`: `scripts/oss/oss-report.py` over all of them.
+  `report.json`, `compile.jsonl`, `configure.log` and `test.log`. The
+  job fails only when `oss-build.sh` wrote no `report.json`: the project
+  was not measured (a failed clone or download, retried once, or a
+  runner failure; spec/landed/harness/WP-1241.md). A build or test
+  failure is in the report and the job stays green.
+- `oss summary`: `scripts/oss/oss-report.py --expect` over all of them.
+  It opens with how many of the matrix's project/compiler pairs reported
+  and lists each one without a report as "no report (infrastructure)",
+  never leaving it out. A release candidate's sweep needs every pair
+  reported.
 
 Run it before a release (docs/STABILITY.md), and after a change to ABI
 lowering, calling conventions or the driver's target defaults: push the

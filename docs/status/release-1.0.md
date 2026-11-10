@@ -269,8 +269,11 @@ How to read the run (Actions tab, the `sweep` workflow):
   project, kiln against the clang 19 control on the same runner: TUs,
   links, tests, wall time, peak TU RSS, and kiln's failure clusters. A
   project is at parity when its test counts match the control's.
-- A failed `oss <project> <compiler>` job is a failed build or test run
-  of that project; its `test.log` and `configure.log` artifacts say why.
+- A failed `oss <project> <compiler>` job wrote no `report.json`: the
+  project was not measured (a failed fetch, retried once, or a runner
+  failure), and the summary's first line lists it as "no report
+  (infrastructure)". Re-run the job. A failed build or test run is in the
+  report and the summary's table, and the job stays green (WP-1241).
 
 | suite / project | x86_64 kiln | clang 19 control | parity |
 |---|---|---|---|

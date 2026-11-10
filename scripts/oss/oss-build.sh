@@ -133,6 +133,16 @@ P_CONFIGURE=("${P_CONFIGURE[@]//@OSS@/$KILN/scripts/oss}")
 P_TEST="${P_TEST//@OSS@/$KILN/scripts/oss}"
 [ ${#PREFIXES[@]} -eq 0 ] || P_CONFIGURE+=("-DCMAKE_PREFIX_PATH=$(IFS=';'; echo "${PREFIXES[*]}")")
 
+# One retry of a fetch (WP-1241): a single DNS or network blip must not
+# cost a sweep job its report. `cmd || again cmd` runs a failed clone or
+# download once more after KILN_OSS_FETCH_RETRY_S seconds (default 30);
+# nothing else is retried.
+again() {
+  echo "oss-build: fetch failed, retrying once in ${KILN_OSS_FETCH_RETRY_S:-30} s" >&2
+  sleep "${KILN_OSS_FETCH_RETRY_S:-30}"
+  "$@"
+}
+
 SRC="$OSS/src/$P_CHECKOUT"
 [ -z "$P_LOCAL" ] || SRC="$HERE/$P_LOCAL"
 BUILD="$OSS/build/$PROJECT/$COMPILER$SFX${INSTALL:+-dep}"
@@ -156,7 +166,8 @@ elif [ -n "$P_ARCHIVE" ]; then
   else
     tarball="$OSS/src/$P_CHECKOUT.tarball"
     echo "oss-build: fetching $P_URL"
-    curl -sSfL --retry 3 -o "$tarball" "$P_URL" || { echo "oss-build: download failed" >&2; exit 1; }
+    curl_get() { curl -sSfL --retry 3 -o "$tarball" "$P_URL"; }
+    curl_get || again curl_get || { echo "oss-build: download failed" >&2; exit 1; }
     echo "$P_SHA256  $tarball" | sha256sum -c --quiet - || { echo "oss-build: $P_URL does not match the toml's sha256" >&2; rm -f "$tarball"; exit 1; }
     mkdir -p "$SRC" && tar -xf "$tarball" -C "$SRC" --strip-components=1 || { echo "oss-build: cannot unpack $tarball" >&2; exit 1; }
     rm -f "$tarball"
@@ -169,7 +180,11 @@ else
   sub=()
   [ -n "$P_SUBMODULES" ] && sub=(--recurse-submodules --shallow-submodules)
   echo "oss-build: cloning $P_URL@$P_TAG"
-  git -c advice.detachedHead=false clone -q --depth 1 --branch "$P_TAG" "${sub[@]}" "$P_URL" "$SRC" || { echo "oss-build: clone failed" >&2; exit 1; }
+  # A failed clone removes the directory it created, so the retry starts
+  # clean; one that leaves $SRC (a submodule failed after the checkout) is
+  # not retried, since the second clone would refuse the directory.
+  clone() { git -c advice.detachedHead=false clone -q --depth 1 --branch "$P_TAG" "${sub[@]}" "$P_URL" "$SRC"; }
+  clone || { [ ! -e "$SRC" ] && again clone; } || { echo "oss-build: clone failed" >&2; exit 1; }
 fi
 SRCDIR="$SRC${P_SOURCE_SUBDIR:+/$P_SOURCE_SUBDIR}"
 
