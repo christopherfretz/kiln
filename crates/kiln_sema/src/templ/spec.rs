@@ -396,8 +396,11 @@ impl Sema<'_, '_> {
         let tctx = self.ast.redecl_context(tctx);
         let cur = self.ast.redecl_context(self.ctx);
         let file = matches!(self.kind_of(cur), DeclKind::Namespace | DeclKind::TranslationUnit);
-        let ok =
-            if file { self.encloses(cur, tctx) } else { self.ast.first(cur) == self.ast.first(tctx) };
+        let ok = if file {
+            self.encloses(cur, tctx)
+        } else {
+            self.ast.first(cur) == self.ast.first(tctx)
+        };
         if ok {
             return true;
         }
