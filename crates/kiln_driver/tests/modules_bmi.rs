@@ -1083,6 +1083,60 @@ fn kind2_declaration_image_polymorphic() {
     assert!(irs[0] == irs[2], "IR differs between the image and a kind-1 import");
 }
 
+const IMGU: &str = include_str!("../../../tests/conformance/module.interface/Inputs/img-using.cppm");
+const IMGU_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-using-run.cpp");
+const IMGU_HIDDEN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-using-hidden.cpp");
+
+/// Stage S6 (§11.11 "Imports, partitions and using-declarations",
+/// WP-1068): using-declarations, a using-enum-declaration, namespace
+/// aliases and a using-directive come from the image. With the unit's
+/// source blanked the importer still finds names through them (and ADL
+/// through a class they name), runs, emits the replay's IR, and a
+/// non-exported using-declaration stays invisible.
+#[test]
+fn kind2_declaration_image_using() {
+    let d = scratch("image-using");
+    std::fs::write(d.join("u.cppm"), IMGU).unwrap();
+    std::fs::write(d.join("r.cpp"), IMGU_RUN).unwrap();
+    std::fs::write(d.join("h.cpp"), IMGU_HIDDEN).unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "u.cppm", "-o", "u.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "u.pcm", "-o", "u.o"]);
+    blank_source(&d, "u.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgu=blank.pcm", "r.cpp", "u.o", "-o", "r"]);
+    assert_eq!(notes, ["note: imported 'imgu' from its declaration image"]);
+    let out = Command::new(d.join("r")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "3 11 2 2 11 | 5 16 42 9\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "u.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgu=m.pcm", "-S", "-emit-llvm", "r.cpp", "-o", "r.ll"]);
+        irs.push(std::fs::read_to_string(d.join("r.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    // The same three errors, built from the image or replayed.
+    let mut errs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "u.pcm")] {
+        let o = kiln(&d, &[flag, &format!("-fmodule-file=imgu={pcm}"), "-fsyntax-only", "h.cpp"]);
+        assert_ne!(o.code, 0, "{}", o.stderr);
+        let e: Vec<String> = o
+            .stderr
+            .lines()
+            .filter(|l| l.contains("error: "))
+            .map(|l| l[l.find("h.cpp").unwrap_or(0)..].to_owned())
+            .collect();
+        errs.push(e);
+    }
+    assert_eq!(errs[0].len(), 3, "{:#?}", errs[0]);
+    assert_eq!(errs[0], errs[1]);
+}
+
 /// A unit with a node the image does not carry is written without one,
 /// and `-v` names the first such node (§11.11 "Part 2a", "Fallback").
 #[test]
@@ -1182,9 +1236,20 @@ fn kind2_declaration_image_fallback() {
             "a template expression",
         ),
         (
-            "export module f;\nexport namespace n { using I = int; }\nexport using n::I;\n",
-            "a using-declaration",
+            "export module f;\nexport struct B { int f() { return 1; } };\n\
+             export struct D : B { using B::f; };\n",
+            "a using-declaration in a class",
         ),
+        (
+            "export module f;\nexport template <class T> struct B { int f(); };\n\
+             export template <class T> struct D : B<T> { using B<T>::f; };\n",
+            "a dependent using-declaration",
+        ),
+        (
+            "export module f;\nexport struct B { B(int) {} };\nexport struct D : B { using B::B; };\n",
+            "an inherited constructor or assignment operator",
+        ),
+
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
         (
             "export module f;\nstruct S { int x; bool operator==(const S &) const = default; };\nexport constexpr S v{3};\n",

@@ -4750,6 +4750,82 @@ mod tests {
         fuzz(&encode(&template_sample()));
     }
 
+    /// Stage S6: `sample` plus, at global scope, `export using ns::f;`
+    /// (with its shadow), `export namespace na = ns;`, `export using
+    /// enum ns::E;`, `using namespace ns;`, `export using na::v;` (an
+    /// alias step) and a shadow of the first shadow.
+    fn using_sample() -> Image {
+        let mut img = sample();
+        let na = img.names.len() as u32;
+        img.names.push("na".into());
+        let rec = |name, payload| DeclRec {
+            flags: 0,
+            owner: 3,
+            access: 0,
+            name,
+            ctx: NONE,
+            lexical: NONE,
+            loc: 200,
+            prev: NONE,
+            payload,
+        };
+        img.decls.extend([
+            rec(1, Payload::Using { steps: vec![NnsRec::Ns(0)] }),
+            rec(1, Payload::Shadow { target: 2 }),
+            rec(na, Payload::NsAlias { target: 0 }),
+            rec(2, Payload::UsingEnum { e: 3 }),
+            rec(NONE, Payload::UsingDir { ns: 0 }),
+            rec(5, Payload::Using { steps: vec![NnsRec::Global, NnsRec::Alias(12)] }),
+            rec(5, Payload::Shadow { target: 6 }),
+            rec(1, Payload::Shadow { target: 11 }),
+        ]);
+        img.decls[14].owner = 1;
+        img.gated = gated_names(&img);
+        img
+    }
+
+    /// [namespace.udecl], [enum.udecl], [namespace.alias],
+    /// [namespace.udir] (S6, WP-1068): the using family round-trips; a
+    /// record naming the wrong kind of target, a later one, or carrying
+    /// the wrong name is an error.
+    #[test]
+    fn carries_using_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let img = using_sample();
+        assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
+        assert_eq!(decode(&encode(&img)), Ok(img));
+        let corrupt: [Corrupt; 12] = [
+            ("shadow of a later declaration", |i| i.decls[11].payload = Payload::Shadow { target: 16 }),
+            ("shadow of itself", |i| i.decls[11].payload = Payload::Shadow { target: 11 }),
+            ("shadow of a namespace", |i| i.decls[11].payload = Payload::Shadow { target: 0 }),
+            ("shadow under another name", |i| i.decls[11].name = 2),
+            ("directive naming an export block", |i| {
+                i.decls[14].payload = Payload::UsingDir { ns: 1 };
+            }),
+            ("directive with a name", |i| i.decls[14].name = 0),
+            ("alias of a function", |i| i.decls[12].payload = Payload::NsAlias { target: 2 }),
+            ("alias of a later alias", |i| i.decls[12].payload = Payload::NsAlias { target: 12 }),
+            ("using-enum of a typedef", |i| i.decls[13].payload = Payload::UsingEnum { e: 5 }),
+            ("using-enum under another name", |i| i.decls[13].name = 0),
+            ("alias step naming a namespace", |i| {
+                i.decls[15].payload = Payload::Using { steps: vec![NnsRec::Alias(0)] };
+            }),
+            ("namespace step naming an alias", |i| {
+                i.decls[15].payload = Payload::Using { steps: vec![NnsRec::Ns(12)] };
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = using_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+        // A global step after the first is not a qualifier.
+        let mut img = using_sample();
+        img.decls[15].payload = Payload::Using { steps: vec![NnsRec::Alias(12), NnsRec::Global] };
+        assert!(decode(&encode(&img)).is_err());
+        fuzz(&encode(&using_sample()));
+    }
+
     /// Stage S4: `sample` plus `namespace ns { template <class T, int N>
     /// T tf(T x); }`: the two parameter records, the pattern (dependent,
     /// unlisted) and the template record claiming them.

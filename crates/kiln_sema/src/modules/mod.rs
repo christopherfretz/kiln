@@ -744,7 +744,10 @@ impl Sema<'_, '_> {
     pub(crate) fn module_diagnose_hidden(&mut self, found: &Found, name: DeclName, loc: Loc) {
         let (Some(&raw), Some(&d)) = (found.found.first(), found.decls.first()) else { return };
         let text = self.decl_name_str(name);
-        let note = self.diag(DiagId::note_module_decl_not_visible, self.ast.decls.get(d).loc());
+        // A declaration found through a using-declaration is noted at
+        // the using-declaration's shadow (clang 22).
+        let at = if self.kind_of(raw) == DeclKind::UsingShadow { raw } else { d };
+        let note = self.diag(DiagId::note_module_decl_not_visible, self.ast.decls.get(at).loc());
         let mt = &self.ast.modules;
         let scope = self.module_scope_decl(raw);
         let o = scope.map(|s| mt.owner(s)).unwrap_or_default();
