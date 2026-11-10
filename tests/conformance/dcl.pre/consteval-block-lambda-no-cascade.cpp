@@ -6,9 +6,9 @@
 // call, a copy, a variable template it initializes, a closure returned
 // from a function template) and of the enclosing function report
 // nothing more (WP-1257, the consteval-block form of WP-1247; spec/sema-templates.md §5.5).
-// A function template, a class template member function and a generic
-// lambda's call operator, whose blocks already failed only themselves,
-// are pinned too. GCC 16.1 reports the same six errors, one per block.
+// A function template, a class member template and a generic lambda are pinned too (GCC
+// 16.1 agrees). Requires 22: clang 19 names the closure `(anonymous class)`.
+//@ requires: clang>=22
 //@ expect: compile-fail
 //@ skip(clang): clang 19 has no consteval blocks (P3289R1)
 //@ oracle: gcc
