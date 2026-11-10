@@ -132,7 +132,10 @@ impl Sema<'_, '_> {
         self.ctx = ctx;
         let access_ctx = self.access_ctx.take();
         let lambda_base = std::mem::replace(&mut self.lambda_base, self.lambdas.len());
-        let r = f(self);
+        // Likewise the outer expression's deleted functions and template-id
+        // warnings waiting for their use: an instantiated body's
+        // full-expressions do not report them (WP-1170).
+        let r = self.setting_aside_uses_outside(&[], f);
         self.lambda_base = lambda_base;
         self.access_ctx = access_ctx;
         self.scopes = saved.scopes;

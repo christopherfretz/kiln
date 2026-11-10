@@ -384,11 +384,13 @@ impl Sema<'_, '_> {
             let o = if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
             opts.push(o.with(IcsOptions::CANDIDATE_ARG));
         }
+        let mark = self.ovl.nondep_ics.len();
         let r = self.deduce_call(ft, explicit, &args, &opts, loc);
         self.cand_scratch.push((args, opts));
         #[cfg(feature = "op-stats")]
         let tdk = r.as_ref().map_or_else(|f| f.tdk, |_| crate::templ::deduce::Tdk::Success);
         self.add_template_candidate_with(set, ft, found, kind, first_opts, pattern, lead, r);
+        self.ovl.nondep_ics.truncate(mark);
         #[cfg(feature = "op-stats")]
         crate::templ::deduce_stats::cand_end(&frame, tdk);
     }

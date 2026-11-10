@@ -569,8 +569,12 @@ impl Sema<'_, '_> {
         let (mine, others): (Vec<ExprId>, Vec<ExprId>) =
             std::mem::take(&mut self.pending_odr).into_iter().partition(|r| names.contains(r));
         self.pending_odr = mine;
+        // Likewise the deleted functions and template-id warnings waiting
+        // for their use: those the enclosing expression named (the callee
+        // of `del(X<f<1>()>::v)`) are still decided by its call or its end
+        // (WP-1170).
         self.constant_full_expr += 1;
-        let r = self.act_on_full_expr(e);
+        let r = self.setting_aside_outer_uses(e, |s| s.act_on_full_expr(e));
         self.constant_full_expr -= 1;
         let rest = std::mem::replace(&mut self.pending_odr, others);
         self.pending_odr.extend(rest);
@@ -593,6 +597,65 @@ impl Sema<'_, '_> {
     /// Returns the stack of [`Sema::take_walk_stack`] for the next walk.
     pub(crate) fn put_walk_stack(&self, stack: Vec<ExprId>) {
         self.walk_stack.replace(stack);
+    }
+
+    /// `f` with the pending uses waiting for their context
+    /// ([`Sema::special`]'s deleted functions and template-id warnings)
+    /// that are not part of the constant expression `e` set aside, so
+    /// that completing `e` decides only its own.
+    fn setting_aside_outer_uses<R>(&mut self, e: ExprId, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.setting_aside_uses_outside(&[e], f)
+    }
+
+    /// Before the constant evaluation of `roots`: the pending uses
+    /// ([`Sema::flush_pending_deleted`]) they name are reported; those of
+    /// an enclosing expression still wait for its call or its end (the
+    /// `del` of `del(X<f<1>()>::v)` while `f<1>`'s explicit argument is
+    /// evaluated; WP-1170).
+    pub(crate) fn flush_pending_deleted_in(&mut self, roots: &[ExprId]) {
+        if self.special.has_pending() {
+            self.setting_aside_uses_outside(roots, Sema::flush_pending_deleted);
+        }
+    }
+
+    /// [`Sema::setting_aside_outer_uses`] for the expressions `roots`
+    /// (none: every pending use is set aside).
+    pub(crate) fn setting_aside_uses_outside<R>(
+        &mut self,
+        roots: &[ExprId],
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        if !self.special.has_pending() {
+            return f(self);
+        }
+        let mut within = kiln_source::fx::FxHashSet::default();
+        let mut stack = self.walk_stack.take();
+        stack.clear();
+        stack.extend_from_slice(roots);
+        while let Some(x) = stack.pop() {
+            if within.len() > 1_000_000 {
+                break;
+            }
+            if within.insert(x) {
+                self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+            }
+        }
+        self.put_walk_stack(stack);
+        let (mine, deleted): (Vec<_>, Vec<_>) = std::mem::take(&mut self.special.pending_deleted)
+            .into_iter()
+            .partition(|p| within.contains(&p.expr));
+        self.special.pending_deleted = mine;
+        let (mine, warnings): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.special.pending_tid_warnings)
+                .into_iter()
+                .partition(|w| within.contains(&w.0));
+        self.special.pending_tid_warnings = mine;
+        let r = f(self);
+        let inner = std::mem::replace(&mut self.special.pending_deleted, deleted);
+        self.special.pending_deleted.extend(inner);
+        let inner = std::mem::replace(&mut self.special.pending_tid_warnings, warnings);
+        self.special.pending_tid_warnings.extend(inner);
+        r
     }
 
     /// The `DeclRefExpr`s in `e`.

@@ -10,7 +10,6 @@
 //@ expect: run
 //@ args: %{test_dir}/Inputs/lambda-in-signature-explicit-args-no-early-spec-defs.cpp
 //@ stdout: 1 1
-//@ xfail(kiln): WP-1142 follow-up, no early specialization (U not deducible from the explicit arguments); the overload-set path resolves fewer times than clang
 #include <cstdio>
 template <class T> struct is_int { static constexpr bool v = false; };
 template <> struct is_int<int> { static constexpr bool v = true; };
