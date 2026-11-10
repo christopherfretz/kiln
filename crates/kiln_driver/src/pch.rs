@@ -903,7 +903,7 @@ fn write_pch(
         macros: macros(args),
         files,
     };
-    let _write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
+    let write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
     if let Err(err) = bmi::write_file(Path::new(out), rec.write().as_bytes()) {
         let why = if err.kind() == std::io::ErrorKind::NotFound {
             "No such file or directory".to_owned()
@@ -913,7 +913,7 @@ fn write_pch(
         report_output_error(diag_opts, &io.stderr, out, &why);
         return 1;
     }
-    drop(_write_ast);
+    drop(write_ast);
     // The user's `-MD` / `-MMD` file: the same list, filtered.
     if let Some(h) = args.deps.headers() {
         let mut user = DepList::new(h == DepHeaders::All);
