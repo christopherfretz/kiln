@@ -117,6 +117,16 @@ impl AnnotArena {
         }
     }
 
+    /// Empties the annotations of declaration `d`, leaving it an (empty)
+    /// list so that none is copied onto it later: a function template
+    /// specialization declared by an explicit specialization drops those
+    /// instantiated from the pattern (spec/annotations.md §5).
+    pub fn clear(&mut self, d: DeclId) {
+        if !self.of_decl.refine(d, ListId::EMPTY) {
+            let _ = self.of_decl.insert(d, ListId::EMPTY);
+        }
+    }
+
     /// The annotations of the `index`-th direct base-specifier of the
     /// class whose first declaration is `class`, in source order
     /// ([`ListId::EMPTY`] if none).
