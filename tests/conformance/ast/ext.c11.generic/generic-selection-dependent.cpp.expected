@@ -1,0 +1,129 @@
+TranslationUnitDecl
+|-ClassTemplateDecl S
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-CXXRecordDecl struct S definition
+| | |-VarDecl v 'const int' static inline constexpr cinit
+| | | `-GenericSelectionExpr '<dependent type>' result_dependent
+| | |   |-CXXUnresolvedConstructExpr 'T' list
+| | |   | `-InitListExpr 'void'
+| | |   |-case 'int'
+| | |   | `-IntegerLiteral 'int' 1
+| | |   |-case 'long'
+| | |   | `-IntegerLiteral 'int' 2
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 3
+| | |-VarDecl w 'const int' static inline constexpr cinit
+| | | `-GenericSelectionExpr '<dependent type>' result_dependent type_operand='T'
+| | |   |-case 'int'
+| | |   | `-IntegerLiteral 'int' 10
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 30
+| | |-VarDecl d 'const int' static inline constexpr cinit
+| | | `-GenericSelectionExpr '<dependent type>' result_dependent
+| | |   |-IntegerLiteral 'int' 0
+| | |   |-case 'T'
+| | |   | `-IntegerLiteral 'int' 100
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 300
+| | |-VarDecl n 'const int' static inline constexpr cinit
+| | | `-GenericSelectionExpr '<dependent type>' result_dependent
+| | |   |-CXXUnresolvedConstructExpr 'T' list
+| | |   | `-InitListExpr 'void'
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 7
+| | `-VarDecl k 'const int' static inline constexpr cinit value=5
+| |   `-GenericSelectionExpr 'int'
+| |     |-IntegerLiteral 'int' 0
+| |     |-case 'int' selected
+| |     | `-IntegerLiteral 'int' 5
+| |     `-default
+| |       `-IntegerLiteral 'int' 6
+| |-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+| | |-TemplateArgument type 'int'
+| | |-VarDecl referenced v 'const int' static inline constexpr cinit value=1
+| | | `-GenericSelectionExpr 'int'
+| | |   |-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+| | |   | `-InitListExpr 'int'
+| | |   |-case 'int' selected
+| | |   | `-IntegerLiteral 'int' 1
+| | |   |-case 'long'
+| | |   | `-IntegerLiteral 'int' 2
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 3
+| | |-VarDecl referenced w 'const int' static inline constexpr cinit value=10
+| | | `-GenericSelectionExpr 'int' type_operand='int'
+| | |   |-case 'int' selected
+| | |   | `-IntegerLiteral 'int' 10
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 30
+| | |-VarDecl referenced d 'const int' static inline constexpr cinit value=100
+| | | `-GenericSelectionExpr 'int'
+| | |   |-IntegerLiteral 'int' 0
+| | |   |-case 'int' selected
+| | |   | `-IntegerLiteral 'int' 100
+| | |   `-default
+| | |     `-IntegerLiteral 'int' 300
+| | |-VarDecl referenced n 'const int' static inline constexpr cinit value=7
+| | | `-GenericSelectionExpr 'int'
+| | |   |-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+| | |   | `-InitListExpr 'int'
+| | |   `-default selected
+| | |     `-IntegerLiteral 'int' 7
+| | `-VarDecl referenced k 'const int' static inline constexpr cinit value=5
+| |   `-GenericSelectionExpr 'int'
+| |     |-IntegerLiteral 'int' 0
+| |     |-case 'int' selected
+| |     | `-IntegerLiteral 'int' 5
+| |     `-default
+| |       `-IntegerLiteral 'int' 6
+| `-ClassTemplateSpecializationDecl struct S definition implicit_instantiation
+|   |-TemplateArgument type 'long'
+|   |-VarDecl referenced v 'const int' static inline constexpr cinit value=2
+|   | `-GenericSelectionExpr 'int'
+|   |   |-CXXFunctionalCastExpr 'long' functional cast to long <NoOp>
+|   |   | `-InitListExpr 'long'
+|   |   |-case 'int'
+|   |   | `-IntegerLiteral 'int' 1
+|   |   |-case 'long' selected
+|   |   | `-IntegerLiteral 'int' 2
+|   |   `-default
+|   |     `-IntegerLiteral 'int' 3
+|   |-VarDecl referenced w 'const int' static inline constexpr cinit value=30
+|   | `-GenericSelectionExpr 'int' type_operand='long'
+|   |   |-case 'int'
+|   |   | `-IntegerLiteral 'int' 10
+|   |   `-default selected
+|   |     `-IntegerLiteral 'int' 30
+|   |-VarDecl referenced d 'const int' static inline constexpr cinit value=300
+|   | `-GenericSelectionExpr 'int'
+|   |   |-IntegerLiteral 'int' 0
+|   |   |-case 'long'
+|   |   | `-IntegerLiteral 'int' 100
+|   |   `-default selected
+|   |     `-IntegerLiteral 'int' 300
+|   |-VarDecl n 'const int' static constexpr
+|   `-VarDecl k 'const int' static constexpr
+|-VarDecl s 'int' cinit
+| `-BinaryOperator 'int' '+'
+|   |-BinaryOperator 'int' '+'
+|   | |-BinaryOperator 'int' '+'
+|   | | |-BinaryOperator 'int' '+'
+|   | | | |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | | | | `-DeclRefExpr 'const int' lvalue Var 'v' 'const int' non_odr_use_constant
+|   | | | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   | | |   `-DeclRefExpr 'const int' lvalue Var 'w' 'const int' non_odr_use_constant
+|   | | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   | |   `-DeclRefExpr 'const int' lvalue Var 'd' 'const int' non_odr_use_constant
+|   | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   |   `-DeclRefExpr 'const int' lvalue Var 'n' 'const int' non_odr_use_constant
+|   `-ImplicitCastExpr 'int' <LValueToRValue>
+|     `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant
+`-VarDecl l 'int' cinit
+  `-BinaryOperator 'int' '+'
+    |-BinaryOperator 'int' '+'
+    | |-ImplicitCastExpr 'int' <LValueToRValue>
+    | | `-DeclRefExpr 'const int' lvalue Var 'v' 'const int' non_odr_use_constant
+    | `-ImplicitCastExpr 'int' <LValueToRValue>
+    |   `-DeclRefExpr 'const int' lvalue Var 'w' 'const int' non_odr_use_constant
+    `-ImplicitCastExpr 'int' <LValueToRValue>
+      `-DeclRefExpr 'const int' lvalue Var 'd' 'const int' non_odr_use_constant

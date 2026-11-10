@@ -49,17 +49,36 @@
 //! initializers included) is known.
 //!
 //! Local variables and condition variables have values, as in clang's
-//! call frame (WP-1150): until the first side effect (after which clang
-//! fails quietly to access any of them), a local variable of a type no
-//! evaluation can leave a pointer in (arithmetic, enumeration, and arrays
-//! and classes of those without a destructor) is a frame object
-//! ([`kiln_oven::Oven::frame_local`]), initialized and later read and
-//! modified by the Oven ([`Sema::eval_in_frame`]) with the parameters
-//! still unknown; a reference variable bound to one names it. Any other
-//! local variable is unknown, so the walk misses some functions clang
-//! reports; it never reports one clang accepts. A loop whose iteration
-//! leaves the frame as it found it repeats forever; any other runs
-//! iteration by iteration.
+//! call frame (WP-1150, WP-1163): until the first side effect (after
+//! which clang fails quietly to access any of them), a local variable of
+//! a type the Oven can keep between evaluations (scalars, pointers
+//! included, and arrays and classes of those without a destructor) is a
+//! frame object ([`kiln_oven::Oven::frame_local`]), initialized and later
+//! read and modified by the Oven ([`Sema::eval_in_frame`]) with the
+//! parameters still unknown; a reference variable bound to one names it.
+//! A pointer local whose value would dangle once its evaluation ends (one
+//! to a temporary, a block-scope object of the evaluation, the heap) is
+//! not kept: the evaluation fails quietly. Any other local variable is
+//! unknown, so the walk misses some functions clang reports; it never
+//! reports one clang accepts.
+//!
+//! An expression naming both is evaluated in clang's order (WP-1163):
+//! the Oven runs it whole in the frame, and its first read of a
+//! parameter, `this` or an untracked local fails the evaluation quietly
+//! ([`kiln_oven::Oven::evaluate_in_frame`]); the walk then takes the
+//! expression apart, and an operand that names no local is still
+//! checked, as clang's `keepEvaluatingAfterFailure` does. An assignment
+//! evaluates its right operand first; a potential result is never
+//! checked as a constant result (clang `CheckPotentialConstantExpression`
+//! does not).
+//!
+//! A loop whose statements name only known locals (no `return`, label,
+//! `goto`, `try` or range-based `for` in it) runs in one Oven evaluation,
+//! however many iterations it takes ([`Sema::eval_loop_in_frame`],
+//! `-fconstexpr-steps` its budget, counting clang's steps); any other
+//! loop runs iteration by iteration, and one whose iteration leaves the
+//! frame and the steps as it found it repeats until the step limit,
+//! which the walk jumps to.
 //!
 //! Builtin calls follow clang's table, never the Oven, which folds more
 //! (the P0533 `<cmath>` builtins and their library twins) and notes some
@@ -163,12 +182,17 @@ enum Flow {
     CaseNotFound,
 }
 
-/// The most statements the walk executes before it gives up quietly
-/// (its own budget: clang's `-fconstexpr-steps` limit is far larger).
+/// The most statements the walk executes itself before it gives up
+/// quietly (its own budget: clang's `-fconstexpr-steps` limit is far
+/// larger). A loop run as one Oven evaluation, and the iterations a
+/// repeating loop skips, count once (WP-1163).
 const MAX_WORK: usize = 1 << 16;
 
 /// The most Oven evaluations in the walk's frame; past them the walk
-/// knows no local variable's value (as after a side effect).
+/// knows no local variable's value (as after a side effect). A loop over
+/// known locals takes one ([`Sema::nc_loop_job`], WP-1163), so only a
+/// loop the walk runs iteration by iteration (one with a `return` in it)
+/// can reach the cap.
 const MAX_FRAME_EVALS: u32 = 1 << 12;
 
 /// What a full-expression names ([`Sema::nc_names`]).
@@ -251,8 +275,9 @@ struct Walk {
     steps: u64,
     /// The step limit (`-fconstexpr-steps`).
     limit: u64,
-    /// The statements executed, in order.
-    trace: Vec<StmtId>,
+    /// Statements walked (each once, whatever the steps a loop job or a
+    /// repeating iteration skips): [`MAX_WORK`] bounds them.
+    work: usize,
     /// A statement expression ran, whose statements clang counts as
     /// steps and the walk does not: no step-limit failure is reported.
     no_steps: bool,
@@ -503,7 +528,7 @@ impl Sema<'_, '_> {
             scopes: Vec::new(),
             steps: 0,
             limit,
-            trace: Vec::new(),
+            work: 0,
             no_steps: false,
             track: !self.nc_strict_only && self.oven.is_some(),
             tracked: Vec::new(),
@@ -657,7 +682,10 @@ impl Sema<'_, '_> {
             w.no_steps = true;
         }
         let known = f.known();
-        if !known || f.names.unknown() || self.nc_impure(e, 0) {
+        // A frame evaluation that succeeded read nothing unknown (it
+        // fails quietly at the first such read), so it notes no side
+        // effect (`int j = (x, 0);`).
+        if !known || (f.names.unknown() && !f.framed) || self.nc_impure(e, 0) {
             w.side = true;
         }
         known || !(f.names.untracked || (f.names.tracked && !f.framed))
@@ -755,12 +783,23 @@ impl Sema<'_, '_> {
     }
 
     /// The outcome of `e` (naming `names`) whose evaluation in the walk's
-    /// frame failed with `f`: the failure when clang reports it (with
-    /// every name known, it is clang's), else a failure the walk finds
-    /// with the unknown names unknown, else unknown.
+    /// frame failed with `f`: the failure when clang reports it, else,
+    /// when `e` names something the walk does not know, a failure the
+    /// walk finds with every local unknown, else unknown.
+    ///
+    /// The frame evaluation fails quietly at the first read of a
+    /// parameter, `this` or an untracked local (`Oven::frame_job`,
+    /// WP-1163), so a failure with notes came before it in clang's
+    /// order, while every local was still known. Past that read clang
+    /// fails quietly on every local (C++14 `findCompleteObject` once
+    /// `HasSideEffects` is set) but still reports a failure of an
+    /// operand that names none: what [`Sema::nc_expr`] finds.
     fn nc_frame_failure(&mut self, f: EvalFailure, names: Names, e: ExprId, depth: u32) -> Value {
-        if Self::reportable(&f) && !names.unknown() {
+        if Self::reportable(&f) {
             return Value::Fails(f);
+        }
+        if !names.unknown() {
+            return Value::Unknown;
         }
         match self.nc_expr(e, depth + 1) {
             p @ Value::Fails(_) => p,
@@ -926,6 +965,15 @@ impl Sema<'_, '_> {
                 let [t, f] = ex.cond_arms(e);
                 for c in ops {
                     self.nc_temps(c, ignored && (c == t || c == f), in_ewc, out, depth + 1);
+                }
+            }
+            // The copy rebuilt for a lifetime-extending use (spec/sema.md
+            // §7.6a) holds this frame's extended temporaries. Unreached
+            // today: the walk stops at a range-based `for` and an
+            // expansion statement, the only rewriting contexts. WP-1166.
+            ExprKind::CXXDefaultArgExpr => {
+                if let Some(r) = ex.default_arg_rewritten(e) {
+                    self.nc_temps(r, false, in_ewc, out, depth + 1);
                 }
             }
             _ => {
@@ -1476,18 +1524,183 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// A loop iteration that began at `w.trace[start]`, with
-    /// [`Walk::side`] and the frame the same at its end as at its start
+    /// A loop iteration that began at step `start`, with [`Walk::side`]
+    /// and the frame the same at its end as at its start
     /// ([`Sema::nc_repeats`]), has finished and the loop goes on: every
     /// later iteration executes the same statements, so clang runs out
-    /// of steps at a statement of that sequence.
-    fn nc_cycle(&self, w: &Walk, start: usize) -> Flow {
-        let seq = &w.trace[start..];
-        if seq.is_empty() || self.nc_strict_only || w.no_steps {
-            return Flow::Stop;
+    /// of steps at a statement of that sequence. The walk skips the
+    /// whole iterations left (`None`: it goes on with the last, partial
+    /// one, which fails at that statement), once per loop and only when
+    /// it counts clang's steps.
+    fn nc_skip(&self, w: &mut Walk, start: u64, skipped: &mut bool) -> Option<Flow> {
+        let n = w.steps.saturating_sub(start);
+        if n == 0 || *skipped || self.nc_strict_only || w.no_steps {
+            return Some(Flow::Stop);
         }
-        let k = (w.limit.saturating_sub(w.steps) % seq.len() as u64) as usize;
-        self.nc_step_fail(w, seq[k])
+        *skipped = true;
+        w.steps += w.limit.saturating_sub(w.steps) / n * n;
+        None
+    }
+
+    /// Loop statement `s` executed whole in one Oven job in the walk's
+    /// frame (WP-1163), when every local variable's value is known and
+    /// the loop is one the Oven executes as clang would
+    /// ([`Sema::nc_loop_pure`]): how the walk goes on, or `None` to walk
+    /// it an iteration at a time (the job failed quietly, the frame is
+    /// as it was). The job counts clang's steps from the walk's.
+    fn nc_loop_job(&mut self, w: &mut Walk, s: StmtId) -> Option<Flow> {
+        if !w.knows_locals() {
+            return None;
+        }
+        let d = *self.ast.stmts.loop_data(s);
+        let anchor = d.cond.or(d.inc)?;
+        let mut locals = Vec::new();
+        if !self.nc_loop_pure(w, s, &mut locals, 0) {
+            return None;
+        }
+        // `s` itself counts again in the job.
+        let steps = w.limit.saturating_sub(w.steps) + 1;
+        let at = self.begin_loc(anchor);
+        match self.eval_loop_in_frame(s, anchor, &w.frame, steps, at) {
+            Ok(used) => {
+                w.steps = (w.steps + used).saturating_sub(1);
+                Some(Flow::Next)
+            }
+            Err(f) if f.kind == FailKind::StepLimit && w.no_steps => Some(Flow::Stop),
+            Err(f) if Self::reportable(&f) => Some(Flow::Fails(f)),
+            Err(_) => None,
+        }
+    }
+
+    /// Whether statement `s` of a loop the walk would execute in one
+    /// job ([`Sema::nc_loop_job`]) is one the Oven executes as clang
+    /// would, the variables it declares added to `locals`: plain
+    /// statements (no `return`, label, `goto`, `try`, assumption or
+    /// `if consteval`), local variables without a destructor, and
+    /// full-expressions [`Sema::nc_loop_expr`] accepts.
+    fn nc_loop_pure(&mut self, w: &Walk, s: StmtId, locals: &mut Vec<DeclId>, depth: u32) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let st = &self.ast.stmts;
+        match st.get(s).kind() {
+            StmtKind::NullStmt | StmtKind::BreakStmt | StmtKind::ContinueStmt => true,
+            StmtKind::CompoundStmt => {
+                let subs: Vec<StmtId> =
+                    self.ast.lists.iter::<StmtId>(st.compound_body(s)).collect();
+                subs.into_iter().all(|c| self.nc_loop_pure(w, c, locals, depth + 1))
+            }
+            StmtKind::ExprStmt => {
+                let e = st.expr_stmt_expr(s);
+                self.nc_loop_expr(w, e, locals)
+            }
+            StmtKind::DeclStmt => {
+                let decls: Vec<DeclId> =
+                    self.ast.lists.iter::<DeclId>(st.decl_stmt_decls(s)).collect();
+                decls.into_iter().all(|d| self.nc_loop_var(w, d, locals))
+            }
+            StmtKind::IfStmt => {
+                let d = *st.if_data(s);
+                let Some(cond) = d.cond else { return false };
+                d.init.is_none_or(|i| self.nc_loop_pure(w, i, locals, depth + 1))
+                    && d.cond_var.is_none_or(|v| self.nc_loop_var(w, v, locals))
+                    && self.nc_loop_expr(w, cond, locals)
+                    && d.then.is_none_or(|t| self.nc_loop_pure(w, t, locals, depth + 1))
+                    && d.els.is_none_or(|e| self.nc_loop_pure(w, e, locals, depth + 1))
+            }
+            StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt => {
+                let d = *st.loop_data(s);
+                d.init.is_none_or(|i| self.nc_loop_pure(w, i, locals, depth + 1))
+                    && d.cond_var.is_none_or(|v| self.nc_loop_var(w, v, locals))
+                    && d.cond.is_none_or(|c| self.nc_loop_expr(w, c, locals))
+                    && d.inc.is_none_or(|i| self.nc_loop_expr(w, i, locals))
+                    && d.body.is_some_and(|b| self.nc_loop_pure(w, b, locals, depth + 1))
+            }
+            StmtKind::SwitchStmt => {
+                let d = *st.switch_data(s);
+                d.init.is_none_or(|i| self.nc_loop_pure(w, i, locals, depth + 1))
+                    && d.cond_var.is_none_or(|v| self.nc_loop_var(w, v, locals))
+                    && self.nc_loop_expr(w, d.cond, locals)
+                    && self.nc_loop_pure(w, d.body, locals, depth + 1)
+            }
+            StmtKind::CaseStmt => {
+                let sub = st.case_data(s).sub;
+                self.nc_loop_pure(w, sub, locals, depth + 1)
+            }
+            StmtKind::DefaultStmt => {
+                let sub = st.default_sub(s);
+                self.nc_loop_pure(w, sub, locals, depth + 1)
+            }
+            StmtKind::AttributedStmt => {
+                let assume = self
+                    .ast
+                    .lists
+                    .iter::<kiln_ast::AttrId>(st.stmt_attrs(s))
+                    .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::ASSUME);
+                let sub = st.sub_stmt(s);
+                !assume && self.nc_loop_pure(w, sub, locals, depth + 1)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the definition of `d` in a loop the walk would execute in
+    /// one job is one the Oven executes as clang would
+    /// ([`Sema::nc_loop_pure`]): a local variable (not static or
+    /// `thread_local`, no structured binding) without a destructor,
+    /// whose initializer [`Sema::nc_loop_expr`] accepts.
+    fn nc_loop_var(&mut self, w: &Walk, d: DeclId, locals: &mut Vec<DeclId>) -> bool {
+        let Some(v) = self.ast.decls.var(d) else { return false };
+        let init = v.init;
+        if self.kind_of(d) != DeclKind::Var
+            || v.spec.storage() == kiln_ast::decl::VarStorage::Extern
+            || !self.has_local_storage(d)
+            || self.ast.decls.decomp_bindings(d).is_some()
+            || self.nc_destroyed(d)
+        {
+            return false;
+        }
+        locals.push(d);
+        init.is_none_or(|i| self.nc_loop_expr(w, i, locals))
+    }
+
+    /// Whether full-expression `e` of a loop the walk would execute in
+    /// one job is one the Oven evaluates as clang would: nothing
+    /// [`Sema::nc_impure`] or [`Sema::nc_frame_ok`] refuses, and every
+    /// local variable it names tracked or declared in the loop
+    /// (`locals`); no parameter, no `this`.
+    fn nc_loop_expr(&mut self, w: &Walk, e: ExprId, locals: &[DeclId]) -> bool {
+        self.nc_loop_names(w, e, locals, 0) && !self.nc_impure(e, 0) && self.nc_frame_ok(e)
+    }
+
+    /// Whether every local variable `e` names is tracked or in `locals`,
+    /// and it names no parameter and no `this` ([`Sema::nc_loop_expr`]).
+    fn nc_loop_names(&self, w: &Walk, e: ExprId, locals: &[DeclId], depth: u32) -> bool {
+        if depth > 256 {
+            return false;
+        }
+        let ex = &self.ast.exprs;
+        match ex.get(e).kind() {
+            ExprKind::CXXThisExpr => false,
+            ExprKind::DeclRefExpr => {
+                let d = ex.decl(e);
+                !self.has_local_storage(d)
+                    || (self.kind_of(d) != DeclKind::ParmVar
+                        && (w.object_of(d).is_some() || locals.contains(&d)))
+            }
+            ExprKind::CXXDefaultInitExpr => {
+                let field = ex.default_init_field(e);
+                self.ast
+                    .decls
+                    .field(field)
+                    .and_then(|fd| fd.init)
+                    .is_none_or(|i| self.nc_loop_names(w, i, locals, depth + 1))
+            }
+            _ => ex
+                .children(e, &self.ast.lists)
+                .into_iter()
+                .all(|c| self.nc_loop_names(w, c, locals, depth + 1)),
+        }
     }
 
     /// A loop body (clang `EvaluateLoopBody`): a block scope of its own;
@@ -1509,16 +1722,16 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// The state a loop iteration starts in: [`Walk::side`], the trace
-    /// length and the frame's objects ([`Sema::frame_snapshot`]).
-    fn nc_iter_start(&self, w: &Walk) -> (bool, usize, Vec<u8>) {
-        (w.side, w.trace.len(), self.frame_snapshot(&w.frame))
+    /// The state a loop iteration starts in: [`Walk::side`], the step
+    /// count and the frame's objects ([`Sema::frame_snapshot`]).
+    fn nc_iter_start(&self, w: &Walk) -> (bool, u64, Vec<u8>) {
+        (w.side, w.steps, self.frame_snapshot(&w.frame))
     }
 
     /// Whether an iteration that started in `start`
     /// ([`Sema::nc_iter_start`]) left the walk as it found it: the loop
     /// repeats it forever.
-    fn nc_repeats(&self, w: &Walk, start: &(bool, usize, Vec<u8>)) -> bool {
+    fn nc_repeats(&self, w: &Walk, start: &(bool, u64, Vec<u8>)) -> bool {
         start.0 == w.side && start.2 == self.frame_snapshot(&w.frame)
     }
 
@@ -1528,6 +1741,7 @@ impl Sema<'_, '_> {
     fn nc_while(&mut self, w: &mut Walk, s: StmtId, depth: u32) -> Flow {
         let d = *self.ast.stmts.loop_data(s);
         let (Some(cond), Some(body)) = (d.cond, d.body) else { return Flow::Stop };
+        let mut skipped = false;
         loop {
             let start = self.nc_iter_start(w);
             w.open();
@@ -1565,8 +1779,10 @@ impl Sema<'_, '_> {
             if !w.destroy() {
                 return Flow::Stop;
             }
-            if self.nc_repeats(w, &start) {
-                return self.nc_cycle(w, start.1);
+            if self.nc_repeats(w, &start)
+                && let Some(r) = self.nc_skip(w, start.1, &mut skipped)
+            {
+                return r;
             }
         }
     }
@@ -1575,6 +1791,7 @@ impl Sema<'_, '_> {
     fn nc_do(&mut self, w: &mut Walk, s: StmtId, depth: u32, mut case: Option<StmtId>) -> Flow {
         let d = *self.ast.stmts.loop_data(s);
         let (Some(cond), Some(body)) = (d.cond, d.body) else { return Flow::Stop };
+        let mut skipped = false;
         loop {
             let (start, whole) = (self.nc_iter_start(w), case.is_none());
             match self.nc_loop_body(w, body, depth, case) {
@@ -1591,8 +1808,11 @@ impl Sema<'_, '_> {
                 Some(false) => return Flow::Next,
                 None => return Flow::Stop,
             }
-            if whole && self.nc_repeats(w, &start) {
-                return self.nc_cycle(w, start.1);
+            if whole
+                && self.nc_repeats(w, &start)
+                && let Some(r) = self.nc_skip(w, start.1, &mut skipped)
+            {
+                return r;
             }
         }
     }
@@ -1616,6 +1836,7 @@ impl Sema<'_, '_> {
             w.discard();
             r
         };
+        let mut skipped = false;
         loop {
             let start = self.nc_iter_start(w);
             w.open();
@@ -1656,9 +1877,11 @@ impl Sema<'_, '_> {
                 w.discard();
                 return Flow::Stop;
             }
-            if self.nc_repeats(w, &start) {
+            if self.nc_repeats(w, &start)
+                && let Some(r) = self.nc_skip(w, start.1, &mut skipped)
+            {
                 w.discard();
-                return self.nc_cycle(w, start.1);
+                return r;
             }
         }
     }
@@ -2022,14 +2245,14 @@ impl Sema<'_, '_> {
     /// unknown (clang `EvaluateStmt`), searching for `case` label
     /// `case` when it is set.
     fn nc_stmt(&mut self, w: &mut Walk, s: StmtId, depth: u32, case: Option<StmtId>) -> Flow {
-        if depth > MAX_DEPTH || w.trace.len() >= MAX_WORK {
+        if depth > MAX_DEPTH || w.work >= MAX_WORK {
             return Flow::Stop;
         }
         if w.steps >= w.limit {
             return self.nc_step_fail(w, s);
         }
         w.steps += 1;
-        w.trace.push(s);
+        w.work += 1;
         while let Some(o) = w.dead.pop() {
             self.frame_free(o);
         }
@@ -2059,6 +2282,12 @@ impl Sema<'_, '_> {
                 StmtKind::DeclStmt => return self.nc_decl_case(w, s, depth),
                 _ => return Flow::CaseNotFound,
             }
+        }
+        if case.is_none()
+            && matches!(kind, StmtKind::WhileStmt | StmtKind::ForStmt | StmtKind::DoStmt)
+            && let Some(r) = self.nc_loop_job(w, s)
+        {
+            return r;
         }
         let st = &self.ast.stmts;
         match kind {

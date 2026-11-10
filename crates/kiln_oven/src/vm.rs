@@ -557,7 +557,7 @@ impl Oven {
             Ok(()) => Ok(()),
             Err((fault, pc)) => {
                 let kind = fault.kind();
-                let f = if self.run.silent {
+                let f = if self.run.silent || self.frame_unknown_read(&*b, &fault) {
                     EvalFailure::silent(kind)
                 } else {
                     EvalFailure { kind, notes: self.render(&*b, fault, pc) }

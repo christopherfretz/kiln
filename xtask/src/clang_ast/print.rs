@@ -102,6 +102,21 @@ fn desugar_type_node(t: &Json) -> &Json {
     t
 }
 
+/// `'type'` or `'type':'desugared'` of a type-tree node. A qualified
+/// type's `QualType` node carries both; any other node carries no
+/// `desugaredQualType`, so the desugar is read off its sugar chain.
+fn type_node_pair(t: &Json) -> Res<String> {
+    if kind(t) == "QualType" {
+        return type_pair(t.get("type"), "QualType");
+    }
+    let ty = qual_type(t);
+    if ty.is_empty() {
+        return Err(format!("clang-ast: type node {} has no type", kind(t)));
+    }
+    let d = qual_type(desugar_type_node(t));
+    Ok(if d.is_empty() || d == ty { format!("'{ty}'") } else { format!("'{ty}':'{d}'") })
+}
+
 fn qual_type(n: &Json) -> &str {
     n.get("type").and_then(|t| text(t, "qualType")).unwrap_or("")
 }
@@ -1857,6 +1872,7 @@ impl<'a> Printer<'a, '_> {
                 line = self.expr_head(n, k)?;
                 kids_out = self.kid_trees(n)?;
             }
+            "GenericSelectionExpr" => (line, kids_out) = self.generic_selection(n)?,
             "CXXNewExpr" | "CXXDeleteExpr" => {
                 let mut l = self.expr_head(n, k)?;
                 for (key, word) in [("isGlobal", " global"), ("isArray", " array")] {
@@ -1993,6 +2009,74 @@ impl<'a> Printer<'a, '_> {
             _ => return Err(format!("clang-ast: no printer for kept kind `{k}` (normalizer bug)")),
         }
         Ok(Some(Tree { line, kids: kids_out }))
+    }
+
+    /// A `GenericSelectionExpr` (spec/ast-dump.md §3): clang's JSON
+    /// children are the controlling expression and its type's tree (or
+    /// only the controlling type's tree), then the associations, which
+    /// have no `kind` (`associationKind`, `selected`, and as children the
+    /// type's tree of a `case`, then the expression).
+    fn generic_selection(&mut self, n: &'a Json) -> Res<(String, Vec<Tree>)> {
+        const K: &str = "GenericSelectionExpr";
+        let mut l = self.expr_head(n, K)?;
+        if flag(n, "resultDependent") {
+            push_word(&mut l, "result_dependent");
+        }
+        let mut out = Vec::new();
+        let mut it = kids(n).peekable();
+        let first =
+            it.next().ok_or("clang-ast: a GenericSelectionExpr without a controlling operand")?;
+        if kind(first).ends_with("Type") {
+            let _ = write!(l, " type_operand={}", type_node_pair(first)?);
+        } else {
+            out.extend(self.node(first)?);
+            // The controlling expression's type tree (clang's text dump
+            // prints it too, marked "FIXME: remove").
+            if it.peek().is_some_and(|c| kind(c).ends_with("Type")) {
+                it.next();
+            }
+        }
+        for a in it {
+            let obj = a.as_obj().unwrap_or(&[]);
+            if let Some((key, _)) = obj
+                .iter()
+                .find(|(key, _)| !matches!(key.as_str(), "associationKind" | "selected" | "inner"))
+            {
+                return Err(format!(
+                    "clang-ast: a GenericSelectionExpr association attribute `{key}` is not in \
+                     the mapping table (xtask/src/clang_ast/table.rs)"
+                ));
+            }
+            let mut assoc = kids(a);
+            let mut line = match text(a, "associationKind") {
+                Some("case") => {
+                    let t = assoc.next().filter(|t| kind(t).ends_with("Type")).ok_or(
+                        "clang-ast: a GenericSelectionExpr `case` association without a type",
+                    )?;
+                    format!("case {}", type_node_pair(t)?)
+                }
+                Some("default") => "default".to_owned(),
+                other => {
+                    return Err(format!(
+                        "clang-ast: a GenericSelectionExpr association of kind {other:?}"
+                    ));
+                }
+            };
+            if flag(a, "selected") {
+                line.push_str(" selected");
+            }
+            let e = assoc
+                .next()
+                .ok_or("clang-ast: a GenericSelectionExpr association without an expression")?;
+            if assoc.next().is_some() {
+                return Err(
+                    "clang-ast: a GenericSelectionExpr association with extra children".into()
+                );
+            }
+            let kids = self.node(e)?.into_iter().collect();
+            out.push(Tree { line, kids });
+        }
+        Ok((l, out))
     }
 
     /// `Class 'type' [lvalue|xvalue] [bitfield]`.
