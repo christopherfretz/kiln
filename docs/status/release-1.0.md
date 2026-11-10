@@ -31,13 +31,17 @@ timeout 1800 cargo xtask dist --check
 # archive and SHA256SUMS; --check smoke-tests --version, the resource
 # directory, hello world, a <meta> TU and a constexpr TU
 D=$CARGO_TARGET_DIR/kiln-dist
-(cd "$D" && sha256sum -c --ignore-missing SHA256SUMS)
-mkdir -p "$D/unpacked" && tar -xJf "$D"/kiln-1.0.0-*[!s].tar.xz -C "$D/unpacked"
-export PATH=$(echo "$D"/unpacked/kiln-1.0.0-*/bin):$PATH
-kiln++ --version                     # kiln version 1.0.0 ...
+T=aarch64-unknown-linux-gnu          # the host triple the archive names
+(cd "$D" && sha256sum -c SHA256SUMS) # both archives: OK
+mkdir -p "$D/unpacked" && tar -xJf "$D/kiln-1.0.0-$T.tar.xz" -C "$D/unpacked"
+export PATH=$D/unpacked/kiln-1.0.0-$T/bin:$PATH
+kiln++ --version                     # kiln version 1.0.0 ..., Target: $T
 ```
 
-Then compile and run three programs with the unpacked `kiln++`:
+Then compile and run three programs with the unpacked `kiln++`. The
+reflection program includes `<meta>`, which only GCC 16.1's libstdc++
+ships; `scripts/env.sh` sets `KILN_GCC` to that compiler, and its
+install prefix is the `--gcc-toolchain`:
 
 ```sh
 cat > hello.cpp <<'EOF'
@@ -63,7 +67,8 @@ int main() {
               std::meta::identifier_of(^^P).data());
 }
 EOF
-kiln++ -std=c++26 refl.cpp -o refl && ./refl                 # 2 P
+GCC16=$("$KILN_GCC" -print-search-dirs | sed -n 's|^install: \(.*\)/lib/gcc/.*|\1|p')
+kiln++ -std=c++26 --gcc-toolchain="$GCC16" refl.cpp -o refl && ./refl   # 2 P
 ```
 
 | step | result |
@@ -74,6 +79,12 @@ kiln++ -std=c++26 refl.cpp -o refl && ./refl                 # 2 P
 | hello world | |
 | `import std;` (`-stdlib=libc++`) | |
 | reflection | |
+
+Validated at WP-1202 (2026-11-09) on the aarch64 archive then still
+named 0.0.1: `dist --check` passed, both checksums OK, and the three
+programs printed `hello`, `import std 3` and `2 P`. Without
+`--gcc-toolchain` the reflection program stops at `'meta' file not
+found`, under both the default libstdc++ 14 and `-stdlib=libc++`.
 
 ## (a) Constant evaluation: time and memory
 
@@ -110,8 +121,17 @@ The README's and CHANGELOG's 0.21x / 0.17x are the clang 19 row of
 `--record` to the clang 19 run, which also merges its table into
 perf.md, and commit the baselines with it.
 
-Validated on a subset: the same command with `--filter oven/fib
---runs 1`, once per compiler.
+`bench` exits `FAILED` when any entry regressed against
+`bench/baselines/`; that verdict is about kiln against its own
+baselines, not the comparison. Run it on a quiet host (the load column)
+with the default run count, or the shared host's noise shows as
+regressions.
+
+Validated on a subset (WP-1202, aarch64, shared host under load): the
+same command with `--filter oven/fib --runs 1`, once per compiler. All
+three ran, GCC with the mapped flags. kiln/other time was 0.06x
+(clang 19), 0.07x (clang 22) and 0.33x (GCC 16.1). The single noisy run
+also reported a regression against the 10.2 ms baseline.
 
 ## (b) libc++ 22.1.8 test suite (aarch64)
 
@@ -141,8 +161,12 @@ The pass rate is pass / (total - unsupported), as `--report` computes
 it. The 9 failures of the last run were fixed since (WP-460, WP-491);
 this run confirms it.
 
-Validated on a subset: the same command with one test path instead of
-`std libcxx`, `std/utilities/utility/pairs/pairs.pair/ctor.default.pass.cpp`.
+Validated on a subset (WP-1202): the same command with
+`std/utilities/utility/pairs/pairs.pair --filter ctor.default.pass` in
+place of `std libcxx`. One test, PASS, and both files written;
+`libcxx-results.py` summarized the TSV. The summary line also counts
+`xpass`, `killed` and `error`; any nonzero count goes in the table's
+fail column, with a note.
 
 ## (c) x86_64 sweep
 
@@ -254,6 +278,11 @@ cargo xtask ci 2>&1 | tee scratchpad/ci-rc.log
 grep '^xtask ci: corpus' scratchpad/ci-rc.log
 ```
 
+Each corpus line reads `test result: ok. N passed; N failed; N xfail;
+N xpass; N skipped; N errors; N killed; N compared with gcc; N tests`.
+`cargo xtask ci` tests the kiln it builds itself, not the archive's
+`kiln++`, so this run needs the same commit as the archive.
+
 | corpus run | passed | failed | xfail | xpass | skipped | compared with gcc | total |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | clang++-22 self-check | | | | | | | |
@@ -267,8 +296,10 @@ regenerate that list from `git grep -n 'xfail(kiln)' tests/` when the
 count changes. One corpus directory can be checked alone with
 `cargo xtask test --compiler "$(command -v kiln++)" tests/conformance/<dir>`.
 
-Validated on a subset: `features --summary`, and `cargo xtask test`
-on `tests/conformance/basic.indet`.
+Validated on a subset (WP-1202): `features --summary` (`summary ok`),
+and `cargo xtask test --compiler <archive kiln++>
+tests/conformance/basic.indet` (23 passed). The corpus line format was
+checked against a `ci --quick` log, whose kiln run had 26 xfail.
 
 ## (f) Accepts-invalid
 
@@ -292,8 +323,13 @@ triage after it is by hand.
 | `expected-no-diagnostics` configurations kiln rejects | 11.2% (47 of 418) | |
 | crashes, timeouts, out of memory | 0 of 2850 | |
 
-Validated: `cargo xtask clang-neg --help` (the clang test checkout was
-not fetched for WP-1202).
+`--filter <glob>` (relative to `clang/test`) narrows a trial run;
+point `--report` at a copy of the page so the trial does not overwrite
+it.
+
+Validated on a subset (WP-1202): `fetch-clang-tests.sh` (47 MB), then
+the command above with `--filter 'SemaCXX/attr-n*'` and `--report` on a
+copy: 11 cases ran, 0 crashes, and both files were written.
 
 ## (g) Memory safety
 
@@ -326,3 +362,9 @@ The third-party crates are not covered by the attribute. At WP-1202
 `signal-hook-registry`, `windows-link` and `windows-sys` besides kiln's
 own crates; list them in the table with
 `grep '^name' Cargo.lock`.
+
+Validated (WP-1202): all three greps print nothing. Each of the 14
+crate roots (12 crates, kiln_driver's binary, and xtask) carries the
+attribute, and as a
+positive control the second pattern does match the one `unsafe {`
+quoted in docs/status.

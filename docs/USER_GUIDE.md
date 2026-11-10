@@ -79,7 +79,8 @@ kiln writes LLVM IR and runs LLVM's tools to finish the job, so you need:
 - **A C++ standard library.** The default is the system libstdc++ from
   the GCC installation clang would pick (GCC 14 is what kiln is tested
   with). For libc++, pass `-stdlib=libc++`; it comes from the LLVM
-  directory.
+  directory. For reflection's `<meta>`, use GCC 16.1's libstdc++ with
+  `--gcc-toolchain=` (see [Language modes](#language-modes)).
 - **glibc 2.39 or newer** for the binary itself (Debian 13, Ubuntu
   24.04). Lowering that floor is tracked as
   [WP-943](BACKLOG.md).
@@ -150,6 +151,12 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
 - **Reflection** (P2996, `^^`, splices, `<meta>`) is on by default at
   `-std=c++26`. Turn it off with `-fno-reflection`. Below C++26 it is
   always off, and an explicit `-freflection` is accepted and ignored.
+  The `<meta>` header itself comes from GCC 16.1's libstdc++ (neither
+  libstdc++ 14 nor libc++ 22 ships one), so a program that includes it
+  names that installation:
+  `kiln++ -std=c++26 --gcc-toolchain=<GCC 16.1 prefix> refl.cpp`, where
+  the prefix is the directory holding `lib/gcc/<triple>/16.1.0`. `^^`
+  and splices need no header.
   `-fkiln-reflection-mangling=gcc|kiln|kiln-hashed` chooses how a
   `std::meta::info` template argument is mangled. The default is `gcc`,
   GCC 16.1's `L Dm … E` form: objects that use reflections link with

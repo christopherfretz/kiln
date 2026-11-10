@@ -19,7 +19,9 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   done. The one partial row is P2786 (trivial relocatability), which was
   removed from C++26 at Kona and is not in the DIS.
 - C++26 static reflection (P2996, `<meta>`), on by default at
-  `-std=c++26` (`-fno-reflection` turns it off).
+  `-std=c++26` (`-fno-reflection` turns it off). The `<meta>` header is
+  GCC 16.1's libstdc++ one, selected with `--gcc-toolchain=`; libstdc++
+  14 and libc++ 22 do not ship it.
 - C++26 contracts (P2900): `pre`, `post`, `contract_assert`, the four
   evaluation semantics (`-fcontract-evaluation-semantic=`), and a
   replaceable violation handler.
