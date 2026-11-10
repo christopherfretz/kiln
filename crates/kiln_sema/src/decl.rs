@@ -10329,7 +10329,7 @@ impl Sema<'_, '_> {
             self.emit(d);
         }
         // clang prints what was read before a failing read.
-        (ok || !bytes.is_empty()).then(|| escape_diag_text(&bytes))
+        (ok || !bytes.is_empty()).then(|| kiln_diag::escape_diag_text(&bytes))
     }
 
     /// clang's check of the message of a `static_assert` that holds
@@ -10402,7 +10402,7 @@ impl Sema<'_, '_> {
 
     /// The contents of a narrow string literal, for messages.
     fn string_literal_text(&self, e: ExprId) -> Option<String> {
-        self.string_text(e)
+        self.string_msg(e)
     }
 
     /// clang's "expression evaluates to 'L op R'" note for a failed
@@ -13119,28 +13119,6 @@ impl Sema<'_, '_> {
         self.abi.triple.arch == kiln_abi::target::Arch::X86_64
             && self.ast.types.canonical(ty).ty() == QualType::HALF.ty()
     }
-}
-
-/// `bytes` as clang's diagnostic engine prints a string argument
-/// (`pushEscapedString`): valid UTF-8 as is, except that an unprintable
-/// code point other than a tab or newline prints as `<U+XXXX>`; a byte
-/// that is not valid UTF-8 prints as `<XX>`.
-fn escape_diag_text(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(bytes.len());
-    for chunk in bytes.utf8_chunks() {
-        for c in chunk.valid().chars() {
-            if c.is_control() && c != '\t' && c != '\n' {
-                let _ = write!(out, "<U+{:04X}>", u32::from(c));
-            } else {
-                out.push(c);
-            }
-        }
-        for b in chunk.invalid() {
-            let _ = write!(out, "<{b:02X}>");
-        }
-    }
-    out
 }
 
 /// The deduction form of a variable's initializer `init`: its items (a

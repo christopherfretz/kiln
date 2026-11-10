@@ -421,7 +421,9 @@ impl Oven {
 
     /// The `what()` of an uncaught exception object of a class derived
     /// from `std::exception` (for its note): the string its `what` (a
-    /// virtual call of `std::exception::what`) returns.
+    /// virtual call of `std::exception::what`) returns, escaped as a
+    /// diagnostic prints program-provided text
+    /// ([`kiln_diag::escape_diag_text`]).
     fn exc_what(&mut self, b: &mut dyn SemaBridge, e: &Exc) -> Option<Box<str>> {
         if self.run.silent || !matches!(self.types.kind(e.ty), TyKind::Record { .. }) {
             return None;
@@ -501,7 +503,10 @@ impl Oven {
             more += (out.len() - keep) as u64;
             out.truncate(keep);
         }
-        let mut w = String::from_utf8_lossy(&out).into_owned();
+        // Program-provided text: escaped as clang escapes a string
+        // argument, so a control character or a byte that is not UTF-8
+        // prints as `<U+XXXX>` / `<XX>` (spec/diag.md §6.2).
+        let mut w = kiln_diag::escape_diag_text(&out);
         let reason = stop.map(|f| {
             let why = self.what_stop_reason(b.ast(), f);
             why.map_or_else(

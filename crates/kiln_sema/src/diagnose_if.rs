@@ -265,7 +265,7 @@ impl Sema<'_, '_> {
             hits = check(self, false);
         }
         for n in hits {
-            let text = ExprId::from_raw(n.b).and_then(|m| self.string_text(m)).unwrap_or_default();
+            let text = ExprId::from_raw(n.b).and_then(|m| self.string_msg(m)).unwrap_or_default();
             let id = if n.flags & DIAGNOSE_IF_ERROR != 0 {
                 DiagId::sema_diagnose_if_succeeded_error
             } else {

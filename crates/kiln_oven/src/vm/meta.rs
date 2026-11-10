@@ -19,7 +19,7 @@ use crate::meta::{MAX_META_ARGS, MetaCtx, MetaError, MetaErrorKind, MetaOut, Ove
 use crate::ty::OTy;
 use crate::{MetaOp, Note, Oven, SemaBridge};
 
-/// The longest string [`Oven::meta_c_string`] reads (a bound on a
+/// The longest string [`Oven::meta_c_bytes`] reads (a bound on a
 /// runaway string).
 const MAX_NAME: u64 = 4096;
 
@@ -232,11 +232,12 @@ impl Oven {
 
     /// The narrow string at `p` (a pointer argument of the intrinsic
     /// running with `ctx`, whose elements are of the call's last pointer
-    /// argument's element type), as written, up to 4096 characters.
+    /// argument's element type), as written, up to 4096 characters: its
+    /// bytes, which need not be UTF-8.
     ///
     /// # Errors
     /// The evaluator's fault reading it (out of bounds, uninitialized).
-    pub fn meta_c_string(&self, p: u128, ctx: &MetaCtx) -> Result<String, MetaError> {
+    pub fn meta_c_bytes(&self, p: u128, ctx: &MetaCtx) -> Result<Vec<u8>, MetaError> {
         let fault = |f| MetaError { notes: Vec::new(), kind: MetaErrorKind::Fault(OvenFault(f)) };
         let (p, ct) = (p as u64, ctx.elem);
         let n = self.bi_strlen(p, ct).map_err(fault)?.min(MAX_NAME);
@@ -246,7 +247,7 @@ impl Oven {
             bytes.push(self.load(q, ct, ak::READ).map_err(fault)? as u8);
             q = self.ptr_add(q, 1, ct).map_err(fault)?;
         }
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        Ok(bytes)
     }
 
     /// Element `i` of the `std::meta::info` array at `p` (the pointer

@@ -180,7 +180,7 @@ impl Sema<'_, '_> {
         let attr = *self.ast.attrs.get(a);
         let unavail = attr.kind == AttrKind::UNAVAILABLE;
         let name = self.name_for_diagnostic(d);
-        let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+        let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
         let (plain, with_msg) = if unavail {
             (DiagId::sema_unavailable, DiagId::sema_unavailable_msg)
         } else {

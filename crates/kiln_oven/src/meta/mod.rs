@@ -262,7 +262,7 @@ pub struct MetaCtx {
     /// speculative checkpoint): a `Mutating` op never reaches the bridge.
     pub trial: bool,
     /// The element type of the call's last pointer argument (what
-    /// [`crate::Oven::meta_c_string`] reads); for a value op given a
+    /// [`crate::Oven::meta_c_bytes`] reads); for a value op given a
     /// range ([`materialize::Shape::Elems`]), the range's element type.
     pub(crate) elem: OTy,
     /// The intrinsic's declaration: the specialization whose signature

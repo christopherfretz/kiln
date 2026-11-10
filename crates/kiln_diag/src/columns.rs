@@ -139,6 +139,50 @@ pub(crate) fn is_printable(c: char) -> bool {
         && c & 0xFFFE != 0xFFFE
 }
 
+/// Approximation of `llvm::sys::unicode::isFormatting` (`spec/diag.md`
+/// deviation D5): the format characters (general category Cf).
+fn is_formatting(c: char) -> bool {
+    matches!(u32::from(c),
+        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
+        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// Program-provided text (a `static_assert` message, an uncaught
+/// exception's `what()`, an attribute's message) as clang's diagnostic
+/// engine prints a string argument (`pushEscapedString`; `spec/diag.md`
+/// §6.2): ASCII whitespace (tab, newline, vertical tab, form feed,
+/// carriage return) and printable or format characters as they are; any
+/// other code point as `<U+XXXX>` (a control character, a line or
+/// paragraph separator, a private-use or noncharacter code point); each
+/// byte that is not part of valid UTF-8 as `<XX>` (hex, uppercase).
+///
+/// ```
+/// assert_eq!(kiln_diag::escape_diag_text(b"a\tb\nc\x01\xff"), "a\tb\nc<U+0001><FF>");
+/// ```
+#[must_use]
+pub fn escape_diag_text(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(bytes.len());
+    for chunk in bytes.utf8_chunks() {
+        for c in chunk.valid().chars() {
+            if matches!(c, '\t' | '\n' | '\x0B' | '\x0C' | '\r')
+                || is_printable(c)
+                || is_formatting(c)
+            {
+                out.push(c);
+            } else {
+                let _ = write!(out, "<U+{:04X}>", u32::from(c));
+            }
+        }
+        for b in chunk.invalid() {
+            let _ = write!(out, "<{b:02X}>");
+        }
+    }
+    out
+}
+
 /// Approximation of `llvm::sys::locale::columnWidth` for a printable
 /// string: combining marks are 0 columns, East Asian wide characters 2.
 pub(crate) fn column_width(s: &str) -> usize {
@@ -287,6 +331,25 @@ mod tests {
         assert_eq!(printable("\tx"), "        x");
         assert_eq!(printable("ab\tx"), "ab      x");
         assert_eq!(printable("a\t\tx"), "a               x");
+    }
+
+    #[test]
+    fn escape_diag_text_as_clang() {
+        // clang 22 `pushEscapedString`: whitespace and format characters
+        // stay, controls, separators, private use and bad bytes escape.
+        assert_eq!(escape_diag_text(b"a\tb\nc\x0B\x0C\r"), "a\tb\nc\x0B\x0C\r");
+        assert_eq!(escape_diag_text(b"\x00\x01\x7F"), "<U+0000><U+0001><U+007F>");
+        assert_eq!(
+            escape_diag_text("\u{85}\u{2028}\u{2029}".as_bytes()),
+            "<U+0085><U+2028><U+2029>"
+        );
+        assert_eq!(
+            escape_diag_text("\u{AD}\u{200B}\u{FEFF}é".as_bytes()),
+            "\u{AD}\u{200B}\u{FEFF}é"
+        );
+        assert_eq!(escape_diag_text("\u{E000}\u{FFFE}".as_bytes()), "<U+E000><U+FFFE>");
+        assert_eq!(escape_diag_text(b"\xFF\xED\xBF\xBF\xC3"), "<FF><ED><BF><BF><C3>");
+        assert_eq!(escape_diag_text(b"\xF4\x90\x80\x80"), "<F4><90><80><80>");
     }
 
     #[test]

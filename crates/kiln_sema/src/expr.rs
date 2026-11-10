@@ -1552,7 +1552,7 @@ impl Sema<'_, '_> {
             // clang appends the attribute's message
             // ([dcl.attr.nodiscard]/4).
             let attr = *self.ast.attrs.get(a);
-            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
             let name = "'nodiscard'".to_owned();
             // clang 22 `warn_unused_return_type`: a nodiscard
             // type is named, under -Wunused-value.
@@ -1588,10 +1588,10 @@ impl Sema<'_, '_> {
         let attr = *self.ast.attrs.get(a);
         let name = "'nodiscard'".to_owned();
         if by_ctor.is_none() && self.clang_compat >= 22 {
-            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_text(m));
+            let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
             return Some(self.unused_type_warning("1", n.ty(), name, text, loc));
         }
-        Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_text(m)) {
+        Some(match ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m)) {
             Some(t) => (DiagId::sema_unused_constructor_msg, loc, vec![name, t]),
             None => (DiagId::sema_unused_constructor, loc, vec![name]),
         })
@@ -2549,6 +2549,19 @@ impl Sema<'_, '_> {
         }
         let bytes = bytes.strip_suffix(&[0]).unwrap_or(bytes);
         Some(String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    /// The text of a narrow string literal that a diagnostic prints (an
+    /// attribute's or a `static_assert`'s message), escaped as clang
+    /// escapes a string argument ([`kiln_diag::escape_diag_text`]).
+    pub(crate) fn string_msg(&self, e: ExprId) -> Option<String> {
+        let s = self.string_lit_of(e)?;
+        let id = self.ast.exprs.string_lit(s);
+        let (enc, bytes) = self.ast.strings.get(id);
+        if !matches!(enc, StringEncoding::Ordinary | StringEncoding::Utf8) {
+            return None;
+        }
+        Some(kiln_diag::escape_diag_text(bytes.strip_suffix(&[0]).unwrap_or(bytes)))
     }
 
     // -- literals ----------------------------------------------------------------

@@ -28,7 +28,7 @@ impl Sema<'_, '_> {
             ExtOp::DefineMember => {
                 let (cls, ty) = (info_arg(args, 0)?, info_arg(args, 1)?);
                 let p = *args.get(2).ok_or_else(MetaError::invalid)?;
-                let name = oven.meta_c_string(p, ctx)?;
+                let name = oven.meta_c_bytes(p, ctx)?;
                 MetaOut::Info(self.define_member(cls, ty, &name, ctx, oven)?)
             }
         };
@@ -73,7 +73,7 @@ impl Sema<'_, '_> {
         &mut self,
         cls: ReflectionId,
         ty: ReflectionId,
-        name: &str,
+        name: &[u8],
         ctx: &MetaCtx,
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
@@ -139,9 +139,10 @@ impl Sema<'_, '_> {
                 ),
             );
         }
-        if !is_identifier(name) {
-            return fail(loc, format!("'{name}' is not an identifier"));
-        }
+        let Some(name) = std::str::from_utf8(name).ok().filter(|s| is_identifier(s)) else {
+            let shown = kiln_diag::escape_diag_text(name);
+            return fail(loc, format!("'{shown}' is not an identifier"));
+        };
         let sym = self.ast.symbols().intern(name);
         let class_loc = self.ast.decls.get(r).loc();
         let in_eval = Note::new(
