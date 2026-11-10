@@ -13,6 +13,9 @@
 #   test           shell command run in the build dir under `timeout 1800`
 #   c_compiler     the C compiler (kiln is C++-only), default clang-19
 #   wave           1, 2, 3 or 4 (docs/ROADMAP.md M8)
+#   sweep          optional (WP-1265): true puts the project in the x86_64
+#                  sweep's oss matrix (.github/workflows/sweep.yml job
+#                  oss-matrix, `projects.py list --sweep --json`)
 #   verified       true once the configure flags were run end to end
 #   submodules     optional: clone with --recurse-submodules
 #   source_subdir  optional: the CMake source dir inside the checkout
@@ -40,6 +43,7 @@ configure = ["-DFMT_TEST=ON", "-DFMT_DOC=OFF", "-DFMT_PEDANTIC=OFF"]
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 1
+sweep = true
 verified = false
 notes = "WP-667 drives this one with its own wrapper until the harness lands."
 
@@ -78,6 +82,7 @@ configure = ["-DJSON_BuildTests=ON", "-DJSON_MultipleHeaders=ON"]
 test = "ctest --output-on-failure -LE git_required"
 c_compiler = "clang-19"
 wave = 1
+sweep = true
 verified = false
 notes = "WP-668. The test data repo is downloaded at configure time; many tests build per -std (JSON_TestStandards)."
 
@@ -216,6 +221,7 @@ configure = ["-DABSL_BUILD_TESTING=ON", "-DABSL_USE_GOOGLETEST_HEAD=ON", "-DBUIL
 test = "ctest --output-on-failure"
 c_compiler = "clang-19"
 wave = 2
+sweep = true
 verified = true
 notes = "LTS release. googletest is downloaded at configure time (ABSL_USE_GOOGLETEST_HEAD)."
 install_configure = ["-DABSL_BUILD_TESTING=OFF", "-DABSL_ENABLE_INSTALL=ON", "-DABSL_PROPAGATE_CXX_STD=ON"]
@@ -382,6 +388,7 @@ build_targets = ["SupportTests", "ADTTests", "IRTests"]
 test = "rc=0; ./unittests/Support/SupportTests --gtest_filter=-FileSystemTest.CreateDir:FileSystemTest.RespectUmask:raw_ostreamTest.filePermissions || rc=1; ./unittests/ADT/ADTTests || rc=1; ./unittests/IR/IRTests || rc=1; exit $rc"
 c_compiler = "clang-19"
 wave = 3
+sweep = true
 verified = true
 notes = "lib/Support + lib/ADT unit tests only. Same release as the libc++ 19 test suite; the shallow clone is ~2 GB."
 
@@ -457,6 +464,7 @@ build_targets = ["unittest", "shell"]
 test = "DUCKDB_TEST_MAX_THREADS=4 SUMMARIZE_FAILURES=1 test/unittest"
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-799. Release, default extensions (core_functions, parquet), not the amalgamation. The test is unittest with no arguments: the default (non-slow) SQL logic tests, at most 4 threads per database (DUCKDB_TEST_MAX_THREADS)."
 
@@ -579,6 +587,7 @@ configure = [
 test = "ctest --output-on-failure -j 4 --timeout 300"
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-792. daw-header-libraries and daw-utf-range are fetched at configure time (FetchContent); a shim pins header_libraries to v2.135.0 (the tests otherwise take its moving `v2` branch, which no longer builds v3.38.1). The Boost-using tests are off: the system Boost 1.83 has no Boost.Container CMake package."
 
@@ -713,6 +722,7 @@ configure = [
 test = "unset OPENCV_TEST_DATA_PATH; export OPENCV_FOR_THREADS_NUM=4 GTEST_FILTER=-$(grep -v '^#' @OSS@/opencv-gtest-exclude.txt | paste -sd:); ctest --output-on-failure -j 4 -E opencv_test_imgcodecs"
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-803. No opencv_contrib, no opencv_extra test data; default CPU_BASELINE and NEON dispatch. BUILD_LIST adds ts (the test framework; without it no tests are built). The 480 gtests failing under the clang control without test data (opencv-gtest-exclude.txt) and opencv_test_imgcodecs (segfaults on its missing data under the control) are excluded in both builds; 4 OpenCV threads per test binary."
 
@@ -730,6 +740,7 @@ test = "ctest --output-on-failure -j 4 --timeout 300"
 test_timeout = 7200
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-811. Kitware CMake bootstrapped with the system cmake (3.31), all bundled third-party libraries (libuv, curl, zlib, ...; C, so clang-19). CMake's own ctest suite (714 tests) runs the built cmake, ctest and cpack; the test projects it configures pick the default system compilers (gcc), so the suite checks the kiln-built CMake, not kiln on the test projects. ccmake is off (no curses headers)."
 
@@ -743,6 +754,7 @@ test = 'rc=0; ./bin/bench_bitcoin -sanity-check > bench.log 2>&1 && echo "bench_
 test_timeout = 5400
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-811. The CMake build, no depends/: system Boost headers (1.83, Boost.Test header-only), system libevent. No wallet (the container has no sqlite3 headers), no GUI, ZMQ or IPC (no capnp). Tests: bench_bitcoin -sanity-check, the python functional suite (test/functional/test_runner.py -j 4; wallet tests skip themselves), then ctest (test_bitcoin, one ctest test per Boost.Test suite, and the secp256k1/univalue tests), last so its summary is the report's. Excluded under both compilers: feature_reindex_init and feature_reindex_readonly (they make the data directory read-only, which root ignores) and univalue_object_test (its BOOST_CHECK macros are assert()s, which the Release (NDEBUG) build compiles out with their side effects; the control dies with SIGILL)."
 
@@ -758,6 +770,7 @@ test = "bash @OSS@/grpc-tests.sh @OSS@/grpc-tests.txt ../../../src/grpc"
 test_timeout = 7200
 c_compiler = "clang-19"
 wave = 4
+sweep = true
 verified = true
 notes = "WP-811. The C++ core with every dependency from its submodule (abseil, protobuf, re2, c-ares, boringssl, zlib; the C ones go to clang-19), no archive downloads. protoc and grpc_cpp_plugin are built by the compiler under test and generate the test protos' code. gRPC registers no ctest tests: build_targets are the binaries of scripts/oss/grpc-tests.txt (the unit tests that link no grpc_test_util, then localhost end2end and generated-code tests; keep the two lists equal), run by scripts/oss/grpc-tests.sh (4 at a time, 300 s each, from the source root, with gRPC's port server on localhost:32766 for the end2end tests). end2end_http2_test (1095 cases) is killed at 300 s under both compilers with no failed case, so both reach 117/118: parity, docs/status/oss/grpc.md."
 

@@ -738,11 +738,12 @@ mod ci_tests {
 
     /// The `x86_64` sweep never gates a merge (WP-961, docs/VALIDATION.md
     /// "`x86_64` sweep"): `.github/workflows/sweep.yml` triggers only on
-    /// `workflow_dispatch` and pushes to `sweep/**`, and every project of its
-    /// OSS matrix is a row of `scripts/oss/projects.toml`. The oss summary
-    /// expects a report from every matrix pair (WP-1241): its
-    /// `OSS_PROJECTS` list is the matrix's projects and its `OSS_COMPILERS`
-    /// the matrix's compiler expression.
+    /// `workflow_dispatch` and pushes to `sweep/**`. Its OSS lists are
+    /// spelled once (WP-1265): job `oss-matrix` outputs the projects
+    /// (`scripts/oss/projects.toml`'s `sweep = true` rows) and the compilers
+    /// (the clang control on a push or with `inputs.control`), and both the
+    /// oss matrix and the oss summary's `--expect` (WP-1241: a report from
+    /// every matrix pair) read those outputs.
     #[test]
     fn sweep_never_gates() {
         let root = util::repo_root();
@@ -768,39 +769,105 @@ mod ci_tests {
             let mut code = yml.lines().filter(|l| !l.trim_start().starts_with('#'));
             assert!(!code.any(|l| l.contains(gate)), "{} names {gate}", path.display());
         }
-        let toml = std::fs::read_to_string(root.join("scripts/oss/projects.toml")).unwrap();
-        let line = yml
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("project: ["))
-            .expect("sweep.yml has a `project: [...]` matrix line");
-        let matrix: Vec<&str> = line.trim_end_matches(']').split(',').map(str::trim).collect();
-        for p in &matrix {
-            assert!(toml.contains(&format!("\n[{p}]\n")), "{p} is not in projects.toml");
-        }
-        let env = |key: &str| {
-            yml.lines()
-                .find_map(|l| l.trim().strip_prefix(key))
-                .unwrap_or_else(|| panic!("sweep.yml has no `{key}` line"))
+
+        let (_, jobs) = workflow_jobs(&path);
+        let job = |name: &str| -> String {
+            let (_, b) = jobs
+                .iter()
+                .find(|(n, _)| n == name)
+                .unwrap_or_else(|| panic!("sweep.yml has no `{name}` job"));
+            // Code only: a comment may quote the old shapes.
+            b.lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .fold(String::new(), |mut acc, l| {
+                    acc.push_str(l.trim());
+                    acc.push('\n');
+                    acc
+                })
         };
-        let expected: Vec<&str> = env("OSS_PROJECTS: ").split_whitespace().collect();
-        assert_eq!(
-            expected, matrix,
-            "the oss summary's OSS_PROJECTS is not the matrix's project list"
+        let has = |block: &str, name: &str, line: &str| {
+            assert!(block.lines().any(|l| l == line), "sweep.yml job `{name}` lacks `{line}`");
+        };
+        let needs_matrix = |block: &str, name: &str| {
+            let needs = block
+                .lines()
+                .find_map(|l| l.strip_prefix("needs: "))
+                .unwrap_or_else(|| panic!("sweep.yml job `{name}` has no needs"));
+            assert!(
+                needs.trim_matches(['[', ']']).split(',').any(|n| n.trim() == "oss-matrix"),
+                "sweep.yml job `{name}` does not need oss-matrix"
+            );
+        };
+
+        // The one source: projects.toml's sweep rows and the control rule.
+        let matrix = job("oss-matrix");
+        has(&matrix, "oss-matrix", "projects: ${{ steps.lists.outputs.projects }}");
+        has(&matrix, "oss-matrix", "compilers: ${{ steps.lists.outputs.compilers }}");
+        has(&matrix, "oss-matrix", "CONTROL: ${{ github.event_name == 'push' || inputs.control }}");
+        assert!(
+            matrix.contains("python3 scripts/oss/projects.py list --sweep --json"),
+            "oss-matrix does not list projects.toml's sweep rows"
         );
-        let compiler = env("compiler: ${{ fromJSON(").trim_end_matches(") }}");
-        let summary = env("OSS_COMPILERS: ${{ join(fromJSON(");
-        assert_eq!(
-            summary.strip_suffix("), ',') }}"),
-            Some(compiler),
-            "the oss summary's OSS_COMPILERS is not the matrix's compiler expression"
+        assert!(
+            matrix.contains(r#"compilers='["kiln", "clang"]'; else compilers='["kiln"]'"#),
+            "oss-matrix's compilers are not kiln + clang with the control, else kiln"
         );
+        let toml = std::fs::read_to_string(root.join("scripts/oss/projects.toml")).unwrap();
+        let mut sweep = Vec::new();
+        let mut row = "";
+        for l in toml.lines() {
+            if let Some(name) = l.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                row = name;
+            } else if l.trim() == "sweep = true" {
+                sweep.push(row);
+            }
+        }
+        assert!(!sweep.is_empty(), "no projects.toml row has `sweep = true`");
+
+        // Both readers take the same outputs; nothing spells a list again.
+        let oss = job("oss");
+        needs_matrix(&oss, "oss");
+        has(&oss, "oss", "project: ${{ fromJSON(needs.oss-matrix.outputs.projects) }}");
+        has(&oss, "oss", "compiler: ${{ fromJSON(needs.oss-matrix.outputs.compilers) }}");
+        let summary = job("oss-summary");
+        needs_matrix(&summary, "oss-summary");
+        has(
+            &summary,
+            "oss-summary",
+            "OSS_PROJECTS: ${{ join(fromJSON(needs.oss-matrix.outputs.projects), ' ') }}",
+        );
+        has(
+            &summary,
+            "oss-summary",
+            "OSS_COMPILERS: ${{ join(fromJSON(needs.oss-matrix.outputs.compilers), ',') }}",
+        );
+        assert!(
+            summary.contains(r#"oss-report.py --root oss --expect "$OSS_COMPILERS" $OSS_PROJECTS"#),
+            "the oss summary does not pass OSS_COMPILERS and OSS_PROJECTS to --expect"
+        );
+        // A summary that ran without every matrix pair would drop the
+        // unscheduled ones silently: it runs whenever the oss jobs ran.
+        has(&summary, "oss-summary", "if: ${{ !cancelled() && needs.oss.result != 'skipped' }}");
+        for (name, block) in [("oss", &oss), ("oss-summary", &summary)] {
+            for l in block.lines().filter(|l| l.contains("fromJSON(")) {
+                assert!(
+                    l.matches("fromJSON(").count() == l.matches("fromJSON(needs.oss-matrix.outputs.").count(),
+                    "sweep.yml job `{name}` reads a list other than oss-matrix's: `{l}`"
+                );
+            }
+            for p in &sweep {
+                assert!(
+                    !block.contains(&format!(" {p} ")) && !block.contains(&format!(", {p},")),
+                    "sweep.yml job `{name}` spells the sweep project {p}"
+                );
+            }
+        }
     }
 
-    /// ci-lane.yml's text and its jobs, each a two-space-indented `name:`
+    /// A workflow's text and its jobs, each a two-space-indented `name:`
     /// line and the lines that follow it.
-    fn lane_workflow() -> (String, Vec<(String, String)>) {
-        let path = util::repo_root().join(".github/workflows/ci-lane.yml");
-        let yml = std::fs::read_to_string(&path).unwrap();
+    fn workflow_jobs(path: &std::path::Path) -> (String, Vec<(String, String)>) {
+        let yml = std::fs::read_to_string(path).unwrap();
         let jobs = &yml[yml.find("\njobs:\n").expect("a jobs: map")..];
         let mut blocks: Vec<(String, String)> = Vec::new();
         for line in jobs.lines().skip(2) {
@@ -813,6 +880,11 @@ mod ci_tests {
             }
         }
         (yml, blocks)
+    }
+
+    /// ci-lane.yml's text and its jobs (`workflow_jobs`).
+    fn lane_workflow() -> (String, Vec<(String, String)>) {
+        workflow_jobs(&util::repo_root().join(".github/workflows/ci-lane.yml"))
     }
 
     /// The jobs that run the corpus (self-check, kiln-22, kiln-19).

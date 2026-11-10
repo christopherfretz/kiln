@@ -498,15 +498,23 @@ jobs:
   uploads its `--results` file and its `--report` page.
 - `libcxx summary`: `scripts/libcxx-results.py` merges the shards into the
   run's summary page (counts, pass rate, failing tests).
-- `oss <project> <compiler>`: `scripts/oss/oss-build.sh` for ten projects
-  of `scripts/oss/projects.toml`, with kiln and with the clang 19 control
-  on the same runner, trees on the runner's `/mnt`; each uploads its
+- `oss matrix`: the oss jobs' two lists, as JSON outputs, the one place
+  they are spelled (spec/landed/harness/WP-1265.md): the projects are the
+  `sweep = true` rows of `scripts/oss/projects.toml` (`projects.py list
+  --sweep --json`; add a project to the sweep by setting the key on its
+  row), the compilers kiln and the clang 19 control on a push or a
+  dispatch with `control`, else kiln alone.
+- `oss <project> <compiler>`: `scripts/oss/oss-build.sh` for each project
+  and compiler of `oss matrix` (ten projects), on the same runner, trees
+  on the runner's `/mnt`; each uploads its
   `report.json`, `compile.jsonl`, `configure.log` and `test.log`. The
   job fails only when `oss-build.sh` wrote no `report.json`: the project
   was not measured (a failed clone or download, retried once, or a
   runner failure; spec/landed/harness/WP-1241.md). A build or test
   failure is in the report and the job stays green.
-- `oss summary`: `scripts/oss/oss-report.py --expect` over all of them.
+- `oss summary`: `scripts/oss/oss-report.py --expect` over all of them,
+  its expected projects and compilers read from `oss matrix`'s outputs,
+  as the matrix's are (`ci_tests::sweep_never_gates` checks both).
   It opens with how many of the matrix's project/compiler pairs reported
   and lists each one without a report as "no report (infrastructure)",
   never leaving it out. A release candidate's sweep needs every pair
