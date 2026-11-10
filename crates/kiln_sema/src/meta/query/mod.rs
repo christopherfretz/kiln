@@ -52,6 +52,23 @@ impl Sema<'_, '_> {
             return Ok(());
         }
         let r = info_arg(args, 0)?;
+        // The queries that look at the type of an entity answer
+        // differently once its placeholder type is deduced (`type_of`
+        // throws before, succeeds after), so such an answer is not
+        // memoized.
+        if matches!(
+            q,
+            QueryOp::TypeOf
+                | QueryOp::ReturnTypeOf
+                | QueryOp::IsConst
+                | QueryOp::IsVolatile
+                | QueryOp::IsLvalueReferenceQualified
+                | QueryOp::IsRvalueReferenceQualified
+        ) && let Reflectee::Decl(d) = self.ast.reflections.get(r)
+            && self.undeduced_decl(d)
+        {
+            oven.mark_impure();
+        }
         if let Some(b) = self.query_pred(q, r, ctx, oven)? {
             *out = MetaOut::Scalar(u128::from(b));
             return Ok(());
@@ -119,6 +136,9 @@ impl Sema<'_, '_> {
     /// parameter or direct base.
     pub(in crate::meta) fn type_of_reflectee(&self, x: Reflectee) -> Option<QualType> {
         let ty = match x {
+            // *has-type* is false for a variable or function whose type
+            // contains an undeduced placeholder type (WP-1243).
+            Reflectee::Decl(d) if self.undeduced_decl(d) => None,
             Reflectee::Decl(d) => match self.kind_of(d) {
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => self.reflected_var_type(d),
                 DeclKind::ParmVar
@@ -160,6 +180,26 @@ impl Sema<'_, '_> {
             _ => None,
         };
         ty.filter(|&t| t != QualType::ERROR)
+    }
+
+    /// Whether `d` is a variable or function whose type, so far, contains
+    /// an undeduced placeholder type ([dcl.spec.auto.general]): `auto f();`
+    /// before a definition deduces it, a member of a class template
+    /// specialization whose definition is not instantiated yet
+    /// ([dcl.spec.auto.general]/12; reflecting it instantiates nothing, as
+    /// in GCC 16.1), or `auto` variable in its own initializer. Such an
+    /// entity has no type for [meta.reflection.queries] (*has-type*) and is
+    /// not members-of-representable ([meta.reflection.member.queries]/3).
+    /// The answer is point-dependent: it turns false at the deduction.
+    pub(in crate::meta) fn undeduced_decl(&self, d: DeclId) -> bool {
+        let ty = match self.kind_of(d) {
+            DeclKind::Var | DeclKind::VarTemplateSpecialization => self.reflected_var_type(d),
+            DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
+                self.ast.decls.get(d).ty()
+            }
+            _ => return false,
+        };
+        ty.is_some_and(|t| !self.ast.types.is_dependent(t) && self.contains_undeduced_auto(t))
     }
 
     /// The type of variable `d` as its latest declaration so far declares

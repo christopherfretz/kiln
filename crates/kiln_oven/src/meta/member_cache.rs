@@ -25,6 +25,12 @@ pub mod member_kind {
     /// Needs no access check: a public member of the class itself (the
     /// common case, tested without asking sema).
     pub const PUBLIC: u8 = 8;
+    /// A variable or function declared with a placeholder type that was
+    /// still undeduced when the list was built: each query checks it
+    /// again, since a member whose type contains an undeduced placeholder
+    /// type is not members-of-representable ([meta.reflection.member.queries]/3)
+    /// and a later definition deduces it.
+    pub const PLACEHOLDER: u8 = 16;
 }
 
 /// Which list of an entity.

@@ -67,6 +67,9 @@ impl Sema<'_, '_> {
                 .filter(|&f| {
                     !matches!(self.kind_of(f), DeclKind::CXXConstructor | DeclKind::CXXDestructor)
                 })
+                // *has-type* ([meta.reflection.queries]): not a function
+                // whose type contains an undeduced placeholder type.
+                .filter(|&f| !self.undeduced_decl(f))
                 .and_then(|f| self.ast.decls.get(f).ty()),
         };
         let ret = t.and_then(|t| {
