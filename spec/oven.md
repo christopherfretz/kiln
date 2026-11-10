@@ -3742,7 +3742,14 @@ follow clang trunk's P3068 branch.
   note that read carries elsewhere ("read of dereferenced one-past-the-end
   pointer is not allowed in a constant expression"), as a `static_assert`
   message prints the characters read before its failure (WP-1251;
-  `expr.throw/constexpr-uncaught-what-{unterminated,utf8-cap,fails}.cpp`); else, or
+  `expr.throw/constexpr-uncaught-what-{unterminated,utf8-cap,fails}.cpp`).
+  The bytes kept are escaped as all program-provided text a diagnostic
+  prints (`kiln_diag::escape_diag_text`, spec/diag.md §6.2; the cap
+  counts the bytes before escaping): a newline or a tab prints as is, a
+  control character as `<U+XXXX>`, a byte that is not valid UTF-8 as
+  `<XX>`, as clang prints a `static_assert` message (GCC 16.1 prints
+  C escapes, `\x0a`, and keeps every note on one line; WP-1259,
+  `expr.throw/constexpr-uncaught-what-escape.cpp`). Else, or
   when that call is not constant or the first read faults,
   "unhandled exception of type 'T' thrown from here" at the operand when
   `T` has size 1 (an empty class, a `char`, a class of one `char`: the

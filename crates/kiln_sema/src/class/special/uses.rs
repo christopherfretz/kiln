@@ -56,7 +56,7 @@ impl Sema<'_, '_> {
             .cold
             .delete_message
             .get(first)
-            .and_then(|&m| self.string_text(m))
+            .and_then(|&m| self.string_msg(m))
             .map(|s| format!(": {s}"))
             .unwrap_or_default()
     }

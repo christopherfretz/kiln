@@ -1227,14 +1227,6 @@ impl Oven {
         }
     }
 
-    /// The note on an exception leaving the evaluation, worded as clang's
-    /// P3068 implementation: "unhandled exception: W" at the
-    /// throw-expression (`W` the `what()` string of a class derived from
-    /// `std::exception`), else "unhandled exception of type 'T' with
-    /// content V thrown from here" at its operand (`V` the object's value
-    /// as clang's `APValue` prints it), without the content when the
-    /// operand's type has size 1 (an empty class, a `char`, a `bool`). The type is named as the throw-expression's
-    /// operand's (as written, `site.e` the throw-expression).
     /// Why the scan of an uncaught exception's `what()` string stopped
     /// before its terminating null character (`Oven::exc_what`): the
     /// note a read of that character would carry (as the `static_assert`
@@ -1247,6 +1239,16 @@ impl Oven {
         Some(self.mem_msg(ast, site, f, k, ty, p, &mut Vec::new()).1)
     }
 
+    /// The note on an exception leaving the evaluation, worded as clang's
+    /// P3068 implementation: "unhandled exception: W" at the
+    /// throw-expression (`W` the `what()` string of a class derived from
+    /// `std::exception`, escaped by `Oven::exc_what`), else "unhandled
+    /// exception of type 'T' with content V thrown from here" at its
+    /// operand (`V` the object's value as clang's `APValue` prints it),
+    /// without the content when the operand's type has size 1 (an empty
+    /// class, a `char`, a `bool`). The type is named as the
+    /// throw-expression's operand's (as written, `site.e` the
+    /// throw-expression).
     fn uncaught_note(
         &self,
         ast: &Ast,

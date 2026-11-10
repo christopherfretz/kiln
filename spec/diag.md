@@ -472,6 +472,36 @@ Diag::new(DiagId::pp_macro_redefined, name_span)
   notes, for example the -1 `__builtin_shufflevector` index). It follows
   its parent like any note.
 
+### 6.2 Program-provided text (WP-1259)
+
+Text that comes from the program rather than from kiln is escaped before
+it reaches a message, by one function, `kiln_diag::escape_diag_text`
+(clang's `pushEscapedString`, which clang applies to every string
+argument): from the original bytes, ASCII whitespace (tab, newline,
+vertical tab, form feed, carriage return) and printable or format (Cf)
+characters print as they are; any other code point (a control character,
+U+2028/U+2029, a private-use or noncharacter code point) as `<U+XXXX>`;
+each byte that is not part of valid UTF-8 as `<XX>` (uppercase hex).
+Printability follows §9.4 and deviation D5 (clang also escapes the
+unassigned code points). A newline is not escaped, as in clang: the
+message continues on the next line. The callers:
+
+- a failed `static_assert`'s message, a string literal or a `size()` /
+  `data()` object (`Sema::static_assert_message_text`,
+  `Sema::string_msg`; not truncated);
+- the `what()` of an exception that leaves a constant evaluation, a
+  `std::meta::exception` or one leaving a consteval block included
+  (`Oven::exc_what`; capped at `WHAT_CAP` bytes before escaping,
+  spec/oven.md §Exceptions);
+- the messages of `deprecated` / `unavailable`, `nodiscard` (call and
+  construction), `= delete("…")`, `enable_if` and `diagnose_if`
+  (`Sema::string_msg`);
+- a `data_member_spec` or `__kiln_define_member` name that is not an
+  identifier, quoted in the `std::meta::exception`'s message (and so in
+  its `what()`).
+
+Kiln has no compile-time printing builtin; one would join this list.
+
 ### 6.1 Template type diffing (`%diff`)
 
 Templates take pre-formatted strings, so a clang `%diff{...$...$...}`

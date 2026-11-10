@@ -141,7 +141,7 @@ impl Sema<'_, '_> {
     /// The message of `enable_if` attribute `node`, as the note prints it
     /// (clang: `<no message provided>` for an empty one).
     pub(crate) fn enable_if_message(&self, node: &AttrNode) -> String {
-        let text = ExprId::from_raw(node.b).and_then(|e| self.string_text(e)).unwrap_or_default();
+        let text = ExprId::from_raw(node.b).and_then(|e| self.string_msg(e)).unwrap_or_default();
         if text.is_empty() { "<no message provided>".to_owned() } else { text }
     }
 
