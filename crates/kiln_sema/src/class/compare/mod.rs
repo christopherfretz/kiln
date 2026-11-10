@@ -41,17 +41,26 @@ pub(crate) enum CmpUsage {
 }
 
 impl Sema<'_, '_> {
-    /// The type of namespace-scope class `r` as clang's bare `RecordType`
-    /// of it prints: `'std::strong_ordering'`, which kiln spells as
-    /// `Elaborated` sugar with the enclosing non-inline namespaces as the
-    /// qualifier (spec/types.md §15 R4).
+    /// The type of class `r` as clang's bare `RecordType` of it prints:
+    /// `'std::strong_ordering'`, `'ns::Outer::B'`, which kiln spells as
+    /// `Elaborated` sugar with the enclosing non-inline namespaces and
+    /// (each spelled so in turn) classes as the qualifier (spec/types.md
+    /// §15 R4). A local class stays bare.
     pub(crate) fn scoped_class_type(&mut self, r: DeclId) -> QualType {
         let t = self.class_type(r);
         let mut chain = Vec::new();
         let mut c = self.ast.decls.get(r).ctx();
+        let mut class = None;
         while let Some(d) = c
             && d != self.ast.tu
         {
+            if self.kind_of(d) == DeclKind::CXXRecord && chain.is_empty() {
+                // The enclosing class's own scoped type is the prefix
+                // (WP-1158: the object of `p->m` for a member `m` of a
+                // nested base class prints `'ns::Outer::B *'`).
+                class = Some(d);
+                break;
+            }
             if self.kind_of(d) != DeclKind::Namespace {
                 return t;
             }
@@ -60,6 +69,11 @@ impl Sema<'_, '_> {
                 chain.push(first);
             }
             c = self.ast.decls.get(d).ctx();
+        }
+        if let Some(d) = class {
+            let outer = self.scoped_class_type(d);
+            let nns = self.ast.types.nns(Nns::Type { prefix: None, ty: outer, template_kw: false });
+            return self.ast.types.elaborated(TagKeyword::None, Some(nns), t);
         }
         if chain.is_empty() {
             return t;

@@ -1524,6 +1524,25 @@ cut the front-end cost of `-g` without changing a byte of the IR.
   - Type descriptors name the written type, or the canonical type
     (`getRecordType`, `getThisType`, the float-cast operands). A
     canonical tag prints with its full scope.
+    The name is clang's `ConvertArgToString(ak_qualtype)`, the very
+    formatting of a type argument of a diagnostic (WP-1158;
+    `kiln_ast::diag_names::DiagNames::type_arg`, shared with Sema's
+    `ty_arg`): `'T'` or `'T' (aka 'U')`, with the `-fclang-compat`
+    level's spellings (for `ns::myE` naming `ns::E`, clang 19's aka is
+    fully scoped, `(aka 'ns::E')`, and clang 22's keeps the written
+    qualifier, `(aka 'E')`). The written type is the sugared one: a member
+    access, `dynamic_cast` and `delete` check the pointee as written
+    (`TypeContext::pointee_sugared`, clang `getPointeeType`), a
+    downcast the written target (`static_cast<DT &>` is an lvalue of
+    type `DT`). An implicit class template specialization prints
+    without the trailing arguments equal to their defaults
+    (`'ns::H<>'`); an explicit specialization or explicit
+    instantiation prints the arguments written on it
+    (`getTemplateArgsAsWritten`, `Templates::args_as_written`):
+    `'std::coroutine_handle<void>'`, `'n::X<TA>'`. For a redeclared
+    explicit specialization clang 19 keeps the definition's written
+    arguments and clang 22 the first declaration's; an explicit
+    instantiation keeps the first one's.
 
   At `-fclang-compat=22`:
   - a signed `_BitInt` descriptor is kind 2 with its width appended;

@@ -433,7 +433,7 @@ impl Sema<'_, '_> {
     /// A class type as clang prints a bare `RecordType` in a diagnostic
     /// argument: fully scoped (`'resumable3::promise_type'`).
     pub(crate) fn scoped_ty_arg(&self, q: QualType) -> String {
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         let opts = kiln_ast::types::PrintOptions {
             full_scope: true,
             ..kiln_ast::types::PrintOptions::SUGARED

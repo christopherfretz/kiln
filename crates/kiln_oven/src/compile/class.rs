@@ -79,6 +79,11 @@ impl Compiler<'_> {
                     self.emit(Op::Mov, 0, &[dst, t]);
                 }
             }
+            None if self.o.frame_running() => {
+                // A potential-constant frame job (WP-1163): `this` is
+                // unknown, a quiet failure (`frame::frame_unknown_read`).
+                self.trap(e, "");
+            }
             None => {
                 // clang `note_constexpr_this`: "implicit use" for a member
                 // named without `this->`.
