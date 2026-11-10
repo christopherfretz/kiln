@@ -10,9 +10,10 @@
 //!
 //! Coverage. Only what can be rebuilt exactly is written: the list is
 //! spec/modules.md §11.11 "Part 2a" (declarations, function bodies,
-//! initializers and, since S3, non-template non-polymorphic classes).
-//! Anything else (a template, a polymorphic class, a global module
-//! fragment, an import, a declaration outside the unit's main file, ...)
+//! initializers, since S3 non-template classes, and since WP-1120
+//! polymorphic ones with virtual bases). Anything else (a polymorphic
+//! class template, a global module fragment, an import, a declaration
+//! outside the unit's main file, ...)
 //! makes the writer emit no image, and the importer replays the source as
 //! before (the fallback; correctness first; `-v` prints the reason).
 //!
@@ -46,7 +47,7 @@ mod spec;
 use body::{Bodies, BodyState, Root};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 7;
+pub(crate) const IMAGE_VERSION: u32 = 9;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -197,28 +198,34 @@ enum FnBody {
     Stmt(u32),
 }
 
-/// A base-specifier of a class definition (never virtual).
+/// A base-specifier of a class definition.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct BaseRec {
     ty: QRef,
     loc: u32,
     /// [`Access`] as written (0 when defaulted).
     access: u8,
+    /// `virtual` (WP-1120).
+    virt: bool,
 }
 
 /// A class definition: its frozen `DefinitionBits` (without
-/// `BEING_DEFINED` / `COMPLETE`), the first record after its members, and
-/// its bases.
+/// `BEING_DEFINED` / `COMPLETE`), the first record after its members, its
+/// key function (a member function record of the class, or [`NONE`];
+/// Itanium C++ ABI §5.2.3, WP-1120) and its bases.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct RecDef {
     bits: u64,
     end: u32,
+    key: u32,
     bases: Vec<BaseRec>,
 }
 
 /// A ctor-initializer: `kind` is `CtorInitKind` (`Base` 0: `target` the
-/// base's position in its class's base list; `Field` 2: a field record of
-/// the class, possibly after the constructor; `Delegating` 4: 0).
+/// base's position in its class's base list; `VirtualBase` 1: the type
+/// reference (unqualified) of the virtual base as written, direct or
+/// indirect; `Field` 2: a field record of the class, possibly after the
+/// constructor; `Delegating` 4: 0).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct InitRec {
     kind: u8,
@@ -255,6 +262,10 @@ enum Payload {
         body: FnBody,
         /// A constructor's ctor-initializers, in initialization order.
         inits: Vec<InitRec>,
+        /// The virtual functions a first declaration overrides
+        /// ([class.virtual]/2, sema's `cold.overrides`): function or
+        /// implicit member records, possibly after this one (WP-1120).
+        overrides: Vec<u32>,
     },
     Var {
         ty: QRef,
@@ -454,9 +465,9 @@ const FIELD_FLAGS: u32 =
     kiln_ast::decl::FieldData::MUTABLE | (3 << 2) | kiln_ast::decl::FieldData::HAS_DEFAULT_INIT;
 
 /// `DefinitionBits` a carried class may have: every defined bit (through
-/// WP-1109's `NONTRIVIAL_*`, bits 57-61) except a lambda, polymorphic,
-/// abstract, anonymous, with virtual or inherited members, or
-/// `trivial_abi` (spec/modules.md §11.11 "Classes").
+/// WP-1109's `NONTRIVIAL_*`, bits 57-61) except a lambda, anonymous, with
+/// inherited members, or `trivial_abi` (spec/modules.md §11.11
+/// "Classes"; polymorphic, abstract and virtual bases since WP-1120).
 const DEF_BITS: u64 = {
     use kiln_ast::decl::DefinitionBits as B;
     ((B::NONTRIVIAL_MOVE_ASSIGN.bits() << 1) - 1)
@@ -464,9 +475,6 @@ const DEF_BITS: u64 = {
             | B::COMPLETE.bits()
             | B::ANONYMOUS.bits()
             | B::LAMBDA.bits()
-            | B::POLYMORPHIC.bits()
-            | B::ABSTRACT.bits()
-            | B::HAS_VIRTUAL_BASES.bits()
             | B::HAS_INHERITED_CTOR.bits()
             | B::HAS_INHERITED_ASSIGN.bits()
             | B::LAMBDA_CAPTURES.bits()
@@ -476,9 +484,10 @@ const DEF_BITS: u64 = {
 /// Function specifier bits carried: storage, inline (written and
 /// implicit), `constexpr`/`consteval`, explicitly defaulted, deleted,
 /// `explicit`, trivial, immediate-escalating, escalated, `...`, inherited
-/// storage, not selected ([special]/6, WP-1109), deduced return type.
-/// Anything else (virtual, implicitly defaulted, coroutine, contracts,
-/// ...) is not carried yet.
+/// storage, not selected ([special]/6, WP-1109), deduced return type;
+/// since WP-1120 virtual (semantic and written), pure, `override` and
+/// `final`. Anything else (implicitly defaulted, coroutine, contracts,
+/// explicit object parameter, ...) is not carried yet.
 fn fn_spec(bits: u32) -> Option<FnSpec> {
     let storage = match bits & 3 {
         0 => FnStorage::None,
@@ -498,6 +507,8 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_inline(bit(2))
         .with_implicit_inline(bit(3))
         .with_constexpr_kind(ck)
+        .with_virtual(bit(6))
+        .with_pure(bit(7))
         .with_defaulted(if bit(8) { Defaulted::Explicit } else { Defaulted::No })
         .with_deleted(bit(10))
         .with_explicit(bit(11))
@@ -505,6 +516,9 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_immediate_escalating(bit(13))
         .with_escalated(bit(16))
         .with_variadic(bit(17))
+        .with_override(bit(18))
+        .with_final(bit(19))
+        .with_virtual_written(bit(21))
         .with_storage_inherited(bit(22))
         .with_not_selected(bit(23))
         .with_return_deduced(bit(24));
@@ -656,7 +670,7 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
     }
     match &d.payload {
         Payload::Namespace | Payload::Export | Payload::Label | Payload::Access => {}
-        Payload::Function { kind, ty, spec, deferred, params, body, inits } => {
+        Payload::Function { kind, ty, spec, deferred, params, body, inits, overrides } => {
             w.u8(*kind);
             w.q(*ty);
             w.u32(*spec);
@@ -689,6 +703,10 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                 w.u8(i.written);
                 w.u32(i.init);
                 w.u32(i.loc);
+            }
+            w.len(overrides.len());
+            for &o in overrides {
+                w.u32(o);
             }
         }
         Payload::Var { ty, spec, init, eval } => {
@@ -726,11 +744,13 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                     w.u8(1);
                     w.u64(d.bits);
                     w.u32(d.end);
+                    w.u32(d.key);
                     w.len(d.bases.len());
                     for b in &d.bases {
                         w.q(b.ty);
                         w.u32(b.loc);
                         w.u8(b.access);
+                        w.u8(u8::from(b.virt));
                     }
                 }
             }
@@ -1046,7 +1066,12 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                     loc: r.u32()?,
                 });
             }
-            Payload::Function { kind, ty, spec, deferred, params, body, inits }
+            let n = r.count(4)?;
+            let mut overrides = Vec::with_capacity(n);
+            for _ in 0..n {
+                overrides.push(r.u32()?);
+            }
+            Payload::Function { kind, ty, spec, deferred, params, body, inits, overrides }
         }
         K_VAR => Payload::Var { ty: r.q()?, spec: r.u32()?, init: r.u32()?, eval: r.u32()? },
         K_LABEL => Payload::Label,
@@ -1070,12 +1095,19 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                 1 => {
                     let bits = r.u64()?;
                     let end = r.u32()?;
-                    let n = r.count(10)?;
+                    let key = r.u32()?;
+                    let n = r.count(11)?;
                     let mut bases = Vec::with_capacity(n);
                     for _ in 0..n {
-                        bases.push(BaseRec { ty: r.q()?, loc: r.u32()?, access: r.u8()? });
+                        let (ty, loc, access) = (r.q()?, r.u32()?, r.u8()?);
+                        let virt = match r.u8()? {
+                            0 => false,
+                            1 => true,
+                            _ => return bad("bad flag byte"),
+                        };
+                        bases.push(BaseRec { ty, loc, access, virt });
                     }
-                    Some(RecDef { bits, end, bases })
+                    Some(RecDef { bits, end, key, bases })
                 }
                 _ => return bad("bad flag byte"),
             };
@@ -1181,9 +1213,10 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         Payload::Ttp { default, .. } => default.iter().copied().collect(),
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
-        Payload::Function { ty, params, .. } => {
-            std::iter::once(*ty).chain(params.iter().map(|p| p.ty)).collect()
-        }
+        Payload::Function { ty, params, inits, .. } => std::iter::once(*ty)
+            .chain(params.iter().map(|p| p.ty))
+            .chain(inits.iter().filter(|x| x.kind == 1).map(|x| QRef { ty: x.target, quals: 0 }))
+            .collect(),
         Payload::Field { ty, .. }
         | Payload::Var { ty, .. }
         | Payload::Enumerator { ty, .. }
@@ -1744,9 +1777,25 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             return bad("bad type reference");
         }
         match &d.payload {
-            Payload::Function { kind, ty, spec, params, inits, .. } => {
+            Payload::Function { kind, ty, spec, params, inits, overrides, .. } => {
                 if *kind as usize >= FN_KINDS.len() || (*kind == 0) == in_class {
                     return bad("bad function kind");
+                }
+                // A first declaration's overridden functions: other
+                // member functions (records anywhere in the image).
+                let overrider = |x: u32| {
+                    x as usize != i
+                        && img.decls.get(x as usize).is_some_and(|o| match o.payload {
+                            Payload::Function { kind: 1 | 3 | 4, .. } => o.prev == NONE,
+                            // An implicit assignment operator or destructor.
+                            Payload::Implicit { kind } => kind >= 3,
+                            _ => false,
+                        })
+                };
+                if (!overrides.is_empty() && (d.prev != NONE || !matches!(*kind, 1 | 3 | 4)))
+                    || !overrides.iter().all(|&x| overrider(x))
+                {
+                    return bad("bad overridden functions");
                 }
                 if !inits.is_empty() && *kind != 2 {
                     return bad("ctor-initializers of a function that is not a constructor");
@@ -1764,6 +1813,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             matches!(f.payload, Payload::Field { .. }) && f.ctx == d.ctx
                         }),
                         4 => x.target == 0,
+                        // A virtual base (its type checked with the
+                        // record's type references).
+                        1 => base_class(img, QRef { ty: x.target, quals: 0 }, &|_| true).is_some(),
                         _ => false,
                     };
                     if !ok {
@@ -1819,6 +1871,18 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     let end = df.end as usize;
                     if end <= i || end > parent_end || df.bits & !DEF_BITS != 0 {
                         return bad("bad class definition");
+                    }
+                    // The key function: a member function declared in the
+                    // class (not an out-of-line definition).
+                    if df.key != NONE
+                        && (!(i + 1..end).contains(&(df.key as usize))
+                            || img.decls.get(df.key as usize).is_none_or(|k| {
+                                !matches!(k.payload, Payload::Function { kind: 1 | 3 | 4, .. })
+                                    || k.ctx as usize != i
+                                    || k.lexical != NONE
+                            }))
+                    {
+                        return bad("bad key function");
                     }
                     if def_end[chain[i]] != usize::MAX {
                         return bad("a class defined twice");
@@ -1952,6 +2016,11 @@ struct Writer<'s, 'a, 'b> {
     tmemo: FxHashMap<TypeId, u32>,
     img: Image,
     bs: BodyState,
+    /// Function records and the functions they override, class records
+    /// and their key functions: resolved once every record is written
+    /// (the targets may follow, implicit members last; WP-1120).
+    overrides: Vec<(u32, Vec<DeclId>)>,
+    keys: Vec<(u32, DeclId)>,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -2488,12 +2557,11 @@ impl Writer<'_, '_, '_> {
         if c.friends.get(d).is_some_and(|&l| !self.s.ast.lists.is_empty(l)) {
             return Err("a friend declaration");
         }
-        if c.overrides.contains(d)
-            || c.key_function.contains(d)
-            || c.dtor_delete.contains(d)
-            || c.dtor_delete_this.contains(d)
-        {
-            return Err("a virtual function");
+        // The overridden functions, key function and deleting
+        // destructor's `operator delete` are carried or recomputed
+        // (WP-1120); a destroying `operator delete` is not.
+        if c.dtor_delete_this.contains(d) {
+            return Err("a destroying operator delete");
         }
         if c.inheriting_ctor.contains(d) || c.inherited_ctor.contains(d) {
             return Err("an inherited constructor");
@@ -2544,8 +2612,9 @@ impl Writer<'_, '_, '_> {
         }
         let spec = fd.spec;
         let bits = spec.bits();
-        if spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final() {
-            return Err("a virtual function");
+        let virt = spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final();
+        if virt && pattern {
+            return Err("a virtual function in a class template");
         }
         if fn_spec(bits) != Some(spec) {
             return Err("a coroutine, contract-checked or implicitly defaulted function");
@@ -2647,7 +2716,31 @@ impl Writer<'_, '_, '_> {
         {
             return Err("ctor-initializers of a constructor without a carried body");
         }
-        Ok(Payload::Function { kind: kind as u8, ty, spec: bits, deferred, params, body, inits })
+        // The functions a first declaration overrides (resolved in
+        // `collect`); a redeclaration shares its first declaration's.
+        let ov = |x: DeclId| {
+            let l = ast.decls.cold.overrides.get(x).copied();
+            l.map(|l| ast.lists.iter::<DeclId>(l).collect::<Vec<_>>()).unwrap_or_default()
+        };
+        let mine = ov(d);
+        if first {
+            if !mine.is_empty() {
+                self.overrides.push((i, mine));
+            }
+        } else if !mine.is_empty() && mine != ov(ast.first(d)) {
+            return Err("a redeclared virtual function with other overridden functions");
+        }
+        let overrides = Vec::new();
+        Ok(Payload::Function {
+            kind: kind as u8,
+            ty,
+            spec: bits,
+            deferred,
+            params,
+            body,
+            inits,
+            overrides,
+        })
     }
 
     /// The ctor-initializers of constructor `d`, record `i`.
@@ -2684,7 +2777,15 @@ impl Writer<'_, '_, '_> {
                     NONE
                 }
                 CtorInitKind::Delegating => 0,
-                CtorInitKind::VirtualBase => return Err("a virtual base class"),
+                CtorInitKind::VirtualBase => {
+                    // The virtual base's type as written (direct or
+                    // indirect).
+                    let q = self.qref(QualType::unqual(TypeId::new(x.target)))?;
+                    if q.quals != 0 {
+                        return Err("a malformed ctor-initializer");
+                    }
+                    q.ty
+                }
                 CtorInitKind::IndirectField => return Err("an anonymous union member"),
             };
             // Patched by `walk_roots`.
@@ -2736,11 +2837,14 @@ impl Writer<'_, '_, '_> {
         if !b.contains(DefinitionBits::COMPLETE) || b.contains(DefinitionBits::BEING_DEFINED) {
             return Err("an incomplete class definition");
         }
-        if b.contains(DefinitionBits::POLYMORPHIC) {
-            return Err("a polymorphic class");
+        if ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
+            && (b.contains(DefinitionBits::POLYMORPHIC)
+                || b.contains(DefinitionBits::HAS_VIRTUAL_BASES))
+        {
+            return Err("a polymorphic class template");
         }
-        if b.contains(DefinitionBits::HAS_VIRTUAL_BASES) {
-            return Err("a virtual base class");
+        if let Some(&k) = ast.decls.cold.key_function.get(d) {
+            self.keys.push((i, k));
         }
         if b.contains(DefinitionBits::HAS_INHERITED_CTOR)
             || b.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
@@ -2750,7 +2854,13 @@ impl Writer<'_, '_, '_> {
         if b.contains(DefinitionBits::ANONYMOUS) {
             return Err("an anonymous union or struct member");
         }
-        if crate::class::SpecialKind::any_needs_overload(b) {
+        // A dynamic class declares its implicit members eagerly anyway
+        // (`finish_special_bits`), and they are carried as implicit
+        // records in id order; a non-dynamic one still falls back
+        // (WP-1121).
+        let dynamic = b.contains(DefinitionBits::POLYMORPHIC)
+            || b.contains(DefinitionBits::HAS_VIRTUAL_BASES);
+        if !dynamic && crate::class::SpecialKind::any_needs_overload(b) {
             return Err("a class whose implicit special members need overload resolution");
         }
         let bits = b.without(DefinitionBits::COMPLETE).bits();
@@ -2761,9 +2871,6 @@ impl Writer<'_, '_, '_> {
         let mut bases = Vec::with_capacity(list.len());
         for (pos, g) in list.into_iter().enumerate() {
             let bs = *ast.decls.base_spec(g);
-            if bs.is_virtual {
-                return Err("a virtual base class");
-            }
             if bs.pack_expansion {
                 return Err("a pack expansion");
             }
@@ -2772,9 +2879,10 @@ impl Writer<'_, '_, '_> {
                 ty: self.qref(bs.ty)?,
                 loc: self.loc(bs.loc)?,
                 access: bs.access as u8,
+                virt: bs.is_virtual,
             });
         }
-        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, bases }) })
+        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, key: NONE, bases }) })
     }
 
     /// Parameter `p`, the image's parameter `g`.
@@ -3013,6 +3121,22 @@ impl Writer<'_, '_, '_> {
             });
             self.recs.insert(d, i);
         }
+        for (i, list) in std::mem::take(&mut self.overrides) {
+            let mut out = Vec::with_capacity(list.len());
+            for o in list {
+                let r = self.recs.get(&o).ok_or("an override of a function outside the image")?;
+                out.push(*r);
+            }
+            if let Payload::Function { overrides, .. } = &mut self.img.decls[i as usize].payload {
+                *overrides = out;
+            }
+        }
+        for (i, k) in std::mem::take(&mut self.keys) {
+            let r = *self.recs.get(&k).ok_or("a key function outside the image")?;
+            if let Payload::Record { def: Some(df), .. } = &mut self.img.decls[i as usize].payload {
+                df.key = r;
+            }
+        }
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let r = *self.recs.get(&f).ok_or("a ctor-initializer of a field outside the image")?;
             if let Payload::Function { inits, .. } = &mut self.img.decls[i as usize].payload
@@ -3104,6 +3228,8 @@ impl Sema<'_, '_> {
             tmemo: FxHashMap::default(),
             img: Image::default(),
             bs: BodyState::default(),
+            overrides: Vec::new(),
+            keys: Vec::new(),
         };
         if let Err(why) = w.collect() {
             return none(why);
@@ -3259,7 +3385,7 @@ impl Sema<'_, '_> {
             let d = match &r.payload {
                 Payload::Namespace => self.builder().namespace(h, false, prev),
                 Payload::Export => self.builder().export_decl(ctx, h.loc),
-                Payload::Function { kind, ty, spec, deferred, params, body, inits: ci } => {
+                Payload::Function { kind, ty, spec, deferred, params, body, inits: ci, .. } => {
                     let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = fn_spec(*spec).unwrap_or_default();
                     let kind = FN_KINDS[usize::from(*kind)];
@@ -3364,7 +3490,7 @@ impl Sema<'_, '_> {
                             .map(|b| kiln_ast::decl::BaseSpec {
                                 ty: self.image_ty(img, &mut tys, &ids, b.ty),
                                 loc: lo(self, b.loc),
-                                is_virtual: false,
+                                is_virtual: b.virt,
                                 access: access_of(b.access),
                                 pack_expansion: false,
                             })
@@ -3391,7 +3517,19 @@ impl Sema<'_, '_> {
                 }
                 Payload::Implicit { kind } => {
                     let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
-                    let f = self.declare_implicit(ctx, k);
+                    // Declaring one implicit member can declare another
+                    // that a later record names (a derived class's
+                    // default constructor declares its base's, WP-1120):
+                    // that record takes the member already declared.
+                    let f = if self.implicit_bits(ctx) & k.bit() != 0
+                        && let Some(f) = self.ast.members(self.class_def(ctx)).find(|&m| {
+                            self.ast.decls.get(m).flags().contains(DeclFlags::IMPLICIT)
+                                && self.special_kind_of(m) == Some(k)
+                        }) {
+                        f
+                    } else {
+                        self.declare_implicit(ctx, k)
+                    };
                     defaulted.push((f, r.flags));
                     f
                 }
@@ -3442,6 +3580,7 @@ impl Sema<'_, '_> {
         while let Some((c, _, bits)) = classes.pop() {
             self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
         }
+        self.image_virtuals(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         for (f, width, init) in fields {
             if width != NONE {
@@ -3468,6 +3607,10 @@ impl Sema<'_, '_> {
                             q.ty().index()
                         }),
                         CtorInitKind::Field => ids[x.target as usize].index(),
+                        CtorInitKind::VirtualBase => {
+                            let q = QRef { ty: x.target, quals: 0 };
+                            self.image_ty(img, &mut tys, &ids, q).ty().index()
+                        }
                         _ => 0,
                     };
                     kiln_ast::decl::CtorInit {
@@ -3483,6 +3626,17 @@ impl Sema<'_, '_> {
         }
         for (f, s) in fbodies {
             let _ = self.builder().set_body(f, built.stmt(s));
+        }
+        // A virtual destructor defined in the module: the `operator
+        // delete` its deleting destructor calls ([class.dtor]/16), as
+        // sema finds it at the definition (WP-1120).
+        for (i, r) in img.decls.iter().enumerate() {
+            if let Payload::Function { kind: 3, body, .. } = r.payload
+                && body != FnBody::None
+                && let Some(class) = self.ast.decls.get(ids[i]).ctx()
+            {
+                self.check_destructor_delete(ids[i], class);
+            }
         }
         for (v, init, eval) in inits {
             if init != NONE {
@@ -3519,6 +3673,40 @@ impl Sema<'_, '_> {
             }
         }
         self.module_owner_changed();
+    }
+
+    /// The virtual function relations of the image's classes (WP-1120):
+    /// the functions each first declaration overrides (a redeclaration
+    /// shares its first declaration's list, as `finish_virtual_decl`
+    /// does) and each class's key function. Implicit members computed
+    /// their own when declared.
+    fn image_virtuals(&mut self, img: &Image, ids: &[DeclId]) {
+        for (i, r) in img.decls.iter().enumerate() {
+            match &r.payload {
+                Payload::Function { overrides, .. } if !overrides.is_empty() => {
+                    let os: Vec<DeclId> =
+                        overrides.iter().map(|&o| self.ast.first(ids[o as usize])).collect();
+                    let _ = self.builder().set_overrides(ids[i], &os);
+                }
+                Payload::Record { def: Some(df), .. } if df.key != NONE => {
+                    let _ = self.ast.decls.cold.key_function.insert(ids[i], ids[df.key as usize]);
+                }
+                _ => {}
+            }
+        }
+        for (i, r) in img.decls.iter().enumerate() {
+            if let Payload::Function { .. } = r.payload
+                && r.prev != NONE
+            {
+                let f = ids[i];
+                let first = self.ast.first(f);
+                if let Some(&l) = self.ast.decls.cold.overrides.get(first)
+                    && !self.ast.decls.cold.overrides.contains(f)
+                {
+                    let _ = self.ast.decls.cold.overrides.insert(f, l);
+                }
+            }
+        }
     }
 
     /// The constructor, destructor or conversion function name of a
@@ -3757,6 +3945,7 @@ mod tests {
                         kind: 0,
                         deferred: false,
                         inits: vec![],
+                        overrides: vec![],
                         ty: q(BUILTINS + 1),
                         spec: 0,
                         params: vec![ParamRec {
@@ -3832,6 +4021,7 @@ mod tests {
                         kind: 0,
                         deferred: false,
                         inits: vec![],
+                        overrides: vec![],
                         ty: q(BUILTINS + 1),
                         spec: 0x18,
                         params: vec![ParamRec {
@@ -3988,11 +4178,19 @@ mod tests {
             prev: NONE,
             payload,
         };
-        let def =
-            |end, bases| Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end, bases }) };
+        let def = |end, bases| Payload::Record {
+            tag: 0,
+            def: Some(RecDef { bits: 0, end, key: NONE, bases }),
+        };
         img.decls.extend([
             head(base, 1, 0, 200, def(11, vec![])),
-            head(base + 1, 1, 0, 210, def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0 }])),
+            head(
+                base + 1,
+                1,
+                0,
+                210,
+                def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0, virt: false }]),
+            ),
             head(
                 base + 2,
                 11,
@@ -4008,6 +4206,7 @@ mod tests {
                 Payload::Function {
                     kind: 2,
                     deferred: false,
+                    overrides: vec![],
                     inits: vec![
                         InitRec { kind: 0, target: 0, written: 0, init: 0, loc: 220 },
                         InitRec { kind: 2, target: 12, written: 1, init: 0, loc: 224 },
@@ -4108,6 +4307,77 @@ mod tests {
         assert!(decode(&encode(&img)).is_err());
     }
 
+    /// `class_sample` with S's constructor turned into a virtual member
+    /// function `w` (WP-1120): S's key function, overriding the implicit
+    /// destructor record (any first declaration of a method, destructor
+    /// or implicit destructor is a valid target), over a virtual base.
+    fn virtual_sample() -> Image {
+        let mut img = class_sample();
+        let w = img.names.len() as u32 - 1;
+        img.decls[13].name = w;
+        if let Payload::Function { kind, inits, overrides, spec, .. } = &mut img.decls[13].payload {
+            *kind = 1;
+            inits.clear();
+            *overrides = vec![14];
+            *spec = FnSpec::new().with_virtual(true).with_override(true).bits();
+        }
+        if let Payload::Record { def: Some(df), .. } = &mut img.decls[11].payload {
+            df.key = 13;
+            df.bases[0].virt = true;
+        }
+        img
+    }
+
+    /// [class.virtual], [class.mi]/4 (WP-1120): virtual functions, the
+    /// functions they override, a key function and a virtual base
+    /// round-trip, with the virt-specifier and `pure` bits; a malformed
+    /// relation is an error.
+    #[test]
+    fn carries_virtual_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        fn set_key(i: &mut Image, k: u32) {
+            if let Payload::Record { def: Some(df), .. } = &mut i.decls[11].payload {
+                df.key = k;
+            }
+        }
+        fn set_ovr(i: &mut Image, o: Vec<u32>) {
+            if let Payload::Function { overrides, .. } = &mut i.decls[13].payload {
+                *overrides = o;
+            }
+        }
+        let spec = FnSpec::new()
+            .with_virtual(true)
+            .with_pure(true)
+            .with_override(true)
+            .with_final(true)
+            .with_virtual_written(true);
+        assert_eq!(fn_spec(spec.bits()), Some(spec));
+        let img = virtual_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
+        let corrupt: [Corrupt; 6] = [
+            ("key outside the class", |i| set_key(i, 14)),
+            ("key not a function", |i| set_key(i, 12)),
+            ("overrides itself", |i| set_ovr(i, vec![13])),
+            ("overrides a field", |i| set_ovr(i, vec![12])),
+            ("overrides past the image", |i| set_ovr(i, vec![99])),
+            ("overrides on a redeclaration", |i| i.decls[13].prev = 0),
+        ];
+        for (what, f) in corrupt {
+            let mut img = virtual_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+        // A virtual base flag byte other than 0 or 1.
+        let mut bytes = encode(&virtual_sample());
+        let good = bytes.clone();
+        let mut img = virtual_sample();
+        set_base(&mut img, |b| b.virt = false);
+        let plain = encode(&img);
+        let at = good.iter().zip(&plain).position(|(a, b)| a != b).unwrap();
+        bytes[at] = 2;
+        assert!(decode(&bytes).is_err());
+    }
+
     fn set_end(img: &mut Image, r: usize, end: u32) {
         if let Payload::Record { def: Some(df), .. } = &mut img.decls[r].payload {
             df.end = end;
@@ -4183,6 +4453,7 @@ mod tests {
                     kind: 0,
                     deferred: false,
                     inits: vec![],
+                    overrides: vec![],
                     ty: q(t + 1),
                     spec: 0,
                     params: vec![ParamRec {
@@ -4316,7 +4587,10 @@ mod tests {
                 1,
                 0,
                 420,
-                Payload::Record { tag: 0, def: Some(RecDef { bits: 0, end: 19, bases: vec![] }) },
+                Payload::Record {
+                    tag: 0,
+                    def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![] }),
+                },
             ),
             head(
                 0,
