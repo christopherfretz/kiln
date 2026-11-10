@@ -1,0 +1,64 @@
+TranslationUnitDecl
+|-TypedefDecl referenced L 'long'
+|-VarDecl used a 'int' cinit
+| `-IntegerLiteral 'int' 1
+|-VarDecl used b 'long' cinit
+| `-ImplicitCastExpr 'long' <IntegralCast>
+|   `-IntegerLiteral 'int' 2
+|-VarDecl x 'int' cinit
+| `-GenericSelectionExpr 'int'
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|   |-case 'int' selected
+|   | `-IntegerLiteral 'int' 1
+|   |-case 'L':'long'
+|   | `-IntegerLiteral 'int' 2
+|   `-default
+|     `-IntegerLiteral 'int' 3
+|-VarDecl y 'int' cinit
+| `-GenericSelectionExpr 'int'
+|   |-ImplicitCastExpr 'long' <LValueToRValue>
+|   | `-DeclRefExpr 'long' lvalue Var 'b' 'long' non_odr_use_unevaluated
+|   |-case 'int'
+|   | `-IntegerLiteral 'int' 1
+|   |-case 'L':'long' selected
+|   | `-IntegerLiteral 'int' 2
+|   `-default
+|     `-IntegerLiteral 'int' 3
+|-VarDecl r 'int &' cinit
+| `-GenericSelectionExpr 'int' lvalue
+|   |-ImplicitCastExpr 'int' <LValueToRValue>
+|   | `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|   |-case 'int' selected
+|   | `-DeclRefExpr 'int' lvalue Var 'a' 'int'
+|   `-case 'long'
+|     `-DeclRefExpr 'long' lvalue Var 'b' 'long'
+|-VarDecl u 'int' cinit
+| `-GenericSelectionExpr 'int'
+|   |-BinaryOperator 'double' '+'
+|   | |-ImplicitCastExpr 'double' <IntegralToFloating>
+|   | | `-ImplicitCastExpr 'int' <LValueToRValue>
+|   | |   `-DeclRefExpr 'int' lvalue Var 'a' 'int' non_odr_use_unevaluated
+|   | `-FloatingLiteral 'double' 5e-1
+|   |-case 'int'
+|   | `-IntegerLiteral 'int' 1
+|   `-default selected
+|     `-IntegerLiteral 'int' 2
+|-VarDecl t 'int' cinit
+| `-GenericSelectionExpr 'int' type_operand='const int'
+|   |-case 'int'
+|   | `-IntegerLiteral 'int' 1
+|   `-case 'const int' selected
+|     `-IntegerLiteral 'int' 2
+|-CXXRecordDecl referenced struct S definition
+|-TypeAliasDecl referenced CS 'const S'
+`-VarDecl q 'int' cinit
+  `-GenericSelectionExpr 'int' type_operand='const L':'const long'
+    |-case 'const L':'const long' selected
+    | `-IntegerLiteral 'int' 1
+    |-case 'volatile S'
+    | `-IntegerLiteral 'int' 3
+    |-case 'CS':'const S'
+    | `-IntegerLiteral 'int' 4
+    `-default
+      `-IntegerLiteral 'int' 2

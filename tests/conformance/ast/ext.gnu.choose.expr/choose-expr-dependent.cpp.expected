@@ -1,0 +1,74 @@
+TranslationUnitDecl
+|-ClassTemplateDecl C
+| |-TemplateTypeParmDecl referenced class depth 0 index 0 T
+| |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| |-CXXRecordDecl struct C definition
+| | |-VarDecl v 'const long' static inline constexpr cinit
+| | | `-ChooseExpr '<dependent type>'
+| | |   |-BinaryOperator 'bool' '>'
+| | |   | |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |   | `-IntegerLiteral 'int' 1
+| | |   |-CXXUnresolvedConstructExpr 'T' list
+| | |   | `-InitListExpr 'void'
+| | |   |   `-IntegerLiteral 'int' 1
+| | |   `-FloatingLiteral 'double' 2.5e0
+| | |-VarDecl w 'const int' static inline constexpr cinit
+| | | `-ChooseExpr '<dependent type>'
+| | |   |-DeclRefExpr 'int' NonTypeTemplateParm 'N' 'int'
+| | |   |-IntegerLiteral 'int' 10
+| | |   `-IntegerLiteral 'int' 20
+| | `-VarDecl k 'const int' static inline constexpr cinit value=3
+| |   `-ChooseExpr 'int'
+| |     |-ConstantExpr 'int' value=1
+| |     | `-IntegerLiteral 'int' 1
+| |     |-IntegerLiteral 'int' 3
+| |     `-CXXUnresolvedConstructExpr 'T' list
+| |       `-InitListExpr 'void'
+| |-ClassTemplateSpecializationDecl struct C definition implicit_instantiation
+| | |-TemplateArgument type 'long'
+| | |-TemplateArgument value 'int' 2
+| | |-VarDecl referenced v 'const long' static inline constexpr cinit value=1
+| | | `-ChooseExpr 'long'
+| | |   |-ConstantExpr 'bool' value=true
+| | |   | `-BinaryOperator 'bool' '>'
+| | |   |   |-SubstNonTypeTemplateParmExpr 'int'
+| | |   |   | |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+| | |   |   | `-IntegerLiteral 'int' 2
+| | |   |   `-IntegerLiteral 'int' 1
+| | |   |-CXXFunctionalCastExpr 'long' functional cast to long <NoOp>
+| | |   | `-InitListExpr 'long'
+| | |   |   `-ImplicitCastExpr 'long' <IntegralCast>
+| | |   |     `-IntegerLiteral 'int' 1
+| | |   `-FloatingLiteral 'double' 2.5e0
+| | |-VarDecl w 'const int' static constexpr
+| | `-VarDecl k 'const int' static constexpr
+| `-ClassTemplateSpecializationDecl struct C definition implicit_instantiation
+|   |-TemplateArgument type 'int'
+|   |-TemplateArgument value 'int' 0
+|   |-VarDecl v 'const long' static constexpr
+|   |-VarDecl referenced w 'const int' static inline constexpr cinit value=20
+|   | `-ChooseExpr 'int'
+|   |   |-ConstantExpr 'int' value=0
+|   |   | `-SubstNonTypeTemplateParmExpr 'int'
+|   |   |   |-NonTypeTemplateParmDecl referenced 'int' depth 0 index 1 N
+|   |   |   `-IntegerLiteral 'int' 0
+|   |   |-IntegerLiteral 'int' 10
+|   |   `-IntegerLiteral 'int' 20
+|   `-VarDecl referenced k 'const int' static inline constexpr cinit value=3
+|     `-ChooseExpr 'int'
+|       |-ConstantExpr 'int' value=1
+|       | `-IntegerLiteral 'int' 1
+|       |-IntegerLiteral 'int' 3
+|       `-CXXFunctionalCastExpr 'int' functional cast to int <NoOp>
+|         `-InitListExpr 'int'
+`-VarDecl a 'long' cinit
+  `-BinaryOperator 'long' '+'
+    |-BinaryOperator 'long' '+'
+    | |-ImplicitCastExpr 'long' <LValueToRValue>
+    | | `-DeclRefExpr 'const long' lvalue Var 'v' 'const long' non_odr_use_constant
+    | `-ImplicitCastExpr 'long' <IntegralCast>
+    |   `-ImplicitCastExpr 'int' <LValueToRValue>
+    |     `-DeclRefExpr 'const int' lvalue Var 'w' 'const int' non_odr_use_constant
+    `-ImplicitCastExpr 'long' <IntegralCast>
+      `-ImplicitCastExpr 'int' <LValueToRValue>
+        `-DeclRefExpr 'const int' lvalue Var 'k' 'const int' non_odr_use_constant

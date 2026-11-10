@@ -11,9 +11,11 @@
 //! enables what it depends on, disabling an enabled one disables what
 //! depends on it, and every feature the level or an extension touched is
 //! listed (`+name` when finally on, `-name` when off).
-//! `-mcpu=generic[+ext...]` is `armv8-a` plus the `ete` and `trbe`
-//! features. `-march=` wins over `-mcpu=` (whose extensions are then
-//! ignored, as clang's are); the `-target-feature` list applies after
+//! `-mcpu=<cpu>[+ext...]` names a CPU of clang's `AArch64TargetParser`
+//! ([`crate::aarch64_cpus`], by `-fclang-compat=`; WP-1151) whose
+//! extensions are on, the modifiers applying over them alike. `-march=`
+//! wins over `-mcpu=`'s features (the CPU stays the `target-cpu`, as
+//! clang's); the `-target-feature` list applies after
 //! both, the last naming a feature winning, with no dependency closure
 //! (as clang's `-cc1`). Any other architecture, CPU or extension is an
 //! unsupported value. The levels and the dependency graph are clang 19's
@@ -24,6 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kiln_pp::ClangCompat;
 
+use crate::aarch64_cpus;
 use crate::args::{ArgError, Args};
 use crate::toolchain::Target;
 use crate::x86_features;
@@ -60,6 +63,10 @@ pub struct TargetFeatures {
     /// `-march=<cpu>`; `None` for the default (spec/driver.md "Codegen
     /// flags").
     pub cpu: Option<String>,
+    /// `AArch64`: clang's `hasTargetFeatureMTE`, the memtag sanitizers'
+    /// hardware support: `-march=`/`-mcpu=` enable `mte`, or (clang 22)
+    /// an `-Xclang -target-feature +mte` is given (WP-1151).
+    pub memtag_hw: bool,
 }
 
 impl TargetFeatures {
@@ -263,8 +270,9 @@ fn split(v: &str) -> (String, &str) {
 fn deps(f: &str, v22: bool) -> &'static [&'static str] {
     match f {
         "neon" | "jsconv" | "fullfp16" | "fprcvt" => &["fp-armv8"],
+        "fptoint" if v22 => &["fp-armv8"],
         "complxnum" | "dotprod" | "rdm" | "aes" | "sha2" | "sm4" => &["neon"],
-        "bf16" | "i8mm" | "lut" | "faminmax" if v22 => &["neon"],
+        "bf16" | "i8mm" | "lut" | "faminmax" | "fp8" if v22 => &["neon"],
         "fp16fml" | "f16f32dot" if v22 => &["fullfp16", "neon"],
         "sha3" => &["sha2"],
         "crypto" => &["aes", "sha2"],
@@ -291,6 +299,18 @@ fn deps(f: &str, v22: bool) -> &'static [&'static str] {
         "rasv2" => &["ras"],
         "specres2" => &["predres"],
         "gcs" => &["chk"],
+        // The SME and FP8 features some `-mcpu=` CPUs enable (WP-1151).
+        "sme" if v22 => &["bf16", "fullfp16"],
+        "sme" => &["bf16"],
+        "sme2" | "sme-f64f64" | "sme-i16i64" => &["sme"],
+        "sme2p1" | "sme-f16f16" => &["sme2"],
+        "sme-b16b16" if v22 => &["sme2", "sve-b16b16"],
+        "sme-b16b16" => &["sme2", "b16b16"],
+        "fp8" => &["bf16", "faminmax", "lut"],
+        "fp8fma" | "fp8dot2" | "fp8dot4" if v22 => &["fp8"],
+        "fp8fma" => &["fp8"],
+        "fp8dot4" => &["fp8fma"],
+        "fp8dot2" => &["fp8dot4"],
         _ => &[],
     }
 }
@@ -308,7 +328,12 @@ const DEPENDENT: &[&str] = &[
     "f64mm",
     "faminmax",
     "fprcvt",
+    "fptoint",
     "fp16fml",
+    "fp8",
+    "fp8dot2",
+    "fp8dot4",
+    "fp8fma",
     "fullfp16",
     "gcs",
     "i8mm",
@@ -323,6 +348,13 @@ const DEPENDENT: &[&str] = &[
     "sha2",
     "sha3",
     "sm4",
+    "sme",
+    "sme-b16b16",
+    "sme-f16f16",
+    "sme-f64f64",
+    "sme-i16i64",
+    "sme2",
+    "sme2p1",
     "specres2",
     "sve",
     "sve-aes",
@@ -434,6 +466,63 @@ impl ExtensionSet {
     }
 }
 
+/// A row of the `-mcpu=` CPU table (`aarch64_cpus`; the columns are
+/// scripts/gen-aarch64-cpus.py's).
+struct CpuRow {
+    canonical: &'static str,
+    arch: &'static str,
+    driver: &'static str,
+    closure: &'static str,
+    keep: &'static str,
+}
+
+/// The items of a table list (`-` is the empty list).
+fn list(l: &'static str) -> impl Iterator<Item = &'static str> {
+    l.split(',').filter(|f| *f != "-")
+}
+
+/// The CPU table row of `name` (case-insensitive, as clang's `parseCpu`
+/// after the driver lower-cases `-mcpu=`), for clang 19 or clang 22.
+/// The R-profile CPUs (`v8r`: `cortex-r82`, `cortex-r82ae`) are left out,
+/// as `-march=armv8-r` is (kiln has no R-profile predefines).
+fn cpu_row(name: &str, v22: bool) -> Option<CpuRow> {
+    let table = if v22 { aarch64_cpus::CPUS_22 } else { aarch64_cpus::CPUS_19 };
+    table.lines().find_map(|l| {
+        let mut w = l.split(' ');
+        if !w.next()?.eq_ignore_ascii_case(name) {
+            return None;
+        }
+        let row = CpuRow {
+            canonical: w.next()?,
+            arch: w.next()?,
+            driver: w.next()?,
+            closure: w.next()?,
+            keep: w.next()?,
+        };
+        (row.arch != "v8r").then_some(row)
+    })
+}
+
+/// The `(major, minor)` of an architecture feature (`v8a`, `v8.2a`, `v9a`).
+fn arch_of(feature: &str) -> Option<(u8, u8)> {
+    let v = feature.strip_prefix('v')?.strip_suffix('a')?;
+    let (major, minor) = v.split_once('.').unwrap_or((v, "0"));
+    Some((major.parse().ok()?, minor.parse().ok()?))
+}
+
+/// The CPU of `-mcpu=<cpu>[+ext...]` and its features as clang's
+/// `ExtensionSet` after `addCPUDefaults` and the `+ext` items, or `None`
+/// for an unknown CPU or extension.
+fn cpu_set(v: &str, v22: bool) -> Option<(CpuRow, ExtensionSet)> {
+    let (base, exts) = split(v);
+    let row = cpu_row(&base, v22)?;
+    let arch = arch_of(row.arch)?;
+    let on: BTreeSet<&'static str> = list(row.driver).chain([row.arch]).collect();
+    let mut s = ExtensionSet { arch, v22, enabled: on.clone(), touched: on };
+    s.extensions(exts)?;
+    Some((row, s))
+}
+
 /// [`resolve`] on x86-64 (spec/driver.md "x86-64 target features").
 fn resolve_x86(args: &Args, target: &Target, f: &mut TargetFeatures, errors: &mut Vec<ArgError>) {
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
@@ -496,6 +585,11 @@ fn resolve_x86(args: &Args, target: &Target, f: &mut TargetFeatures, errors: &mu
         let t = args.target.as_deref().unwrap_or(target.triple);
         errors.push(ArgError::UnsupportedForTarget("-msve-vector-bits=".to_owned(), t.into()));
     }
+    // WP-1151: `-ffixed-x18` is an `AArch64` (and RISC-V) option.
+    if args.fixed_x18 {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-ffixed-x18".to_owned(), t.into()));
+    }
     // WP-846: clang's target-specific `-mbranch-protection=`.
     if args.codegen.mbranch_protection_given {
         let t = args.target.as_deref().unwrap_or(target.triple);
@@ -520,28 +614,53 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     if native(&args.march) || (args.march.is_none() && native(&args.mcpu)) {
         f.cpu = Some("native".to_owned());
     } else if let Some(v) = &args.march {
+        // WP-1151: `-march=` wins over the `-mcpu=` CPU's features, but the
+        // CPU is still checked and still the `target-cpu` (clang's
+        // `getAArch64TargetFeatures` parses both; `getAArch64TargetCPU`).
+        let cpu = args.mcpu.as_deref().filter(|c| *c != "native").map(|c| (c, cpu_set(c, v22)));
+        if let Some((c, None)) = cpu {
+            errors.push(unsupported("-mcpu=", c));
+        }
         let (base, exts) = split(v);
         let set = parse_arch(&base.to_ascii_lowercase(), v22).and_then(|arch| {
             let mut s = ExtensionSet::new(arch, v22);
             s.extensions(exts).map(|()| s)
         });
         match set {
-            Some(s) => s.into_features(&mut f),
+            Some(s) => {
+                if let Some((_, Some((row, _)))) = &cpu {
+                    // clang 19's `+zcm,+zcz` of an Apple CPU stay.
+                    for k in list(row.keep) {
+                        f.set(k, true);
+                    }
+                    f.cpu = Some(row.canonical.to_owned()).filter(|c| c != "generic");
+                }
+                s.into_features(&mut f);
+            }
             None => errors.push(unsupported("-march=", v)),
         }
     } else if let Some(v) = &args.mcpu {
-        let (base, exts) = split(v);
-        let mut s = ExtensionSet::new((8, 0), v22);
-        if base.eq_ignore_ascii_case("generic") && s.extensions(exts).is_some() {
-            // `generic` is clang's `-mcpu=` default CPU plus the `ete` and
-            // `trbe` features it names explicitly.
-            f.set("ete", true);
-            f.set("trbe", true);
-            s.into_features(&mut f);
-        } else {
-            errors.push(unsupported("-mcpu=", v));
+        // WP-1151: a CPU of clang's `AArch64TargetParser` (by
+        // `-fclang-compat=`) has its extensions (`aarch64_cpus`); the
+        // function's `target-features` are its architecture feature's
+        // closure overridden by the driver's list.
+        match cpu_set(v, v22) {
+            Some((row, s)) => {
+                for c in list(row.closure) {
+                    f.set(c, true);
+                }
+                f.cpu = Some(row.canonical.to_owned()).filter(|c| c != "generic");
+                s.into_features(&mut f);
+            }
+            None => errors.push(unsupported("-mcpu=", v)),
         }
     }
+    // WP-1151: clang's `hasTargetFeatureMTE` (the memtag sanitizers'
+    // hardware check) sees the driver's own `-target-feature` list, and at
+    // `-fclang-compat=22` also the `-Xclang -target-feature` items (any
+    // `+mte`, no last-wins); clang 19 checks before appending them.
+    f.memtag_hw = f.extra.iter().any(|e| e == "+mte")
+        || v22 && args.target_features.iter().any(|t| t == "+mte");
     match args.sve_vector_bits.as_deref() {
         None | Some("scalable") => {}
         Some(v) => match v.parse::<u32>() {
@@ -561,6 +680,10 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
             .has(kiln_ast::sanitize::SanitizerSet::HWADDRESS)
     {
         f.set("tagged-globals", true);
+    }
+    // WP-1151: clang's `getAArch64TargetFeatures` reserves x18.
+    if args.fixed_x18 {
+        f.set("reserve-x18", true);
     }
     for t in &args.target_features {
         match t.split_at_checked(1) {
@@ -943,10 +1066,72 @@ mod tests {
     #[test]
     fn mcpu_and_march() {
         assert_eq!(feats("-mcpu=generic a.cpp"), "false +ete,+trbe");
-        assert_eq!(feats("-mcpu=generic+sve a.cpp"), "true +ete,+trbe,+fullfp16,+sve");
+        // clang's `-###` order: the `ExtensionSet` features sorted.
+        assert_eq!(feats("-mcpu=generic+sve a.cpp"), "true +ete,+fullfp16,+sve,+trbe");
         // `-march=` wins and `-mcpu=`'s extensions are ignored.
         assert_eq!(feats("-mcpu=generic+sve -march=armv8-a a.cpp"), "false ");
         assert_eq!(feats("-march=armv8-a+sve -mcpu=generic a.cpp"), "true +fullfp16,+sve");
+    }
+
+    /// spec/driver.md "Target features" (WP-1151): a CPU of clang's
+    /// `AArch64TargetParser` has its extensions (`-mcpu=cortex-x2` has
+    /// `+mte`), its modifiers apply over them with their dependencies, and
+    /// an alias names its canonical CPU.
+    #[test]
+    fn mcpu_cpu_table() {
+        let cpu = |s: &str| {
+            let (f, e) = res(s, true);
+            assert_eq!(e, [], "{s}");
+            f
+        };
+        let has = |s: &str, x: &str| cpu(s).extra.iter().any(|e| e == x);
+        for v in ["19", "22"] {
+            let x2 = cpu(&format!("-fclang-compat={v} -mcpu=cortex-x2 a.cpp"));
+            assert_eq!(x2.cpu.as_deref(), Some("cortex-x2"));
+            assert!(x2.sve && x2.memtag_hw && x2.extra.iter().any(|e| e == "+v9a"));
+            let s = format!("-fclang-compat={v} -mcpu=cortex-x2+nomemtag a.cpp");
+            assert!(!cpu(&s).memtag_hw && has(&s, "-mte"));
+            // `-march=` wins over the features, not the `target-cpu`.
+            let m = cpu(&format!("-fclang-compat={v} -march=armv8-a -mcpu=cortex-x2 a.cpp"));
+            assert_eq!(m.cpu.as_deref(), Some("cortex-x2"));
+            assert!(!m.memtag_hw && !m.sve);
+            assert_eq!(cpu(&format!("-fclang-compat={v} -mcpu=CORTEX-A57 a.cpp")).arch, (8, 0));
+        }
+        // An alias: clang 22's `apple-a18` is `apple-m4`.
+        let a = cpu("-fclang-compat=22 -mcpu=apple-a18 a.cpp");
+        assert_eq!(a.cpu.as_deref(), Some("apple-m4"));
+        // The SME dependencies: clang 22's `sme` needs `fullfp16`, clang
+        // 19's does not.
+        assert!(has("-fclang-compat=22 -mcpu=apple-m4+nofp16 a.cpp", "-sme"));
+        assert!(!has("-fclang-compat=19 -mcpu=apple-m4+nofp16 a.cpp", "-sme"));
+        assert!(has("-fclang-compat=19 -mcpu=apple-m4+nobf16 a.cpp", "-sme"));
+    }
+
+    /// spec/driver.md "Target features" (WP-1151): clang's
+    /// `hasTargetFeatureMTE` sees `-Xclang -target-feature +mte` at
+    /// `-fclang-compat=22` only, and any `+mte` (no last-wins).
+    #[test]
+    fn xclang_mte_by_compat() {
+        let mte = |s: &str| res(s, true).0.memtag_hw;
+        let x = "-Xclang -target-feature -Xclang";
+        assert!(!mte(&format!("-fclang-compat=19 {x} +mte a.cpp")));
+        assert!(mte(&format!("-fclang-compat=22 {x} +mte a.cpp")));
+        assert!(mte(&format!("-fclang-compat=22 {x} +mte {x} -mte a.cpp")));
+        assert!(mte(&format!("-fclang-compat=19 -mcpu=cortex-x2 {x} -mte a.cpp")));
+        assert!(!mte("-fclang-compat=22 -march=armv8.4-a a.cpp"));
+    }
+
+    /// spec/driver.md "Target features" (WP-1151): `-ffixed-x18` is
+    /// `+reserve-x18` on `AArch64` and unsupported on x86-64.
+    #[test]
+    fn fixed_x18() {
+        assert!(res("-ffixed-x18 a.cpp", true).0.extra.iter().any(|e| e == "+reserve-x18"));
+        let (f, e) = res("--target=x86_64-linux-gnu -ffixed-x18 a.cpp", false);
+        assert!(f.extra.is_empty());
+        assert_eq!(
+            e,
+            [ArgError::UnsupportedForTarget("-ffixed-x18".into(), "x86_64-linux-gnu".into())]
+        );
     }
 
     #[test]
@@ -1039,7 +1224,15 @@ mod tests {
             res("-fclang-compat=19 -march=armv9.6-a a.cpp", true).1,
             [u("-march=", "armv9.6-a")]
         );
-        assert_eq!(res("-mcpu=cortex-a57 a.cpp", true).1, [u("-mcpu=", "cortex-a57")]);
+        assert_eq!(res("-mcpu=cortex-a1 a.cpp", true).1, [u("-mcpu=", "cortex-a1")]);
+        // WP-1151: `-march=` does not hide an unknown CPU; the Armv8-R
+        // CPUs are unsupported values, as `-march=armv8-r` is.
+        assert_eq!(res("-march=armv8-a -mcpu=cortex-a1 a.cpp", true).1, [u("-mcpu=", "cortex-a1")]);
+        assert_eq!(res("-mcpu=cortex-r82 a.cpp", true).1, [u("-mcpu=", "cortex-r82")]);
+        assert_eq!(
+            res("-fclang-compat=19 -mcpu=apple-a18 a.cpp", true).1,
+            [u("-mcpu=", "apple-a18")]
+        );
         assert_eq!(res("-target-feature sve a.cpp", true).1, [u("-target-feature", "sve")]);
         assert_eq!(res("-march=armv8-a+sve a.cpp", false).1, [u("-march=", "armv8-a+sve")]);
         // `-target-feature` is ignored on a non-`AArch64` target.

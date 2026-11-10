@@ -1472,7 +1472,7 @@ impl Sema<'_, '_> {
 
     /// [`Self::mark_used_type`] for an expression: a non-type or template
     /// template parameter it names, and every type it holds.
-    fn mark_used_expr(&self, e: ExprId, depth: u32, used: &mut [bool], lvl: u32) {
+    pub(crate) fn mark_used_expr(&self, e: ExprId, depth: u32, used: &mut [bool], lvl: u32) {
         let n = self.ast.exprs.get(e);
         if lvl > 256 || !n.deps().intersects(ExprDeps::TYPE_VALUE_INST) {
             return;

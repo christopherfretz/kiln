@@ -51,6 +51,8 @@ sema_non_extern_extern = Error (1) "non-extern declaration of '{0}' follows exte
 sema_non_object_not_modifiable = Error (1) "non-object type {0} is not assignable";
 sema_non_pod_vararg = WarningError [NonPodVarargs] (2) "cannot pass object of non-trivial type {0} through variadic {1:function|block|method|constructor}; call will abort at runtime";
 sema_non_static_static = Error (1) "non-static declaration of '{0}' follows static declaration";
+// clang `err_non_temp_friend_decl_with_requires_clause_must_be_def` ([temp.friend]/9, WP-1164)
+sema_non_temp_friend_decl_with_requires_clause_must_be_def = Error (0) "non-template friend declaration with a requires clause must be a definition";
 sema_non_template_in_template_id = Error (1) "'{0}' does not name a template but is followed by template arguments";
 sema_non_thread_thread = Error (1) "non-thread-local declaration of '{0}' follows thread-local declaration";
 sema_nonconst_member_fn_ptr = Error (0) "cannot create a non-constant pointer to member function";
