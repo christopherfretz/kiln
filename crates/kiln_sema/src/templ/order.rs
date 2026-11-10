@@ -122,6 +122,7 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(list.depth, n);
+        d.params = Some(list.params);
         let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
         if ok && p.has_pack {
             self.empty_undeduced_packs(list.params, &mut d);
@@ -578,6 +579,7 @@ impl Sema<'_, '_> {
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
+        d.params = Some(lb.params);
         // [temp.deduct.type]/9: a pack expansion of `a`'s (a synthesized
         // pack) is deduced as a whole by a pack expansion of `b`'s, as
         // clang does (`template <class... P> C<0, T<P...>>` against
@@ -737,6 +739,7 @@ impl Sema<'_, '_> {
     ) -> bool {
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(l.depth, self.ast.lists.len(l.params));
+        d.params = Some(l.params);
         d.expansions = true;
         d.converted_values = converted_values;
         let mut ok = self.deduce_args(ps, as_, true, &mut d, loc) == Tdk::Success;

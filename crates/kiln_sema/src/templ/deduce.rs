@@ -6,7 +6,7 @@
 
 use kiln_ast::decl::DeclKind;
 use kiln_ast::expr::ExprKind;
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{ArgListId, ListId};
 use kiln_ast::types::{
     ArgView, ExcSpec, ExprOperand, NoexceptValue, TemplateArg, TypeFlags, TypeKind, TypeView,
 };
@@ -169,6 +169,15 @@ pub struct DeducedArgs {
     /// context, [temp.deduct.type]/5.7) and the parameters after it are
     /// still deduced (clang `MarkUsedTemplateParameters`, `OnlyDeduced`).
     pub self_deduce: bool,
+    /// The parameter decls of the template being deduced, when known: a
+    /// non-type parameter `P` names is looked up here by index
+    /// (`deduce_nttp_type`), as clang's `getDeducedParameterFromExpr`
+    /// takes `TemplateParams->getParam(Index)`. A canonical argument's
+    /// expression is the first one formed with its profile, which may
+    /// name the same-position parameter of another template
+    /// (`template <class T, same_as<T> auto V>`): its type is not this
+    /// template's (WP-1217).
+    pub params: Option<ListId>,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -189,6 +198,7 @@ impl DeducedArgs {
             ordering: false,
             converted_values: false,
             self_deduce: false,
+            params: None,
             loc: Loc::INVALID,
         }
     }
@@ -765,6 +775,7 @@ impl Sema<'_, '_> {
             return Tdk::Success;
         }
         let Some(decl) = e.and_then(|e| self.nttp_decl_of_expr(e)) else { return Tdk::Success };
+        let decl = self.deduced_nttp_decl(decl, d);
         let Some(pt) = self.ast.decls.get(decl).ty() else { return Tdk::Success };
         if !self.ast.types.is_dependent(pt)
             || (d.converted_values && !self.nttp_type_has_placeholder(pt))
@@ -793,6 +804,22 @@ impl Sema<'_, '_> {
             _ => at,
         };
         self.deduce_ty(pt, at, TdfFlags::SKIP_NON_DEPENDENT, d, 0)
+    }
+
+    /// The parameter of the template being deduced (`d.params`) at
+    /// `decl`'s index, else `decl`: the parameter a canonical argument's
+    /// expression names may belong to another template ([`DeducedArgs::params`]).
+    fn deduced_nttp_decl(&self, decl: DeclId, d: &DeducedArgs) -> DeclId {
+        let Some(l) = d.params else { return decl };
+        let Some(i) = self.ast.template_parm(decl).filter(|i| i.depth == d.depth) else {
+            return decl;
+        };
+        self.ast
+            .lists
+            .iter::<DeclId>(l)
+            .nth(usize::from(i.index))
+            .filter(|&p| self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm)
+            .unwrap_or(decl)
     }
 
     /// The non-type template parameter declaration `e` names (as

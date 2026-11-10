@@ -557,6 +557,8 @@ impl Sema<'_, '_> {
         let n = params.len();
         let mut d = DeducedArgs::new(depth, n);
         d.loc = loc;
+        d.params =
+            self.ast.template_info(ft).map(|i| self.ast.templates.param_list(i.params).params);
         let name_loc = self.ast.decls.get(templated).loc();
         // The warnings the phases before the specialization is formed
         // hold back (§5.7): kept with it on success, else dropped.
@@ -1351,6 +1353,7 @@ impl Sema<'_, '_> {
         let _t = crate::templ::deduce_stats::timer("has_deducible_params");
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
         probe.loc = d.loc;
+        probe.params = d.params;
         // The packs a pack expansion's pattern names, element-wise.
         if pattern {
             probe.pack_cur = Some(Vec::new());
@@ -1397,6 +1400,7 @@ impl Sema<'_, '_> {
     fn pattern_packs(&mut self, p: QualType, d: &DeducedArgs) -> Vec<u16> {
         let mut probe = DeducedArgs::new(d.depth, d.args.len());
         probe.loc = d.loc;
+        probe.params = d.params;
         probe.pack_cur = Some(Vec::new());
         self.deduce(p, p, TdfFlags::NONE, &mut probe);
         probe.pack_cur.unwrap_or_default().into_iter().map(|x| x.0).collect()
@@ -2232,6 +2236,7 @@ impl Sema<'_, '_> {
             let at = self.ast.types.canonical(at);
             let mut trial = DeducedArgs::new(d.depth, d.args.len());
             trial.loc = d.loc;
+            trial.params = d.params;
             trial.expansions = d.expansions;
             trial.pack_elem = d.pack_elem;
             trial.pack_cur = d.pack_cur.as_ref().map(|_| Vec::new());

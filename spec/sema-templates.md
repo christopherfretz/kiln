@@ -4640,6 +4640,16 @@ parameter matches the argument's type as that reference): `template<class
 T, T *P> struct S<P>` deduces `T` from `S<&g>`, and the deducibility
 check of a partial specialization finds `T` deducible (WP-789,
 tests/conformance/temp.spec.partial.general/auto-primary-typed-nttp-partial-run.cpp).
+The declared type is that of the parameter at the named index in the
+template being deduced (`DeducedArgs::params`, set for class partial
+specialization matching and ordering and for function template
+deduction), not of the parameter the argument's expression names: a
+canonical argument's expression is the first one formed with its
+profile, and a profile leaves out a placeholder's type-constraint (as
+clang's `getUnconstrainedType`), so it may name another template's
+`same_as<T> auto V`, whose type depends on that template's `T`. Clang
+takes `TemplateParams->getParam(Index)` the same way (WP-1217,
+tests/conformance/temp.spec.partial.match/nttp-param-type-own-template-run.cpp).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
