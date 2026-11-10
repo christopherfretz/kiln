@@ -3114,7 +3114,22 @@ access, out-of-line declarator scope.**
   member of a dependent base or a template-id stays dependent). Tests:
   `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`,
   `temp.dep.type/out-of-line-current-instantiation-expr-run.cpp`,
-  `-expr-members-run.cpp`, `-expr-neg.cpp`. After a
+  `-expr-members-run.cpp`, `-expr-neg.cpp`. WP-1169 extends the rebuild
+  to a template-id (`C<X>::template f<U>()`, `C<X>::template vt<2>`:
+  `ci_member_ref` forms the class's own template-id, keeping `template`),
+  a `typeof`/`__typeof__` operand (top-level or nested), a pack-indexing
+  type `Ts...[I]` nested in a type (a top-level pack-indexing decl-spec
+  is not rebuilt, as in clang, so `Ts...[C<Ts...>::N]` there does not
+  match the in-class `Ts...[N]`), the index of a pack-indexing
+  expression and a dependent array bound stored only as a profile. A
+  rebuilt pack index that is not value-dependent keeps the written
+  index: clang converts the index only when it is not
+  instantiation-dependent, and the rebuilt one stays so through its
+  qualifier, so `Ns...[sizeof(typename D<Ns...>::T)]` does not match the
+  in-class `Ns...[sizeof(T)]` (`ci_index_value_dependent`). Tests:
+  `temp.dep.type/out-of-line-current-instantiation-{template-id,typeof,pack-index}-{run,neg}.cpp`,
+  `ir-out-of-line-current-instantiation-template-id-typeof-mangling.cpp`;
+  spec/landed/sema-class/WP-1169.md. After a
   parenthesized declarator holding the qualified declarator-id
   (`X (*C<X>::f())(T)`), the parser enters the declarator scope again for
   the outer suffixes, so `T` there is found in `C<X>` (WP-1152,

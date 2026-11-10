@@ -181,7 +181,8 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// declaration are rebuilt. Types go through
     /// [`Sema::rebuild_ci_type`] and a `C<X>::m` naming a member of the
     /// current instantiation is resolved ([temp.dep.type]/1, /6;
-    /// WP-1154).
+    /// WP-1154), with its template arguments when it is a template-id;
+    /// `typeof` operands and pack indexes are rebuilt too (WP-1169).
     pub(crate) ci_rebuild: Option<DeclId>,
 }
 

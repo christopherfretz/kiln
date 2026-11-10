@@ -100,27 +100,118 @@ impl Substituter<'_, '_, '_> {
     /// instantiation and lookup there finds `m`, the id-expression the
     /// class itself would form (clang's `CurrentInstantiationRebuilder`
     /// over `TransformDependentScopeDeclRefExpr`, [temp.dep.type]/1).
-    /// `None` otherwise (a member of a dependent base, a template-id):
-    /// the name stays dependent.
+    /// A template-id `C<X>::template f<A>` naming a member function or
+    /// variable template of the current instantiation is formed as the
+    /// class forms `C::template f<A>` ([`Substituter::ci_member_template_id`]).
+    /// `None` otherwise (a member of a dependent base): the name stays
+    /// dependent.
     fn ci_member_ref(
         &mut self,
         e: ExprId,
         nns: NnsId,
         name: DeclName,
-        begin: Loc,
-        loc: Loc,
+        (begin, loc): (Loc, Loc),
+        callee: bool,
     ) -> Option<ExprId> {
         let qual = self.ci_rebuild?;
-        if self.sema.ast.templates.expr_targs.get(e).is_some() {
-            return None;
-        }
         let ctx = self.sema.rebuild_ci_nns_record(nns, qual, begin, 0)?;
         let found = self.sema.lookup_qualified_dn(ctx, name, crate::lookup::LookupKind::Ordinary);
         if found.decls.is_empty() {
             return None;
         }
+        if let Some(l) = self.sema.ast.templates.expr_targs.get(e).copied() {
+            let t = found.decls.iter().find_map(|&x| self.sema.template_of(x))?;
+            return self.ci_member_template_id(e, (ctx, nns), (t, name), l, (begin, loc), callee);
+        }
         let q = crate::using::Qualifier { ctx, nns, loc: begin };
         Some(self.sema.act_on_id_expression_dn(name, loc, Some(q)))
+    }
+
+    /// `pack...[index]` while rebuilding in the current instantiation
+    /// ([`Substituter::ci_rebuild`], [expr.prim.pack.index]): no pack is
+    /// expanded; the index is rebuilt (`Ns...[D<Ns...>::M]` as
+    /// `Ns...[M]`, [temp.over.link]/5). As clang, whose rebuilt index
+    /// stays instantiation-dependent through its qualifier and so is not
+    /// converted, an index the rebuild leaves value-independent
+    /// (`Ns...[D<Ns...>::K]` with `K = 1`) keeps the pack index as
+    /// written, which then matches no in-class `Ns...[K]` (WP-1169).
+    fn ci_pack_indexing_expr(&mut self, e: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
+        let n = *self.sema.ast.exprs.get(e);
+        let pattern = ExprId::from_raw(n.a()).ok_or(SubstFail)?;
+        let old = ExprId::from_raw(n.b()).ok_or(SubstFail)?;
+        let index = self.expr(old)?;
+        if index == old || !self.ci_index_value_dependent(index) {
+            return Ok(e);
+        }
+        Ok(self.sema.act_pack_indexing(pattern, loc, index, end))
+    }
+
+    /// Whether rebuilt pack index `e` is value-dependent other than
+    /// through the written `C<X>::` qualifiers it keeps as sugar: a
+    /// `sizeof`/`alignof` of a type whose canonical type is not dependent
+    /// (`sizeof(typename D<Ns...>::T)` with `T = int`) is not, as clang's
+    /// elaborated type is only instantiation-dependent there
+    /// ([`Substituter::ci_pack_indexing_expr`]).
+    fn ci_index_value_dependent(&self, e: ExprId) -> bool {
+        let n = *self.sema.ast.exprs.get(e);
+        let sub = |r: u32| ExprId::from_raw(r);
+        match n.kind() {
+            ExprKind::UnaryExprOrTypeTraitExpr if n.has(ExprFlags::ARG_IS_TYPE) => {
+                self.sema.ast.exprs.trait_type_arg(e).is_none_or(|t| {
+                    let c = self.sema.ast.types.canonical(t);
+                    self.sema.is_dependent_type(c)
+                })
+            }
+            ExprKind::BinaryOperator => {
+                [n.a(), n.b()].into_iter().filter_map(sub).any(|x| self.ci_index_value_dependent(x))
+            }
+            ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => {
+                sub(n.a()).is_none_or(|x| self.ci_index_value_dependent(x))
+            }
+            _ => self.sema.expr_is_value_dependent(e),
+        }
+    }
+
+    /// `C<X>::template f<A>` (`e`, with written arguments `l`) naming the
+    /// member template `t` of the current instantiation `ctx`, rebuilt
+    /// in it ([temp.dep.type]/1, [temp.names]/5): the arguments rebuilt,
+    /// then the template-id the parser forms for `C::template f<A>`
+    /// inside the class -- a variable template's value, or a function
+    /// template's overload set (with the name's other overloads, resolved
+    /// to its one specialization when not called) keeping the qualifier
+    /// `nns`. Its profile is then the in-class qualified template-id's,
+    /// and differs from the unqualified `f<A>`'s, which keeps no
+    /// qualifier ([temp.over.link]/5; clang's
+    /// `CurrentInstantiationRebuilder` over
+    /// `TransformDependentScopeDeclRefExpr`, WP-1169). `None` when the
+    /// rebuild fails: the name stays dependent.
+    fn ci_member_template_id(
+        &mut self,
+        e: ExprId,
+        (ctx, nns): (DeclId, NnsId),
+        (t, name): (DeclId, DeclName),
+        l: ArgListId,
+        (begin, loc): (Loc, Loc),
+        callee: bool,
+    ) -> Option<ExprId> {
+        let id = name.as_ident()?;
+        let l = self.args(l, loc).ok()?;
+        let args = self.sema.ast.types.args(l).to_vec();
+        let tn = self.sema.template_name_for(t);
+        let x = match self.sema.act_template_id(tn, &args, loc, loc) {
+            Ok(crate::templ::actions::TemplateIdRef::Value(x)) => x,
+            Ok(crate::templ::actions::TemplateIdRef::Overload(x)) => {
+                let x = self.sema.widen_function_template_id(x, id, Some(ctx));
+                self.sema.set_template_id_begin(x, begin, loc);
+                self.sema.set_template_id_qualifier(x, nns);
+                self.keep_template_kw(e, x);
+                return Some(if callee { x } else { self.sema.resolve_single_template_id(x) });
+            }
+            _ => return None,
+        };
+        self.sema.set_template_id_begin(x, begin, loc);
+        self.sema.set_template_id_qualifier(x, nns);
+        Some(x)
     }
 
     /// A name written `N::template x<A>` that is still unresolved after
@@ -715,7 +806,7 @@ impl Substituter<'_, '_, '_> {
                 let name = self.member_name(name, loc)?;
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
-                if let Some(r) = self.ci_member_ref(e, nns, name, begin, loc) {
+                if let Some(r) = self.ci_member_ref(e, nns, name, (begin, loc), callee) {
                     return Ok(r);
                 }
                 if self.nns_still_dependent(nns) {
@@ -1126,9 +1217,20 @@ impl Substituter<'_, '_, '_> {
             }
             ExprKind::CXXFoldExpr => self.fold(e, loc, end),
             ExprKind::SizeOfPackExpr => self.size_of_pack(e, loc, end),
+            ExprKind::PackIndexingExpr if self.ci_rebuild.is_some() => {
+                self.ci_pack_indexing_expr(e, loc, end)
+            }
             ExprKind::PackIndexingExpr => self.pack_indexing_expr(e, loc, end),
             ExprKind::SubstNonTypeTemplateParmPackExpr => self.subst_nttp_pack(e, loc),
             ExprKind::FunctionParmPackExpr => self.subst_parm_pack(e, loc),
+            // `D<Ns...>` in a signature rebuilt in the current
+            // instantiation: nothing is expanded; the pattern is rebuilt
+            // (WP-1169).
+            ExprKind::PackExpansionExpr if self.ci_rebuild.is_some() => {
+                let pattern = ExprId::from_raw(self.sema.ast.exprs.get(e).a()).ok_or(SubstFail)?;
+                let p = self.expr(pattern)?;
+                Ok(if p == pattern { e } else { self.sema.act_pack_expansion(p, loc) })
+            }
             ExprKind::PackExpansionExpr => self.unimplemented("pack expansion", loc),
             ExprKind::ConceptSpecializationExpr => self.concept_id_expr(e, loc),
             ExprKind::RequiresExpr => self.requires_expr(e, loc),

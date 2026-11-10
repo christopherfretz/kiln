@@ -38,6 +38,50 @@ impl Substituter<'_, '_, '_> {
         self.sema.act_on_typeof_expr(e?, loc, unqual).ok_or(SubstFail)
     }
 
+    /// While rebuilding in the current instantiation
+    /// ([`Substituter::ci_rebuild`]): the types other than `decltype`
+    /// that carry an expression, rebuilt with their operands
+    /// ([temp.dep.type]/1, /6, [temp.over.link]/5; WP-1169) -- GNU
+    /// `typeof(type)` and `typeof(e)` (`__typeof__(typename C<X>::T)`,
+    /// `__typeof__(C<X>::N + 1)`) and a pack-index-specifier whose index
+    /// names a member of the current instantiation (`Ts...[C<Ts...>::N]`,
+    /// [dcl.type.pack.index]; the pattern is a pack's name, kept). Each
+    /// form also as its canonical, profile-only node, whose first
+    /// expression stands for it as when substituting. `None` when `q` is
+    /// none of those.
+    pub(crate) fn ci_expr_operand_ty(
+        &mut self,
+        q: QualType,
+        loc: Loc,
+    ) -> Option<SubstResult<QualType>> {
+        let profile = |s: &mut Self, p| s.sema.ast.types.profile_expr(p).ok_or(SubstFail);
+        Some(match self.sema.ast.types.view(q.ty()) {
+            TypeView::TypeOf { operand: TypeOfOperand::Type(t), unqual, .. } => {
+                self.ty(t, loc).map(|t| self.sema.ast.types.typeof_type(t, unqual))
+            }
+            TypeView::TypeOf { operand: TypeOfOperand::Expr(e), unqual, .. } => {
+                self.typeof_expr_ty(e, unqual, loc)
+            }
+            TypeView::TypeOf { operand: TypeOfOperand::Profile(p), unqual, .. } => {
+                profile(self, p).and_then(|e| self.typeof_expr_ty(e, unqual, loc))
+            }
+            TypeView::PackIndexing { pattern, index, selected: None } => {
+                let index = match index {
+                    ExprOperand::Expr(e) => Ok(e),
+                    ExprOperand::Profile(p) => profile(self, p),
+                };
+                index.and_then(|e| self.expr(e).map(|i| (e, i))).map(|(e, i)| {
+                    if i == e {
+                        return q;
+                    }
+                    let at = self.sema.begin_loc(i);
+                    self.sema.act_pack_indexing_type(pattern, at, i)
+                })
+            }
+            _ => return None,
+        })
+    }
+
     /// Substitutes into type `q` (its qualifiers kept, collapsing as the
     /// constructors do).
     pub fn ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
