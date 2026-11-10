@@ -1559,6 +1559,17 @@ impl Parser<'_, '_> {
                 return None;
             };
             let nl = self.bump().span.lo;
+            if self.at(Punct::Less)
+                && let Some(sf) = self.s.dependent_destructor_prefix(e, arrow, q)
+            {
+                // `p->Self::template TI<int>::~TI<int>()` on a dependent
+                // object: `TI` is looked up in the dependent prefix
+                // `Self` at instantiation (WP-1192).
+                let (args, ..) = self.parse_template_arg_list()?;
+                return Some(self.s.act_on_dependent_qualified_destructor_template(
+                    e, arrow, q, sf, name, &args, nl, loc,
+                ));
+            }
             if self.at(Punct::Less) {
                 // `p->N::C<int>::~C<int>()`: the simple-template-id names
                 // the destroyed class type.

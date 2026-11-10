@@ -29,6 +29,7 @@ use kiln_pp::ClangCompat;
 
 use crate::aarch64_cpus;
 use crate::aarch64_extensions;
+use crate::aarch64_levels;
 use crate::args::{ArgError, Args};
 use crate::toolchain::Target;
 use crate::x86_features;
@@ -131,39 +132,15 @@ impl TargetFeatures {
     }
 }
 
-/// The features `armv8.N-a` adds to `armv8.(N-1)-a` (the `v8.Na` name is
-/// the level's own).
-fn v8_level(n: u8, v22: bool) -> &'static [&'static str] {
-    match n {
-        1 => &["crc", "lse", "rdm", "v8.1a"],
-        2 => &["ras", "v8.2a"],
-        3 => &["ccidx", "complxnum", "jsconv", "pauth", "rcpc", "v8.3a"],
-        4 => &["dit", "dotprod", "flagm", "v8.4a"],
-        5 => &["bti", "predres", "sb", "ssbs", "v8.5a"],
-        6 => &["bf16", "i8mm", "v8.6a"],
-        7 if v22 => &["spe-eef", "v8.7a", "wfxt"],
-        7 => &["v8.7a", "wfxt"],
-        8 => &["hbc", "mops", "v8.8a"],
-        9 => &["cssc", "rasv2", "specres2", "v8.9a"],
-        _ => &[],
-    }
-}
-
-/// The features `armv9.N-a` adds to `armv9.(N-1)-a` beyond the `armv8`
-/// level it includes (`armv9.N-a` includes `armv8.(N+5)-a`, up to 8.9).
-fn v9_level(n: u8, v22: bool) -> &'static [&'static str] {
-    match n {
-        0 => &["fullfp16", "sve", "sve2", "v9a"],
-        1 => &["rme", "v9.1a"],
-        2 => &["mec", "v9.2a"],
-        3 => &["v9.3a"],
-        4 if v22 => &["sve2p1", "v9.4a"],
-        4 => &["v9.4a"],
-        5 => &["cpa", "faminmax", "lut", "v9.5a"],
-        6 => &["cmpbr", "lsui", "occmo", "v9.6a"],
-        7 => &["f16f32dot", "fprcvt", "sve2p2", "sve2p3", "v9.7a"],
-        _ => &[],
-    }
+/// The features architecture level `major.minor` adds (the generated
+/// [`aarch64_levels`] table of clang 19 or clang 22; WP-1187): `armv8.N-a`
+/// adds them to `armv8.(N-1)-a`, `armv9.N-a` to `armv9.(N-1)-a` beyond the
+/// `armv8.(N+5)-a` (up to 8.9) it includes. `None` for a level the
+/// clang version does not know.
+fn level(major: u8, minor: u8, v22: bool) -> Option<impl Iterator<Item = &'static str>> {
+    let table = if v22 { aarch64_levels::LEVELS_22 } else { aarch64_levels::LEVELS_19 };
+    let key = format!("{major}.{minor}");
+    table.lines().find_map(|l| l.split_once(' ').filter(|(k, _)| *k == key)).map(|(_, f)| list(f))
 }
 
 /// The architecture level of a lower-case `-march=` base name.
@@ -177,11 +154,12 @@ fn parse_arch(s: &str, v22: bool) -> Option<(u8, u8)> {
             _ => return None,
         },
     };
-    match major {
-        "8" => Some((8, minor)),
-        "9" if minor <= if v22 { 7 } else { 5 } => Some((9, minor)),
-        _ => None,
-    }
+    let major = match major {
+        "8" => 8,
+        "9" => 9,
+        _ => return None,
+    };
+    level(major, minor, v22).map(|_| (major, minor))
 }
 
 /// The rows `(feature, names, deps)` of the generated modifier table of
@@ -239,12 +217,12 @@ impl ExtensionSet {
     fn new(arch: (u8, u8), v22: bool) -> ExtensionSet {
         let mut s = ExtensionSet { arch, v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
         let v8 = if arch.0 == 9 { (arch.1 + 5).min(9) } else { arch.1 };
-        let mut level: Vec<&'static str> = vec!["fp-armv8", "neon"];
-        level.extend((1..=v8).flat_map(|n| v8_level(n, v22)));
+        let mut defaults: Vec<&'static str> = vec!["fp-armv8", "neon"];
+        defaults.extend((1..=v8).filter_map(|n| level(8, n, v22)).flatten());
         if arch.0 == 9 {
-            level.extend((0..=arch.1).flat_map(|n| v9_level(n, v22)));
+            defaults.extend((0..=arch.1).filter_map(|n| level(9, n, v22)).flatten());
         }
-        for f in level {
+        for f in defaults {
             s.enable(f);
         }
         s
@@ -802,26 +780,56 @@ pub fn target_attr_parser(
     target_attr_features(attr, m.features, m.v22)
 }
 
-/// The features of a GNU `target("...")` attribute string on `AArch64`
-/// over the module's features `module` (`+name`/`-name`; clang
-/// `AArch64TargetInfo::parseTargetAttr` + `getFunctionFeatureMap`;
-/// spec/landed/codegen/WP-558.md "Target features"). The module's extension features
-/// seed an extension set (LLVM `reconstructFromParsedFeatures`); per
-/// comma-separated item, an extension name (`-march=` spelling) enables
-/// it with its dependencies, `no<ext>`/`no-<ext>` disables it with its
-/// dependents; otherwise `no-x` is `-x`, a sub-architecture `v8.Na`/`v9.Na`
-/// is `+v8.Na` plus its level's features (clang 22 `setFeatureEnabled`;
-/// clang 19 enables the extension ones in the set), and
-/// an LLVM feature name is `+x`. Then the extension set's touched
-/// features follow, so they win over a plain `+x`/`-x` naming one.
-/// `arch=`, `cpu=`, `tune=`, `branch-protection=`, `+ext` items and
-/// unknown names add nothing (kiln does not diagnose them yet).
-pub fn target_attr_features(
-    attr: &str,
-    module: &[String],
-    v22: bool,
-) -> kiln_codegen::TargetAttrFeatures {
-    const LLVM: &[&str] = &["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand"];
+/// The CPU table row of a `target("cpu=<name>")` / `tune=<name>` CPU:
+/// case-sensitive (clang's `AArch64::parseCpu` on the attribute's text,
+/// an alias resolving to its CPU), the R-profile CPUs included.
+fn attr_cpu_row(name: &str, v22: bool) -> Option<CpuRow> {
+    let table = if v22 { aarch64_cpus::CPUS_22 } else { aarch64_cpus::CPUS_19 };
+    table.lines().find_map(|l| {
+        let mut w = l.split(' ');
+        if w.next()? != name {
+            return None;
+        }
+        Some(CpuRow {
+            canonical: w.next()?,
+            arch: w.next()?,
+            driver: w.next()?,
+            closure: w.next()?,
+            keep: w.next()?,
+        })
+    })
+}
+
+/// Whether `name` is a CPU of clang 19's / clang 22's `AArch64`
+/// `isValidCPUName` (case-sensitive): the check of a `target("cpu=…")`
+/// and `tune=…` CPU (clang `Sema::checkTargetAttr`, WP-1187).
+#[must_use]
+pub fn aarch64_attr_cpu_valid(name: &str, v22: bool) -> bool {
+    attr_cpu_row(name, v22).is_some()
+}
+
+/// The `+ext+...` modifiers of a `target("...")` item (clang
+/// `parseTargetAttr`'s `SplitAndAddFeatures`): an extension (`no<ext>`
+/// disables it) goes to the extension set; anything else passes through
+/// as `-name` for `no<name>`, else `+name`.
+fn attr_modifiers(exts: &str, bits: &mut ExtensionSet, features: &mut Vec<String>) {
+    for e in exts.split('+').filter(|e| !e.is_empty()) {
+        match e.strip_prefix("no") {
+            Some(n) => match extension(n, bits.v22) {
+                Some(f) => bits.disable(f),
+                None => features.push(format!("-{n}")),
+            },
+            None => match attr_extension(e, bits.v22) {
+                Some(f) => bits.enable(f),
+                None => features.push(format!("+{e}")),
+            },
+        }
+    }
+}
+
+/// The extension set of the module's features `module` (LLVM
+/// `reconstructFromParsedFeatures`): its extension features, touched.
+fn module_extension_set(module: &[String], v22: bool) -> ExtensionSet {
     let mut bits =
         ExtensionSet { arch: (8, 0), v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
     for m in module {
@@ -840,12 +848,97 @@ pub fn target_attr_features(
             }
         }
     }
+    bits
+}
+
+/// The features of a GNU `target("...")` attribute string on `AArch64`
+/// over the module's features `module` (`+name`/`-name`), and its CPUs
+/// (clang `AArch64TargetInfo::parseTargetAttr`, `getFunctionFeatureMap`
+/// and `GetCPUAndFeaturesAttributes`; spec/driver.md "Target features",
+/// target attribute, WP-1187). The module's extension features seed an extension set (LLVM
+/// `reconstructFromParsedFeatures`). Per comma-separated item:
+/// - `arch=<arch>[+ext...]` (case-sensitive; unknown: nothing): the
+///   architecture becomes the base and its default extensions are
+///   enabled, then the `+ext` modifiers apply;
+/// - `cpu=<cpu>[+ext...]` (case-sensitive): the function's `target-cpu`;
+///   a known CPU becomes the base with its extensions, then its `+ext`;
+///   a second `cpu=` is ignored;
+/// - `tune=<cpu>`: the function's `tune-cpu` (a known CPU);
+/// - `+ext+...`: modifiers; `fpmath=` and `branch-protection=`: nothing;
+/// - otherwise an extension name (`-march=` spelling) enables it with its
+///   dependencies, `no<ext>`/`no-<ext>` disables it with its dependents,
+///   a sub-architecture `v8.Na`/`v9.Na` is `+v8.Na` plus its level's
+///   features (clang 22 `setFeatureEnabled`; clang 19 enables the
+///   extension ones in the set), and any other name passes through as
+///   `-x` for `no-x`, else `+x` (raw LLVM features such as `spe`).
+///
+/// Then the base architecture's feature with the features it implies
+/// (`setFeatureEnabled`) and the extension set's touched features follow,
+/// so they win over a plain `+x`/`-x` naming one.
+pub fn target_attr_features(
+    attr: &str,
+    module: &[String],
+    v22: bool,
+) -> kiln_codegen::TargetAttrFeatures {
+    let mut bits = module_extension_set(module, v22);
     let mut features = Vec::new();
+    // The base architecture's feature and the features it implies.
+    let mut base: Option<(&'static str, Vec<&'static str>)> = None;
+    let (mut cpu, mut tune) = (None::<String>, None::<String>);
+    let mut cpu_written = false;
     for item in attr.split(',').map(str::trim) {
-        if item.is_empty()
-            || item.starts_with('+')
-            || ["arch=", "cpu=", "tune=", "branch-protection="].iter().any(|p| item.starts_with(p))
+        if item.is_empty() || item.starts_with("fpmath=") || item.starts_with("branch-protection=")
         {
+            continue;
+        }
+        if let Some(v) = item.strip_prefix("arch=") {
+            let (name, exts) = v.trim().split_once('+').unwrap_or((v.trim(), ""));
+            let Some(arch) = parse_arch(name, v22) else { continue };
+            let defaults = ExtensionSet::new(arch, v22);
+            let feature = defaults.enabled.iter().copied().find(|f| arch_of(f) == Some(arch));
+            bits.arch = arch;
+            // LLVM extensions without a modifier (`ccidx`) are touched too,
+            // so they survive a later `cpu=`.
+            for &f in &defaults.enabled {
+                if is_extension_feature(f, v22) {
+                    bits.enable(f);
+                } else if arch_of(f).is_none() {
+                    features.push(format!("+{f}"));
+                }
+            }
+            let implied = defaults.enabled.into_iter().filter(|f| Some(*f) != feature).collect();
+            base = Some((feature.unwrap_or("v8a"), implied));
+            attr_modifiers(exts, &mut bits, &mut features);
+            continue;
+        }
+        if let Some(v) = item.strip_prefix("cpu=") {
+            let (name, exts) = v.trim().split_once('+').unwrap_or((v.trim(), ""));
+            if cpu_written {
+                continue;
+            }
+            cpu_written = !name.is_empty();
+            if let Some(row) = attr_cpu_row(name, v22) {
+                cpu = Some(name.to_owned());
+                bits.arch = arch_of(row.arch).unwrap_or((8, 0));
+                for f in list(row.driver) {
+                    match extension_feature(f, v22).filter(|f| is_extension_feature(f, v22)) {
+                        Some(f) => bits.enable(f),
+                        None => features.push(format!("+{f}")),
+                    }
+                }
+                base = Some((row.arch, list(row.closure).collect()));
+                attr_modifiers(exts, &mut bits, &mut features);
+            }
+            continue;
+        }
+        if let Some(v) = item.strip_prefix("tune=") {
+            if tune.as_deref().is_none_or(str::is_empty) {
+                tune = Some(v.trim().to_owned());
+            }
+            continue;
+        }
+        if item.starts_with('+') {
+            attr_modifiers(item, &mut bits, &mut features);
             continue;
         }
         let neg = item.strip_prefix("no-").or_else(|| item.strip_prefix("no"));
@@ -870,14 +963,21 @@ pub fn target_attr_features(
                 }
             }
             features.push(format!("+{item}"));
-        } else if LLVM.contains(&item) {
+        } else {
             features.push(format!("+{item}"));
         }
+    }
+    if let Some((feature, implied)) = base {
+        features.extend(implied.into_iter().map(|f| format!("+{f}")));
+        features.push(format!("+{feature}"));
     }
     for f in &bits.touched {
         features.push(format!("{}{f}", if bits.enabled.contains(f) { '+' } else { '-' }));
     }
-    kiln_codegen::TargetAttrFeatures { features, ..Default::default() }
+    // clang `GetCPUAndFeaturesAttributes`: a valid `tune=` CPU is the
+    // `tune-cpu` (a valid `cpu=` clears the command line's).
+    let tune = tune.filter(|t| attr_cpu_row(t, v22).is_some());
+    kiln_codegen::TargetAttrFeatures { features, cpu, tune }
 }
 
 #[cfg(test)]
@@ -1256,11 +1356,37 @@ mod tests {
         assert_eq!(t("neon", true), "+neon,-fmv,+fp-armv8,+neon");
         // `no-neon` names the LLVM feature, not the extension (`simd`):
         // the module's `+neon` in the set wins; `nosha2` of an off
-        // extension touches nothing.
+        // extension touches nothing; `bogus` passes through (WP-1187).
         assert_eq!(
             t("no-neon,nosha2,arch=armv8-a,+crc,bogus", false),
-            "-neon,-fmv,+fp-armv8,+neon"
+            "-neon,+bogus,+fp-armv8,+neon,+v8a,+crc,-fmv,+fp-armv8,+neon"
         );
         assert_eq!(t("nosimd", true), "-fmv,+fp-armv8,-neon");
+        // WP-1187: `arch=` is the base with its defaults, then `+ext`.
+        assert_eq!(
+            t("arch=armv8.2-a+sve", true),
+            "+crc,+fp-armv8,+lse,+neon,+ras,+rdm,+v8.1a,+v8.2a,\
+             +crc,-fmv,+fp-armv8,+fullfp16,+lse,+neon,+ras,+rdm,+sve"
+        );
+        // `cpu=` replaces the base; `arch=`'s touched extensions stay.
+        let a = target_attr_features("arch=armv8.4-a,cpu=cortex-a57", &module, true);
+        assert_eq!(a.cpu.as_deref(), Some("cortex-a57"));
+        assert_eq!(
+            a.features.join(","),
+            "+ccidx,+v8a,+aes,+complxnum,+crc,+dit,+dotprod,+flagm,-fmv,+fp-armv8,\
+             +jsconv,+lse,+neon,+pauth,+perfmon,+ras,+rcpc,+rdm,+sha2"
+        );
+        let a = target_attr_features("cpu=cortex-a57,tune=neoverse-v1,tune=x", &module, true);
+        assert_eq!(
+            (a.cpu.as_deref(), a.tune.as_deref()),
+            (Some("cortex-a57"), Some("neoverse-v1"))
+        );
+        // Raw LLVM features pass through; `+ext` modifiers; an unknown
+        // (case-mismatched) level is nothing.
+        assert_eq!(t("spe,no-perfmon", true), "+spe,-perfmon,-fmv,+fp-armv8,+neon");
+        assert_eq!(t("+sve2+nofp16", true), "-fmv,+fp-armv8,-fullfp16,+neon,-sve,-sve2");
+        assert_eq!(t("arch=ARMv8.2-a", true), "-fmv,+fp-armv8,+neon");
+        assert!(aarch64_attr_cpu_valid("cortex-r82", false));
+        assert!(!aarch64_attr_cpu_valid("Neoverse-V1", true));
     }
 }

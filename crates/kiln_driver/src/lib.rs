@@ -10,6 +10,7 @@
 
 mod aarch64_cpus;
 mod aarch64_extensions;
+mod aarch64_levels;
 pub mod args;
 mod cdb;
 pub mod codegen_cmd;

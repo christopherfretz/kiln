@@ -663,10 +663,11 @@ pub struct TargetAttrFeatures {
     /// features, then the function's whole map. The `+` ones are what an
     /// `always_inline` callee requires first, in this order.
     pub features: Vec<String>,
-    /// x86-64: the CPU of an `arch=<cpu>` item, the function's
-    /// `target-cpu` (and no default `tune-cpu`; WP-630).
+    /// The function's `target-cpu`, which drops the default `tune-cpu`:
+    /// on x86-64 the CPU of an `arch=<cpu>` item (WP-630), on `AArch64` a
+    /// known CPU of a `cpu=<cpu>` item, as written (WP-1187).
     pub cpu: Option<String>,
-    /// x86-64: the CPU of a `tune=<cpu>` item, the function's `tune-cpu`.
+    /// The known CPU of a `tune=<cpu>` item, the function's `tune-cpu`.
     pub tune: Option<String>,
 }
 

@@ -227,7 +227,7 @@ impl Cg<'_> {
             a.push(Attr::Flag(AttrKind::NoUnwind));
         }
         self.def_attrs(&mut a);
-        self.vscale_attr(&mut a);
+        self.vscale_attr(&mut a, None);
         self.target_attrs(&mut a);
         if self.is_x86() {
             a.push(Attr::string("min-legal-vector-width", &vector_width.to_string()));
