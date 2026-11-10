@@ -113,6 +113,7 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         }
         let (errors, body_errors) = (self.sema.diags.error_count(), self.sema.inst.body_errors);
+        let asserts = self.sema.inst.static_assert_errors;
         let outer_return_failed = std::mem::take(&mut self.lambda_return_failed);
         self.lambda_bodies += 1;
         let b = self.body(body);
@@ -125,8 +126,12 @@ impl Substituter<'_, '_, '_> {
         // clang's `TransformLambdaExpr` returns `ExprError` for an invalid
         // body: no closure with a `void` call operator is left to cascade
         // ("cannot initialize ... with an rvalue of type 'void'"), and the
-        // enclosing statement fails like any other (§5.5).
-        let nested = self.sema.inst.body_errors.saturating_sub(body_errors);
+        // enclosing statement fails like any other (§5.5). A failed
+        // `static_assert` is no such error: its declaration is kept, the
+        // body is valid, and a constant evaluation of the lambda goes on
+        // to report the next independent error (WP-1247).
+        let nested = self.sema.inst.body_errors.saturating_sub(body_errors)
+            + self.sema.inst.static_assert_errors.saturating_sub(asserts);
         // So does a `return` that failed without an error of its own in a
         // call operator with a placeholder return type (clang marks it
         // invalid; `Substituter::lambda_return_failed`).

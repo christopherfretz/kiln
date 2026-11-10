@@ -398,6 +398,13 @@ pub struct InstState {
     /// in error (clang: that body is invalid; a call naming it is a
     /// `RecoveryExpr`).
     pub(crate) body_errors: u32,
+    /// Errors reported by `static_assert` declarations of a substituted
+    /// body that were declared all the same (the condition substituted;
+    /// it was `false` or not a constant expression), nested bodies not
+    /// counted: clang's `BuildStaticAssertDeclaration` returns a failed
+    /// declaration, not `StmtError`, so the enclosing lambda body is not
+    /// invalid (spec/sema-templates.md §5.5; WP-1247).
+    pub(crate) static_assert_errors: u32,
     /// Alias template specializations already substituted (§4.6).
     pub(crate) alias_cache: kiln_source::fx::FxHashMap<(DeclId, ArgListId), QualType>,
     /// The instantiation report (§11.3).
