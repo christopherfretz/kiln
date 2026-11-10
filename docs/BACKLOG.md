@@ -1045,7 +1045,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1169 | template-id inside a function signature expression; typeof / pack-index in signatures (WP-1154 tails) | WP-1154 | open |
 | WP-1152 | WP-999 correctness subset: oven explicit/pseudo-destructor lifetime, qualified destructor names `p->N::~T()`, `typename C<X>::T` rebuild under nested type constructors | WP-999 | done (#512) |
 | WP-1155 | rejects-valid: template-ids on the pseudo-destructor path (`p->~A<int>()`, `p->N::I::~B<int>()`), `p->T::Inner::~Inner()` in a dependent scope | WP-1152 | done (#524) |
-| WP-1173 | WP-1152 accepts-invalid left by WP-1155 (dependent-scope pseudo-destructor forms: kiln follows GCC, clang rejects - decide) | WP-1155 | open |
+| WP-1173 | WP-1152 accepts-invalid left by WP-1155 (dependent-scope pseudo-destructor forms: kiln follows GCC, clang rejects - decide) | WP-1155 | in progress |
 | WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
 | WP-1004 | driver: gcov filters `-fprofile-filter-files`/`-fprofile-exclude-files` (coverage_flags.rs:131) | WP-941 | open |
 | WP-1005 | abi: lambda `$_N` numbering order differs from clang (kiln_abi mangle.rs:41) | WP-941 | open |
