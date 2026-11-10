@@ -822,6 +822,10 @@ belong to WP-017, which builds them on `macro_defined` and
     `SVE2_BITPERM` follow `sve2-aes` / `sve2-bitperm` in clang 19 and
     `sve2` with `sve-aes` / `sve-bitperm` in clang 22.
     `__ARM_FEATURE_SVE_BITS N` with `-msve-vector-bits=N`.
+  - SME and FP8 (WP-1151, reachable through `-mcpu=`): `SME` +
+    `LOCALLY_STREAMING` (sme), `SME2`, `SME2p1`, `SME_B16B16`,
+    `SME_F16F16`, `FP8`, `FP8FMA`, `FP8DOT2`, `FP8DOT4`, each with its
+    feature (test: predef.rs `arm_sme_fp8_macros`).
   - clang 19 (`-fclang-compat=19`) also sets `crc`, `lse` (v8.1), `rcpc`
     (v8.3), `dotprod` (v8.4), `bti` (v8.5), `bf16`, `i8mm` (v8.6) and, on
     v9, `sve2` and `fullfp16` from the level whatever the extensions say

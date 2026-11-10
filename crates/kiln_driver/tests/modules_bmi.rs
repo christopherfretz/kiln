@@ -440,17 +440,33 @@ const CV_RUN: &str =
 const CR: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cr.cppm");
 const CR_RUN: &str =
     include_str!("../../../tests/conformance/module.interface/carried-reflections-run.cpp");
+const CL: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cl.cppm");
+const CL_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-literals-run.cpp");
+const CX: &str = include_str!("../../../tests/conformance/module.interface/Inputs/cx.cppm");
+const CX_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/carried-reflections-more-run.cpp");
 
 /// WP-1047: kind 2 carries pointer, reference, member-pointer and
 /// reflection values and the results inside specializations keyed on
 /// them (`X<&g>`, `HW<h>`, `Wrap<^^S>`): a kind-2 importer re-evaluates
 /// none of the module's initializers, and its IR (the specializations'
-/// mangled names and addresses) is that of kind 1.
+/// mangled names and addresses) is that of kind 1. WP-1160: so do
+/// pointers to string literals, temporaries and labels (`cl`) and
+/// reflections of alias template specializations, data member
+/// specifications and annotations (`cx`); `-v` names the first value not
+/// carried also when others are, and a damaged section of them is a
+/// fallback or a diagnostic, never a crash.
 #[test]
 fn kind2_carries_pointer_and_reflection_values() {
     let d = scratch("kind2-values");
     let support = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/support");
-    for (m, src, run, extra) in [("cv", CV, CV_RUN, false), ("cr", CR, CR_RUN, true)] {
+    for (m, src, run, extra) in [
+        ("cv", CV, CV_RUN, false),
+        ("cr", CR, CR_RUN, true),
+        ("cl", CL, CL_RUN, false),
+        ("cx", CX, CX_RUN, true),
+    ] {
         std::fs::write(d.join(format!("{m}.cppm")), src).unwrap();
         std::fs::write(d.join(format!("{m}-run.cpp")), run).unwrap();
         let mut base = vec!["-std=c++26"];
@@ -469,7 +485,23 @@ fn kind2_carries_pointer_and_reflection_values() {
         let cppm = format!("{m}.cppm");
         let o = kiln(&d, args(&["-v", "--precompile", &cppm, "-o", &format!("{m}2.pcm")]));
         assert_eq!(o.code, 0, "{}", o.stderr);
-        assert!(o.stderr.contains(" inside template instantiations"), "{}", o.stderr);
+        if m != "cl" {
+            assert!(o.stderr.contains(" inside template instantiations"), "{}", o.stderr);
+        }
+        // `cv` and `cl` carry every result; the trial evaluations of
+        // `bases_of(...)` and `annotations_of(...)` in `cr` and `cx` fail,
+        // and `-v` says so beside the count.
+        let why = match m {
+            "cv" | "cl" => None,
+            "cx" => Some(
+                "constant results, 2 inside template instantiations (first not carried: an evaluation that failed)",
+            ),
+            _ => Some(" (first not carried: "),
+        };
+        match why {
+            Some(w) => assert!(o.stderr.contains(w), "{}", o.stderr),
+            None => assert!(!o.stderr.contains("first not carried"), "{}", o.stderr),
+        }
         ok(&d, args(&["-fkiln-bmi-kind=1", "--precompile", &cppm, "-o", &format!("{m}1.pcm")]));
         // A trial evaluation of `bases_of(...)` / `parameters_of(...)` on
         // its own fails (its vector is not a constant) and is not carried.
@@ -493,7 +525,7 @@ fn kind2_carries_pointer_and_reflection_values() {
                 .filter(|(l, _)| !failed.iter().any(|f| l.starts_with(f.as_str())))
                 .collect();
             if k == "1" {
-                assert!(module.len() >= 15, "kind 1 re-evaluates: {lines:?}");
+                assert!(module.len() >= 13, "kind 1 re-evaluates: {lines:?}");
             } else {
                 assert!(module.is_empty(), "kind 2 re-evaluated: {module:?}");
             }
@@ -502,6 +534,40 @@ fn kind2_carries_pointer_and_reflection_values() {
             irs.push(std::fs::read_to_string(d.join(&ll)).unwrap());
         }
         assert!(irs[0] == irs[1], "{m}: IR differs between kinds");
+        if m == "cl" || m == "cx" {
+            damage_consts(
+                &d,
+                &format!("{m}2.pcm"),
+                &args(&[
+                    "-fsyntax-only",
+                    &format!("-fmodule-file={m}=bad.pcm"),
+                    &format!("{m}-run.cpp"),
+                ]),
+            );
+        }
+    }
+}
+
+/// Damages the carried-constants section of `pcm` (behind a valid
+/// checksum) and compiles `args` against each damaged copy as `bad.pcm`:
+/// a diagnostic or a fallback, never a crash.
+fn damage_consts(d: &Path, pcm: &str, args: &[String]) {
+    let capsule = kiln_pp::bmi::read(&std::fs::read(d.join(pcm)).unwrap()).unwrap();
+    let len = capsule.section(kiln_pp::bmi::SECTION_CONSTS).unwrap().len() as u64;
+    let mut rng = 0x2545_f491_4f6c_dd1du64;
+    for i in 0..16 {
+        let mut c = capsule.clone();
+        let s = c.sections.iter_mut().find(|s| s.tag == kiln_pp::bmi::SECTION_CONSTS).unwrap();
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        match i % 2 {
+            0 => s.bytes.truncate((rng % len) as usize),
+            _ => s.bytes[(rng % len) as usize] ^= 0xff,
+        }
+        std::fs::write(d.join("bad.pcm"), kiln_pp::bmi::write(&c)).unwrap();
+        let o = kiln(d, &args.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(o.code == 0 || o.code == 1, "{pcm} damage {i}: {}", o.stderr);
     }
 }
 
