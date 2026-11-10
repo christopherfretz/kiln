@@ -1068,7 +1068,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1125 | docs: 1.0 truth-up of README, USER_GUIDE, KNOWN_ISSUES, COMPATIBILITY, STABILITY against main (std module cache section, stale limitations, link check) | WP-984 | done (#492) |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
 | WP-1159 | accepts-invalid: `export` on an out-of-class member definition ([module.interface]/1, clang `err_export_non_namespace_scope_name`) | WP-1047 | done (#530) |
-| WP-1174 | qualified_decl.rs:126 skips the does-not-enclose check for any template head (clang exempts only template-ids/member specializations; possible accepts-invalid); `export struct ::X` not checked (decl.rs:8601, wording) | WP-1159 | open |
+| WP-1174 | qualified_decl.rs:126 skips the does-not-enclose check for any template head (clang exempts only template-ids/member specializations; possible accepts-invalid); `export struct ::X` not checked (decl.rs:8601, wording) | WP-1159 | in progress |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | done (#436) |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
 | WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | done (#432) |
