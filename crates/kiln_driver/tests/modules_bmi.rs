@@ -772,6 +772,77 @@ fn kind2_declaration_image_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGG: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-generic.cppm");
+const IMGG_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-generic-run.cpp");
+
+/// WP-1132: bodies using `_Generic` (expression and type-name controls,
+/// type and `default` associations, dependent controls, association
+/// types and selections) and `__builtin_choose_expr` (constant and
+/// dependent conditions, lvalue arms) are carried by the image, with no
+/// fallback reason. With the unit's source blanked, an importer still
+/// evaluates, instantiates and runs them, and its IR is the replay's.
+#[test]
+fn kind2_declaration_image_generic_and_choose() {
+    let d = scratch("image-generic");
+    std::fs::write(d.join("g.cppm"), IMGG).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGG_RUN).unwrap();
+    // The type-name control form (kiln only: clang 19 crashes on it in a
+    // module interface, so the corpus test leaves it out).
+    std::fs::write(
+        d.join("t.cppm"),
+        "export module gt;\n\
+         export constexpr int qual_tag() { return _Generic(const int, const int: 4, int: 0, default: 9); }\n\
+         export template <class T> constexpr int ttag() { return _Generic(T, int: 10, default: 20); }\n\
+         export template <class T> constexpr int ctag(T v) { return _Generic(v, T: 1, default: 2); }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("tu.cpp"),
+        "import gt;\n\
+         static_assert(qual_tag() == 4 && ttag<int>() == 10 && ttag<char>() == 20 && ctag(1) == 1);\n\
+         int main() { return ttag<long>() + qual_tag() + ctag('a') == 25 ? 0 : 1; }\n",
+    )
+    .unwrap();
+    for (src, pcm, decls) in [("g.cppm", "g.pcm", 27), ("t.cppm", "t.pcm", 10)] {
+        let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", src, "-o", pcm]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        let carried = format!("with a declaration image of {decls} declarations");
+        assert!(o.stderr.contains(&carried), "{src}: {}", o.stderr);
+        assert!(!o.stderr.contains("no declaration image"), "{src}: {}", o.stderr);
+    }
+    ok(&d, &["-c", "g.pcm", "-o", "g.o"]);
+    ok(&d, &["-c", "t.pcm", "-o", "t.o"]);
+    blank_source(&d, "g.pcm", "gblank.pcm");
+    blank_source(&d, "t.pcm", "tblank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgg=gblank.pcm", "u.cpp", "g.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgg' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1 3 14 | 9 7 | 1 2 3 0 1 0 | 5 | 6 60 6 | 8 | 100 100\n"
+    );
+    let notes = image_notes(&d, &["-fmodule-file=gt=tblank.pcm", "tu.cpp", "t.o", "-o", "tu"]);
+    assert_eq!(notes, ["note: imported 'gt' from its declaration image"]);
+    assert!(Command::new(d.join("tu")).status().unwrap().success(), "type-name controls");
+
+    // The same IR from the image (blank source) as from the replay.
+    for (m, user, blank, real) in
+        [("imgg", "u.cpp", "gblank.pcm", "g.pcm"), ("gt", "tu.cpp", "tblank.pcm", "t.pcm")]
+    {
+        let mut irs = Vec::new();
+        for (flag, pcm) in [("-fkiln-bmi-image", blank), ("-fno-kiln-bmi-image", real)] {
+            std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+            let mf = format!("-fmodule-file={m}=m.pcm");
+            ok(&d, &[flag, &mf, "-S", "-emit-llvm", user, "-o", "u.ll"]);
+            irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+        }
+        assert!(irs[0] == irs[1], "{m}: IR differs between the image and the replay");
+    }
+}
+
 const IMGCT: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-class-template.cppm");
 const IMGCT_RUN: &str =

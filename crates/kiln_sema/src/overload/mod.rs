@@ -454,6 +454,19 @@ pub(crate) struct OverloadScratch {
     /// specialization, withdrawn when the target re-resolves the
     /// template-id to another ([`Sema::retarget_template_id`]).
     pub template_id_queued: kiln_source::fx::FxHashMap<kiln_ast::ExprId, DeclId>,
+    /// Of [`Self::template_id_refs`], the early resolutions that numbered
+    /// lambdas in their templates' signatures: per numbering key, the
+    /// last number before the resolution and the one its resolutions
+    /// (the early one and its re-runs) have reached, so a target that
+    /// re-resolves it to another specialization takes those numbers over
+    /// ([`Sema::retarget_template_id`], spec/sema-lambda.md §3.5).
+    pub template_id_numbers: kiln_source::fx::FxHashMap<kiln_ast::ExprId, Vec<address::IdNumber>>,
+    /// The conversion sequences a template candidate's deduction
+    /// computed for its function template-id arguments of non-dependent
+    /// parameters ([temp.deduct.call]/10): the candidate reuses them, as
+    /// clang's `CheckNonDependentConversions` sequences are, so the
+    /// template-id is not resolved again (spec/sema-lambda.md §3.5).
+    pub nondep_ics: Vec<(kiln_ast::ExprId, Ics)>,
     /// How many user-defined conversions are being applied
     /// ([`Sema::user_convert`]).
     pub udc_depth: u8,

@@ -113,8 +113,9 @@ const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
 const COLD_BEGIN: u8 = 8;
 const COLD_OP: u8 = 16;
-/// The lifetime-extended copy of a default argument (WP-1149, spec/sema.md
-/// §7.6a): an expression field, so the copy is written before its use.
+/// The lifetime-extended copy of a default argument (WP-1149) or default
+/// member initializer (WP-1177, spec/sema.md §7.6a): an expression field,
+/// so the copy is written before its use.
 const COLD_REWRITE: u8 = 32;
 const COLD_ALL: u8 = 63;
 
@@ -189,6 +190,24 @@ pub(super) enum F {
     /// A member name of a dependent member access (S4): an identifier,
     /// as an index into the image's undeclared names (`pnames`).
     Name,
+    /// A `_Generic` selection's operands (WP-1132): the association
+    /// count `n`, the controlling operand, then `n` associations of four
+    /// words each, the type as a [`QRef`] ([`NONE`] and 0 for `default`),
+    /// the type's (or `default`'s) location and the expression. `Gen`
+    /// has an expression control (expression, location: two words),
+    /// `GenT` a type-name control ([`QRef`], location: three words).
+    Gen,
+    GenT,
+}
+
+/// The words of a `_Generic` control in an [`F::Gen`] / [`F::GenT`] token.
+const fn gen_ctrl_words(f: F) -> usize {
+    if matches!(f, F::GenT) { 3 } else { 2 }
+}
+
+/// The associations of an [`F::Gen`] / [`F::GenT`] token: four words each.
+fn gen_assocs(f: F, w: &[u32]) -> std::slice::ChunksExact<'_, u32> {
+    w[1 + gen_ctrl_words(f)..].chunks_exact(4)
 }
 
 /// The statement attributes the image carries: argument-free ones.
@@ -257,7 +276,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 49] = {
+pub(super) const EXPR_KINDS: [ExprKind; 50] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -311,6 +330,8 @@ pub(super) const EXPR_KINDS: [ExprKind; 49] = {
         // type-dependent object, in a pattern.
         X::CXXUnresolvedConstructExpr,
         X::CXXDependentScopeMemberExpr,
+        // WP-1132: `_Generic`, resolved or (in a pattern) result-dependent.
+        X::GenericSelectionExpr,
     ]
 };
 
@@ -363,6 +384,10 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
         X::CXXUnresolvedConstructExpr => [f(F::EL), Z],
         X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
+        // `b` is the selected association's expression, NONE while the
+        // selection is result-dependent (checked to be an association's).
+        X::GenericSelectionExpr if flag4 => [f(F::GenT), f(F::OE)],
+        X::GenericSelectionExpr => [f(F::Gen), f(F::OE)],
         X::ImplicitCastExpr
         | X::CStyleCastExpr
         | X::CXXFunctionalCastExpr
@@ -487,6 +512,9 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
             F::Qt => 2,
             F::EL | F::SL | F::DL(_) => 1 + *words.get(p)? as usize,
             F::QL | F::AL => 1 + 2 * (*words.get(p)? as usize),
+            F::Gen | F::GenT => {
+                (*words.get(p)? as usize).checked_mul(4)?.checked_add(1 + gen_ctrl_words(f))?
+            }
             F::Path => match *words.get(p)? as usize {
                 0 => 1,
                 n => 1 + 2 * (n - 1),
@@ -880,6 +908,25 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             }
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
             F::Name => (w[0] as usize) < img.pnames.len(),
+            F::Gen | F::GenT => {
+                let q =
+                    |ty: u32, quals: u32| quals <= 7 && qref_ok(QRef { ty, quals: quals as u8 });
+                let ctrl = match f {
+                    F::GenT => q(w[1], w[2]),
+                    _ => (w[1] as usize) < e_lim,
+                };
+                let mut defaults = 0usize;
+                let assocs = gen_assocs(f, w).all(|a| {
+                    let ty = if a[0] == NONE {
+                        defaults += 1;
+                        a[1] == 0
+                    } else {
+                        q(a[0], a[1])
+                    };
+                    ty && (a[3] as usize) < e_lim
+                });
+                ctrl && assocs && defaults <= 1
+            }
             F::Nns => {
                 let mut p = 1;
                 while p < w.len() {
@@ -942,7 +989,8 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
             || e.cold & !COLD_ALL != 0
-            || (e.cold & COLD_REWRITE != 0 && k != ExprKind::CXXDefaultArgExpr)
+            || (e.cold & COLD_REWRITE != 0
+                && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.bits() != 0
         {
             return bad("bad expression bits");
@@ -966,6 +1014,14 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             && matches!(e.aux & 3, 0) != (toks[1].1[0] == NONE)
         {
             return bad("bad temporary");
+        }
+        // A `_Generic`'s selected expression is one of its associations'.
+        if k == ExprKind::GenericSelectionExpr {
+            let (f, w) = toks[0];
+            let sel = toks[1].1[0];
+            if sel != NONE && !gen_assocs(f, w).any(|a| a[3] == sel) {
+                return bad("bad generic selection");
+            }
         }
     }
     // The declaration fields that point into the bodies.
@@ -1011,8 +1067,13 @@ pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
         out.push(e.loc);
         let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
         for (f, w) in tokens(&layout(expr_shape(k, e.bits), e.cold), &e.words).unwrap_or_default() {
-            if f == F::Loc {
-                out.push(w[0]);
+            match f {
+                F::Loc => out.push(w[0]),
+                F::Gen | F::GenT => {
+                    out.push(w[gen_ctrl_words(f)]);
+                    out.extend(gen_assocs(f, w).map(|a| a[2]));
+                }
+                _ => {}
             }
         }
     }
@@ -1086,6 +1147,8 @@ enum Fv {
     AL(ListId),
     Path(Option<ListId>),
     Name(DeclName),
+    /// A `_Generic`'s raw operand list; true for a type-name control.
+    Gen(ListId, bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1136,6 +1199,7 @@ impl Writer<'_, '_, '_> {
             F::Nns => Fv::Nns(NnsId::from_raw(raw)),
             F::AL => Fv::AL(ListId::from_raw(raw).ok_or(BAD)?),
             F::Name => Fv::Name(DeclName::from_raw(raw).ok_or(BAD)?),
+            F::Gen | F::GenT => Fv::Gen(ListId::from_raw(raw).ok_or(BAD)?, f == F::GenT),
         })
     }
 
@@ -1327,6 +1391,16 @@ impl Writer<'_, '_, '_> {
                 Fv::SL(l) => {
                     v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S));
                 }
+                // The control expression (not a type), then every
+                // association's expression ([`ExprArena::generic_assocs`]).
+                Fv::Gen(l, is_ty) => {
+                    let w = lists.get(l);
+                    if !is_ty {
+                        v.extend(w.first().and_then(|&x| ExprId::from_raw(x)).map(Node::E));
+                    }
+                    let assocs = w.get(2..).unwrap_or(&[]).chunks_exact(3);
+                    v.extend(assocs.filter_map(|c| ExprId::from_raw(c[2])).map(Node::E));
+                }
                 _ => {}
             }
         }
@@ -1487,6 +1561,7 @@ impl Writer<'_, '_, '_> {
                     out.extend([rec, pos]);
                 }
             }
+            Fv::Gen(l, is_ty) => self.generic_words(l, is_ty, out)?,
             Fv::AL(l) => {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32);
@@ -1498,6 +1573,38 @@ impl Writer<'_, '_, '_> {
                     out.push(self.loc(a.loc)?);
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// A `_Generic`'s operand list `l` as an [`F::Gen`] / [`F::GenT`]
+    /// token.
+    fn generic_words(&mut self, l: ListId, is_ty: bool, out: &mut Vec<u32>) -> W<()> {
+        let items: Vec<u32> = self.s.ast.lists.get(l).to_vec();
+        if items.len() < 2 || !(items.len() - 2).is_multiple_of(3) {
+            return Err("a malformed body");
+        }
+        out.push(((items.len() - 2) / 3) as u32);
+        let expr = |s: &Self, w: u32| {
+            ExprId::from_raw(w).and_then(|e| s.bs.emap.get(&e).copied()).ok_or("a malformed body")
+        };
+        if is_ty {
+            let q = self.qref(QualType::from_raw(items[0]).ok_or("a malformed body")?)?;
+            out.extend([q.ty, u32::from(q.quals)]);
+        } else {
+            out.push(expr(self, items[0])?);
+        }
+        out.push(self.loc(Loc::from_raw(items[1]))?);
+        for c in items[2..].chunks_exact(3) {
+            match QualType::from_raw(c[0]) {
+                None => out.extend([NONE, 0]),
+                Some(t) => {
+                    let q = self.qref(t)?;
+                    out.extend([q.ty, u32::from(q.quals)]);
+                }
+            }
+            out.push(self.loc(Loc::from_raw(c[1]))?);
+            out.push(expr(self, c[2])?);
         }
         Ok(())
     }
@@ -1946,7 +2053,7 @@ impl Sema<'_, '_> {
             // Only on a default-argument use (the copy precedes it, so it
             // is already built); anything else is dropped.
             if e.cold & COLD_REWRITE != 0
-                && k == ExprKind::CXXDefaultArgExpr
+                && matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr)
                 && let Some(r) = ExprId::from_raw(next())
             {
                 let _ = self.ast.exprs.set_default_arg_rewritten(id, r);
@@ -2032,12 +2139,28 @@ impl Sema<'_, '_> {
                 let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
                 DeclName::ident(self.intern(n)).to_raw()
             }
-            F::Loc => {
-                if w[0] == NONE {
-                    Loc::INVALID.to_raw()
-                } else {
-                    self.diags.sm().loc(main, w[0]).to_raw()
+            F::Loc => self.image_loc(main, w[0]).to_raw(),
+            // The AST's raw list ([`AstBuilder::generic_selection`]):
+            // control, its location, then (type, location, expression)
+            // per association.
+            F::Gen | F::GenT => {
+                let mut v = Vec::with_capacity(w.len());
+                let ctrl = match f {
+                    F::GenT => {
+                        self.image_ty(img, tys, ids, QRef { ty: w[1], quals: w[2] as u8 }).to_raw()
+                    }
+                    _ => built.ebase + w[1],
+                };
+                v.extend([ctrl, self.image_loc(main, w[gen_ctrl_words(f)]).to_raw()]);
+                for a in gen_assocs(f, w) {
+                    let ty = if a[0] == NONE {
+                        0
+                    } else {
+                        self.image_ty(img, tys, ids, QRef { ty: a[0], quals: a[1] as u8 }).to_raw()
+                    };
+                    v.extend([ty, self.image_loc(main, a[2]).to_raw(), built.ebase + a[3]]);
                 }
+                self.ast.lists.push_raw(&v).raw()
             }
             F::Qt => self.image_ty(img, tys, ids, QRef { ty: w[0], quals: w[1] as u8 }).to_raw(),
             F::EL => {
@@ -2115,6 +2238,11 @@ impl Sema<'_, '_> {
                 self.ast.lists.push_raw(&v).raw()
             }
         }
+    }
+
+    /// Main-file offset `o` as a location ([`NONE`]: none).
+    fn image_loc(&self, main: FileId, o: u32) -> Loc {
+        if o == NONE { Loc::INVALID } else { self.diags.sm().loc(main, o) }
     }
 
     /// The two slot values from the token values; also how many tokens
@@ -2232,5 +2360,86 @@ impl Sema<'_, '_> {
             },
             AstPayload::None(0),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::sample;
+    use super::super::{decode, encode};
+    use super::{ExprRec, NONE};
+
+    /// The kind byte of `GenericSelectionExpr`.
+    fn generic_kind() -> u8 {
+        let k = kiln_ast::expr::ExprKind::GenericSelectionExpr;
+        super::EXPR_KINDS.iter().position(|&x| x == k).unwrap() as u8
+    }
+
+    /// The sample image plus `_Generic(e0, int: e0, default: e2)` with
+    /// `words` (the operand list) and selected expression `sel`; `bits`
+    /// 0x10 is the type-name control form.
+    fn with_generic(bits: u8, mut words: Vec<u32>, sel: u32) -> super::super::Image {
+        let mut img = sample();
+        let ty = img.bodies.exprs[0].ty;
+        words.push(sel);
+        img.bodies.exprs.push(ExprRec {
+            kind: generic_kind(),
+            bits,
+            aux: 0,
+            cold: 0,
+            deps: 0,
+            ty,
+            loc: 111,
+            words,
+        });
+        img
+    }
+
+    /// WP-1132: a `_Generic` record round-trips; its operand list and its
+    /// selection are validated.
+    #[test]
+    fn generic_selection_records() {
+        let int = sample().bodies.exprs[0].ty;
+        let assocs = |d: [u32; 2]| vec![int.ty, 0, 112, 0, d[0], d[1], 113, 2];
+        let expr_form = |ctrl: Vec<u32>, n: u32, d: [u32; 2], sel: u32| {
+            let mut w = vec![n];
+            w.extend(ctrl);
+            w.extend(assocs(d));
+            with_generic(0, w, sel)
+        };
+        let good = expr_form(vec![0, NONE], 2, [NONE, 0], 2);
+        assert_eq!(decode(&encode(&good)), Ok(good));
+        // Result-dependent: no selection.
+        let dep = expr_form(vec![0, NONE], 2, [NONE, 0], NONE);
+        assert_eq!(decode(&encode(&dep)), Ok(dep));
+        // The type-name form.
+        let mut w = vec![2, int.ty, 1, 110];
+        w.extend(assocs([NONE, 0]));
+        let ty_form = with_generic(0x10, w, 0);
+        assert_eq!(decode(&encode(&ty_form)), Ok(ty_form));
+        for bad in [
+            // A selection that is not an association's expression.
+            expr_form(vec![0, NONE], 2, [NONE, 0], 1),
+            // Two `default`s.
+            {
+                let mut img = expr_form(vec![0, NONE], 2, [NONE, 0], 2);
+                img.bodies.exprs[3].words[3] = NONE;
+                img
+            },
+            // A `default` with qualifiers.
+            expr_form(vec![0, NONE], 2, [NONE, 1], 2),
+            // An association type the image does not hold.
+            expr_form(vec![0, NONE], 2, [9999, 0], 2),
+            // A control expression that does not precede the selection.
+            expr_form(vec![3, NONE], 2, [NONE, 0], 2),
+            // A count past the words.
+            expr_form(vec![0, NONE], 3, [NONE, 0], 2),
+        ] {
+            assert!(decode(&encode(&bad)).is_err(), "{:?}", bad.bodies.exprs[3]);
+        }
+        // Every location reaches the importer's bound check.
+        let mut offs = Vec::new();
+        super::body_locs(&expr_form(vec![0, 114], 2, [NONE, 0], 2), &mut offs);
+        assert!([111, 112, 113, 114].iter().all(|o| offs.contains(o)), "{offs:?}");
     }
 }

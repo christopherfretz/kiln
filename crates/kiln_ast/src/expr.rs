@@ -1391,12 +1391,17 @@ pub struct ColdExprData {
     /// `template [: r :] < args >` (P2996 [expr.prim.splice]): the
     /// template arguments as written.
     pub splice_args: ColdMap<ExprId, ArgListId>,
-    /// A `CXXDefaultArgExpr` whose default argument was rebuilt for this
-    /// use (clang `CXXDefaultArgExpr::getRewrittenExpr`): in a
+    /// A `CXXDefaultArgExpr` whose default argument, or a
+    /// `CXXDefaultInitExpr` whose default member initializer, was rebuilt
+    /// for this use (clang `CXXDefaultArgExpr::getRewrittenExpr`,
+    /// `CXXDefaultInitExpr::getExpr` of a rebuilt initializer): in a
     /// lifetime-extending context its temporaries are its own, fresh
     /// `MaterializeTemporaryExpr`s that the extending declaration
-    /// extends, where the parameter's shared default argument keeps
-    /// those of every other call (spec/sema.md §7.6a).
+    /// extends, where the parameter's shared default argument (the
+    /// field's shared initializer) keeps those of every other use
+    /// (spec/sema.md §7.6a). A rebuilt member initializer has no
+    /// `ExprWithCleanups` of its own: its temporaries belong to the
+    /// use's full-expression ([intro.execution]/5).
     pub default_arg_rewritten: ColdMap<ExprId, ExprId>,
 }
 
@@ -2187,24 +2192,34 @@ impl ExprArena {
         DeclId::new(self.expect_kind(e, ExprKind::CXXDefaultArgExpr).a)
     }
 
-    /// The default argument rebuilt for the `CXXDefaultArgExpr` `e`, if
-    /// any ([`ColdExprData::default_arg_rewritten`]).
+    /// The default argument rebuilt for the `CXXDefaultArgExpr` `e`, or
+    /// the default member initializer rebuilt for the
+    /// `CXXDefaultInitExpr` `e`, if any
+    /// ([`ColdExprData::default_arg_rewritten`]).
     pub fn default_arg_rewritten(&self, e: ExprId) -> Option<ExprId> {
         self.cold.default_arg_rewritten.get(e).copied()
     }
 
     /// Records `rewritten` as the default argument of the
-    /// `CXXDefaultArgExpr` `e` (sema, in a lifetime-extending context).
+    /// `CXXDefaultArgExpr` `e`, or the default member initializer of the
+    /// `CXXDefaultInitExpr` `e` (sema, in a lifetime-extending context).
     /// Write-once.
     ///
     /// # Errors
     /// If `e` already has one.
+    ///
+    /// # Panics
+    /// If `e` is neither kind.
     pub fn set_default_arg_rewritten(
         &mut self,
         e: ExprId,
         rewritten: ExprId,
     ) -> Result<(), AlreadySet> {
-        let _ = self.expect_kind(e, ExprKind::CXXDefaultArgExpr);
+        let k = self.get(e).kind;
+        assert!(
+            matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr),
+            "{k:?} has no rewritten initializer"
+        );
         self.cold.default_arg_rewritten.insert(e, rewritten)
     }
 
@@ -2235,6 +2250,7 @@ impl ExprArena {
             | ExprKind::MaterializeTemporaryExpr
             | ExprKind::CXXBindTemporaryExpr
             | ExprKind::CXXStdInitializerListExpr
+            | ExprKind::ExprWithCleanups
             | ExprKind::CXXRewrittenBinaryOperator
             | ExprKind::CXXThrowExpr
             | ExprKind::CXXDeleteExpr
@@ -2305,7 +2321,7 @@ impl ExprArena {
                 c.a = lists.push(inits).raw();
                 c.b = self.push_init_list(extra);
             }
-            ExprKind::CXXDefaultArgExpr => {}
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {}
             _ => return None,
         }
         let id = self.push(c);

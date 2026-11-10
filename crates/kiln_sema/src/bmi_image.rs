@@ -4299,7 +4299,7 @@ mod tests {
     use super::*;
 
     #[allow(clippy::too_many_lines)] // a literal image covering every record and type kind
-    fn sample() -> Image {
+    pub(super) fn sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;
         Image {

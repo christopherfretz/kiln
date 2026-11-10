@@ -1706,7 +1706,7 @@ a port of the clang 19 function it names.
 | `MaterializeTemporaryExpr` | sub | 0 or `LifetimeExtendedTemporary` `DeclId` | storage duration(2: full-expression, automatic, static, thread), `bound_to_lvalue_ref` |
 | `CXXBindTemporaryExpr` | sub | dtor `DeclId` | |
 | `ExprWithCleanups` | sub | — | `side_effects` |
-| `CXXDefaultInitExpr` | field `DeclId` | used_ctx `DeclContextId` | `rewritten` (always set, as clang 19 dumps it); child = the field's shared NSDMI |
+| `CXXDefaultInitExpr` | field `DeclId` | used_ctx `DeclContextId` | `rewritten` (always set, as clang 19 dumps it); child = the field's shared NSDMI, or the use's copy in a lifetime-extending context (`Ast::default_init_expr`, spec/sema.md §7.6a) |
 | `CXXDefaultArgExpr` | param `DeclId` | used_ctx `DeclContextId` | owned by sema-overload.md §7: child = the shared `ParamData.default_arg` |
 | `CXXThisExpr` | — | — | `implicit` |
 | `CXXMemberCallExpr` | callee `MemberExpr` | args `ListId` | object = callee's base |
@@ -1868,7 +1868,10 @@ and extends those to `__range`, so `for (int x : mk())` with
 do not extend them in a template, nor clang 22 a nested one
 (`stmt.ranged/p2718-default-argument-run.cpp`, GCC oracle). The copy, the
 walks that enter it and the module image's carry of it (WP-1166) are in
-spec/sema.md §7.6a.
+spec/sema.md §7.6a. A default member initializer that an aggregate
+initialization in the initializer uses (`mk(Agg{})`, `struct Agg { int x =
+D{4}.v; }`) is rebuilt and extended the same way (WP-1177;
+`stmt.ranged/p2718-default-member-initializer{,-nested}-run.cpp`).
 
 A discarded class prvalue in a lifetime-extending context (an open
 `extend_collector`: the for-range-initializer from C++23, and an enumerating
@@ -2023,6 +2026,11 @@ field 'f' with default member initializer`, and the capture notes:
   supported; ...` [-Wdangling] at the closing brace once per member (and
   once for an array filler), with the default-member-initializer note;
   with `-fclang-compat>=20` it is extended and not diagnosed (WP-874).
+  Either way kiln extends it: the use gets its own copy of the member's
+  initializer, keeping its `ExprWithCleanups`, whose bound temporaries
+  are extended with the variable (`rebuilt_default_init`, spec/sema.md
+  §7.6a, WP-1177; before that the shared initializer's temporary died at
+  its end, `class.temporary/cwg1815-default-member-initializer-run.cpp`).
 - *mem-initializer*: a temporary is `{reference|backing array for
   'std::initializer_list'} {|subobject of }member 'f' binds to a
   temporary object whose lifetime is shorter than the lifetime of the
@@ -2620,7 +2628,17 @@ Constructors, destructors, conversion functions, `= default` and
   expression (`act_on_full_expr`), declaration (`act_on_end_abbreviated`)
   or constant evaluation (`eval_const`) as "attempt to use", unless
   `act_on_deleted_callee` saw it called ("call to deleted function",
-  "call to [implicitly-]deleted constructor"). §4.8:
+  "call to [implicitly-]deleted constructor"). A full-expression, a
+  constant evaluation or an instantiated body finished while an
+  enclosing expression is being built (a constant subexpression such as
+  the explicit argument of `f<f<1>()>`, its evaluation, the body it
+  instantiates) reports only the uses inside it; the enclosing
+  expression's pending uses and held template-id warnings are set aside
+  until it decides them, so a use it calls is reported once, as a call
+  (`Sema::setting_aside_uses_outside`, `flush_pending_deleted_in`,
+  `in_inst_context`; as `pending_odr` is partitioned, spec/sema.md §5.2;
+  WP-1170, `dcl.fct.def.delete/use-beside-constant-subexpression.cpp`).
+  §4.8:
   `check_class_default_init` (from `act_on_uninit`) checks the default
   constructor (deleted, inaccessible, const default-init) and the
   destructor (deleted, access) of a variable.
@@ -3251,11 +3269,13 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
   arguments at every use (`has rewritten init`). S3O §7 already shares
   default arguments, cloning only in a lifetime-extending context
   (WP-1149: a use gets a copy with its own extended temporaries,
-  `default_arg_rewritten`). *Recommend* the same for NSDMIs: the use
-  node carries `used_ctx`; if the stored initializer is an
-  `ExprWithCleanups`, the use site sets `cleanup.needs`; `SourceLocExpr` and
-  immediate invocations are evaluated against the nearest enclosing
-  default-arg/default-init node's location and context (the Oven tracks it).
+  `default_arg_rewritten`). *Resolved*: NSDMIs are shared the same way
+  and copied in the same lifetime-extending contexts, P2718 range-for and
+  CWG1815 (WP-1177, spec/sema.md §7.6a). Elsewhere the use node carries
+  `used_ctx`; if the stored initializer is an `ExprWithCleanups`, the use
+  site sets `cleanup.needs`; `SourceLocExpr` and immediate invocations are
+  evaluated against the nearest enclosing default-arg/default-init node's
+  location and context (the Oven tracks it).
 - **Q4 Explicit object parameters (P0847).** *Resolved* (WP-149) for
   member functions (§2.5), and (WP-356) for lambdas, spec/sema-lambda.md
   §3.1.

@@ -299,9 +299,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(&[e]);
         if let Some(v) = self.carried_lookup(e, &ctx) {
             return Ok(v);
         }
@@ -326,9 +324,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return (Vec::new(), Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant)));
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(&[size, data]);
         self.with_oven(Some(ctx.loc), |oven, b| oven.evaluate_chars(b, size, data, ctx))
     }
 
@@ -511,9 +507,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(&[e]);
         self.with_oven(Some(at), |oven, b| oven.evaluate_potential(b, e))
     }
 
@@ -536,9 +530,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Ok(None);
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(init.as_slice());
         self.with_oven(Some(at), |oven, b| oven.frame_local(b, d, init, frame))
     }
 
@@ -555,9 +547,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(&[e]);
         self.with_oven(Some(at), |oven, b| oven.evaluate_in_frame(b, e, frame, how))
     }
 
@@ -576,9 +566,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             return Err(EvalFailure::silent(kiln_oven::FailKind::NotConstant));
         }
         self.flush_member_refs();
-        if self.special.has_pending() {
-            self.flush_pending_deleted();
-        }
+        self.flush_pending_deleted_in(&[e]);
         self.with_oven(Some(at), |oven, b| oven.evaluate_loop_in_frame(b, s, e, frame, steps))
     }
 

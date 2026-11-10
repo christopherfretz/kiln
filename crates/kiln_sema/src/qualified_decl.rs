@@ -295,8 +295,12 @@ impl Sema<'_, '_> {
     }
 
     /// A scope as clang prints a `NamedDecl` argument here: unqualified,
-    /// with a specialization's template arguments (`B`, `TT<int>`).
+    /// with a specialization's template arguments (`B`, `TT<int>`, an
+    /// implicit `A<int>` too: clang's `getNameForDiagnostic`; WP-1178).
     fn scope_name(&self, d: DeclId) -> String {
+        if self.ast.spec_info(d).is_some() {
+            return self.name_for_diagnostic(d);
+        }
         self.unqualified_decl_name(d)
     }
 }

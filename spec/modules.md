@@ -2395,7 +2395,7 @@ The following still fall back:
 - block-scope using-declarations and directives in bodies.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 11` since WP-1068 (S6; 10 is held by WP-1177), 9 for WP-1120, 8 for WP-1132, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 11` since WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2569,18 +2569,25 @@ index, a location, a type (`qref`, two words), a counted list of
 expressions, statements, declarations or types, a cast's base path (0
 none, else 1 + the number of steps, then each step's class record and
 base position, S3), a nested-name-specifier (a count, then components:
-0 `::`, 1 namespace and record, 2 type and `qref` and bool), and a
-statement's attribute list. A declaration reference is a record index,
+0 `::`, 1 namespace and record, 2 type and `qref` and bool), a
+statement's attribute list, and a `_Generic`'s operand list (WP-1132:
+the association count n, the control, then n associations of four
+words: the type as a `qref`, `u32::MAX` and 0 for `default`, the
+type's or `default`'s location and the expression; the control is an
+expression index and a location, or with bits 16, the type-name form,
+a `qref` and its location). A declaration reference is a record index,
 `0x8000_0000 | i` for the image's i-th parameter (counting the
 parameters of the function records in order), or `u32::MAX - 1` for the
 translation unit. The expression record's `cold` byte says which cold
 annotations follow the slots: 1 end location, 2 written type, 4
 operator location, 8 begin location, 16 member-access operator
-location (S4b), 32 the copy of a default argument rebuilt for a
-lifetime-extending use (an expression index, written before the
-`CXXDefaultArgExpr` it belongs to and rejected on any other kind;
-spec/sema.md §7.6a, WP-1166: without it an importer gave the copy's
-temporaries full-expression lifetime).
+location (S4b), 32 the copy of a default argument or default member
+initializer rebuilt for a lifetime-extending use (an expression index,
+written before the `CXXDefaultArgExpr` or `CXXDefaultInitExpr` it belongs
+to and rejected on any other kind; spec/sema.md §7.6a, WP-1166, WP-1177:
+without it an importer gave the copy's temporaries full-expression
+lifetime). A `CXXDefaultInitExpr` copy uses the same field, so the format
+word did not change for it.
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):
@@ -2588,7 +2595,15 @@ record's kind byte is the index):
 - expressions: integer, floating, character, string, `bool`,
   `nullptr` and `__null` literals; declaration references; predefined
   names (`__func__`); unary, binary, compound-assignment and conditional
-  operators; `__builtin_choose_expr`; subscripts; parentheses; calls and
+  operators; `__builtin_choose_expr` (the condition, both arms, aux 1
+  or 2 for the chosen arm, 0 while the condition is dependent);
+  `_Generic` (WP-1132; clang's `GenericSelectionExpr`: the operand list
+  above and the selected association's expression, `u32::MAX` while
+  the selection is result-dependent; the decoder rejects a selection
+  that is not one of the associations' expressions and a second
+  `default`; the value category, type and dependence are the header's,
+  copied from the selected expression when the selection was made);
+  subscripts; parentheses; calls and
   operator calls; implicit, C-style, functional, `static_cast`,
   `const_cast` and `reinterpret_cast` casts; initializer lists, implicit
   value initialization and `T()`; `sizeof`/`alignof`, type traits and
