@@ -146,7 +146,28 @@ template <C T> struct Ps<T> {
   void n() {}
 };
 
+// Member-like friend templates (clang 19's form; kiln's mangler runs at
+// -fclang-compat=19 here, WP-1146): a nested name for a specialization of
+// a friend with a trailing requires-clause, `F` for one constrained on the
+// enclosing class's parameter.
+struct Fs {
+  template <class U> friend void mf1(U, Fs) requires C<U> {}
+  template <class U> friend void mf2(U, Fs) requires C<U>;
+};
+template <class U> void mf2(U, Fs) requires C<U> {}
+template <class U> void mf3(U) requires C<U>;
+struct Fs3 {
+  template <class U> friend void mf3(U) requires C<U> {}
+};
+template <class T> struct Xt {
+  template <class U> friend void mf4(U, Xt) requires C<U> {}
+  template <class U> friend void mf5(U, Xt) requires C<T> {}
+  template <class U> requires C<T> friend void mf6(U, Xt) {}
+  template <class U> friend void mf7(U, Xt) requires C<U> && C<T> {}
+};
+
 void use() {
+  mf1(1, Fs{}); mf2(1, Fs{}); mf3(1); Xt<int> xt; mf4(1, xt); mf5(1, xt); mf6(1, xt); mf7(1, xt);
   f1(1); f2(1); f3(1); f4(1); f5(1); f6<1>(); f7(1, 2.0); f7(); f8<S>(); f9<CS>(); f9<S>();
   f10(1); f11(1); f12(1); f13(1); f14(1, 2); f15(1); f16(CS<int>{}); f17(1); f18(1);
   f19(1, 2); f20(1, 2); f21(Q{}); f22(1); f23(2); f24(3); f25(4L); f26<3>(); f27(1, 'c');
