@@ -193,19 +193,30 @@ fn miss_builds_then_hit_reuses() {
     done(&d);
 }
 
-/// `-fconstexpr-stats` / `-fconstexpr-profile` describe the importer
-/// only: the in-process build of a cache miss prints neither (spec/driver.md
-/// "Constexpr profile"; [module.import]).
+/// `-fconstexpr-stats` / `-fconstexpr-profile` / `-fconstexpr-report`
+/// describe the importer only: the in-process build of a cache miss prints
+/// and writes none of them, though it evaluates (spec/driver.md "Constexpr
+/// profile"; [module.import]).
 #[test]
 fn constexpr_profile_is_the_importers_only() {
     let Some(d) = setup("profile") else { return };
+    std::fs::write(
+        d.join("sys/usr/include/c++/v1/answer.h"),
+        "inline int answer() { return 42; }\nstatic_assert(sizeof(int) >= 2);\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("u.cpp"), format!("{USE_STD}static_assert(1 + 1 == 2);\n")).unwrap();
     let args = ["-fmodules-cache-path=cache", "-fsyntax-only", "-fconstexpr-stats"];
     let mut miss = args.to_vec();
-    miss.extend(["-fconstexpr-profile", "u.cpp"]);
+    miss.extend(["-fconstexpr-profile", "-fconstexpr-report=r.ndjson", "u.cpp"]);
     let e = ok(&d, &miss);
     assert_eq!(e.matches("constexpr: steps count=").count(), 1, "{e}");
     assert_eq!(e.matches("===-- kiln constexpr profile:").count(), 1, "{e}");
     assert!(e.contains("===-- kiln constexpr profile: u.cpp --==="), "{e}");
+    let report = std::fs::read_to_string(d.join("r.ndjson")).unwrap();
+    let locs: Vec<&str> = report.lines().filter_map(|l| l.split('"').nth(3)).collect();
+    assert_eq!(locs.iter().filter(|l| l.starts_with("u.cpp:")).count(), 1, "{report}");
+    assert!(!report.contains("answer.h"), "{report}");
     assert_eq!(entries(&d.join("cache")).len(), 1, "the miss built std");
     done(&d);
 }

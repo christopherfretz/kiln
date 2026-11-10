@@ -716,17 +716,32 @@ const ARM_TARGET_MACROS: &[&str] = &[
     "__ARM_NEON_FP",
 ];
 
-/// WP-1151: the SME and FP8 features' macros (reachable through `-mcpu=`).
-const SME_FP8_MACROS: [(&str, &[&str]); 9] = [
-    ("sme", &["SME", "LOCALLY_STREAMING"]),
-    ("sme2", &["SME2"]),
-    ("sme2p1", &["SME2p1"]),
-    ("sme-b16b16", &["SME_B16B16"]),
-    ("sme-f16f16", &["SME_F16F16"]),
-    ("fp8", &["FP8"]),
-    ("fp8fma", &["FP8FMA"]),
-    ("fp8dot2", &["FP8DOT2"]),
-    ("fp8dot4", &["FP8DOT4"]),
+/// WP-1151/WP-1167: the `__ARM_FEATURE_<name>`s (value 1) that follow one
+/// target feature each, as `(feature, clang 22 only, names)`. clang 19
+/// defines none of the FP8 ones and none of the SME/SSVE FP8 ones;
+/// measured over every `+ext` modifier against clang 19 and 22
+/// (`march_modifiers_match_clang`).
+const FEATURE_MACROS: [(&str, bool, &[&str]); 20] = [
+    ("sme", false, &["SME", "LOCALLY_STREAMING"]),
+    ("sme2", false, &["SME2"]),
+    ("sme2p1", false, &["SME2p1"]),
+    ("sme2p2", true, &["SME2p2"]),
+    ("sme-b16b16", false, &["SME_B16B16"]),
+    ("sme-f16f16", false, &["SME_F16F16"]),
+    ("sme-f8f16", true, &["SME_F8F16"]),
+    ("sme-f8f32", true, &["SME_F8F32"]),
+    ("fp8", true, &["FP8"]),
+    ("fp8fma", true, &["FP8FMA"]),
+    ("fp8dot2", true, &["FP8DOT2"]),
+    ("fp8dot4", true, &["FP8DOT4"]),
+    ("f8f16mm", true, &["F8F16MM"]),
+    ("f8f32mm", true, &["F8F32MM"]),
+    ("ssve-aes", true, &["SSVE_AES"]),
+    ("ssve-fp8fma", true, &["SSVE_FP8FMA"]),
+    ("ssve-fp8dot2", true, &["SSVE_FP8DOT2"]),
+    ("ssve-fp8dot4", true, &["SSVE_FP8DOT4"]),
+    ("sve-bfscale", true, &["SVE_BFSCALE"]),
+    ("pauth-lr", false, &["PAUTH_LR"]),
 ];
 
 /// clang `AArch64TargetInfo::getTargetDefines` over the target state `t`
@@ -752,11 +767,12 @@ fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompa
     let fp = has("fp-armv8");
     let neon = fp && has("neon");
     let sve = neon && has("sve");
-    // `+sve` (and clang 22's `+sve-bitperm` / `+sve-aes`) set `HasFullFP16`
-    // whatever `fullfp16` says (a `-target-feature +sve` alone).
+    // `+sve` (clang 19's `+sme`, clang 22's `+sve-bitperm` / `+sve-aes`)
+    // set `HasFullFP16` whatever `fullfp16` says (a `-target-feature +sve`
+    // alone).
     let fp16 = has("fullfp16")
         || has("sve")
-        || if c19 { v9 } else { has("sve-bitperm") || has("sve-aes") };
+        || if c19 { v9 || has("sme") } else { has("sve-bitperm") || has("sve-aes") };
     let bf16 = has("bf16") || c19 && v8(6);
     let i8mm = has("i8mm") || c19 && v8(6);
     let mut def = |n: &str, v: &str| set(m, n, v);
@@ -783,7 +799,8 @@ fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompa
         (has("aes") && has("sha2"), &["CRYPTO"]),
         (has("sha3"), &["SHA3", "SHA512"]),
         (has("sm4"), &["SM3", "SM4"]),
-        (has("pauth"), &["PAUTH"]),
+        // clang sets `HasPAuth` for `+pauth-lr` too (`+nopauth` keeps it).
+        (has("pauth") || has("pauth-lr"), &["PAUTH"]),
         (has("mte"), &["MEMORY_TAGGING"]),
         (has("rand"), &["RNG"]),
         (has("mops"), &["MOPS"]),
@@ -810,7 +827,7 @@ fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompa
     for n in sve_feature_macros(t, c19, sve) {
         def(&format!("__ARM_FEATURE_{n}"), "1");
     }
-    for (_, names) in SME_FP8_MACROS.iter().filter(|(f, _)| has(f)) {
+    for (_, _, names) in FEATURE_MACROS.iter().filter(|(f, v22, _)| has(f) && !(c19 && *v22)) {
         for n in *names {
             def(&format!("__ARM_FEATURE_{n}"), "1");
         }
@@ -851,7 +868,8 @@ fn sve_feature_macros(t: &ArmTarget, c19: bool, sve: bool) -> Vec<&'static str> 
         (if c19 { has("sve2-aes") } else { sve2 && has("sve-aes") }, "SVE2_AES"),
         (if c19 { has("sve2-bitperm") } else { sve2 && has("sve-bitperm") }, "SVE2_BITPERM"),
         (has("sve-aes2"), "SVE_AES2"),
-        (has("sve-b16b16"), "SVE_B16B16"),
+        // clang 19 sets `HasSVEB16B16` for `+sme-b16b16` too.
+        (has("sve-b16b16") || c19 && has("sme-b16b16"), "SVE_B16B16"),
         (has("sve-f16f32mm"), "SVE_F16F32MM"),
         (has("sve2-sha3"), "SVE2_SHA3"),
         (has("sve2-sm4"), "SVE2_SM4"),
@@ -1149,12 +1167,20 @@ mod tests {
     #[test]
     fn arm_sme_fp8_macros() {
         for c in [ClangCompat::Clang19, ClangCompat::Clang22] {
-            let got = arm((9, 2), "fp-armv8,neon,bf16,sme,sme2,fp8,fp8fma", None, c);
-            for m in ["SME 1", "SME2 1", "LOCALLY_STREAMING 1", "FP8 1", "FP8FMA 1"] {
+            let got = arm((9, 2), "fp-armv8,neon,bf16,sme,sme2,fp8,fp8fma,pauth-lr", None, c);
+            for m in ["SME 1", "SME2 1", "LOCALLY_STREAMING 1", "PAUTH 1", "PAUTH_LR 1"] {
                 assert!(got.split(',').any(|d| d == m), "{m} in {got}");
             }
+            // clang 19 defines no FP8 macro (WP-1167).
+            let fp8 = ["FP8 1", "FP8FMA 1"].iter().all(|m| got.split(',').any(|d| d == *m));
+            assert_eq!(fp8, c == ClangCompat::Clang22, "{got}");
             assert!(!got.contains("SME2p1") && !got.contains("FP8DOT"), "{got}");
         }
+        // clang 19's `+sme` sets `HasFullFP16`, its `+sme-b16b16` `HasSVEB16B16`.
+        let got = arm((8, 0), "fp-armv8,neon,bf16,sme,sme-b16b16", None, ClangCompat::Clang19);
+        assert!(got.contains("FP16_SCALAR_ARITHMETIC 1") && got.contains("SVE_B16B16 1"), "{got}");
+        let got = arm((8, 0), "fp-armv8,neon,bf16,sme,sme-b16b16", None, ClangCompat::Clang22);
+        assert!(!got.contains("FP16_SCALAR") && !got.contains("SVE_B16B16"), "{got}");
     }
 
     #[test]

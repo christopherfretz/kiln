@@ -358,6 +358,8 @@ kiln++ -c -ftime-trace foo.cpp -o out/foo.o         # writes out/foo.json
 kiln++ -c -ftime-trace=traces/ foo.cpp              # writes traces/foo.json
 kiln++ -c -ftime-trace=t.json foo.cpp               # writes t.json
 kiln++ -ftime-trace foo.cpp -o app                  # links; writes app-foo.json
+kiln++ -ftime-trace=traces/ a.cpp b.cpp -o app      # links; traces/a-<hex>.json, traces/b-<hex>.json
+kiln++ --precompile -ftime-trace m.cppm -o m.pcm    # writes m.json
 ```
 
 - `-ftime-trace-granularity=<us>` drops events shorter than `<us>`
@@ -370,12 +372,18 @@ kiln++ -ftime-trace foo.cpp -o app                  # links; writes app-foo.json
   evaluation, so they are off by default.
 - With `-fsyntax-only` no trace is written, and `-ftime-trace` warns
   `argument unused during compilation`, as clang does.
+- A trace that cannot be written is reported (`unable to open output
+  file`) without failing the compile, as clang does.
 
 The events are clang's where kiln has the same phase: `ExecuteCompiler`,
 `Frontend`, `Source` (one per included header), `ParseClass`,
 `ParseFunctionDefinition`, `InstantiateClass`, `InstantiateFunction`,
-`PerformPendingInstantiations`, `CodeGen Function`, `Backend`,
-`Optimizer`, `CodeGenPasses` and the LLVM passes inside them. Constant
+`PerformPendingInstantiations`, `CheckConstraintSatisfaction`,
+`BuildCFG`, `CodeGen Function`, `DebugType` and `DebugGlobalVariable`
+(with `-g`), `WriteAST` (a module file or PCH), `Backend`, `Optimizer`,
+`CodeGenPasses` and the LLVM passes inside them. Sema's own folds are
+clang's `EvaluateForOverflow`, `EvaluateAsInt`, `EvaluateAsRValue` and
+`EvaluateAsBooleanCondition`. Constant
 evaluation appears as clang's `EvaluateAsInitializer` (a `constexpr`
 variable; the detail is its name), `EvaluateAsRValue` (a
 `static_assert`) and `EvaluateAsConstantExpr` (anything else, such as a

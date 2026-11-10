@@ -675,6 +675,16 @@ impl TempDir {
         TempDir { path: std::env::temp_dir().join(name) }
     }
 
+    /// Six hex digits unique to this run and input `n`, as the random
+    /// part of clang's temporary file names (`x-1a2b3c.o`).
+    fn suffix(&self, n: usize) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.path.hash(&mut h);
+        n.hash(&mut h);
+        format!("{:06x}", h.finish() & 0xff_ffff)
+    }
+
     fn file(&self, name: &str) -> String {
         self.path.join(name).display().to_string()
     }
@@ -1171,11 +1181,24 @@ fn render(step: &Step<'_>, quote_all: bool) -> String {
 }
 
 /// Starts `input`'s trace (spec/driver.md "Time trace"): its path is
-/// derived from the job's output, the object file when linking.
-fn start_trace(args: &Args, s: time_trace::Settings, input: &str) -> InputTrace {
+/// derived from the job's output. When linking, that is clang's
+/// temporary object, `<stem>-XXXXXX.o` (`-ftime-trace=<dir>` names the
+/// trace after it, so two inputs, or two runs, never share one); `n`
+/// is the input's position, which keeps the suffix unique per input.
+fn start_trace(
+    args: &Args,
+    s: time_trace::Settings,
+    input: &str,
+    temp: &TempDir,
+    n: usize,
+) -> InputTrace {
     let phase = Phase::of(args);
     let output = match phase {
-        Phase::Link => default_output(input, Phase::Object),
+        Phase::Link => {
+            let obj = default_output(input, Phase::Object);
+            let stem = obj.strip_suffix(".o").unwrap_or(&obj);
+            format!("{stem}-{}.o", temp.suffix(n))
+        }
         _ => args.output.clone().unwrap_or_else(|| default_output(input, phase)),
     };
     InputTrace::start(s, time_trace::path(args, Some(phase), input, &output))
@@ -1203,6 +1226,7 @@ fn execute(
     let trace_settings = time_trace::settings(args).ok().flatten();
     let mut trace: Option<InputTrace> = None;
     let mut traced_children = 0usize;
+    let mut traced_inputs = 0usize;
     let mut child = |trace: &mut Option<InputTrace>, cmd: &Command| -> Command {
         let Some(t) = trace.as_mut() else { return cmd.clone() };
         if !matches!(cmd.tool, Tool::Llc | Tool::Opt) || temp.create().is_err() {
@@ -1218,8 +1242,10 @@ fn execute(
         }
         match step {
             Step::Frontend { input, dest } => {
-                failed |= end_trace(trace.take(), args, diag_opts, io);
-                trace = trace_settings.map(|s| start_trace(args, s, &input.path));
+                end_trace(trace.take(), args, diag_opts, io);
+                traced_inputs += 1;
+                trace =
+                    trace_settings.map(|s| start_trace(args, s, &input.path, temp, traced_inputs));
                 let text = {
                     let _frontend = kiln_source::trace::Scope::new("Frontend");
                     frontend(args, tc, input, stdin_text, diag_opts, io)
@@ -1310,7 +1336,7 @@ fn execute(
                 }
             }
             Step::External { cmd, piped: false } => {
-                failed |= end_trace(trace.take(), args, diag_opts, io);
+                end_trace(trace.take(), args, diag_opts, io);
                 // The link step: only when everything before it worked.
                 if !failed {
                     failed |= !cmd.run(None, &mut io.stdout, &io.stderr, drv);
@@ -1318,20 +1344,18 @@ fn execute(
             }
         }
     }
-    failed |= end_trace(trace.take(), args, diag_opts, io);
+    end_trace(trace.take(), args, diag_opts, io);
     i32::from(failed)
 }
 
-/// Finishes an input's time trace and writes it; `true` when writing
-/// failed (reported as clang's `cannot open output file`).
-fn end_trace(trace: Option<InputTrace>, args: &Args, diag_opts: &DiagOptions, io: &Io) -> bool {
-    let Some(t) = trace else { return false };
-    match t.finish(&args.program) {
-        Ok(()) => false,
-        Err((path, e)) => {
-            report_output_error(diag_opts, &io.stderr, &path, &e);
-            true
-        }
+/// Finishes an input's time trace and writes it. A trace that cannot
+/// be written is reported as clang's `unable to open output file` and
+/// leaves the exit status alone (clang 19 / 22 `cc1_main`: the error is
+/// printed after the compile, which already succeeded).
+fn end_trace(trace: Option<InputTrace>, args: &Args, diag_opts: &DiagOptions, io: &Io) {
+    let Some(t) = trace else { return };
+    if let Err((path, e)) = t.finish(&args.program) {
+        report_output_error(diag_opts, &io.stderr, &path, &e);
     }
 }
 

@@ -406,11 +406,12 @@ pub enum Sniffed {
     Missing,
 }
 
-/// The main file path and the declared names an image section lists up
-/// front (spec/modules.md §11.11 "Part 2a", "Encoding"), which the
-/// importer's preprocessor checks
-/// against its interner before it uses the image; `None` when the header
-/// does not decode (the reader then reports the file as corrupt).
+/// The main file path and the gated names an image section lists up
+/// front (spec/modules.md §11.11 "Part 2a", "Encoding"): the names of
+/// its declarations at global namespace scope, which the importer's
+/// preprocessor checks against the names it has seen there before it uses
+/// the image; `None` when the header does not decode (the reader then
+/// reports the file as corrupt).
 pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
     let mut at = 0usize;
     let u32_at = |at: &mut usize| -> Option<u32> {
@@ -434,7 +435,14 @@ pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
         return None;
     }
     let names = (0..n).map(|_| str_at(&mut at)).collect::<Option<Vec<_>>>()?;
-    Some((main, names))
+    let g = u32_at(&mut at)? as usize;
+    if g.saturating_mul(4) > bytes.len() - at {
+        return None;
+    }
+    let gated = (0..g)
+        .map(|_| names.get(u32_at(&mut at)? as usize).copied())
+        .collect::<Option<Vec<_>>>()?;
+    Some((main, gated))
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.

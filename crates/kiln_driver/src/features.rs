@@ -18,15 +18,17 @@
 //! clang's); the `-target-feature` list applies after
 //! both, the last naming a feature winning, with no dependency closure
 //! (as clang's `-cc1`). Any other architecture, CPU or extension is an
-//! unsupported value. The levels and the dependency graph are clang 19's
-//! or clang 22's by `-fclang-compat=` (measured with
-//! `clang-N -S -emit-llvm -march=...`).
+//! unsupported value. The levels are clang 19's or clang 22's by
+//! `-fclang-compat=` (measured with `clang-N -S -emit-llvm -march=...`);
+//! the modifier names and the dependency graph are the generated
+//! [`crate::aarch64_extensions`] (`scripts/gen-aarch64-cpus.py`; WP-1167).
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use kiln_pp::ClangCompat;
 
 use crate::aarch64_cpus;
+use crate::aarch64_extensions;
 use crate::args::{ArgError, Args};
 use crate::toolchain::Target;
 use crate::x86_features;
@@ -182,82 +184,28 @@ fn parse_arch(s: &str, v22: bool) -> Option<(u8, u8)> {
     }
 }
 
-/// The LLVM feature an `-march=` extension name enables or (as `no<name>`)
-/// disables.
-fn extension(name: &str, v22: bool) -> Option<&'static str> {
-    Some(match name {
-        "fp" => "fp-armv8",
-        "simd" => "neon",
-        "fp16" => "fullfp16",
-        "rdm" | "rdma" => "rdm",
-        "jscvt" => "jsconv",
-        "fcma" => "complxnum",
-        "memtag" => "mte",
-        "rng" => "rand",
-        "tme" if !v22 => "tme",
-        "f16f32dot" | "fprcvt" | "sve-aes" | "sve-aes2" | "sve-b16b16" | "sve-bitperm"
-        | "sve-f16f32mm" | "sve-sha3" | "sve-sm4" | "sve2p2" | "sve2p3"
-            if v22 =>
-        {
-            *[
-                "f16f32dot",
-                "fprcvt",
-                "sve-aes",
-                "sve-aes2",
-                "sve-b16b16",
-                "sve-bitperm",
-                "sve-f16f32mm",
-                "sve-sha3",
-                "sve-sm4",
-                "sve2p2",
-                "sve2p3",
-            ]
-            .iter()
-            .find(|n| **n == name)?
-        }
-        _ => *[
-            "aes",
-            "bf16",
-            "bti",
-            "crc",
-            "crypto",
-            "cssc",
-            "d128",
-            "dotprod",
-            "f32mm",
-            "f64mm",
-            "faminmax",
-            "flagm",
-            "fp16fml",
-            "gcs",
-            "i8mm",
-            "ls64",
-            "lse",
-            "lse128",
-            "lut",
-            "mops",
-            "pauth",
-            "predres",
-            "ras",
-            "rcpc",
-            "rcpc3",
-            "sb",
-            "sha2",
-            "sha3",
-            "sm4",
-            "ssbs",
-            "sve",
-            "sve2",
-            "sve2-aes",
-            "sve2-bitperm",
-            "sve2-sha3",
-            "sve2-sm4",
-            "sve2p1",
-            "the",
-        ]
-        .iter()
-        .find(|n| **n == name)?,
+/// The rows `(feature, names, deps)` of the generated modifier table of
+/// clang 19 or clang 22 ([`aarch64_extensions`], scripts/gen-aarch64-cpus.py
+/// documents the columns; WP-1167).
+fn extension_rows(v22: bool) -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
+    let table =
+        if v22 { aarch64_extensions::EXTENSIONS_22 } else { aarch64_extensions::EXTENSIONS_19 };
+    table.lines().filter_map(|l| {
+        let mut w = l.split(' ');
+        Some((w.next()?, w.next()?, w.next()?))
     })
+}
+
+/// The LLVM feature an `-march=` extension name (lower case) enables or
+/// (as `no<name>`) disables: a modifier of clang's
+/// `--print-supported-extensions`, or the alias `rdma`.
+fn extension(name: &str, v22: bool) -> Option<&'static str> {
+    extension_rows(v22).find(|(_, names, _)| list(names).any(|n| n == name)).map(|(f, _, _)| f)
+}
+
+/// The table row of LLVM feature `f`, if it is in LLVM's extension graph.
+fn extension_feature(f: &str, v22: bool) -> Option<&'static str> {
+    extension_rows(v22).find(|(g, _, _)| *g == f).map(|(g, _, _)| g)
 }
 
 /// Splits `base+ext+...` into the base and the `+`-separated extensions.
@@ -265,111 +213,18 @@ fn split(v: &str) -> (String, &str) {
     v.split_once('+').map_or((v.to_owned(), ""), |(b, e)| (b.to_owned(), e))
 }
 
-/// The features feature `f` depends on (LLVM `ExtensionDependencies`):
-/// enabling `f` enables them, disabling one of them disables `f`.
-fn deps(f: &str, v22: bool) -> &'static [&'static str] {
-    match f {
-        "neon" | "jsconv" | "fullfp16" | "fprcvt" => &["fp-armv8"],
-        "fptoint" if v22 => &["fp-armv8"],
-        "complxnum" | "dotprod" | "rdm" | "aes" | "sha2" | "sm4" => &["neon"],
-        "bf16" | "i8mm" | "lut" | "faminmax" | "fp8" if v22 => &["neon"],
-        "fp16fml" | "f16f32dot" if v22 => &["fullfp16", "neon"],
-        "sha3" => &["sha2"],
-        "crypto" => &["aes", "sha2"],
-        "sve" | "fp16fml" => &["fullfp16"],
-        "sve2" | "f32mm" | "f64mm" | "sve-f16f32mm" => &["sve"],
-        "sve2p2" => &["sve2p1"],
-        "sve2p3" => &["sve2p2"],
-        // clang 22 splits each `sve2-x` into `sve-x` and `sve2`.
-        "sve-aes" => &["aes"],
-        "sve-sha3" => &["sha3"],
-        "sve-sm4" => &["sm4"],
-        "sve2-aes" if v22 => &["sve-aes", "sve2"],
-        "sve2-sha3" if v22 => &["sve-sha3", "sve2"],
-        "sve2-sm4" if v22 => &["sve-sm4", "sve2"],
-        "sve2-bitperm" if v22 => &["sve-bitperm", "sve2"],
-        "sve2-aes" => &["aes", "sve2"],
-        "sve2-sha3" => &["sha3", "sve2"],
-        "sve2-sm4" => &["sm4", "sve2"],
-        "sve2-bitperm" | "sve2p1" => &["sve2"],
-        "rcpc-immo" => &["rcpc"],
-        "rcpc3" => &["rcpc-immo"],
-        "lse128" => &["lse"],
-        "d128" => &["lse128"],
-        "rasv2" => &["ras"],
-        "specres2" => &["predres"],
-        "gcs" => &["chk"],
-        // The SME and FP8 features some `-mcpu=` CPUs enable (WP-1151).
-        "sme" if v22 => &["bf16", "fullfp16"],
-        "sme" => &["bf16"],
-        "sme2" | "sme-f64f64" | "sme-i16i64" => &["sme"],
-        "sme2p1" | "sme-f16f16" => &["sme2"],
-        "sme-b16b16" if v22 => &["sme2", "sve-b16b16"],
-        "sme-b16b16" => &["sme2", "b16b16"],
-        "fp8" => &["bf16", "faminmax", "lut"],
-        "fp8fma" | "fp8dot2" | "fp8dot4" if v22 => &["fp8"],
-        "fp8fma" => &["fp8"],
-        "fp8dot4" => &["fp8fma"],
-        "fp8dot2" => &["fp8dot4"],
-        _ => &[],
-    }
+/// The features feature `f` directly depends on (LLVM
+/// `ExtensionDependencies`, from the generated table): enabling `f`
+/// enables them, disabling one of them disables `f`.
+fn deps(f: &str, v22: bool) -> impl Iterator<Item = &'static str> {
+    list(extension_rows(v22).find(|(g, _, _)| *g == f).map_or("-", |(_, _, d)| d))
 }
 
-/// Every feature with a dependency (the candidates of a disable cascade).
-const DEPENDENT: &[&str] = &[
-    "aes",
-    "bf16",
-    "complxnum",
-    "crypto",
-    "d128",
-    "dotprod",
-    "f16f32dot",
-    "f32mm",
-    "f64mm",
-    "faminmax",
-    "fprcvt",
-    "fptoint",
-    "fp16fml",
-    "fp8",
-    "fp8dot2",
-    "fp8dot4",
-    "fp8fma",
-    "fullfp16",
-    "gcs",
-    "i8mm",
-    "jsconv",
-    "lse128",
-    "lut",
-    "neon",
-    "rasv2",
-    "rcpc-immo",
-    "rcpc3",
-    "rdm",
-    "sha2",
-    "sha3",
-    "sm4",
-    "sme",
-    "sme-b16b16",
-    "sme-f16f16",
-    "sme-f64f64",
-    "sme-i16i64",
-    "sme2",
-    "sme2p1",
-    "specres2",
-    "sve",
-    "sve-aes",
-    "sve-f16f32mm",
-    "sve-sha3",
-    "sve-sm4",
-    "sve2",
-    "sve2-aes",
-    "sve2-bitperm",
-    "sve2-sha3",
-    "sve2-sm4",
-    "sve2p1",
-    "sve2p2",
-    "sve2p3",
-];
+/// The features directly depending on `f` (the next step of a disable
+/// cascade).
+fn dependents(f: &str, v22: bool) -> impl Iterator<Item = &'static str> {
+    extension_rows(v22).filter(move |(_, _, d)| list(d).any(|x| x == f)).map(|(g, _, _)| g)
+}
 
 /// LLVM's `AArch64::ExtensionSet` over one base architecture.
 struct ExtensionSet {
@@ -400,7 +255,7 @@ impl ExtensionSet {
             return;
         }
         self.touched.insert(f);
-        for &d in deps(f, self.v22) {
+        for d in deps(f, self.v22) {
             self.enable(d);
         }
         // `+crypto` from v8.4 on also enables `sha3` and `sm4`; `+fp16`
@@ -434,10 +289,8 @@ impl ExtensionSet {
             return;
         }
         self.touched.insert(f);
-        for &d in DEPENDENT {
-            if deps(d, self.v22).contains(&f) {
-                self.disable(d);
-            }
+        for d in dependents(f, self.v22) {
+            self.disable(d);
         }
     }
 
@@ -936,10 +789,9 @@ fn attr_extension(name: &str, v22: bool) -> Option<&'static str> {
 }
 
 /// Whether LLVM feature `f` is an extension's (LLVM
-/// `targetFeatureToExtension`): the ones `-march=` extensions name.
+/// `targetFeatureToExtension`): `fmv`, or one a `-march=` modifier names.
 fn is_extension_feature(f: &str, v22: bool) -> bool {
-    ["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand", "fmv"].contains(&f)
-        || extension(f, v22) == Some(f)
+    f == "fmv" || extension_rows(v22).any(|(g, names, _)| g == f && names != "-")
 }
 
 /// [`target_attr_features`] as a [`kiln_codegen::TargetAttrParser`].
@@ -978,11 +830,7 @@ pub fn target_attr_features(
             Some((_, n)) => (false, n),
             None => continue,
         };
-        let known = ["fp-armv8", "neon", "fullfp16", "jsconv", "complxnum", "mte", "rand", "fmv"]
-            .into_iter()
-            .chain(DEPENDENT.iter().copied())
-            .find(|f| *f == name)
-            .or_else(|| extension(name, v22).filter(|f| *f == name));
+        let known = extension_feature(name, v22).or((name == "fmv").then_some("fmv"));
         if let Some(f) = known.filter(|f| is_extension_feature(f, v22)) {
             bits.touched.insert(f);
             if on {
