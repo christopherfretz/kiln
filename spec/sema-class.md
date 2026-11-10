@@ -2994,9 +2994,22 @@ access, out-of-line declarator scope.**
   nested in `*`, `&`, `&&`, a function type (return and parameters), a
   member pointer, an array, declarator parentheses and the type arguments
   of a template-id (`W<void(typename C<X>::T)>`, `W<typename C<X>::T[2]>`,
-  `rebuild_ci_compound`; WP-1152). A `decltype` operand is not rebuilt (a
-  gap: clang's `RebuildExprInCurrentInstantiation`; xfail
-  `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`). After a
+  `rebuild_ci_compound`; WP-1152). The expressions inside those types are
+  rebuilt too (clang's `RebuildExprInCurrentInstantiation`; WP-1154): a
+  `decltype` operand, a value-dependent array bound, a function type's
+  `noexcept` operand and an expression template argument
+  (`decltype(typename C<X>::T())`, `W<char[C<X>::N]>`,
+  `NX<void() noexcept(C<X>::B)>`, `I<C<X>::N + 1>`), so they are
+  equivalent to the in-class ones ([temp.over.link]/5).
+  `rebuild_ci_expr(e, qual)` runs the substituter with no argument levels
+  in its current-instantiation mode (`Substituter::ci_rebuild`) inside the
+  declarator scope: types go through `rebuild_ci_type`, and a `C<X>::m`
+  whose qualifier names the current instantiation and where lookup finds
+  `m` becomes the id-expression the class forms (`ci_member_ref`; a
+  member of a dependent base or a template-id stays dependent). Tests:
+  `temp.dep.type/out-of-line-current-instantiation-decltype.cpp`,
+  `temp.dep.type/out-of-line-current-instantiation-expr-run.cpp`,
+  `-expr-members-run.cpp`, `-expr-neg.cpp`. After a
   parenthesized declarator holding the qualified declarator-id
   (`X (*C<X>::f())(T)`), the parser enters the declarator scope again for
   the outer suffixes, so `T` there is found in `C<X>` (WP-1152,

@@ -129,6 +129,8 @@ sema_fp_conversion_rank = ExtWarn [FloatConversionRank] (3) "ISO C++ does not al
 sema_frame_address = WarningOff [FrameAddress] (1) "calling '{0}' with a nonzero argument is unsafe";
 sema_friend_decl_with_def_arg_must_be_def = Error (0) "friend declaration specifying a default argument must be a definition";
 sema_friend_decl_with_def_arg_redeclared = Error (0) "friend declaration specifying a default argument must be the only declaration";
+// clang `err_friend_decl_with_enclosing_temp_constraint_must_be_def` ([temp.friend]/9, WP-1164)
+sema_friend_decl_with_enclosing_temp_constraint_must_be_def = Error (0) "friend declaration with a constraint that depends on an enclosing template parameter must be a definition";
 sema_friend_def_in_local_class = Error (0) "friend function cannot be defined in a local class";
 sema_friend_def_no_match = Error (2) "friend declaration of '{0}' does not match any declaration in {1}";
 sema_friend_enum = Warning [FriendEnum] (0) "elaborated enum specifier cannot be declared as a friend";
@@ -355,6 +357,7 @@ sema_module_export_in_anon_ns = Error (0) "export declaration appears within ano
 sema_module_export_in_private = Error (0) "export declaration cannot be used in a private module fragment";
 sema_module_export_internal = Error (1) "declaration of '{0}' with internal linkage cannot be exported";
 sema_module_export_nested = Error (0) "export declaration appears within another export declaration";
+sema_module_export_non_namespace_scope_name = Error (1) "cannot export '{0}' as it is not at namespace scope";
 sema_module_export_not_interface = Error (0) "export declaration can only be used within a module interface";
 sema_module_export_redecl_module_linkage = Error (1) "cannot export redeclaration '{0}' here since the previous declaration has module linkage";
 sema_module_export_using_internal = Error (2) "using declaration referring to '{0}' with {1:internal|module} linkage cannot be exported";

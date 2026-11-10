@@ -168,6 +168,16 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// substituted once the outermost class is complete, as the parser
     /// replays them (spec/sema-templates.md §4.4, WP-905).
     pub(crate) local_late: Option<Vec<LocalLate>>,
+    /// Rebuilding in the current instantiation, not substituting
+    /// (clang's `CurrentInstantiationRebuilder`, spec/sema-class.md
+    /// "out-of-line declarator scope"): with no argument levels, the
+    /// operands of a type written before the declarator-id of an
+    /// out-of-line member of the class template whose pattern is this
+    /// declaration are rebuilt. Types go through
+    /// [`Sema::rebuild_ci_type`] and a `C<X>::m` naming a member of the
+    /// current instantiation is resolved ([temp.dep.type]/1, /6;
+    /// WP-1154).
+    pub(crate) ci_rebuild: Option<DeclId>,
 }
 
 impl std::fmt::Debug for Substituter<'_, '_, '_> {
@@ -215,6 +225,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             expansions: Vec::new(),
             outer_used: std::cell::Cell::new(false),
             local_late: None,
+            ci_rebuild: None,
         }
     }
 

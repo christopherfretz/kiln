@@ -660,6 +660,8 @@ pub struct Args {
     pub march: Option<String>,
     /// `-mcpu=<cpu>[+ext...]` as written (the last wins).
     pub mcpu: Option<String>,
+    /// `-ffixed-x18`: `AArch64` reserves x18 (`+reserve-x18`; WP-1151).
+    pub fixed_x18: bool,
     /// `-msve-vector-bits=<bits|scalable>` as written (the last wins).
     pub sve_vector_bits: Option<String>,
     /// `-target-feature <+name|-name>` (clang's `-Xclang` option), in order.
@@ -1013,6 +1015,9 @@ impl Args {
             }
         }
         a.verify = verify.finish(&mut a.errors);
+        // WP-1151: the shadow call stack's register.
+        a.sanitize.x18_reserved = a.fixed_x18
+            || a.target.as_deref().is_some_and(crate::sanitize::x18_reserved_by_default);
         if a.precompile && matches!(a.action, Action::Link | Action::Compile) {
             a.action = Action::Precompile;
         }
@@ -1165,6 +1170,8 @@ impl Args {
             self.mcpu = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("-msve-vector-bits=") {
             self.sve_vector_bits = Some(v.to_owned());
+        } else if arg == "-ffixed-x18" {
+            self.fixed_x18 = true;
         } else {
             return false;
         }
