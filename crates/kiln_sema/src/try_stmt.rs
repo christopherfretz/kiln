@@ -272,10 +272,8 @@ impl Sema<'_, '_> {
     /// extend beyond the innermost enclosing try-block (clang
     /// `IsThrownVarInScope`).
     pub(crate) fn thrown_var_in_scope(&self, e: ExprId) -> bool {
-        let mut id = e;
-        while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
-            id = self.ast.exprs.operand(id);
-        }
+        // clang `IsThrownVarInScope` strips with `IgnoreParens`.
+        let id = self.ignore_parens(e);
         if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr {
             return false;
         }

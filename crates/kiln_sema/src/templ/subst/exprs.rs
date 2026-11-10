@@ -640,12 +640,19 @@ impl Substituter<'_, '_, '_> {
                 // is looked up now, in the object's class (clang
                 // `TransformCXXPseudoDestructorExpr` → `getDestructorName`).
                 if let Some(&name) = self.sema.ast.templates.pseudo_dtor_name.get(e) {
+                    // `p->~C<args>()` (WP-1173).
+                    if let Some(&l) = self.sema.ast.templates.expr_targs.get(e) {
+                        let l = self.args(l, loc)?;
+                        return Ok(self.sema.act_on_member_destructor_template_late(
+                            base, name, l, loc, op, arrow,
+                        ));
+                    }
                     return Ok(self.sema.act_on_member_destructor_late(base, name, loc, op, arrow));
                 }
-                let destroyed = self.ty(destroyed, loc)?;
+                let destroyed = self.member_rooted_type(destroyed, base, arrow, loc)?;
                 // `p->T::F::~Q()`: the first type-name `T::F` too (WP-1155).
                 if let Some(&(first, fl)) = self.sema.ast.templates.pseudo_dtor_first.get(e) {
-                    let first = self.ty(first, fl)?;
+                    let first = self.member_rooted_type(first, base, arrow, fl)?;
                     return Ok(self.sema.rebuild_pseudo_destructor_first(
                         base,
                         (first, fl),
@@ -1464,6 +1471,29 @@ impl Substituter<'_, '_, '_> {
                 Ok((c, q))
             }
         }
+    }
+
+    /// A destructor-name type `Self::Inner` whose first component was
+    /// not found at the definition (`p->Self::Inner::~Inner()`, `Self`
+    /// a member of the object's class): the component is looked up in
+    /// the object's class now, as for a member qualifier
+    /// ([basic.lookup.qual.general]/2, WP-1173).
+    fn member_rooted_type(
+        &mut self,
+        q: QualType,
+        base: ExprId,
+        arrow: bool,
+        loc: Loc,
+    ) -> SubstResult<QualType> {
+        if let kiln_ast::types::TypeView::DependentName { keyword, nns, name } =
+            self.sema.ast.types.view(q.ty())
+            && self.rooted_in_member(nns)
+        {
+            let (_, n) = self.member_nns(nns, base, arrow, loc)?;
+            let t = self.sema.ast.types.dependent_name(keyword, n, name);
+            return self.ty(t, loc);
+        }
+        self.ty(q, loc)
     }
 
     /// True if specifier `n` starts with a dependent `name::` of a

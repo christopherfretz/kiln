@@ -69,7 +69,8 @@ fn kiln_names(src: &str, arch: Arch) -> Result<BTreeSet<String>, String> {
     }
     let ast = &tu.ast;
     let mut names = BTreeSet::new();
-    let anon = &mut mangle::AnonIds::new();
+    // The oracle is clang 19 (member-like friend templates differ; WP-1146).
+    let anon = &mut mangle::AnonIds::new().with_clang_compat(19);
     // A module interface unit's initializer (`_ZGI`).
     if let Some(u) = ast.modules.units.first()
         && u.kind.is_interface()

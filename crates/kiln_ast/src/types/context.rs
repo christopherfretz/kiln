@@ -259,6 +259,13 @@ pub struct TypeContext {
     /// or array type that canonicalized to it
     /// ([`TypeContext::expr_origin`]).
     pub(crate) expr_origins: kiln_source::fx::FxHashMap<TypeId, ExprId>,
+    /// For each non-dependent alias template specialization type whose
+    /// written arguments differ from its converted ones (a non-type
+    /// argument written as an expression, a defaulted argument, a pack):
+    /// the canonical converted list, the specialization's identity
+    /// ([temp.alias]/2, [temp.type]/1; [`TypeContext::alias_converted`]).
+    /// The type itself keeps the written list for printing.
+    pub(crate) alias_converted: kiln_source::fx::FxHashMap<TypeId, ArgListId>,
     pub(crate) nns: KeyedTable,
     pub(crate) args: ArgTable,
     pub(crate) profiles: ProfileTable,
@@ -313,6 +320,7 @@ impl TypeContext {
             exc_protos: kiln_source::fx::FxHashMap::default(),
             arg_origins: kiln_source::fx::FxHashMap::default(),
             expr_origins: kiln_source::fx::FxHashMap::default(),
+            alias_converted: kiln_source::fx::FxHashMap::default(),
             nns: KeyedTable::new(),
             args: ArgTable::new(),
             profiles: ProfileTable::new(),
@@ -1247,6 +1255,26 @@ impl TypeContext {
         }
     }
 
+    /// The canonical converted argument list of alias template
+    /// specialization type `spec` (one argument per parameter, non-type
+    /// arguments as values, defaults filled in): its identity
+    /// ([temp.alias]/2, [temp.type]/1), so `A<1 + 2>` and `A<3>` reflect
+    /// the same specialization. Falls back to the canonical written list
+    /// when no converted list was recorded (a dependent specialization).
+    pub fn alias_converted(&self, spec: TypeId, written: ArgListId) -> ArgListId {
+        self.alias_converted.get(&spec).copied().unwrap_or_else(|| self.canonical_args(written))
+    }
+
+    /// Records `converted` (canonical) as the identity of the alias
+    /// template specialization type `spec` written with arguments
+    /// `written` ([`TypeContext::alias_converted`]); nothing is stored
+    /// when the written list canonicalizes to it already.
+    pub fn note_alias_converted(&mut self, spec: TypeId, written: ArgListId, converted: ArgListId) {
+        if self.canonical_args(written) != converted {
+            self.alias_converted.insert(spec, converted);
+        }
+    }
+
     /// The expression written by the `decltype` (or dependent-bound
     /// array) type that created the canonical type `canonical`
     /// ([`TypeContext::arg_origin`]); else the profile's first
@@ -1315,6 +1343,7 @@ impl TypeContext {
         r.push(MemRow::of_map("exc_protos", &self.exc_protos));
         r.push(MemRow::of_map("arg_origins", &self.arg_origins));
         r.push(MemRow::of_map("expr_origins", &self.expr_origins));
+        r.push(MemRow::of_map("alias_converted", &self.alias_converted));
         self.nns.memory("nns", &mut r);
         self.args.memory(&mut r);
         self.profiles.memory(&mut r);

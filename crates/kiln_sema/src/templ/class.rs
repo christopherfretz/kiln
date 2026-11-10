@@ -21,7 +21,7 @@ use crate::decl::TagUse;
 use crate::declspec::DeclaratorContext;
 use crate::init::Initializer;
 use crate::scope::{Scope, ScopeKind};
-use crate::templ::args::{LevelMode, MultiLevelArgs};
+use crate::templ::args::{ConvertedArgs, LevelMode, MultiLevelArgs};
 use crate::templ::stack::FrameKind;
 use crate::templ::subst::{LocalLate, LocalMethod, SubstFail, SubstResult, Substituter};
 
@@ -226,10 +226,7 @@ impl Sema<'_, '_> {
     /// argument as first written (`X<int>::apply`, a qualified template
     /// name), which its members' types then print with
     /// (`'X<int>::apply<int>':'int *'`; [temp.arg.template]/1).
-    fn first_written_template_args(
-        &mut self,
-        conv: crate::templ::args::ConvertedArgs,
-    ) -> ArgListId {
+    fn first_written_template_args(&mut self, conv: ConvertedArgs) -> ArgListId {
         if self.clang_compat < 22 {
             return conv.canonical;
         }
@@ -478,7 +475,7 @@ impl Sema<'_, '_> {
         let sugared = self.clang_compat >= 22;
         let key = (tmpl, if sugared { conv.sugared } else { conv.canonical });
         if let Some(&u) = self.inst.alias_cache.get(&key) {
-            return Ok(self.ast.types.template_specialization(name, list, Some(u), true));
+            return Ok(self.alias_spec_type(name, list, u, conv, dependent));
         }
         let Some(pattern) = self.ast.template_info(tmpl).and_then(|i| i.pattern) else {
             return Err(());
@@ -537,7 +534,28 @@ impl Sema<'_, '_> {
         if self.access_checks == checks && self.sfinae_errors() == trapped {
             let _ = self.inst.alias_cache.insert(key, u);
         }
-        Ok(self.ast.types.template_specialization(name, list, Some(u), true))
+        Ok(self.alias_spec_type(name, list, u, conv, dependent))
+    }
+
+    /// The sugar type `name<written>` over aliased type `u`. It keeps the
+    /// arguments as written for printing; a non-dependent one records its
+    /// canonical converted arguments as its identity ([temp.alias]/2,
+    /// [temp.type]/1: `A<1 + 2>` and `A<3>` are the same specialization;
+    /// clang's `CheckTemplateArgumentList`), which `^^A<1 + 2>` reflects
+    /// (spec/sema-templates.md §4.10).
+    fn alias_spec_type(
+        &mut self,
+        name: TemplateNameId,
+        written: ArgListId,
+        u: QualType,
+        conv: ConvertedArgs,
+        dependent: bool,
+    ) -> QualType {
+        let t = self.ast.types.template_specialization(name, written, Some(u), true);
+        if !dependent {
+            self.ast.types.note_alias_converted(t.ty(), written, conv.canonical);
+        }
+        t
     }
 
     /// clang 19's `enable_if_t` rewrite (`CheckTemplateIdType`,

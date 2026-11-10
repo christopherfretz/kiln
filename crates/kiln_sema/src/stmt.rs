@@ -264,10 +264,9 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        let mut id = e;
-        while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
-            id = self.ast.exprs.operand(id);
-        }
+        // clang `IgnoreParens`: also through `__extension__` and a resolved
+        // `_Generic` or `__builtin_choose_expr`.
+        let id = self.ignore_parens(e);
         if self.ast.exprs.get(id).kind() != ExprKind::DeclRefExpr
             || self.ast.exprs.get(id).has(kiln_ast::expr::ExprFlags::REFERS_TO_ENCLOSING)
         {
@@ -1692,11 +1691,11 @@ impl Sema<'_, '_> {
     /// an id-expression naming a non-volatile object of automatic storage
     /// duration declared in the function becomes an xvalue.
     pub(crate) fn implicit_move(&mut self, e: ExprId) -> ExprId {
-        // A possibly parenthesized id-expression.
-        let mut id = e;
-        while self.ast.exprs.get(id).kind() == ExprKind::ParenExpr {
-            id = self.ast.exprs.operand(id);
-        }
+        // A possibly parenthesized id-expression; clang `getNamedReturnInfo`
+        // strips with `IgnoreParens`, so also `__extension__` and a resolved
+        // `_Generic` or `__builtin_choose_expr`. The xvalue cast wraps the
+        // whole operand.
+        let id = self.ignore_parens(e);
         let n = *self.ast.exprs.get(id);
         // A captured variable is not declared in the innermost function
         // or lambda ([class.copy.elision]/3).

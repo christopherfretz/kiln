@@ -1472,7 +1472,13 @@ impl Parser<'_, '_> {
                     | NameClass::Namespace(_)
                     | NameClass::Undeclared
             ) {
-                let _ = self.parse_template_arg_list();
+                let args = self.parse_template_arg_list();
+                if let (NameClass::Undeclared, Some((args, ..))) = (class, &args)
+                    && let Some(r) =
+                        self.s.act_on_dependent_destructor_template(e, arrow, name, args, nl, loc)
+                {
+                    return Some(r);
+                }
                 self.s.diagnose_destructor_non_template(e, arrow, false, class, name, nl);
                 return None;
             }
