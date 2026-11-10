@@ -9814,6 +9814,30 @@ not supported yet`.
     initializer's own. The same rewrite serves a destructuring
     expansion-initializer and the P2718 for-range-initializer
     (`extend_range_default_args`, `range_for.rs`; spec/sema-class.md).
+    WP-1166: the copy covers every evaluated kind on the way to a
+    temporary (compound assignments, rewritten operators, `new`/`delete`,
+    a potentially-evaluated `typeid`, casts, `__builtin_choose_expr`, GNU
+    `?:` with its `OpaqueValueExpr`s rebound to the copied common
+    expression, `ExprArena::clone_opaque`;
+    `stmt.ranged/p2718-default-argument-kinds-run.cpp`), except a
+    `CXXDefaultInitExpr`, whose member initializer stays shared (clang 22
+    and GCC 16.1 extend its temporaries; xfail
+    `stmt.ranged/p2718-default-member-initializer-run.cpp`), and a few
+    vendor builtins (`fresh_temporaries` lists them). The jump-scope
+    checker and the CFG enter the copy (clang 19 and 22 do not: their
+    `CXXDefaultArgExpr` has no children), so an indirect `goto` out of
+    the loop leaves the copy's extended temporaries' scope
+    (`stmt.goto/computed-goto-default-argument-temporary.cpp`) and a
+    `[[noreturn]]` call in the copy ends the path
+    (`stmt.ranged/p2718-default-argument-noreturn.cpp`); a default
+    argument that is not rewritten stays one CFG element, as in clang.
+    The never-constant walk stops at range-based `for` and expansion
+    statements, the only rewriting contexts, so it never reaches a copy
+    (its temporaries scan enters one anyway). The module declaration
+    image carries the copy (cold field `default_arg_rewritten`,
+    spec/modules.md §11.11), so an importer building an inline or
+    constexpr body from the image extends the same temporaries
+    (`module.interface/image-default-temporaries-run.cpp`).
     GCC 16.1 extends no element temporaries and rejects reading one in
     constant evaluation, so the tests carry kiln goldens
     (`element-default-argument-temporaries-run.cpp`, `oracle: none`).

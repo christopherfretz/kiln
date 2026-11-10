@@ -1866,7 +1866,9 @@ initializer, nested ones included, its own copy with fresh temporaries
 and extends those to `__range`, so `for (int x : mk())` with
 `A mk(const D& = D{7})` prints `w1 w2 ~D7`. GCC 16.1 agrees; clang 19 and 22
 do not extend them in a template, nor clang 22 a nested one
-(`stmt.ranged/p2718-default-argument-run.cpp`, GCC oracle).
+(`stmt.ranged/p2718-default-argument-run.cpp`, GCC oracle). The copy, the
+walks that enter it and the module image's carry of it (WP-1166) are in
+spec/sema.md §7.6a.
 
 A discarded class prvalue in a lifetime-extending context (an open
 `extend_collector`: the for-range-initializer from C++23, and an enumerating
