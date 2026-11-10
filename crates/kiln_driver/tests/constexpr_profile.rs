@@ -482,7 +482,7 @@ fn importer_reports_its_own_evaluations() {
 /// translation unit and Oven: its evaluations are the importer's and both
 /// the profile and `-fconstexpr-report` list them, located in the module
 /// source (spec/driver.md "Constexpr profile"). A BMI's (prebuilt, the
-/// test above; cache-built, tests/module_cache.rs) are never listed.
+/// test above; cache-built, `tests/module_cache.rs`) are never listed.
 #[test]
 fn module_source_named_directly_is_the_importers() {
     let d = scratch("modsrc");
