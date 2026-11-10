@@ -59,12 +59,13 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ### Standard libraries and compatibility
 
-- libc++ 22.1.8 test suite at `-std=c++26`: 99.2%. libc++ 19.1.7: 98.3%.
+- libc++ 22.1.8 test suite at `-std=c++26`: 99.4%. libc++ 19.1.7: 98.3%.
   Every public libstdc++ 14 header compiles at `-std=c++20` and
   `-std=c++26`.
 - 47 open-source projects built with their own build systems and test
   suites, including all of LLVM, Boost, folly, Abseil, DuckDB and CMake:
-  44 at parity with clang 19 on every test.
+  46 at parity with clang 19 or better on every test; the Boost
+  metaprogramming libraries match clang 22.
 - clang-compatible command line and predefined macros. CMake and
   autotools work unchanged. kiln reproduces clang 22 by default and
   clang 19 with `-fclang-compat=19`.

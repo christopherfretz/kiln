@@ -13,13 +13,13 @@ standard, C++98 to C++26, are in
 
 Each number is from the page named, at the run that page records.
 
-- libc++ 22.1.8 suite at `-std=c++26`: 99.2% of 9247 tests
-  ([libcxx-m5.md](libcxx-m5.md)). libc++ 19.1.7: 98.3% of `std/`
+- libc++ 22.1.8 suite at `-std=c++26`: 99.4% of 9247 tests
+  ([libcxx-1.0.md](libcxx-1.0.md)). libc++ 19.1.7: 98.3% of `std/`
   ([libcxx.md](libcxx.md)).
 - Compile time and memory against clang 19 on the `bench/` corpus:
   geometric mean 0.21x time, 0.17x peak RSS ([perf.md](perf.md)).
 - Open-source projects built with their own build systems and test
-  suites: 47, of which 44 at parity with clang 19
+  suites: 47, of which 46 at parity with clang 19 or better
   ([../COMPATIBILITY.md](../COMPATIBILITY.md#libraries-and-applications);
   the runs are in [oss.md](oss.md) and [oss/](oss/)).
 - clang 22's negative tests: kiln reports no error in 4.6% of files where
@@ -38,6 +38,7 @@ Standard libraries:
 
 - `libcxx.md`: libc++ 19 end to end (ROADMAP M3b), sample and full-suite
   pass rates, failure clusters, and the run rows of every libc++ run.
+- `libcxx-1.0.md`: libc++ 22 full suite on the 1.0 release candidate.
 - `libcxx-m5.md`: libc++ 22 full suite (ROADMAP M5), failure clusters by
   class (correctness, diagnostic wording, harness, environment), fixes.
 - `libcxx-m3.md`: the frozen M3 gate subset. `libcxx-longtail.md`: the

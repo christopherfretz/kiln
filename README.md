@@ -32,11 +32,11 @@ Each number links to the page that records how it was measured.
   (ctre, mp-units, daw_json_link, Glaze, scnlib, reflect-cpp): **0.39x to
   0.47x** the control's peak RSS (geomean per project), at 0.91x to 1.06x
   its time. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#constexpr-and-compile-time-performance)
-- **libc++ 22.1.8** test suite (9247 tests, `-std=c++26`): **99.2%**
+- **libc++ 22.1.8** test suite (9247 tests, `-std=c++26`): **99.4%**
   pass. [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries),
-  [docs/status/libcxx-m5.md](docs/status/libcxx-m5.md)
+  [docs/status/libcxx-1.0.md](docs/status/libcxx-1.0.md)
 - **47 open-source projects** built with their own build systems and test
-  suites: 44 Flawless, 2 Near-perfect, 1 Partial. They include all of LLVM
+  suites: 46 Flawless, 1 Near-perfect. They include all of LLVM
   (`check-llvm`: 38434 tests passed, at 0.94x clang's summed TU time and
   0.63x its peak TU RSS), Boost and folly.
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#libraries-and-applications)
@@ -115,7 +115,7 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 |---|---|---|
 | C++98 to C++23 | done | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
 | C++26 (Croydon DIS draft), reflection, contracts | done except 1 partial paper (P2786, removed from the DIS) | [STANDARD_SUPPORT.md](docs/STANDARD_SUPPORT.md) |
-| libc++ 22 / libc++ 19 / libstdc++ 14 | 99.2% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
+| libc++ 22 / libc++ 19 / libstdc++ 14 | 99.4% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet; the declaration image (`-fkiln-bmi-image`) is experimental and off by default | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
 | C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |

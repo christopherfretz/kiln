@@ -194,39 +194,41 @@ warnings clang has are missing. Wording is not covered by
 
 ## libc++ 22 test suite
 
-kiln passes 99.2% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`;
-[status/libcxx-m5.md](status/libcxx-m5.md)). What was left at that run:
+kiln passes 99.4% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`)
+on the 1.0 release candidate ([status/libcxx-1.0.md](status/libcxx-1.0.md)).
+The 9 correctness failures of the M5 run
+([status/libcxx-m5.md](status/libcxx-m5.md); WP-460, WP-491) all pass.
+What is left:
 
-- **9 correctness failures**, all fixed since (WP-460: `trivial_abi` ×6,
-  `enable_if`, the `std.compat` modules case; WP-491: `make_from_tuple`).
-  The full suite has not been re-run since those fixes.
-- **12 expected failures for missing or reworded warnings**, none of
-  them wrong code:
+- **4 filesystem permission tests** that cannot pass when the suite runs
+  as root (an environment limit, not a kiln failure).
+- **Expected failures for missing or reworded warnings**, none of them
+  wrong code:
   - `-Wnonnull` ×5 ([WP-433](BACKLOG.md))
   - `-Wthread-safety` ×2
   - deprecation warnings on `rel_ops` and the C++17 adaptor typedefs ×2
   - `alloc_align` power-of-two check ×1
   - constraint-note wording ×1
-  - `std::hash<std::monostate>` wording ×1
+
+  The `std::hash<std::monostate>` wording test that was on this list now
+  passes.
 - **1 long test** that times out under heavy host load and passes at its
   full timeout.
 
 ## Open-source projects with gaps
 
 Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applications),
-44 pass everything clang passes. simdjson (117 of 117; its one earlier
-failure needed `-Wuninitialized`, WP-696), mp-units (25 of 25) and oneTBB
-(139 of 139, with a clang-22 C driver for its LTO link; see
-[Build systems](#build-systems)) were re-run at parity for the 1.0
-release. The others:
+46 pass everything clang passes in the 1.0 release run
+([status/release-1.0.md](status/release-1.0.md) "(d)"). Among them,
+folly (3772 of 3773, as clang), folly::coro (616 of 618, as clang),
+simdjson (117 of 117; its one earlier failure needed `-Wuninitialized`,
+WP-696), mp-units (25 of 25) and oneTBB (139 of 139, with a clang-22 C
+driver for its LTO link; see [Build systems](#build-systems)) were
+re-run at parity for the release. The other:
 
-- **folly**: 3767 of 3773 in the full run. The 6 failures (`memcpy_test`)
-  were fixed by WP-763 and pass in a targeted re-run.
-- **Boost metaprogramming libraries**: 99.6% of clang's passing tests.
-  Of the 23 TUs that fail, 13 also fail under clang 19.
-- **folly::coro**: 583 of 618. All 33 kiln-only failures had one cause,
-  fixed by WP-802. A partial re-run found two more compile failures,
-  fixed by WP-933. The full re-run is [WP-992](BACKLOG.md).
+- **Boost metaprogramming libraries**: 2235 of 2253 TUs (clang 19:
+  2240). Of the 18 TUs that fail, 13 also fail under clang 19; the other
+  5 are rejected by clang 22 too, so kiln follows clang 22 there.
 
 ## Open expected-failure tests
 
@@ -243,9 +245,6 @@ Templates, lookup and overloading:
   as members yet (spec/sema-class.md §2.2). WP-171.
 - `ast/namespace.udecl/instantiated-shadow-order.cpp`: the same cause.
   WP-171.
-- `expr.prim.id.dtor/run-dependent-object-qualified-destructor-template-id.cpp`:
-  `~Q<args>` after a dependent unresolved prefix is not deferred to
-  instantiation. WP-1173.
 - `over.match.best/perfect-match-reversed-member.cpp`: a member
   `operator==` beside its own reversed form is a unique perfect match in
   clang 22.1. [WP-635](BACKLOG.md) (deferred).
@@ -258,6 +257,11 @@ Templates, lookup and overloading:
   conversion check. WP-804.
 - `temp.dep.type/out-of-line-current-instantiation-var-template-unqualified-run.cpp`:
   a variable template-id keeps its written qualifier. WP-1169.
+- `temp.spec.partial.order/typed-nttp-more-specialized-than-auto-run.cpp`:
+  partial ordering of class partial specializations does not check a
+  deduced non-type argument's type against its parameter's
+  (`os<int E>` against `os<auto E>` is called ambiguous).
+  [WP-1236](BACKLOG.md).
 
 Constant evaluation and reflection:
 
@@ -301,9 +305,6 @@ Code generation, ABI and sanitizers:
   enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
 - `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
   FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
-- `module.interface/vtable-alias-O1-run.cpp`: at `-O1` an
-  `available_externally` vtable references a structor alias that is not
-  emitted yet. WP-1120.
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
 - `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's

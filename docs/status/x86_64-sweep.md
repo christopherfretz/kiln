@@ -6,7 +6,8 @@ x86_64 runners, in the CI reference container `gcc:16.1.0-trixie`
 (Debian 13, clang 19 and 22, GCC 14's libstdc++), with kiln++ from
 `cargo xtask dist`. How to run it: docs/VALIDATION.md "x86_64 sweep".
 This page records the first sweep (2026-11-08/09) and its triage; the
-gRPC results were filled in from its artifacts by WP-1002.
+gRPC results were filled in from its artifacts by WP-1002. The sweep of
+the 1.0 release candidate (2026-11-10) is in "1.0 RC sweep" below.
 
 ## Runs
 
@@ -32,6 +33,51 @@ The one-off flag masks main's WP-873 never-constant regression (see
 daw_json_link. It was only on the `sweep/x86-3` and `sweep/x86-4`
 branches; `sweep.yml` on main has no such flag. All four `sweep/x86-*`
 branches are deleted (a run continues when its branch is deleted).
+- rc-1.0.0, `42788235805` (`e6199e693`, the 1.0 release candidate,
+  branch `sweep/rc-1.0.0`): the full sweep, libc++ 6 shards and the ten
+  projects with kiln and with the clang 19 control, with `sweep.yml` as
+  on main (no added flags). Results in "1.0 RC sweep".
+
+## 1.0 RC sweep (rc-1.0.0)
+
+Run `42788235805` on `e6199e693`. kiln against the clang 19 control on
+an identical runner, libstdc++ 14. Tests are "passed / total".
+
+| scope | total | pass | fail | xfail | xpass | unsupported | timeout | pass rate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| libc++, all, x86_64 | 9247 | 8749 | 4 | 46 | 1 | 446 | 1 | 99.4% |
+| libc++, all, aarch64 (the same RC, [libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8748 | 4 | 47 | 1 | 446 | 1 | 99.4% |
+
+`std/` 99.5% and `libcxx/` 97.9% on both. The 4 FAILs are the
+filesystem permission tests listed under "Both arches: environment and
+known" (the runner and the container run as root); the XPASS is
+`variant.hash/hash.depr.verify.cpp`, as on aarch64; the timeout is
+`atomics` `lost_wakeup`, the flaky load timeout of x86-2 and x86-4
+(aarch64 timed out on `ifstream` `offset_range` instead). The other
+x86_64-only failure of x86-2, `stable_sort` (WP-981), passes, and of
+x86-2's 38 failures only the 4 environment ones are left.
+
+- **fmt**: 21/21, 50/50 TUs; clang the same.
+- **nlohmann_json**: 97/97, 93/93 TUs; clang the same.
+- **abseil**: 232/232, 413/413 TUs; clang the same. No flag needed now
+  that WP-962 fixed the WP-873 regression.
+- **llvm_project**: `SupportTests`, `ADTTests` and `IRTests` build and
+  pass (`IRTests` 732 passed), 1504/1504 TUs, 4/4 links; clang the same.
+  The `_Float128` rejection of x86-2 is fixed (WP-1058).
+- **duckdb**: 4618/4628, 421/421 TUs; clang the same (the same 10 fail
+  under both).
+- **bitcoin_core**: 357/357, 487/487 TUs; clang 357/357, 487/487. The 12
+  `-m<feature>` TUs missing at x86-2 now build (WP-1000).
+- **cmake_app**: 721/723, 587/587 TUs; clang the same (the same 2 fail
+  under both).
+- **daw_json_link**: 147/147, 159/159 TUs; clang the same.
+- **opencv**: clang 7/7, 537/537 TUs. The kiln job could not clone the
+  source (a DNS failure on the runner) and still reported success, so it
+  has no report; it is re-run. Result: to be filled in.
+- **grpc**: to be filled in (the job was still running when this was
+  written).
+
+Every project with a result is at parity with clang, TU counts included.
 
 ## libc++ 22.1.8 (x86-2; x86-4 is identical)
 
