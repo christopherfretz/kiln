@@ -86,6 +86,11 @@ note_pch_rebuild = Note (1) "please rebuild precompiled file '{0}'";
 note_pch_rebuild_19 = Note (1) "please rebuild precompiled header '{0}'";
 note_placeholder_declared = Note (0) "placeholder declared here";
 note_possible_target = Note (0) "possible target for call";
+// WP-1210: after a missing `#include <meta>` at C++26; `{n}` is the
+// optional "; a GCC 16 installation was found at ..." PATH probe suffix.
+note_pp_meta_gcc = Note (3) "'<meta>' is provided by GCC 16.1's libstdc++; kiln is using the GCC installation at '{0}' (version {1}); pass --gcc-toolchain=<prefix of a GCC 16.1 installation>{2}";
+note_pp_meta_libcxx = Note (1) "libc++ does not provide '<meta>'; it is provided by GCC 16.1's libstdc++: pass -stdlib=libstdc++ --gcc-toolchain=<prefix of a GCC 16.1 installation>{0}";
+note_pp_meta_no_gcc = Note (1) "'<meta>' is provided by GCC 16.1's libstdc++, but kiln found no GCC installation; pass --gcc-toolchain=<prefix of a GCC 16.1 installation>{0}";
 note_pp_poisoned_here = Note (0) "poisoned here";
 note_pragma_loop_invalid_vectorize_option = Note (0) "vectorize_width loop hint malformed; use vectorize_width(X, fixed) or vectorize_width(X, scalable) where X is an integer, or vectorize_width('fixed' or 'scalable')";
 note_previous_attribute = Note (0) "previous attribute is here";
