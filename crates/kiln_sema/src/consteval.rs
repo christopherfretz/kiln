@@ -837,20 +837,20 @@ impl Sema<'_, '_> {
     /// `EvaluateAsInt` of the unvalued `ConstantExpr`): evaluated now and
     /// the result kept for the end of the full-expression, which reads it
     /// instead of evaluating the call again ([expr.const]/16, WP-1171).
-    /// `None` when `c` is not such an invocation; `Some(None)` when it is
-    /// not a constant expression (reported at the end).
-    pub(crate) fn prefold_immediate(&mut self, c: ExprId) -> Option<Option<ConstValueId>> {
+    /// `None` when `c` is not such an invocation; `Some(Err(()))` when it
+    /// is not a constant expression (reported at the end).
+    pub(crate) fn prefold_immediate(&mut self, c: ExprId) -> Option<Result<ConstValueId, ()>> {
         if self.ast.exprs.get(c).kind() != ExprKind::ConstantExpr
             || self.ast.exprs.constant_value(c).is_some()
             || !self.imm.pending.candidates.iter().any(|&(x, _)| x == c)
         {
             return None;
         }
-        if let Some(&(_, ref r)) = self.imm.pending.prefolded.iter().find(|&&(x, _)| x == c) {
-            return Some(r.as_ref().ok().copied());
+        if let Some((_, r)) = self.imm.pending.prefolded.iter().find(|&&(x, _)| x == c) {
+            return Some(r.as_ref().map(|&v| v).map_err(|_| ()));
         }
         let r = self.eval_immediate(c);
-        let v = r.as_ref().ok().copied();
+        let v = r.as_ref().map(|&v| v).map_err(|_| ());
         self.imm.pending.prefolded.push((c, r));
         Some(v)
     }

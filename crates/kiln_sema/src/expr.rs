@@ -3692,7 +3692,7 @@ impl Sema<'_, '_> {
             c = self.ast.exprs.operand(c);
         }
         let v = match self.prefold_immediate(c) {
-            Some(v) => v.and_then(|v| self.const_int(v)),
+            Some(v) => v.ok().and_then(|v| self.const_int(v)),
             None => self.fold_int(r),
         };
         let Some(v) = v else { return };
