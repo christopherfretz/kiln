@@ -523,6 +523,14 @@ fn gcc_as_the_compiler_under_test() {
     let log = flags.unwrap().log.join("\n");
     assert!(log.contains("-fmax-errors=5 -fconstexpr-ops-limit=1000"), "{log}");
     assert!(!log.contains("--gcc-toolchain") && !log.contains("-resource-dir"), "{log}");
+    assert!(
+        log.contains("tests/support/meta-header"),
+        "the stand-in kiln_meta.h comes first: {log}"
+    );
+    assert!(!log.contains("-lstdc++exp"), "a compile that does not link: {log}");
+    let run = results.iter().find(|r| r.name.ends_with("pass-run-output.cpp"));
+    let log = run.unwrap().log.join("\n");
+    assert!(log.contains("-lstdc++exp"), "a link names libstdc++exp: {log}");
 }
 
 /// `KILN_REQUIRE_DEBUGGERS` is required only by exactly `1`, and the
