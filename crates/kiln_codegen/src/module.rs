@@ -2423,12 +2423,19 @@ impl<'a> Cg<'a> {
                 out.push(Attr::string("tune-cpu", t));
             }
         } else {
-            // WP-1151: the `AArch64` `-mcpu=` CPU (canonical name).
-            if !native {
-                out.push(Attr::string("target-cpu", cpu.unwrap_or("generic")));
+            // WP-1151: the `AArch64` `-mcpu=` CPU (canonical name). WP-1187:
+            // a known `target("cpu=<cpu>")` CPU (as written) replaces it and
+            // drops the `-mtune=` CPU; a known `tune=<cpu>` is the tune CPU
+            // (clang `GetCPUAndFeaturesAttributes`).
+            let a = d.and_then(|d| self.target_attr_features(d)).unwrap_or_default();
+            let tune = if a.cpu.is_some() { None } else { tune };
+            match a.cpu.as_deref() {
+                Some(c) => out.push(Attr::string("target-cpu", c)),
+                None if !native => out.push(Attr::string("target-cpu", cpu.unwrap_or("generic"))),
+                None => {}
             }
             out.push(Attr::string("target-features", &self.features_attr(d)));
-            if let Some(t) = tune {
+            if let Some(t) = a.tune.as_deref().or(tune) {
                 out.push(Attr::string("tune-cpu", t));
             }
         }
@@ -2469,13 +2476,20 @@ impl<'a> Cg<'a> {
     /// `vscale_range(1,16)` with the `sve` target feature, on a function
     /// definition (clang `getVScaleRange` in `StartFunction`; not on the
     /// thunks and helpers clang builds without a `CodeGenFunction`).
-    pub fn vscale_attr(&self, out: &mut Vec<Attr>) {
+    /// clang 22 also checks function `d`'s own features: a
+    /// `target("...+sve")` function has the range (WP-1187).
+    pub fn vscale_attr(&self, out: &mut Vec<Attr>, d: Option<DeclId>) {
         if self.is_x86() {
             return;
         }
+        let own_sve = || {
+            self.opts.clang_compat >= 22
+                && d.is_some_and(|d| self.target_attr_str(d).is_some())
+                && self.feature_map(d).get("sve") == Some(&true)
+        };
         if let Some(n) = self.opts.sve_vector_bits {
             out.push(Attr::VScaleRange(n / 128, n / 128));
-        } else if self.opts.sve {
+        } else if self.opts.sve || own_sve() {
             out.push(Attr::VScaleRange(1, 16));
         }
     }
@@ -2844,7 +2858,7 @@ impl<'a> Cg<'a> {
         }
         a.extend(extra);
         self.def_attrs(&mut a);
-        self.vscale_attr(&mut a);
+        self.vscale_attr(&mut a, decl);
         self.target_attrs_of(&mut a, decl);
         if inline == DefInline::OptNone {
             // `SetLLVMFunctionAttributesForDefinition` removes them.

@@ -223,6 +223,7 @@ impl SyntaxJob<'_> {
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,
             sve_vector_bits: feats.sve_vector_bits,
+            aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
             cfg_dump: a.dump_cfg,
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
