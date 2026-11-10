@@ -83,6 +83,7 @@ impl AnonIds {
     /// This table, mangling as clang `compat` (`-fclang-compat=`) does
     /// where the versions differ (spec/abi.md §"Member-like constrained
     /// friends").
+    #[must_use]
     pub fn with_clang_compat(self, compat: u32) -> Self {
         AnonIds { compat19: compat < 20, ..self }
     }
