@@ -665,7 +665,7 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
 - These memos make a TU of repeated nested template-ids linear with a
   small slope: `bench/frontend/nested-template-ids-dup.cpp` (generated at
   bench time, 1.3 MB; spec/bench.md "Generated entries") tracks it, and
-  docs/status/perf.md "WP-919" has the g++-16 comparison.
+  docs/status/perf-history.md "WP-919" has the g++-16 comparison.
 
 ## 3. Parser core (`parser.rs`)
 - **Token access:**
@@ -1663,9 +1663,13 @@ for `^^`, §5 for splices).
 - **`^^` operand** ([expr.reflect]). If the operand can be a type-id (the
   test is the trailing-return-type one, so `void (*)(int)` is a type), it
   is parsed as a type-id → `act_on_reflect_type`. Otherwise it is an
-  optional nested-name-specifier and an identifier →
-  `act_on_reflect_name`. A template-id operand is
-  "unsupported: reflection of a template-id".
+  optional nested-name-specifier and an unqualified-id →
+  `act_on_reflect_name` / `act_on_reflect_dn`. The unqualified-id is an
+  identifier, an operator-function-id, a conversion-function-id or a
+  literal-operator-id, each optionally followed by template arguments
+  (`at_operator_template_args`, as in an id-expression, [temp.names]/1)
+  → `act_on_reflect_template_id` (WP-1246:
+  `^^ns::operator== <int>`, `^^ns::operator""_x<'1'>`).
 - **Splice brackets.** `splice-specifier: [: constant-expression :]`.
   `splice_end` finds the matching `:]` (nested splices balance), and the
   tentative-parse scanner and template-argument scan use it to skip a

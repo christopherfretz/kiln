@@ -547,6 +547,71 @@ pub fn target_intrinsic(
     declare(m, name, ret, &params, &[], shape)
 }
 
+/// `V @llvm.masked.load.V.p0(ptr nocapture, [i32 immarg align,] <N x i1>,
+/// V)`: the alignment is an `immarg` operand before LLVM 22 and a call-site
+/// `align` attribute from 22 (WP-1242, the AVX-512 masked loads).
+pub fn masked_load(m: &mut Module, vty: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.masked.load", &[vty, p]);
+    let mt = mask_ty(m, vty);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    let mut params: Vec<(TypeId, &[Attr])> = vec![(p, nc)];
+    if m.ir_version < 22 {
+        params.push((TypeId::I32, imm));
+    }
+    params.extend([(mt, &[][..]), (vty, &[][..])]);
+    let mem = MemoryEffects::argmem_only(ModRef::Read);
+    declare(m, &name, vty, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `void @llvm.masked.store.V.p0(V, ptr nocapture, [i32 immarg align,]
+/// <N x i1>)` (the alignment as for [`masked_load`]; WP-1242).
+pub fn masked_store(m: &mut Module, vty: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.masked.store", &[vty, p]);
+    let mt = mask_ty(m, vty);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let imm: &[Attr] = &[Attr::Flag(ImmArg)];
+    let mut params: Vec<(TypeId, &[Attr])> = vec![(vty, &[]), (p, nc)];
+    if m.ir_version < 22 {
+        params.push((TypeId::I32, imm));
+    }
+    params.push((mt, &[]));
+    let mem = MemoryEffects::argmem_only(ModRef::Write);
+    declare(m, &name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `V @llvm.masked.expandload.V(ptr nocapture, <N x i1>, V)`:
+/// `memory(read)` (WP-1242).
+pub fn masked_expandload(m: &mut Module, vty: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.masked.expandload", &[vty]);
+    let mt = mask_ty(m, vty);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let params: [(TypeId, &[Attr]); 3] = [(p, nc), (mt, &[]), (vty, &[])];
+    let mem = MemoryEffects::all(ModRef::Read);
+    declare(m, &name, vty, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `void @llvm.masked.compressstore.V(V, ptr nocapture, <N x i1>)`:
+/// `memory(argmem: write)` (WP-1242).
+pub fn masked_compressstore(m: &mut Module, vty: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.masked.compressstore", &[vty]);
+    let mt = mask_ty(m, vty);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let params: [(TypeId, &[Attr]); 3] = [(vty, &[]), (p, nc), (mt, &[])];
+    let mem = MemoryEffects::argmem_only(ModRef::Write);
+    declare(m, &name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `<N x i1>` for vector type `<N x T>`.
+fn mask_ty(m: &mut Module, vty: TypeId) -> TypeId {
+    let n = m.types.vector_info(vty).map_or(1, |x| x.1);
+    m.types.vector(TypeId::I1, n)
+}
+
 /// `void @llvm.aarch64.neon.st{2,3,4}.<VTy>.p0(<VTy> x k, ptr nocapture)`
 /// by full name, as LLVM declares it (`IntrArgMemOnly`,
 /// `NoCapture<ArgIndex<k>>`; WP-799).
@@ -724,6 +789,14 @@ pub fn vector_reduce(m: &mut Module, op: &str, vty: TypeId) -> FuncId {
     let et = m.types.vector_info(vty).map_or(vty, |x| x.0);
     let name = overloaded_name(m, &format!("llvm.vector.reduce.{op}"), &[vty]);
     declare(m, &name, et, &[(vty, &[])], &[], Shape::Pure)
+}
+
+/// `E @llvm.vector.reduce.<op>.V(E start, V)` for a floating-point vector
+/// type `V` of element type `E` (`op`: `fadd`, `fmul`; WP-1242).
+pub fn vector_reduce_start(m: &mut Module, op: &str, vty: TypeId) -> FuncId {
+    let et = m.types.vector_info(vty).map_or(vty, |x| x.0);
+    let name = overloaded_name(m, &format!("llvm.vector.reduce.{op}"), &[vty]);
+    declare(m, &name, et, &[(et, &[]), (vty, &[])], &[], Shape::Pure)
 }
 
 /// `F @llvm.vector.extract.F.S(S, i64 immarg idx)`: the fixed-length

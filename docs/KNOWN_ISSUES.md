@@ -22,15 +22,17 @@ If you hit something not listed here, please
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
-- **x86_64 sweep results are from before the last fixes.** The first
-  x86_64 sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) found
-  that LLVM's `IRTests` did not build because glibc's x86-64 `*f128`
-  functions were not usable as `__float128` ones. WP-1058 fixed that
-  (kiln still keeps `_Float128` and `__float128` distinct, as GCC 13+
-  does), and WP-1000 added the `-m<feature>` flags Bitcoin Core and
-  OpenCV need, but the sweep has not been re-run since. The 1.0 release
-  candidate's sweep re-measures them
-  ([status/release-1.0.md](status/release-1.0.md)).
+- **OpenCV on x86_64: fixed.** The final release candidate's x86_64
+  sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) passes
+  OpenCV's 7 tests, as clang. In the first release candidate's sweep 12
+  of its `modules/core/*.avx2.cpp` dispatch TUs used x86 builtins kiln
+  did not lower (`__builtin_ia32_extract128i256` and others), so 0 of 7
+  ran. WP-1242 lowers every x86 builtin clang lowers to generic IR.
+- **23 x86 builtins are not supported**: `__builtin_ia32_maskmovq`, the
+  Key Locker builtins and the AMX `t*_internal` tile builtins.
+  `__has_builtin` answers 0 for each, and a call that reaches code
+  generation is the error "code generation for `<name>` is not supported
+  yet" (WP-1242; spec/landed/codegen/WP-630.md "Generic x86 lowering").
 - **LLVM 19 and 22 only.** LLVM 20 and 21 are not supported.
 - **Identification.** `--version` prints `kiln version <v>` without the
   git commit ([WP-942](BACKLOG.md)). The `-v` output of a link step
@@ -43,6 +45,14 @@ kiln compiles C++ only. `kiln` can preprocess C (`-E` on `.c`, `.h`,
 `.i`, or `-x c`), but compiling C is `not implemented yet`. `kiln++`
 compiles a `.c` file as C++, with a warning, as `clang++` does. C support
 is [WP-243](BACKLOG.md) and is not part of 1.0.
+
+## Reflection
+
+- **`std::meta::reflect_constant`, `reflect_constant_array` and
+  `define_static_array` of a reflection of a constexpr member function
+  of a class template specialization** do not instantiate that member's
+  definition; GCC 16.1 does. Found by the reference workload; planned
+  for 1.0.1 (WP-1252).
 
 ## Uninitialized variables at C++26
 
@@ -70,6 +80,13 @@ clang. This is by design, not a gap
   without the `kiln++` symlink or the resource directory. Use the release
   archive or `cargo xtask dist`
   ([STABILITY.md](STABILITY.md#cratesio-not-published)).
+- **LTO with an older linker**: with `-flto`, kiln's objects are LLVM
+  bitcode of the selected LLVM (22 when it is installed), so the link
+  needs the same LLVM's driver, linker plugin or `lld`. A target linked
+  by an older driver, such as a C library linked by clang-19, fails with
+  `Unknown attribute kind ... (Producer: 'LLVM22...' Reader: 'LLVM 19...')`.
+  clang has the same rule. In a mixed C/C++ build, use a C compiler of
+  the same LLVM ([USER_GUIDE.md](USER_GUIDE.md#targets-and-llvm-versions)).
 
 ## Modules
 
@@ -159,24 +176,26 @@ clang's help; spec/driver.md, "Options", is the complete list.
 ## Diagnostics and accepts-invalid
 
 kiln is measured on clang 22.1.8's own negative tests
-([status/accepts-invalid.md](status/accepts-invalid.md), run at
-`321baa9de`):
+([status/accepts-invalid.md](status/accepts-invalid.md), run on the
+first 1.0 release candidate `e6199e693`; the final release candidate
+`ae54fd2fa` differs from it only by WP-1242 to WP-1246):
 
-- In 7.1% of test files (89 of 1250) where clang expects an error, kiln
+- In 4.6% of test files (57 of 1250) where clang expects an error, kiln
   reports none in some configuration.
-- 17.6% of `expected-error` lines (4930 of 28065) have no kiln error on
+- 12.1% of `expected-error` lines (3384 of 28065) have no kiln error on
   them.
-- 11.2% of `expected-no-diagnostics` configurations (47 of 418) get an
+- 6.2% of `expected-no-diagnostics` configurations (26 of 418) get an
   error from kiln (rejects-valid).
-- 0 crashes, timeouts or out-of-memory results in 2850 cases.
+- 0 crashes, timeouts or out-of-memory results in 2850 cases (2767 ran;
+  the driver skipped 83 for clang flags it does not accept).
 
-Most missed errors are declaration rules: types defined where the grammar
-forbids them, members named after their class, union and static member
-rules, redeclarations, and attribute checks. The clusters are
-[WP-945](BACKLOG.md) to [WP-960](BACKLOG.md). Most of them are fixed
-since that run, so the numbers above overstate the gap; the remaining
-cluster is [WP-960](BACKLOG.md) (`-pedantic-errors` extension
-diagnostics). Valid code is not affected.
+The first triage run (`321baa9de`) found mostly declaration rules: types
+defined where the grammar forbids them, members named after their class,
+union and static member rules, redeclarations, and attribute checks. The
+clusters are [WP-945](BACKLOG.md) to [WP-960](BACKLOG.md), and most of
+them are fixed in 1.0; the largest remaining cluster is
+[WP-960](BACKLOG.md) (`-pedantic-errors` extension diagnostics). Valid
+code is not affected.
 Code that clang rejects may compile with kiln, so build with clang or GCC
 in CI too if you rely on rejection.
 
@@ -186,38 +205,43 @@ warnings clang has are missing. Wording is not covered by
 
 ## libc++ 22 test suite
 
-kiln passes 99.2% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`;
-[status/libcxx-m5.md](status/libcxx-m5.md)). What was left at that run:
+kiln passes 99.4% of libc++ 22.1.8's suite (9247 tests, `-std=c++26`)
+on the 1.0 release candidate ([status/libcxx-1.0.md](status/libcxx-1.0.md)).
+The 9 correctness failures of the M5 run
+([status/libcxx-m5.md](status/libcxx-m5.md); WP-460, WP-491) all pass.
+What is left:
 
-- **9 correctness failures**, all fixed since (WP-460: `trivial_abi` ×6,
-  `enable_if`, the `std.compat` modules case; WP-491: `make_from_tuple`).
-  The full suite has not been re-run since those fixes.
-- **12 expected failures for missing or reworded warnings**, none of
-  them wrong code:
+- **4 filesystem permission tests** that cannot pass when the suite runs
+  as root (an environment limit, not a kiln failure).
+- **Expected failures for missing or reworded warnings**, none of them
+  wrong code:
   - `-Wnonnull` ×5 ([WP-433](BACKLOG.md))
   - `-Wthread-safety` ×2
   - deprecation warnings on `rel_ops` and the C++17 adaptor typedefs ×2
   - `alloc_align` power-of-two check ×1
   - constraint-note wording ×1
-  - `std::hash<std::monostate>` wording ×1
-- **1 long test** that times out under heavy host load and passes at its
-  full timeout.
+
+  The `std::hash<std::monostate>` wording test that was on this list now
+  passes.
+- **2 long tests**, `offset_range` and `lost_wakeup`, that time out
+  under heavy host load and pass when run alone.
 
 ## Open-source projects with gaps
 
 Of the 47 projects in [COMPATIBILITY.md](COMPATIBILITY.md#libraries-and-applications),
-43 pass everything clang passes. The others:
+46 pass everything clang passes in the 1.0 release run
+([status/release-1.0.md](status/release-1.0.md) "(d)"). Among them,
+folly (3772 of 3773, as clang), folly::coro (616 of 618, as clang),
+simdjson (117 of 117; its one earlier failure needed `-Wuninitialized`,
+WP-696), mp-units (25 of 25) and oneTBB (139 of 139, with a clang-22 C
+driver for its LTO link; see [Build systems](#build-systems)) were
+re-run at parity for the release. On x86_64, OpenCV did not build in
+the first release candidate's sweep and is fixed in the final one (see
+[Platforms](#platforms)). The other:
 
-- **simdjson**: 116 of 117 tests. The one failure is a negative compile
-  test that needs `-Wuninitialized` under `-Werror`. That warning has
-  landed since (WP-696); the re-run is [WP-992](BACKLOG.md).
-- **folly**: 3767 of 3773 in the full run. The 6 failures (`memcpy_test`)
-  were fixed by WP-763 and pass in a targeted re-run.
-- **Boost metaprogramming libraries**: 99.6% of clang's passing tests.
-  Of the 23 TUs that fail, 13 also fail under clang 19.
-- **folly::coro**: 583 of 618. All 33 kiln-only failures had one cause,
-  fixed by WP-802. A partial re-run found two more compile failures,
-  fixed by WP-933. The full re-run is [WP-992](BACKLOG.md).
+- **Boost metaprogramming libraries**: 2235 of 2253 TUs (clang 19:
+  2240). Of the 18 TUs that fail, 13 also fail under clang 19; the other
+  5 are rejected by clang 22 too, so kiln follows clang 22 there.
 
 ## Open expected-failure tests
 
@@ -234,9 +258,6 @@ Templates, lookup and overloading:
   as members yet (spec/sema-class.md §2.2). WP-171.
 - `ast/namespace.udecl/instantiated-shadow-order.cpp`: the same cause.
   WP-171.
-- `expr.prim.id.dtor/run-dependent-object-qualified-destructor-template-id.cpp`:
-  `~Q<args>` after a dependent unresolved prefix is not deferred to
-  instantiation. WP-1173.
 - `over.match.best/perfect-match-reversed-member.cpp`: a member
   `operator==` beside its own reversed form is a unique perfect match in
   clang 22.1. [WP-635](BACKLOG.md) (deferred).
@@ -249,12 +270,20 @@ Templates, lookup and overloading:
   conversion check. WP-804.
 - `temp.dep.type/out-of-line-current-instantiation-var-template-unqualified-run.cpp`:
   a variable template-id keeps its written qualifier. WP-1169.
+- `temp.spec.partial.order/typed-nttp-more-specialized-than-auto-run.cpp`:
+  partial ordering of class partial specializations does not check a
+  deduced non-type argument's type against its parameter's
+  (`os<int E>` against `os<auto E>` is called ambiguous).
+  [WP-1236](BACKLOG.md).
 
 Constant evaluation and reflection:
 
 - `class.union/constexpr-placement-same-type.cpp`: Oven pointers carry no
   union-member designator, so either member of one type at one offset
   may be the constructed one. [WP-517](BACKLOG.md).
+- `expr.reflect/member-template-of-specialization.cpp`: `^^W<int>::In`
+  (a member template of a specialization) parses as a type-id that needs
+  template arguments. WP-1243 follow-up.
 - `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`: no
   lenient designator for object-size folds. WP-808.
 - `meta.reflection.define.aggregate/define-run-template-for.cpp`: an
@@ -292,9 +321,6 @@ Code generation, ABI and sanitizers:
   enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
 - `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
   FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
-- `module.interface/vtable-alias-O1-run.cpp`: at `-O1` an
-  `available_externally` vtable references a structor alias that is not
-  emitted yet. WP-1120.
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
 - `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's

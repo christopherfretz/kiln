@@ -107,6 +107,32 @@ declarations are in `tests/support/kiln_meta_queries.h`.
   `temp.inst/p4-var-template-unknown-bound.cpp`, xfail).
 - **`return_type_of(r)`** gives the declared return type of a function or
   function type, canonical like `type_of`.
+- **Undeduced placeholder types** ([meta.reflection.queries] *has-type*,
+  [meta.reflection.member.queries]/3; WP-1243). A function whose type
+  still contains an undeduced placeholder (`auto spin();` before any
+  definition, `static auto sv();`, `auto f();` at namespace scope) has
+  no type: `type_of` and `return_type_of` fail (§3), and `is_const`,
+  `is_volatile`, `is_lvalue_reference_qualified` and
+  `is_rvalue_reference_qualified` answer false, since they read
+  `type_of(r)` only when *has-type* holds. `parameters_of`,
+  `is_noexcept` and the other function queries have no such condition
+  and answer as usual. Such a function is not members-of-representable,
+  so `members_of` (and `static_data_members_of` for a variable) omits it
+  rather than report a member whose type cannot be asked; this is the
+  DIS rule and GCC 16.1's answer. Once a definition deduces the type
+  (`auto Gizmo::spin() { return 2L; }` before the query point) the
+  member is reported and typed (`type_of == ^^long()`). A member
+  function of a class template specialization whose definition is not
+  instantiated stays undeduced: reflecting it or listing members
+  instantiates nothing, as in GCC 16.1 (`type_of(^^S<int>::f)` fails for
+  `auto f() { return T{}; }`). A variable declared `auto` is undeduced
+  only inside its own initializer, where `^^v` is ill-formed
+  ([dcl.spec.auto.general]/11, as `auto v = v;`; GCC 16.1 agrees); its
+  type is deduced from the initializer's type before the initializer is
+  evaluated, so `members_of` called from inside the initializer reports
+  it, as in GCC 16.1. Tests:
+  `meta.reflection.member.queries/members-of-undeduced-placeholder.cpp`,
+  `expr.reflect/reflect-auto-var-own-initializer-neg.cpp`.
 - **`has_ellipsis_parameter`** (P3096) is the row `is_vararg_function`,
   which is GCC 16.1's name. `<meta>` (WP-484) spells both.
 
@@ -135,7 +161,11 @@ declarations are in `tests/support/kiln_meta_queries.h`.
 
   These rows raise `run.impure`, so a caller of one is never memoized.
   `type_of` is `Stable` but raises `run.impure` itself for a variable
-  whose type is still an array of unknown bound (§1, WP-795).
+  whose type is still an array of unknown bound (§1, WP-795). It, and
+  `return_type_of`, `is_const`, `is_volatile` and the two
+  ref-qualifier queries, also raise it for a function whose type still
+  contains an undeduced placeholder (§1, WP-1243): a later definition
+  deduces it, so the answer before must not be memoized for after.
 - **Budget.** `meta.reflection.queries/oven-budget.cpp` pins the cost.
   It runs 10,000 calls per loop and checks the report counters:
 
@@ -153,7 +183,7 @@ parity is out of scope. The negative tests are `entity-neg.cpp`,
 
 | Op | Fails when | Note |
 |---|---|---|
-| `type_of` | `r` has no type ([meta.reflection.queries] *has-type*) | `'X' has no type` |
+| `type_of` | `r` has no type ([meta.reflection.queries] *has-type*; also a function whose type contains an undeduced placeholder, §1) | `'X' has no type` |
 | `parent_of` | `r` is null, the global namespace, a type without a declaration, a value or object, or a function or variable with C language linkage (`has_parent` false) | `reflection does not represent an entity with parent` |
 | `object_of` | `r` is not a variable of static storage duration | `reflection does not represent an object with static storage duration, or a reference to such an object` |
 | `constant_of` | `r` is not a value, annotation, enumerator, object, variable, structured binding or function (a non-static member, a type, a namespace) | `reflection does not represent an annotation or a valid argument to a splice-expression` |
@@ -163,7 +193,7 @@ parity is out of scope. The negative tests are `entity-neg.cpp`,
 | `constant_of` | the value is not a valid constant template argument (a pointer to a string literal) | `the value refers to a string literal, which is not a valid constant template argument` |
 | `operator_of` | `r` is not an operator function (template) | `reflection does not represent an operator function or operator function template` |
 | `symbol_of`, `u8symbol_of` | `op` is not an `operators` enumerator | `operators argument is not a valid operator` |
-| `return_type_of` | `r` is not a function or function type | `reflection does not represent a function or function type with a return type` |
+| `return_type_of` | `r` is not a function or function type, or is a function whose type contains an undeduced placeholder (§1) | `reflection does not represent a function or function type with a return type` |
 | `variable_of` | `r` is not a parameter of the function being evaluated | `reflection does not represent parameter of current function` |
 
 **Not implemented yet.** These fail with a `kiln:` note:

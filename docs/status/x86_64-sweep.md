@@ -6,7 +6,8 @@ x86_64 runners, in the CI reference container `gcc:16.1.0-trixie`
 (Debian 13, clang 19 and 22, GCC 14's libstdc++), with kiln++ from
 `cargo xtask dist`. How to run it: docs/VALIDATION.md "x86_64 sweep".
 This page records the first sweep (2026-11-08/09) and its triage; the
-gRPC results were filled in from its artifacts by WP-1002.
+gRPC results were filled in from its artifacts by WP-1002. The sweep of
+the 1.0 release candidate (2026-11-10) is in "1.0 RC sweep" below.
 
 ## Runs
 
@@ -32,6 +33,74 @@ The one-off flag masks main's WP-873 never-constant regression (see
 daw_json_link. It was only on the `sweep/x86-3` and `sweep/x86-4`
 branches; `sweep.yml` on main has no such flag. All four `sweep/x86-*`
 branches are deleted (a run continues when its branch is deleted).
+- rc-1.0.0, `42788235805` (`e6199e693`, the first 1.0 release candidate,
+  branch `sweep/rc-1.0.0`): the full sweep, libc++ 6 shards and the ten
+  projects with kiln and with the clang 19 control, with `sweep.yml` as
+  on main (no added flags). Results in "1.0 RC sweep".
+- final RC, `42819709794` (`ae54fd2fa`, the final 1.0 release
+  candidate): the same sweep. Results in "1.0 RC sweep".
+
+## 1.0 RC sweep (rc-1.0.0)
+
+Run `42788235805` on `e6199e693`, the first release candidate, and run
+`42819709794` on `ae54fd2fa`, the final one. kiln against the clang 19
+control on an identical runner, libstdc++ 14. Tests are "passed /
+total". The project results below are the first RC's unless they say
+otherwise.
+
+| scope | total | pass | fail | xfail | xpass | unsupported | timeout | pass rate |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| libc++, all, x86_64, final RC `ae54fd2fa` | 9247 | 8748 | 4 | 46 | 1 | 446 | 2 | 99.4% |
+| libc++, all, x86_64, first RC `e6199e693` | 9247 | 8749 | 4 | 46 | 1 | 446 | 1 | 99.4% |
+| libc++, all, aarch64, final RC ([libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8747 | 4 | 47 | 1 | 446 | 2 | 99.4% |
+| libc++, all, aarch64, first RC ([libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8748 | 4 | 47 | 1 | 446 | 1 | 99.4% |
+
+`std/` 99.5% and `libcxx/` 97.9% on both. The 4 FAILs are the
+filesystem permission tests listed under "Both arches: environment and
+known" (the runner and the container run as root); the XPASS is
+`variant.hash/hash.depr.verify.cpp`, as on aarch64; the timeout is
+`atomics` `lost_wakeup`, the flaky load timeout of x86-2 and x86-4
+(aarch64 timed out on `ifstream` `offset_range` instead). On the final
+RC, x86_64 has one more timeout, `offset_range`, the long test that
+also times out on aarch64; the 4 FAILs and the XPASS are the same. The
+other
+x86_64-only failure of x86-2, `stable_sort` (WP-981), passes, and of
+x86-2's 38 failures only the 4 environment ones are left.
+
+- **fmt**: 21/21, 50/50 TUs; clang the same.
+- **nlohmann_json**: 97/97, 93/93 TUs; clang the same.
+- **abseil**: 232/232, 413/413 TUs; clang the same. No flag needed now
+  that WP-962 fixed the WP-873 regression.
+- **llvm_project**: `SupportTests`, `ADTTests` and `IRTests` build and
+  pass (`IRTests` 732 passed), 1504/1504 TUs, 4/4 links; clang the same.
+  The `_Float128` rejection of x86-2 is fixed (WP-1058).
+- **duckdb**: 4618/4628, 421/421 TUs; clang the same (the same 10 fail
+  under both).
+- **bitcoin_core**: 357/357, 487/487 TUs; clang 357/357, 487/487. The 12
+  `-m<feature>` TUs missing at x86-2 now build (WP-1000).
+- **cmake_app**: 721/723, 587/587 TUs; clang the same (the same 2 fail
+  under both).
+- **daw_json_link**: 147/147, 159/159 TUs; clang the same.
+- **grpc**: 117/118, 5732/5732 TUs, 120/120 links; clang the same. On
+  the final RC: configure and build exit 0, 117/118 (3893 s wall); the
+  failure is `end2end_http2_test` (exit 137), as in both first-RC runs.
+- **opencv**: **fixed on the final RC**. Run `42819709794` on
+  `ae54fd2fa`: configure, build and test exit 0, 7/7 tests pass, as
+  clang (601 s wall). On the first RC it was a **regression**: kiln
+  built 98 TUs, 12 of them failed, and 0/7 tests ran; clang 7/7, 537/537
+  TUs. The 12 are
+  `modules/core/*.avx2.cpp` dispatch TUs that use x86 builtins kiln does
+  not lower yet: `__builtin_ia32_extract128i256`,
+  `__builtin_ia32_permti256`, `__builtin_ia32_vcvtph2ps256`,
+  `__builtin_ia32_vfmaddpd256` and `__builtin_ia32_vfmaddps256`. The
+  first sweep never compiled them (7/7 with 473 TUs: kiln rejected
+  `-mavx2` then); WP-1000 made kiln accept the flag and exposed them.
+  WP-1242 fixed them (see the triage below). aarch64 was not affected. (The kiln job's first attempt
+  could not clone the source, a DNS failure on the runner; this is the
+  re-run.)
+
+Every other project of the first RC's sweep is at parity with clang, TU
+counts included.
 
 ## libc++ 22.1.8 (x86-2; x86-4 is identical)
 
@@ -148,6 +217,20 @@ CPU and load differ, so only the RSS ratio carries across.
   for the TU counts. x86 function multiversioning (`target_clones`) is
   still rejected: WP-1059, xfail
   `tests/conformance/ext.multiversion/target-clones-x86.cpp`.
+- With `-mavx2` accepted (WP-1000), the 1.0 RC sweep (run
+  `42788235805`) builds OpenCV's AVX2 dispatch TUs, and 12 of its
+  `modules/core/*.avx2.cpp` failed with "code generation for
+  `__builtin_ia32_X` is not supported yet" (`extract128i256`,
+  `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`): builtins
+  clang lowers to generic IR, which kiln's 1:1 table never covered, so
+  the build stopped (0/7 tests; clang 7/7). **Fixed** (WP-1242): every
+  declared x86 builtin is lowered as clang's `EmitX86BuiltinExpr`, except
+  23 (`maskmovq`, Key Locker, the AMX `*_internal`) for which
+  `__has_builtin` is now 0, and a call of an x86 builtin sets clang's
+  `"min-legal-vector-width"` (spec/landed/codegen/WP-630.md "Generic x86
+  lowering"; `tests/conformance/target.x86/opencv-avx2-tu.cpp`,
+  `avx2-fma-f16c-run.cpp`, the `*-ir.cpp` family tests). The final RC's
+  sweep (run `42819709794`, `ae54fd2fa`) passes opencv's 7/7 tests.
 - glibc's x86-64 `bits/floatn.h` says `typedef __float128 _Float128;`.
   kiln makes `_Float128` its own P1467 type and drops that typedef, so a
   `_Float128` function (`logf128`) is not a `__float128` one, as it is

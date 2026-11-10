@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-10
 
 The first release. This section summarises what kiln 1.0 does. Measured
 results are in [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md), and the
@@ -59,12 +59,13 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 
 ### Standard libraries and compatibility
 
-- libc++ 22.1.8 test suite at `-std=c++26`: 99.2%. libc++ 19.1.7: 98.3%.
+- libc++ 22.1.8 test suite at `-std=c++26`: 99.4%. libc++ 19.1.7: 98.3%.
   Every public libstdc++ 14 header compiles at `-std=c++20` and
   `-std=c++26`.
 - 47 open-source projects built with their own build systems and test
   suites, including all of LLVM, Boost, folly, Abseil, DuckDB and CMake:
-  43 at parity with clang 19 on every test.
+  46 at parity with clang 19 or better on every test; the Boost
+  metaprogramming libraries match clang 22.
 - clang-compatible command line and predefined macros. CMake and
   autotools work unchanged. kiln reproduces clang 22 by default and
   clang 19 with `-fclang-compat=19`.
@@ -95,6 +96,30 @@ limits are in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Release archives from `cargo xtask dist`: relocatable,
   `kiln-<version>-<triple>.tar.xz` with a stripped binary, plus a
   `-symbols` archive and `SHA256SUMS`.
+
+### Fixed in the final release candidate
+
+These landed after the first 1.0 release candidate was measured.
+
+- x86 builtins: every x86 builtin that clang lowers to generic IR is now
+  lowered (AVX and AVX2 extract, insert and `perm2x128`, F16C, the FMA
+  family and more). The builtins kiln declares but cannot lower went
+  from 595 to 23 (`maskmovq`, Key Locker, the AMX internals), and those
+  23 answer `__has_builtin` with 0. A call of an x86 builtin sets
+  `min-legal-vector-width`, which fixes an LLVM backend crash at
+  `-march=skylake-avx512 -O2`. OpenCV's AVX2 dispatch TUs now compile
+  (WP-1242).
+- Reflection: `extract` of a function now instantiates and odr-uses it
+  (WP-1244).
+- Constant evaluation: an uncaught exception in a constant evaluation
+  prints its `what()` whole, up to 64 KiB, after which it ends with
+  "… [N more characters]" (WP-1245).
+- Reflection: `^^` accepts operator, literal-operator, conversion and
+  dependent template-ids, such as `^^ns::operator==<int>` (WP-1246).
+- Reflection: `members_of` leaves out members whose type is an undeduced
+  placeholder, and `type_of` on one throws, as in GCC.
+  `display_string_of` prints requires-clauses as GCC 16.1 does
+  (WP-1243).
 
 ## Before 1.0
 

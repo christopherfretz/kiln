@@ -26,49 +26,49 @@ written by hand (WP-912). The run is informational and never part of
 ## Run
 
 - clang tests: `llvmorg-22.1.8` (`ca7933e47d3a3451d81e72ac174dcb5aa28b59d1`), `clang/test`
-- kiln: kiln version 0.0.1 (C++26 frontend, LLVM IR backend) at `380e9ec83`
-- command: `cargo xtask clang-neg -j 4 --profile harness CXX SemaCXX`
+- kiln: kiln version 1.0.0 (C++26 frontend, LLVM IR backend) at `e6199e693`
+- command: `cargo xtask clang-neg -j 4 --compiler <kiln++> CXX SemaCXX`
 - limits: 2048 MiB address space per case (plus kiln's stack reservation); timeout 60 s; -j 4
 - 2276 test files, 2119 with `%clang_cc1 -verify` RUN lines; 2767 cases run, 1071 configurations skipped
-- wall time 101 s; peak RSS of one case 21 MiB (gnu-time)
+- wall time 21 s; peak RSS of one case 23 MiB (gnu-time)
 
 ## Totals
 
 | measure | count | of | rate |
 |---|---:|---:|---:|
-| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 63 | 1250 | 5.0% |
-| ACCEPTS-INVALID cases (per RUN configuration) | 74 | 1946 | 3.8% |
-| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3789 | 28065 | 13.5% |
-| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 27 | 418 | 6.5% |
+| ACCEPTS-INVALID files (clang expects an error, kiln reports none in some configuration) | 57 | 1250 | 4.6% |
+| ACCEPTS-INVALID cases (per RUN configuration) | 68 | 1946 | 3.5% |
+| MISSED-ERROR lines (expected-error with no kiln error on its line) | 3384 | 28065 | 12.1% |
+| REJECTS-VALID cases (kiln errors in an `expected-no-diagnostics` file) | 26 | 418 | 6.2% |
 | crashes | 0 | 2850 | 0.0% |
 | timeouts | 0 | 2850 | 0.0% |
 | out of memory | 0 | 2850 | 0.0% |
 
-0 cases had a directive kiln's verifier could not parse (counted as they ran). 128 cases had a kiln "not supported yet" error, which counts as an error here although it is no verdict on the program (see the last table).
+0 cases had a directive kiln's verifier could not parse (counted as they ran). 126 cases had a kiln "not supported yet" error, which counts as an error here although it is no verdict on the program (see the last table).
 
 ## By directory
 
 | directory | accepts-invalid files | rate | missed lines | rate | rejects-valid | crash / timeout |
 |---|---:|---:|---:|---:|---:|---:|
-| CXX/basic | 3 / 37 | 8.1% | 62 / 311 | 19.9% | 0 | 0 / 0 |
+| CXX/basic | 3 / 37 | 8.1% | 39 / 311 | 12.5% | 0 | 0 / 0 |
 | CXX/class | 1 / 46 | 2.2% | 83 / 634 | 13.1% | 1 | 0 / 0 |
 | CXX/class.access | 0 / 12 | 0.0% | 47 / 573 | 8.2% | 0 | 0 / 0 |
 | CXX/class.derived | 0 / 15 | 0.0% | 10 / 96 | 10.4% | 0 | 0 / 0 |
 | CXX/conv | 0 / 2 | 0.0% | 2 / 16 | 12.5% | 0 | 0 / 0 |
 | CXX/cpp | 0 / 0 | - | 0 / 0 | - | 0 | 0 / 0 |
 | CXX/dcl | 0 / 4 | 0.0% | 0 / 81 | 0.0% | 0 | 0 / 0 |
-| CXX/dcl.dcl | 4 / 77 | 5.2% | 248 / 1141 | 21.7% | 0 | 0 / 0 |
-| CXX/dcl.decl | 1 / 54 | 1.9% | 76 / 788 | 9.6% | 1 | 0 / 0 |
-| CXX/drs | 1 / 33 | 3.0% | 1285 / 8682 | 14.8% | 0 | 0 / 0 |
-| CXX/except | 3 / 15 | 20.0% | 24 / 104 | 23.1% | 0 | 0 / 0 |
-| CXX/expr | 2 / 78 | 2.6% | 71 / 644 | 11.0% | 0 | 0 / 0 |
+| CXX/dcl.dcl | 3 / 77 | 3.9% | 207 / 1141 | 18.1% | 0 | 0 / 0 |
+| CXX/dcl.decl | 1 / 54 | 1.9% | 73 / 788 | 9.3% | 1 | 0 / 0 |
+| CXX/drs | 1 / 33 | 3.0% | 1098 / 8682 | 12.6% | 0 | 0 / 0 |
+| CXX/except | 2 / 15 | 13.3% | 14 / 104 | 13.5% | 0 | 0 / 0 |
+| CXX/expr | 2 / 78 | 2.6% | 69 / 644 | 10.7% | 0 | 0 / 0 |
 | CXX/lex | 0 / 14 | 0.0% | 1 / 78 | 1.3% | 0 | 0 / 0 |
-| CXX/module | 0 / 6 | 0.0% | 6 / 75 | 8.0% | 0 | 0 / 0 |
+| CXX/module | 0 / 6 | 0.0% | 2 / 75 | 2.7% | 0 | 0 / 0 |
 | CXX/over | 1 / 42 | 2.4% | 7 / 313 | 2.2% | 0 | 0 / 0 |
-| CXX/special | 2 / 31 | 6.5% | 12 / 224 | 5.4% | 3 | 0 / 0 |
+| CXX/special | 1 / 31 | 3.2% | 11 / 224 | 4.9% | 3 | 0 / 0 |
 | CXX/stmt.stmt | 0 / 9 | 0.0% | 3 / 255 | 1.2% | 0 | 0 / 0 |
-| CXX/temp | 8 / 147 | 5.4% | 279 / 1644 | 17.0% | 2 | 0 / 0 |
-| SemaCXX | 37 / 628 | 5.9% | 1573 / 12406 | 12.7% | 20 | 0 / 0 |
+| CXX/temp | 8 / 147 | 5.4% | 265 / 1644 | 16.1% | 2 | 0 / 0 |
+| SemaCXX | 34 / 628 | 5.4% | 1453 / 12406 | 11.7% | 19 | 0 / 0 |
 
 ## Top 50 accepts-invalid files
 
@@ -76,10 +76,7 @@ Ranked by the expected errors of their worst configuration.
 
 | file | accepts-invalid configs | expected errors |
 |---|---:|---:|
-| `SemaCXX/attr-require-constant-initialization.cpp` | 3 / 4 | 23 |
-| `SemaCXX/attr-unavailable.cpp` | 1 / 1 | 23 |
 | `SemaCXX/cxx2b-p2266-disable-with-msvc-compat.cpp` | 1 / 2 | 21 |
-| `SemaCXX/attr-annotate.cpp` | 1 / 1 | 12 |
 | `SemaCXX/array-alignment.cpp` | 1 / 1 | 11 |
 | `SemaCXX/attr-lifetime-capture-by.cpp` | 1 / 1 | 10 |
 | `SemaCXX/addr-label-in-coroutines.cpp` | 1 / 1 | 9 |
@@ -89,9 +86,7 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/drs/cwg412.cpp` | 7 / 7 | 6 |
 | `SemaCXX/attr-reinitializes.cpp` | 1 / 1 | 6 |
 | `SemaCXX/warn-consumed-parsing.cpp` | 1 / 1 | 6 |
-| `CXX/except/except.spec/p2-dynamic-types.cpp` | 1 / 1 | 5 |
 | `CXX/basic/basic.stc/basic.stc.dynamic/basic.stc.dynamic.deallocation/p2.cpp` | 1 / 1 | 4 |
-| `CXX/dcl.dcl/dcl.attr/dcl.attr.depend/p2.cpp` | 1 / 1 | 3 |
 | `CXX/expr/expr.unary/expr.new/p20-0x.cpp` | 3 / 3 | 3 |
 | `CXX/special/class.temporary/p1.cpp` | 1 / 1 | 3 |
 | `CXX/temp/temp.spec/temp.expl.spec/p21.cpp` | 1 / 1 | 3 |
@@ -108,7 +103,6 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/attr-abi-tag-syntax.cpp` | 1 / 1 | 2 |
 | `SemaCXX/attr-target-clones-aarch64.cpp` | 1 / 1 | 2 |
 | `SemaCXX/coroutine-vla.cpp` | 1 / 1 | 2 |
-| `SemaCXX/gh138775.cpp` | 1 / 1 | 2 |
 | `SemaCXX/warn-unused-label-error.cpp` | 1 / 1 | 2 |
 | `CXX/basic/basic.link/p9.cpp` | 1 / 1 | 1 |
 | `CXX/basic/basic.lookup/basic.lookup.unqual/p7.cpp` | 1 / 1 | 1 |
@@ -117,7 +111,6 @@ Ranked by the expected errors of their worst configuration.
 | `CXX/except/except.spec/p15.cpp` | 2 / 2 | 1 |
 | `CXX/expr/expr.prim/expr.prim.lambda/p2-template-parameter.cpp` | 1 / 1 | 1 |
 | `CXX/over/over.match/over.match.best/over.best.ics/over.ics.user/p3-0x.cpp` | 1 / 1 | 1 |
-| `CXX/special/class.dtor/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.arg/temp.arg.nontype/p1.cpp` | 1 / 8 | 1 |
 | `CXX/temp/temp.decls/temp.friend/p3.cpp` | 1 / 1 | 1 |
 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp` | 1 / 1 | 1 |
@@ -126,6 +119,13 @@ Ranked by the expected errors of their worst configuration.
 | `SemaCXX/PR10177.cpp` | 1 / 2 | 1 |
 | `SemaCXX/PR8012.cpp` | 1 / 1 | 1 |
 | `SemaCXX/access-member-pointer.cpp` | 1 / 1 | 1 |
+| `SemaCXX/attr-visibility.cpp` | 1 / 1 | 1 |
+| `SemaCXX/builtin-ptrtomember-ambig.cpp` | 1 / 1 | 1 |
+| `SemaCXX/crash-lambda-weak-attr.cpp` | 1 / 1 | 1 |
+| `SemaCXX/cxx98-compat.cpp` | 3 / 3 | 1 |
+| `SemaCXX/externc-ifunc-resolver.cpp` | 1 / 1 | 1 |
+| `SemaCXX/gh37257.cpp` | 1 / 1 | 1 |
+| `SemaCXX/gh48974.cpp` | 1 / 1 | 1 |
 
 ## Top 40 missed-error clusters
 
@@ -134,34 +134,33 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | clang expects | files | lines | example |
 |---|---:|---:|---|
 | variadic macros are a CN feature | 14 | 14 | `CXX/drs/cwg0xx.cpp:10` |
-| no matching function for call to '…' | 13 | 37 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p12.cpp:137` |
-| constexpr variable '…' must be initialized by a constant expression | 9 | 24 | `CXX/drs/cwg18xx.cpp:480` |
-| constant expression | 8 | 31 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p6.cpp:30` |
+| no matching function for call to '…' | 12 | 36 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p12.cpp:137` |
+| constexpr variable '…' must be initialized by a constant expression | 9 | 27 | `CXX/drs/cwg18xx.cpp:480` |
+| constant expression | 8 | 34 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p6.cpp:30` |
 | redefinition of '…' | 8 | 26 | `CXX/basic/basic.lookup/basic.lookup.unqual/p15.cpp:12` |
 | no matching constructor | 8 | 14 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:132` |
 | invalid use of non-static data member '…' | 7 | 30 | `CXX/class/class.nest/p1.cpp:12` |
 | redefinition | 7 | 17 | `CXX/basic/basic.link/p9.cpp:9` |
-| no member named '…' in '…' | 6 | 51 | `CXX/class/class.mem/p13.cpp:124` |
 |  | 6 | 33 | `CXX/drs/cwg5xx.cpp:514` |
-| use of undeclared identifier '…' | 6 | 27 | `CXX/drs/cwg14xx.cpp:33` |
 | deleted function definitions are a C++N extension | 6 | 20 | `CXX/drs/cwg13xx.cpp:687` |
-| '…' is a private member of '…' | 6 | 14 | `CXX/class.access/p4.cpp:591` |
 | never produces a constant expression | 6 | 14 | `CXX/dcl.dcl/dcl.spec/dcl.constexpr/p3.cpp:275` |
-| no matching function | 6 | 9 | `CXX/temp/temp.param/p8-cxx20.cpp:47` |
-| '…' attribute takes at least N argument | 5 | 33 | `SemaCXX/annotate-type.cpp:43` |
+| no member named '…' in '…' | 5 | 45 | `CXX/class/class.mem/p13.cpp:124` |
+| use of undeclared identifier '…' | 5 | 26 | `CXX/drs/cwg14xx.cpp:33` |
 | no matching constructor for initialization of '…' | 5 | 14 | `CXX/dcl.decl/dcl.init/dcl.init.aggr/p1.cpp:36` |
+| '…' is a private member of '…' | 5 | 12 | `CXX/class.access/p4.cpp:591` |
 | must be initialized by a constant expression | 5 | 11 | `SemaCXX/attr-weak.cpp:50` |
 | static assertion expression is not an integral constant expression | 5 | 10 | `CXX/class/class.compare/class.compare.default/p4.cpp:35` |
+| no matching function | 5 | 8 | `CXX/temp/temp.param/p8-cxx20.cpp:47` |
 | not an integral constant expression | 5 | 8 | `CXX/temp/temp.res/temp.dep/temp.dep.constexpr/p2.cpp:21` |
 | expected '…' | 5 | 6 | `CXX/basic/basic.lookup/basic.lookup.unqual/p3.cpp:61` |
 | use '…' keyword to treat '…' as a dependent template name | 4 | 42 | `CXX/drs/cwg17xx.cpp:14` |
+| '…' attribute takes at least N argument | 4 | 31 | `SemaCXX/annotate-type.cpp:43` |
 | call to '…' is ambiguous | 4 | 18 | `CXX/drs/cwg10xx.cpp:30` |
 | call to consteval function '…' is not a constant expression | 4 | 14 | `CXX/basic/basic.def.odr/p2-typeid.cpp:59` |
 | explicit instantiation declaration of '…' with internal linkage | 4 | 14 | `CXX/drs/cwg0xx.cpp:1137` |
 | assigning to '…' from incompatible type '…' | 4 | 13 | `SemaCXX/conditional-expr.cpp:429` |
 | ambiguous | 4 | 12 | `CXX/dcl.dcl/basic.namespace/namespace.udecl/p8-cxx0x.cpp:197` |
 | call to deleted constructor of '…' | 4 | 11 | `CXX/class/class.init/class.copy.elision/p3.cpp:141` |
-| unknown type name '…' | 4 | 10 | `CXX/drs/cwg1xx.cpp:100` |
 | call to deleted constructor | 4 | 8 | `CXX/class/class.init/class.copy.elision/p3.cpp:224` |
 | redefinition of '…' as different kind of symbol | 4 | 8 | `CXX/temp/temp.deduct.guide/p1.cpp:52` |
 | reference to '…' is ambiguous | 4 | 5 | `CXX/expr/expr.prim/expr.prim.req/type-requirement.cpp:145` |
@@ -169,10 +168,11 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | qualified reference to '…' is a constructor name rather than a type in this context | 3 | 47 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:30` |
 | '…' attribute takes no arguments | 3 | 28 | `SemaCXX/attr-reinitializes.cpp:14` |
 | recursive evaluation of default argument | 3 | 18 | `CXX/dcl.decl/dcl.init/dcl.init.ref/p5-cxx03-extra-copy.cpp:46` |
-| type '…' cannot be used prior to '…' because it has no members | 3 | 18 | `CXX/drs/cwg13xx.cpp:263` |
 | default template arguments for a function template are a C++N extension | 3 | 17 | `CXX/drs/cwg2xx.cpp:536` |
 | cannot cast private base class '…' to '…' | 3 | 16 | `CXX/conv/conv.mem/p4.cpp:22` |
 | qualified reference to '…' is a constructor name rather than a template name in this context | 3 | 16 | `CXX/basic/basic.lookup/basic.lookup.qual/class.qual/p2.cpp:51` |
+| '…' is a protected member of '…' | 3 | 15 | `CXX/drs/cwg1xx.cpp:952` |
+| call to immediate function '…' is not a constant expression | 3 | 12 | `SemaCXX/builtin-is-within-lifetime.cpp:235` |
 
 ## Rejects-valid cases
 
@@ -192,7 +192,6 @@ clang's expected text, normalized (quoted spans `'…'`, digits `N`).
 | `SemaCXX/builtin-std-move-nobuiltin.cpp` | RUN 3 -std=c++20 -verify=expected | static assertion failed due to requirement 'addr(std::move(builtin)) == &nobuiltin' |
 | `SemaCXX/builtin-std-move-nobuiltin.cpp` | RUN 4 -std=c++20 -verify=expected | static assertion failed due to requirement 'addr(std::move(builtin)) == &nobuiltin' |
 | `SemaCXX/builtins-overflow.cpp` | RUN 1 -std=c++17 -verify=expected | constant expression evaluates to -126 which cannot be narrowed to type 'char' |
-| `SemaCXX/constexpr-duffs-device.cpp` | RUN 1 -std=c++1y -verify=expected | static assertion expression is not an integral constant expression |
 | `SemaCXX/cxx2b-deducing-this-constexpr.cpp` | RUN 1 -std=c++2b -verify=expected | binding reference of type 'MoveMe' to value of type 'const MoveMe' drops 'const' qualifier |
 | `SemaCXX/goto2.cpp` | RUN 1 -std=c++17 -verify=expected | unknown type name '__label__' |
 | `SemaCXX/libstdcxx_format_kind_hack.cpp` | RUN 1 -std=c++23 -verify=expected | variable template 'format_kind' declared with deduced type 'const auto' cannot appear in its own initializer |
@@ -238,12 +237,12 @@ None.
 | '…' (the floating-point environment) is not supported yet | 1 | 1 |
 | '…' without parentheses is not supported yet | 1 | 1 |
 | a cast calling a deleted constructor is not supported yet | 1 | 1 |
-| a qualified destructor name with a template-id is not supported yet | 1 | 1 |
 | braced-init-list arguments is not supported yet | 1 | 1 |
 | deduction guides here is not supported yet | 1 | 1 |
 | language linkage "bogus" is not supported yet | 1 | 1 |
 | pointer to member of reference type is not supported yet | 1 | 1 |
 | pure virtual friend functions is not supported yet | 1 | 1 |
+| range-based for over a variable length array is not supported yet | 1 | 1 |
 
 ## Skipped configurations
 
@@ -359,12 +358,18 @@ against clang 19 and clang 22) and one follow-up row in
 [BACKLOG.md](../BACKLOG.md) with origin WP-912. Paths below are relative to
 `tests/conformance/`.
 
-The generated tables above are from a later run (WP-1017, after items 2-6
-and 9-12 were fixed; WP-1015 fixed 2-6): accepts-invalid fell from 89 to 68
-files and from 110 to 80 cases; missed `expected-error` lines fell from
-4930 to 4276 (4072 after WP-946 and WP-1054; WP-1078 regenerated the tables at 3900). Rejects-valid fell from 47 to 28 cases through fixes from
-other work packages (WP-958 and earlier); the driver now skips 83 cases
-with clang flags it does not know, so 418 no-diagnostics cases run.
+The generated tables above are from the first 1.0 release candidate
+(kiln `e6199e693`, 2026-11-10; the final release candidate `ae54fd2fa`
+differs from it only by WP-1242 to WP-1246), after items 2-6 and 9-12
+were fixed. Against this triage run, accepts-invalid fell from 89 to 57 files (7.1% to 4.6%)
+and from 110 to 68 cases; missed `expected-error` lines fell from 4930 to
+3384 (17.6% to 12.1%); rejects-valid fell from 47 to 26 cases (11.2% to
+6.2%). There were 0 crashes, timeouts or out-of-memory results: 2767 of
+the 2850 cases ran, and the driver skips 83 cases with clang flags it does
+not know. Intermediate runs: WP-1017 (after WP-1015 fixed 2-6) had 68
+files, 80 cases and 4276 lines; WP-946 and WP-1054 brought the lines to
+4072, and WP-1078 regenerated the tables at 3900. The rejects-valid fall
+came from fixes in other work packages (WP-958 and earlier).
 
 ### Accepts invalid code
 
@@ -475,8 +480,7 @@ with clang flags it does not know, so 418 no-diagnostics cases run.
    (expr.const unchanged at 5 of 78; constant-expression* 149 to 99 of
    1150). The past-the-end pointer identity also removes eight false
    rejections in `constant-expression-cxx11.cpp` (`pb3a`, `pd3n`, `pd9n`,
-   `pd0n`, ...), so these numbers are not reflected in the totals above
-   until the next full run.
+   `pd0n`, ...), and the totals above include these fixes.
 8. **Clang attribute checks** (`unavailable` 24, argument counts 33 + 28 + 26,
    `require_constant_initialization`, `annotate`, `carries_dependency` on a
    redeclaration; [dcl.attr.depend]/2). Most of these are the

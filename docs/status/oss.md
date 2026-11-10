@@ -64,14 +64,14 @@ The loop:
 | `abseil` | 2 | `20260107.1` | tests at parity | not run |
 | `benchmark` | 2 | `v1.9.5` | tests at parity | not run |
 | `cereal` | 2 | `v1.3.2` | tests at parity | not run |
-| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset) | not run |
+| `eigen` | 2 | `3.4.1` | tests at parity (132-target subset; 539/539 at 1.0) | not run |
 | `entt` | 2 | `v3.15.0` | tests at parity | not run |
-| `glog` | 2 | `v0.7.1` | tests at parity | not run |
+| `glog` | 2 | `v0.7.1` | tests at parity (22/24 under both at 1.0: environment) | not run |
 | `re2` | 2 | `2025-11-05` | tests at parity | not run |
-| `simdjson` | 2 | `v4.2.4` | blocked (tests 116/117 vs clang 117/117) | not run |
+| `simdjson` | 2 | `v4.2.4` | tests at parity (117/117 at 1.0) | not run |
 | `taskflow` | 2 | `v3.10.0` | tests at parity | not run |
 | `yaml_cpp` | 2 | `yaml-cpp-0.9.0` | tests at parity | not run |
-| `folly` | 3 | `v2026.10.26.00` | blocked (tests 3767/3773 vs clang 3773; `[[gnu::ifunc]]`/alias codegen) | not run |
+| `folly` | 3 | `v2026.10.26.00` | tests at parity (3772/3773 under both at 1.0) | not run |
 | `leveldb` | 3 | `1.23` | tests at parity | not run |
 | `llvm_project` | 3 | `llvmorg-19.1.7` | tests at parity | not run |
 | `protobuf` | 3 | `v33.1` | tests at parity | not run |
@@ -79,12 +79,12 @@ The loop:
 | `bitcoin_core` | 4 | `v32.1` | blocked (tests 357/357 vs clang 357/358; parity by the functional tests, `oss/bitcoin_core.md`) | not run |
 | `boost_compiled` | 4 | `boost-1.90.0` | blocked (tests 1326/1327 vs clang 1327/1368) | not run |
 | `boost_heavy` | 4 | `boost-1.90.0` | tests at parity | not run |
-| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802) | not run |
+| `boost_meta` | 4 | `boost-1.90.0` | control failures and row 14 only (WP-802; 2235/2253 TUs at 1.0) | not run |
 | `cmake_app` | 4 | `v4.4.5` | blocked (tests 689/714 vs clang 690/714; the 1 differs under reruns, parity, `oss/cmake_app.md`) | not run |
 | `ctre` | 4 | `v3.11.0` | tests at parity | not run |
 | `daw_json_link` | 4 | `v3.38.1` | tests at parity | not run |
 | `duckdb` | 4 | `v1.5.6` | tests at parity | not run |
-| `folly_coro` | 4 | `v2026.10.26.00` | blocked (1 cluster) | not run |
+| `folly_coro` | 4 | `v2026.10.26.00` | tests at parity (616/618 under both at 1.0) | not run |
 | `glaze` | 4 | `v9.1.0` | tests at parity | not run |
 | `grpc` | 4 | `v1.85.1` | tests at parity | not run |
 | `libunifex` | 4 | `v0.4.0` | tests at parity | not run |
@@ -92,13 +92,18 @@ The loop:
 | `llvm_full` | 4 | `llvmorg-19.1.7` | tests at parity (check-llvm) | not run |
 | `llvm_selfhost` | 4 | `llvmorg-19.1.7` | tests at parity (stage 2: check-clang, check-lld; stage-2/stage-3 IR identical; [details](oss/llvm_selfhost.md)) | not run |
 | `mp_units` | 4 | `v2.5.0` | tests at parity | not run |
-| `onetbb` | 4 | `v2022.3.0` | tests at parity | not run |
+| `onetbb` | 4 | `v2022.3.0` | tests at parity (139/139 at 1.0, C driver clang-22) | not run |
 | `opencv` | 4 | `4.12.0` | tests at parity | not run |
-| `reflect_cpp` | 4 | `v0.27.1` | tests at parity | not run |
+| `reflect_cpp` | 4 | `v0.27.1` | tests at parity (484/484 under both at 1.0) | not run |
 | `scnlib` | 4 | `v4.0.1` | tests at parity | not run |
 | `stdexec` | 4 | `nvhpc-26.05` | tests at parity | not run |
 | `z3` | 4 | `z3-4.15.8` | tests at parity | not run |
 <!-- /oss:projects -->
+
+"at 1.0" is the 1.0 release run (2026-11-09/10), recorded by hand in
+[release-1.0.md](release-1.0.md) "(d)" with every project's numbers.
+The sections under "Results" are the earlier runs that `--update` wrote,
+apart from the 1.0 notes at the end of a few of them.
 
 ## Constexpr performance (WP-792)
 
@@ -393,6 +398,8 @@ Failure clusters (kiln): none.
 Failure clusters (kiln): none.
 
 kiln test run: `96% tests passed, 1 tests failed out of 24`
+
+At 1.0 (`8c18a98ca`): 22/24 under both, 23/23 TUs; `logging` and `symbolize` fail under both (the environment).
 <!-- /oss:glog -->
 
 <!-- oss:taskflow -->
@@ -453,6 +460,8 @@ A 132-test subset (539 TUs). The link cluster is the class-template
 it, all 539 tests pass (WP-709, docs/status/oss/eigen.md).
 
 With the WP-686 allocation fixes now on main (#324), the 4 targets that failed to link on the WP-709 branch build and pass: 539/539 tests, at parity with clang-19.
+
+At 1.0 (`44430ce4b`): 539/539 TUs, 539/539 links, 539/539 tests, as clang.
 <!-- /oss:eigen -->
 
 <!-- oss:leveldb -->
@@ -714,6 +723,8 @@ geomean kiln/clang-19 time **0.91x**, RSS **0.39x**; total 804 s vs 884 s; peak 
 | `$KILN/.oss/src/reflect_cpp/tests/cli/test_wide_char.cpp` | 4.8 | 4.4 | 0.92 | 326 | 127 | 0.39 |
 
 TUs over 1.2x on time or RSS: 0 of the 315 that take clang-19 at least 0.5 s.
+
+At 1.0 (`44430ce4b`): 326/0 TUs, 484/484 tests, as clang (the project's test selection grew since this run).
 <!-- /oss:reflect_cpp -->
 
 <!-- oss:boost_meta -->
@@ -783,6 +794,8 @@ Failure clusters (kiln, WP-787 final): 16.
    - repro: `cd $KILN/.oss/build/boost_meta/kiln && kiln++ -I$KILN/.oss/src/boost/libs/accumulators/include -I$KILN/.oss/src/boost/libs/algorithm/include -I$KILN/.oss/src/boost/libs/align/include -I$KILN/.oss/src/boost/libs/any/include -I$KILN/.oss/src/boost/libs/array/include -I$KILN/.oss/src/boost/libs/asio/include -I$KILN/.oss/src/boost/libs/assert/include -I$KILN/.oss/src/boost/libs/assign/include -I$KILN/.oss/src/boost/libs/atomic/include -I$KILN/.oss/src/boost/libs/beast/include -I$KILN/.oss/src/boost/libs/bimap/include -I$KILN/.oss/src/boost/libs/bind/include -I$KILN/.oss/src/boost/libs/bloom/include -I$KILN/.oss/src/boost/libs/callable_traits/include -I$KILN/.oss/src/boost/libs/charconv/include -I$KILN/.oss/src/boost/libs/chrono/include -I$KILN/.oss/src/boost/libs/circular_buffer/include -I$KILN/.oss/src/boost/libs/cobalt/include -I$KILN/.oss/src/boost/libs/compat/include -I$KILN/.oss/src/boost/libs/compute/include -I$KILN/.oss/src/boost/libs/concept_check/include -I$KILN/.oss/src/boost/libs/config/include -I$KILN/.oss/src/boost/libs/container/include -I$KILN/.oss/src/boost/libs/container_hash/include -I$KILN/.oss/src/boost/libs/context/include -I$KILN/.oss/src/boost/libs/contract/include -I$KILN/.oss/src/boost/libs/conversion/include -I$KILN/.oss/src/boost/libs/convert/include -I$KILN/.oss/src/boost/libs/core/include -I$KILN/.oss/src/boost/libs/coroutine/include -I$KILN/.oss/src/boost/libs/coroutine2/include -I$KILN/.oss/src/boost/libs/crc/include -I$KILN/.oss/src/boost/libs/date_time/include -I$KILN/.oss/src/boost/libs/describe/include -I$KILN/.oss/src/boost/libs/detail/include -I$KILN/.oss/src/boost/libs/dll/include -I$KILN/.oss/src/boost/libs/dynamic_bitset/include -I$KILN/.oss/src/boost/libs/endian/include -I$KILN/.oss/src/boost/libs/exception/include -I$KILN/.oss/src/boost/libs/fiber/include -I$KILN/.oss/src/boost/libs/filesystem/include -I$KILN/.oss/src/boost/libs/flyweight/include -I$KILN/.oss/src/boost/libs/foreach/include -I$KILN/.oss/src/boost/libs/format/include -I$KILN/.oss/src/boost/libs/function/include -I$KILN/.oss/src/boost/libs/function_types/include -I$KILN/.oss/src/boost/libs/functional/include -I$KILN/.oss/src/boost/libs/fusion/include -I$KILN/.oss/src/boost/libs/geometry/include -I$KILN/.oss/src/boost/libs/gil/include -I$KILN/.oss/src/boost/libs/graph/include -I$KILN/.oss/src/boost/libs/graph_parallel/include -I$KILN/.oss/src/boost/libs/hana/include -I$KILN/.oss/src/boost/libs/hash2/include -I$KILN/.oss/src/boost/libs/headers/include -I$KILN/.oss/src/boost/libs/heap/include -I$KILN/.oss/src/boost/libs/histogram/include -I$KILN/.oss/src/boost/libs/hof/include -I$KILN/.oss/src/boost/libs/icl/include -I$KILN/.oss/src/boost/libs/integer/include -I$KILN/.oss/src/boost/libs/interprocess/include -I$KILN/.oss/src/boost/libs/intrusive/include -I$KILN/.oss/src/boost/libs/io/include -I$KILN/.oss/src/boost/libs/iostreams/include -I$KILN/.oss/src/boost/libs/iterator/include -I$KILN/.oss/src/boost/libs/json/include -I$KILN/.oss/src/boost/libs/lambda/include -I$KILN/.oss/src/boost/libs/lambda2/include -I$KILN/.oss/src/boost/libs/leaf/include -I$KILN/.oss/src/boost/libs/lexical_cast/include -I$KILN/.oss/src/boost/libs/local_function/include -I$KILN/.oss/src/boost/libs/locale/include -I$KILN/.oss/src/boost/libs/lockfree/include -I$KILN/.oss/src/boost/libs/log/include -I$KILN/.oss/src/boost/libs/logic/include -I$KILN/.oss/src/boost/libs/math/include -I$KILN/.oss/src/boost/libs/metaparse/include -I$KILN/.oss/src/boost/libs/move/include -I$KILN/.oss/src/boost/libs/mp11/include -I$KILN/.oss/src/boost/libs/mpi/include -I$KILN/.oss/src/boost/libs/mpl/include -I$KILN/.oss/src/boost/libs/mqtt5/include -I$KILN/.oss/src/boost/libs/msm/include -I$KILN/.oss/src/boost/libs/multi_array/include -I$KILN/.oss/src/boost/libs/multi_index/include -I$KILN/.oss/src/boost/libs/multiprecision/include -I$KILN/.oss/src/boost/libs/mysql/include -I$KILN/.oss/src/boost/libs/nowide/include -I$KILN/.oss/src/boost/libs/numeric/conversion/include -I$KILN/.oss/src/boost/libs/numeric/interval/include -I$KILN/.oss/src/boost/libs/numeric/odeint/include -I$KILN/.oss/src/boost/libs/numeric/ublas/include -I$KILN/.oss/src/boost/libs/openmethod/include -I$KILN/.oss/src/boost/libs/optional/include -I$KILN/.oss/src/boost/libs/outcome/include -I$KILN/.oss/src/boost/libs/parameter/include -I$KILN/.oss/src/boost/libs/parameter_python/include -I$KILN/.oss/src/boost/libs/parser/include -I$KILN/.oss/src/boost/libs/pfr/include -I$KILN/.oss/src/boost/libs/phoenix/include -I$KILN/.oss/src/boost/libs/poly_collection/include -I$KILN/.oss/src/boost/libs/polygon/include -I$KILN/.oss/src/boost/libs/pool/include -I$KILN/.oss/src/boost/libs/predef/include -I$KILN/.oss/src/boost/libs/preprocessor/include -I$KILN/.oss/src/boost/libs/process/include -I$KILN/.oss/src/boost/libs/program_options/include -I$KILN/.oss/src/boost/libs/property_map/include -I$KILN/.oss/src/boost/libs/property_map_parallel/include -I$KILN/.oss/src/boost/libs/property_tree/include -I$KILN/.oss/src/boost/libs/proto/include -I$KILN/.oss/src/boost/libs/ptr_container/include -I$KILN/.oss/src/boost/libs/python/include -I$KILN/.oss/src/boost/libs/qvm/include -I$KILN/.oss/src/boost/libs/random/include -I$KILN/.oss/src/boost/libs/range/include -I$KILN/.oss/src/boost/libs/ratio/include -I$KILN/.oss/src/boost/libs/rational/include -I$KILN/.oss/src/boost/libs/redis/include -I$KILN/.oss/src/boost/libs/regex/include -I$KILN/.oss/src/boost/libs/safe_numerics/include -I$KILN/.oss/src/boost/libs/scope/include -I$KILN/.oss/src/boost/libs/scope_exit/include -I$KILN/.oss/src/boost/libs/serialization/include -I$KILN/.oss/src/boost/libs/signals2/include -I$KILN/.oss/src/boost/libs/smart_ptr/include -I$KILN/.oss/src/boost/libs/sort/include -I$KILN/.oss/src/boost/libs/spirit/include -I$KILN/.oss/src/boost/libs/stacktrace/include -I$KILN/.oss/src/boost/libs/statechart/include -I$KILN/.oss/src/boost/libs/static_assert/include -I$KILN/.oss/src/boost/libs/static_string/include -I$KILN/.oss/src/boost/libs/stl_interfaces/include -I$KILN/.oss/src/boost/libs/system/include -I$KILN/.oss/src/boost/libs/test/include -I$KILN/.oss/src/boost/libs/thread/include -I$KILN/.oss/src/boost/libs/throw_exception/include -I$KILN/.oss/src/boost/libs/timer/include -I$KILN/.oss/src/boost/libs/tokenizer/include -I$KILN/.oss/src/boost/libs/tti/include -I$KILN/.oss/src/boost/libs/tuple/include -I$KILN/.oss/src/boost/libs/type_erasure/include -I$KILN/.oss/src/boost/libs/type_index/include -I$KILN/.oss/src/boost/libs/type_traits/include -I$KILN/.oss/src/boost/libs/typeof/include -I$KILN/.oss/src/boost/libs/units/include -I$KILN/.oss/src/boost/libs/unordered/include -I$KILN/.oss/src/boost/libs/url/include -I$KILN/.oss/src/boost/libs/utility/include -I$KILN/.oss/src/boost/libs/uuid/include -I$KILN/.oss/src/boost/libs/variant/include -I$KILN/.oss/src/boost/libs/variant2/include -I$KILN/.oss/src/boost/libs/vmd/include -I$KILN/.oss/src/boost/libs/wave/include -I$KILN/.oss/src/boost/libs/winapi/include -I$KILN/.oss/src/boost/libs/xpressive/include -I$KILN/.oss/src/boost/libs/yap/include -O3 -DNDEBUG -std=gnu++20 -fvisibility=hidden -fvisibility-inlines-hidden -MD -MT CMakeFiles/hof-reverse_fold.dir/libs/hof/test/reverse_fold.cpp.o -MF CMakeFiles/hof-reverse_fold.dir/libs/hof/test/reverse_fold.cpp.o.d -o CMakeFiles/hof-reverse_fold.dir/libs/hof/test/reverse_fold.cpp.o -c $KILN/.oss/src/boost/libs/hof/test/reverse_fold.cpp`
 
 kiln test run: `99% tests passed, 28 tests failed out of 2087`
+
+At 1.0 (`44430ce4b`): 2235/18 TUs (clang 2240/13); the 5 kiln-only TUs are row 14. ctest started 2007 of the 2087 tests (2002 passed, the 5 not run are those TUs); the 80 `RUN_SERIAL` compile-fail and link-fail tests it did not start were re-run alone, 79/79 passed (WP-1238). clang 2087/2087.
 <!-- /oss:boost_meta -->
 
 <!-- oss:folly_coro -->
@@ -805,6 +818,8 @@ Failure clusters (kiln): 1.
    - repro: `cd $KILN/.oss/build/folly_coro/kiln && kiln++ -O3 -DNDEBUG -g -Wall -Wextra -O3 -Xlinker --dependency-file=CMakeFiles/coro_safe_AsyncClosureTest.dir/link.d CMakeFiles/coro_safe_AsyncClosureTest.dir/folly/coro/safe/test/AsyncClosureTest.cpp.o -o coro_safe_AsyncClosureTest libfolly_test_support.a folly/libfollybenchmark.a folly/libfolly_benchmark_util.a folly/detail/libfolly_detail_perf_scoped.a folly/system/libfolly_system_pid.a folly/testing/libfolly_testing_test_util.a folly/io/libfolly_io_fs_util.a folly/ext/libfolly_ext_test_ext.a folly/libfolly_subprocess.a folly/io/libfolly_io_iobuf.a folly/memory/libfolly_memory_sanitize_address.a folly/logging/libfolly_logging_logging.a folly/libfolly_file.a folly/libfolly_exception_wrapper.a folly/portability/libfolly_portability_filesystem.a folly/logging/libfolly_logging_log_handler.a folly/logging/libfolly_logging_log_level.a folly/logging/libfolly_logging_log_name.a folly/logging/libfolly_logging_rate_limiter.a folly/system/libfolly_system_thread_name.a folly/portability/libfolly_portability_dirent.a folly/system/libfolly_system_shell.a folly/libfolly_file_util.a folly/portability/libfolly_portability_sys_uio.a folly/portability/libfolly_portability_stdlib.a folly/portability/libfolly_portability_sys_file.a folly/json/libfolly_json_dynamic.a folly/libfolly_format.a folly/json/libfolly_json_json_pointer.a folly/libfolly_unicode.a folly/libfolly_random.a folly/libfolly_singleton_thread_local.a folly/detail/libfolly_detail_thread_local_detail.a folly/container/detail/libfolly_container_detail_f14_hash_detail.a folly/detail/libfolly_detail_unique_instance.a folly/synchronization/detail/libfolly_synchronization_detail_sleeper.a /usr/lib/aarch64-linux-gnu/libglog.so folly/detail/libfolly_detail_thread_local_globals.a folly/detail/libfolly_detail_static_singleton_manager.a folly/memory/libfolly_memory_reentrant_allocator.a folly/portability/libfolly_portability_sys_mman.a folly/memory/libfolly_memory_sanitize_leak.a folly/synchronization/libfolly_synchronization_atomic_notification.a folly/libfolly_shared_mutex.a folly/portability/libfolly_portability_sys_resource.a folly/portability/libfolly_portability_sys_time.a folly/concurrency/libfolly_concurrency_cache_locality.a folly/portability/libfolly_portability_fcntl.a folly/portability/libfolly_portability_sys_stat.a folly/system/libfolly_system_thread_id.a folly/portability/libfolly_portability_unistd.a folly/portability/libfolly_portability_sockets.a folly/net/libfolly_net_net_ops.a folly/net/detail/libfolly_net_detail_socket_file_descriptor_map.a folly/system/libfolly_system_at_fork.a folly/synchronization/libfolly_synchronization_sanitize_thread.a folly/portability/libfolly_portability_pthread.a folly/portability/libfolly_portability_sched.a folly/portability/libfolly_portability_time.a folly/detail/libfolly_detail_futex.a folly/synchronization/libfolly_synchronization_parking_lot.a folly/libfolly_string.a folly/libfolly_scope_guard.a folly/lang/libfolly_lang_uncaught_exceptions.a folly/libfolly_conv.a folly/detail/libfolly_detail_simple_simd_string_utils.a folly/detail/libfolly_detail_range_simd.a folly/detail/libfolly_detail_range_sse42.a folly/external/nvidia/detail/libfolly_external_nvidia_detail_range_sve2.a folly/detail/libfolly_detail_range_common.a folly/detail/libfolly_detail_sse.a folly/detail/libfolly_detail_avx2.a folly/libfolly_exception_string.a folly/libfolly_demangle.a folly/hash/libfolly_hash_spooky_hash_v2.a folly/lang/libfolly_lang_c_string.a folly/hash/libfolly_hash_spooky_hash_v1.a folly/memory/libfolly_memory_malloc.a folly/lang/libfolly_lang_exception.a folly/lang/libfolly_lang_safe_assert.a folly/detail/libfolly_detail_file_util_detail.a folly/lang/libfolly_lang_to_ascii.a folly/portability/libfolly_portability_builtins.a folly/portability/libfolly_portability_malloc.a folly/memory/detail/libfolly_memory_detail_malloc_impl.a libfolly.a /usr/lib/aarch64-linux-gnu/libfmt.so.10.1.0 /usr/lib/aarch64-linux-gnu/libevent.so /usr/lib/aarch64-linux-gnu/libz.so /usr/lib/aarch64-linux-gnu/libssl.so /usr/lib/aarch64-linux-gnu/libcrypto.so /usr/lib/aarch64-linux-gnu/libbz2.so /usr/lib/aarch64-linux-gnu/liblzma.so /usr/lib/aarch64-linux-gnu/liblz4.so /usr/lib/aarch64-linux-gnu/libzstd.so /usr/lib/aarch64-linux-gnu/libsnappy.so /usr/lib/aarch64-linux-gnu/libdwarf.so /usr/lib/aarch64-linux-gnu/libaio.so /usr/lib/aarch64-linux-gnu/liburing.so -ldl /usr/lib/aarch64-linux-gnu/libboost_regex.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_program_options.so.1.83.0 /usr/lib/aarch64-linux-gnu/libsodium.so /usr/lib/aarch64-linux-gnu/libboost_context.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_filesystem.so.1.83.0 /usr/lib/aarch64-linux-gnu/libboost_atomic.so.1.83.0 lib/libgmock_main.a lib/libgmock.a lib/libgtest.a /usr/lib/aarch64-linux-gnu/libglog.so /usr/lib/aarch64-linux-gnu/libgflags.so.2.2.2 /usr/lib/aarch64-linux-gnu/libunwind.so`
 
 kiln test run: `94% tests passed, 35 tests failed out of 618`
+
+At 1.0 (`8c18a98ca`): 616/618, as clang; the same 2 tests (`AsyncStackMetadataTest.MetadataTraceHasNoAnnotationsWithoutScope`, `FutureUtilTest.ToTaskInterruptOnCancelFutureWithCancellation`) fail under both.
 <!-- /oss:folly_coro -->
 
 <!-- oss:libunifex -->
@@ -889,6 +904,8 @@ Failure clusters (kiln): none.
 | peak TU RSS | 835 MB | 915 MB |
 
 Failure clusters (kiln): none.
+
+At 1.0 (the first RC `e6199e693`, C driver clang-22 for the `-flto` link, WP-1231): 184/0 TUs, 145/0 links, 139/139 tests, as clang.
 <!-- /oss:onetbb -->
 
 <!-- oss:opencv -->

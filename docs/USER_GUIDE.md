@@ -625,6 +625,13 @@ See [COMPATIBILITY.md](COMPATIBILITY.md#coverage-and-profiling).
   language and macro behaviour follow `-fclang-compat`, which defaults to
   22 whichever LLVM is used. LTO (`-flto`, `-flto=thin`) works with the
   selected LLVM.
+- **LTO objects:** with `-flto`, kiln's object files are LLVM bitcode of
+  the selected LLVM (22 when it is installed). Link them with the same
+  LLVM's driver, linker plugin or `lld`. A target linked by an older
+  driver, for example a C library linked by clang-19, fails with
+  `Unknown attribute kind ... (Producer: 'LLVM22...' Reader: 'LLVM 19...')`.
+  clang has the same rule: bitcode is read only by the same or a newer
+  LLVM. See [KNOWN_ISSUES.md](KNOWN_ISSUES.md#build-systems).
 
 ## Crashes
 

@@ -8,7 +8,7 @@
 //! declaration of a dependent context reflects the pattern until
 //! substitution remaps it (`templ/subst/exprs.rs`).
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclFlags, DeclKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::reflect::Reflectee;
@@ -88,6 +88,7 @@ impl Sema<'_, '_> {
             None => s.lookup_name_dn(name, k),
         };
         let mut found = lookup(self, LookupKind::Ordinary);
+        found = self.conversion_template_fallback(found, qual.map(|q| q.ctx), name, name_loc);
         if found.decls.is_empty() && name.as_ident().is_some() {
             found = lookup(self, LookupKind::Nested);
         }
@@ -118,10 +119,37 @@ impl Sema<'_, '_> {
                 if !self.check_found_access(&found, name_loc) {
                     return self.recover(info, &[], loc);
                 }
+                if self.reflect_auto_var_in_own_init(d, name_loc) {
+                    return self.recover(info, &[], loc);
+                }
                 self.reflect_entity(d, name_loc, loc, end)
             }
             _ => self.reflect_overload_set(name_loc, loc),
         }
+    }
+
+    /// `^^v` inside the initializer of `v`, a variable declared with a
+    /// placeholder type: the id-expression names a variable whose type is
+    /// not yet deduced ([dcl.spec.auto.general]/11), as in `auto v = v;`
+    /// (GCC 16.1: "use of 'v' before deduction of 'auto'"). Diagnosed
+    /// here, so no reflection of a variable with an undeduced type
+    /// reaches a query (WP-1243).
+    fn reflect_auto_var_in_own_init(&mut self, d: DeclId, loc: Loc) -> bool {
+        let n = *self.ast.decls.get(d);
+        let Some(t) = n.ty() else { return false };
+        if n.kind() != DeclKind::Var
+            || n.has(DeclFlags::INVALID)
+            || !self.contains_undeduced_auto(t)
+        {
+            return false;
+        }
+        let msg = self
+            .diag(DiagId::sema_auto_var_in_own_initializer, loc)
+            .arg(self.decl_name(d))
+            .arg(self.ty_arg(t));
+        self.emit(msg);
+        self.ast.decls.set_flags(d, DeclFlags::INVALID);
+        true
     }
 
     /// `r`, the instantiated `^^T::name` (no `typename`): a name that was
@@ -299,9 +327,13 @@ impl Sema<'_, '_> {
                 let d = self.ast.exprs.decl(e);
                 self.reflect_entity(d, name_loc, loc, end)
             }
+            // `^^ns::f<T>` in a template: a dependent `CXXReflectExpr`
+            // over the template-id, which substitution resolves to its
+            // single specialization (spec/reflection-repr.md §2).
             ExprKind::UnresolvedLookupExpr if self.expr_is_value_dependent(e) => {
-                self.unsupported("reflection of a dependent template-id", name_loc);
-                self.recover(info, &[], loc)
+                let r = self.builder().dependent_reflect_expr(e, info, loc, end);
+                self.note_consteval_only(r);
+                r
             }
             ExprKind::UnresolvedLookupExpr => self.reflect_overload_set(name_loc, loc),
             _ => self.reflect_bad_operand(name_loc, loc),

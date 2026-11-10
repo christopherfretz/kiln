@@ -77,7 +77,19 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   member) is not members-of-representable and is left out (P2996R13
   [meta.reflection.member.queries]/2; GCC 16.1 agrees;
   `meta.reflection.member.queries/members-of-unsatisfied-constraints.cpp`). The list is
-  built once and never changes.
+  built once and never changes, apart from the next rule.
+- **Undeduced placeholder types** (classes and namespaces; WP-1243). A
+  function or variable whose type still contains an undeduced
+  placeholder type (`auto spin();` with no definition yet) is not
+  members-of-representable ([meta.reflection.member.queries]/3) and is
+  left out, as in GCC 16.1; a member template and a member defined in
+  its class (`auto inl() { return 1; }`) are listed. Its entry carries
+  the `member_kind::PLACEHOLDER` bit, so every query re-checks it: once
+  a definition before the evaluation point deduces the type it is
+  listed, in its declaration position. `members_of` is `PointDependent`,
+  so no answer from before the definition is memoized for after
+  (spec/reflection-queries.md §1;
+  `meta.reflection.member.queries/members-of-undeduced-placeholder.cpp`).
 - **Filters.** `static_data_members_of`, `nonstatic_data_members_of` and
   `subobjects_of` (bases then non-static data members) filter the same
   list by kind bit (`member_kind`). `bases_of` is its own list of

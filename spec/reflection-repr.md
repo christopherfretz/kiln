@@ -76,7 +76,17 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
   specialization it selects without a target ([over.over]). Defaulted
   template arguments count: with `template <class T, class U = long>
   void tf(T, U)` as the only `tf`, `^^tf<int> == ^^tf<int, long>`; two
-  viable templates are an overload set.
+  viable templates are an overload set. The template-name may be an
+  operator-function-id or a literal-operator-id ([temp.names]/1), with
+  or without a nested-name-specifier: `^^ns::operator== <int>`,
+  `^^operator+<long>`, `^^ns::operator""_x<'1','2'>`,
+  `^^S::operator()<int>` reflect the specialization, as GCC 16.1 does
+  (`display_string_of` gives `bool ns::operator==(const A&, T) [with T
+  = int]`; WP-1246, `expr.reflect/operator-template-ids.cpp`). A
+  template-id whose arguments are dependent (`^^ns::plain<T>`,
+  `^^operator""_x<C...>`) is a dependent `CXXReflectExpr` (tag 12, `a`
+  the `UnresolvedLookupExpr`); substitution re-selects the
+  specialization with the substituted arguments.
 - `^^id-expression` (/7): `Decl` of the entity it names after lookup — a
   variable (a `constexpr` one reflects the variable, not its value), a
   function, a static or non-static data member, a member function, an
@@ -85,7 +95,14 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
   qualified (`^^S::operator=`, `^^S::operator()`, `^^S::operator int`,
   `^^S::operator<=>`, a namespace-scope `^^operator+`): `Decl` of the
   function when the name finds exactly one; `has_identifier` is false and
-  `identifier_of` fails ("'R' has no identifier").
+  `identifier_of` fails ("'R' has no identifier"). A conversion-function-id
+  that finds no non-template conversion function names the
+  specialization of the class's conversion function templates deduced
+  for its type ([temp.mem]/6, as `&S::operator int*` and a call
+  `S::operator int*()` name it, lookup only in the named class, as
+  clang's): with only `template <class T> operator T*()`,
+  `^^S::operator int*` is `Decl` of `operator T*<int>` (GCC 16.1
+  reflects the template; `expr.reflect/operator-template-ids-kiln.cpp`).
 - `^^S::~S` (a destructor name, /7): `Decl` of the
   destructor, the implicit one included (it is declared on demand). The
   type-name after `~` must name S; `^^S::~U` and a pseudo-destructor
@@ -93,6 +110,7 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
   destructor, like a constructor, has no type: `type_of` fails ("'R' has
   no type").
 - A dependent qualified name — `^^T::x`, `^^T::template m<U>`,
+  `^^T::template operator()<int>`,
   `^^typename T::type`, `^^typename T::template m<U>`, `^^ns::W<T>::x`,
   `^^T::operator=`, `^^T::operator int`, `^^T::~T`, nested
   (`^^T::template inner<U>::y`): the parser keeps the qualified-id as a

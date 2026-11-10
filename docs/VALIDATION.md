@@ -383,7 +383,7 @@ for libstdc++, because neither looks in `/usr/local`. Its
 image's `ld.so.conf` puts its libstdc++.so.6 first for every process; both
 are compatible with what Debian's GCC 14 builds. The first action step
 checks the GCC version and compiles a `<meta>` TU with it
-(docs/status/perf.md "WP-502: GCC 16.1 in CI" has the cost). The packages are
+(docs/status/perf-history.md "WP-502: GCC 16.1 in CI" has the cost). The packages are
 installed in the first step (`clang-19 llvm-19 lld-19 libc++-19-dev
 libc++abi-19-dev clang-22 llvm-22 lld-22`, plus `build-essential procps
 time`). `libc++-22-dev` conflicts with `libc++-19-dev`, so libc++ 22 is
@@ -456,7 +456,7 @@ aarch64-only `run` test (WP-239).
 
 Before WP-692 the whole gate ran serially in one job per architecture,
 18 minutes on aarch64 and 26 on x86-64; the fanned-out times and the
-per-job floor are in docs/status/perf.md "WP-692: CI fan-out". Locally,
+per-job floor are in docs/status/perf-history.md "WP-692: CI fan-out". Locally,
 `cargo xtask ci` is the same gate. Run
 it before pushing `main`, because Actions only reports after the push, and
 the local run is still the merge gate (docs/AGENTS.md rule 3).

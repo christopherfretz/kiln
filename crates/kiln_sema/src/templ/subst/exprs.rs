@@ -1440,6 +1440,15 @@ impl Substituter<'_, '_, '_> {
     /// `DependentScopeDeclRefExpr` keeps the `DeclName`).
     fn reflect_dependent_name(&mut self, r: ExprId, loc: Loc, end: Loc) -> SubstResult<ExprId> {
         let Some(e) = self.sema.ast.exprs.reflect_dependent_name(r) else { return Ok(r) };
+        // `^^ns::f<T>`, `^^operator==<T>`: the function template-id with
+        // its arguments substituted names one specialization
+        // ([over.over]/3), as a non-dependent one does.
+        if self.sema.ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr {
+            let name_loc = self.sema.ast.exprs.get(e).loc();
+            let x = self.callee(e)?;
+            let x = crate::templ::actions::TemplateIdRef::Overload(x);
+            return Ok(self.sema.act_on_reflect_template_id(x, name_loc, loc, end));
+        }
         let Some(nns) = NnsId::try_new(self.sema.ast.exprs.get(e).a()) else {
             return Err(SubstFail);
         };
@@ -1478,7 +1487,21 @@ impl Substituter<'_, '_, '_> {
         // specialization, as `^^C::m<args>` reflects it.
         if let Some(l) = targs {
             let Some(id) = name.as_ident() else {
-                return self.unimplemented("an operator function template-id", name_loc);
+                // `^^T::template operator()<int>`, `^^T::template
+                // operator""_x<'1'>`: an operator- or literal-operator-id
+                // template-id ([temp.names]/1) in the substituted class.
+                let ctx = self.nns_context(nns, begin)?;
+                let l = self.args(l, loc)?;
+                let args = self.sema.ast.types.args(l).to_vec();
+                let x =
+                    self.sema.act_on_operator_template_id(name, &args, name_loc, Some(ctx), false);
+                self.sema.set_template_id_begin(x, begin, name_loc);
+                self.sema.set_template_id_qualifier(x, nns);
+                let res = crate::templ::actions::TemplateIdRef::Overload(x);
+                let r = self.sema.act_on_reflect_template_id(res, name_loc, loc, end);
+                return Ok(self
+                    .sema
+                    .check_reflect_dependent_kind(r, ctx, name, true, name_loc, loc));
             };
             let t = self.member_template_named(nns, id, name_loc)?;
             let l = self.args(l, loc)?;

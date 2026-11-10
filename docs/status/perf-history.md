@@ -1,0 +1,854 @@
+# Performance history: measured by hand
+
+Per-work-package measurements made by hand before 1.0 (WP-313 to WP-1171,
+2026-11-02 to 2026-11-09), moved here verbatim from [perf.md](perf.md),
+which keeps the current results. Each section describes the tree and host
+of its own run, so its numbers are not the 1.0 release's.
+
+## Measured by hand
+
+Kept verbatim by every `--record` (spec/bench.md "Recording"); rows that
+the recorder cannot produce: debug builds, libc++ tests, before/after
+pairs. `/usr/bin/time` wall and max RSS, `-fsyntax-only`; instantiations
+from `-fkiln-instantiation-report`. Box shared with five other
+implementers, so walls are noisy (clang's varied 5.9-8.5 s across runs).
+
+### WP-483: CI time, GCC 16.1 reflection baselines, S1 scaling (2026-11-03)
+
+**CI time.** Per-step wall of the last main run before WP-483 (run
+41641461340, before WP-488), from the job logs:
+
+| Step | `check` (aarch64) | `check-x86_64` |
+|---|--:|--:|
+| Initialize containers (`debian:trixie` pull) | 5 s | 4 s |
+| Install git | 7 s | 5 s |
+| Checkout | 2 s | 3 s |
+| apt toolchain (clang 19/22, LLVM, lld, libc++) | 12 s | 12 s |
+| Rust toolchain + cache | 10 s | 12 s |
+| `xtask ci`: fmt, clippy | 24 s | 20 s |
+| `xtask ci`: cargo test | 264 s | 214 s |
+| `xtask ci`: clang 22 self-check | 64 s | 67 s |
+| `xtask ci`: kiln corpus | 160 s | 141 s |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | 3 s |
+| `--quick`: cargo test | 210 s | 178 s |
+| `--quick`: kiln corpus | 159 s | 140 s |
+| Job total | 15.6 min | 13.5 min |
+
+WP-483 adds no CI step. Its new xtask unit tests (gen-reflect
+determinism, the scaling gate, the GCC oracle and `--external` with the
+fake GCC) take 1.5 s together on the dev host and run in parallel with the
+other xtask tests inside the cargo test steps; `bench/reflect` is not in
+the corpus. The image stays `debian:trixie`: `gcc:16.1.0-trixie` exists
+(Docker Hub, 2026-08-10) but is 536.8 MB compressed on arm64 and
+560.1 MB on amd64 (GCC's layer 163.5 / 176.4 MB) against about 50 MB for
+`debian:trixie`. Downloading and decompressing the arm64 layers took 5.4 s
+on the dev host (about 1.55 GB unpacked); on a hosted runner, with the
+extraction to disk, that is an estimated 15-30 s against 4-5 s today, so
++10-25 s per job, while the preinstalled git, curl and build tools save
+about 5 s. GCC in the image costs more than it saves, so CI leaves
+`KILN_GCC` unset and `oracle: gcc` comparisons are skipped there
+(spec/harness.md "GCC oracle"). The PR run's per-step times are in the
+WP-483 handback.
+
+**GCC 16.1 on the reflection shapes.** `bench/reflect/` at the committed
+default N, and at the §3.8 sizes, one run each, `g++-16 -std=c++26
+-freflection -fsyntax-only`, `/usr/bin/time` wall and max RSS, dev host
+at a load average of about 11. kiln has no `<meta>` yet (every shape is
+`xfail(kiln)`), so there is no kiln column.
+
+| Shape | N | Wall | Max RSS | N (§3.8) | Wall | Max RSS |
+|---|--:|--:|--:|--:|--:|--:|
+| S1 | 100 | 0.82 s | 153560 KB | 2000 | 8.00 s | 1115956 KB |
+| S2 | 50 | 0.86 s | 197628 KB | 500 | 4.58 s | 1004692 KB |
+| S3 | 100 | 1.10 s | 176912 KB | 1000 | 7.27 s | 805852 KB |
+| S4 | 100 | 0.81 s | 152964 KB | 2000 | 7.15 s | 1113780 KB |
+| S5 | 1000 | 0.93 s | 152976 KB | 10000 | 4.74 s | 631608 KB |
+| S6 | 500 | 1.94 s | 437504 KB | 1000 | 3.26 s | 792796 KB |
+
+S6 at N=2000 took 6.23 s and 1483628 KB: GCC's memory grows by about
+0.7 MB per namespace member scanned 100 times, so the §3.8 N=5000 was not
+run (it would pass 3 GiB). S3 builds its 10N-member aggregate from 10
+chunks of N specs (`define_static_array`), because 10000
+`data_member_spec` calls in one evaluation exceed GCC's default
+`-fconstexpr-ops-limit` (33554432) and leave the class incomplete.
+
+**S1 scaling** (`cargo xtask bench --scaling s1`, spec/bench.md "Scaling
+sweeps"):
+
+| Compiler | N | Wall | Peak RSS | 4N wall | 4N peak RSS | 4N/N wall | 4N/N RSS | Gate |
+|---|--:|--:|--:|--:|--:|--:|--:|---|
+| GCC 16.1, `--runs 3` | 100 | 670 ms | 150.6 MiB | 1682 ms | 298.9 MiB | 2.51x | 1.98x | ok |
+| GCC 16.1, `--runs 1` | 500 | 2407 ms | 347.0 MiB | 8075 ms | 1089.7 MiB | 3.35x | 3.14x | ok |
+| kiln release | 100 | - | - | - | - | - | - | xfail (WP-478: `'meta' file not found`) |
+
+### WP-487: the `pp/headers` regression (2026-11-03)
+
+**Cause.** `git bisect run --first-parent 83ba262d0..3946da255` (657
+first-parent commits; release kiln++ per step; min of 3 `-E` runs of the
+entry without its libc++ includes, threshold 1.5 s) named `203242dcd`
+(PR #27, WP-234): every `#define`/`#undef` scanned the whole
+attribute-macro history once one attribute macro existed, and the entry's
+5120 passes each redefine two (`[[no_unique_address]]`, `[[likely]]`), so
+the scan was quadratic. Last good step 728-766 ms, first bad 2163-2204 ms
+on that half; the libc++-include half moved only 347 to 374 ms over the
+whole range (header search and include guards are not involved).
+
+**Fix.** An index from name to the live history entry
+(`Preprocessor::attr_live`, spec/pp.md "Performance obligations"). Same
+binaries, interleaved, min of 3, load 17-23:
+
+| `-E bench/pp/headers.cpp` | ms |
+|---|---|
+| kiln `83ba262d0` (the 2026-10-28 baseline, 866 ms then) | 1199-1276 |
+| kiln main `3946da255` (before) | 3180 |
+| kiln WP-487 (after) | 1290-1459 |
+| clang 19 | 783-933 |
+
+The recorder's numbers above (1199 ms, 1.50x clang) are the after state at
+load 22. Under callgrind an 80-pass reduction runs 148.6M instructions
+against 139.2M at `83ba262d0` and 152.8M before the fix; the remaining
++7% is spread over the lexer (`Lexer::next` +4.2M from PR #23 WP-143's
+comment recording changing its inlining) and +1.4M of startup, not one
+hotspot. `bench/pp/headers.cpp` now carries `budget-time: 1765` (1.5x the
+1176 ms median of the first post-fix recording), so `cargo xtask bench`
+fails, `--record` included, if it regresses past that.
+
+**Other `pp/*` rows.** None is over 1.5x clang: `pp/repetition` is 0.56x
+time and 1.12x memory, `pp/xmacro` 1.05x time and 1.37x memory (both
+re-recorded here, noisy at load 22).
+
+### WP-317: the 2026-11-03 re-recording
+
+The table above and every `bench/baselines/*.json` were re-recorded with a
+`release` kiln++ (thin LTO, 4 codegen units; spec/libcxx.md "Build
+profiles", WP-326) built from main `2c31e9f33`, on the whole corpus, at a
+1-minute load average of 11.3-12.6 (12:32-12:41 UTC; no quieter window
+came up that day). The four `oven` entries that were FAIL in the
+2026-10-28 recording (`sieve`, `sort`, `string`, `table`, the variants that
+include standard headers, `<array>`, `<algorithm>` or `<string>`, where the
+`-nohdr` ones do not) now compile, so no row fails. Entries under ~50 ms move by 2x with a load spike: `oven/fib`
+measured 39.6 ms in the recording and 16.3 ms in a rerun a minute later.
+`pp/headers` is not noise: kiln -E takes 2.4 s where the 2026-10-28
+baseline had 0.9 s (spread 0.4% over three reruns, output identical to
+clang's), a preprocessor regression in between: bisected and fixed by
+WP-487 (below).
+
+### WP-313: libc++ `experimental/simd` instantiation throughput (2026-11-02)
+
+`simd.class/simd_copy.pass.cpp` with the libc++ runner's flags
+(`-std=c++26 -stdlib=libc++ -D_LIBCPP_ENABLE_EXPERIMENTAL`). Before is
+main 65473881, after is the WP-313 branch. The fix: the type interner's
+FxHash left an elaborated type's second word out of its bucket bits (one
+probe chain per qualifier), and the per-frame memory meter summed every
+lookup overload set.
+
+| Compiler | Build | Before wall | Before max RSS | After wall | After max RSS | Instantiations (before = after) |
+|---|---|--:|--:|--:|--:|--:|
+| kiln | debug | 309.62 s | 412952 KB | 49.41 s | 411660 KB | 712899 |
+| kiln | release | 14.91 s | 406984 KB | 5.30 s | 407712 KB | 712899 |
+| clang 19 | release | 5.86 s | 845036 KB | 8.45 s (same box, same run) | 843432 KB | - |
+
+Instantiating (report total): release 9830.7 ms to 3974.1 ms, debug
+38903.2 ms after. `cargo xtask libcxx` on the test: compile timeout
+(120 s) before, pass after (74.5 s for compile, link and run, debug kiln).
+
+`bench/frontend/simd-generate.cpp` (the reduced reproducer, header-free,
+96852 instantiations, tracked by the recorder above):
+
+| Compiler | Build | Before wall | Before max RSS | After wall | After max RSS |
+|---|---|--:|--:|--:|--:|
+| kiln | debug | - | - | 5.95 s | 68004 KB |
+| kiln | release | 2.03 s | 62080 KB | 0.44 s | 61640 KB |
+| clang 19 | release | 0.92 s | 179672 KB | 0.92 s | 179672 KB |
+
+### WP-454: iterating expansion over a 100000-element `std::array` (2026-11-03)
+
+`tests/conformance/stmt.expand/iterating-large.cpp` (`-std=c++26`, kiln's
+bundled libc++). Before is the WP-454 branch with the `end - begin` fast
+path disabled (each element counted by a `begin + i != end` evaluation,
+capped at 2^20), after is the branch. clang 22 lacks P1306, so there is no
+clang row. The remaining time is the per-element instantiation of the body
+(linear in N).
+
+| Compiler | Build | Before wall | Before max RSS | After wall | After max RSS |
+|---|---|--:|--:|--:|--:|
+| kiln | debug | 12.14 s | 227992 KB | 11.38 s | 185644 KB |
+| kiln | harness (opt 3) | 1.22 s | 223976 KB | 0.99 s | 172416 KB |
+
+An earlier pair of debug runs gave 12.68 s before and 10.56 s after. A
+range of more than 2^20 library-iterator elements is now counted rather
+than rejected.
+
+### WP-467: iterating expansion over a user iterator (2026-11-03)
+
+`tests/stress/expansion-iterating-user-iterator.cpp`: 10000 elements, a
+class iterator with `+`, `!=` and unary `*` (not the `end - begin` fast
+path), `-fsyntax-only`, debug kiln, two runs each on the shared host.
+Before is WP-467's base (the count evaluates `begin + i != end` per i,
+then each element builds `begin + i` again), after builds element i's
+`__iter` once and the count tests `__iter != end`.
+
+| Build | Before wall | Before max RSS | After wall | After max RSS | Oven steps (line 26) |
+|---|--:|--:|--:|--:|--:|
+| debug | 3.74 s, 3.65 s | 44932 KB | 3.22 s, 2.85 s | 40736 KB | 80008 → 60008 |
+
+Per element, against a pointer iterator over the same data (fast path,
+`-fsyntax-only`, debug, 10000 elements of a two-range program): 2.84 s
+and 40744 KB against 1.09 s and 34248 KB, about 175 µs and 0.65 KB more
+per element. What remains is three operator overload resolutions per
+element (`__begin + i`, `__iter != __end`, `*__iter`, each with clang's
+builtin candidate set; the arithmetic pairs dominate `+`) and three Oven
+evaluations; the body's instantiation is the same in both. At the 2^20
+cap this is roughly 3 minutes and 0.7 GB extra in a debug build, so a range
+that large is only practical through the fast path. Follow-up: resolve
+the three operators once per expansion (every element has the same
+operand types) and build the later elements' calls from the first's
+resolution.
+
+### WP-428: layout of a class being defined, per virtual destructor (2026-11-03)
+
+Declaring a class's implicit virtual destructor selects its deallocation
+function by the class's alignment, while the class is still being defined.
+Before, that class was laid out from scratch with all of its bases (WP-450
+cached complete classes only). After, it is laid out over the per-Sema
+cache, and only the class itself is dropped (spec/sema-class.md §6.5).
+Measured with the harness build (opt 3), `-std=c++26 -fsyntax-only`, from
+the WP-428 branch with and without the change. Lattice depths use
+`bench/frontend/virtual-lattice.cpp` with `-DLATTICE_DEPTH=N`. The chain is
+`bench/frontend/virtual-dtor-chain.cpp`, 600 classes.
+
+| Input | Before wall | Before max RSS | After wall | After max RSS | clang 22 |
+|---|--:|--:|--:|--:|--:|
+| lattice, depth 14 | 0.04 s | 9184 KB | 0.05 s | 9140 KB | 2.6 s |
+| lattice, depth 100 | 1.95 s | 15372 KB | 0.93 s | 15328 KB | (exponential) |
+| lattice, depth 200 | 13.22 s | 28856 KB | 4.01 s | 29504 KB | (exponential) |
+| chain, 400 classes | 1.17 s | 13632 KB | 0.17 s | 13136 KB | 0.36 s |
+| chain, 600 classes | 3.81 s | 19968 KB | 0.28 s | 20336 KB | 1.14 s |
+| chain, 1000 classes | 16.05 s | 34524 KB | 0.67 s | 34188 KB | 5.30 s |
+
+Before, the chain grew cubically, and it still had no virtual base. The
+`frontend/virtual-dtor-chain` bench entry and its baseline guard against
+that layout returning (`threshold-time: 100`, against a 13x regression).
+`cargo xtask test` has no time budget, so the lattice stress
+(`tests/stress/virtual-lattice-deep.cpp`, depth 32) keeps its `mem<=512`.
+Callgrind at lattice depth 40 now puts the virtual-destructor
+deallocation lookup at 7.6% of instructions (52% before). Most of what
+remains is the virtual-base collection (`virtual_bases`) and the final
+overriders (`all_final_overriders`).
+
+### WP-502: GCC 16.1 in CI (2026-11-03)
+
+**Choice: `container: gcc:16.1.0-trixie` in both jobs** (the preferred
+form; spec/harness.md "GCC oracle", docs/VALIDATION.md "GitHub Actions"),
+with `KILN_GCC=/usr/local/bin/g++` and `KILN_REQUIRE_GCC=1` in the job
+env. The fallback (`debian:trixie` plus an `actions/cache` restore of the
+GCC layer into `/opt/gcc-16`) applies only if the image's measured per-job
+delta exceeds 60 s. The fallback would still download the 163.5 / 176.4 MB
+GCC layer from the cache, need an `ldconfig` step, and add a cache key to
+keep in step, so it saves at most the base-layer pull. The image's
+preinstalled git removes the `Install git` step (5-7 s), and its
+build tools make the `build-essential` part of the apt step a no-op.
+
+New work inside the steps:
+- **The action's GCC check**, `-dumpfullversion` plus a `<meta>` TU with
+  `-fsyntax-only`, takes 0.5 s on the dev host.
+- **The four `oracle: gcc` tests** in `tests/conformance/meta.reflection.ci/`
+  add one GCC compile, link and run each, in both corpus runs: 0.7 s
+  of GCC together on the dev host, spread over the corpus's parallel jobs.
+- **The xtask unit test `require_gcc_makes_a_missing_gcc_an_error`**
+  takes under 0.1 s.
+
+**CI time, from the PR run.** The WP-483 column is the baseline above
+(run 41641461340). The PR column is the PR's first CI run, 41676776320
+(wp/502 at 71afe3dcf). Both come from `gh run view <id> --repo
+christopherfretz/kiln --log`, one row per step, taken from the step and
+`xtask ci:` timestamps. Like the baseline, the fmt-and-clippy row leaves
+out the xtask build.
+
+| Step | `check` WP-483 | `check` PR | delta | `check-x86_64` WP-483 | `check-x86_64` PR | delta |
+|---|--:|--:|--:|--:|--:|--:|
+| Initialize containers (image pull) | 5 s | 21 s | +16 s | 4 s | 25 s | +21 s |
+| Install git (removed) | 7 s | 0 s | -7 s | 5 s | 0 s | -5 s |
+| Checkout | 2 s | 5 s | +3 s | 3 s | 6 s | +3 s |
+| apt toolchain + GCC check | 12 s | 12 s | 0 s | 12 s | 12 s | 0 s |
+| Rust toolchain + cache | 10 s | 8 s | -2 s | 12 s | 15 s | +3 s |
+| `xtask ci`: fmt, clippy | 24 s | 24 s | 0 s | 20 s | 27 s | +7 s |
+| `xtask ci`: cargo test | 264 s | 190 s | -74 s | 214 s | 187 s | -27 s |
+| `xtask ci`: clang 22 self-check | 64 s | 69 s | +5 s | 67 s | 72 s | +5 s |
+| `xtask ci`: kiln corpus | 160 s | 175 s | +15 s | 141 s | 192 s | +51 s |
+| `KILN_ORACLE=19 xtask ci --quick`: fmt, clippy | 4 s | 0 s | -4 s | 3 s | 0 s | -3 s |
+| `--quick`: cargo test | 210 s | 15 s | -195 s | 178 s | 15 s | -163 s |
+| `--quick`: kiln corpus | 159 s | 173 s | +14 s | 140 s | 189 s | +49 s |
+| Job total | 938 s (15.6 min) | 711 s (11.9 min) | -227 s | 812 s (13.5 min) | 760 s (12.7 min) | -52 s |
+
+Most of each job's net change comes from things other than WP-502:
+- **The two `--quick` savings rows are WP-488.** The baseline run predates
+  WP-488. The PR's second pass is `--quick --oracle-only`, which skips fmt
+  and clippy and runs only `cargo test -p kiln_codegen --test ir_vs_clang`.
+- **The corpus grew by 74 tests between the runs** (3868 to 3942).
+- **The rest of the corpus and cargo-test movement is runner variance.**
+  The four GCC comparisons account for about 1 s of the corpus rows.
+
+The cost WP-502 itself adds is image cost:
+- **What it is:** `Initialize containers` plus `Install git`, against the
+  old pair.
+- **`check`:** 21 s against 12 s, so +9 s.
+- **`check-x86_64`:** 25 s against 9 s, so +16 s.
+- **The GCC check:** inside the noise of the apt step.
+
+A same-code control confirms this: main at ec90dc214, run 41674865717,
+on `debian:trixie` with WP-488. Its container + git pair is 12 s / 14 s,
+against the PR's 21 s / 25 s.
+
+Both jobs print `g++ (GCC) 16.1.0` in `Install the toolchain packages`
+and `4 compared with gcc` in both kiln-corpus summary lines.
+
+**Conclusion:** the `gcc:16.1.0-trixie` image costs +9 s (`check`) and
++16 s (`check-x86_64`) per job, well under the 60 s threshold, so the
+image stays and the `actions/cache` fallback is not taken.
+
+### WP-692: CI fan-out (2026-11-07)
+
+**Before:** one serial job per architecture, run 42338130087 (main):
+`check` 18.3 min, `check-x86_64` 26 min. **After:** the fanned-out graph
+(docs/VALIDATION.md "GitHub Actions": per architecture `lints`, `unit` x3,
+`self-check` x2, `kiln-22` x6, `kiln-19` x6), PR run 42342017979 on
+wp/692. Attempt 1 had a cold cache under the new per-architecture keys;
+attempt 2 restored it. Times are from the run's jobs API, measured from
+when the run's first job was created.
+
+| | aarch64 cold | aarch64 warm | x86-64 cold | x86-64 warm |
+|---|---|---|---|---|
+| fan-in done (run wall-clock) | 200 s | 196 s (3.3 min) | 208 s | 228 s (3.8 min) |
+| longest job | `unit rest` 187 s | `unit rest` 185 s | `kiln-22 3/6` 200 s | `unit rest`, `kiln-22 5/6` 218 s |
+| `kiln-22`/`kiln-19` shard jobs | 135-167 s | 131-165 s | 119-200 s | 112-218 s |
+| `unit xtask` / `codegen` / `rest` | 153 / 140 / 187 s | 139 / 131 / 185 s | 169 / 157 / 199 s | 155 / 150 / 218 s |
+| `self-check` 1/2, 2/2 | 108 / 103 s | 110 / 110 s | 118 / 114 s | 114 / 117 s |
+| `lints` | 94 s | 93 s | 118 s | 93 s |
+| runner time, all 18 jobs | | 42 min | | 46 min |
+
+The deps-only cache is so small (12 MB) that a cold run costs almost
+nothing. Each run uses about twice the runner minutes of the serial
+job (42 against 18 and 46 against 26) in exchange for a 5.5x and 6.8x
+shorter wait.
+
+**Per-job fixed overhead** (warm, from the step log timestamps; aarch64 /
+x86-64):
+- set up job: 1 s;
+- container (`gcc:16.1.0-trixie` pull and start): 19-24 s / 19-25 s;
+- checkout: 1 s / 3 s;
+- apt and the GCC 16.1 `<meta>` check: 12 s / 13 s;
+- rustup 1.95.0: 6 s / 10 s;
+- rust-cache restore (12 MB, exact hit): 1-2 s / 2 s;
+- xtask build: 14 s / 15 s;
+- workspace rebuild: `cargo build -p kiln_driver` 24 s / 25 s in the
+  corpus jobs, `cargo test` build of the `rest` group 55 s / 59 s.
+
+That is about 58 s / 66 s before any job compiles kiln, and 82 s / 91 s
+before a kiln shard starts testing.
+
+**Critical path** (warm):
+- aarch64: `unit rest` = 45 s setup + 14 s xtask + 55 s test build + 70 s
+  of tests = 185 s.
+- x86-64: `unit rest` = 50 s + 15 s + 59 s + 100 s = 218 s, tied with
+  `kiln-22 5/6` = 52 s + 15 s + 25 s kiln build + 122 s corpus = 218 s.
+
+The x86-64 corpus shards vary by 2x between attempts on the same commit
+(`kiln-22 3/6` took 200 s cold and 122 s warm; `5/6` took 189 s and
+218 s), so the tail there is runner variance, not shard imbalance. A
+larger `S` would cut the mean shard but not the variance, and costs 4
+jobs per step of `S`.
+
+**What the floor is made of, and the options:**
+- **A prebuilt toolchain image** (Dockerfile in the repo, published to
+  GHCR) would fold apt, the GCC check and rustup (18 s / 23 s per job)
+  into the image. The image would gain clang 19 and 22, LLVM and lld,
+  roughly 1 GB on top of `gcc:16.1.0-trixie`. Hosted runners pull it
+  cold every job, and the container step already takes about 22 s, so
+  the net saving is likely 5-15 s per job. That is worth measuring
+  before building, but it is not a big lever.
+- **A build-once job** that uploads `kiln++` and the test binaries as an
+  artifact would be sound: same checkout, same image, same absolute
+  `/__w` paths. It would put a whole serial job on the critical path:
+  setup of about 50 s, the build of about 60 s, then upload and
+  download. It would save each parallel job only its 25-60 s rebuild,
+  which today runs concurrently anyway. It would therefore save runner
+  minutes but lengthen the wall clock by roughly 45-60 s. Not measured,
+  since the estimate is one-sided.
+- **Caching workspace crates is not done.** Cargo rebuilds them anyway,
+  because a fresh checkout's mtimes are newer than the cache. Restoring
+  commit mtimes would be unsound, because a PR commit can be older than
+  the cached build (docs/VALIDATION.md "Cache policy").
+- **`unit rest` is now the longest job** (55-59 s of test build plus
+  70-100 s of serial test binaries). It could split again, but its
+  build cost repeats in every split, so a split would cut at most 30-40 s
+  and only on aarch64.
+
+### WP-862: -Wall uninitialized-values analysis cost (2026-11-08)
+
+The analysis runs only in a function that declares a tracked local without
+an initializer, and only when one of its four warnings is enabled
+(spec/sema.md §7.14). Everything below compares `-Wall` with
+`-Wall -Wno-uninitialized` on the `harness`-profile `kiln++` of
+branch `wp/862`, on aarch64. Wall times are the best of 5, and RSS is the
+peak (`/usr/bin/time -f "%e %M"`). The host load was about 20.
+
+Command lines. `S` is the `.oss/src` checkout made by `scripts/oss/oss-build.sh`:
+fmt is at tag 12.1.0 and nlohmann_json at v3.12.0. The same flags go to
+`kiln++` and `clang++-19`, each followed by `-Wall`, or by
+`-Wall -Wno-uninitialized`:
+
+```
+FM: -std=c++20 -fsyntax-only -I$S/fmt/include -I$S/fmt/test -I$S/fmt/test/gtest \
+    -DGTEST_HAS_STD_WSTRING=1 $S/fmt/test/format-test.cc
+JS: -std=c++20 -fsyntax-only -I$S/nlohmann_json/include \
+    -I$S/nlohmann_json/tests/thirdparty/doctest -I$S/nlohmann_json/tests/thirdparty/fifo_map \
+    -DJSON_TEST_KEEP_MACROS $S/nlohmann_json/tests/src/unit-algorithms.cpp
+PS: -std=c++20 -fsyntax-only perf_small.cpp
+```
+
+`perf_small.cpp` is the synthetic worst case: 300 functions, each with 8
+uninitialized locals that are assigned under branches in a loop and read
+afterwards. It is 6601 lines, md5 `7812418212cd0567d8af2cbf9604c533`. To
+generate it:
+
+```python
+print("int g(int);")
+for f in range(300):
+    print(f"int f{f}(int n, bool b) {{")
+    for v in range(8): print(f"  int v{v};")
+    print("  for (int i = 0; i < n; ++i) {")
+    for v in range(8): print(f"    if (b && i > {v}) v{v} = g(i); else v{v} = {v};")
+    print("  }")
+    print("  switch (n) { case 1: v0 = 1; break; default: v1 = 2; }")
+    print("  return " + " + ".join(f"(n ? v{v} : 0)" for v in range(8)) + ";")
+    print("}")
+```
+
+Instruction counts are from `valgrind --tool=callgrind` under
+`ulimit -v 3000000`:
+
+- FM: 15,430,093,412 vs 15,382,733,723 (+0.31%).
+- JS: 11,347,626,373 vs 11,347,646,152 (0.00%).
+- PS: 981,406,398 vs 851,506,828 (+15.3%).
+  - The CFG build accounts for most of it, about 148M (`cfg_ensure`,
+    inclusive). The dataflow itself is about 38M.
+  - clang builds the same CFG whenever an analysis-based warning is enabled.
+
+Wall time and peak RSS, given as `-Wall` / `-Wall -Wno-uninitialized`:
+
+- FM:
+  - kiln++: 2.74 s / 2.81 s, 113 MB / 112 MB;
+  - clang++-19: 2.52 s / 2.50 s, 287 MB / 287 MB.
+- JS:
+  - kiln++: 1.97 s / 2.01 s, 88 MB / 88 MB;
+  - clang++-19: 2.13 s / 2.09 s, 306 MB / 307 MB.
+- PS:
+  - kiln++: 0.08 s / 0.07 s, 13.1 MB / 12.7 MB;
+  - clang++-19: 0.07 s / 0.06 s, 90 MB / 90 MB.
+
+`cargo xtask bench --compiler kwall.sh --compare-with knouninit.sh`, where
+the two wrappers exec `kiln++ -Wall` and `kiln++ -Wall -Wno-uninitialized`,
+over 50 entries × 5 runs:
+
+- geomean time 1.0092 (37,258 ms vs 37,455 ms in total);
+- geomean memory 1.0025.
+
+Both are within noise.
+
+### WP-879: frontend throughput on repeated nested template-ids (2026-11-08)
+
+Found during the WP-879 reflection-mangling scaling study
+(spec/landed/sema/WP-879.md). It is not a mangling cost: mangling is
+3.4 ms of the compile. The TU is generated, since no project has it: 200
+reflection-keyed specializations whose keys are template-ids 8 levels
+deep, and each level repeats the previous level twice, so the source is
+5.1 MB of mostly repeated text. clang has no reflection, so g++-16 is the
+comparator. Release kiln++ (WP-879 branch), 5 runs, `/usr/bin/time`,
+median.
+
+```
+python3 gen.py 200 8 4 1 > dup8.cpp     # the generator below
+kiln++ -std=c++26 -freflection -fsyntax-only dup8.cpp
+g++-16 -std=c++26 -freflection -fsyntax-only dup8.cpp
+kiln++ -std=c++26 -freflection -c dup8.cpp -o k.o
+g++-16 -std=c++26 -freflection -c dup8.cpp -o g.o
+```
+
+| Compiler | Mode | Wall | User | Max RSS |
+|---|---|--:|--:|--:|
+| kiln | `-fsyntax-only` | 1.28 s | 1.23 s | 17824 KB |
+| g++-16 | `-fsyntax-only` | 0.44 s | 0.31 s | 174324 KB |
+| kiln | `-c` | 1.38 s | 1.31 s | 64932 KB |
+| g++-16 | `-c` | 0.59 s | 0.38 s | 189492 KB |
+
+kiln time is linear in the source size (0.12 / 0.37 / 1.33 s of CPU for
+`-c` at 0.3 / 1.3 / 5.1 MB, with D = 4 / 6 / 8), but its slope is about 3x
+g++-16's, while it uses a tenth of the memory. Almost all of it is
+already in `-fsyntax-only`; it was not profiled further. Follow-up row in
+the WP-879 handback.
+
+```python
+# gen.py N DEPTH WIDTH [1]
+import sys
+n, depth, width = map(int, sys.argv[1:4])
+dup = len(sys.argv) > 4 and sys.argv[4] == '1'
+o = ["using info = decltype(^^int);",
+     "template <info R> int f() { static int n = 0; return ++n; }",
+     "template <info R> struct S { static int count; };",
+     "template <info R> int S<R>::count = 0;", "namespace lib {"]
+o += [f"template <class... Ts> struct Node{k} {{}};" for k in range(4)]
+o += [f"struct T{i:05} {{}};" for i in range(n)] + ["}"]
+def ty(i, d):
+    if d == 0:
+        return f"lib::T{i:05}"
+    prev = ty(i, d - 1)
+    args = [prev]
+    for a in range(1, width - (1 if dup else 0)):
+        j = (i * 7 + d * 13 + a) % n
+        args.append([f"lib::T{j:05}", "int", f"const lib::T{i:05}*", "long",
+                     f"lib::T{j:05}&"][a % 5])
+    if dup:
+        args.append(prev)
+    return f"lib::Node{d % 4}<{', '.join(args)}>"
+o += ["int (*fs[])() = {"] + [f"  &f<^^{ty(i, depth)}>," for i in range(n)] + ["};"]
+o += ["int* counts[] = {"] + [f"  &S<^^{ty(i, depth)}>::count," for i in range(n)] + ["};"]
+print("\n".join(o))
+```
+
+### WP-919: frontend throughput on repeated nested template-ids, fixed (2026-11-08)
+
+The WP-879 slope (above) is gone: dup8 `-fsyntax-only` went from 3.16x to
+1.18x g++-16's wall time, at the same RSS (17 MB vs g++-16's 181 MB). The
+design and the profiles are in spec/landed/parse/WP-919.md.
+
+**Profile** (callgrind, release kiln++, dup6 = 1.3 MB; `perf` is blocked in
+the container): 4,524M instructions before, 1,432M after (-68%). Before,
+the lookahead scans (`TokenSource::get` alone 16.7%), the SipHash keyword
+lookup (12.9%), allocation (22%, from `lookup_name_scoped`'s result vectors)
+and name classification (20%) were 80% of it; lexing and preprocessing
+4%. Each component of a nested template-id was classified by
+`Sema::classify_name` and re-scanned by `scan_name_walk` once per lookahead
+predicate before it was parsed, so the same lookups ran several times per
+token.
+
+**Fixes** (spec/parse.md §2.2, §2.5): a dense keyword table indexed by the
+symbol instead of a SipHash map; a `classify_name`/`classify_nested_name`
+memo and a `scan_name_walk` memo, both keyed under `Sema::lookup_stamp` like
+the WP-086 template-argument memo and capped at 4,096 entries;
+`decltype_scope_end` decides on the token's keyword before it scans; and an
+inlined in-window fast path for `TokenSource::get`. No output changes.
+
+**Timings.** Release kiln++ before (main b2e7a81c9) and after (wp/919),
+g++-16 16.1 and clang++-19, all `-fsyntax-only`, interleaved best of 5 on
+the same loaded host (load ~18 on 24 CPUs), wall / user / max RSS. dup4,
+dup6 and dup8 are `python3 gen.py 200 D 4 1` with D = 4, 6, 8 (0.3, 1.3,
+5.1 MB; the generator is in the WP-879 section, and
+`bench/frontend/nested-template-ids-dup.cpp` generates dup6 at bench time);
+clang 19 has no reflection. `S=.oss/src` (`scripts/oss/oss-build.sh`).
+
+```
+kiln++ -std=c++26 -freflection -fsyntax-only dupD.cpp
+g++-16 -std=c++26 -freflection -fsyntax-only dupD.cpp
+# fmt 12.1.0
+kiln++ -fsyntax-only -std=c++20 -I$S/fmt/include -I$S/fmt/test/gtest -I$S/fmt/test $S/fmt/test/format-test.cc
+# nlohmann_json v3.12.0
+kiln++ -fsyntax-only -std=c++17 -I$S/nlohmann_json/include -I$S/nlohmann_json/tests/thirdparty/doctest $S/nlohmann_json/tests/src/unit-algorithms.cpp
+# range-v3 0.12.0
+kiln++ -fsyntax-only -std=c++20 -I$S/range_v3/include -I$S/range_v3/test $S/range_v3/test/view/zip.cpp
+# Boost.Hana boost-1.89.0
+kiln++ -fsyntax-only -std=c++17 -I$S/hana/include -I$S/hana/test/_include $S/hana/test/searchable.cpp
+```
+
+(g++-16 and clang++-19 take the same arguments.)
+
+| TU | kiln before | kiln after | g++-16 | clang++-19 | before / gcc | after / gcc |
+|---|--:|--:|--:|--:|--:|--:|
+| dup4 (0.3 MB) | 0.09 s / 0.06 u / 11 MB | 0.05 s / 0.02 u / 11 MB | 0.09 s / 0.03 u / 38 MB | n/a | 1.00x | 0.56x |
+| dup6 (1.3 MB) | 0.31 s / 0.28 u / 13 MB | 0.12 s / 0.10 u / 12 MB | 0.16 s / 0.09 u / 66 MB | n/a | 1.94x | 0.75x |
+| dup8 (5.1 MB) | 1.20 s / 1.18 u / 17 MB | 0.45 s / 0.41 u / 17 MB | 0.38 s / 0.33 u / 181 MB | n/a | 3.16x | **1.18x** |
+| fmt format-test.cc | 1.66 s / 1.55 u / 113 MB | 1.61 s / 1.49 u / 113 MB | 2.02 s / 1.53 u / 387 MB | 2.08 s / 1.93 u / 277 MB | 0.82x | 0.80x |
+| json unit-algorithms.cpp | 1.15 s / 1.01 u / 84 MB | 1.03 s / 0.96 u / 84 MB | 1.07 s / 0.80 u / 284 MB | 1.39 s / 1.29 u / 232 MB | 1.07x | 0.96x |
+| range-v3 view/zip.cpp | 2.13 s / 2.00 u / 141 MB | 1.92 s / 1.72 u / 142 MB | 2.10 s / 1.81 u / 503 MB | 2.61 s / 2.40 u / 354 MB | 1.01x | 0.91x |
+| hana searchable.cpp | 0.70 s / 0.56 u / 49 MB | 0.67 s / 0.54 u / 49 MB | 1.02 s / 0.63 u / 244 MB | 1.04 s / 0.82 u / 176 MB | 0.69x | 0.66x |
+
+The real TUs never had the slope (kiln was at or under g++-16 and
+clang++-19 already), so they were no-regression checks; they got 2-10%
+faster. Diagnostics and IR are byte-identical before and after (stderr of
+all four real TUs, `-S -emit-llvm` of dup6).
+
+**Bench A/B** (`cargo xtask bench --compiler <after> --compare-with
+<before> --runs 5`, the default corpus, same host, load ~19): geometric
+mean after/before **time 0.94x, memory 0.99x** over 51 entries. The
+largest memory ratio is 1.03x (`oven/churn-list`, 10.0 vs 9.7 MB), so no
+entry's RSS grew by more than 3%. Front-end entries: `nested-template-ids`
+0.54x (the WP-086 depth-2,000 template-id), the new
+`nested-template-ids-dup` 0.47x (170 vs 359 ms, 12.4 vs 12.7 MB),
+`overload/calls` 0.66x, `templates_wide` 0.93x, `format-like-g` 0.94x;
+the rest are within noise (0.96-1.04x). Above 1.1x are only the noisy
+(spread > 10%) `oven/churn-tree` 2.33x, `frontend/expansion-outline-obj`
+1.33x and `frontend/virtual-lattice` 1.19x (a 46 vs 55 ms entry), which do
+not touch the changed code paths (`oven/churn-mixed` moved the other way,
+0.27x). Results file: `bench/results/2026-11-08T225947.json` (not
+committed).
+
+**Stamp fix.** The libc++ M3 gate caught a stale classification: two
+function templates of alike shape whose scopes are reinstated in turn
+shared memo entries (spec/parse.md §2.5). `Sema::lookup_stamp` now also
+hashes each scope's last local and its using-declarator count. Re-timed
+after it, same protocol: dup6 0.12 s (0.86x g++-16), dup8 0.44 s
+(**1.19x**), fmt 0.76x, json 0.86x, range-v3 0.85x, hana 0.73x, with RSS
+unchanged.
+
+### WP-1140: an immediate invocation evaluated once (2026-11-09)
+
+An immediate invocation in a variable initializer was evaluated two to
+four times: once as the invocation, again by the whole-initializer
+`try_fold` of a constant-initialized variable, again by
+`check_constexpr_init` / `check_constinit`, and again by codegen's
+`fold_constant_init` (the Oven's `init_inner` compiled the wrapper's
+operand instead of its stored value). Now each is evaluated once
+(spec/oven.md "Valued immediate invocations").
+
+TU: `common.h` below with `#define N 4096` before it, and one context
+per TU:
+
+```c++
+consteval long fib(int n) { return n < 2 ? n : fib(n - 1) + fib(n - 2); }
+struct Table { int v[N]; };
+consteval Table build() {
+  Table t{};
+  for (int i = 0; i < N; ++i) {
+    int a = i;
+    for (int j = 0; j < 300; ++j) a = (a * 31 + j) % 9973;
+    t.v[i] = a;
+  }
+  return t;
+}
+// local:     int main() { long x = fib(27); Table t = build(); return (int)(x + t.v[N-1]) & 1; }
+// constexpr: constexpr long x = fib(27); constexpr Table t = build(); (main reads them)
+// constinit: constinit long x = fib(27); constinit Table t = build();
+// dyn:       long id(long); Table idt(Table); long x = id(fib(27)); Table t = idt(build());
+// nsdmi:     struct S { long x = fib(27); Table t = build(); }; (main: S s;)
+// defarg:    long f(long x = fib(27)); int h(Table t = build()); (main: f(); h();)
+// escal:     template<class T> constexpr long g(T) { Table t = build(); return fib(27) + t.v[N-1]; }
+```
+
+Commands: `kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+<ctx>.cpp` and the same with `clang++-19`; `/usr/bin/time -f "%e %M"`;
+evaluation counts from `-ftime-trace -ftime-trace-verbose
+-ftime-trace-granularity=0` (`ConstevalCall` events named `build`; `fib`
+is memoized, 28 calls per evaluation, and went from 56 to 28 calls in the
+constexpr, constinit and dyn contexts). Harness profile, same host.
+
+| context | `build` evaluations before → after | kiln before | kiln after | clang++-19 |
+|---|---|---|---|---|
+| local | 2 → 1 | 0.17 s / 55.5 MB | 0.10 s / 55.5 MB | 3.92 s / 91.9 MB |
+| constexpr | 3 → 1 | 0.28 s / 55.1 MB | 0.11 s / 55.1 MB | 2.51 s / 90.9 MB |
+| constinit | 4 → 1 | 0.32 s / 55.1 MB | 0.10 s / 55.1 MB | 2.53 s / 91.2 MB |
+| dyn | 3 → 1 | 0.34 s / 60.4 MB | 0.19 s / 60.4 MB | 4.47 s / 97.2 MB |
+| nsdmi | 2 → 2 | 0.29 s / 61.0 MB | 0.29 s / 60.9 MB | 2.35 s / 97.1 MB |
+| defarg | 2 → 2 | 0.27 s / 60.3 MB | 0.28 s / 60.3 MB | 2.48 s / 97.3 MB |
+| escal | 3 → 1 | 0.24 s / 55.7 MB | 0.09 s / 55.7 MB | 5.72 s / 93.1 MB |
+
+One `build` evaluation is about 75 ms. Still open: a default member
+initializer's or default argument's invocation is evaluated by sema's
+check at each use and again by codegen's fold of the use
+(`kiln_codegen` `folds.imm`, keyed by use); a full-expression's
+`-Winteger-overflow` trial fold (`int_overflow.rs`
+`overflow_value_inner`) runs before the invocations are valued and is
+not memoized (`return fib(27) + g();` runs about 635k `fib` calls).
+
+### WP-1129: trial folds and codegen read the invocation's value (2026-11-09)
+
+The two re-evaluations WP-1140 left open are gone. A full-expression's
+completion checks (`-Wconstant-conversion`-style implicit-conversion
+warnings, `impcast.rs`, and the `-Winteger-overflow` trial fold,
+`int_overflow.rs`) ran before its immediate invocations were evaluated
+and evaluated each call again, silently and without the memo; now sema
+evaluates the outermost invocations first (`evaluate_immediates_early`)
+and the trials read the stored value. Codegen's fold prepass reuses the
+value sema's check of a default argument's or default member
+initializer's use stored (`default_immediate_value`) instead of
+evaluating the call again. spec/sema.md §5.10, spec/oven.md "Valued
+immediate invocations".
+
+TUs: the WP-1140 `common.h` above (saved as `common-wp1129.h`, `N`
+4096) with one context each, and a generated TU with 4,000 trial-folded
+invocations of distinct arguments (no memo hits):
+
+```c++
+// nsdmi:   struct S { long x = fib(27); Table t = build(); }; int main() { S s; ... }
+// defarg:  long f(long x = fib(27)); int h(Table t = build()); int main() { return (int)(f() + h()) & 1; }
+// ovf:     int g(); int main() { return (int)(fib(27) + g()) & 1; }
+// heavy:   consteval int sum(int n) { int r = 0; for (int i = 0; i < n; ++i) r += i ^ n; return r; }
+//          then for i in 0..2000: int f<i>(int x) { return x + sum(200 + i); }
+//                                 short g<i>() { return sum(5000 + i) & 0x7fff; }
+```
+
+Commands: `kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+<ctx>.cpp` (heavy: `kiln++ -std=c++26 -S -emit-llvm -o /dev/null
+heavy.cpp`) and the same with `clang++-19` (heavy: `-std=c++2c`);
+`/usr/bin/time -f "%e %M"`, median of 3; `build` evaluations and `fib`
+calls from `-ftime-trace -ftime-trace-verbose -ftime-trace-granularity=0`
+(`ConstevalCall` events). Harness profile; before = main 2e843c6f9.
+
+| context | before → after | kiln before | kiln after | clang++-19 |
+|---|---|---|---|---|
+| nsdmi | `build` 2 → 1 | 0.31 s / 61.4 MB | 0.25 s / 61.4 MB | 2.29 s / 99.5 MB |
+| defarg | `build` 2 → 1 | 0.32 s / 60.7 MB | 0.25 s / 60.7 MB | 2.43 s / 99.9 MB |
+| ovf | `fib` calls 1271270 → 28 | 0.10 s / 55.4 MB | 0.08 s / 55.4 MB | 1.01 s / 93.2 MB |
+| heavy | trial steps 26427000 → 0 | 1.24 s / 26.0 MB | 0.70 s / 26.0 MB | 30.58 s / 101.1 MB |
+
+`bench/reflect` S2, S3 and S7 (`kiln++ -std=c++26 -freflection
+--gcc-toolchain=<GCC 16.1 prefix> -S -emit-llvm -o /dev/null`) are
+unchanged within noise (0.85, 0.50 and 0.73 s; 56, 35 and 43 MB). Still
+open: defarg's `f() + h()` overflow trial evaluates the default
+argument's `fib(27)` (635649 unmemoized `fib` calls) before failing on
+the non-constexpr `f`; the shift-count check of `<<`/`>>`
+(`diagnose_shift_count`) folds its operand, invocations included, when
+the operator is built.
+
+### WP-1171: the overflow trial and the shift count read stored values (2026-11-09)
+
+The two re-evaluations WP-1129 left open are gone (spec/sema.md §5.10
+"Default arguments", "Shift counts", §5.28). The `-Winteger-overflow`
+trial descends into a default argument instead of evaluating the call
+and reads a default use's stored value (`default_immediate_value`), and
+a default use is checked when its call's full-expression is completed,
+so defarg's `f() + h()` trial no longer evaluates `fib(27)` unmemoized
+before failing on the non-constexpr `f`. A shift count that is an
+immediate invocation is evaluated once (`prefold_immediate`).
+
+TU: the WP-1129 defarg context above (`common.h`, `N` 4096). Commands:
+`kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+defarg.cpp` and the same with `clang++-19`; `/usr/bin/time -f "%e %M"`,
+median of 3; counts from `-fconstexpr-stats`. Harness profile, branch
+wp/1171 (main d6627f3aa + WP-1171).
+
+| defarg | before | after |
+|---|---|---|
+| `fib` calls (`calls count`, trials not counted) | 635622 | 635622 (one `fib(27)`) |
+| memo misses (the trial's unmemoized `fib` calls) | 635649 | 28 |
+| trial steps | 1271242 | 0 |
+| kiln wall / RSS (debug build, `-fsyntax-only -fconstexpr-steps=100000000`) | 1.32 s / 23.8 MB | 0.90 s / 23.7 MB |
+| kiln wall / RSS (harness) | n/a | 0.25 s / 66.7 MB |
+| clang++-19 | 2.19 s / 99.6 MB | 2.19 s / 99.6 MB |
+
+Without `-fconstexpr-steps` both compilers now reject defarg (`fib(27)`
+exceeds the default step limit); before, kiln accepted it only because
+the unlimited trial had filled the memo first. Regression tests: driver
+`immediate_invocations_are_not_folded_again` (trial steps 0 for
+`def() + def()`, one evaluation for `x << csum(7)`).
+
+### WP-1163: the never-constant walk runs a loop in one evaluation (2026-11-09)
+
+The [dcl.constexpr]/6 walk (spec/sema.md "Never constant") ran a loop
+over known locals iteration by iteration, one Oven frame evaluation per
+statement, and gave up on the locals after 4096 evaluations (missing
+clang's reports after a long loop). Now a loop whose statements name
+only known locals runs as one Oven evaluation
+(`Oven::evaluate_loop_in_frame`), with clang's step counting and the
+remaining `-fconstexpr-steps` budget; the walk keeps no per-iteration
+state. The 4096 cap stays as a fallback for loops the walk still runs
+iteration by iteration (one holding a `return`).
+
+TUs:
+- `nc-heavy`: 400 definitions generated by the script below (md5 of the
+  output `6667106001fb04b2c183d94125cae450`), each with a 1000-iteration
+  and an 8-iteration `for` over locals, a 20000-iteration `while` and a
+  pointer local; no diagnostics from either compiler.
+
+  ```python
+  for f in range(400):
+      print(f"constexpr int f{f}(int x) {{")
+      print(f"  int s = 0;")
+      print(f"  for (int i = 0; i < 1000; ++i) s += i * {f % 7 + 1};")
+      print(f"  int a[8] = {{}};")
+      print(f"  for (int j = 0; j < 8; ++j) a[j] = j + s;")
+      print(f"  int k = 0;")
+      print(f"  while (k < {20000 + f}) ++k;")
+      print(f"  const int *p = a + 2;")
+      print(f"  return a[x & 7] + s + k + *p;")
+      print(f"}}")
+  print("int main() { return f0(1); }")
+  ```
+- `long-loop`: `tests/conformance/dcl.constexpr/never-constant-long-loop-cxx20.cpp`
+  (18 never-constant errors in clang 19; kiln before: 4, after: 18).
+- `libcxx-heavy`: `#include`s of `<algorithm> <string> <vector> <ranges>
+  <format> <map> <optional> <variant>` and `int main() {}` (libc++ 19
+  headers; many constexpr definitions, few long loops).
+
+Commands (harness profile, same host, `/usr/bin/time -f "%e %M"`, best of
+2-3 on a shared box):
+- `kiln++ -std=c++20 -fsyntax-only nc-heavy.cpp`, the same with `clang++-19`;
+- `kiln++ -std=c++20 -fsyntax-only -Wno-unused-value -Wno-c++23-extensions
+  -ferror-limit=0 never-constant-long-loop-cxx20.cpp`, the same with
+  `clang++-19`;
+- `kiln++ -std=c++26 -stdlib=libc++ -resource-dir resource -fsyntax-only
+  libcxx-heavy.cpp`; `clang++-19` without `-resource-dir`.
+
+| TU | kiln before | kiln after | clang++-19 |
+|---|---|---|---|
+| nc-heavy | 1.25 s / 14.4 MB | 0.46 s / 15.0 MB | 2.47 s / 87 MB |
+| long-loop | 0.04 s / 12.2 MB | 0.20 s / 12.1 MB | 1.65 s / 95.2 MB |
+| libcxx-heavy | 0.54 s / 50.7 MB | 0.56 s / 50.2 MB | 0.54 s / 155 MB |
+
+`long-loop` is slower after because the walk now runs its finite loops to the
+end, up to the 1048576-step limit, as clang does; before it
+stopped early and missed 14 reports.
+
+`cargo xtask bench --compiler <after> --compare-with <before>
+bench/reflect`, two runs: geometric mean after/before time 1.03x and
+0.98x, memory 1.00x both (no entry outside its own spread on both runs).
+
+### WP-1162: the image name gate counts declarations, not interning (2026-11-09)
+
+An importer that spelled one of a module's declared names anywhere
+before `import` (a member, a macro body, another namespace, a local)
+replayed the unit instead of building it from its declaration image
+(spec/modules.md §11.11 "ODR merging"). Now only a name of the image's
+global-scope declarations that reached the parser at the importer's
+global scope replays it.
+
+Workload: WP-1139's class-template-heavy synthetic interface, generated
+from the corpus module (no external project): 200 exported namespaces
+`ns0`..`ns199`, each holding the body of
+`tests/conformance/module.interface/Inputs/img-class-template.cppm`'s
+`namespace ct` (12601 lines). The importer reads five of them:
+
+```python
+# gen.py <path to Inputs/img-class-template.cppm>
+import sys
+src = open(sys.argv[1]).read()
+body = src[src.index("export namespace ct {") + len("export namespace ct {"):src.rindex("} // namespace ct")]
+open("cth.cppm", "w").write("export module cth;\n" + "\n".join("export namespace ns%d {%s}" % (i, body) for i in range(200)) + "\n")
+use = 'extern "C" int printf(const char *, ...);\nint main() {\n  long s = 0;\n' + "".join(
+    "  s += ns%d::use() + ns%d::Arr<short>{9}.size() + ns%d::Fixed<3>{}.f();\n" % (i, i, i) for i in (0, 50, 100, 150, 199)) + '  printf("%ld\\n", s);\n}\n'
+open("u-plain.cpp", "w").write("import cth;\n" + use)
+open("u-mention.cpp", "w").write("struct Opts { int size; int count; int value; int get; };\nimport cth;\n" + use)
+```
+
+Commands: `kiln++ -std=c++26 -fkiln-bmi-image --precompile cth.cppm -o
+cth.pcm`, then `kiln++ -std=c++26 -fkiln-bmi-image
+-fmodule-file=cth=cth.pcm {-fsyntax-only | -c -o /dev/null} u-*.cpp`
+(`-v` prints the image note); clang: `clang++-19 -std=c++26 --precompile
+cth.cppm -o cth.pcm` and `clang++-19 -std=c++26
+-fmodule-file=cth=cth.pcm {-fsyntax-only | -c -o /dev/null}
+u-mention.cpp`. `/usr/bin/time -f "%e %M"`, median of 3, harness
+profile, aarch64, load ~15; before = main b26b6825f.
+
+| run | kiln before | kiln after | clang++-19 |
+|---|---|---|---|
+| `--precompile cth.cppm` | 0.16 s / 30.1 MiB | 0.14 s / 29.6 MiB | 10.34 s / 98.1 MiB |
+| `u-plain`, `-fsyntax-only` (image both) | 0.03 s / 21.2 MiB | 0.03 s / 20.9 MiB | |
+| `u-mention`, `-fsyntax-only` | 0.11 s / 18.9 MiB (replayed: `get`) | **0.03 s** / 21.2 MiB (image) | 0.02 s / 84.2 MiB |
+| `u-mention`, `-c` | 0.12 s / 53.7 MiB (replayed) | **0.05 s** / 53.7 MiB (image) | 0.02 s / 92.0 MiB |
+| `u-mention`, `-fsyntax-only`, image off (replay) | 0.10 s / 18.7 MiB | 0.09 s / 18.5 MiB | |
+
+Replays of `u-mention`: 1 → 0 (`-v`: `replayed 'cth': its image declares
+'get', already seen` → `imported 'cth' from its declaration image`).
+The image costs 2.3 MiB more peak RSS than the replay at
+`-fsyntax-only` (its eager decode), as WP-1139 measured. The gate's
+per-token bookkeeping is below noise on `u-plain` and the file grows by
+the gated-name list (804 B here: a length and 200 gated namespaces, 4 B each).

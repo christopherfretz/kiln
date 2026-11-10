@@ -25,6 +25,8 @@ use kiln_ast::{ArgListId, ConstValueId, DeclId, QualType, TemplateNameId};
 
 use crate::Sema;
 
+mod requires;
+
 /// `TFF_SCOPE`: print the scope of a function-local class through the
 /// function.
 const SCOPE: u32 = 1;
@@ -384,6 +386,12 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 }
                 return;
             }
+            // A dependent `decltype` prints as written (`decltype(T::x)`),
+            // not as the dependent type under it.
+            TypeView::Decltype { expr, .. } if types.is_dependent(t) => {
+                self.decltype(t, expr);
+                return;
+            }
             _ => {}
         }
         if let Some(next) = self.desugar_step(t) {
@@ -447,6 +455,28 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.template_name(name, flags);
                 let n = types.args(args).len();
                 self.template_args(args, n, flags & !TEMPLATE_HEADER);
+            }
+            _ => self.dump_other_leaf(t),
+        }
+    }
+
+    /// The leaf types `dump_type` has no arm for: placeholders, a
+    /// dependent `decltype`, and kiln's own spelling of the rest.
+    fn dump_other_leaf(&mut self, t: QualType) {
+        match self.ast().types.view(t.ty()) {
+            // An undeduced placeholder, its type-constraint not printed
+            // (`template<auto N>` for `template<std::integral auto N>`).
+            TypeView::Auto { keyword, deduced: None, .. } => {
+                self.cv(t.quals_bits());
+                self.ws(match keyword {
+                    kiln_ast::types::AutoKeyword::DecltypeAuto => "decltype(auto)",
+                    kiln_ast::types::AutoKeyword::GnuAutoType => "__auto_type",
+                    kiln_ast::types::AutoKeyword::Auto => "auto",
+                });
+            }
+            // `pp_cxx_simple_type_specifier` of a `DECLTYPE_TYPE`.
+            TypeView::DependentDecltype(p) if let Some(e) = self.ast().types.profile_expr(p) => {
+                self.decltype(t, e);
             }
             _ => {
                 // Other dependent forms: kiln's own spelling (no reflection
@@ -1115,6 +1145,15 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             let mut tmpl = info.template;
             if let Some((_, m)) = ast.member_spec_info(ast.first(tmpl)) {
                 tmpl = m.instantiated_from;
+            } else if let Some(g) = ast
+                .instantiated_from(ast.first(tmpl))
+                .filter(|&g| g != tmpl && ast.template_info(g).is_some())
+            // same_entity: raw ok
+            {
+                // A member template of a class template specialization:
+                // printed through the primary's member template
+                // (`void ns::E<T>::n(U) [with U = int; T = int]`).
+                tmpl = g;
             }
             let pattern = ast.template_info(tmpl)?.pattern?;
             levels.push((tmpl, Some(info.args)));
@@ -1394,6 +1433,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                 self.dump_type_suffix(r, flags);
             }
         }
+        self.trailing_requires(f);
         self.parms = saved_parms;
     }
 
@@ -1459,11 +1499,14 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             return;
         };
         let mut flags = flags;
+        let k = ast.decls.get(td).kind();
         if flags & TEMPLATE_HEADER != 0 {
             self.template_header(info.params);
+            if k != DeclKind::Concept {
+                self.template_constraints(td, info.params);
+            }
             flags |= DECL_SPECIFIERS;
         }
-        let k = ast.decls.get(td).kind();
         match (k, info.pattern) {
             (DeclKind::ClassTemplate, Some(p)) => {
                 let mut f = (flags & !CLASS_KEY) | TEMPLATE_NAME;
@@ -1487,6 +1530,29 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
             (_, Some(p)) => self.dump_decl(p, flags | TEMPLATE_NAME),
             (_, None) => self.decl_identifier(td),
         }
+    }
+
+    /// The associated constraints after template `td`'s header, whose
+    /// parameter list is `params`: those of the primary's member template
+    /// for a member template of a class template specialization, as
+    /// written (`template<class U>  requires  same_as<T, U> void
+    /// ns::Q<T>::m(U) [with T = int]`).
+    fn template_constraints(&mut self, td: DeclId, params: kiln_ast::TemplateParamListId) {
+        let ast = self.ast();
+        let general = ast
+            .instantiated_from(ast.first(td))
+            .filter(|&g| g != td) // same_entity: raw ok
+            .and_then(|g| ast.template_info(g).copied().map(|i| (g, i)));
+        let (src, params) = match general {
+            Some((g, i)) => (g, i.params),
+            None => (td, params),
+        };
+        let saved = std::mem::take(&mut self.parms);
+        if let Some(p) = ast.template_info(src).and_then(|i| i.pattern) {
+            self.set_parms_for(p);
+        }
+        self.template_requires(params);
+        self.parms = saved;
     }
 
     /// `template<class T, int N> ` before a template's declaration.

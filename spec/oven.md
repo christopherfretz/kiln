@@ -3727,7 +3727,11 @@ follow clang trunk's P3068 branch.
   fails it, worded as clang's P3068 branch (`notes::uncaught_note`):
   "unhandled exception: W" at the throw-expression, `W` the `what()`
   string of a class derived from `std::exception` (evaluated silently
-  through a virtual call); else, or when that call is not constant,
+  through a virtual call), printed whole up to `WHAT_CAP` (64 KiB)
+  characters and past it as its first `WHAT_CAP` characters followed by
+  "… [N more characters]" (GCC 16.1 prints any length; the cap keeps a
+  pathological string from flooding the terminal; WP-1245); else, or
+  when that call is not constant,
   "unhandled exception of type 'T' thrown from here" at the operand when
   `T` has size 1 (an empty class, a `char`, a class of one `char`: the
   branch's `getTypeSizeInChars(T).isOne()`), and "unhandled exception of type 'T' with
