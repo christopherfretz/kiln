@@ -653,6 +653,14 @@ impl Sema<'_, '_> {
         if self.kind_of(qual) != DeclKind::CXXRecord {
             return base;
         }
+        // A pack-index-specifier that is the decl-specifier itself is kept
+        // as written (clang rebuilds no `TST_typename_pack_indexing`;
+        // [temp.over.link]/5, WP-1169): `Ts...[C<Ts...>::M]` there does
+        // not match `Ts...[M]` in the class, while nested in a
+        // template-id (`W<Ts...[C<Ts...>::M]>`) it is rebuilt.
+        if matches!(self.ast.types.view(base.ty()), TypeView::PackIndexing { .. }) {
+            return base;
+        }
         self.rebuild_ci_type(base, qual, d.loc, 0)
     }
 
@@ -1045,8 +1053,10 @@ impl Sema<'_, '_> {
     /// value (`decltype(typename C<X>::T())`, `W<char[C<X>::N]>`), whose
     /// operands are rebuilt by [`Sema::rebuild_ci_expr`] (clang's
     /// `RebuildExprInCurrentInstantiation` under
-    /// `RebuildTypeInCurrentInstantiation`; WP-1154). `None` when `view`
-    /// is none of those.
+    /// `RebuildTypeInCurrentInstantiation`; WP-1154), and GNU `typeof` and
+    /// a pack-index-specifier through
+    /// [`crate::templ::subst::Substituter::ci_expr_operand_ty`] (WP-1169).
+    /// `None` when `view` is none of those.
     fn rebuild_ci_expr_type(
         &mut self,
         base: QualType,
@@ -1067,8 +1077,32 @@ impl Sema<'_, '_> {
                 self.act_on_exit_declarator_scope(entered);
                 r.ok()?
             }
+            // `__typeof__(C<X>::N + 1)`, `__typeof__(typename C<X>::T)`,
+            // `Ts...[C<Ts...>::N]` (WP-1169).
+            TypeView::TypeOf { .. } | TypeView::PackIndexing { selected: None, .. } => {
+                let levels = crate::templ::args::MultiLevelArgs::new();
+                let entered = self.act_on_enter_declarator_scope(qual);
+                let r = {
+                    let mut s = crate::templ::subst::Substituter::new(self, &levels);
+                    s.ci_rebuild = Some(qual);
+                    s.ci_expr_operand_ty(base, loc)
+                };
+                self.act_on_exit_declarator_scope(entered);
+                match r? {
+                    Ok(t) if !self.is_error_type(t) => t,
+                    _ => return Some(base),
+                }
+            }
             TypeView::DependentSizedArray { elem, size } => {
-                let kiln_ast::types::ExprOperand::Expr(e) = size else { return Some(base) };
+                // A bound kept only as its profile (the canonical array
+                // type) stands for its first expression (WP-1169).
+                let e = match size {
+                    kiln_ast::types::ExprOperand::Expr(e) => e,
+                    kiln_ast::types::ExprOperand::Profile(p) => {
+                        let Some(e) = self.ast.types.profile_expr(p) else { return Some(base) };
+                        e
+                    }
+                };
                 let r = self.rebuild_ci_type(elem, qual, loc, depth + 1);
                 let n = self.rebuild_ci_expr(e, qual);
                 if r == elem && n == e {
