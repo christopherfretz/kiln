@@ -7,8 +7,7 @@
 // silently, with no note). The failure is in the initializer, not in the
 // substitution of the arguments, so it is a hard error and extract reads
 // an initializer that is not a constant expression. GCC 16.1 also rejects
-// the program (its trait answers false for the incomplete type, so the
-// assertion fails).
+// the program; kiln names door() after the substitution's notes.
 //@ expect: compile-fail
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -17,6 +16,7 @@
 //@ diag: 38:41 error "constexpr variable 'copyable_v<^^Inc>' must be initialized by a constant expression"
 //@ diag: 39:52 note "in instantiation of variable template specialization 'copyable_v<^^Inc>' requested here"
 //@ diag: 39:52 note "while substituting template arguments into 'copyable_v' for std::meta::substitute"
+//@ diag: 40:15 note "in call to 'door(^^Inc)'"
 //@ diag: 37:42 note "invalid use of incomplete type 'Inc'"
 //@ diag: 38:54 note "in call to 'copyable(^^Inc)'"
 //@ diag: 38:54 error "call to consteval function 'copyable' is not a constant expression"
