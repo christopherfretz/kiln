@@ -460,8 +460,7 @@ pub(crate) struct OverloadScratch {
     /// (the early one and its re-runs) have reached, so a target that
     /// re-resolves it to another specialization takes those numbers over
     /// ([`Sema::retarget_template_id`], spec/sema-lambda.md §3.5).
-    pub template_id_numbers:
-        kiln_source::fx::FxHashMap<kiln_ast::ExprId, Vec<address::IdNumber>>,
+    pub template_id_numbers: kiln_source::fx::FxHashMap<kiln_ast::ExprId, Vec<address::IdNumber>>,
     /// The conversion sequences a template candidate's deduction
     /// computed for its function template-id arguments of non-dependent
     /// parameters ([temp.deduct.call]/10): the candidate reuses them, as

@@ -1235,7 +1235,8 @@ pub fn implicit_convert(
         let resolved = if ctx == ConvCtx::Condition {
             s.check_overload_use(e);
             None
-        } else if checked && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
+        } else if checked
+            && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
         {
             // [expr.assign]/3 via [over.over]: clang's
             // `CheckSingleAssignmentConstraints` resolves silently and

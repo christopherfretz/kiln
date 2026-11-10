@@ -480,10 +480,15 @@ impl Sema<'_, '_> {
     /// re-runs', whose closures are discarded) stay given
     /// (spec/sema-lambda.md §3.5, WP-1170). Without a current record `f`
     /// numbers after them.
-    pub(crate) fn taking_over_numbers<R>(&mut self, r: ExprId, f: impl FnOnce(&mut Self) -> R) -> R {
-        let rec = self.ovl.template_id_numbers.remove(&r).filter(|rec| {
-            rec.iter().all(|x| self.lambda_mangle.number_of(&x.key) == x.reached)
-        });
+    pub(crate) fn taking_over_numbers<R>(
+        &mut self,
+        r: ExprId,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let rec =
+            self.ovl.template_id_numbers.remove(&r).filter(|rec| {
+                rec.iter().all(|x| self.lambda_mangle.number_of(&x.key) == x.reached)
+            });
         for x in rec.iter().flatten() {
             self.lambda_mangle.set_number(&x.key, x.before);
         }
@@ -636,9 +641,9 @@ impl Sema<'_, '_> {
         }
         let loc = self.ast.exprs.get(ule).loc();
         let mismatched = r != ule
-            && self.referenced_decl_of_callee(r).is_some_and(|d| {
-                !self.address_matches(d, (fnty, member))
-            });
+            && self
+                .referenced_decl_of_callee(r)
+                .is_some_and(|d| !self.address_matches(d, (fnty, member)));
         let run = |s: &mut Self| {
             s.holding_pending_uses(|s| {
                 for (d, _) in s.ule_candidates(ule) {

@@ -1170,9 +1170,10 @@ impl Sema<'_, '_> {
             // resolves it here once and the candidate reuses the
             // sequence (spec/sema-lambda.md §3.5).
             // One still an overload set is resolved by the conversion.
-            let tid = args[i].expr.filter(|_| o.contains(IcsOptions::CANDIDATE_ARG)).and_then(
-                |e| self.template_id_arg(e).map(|set| (e, set)),
-            );
+            let tid = args[i]
+                .expr
+                .filter(|_| o.contains(IcsOptions::CANDIDATE_ARG))
+                .and_then(|e| self.template_id_arg(e).map(|set| (e, set)));
             if let Some((e, false)) = tid
                 && self.mismatched_template_id(e, p).is_none()
             {
