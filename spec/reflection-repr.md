@@ -130,6 +130,13 @@ The parser (`parse_reflect_expr`) and sema map the operand forms:
 - `^^T` in a template: dependent; the `CXXReflectExpr` stores the
   pattern operand and substitution remaps it (`templ/subst/exprs.rs`),
   so a member of a class template reflects the instantiated member.
+  An instantiation-dependent type operand that is not a dependent type
+  (`^^ND<T>`, `template <class T> using ND = int;`) is value-dependent
+  too ([temp.dep.constexpr]): its reflection is the alias specialization
+  of the template's own parameter, so a parameter type `K<^^ND<T>>` is
+  substituted (and deduced through the other parameters) rather than
+  compared with its definition-time value (`Builder::reflect_expr`,
+  WP-1260; `temp.dep.constexpr/reflect-instantiation-dependent-alias-run.cpp`).
 
 Ill-formed operands, each one error:
 

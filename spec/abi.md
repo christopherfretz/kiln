@@ -988,18 +988,47 @@ unadjusted alignment, as the classification does (WP-583).
   specialization's type, template and bare non-type arguments, an array
   bound (`template <class T, int N> using Arr = TT<T[N]>` matches GCC's
   `ta3ArrIA3_iE_2TTIS0_E`) and a recoverable alias; anything else is
-  conservatively not deduced. An alias with a parameter that is not
-  deduced writes its own arguments in both modes, dependent or not:
-  one that does not appear (`template <class T, class U> using F = TT<T>`,
-  `ta1FIS0_iE_…`; `f<^^F<int, long>>` is `…ta1FIilE_2TTIiE…`), one that
-  is non-deduced (`template <class T> using D = typename RC<T>::type`,
-  a remove_const: `f<^^D<const int>>` is `…ta1DIKiE_i…`, g++-16's
-  `ta1D_i` is also `D<int>`'s), or an alias of a non-class type that does
-  not name it (`using V = void`). The symbols are
-  `spec/landed/abi/WP-1250.md`; the tests are
-  `tests/conformance/expr.reflect/template-id-signature-*-run.cpp` and the
-  driver's `gcc_dependent_template_id_link` (a kiln object linked with a
-  g++-16 one).
+  conservatively not deduced.
+
+  A parameter that appears only in a non-deduced context
+  ([temp.deduct.type]/5: a nested-name-specifier, a decltype operand)
+  is still recoverable from one specialization's spelling when its
+  argument there is dependent: the qualifier then stays a dependent name
+  and is written structurally ([temp.dep.type]), carrying the argument
+  (WP-1260). So gcc mode also writes GCC's form when every alias
+  parameter is deduced or, with a dependent argument (a non-empty pack
+  whose elements are all dependent, for a pack), appears in a dependent
+  qualifier (`typename RC<T>::type`, `typename RN<N>::type`,
+  `RC<T>::template X<U>`) or a decltype (`decltype(T{})`,
+  `decltype(sizeof(T))`) of the defining-type-id, through nested aliases
+  and class specialization arguments
+  (`mangle::reflect::alias_args_preserved`). `^^D<T>`, `template <class
+  T> using D = typename RC<T>::type`, is g++-16's `ta1D_N2RCIS0_E4typeE`;
+  `^^D2<T, int>` (`typename RC2<T, U>::type`) `ta2D2_N3RC2IS0_iE4typeE`;
+  `^^DP<T, int>` (`TT2<typename RC<T>::type, U>`)
+  `ta2DPIN2RCIS0_E4typeEiE_3TT2IS4_iE`; nested `^^D<AT<T>>`
+  `ta2N1_N2RCI2TTIPS0_EE4typeE`; `^^DT<T>` (`decltype(T{})`)
+  `ta2DT_DTtlS0_EE`. This is decided per specialization, so the two forms
+  mix within one alias: a dependent qualifier makes the aliased type
+  dependent, a resolved one makes it the resolved type, and a kiln form
+  always has an argument list (`I…E`) that differs from the aliased
+  type's, so no gcc-form symbol equals a kiln-form one.
+
+  Otherwise an alias with a parameter that is not deduced writes its own
+  arguments in both modes, dependent or not: one that does not appear
+  (`template <class T, class U> using F = TT<T>`, `ta1FIS0_iE_…`;
+  `f<^^F<int, long>>` is `…ta1FIilE_2TTIiE…`; `template <class T> using
+  ND = int`, `^^ND<T>` is `ta2NDIS0_E_i`), one in a non-deduced context
+  whose argument is not dependent (`D = typename RC<T>::type`, a
+  remove_const: `f<^^D<const int>>` is `…ta1DIKiE_i…`, g++-16's `ta1D_i`
+  is also `D<int>`'s; `^^DP<const int, T>` is `ta2DPIKiS0_E_…`), or an
+  alias of a non-class type that does not name it (`using V = void`).
+  The symbols are `spec/landed/abi/WP-1250.md` and
+  `spec/landed/abi/WP-1260.md`; the tests are
+  `tests/conformance/expr.reflect/template-id-signature-*-run.cpp`,
+  `template-id-nondeduced-*-run.cpp` and the driver's
+  `gcc_dependent_template_id_link` and `gcc_nondeduced_alias_link` (a
+  kiln object linked with a g++-16 one).
 - **Known divergences from GCC 16.1.** Reflection-specific, where GCC's
   spelling gives distinct declarations one symbol and g++-16 fails to
   assemble a TU holding both ("symbol … is already defined";
@@ -1014,7 +1043,11 @@ unadjusted alignment, as the classification does (WP-583).
   - an alias template-id is its aliased type's (class specialization)
     arguments even when they do not determine the alias's (`^^F<T, int>`
     and `^^F<T, long>` are both `ta1FIS0_E_2TTIS0_E`; `^^D<int>` and
-    `^^D<const int>` are both `ta1D_i`; non-dependent too);
+    `^^D<const int>` are both `ta1D_i`; non-dependent too; `^^ND<T>` and
+    `^^ND<T*>` with `ND = int` are both `ta2ND_i`; `^^DP<int, T>` and
+    `^^DP<const int, T>` are both `ta2DPIiS0_E_…`, a qualifier with a
+    non-dependent argument resolving;
+    `expr.reflect/template-id-nondeduced-collide-run.cpp`);
   - g++-16 rejects `^^S<T>::template m<int>` and `^^T::template m<int>`
     at substitution ("'m' was not declared", a rejects-valid), so those
     have no GCC symbol; kiln writes `desr1SIS0_EE1mIiE`.
