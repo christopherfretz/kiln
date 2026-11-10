@@ -481,7 +481,8 @@ impl<'a> Cg<'a> {
             f: Fx::empty(),
             gi: crate::global_init::GlobalInits::default(),
             cov: crate::coverage::records::CovModule::default(),
-            anon: mangle::AnonIds::with_reflection_mangling(opts.reflection_mangling),
+            anon: mangle::AnonIds::with_reflection_mangling(opts.reflection_mangling)
+                .with_clang_compat(opts.clang_compat),
             tbaa: crate::tbaa::TbaaCache::default(),
             ann: crate::annotate::Annotations::default(),
             vis_active: opts.visibility != Visibility::Default
