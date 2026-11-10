@@ -165,6 +165,16 @@ impl Cg<'_> {
 
     /// clang `getOrCreateType` (`None` for `void`).
     pub(crate) fn di_type(&mut self, q: QualType) -> Option<MetadataId> {
+        // clang's `DebugType` time-trace event, cache hits included; the
+        // detail is the type as written (spec/driver.md "Time trace").
+        let _t = kiln_source::trace::Scope::with_detail("DebugType", || {
+            kiln_ast::types::print_type(
+                &self.ast.types,
+                self.ast,
+                q,
+                kiln_ast::types::PrintOptions::SUGARED,
+            )
+        });
         let q = self.di_unwrap(q);
         if let Some(&t) = self.di.as_deref()?.types.get(&q) {
             return t;

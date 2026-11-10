@@ -1251,7 +1251,7 @@ impl Cg<'_> {
         let Some(od) = ast.exprs.operator_delete(e) else {
             return err(loc, "delete-expression without a deallocation function");
         };
-        let Some(mut dt) = t.pointee(ast.exprs.get(arg).ty()) else {
+        let Some(mut dt) = t.pointee_sugared(ast.exprs.get(arg).ty()) else {
             return err(loc, "delete of a non-pointer");
         };
         let array_form = ast.exprs.get(e).has(ExprFlags::ARRAY_FORM);

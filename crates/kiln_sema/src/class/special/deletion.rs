@@ -81,7 +81,7 @@ impl Sema<'_, '_> {
     pub(crate) fn decl_arg(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        let names = crate::names::SemaNames::new(self);
+        let names = crate::names::sema_names(self);
         names.write_decl_name(d, false, &mut s);
         if matches!(self.kind_of(d), DeclKind::CXXRecord | DeclKind::Var)
             && let Some((_, info)) = self.ast.spec_info(d)

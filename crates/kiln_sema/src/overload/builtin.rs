@@ -899,7 +899,7 @@ impl Sema<'_, '_> {
     fn c_ty_str(&self, t: QualType) -> String {
         kiln_ast::types::print_type(
             &self.ast.types,
-            &crate::names::SemaNames::new(self),
+            &crate::names::sema_names(self),
             t,
             kiln_ast::types::PrintOptions::C_DEFAULT,
         )
