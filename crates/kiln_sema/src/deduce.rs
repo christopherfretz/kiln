@@ -239,7 +239,8 @@ impl Sema<'_, '_> {
         if n.kind() == ExprKind::SubstNonTypeTemplateParmExpr
             && self.ast.types.as_record(n.ty()).is_some()
             && !n.has(ExprFlags::REFERENCE_PARAMETER)
-            && self.names_template_param_object(self.ast.exprs.subst_replacement(e))
+            && (self.names_template_param_object(self.ast.exprs.subst_replacement(e))
+                || self.nttp_never_reference(self.ast.exprs.subst_parameter(e)))
         {
             // A template parameter object ([temp.param]/8): the
             // parameter's (deduced) class type, without the `const` of
@@ -252,6 +253,22 @@ impl Sema<'_, '_> {
             ValueCategory::LValue => self.ast.types.lvalue_ref_to(n.ty()),
             ValueCategory::XValue => self.ast.types.rvalue_ref_to(n.ty()),
             ValueCategory::PRValue => n.ty(),
+        }
+    }
+
+    /// Whether non-type parameter `p` is never a reference: typed by a
+    /// non-dependent non-reference type, or by `auto` (`C auto`), which
+    /// deduces as a variable does ([temp.param]/6, [dcl.type.auto.deduct]).
+    /// Its class-type argument is a template parameter object even when
+    /// the substituted argument is still the written one (a
+    /// type-constraint's `Of<sp> auto`, whose `sp` names the variable;
+    /// WP-1217).
+    fn nttp_never_reference(&self, p: DeclId) -> bool {
+        let Some(t) = self.ast.decls.get(p).ty() else { return false };
+        let t = self.ast.types.canonical(t);
+        match self.ast.types.view(t.ty()) {
+            TypeView::Auto { keyword: AutoKeyword::Auto, deduced: None, .. } => true,
+            _ => !self.ast.types.is_dependent(t) && !self.ast.types.is_reference(t),
         }
     }
 

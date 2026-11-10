@@ -1665,7 +1665,13 @@ silently (`diag = None`) at those sites. S3O lists them.
      that type, a dependent type anything (its deduction checked it), and
      a placeholder type a value whose type it deduces from (`auto *P`
      takes `&x` but not `0` or `nullptr`; `auto Q::*M` takes `&Q::m`;
-     `nttp_placeholder_matches`); a deduced pack element by element. So
+     `nttp_placeholder_matches`), a deduced class template placeholder
+     (`template <fs F>`, [dcl.type.class.deduct]/2) a value whose type is a
+     specialization of that template (its copy deduction candidate,
+     [over.match.class.deduct]/1.3; `ctad_placeholder_matches`; WP-1217,
+     `tests/conformance/temp.spec.partial.match/nttp-class-placeholder-run.cpp`,
+     `nttp-class-placeholder-qualified-run.cpp`);
+     a deduced pack element by element. So
      `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
      primary does not bind `template<int N> A<N>` (WP-1105,
      `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
@@ -4647,6 +4653,16 @@ parameter matches the argument's type as that reference): `template<class
 T, T *P> struct S<P>` deduces `T` from `S<&g>`, and the deducibility
 check of a partial specialization finds `T` deducible (WP-789,
 tests/conformance/temp.spec.partial.general/auto-primary-typed-nttp-partial-run.cpp).
+The declared type is that of the parameter at the named index in the
+template being deduced (`DeducedArgs::params`, set for class partial
+specialization matching and ordering and for function template
+deduction), not of the parameter the argument's expression names: a
+canonical argument's expression is the first one formed with its
+profile, and a profile leaves out a placeholder's type-constraint (as
+clang's `getUnconstrainedType`), so it may name another template's
+`same_as<T> auto V`, whose type depends on that template's `T`. Clang
+takes `TemplateParams->getParam(Index)` the same way (WP-1217,
+tests/conformance/temp.spec.partial.match/nttp-param-type-own-template-run.cpp).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -5404,7 +5420,12 @@ The `SpecKind` transitions are those of §4.5.
   `decltype(A)` of a template parameter object is the deduced class type
   without `const` ([dcl.type.decltype]/1.3; `decltype_of` on a
   `SubstNonTypeTemplateParmExpr` of class type); `decltype((A))` is
-  `const T&` (WP-201).
+  `const T&` (WP-201). The same holds when the substituted argument is
+  still the written one, a `DeclRefExpr` to a variable (a
+  type-constraint's `Of<sp> auto`): a parameter declared `auto` or of a
+  non-dependent non-reference type is never a reference
+  (`nttp_never_reference`; WP-1217,
+  `tests/conformance/dcl.type.decltype/constraint-class-nttp-not-reference.cpp`).
 - **Uses.** An id-expression naming a class-type NTTP in the pattern is an
   lvalue of type `const T` (builder `decl_ref_category`,
   `build_decl_ref_extra`); a reference NTTP names its referent (an

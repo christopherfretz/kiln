@@ -122,6 +122,7 @@ impl Sema<'_, '_> {
         }
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(list.depth, n);
+        d.params = Some(list.params);
         let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
         if ok && p.has_pack {
             self.empty_undeduced_packs(list.params, &mut d);
@@ -278,11 +279,39 @@ impl Sema<'_, '_> {
                 t.canonical(QualType::unqual(class)) == t.canonical(QualType::unqual(ac));
             return same_class && self.nttp_placeholder_matches(pointee, ap);
         }
+        if let Some((_, tmpl)) = self.undeduced_ctad(t.canonical(pt)) {
+            return self.ctad_placeholder_matches(tmpl, at);
+        }
         if !self.contains_undeduced_auto(pt) {
             let t = &self.ast.types;
             return t.same_unqualified(t.canonical(pt), t.canonical(at));
         }
         self.deduce_match(pt, at).is_some()
+    }
+
+    /// Whether a non-type parameter typed by the deduced class template
+    /// placeholder for `tmpl` (`template <fs F>`, [temp.param]/6,
+    /// [dcl.type.class.deduct]/2) binds a value of type `at`: class
+    /// template argument deduction from that value picks its copy
+    /// deduction candidate ([over.match.class.deduct]/1.3), so any
+    /// specialization of `tmpl` (`fs<3>`, or a synthesized `fs<N>` or the
+    /// same placeholder in partial ordering) matches (clang
+    /// `ConvertDeducedTemplateArgument` → `CheckTemplateArgument`). A
+    /// placeholder for an alias template is not checked here.
+    fn ctad_placeholder_matches(&self, tmpl: DeclId, at: QualType) -> bool {
+        if self.kind_of(tmpl) != DeclKind::ClassTemplate {
+            return true;
+        }
+        let want = self.ast.first(tmpl);
+        let t = &self.ast.types;
+        let named = match t.canonical_view(at) {
+            TypeView::TemplateSpecialization { name, .. }
+            | TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
+                t.template_decl(name)
+            }
+            _ => t.as_record(at).and_then(|d| self.ast.spec_info(d)).map(|(_, s)| s.template),
+        };
+        named.is_some_and(|d| self.ast.first(d) == want)
     }
 
     /// Whether the arguments of partial specialization `p`, with
@@ -632,6 +661,7 @@ impl Sema<'_, '_> {
         let as_: Vec<TemplateArg> = self.ast.types.args(pa.canonical).to_vec();
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(lb.depth, self.ast.lists.len(lb.params));
+        d.params = Some(lb.params);
         // [temp.deduct.type]/9: a pack expansion of `a`'s (a synthesized
         // pack) is deduced as a whole by a pack expansion of `b`'s, as
         // clang does (`template <class... P> C<0, T<P...>>` against
@@ -791,6 +821,7 @@ impl Sema<'_, '_> {
     ) -> bool {
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(l.depth, self.ast.lists.len(l.params));
+        d.params = Some(l.params);
         d.expansions = true;
         d.converted_values = converted_values;
         let mut ok = self.deduce_args(ps, as_, true, &mut d, loc) == Tdk::Success;
