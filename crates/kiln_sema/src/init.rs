@@ -1982,8 +1982,14 @@ impl Sema<'_, '_> {
             let et = conv::strip_cv(self, self.ety(e));
             let ce = self.ast.types.canonical(et);
             let lvalue = self.ast.exprs.get(e).value_category() == ValueCategory::LValue;
+            // An overload set (a function template-id, even one resolved
+            // early) initializing a reference to function is resolved for
+            // the binding first and then binds directly (clang
+            // `ResolveOverloadedFunctionForReferenceBinding`).
             if self.expr_is_type_dependent(e)
                 || (self.ref_related(cr, ce).0 && (lvalue || !no_temp))
+                || (self.ast.types.is_function(cr)
+                    && (self.overload_operand(e).is_some() || self.template_id_arg(e).is_some()))
             {
                 return self.init_from_expr(ty, e, ConvCtx::Initialization, at);
             }

@@ -10,7 +10,6 @@
 //@ expect: run
 //@ args: %{test_dir}/Inputs/lambda-in-signature-explicit-args-mismatched-spec-defs.cpp
 //@ stdout: 1 1
-//@ xfail(kiln): WP-1142 follow-up, the early specialization (U = void) is not the target's, and the retarget numbers each resolution twice
 #include <cstdio>
 template <class T> struct is_int { static constexpr bool v = false; };
 template <> struct is_int<int> { static constexpr bool v = true; };

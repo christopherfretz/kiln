@@ -154,6 +154,39 @@ impl ManglingState {
             j.extend(mine);
         }
     }
+
+    /// Ends a probe begun by [`Self::begin_probe`], keeping its numbers:
+    /// returns the keys it numbered (one entry per number given). Only
+    /// an outermost probe returns them; inside another probe they join
+    /// that one's journal and nothing is returned, so a caller never
+    /// takes back numbers an enclosing probe may discard too.
+    pub(crate) fn end_probe_keys(
+        &mut self,
+        outer: Option<Vec<(DeclId, String)>>,
+    ) -> Vec<(DeclId, String)> {
+        let mine = std::mem::replace(&mut self.journal, outer).unwrap_or_default();
+        if let Some(j) = self.journal.as_mut() {
+            j.extend(mine);
+            return Vec::new();
+        }
+        mine
+    }
+
+    /// The last number given in numbering context and <lambda-sig> `key`.
+    pub(crate) fn number_of(&self, key: &(DeclId, String)) -> u32 {
+        self.numbers.get(key).copied().unwrap_or(0)
+    }
+
+    /// Sets the last number given in `key`: the next closure numbered
+    /// there takes `n + 1` (spec/sema-lambda.md §3.5, the re-resolution
+    /// of a function template-id, WP-1170).
+    pub(crate) fn set_number(&mut self, key: &(DeclId, String), n: u32) {
+        if let Some(x) = self.numbers.get_mut(key) {
+            *x = n;
+        } else if n > 0 {
+            let _ = self.numbers.insert(key.clone(), n);
+        }
+    }
 }
 
 /// The [`ManglingState`] numbering sites a function template

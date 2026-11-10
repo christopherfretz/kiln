@@ -2185,10 +2185,11 @@ impl Cg<'_> {
 
     // ---- expressions ---------------------------------------------------
 
-    /// The initializer of the field of a `CXXDefaultInitExpr`.
+    /// The initializer of the field of a `CXXDefaultInitExpr`, or the
+    /// copy sema rebuilt for this use, whose temporaries are the use's
+    /// (spec/sema.md §7.6a; [`kiln_ast::Ast::default_init_expr`]).
     pub(crate) fn default_member_init(&self, e: ExprId) -> Option<ExprId> {
-        let f = self.ast.exprs.default_init_field(e);
-        self.ast.decls.field(f).and_then(|x| x.init)
+        self.ast.default_init_expr(e)
     }
 
     /// A static member function.

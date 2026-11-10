@@ -1232,9 +1232,11 @@ impl Sema<'_, '_> {
             // use (spec/sema.md §7.6a) is evaluated here, so its calls and
             // temporaries are this function's (clang 19/22 leave the
             // element empty: their `CXXDefaultArgExpr` has no children). A
-            // default argument that is not rewritten stays one element.
+            // default argument that is not rewritten stays one element. So
+            // does a default member initializer use, rebuilt the same way
+            // (WP-1177).
             // WP-1166.
-            ExprKind::CXXDefaultArgExpr => {
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
                 if let Some(r) = ex.default_arg_rewritten(e) {
                     self.cfg_expr(r, b);
                 }
