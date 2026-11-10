@@ -2261,7 +2261,7 @@ variable templates, unresolved-lookup expressions (a dependent call
 calls, and every construct the first slice lists.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 9` since WP-1120, 8 for WP-1132, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 10` since WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
