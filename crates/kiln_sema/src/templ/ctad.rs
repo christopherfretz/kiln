@@ -2096,7 +2096,7 @@ impl Sema<'_, '_> {
                 ph.push_str("...");
             }
             ph.push_str(&self.decl_name_str(self.ast.decls.get(*p).name()));
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             kiln_ast::types::write_declarator(
                 &self.ast.types,
                 &names,

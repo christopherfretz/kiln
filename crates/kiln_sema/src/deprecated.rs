@@ -129,7 +129,7 @@ impl Sema<'_, '_> {
     pub(crate) fn name_for_diagnostic(&self, d: DeclId) -> String {
         let mut name = self.decl_name(d);
         if let Some((_, i)) = self.ast.spec_info(d) {
-            let names = crate::names::SemaNames::new(self);
+            let names = crate::names::sema_names(self);
             let types = &self.ast.types;
             if self.ast.decls.record(d).is_some() {
                 kiln_ast::types::write_arg_list_scoped_of(

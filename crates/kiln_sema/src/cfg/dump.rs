@@ -50,7 +50,7 @@ impl Sema<'_, '_> {
     pub(crate) fn cfg_title(&self, f: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        crate::names::SemaNames::new(self).closures_as_lambda().write_decl_name(f, true, &mut s);
+        crate::names::sema_names(self).closures_as_lambda().write_decl_name(f, true, &mut s);
         s
     }
 
