@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use super::compare::{line_diff, pp_diff};
 use super::diag_parse::{self, Diagnostic};
 use super::directives::{
-    self, CompilerKind, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect, TestSpec,
+    self, CompilerKind, DiagDirective, Expect, Lang, PpCompare, Severity, StdinInput, StdoutExpect,
+    TestSpec,
 };
 use super::discover::TestCase;
 use super::inst_report;
@@ -556,14 +557,18 @@ impl Test<'_> {
             // `mode`, and a test's own `args:` come last and win.
             c.arg("-fno-crash-diagnostics");
         }
-        c.args(mode);
+        let gcc = program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Gcc;
+        let args: Vec<String> =
+            spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
+        let mode: Vec<String> = mode.iter().map(|m| (*m).to_owned()).collect();
+        c.args(compiler_flags(gcc, &mode));
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
         if program == self.cfg.compiler {
             c.args(self.meta_header_flags(true));
         }
-        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        c.args(compiler_flags(gcc, &args));
         c.args(self.module_flags(program, spec, spec.modules.len()));
         if spec.pch.is_some() {
             c.arg("-include-pch").arg(self.pch_file(program));
@@ -1047,8 +1052,9 @@ impl Test<'_> {
     }
 
     fn check_diags(&self, spec: &TestSpec, diags: &[Diagnostic]) -> Check {
-        let clang = self.cfg.compiler_kind == CompilerKind::Clang;
-        let directives = diag_parse::expand_clang_dups(&spec.diags, clang);
+        let Some(directives) = diag_directives_for(spec, self.cfg.compiler_kind) else {
+            return Ok(());
+        };
         let report = diag_parse::match_diags(
             &directives,
             diags,
@@ -2029,6 +2035,22 @@ const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Why a compiler of `kind` cannot run `spec` at all (a skip), if it
 /// cannot.
+/// The flags of a compile by the compiler under test, as it takes them:
+/// GCC's spelling ([`crate::oracle::gcc_args`]) when it is GCC
+/// (spec/harness.md "GCC as the compiler under test"), else unchanged.
+fn compiler_flags(gcc: bool, flags: &[String]) -> Vec<String> {
+    if gcc { crate::oracle::gcc_args(flags) } else { flags.to_vec() }
+}
+
+/// The `diag:` directives a compile by a `kind` compiler is checked
+/// against (spec/harness.md "Diagnostics"): `None` under GCC, whose wording
+/// is not kiln's or clang's (`diag:` and `strict-diags` are not checked);
+/// otherwise the test's, with `dup(clang)` groups doubled under clang.
+fn diag_directives_for(spec: &TestSpec, kind: CompilerKind) -> Option<Vec<DiagDirective>> {
+    (kind != CompilerKind::Gcc)
+        .then(|| diag_parse::expand_clang_dups(&spec.diags, kind == CompilerKind::Clang))
+}
+
 fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     let needs = |what: &str, who: &str| {
         Some(format!("not supported by this compiler (`{what}` needs {who})"))
@@ -2409,10 +2431,54 @@ fn has_sanitizer_runtime(clang: &Path) -> bool {
 #[cfg(test)]
 mod compat_tests {
     use super::{
-        DumpKind, Status, compat_for, crash_diagnostics_off, debugger_gate_in, first_missing_check,
-        ir_diff, ir_normalize, ir_target_flag,
+        DumpKind, Status, compat_for, compiler_flags, crash_diagnostics_off, debugger_gate_in,
+        diag_directives_for, first_missing_check, ir_diff, ir_normalize, ir_target_flag,
     };
-    use crate::test::directives::{Lang, parse};
+    use crate::test::directives::{CompilerKind, Lang, parse};
+
+    /// WP-1249: GCC as the compiler under test gets the mode's and the
+    /// test's flags in GCC's spelling (`oracle::gcc_args`); kiln and clang
+    /// get them unchanged.
+    #[test]
+    fn gcc_under_test_gets_gcc_spelling() {
+        let v = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let args = v(&[
+            "-freflection",
+            "--gcc-toolchain=/usr/local",
+            "-ferror-limit=0",
+            "-fclang-compat=19",
+            "-Xclang",
+            "-verify",
+            "-I",
+            "tests/support",
+        ]);
+        assert_eq!(
+            compiler_flags(true, &args),
+            v(&["-freflection", "-fmax-errors=0", "-I", "tests/support"])
+        );
+        assert_eq!(compiler_flags(false, &args), args);
+        let mode = v(&["-fsyntax-only", "-ferror-limit=0"]);
+        assert_eq!(compiler_flags(true, &mode), v(&["-fsyntax-only", "-fmax-errors=0"]));
+        assert_eq!(compiler_flags(false, &mode), mode);
+    }
+
+    /// WP-1249: which `diag:` directives each compiler kind is checked
+    /// against (spec/harness.md "Diagnostics"): none under GCC, the test's
+    /// under kiln, and under clang the test's with `dup(clang)` doubled.
+    #[test]
+    fn diag_directives_per_compiler_kind() {
+        let src = "//@ expect: compile-fail\n//@ strict-diags\n\
+                   //@ diag: 5 error \"once\" dup(clang)\n//@ diag: 5 note \"here\"\n\
+                   //@ diag: 6 warning \"unused\"\n";
+        let spec = parse(src, Lang::Cxx).unwrap();
+        let lines = |k| {
+            diag_directives_for(&spec, k).map(|d| d.iter().map(|d| d.line).collect::<Vec<_>>())
+        };
+        assert_eq!(lines(CompilerKind::Gcc), None);
+        assert_eq!(lines(CompilerKind::Kiln), Some(vec![5, 5, 6]));
+        assert_eq!(lines(CompilerKind::Clang), Some(vec![5, 5, 5, 5, 6]));
+        assert_eq!(lines(CompilerKind::Other), Some(vec![5, 5, 6]));
+    }
 
     /// spec/harness.md "Oracle toolchain": kiln imitates the oracle, or
     /// the clang a `requires:` names when the oracle does not meet it.

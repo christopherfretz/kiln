@@ -503,6 +503,28 @@ fn gcc_oracle_with_a_fake_gcc() {
     assert!(execute(&o).unwrap_err().contains("the GCC oracle"));
 }
 
+/// GCC as the compiler under test (WP-1249, spec/harness.md "GCC as the
+/// compiler under test") with the fake GCC, which rejects the kiln/clang
+/// flags GCC 16.1 rejects: the flags reach it in GCC's spelling, the
+/// verdict and run output are checked, `diag:`/`strict-diags` are not,
+/// and `xfail(gcc)`/`skip(gcc)` apply.
+#[test]
+fn gcc_as_the_compiler_under_test() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let mut o = clang_opts(&[root.join("xtask/fixtures/gcc-compiler")]);
+    o.compiler = Some(root.join("xtask/fixtures/fake-gcc/g++"));
+    o.no_gcc = true;
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 9);
+    let flags = results.iter().find(|r| r.name.ends_with("pass-flags-in-gcc-spelling.cpp"));
+    let log = flags.unwrap().log.join("\n");
+    assert!(log.contains("-fmax-errors=5 -fconstexpr-ops-limit=1000"), "{log}");
+    assert!(!log.contains("--gcc-toolchain") && !log.contains("-resource-dir"), "{log}");
+}
+
 /// `KILN_REQUIRE_DEBUGGERS` is required only by exactly `1`, and the
 /// debugger corpus is a default root (WP-816, spec/harness.md "Debugger
 /// tests"; the SKIP/ERROR decision is `runner::compat_tests`).

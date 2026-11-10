@@ -8,16 +8,30 @@
 #   reject  reports an error (exit 1)
 #   accept  exits 0 without compiling
 # Otherwise it compiles with ${KILN_FAKE_CC:-clang++-19} and -DKILN_FAKE_GCC,
-# so a test can make GCC's binary behave differently.
+# so a test can make GCC's binary behave differently. Like GCC 16.1 it
+# rejects the kiln/clang flags the harness must not pass it
+# (`--gcc-toolchain=`, `-ferror-limit=`, `-fclang-compat=`, `-fkiln-*`;
+# spec/harness.md "GCC as the compiler under test"), and it drops GCC's own
+# `-fmax-errors=`/`-fconstexpr-ops-limit=` before calling clang.
 if [ "$1" = "--version" ]; then
   echo "g++ (GCC) 16.1.0-fake (xtask fixture)"
   exit 0
 fi
 src=
-for a in "$@"; do
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  n=$((n - 1))
   case "$a" in
+    --gcc-toolchain=* | -ferror-limit=* | -fclang-compat=* | -fkiln-*)
+      echo "g++: error: unrecognized command-line option '$a'" >&2
+      exit 1
+      ;;
+    -fmax-errors=* | -fconstexpr-ops-limit=*) continue ;;
     *.cpp | *.c | *.h) src=$a ;;
   esac
+  set -- "$@" "$a"
 done
 what=$(sed -n 's|^// fake-gcc: *||p' "$src" 2>/dev/null | head -n 1)
 case "$what" in
