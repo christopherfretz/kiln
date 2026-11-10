@@ -1547,10 +1547,10 @@ impl Mangler<'_, '_> {
                 // arguments (the current instantiation, `C::f` or
                 // `C<X>::f` in a member of `C<int>`) is clang's
                 // `Type::Record` case, the bare name `sr1CE1f` (WP-1169).
-                if self.spec_of(d).is_some() {
-                    if let Some(args) = self.written_args(ty) {
-                        self.template_args(args);
-                    }
+                if self.spec_of(d).is_some()
+                    && let Some(args) = self.written_args(ty)
+                {
+                    self.template_args(args);
                 }
                 Some(false)
             }

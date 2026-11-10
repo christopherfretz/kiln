@@ -162,10 +162,9 @@ impl Substituter<'_, '_, '_> {
                     self.sema.is_dependent_type(c)
                 })
             }
-            ExprKind::BinaryOperator => [n.a(), n.b()]
-                .into_iter()
-                .filter_map(sub)
-                .any(|x| self.ci_index_value_dependent(x)),
+            ExprKind::BinaryOperator => {
+                [n.a(), n.b()].into_iter().filter_map(sub).any(|x| self.ci_index_value_dependent(x))
+            }
             ExprKind::ParenExpr | ExprKind::ImplicitCastExpr => {
                 sub(n.a()).is_none_or(|x| self.ci_index_value_dependent(x))
             }
