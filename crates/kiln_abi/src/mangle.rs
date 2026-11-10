@@ -564,6 +564,17 @@ pub fn type_externally_visible(ast: &Ast, q: QualType) -> bool {
     Vis::new(ast).ty(q)
 }
 
+/// [basic.link]/15 "a type is said to have linkage" with external
+/// linkage, the type test of clang `isExternalWithNoLinkageType`
+/// (`err_undefined_internal_type`, [basic.link]/8): as
+/// [`type_externally_visible`], except that a class template
+/// specialization has linkage whatever its template arguments (its
+/// template's, and its enclosing class's or function's, still count), and
+/// so does a member of one. `W<Local>` has linkage, `Local` none.
+pub fn type_has_external_linkage(ast: &Ast, q: QualType) -> bool {
+    Vis { spec_has_linkage: true, ..Vis::new(ast) }.ty(q)
+}
+
 fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
     Vis::new(ast).tag(d)
 }
@@ -576,11 +587,14 @@ fn tag_externally_visible(ast: &Ast, d: DeclId) -> bool {
 struct Vis<'a> {
     ast: &'a Ast,
     memo: FxHashMap<QualType, bool>,
+    /// A class template specialization's template arguments are not
+    /// consulted ([`type_has_external_linkage`]).
+    spec_has_linkage: bool,
 }
 
 impl<'a> Vis<'a> {
     fn new(ast: &'a Ast) -> Self {
-        Vis { ast, memo: FxHashMap::default() }
+        Vis { ast, memo: FxHashMap::default(), spec_has_linkage: false }
     }
 
     fn ty(&mut self, q: QualType) -> bool {
@@ -720,6 +734,7 @@ impl<'a> Vis<'a> {
         // A class template specialization takes the linkage of its
         // template arguments (clang `getLVForDecl` → `mergeTemplateLV`).
         if let Some((_, s)) = ast.spec_info(d)
+            && !self.spec_has_linkage
             && !self.args(s.args)
         {
             return false;

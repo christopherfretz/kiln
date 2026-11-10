@@ -1198,10 +1198,20 @@ impl Sema<'_, '_> {
             bits = bits.with(DefinitionBits::HAS_CONSTEXPR_CTOR);
         }
         let constexpr_dtor = decl.dtor_constexpr.unwrap_or(no_vbases);
+        // [expr.prim.lambda.closure]/3 (P0170R1): a closure type is
+        // literal from C++17 when its members are (no constructor is
+        // needed), and never before (clang `CXXRecordDecl::isLiteral`).
+        // WP-1225.
+        let lambda = bits.contains(DefinitionBits::LAMBDA)
+            || self.ast.decls.record(r).is_some_and(|x| x.lambda.is_some());
         let literal = constexpr_dtor
-            && (bits.contains(DefinitionBits::AGGREGATE)
-                || bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
-                || bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR));
+            && if lambda {
+                self.std >= kiln_lex::Std::Cxx17
+            } else {
+                bits.contains(DefinitionBits::AGGREGATE)
+                    || bits.contains(DefinitionBits::HAS_CONSTEXPR_CTOR)
+                    || bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR)
+            };
         if !literal {
             bits = bits.without(DefinitionBits::LITERAL).without(DefinitionBits::STRUCTURAL);
         }
