@@ -254,6 +254,7 @@ impl Sema<'_, '_> {
         let invented = self.open_invented_head_list();
         let inner_head = written || invented.is_some();
         let inner_list = invented.or_else(|| self.innermost_open_head_list().filter(|_| written));
+        let head_loc = self.outermost_open_head_loc();
         self.take_open_heads();
         let ty = self.type_for_declarator_at(base, ds.type_loc.unwrap_or(ds.loc), d);
         self.templ.cur = None;
@@ -264,6 +265,15 @@ impl Sema<'_, '_> {
         let fd = self.builder().friend(record, at, FriendTarget::Type { ty, owned_tag: None });
         let name = d.fn_decl_name(name);
         if path.is_empty() && self.member_friend_kind_mismatch(template, name, true, at) {
+            self.ast.decls.set_flags(fd, DeclFlags::INVALID);
+            return Some(fd);
+        }
+        if !inner_head && self.non_template_member_friend_requires(d, depth, head_loc) {
+            // clang drops the declaration in a templated class before it
+            // warns.
+            if depth == 0 {
+                self.warn_unsupported_friend(nns, record, at);
+            }
             self.ast.decls.set_flags(fd, DeclFlags::INVALID);
             return Some(fd);
         }
@@ -373,6 +383,37 @@ impl Sema<'_, '_> {
             MemberFriend { nns, depth, fn_ty, enclosing, template, args, path, ..pattern.clone() };
         self.register_member_friend(fd, mf);
         Some(fd)
+    }
+
+    /// [temp.friend]/9: `template<class T> friend int A<T>::w() requires
+    /// C<T>;` befriends a non-template member, so it is a non-template
+    /// friend declaration with a requires-clause, which must be a
+    /// definition, and a qualified friend cannot be one ([class.friend]/6).
+    /// As in clang 19 and 22: in a templated class (the friend's own head
+    /// at `depth` > 0) `err_non_temp_friend_decl_with_requires_clause_
+    /// must_be_def` at that head's `template` (`head_loc`); in a
+    /// non-template class the friend's head does not make the function
+    /// templated, so `err_constrained_non_templated_function` at the
+    /// clause. Whether one was reported (WP-1146).
+    fn non_template_member_friend_requires(
+        &mut self,
+        d: &Declarator,
+        depth: u16,
+        head_loc: Option<Loc>,
+    ) -> bool {
+        let Some(r) = d.trailing_requires.filter(|&r| !self.is_err_expr(r)) else { return false };
+        if !self.inst.stack.is_empty() {
+            return false;
+        }
+        let e = if depth == 0 {
+            let at = self.begin_loc(r);
+            self.diag(DiagId::sema_trailing_requires_non_template, at)
+        } else {
+            let at = head_loc.unwrap_or(d.loc);
+            self.diag(DiagId::sema_non_temp_friend_decl_with_requires_clause_must_be_def, at)
+        };
+        self.emit(e);
+        true
     }
 
     fn register_member_friend(&mut self, fd: DeclId, mf: MemberFriend) {
