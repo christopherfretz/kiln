@@ -621,7 +621,32 @@ answers as of that point.
   template specialization or member of a class template specialization
   through its pattern with its bindings (`void ns::TT<T, N>::mem(T) [with
   T = int; int N = 3]`; followed by the typedefs the
-  signature names, `; size_type = ...`); a parameter as
+  signature names, `; size_type = ...`; a member template of a class
+  template specialization through the primary's member template,
+  `void ns::E<T>::n(U) [with U = int; T = int]`); a constrained
+  template's associated constraints (WP-1243, `kiln_sema/src/meta/
+  gcc_names/requires.rs`, `meta.reflection.names/
+  display-string-of-gcc-requires.cpp`): after the header, GCC's
+  `pp_cxx_requires_clause` padding `  requires ` then the constraint and
+  a space (`template<class T>  requires  is_integral_v<T> struct
+  ns::OnlyInt`), the constraint being the template parameters'
+  type-constraints in order (a constrained pack as `(... && C<Ts>)`, a
+  constrained placeholder NTTP as `C<decltype(N)>` with header `auto N`)
+  then the requires-clause, joined as one left-associated `&&` chain; a
+  function's trailing requires-clause follows its declarator, before
+  `[with ...]` (`void ns::g(T) requires  C<T> [with T = int]`). The
+  expression prints as GCC's C precedence printer: a binary operator's
+  operands bare at its own precedence level (right one level tighter),
+  any other operand form (template-id, concept-id, `T::v`, fold,
+  parenthesized looser operator) inside parentheses (`(integral<T>) &&
+  (is_signed_v<T>)`, `(N + 1) * 2 > 0`); unary operators raw (`!(C<T>)`,
+  `- N`); `sizeof (T)`, `alignof (T)`, `sizeof ... (Ts ...)`; a
+  conditional without its colon (`c ? a b`, as GCC); folds as `(... &&
+  C<Ts>)`, `(N + ... +0)`; a requires-expression as `requires(T t) {a +
+  b;{t + t}noexcept -> decltype(auto) [requires std::same_as<<placeholder>,
+  T>];requires sizeof (T) > 1;}`; a dependent `decltype(e)` as written;
+  a variable template-id of an explicit specialization by its name only
+  (`ns::pv`, GCC); a parameter as
   `<parameter x of F>` / `<unnamed parameter 2 of F>`; a base as `D: B`;
   the null reflection `<null reflection>`.
 - **The file name of `source_location_of`** follows
@@ -648,7 +673,12 @@ answers as of that point.
   kiln's spelling for characters, pointers and subobjects (below); a
   canonical template parameter GCC names after the first
   template that formed it (`is_integral<t_TYPE>` from another template)
-  prints by its name in the template being printed; `source_location_of`
+  prints by its name in the template being printed (also inside a
+  requires-clause, `std::is_integral<_Tp>::value`); a call to a function
+  template-id in a requires-clause prints unparenthesized
+  (`fn<T>()`; GCC `(fn<T>)()`); an abbreviated function template's
+  invented parameters are numbered from 1 per template (`auto:1`; GCC
+  counts across the TU); `source_location_of`
   of `^^S::f` for a member function or `^^f` for a function template is
   `0:0` in GCC (its operand stays an overload set there) and the
   function's location in kiln; an out-of-line definition's column is

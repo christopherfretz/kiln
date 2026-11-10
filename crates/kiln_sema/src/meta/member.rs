@@ -189,7 +189,7 @@ impl Sema<'_, '_> {
                 .get(ns, MemberList::Members)
                 .map_or(&[][..], |l| &l.items[..]);
             // Namespace members need no access check.
-            return Ok(filter_members(items, oven.meta_infos(), |_| true));
+            return Ok(filter_members(items, oven.meta_infos(), |e| self.representable(e)));
         }
         let Some(def) = self.complete_class_of(r, ctx, oven)? else {
             return fail(loc, "neither complete class type nor namespace");
@@ -218,14 +218,16 @@ impl Sema<'_, '_> {
         let bases = st.get(def, MemberList::Bases).map_or(&[][..], |l| &l.items[..]);
         let out = oven.meta_infos();
         let n = match m {
-            MemberOp::MembersOf => {
-                filter_members(members, out, |e| self.entry_accessible(e, def, false, chk, &sc))
-            }
+            MemberOp::MembersOf => filter_members(members, out, |e| {
+                self.representable(e) && self.entry_accessible(e, def, false, chk, &sc)
+            }),
             MemberOp::BasesOf => {
                 filter_members(bases, out, |e| self.entry_accessible(e, def, true, chk, &sc))
             }
             MemberOp::StaticDataMembersOf => filter_members(members, out, |e| {
-                e.kind & mk::SDM != 0 && self.entry_accessible(e, def, false, chk, &sc)
+                e.kind & mk::SDM != 0
+                    && self.representable(e)
+                    && self.entry_accessible(e, def, false, chk, &sc)
             }),
             MemberOp::NonstaticDataMembersOf => filter_members(members, out, |e| {
                 e.kind & mk::NSDM != 0 && self.entry_accessible(e, def, false, chk, &sc)
@@ -245,6 +247,16 @@ impl Sema<'_, '_> {
         };
         self.meta_members.scope = sc;
         Ok(n)
+    }
+
+    /// Whether member entry `e` is members-of-representable here as far
+    /// as its type goes ([meta.reflection.member.queries]/3): not a
+    /// variable or function whose type still contains an undeduced
+    /// placeholder type (GCC 16.1 skips it too). Only an entry built
+    /// undeduced ([`mk::PLACEHOLDER`]) is checked again; `members_of` is
+    /// point-dependent, so a later deduction is seen.
+    fn representable(&self, e: &MemberEntry) -> bool {
+        e.kind & mk::PLACEHOLDER == 0 || !self.undeduced_decl(e.decl)
     }
 
     /// Whether entry `e` of class `parent`'s members (or bases) passes
@@ -442,6 +454,9 @@ impl Sema<'_, '_> {
         if n.misc().access() == Access::Public {
             kind |= mk::PUBLIC;
         }
+        if self.undeduced_decl(m) {
+            kind |= mk::PLACEHOLDER;
+        }
         let r = self.member_reflection(m, loc)?;
         Ok(MemberEntry { r, decl: m, kind })
     }
@@ -560,7 +575,8 @@ impl Sema<'_, '_> {
             return Ok(());
         }
         let r = self.member_reflection(m, loc)?;
-        l.items.push(MemberEntry { r, decl: m, kind: mk::PUBLIC });
+        let kind = if self.undeduced_decl(m) { mk::PUBLIC | mk::PLACEHOLDER } else { mk::PUBLIC };
+        l.items.push(MemberEntry { r, decl: m, kind });
         Ok(())
     }
 
@@ -725,7 +741,8 @@ impl Sema<'_, '_> {
                 ),
                 DeclKind::Var | DeclKind::VarTemplateSpecialization => {
                     let t = self.reflected_var_type(d).unwrap_or(QualType::ERROR);
-                    if self.ast.types.is_reference(t) {
+                    // No type yet (*has-type*): `auto` in its own initializer.
+                    if self.ast.types.is_reference(t) || self.undeduced_decl(d) {
                         return bad();
                     }
                     (t, None, false)
