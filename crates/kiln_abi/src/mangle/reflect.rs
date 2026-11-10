@@ -690,10 +690,10 @@ impl Mangler<'_, '_> {
                         let gcc_form = self.gcc()
                             && (alias_args_recoverable(ast, t)
                                 || alias_args_preserved(ast, t, args));
-                        if !gcc_form {
-                            self.template_args(args);
-                        } else {
+                        if gcc_form {
                             self.underlying_spec_args(u);
+                        } else {
+                            self.template_args(args);
                         }
                         self.out.push('_');
                         self.ty(u);
