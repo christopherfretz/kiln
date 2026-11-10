@@ -3,10 +3,10 @@
 // attribute is a -Wignored-attributes warning and the attribute is
 // ignored; an unknown `arch=` level (or a case mismatch) is silently a
 // no-op. clang `Sema::checkTargetAttr` (spec/driver.md "Target
-// features", target attribute). WP-1187.
+// features", target attribute). `verify` checks the warnings
+// exhaustively. WP-1187.
 //@ requires: target-aarch64
 //@ verify
-//@ strict-diags
 __attribute__((target("cpu=foo"))) void b2() {} // expected-warning {{unknown CPU 'foo' in the 'target' attribute string; 'target' attribute ignored}}
 __attribute__((target("tune=bar"))) void b3() {} // expected-warning {{unknown tune CPU 'bar' in the 'target' attribute string; 'target' attribute ignored}}
 __attribute__((target("arch=armv8.1-a,arch=armv8.2-a"))) void b6() {} // expected-warning {{duplicate 'arch=' in the 'target' attribute string; 'target' attribute ignored}}
