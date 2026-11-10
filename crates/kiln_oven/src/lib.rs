@@ -70,6 +70,7 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use frame::{FrameEval, FrameObject};
+pub use notes::FrameMark;
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::member_cache::{
     CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,

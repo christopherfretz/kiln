@@ -23,6 +23,14 @@ use crate::value::var_info;
 use crate::vm::{BiFault, BoundErr, Fault, value_len};
 use crate::{Oven, SemaBridge};
 
+/// An evaluation paused in a bridge callback ([`Oven::frame_mark`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameMark {
+    frames: u32,
+    entry: u32,
+    depth: u32,
+}
+
 /// clang's default `-fconstexpr-backtrace-limit`.
 pub(crate) const BACKTRACE_LIMIT: usize = 10;
 
@@ -39,9 +47,9 @@ const LOC_MARK: char = '\u{1}';
 
 /// `msg` with each [`LOC_MARK`]-delimited raw `Loc` written as clang
 /// prints a declaration's location in a type name (`F:L:C`), or with
-/// ` at <loc>` dropped when the bridge has no sources (as
-/// `AstNames::new` prints an unnamed class).
-fn resolve_locs(b: &dyn SemaBridge, msg: &str) -> String {
+/// ` at <loc>` dropped without `sources` (as `AstNames::new` prints an
+/// unnamed class).
+fn resolve_locs(sources: Option<&kiln_source::SourceManager>, msg: &str) -> String {
     let mut out = String::with_capacity(msg.len());
     let mut parts = msg.split(LOC_MARK);
     if let Some(first) = parts.next() {
@@ -49,7 +57,7 @@ fn resolve_locs(b: &dyn SemaBridge, msg: &str) -> String {
     }
     while let (Some(raw), Some(rest)) = (parts.next(), parts.next()) {
         let p =
-            raw.parse::<u32>().ok().and_then(|r| b.sources()?.presumed_line_col(Loc::from_raw(r)));
+            raw.parse::<u32>().ok().and_then(|r| sources?.presumed_line_col(Loc::from_raw(r)));
         match p {
             Some(p) => {
                 let _ = write!(out, "{}:{}:{}", p.file_name, p.line, p.col);
@@ -237,7 +245,44 @@ impl Oven {
         let mut notes = self.render_notes(b, fault, pc);
         for n in &mut notes {
             if n.msg.contains(LOC_MARK) {
-                n.msg = resolve_locs(b, &n.msg);
+                n.msg = resolve_locs(b.sources(), &n.msg);
+            }
+        }
+        notes
+    }
+
+    /// A token for the evaluation that is paused in a bridge callback now
+    /// (its call stack and nesting): sema compares it with
+    /// [`Oven::paused_call_notes`]'s caller's to know the Oven it holds is
+    /// still paused in that callback (WP-1248).
+    pub fn frame_mark(&self) -> FrameMark {
+        FrameMark {
+            frames: u32::try_from(self.stack.len()).unwrap_or(u32::MAX),
+            entry: u32::try_from(self.run.entry).unwrap_or(u32::MAX),
+            depth: self.ctx_depth,
+        }
+    }
+
+    /// The call stack of the evaluation paused in a bridge callback (a
+    /// reflection intrinsic's [`SemaBridge::meta`]), innermost first, as
+    /// the "in call to 'f(args)'" notes of a failure's backtrace with the
+    /// same elision (`-fconstexpr-backtrace-limit`): what sema appends to
+    /// the instantiation context of an error in an instantiation the
+    /// callback required (spec/oven.md "Interface", WP-1248). Rendered
+    /// only when such an error prints.
+    pub fn paused_call_notes(
+        &self,
+        ast: &Ast,
+        sources: Option<&kiln_source::SourceManager>,
+    ) -> Vec<Note> {
+        let mut notes = Vec::new();
+        if self.stack.len() <= self.run.entry + 1 {
+            return notes;
+        }
+        self.call_stack(ast, &mut notes);
+        for n in &mut notes {
+            if n.msg.contains(LOC_MARK) {
+                n.msg = resolve_locs(sources, &n.msg);
             }
         }
         notes
