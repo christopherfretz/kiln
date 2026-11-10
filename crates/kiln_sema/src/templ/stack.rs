@@ -292,6 +292,16 @@ impl InstantiationStack {
                 .any(|f| matches!(f.kind, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck))
     }
 
+    /// Whether every frame above the first `depth` is a checking frame
+    /// that neither instantiates (its result is not cached) nor sets the
+    /// SFINAE context: a diagnostic emitted there belongs to the step
+    /// that began at `depth` (the empty-pack length sweep's capture).
+    pub(crate) fn only_checks_above(&self, depth: usize) -> bool {
+        self.frames
+            .get(depth..)
+            .is_some_and(|fs| fs.iter().all(|f| !f.kind.is_instantiation() && f.sfinae.is_none()))
+    }
+
     /// Whether diagnostics are currently in a SFINAE context (the
     /// innermost frame that says).
     pub fn is_sfinae(&self) -> bool {

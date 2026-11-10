@@ -5824,6 +5824,17 @@ deduce it from, so the kept expression's type is the dependent `auto`
 `f(Vs)...` in the swept pattern stays unresolved instead of deducing and
 instantiating `f<auto>` (WP-933,
 `temp.variadic/empty-auto-pack-call-in-expansion.cpp`).
+The sweep's capture also holds the diagnostics of the checking frames it
+pushes, those that neither instantiate nor set the SFINAE context
+(`InstStack::only_checks_above`; a prior-argument substitution, for
+one): with `template<class T, T... v>` and `T` = void, the swept
+`ic<T, v>...` re-forms `ic<void, v>`, whose parameter `T v` substitutes
+to void ([temp.param]/4). clang never forms the pattern of an empty
+expansion, so that error must neither print nor, in deduction, count as a
+substitution failure; a frame that instantiates (its result is cached) or
+that is a SFINAE boundary keeps reporting as before (WP-1222, Boost.Hana
+`tuple_c<void>`,
+`tests/conformance/temp.variadic/p7-empty-nttp-pack-of-void-type-run.cpp`).
 
 A converted argument pack inside an argument list being substituted is
 rebuilt element by element. This happens for a partial

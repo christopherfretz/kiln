@@ -126,7 +126,7 @@ impl Sema<'_, '_> {
 
     /// Runs `f` with its diagnostics stash back; returns them in order.
     pub(crate) fn capturing<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> (R, Vec<Diag>) {
-        let old = self.diag_capture.replace(Some((self.inst.stack.len(), Vec::new())));
+        let old = self.diag_capture.replace(Some((self.inst.stack.len(), Vec::new(), false)));
         let r = f(self);
         let stash = self.diag_capture.replace(old).map(|c| c.1).unwrap_or_default();
         (r, stash)

@@ -1149,7 +1149,8 @@ impl Substituter<'_, '_, '_> {
     /// [`Self::find_instantiated_decl`]); a definition later in the
     /// body redeclares it.
     fn local_tag_used_early(&mut self, d: DeclId) -> SubstResult<DeclId> {
-        let held = self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new())));
+        let held =
+            self.sema.diag_capture.replace(Some((self.sema.inst.stack.len(), Vec::new(), false)));
         let x = if let Some(data) = self.sema.ast.decls.enumeration(d).copied() {
             // Declared only: its definition statement defines it.
             let n = *self.sema.ast.decls.get(d);
