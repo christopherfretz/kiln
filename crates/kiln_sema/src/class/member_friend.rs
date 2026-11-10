@@ -567,7 +567,7 @@ impl Sema<'_, '_> {
                 }
             }
             let Ok(t) = Substituter::new(s, &levels).ty(fty, loc) else { return Grant::No };
-            if !e_ty.is_some_and(|et| s.ast.types.canonical(et) == s.ast.types.canonical(t)) {
+            if e_ty.is_none_or(|et| s.ast.types.canonical(et) != s.ast.types.canonical(t)) {
                 return Grant::No;
             }
             // The constraints of a friend still in a class template's
