@@ -5693,6 +5693,18 @@ lvalue it is (clang's `PerformMoveOrCopyInitialization`): `T& f(T&& t)
 { return t; }` and a class with only a `C(C&)` copy constructor are
 accepted in C++20. `decltype(auto)` of `return (x);` is then `T&`.
 Test: `tests/conformance/class.copy.elision/p3-cxx20-two-stage.cpp`.
+The "possibly parenthesized id-expression" of the implicit move, of the
+NRVO candidate and of a thrown local (`implicit_move`,
+`copy_elision_candidate`, `thrown_var_in_scope`) is found with clang's
+`Expr::IgnoreParens` (`Sema::ignore_parens`, as in clang
+`getNamedReturnInfo` and `IsThrownVarInScope`): parentheses, GNU
+`__extension__`, and a resolved `_Generic` or `__builtin_choose_expr`
+(their selected operand), but not a result- or condition-dependent one,
+which is looked through once instantiation resolves it. The xvalue
+`ImplicitCastExpr <NoOp>` wraps the whole operand (the selection stays
+an lvalue under it), and the variable stays an NRVO candidate (WP-1176).
+Tests: `tests/conformance/class.copy.elision/implicit-move-through-*.cpp`,
+`nrvo-through-generic-selection-ir.cpp`.
 
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):

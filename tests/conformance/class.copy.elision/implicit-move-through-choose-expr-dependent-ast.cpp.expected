@@ -1,0 +1,23 @@
+Dumping dependent:
+FunctionTemplateDecl dependent
+|-TemplateTypeParmDecl referenced class depth 0 index 0 T
+|-FunctionDecl dependent 'T (T)'
+| |-ParmVarDecl referenced t 'T'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-ChooseExpr '<dependent type>'
+|       |-TypeTraitExpr 'bool' __is_class 'T'
+|       |-DeclRefExpr 'T' lvalue ParmVar 't' 'T'
+|       `-IntegerLiteral 'int' 0
+`-FunctionDecl used dependent 'M (M)'
+  |-ParmVarDecl used t 'M'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXConstructExpr 'M' 'void (M &&) noexcept'
+        `-ImplicitCastExpr 'M' xvalue <NoOp>
+          `-ChooseExpr 'M' lvalue
+            |-ConstantExpr 'bool' value=true
+            | `-TypeTraitExpr 'bool' __is_class 'M'
+            |-DeclRefExpr 'M' lvalue ParmVar 't' 'M'
+            `-IntegerLiteral 'int' 0
+
