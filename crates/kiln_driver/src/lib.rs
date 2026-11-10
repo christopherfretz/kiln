@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod aarch64_cpus;
+mod aarch64_extensions;
 pub mod args;
 mod cdb;
 pub mod codegen_cmd;
