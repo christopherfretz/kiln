@@ -310,11 +310,19 @@ impl Sema<'_, '_> {
     /// Whether a (partial or explicit) specialization of `tmpl` may be
     /// declared in the current context ([temp.expl.spec]/3,
     /// [temp.spec.partial.general]/4: a scope in which the primary
-    /// template may be defined); diagnoses otherwise.
+    /// template may be defined); diagnoses otherwise. Diagnosed at
+    /// namespace scope, the specialization is still declared (true, as
+    /// clang's `CheckTemplateSpecializationScope` recovers; WP-1178); in
+    /// a class other than the member template's own it is not (false).
     pub(crate) fn check_spec_scope(&mut self, tmpl: DeclId, partial: bool, loc: Loc) -> bool {
         let tctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
         let tctx = self.ast.redecl_context(tctx);
         let cur = self.ast.redecl_context(self.ctx);
+        if self.kind_of(tctx) == DeclKind::CXXRecord
+            || self.kind_of(tctx) == DeclKind::ClassTemplateSpecialization
+        {
+            return self.check_member_spec_scope(tmpl, partial, loc);
+        }
         if self.kind_of(tctx) != DeclKind::Namespace
             && self.kind_of(tctx) != DeclKind::TranslationUnit
         {
@@ -339,7 +347,7 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(tmpl))
                 .with_note(note);
             self.emit(d);
-            return false;
+            return true;
         }
         if func {
             let id = DiagId::sema_function_spec_not_in_enclosing_ns;
@@ -349,7 +357,7 @@ impl Sema<'_, '_> {
                 .arg(self.decl_name(tctx))
                 .with_note(note);
             self.emit(d);
-            return false;
+            return true;
         }
         let id = match (partial, var) {
             (true, false) => DiagId::sema_partial_spec_redecl_scope,
@@ -360,7 +368,58 @@ impl Sema<'_, '_> {
         let d =
             self.diag(id, loc).arg(self.decl_name(tmpl)).arg(self.decl_name(tctx)).with_note(note);
         self.emit(d);
-        false
+        true
+    }
+
+    /// [temp.expl.spec]/3, [temp.spec.partial.general]/4 for a member of
+    /// a class (clang's `CheckTemplateSpecializationScope` when the
+    /// specialized entity's context is a class): a specialization of
+    /// member template `tmpl` (`template<> template<> struct
+    /// N::A<int>::C<int>`), or the member specialization of member `tmpl`
+    /// of a class template (`template<> struct N::A<int>::I`; `tmpl` is
+    /// the pattern's member, which the note names) must be
+    /// declared in that class or in a namespace enclosing it. Diagnosed
+    /// at `loc` against the class; at namespace scope the specialization
+    /// is still declared (true, clang's recovery), in another class it is
+    /// not (false). The entity kind selects clang's
+    /// `err_template_spec_redecl_out_of_scope` wording.
+    pub(crate) fn check_member_spec_scope(
+        &mut self,
+        tmpl: DeclId,
+        partial: bool,
+        loc: Loc,
+    ) -> bool {
+        if !self.inst.stack.is_empty() {
+            return true;
+        }
+        let tctx = self.ast.decls.get(tmpl).ctx().unwrap_or(self.ast.tu);
+        let tctx = self.ast.redecl_context(tctx);
+        let cur = self.ast.redecl_context(self.ctx);
+        let file = matches!(self.kind_of(cur), DeclKind::Namespace | DeclKind::TranslationUnit);
+        let ok =
+            if file { self.encloses(cur, tctx) } else { self.ast.first(cur) == self.ast.first(tctx) };
+        if ok {
+            return true;
+        }
+        let kind = match self.kind_of(tmpl) {
+            DeclKind::ClassTemplate => u32::from(partial),
+            DeclKind::VarTemplate => 2 + u32::from(partial),
+            DeclKind::FunctionTemplate => 4,
+            DeclKind::Enum => 8,
+            k if k.is_function() => 5,
+            DeclKind::Var => 6,
+            _ => 7,
+        };
+        let note =
+            self.diag(DiagId::note_explicit_spec_template_declared, self.ast.decls.get(tmpl).loc());
+        let d = self
+            .diag(DiagId::sema_spec_redecl_out_of_class_scope, loc)
+            .arg(kind)
+            .arg(self.decl_name(tmpl))
+            .arg(self.name_for_diagnostic(tctx))
+            .with_note(note);
+        self.emit(d);
+        file
     }
 
     // -- partial specializations ---------------------------------------------------------
@@ -894,10 +953,22 @@ impl Sema<'_, '_> {
     /// specialization ([temp.expl.spec]/7; clang
     /// `CheckMemberSpecialization`): false, after "explicit
     /// specialization of 'I' after instantiation", when the member was
-    /// already defined from its pattern or explicitly instantiated.
+    /// already defined from its pattern or explicitly instantiated, or
+    /// when it is declared in a class other than its own
+    /// ([temp.expl.spec]/3, [`Sema::check_member_spec_scope`]; in a
+    /// class, the qualifier is diagnosed first). Declared outside a
+    /// namespace enclosing the class, it is diagnosed and still
+    /// specialized (true, clang's recovery).
     pub(crate) fn check_member_tag_spec(&mut self, p: DeclId, name_loc: Loc) -> bool {
         let first = self.ast.first(p);
         let Some(info) = self.ast.member_spec_info(first).map(|(_, x)| *x) else { return true };
+        if self.inst.stack.is_empty() && self.kind_of(self.ctx) == DeclKind::CXXRecord {
+            // In a class (clang's `diagnoseQualifiedDeclaration` with
+            // `IsMemberSpecialization`): the qualifier is diagnosed, then
+            // the scope below.
+            let n = self.decl_name(first);
+            self.emit(self.diag(DiagId::sema_member_qualification, name_loc).arg(n));
+        }
         let after_inst = match info.kind {
             SpecKind::ImplicitInstantiation => self.ast.definition(first).is_some(),
             SpecKind::ExplicitInstantiationDeclaration
@@ -905,7 +976,8 @@ impl Sema<'_, '_> {
             SpecKind::Undeclared | SpecKind::ExplicitSpecialization => false,
         };
         if !after_inst {
-            return true;
+            // Then its scope (WP-1178).
+            return self.check_member_spec_scope(info.instantiated_from, false, name_loc);
         }
         let explicit = u32::from(info.kind != SpecKind::ImplicitInstantiation);
         // An unscoped member enumeration was defined with its class: the

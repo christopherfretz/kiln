@@ -8628,6 +8628,9 @@ impl Sema<'_, '_> {
                         return p;
                     }
                     prev = None;
+                    // In another class ([temp.expl.spec]/3): clang's tag
+                    // is invalid, so later lookups do not find it.
+                    conflict |= self.kind_of(self.ctx) == DeclKind::CXXRecord;
                 } else if use_ == TagUse::Reference {
                     // (Not marked referenced: clang `ActOnTag` marks no
                     // declaration an elaborated-type-specifier names.)
@@ -8698,9 +8701,7 @@ impl Sema<'_, '_> {
             if qualified_member && let Some(q) = qualifier {
                 self.check_qualified_member_tag(q, n, nloc);
                 let s = self.ast.symbols().as_str(n).to_owned();
-                if self.templ.member_spec.is_none() {
-                    self.diagnose_qualified_tag(q, &s, nloc);
-                }
+                self.diagnose_qualified_tag(q, &s, nloc);
                 // `export struct S::N {}` ([module.interface]/1; WP-1159).
                 self.module_check_export_member(q, &s, nloc);
             }

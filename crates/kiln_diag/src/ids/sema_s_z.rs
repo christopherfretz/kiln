@@ -29,6 +29,8 @@ sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be na
 sema_spec_after_instantiation = Error (1) "explicit specialization of '{0}' after instantiation";
 sema_spec_member_not_instantiated = Error (1) "specialization of member '{0}' does not specialize an instantiated member";
 sema_spec_redecl_global_scope = Error (2) "{0:class template|class template partial|variable template|variable template partial|function template} specialization of '{1}' must occur at global scope";
+// [temp.expl.spec]/3, [temp.spec.partial.general]/4 (WP-1178)
+sema_spec_redecl_out_of_class_scope = Error (3) "{0:class template|class template partial|variable template|variable template partial|function template|member function|static data member|member class|member enumeration} specialization of '{1}' not in class '{2}' or an enclosing namespace";
 sema_special_redeclared = Error (1) "{0:constructor|destructor|conversion function} cannot be redeclared";
 sema_specialization_not_primary_template = Error (2) "cannot reference member of primary template because deduced class template specialization {0} is {1:instantiated from a partial|an explicit} specialization";
 // [expr.prim.id.qual]/2 (WP-474)
