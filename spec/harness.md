@@ -304,6 +304,44 @@ are the oracle's (spec/pp.md "clang compatibility level"; WP-263). A test's
 own `args: -fclang-compat=N` comes later and wins. Without an oracle
 (`--no-oracle`, or a kiln oracle) kiln runs at its default level.
 
+**Oracle crash retry.** A clang oracle can crash nondeterministically (an
+address-dependent clang 19 bug, docs/VALIDATION.md "known oracle defects";
+WP-1254), so a compile by a clang oracle that dies of a signal is run once
+more with the same command. That covers every compile the oracle runs:
+`run`'s `oracle.out`, its verdict on a `compile-ok` or `compile-fail` test,
+its `pp`, `ast`, `layout`, `vtables` or `ir` output, and its module,
+header-unit, PCH or two-step builds. "Dies of a signal" means either of these:
+
+- The process is killed by a signal.
+- The driver reports that one of its commands was: `... command failed due
+  to signal`, with the signal named by `unable to execute command: <signal
+  description>` (Debian's clang runs `cc1` out of process and then exits 1),
+  or `... failed with exit code 128+N`.
+
+If the retry succeeds, the test goes on as if the first compile had, and
+its result line carries `[advisory: oracle crashed once (signal N), retry
+ok]`. Like a GCC advisory ("GCC oracle"), this is printed even when the
+test passed, and the summary counts it ("Output"). If the retry crashes
+too, the test stays an **ERROR**, as any oracle crash is.
+
+There is never more than one retry, and the success path runs one process.
+None of these are retried:
+
+- a timeout
+- a memory kill: running out of memory under the cap ("Resource limits"),
+  `LLVM ERROR: out of memory`, `std::bad_alloc`, or SIGKILL (the kernel's OOM
+  killer)
+- a failure that is not a signal: a rejection, or another exit code
+- the run of the oracle's binary
+- a kiln oracle
+- the compiler under test, kiln or not, even when it is the same clang as
+  the oracle
+
+The command log shows `# the oracle crashed (signal N); retrying it once`
+and, when the retry crashes too, `# the oracle crashed again (...); not
+retried` (`xtask/src/test/oracle_retry.rs`; self-test
+`xtask/fixtures/oracle-crash/`).
+
 ### GCC oracle
 
 GCC 16.1 is the reference implementation of C++26 reflection (P2996,
@@ -336,7 +374,9 @@ default library.
 WP-102 policy for a pre-release oracle): the comparison is dropped, the
 test's result is whatever kiln's own expectations give, and the result
 line carries `[advisory: oracle crashed (<why>)]`; such a result is
-printed even when it passed, and the summary counts it ("Output").
+printed even when it passed, and the summary counts it ("Output"). GCC is
+never retried: its crash drops the comparison, where a clang oracle's
+crash is retried once and then is an ERROR ("Oracle crash retry").
 
 Without a GCC (none configured, `--no-gcc`, `--no-oracle`) an
 `oracle: gcc` test runs against its own expectations only; it never
@@ -1055,7 +1095,8 @@ The outcomes are evaluated in this order:
 3. The test is kiln-specific and the compiler is not kiln: **SKIP**.
 4. The test runs. A process that runs out of memory under the cap is
    **KILLED** ("Resource limits"), and a broken test (missing `stdout-file`
-   or `run-stdin-file`, oracle rejection, oracle hang or crash, I/O error)
+   or `run-stdin-file`, oracle rejection, oracle hang or crash (a clang
+   oracle's after its one retry, "Oracle"), I/O error)
    is **ERROR**, both even when an `xfail` marker applies.
 5. Otherwise, a failure is **FAIL**, or **XFAIL** if an `xfail` marker
    applies. Success is **PASS**, or **XPASS** if an `xfail` marker applies.
@@ -1073,7 +1114,7 @@ Output goes to stdout:
 - One block per result, in name order. A result line is
   `<STATUS> <name> [(<reason>)]`. With `-v`, the line ends with the elapsed time `[<secs>s]`.
 - PASS results are printed only with `-v`, unless they carry an oracle
-  advisory ("GCC oracle"). SKIP, XFAIL and the failure statuses are always
+  advisory ("Oracle", "GCC oracle"). SKIP, XFAIL and the failure statuses are always
   printed.
 - A failure result is followed by indented details (unified line diffs with
   `-expected +actual`, or `-oracle +actual`) and the commands that were run.
@@ -1086,7 +1127,9 @@ test result: ok|FAILED. P passed; F failed; X xfail; XP xpass; S skipped; E erro
 `G compared with gcc; ` appears only when G > 0: the number of tests GCC
 compiled to a verdict (accepted or rejected, "GCC oracle"); a comparison
 dropped by an advisory is not counted. `A advisory; ` appears only when a
-result carries an oracle advisory.
+result carries an oracle advisory: a GCC oracle's dropped comparison, or
+a clang oracle's crash that was retried successfully ("Oracle"). A result
+with both has one entry, and both notes joined by `; `.
 
 The parity report ("Parity report") counts KILLED in its fail column.
 

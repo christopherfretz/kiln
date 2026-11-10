@@ -88,7 +88,7 @@ impl Test<'_> {
             .map_err(|e| Problem::Broken(format!("could not run the GCC oracle `{shown}`: {e}")))?;
         if let Some(why) = advisory_cause(&o) {
             self.log.push(format!("# the GCC oracle: {why}; its comparison is dropped"));
-            self.advisory = Some(format!("advisory: oracle crashed ({why})"));
+            self.add_advisory(format!("advisory: oracle crashed ({why})"));
             return Ok(Verdict::Advisory);
         }
         self.check_capped("the GCC oracle", &o, cap)?;

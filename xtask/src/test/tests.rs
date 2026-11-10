@@ -533,6 +533,51 @@ fn gcc_as_the_compiler_under_test() {
     assert!(log.contains("-lstdc++exp"), "a link names libstdc++exp: {log}");
 }
 
+/// A clang oracle compile that dies of a signal is retried once
+/// (spec/harness.md "Oracle", WP-1254): a retry that succeeds leaves an
+/// advisory on a PASS, a second crash stays ERROR, and rejections, SIGKILL
+/// and memory exhaustion are never retried. The compiler under test never
+/// is.
+#[test]
+fn clang_oracle_crash_is_retried_once() {
+    if !have_clang() {
+        return;
+    }
+    let root = repo_root();
+    let dir = root.join("xtask/fixtures/oracle-crash");
+    let fake_clang = root.join("xtask/fixtures/fake-clang/clang++");
+    let mut o = clang_opts(std::slice::from_ref(&dir));
+    o.oracle = Some(fake_clang.clone());
+    let results = execute(&o).unwrap();
+    check_fixture_statuses(&results, 6);
+    let by_name = |rs: &[TestResult], n: &str| rs.iter().find(|r| r.name.ends_with(n)).cloned();
+    let has = |n: &str, what: &str| {
+        let t = report::format_result(&by_name(&results, n).unwrap(), false);
+        assert!(t.contains(what), "{n}: {what:?} not in\n{t}");
+    };
+    for n in ["pass-segv-once-run.cpp", "pass-driver-segv-once-run.cpp"] {
+        has(n, "[advisory: oracle crashed once (signal 11), retry ok]");
+    }
+    has("error-segv-twice-run.cpp", "rejected the test (killed by signal 11)");
+    has("error-reject-not-retried-run.cpp", "fake rejection");
+    has("error-sigkill-not-retried-run.cpp", "rejected the test (killed by signal 9)");
+    has("error-oom-not-retried-run.cpp", "LLVM ERROR: out of memory");
+    let advised: Vec<&str> =
+        results.iter().filter(|r| r.advisory.is_some()).map(|r| r.name.as_str()).collect();
+    assert_eq!(advised.len(), 2, "{advised:?}");
+    let counts = report::Counts::of(&results);
+    let summary = report::format_summary(&counts, results.len(), Duration::ZERO);
+    assert!(summary.contains("; 2 advisory; 6 tests"), "{summary}");
+    // The crash is the compiler's: FAIL, not retried, no advisory.
+    let mut c = clang_opts(std::slice::from_ref(&dir));
+    c.compiler = Some(fake_clang);
+    c.filter = Some("pass-segv-once".into());
+    let results = execute(&c).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, Status::Fail, "{}", report(&results));
+    assert!(results[0].advisory.is_none(), "{}", report(&results));
+}
+
 /// `KILN_REQUIRE_DEBUGGERS` is required only by exactly `1`, and the
 /// debugger corpus is a default root (WP-816, spec/harness.md "Debugger
 /// tests"; the SKIP/ERROR decision is `runner::compat_tests`).
