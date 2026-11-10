@@ -791,6 +791,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-708 | parse: GNU `noreturn` in pointer / grouping-paren declarator positions (`crates/kiln_parse/src/decl.rs:2313`) | WP-700 | fixed by WP-735 (tests/conformance/dcl.attr.noreturn/gnu-noreturn-declarator-positions.cpp) |
 | WP-711 | diag: emit -Wmissing-template-arg-list-after-template-kw and -Wc++11-narrowing-const-reference (clang errors by default) and -Wdeprecated-copy; cereal has instances of all three (cereal/details/tuple.hpp:98, unittests/multimap.hpp:75) | WP-704 | done (#403, via WP-865) |
 | WP-865 | diag: accepted-but-ignored warnings bundle (WP-711, WP-725, WP-718, WP-701, WP-702) | WP-711 | done (#403) |
+| WP-1227 | diag: clang's system-macro rule (`SuppressInSystemMacro`: -Wshadow in nested system-header macros, simdjson aarch64 NEON) | WP-865 | in progress |
 | WP-712 | sema: global operator new templates are not allocation candidates (`crates/kiln_sema/src/overload/alloc.rs:77`) | WP-686 | fixed by WP-730 (PR #332, tests/conformance/expr.new/global-operator-new-template.cpp) |
 | WP-713 | sema: placement operator delete templates are not matched (`crates/kiln_sema/src/new_delete.rs:1259` matching_operator_delete) | WP-686 | fixed by WP-735 (tests/conformance/expr.new/p28-*-run.cpp) |
 | WP-714 | parse: `D::B::m` through a base injected-class-name is not handled (`crates/kiln_parse/src/parser.rs:1001`) | WP-686 | already worked; regression test by WP-735 (tests/conformance/temp.local/p2-*-run.cpp) |
