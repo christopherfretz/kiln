@@ -211,6 +211,24 @@ a function) and the declaration queries (`members_of`, `type_of`,
 specialization stays reflectable. Tests:
 `meta.reflection.extract/function-{instantiate-neg,no-instantiate,instantiate-run}.cpp`.
 
+**Reflecting a function reflection's value** (WP-1252;
+[meta.reflection.result]/2-4, [temp.inst]/4, /5 and /8,
+[expr.const.defns]/2, [basic.def.odr]/3-4, [expr.context]/1):
+`reflect_constant(m)` with `m` a `std::meta::info` reflects the value
+`m` (`T` is `info`, so V is the value of `expr`), not a pointer to the
+function `m` designates. The result depends on the value alone, and no
+expression names the function, so it is neither odr-used nor needed for
+constant evaluation, and `reflect_constant`, `reflect_constant_array`
+and `define_static_array` of `info` values instantiate nothing. A member
+function of a class template specialization reached through
+`members_of`, whose body is ill-formed for the specialization, stays
+uninstantiated. GCC 16.1 instantiates it depending on where the value
+came from. It instantiates when `m` comes from `members_of`, but not for
+the equal `^^C<2>::f` (spec/landed/reflection/WP-1252.md). kiln follows
+the standard here. Test:
+`meta.reflection.result/reflect-constant-info-no-instantiate.cpp`
+(`xfail(gcc)`).
+
 ### 3.1 Recognizing an intrinsic
 - The `std::meta` functions have no bodies: the library declares them, and
   a direct call to a declaration that sema recognizes compiles to one KBC
