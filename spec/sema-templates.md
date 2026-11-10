@@ -1665,7 +1665,12 @@ silently (`diag = None`) at those sites. S3O lists them.
      that type, a dependent type anything (its deduction checked it), and
      a placeholder type a value whose type it deduces from (`auto *P`
      takes `&x` but not `0` or `nullptr`; `auto Q::*M` takes `&Q::m`;
-     `nttp_placeholder_matches`); a deduced pack element by element. So
+     `nttp_placeholder_matches`), a deduced class template placeholder
+     (`template <fs F>`, [dcl.type.class.deduct]/2) a value whose type is a
+     specialization of that template (its copy deduction candidate,
+     [over.match.class.deduct]/1.3; `ctad_placeholder_matches`; WP-1217,
+     `tests/conformance/temp.spec.partial.match/nttp-class-placeholder-run.cpp`);
+     a deduced pack element by element. So
      `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
      primary does not bind `template<int N> A<N>` (WP-1105,
      `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
