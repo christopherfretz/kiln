@@ -716,6 +716,19 @@ const ARM_TARGET_MACROS: &[&str] = &[
     "__ARM_NEON_FP",
 ];
 
+/// WP-1151: the SME and FP8 features' macros (reachable through `-mcpu=`).
+const SME_FP8_MACROS: [(&str, &[&str]); 9] = [
+    ("sme", &["SME", "LOCALLY_STREAMING"]),
+    ("sme2", &["SME2"]),
+    ("sme2p1", &["SME2p1"]),
+    ("sme-b16b16", &["SME_B16B16"]),
+    ("sme-f16f16", &["SME_F16F16"]),
+    ("fp8", &["FP8"]),
+    ("fp8fma", &["FP8FMA"]),
+    ("fp8dot2", &["FP8DOT2"]),
+    ("fp8dot4", &["FP8DOT4"]),
+];
+
 /// clang `AArch64TargetInfo::getTargetDefines` over the target state `t`
 /// (measured against clang 19 and 22 for every `-march=` level and
 /// extension kiln accepts). The architecture-version defines
@@ -796,6 +809,11 @@ fn apply_arm(m: &mut BTreeMap<String, String>, t: &ArmTarget, compat: ClangCompa
     }
     for n in sve_feature_macros(t, c19, sve) {
         def(&format!("__ARM_FEATURE_{n}"), "1");
+    }
+    for (_, names) in SME_FP8_MACROS.iter().filter(|(f, _)| has(f)) {
+        for n in *names {
+            def(&format!("__ARM_FEATURE_{n}"), "1");
+        }
     }
     if bf16 {
         def("__ARM_BF16_FORMAT_ALTERNATIVE", "1");
@@ -1124,6 +1142,19 @@ mod tests {
             .collect();
         v.sort_unstable();
         v.join(",")
+    }
+
+    /// WP-1151: the SME and FP8 macros of a `-mcpu=` CPU's features
+    /// (clang `AArch64TargetInfo::getTargetDefines`).
+    #[test]
+    fn arm_sme_fp8_macros() {
+        for c in [ClangCompat::Clang19, ClangCompat::Clang22] {
+            let got = arm((9, 2), "fp-armv8,neon,bf16,sme,sme2,fp8,fp8fma", None, c);
+            for m in ["SME 1", "SME2 1", "LOCALLY_STREAMING 1", "FP8 1", "FP8FMA 1"] {
+                assert!(got.split(',').any(|d| d == m), "{m} in {got}");
+            }
+            assert!(!got.contains("SME2p1") && !got.contains("FP8DOT"), "{got}");
+        }
     }
 
     #[test]

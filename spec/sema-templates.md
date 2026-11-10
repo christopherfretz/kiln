@@ -3345,6 +3345,14 @@ Outside SFINAE mode, a failure has already been diagnosed. The caller
 then gets an ERROR-flagged node and goes on, which keeps error recovery
 like clang's.
 
+With `ci_rebuild: Some(pattern)` and no argument levels the substituter
+rebuilds an expression in the current instantiation instead of
+substituting (clang's `CurrentInstantiationRebuilder`; WP-1154,
+spec/sema-class.md §8.3 "Out-of-line declarator scope"): `ty` hands every
+type to `Sema::rebuild_ci_type`, and a `DependentScopeDeclRefExpr`
+`C<X>::m` whose qualifier names the current instantiation is formed again
+as the class's own id-expression when lookup finds `m`.
+
 ### 5.3 Types
 
 1. If `t` has none of `DEPENDENT`, `INSTANTIATION_DEPENDENT` or

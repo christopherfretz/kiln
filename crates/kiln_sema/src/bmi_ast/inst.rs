@@ -11,28 +11,32 @@
 //! (canonical, with their cv bits); values as part 1's carried values.
 //! The producing compile and the importer's replay build the same bytes
 //! for the same specialization, so the bytes are compared as they are.
-//! A key that cannot be formed (a dependent or unsupported type, a
-//! pointer to a string literal or temporary, an implicit declaration, a
-//! position the replay does not reproduce) leaves the evaluation
-//! uncarried.
+//! A key that cannot be formed (a dependent or unsupported type, an
+//! implicit declaration, a position the replay does not reproduce)
+//! leaves the evaluation uncarried.
 //!
 //! The same value encoding carries pointer, reference and reflection
 //! results ([`value_bytes`]); the importer resolves the entities in it
-//! back to its own declarations (`value.rs`).
+//! back to its own declarations (`value.rs`). Objects without a
+//! declaration of their own are written by what the replay rebuilds them
+//! from: a string literal and a label address by the position of the
+//! expression whose evaluation made them, a lifetime-extended temporary
+//! by its extending declaration and mangling index (WP-1160).
 
 use kiln_ast::consts::{ConstValue, MemberKind, PtrBase, Scalar};
 use kiln_ast::decl::DeclFlags;
-use kiln_ast::ids::ArgListId;
+use kiln_ast::ids::{AnnId, ArgListId, ExprId};
 use kiln_ast::names::DeclNameKind;
 use kiln_ast::reflect::Reflectee;
 use kiln_ast::types::{ArgView, ExcSpec, TemplateName, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, QualType};
-use kiln_source::{FileId, SourceManager};
+use kiln_oven::Oven;
+use kiln_source::{FileId, Loc, SourceManager};
 
 use super::{
-    Rd, Res, TAG_AGGREGATE, TAG_AGGREGATE_EX, TAG_MEMBER_NULL, TAG_MEMBER_POINTER, TAG_POINTER,
-    TAG_REFLECTION, TAG_TYPED, bad, carried_value, loc_key, put_bytes, put_u32, put_value, put_var,
-    read_plain,
+    Rd, Res, Skip, TAG_AGGREGATE, TAG_AGGREGATE_EX, TAG_MEMBER_NULL, TAG_MEMBER_POINTER,
+    TAG_POINTER, TAG_REFLECTION, TAG_TYPED, bad, carried_value, loc_key, put_bytes, put_u32,
+    put_value, put_var, read_plain,
 };
 
 /// The deepest nesting a key may have (entities, argument lists and
@@ -82,15 +86,35 @@ pub(super) const BASE_TYPE_INFO: u8 = 2;
 pub(super) const BASE_PARAM_OBJECT: u8 = 3;
 /// A subobject of another constant, by its type and value.
 pub(super) const BASE_CONST: u8 = 4;
+/// A string literal object, by the position of the `StringLiteral` whose
+/// evaluation made it (version 4).
+pub(super) const BASE_STRING: u8 = 5;
+/// A lifetime-extended temporary, by its extending declaration and
+/// mangling index, its type and its value if it has one (version 4).
+pub(super) const BASE_TEMPORARY: u8 = 6;
+/// A label address, by the label and the position of the `&&label`
+/// (version 4).
+pub(super) const BASE_LABEL: u8 = 7;
 
 /// Type reflection forms (after the reflectee tag 0).
 pub(super) const REFL_TYPE: u8 = 0;
 pub(super) const REFL_ALIAS: u8 = 1;
+/// An alias template specialization: the alias template, its canonical
+/// arguments and the canonical aliased type (version 4).
+pub(super) const REFL_ALIAS_SPEC: u8 = 2;
+
+/// Data member specification flags (after the reflectee tag 9).
+pub(super) const DMS_NAME: u8 = 1;
+pub(super) const DMS_ALIGN: u8 = 2;
+pub(super) const DMS_WIDTH: u8 = 4;
+pub(super) const DMS_NUA: u8 = 8;
 
 /// The writer of one key. `file` maps a file to its index in the
 /// section's path table (`None`: a file the replay does not reproduce).
 struct KeyCx<'a, F> {
     ast: &'a Ast,
+    /// The Oven, for the data member specifications a value names.
+    oven: Option<&'a Oven>,
     sm: &'a SourceManager,
     file: F,
     out: Vec<u8>,
@@ -100,11 +124,22 @@ struct KeyCx<'a, F> {
     /// importer rebuilds the value from the canonical form, so a sugared
     /// type would make it a different value).
     exact: bool,
+    /// Why the value could not be written, when a part of it that has a
+    /// reason of its own failed first (the `-v` note).
+    why: Option<Skip>,
 }
 
 impl<'a, F> KeyCx<'a, F> {
     fn key(ast: &'a Ast, sm: &'a SourceManager, file: F, out: Vec<u8>) -> Self {
-        KeyCx { ast, sm, file, out, limit: MAX_KEY, exact: false }
+        KeyCx { ast, oven: None, sm, file, out, limit: MAX_KEY, exact: false, why: None }
+    }
+
+    /// `r`, noting `why` when it failed and nothing more specific was.
+    fn or_why(&mut self, r: Option<()>, why: Skip) -> Option<()> {
+        if r.is_none() {
+            self.why.get_or_insert(why);
+        }
+        r
     }
 }
 
@@ -136,21 +171,29 @@ pub(super) fn decl_key(
 }
 
 /// The full encoding of value `v` (tag first), when it can be written
-/// and every type in it is canonical.
+/// and every type in it is canonical; else why not, when a part with a
+/// reason of its own failed.
 pub(super) fn value_bytes(
     ast: &Ast,
+    oven: Option<&Oven>,
     sm: &SourceManager,
     file: impl FnMut(FileId) -> Option<u32>,
     v: ConstValueId,
     typed: bool,
-) -> Option<Box<[u8]>> {
-    let mut cx = KeyCx { ast, sm, file, out: Vec::new(), limit: usize::MAX, exact: true };
-    if typed {
-        cx.out.push(TAG_TYPED);
-        cx.vty(ast.consts.ty(v), 0)?;
+) -> Result<Box<[u8]>, Option<Skip>> {
+    let mut cx =
+        KeyCx { ast, oven, sm, file, out: Vec::new(), limit: usize::MAX, exact: true, why: None };
+    let ok = (|| {
+        if typed {
+            cx.out.push(TAG_TYPED);
+            cx.vty(ast.consts.ty(v), 0)?;
+        }
+        cx.value(v, 0)
+    })();
+    match ok {
+        Some(()) => Ok(cx.out.into_boxed_slice()),
+        None => Err(cx.why),
     }
-    cx.value(v, 0)?;
-    Some(cx.out.into_boxed_slice())
 }
 
 /// The length of the entity at the start of `b` (bytes a checked section
@@ -264,11 +307,23 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
             DeclNameKind::Operator => self.out.push(name.payload() as u8),
             _ => {}
         }
-        let at = loc_key(self.sm, n.loc(), &mut self.file)?;
+        self.at(n.loc())
+    }
+
+    /// A replay-stable position.
+    fn at(&mut self, loc: Loc) -> Option<()> {
+        let at = loc_key(self.sm, loc, &mut self.file)?;
         for w in at.0 {
             put_u32(&mut self.out, w);
         }
         Some(())
+    }
+
+    /// The position of expression `e` (a string literal's or label
+    /// address's origin; the importer finds its own by it, `value.rs`).
+    fn expr_at(&mut self, e: ExprId) -> Option<()> {
+        let loc = self.ast.exprs.get(e).loc();
+        self.at(loc)
     }
 
     fn args(&mut self, l: ArgListId, depth: u32) -> Option<()> {
@@ -283,6 +338,11 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     self.ty(q, depth + 1)?;
                 }
                 ArgView::Value { ty, value } => {
+                    // Inside a value the importer rebuilds the argument
+                    // with the value typed as the argument is.
+                    if self.exact && ast.consts.ty(value) != ast.types.canonical(ty) {
+                        return None;
+                    }
                     self.out.push(ARG_VALUE);
                     self.ty(ty, depth + 1)?;
                     self.value(value, depth + 1)?;
@@ -400,34 +460,7 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                     TAG_POINTER,
                     u8::from(past) | u8::from(designated.is_some()) << 1,
                 ]);
-                match base {
-                    PtrBase::Decl(x) => {
-                        if let Some(pv) = ast.templates.param_object_value(x) {
-                            self.out.push(BASE_PARAM_OBJECT);
-                            self.vty(store.ty(pv), d)?;
-                            self.value(pv, d)?;
-                        } else {
-                            self.out.push(BASE_DECL);
-                            self.ent(x, d)?;
-                        }
-                    }
-                    PtrBase::Function(x) => {
-                        self.out.push(BASE_FUNCTION);
-                        self.ent(x, d)?;
-                    }
-                    PtrBase::TypeInfo(q) => {
-                        self.out.push(BASE_TYPE_INFO);
-                        self.vty(q, d)?;
-                    }
-                    PtrBase::Const(c) => {
-                        self.out.push(BASE_CONST);
-                        self.vty(store.ty(c), d)?;
-                        self.value(c, d)?;
-                    }
-                    PtrBase::Temporary(_) | PtrBase::StringLit { .. } | PtrBase::Label { .. } => {
-                        return None;
-                    }
-                }
+                self.ptr_base(base, d)?;
                 put_var(&mut self.out, offset);
                 if let Some(q) = designated {
                     self.vty(q, d)?;
@@ -473,6 +506,74 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
         self.room(depth)
     }
 
+    /// Pointer base `base` of a pointer value: its base tag, then what
+    /// identifies the object it points into.
+    fn ptr_base(&mut self, base: PtrBase, d: u32) -> Option<()> {
+        let ast = self.ast;
+        let store = &ast.consts;
+        match base {
+            PtrBase::Decl(x) => {
+                if let Some(pv) = ast.templates.param_object_value(x) {
+                    self.out.push(BASE_PARAM_OBJECT);
+                    self.vty(store.ty(pv), d)?;
+                    self.value(pv, d)?;
+                } else {
+                    self.out.push(BASE_DECL);
+                    self.ent(x, d)?;
+                }
+            }
+            PtrBase::Function(x) => {
+                self.out.push(BASE_FUNCTION);
+                self.ent(x, d)?;
+            }
+            PtrBase::TypeInfo(q) => {
+                self.out.push(BASE_TYPE_INFO);
+                self.vty(q, d)?;
+            }
+            PtrBase::Const(c) => {
+                self.out.push(BASE_CONST);
+                self.vty(store.ty(c), d)?;
+                self.value(c, d)?;
+            }
+            PtrBase::StringLit { origin, .. } => {
+                self.out.push(BASE_STRING);
+                let r = self.expr_at(origin);
+                self.or_why(r, "a pointer to a string literal outside the replayed source")?;
+            }
+            PtrBase::Label { label, origin } => {
+                self.out.push(BASE_LABEL);
+                let r = self.ent(label, d).and_then(|()| self.expr_at(origin));
+                self.or_why(r, "a label address whose label has no key")?;
+            }
+            PtrBase::Temporary(t) => {
+                let r = self.temporary(t, d);
+                self.or_why(r, "a pointer to a temporary whose declaration has no key")?;
+            }
+        }
+        Some(())
+    }
+
+    /// Lifetime-extended temporary `t`: its extending declaration and
+    /// mangling index (what the replay creates it with, so the importer
+    /// finds its own), its type, and the value the evaluation froze for
+    /// it, which the importer then gives its own (the evaluation that
+    /// would have does not run).
+    fn temporary(&mut self, t: DeclId, d: u32) -> Option<()> {
+        let ast = self.ast;
+        let l = *ast.decls.lifetime_extended(t)?;
+        self.out.push(BASE_TEMPORARY);
+        self.ent(l.extending, d)?;
+        put_var(&mut self.out, u64::from(l.mangling_index));
+        self.ty(ast.decls.get(t).ty()?, d)?;
+        let Some(v) = l.value else {
+            self.out.push(0);
+            return Some(());
+        };
+        self.out.push(1);
+        self.vty(ast.consts.ty(v), d)?;
+        self.value(v, d)
+    }
+
     /// Reflectee `r`: its tag, then what identifies it.
     fn reflectee(&mut self, r: Reflectee, d: u32) -> Option<()> {
         let ast = self.ast;
@@ -485,6 +586,16 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                 TypeView::Typedef { decl, .. } if q.quals_bits() == 0 => {
                     self.out.push(REFL_ALIAS);
                     self.ent(decl, d)?;
+                }
+                // A kept alias template specialization, canonical inside.
+                TypeView::TemplateSpecialization {
+                    name,
+                    args,
+                    underlying: Some(u),
+                    alias: true,
+                } if q.quals_bits() == 0 => {
+                    let r = self.alias_spec(name, args, u, d);
+                    self.or_why(r, "a reflection of an alias template specialization with no key")?;
                 }
                 TypeView::TemplateSpecialization { .. } => return None,
                 _ => {
@@ -509,8 +620,107 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                 self.ent(x, d)?;
                 put_var(&mut self.out, u64::from(i));
             }
-            Reflectee::DataMemberSpec(_) | Reflectee::Annotation(_) => return None,
+            Reflectee::DataMemberSpec(id) => {
+                let r = self.dms(id, d);
+                self.or_why(r, "a data member specification with a value that has no key")?;
+            }
+            Reflectee::Annotation(a) => self.annotation(a, d)?,
         }
+        Some(())
+    }
+
+    fn alias_spec(
+        &mut self,
+        name: kiln_ast::ids::TemplateNameId,
+        args: ArgListId,
+        u: QualType,
+        d: u32,
+    ) -> Option<()> {
+        let types = &self.ast.types;
+        let TemplateName::Template(x) = types.template_name_view(name) else { return None };
+        if types.canonical_template_name(name) != name || types.canonical_args(args) != args {
+            return None;
+        }
+        self.out.push(REFL_ALIAS_SPEC);
+        self.ent(x, d)?;
+        self.args(args, d)?;
+        self.vty(u, d)
+    }
+
+    /// Data member specification `id` ([meta.reflection.define.aggregate]):
+    /// interned by its contents, so the contents are its identity.
+    fn dms(&mut self, id: kiln_ast::ids::DmsId, d: u32) -> Option<()> {
+        let s = *self.oven?.dms(id)?;
+        self.vty(s.ty, d)?;
+        let flags = if s.name.is_some() { DMS_NAME } else { 0 }
+            | if s.alignment.is_some() { DMS_ALIGN } else { 0 }
+            | if s.bit_width.is_some() { DMS_WIDTH } else { 0 }
+            | if s.nua { DMS_NUA } else { 0 };
+        self.out.push(flags);
+        if let Some(n) = s.name {
+            put_bytes(&mut self.out, self.ast.symbols().as_str(n).as_bytes());
+        }
+        if let Some(a) = s.alignment {
+            put_u32(&mut self.out, a);
+        }
+        if let Some(w) = s.bit_width {
+            put_u32(&mut self.out, w);
+        }
+        let annots = self.oven?.dms_annots(s.annots);
+        put_var(&mut self.out, annots.len() as u64);
+        for &a in annots {
+            self.reflectee(self.ast.reflections.get(a), d)?;
+        }
+        Some(())
+    }
+
+    /// Annotation `a`: the entity (or base-specifier) it is an annotation
+    /// of, its position, and its ordinal among that entity's annotations
+    /// at the position (a pack expansion makes several at one).
+    fn annotation(&mut self, a: AnnId, d: u32) -> Option<()> {
+        let ast = self.ast;
+        let n = *ast.annots.get(a);
+        if n.loc == Loc::INVALID {
+            self.why.get_or_insert("an annotation reflection made by define_aggregate");
+            return None;
+        }
+        let own: Vec<AnnId> = ast.lists.iter::<AnnId>(ast.annots.of_decl(n.decl)).collect();
+        let (list, base) = if own.contains(&a) {
+            (ast.annots.of_entity(ast, n.decl), None)
+        } else {
+            let first = ast.first(n.decl);
+            let count = ast.decls.bases(n.decl, &ast.lists).count() as u32;
+            let i = (0..count)
+                .find(|&i| ast.lists.iter::<AnnId>(ast.annots.of_base(first, i)).any(|x| x == a))?;
+            (ast.lists.iter::<AnnId>(ast.annots.of_base(first, i)).collect(), Some(i))
+        };
+        match base {
+            None => self.out.push(0),
+            Some(i) => {
+                self.out.push(1);
+                put_var(&mut self.out, u64::from(i));
+            }
+        }
+        let r = self.ent(n.decl, d);
+        self.or_why(r, "an annotation reflection whose entity has no key")?;
+        let at = loc_key(self.sm, n.loc, &mut self.file);
+        let Some(at) = at else {
+            self.why.get_or_insert("an annotation reflection outside the replayed source");
+            return None;
+        };
+        let mut k = 0u64;
+        for &x in &list {
+            if x == a {
+                break;
+            }
+            if loc_key(self.sm, ast.annots.get(x).loc, &mut self.file) == Some(at) {
+                k += 1;
+            }
+        }
+        for w in at.0 {
+            put_u32(&mut self.out, w);
+        }
+        put_var(&mut self.out, k);
         Some(())
     }
 }
@@ -573,16 +783,26 @@ impl Ck<'_> {
                     2..=6 => {}
                     _ => return bad("bad instantiation key"),
                 }
-                for i in 0..4 {
-                    let w = self.r.u32()?;
-                    if i % 2 == 0 && w as usize >= self.npaths {
-                        return bad("path index out of range");
-                    }
-                }
-                Ok(())
+                self.at()
             }
             _ => bad("bad instantiation key"),
         }
+    }
+
+    /// A position: two (path index, offset) pairs.
+    fn at(&mut self) -> Res<()> {
+        for i in 0..4 {
+            let w = self.r.u32()?;
+            if i % 2 == 0 && w as usize >= self.npaths {
+                return bad("path index out of range");
+            }
+        }
+        Ok(())
+    }
+
+    /// A varint that fits a `u32`.
+    fn small(&mut self, what: &'static str) -> Res<()> {
+        if self.r.var()? > u64::from(u32::MAX) { bad(what) } else { Ok(()) }
     }
 
     fn args(&mut self, depth: u32) -> Res<()> {
@@ -676,6 +896,20 @@ impl Ck<'_> {
                         self.ty(d)?;
                         self.value(d)?;
                     }
+                    BASE_STRING => self.at()?,
+                    BASE_LABEL => {
+                        self.ent(d)?;
+                        self.at()?;
+                    }
+                    BASE_TEMPORARY => {
+                        self.ent(d)?;
+                        self.small("bad temporary")?;
+                        self.ty(d)?;
+                        if self.r.flag()? {
+                            self.ty(d)?;
+                            self.value(d)?;
+                        }
+                    }
                     _ => return bad("bad pointer base"),
                 }
                 self.r.var()?;
@@ -692,26 +926,7 @@ impl Ck<'_> {
                     self.ent(d)?;
                 }
             }
-            TAG_REFLECTION => match self.r.u8()? {
-                0 => match self.r.u8()? {
-                    REFL_TYPE => self.ty(d)?,
-                    REFL_ALIAS => self.ent(d)?,
-                    _ => return bad("bad reflection"),
-                },
-                1 | 3 | 4 | 5 => self.ent(d)?,
-                2 => {}
-                6 | 7 => {
-                    self.ty(d)?;
-                    self.value(d)?;
-                }
-                8 | 11 => {
-                    self.ent(d)?;
-                    if self.r.var()? > u64::from(u32::MAX) {
-                        return bad("bad reflection");
-                    }
-                }
-                _ => return bad("bad reflection"),
-            },
+            TAG_REFLECTION => self.reflectee(d)?,
             TAG_AGGREGATE_EX => {
                 self.r.bytes()?;
                 for _ in 0..self.r.var_count(2)? {
@@ -729,6 +944,64 @@ impl Ck<'_> {
                 }
             }
             _ => return bad("unknown value tag"),
+        }
+        Ok(())
+    }
+
+    /// A reflectee (the grammar [`KeyCx::reflectee`] writes).
+    fn reflectee(&mut self, d: u32) -> Res<()> {
+        Self::depth(d)?;
+        match self.r.u8()? {
+            0 => match self.r.u8()? {
+                REFL_TYPE => self.ty(d)?,
+                REFL_ALIAS => self.ent(d)?,
+                REFL_ALIAS_SPEC => {
+                    self.ent(d)?;
+                    self.args(d)?;
+                    self.ty(d)?;
+                }
+                _ => return bad("bad reflection"),
+            },
+            1 | 3 | 4 | 5 => self.ent(d)?,
+            2 => {}
+            6 | 7 => {
+                self.ty(d)?;
+                self.value(d)?;
+            }
+            8 | 11 => {
+                self.ent(d)?;
+                self.small("bad reflection")?;
+            }
+            9 => {
+                self.ty(d)?;
+                let flags = self.r.u8()?;
+                if flags > DMS_NAME | DMS_ALIGN | DMS_WIDTH | DMS_NUA {
+                    return bad("bad reflection");
+                }
+                if flags & DMS_NAME != 0 {
+                    self.r.bytes()?;
+                }
+                if flags & DMS_ALIGN != 0 {
+                    self.r.u32()?;
+                }
+                if flags & DMS_WIDTH != 0 {
+                    self.r.u32()?;
+                }
+                for _ in 0..self.r.var_count(1)? {
+                    self.reflectee(d + 1)?;
+                }
+            }
+            10 => {
+                match self.r.u8()? {
+                    0 => {}
+                    1 => self.small("bad reflection")?,
+                    _ => return bad("bad reflection"),
+                }
+                self.ent(d)?;
+                self.at()?;
+                self.small("bad reflection")?;
+            }
+            _ => return bad("bad reflection"),
         }
         Ok(())
     }
