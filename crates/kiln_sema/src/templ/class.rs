@@ -135,13 +135,7 @@ impl Sema<'_, '_> {
         // Likewise the outer expression's deleted functions and template-id
         // warnings waiting for their use: an instantiated body's
         // full-expressions do not report them (WP-1170).
-        let deleted = std::mem::take(&mut self.special.pending_deleted);
-        let warnings = std::mem::take(&mut self.special.pending_tid_warnings);
-        let r = f(self);
-        let inner = std::mem::replace(&mut self.special.pending_deleted, deleted);
-        self.special.pending_deleted.extend(inner);
-        let inner = std::mem::replace(&mut self.special.pending_tid_warnings, warnings);
-        self.special.pending_tid_warnings.extend(inner);
+        let r = self.setting_aside_uses_outside(&[], f);
         self.lambda_base = lambda_base;
         self.access_ctx = access_ctx;
         self.scopes = saved.scopes;

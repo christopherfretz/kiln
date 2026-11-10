@@ -67,6 +67,28 @@ impl Sema<'_, '_> {
         )
     }
 
+    /// The conversion sequence of a candidate's argument `a` to its
+    /// parameter type `p` ([over.best.ics]). A function template-id
+    /// resolved early: the candidate's conversion sequence resolves it
+    /// again (clang `TryCopyInitialization`); one the target re-resolves
+    /// to another specialization is resolved by the sequence itself (`Ics`
+    /// of an overload set); one the deduction of a template candidate
+    /// already converted reuses that sequence (clang
+    /// `CheckNonDependentConversions`, spec/sema-lambda.md §3.5).
+    fn candidate_arg_ics(&mut self, a: &super::ArgInfo, p: QualType, opts: IcsOptions) -> Ics {
+        let reused =
+            a.expr.and_then(|e| self.ovl.nondep_ics.iter().rev().find(|x| x.0 == e).map(|x| x.1));
+        if let Some(x) = reused {
+            return x;
+        }
+        if let Some(e) = a.expr
+            && self.mismatched_template_id(e, p).is_none()
+        {
+            self.rerun_template_id_resolution(e, p);
+        }
+        self.try_implicit_conversion(a, p, opts)
+    }
+
     /// Adds function `f` (found as `found`) to `set` as a candidate of
     /// kind `kind` for the set's arguments (and object argument): checks
     /// arity ([over.match.viable]/2), then computes one conversion
@@ -153,33 +175,7 @@ impl Sema<'_, '_> {
                         Some(&p) => {
                             let opts =
                                 if i == 0 && !oper_fn { first_opts } else { IcsOptions::NONE };
-                            // A function template-id resolved early: the
-                            // candidate's conversion sequence resolves it
-                            // again (clang `TryCopyInitialization`, or a
-                            // template's `CheckNonDependentConversions`,
-                            // whose sequence the candidate reuses).
-                            // One the target re-resolves to another
-                            // specialization is resolved by the sequence
-                            // itself (`Ics` of an overload set).
-                            // One the deduction of a template candidate
-                            // already converted reuses that sequence.
-                            let reused = a.expr.and_then(|e| {
-                                self.ovl.nondep_ics.iter().rev().find(|x| x.0 == e).map(|x| x.1)
-                            });
-                            if let Some(x) = reused {
-                                x
-                            } else {
-                                if let Some(e) = a.expr
-                                    && self.mismatched_template_id(e, p).is_none()
-                                {
-                                    self.rerun_template_id_resolution(e, p);
-                                }
-                                self.try_implicit_conversion(
-                                    &a,
-                                    p,
-                                    opts.with(IcsOptions::CANDIDATE_ARG),
-                                )
-                            }
+                            self.candidate_arg_ics(&a, p, opts.with(IcsOptions::CANDIDATE_ARG))
                         }
                         None => Ics::Ellipsis,
                     };

@@ -698,7 +698,7 @@ impl Sema<'_, '_> {
         if n.kind() == ExprKind::UnresolvedLookupExpr {
             return (n.ty() == QualType::OVERLOAD
                 && self.ast.templates.expr_targs.get(x).is_some()
-                && self.ovl.members.get(&x).is_none())
+                && !self.ovl.members.contains_key(&x))
             .then_some((x, x));
         }
         if self.ovl.template_id_refs.is_empty() {

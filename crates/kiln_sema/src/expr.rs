@@ -618,8 +618,9 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// [`Sema::setting_aside_outer_uses`] for the expressions `roots`.
-    fn setting_aside_uses_outside<R>(
+    /// [`Sema::setting_aside_outer_uses`] for the expressions `roots`
+    /// (none: every pending use is set aside).
+    pub(crate) fn setting_aside_uses_outside<R>(
         &mut self,
         roots: &[ExprId],
         f: impl FnOnce(&mut Self) -> R,

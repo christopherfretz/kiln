@@ -1183,6 +1183,52 @@ fn qualify_prvalue(s: &mut Sema<'_, '_>, e: ExprId, to: QualType) -> ExprId {
     raw_cast(s, CastKind::NoOp, e, to, ValueCategory::PRValue, None)
 }
 
+/// [`implicit_convert`] of the overload set `e` to a non-class `to`:
+/// [over.over]/1, the target selects the function.
+fn convert_overload_set(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Result<ExprId, ConvError> {
+    // [over.over]: the target selects the function.
+    // clang resolves an assigned overload set twice (the check, then
+    // the perform step of the result): a function template-id is not resolved
+    // a third time after it (spec/sema-lambda.md §3.5, WP-1170).
+    let checked = ctx == ConvCtx::Assignment && s.overload_operand(e).is_some();
+    let resolved = if ctx == ConvCtx::Condition {
+        s.check_overload_use(e);
+        None
+    } else if checked && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad() {
+        // [expr.assign]/3 via [over.over]: clang's
+        // `CheckSingleAssignmentConstraints` resolves silently and
+        // reports the assignment.
+        s.diagnose_overload_assign(e, to);
+        None
+    } else {
+        let at = s.begin_loc(e);
+        s.resolve_address_of_overloaded(e, to, true, crate::overload::address::AddrCtx::Convert, at)
+    };
+    match resolved {
+        // A non-static member without an object: reported at the end
+        // of the full-expression ([expr.prim.id.general]/4).
+        Some(x) if s.member_refs.get(&x).is_some_and(|r| r.error) => {
+            let loc = s.eloc(x);
+            Ok(s.recover_err(&[x], loc))
+        }
+        Some(x) => {
+            if checked {
+                s.forget_template_id(x);
+            }
+            implicit_convert(s, x, to, ctx)
+        }
+        None => {
+            let loc = s.eloc(e);
+            Ok(s.recover_err(&[e], loc))
+        }
+    }
+}
+
 /// Converts `e` to type `to` in context `ctx` by an implicit conversion
 /// sequence ([over.best.ics]): a standard conversion sequence for
 /// non-class types ([over.ics.scs]), or a direct reference binding to a
@@ -1227,50 +1273,7 @@ pub fn implicit_convert(
     // the overload set is the argument of the class's converting
     // constructor (`const D& d = f;` with `D(R (*)())`).
     if from == QualType::OVERLOAD && !s.overload_set_converts_to_class(e, to, IcsOptions::NONE) {
-        // [over.over]: the target selects the function.
-        // clang resolves an assigned overload set twice (the check, then
-        // the perform step below): a function template-id is not resolved
-        // a third time after it (spec/sema-lambda.md §3.5, WP-1170).
-        let checked = ctx == ConvCtx::Assignment && s.overload_operand(e).is_some();
-        let resolved = if ctx == ConvCtx::Condition {
-            s.check_overload_use(e);
-            None
-        } else if checked
-            && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
-        {
-            // [expr.assign]/3 via [over.over]: clang's
-            // `CheckSingleAssignmentConstraints` resolves silently and
-            // reports the assignment.
-            s.diagnose_overload_assign(e, to);
-            None
-        } else {
-            let at = s.begin_loc(e);
-            s.resolve_address_of_overloaded(
-                e,
-                to,
-                true,
-                crate::overload::address::AddrCtx::Convert,
-                at,
-            )
-        };
-        return match resolved {
-            // A non-static member without an object: reported at the end
-            // of the full-expression ([expr.prim.id.general]/4).
-            Some(x) if s.member_refs.get(&x).is_some_and(|r| r.error) => {
-                let loc = s.eloc(x);
-                Ok(s.recover_err(&[x], loc))
-            }
-            Some(x) => {
-                if checked {
-                    s.forget_template_id(x);
-                }
-                implicit_convert(s, x, to, ctx)
-            }
-            None => {
-                let loc = s.eloc(e);
-                Ok(s.recover_err(&[e], loc))
-            }
-        };
+        return convert_overload_set(s, e, to, ctx);
     }
     if s.ast.types.is_reference(to) {
         let r = bind_reference(s, e, to, ctx)?;
