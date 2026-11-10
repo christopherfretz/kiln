@@ -10,14 +10,31 @@
 # Otherwise it compiles with ${KILN_FAKE_CC:-clang++-19} and -DKILN_FAKE_GCC,
 # so a test can make GCC's binary behave differently. Like GCC 16.1 it
 # rejects the kiln/clang flags the harness must not pass it
-# (`--gcc-toolchain=`, `-ferror-limit=`, `-fclang-compat=`, `-fkiln-*`;
-# spec/harness.md "GCC as the compiler under test"), and it drops GCC's own
+# (`--gcc-toolchain=`, `-ferror-limit=`, `-fclang-compat=`, `-fkiln-*`,
+# `-Qunused-arguments`, `-fno-crash-diagnostics`, `-R<remark>`, and a
+# `-W<name>`/`-Werror=<name>` naming a warning outside its short
+# `-Q --help=warnings` list; spec/harness.md "GCC as the compiler under
+# test"), as well as `-fsanitize-ignorelist=` (a clang flag the harness
+# cannot map, for the flag probe), and it drops GCC's own
 # `-fmax-errors=`/`-fconstexpr-ops-limit=` and `-lstdc++exp` before calling
 # clang.
 if [ "$1" = "--version" ]; then
   echo "g++ (GCC) 16.1.0-fake (xtask fixture)"
   exit 0
 fi
+case " $* " in
+  *" --help=warnings "*)
+    echo "The following options control compiler warning messages:"
+    echo "  -Wall                       		[disabled]"
+    echo "  -Wextra                     		[disabled]"
+    echo "  -Wformat=<0,2>              		0"
+    echo "  -Wpedantic                  		[disabled]"
+    echo "  -Wunused-variable           		[disabled]"
+    echo "  -Wmissing-prototypes        		[available in C, ObjC]"
+    exit 0
+    ;;
+esac
+known=" all extra format pedantic unused-variable "
 src=
 n=$#
 while [ "$n" -gt 0 ]; do
@@ -25,9 +42,24 @@ while [ "$n" -gt 0 ]; do
   shift
   n=$((n - 1))
   case "$a" in
-    --gcc-toolchain=* | -ferror-limit=* | -fclang-compat=* | -fkiln-*)
+    --gcc-toolchain=* | -ferror-limit=* | -fclang-compat=* | -fkiln-* | \
+      -Qunused-arguments | -fno-crash-diagnostics | -fcrash-diagnostics* | -R[a-z]* | \
+      -fsanitize-ignorelist=*)
       echo "g++: error: unrecognized command-line option '$a'" >&2
       exit 1
+      ;;
+    -W | -Werror | -Wno-* | -W?,*) ;;
+    -W*)
+      w=${a#-W}
+      w=${w#error=}
+      w=${w%%=*}
+      case "$known" in
+        *" $w "*) ;;
+        *)
+          echo "g++: error: unrecognized command-line option '$a'" >&2
+          exit 1
+          ;;
+      esac
       ;;
     -fmax-errors=* | -fconstexpr-ops-limit=* | -lstdc++exp) continue ;;
     *.cpp | *.c | *.h) src=$a ;;
