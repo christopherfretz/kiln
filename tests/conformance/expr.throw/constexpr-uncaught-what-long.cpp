@@ -3,8 +3,8 @@
 // however long (WP-1245: kiln cut it at 1023 characters and fell back to
 // the value dump). A user class with its own what() over a member buffer
 // of 1023, 1024 and 4000 characters prints whole; past 64 KiB (70000
-// characters) the note prints the first 65536 then "… [N more
-// characters]". A long string literal what() prints whole too. The
+// characters) the note prints the first 65536 then "… [N more bytes]"
+// (WP-1251: N counts bytes). A long string literal what() prints whole too. The
 // regexes pin the full text (spec/oven.md §Exceptions).
 //@ verify
 //@ skip(clang): neither clang 19 nor clang 22 implements P3068
@@ -45,7 +45,7 @@ constexpr int c = raise<4000>(); // expected-error {{constexpr variable 'c' must
 // 70000 = 65536 printed + 4464 counted; the printed part is "BEGIN" and
 // 65531 digits, ending in '0'.
 constexpr int d = raise<70000>(); // expected-error {{constexpr variable 'd' must be initialized by a constant expression}}
-// expected-note-re@#throw {{unhandled exception: BEGIN{{(0123456789)+}}0… [4464 more characters]{{$}}}}
+// expected-note-re@#throw {{unhandled exception: BEGIN{{(0123456789)+}}0… [4464 more bytes]{{$}}}}
 
 // A string literal what() of 2006 characters.
 #define D10 "0123456789"
