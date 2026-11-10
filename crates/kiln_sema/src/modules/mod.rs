@@ -596,11 +596,15 @@ impl Sema<'_, '_> {
     /// The namespace-scope declaration whose owner decides whether `raw`
     /// is visible: `raw` itself, or the enumeration of an unscoped
     /// enumerator; `None` for anything not at namespace scope (a scoped
-    /// enumerator included), and namespaces.
+    /// enumerator included), and namespaces. A using-declaration's shadow
+    /// is implicit but has the using-declaration's owner: a shadow of a
+    /// non-exported using-declaration is not visible to an importer even
+    /// when its target is ([module.interface]/7, [namespace.udecl]/1).
     fn module_scope_decl(&self, raw: DeclId) -> Option<DeclId> {
         let mut d = raw;
         let n = self.ast.decls.get(d);
-        if n.kind() == DeclKind::Namespace || n.has(DeclFlags::IMPLICIT) || !n.loc().is_valid() {
+        let implicit = n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow;
+        if n.kind() == DeclKind::Namespace || implicit || !n.loc().is_valid() {
             return None;
         }
         let mut c = n.ctx()?;
