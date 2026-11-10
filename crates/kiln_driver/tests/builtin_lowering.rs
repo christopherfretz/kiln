@@ -23,10 +23,14 @@
 //! other errors are operand checks the made-up operands trip (a NEON
 //! type code, a shift immediate) and only drop the call.
 //!
+//! On x86 every feature is on (`x86_features::all_flags`), and a call
+//! sema rejects with each operand count is retried with the last operand
+//! `4` (a rounding mode, a gather scale) and then with the operands `1`,
+//! `2`, ... (distinct AMX tile numbers; WP-1242).
+//!
 //! Coverage limit: a builtin no operand list of that type satisfies (the
-//! NEON `_v` type-code forms with vector operands, the x86 builtins with
-//! immediate operands, the type traits and other keywords) is not
-//! exercised; neither are the hand-written coroutine builtins, which
+//! NEON `_v` type-code forms with vector operands, the type traits and
+//! other keywords) is not exercised; neither are the hand-written coroutine builtins, which
 //! need the shape of a coroutine (`__builtin_coro_id` first).
 #![forbid(unsafe_code)]
 
@@ -49,6 +53,8 @@ struct Probe {
     dir: PathBuf,
     target: &'static str,
     compat: u32,
+    /// The `-m<feature>` flags (every x86 feature).
+    flags: Vec<String>,
 }
 
 /// An `error:` diagnostic located in `probe.cpp`: its line and message.
@@ -69,7 +75,15 @@ impl Probe {
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
             .join(format!("builtin-lowering-{}-{target}-{compat}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        Probe { dir, target, compat }
+        let flags = if target.starts_with("x86_64") {
+            kiln_driver::x86_features::all_flags(compat >= 22)
+                .into_iter()
+                .map(|f| format!("-m{f}"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Probe { dir, target, compat, flags }
     }
 
     /// Compiles `src` as `probe.cpp` with `mode` (`-fsyntax-only`, or
@@ -80,6 +94,7 @@ impl Probe {
             .args(["-std=c++26", "-ferror-limit=0", "-Wno-everything"])
             .arg(format!("-fclang-compat={}", self.compat))
             .arg(format!("--target={}", self.target))
+            .args(&self.flags)
             .args(mode)
             .arg("probe.cpp")
             .current_dir(&self.dir)
@@ -127,14 +142,15 @@ impl Probe {
     }
 
     /// The calls `return name(Any{}, ...)` sema accepts, with the fewest
-    /// operands that work; the names no operand count satisfies drop out.
-    fn callable(&self, names: &[String]) -> Vec<(String, usize)> {
+    /// operands that work (then the x86 retries, see the module doc), as
+    /// (name, operand list); the names no operand list satisfies drop out.
+    fn callable(&self, names: &[String]) -> Vec<(String, String)> {
         self.callable_and_undeclared(names).0
     }
 
     /// [`Probe::callable`], and the names sema does not declare at all:
     /// their call is a "use of undeclared identifier" (WP-1057).
-    fn callable_and_undeclared(&self, names: &[String]) -> (Vec<(String, usize)>, Vec<String>) {
+    fn callable_and_undeclared(&self, names: &[String]) -> (Vec<(String, String)>, Vec<String>) {
         let mut left: Vec<&String> = names.iter().collect();
         let mut ok = Vec::new();
         let mut undeclared = Vec::new();
@@ -161,23 +177,52 @@ impl Probe {
                 if bad.contains(&i) {
                     next.push(n);
                 } else {
-                    ok.push((n.clone(), k));
+                    ok.push((n.clone(), args.clone()));
                 }
             }
             left = next;
+        }
+        if !self.flags.is_empty() {
+            let last4 = |k: usize| {
+                let mut a = vec!["Any{}".to_string(); k - 1];
+                a.push("4".into());
+                a.join(", ")
+            };
+            let distinct = |k: usize| (1..=k).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
+            for mk in [&last4 as &dyn Fn(usize) -> String, &distinct] {
+                for k in 1..7 {
+                    let args = mk(k);
+                    let mut src = ANY.to_string();
+                    for (i, n) in left.iter().enumerate() {
+                        let _ = writeln!(src, "auto f{i}() {{ return {n}({args}); }}");
+                    }
+                    let bad: BTreeSet<usize> = errors(&self.run(&src, &["-fsyntax-only"]))
+                        .into_iter()
+                        .filter_map(|(l, _)| l.checked_sub(2))
+                        .collect();
+                    let mut next = Vec::new();
+                    for (i, n) in left.into_iter().enumerate() {
+                        if bad.contains(&i) {
+                            next.push(n);
+                        } else {
+                            ok.push((n.clone(), args.clone()));
+                        }
+                    }
+                    left = next;
+                }
+            }
         }
         (ok, undeclared)
     }
 
     /// The calls of `calls` codegen rejects as unlowered, with the error.
-    fn unlowered(&self, calls: &[(String, usize)]) -> Vec<(String, String)> {
+    fn unlowered(&self, calls: &[(String, String)]) -> Vec<(String, String)> {
         let mut bad = Vec::new();
         for chunk in calls.chunks(64) {
             let mut chunk = chunk.to_vec();
             while !chunk.is_empty() {
                 let mut src = ANY.to_string();
-                for (i, (n, k)) in chunk.iter().enumerate() {
-                    let args = vec!["Any{}"; *k].join(", ");
+                for (i, (n, args)) in chunk.iter().enumerate() {
                     let _ = writeln!(src, "auto f{i}() {{ return {n}({args}); }}");
                 }
                 let err = self.run(&src, &["-S", "-emit-llvm", "-o", "probe.ll"]);

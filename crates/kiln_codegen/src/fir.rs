@@ -930,6 +930,11 @@ impl Fir {
         self.access_group = group;
     }
 
+    /// The fast-math flags of the instructions appended from now on.
+    pub fn fmf(&self) -> FastMath {
+        self.fmf
+    }
+
     /// Sets the fast-math flags of the instructions appended from now on
     /// (WP-806, spec/codegen.md "Floating-point semantics").
     pub fn set_fmf(&mut self, fmf: FastMath) {
