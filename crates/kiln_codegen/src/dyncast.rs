@@ -183,7 +183,7 @@ impl Cg<'_> {
         // clang `EmitDynamicCast`: [class.cdtor]/5 (the written source
         // class type).
         if self.ub_type_check_on() {
-            let srq = if is_ref { sq } else { ast.types.pointee(sq).unwrap_or(sq) };
+            let srq = if is_ref { sq } else { ast.types.pointee_sugared(sq).unwrap_or(sq) };
             let loc = self.ub_expr_loc(e);
             self.ub_type_check(this, TypeCheck::new(Tck::DynamicOperation, loc, srq))?;
         }

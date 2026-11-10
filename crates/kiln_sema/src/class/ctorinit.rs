@@ -1145,7 +1145,7 @@ impl Sema<'_, '_> {
     fn qualified_decl_arg(&self, d: DeclId) -> String {
         use kiln_ast::types::TypeNames as _;
         let mut s = String::new();
-        crate::names::SemaNames::new(self).write_decl_name(d, true, &mut s);
+        crate::names::sema_names(self).write_decl_name(d, true, &mut s);
         format!("'{s}'")
     }
 
