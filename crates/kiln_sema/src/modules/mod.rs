@@ -605,10 +605,16 @@ impl Sema<'_, '_> {
     /// is implicit but has the using-declaration's owner: a shadow of a
     /// non-exported using-declaration is not visible to an importer even
     /// when its target is ([module.interface]/7, [namespace.udecl]/1).
+    /// Only a purview shadow is filtered: a global-module shadow (a
+    /// header's `using ::size_t;`) stays judged by its target, as before
+    /// S6, since a later unit's own `#include` of a guarded header does
+    /// not redeclare it.
     fn module_scope_decl(&self, raw: DeclId) -> Option<DeclId> {
         let mut d = raw;
         let n = self.ast.decls.get(d);
-        let implicit = n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow;
+        let purview_shadow =
+            n.kind() == DeclKind::UsingShadow && self.ast.modules.owner(raw).purview;
+        let implicit = n.has(DeclFlags::IMPLICIT) && !purview_shadow;
         if n.kind() == DeclKind::Namespace || implicit || !n.loc().is_valid() {
             return None;
         }

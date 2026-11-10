@@ -194,7 +194,12 @@ qualified and class-scope name lookup), by ADL, and by redeclaration lookup:
 
 A using-declaration is filtered by its own owner, not its target's: `export
 namespace std { using std::vector; }` makes `std::vector` visible to an
-importer although the class template, declared in std's GMF, is not.
+importer although the class template, declared in std's GMF, is not. A
+purview shadow is filtered the same way, so the shadow of a non-exported
+using-declaration is invisible even when its target is visible (WP-1068).
+A global-module shadow (a header's `using ::size_t;`) is exempt, like every
+implicit declaration, since an importer's own `#include` of the guarded
+header does not redeclare it (`module.import/import-std-compat.cpp`).
 
 ADL ([basic.lookup.argdep]/4, `Sema::module_adl_visible`) uses the same
 predicate plus: a function that is *exported*, attached to a named module
@@ -2302,14 +2307,19 @@ module's last import").
 
 The writer skips every declaration owned by another unit: imported
 ones, and those of the units the preamble's imports replayed. A record
-that refers to one of them falls back, with the existing reasons:
+that refers to one of them falls back, with the existing reasons
+(each pinned by `kind2_declaration_image_imports`):
 
-- a namespace reopened from an import ("a redeclaration of an entity
+- a body naming an imported declaration ("a body referring to a
+  declaration outside the image");
+- a qualifier naming an imported namespace ("a qualifier naming a
+  namespace outside the image"), a type naming an imported class ("a
+  type declared outside the image"), an alias or directive naming an
+  imported namespace ("a using-directive or alias naming a namespace
   outside the image");
-- a type, qualifier or body naming an imported declaration ("a ...
-  outside the image");
-- an implicit member or instantiation of an imported class or template
-  ("a declaration in an unsupported context").
+- a namespace reopened from an import, and an implicit member or
+  instantiation of an imported class or template ("a declaration in an
+  unsupported context").
 
 S6 thus carries the declarations a unit adds on top of its imports, as
 long as they do not refer to them. Referring to imported entities
@@ -2324,7 +2334,28 @@ check runs before the preamble is replayed. The second runs at its
 end, because the preamble's imports may have made a gated name seen.
 If the second check fails, or the stop lies inside an open `#if`, the
 preprocessor does not stop. It goes on lexing the rest of the main
-file and the unit replays, with the reason logged.
+file and the unit replays, with the reason logged ("its image declares
+'X', already seen", "its preamble ends in a conditional"). A preamble
+past the end of the recorded main file, or off a character boundary,
+replays from the start ("its image has a bad preamble").
+
+Mechanics. `try_image_unit` enters the unit with the ordinary
+`replay_capsule_unit` and then gives the unit's main-file frame a
+lexer over bytes `0..preamble` and an `ImageStop`. At that lexer's end
+of file, `image_stop_reached` decides: on success the frame pops as at
+any end of file, and `Marker::UnitEnd` (and the parser's
+`Event::UnitEnd`) carries the image, which the parser hands to
+`Sema::load_module_image` (`after_preamble = true`) before
+`act_on_unit_end`; otherwise the frame's lexer is replaced by one over
+`preamble..len` and lexing goes on. The reader checks that
+`after_preamble` matches the image (a preamble word iff a preamble
+mode load) and that the unit sema entered has the image's key; either
+mismatch is a corrupt file ("a preamble that does not match the
+import", "a preamble that does not enter the image's unit"). The
+writer's offset is `ModuleDirective::end`, which the parser passes to
+`Sema::module_note_directive_end` after each module or import
+directive of the main unit; a `None` there (an include or a macro
+expansion) makes the unit fall back.
 
 *Partitions.* An interface partition (`export module M:P;`) and an
 implementation partition (`module M:P;`) produce images like a
@@ -2393,6 +2424,27 @@ The following still fall back:
 - dependent and pack using-declarations (`UnresolvedUsing*`,
   `UsingPack`);
 - block-scope using-declarations and directives in bodies.
+
+*S6, measured* (WP-1068; harness profile, aarch64, `/usr/bin/time -v`,
+median of 5 interleaved). An ad hoc project: two interface partitions
+and an implementation partition of 400 classes, 400 `constexpr`
+functions and 400 aliases each (about 2400 records), a primary of 1600
+records that re-exports the first two and imports the third, a module
+that re-exports the primary, and a consumer that uses all of them in a
+`static_assert` and `main`.
+
+- Import, `-fsyntax-only`: 0.11 s and 20.3 MiB replayed, 0.04 s and
+  15.0 MiB from the images (clang 19: 0.01 s, 85.5 MiB). `-c`: 0.12 s
+  to 0.05 s, peak RSS unchanged at 60.0 MiB (LLVM's).
+- Precompiling the primary and the re-exporting module, whose imports
+  now come from images: 0.12 s to 0.07 s and 0.10 s to 0.04 s, peak
+  RSS 19.8 to 15.4 MiB and 20.3 to 14.3 MiB. A partition's own
+  precompile, which imports nothing, grows from 0.04 s and 13.9 MiB to
+  0.05 to 0.07 s and 16.6 MiB (writing about 2400 records), and its
+  module file from 78 KiB to 461 KiB (about 160 B per record).
+- On/off equivalence: identical LLVM IR and identical visibility errors
+  (`kind2_declaration_image_imports`, `image-part-run.cpp`,
+  `image-part-hidden.cpp`).
 
 **Versioning and the fingerprint.** The section starts with its own
 format word (`IMAGE_VERSION = 11` since WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
