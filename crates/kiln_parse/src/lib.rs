@@ -100,6 +100,8 @@ pub struct ParseOptions {
     pub sve: bool,
     /// `-msve-vector-bits=N` ([`kiln_sema::Sema::sve_vector_bits`]).
     pub sve_vector_bits: Option<u32>,
+    /// The `AArch64` CPU names ([`kiln_sema::Sema::aarch64_cpu_valid`]).
+    pub aarch64_cpu_valid: fn(&str, bool) -> bool,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
@@ -153,6 +155,7 @@ impl Default for ParseOptions {
             math_errno: true,
             sve: false,
             sve_vector_bits: None,
+            aarch64_cpu_valid: |_, _| true,
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
@@ -365,6 +368,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.math_errno = opts.math_errno;
     s.sve = opts.sve;
     s.sve_vector_bits = opts.sve_vector_bits;
+    s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;

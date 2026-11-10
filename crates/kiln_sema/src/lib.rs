@@ -333,6 +333,11 @@ pub struct Sema<'a, 'sm> {
     /// `-msve-vector-bits=N` (clang's `VScaleMin` = `VScaleMax` = N/128):
     /// the one size `arm_sve_vector_bits` accepts (spec/sema.md "SVE").
     pub sve_vector_bits: Option<u32>,
+    /// Whether `name` is an `AArch64` CPU of clang 22 (`true`) or clang 19
+    /// (`isValidCPUName`, case-sensitive): the `cpu=` and `tune=` check of
+    /// a `target("...")` attribute (WP-1187; set by the driver from its
+    /// CPU table, every name by default).
+    pub aarch64_cpu_valid: fn(&str, bool) -> bool,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -1321,6 +1326,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cf_protection_branch: false,
             sve: false,
             sve_vector_bits: None,
+            aarch64_cpu_valid: |_, _| true,
             nns_start: None,
             gnu_lib_builtins: false,
             no_builtin: false,
