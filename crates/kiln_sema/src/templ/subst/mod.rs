@@ -146,6 +146,11 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// call's callee: a template-id there is not resolved to its one
     /// specialization (the call deduces). Taken by that node.
     pub(crate) as_callee: bool,
+    /// The type about to be substituted is the destroyed type
+    /// `S::template Q<args>` of `p->S::F::~Q<args>()`, written without
+    /// `template`: a non-template `Q` is clang's "'Q' does not refer to a
+    /// template" (WP-1192). Taken by `member_template_named`.
+    pub(crate) dtor_template_name: bool,
     /// The occurrence rule of the declaration whose type is being
     /// substituted (§5.8; [`Substituter::with_written_scope`]).
     pub(crate) written_scope: Option<crate::templ::written::WrittenScope>,
@@ -221,6 +226,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             partial_pack: None,
             written_locs: true,
             as_callee: false,
+            dtor_template_name: false,
             written_scope: None,
             written_used: std::cell::RefCell::default(),
             expansions: Vec::new(),

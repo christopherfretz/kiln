@@ -12059,9 +12059,10 @@ impl Sema<'_, '_> {
     }
 
     /// GNU `target("features")` (clang `handleTargetAttr`): exactly one
-    /// string literal, kept as its `StringLitId` in `a`. The feature
-    /// names are not checked (clang's `warn_unsupported_target_attribute`
-    /// is a follow-up); codegen reads them on `AArch64`. A non-empty
+    /// string literal, kept as its `StringLitId` in `a`. Its `fpmath=`,
+    /// and on `AArch64` its `cpu=`/`tune=` CPUs and repeated items, are
+    /// checked first ([`Sema::target_attr_ignored`]); the feature names
+    /// are not (clang accepts any on `AArch64`); codegen reads them. A non-empty
     /// `branch-protection=<spec>` (clang `checkTargetAttr`, WP-846) must
     /// parse on `AArch64` ("invalid or misplaced branch protection
     /// specification"); off it the attribute is ignored with a warning.
@@ -12090,6 +12091,10 @@ impl Sema<'_, '_> {
         };
         let id = self.ast.exprs.string_lit(lit);
         let text = String::from_utf8_lossy(self.ast.strings.bytes(id)).into_owned();
+        if let Some(msg) = self.target_attr_ignored(&text, at) {
+            self.emit(msg);
+            return None;
+        }
         if let Some(spec) = kiln_abi::BranchProtection::of_target_attr(&text)
             && !spec.is_empty()
         {
@@ -12108,6 +12113,52 @@ impl Sema<'_, '_> {
         let a = id.raw();
         let node = AttrNode { kind: AttrKind::TARGET, syntax, flags: 0, loc, a, b: 0 };
         Some(self.ast.attrs.push(node))
+    }
+
+    /// clang `Sema::checkTargetAttr`'s value checks before the branch
+    /// protection's (WP-1187; `warn_unsupported_target_attribute`, the
+    /// attribute is then ignored): an `fpmath=` anywhere in the string,
+    /// then on `AArch64` (`AArch64TargetInfo::parseTargetAttr`) the first
+    /// `cpu=` CPU and the first `tune=` CPU must be known, case-sensitive
+    /// ([`Sema::aarch64_cpu_valid`]), and no `arch=`, `cpu=` or `tune=`
+    /// may repeat (the last repeated one is named).
+    fn target_attr_ignored(&self, text: &str, at: Loc) -> Option<kiln_diag::Diag> {
+        if text.contains("fpmath=") {
+            return Some(self.diag(DiagId::sema_unsupported_target_attribute, at).arg("fpmath="));
+        }
+        if self.abi.triple.arch != kiln_abi::Arch::AArch64 {
+            return None;
+        }
+        let (mut cpu, mut tune, mut arch) = (None, None, false);
+        let mut duplicate = None;
+        for item in text.split(',').map(str::trim) {
+            if item.starts_with("arch=") {
+                if arch {
+                    duplicate = Some("arch=");
+                }
+                arch = true;
+            } else if let Some(v) = item.strip_prefix("cpu=") {
+                if cpu.is_some() {
+                    duplicate = Some("cpu=");
+                } else {
+                    cpu = v.trim().split('+').next().filter(|n| !n.is_empty());
+                }
+            } else if let Some(v) = item.strip_prefix("tune=") {
+                if tune.is_some() {
+                    duplicate = Some("tune=");
+                } else {
+                    tune = Some(v.trim()).filter(|n| !n.is_empty());
+                }
+            }
+        }
+        let v22 = self.clang_compat >= 22;
+        if let Some(c) = cpu.filter(|c| !(self.aarch64_cpu_valid)(c, v22)) {
+            return Some(self.diag(DiagId::sema_unknown_target_cpu, at).arg(c.to_owned()));
+        }
+        if let Some(t) = tune.filter(|t| !(self.aarch64_cpu_valid)(t, v22)) {
+            return Some(self.diag(DiagId::sema_unknown_target_tune_cpu, at).arg(t.to_owned()));
+        }
+        duplicate.map(|d| self.diag(DiagId::sema_duplicate_target_attribute, at).arg(d))
     }
 
     /// GNU `weakref` / `weakref("target")`, `alias("target")`,
