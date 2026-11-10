@@ -459,7 +459,9 @@ lifetime-extending context may carry its own copy of the parameter's
 default argument (cold `default_arg_rewritten`, write-once through
 `set_default_arg_rewritten`; dump `has rewritten init`), which
 `Ast::default_arg_expr` returns in place of the shared one (WP-1149,
-spec/sema.md §7.6a). `ExprArena::clone_with_children(e, lists, kids)`
+spec/sema.md §7.6a). A `CXXDefaultInitExpr` may carry a copy of the
+field's default member initializer in the same map (WP-1177), which
+`Ast::default_init_expr` returns in place of the field's. `ExprArena::clone_with_children(e, lists, kids)`
 copies one node with new children (same kind, type, flags and cold
 payloads) for the structural kinds that rewrite needs, `None` otherwise.
 

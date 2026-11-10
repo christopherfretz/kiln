@@ -9903,11 +9903,9 @@ not supported yet`.
     a potentially-evaluated `typeid`, casts, `__builtin_choose_expr`, GNU
     `?:` with its `OpaqueValueExpr`s rebound to the copied common
     expression, `ExprArena::clone_opaque`;
-    `stmt.ranged/p2718-default-argument-kinds-run.cpp`), except a
-    `CXXDefaultInitExpr`, whose member initializer stays shared (clang 22
-    and GCC 16.1 extend its temporaries; xfail
-    `stmt.ranged/p2718-default-member-initializer-run.cpp`), and a few
-    vendor builtins (`fresh_temporaries` lists them). The jump-scope
+    `stmt.ranged/p2718-default-argument-kinds-run.cpp`), and a
+    `CXXDefaultInitExpr` (below), except a few vendor builtins
+    (`fresh_temporaries` lists them). The jump-scope
     checker and the CFG enter the copy (clang 19 and 22 do not: their
     `CXXDefaultArgExpr` has no children), so an indirect `goto` out of
     the loop leaves the copy's extended temporaries' scope
@@ -9916,12 +9914,71 @@ not supported yet`.
     (`stmt.ranged/p2718-default-argument-noreturn.cpp`); a default
     argument that is not rewritten stays one CFG element, as in clang.
     The never-constant walk stops at range-based `for` and expansion
-    statements, the only rewriting contexts, so it never reaches a copy
-    (its temporaries scan enters one anyway). The module declaration
+    statements, so it never reaches a copy made there (its temporaries
+    scan enters one anyway, and a variable's member initializer copy,
+    below, too). The module declaration
     image carries the copy (cold field `default_arg_rewritten`,
     spec/modules.md §11.11), so an importer building an inline or
     constexpr body from the image extends the same temporaries
     (`module.interface/image-default-temporaries-run.cpp`).
+    *Default member initializers* (WP-1177; [class.temporary]/6-7,
+    [intro.execution]/5): a default member initializer an aggregate
+    initialization uses is part of the enclosing full-expression too, so
+    in a lifetime-extending context its temporaries are extended like a
+    default argument's. clang's rule (`Sema::BuildCXXDefaultInitExpr`):
+    the field's initializer is rebuilt for the use
+    (`EnsureImmediateInvocationInDefaultArgs::TransformInitializer`, which
+    drops its `ExprWithCleanups`) when it holds an immediate invocation,
+    or when the context is lifetime-extending
+    (`needsRebuildOfDefaultArgOrInit`: `InLifetimeExtendingContext`, set
+    for a C++23 for-range-initializer and inherited by the aggregate's
+    `InitListChecker`) and the initializer is an `ExprWithCleanups`; the
+    rebuilt temporaries are then extended by `__range` like the others.
+    The immediate-invocation rebuild is not needed in kiln (its
+    `ConstantExpr`s are evaluated at the use, WP-1106). kiln follows the
+    lifetime-extending half: `extend_walk` gives each `CXXDefaultInitExpr`
+    use whose member initializer is an `ExprWithCleanups` a copy of its
+    operand with fresh temporaries (`fresh_temporaries`, the same map
+    `default_arg_rewritten`; `Ast::default_init_expr` returns it, so
+    codegen and the Oven evaluate and destroy the use's own), in the
+    aggregate written in the range-initializer, in a default argument's,
+    and nested (`mk(Outer{})`, a default argument's own use, a class
+    template's instantiated initializer, which `templ/class.rs` `nsdmi`
+    rebuilds without the pattern's `ExprWithCleanups` so the conversion
+    to the field's type is inside the new one, as clang has it). A
+    member initializer that is no `ExprWithCleanups` is not rebuilt, so
+    the temporaries of the member initializers it uses in turn stay its
+    own (`struct O2 { Agg a = Agg{}; }`, as clang 22; GCC 16.1 extends
+    them), and neither is an array filler, one initializer for every
+    element (clang 22 and GCC 16.1 agree). A default argument used by
+    the member initializer is extended with it (GCC 16.1; clang 22 does
+    not, as for a nested default argument). Outside a lifetime-extending
+    context the use shares the field's initializer and its temporaries
+    end with the full-expression
+    (`class.temporary/default-member-initializer-full-expression-run.cpp`).
+    CWG1815 ([class.temporary]/6): a temporary that a reference member's
+    default member initializer binds, in a variable's aggregate
+    initialization, is extended with the variable
+    (`temporaries_bound_by`/`temporaries_in_aggregate` rebuild the use,
+    `rebuilt_default_init`, for a reference member and for a class or
+    array member, so an `std::initializer_list` member's backing array
+    too). That copy keeps the initializer's `ExprWithCleanups`, as
+    clang's does: the variable's initializer has none of its own when
+    the shared one held every temporary, and the copy's unextended
+    temporaries end at its end; a later lifetime-extending walk looks
+    through it (`rewritten_operand`). Like clang 22, codegen destroys a
+    temporary so bound in an aggregate temporary that a reference
+    variable extends (`const Q& q = Q{};`) at the end of the
+    full-expression, since its cleanup is pushed in two nested
+    full-expression scopes; GCC 16.1 extends it. Before WP-1177 the
+    shared initializer's temporary died with it (a dangling reference).
+    Tests: `stmt.ranged/p2718-default-member-initializer{,-nested,-default-argument}-run.cpp`,
+    `-constexpr.cpp` (the Oven), `class.temporary/cwg1815-default-member-initializer-run.cpp`,
+    `ast/class.temporary/default-member-initializer-rewritten.cpp` (clang
+    22's dump) and `module.interface/image-default-member-init-temporaries-run.cpp`
+    (the image's cold field carries the copy; before, its decoder
+    rejected the field on a `CXXDefaultInitExpr`, so such a unit had no
+    image).
     GCC 16.1 extends no element temporaries and rejects reading one in
     constant evaluation, so the tests carry kiln goldens
     (`element-default-argument-temporaries-run.cpp`, `oracle: none`).

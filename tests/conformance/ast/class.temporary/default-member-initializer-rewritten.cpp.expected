@@ -1,0 +1,126 @@
+Dumping dmiuse:
+FunctionDecl dmiuse 'void ()'
+`-CompoundStmt
+  |-CXXForRangeStmt
+  | |-DeclStmt
+  | | `-VarDecl implicit used __range1 'A &&' cinit
+  | |   `-ExprWithCleanups 'A' xvalue
+  | |     `-MaterializeTemporaryExpr 'A' xvalue extended by Var '__range1' 'A &&'
+  | |       `-CallExpr 'A'
+  | |         |-ImplicitCastExpr 'A (*)(const Agg &)' <FunctionToPointerDecay>
+  | |         | `-DeclRefExpr 'A (const Agg &)' lvalue Function 'mk' 'A (const Agg &)'
+  | |         `-MaterializeTemporaryExpr 'const Agg' lvalue extended by Var '__range1' 'A &&'
+  | |           `-ImplicitCastExpr 'const Agg' <NoOp>
+  | |             `-CXXFunctionalCastExpr 'Agg' functional cast to Agg <NoOp>
+  | |               `-InitListExpr 'Agg'
+  | |                 `-CXXDefaultInitExpr 'int' has rewritten init
+  | |                   `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |                     `-MemberExpr 'int' xvalue .v
+  | |                       `-MaterializeTemporaryExpr 'D' xvalue extended by Var '__range1' 'A &&'
+  | |                         `-CXXFunctionalCastExpr 'D' functional cast to D <NoOp>
+  | |                           `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+  | |                             `-InitListExpr 'D'
+  | |                               `-IntegerLiteral 'int' 4
+  | |-DeclStmt
+  | | `-VarDecl implicit used __begin1 'const int *' cinit
+  | |   `-CXXMemberCallExpr 'const int *'
+  | |     `-MemberExpr '<bound member function type>' .begin
+  | |       `-ImplicitCastExpr 'const A' lvalue <NoOp>
+  | |         `-DeclRefExpr 'A' lvalue Var '__range1' 'A &&'
+  | |-DeclStmt
+  | | `-VarDecl implicit used __end1 'const int *' cinit
+  | |   `-CXXMemberCallExpr 'const int *'
+  | |     `-MemberExpr '<bound member function type>' .end
+  | |       `-ImplicitCastExpr 'const A' lvalue <NoOp>
+  | |         `-DeclRefExpr 'A' lvalue Var '__range1' 'A &&'
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | | | `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | | `-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | |   `-DeclRefExpr 'const int *' lvalue Var '__end1' 'const int *'
+  | |-UnaryOperator 'const int *' lvalue prefix '++'
+  | | `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | |-DeclStmt
+  | | `-VarDecl used x 'int' cinit
+  | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |     `-UnaryOperator 'const int' lvalue prefix '*' cannot overflow
+  | |       `-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | |         `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+  |-CXXForRangeStmt
+  | |-DeclStmt
+  | | `-VarDecl implicit used __range1 'A &&' cinit
+  | |   `-ExprWithCleanups 'A' xvalue
+  | |     `-MaterializeTemporaryExpr 'A' xvalue extended by Var '__range1' 'A &&'
+  | |       `-CallExpr 'A'
+  | |         |-ImplicitCastExpr 'A (*)(const TA<int> &)' <FunctionToPointerDecay>
+  | |         | `-DeclRefExpr 'A (const TA<int> &)' lvalue Function 'mt' 'A (const TA<int> &)'
+  | |         `-MaterializeTemporaryExpr 'const TA<int>' lvalue extended by Var '__range1' 'A &&'
+  | |           `-ImplicitCastExpr 'const TA<int>' <NoOp>
+  | |             `-CXXFunctionalCastExpr 'TA<int>' functional cast to TA<int> <NoOp>
+  | |               `-InitListExpr 'TA<int>'
+  | |                 `-CXXDefaultInitExpr 'int' has rewritten init
+  | |                   `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |                     `-MemberExpr 'int' xvalue .v
+  | |                       `-MaterializeTemporaryExpr 'D' xvalue extended by Var '__range1' 'A &&'
+  | |                         `-CXXFunctionalCastExpr 'D' functional cast to D <NoOp>
+  | |                           `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+  | |                             `-InitListExpr 'D'
+  | |                               `-IntegerLiteral 'int' 9
+  | |-DeclStmt
+  | | `-VarDecl implicit used __begin1 'const int *' cinit
+  | |   `-CXXMemberCallExpr 'const int *'
+  | |     `-MemberExpr '<bound member function type>' .begin
+  | |       `-ImplicitCastExpr 'const A' lvalue <NoOp>
+  | |         `-DeclRefExpr 'A' lvalue Var '__range1' 'A &&'
+  | |-DeclStmt
+  | | `-VarDecl implicit used __end1 'const int *' cinit
+  | |   `-CXXMemberCallExpr 'const int *'
+  | |     `-MemberExpr '<bound member function type>' .end
+  | |       `-ImplicitCastExpr 'const A' lvalue <NoOp>
+  | |         `-DeclRefExpr 'A' lvalue Var '__range1' 'A &&'
+  | |-BinaryOperator 'bool' '!='
+  | | |-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | | | `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | | `-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | |   `-DeclRefExpr 'const int *' lvalue Var '__end1' 'const int *'
+  | |-UnaryOperator 'const int *' lvalue prefix '++'
+  | | `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | |-DeclStmt
+  | | `-VarDecl used x 'int' cinit
+  | |   `-ImplicitCastExpr 'int' <LValueToRValue>
+  | |     `-UnaryOperator 'const int' lvalue prefix '*' cannot overflow
+  | |       `-ImplicitCastExpr 'const int *' <LValueToRValue>
+  | |         `-DeclRefExpr 'const int *' lvalue Var '__begin1' 'const int *'
+  | `-CStyleCastExpr 'void' <ToVoid>
+  |   `-DeclRefExpr 'int' lvalue Var 'x' 'int'
+  |-DeclStmt
+  | `-VarDecl r 'R' listinit
+  |   `-InitListExpr 'R'
+  |     `-CXXDefaultInitExpr 'const D' lvalue has rewritten init
+  |       `-ExprWithCleanups 'const D' lvalue
+  |         `-MaterializeTemporaryExpr 'const D' lvalue extended by Var 'r' 'R'
+  |           `-ImplicitCastExpr 'const D' <NoOp>
+  |             `-CXXFunctionalCastExpr 'D' functional cast to D <NoOp>
+  |               `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+  |                 `-InitListExpr 'D'
+  |                   `-IntegerLiteral 'int' 7
+  `-ExprWithCleanups 'void'
+    `-CallExpr 'void'
+      |-ImplicitCastExpr 'void (*)(const Agg &)' <FunctionToPointerDecay>
+      | `-DeclRefExpr 'void (const Agg &)' lvalue Function 'use' 'void (const Agg &)'
+      `-MaterializeTemporaryExpr 'const Agg' lvalue
+        `-ImplicitCastExpr 'const Agg' <NoOp>
+          `-CXXFunctionalCastExpr 'Agg' functional cast to Agg <NoOp>
+            `-InitListExpr 'Agg'
+              `-CXXDefaultInitExpr 'int' has rewritten init
+                `-ExprWithCleanups 'int'
+                  `-ImplicitCastExpr 'int' <LValueToRValue>
+                    `-MemberExpr 'int' xvalue .v
+                      `-MaterializeTemporaryExpr 'D' xvalue
+                        `-CXXFunctionalCastExpr 'D' functional cast to D <NoOp>
+                          `-CXXBindTemporaryExpr 'D' (CXXTemporary)
+                            `-InitListExpr 'D'
+                              `-IntegerLiteral 'int' 4
+

@@ -2434,11 +2434,13 @@ parameters of the function records in order), or `u32::MAX - 1` for the
 translation unit. The expression record's `cold` byte says which cold
 annotations follow the slots: 1 end location, 2 written type, 4
 operator location, 8 begin location, 16 member-access operator
-location (S4b), 32 the copy of a default argument rebuilt for a
-lifetime-extending use (an expression index, written before the
-`CXXDefaultArgExpr` it belongs to and rejected on any other kind;
-spec/sema.md §7.6a, WP-1166: without it an importer gave the copy's
-temporaries full-expression lifetime).
+location (S4b), 32 the copy of a default argument or default member
+initializer rebuilt for a lifetime-extending use (an expression index,
+written before the `CXXDefaultArgExpr` or `CXXDefaultInitExpr` it belongs
+to and rejected on any other kind; spec/sema.md §7.6a, WP-1166, WP-1177:
+without it an importer gave the copy's temporaries full-expression
+lifetime). A `CXXDefaultInitExpr` copy uses the same field, so the format
+word did not change for it.
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):

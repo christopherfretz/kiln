@@ -113,8 +113,9 @@ const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
 const COLD_BEGIN: u8 = 8;
 const COLD_OP: u8 = 16;
-/// The lifetime-extended copy of a default argument (WP-1149, spec/sema.md
-/// §7.6a): an expression field, so the copy is written before its use.
+/// The lifetime-extended copy of a default argument (WP-1149) or default
+/// member initializer (WP-1177, spec/sema.md §7.6a): an expression field,
+/// so the copy is written before its use.
 const COLD_REWRITE: u8 = 32;
 const COLD_ALL: u8 = 63;
 
@@ -923,7 +924,8 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
             || e.cold & !COLD_ALL != 0
-            || (e.cold & COLD_REWRITE != 0 && k != ExprKind::CXXDefaultArgExpr)
+            || (e.cold & COLD_REWRITE != 0
+                && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.bits() != 0
         {
             return bad("bad expression bits");
@@ -1911,7 +1913,7 @@ impl Sema<'_, '_> {
             // Only on a default-argument use (the copy precedes it, so it
             // is already built); anything else is dropped.
             if e.cold & COLD_REWRITE != 0
-                && k == ExprKind::CXXDefaultArgExpr
+                && matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr)
                 && let Some(r) = ExprId::from_raw(next())
             {
                 let _ = self.ast.exprs.set_default_arg_rewritten(id, r);

@@ -453,6 +453,20 @@ impl Ast {
         })
     }
 
+    /// The expression the `CXXDefaultInitExpr` `e` stands for: its
+    /// field's default member initializer, a full-expression of its own
+    /// (with its `ExprWithCleanups`), unless sema rebuilt it for this use
+    /// in a lifetime-extending context (P2718R0, [class.temporary]/7,
+    /// [intro.execution]/5; [`ExprArena::default_arg_rewritten`]), whose
+    /// temporaries belong to the use's full-expression.
+    pub fn default_init_expr(&self, e: ExprId) -> Option<ExprId> {
+        if let Some(r) = self.exprs.default_arg_rewritten(e) {
+            return Some(r);
+        }
+        let f = self.exprs.default_init_field(e);
+        self.decls.field(f)?.init
+    }
+
     // -- redeclarations (§4.4) ------------------------------------------
 
     /// The first declaration of `d`'s entity (`d` itself if not

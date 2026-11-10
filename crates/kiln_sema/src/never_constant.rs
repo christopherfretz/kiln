@@ -970,8 +970,9 @@ impl Sema<'_, '_> {
             // The copy rebuilt for a lifetime-extending use (spec/sema.md
             // §7.6a) holds this frame's extended temporaries. Unreached
             // today: the walk stops at a range-based `for` and an
-            // expansion statement, the only rewriting contexts. WP-1166.
-            ExprKind::CXXDefaultArgExpr => {
+            // expansion statement, the only rewriting contexts. WP-1166;
+            // a default member initializer use too (WP-1177).
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
                 if let Some(r) = ex.default_arg_rewritten(e) {
                     self.nc_temps(r, false, in_ewc, out, depth + 1);
                 }
