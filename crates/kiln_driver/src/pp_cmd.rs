@@ -276,6 +276,7 @@ impl Job<'_> {
         o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
         o.main_is_header = a.pch.header_main;
+        o.meta_hint = self.meta_hint();
         o.predefines = predefines;
         if let Some(epoch) = time::reproducible_epoch(a.reproducible_time) {
             let (date, t, stamp) = time::spellings(epoch);
@@ -283,6 +284,32 @@ impl Job<'_> {
             o.timestamp = Some(stamp);
         }
         o
+    }
+
+    /// The note after a missing `#include <meta>` (WP-1210): only at
+    /// C++26 with the standard library directories searched, and not when
+    /// the selected GCC is already 16 or later.
+    fn meta_hint(&self) -> Option<kiln_pp::MetaHint> {
+        let a = self.args;
+        if !(self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx26)
+            || a.nostdinc
+            || a.nostdincxx
+            || a.nostdlibinc
+        {
+            return None;
+        }
+        let lib = if a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibCxx {
+            kiln_pp::MetaHintLib::LibCxx
+        } else {
+            match &self.toolchain.gcc {
+                Some(g) if crate::toolchain::gcc_major(&g.version) >= 16 => return None,
+                Some(g) => {
+                    kiln_pp::MetaHintLib::Gcc { dir: g.path.clone(), version: g.version.clone() }
+                }
+                None => kiln_pp::MetaHintLib::NoGcc,
+            }
+        };
+        Some(kiln_pp::MetaHint { lib, probe: crate::toolchain::gcc16_on_path })
     }
 
     fn load_main(&self, sm: &SourceManager, engine: &DiagEngine<'_>) -> Option<MainInput> {
