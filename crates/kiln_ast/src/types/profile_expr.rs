@@ -669,8 +669,11 @@ impl Ast {
             // ----- memory, exceptions, RTTI
             K::CXXNewExpr => {
                 let ne = x.new_extra(e);
+                // The initialization style too, as clang's profile: `new
+                // B(3)` and `new B{3}` are not equivalent (WP-1214).
                 let detail = u32::from(n.has(ExprFlags::GLOBAL))
-                    | (u32::from(n.has(ExprFlags::ARRAY_FORM)) << 1);
+                    | (u32::from(n.has(ExprFlags::ARRAY_FORM)) << 1)
+                    | ((x.new_init_style(e) as u32) << 2);
                 out.extend([tag(k, detail), self.canon_word(ne.allocated_ty)]);
                 stack.extend([Work::Opt(ne.array_size), Work::Opt(ne.init)]);
                 match ne.placement {

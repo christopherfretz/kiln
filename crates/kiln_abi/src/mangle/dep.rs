@@ -438,8 +438,8 @@ impl Mangler<'_, '_> {
 
     /// Parentheses, implicit casts, `ConstantExpr`, temporaries (clang
     /// `MaterializeTemporaryExpr`, `CXXBindTemporaryExpr`,
-    /// `ExprWithCleanups`) and substituted parameters do not appear in
-    /// the mangling.
+    /// `ExprWithCleanups`), substituted parameters and default arguments
+    /// do not appear in the mangling.
     fn skip_transparent(&self, mut e: ExprId) -> ExprId {
         let ex = &self.ast.exprs;
         loop {
@@ -455,6 +455,19 @@ impl Mangler<'_, '_> {
                 | ExprKind::CXXBindTemporaryExpr
                 | ExprKind::ExprWithCleanups => ex.operand(e),
                 ExprKind::SubstNonTypeTemplateParmExpr => ex.subst_replacement(e),
+                // A default argument (member initializer) filled into a
+                // non-dependent call (construction) in a dependent operand
+                // mangles as the expression it stands for (clang
+                // `mangleExpression`, `CXXDefaultArgExprClass` /
+                // `CXXDefaultInitExprClass`: `getExpr`, recurse; WP-1214).
+                ExprKind::CXXDefaultArgExpr => match self.ast.default_arg_expr(e) {
+                    Some(d) => d,
+                    None => return e,
+                },
+                ExprKind::CXXDefaultInitExpr => match self.ast.default_init_expr(e) {
+                    Some(d) => d,
+                    None => return e,
+                },
                 _ => return e,
             };
         }
@@ -668,6 +681,15 @@ impl Mangler<'_, '_> {
             // substituted. The Itanium ABI has no production for it yet;
             // kiln matches clang's names (spec/landed/abi/WP-1029.md).
             ExprKind::PackIndexingExpr => {}
+            // A pack of non-type arguments substituted into a pattern that
+            // still names an unexpanded dependent pack (a member template
+            // of a class template over `I...`, its signature naming `R<C,
+            // I>...` with `C...` its own): the Itanium ABI has no
+            // production; clang 19 and 22 write the vendor token
+            // `_SUBSTPACK_` (`mangleExpression`,
+            // `SubstNonTypeTemplateParmPackExprClass`), `X_SUBSTPACK_E` as a
+            // template argument. Not a substitution candidate (WP-1214).
+            ExprKind::SubstNonTypeTemplateParmPackExpr => self.out.push_str("_SUBSTPACK_"),
             ExprKind::CharacterLiteral => {
                 self.out.push('L');
                 self.ty(n.ty());
@@ -1091,36 +1113,42 @@ impl Mangler<'_, '_> {
         }
         self.out.push('_');
         self.ty(x.allocated_ty);
-        if style == kiln_ast::expr::NewInitStyle::Parens {
-            self.out.push_str("pi");
-            let args: Vec<ExprId> = match x.init {
-                Some(i) if ast.exprs.get(i).kind() == ExprKind::ParenListExpr => {
-                    kiln_ast::ids::ListId::try_new(ast.exprs.get(i).a())
-                        .map(|l| ast.lists.iter::<ExprId>(l).collect())
-                        .unwrap_or_default()
+        // clang `mangleExpression`, `CXXNewExprClass`: any initializer,
+        // the implicit construction of a default-initialized class
+        // included, is `pi` (`il` when braced) with a constructor's
+        // arguments inlined, default arguments too (`new B` is
+        // `nw_1BpiLi1ELi2EE` for `B(int = 1, int = 2)`; WP-1214).
+        let braces = style == kiln_ast::expr::NewInitStyle::Braces;
+        // A default-initialized class has a (trivial) constructor call of
+        // its own in clang, `new Q` is `nw_1QpiE`; `new int` is `nw_iE`.
+        let implicit_ctor = style == kiln_ast::expr::NewInitStyle::None
+            && !ast.types.is_dependent(x.allocated_ty)
+            && ast.types.as_record(x.allocated_ty).is_some();
+        if x.init.is_none() && (style != kiln_ast::expr::NewInitStyle::None || implicit_ctor) {
+            self.out.push_str(if braces { "il" } else { "pi" });
+        }
+        if let Some(init) = x.init {
+            self.out.push_str(if braces { "il" } else { "pi" });
+            let i = self.skip_implicit(init);
+            let args: Vec<ExprId> = match ast.exprs.get(i).kind() {
+                ExprKind::CXXConstructExpr | ExprKind::CXXTemporaryObjectExpr => {
+                    ast.lists.iter::<ExprId>(ast.exprs.construct_args(i)).collect()
                 }
-                Some(i) => vec![i],
-                None => Vec::new(),
+                ExprKind::ParenListExpr => kiln_ast::ids::ListId::try_new(ast.exprs.get(i).a())
+                    .map(|l| ast.lists.iter::<ExprId>(l).collect())
+                    .unwrap_or_default(),
+                ExprKind::InitListExpr if braces => self.written_inits(i),
+                // `new int()`, `new Q()`: `piE`.
+                ExprKind::ImplicitValueInitExpr => Vec::new(),
+                _ => vec![init],
             };
             for a in args {
-                if !self.expression(a) {
+                if !self.braced_element(a) {
                     return false;
                 }
             }
-            self.out.push('E');
-        } else if style == kiln_ast::expr::NewInitStyle::Braces {
-            // `new T{a, b}` (clang `mangleInitListElements`, WP-231).
-            match x.init {
-                Some(i) if ast.exprs.get(i).kind() == ExprKind::InitListExpr => {
-                    if !self.init_list(i) {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-        } else {
-            self.out.push('E');
         }
+        self.out.push('E');
         true
     }
 
@@ -1315,14 +1343,31 @@ impl Mangler<'_, '_> {
     /// `<braced-expression>* E` of braced list `list` (clang
     /// `mangleInitListElements`).
     fn braced_elements(&mut self, list: ExprId) -> bool {
-        let ast = self.ast;
-        for e in ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)) {
+        for e in self.written_inits(list) {
             if !self.braced_element(e) {
                 return false;
             }
         }
         self.out.push('E');
         true
+    }
+
+    /// The elements of braced list `list` as written: clang mangles the
+    /// syntactic form (`mangleInitListElements`), without the value- and
+    /// default-member-initialized members the semantic form fills in
+    /// (`A{}` is `tl1AE` whatever `A`'s members; WP-1214).
+    fn written_inits(&self, list: ExprId) -> Vec<ExprId> {
+        let ex = &self.ast.exprs;
+        self.ast
+            .lists
+            .iter::<ExprId>(ex.init_list_inits(list))
+            .filter(|&e| {
+                !matches!(
+                    ex.get(e).kind(),
+                    ExprKind::ImplicitValueInitExpr | ExprKind::CXXDefaultInitExpr
+                )
+            })
+            .collect()
     }
 
     fn braced_element(&mut self, e: ExprId) -> bool {
@@ -1337,7 +1382,7 @@ impl Mangler<'_, '_> {
     fn init_list(&mut self, list: ExprId) -> bool {
         let ast = self.ast;
         self.out.push_str("il");
-        for e in ast.lists.iter::<ExprId>(ast.exprs.init_list_inits(list)) {
+        for e in self.written_inits(list) {
             let ok = if ast.exprs.get(e).kind() == ExprKind::InitListExpr {
                 self.init_list(e)
             } else {
