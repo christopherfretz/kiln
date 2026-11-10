@@ -340,13 +340,12 @@ impl Preprocessor<'_, '_> {
     /// With modules enabled, reads a module or import directive whose
     /// first token `t` (`export`, `module`, `import`) was just lexed and
     /// whose next token is `kw` (`module` / `import`) if `t` is `export`;
-    /// queues its marker and performs the import. Symbols with an index
-    /// of at least `mark` were first interned by this directive.
-    pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool, mark: u32) {
+    /// queues its marker and performs the import.
+    pub(crate) fn module_directive(&mut self, t: Token, export: bool, import: bool) {
         self.start_directive();
         let kw_span = if export { self.lex_unexpanded().tok.span } else { t.span };
         let kw = if import { "import" } else { "module" };
-        let kind = self.read_directive_body(import, kw, mark);
+        let kind = self.read_directive_body(import, kw);
         let after_directive = if self.unit_pre_directive { self.unit_first_hash } else { None };
         let d = ModuleDirective { span: t.span, export, kw: kw_span, kind, after_directive };
         self.finish_directive();
@@ -427,7 +426,7 @@ impl Preprocessor<'_, '_> {
     }
 
     /// The directive after `module` / `import`, through the `;`.
-    fn read_directive_body(&mut self, import: bool, kw: &str, mark: u32) -> DirectiveKind {
+    fn read_directive_body(&mut self, import: bool, kw: &str) -> DirectiveKind {
         let mut t = self.lex_unexpanded().tok;
         let kind = match t.kind {
             TokKind::Punct(Punct::Semi) if !import => return DirectiveKind::GlobalFragment,
@@ -447,7 +446,7 @@ impl Preprocessor<'_, '_> {
                     DirectiveKind::Private { span: c.span }
                 } else {
                     t = c;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw, mark) else {
+                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
                         return DirectiveKind::Invalid;
                     };
                     self.unlex_file_tok(t);
@@ -473,13 +472,13 @@ impl Preprocessor<'_, '_> {
             }
             _ => {
                 let at = t.span;
-                let Some((name, _)) = self.read_module_name(&mut t, kw, mark) else {
+                let Some((name, _)) = self.read_module_name(&mut t, kw) else {
                     return DirectiveKind::Invalid;
                 };
                 let mut partition = None;
                 if t.kind == TokKind::Punct(Punct::Colon) {
                     t = self.lex_unexpanded().tok;
-                    let Some((p, _)) = self.read_module_name(&mut t, kw, mark) else {
+                    let Some((p, _)) = self.read_module_name(&mut t, kw) else {
                         return DirectiveKind::Invalid;
                     };
                     partition = Some(p);
@@ -505,12 +504,10 @@ impl Preprocessor<'_, '_> {
         kind
     }
 
-    /// `M.N` starting at `t`; leaves the token after it in `t`. A
-    /// component first interned by this directive (index `mark` or
-    /// above), other than `std`, names no entity yet: it joins
-    /// [`Preprocessor::unseen_names`], so that it does not count as
-    /// seen for the image gate (spec/modules.md §11.11, "ODR merging").
-    fn read_module_name(&mut self, t: &mut Token, kw: &str, mark: u32) -> Option<(String, Span)> {
+    /// `M.N` starting at `t`; leaves the token after it in `t`. The
+    /// components are no tokens the parser sees: the image gate does not
+    /// count them as seen (spec/modules.md §11.11, "ODR merging").
+    fn read_module_name(&mut self, t: &mut Token, kw: &str) -> Option<(String, Span)> {
         let start = t.span;
         let mut name = String::new();
         loop {
@@ -523,14 +520,6 @@ impl Preprocessor<'_, '_> {
             if self.macros.get(s).is_some_and(|d| !d.function_like) {
                 let sp = self.interner.as_str(s).to_string();
                 self.emit(Diag::new(DiagId::pp_module_name_is_macro, t.span).arg(sp));
-            }
-            // `std` stays seen: sema declares namespace `std` implicitly
-            // (for `new`, `typeid`, structured bindings), with no token.
-            if s.index() >= mark
-                && !self.unseen_names.contains(&s)
-                && self.interner.as_str(s) != "std"
-            {
-                self.unseen_names.push(s);
             }
             name.push_str(self.interner.as_str(s));
             *t = self.lex_unexpanded().tok;
@@ -809,10 +798,10 @@ impl Preprocessor<'_, '_> {
             return Some(c);
         }
         // An image names its unit's main file; one that is not the
-        // capsule's first file, or that declares a name the importer has
-        // already seen (§11.11 "Part 2a", ODR merging), replays. A header
-        // that does not decode is used anyway: sema then reports the file
-        // as corrupt ("The reader").
+        // capsule's first file, or that declares a global-scope name the
+        // importer may have declared there (§11.11 "Part 2a", ODR
+        // merging), replays. A header that does not decode is used
+        // anyway: sema then reports the file as corrupt ("The reader").
         if let Some((main_path, names)) = bmi::image_header(&bytes) {
             if c.files[0].path != main_path {
                 self.log_image(key, Some("its image names another main file".to_owned()));
@@ -826,7 +815,9 @@ impl Preprocessor<'_, '_> {
             // lookahead whose image declares one of them replays instead.
             for n in names {
                 let s = self.interner.intern(n);
-                self.seen_name(s);
+                if let Some(g) = &mut self.name_gate {
+                    g.see(s);
+                }
             }
         }
         self.log_image(key, None);
@@ -851,11 +842,13 @@ impl Preprocessor<'_, '_> {
         None
     }
 
-    /// Whether the importer has seen the name `n` (spec/modules.md
-    /// §11.11, "ODR merging"): it is interned, and not only as a
-    /// component of a module name ([`Preprocessor::unseen_names`]).
+    /// Whether the importer may have declared the name `n` at global
+    /// namespace scope (spec/modules.md §11.11, "ODR merging"): an
+    /// identifier token `n` reached the parser there
+    /// ([`crate::name_gate::NameGate`]).
     fn name_seen(&self, n: &str) -> bool {
-        self.interner.get(n).is_some_and(|s| !self.unseen_names.contains(&s))
+        let Some(g) = &self.name_gate else { return true };
+        self.interner.get(n).is_some_and(|s| g.seen(s))
     }
 
     fn log_image(&mut self, key: &str, replayed: Option<String>) {
