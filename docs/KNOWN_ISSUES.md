@@ -240,22 +240,15 @@ Templates, lookup and overloading:
 - `over.match.best/perfect-match-reversed-member.cpp`: a member
   `operator==` beside its own reversed form is a unique perfect match in
   clang 22.1. [WP-635](BACKLOG.md) (deferred).
-- `stmt.ranged/p2718-default-member-initializer-run.cpp`: a default
-  member initializer in a lifetime-extending context is not rebuilt with
-  fresh temporaries. WP-1166.
+- `temp.expl.spec/in-class-member-template-spec-of-class-template-run.cpp`:
+  instantiating an in-class explicit specialization of a member class
+  template redeclares the member as a different kind of symbol.
+  WP-1178.
 - `temp.deduct.call/explicit-args-trailing-return-sfinae-before-nondep-conversion.cpp`:
   a trailing return type is substituted only after the CWG1391
   conversion check. WP-804.
 - `temp.dep.type/out-of-line-current-instantiation-var-template-unqualified-run.cpp`:
   a variable template-id keeps its written qualifier. WP-1169.
-
-Lambdas in signatures across translation units:
-
-- `expr.prim.lambda.closure/lambda-in-signature-explicit-args-mismatched-spec-two-units-run.cpp`:
-  lambda numbering when the early specialization is not the target's.
-  WP-1142.
-- `expr.prim.lambda.closure/lambda-in-signature-explicit-args-no-early-spec-two-units-run.cpp`:
-  lambda numbering with no early specialization. WP-1142.
 
 Constant evaluation and reflection:
 
@@ -299,6 +292,9 @@ Code generation, ABI and sanitizers:
   enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
 - `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
   FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
+- `module.interface/vtable-alias-O1-run.cpp`: at `-O1` an
+  `available_externally` vtable references a structor alias that is not
+  emitted yet. WP-1120.
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
   are keyed by name, not by the sugared type. WP-871.
 - `driver.sanitize/ubsan-lambda-returns-nonnull-ir.cpp`: a lambda's
@@ -308,6 +304,12 @@ Code generation, ABI and sanitizers:
 
 Diagnostics and dumps:
 
+- `dcl.fct.def.delete/use-uncalled-argument-no-match.cpp`: a deleted
+  function used as a call argument also draws "no matching function".
+  WP-1170.
+- `dcl.fct.def.delete/use-uncalled-comma-operand.cpp`: a deleted
+  function as a comma operand also draws two `-Wunused-value` warnings.
+  WP-1170.
 - `dcl.array/vla-warning-suppressed-by-wvla-pragma.cpp`: ignoring
   `-Wvla` by pragma does not silence `-Wvla-cxx-extension`. WP-789.
 - `tests/stress/dump-friend-template-cycle.cpp`: `-fdump-ast` prints a
