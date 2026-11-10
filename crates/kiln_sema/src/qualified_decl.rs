@@ -5,7 +5,7 @@
 
 use kiln_ast::DeclId;
 use kiln_ast::decl::DeclKind;
-use kiln_diag::DiagId;
+use kiln_diag::{Diag, DiagId};
 
 use crate::Sema;
 use crate::decl::sym_str;
@@ -50,7 +50,6 @@ impl Sema<'_, '_> {
         &mut self,
         ds: &DeclSpec,
         d: &Declarator,
-        has_head: bool,
     ) -> QualifiedDecl {
         let Some(dc) = d.qualifier else { return QualifiedDecl::Keep };
         if ds.friend.is_some() || d.friend || !self.inst.stack.is_empty() {
@@ -71,16 +70,7 @@ impl Sema<'_, '_> {
             self.emit(m.arg(q));
             return QualifiedDecl::Drop;
         }
-        let mut cur = self.ctx;
-        for _ in 0..10_000 {
-            if !matches!(self.kind_of(cur), DeclKind::LinkageSpec | DeclKind::Export) {
-                break;
-            }
-            match self.ast.decls.get(cur).ctx() {
-                Some(p) => cur = p,
-                None => break,
-            }
-        }
+        let cur = self.qualified_decl_scope();
         let cur_kind = self.kind_of(cur);
         if let Some(r) = self.diagnose_exported_qualified(d, dc, cur) {
             return r;
@@ -123,21 +113,16 @@ impl Sema<'_, '_> {
             return QualifiedDecl::Keep;
         };
         if !self.encloses(cur, dc) {
-            if d.spec_id.is_some() || has_head {
+            // Only a template-id declarator is exempt (clang passes
+            // `IsMemberSpecialization = false` from `HandleDeclarator`):
+            // its scope is checked as a specialization's
+            // ([`Sema::check_spec_scope`]). A templated declaration, an
+            // explicit specialization without a template-id and a member
+            // specialization are all checked here (WP-1174).
+            if d.spec_id.is_some() {
                 return QualifiedDecl::Keep;
             }
-            let m = if is_record(cur_kind) {
-                self.diag(DiagId::sema_member_qualification, loc).arg(&n)
-            } else if self.kind_of(dc) == DeclKind::TranslationUnit {
-                self.diag(DiagId::sema_invalid_declarator_global_scope, loc).arg(&n)
-            } else if cur_kind.is_function() {
-                self.diag(DiagId::sema_invalid_declarator_in_function, loc).arg(&n)
-            } else {
-                self.diag(DiagId::sema_invalid_declarator_scope, loc)
-                    .arg(&n)
-                    .arg(self.scope_name(cur))
-                    .arg(self.scope_name(dc))
-            };
+            let m = self.not_enclosing_diag(cur, dc, &n, loc);
             self.emit(m);
             let var_like = !ds.is_typedef()
                 && !matches!(d.chunks.first(), Some(crate::declspec::Chunk::Function { .. }));
@@ -156,6 +141,84 @@ impl Sema<'_, '_> {
             return QualifiedDecl::Keep;
         }
         QualifiedDecl::Keep
+    }
+
+    /// The scope a qualified declaration is in, as clang's `CurContext`
+    /// for `diagnoseQualifiedDeclaration`: linkage specifications and
+    /// export declarations are skipped.
+    fn qualified_decl_scope(&self) -> DeclId {
+        let mut cur = self.ctx;
+        for _ in 0..10_000 {
+            if !matches!(self.kind_of(cur), DeclKind::LinkageSpec | DeclKind::Export) {
+                break;
+            }
+            match self.ast.decls.get(cur).ctx() {
+                Some(p) => cur = p,
+                None => break,
+            }
+        }
+        cur
+    }
+
+    /// The error for a declaration in `cur` whose qualifier names `dc`,
+    /// a scope `cur` does not enclose (clang's `diagnoseQualifiedDeclaration`).
+    fn not_enclosing_diag(&self, cur: DeclId, dc: DeclId, n: &str, loc: kiln_source::Loc) -> Diag {
+        let cur_kind = self.kind_of(cur);
+        if is_record(cur_kind) {
+            self.diag(DiagId::sema_member_qualification, loc).arg(n)
+        } else if self.kind_of(dc) == DeclKind::TranslationUnit {
+            self.diag(DiagId::sema_invalid_declarator_global_scope, loc).arg(n)
+        } else if cur_kind.is_function() {
+            self.diag(DiagId::sema_invalid_declarator_in_function, loc).arg(n)
+        } else {
+            self.diag(DiagId::sema_invalid_declarator_scope, loc)
+                .arg(n)
+                .arg(self.scope_name(cur))
+                .arg(self.scope_name(dc))
+        }
+    }
+
+    /// [dcl.meaning.general]/2, [namespace.memdef]/2 (WP-1174): a class,
+    /// class template or enumeration defined or redeclared with a
+    /// qualified name `dc::name` outside a class (clang's
+    /// `diagnoseQualifiedDeclaration` from `ActOnTag` and
+    /// `CheckClassTemplate`) must be declared in a scope that encloses
+    /// `dc`. Directly in an export, `export struct ::X {}` names the
+    /// global scope ([module.interface]/1) and a class member is left to
+    /// [`Sema::module_check_export_member`]. A member class
+    /// specialization (`template<> struct A<int>::B {}`) is not checked
+    /// here, as in clang; a qualifier naming the namespace itself is
+    /// `-Wextra-qualification` (not in an export). The tag is still
+    /// declared (clang marks it invalid and goes on).
+    pub(crate) fn diagnose_qualified_tag(&mut self, dc: DeclId, n: &str, loc: kiln_source::Loc) {
+        if !self.inst.stack.is_empty() {
+            return;
+        }
+        let cur = self.qualified_decl_scope();
+        if is_record(self.kind_of(cur)) {
+            // In a class: `check_qualified_member_tag`.
+            return;
+        }
+        let dc_kind = self.kind_of(dc);
+        if self.module_in_export_decl() && dc_kind != DeclKind::Namespace {
+            if dc_kind == DeclKind::TranslationUnit {
+                let m = self.diag(DiagId::sema_invalid_declarator_global_scope, loc).arg(n);
+                self.emit(m);
+            }
+            return;
+        }
+        if self.ast.first(cur) == self.ast.first(dc) {
+            if !self.module_in_export_decl() {
+                let m = self.diag(DiagId::sema_namespace_member_extra_qualification, loc).arg(n);
+                self.emit(m);
+            }
+            return;
+        }
+        if self.encloses(cur, dc) {
+            return;
+        }
+        let m = self.not_enclosing_diag(cur, dc, n, loc);
+        self.emit(m);
     }
 
     /// [module.interface]/1, /6 (WP-1159): directly in an export
