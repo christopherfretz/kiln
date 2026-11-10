@@ -1,7 +1,6 @@
 // Interface unit of module `cx` for carried-reflections-more-run.cpp
 // (spec/modules.md §11.11 Part 2, WP-1160): constexpr reflections of
-// alias template specializations (type, pack, template and non-type
-// arguments),
+// alias template specializations (type, pack and template arguments),
 // data member specifications and annotations (of a class, a member and
 // a base specifier; two equal ones at different positions), all
 // evaluated here, so a kind-2 module file carries them.
@@ -17,8 +16,6 @@ export template <template <class> class TT> using App = TT<int>;
 export constexpr info rap = ^^Ptr<int>;
 export constexpr info rla = ^^LA<int, char>;
 export constexpr info rapp = ^^App<Tm>;
-export template <class T, int N> using Arr = T[N];
-export constexpr info rarr = ^^Arr<char, 1 + 2>;
 export constexpr info rd1 = std::meta::data_member_spec(^^int, {.name = "x"});
 export constexpr info rd2 = std::meta::data_member_spec(^^char, {.name = "y", .alignment = 8});
 export constexpr info rd3 = std::meta::data_member_spec(^^unsigned, {.bit_width = 3});

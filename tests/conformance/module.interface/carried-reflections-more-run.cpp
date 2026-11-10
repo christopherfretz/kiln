@@ -21,7 +21,6 @@ using namespace std::meta;
 static_assert(rap == (^^Ptr<int>) && rap != (^^int *));
 static_assert(rla == (^^LA<int, char>) && rla != (^^LA<int>) && rla != (^^L<int, char, long>));
 static_assert(rapp == (^^App<Tm>) && rapp != (^^Tm<int>));
-static_assert(rarr == (^^Arr<char, 3>) && rarr != (^^Arr<char, 4>) && rarr != (^^char[3]));
 static_assert(rd1 == data_member_spec(^^int, {.name = "x"}) && rd1 != rd4);
 static_assert(rd2 == data_member_spec(^^char, {.name = "y", .alignment = 8}));
 static_assert(rd3 == data_member_spec(^^unsigned, {.bit_width = 3}));

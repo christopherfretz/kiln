@@ -1426,7 +1426,8 @@ same entity:
   importer's rebuilt type is its own `^^Ptr<int>`. A non-type argument is
   its converted value there (sema-templates.md §4.10, WP-1168), so
   `^^Arr<char, 1 + 2>` is carried and equals the importer's
-  `^^Arr<char, 3>`. A specialization whose list still is not canonical
+  `^^Arr<char, 3>`
+  (`tests/conformance/module.interface/carried-alias-value-arg-run.cpp`). A specialization whose list still is not canonical
   falls back (`a reflection of an alias template specialization with no
   key`).
 - **Data member specification.** The Oven interns specifications by
