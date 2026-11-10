@@ -197,6 +197,14 @@ jobs:
           cat "$b/report.json" || true
           df -h /mnt
           echo "oss-build exit status $rc"
+          # No report.json means oss-build.sh stopped before it measured
+          # anything (a fetch, dependency or runner failure, WP-1241): fail
+          # the job. A project that builds but fails its tests still writes
+          # a report and exits 0; that is the summary's business.
+          if [ ! -f "$b/report.json" ]; then
+            echo "::error title=oss no report::oss-build.sh ${{ matrix.project }} --compiler ${{ matrix.compiler }} exited $rc without writing report.json: no report (infrastructure), the project was not measured"
+            exit 1
+          fi
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
@@ -217,17 +225,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { pattern: oss-*, path: raw }
+      # Every project and compiler of the oss matrix is expected to have a
+      # report (WP-1241): oss-report.py --expect lists each pair without
+      # one as "no report (infrastructure)" instead of leaving it out. The
+      # two lists repeat the matrix's (ci_tests::sweep_never_gates keeps
+      # them equal): a job that timed out or was never scheduled uploads
+      # no artifact at all, so the artifact names cannot say what is
+      # missing.
       - name: oss-report.py
+        env:
+          OSS_PROJECTS: fmt nlohmann_json abseil llvm_project duckdb grpc bitcoin_core cmake_app opencv daw_json_link
+          OSS_COMPILERS: ${{ join(fromJSON((github.event_name == 'push' || inputs.control) && '["kiln", "clang"]' || '["kiln"]'), ',') }}
         run: |
-          projects=()
           for d in raw/oss-*; do
             [ -f "$d/report.json" ] || continue
             name="${d#raw/oss-}"
             p="${name%-*}" c="${name##*-}"
             mkdir -p "oss/build/$p/$c"
             cp "$d"/* "oss/build/$p/$c/"
-            [[ " ${projects[*]} " == *" $p "* ]] || projects+=("$p")
           done
-          python3 scripts/oss/oss-report.py --root oss "${projects[@]}" | tee oss-summary.md >> "$GITHUB_STEP_SUMMARY"
+          # shellcheck disable=SC2086 # OSS_PROJECTS is a word list
+          python3 scripts/oss/oss-report.py --root oss --expect "$OSS_COMPILERS" $OSS_PROJECTS | tee oss-summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with: { name: oss-summary, path: oss-summary.md }
