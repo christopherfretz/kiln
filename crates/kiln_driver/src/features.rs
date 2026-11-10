@@ -827,11 +827,35 @@ fn attr_modifiers(exts: &str, bits: &mut ExtensionSet, features: &mut Vec<String
     }
 }
 
+/// The extension set of the module's features `module` (LLVM
+/// `reconstructFromParsedFeatures`): its extension features, touched.
+fn module_extension_set(module: &[String], v22: bool) -> ExtensionSet {
+    let mut bits =
+        ExtensionSet { arch: (8, 0), v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
+    for m in module {
+        let (on, name) = match m.split_at_checked(1) {
+            Some(("+", n)) => (true, n),
+            Some((_, n)) => (false, n),
+            None => continue,
+        };
+        let known = extension_feature(name, v22).or((name == "fmv").then_some("fmv"));
+        if let Some(f) = known.filter(|f| is_extension_feature(f, v22)) {
+            bits.touched.insert(f);
+            if on {
+                bits.enabled.insert(f);
+            } else {
+                bits.enabled.remove(f);
+            }
+        }
+    }
+    bits
+}
+
 /// The features of a GNU `target("...")` attribute string on `AArch64`
 /// over the module's features `module` (`+name`/`-name`), and its CPUs
-/// (clang `AArch64TargetInfo::parseTargetAttr` + `getFunctionFeatureMap`
-/// + `GetCPUAndFeaturesAttributes`; spec/driver.md "Target attribute",
-/// WP-1187). The module's extension features seed an extension set (LLVM
+/// (clang `AArch64TargetInfo::parseTargetAttr`, `getFunctionFeatureMap`
+/// and `GetCPUAndFeaturesAttributes`; spec/driver.md "Target features",
+/// target attribute, WP-1187). The module's extension features seed an extension set (LLVM
 /// `reconstructFromParsedFeatures`). Per comma-separated item:
 /// - `arch=<arch>[+ext...]` (case-sensitive; unknown: nothing): the
 ///   architecture becomes the base and its default extensions are
@@ -856,24 +880,7 @@ pub fn target_attr_features(
     module: &[String],
     v22: bool,
 ) -> kiln_codegen::TargetAttrFeatures {
-    let mut bits =
-        ExtensionSet { arch: (8, 0), v22, enabled: BTreeSet::new(), touched: BTreeSet::new() };
-    for m in module {
-        let (on, name) = match m.split_at_checked(1) {
-            Some(("+", n)) => (true, n),
-            Some((_, n)) => (false, n),
-            None => continue,
-        };
-        let known = extension_feature(name, v22).or((name == "fmv").then_some("fmv"));
-        if let Some(f) = known.filter(|f| is_extension_feature(f, v22)) {
-            bits.touched.insert(f);
-            if on {
-                bits.enabled.insert(f);
-            } else {
-                bits.enabled.remove(f);
-            }
-        }
-    }
+    let mut bits = module_extension_set(module, v22);
     let mut features = Vec::new();
     // The base architecture's feature and the features it implies.
     let mut base: Option<(&'static str, Vec<&'static str>)> = None;
