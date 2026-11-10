@@ -15,6 +15,7 @@
 //@ stdout: int C<int>::t(U) [T = int, U = int] | u > 0 | same
 //@ stdout: int g(long) | x > 100 | same
 //@ stdout: int g(T) [T = int] | x > 0 | same
+//@ xfail(gcc): GCC 16.1 spells function_name() in its own style (`int C<T>::m(T) [with T = long int]`)
 #include <contracts>
 #include <cstdio>
 #include <cstring>

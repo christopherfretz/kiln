@@ -16,6 +16,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1's constant_of of an array, and reflect_constant/reflect_object of these values, differ
 #include "kiln_meta_queries.h"
 using namespace std::meta;
 

@@ -6,6 +6,7 @@
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 throws std::meta::exception out of __builtin_constant_p's operand (spec/reflection.md §8.2)
 #include "kiln_meta.h"
 using namespace std::meta;
 

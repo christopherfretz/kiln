@@ -9,6 +9,7 @@
 //@ requires: clang>=22
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 has no __builtin_is_within_lifetime
 #define L __builtin_is_within_lifetime
 
 consteval int scalars(int w) {

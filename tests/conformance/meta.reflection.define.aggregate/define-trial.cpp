@@ -7,6 +7,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 requires a function template with an info parameter to be consteval
 #include "kiln_meta.h"
 using namespace std::meta;
 
