@@ -278,11 +278,39 @@ impl Sema<'_, '_> {
                 t.canonical(QualType::unqual(class)) == t.canonical(QualType::unqual(ac));
             return same_class && self.nttp_placeholder_matches(pointee, ap);
         }
+        if let Some((_, tmpl)) = self.undeduced_ctad(t.canonical(pt)) {
+            return self.ctad_placeholder_matches(tmpl, at);
+        }
         if !self.contains_undeduced_auto(pt) {
             let t = &self.ast.types;
             return t.same_unqualified(t.canonical(pt), t.canonical(at));
         }
         self.deduce_match(pt, at).is_some()
+    }
+
+    /// Whether a non-type parameter typed by the deduced class template
+    /// placeholder for `tmpl` (`template <fs F>`, [temp.param]/6,
+    /// [dcl.type.class.deduct]/2) binds a value of type `at`: class
+    /// template argument deduction from that value picks its copy
+    /// deduction candidate ([over.match.class.deduct]/1.3), so any
+    /// specialization of `tmpl` (`fs<3>`, or a synthesized `fs<N>` or the
+    /// same placeholder in partial ordering) matches (clang
+    /// `ConvertDeducedTemplateArgument` → `CheckTemplateArgument`). A
+    /// placeholder for an alias template is not checked here.
+    fn ctad_placeholder_matches(&self, tmpl: DeclId, at: QualType) -> bool {
+        if self.kind_of(tmpl) != DeclKind::ClassTemplate {
+            return true;
+        }
+        let want = self.ast.first(tmpl);
+        let t = &self.ast.types;
+        let named = match t.canonical_view(at) {
+            TypeView::TemplateSpecialization { name, .. }
+            | TypeView::DeducedTemplateSpecialization { name, deduced: None } => {
+                t.template_decl(name)
+            }
+            _ => t.as_record(at).and_then(|d| self.ast.spec_info(d)).map(|(_, s)| s.template),
+        };
+        named.is_some_and(|d| self.ast.first(d) == want)
     }
 
     /// Whether the arguments of partial specialization `p`, with
