@@ -6,7 +6,7 @@
 // §7.6a, WP-467): line 26's evaluations are N+3 `__begin`/`__end`/`__iter`
 // initializations, N+1 count tests and N element initializations, each a
 // few steps; a count that re-evaluates `begin + i` doubles its steps.
-// docs/status/perf.md "WP-467" records wall time and peak memory.
+// docs/status/perf-history.md "WP-467" records wall time and peak memory.
 //@ expect: compile-ok
 //@ strict-diags
 //@ requires: clang>=23

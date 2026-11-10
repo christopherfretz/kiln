@@ -1,6 +1,6 @@
 // [stmt.expand]/5.2 (P1306R5): an iterating expansion over a 100000-element
 // constexpr std::array, counted by one `end - begin` evaluation rather
-// than 100000 comparisons (spec/sema.md §7.6a; docs/status/perf.md
+// than 100000 comparisons (spec/sema.md §7.6a; docs/status/perf-history.md
 // "WP-454" records wall time and peak memory).
 //@ expect: compile-ok
 //@ strict-diags

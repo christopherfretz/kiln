@@ -94,7 +94,7 @@ runs:
     # so the next run starts warm. The workspace crates are not cached: a
     # fresh checkout gives every source file a new mtime, so cargo would
     # rebuild them all anyway, and they would make the cache (and every
-    # job's restore) many times larger (docs/status/perf.md "WP-692").
+    # job's restore) many times larger (docs/status/perf-history.md "WP-692").
     - uses: Swatinem/rust-cache@v2
       with:
         shared-key: ${{ inputs.cache-key }}

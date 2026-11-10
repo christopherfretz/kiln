@@ -150,7 +150,7 @@
       "kiln": {
         "mode": "syntax",
         "flags": "-std=c++26 -fsyntax-only -freflection",
-        "source_hash": "fnv1a64:ef30fbe6dd2b98f3",
+        "source_hash": "fnv1a64:2cd6db97f37be9de",
         "runs": 5,
         "wall_ms_median": 140.897,
         "wall_ms_min": 130.014,
