@@ -338,7 +338,9 @@ impl Ast {
     /// `dealias`): a top-level alias is kept — a typedef or alias
     /// declaration (keyed on its first declaration, over the canonical
     /// underlying type) or an alias template specialization (canonical
-    /// name and arguments) — when it carries no qualifiers of its own;
+    /// name and converted arguments,
+    /// [`crate::types::TypeContext::alias_converted`], so
+    /// `^^A<1 + 2> == ^^A<3>`) — when it carries no qualifiers of its own;
     /// `Elaborated`, `Using` and paren sugar above it are looked through.
     /// Everything else is canonical, so `^^const I == ^^const int` and
     /// `^^decltype(1) == ^^int`, but `^^I != ^^int`.
@@ -361,7 +363,7 @@ impl Ast {
                     alias: true,
                 } => {
                     let n = self.types.canonical_template_name(name);
-                    let a = self.types.canonical_args(args);
+                    let a = self.types.alias_converted(cur.ty(), args);
                     let u = self.types.canonical(u);
                     return self.types.template_specialization(n, a, Some(u), true);
                 }
