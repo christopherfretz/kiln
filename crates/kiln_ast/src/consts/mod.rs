@@ -44,7 +44,7 @@ pub mod fltstr;
 mod print;
 mod value;
 
-pub use float::format_float;
+pub use float::{format_float, format_float_gcc};
 pub use print::{IntStyle, Member, NoEnv, PrintEnv, PrintOptions, PrintStyle, Shape};
 pub use value::{
     ByteImage, ByteRange, ConstError, ConstValue, FloatKind, IntBits, MemberKind, NullKind,

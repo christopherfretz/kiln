@@ -95,6 +95,138 @@ pub(crate) fn format_generic(kind: FloatKind, bits: u128, out: &mut String) {
     out.push_str(&(k - 1).to_string());
 }
 
+/// GCC 16.1's `pp_c_floating_constant` digits (spec/reflection.md §3.9):
+/// `real_to_decimal` with the format's `max_digits10` significant digits
+/// (`2 + p * 643 / 2136` for `p` significand bits: 9 for binary32, 17 for
+/// binary64, 21 for x87, 36 for binary128), trailing zeros cropped but one
+/// kept after the point, the exponent always signed (`1.0e+0`,
+/// `1.0000000000000001e-1`, `1.23456e+5`); a zero as `0.0` / `-0.0`, an
+/// infinity as `+Inf` / `-Inf`, a NaN as `+QNaN` / `-SNaN` (sign, then
+/// quiet or signalling). The literal suffix is the caller's. The digits
+/// are correctly rounded (to nearest, ties to even); GCC's own conversion
+/// works in 192-bit arithmetic and can differ in the last of the 36
+/// binary128 digits (`0.1L`).
+pub fn format_float_gcc(kind: FloatKind, bits: u128, out: &mut String) {
+    let f = format_of(kind);
+    let int_bits = u32::from(f.explicit_int);
+    let total = 1 + f.exp_bits + int_bits + f.frac_bits;
+    let neg = bits >> (total - 1) & 1 != 0;
+    let sign = if neg { '-' } else { '+' };
+    let exp_field = (bits >> (f.frac_bits + int_bits)) as u32 & ((1 << f.exp_bits) - 1);
+    let frac = bits & ((1u128 << f.frac_bits) - 1);
+    if exp_field == (1u32 << f.exp_bits) - 1 {
+        if frac == 0 {
+            out.push(sign);
+            out.push_str("Inf");
+        } else {
+            let quiet = frac >> (f.frac_bits - 1) & 1 != 0;
+            out.push(sign);
+            out.push_str(if quiet { "QNaN" } else { "SNaN" });
+        }
+        return;
+    }
+    let int_bit = if f.explicit_int { bits >> f.frac_bits & 1 } else { u128::from(exp_field != 0) };
+    let mant = (int_bit << f.frac_bits) | frac;
+    if neg {
+        out.push('-');
+    }
+    if mant == 0 {
+        out.push_str("0.0");
+        return;
+    }
+    let p = i64::from(f.frac_bits + 1);
+    let n = (2 + p * 643 / 2136) as usize;
+    let bias = (1i64 << (f.exp_bits - 1)) - 1;
+    let e = i64::from(exp_field.max(1)) - bias - i64::from(f.frac_bits);
+    let (digits, k) = fixed_digits(mant, e, n);
+    out.push(char::from(digits[0]));
+    out.push('.');
+    let mut tail = &digits[1..];
+    while let [rest @ .., b'0'] = tail {
+        tail = rest;
+    }
+    if tail.is_empty() {
+        out.push('0');
+    } else {
+        out.extend(tail.iter().map(|&d| char::from(d)));
+    }
+    let x = k - 1;
+    out.push('e');
+    out.push(if x < 0 { '-' } else { '+' });
+    out.push_str(&x.unsigned_abs().to_string());
+}
+
+/// The first `n` significant decimal digits of `mant * 2^e` (> 0),
+/// rounded to nearest with ties to even, as ASCII, with `k` such that the
+/// value is `0.d1d2... * 10^k`.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the exponent (|e| < 2^15) is exact in f64; k is corrected after"
+)]
+fn fixed_digits(mant: u128, e: i64, n: usize) -> (Vec<u8>, i64) {
+    let (mut r, mut s) = if e >= 0 {
+        (Big::from(mant).shl(e as u32), Big::from(1))
+    } else {
+        (Big::from(mant), Big::pow2((-e) as u32))
+    };
+    let bitlen = i64::from(128 - mant.leading_zeros());
+    let mut k = ((bitlen - 1 + e) as f64 * std::f64::consts::LOG10_2).ceil() as i64;
+    if k >= 0 {
+        s.mul_pow10(k as u32);
+    } else {
+        r.mul_pow10((-k) as u32);
+    }
+    // Normalize so that s / 10 <= r < s.
+    while r.cmp(&s) != Ordering::Less {
+        s.mul_small(10);
+        k += 1;
+    }
+    loop {
+        let mut r10 = r.clone();
+        r10.mul_small(10);
+        if r10.cmp(&s) != Ordering::Less {
+            break;
+        }
+        r = r10;
+        k -= 1;
+    }
+    let mut digits = Vec::with_capacity(n + 1);
+    for _ in 0..n {
+        r.mul_small(10);
+        let mut d = 0u8;
+        while r.cmp(&s) != Ordering::Less {
+            r.sub_assign(&s);
+            d += 1;
+        }
+        digits.push(d);
+    }
+    let twice = r.shl(1);
+    let up = match twice.cmp(&s) {
+        Ordering::Greater => true,
+        Ordering::Equal => digits.last().is_some_and(|d| d & 1 == 1),
+        Ordering::Less => false,
+    };
+    if up {
+        let mut i = digits.len();
+        loop {
+            i -= 1;
+            if digits[i] == 9 {
+                digits[i] = 0;
+                if i == 0 {
+                    digits.insert(0, 1);
+                    digits.pop();
+                    k += 1;
+                    break;
+                }
+            } else {
+                digits[i] += 1;
+                break;
+            }
+        }
+    }
+    (digits.into_iter().map(|d| b'0' + d).collect(), k)
+}
+
 /// Burger & Dybvig free-format shortest digits of `mant * 2^e` (> 0).
 /// Returns ASCII digits `d1 d2 ...` and `k` with value `0.d1d2... * 10^k`.
 #[allow(
@@ -408,5 +540,49 @@ mod tests {
         assert_eq!(generic(FloatKind::Quad, 0x3ffb_9999_9999_9999_9999_9999_9999_999a), "1e-1");
         assert_eq!(generic(FloatKind::Quad, 1u128 << 127), "-0e0");
         assert_eq!(generic(FloatKind::Quad, 0x7fffu128 << 112), "inf");
+    }
+
+    fn gcc(kind: FloatKind, bits: u128) -> String {
+        let mut s = String::new();
+        format_float_gcc(kind, bits, &mut s);
+        s
+    }
+
+    /// GCC 16.1's spellings (`pp_c_floating_constant`, checked against
+    /// `g++-16 -freflection` display_string_of).
+    #[test]
+    fn gcc_spelling() {
+        let d = |v: f64| gcc(FloatKind::Double, u128::from(v.to_bits()));
+        let f = |v: f32| gcc(FloatKind::Single, u128::from(v.to_bits()));
+        assert_eq!(d(1.0), "1.0e+0");
+        assert_eq!(d(-1.0), "-1.0e+0");
+        assert_eq!(d(0.0), "0.0");
+        assert_eq!(d(-0.0), "-0.0");
+        assert_eq!(d(0.1), "1.0000000000000001e-1");
+        assert_eq!(d(1e100), "1.0e+100");
+        assert_eq!(d(1e-100), "1.0e-100");
+        assert_eq!(d(123_456.0), "1.23456e+5");
+        assert_eq!(d(1.5e300), "1.5000000000000001e+300");
+        assert_eq!(d(5e-324), "4.9406564584124654e-324");
+        assert_eq!(d(f64::MAX), "1.7976931348623157e+308");
+        assert_eq!(d(f64::INFINITY), "+Inf");
+        assert_eq!(d(f64::NAN), "+QNaN");
+        assert_eq!(f(0.1), "1.00000001e-1");
+        assert_eq!(f(1e30), "1.00000002e+30");
+        assert_eq!(f(1e-30), "1.0e-30");
+        assert_eq!(f(-2.5), "-2.5e+0");
+        assert_eq!(f(f32::from_bits(1)), "1.40129846e-45");
+        assert_eq!(f(f32::NEG_INFINITY), "-Inf");
+        assert_eq!(gcc(FloatKind::Quad, 0x3fffu128 << 112), "1.0e+0");
+        assert_eq!(gcc(FloatKind::Quad, 0x4000_4000u128 << 96), "2.5e+0");
+        // binary128 max: GCC prints 1.18973149535723176508575932662800702e+4932.
+        assert_eq!(
+            gcc(FloatKind::Quad, (0x7ffeu128 << 112) | ((1u128 << 112) - 1)),
+            "1.18973149535723176508575932662800702e+4932"
+        );
+        assert_eq!(gcc(FloatKind::X87Extended, (0x3fffu128 << 64) | (1u128 << 63)), "1.0e+0");
+        // 1e23 is binary64 9.999999999999999161e22: rounded up in the last
+        // place.
+        assert_eq!(d(1e23), "9.9999999999999992e+22");
     }
 }

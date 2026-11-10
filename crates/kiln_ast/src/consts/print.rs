@@ -58,7 +58,13 @@ pub struct PrintOptions {
     /// class as `T()`, plain `char` with octal escapes (`'\000'`), other
     /// character types as integers, floating point in `%e` form with the
     /// type's `max_digits10` digits (`1.5e+0`), a null pointer as `0`.
+    /// Implies [`Self::gcc_float`].
     pub gcc: bool,
+    /// Floating point as GCC 16.1 prints it ([`super::format_float_gcc`]
+    /// and the type's literal suffix from [`PrintEnv::float_suffix`]:
+    /// `1.0e+0f`, `0.0`, `-Inf`), whatever the other options
+    /// (`display_string_of`; spec/reflection.md §3.9).
+    pub gcc_float: bool,
 }
 
 impl PrintOptions {
@@ -70,6 +76,7 @@ impl PrintOptions {
         include_type: true,
         enum_cast: false,
         gcc: false,
+        gcc_float: false,
     };
 
     /// The defaults in `style`.
@@ -218,6 +225,13 @@ pub trait PrintEnv {
     fn reflection(&self, id: ReflectionId, out: &mut String) {
         let _ = write!(out, "^^#r{}", id.index());
     }
+    /// The literal suffix GCC 16.1's `pp_c_floating_constant` appends to a
+    /// floating constant of type `ty` (`f` for `float`, `l` for `long
+    /// double`, `f32` for `_Float32`, none for `double`).
+    fn float_suffix(&self, ty: QualType) -> &'static str {
+        let _ = ty;
+        ""
+    }
 }
 
 /// The context-free [`PrintEnv`].
@@ -361,8 +375,10 @@ impl Printer<'_> {
 
     /// A floating-point value ([`format_float`]); an infinity or NaN has
     /// no literal, so is no exact spelling.
-    fn float(&self, kind: FloatKind, bits: u128, out: &mut String) {
-        if self.opts.gcc && gcc_float(kind, bits, out) {
+    fn float(&self, ty: QualType, kind: FloatKind, bits: u128, out: &mut String) {
+        if self.opts.gcc || self.opts.gcc_float {
+            super::format_float_gcc(kind, bits, out);
+            out.push_str(self.env.float_suffix(ty));
             return;
         }
         let at = out.len();
@@ -383,7 +399,7 @@ impl Printer<'_> {
         match *s {
             Scalar::Int { ty, signed, bits } => self.int(ty, signed, &bits, out),
             Scalar::Bool { value, .. } => out.push_str(if value { "true" } else { "false" }),
-            Scalar::Float { kind, bits, .. } => self.float(kind, bits, out),
+            Scalar::Float { ty, kind, bits } => self.float(ty, kind, bits, out),
             Scalar::Null { ty, .. } if self.opts.gcc && self.env.shape(ty) != Shape::NullPtr => {
                 out.push('0');
             }
@@ -661,7 +677,7 @@ impl Printer<'_> {
                 self.image_int(ty, signed, width, &w, out);
             }
             Shape::Float(kind) => {
-                self.float(kind, read_le(img.bytes, at, kind.value_bytes()), out);
+                self.float(ty, kind, read_le(img.bytes, at, kind.value_bytes()), out);
             }
             Shape::NullPtr => out.push_str("nullptr"),
             Shape::Pointer { .. } | Shape::MemberPointer | Shape::Reflection => {
@@ -724,6 +740,19 @@ impl Printer<'_> {
                         .iter()
                         .filter(|u| u64::from(u.at) == at)
                         .find_map(|u| members.iter().find(|m| m.field == Some(u.field)));
+                    if self.opts.gcc {
+                        // GCC prints the active member's value without its
+                        // designator (`U{2.0e+0f}`), no member as `U()`.
+                        match active {
+                            Some(m) => {
+                                out.push('{');
+                                self.member(img, m, at, depth, out);
+                                out.push('}');
+                            }
+                            None => out.push_str("()"),
+                        }
+                        return;
+                    }
                     out.push('{');
                     if let Some(m) = active {
                         let _ = write!(out, ".{} = ", m.name);
@@ -794,36 +823,4 @@ fn push_gcc_char(c: u32, out: &mut String) {
             let _ = write!(out, "\\{c:03o}");
         }
     }
-}
-
-/// GCC's `pp_c_floating_constant` for `float` and `double`
-/// (`real_to_decimal` with the type's `max_digits10` significant digits,
-/// trailing zeros cropped, one kept after the point; `1.5e+0`,
-/// `1.0000000000000001e-1`). False for other formats and for an infinity
-/// or NaN (the caller prints those).
-fn gcc_float(kind: FloatKind, bits: u128, out: &mut String) -> bool {
-    let (v, digits) = match kind {
-        FloatKind::Single => (f64::from(f32::from_bits(bits as u32)), 9),
-        FloatKind::Double => (f64::from_bits(bits as u64), 17),
-        _ => return false,
-    };
-    if !v.is_finite() {
-        return false;
-    }
-    let s = format!("{:.*e}", digits - 1, v);
-    let Some((mant, exp)) = s.split_once('e') else { return false };
-    let mut mant = mant.to_owned();
-    if mant.contains('.') {
-        while mant.ends_with('0') {
-            mant.pop();
-        }
-        if mant.ends_with('.') {
-            mant.push('0');
-        }
-    } else {
-        mant.push_str(".0");
-    }
-    let exp: i32 = exp.parse().unwrap_or(0);
-    let _ = write!(out, "{mant}e{}{}", if exp < 0 { '-' } else { '+' }, exp.unsigned_abs());
-    true
 }
