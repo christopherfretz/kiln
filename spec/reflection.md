@@ -692,12 +692,31 @@ answers as of that point.
   presumed_file_name`). By default (`clang`) it is the presumed name as
   written (`-I //opt/inc/./` gives `//opt/inc/./x.h`;
   `meta.reflection.names/source-location-of-include-path-clang.cpp`).
-  Under `gcc` it is GCC 16.1's: the absolute path of a file reached
-  through `#include` has its empty and `.` components dropped and
-  `dir/..` folded where `dir` is a real directory, not a symbolic link
-  (`-I //opt/inc` gives `/opt/inc/x.h`); the main file, a `#line` name and
-  relative paths are kept
-  (`meta.reflection.names/source-location-of-include-path.cpp`).
+  Under `gcc` it is GCC 16.1's (WP-1262; checked against GCC in
+  `meta.reflection.names/source-location-of-include-path.cpp`, `oracle:
+  gcc`): a file reached through `#include` is named by the path libcpp's
+  search built, nothing normalized. An absolute header name is kept as
+  written. A header found in a `-I`, `-iquote`, `-isystem` or
+  `-idirafter` directory is the directory as given, a `/` unless it ends
+  in one, then the header name (`append_file_to_dir`): `-I //opt/inc/./`
+  gives `//opt/inc/./x.h` and `-I inc//` gives `inc//x.h` (clang 22
+  drops one trailing slash there, `inc/x.h`; kiln's `clang` style does
+  not yet). A header found relative to its
+  includer is the includer's GCC name up to its last `/`, then the header
+  name (`inc//a.h` including `"../b.h"` gives `inc//../b.h`; from a main
+  file `m.cpp`, `b.h`). A header found in a system directory is named by
+  its `realpath` when that is strictly shorter (`-fcanonical-system-headers`,
+  GCC's default; `maybe_shorter_path`): `-isystem //opt/inc/./` gives
+  `/opt/inc/x.h`, a relative `-isystem` path usually stays (its realpath
+  is absolute, so longer), and symbolic links are resolved. So is a
+  header found relative to its includer when that directory is a system
+  one: libcpp creates the directory with the includer's system-ness at
+  the first `#include` looked up in it (found in a system directory,
+  included from a system header, or after `#pragma GCC system_header`)
+  and caches it by its spelling, so a directory first searched from a
+  user header stays a user one (`Preprocessor::gcc_dirs`). The main file
+  and a `#line` name are kept as written; a file reached by two spellings
+  keeps the first, as its buffer name does.
   `__FILE__` keeps clang's spelling under both. The line and
   column are GCC's per-entity location
   (`meta.reflection.names/source-location-of-definition.cpp`): a class or

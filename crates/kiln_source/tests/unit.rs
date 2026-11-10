@@ -711,6 +711,49 @@ fn cpp_include_inclusion_ranges_alias_the_buffer() {
     assert_eq!(sm.include_loc(from1), Loc::INVALID);
 }
 
+// spec: reflection.md §3.9, driver.md `-fkiln-source-path-style=`;
+// [support.srcloc.cons] (the file name is implementation-defined): under
+// the gcc style an included file is named by the spelling the
+// preprocessor recorded, canonicalized only for a system directory and
+// only when that is shorter; the first record wins; the main file and a
+// `#line` name are kept.
+#[test]
+fn gcc_file_name_follows_the_recorded_spelling() {
+    use kiln_source::SourcePathStyle;
+    let tmp = TempDir::new("gccname");
+    let dir = tmp.0.canonicalize().unwrap();
+    let dir = dir.to_str().unwrap();
+    fs::create_dir_all(format!("{dir}/inc")).unwrap();
+    for f in ["a.h", "b.h", "c.h"] {
+        fs::write(format!("{dir}/inc/{f}"), "int x;\n#line 7 \"n.h\"\nint y;\n").unwrap();
+    }
+    let sm = SourceManager::new();
+    sm.set_source_path_style(SourcePathStyle::Gcc);
+    let main = sm.add_virtual("main.cpp", "#include <a.h>\n".into()).unwrap();
+    let load = |f: &str, as_written: &str, system: bool| {
+        let id = sm.load_file(std::path::Path::new(&format!("{dir}/inc/{f}"))).unwrap();
+        sm.set_gcc_file_name(id, as_written, system);
+        (id, sm.add_inclusion(id, sm.loc(main, 0)).unwrap())
+    };
+    let user = format!("{dir}//inc/../inc/./a.h");
+    let sys = format!("{dir}//inc/../inc/./b.h");
+    let (a, ia) = load("a.h", &user, false);
+    let (_, ib) = load("b.h", &sys, true);
+    // A relative spelling's realpath is absolute, so longer: kept.
+    let (_, ic) = load("c.h", "inc/../inc/c.h", true);
+    let name = |l: Loc| sm.presumed_file_name(&sm.presumed_line_col(l).unwrap(), l);
+    assert_eq!(name(ia), user);
+    assert_eq!(name(ib), format!("{dir}/inc/b.h"));
+    assert_eq!(name(ic), "inc/../inc/c.h");
+    // The first spelling recorded wins.
+    sm.set_gcc_file_name(a, "other/a.h", false);
+    assert_eq!(sm.gcc_file_name(a), user);
+    // A `#line` name and the main file are kept as written.
+    sm.add_line_directive(a, 21, 7, Some("n.h"));
+    assert_eq!(name(ia.with_offset(22)), "n.h");
+    assert_eq!(name(sm.loc(main, 0)), "main.cpp");
+}
+
 // spec: source.md "File kinds"; [cpp.include] (system headers are an
 // implementation notion: clang's file characteristic per inclusion).
 #[test]

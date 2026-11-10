@@ -1,9 +1,9 @@
 // [support.srcloc.cons], [cpp.predefined]: -fmacro-prefix-map= applies
 // after the -fkiln-source-path-style=gcc spelling (spec/driver.md): the
-// simplified `<dir>/Inputs/` prefix of a header found through
-// `-I <dir>//Inputs/../Inputs/./` is replaced; __FILE__, spelled as
-// written, does not start with it.
-//@ args: -fkiln-source-path-style=gcc -fmacro-prefix-map=%{test_dir}/Inputs/=/inc/ -I %{test_dir}//Inputs/../Inputs/./
+// canonical `<dir>/Inputs/` prefix of a header found through the system
+// directory `-isystem <dir>//Inputs/../Inputs/./` is replaced; __FILE__,
+// spelled as written, does not start with it.
+//@ args: -fkiln-source-path-style=gcc -fmacro-prefix-map=%{test_dir}/Inputs/=/inc/ -isystem %{test_dir}//Inputs/../Inputs/./
 //@ skip(clang): -fkiln-source-path-style= is a kiln option
 //@ expect: compile-ok
 //@ strict-diags

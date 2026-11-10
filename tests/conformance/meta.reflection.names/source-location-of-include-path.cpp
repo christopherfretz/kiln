@@ -1,46 +1,62 @@
 // [meta.reflection.names]/8 (P2996R13): source_location_of's file name
 // is implementation-defined; under -fkiln-source-path-style=gcc kiln gives
-// GCC 16.1's (spec/reflection.md §3.9). GCC simplifies the absolute path of a file found through an
-// include search path: empty and `.` components are dropped and `dir/..`
-// is folded when `dir` is a real directory, so `-I /p//Inputs/../Inputs/./`
-// names the header `/p/Inputs/slo-header.h`. Build systems pass such
-// paths (a `//opt/inc` from an empty prefix), and a generator that derives
-// `#include` lines from source_location_of needs GCC's spelling.
-//@ args: -freflection -fkiln-source-path-style=gcc -I tests/support -I %{test_dir}//Inputs/../Inputs/./
-//@ skip(clang): clang 19 does not implement P2996 reflection
+// GCC 16.1's (spec/reflection.md §3.9), compared with GCC (spec/harness.md
+// "GCC oracle"). GCC names a header by the path its search built (libcpp
+// append_file_to_dir): the -I / -iquote directory as given, a `/` unless it
+// ends in one, then the header name; a header included relative to its
+// includer takes the includer's name up to its last `/`. Nothing is
+// normalized: `-I /p//Inputs/../Inputs/./` names the header
+// `/p//Inputs/../Inputs/./slo-header.h`, a doubled trailing slash stays.
+// A header found through a system directory (-isystem) is named by its
+// realpath when that is shorter (-fcanonical-system-headers, GCC's
+// default), and so is one included relative to it, or to a header that
+// made itself a system header with `#pragma GCC system_header` before its
+// directory was first searched (libcpp caches the answer per directory).
+//@ args: -freflection -fkiln-source-path-style=gcc --gcc-toolchain=%{gcc_toolchain} -I %{test_dir}//Inputs/../Inputs/./ -I %{test_dir}/Inputs/slo-path// -iquote %{test_dir}/Inputs/./slo-quote/ -isystem %{test_dir}//Inputs/slo-sys/../slo-sys/./ -I %{test_dir}/Inputs/./slo-prag/
+//@ oracle: gcc
+//@ skip(clang): clang does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
-//@ xfail(gcc): GCC 16.1 keeps the -I spelling `//Inputs/../Inputs/./` in the file name
-#include "kiln_meta.h"
+#include <meta>
 #include <slo-header.h>
+#include <slo-trail.h>
+#include "slo-quote.h"
+#include <slo-sys.h>
+#include <slo-prag.h>
 using namespace std::meta;
 
-consteval decltype(sizeof 0) len(const char* s) {
-  decltype(sizeof 0) n = 0;
-  while (s[n]) ++n;
-  return n;
+consteval bool ends_with(std::string_view s, std::string_view tail) { return s.ends_with(tail); }
+consteval bool canonical(std::string_view s) {
+  return s.starts_with('/') && !s.contains("//") && !s.contains("/./") && !s.contains("/../");
 }
-consteval bool at(const char* s, decltype(sizeof 0) i, const char* part) {
-  for (decltype(sizeof 0) k = 0; part[k]; ++k)
-    if (s[i + k] != part[k]) return false;
-  return true;
-}
-consteval bool contains(const char* s, const char* part) {
-  for (decltype(sizeof 0) i = 0; i + len(part) <= len(s); ++i)
-    if (at(s, i, part)) return true;
-  return false;
-}
-consteval bool ends_with(const char* s, const char* tail) {
-  return len(s) >= len(tail) && at(s, len(s) - len(tail), tail);
-}
-constexpr const char* hf = source_location_of(^^InHeader).file_name();
-static_assert(hf[0] == '/' && hf[1] != '/');
-static_assert(!contains(hf, "//"));
-static_assert(!contains(hf, "/./"));
-static_assert(!contains(hf, "/../"));
-static_assert(ends_with(hf, "/meta.reflection.names/Inputs/slo-header.h"));
+consteval std::string_view file_of(info r) { return source_location_of(r).file_name(); }
+
+// -I with empty, `.` and `..` components: kept as written.
+static_assert(ends_with(file_of(^^InHeader), "/meta.reflection.names//Inputs/../Inputs/./slo-header.h"));
 static_assert(source_location_of(^^InHeader).line() == 3);
+// A doubled trailing slash: no separator is added after it.
+static_assert(ends_with(file_of(^^InTrail), "/meta.reflection.names/Inputs/slo-path//slo-trail.h"));
+// `#include "../slo-rel.h"` from it: the includer's directory part.
+static_assert(ends_with(file_of(^^InRel), "/meta.reflection.names/Inputs/slo-path//../slo-rel.h"));
+// -iquote, with a single trailing slash.
+static_assert(ends_with(file_of(^^InQuote), "/meta.reflection.names/Inputs/./slo-quote/slo-quote.h"));
+// -isystem: the realpath, and a relative include from it too.
+static_assert(canonical(file_of(^^InSys)));
+static_assert(ends_with(file_of(^^InSys), "/meta.reflection.names/Inputs/slo-sys/slo-sys.h"));
+static_assert(canonical(file_of(^^InSysRel)));
+static_assert(ends_with(file_of(^^InSysRel), "/meta.reflection.names/Inputs/slo-sys-rel.h"));
+// A user header itself, then system after its pragma.
+static_assert(ends_with(file_of(^^InPrag), "/meta.reflection.names/Inputs/./slo-prag/slo-prag.h"));
+static_assert(canonical(file_of(^^InPragRel)));
+static_assert(ends_with(file_of(^^InPragRel), "/meta.reflection.names/Inputs/slo-prag-rel.h"));
 // One translation unit is self-consistent: __builtin_FILE() agrees.
-static_assert(ends_with(InHeaderFile, "/meta.reflection.names/Inputs/slo-header.h"));
+static_assert(file_of(^^InHeader) == std::string_view(InHeaderFile));
+static_assert(file_of(^^InTrail) == std::string_view(InTrailFile));
+static_assert(file_of(^^InRel) == std::string_view(InRelFile));
+static_assert(file_of(^^InQuote) == std::string_view(InQuoteFile));
+static_assert(file_of(^^InSys) == std::string_view(InSysFile));
+static_assert(file_of(^^InSysRel) == std::string_view(InSysRelFile));
+static_assert(file_of(^^InPrag) == std::string_view(InPragFile));
+static_assert(file_of(^^InPragRel) == std::string_view(InPragRelFile));
 
 int main() {}
