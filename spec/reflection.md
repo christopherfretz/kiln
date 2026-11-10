@@ -1323,7 +1323,11 @@ built without the flag matches a consumer built without it.
   constructor writes `C4` and a destructor `D4`, the unified structor of
   GCC, whatever variant is being emitted. In kiln mode an alias-template
   specialization writes the alias's own arguments. In gcc mode it writes
-  the arguments of the underlying class specialization, as g++-16 does.
+  the arguments of the underlying class specialization, as g++-16 does,
+  when those determine the alias's (every alias parameter appears
+  deducibly in the defining-type-id, `alias_args_recoverable`), and the
+  alias's own otherwise, where g++-16's spelling collides (spec/abi.md
+  §8.14, WP-1250).
 - **Linkage.** A reflection takes its reflectee's linkage
   (`reflect::reflection_externally_visible`, which `value_externally_visible`
   calls). A namespace-scope or class-member entity, a type, or a value is
@@ -1341,14 +1345,27 @@ built without the flag matches a consumer built without it.
   name. `template <class T> void f(K<^^T>)` gives
   `_Z1fI1SEv1KILu6__infotyT_EE`, and `g(K<^^T::x>)` gives
   `_Z1gI1SEv1KILu6__infodesrT_1xEE`. The gcc spellings
-  (`…KILDmtyT_EE`, `…KILDmdesrT_1xEE`) match g++-16.
+  (`…KILDmtyT_EE`, `…KILDmdesrT_1xEE`) match g++-16. A dependent alias
+  template-id is `ta` as above, not the aliased type (`^^AT<T>` is
+  `…KILDmta2ATIPS0_E_2TTIS2_EEE`). A dependent function or variable
+  template-id is `de` with its qualifier and template arguments
+  (`…KILDmde1gIS0_EEE`, `…KILDmdesr2nsE2nvIS0_EEE`): the parser records a
+  qualified variable template-id's qualifier on the operand, as for any
+  qualified id, so `^^ns::nv<T>` and `^^nv<T>` are different signatures.
+  Where g++-16 drops those arguments or that qualifier its symbols
+  collide, and kiln keeps them in both modes (spec/abi.md §8.14 "Known
+  divergences from GCC 16.1", WP-1250).
 - **GCC link compatibility.** In gcc mode, kiln objects and g++-16 objects
   link against each other for reflection-keyed symbols. `gcc_link_compat`
   requires every `Dm` symbol defined by both compilers to be equal, with at
   least 25 of them. The corpus test
   `tests/conformance/expr.reflect/reflection-mangle-gcc-run.cpp` prints the
   `typeid(...).name()` of a class template keyed by every kind and is
-  compared with g++-16's output (WP-879). The remaining name differences
+  compared with g++-16's output (WP-879). `gcc_dependent_template_id_link`
+  links a kiln object defining signatures with a dependent reflected
+  alias or variable template-id against a g++-16 caller (WP-1250). The
+  reflection-specific exceptions are the GCC 16.1 collisions of
+  spec/abi.md §8.14. The remaining name differences
   are general ABI divergences, not reflection ones (spec/abi.md §8):
   - GCC writes `L` before an anonymous namespace's members
     (`N12_GLOBAL__N_1L5anonvE`);
