@@ -1540,36 +1540,7 @@ impl Writer<'_, '_, '_> {
                     out.extend([rec, pos]);
                 }
             }
-            Fv::Gen(l, is_ty) => {
-                let items: Vec<u32> = lists.get(l).to_vec();
-                if items.len() < 2 || !(items.len() - 2).is_multiple_of(3) {
-                    return Err("a malformed body");
-                }
-                out.push(((items.len() - 2) / 3) as u32);
-                let expr = |s: &Self, w: u32| {
-                    ExprId::from_raw(w)
-                        .and_then(|e| s.bs.emap.get(&e).copied())
-                        .ok_or("a malformed body")
-                };
-                if is_ty {
-                    let q = self.qref(QualType::from_raw(items[0]).ok_or("a malformed body")?)?;
-                    out.extend([q.ty, u32::from(q.quals)]);
-                } else {
-                    out.push(expr(self, items[0])?);
-                }
-                out.push(self.loc(Loc::from_raw(items[1]))?);
-                for c in items[2..].chunks_exact(3) {
-                    match QualType::from_raw(c[0]) {
-                        None => out.extend([NONE, 0]),
-                        Some(t) => {
-                            let q = self.qref(t)?;
-                            out.extend([q.ty, u32::from(q.quals)]);
-                        }
-                    }
-                    out.push(self.loc(Loc::from_raw(c[1]))?);
-                    out.push(expr(self, c[2])?);
-                }
-            }
+            Fv::Gen(l, is_ty) => self.generic_words(l, is_ty, out)?,
             Fv::AL(l) => {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32);
@@ -1581,6 +1552,38 @@ impl Writer<'_, '_, '_> {
                     out.push(self.loc(a.loc)?);
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// A `_Generic`'s operand list `l` as an [`F::Gen`] / [`F::GenT`]
+    /// token.
+    fn generic_words(&mut self, l: ListId, is_ty: bool, out: &mut Vec<u32>) -> W<()> {
+        let items: Vec<u32> = self.s.ast.lists.get(l).to_vec();
+        if items.len() < 2 || !(items.len() - 2).is_multiple_of(3) {
+            return Err("a malformed body");
+        }
+        out.push(((items.len() - 2) / 3) as u32);
+        let expr = |s: &Self, w: u32| {
+            ExprId::from_raw(w).and_then(|e| s.bs.emap.get(&e).copied()).ok_or("a malformed body")
+        };
+        if is_ty {
+            let q = self.qref(QualType::from_raw(items[0]).ok_or("a malformed body")?)?;
+            out.extend([q.ty, u32::from(q.quals)]);
+        } else {
+            out.push(expr(self, items[0])?);
+        }
+        out.push(self.loc(Loc::from_raw(items[1]))?);
+        for c in items[2..].chunks_exact(3) {
+            match QualType::from_raw(c[0]) {
+                None => out.extend([NONE, 0]),
+                Some(t) => {
+                    let q = self.qref(t)?;
+                    out.extend([q.ty, u32::from(q.quals)]);
+                }
+            }
+            out.push(self.loc(Loc::from_raw(c[1]))?);
+            out.push(expr(self, c[2])?);
         }
         Ok(())
     }
