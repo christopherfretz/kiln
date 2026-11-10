@@ -176,7 +176,8 @@ pub struct Substituter<'s, 'a, 'sm> {
     /// declaration are rebuilt. Types go through
     /// [`Sema::rebuild_ci_type`] and a `C<X>::m` naming a member of the
     /// current instantiation is resolved ([temp.dep.type]/1, /6;
-    /// WP-1154).
+    /// WP-1154), with its template arguments when it is a template-id;
+    /// `typeof` operands and pack indexes are rebuilt too (WP-1169).
     pub(crate) ci_rebuild: Option<DeclId>,
 }
 
@@ -816,7 +817,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// `TransformFunctionTypeParams` instantiating the `ParmVarDecl`s).
     /// It keeps its index and function-scope depth for the mangling of
     /// a still-dependent reference.
-    fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+    pub(crate) fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let node = *self.sema.ast.decls.get(d);
         let Some(pd) = self.sema.ast.decls.param(d).copied() else { return Ok(d) };
         let t = pd.original_ty.unwrap_or_else(|| self.decl_ty(d));

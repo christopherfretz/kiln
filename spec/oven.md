@@ -3949,11 +3949,14 @@ they read the stored values: a valued wrapper is a leaf (0 steps), and
 a scalar prvalue call reached by stripping the wrapper is answered by
 the bridge without an evaluation (clang's `EvaluateForOverflow`
 evaluates the call a second time). A default argument's invocation is
-still elided where it is written, but codegen's fold prepass reuses the
-value sema's check of a use stored (`default_immediate_value`) instead
-of evaluating the call again. One remaining second evaluation: the
-shift-count check of `<<`/`>>` (sema `diagnose_shift_count`), which
-folds its operand when the operator is built. Tests:
+still elided where it is written, but codegen's fold prepass and the
+compiler (`Compiler::stored_value`: `rv_inner`, `valued_leaf`,
+`cx_const` and the effect arm, outside a use with source-location
+values) reuse the value sema's check of a use stored
+(`default_immediate_value`) instead of evaluating the call again
+(WP-1171). The shift-count check of `<<`/`>>` (sema
+`diagnose_shift_count`) evaluates a count that is an invocation once
+and hands the result to the full-expression's finish (WP-1171). Tests:
 `tests/conformance/expr.const/immediate-invocation-evaluated-once-run.cpp`,
 `tests/conformance/expr.const/budget/immediate-invocation-once*.cpp`,
 `crates/kiln_driver/tests/time_trace.rs` (`immediate_invocation_evaluated_once`,
