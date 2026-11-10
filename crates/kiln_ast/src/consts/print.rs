@@ -33,6 +33,7 @@ pub enum PrintStyle {
 
 /// Print settings.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent print switches")]
 pub struct PrintOptions {
     /// The syntax.
     pub style: PrintStyle,

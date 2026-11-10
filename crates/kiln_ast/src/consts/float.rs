@@ -549,7 +549,7 @@ mod tests {
     }
 
     /// GCC 16.1's spellings (`pp_c_floating_constant`, checked against
-    /// `g++-16 -freflection` display_string_of).
+    /// `g++-16 -freflection` `display_string_of`).
     #[test]
     fn gcc_spelling() {
         let d = |v: f64| gcc(FloatKind::Double, u128::from(v.to_bits()));
