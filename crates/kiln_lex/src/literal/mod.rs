@@ -157,7 +157,7 @@ pub fn invalid_utf8<'s>(
     if !spelling.as_bytes().contains(&0xEF) {
         return Vec::new();
     }
-    invalid_utf8_slow(sm, tok, spelling, opts)
+    invalid_utf8_slow(sm, tok, spelling, opts.trigraphs)
 }
 
 #[cold]
@@ -165,7 +165,7 @@ fn invalid_utf8_slow<'s>(
     sm: &'s SourceManager,
     tok: &Token,
     spelling: &str,
-    opts: &LexOptions,
+    trigraphs: bool,
 ) -> Vec<InvalidUtf8<'s>> {
     let Some((file, start)) = sm.offset_of(sm.spelling_loc(tok.span.lo)) else {
         return Vec::new();
@@ -178,11 +178,8 @@ fn invalid_utf8_slow<'s>(
     let cleaned = tok.flags.contains(TokFlags::NEEDS_CLEANING);
     let mut out = Vec::new();
     for (k, _) in spelling.match_indices('\u{FFFD}') {
-        let off = if cleaned {
-            crate::spelling::source_offset(text, tok.kind, opts.trigraphs, k)
-        } else {
-            k
-        };
+        let off =
+            if cleaned { crate::spelling::source_offset(text, tok.kind, trigraphs, k) } else { k };
         let Ok(off) = u32::try_from(off) else { break };
         let at = start.saturating_add(off);
         if let Ok(i) = reps.binary_search_by_key(&at, |r| r.offset) {
@@ -933,7 +930,8 @@ fn decode_string_impl<'s>(
         // The body is one fragment; CR LF still becomes LF.
         bad_fragment(body, parts.body.start, bad, raw_bad, &mut diags, &mut |item, r, _| {
             if let Some(Item::Unit(u)) = item
-                && !(u == u32::from(b'\r') && body.as_bytes().get(r.end - parts.body.start) == Some(&b'\n'))
+                && !(u == u32::from(b'\r')
+                    && body.as_bytes().get(r.end - parts.body.start) == Some(&b'\n'))
             {
                 units.push_unit(u);
             }
@@ -1015,28 +1013,37 @@ pub fn decode_char_from_source<'s>(
     let mut too_long = false;
     let body = &spelling[parts.body.clone()];
     let bad = Bad { seqs: invalid, error: enc != Encoding::Ordinary, string: false };
-    for_each_item(body, parts.body.start, bits, opts.std, false, bad, &mut diags, |item, range, d| {
-        chars += 1;
-        let unit = match item {
-            None => 0,
-            Some(Item::Unit(u)) => u,
-            Some(Item::Char(c)) => {
-                let cp = u32::from(c);
-                let fits = match bits {
-                    8 => cp < 0x80,
-                    16 => cp < 0x1_0000,
-                    _ => true,
-                };
-                if !fits {
-                    d.push(LexDiagKind::CharTooLarge, range.start, range.end);
+    for_each_item(
+        body,
+        parts.body.start,
+        bits,
+        opts.std,
+        false,
+        bad,
+        &mut diags,
+        |item, range, d| {
+            chars += 1;
+            let unit = match item {
+                None => 0,
+                Some(Item::Unit(u)) => u,
+                Some(Item::Char(c)) => {
+                    let cp = u32::from(c);
+                    let fits = match bits {
+                        8 => cp < 0x80,
+                        16 => cp < 0x1_0000,
+                        _ => true,
+                    };
+                    if !fits {
+                        d.push(LexDiagKind::CharTooLarge, range.start, range.end);
+                    }
+                    cp
                 }
-                cp
-            }
-        };
-        last = unit;
-        too_long |= packed >> 24 != 0;
-        packed = (packed << 8) | (unit & 0xFF);
-    });
+            };
+            last = unit;
+            too_long |= packed >> 24 != 0;
+            packed = (packed << 8) | (unit & 0xFF);
+        },
+    );
     let full = parts.body.start.saturating_sub(1)..parts.body.end + 1;
     if chars == 0 && body.is_empty() {
         diags.push(LexDiagKind::EmptyCharLiteral, full.start, full.end);

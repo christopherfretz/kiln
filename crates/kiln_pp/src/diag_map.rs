@@ -105,6 +105,20 @@ fn ucn_name(range: &str) -> &str {
     }
 }
 
+/// clang's `err_bad_{string,character}_encoding` /
+/// `warn_bad_{string,character}_encoding` for invalid UTF-8 in a literal
+/// (WP-1267). A string literal's diagnostic is at the first invalid byte
+/// and highlights it; a character literal's is at the token start.
+fn bad_encoding(string: bool, error: bool, span: Span, start: Span) -> Diag {
+    let id = match (string, error) {
+        (true, true) => DiagId::lit_bad_string_encoding,
+        (true, false) => DiagId::lit_bad_string_encoding_warn,
+        (false, true) => DiagId::lit_bad_char_encoding,
+        (false, false) => DiagId::lit_bad_char_encoding_warn,
+    };
+    if string { Diag::new(id, span).range(span) } else { Diag::new(id, start) }
+}
+
 /// The diagnostics for the problems `diags` found decoding `spelling`, the
 /// spelling of literal token `tok` (`enc`: a character literal's
 /// encoding), with clang's wording and locations (clang
@@ -202,16 +216,7 @@ pub fn literal_diags(
                 Diag::new(DiagId::lit_unevaluated_escape, at).arg(esc)
             }
             K::UnevaluatedStringUdSuffix => Diag::new(DiagId::lit_unevaluated_udl, start),
-            K::InvalidEncoding { string, error } => {
-                let id = match (string, error) {
-                    (true, true) => DiagId::lit_bad_string_encoding,
-                    (true, false) => DiagId::lit_bad_string_encoding_warn,
-                    (false, true) => DiagId::lit_bad_char_encoding,
-                    (false, false) => DiagId::lit_bad_char_encoding_warn,
-                };
-                // clang highlights the invalid bytes of a string literal.
-                if string { Diag::new(id, span).range(span) } else { Diag::new(id, start) }
-            }
+            K::InvalidEncoding { string, error } => bad_encoding(string, error, span, start),
             // A further highlighted range of the preceding diagnostic.
             K::InvalidEncodingRange => {
                 if let Some(prev) = out.pop() {
