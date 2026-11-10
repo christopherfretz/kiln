@@ -957,8 +957,75 @@ unadjusted alignment, as the classification does (WP-583).
   encodings). The grammar, the per-kind table and the
   linkage rule are spec/reflection.md §8.3; `spec/landed/abi/WP-501.md`
   (superseding the TU-local `L u6__info <id> E` of WP-485).
-- **Known divergences from GCC 16.1** (not reflection-specific, found by
-  WP-501's `gcc_link_compat`; kiln follows clang here):
+- **Dependent reflected template-ids** (WP-1250). A reflect-expression of
+  a template-id that is still dependent in a signature (a decltype return
+  type, a parameter type through a dependent template argument, a
+  requires-clause) writes, in both modes:
+  - a function template-id (`^^g<T>`, `^^ns::operator== <T>`,
+    `^^S<T>::template m<int>`) and a variable template-id (`^^vt<T>`,
+    `^^ns::nv<T>`) as `de <unresolved-name>`, with its qualifier (`sr`)
+    and its template arguments: `…KILDmde1gIS0_EEE`,
+    `…KILDmdesr2nsEoneqIS0_EEE`, `…KILDmdesr2nsE2nvIS0_EEE`;
+  - an alias template-id (`^^AT<T>`) as `ta <alias> <args> _ <aliased
+    type>`, not as the aliased type (`ty`), which is a different
+    reflection: before WP-1250 `p(T, K<^^AT<T>>)` and
+    `p(T, K<^^TT<T*>>)` had one symbol.
+
+  Declarations that differ only in the reflected template-id's arguments
+  or qualifier are distinct ([temp.over.link]/5), and across TUs a
+  `linkonce_odr` comdat folds equal symbols silently, so a lossy
+  spelling is a miscompile, not a diagnostic. The rule: in gcc mode kiln
+  writes g++-16's spelling where that spelling is injective, and keeps
+  its own otherwise (each such case is a GCC 16.1 ABI bug, listed below);
+  in kiln mode the arguments are always kept. g++-16 equals kiln for
+  `^^vt<T>` (`de2vtIS0_E`) and for an alias whose parameters all appear,
+  deducibly ([temp.deduct.type]/8), in its defining-type-id: gcc mode
+  then writes the aliased class specialization's arguments as GCC does
+  (`ta2ATIPS0_E_2TTIS2_E`), which determine the alias's
+  (`mangle::reflect::alias_args_recoverable`); kiln mode writes the
+  alias's own (`ta2ATIS0_E_2TTIPS0_E`). Deduced forms are the type
+  parameter, compounds of deduced parts, a class template
+  specialization's type, template and bare non-type arguments, an array
+  bound (`template <class T, int N> using Arr = TT<T[N]>` matches GCC's
+  `ta3ArrIA3_iE_2TTIS0_E`) and a recoverable alias; anything else is
+  conservatively not deduced. An alias with a parameter that is not
+  deduced writes its own arguments in both modes, dependent or not:
+  one that does not appear (`template <class T, class U> using F = TT<T>`,
+  `ta1FIS0_iE_…`; `f<^^F<int, long>>` is `…ta1FIilE_2TTIiE…`), one that
+  is non-deduced (`template <class T> using D = typename RC<T>::type`,
+  a remove_const: `f<^^D<const int>>` is `…ta1DIKiE_i…`, g++-16's
+  `ta1D_i` is also `D<int>`'s), or an alias of a non-class type that does
+  not name it (`using V = void`). The symbols are
+  `spec/landed/abi/WP-1250.md`; the tests are
+  `tests/conformance/expr.reflect/template-id-signature-*-run.cpp` and the
+  driver's `gcc_dependent_template_id_link` (a kiln object linked with a
+  g++-16 one).
+- **Known divergences from GCC 16.1.** Reflection-specific, where GCC's
+  spelling gives distinct declarations one symbol and g++-16 fails to
+  assemble a TU holding both ("symbol … is already defined";
+  `expr.reflect/template-id-signature-collide-run.cpp`, `xfail(gcc)`);
+  kiln keeps the information and so does not link with g++-16 for these
+  (WP-1250):
+  - a dependent function template-id is `ft <name>` without its
+    arguments (`^^g<T>` and `^^g<T*>` are both `ft1g`,
+    `^^ns::operator== <T>` is `ft2nseq`, `^^Q::m<T>` is `ft1Q1m`);
+  - a dependent qualified variable template-id drops its qualifier
+    (`^^ns::nv<T>` and `^^nv<T>` are both `de2nvIS0_E`);
+  - an alias template-id is its aliased type's (class specialization)
+    arguments even when they do not determine the alias's (`^^F<T, int>`
+    and `^^F<T, long>` are both `ta1FIS0_E_2TTIS0_E`; `^^D<int>` and
+    `^^D<const int>` are both `ta1D_i`; non-dependent too);
+  - g++-16 rejects `^^S<T>::template m<int>` and `^^T::template m<int>`
+    at substitution ("'m' was not declared", a rejects-valid), so those
+    have no GCC symbol; kiln writes `desr1SIS0_EE1mIiE`.
+
+  Also, beside a constrained function template's symbol g++-16 emits an
+  alias without the constraint (`_Z2q1IiEvT_` for `_Z2q1IiQ…EEvT_`, its
+  ABI-compat name; not reflection-specific); kiln emits only the
+  constrained one, which is what GCC's callers reference.
+
+  Not reflection-specific, found by WP-501's `gcc_link_compat`; kiln
+  follows clang here:
   - GCC writes `L` before the members of an anonymous namespace
     (`N12_GLOBAL__N_1L5anonvE`);
   - an empty non-type pack argument is `JE` in GCC but `TpTnDmJE`-style in
