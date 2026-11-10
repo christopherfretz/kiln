@@ -1119,7 +1119,11 @@ qualifier as spelled: the first level is its identifier with no
 substitution (`t.T::f()` is `sr1TE1f`). Elsewhere a typedef level is its
 own name (`sr1P4SelfE`), a namespace alias its alias name, a
 substituted template parameter an unresolved type (`srS0_1m`) and a
-class template specialization its template-id (`sr1BIiEE1f`). The
+class template specialization its template-id (`sr1BIiEE1f`). A
+specialization the qualifier names without a written template-id (the
+current instantiation, `C::` or `C<X>::` in a member of `C<int>`) is
+clang's `Type::Record` case, the bare `sr1CE1f` (WP-1169,
+`tests/mangle/current_instantiation_qualifier.cpp`). The
 expression profile keeps those spellings apart (spec/types.md §7.2).
 Details, before/after names and the sweep: `spec/landed/abi/WP-1029.md`.
 **Pack indexes, lambdas, unresolved qualifiers (WP-1060).** A

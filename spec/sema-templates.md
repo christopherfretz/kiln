@@ -3375,7 +3375,15 @@ substituting (clang's `CurrentInstantiationRebuilder`; WP-1154,
 spec/sema-class.md §8.3 "Out-of-line declarator scope"): `ty` hands every
 type to `Sema::rebuild_ci_type`, and a `DependentScopeDeclRefExpr`
 `C<X>::m` whose qualifier names the current instantiation is formed again
-as the class's own id-expression when lookup finds `m`.
+as the class's own id-expression when lookup finds `m`. With explicit
+template arguments (`C<X>::template f<U>`) it is formed as the class's
+template-id (WP-1169). A `PackExpansionExpr` rebuilds its pattern, and a
+`PackIndexingExpr` its index; the rebuilt index replaces the written one
+only while it stays value-dependent (`ci_index_value_dependent`, a
+`sizeof`/`alignof` of a non-dependent type is not), so a rebuilt index
+that clang would leave unconverted does not become equivalent to the
+in-class one. `Substituter::ci_expr_operand_ty` rebuilds the operand of
+`typeof` and the index of an unselected pack-indexing type.
 
 ### 5.3 Types
 

@@ -700,7 +700,12 @@ Encoding (prefix-free, so equal word sequences mean equal trees):
     of a requires-clause is one specialization; WP-792);
 - unresolved names (`UnresolvedLookup`, `CXXDependentScopeMemberExpr`,
   `DependentScopeDeclRef`) are `(qualifier, name, explicit args)`. The
-  lookup result is not part of the profile. A member access on an
+  lookup result is not part of the profile. Explicit args are their
+  canonical list word, except that a list holding a non-dependent
+  expression argument (canonical only by identity) is profiled per
+  argument, each expression by its own profile, so the two spellings of
+  `C::template g<1>()` in a declaration and its out-of-line definition
+  agree (`push_args`, WP-1169). A member access on an
   explicit object of dependent type profiles its qualifier as spelled,
   each level by name (`spelled_nns_words`; a template-id or splice level
   keeps its canonical word), as clang keeps an identifier
