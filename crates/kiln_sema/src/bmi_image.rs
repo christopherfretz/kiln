@@ -1544,13 +1544,17 @@ fn unlisted(img: &Image, d: &DeclRec) -> bool {
 fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
     steps.iter().all(|s| match *s {
         NnsRec::Global | NnsRec::Ty(..) => true,
-        NnsRec::Ns(x) => (x as usize) < below
-            && matches!(img.decls.get(x as usize).map(|r| &r.payload), Some(Payload::Namespace)),
-        NnsRec::Alias(x) => (x as usize) < below
-            && matches!(
-                img.decls.get(x as usize).map(|r| &r.payload),
-                Some(Payload::NsAlias { .. })
-            ),
+        NnsRec::Ns(x) => {
+            (x as usize) < below
+                && matches!(img.decls.get(x as usize).map(|r| &r.payload), Some(Payload::Namespace))
+        }
+        NnsRec::Alias(x) => {
+            (x as usize) < below
+                && matches!(
+                    img.decls.get(x as usize).map(|r| &r.payload),
+                    Some(Payload::NsAlias { .. })
+                )
+        }
     })
 }
 
@@ -2329,8 +2333,10 @@ impl Writer<'_, '_, '_> {
                 // S6: the importer resolves the alias again.
                 Nns::NamespaceAlias { alias, ns, .. } => match self.recs.get(&alias) {
                     Some(&r)
-                        if matches!(self.img.decls[r as usize].payload, Payload::NsAlias { .. })
-                            && self.s.ast.resolve_alias(alias) == ns =>
+                        if matches!(
+                            self.img.decls[r as usize].payload,
+                            Payload::NsAlias { .. }
+                        ) && self.s.ast.resolve_alias(alias) == ns =>
                     {
                         NnsRec::Alias(r)
                     }
@@ -2423,9 +2429,10 @@ impl Writer<'_, '_, '_> {
     fn using_record(&mut self, d: DeclId) -> W<Payload> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
-        let in_class = n.ctx().and_then(|c| self.recs.get(&c)).is_some_and(|&c| {
-            matches!(self.img.decls[c as usize].payload, Payload::Record { .. })
-        });
+        let in_class = n
+            .ctx()
+            .and_then(|c| self.recs.get(&c))
+            .is_some_and(|&c| matches!(self.img.decls[c as usize].payload, Payload::Record { .. }));
         if in_class {
             return Err("a using-declaration in a class");
         }
@@ -2452,7 +2459,9 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::NamespaceAlias => {
                 let target = rec(ast.using_target(d))
-                    .filter(|&r| matches!(payload_of(r), Payload::Namespace | Payload::NsAlias { .. }))
+                    .filter(|&r| {
+                        matches!(payload_of(r), Payload::Namespace | Payload::NsAlias { .. })
+                    })
                     .ok_or("a using-directive or alias naming a namespace outside the image")?;
                 Payload::NsAlias { target }
             }
@@ -3892,7 +3901,8 @@ impl Sema<'_, '_> {
                     {
                         h.name = DeclName::operator(op);
                     }
-                    let nns = self.image_nns(steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
+                    let nns =
+                        self.image_nns(steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
                     self.builder().using_decl(h, nns)
                 }
                 Payload::Shadow { target } => {
@@ -4168,12 +4178,16 @@ impl Sema<'_, '_> {
                     Some(&ns) => Nns::Namespace { prefix: cur, ns },
                     None => Nns::Global,
                 },
-                NnsRec::Ty(q, template_kw) => Nns::Type { prefix: cur, ty: ty(self, q), template_kw },
+                NnsRec::Ty(q, template_kw) => {
+                    Nns::Type { prefix: cur, ty: ty(self, q), template_kw }
+                }
                 // S6: an alias step, over the namespace it denotes.
                 NnsRec::Alias(d) => match ids.get(d as usize) {
-                    Some(&alias) => {
-                        Nns::NamespaceAlias { prefix: cur, alias, ns: self.ast.resolve_alias(alias) }
-                    }
+                    Some(&alias) => Nns::NamespaceAlias {
+                        prefix: cur,
+                        alias,
+                        ns: self.ast.resolve_alias(alias),
+                    },
                     None => Nns::Global,
                 },
             };
@@ -4838,13 +4852,32 @@ mod tests {
     /// record naming the wrong kind of target, a later one, or carrying
     /// the wrong name is an error.
     #[test]
+    fn carries_a_preamble() {
+        // S6: the preamble word and a partition's key round-trip (the
+        // preprocessor's read of the header is checked by the driver's
+        // kind2_declaration_image_imports; spec/modules.md §11.11
+        // "Imports, partitions and using-declarations").
+        let mut img = using_sample();
+        img.module = "m:p".to_owned();
+        img.preamble = 40;
+        let bytes = encode(&img);
+        assert_eq!(decode(&bytes), Ok(img.clone()));
+        // A truncated header is corrupt, not a panic.
+        for n in [0, 4, 12, 20] {
+            assert!(decode(&bytes[..n.min(bytes.len())]).is_err());
+        }
+    }
+
+    #[test]
     fn carries_using_records() {
         type Corrupt = (&'static str, fn(&mut Image));
         let img = using_sample();
         assert!(img.gated.contains(&(img.names.len() as u32 - 1)));
         assert_eq!(decode(&encode(&img)), Ok(img));
         let corrupt: [Corrupt; 12] = [
-            ("shadow of a later declaration", |i| i.decls[11].payload = Payload::Shadow { target: 16 }),
+            ("shadow of a later declaration", |i| {
+                i.decls[11].payload = Payload::Shadow { target: 16 }
+            }),
             ("shadow of itself", |i| i.decls[11].payload = Payload::Shadow { target: 11 }),
             ("shadow of a namespace", |i| i.decls[11].payload = Payload::Shadow { target: 0 }),
             ("shadow under another name", |i| i.decls[11].name = 2),

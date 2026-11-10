@@ -1097,7 +1097,8 @@ fn kind2_declaration_image_polymorphic() {
     assert!(irs[0] == irs[2], "IR differs between the image and a kind-1 import");
 }
 
-const IMGU: &str = include_str!("../../../tests/conformance/module.interface/Inputs/img-using.cppm");
+const IMGU: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-using.cppm");
 const IMGU_RUN: &str =
     include_str!("../../../tests/conformance/module.interface/image-using-run.cpp");
 const IMGU_HIDDEN: &str =
@@ -1276,6 +1277,44 @@ fn kind2_declaration_image_imports() {
         notes.contains(&"note: replayed 'imgc': its preamble ends in a conditional".to_owned()),
         "{notes:#?}"
     );
+
+    // What refers to an imported declaration, and an import in an
+    // included file, still fall back.
+    std::fs::write(d.join("i.h"), "import imgp;\n").unwrap();
+    for (src, why) in [
+        (
+            "export module f;\nimport imgp;\nexport inline int g() { return top::answer(); }\n",
+            "a body referring to a declaration outside the image",
+        ),
+        (
+            "export module f;\nimport imgp;\nexport int g(pa::Pt);\n",
+            "a qualifier naming a namespace outside the image",
+        ),
+        (
+            "export module f;\nimport imgp;\nexport struct D : top::Wrap {};\n",
+            "a type declared outside the image",
+        ),
+        (
+            "export module f;\nimport imgp;\nexport namespace q = pa;\n",
+            "a using-directive or alias naming a namespace outside the image",
+        ),
+        (
+            "export module f;\n#include \"i.h\"\nexport int g();\n",
+            "an import outside the module's main file",
+        ),
+    ] {
+        std::fs::write(d.join("f.cppm"), src).unwrap();
+        let mut args: Vec<&str> = vec!["-v", "-fkiln-bmi-image"];
+        args.extend(mf[1..4].iter().map(String::as_str));
+        args.extend(["--precompile", "f.cppm", "-o", "f.pcm"]);
+        let o = kiln(&d, &args);
+        assert_eq!(o.code, 0, "{src}: {}", o.stderr);
+        assert!(
+            o.stderr.contains(&format!("(no declaration image: {why})")),
+            "{src}: {}",
+            o.stderr
+        );
+    }
 }
 
 /// A unit with a node the image does not carry is written without one,
@@ -1390,7 +1429,6 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport struct B { B(int) {} };\nexport struct D : B { using B::B; };\n",
             "an inherited constructor or assignment operator",
         ),
-
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
         (
             "export module f;\nstruct S { int x; bool operator==(const S &) const = default; };\nexport constexpr S v{3};\n",

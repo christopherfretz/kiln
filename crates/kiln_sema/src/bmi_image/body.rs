@@ -1539,7 +1539,9 @@ impl Writer<'_, '_, '_> {
                         .recs
                         .get(&alias)
                         .copied()
-                        .filter(|&r| matches!(self.img.decls[r as usize].payload, Payload::NsAlias { .. }))
+                        .filter(|&r| {
+                            matches!(self.img.decls[r as usize].payload, Payload::NsAlias { .. })
+                        })
                         .filter(|_| self.s.ast.resolve_alias(alias) == ns)
                         .ok_or("a qualifier naming a namespace alias outside the image")?;
                     out.extend([3, w]);

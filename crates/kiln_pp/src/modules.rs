@@ -965,7 +965,14 @@ impl Preprocessor<'_, '_> {
             let record = self.comment_handler.is_some();
             let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
             let len = sm.text(f.file).len() as u32;
-            f.lx = kiln_lex::Lexer::new_in_range(sm, interner, f.file, stop.preamble..len, f.base, opts);
+            f.lx = kiln_lex::Lexer::new_in_range(
+                sm,
+                interner,
+                f.file,
+                stop.preamble..len,
+                f.base,
+                opts,
+            );
             if record {
                 f.lx.set_record_comments(true);
             }
@@ -974,7 +981,8 @@ impl Preprocessor<'_, '_> {
         self.see_gated(&stop.gated);
         self.log_image(&stop.key, None);
         let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
-        let image = Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, main_file: f.file });
+        let image =
+            Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, main_file: f.file });
         f.image_done = Some((image, stop.span));
         true
     }
