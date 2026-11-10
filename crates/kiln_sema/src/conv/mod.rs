@@ -850,6 +850,16 @@ fn bind_reference(
     {
         // [dcl.init.ref]/5.4.2: a temporary of type cv1 T1
         // copy-initialized from the initializer.
+        // A function template-id resolved early: the temporary's
+        // conversion resolves it again (clang's perform step), after a
+        // re-resolution against T1 for a specialization T1 does not take
+        // (spec/sema-lambda.md §3.5, WP-1170).
+        if s.mismatched_template_id(e, r_un).is_some()
+            && let Some(x) = retarget_template_id(s, e, r_un, ctx)
+        {
+            return bind_reference(s, x, to, ctx);
+        }
+        s.rerun_template_id_resolution(e, r_un);
         let target = s.ast.types.qualify(r_un, rq);
         // clang `FK_ReferenceInitFailed`: the referee as written.
         let Some(scs) = standard_conversion(s, e, r_un, ConvCtx::Initialization) else {
@@ -1218,12 +1228,14 @@ pub fn implicit_convert(
     // constructor (`const D& d = f;` with `D(R (*)())`).
     if from == QualType::OVERLOAD && !s.overload_set_converts_to_class(e, to, IcsOptions::NONE) {
         // [over.over]: the target selects the function.
+        // clang resolves an assigned overload set twice (the check, then
+        // the perform step below): a function template-id is not resolved
+        // a third time after it (spec/sema-lambda.md §3.5, WP-1170).
+        let checked = ctx == ConvCtx::Assignment && s.overload_operand(e).is_some();
         let resolved = if ctx == ConvCtx::Condition {
             s.check_overload_use(e);
             None
-        } else if ctx == ConvCtx::Assignment
-            && s.overload_operand(e).is_some()
-            && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
+        } else if checked && s.try_implicit_conversion(&s.arg_info(e), to, IcsOptions::NONE).is_bad()
         {
             // [expr.assign]/3 via [over.over]: clang's
             // `CheckSingleAssignmentConstraints` resolves silently and
@@ -1247,7 +1259,12 @@ pub fn implicit_convert(
                 let loc = s.eloc(x);
                 Ok(s.recover_err(&[x], loc))
             }
-            Some(x) => implicit_convert(s, x, to, ctx),
+            Some(x) => {
+                if checked {
+                    s.forget_template_id(x);
+                }
+                implicit_convert(s, x, to, ctx)
+            }
             None => {
                 let loc = s.eloc(e);
                 Ok(s.recover_err(&[e], loc))
@@ -1258,6 +1275,16 @@ pub fn implicit_convert(
         let r = bind_reference(s, e, to, ctx)?;
         exc_spec_compat(s, e, from, to, ctx)?;
         return Ok(r);
+    }
+    // A function template-id resolved early to a specialization the
+    // target does not ask for: the target resolves it first, and the
+    // perform step below re-runs that resolution (spec/sema-lambda.md
+    // §3.5, WP-1170).
+    if ctx != ConvCtx::Condition
+        && s.mismatched_template_id(e, to).is_some()
+        && let Some(x) = retarget_template_id(s, e, to, ctx)
+    {
+        return implicit_convert(s, x, to, ctx);
     }
     // A function template-id resolved early: clang's perform step
     // resolves it again (`PerformImplicitConversion`; a reference binding

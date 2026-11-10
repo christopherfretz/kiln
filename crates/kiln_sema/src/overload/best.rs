@@ -158,14 +158,28 @@ impl Sema<'_, '_> {
                             // again (clang `TryCopyInitialization`, or a
                             // template's `CheckNonDependentConversions`,
                             // whose sequence the candidate reuses).
-                            if let Some(e) = a.expr {
-                                self.rerun_template_id_resolution(e, p);
+                            // One the target re-resolves to another
+                            // specialization is resolved by the sequence
+                            // itself (`Ics` of an overload set).
+                            // One the deduction of a template candidate
+                            // already converted reuses that sequence.
+                            let reused = a.expr.and_then(|e| {
+                                self.ovl.nondep_ics.iter().rev().find(|x| x.0 == e).map(|x| x.1)
+                            });
+                            if let Some(x) = reused {
+                                x
+                            } else {
+                                if let Some(e) = a.expr
+                                    && self.mismatched_template_id(e, p).is_none()
+                                {
+                                    self.rerun_template_id_resolution(e, p);
+                                }
+                                self.try_implicit_conversion(
+                                    &a,
+                                    p,
+                                    opts.with(IcsOptions::CANDIDATE_ARG),
+                                )
                             }
-                            self.try_implicit_conversion(
-                                &a,
-                                p,
-                                opts.with(IcsOptions::CANDIDATE_ARG),
-                            )
                         }
                         None => Ics::Ellipsis,
                     };

@@ -288,33 +288,54 @@ deductions there, discarding their result (`Sema::rerun_template_id_resolution`,
 `rerun_template_id_single`, with the enclosing full-expression's pending
 deleted uses and held warnings set aside, `holding_pending_uses`):
 the implicit conversion (`conv::implicit_convert`, clang
-`PerformImplicitConversion`; not a condition, resolved before; not a
-reference binding, which resolves once and reuses the result), a
-candidate's conversion sequence (`best.rs` `add_candidate`,
-`TryCopyInitialization`/`CheckNonDependentConversions`), a call by an
-unqualified name with one candidate (`convert_call_args`), the deduction
-of a function-like `P` (`deduce_call_arg`, `ResolveOverloadForDeduction`),
-`auto` deduction (`deduce_from`, `new auto`, an `auto` template
-parameter; `DeduceAutoType`), a braced scalar or aggregate element (the
-list checker's verifying pass, `init.rs`), and the perform step of a
-`static_cast`, C-style or functional cast (`act_on_cast`,
-`TryStaticImplicitCast`). Counting the early resolution and the
-specialization, `f<int>` takes 2 numbers when discarded, compared or
-bound to a reference (`static_cast<FR>`, `reinterpret_cast`), 3 in a
-copy- or direct-initialization of a pointer, an assignment, a pointer
-cast, a qualified call's argument, a reference parameter, `auto &`; 4 in
-a braced initializer, `auto`, `auto *`, an unqualified call with one
-candidate, an `auto` or explicitly typed `F` template argument; 5 for a
-deduced `F` and `auto x{f<int>}`.
+`PerformImplicitConversion`; not a condition, resolved before; not an
+assignment's checking step, which resolves the operand and converts the
+result, `forget_template_id`), a reference bound to a temporary
+([dcl.init.ref]/5.4.2, `bind_reference`; a direct binding resolves once
+and reuses the result), a candidate's conversion sequence (`best.rs`
+`add_candidate`, `TryCopyInitialization`; a function template candidate
+reuses the sequence its deduction formed for a non-dependent parameter,
+clang `CheckNonDependentConversions`, `OverloadScratch::nondep_ics`), a
+call by an unqualified name with one candidate (`convert_call_args`),
+the deduction of a function-like `P` (`deduce_call_arg`,
+`ResolveOverloadForDeduction`), `auto` deduction (`deduce_from`, `new
+auto`, an `auto` template parameter; `DeduceAutoType`), a braced scalar
+or aggregate element (the list checker's verifying pass, `init.rs`), and
+the perform step of a `static_cast`, C-style or functional cast
+(`act_on_cast`, `TryStaticImplicitCast`). A reference to function
+list-initialized from an overload set binds like a direct-initialization
+(`reference_list_init`, clang `ResolveOverloadedFunctionForReferenceBinding`).
+Counting the early resolution and the specialization, `f<int>` takes 2
+numbers when discarded, compared or bound to a reference (`FR r = f<int>`,
+`FR r{f<int>}`, `static_cast<FR>`, `reinterpret_cast`), 3 in a copy- or
+direct-initialization of a pointer, an assignment, a pointer cast, a
+qualified call's argument, a reference parameter, a `const FP &`, `auto
+&`; 4 in a braced initializer, `auto`, `auto *`, an unqualified call
+with one candidate, an `auto` or explicitly typed `F` template argument;
+5 for a deduced `F` and `auto x{f<int>}`.
+The count depends only on the context, not on whether the explicit
+arguments alone complete a specialization (clang never forms one early).
 When the target deduces a different specialization than the explicit
 arguments complete (`f<int>` with `U = void` defaulted, target
 `int (*)(int *, int)`), a cast, an assignment and an argument retarget
 it like an initialization does ([over.over]/1; `retarget_cast_operand`,
 `mismatched_template_id`, `ConvCtx::Assignment | Argument` in
-`retarget_template_id`). The counts there still differ from clang (more
-when the early specialization mismatches, fewer when there is none):
-xfail repros `lambda-in-signature-explicit-args-mismatched-spec-two-units-run.cpp`
-and `…-no-early-spec-two-units-run.cpp` (WP-1142 follow-ups).
+`retarget_template_id`), and the first resolution that forms the
+target's specialization takes over the numbers the early resolution
+gave (`taking_over_numbers`; the early resolution records them per
+numbering key, `OverloadScratch::template_id_numbers`, `IdNumber`); a
+candidate's re-run is skipped for a mismatched template-id, whose
+conversion is that resolution. Numbers given in those keys by another
+signature since make the record stale; it is dropped and the resolution
+numbers after them. An early resolution that deduces
+nothing takes its numbers back. When the explicit arguments
+complete none (`U` undeduced), the target's resolution registers the
+resolved template-id like an early one (`resolve_address_of_overloaded_noted`),
+so the later steps re-run it. Tests:
+`lambda-in-signature-explicit-args-mismatched-spec-two-units-run.cpp`,
+`…-no-early-spec-two-units-run.cpp`,
+`tests/mangle/lambda_in_signature_contexts.cpp` (one template per
+context, with and without the default).
 The address of an overload set deduces its templates from the target
 even when a non-template matches it, then prefers the non-template
 ([over.over]/5; clang `FindAllFunctionsThatMatchTargetTypeExactly`, then

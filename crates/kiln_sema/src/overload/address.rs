@@ -27,6 +27,20 @@ pub(crate) enum AddrCtx {
     Reinterpret,
 }
 
+/// A numbering key ([`crate::lambda::ManglingState`]) in which a function
+/// template-id's resolutions numbered the lambdas of its templates'
+/// signatures ([`OverloadScratch::template_id_numbers`]).
+///
+/// [`OverloadScratch::template_id_numbers`]: crate::overload::OverloadScratch::template_id_numbers
+#[derive(Debug, Clone)]
+pub(crate) struct IdNumber {
+    key: (DeclId, String),
+    /// The last number given before the early resolution.
+    before: u32,
+    /// The last number the template-id's resolutions gave.
+    reached: u32,
+}
+
 impl Sema<'_, '_> {
     /// The `UnresolvedLookupExpr` an expression of overloaded-function
     /// type names (through parentheses and one `&`), and whether it is
@@ -385,14 +399,22 @@ impl Sema<'_, '_> {
     /// template argument explicit or defaulted (clang's
     /// `ResolveSingleFunctionTemplateSpecialization`).
     pub(crate) fn single_template_spec(&mut self, ule: ExprId) -> Option<(DeclId, DeclId)> {
-        let explicit = self.ast.templates.expr_targs.get(ule).copied()?;
+        self.single_template_spec_counted(ule).0
+    }
+
+    /// [`Self::single_template_spec`], with whether any of the set's
+    /// templates was deduced (an ambiguous set formed specializations).
+    fn single_template_spec_counted(&mut self, ule: ExprId) -> (Option<(DeclId, DeclId)>, bool) {
+        let Some(explicit) = self.ast.templates.expr_targs.get(ule).copied() else {
+            return (None, false);
+        };
         if self
             .ast
             .types
             .arg_list_flags(explicit)
             .intersects(kiln_ast::types::TypeFlags::DEPENDENT_INSTANTIATION)
         {
-            return None;
+            return (None, false);
         }
         let loc = self.ast.exprs.get(ule).loc();
         let mut found = None;
@@ -405,11 +427,90 @@ impl Sema<'_, '_> {
             }
             let Ok(spec) = self.deduce_explicit_only(d, Some(explicit), loc) else { continue };
             if found.is_some() {
-                return None;
+                return (None, true);
             }
             found = Some((spec, f));
         }
-        found
+        let any = found.is_some();
+        (found, any)
+    }
+
+    /// Of `keys`, the numbers a resolution of the template-id `ule` gave,
+    /// those in the signatures of its templates (numbered in their
+    /// patterns, spec/sema-lambda.md §3.5); not those of other templates
+    /// whose specializations the substitution formed.
+    fn signature_keys(&self, ule: ExprId, keys: Vec<(DeclId, String)>) -> Vec<(DeclId, String)> {
+        if keys.is_empty() {
+            return keys;
+        }
+        let patterns: Vec<DeclId> = self
+            .ule_candidates(ule)
+            .into_iter()
+            .filter(|&(d, _)| self.kind_of(d) == DeclKind::FunctionTemplate)
+            .filter_map(|(d, _)| self.templated_function(d))
+            .collect();
+        keys.into_iter().filter(|k| patterns.contains(&k.0)).collect()
+    }
+
+    /// Records the numbers `keys` (one entry per number) that the early
+    /// resolution of a function template-id to `r` gave
+    /// ([`OverloadScratch::template_id_numbers`]).
+    ///
+    /// [`OverloadScratch::template_id_numbers`]: crate::overload::OverloadScratch::template_id_numbers
+    fn record_id_numbers(&mut self, r: ExprId, keys: &[(DeclId, String)]) {
+        let mut out: Vec<IdNumber> = Vec::new();
+        for k in keys {
+            if let Some(x) = out.iter_mut().find(|x| &x.key == k) {
+                x.before = x.before.saturating_sub(1);
+                continue;
+            }
+            let reached = self.lambda_mangle.number_of(k);
+            out.push(IdNumber { key: k.clone(), before: reached.saturating_sub(1), reached });
+        }
+        if !out.is_empty() {
+            let _ = self.ovl.template_id_numbers.insert(r, out);
+        }
+    }
+
+    /// Runs `f`, the first resolution of the template-id resolved early
+    /// to `r` against a target that deduces another specialization
+    /// ([over.over]/1): clang never formed the one resolved early, so
+    /// its first resolution at the use forms the target's. `f` takes the
+    /// early resolution's numbers over, and the numbers given since (the
+    /// re-runs', whose closures are discarded) stay given
+    /// (spec/sema-lambda.md §3.5, WP-1170). Without a current record `f`
+    /// numbers after them.
+    pub(crate) fn taking_over_numbers<R>(&mut self, r: ExprId, f: impl FnOnce(&mut Self) -> R) -> R {
+        let rec = self.ovl.template_id_numbers.remove(&r).filter(|rec| {
+            rec.iter().all(|x| self.lambda_mangle.number_of(&x.key) == x.reached)
+        });
+        for x in rec.iter().flatten() {
+            self.lambda_mangle.set_number(&x.key, x.before);
+        }
+        let out = f(self);
+        for x in rec.iter().flatten() {
+            let n = self.lambda_mangle.number_of(&x.key).max(x.reached);
+            self.lambda_mangle.set_number(&x.key, n);
+        }
+        out
+    }
+
+    /// Runs `f`, a re-run of the resolution of the template-id resolved
+    /// early to `r`, keeping [`IdNumber::reached`] current. A number
+    /// given in those keys by anything else since (another
+    /// specialization's signature) leaves the record stale: it is
+    /// dropped, and a retarget then numbers after it.
+    fn rerun_numbering<R>(&mut self, r: ExprId, f: impl FnOnce(&mut Self) -> R) -> R {
+        let Some(mut rec) = self.ovl.template_id_numbers.remove(&r) else { return f(self) };
+        let current = rec.iter().all(|x| self.lambda_mangle.number_of(&x.key) == x.reached);
+        let out = f(self);
+        if current {
+            for x in &mut rec {
+                x.reached = self.lambda_mangle.number_of(&x.key);
+            }
+            let _ = self.ovl.template_id_numbers.insert(r, rec);
+        }
+        out
     }
 
     /// The one specialization the member template-id `x` (an overloaded
@@ -446,7 +547,24 @@ impl Sema<'_, '_> {
         if self.ast.exprs.get(e).kind() != ExprKind::UnresolvedLookupExpr {
             return e;
         }
-        let Some((d, f)) = self.single_template_spec(e) else { return e };
+        // clang resolves the template-id only where it is used: the
+        // numbers of a resolution that deduced nothing are taken back
+        // (an overload set the target resolves numbers its own,
+        // spec/sema-lambda.md §3.5); those of a resolution that formed a
+        // specialization stand for clang's first resolution at the use.
+        let outer = self.lambda_mangle.begin_probe();
+        let (found, any) = self.single_template_spec_counted(e);
+        let keys = self.lambda_mangle.end_probe_keys(outer);
+        let keys = self.signature_keys(e, keys);
+        let Some((d, f)) = found else {
+            if !any {
+                for k in &keys {
+                    let n = self.lambda_mangle.number_of(k);
+                    self.lambda_mangle.set_number(k, n.saturating_sub(1));
+                }
+            }
+            return e;
+        };
         let naming = self.ovl.ule_found.get(&e).and_then(|x| x.naming);
         let nns = self.ast.templates.expr_nns.get(e).copied();
         let loc = self.ast.exprs.get(e).loc();
@@ -480,6 +598,7 @@ impl Sema<'_, '_> {
             self.note_function_name_use(d, r, loc, nns.is_none());
         }
         let _ = self.ovl.template_id_refs.insert(r, e);
+        self.record_id_numbers(r, &keys);
         r
     }
 
@@ -500,10 +619,7 @@ impl Sema<'_, '_> {
     /// each run numbers the lambdas in it (spec/sema-lambda.md §3.5,
     /// WP-1142). A class target is no [over.over] target.
     pub(crate) fn rerun_template_id_resolution(&mut self, e: ExprId, target: QualType) {
-        if self.ovl.template_id_refs.is_empty() {
-            return;
-        }
-        let Some(&ule) = self.ovl.template_id_refs.get(&self.addr_operand(e)) else { return };
+        let Some((r, ule)) = self.template_id_operand(e) else { return };
         let Some(explicit) = self.ast.templates.expr_targs.get(ule).copied() else { return };
         let to = self.non_reference(target);
         if self.ast.types.as_record(to).is_some() || self.is_dependent_type(target) {
@@ -511,24 +627,79 @@ impl Sema<'_, '_> {
         }
         let (fnty, member) = self.address_target(target);
         if !self.ast.types.is_function(fnty) {
-            self.holding_pending_uses(|s| {
-                let _ = s.single_template_spec(ule);
+            self.rerun_numbering(r, |s| {
+                s.holding_pending_uses(|s| {
+                    let _ = s.single_template_spec(ule);
+                });
             });
             return;
         }
         let loc = self.ast.exprs.get(ule).loc();
-        self.holding_pending_uses(|s| {
-            for (d, _) in s.ule_candidates(ule) {
-                // `AddMatchingTemplateFunction` deduces only the templates
-                // whose kind of member the target can point to.
-                if s.kind_of(d) != DeclKind::FunctionTemplate
-                    || s.is_implicit_object_member(s.templated_or_self(d)) != member
-                {
-                    continue;
+        let mismatched = r != ule
+            && self.referenced_decl_of_callee(r).is_some_and(|d| {
+                !self.address_matches(d, (fnty, member))
+            });
+        let run = |s: &mut Self| {
+            s.holding_pending_uses(|s| {
+                for (d, _) in s.ule_candidates(ule) {
+                    // `AddMatchingTemplateFunction` deduces only the
+                    // templates whose kind of member the target can point
+                    // to.
+                    if s.kind_of(d) != DeclKind::FunctionTemplate
+                        || s.is_implicit_object_member(s.templated_or_self(d)) != member
+                    {
+                        continue;
+                    }
+                    let _ = s.deduce_funcaddr(d, Some(explicit), fnty, loc);
                 }
-                let _ = s.deduce_funcaddr(d, Some(explicit), fnty, loc);
-            }
-        });
+            });
+        };
+        if mismatched {
+            self.taking_over_numbers(r, run);
+        } else {
+            self.rerun_numbering(r, run);
+        }
+    }
+
+    /// `e`, an overload set's resolution, possibly parenthesized and
+    /// under `&`, is no longer resolved again as a function template-id
+    /// ([`Self::rerun_template_id_resolution`]).
+    pub(crate) fn forget_template_id(&mut self, e: ExprId) {
+        if !self.ovl.template_id_refs.is_empty() {
+            let x = self.addr_operand(e);
+            let _ = self.ovl.template_id_refs.remove(&x);
+        }
+    }
+
+    /// Whether `e` is a function template-id whose resolutions number
+    /// the closures of its template's signature
+    /// ([`Self::rerun_template_id_resolution`]): `Some(true)` when it is
+    /// still an overload set (a conversion resolves it), `Some(false)`
+    /// when it was resolved early.
+    pub(crate) fn template_id_arg(&self, e: ExprId) -> Option<bool> {
+        self.template_id_operand(e).map(|(r, ule)| r == ule)
+    }
+
+    /// The function template-id operand `e` is, possibly parenthesized
+    /// and under `&`: the reference it was resolved to (or the
+    /// template-id itself, still an overload set) and its
+    /// `UnresolvedLookupExpr`. Re-runs of clang's resolution apply to
+    /// both: clang resolves a template-id at each step that meets it,
+    /// whether or not its explicit arguments alone name one
+    /// specialization (spec/sema-lambda.md §3.5, WP-1170).
+    fn template_id_operand(&self, e: ExprId) -> Option<(ExprId, ExprId)> {
+        let x = self.addr_operand(e);
+        let n = self.ast.exprs.get(x);
+        if n.kind() == ExprKind::UnresolvedLookupExpr {
+            return (n.ty() == QualType::OVERLOAD
+                && self.ast.templates.expr_targs.get(x).is_some()
+                && self.ovl.members.get(&x).is_none())
+            .then_some((x, x));
+        }
+        if self.ovl.template_id_refs.is_empty() {
+            return None;
+        }
+        self.ovl.template_id_refs.get(&x).map(|&u| (x, u))
     }
 
     /// Runs `f`, a re-resolution of a template-id the enclosing
@@ -559,12 +730,11 @@ impl Sema<'_, '_> {
     /// templates the same way: the early resolution leaves at most one
     /// that succeeds, so neither stops early.
     pub(crate) fn rerun_template_id_single(&mut self, e: ExprId) {
-        if self.ovl.template_id_refs.is_empty() {
-            return;
-        }
-        if let Some(&ule) = self.ovl.template_id_refs.get(&self.addr_operand(e)) {
-            self.holding_pending_uses(|s| {
-                let _ = s.single_template_spec(ule);
+        if let Some((r, ule)) = self.template_id_operand(e) {
+            self.rerun_numbering(r, |s| {
+                s.holding_pending_uses(|s| {
+                    let _ = s.single_template_spec(ule);
+                });
             });
         }
     }
@@ -581,7 +751,7 @@ impl Sema<'_, '_> {
 
     /// `e` without parentheses and one `&` (the reference a function
     /// template-id resolved early is, under them).
-    fn addr_operand(&self, e: ExprId) -> ExprId {
+    pub(crate) fn addr_operand(&self, e: ExprId) -> ExprId {
         let x = self.ignore_parens(e);
         if self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
             && self.ast.exprs.unary_op(x) == UnaryOp::AddrOf
@@ -673,6 +843,15 @@ impl Sema<'_, '_> {
                 // whole operand (its `&` or parenthesis).
                 let at = self.begin_loc(e);
                 self.note_function_name_use(d, r, at, nns.is_none());
+                // A template-id stays an overload set for clang: the steps
+                // after this one resolve it again (numbering the lambdas
+                // of its signature, [`Self::rerun_template_id_resolution`]).
+                if self.ast.templates.expr_targs.get(ule).is_some()
+                    && !self.is_err_expr(r)
+                    && self.ast.spec_info(d).is_some()
+                {
+                    let _ = self.ovl.template_id_refs.insert(r, ule);
+                }
                 return Some(self.rebuild_over(e, ule, r));
             }
             if !complain {
@@ -816,7 +995,15 @@ impl Sema<'_, '_> {
             return None;
         }
         let at = self.begin_loc(ule);
-        let r = self.resolve_address_of_overloaded(ule, to, false, AddrCtx::Convert, at)?;
+        // clang never formed the specialization resolved early: its
+        // first resolution at this use forms the one the target deduces.
+        // That resolution takes the early one's numbers, and the numbers
+        // given since (the re-runs', whose closures are discarded) stay
+        // given (spec/sema-lambda.md §3.5, WP-1170).
+        let early = self.addr_operand(e);
+        let r = self.taking_over_numbers(early, |s| {
+            s.resolve_address_of_overloaded(ule, to, false, AddrCtx::Convert, at)
+        })?;
         self.drop_template_id_warnings(e);
         // The specialization resolved early is not used: its definition
         // is not instantiated ([temp.inst]/5), unless something else

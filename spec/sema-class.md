@@ -2619,7 +2619,17 @@ Constructors, destructors, conversion functions, `= default` and
   expression (`act_on_full_expr`), declaration (`act_on_end_abbreviated`)
   or constant evaluation (`eval_const`) as "attempt to use", unless
   `act_on_deleted_callee` saw it called ("call to deleted function",
-  "call to [implicitly-]deleted constructor"). §4.8:
+  "call to [implicitly-]deleted constructor"). A full-expression, a
+  constant evaluation or an instantiated body finished while an
+  enclosing expression is being built (a constant subexpression such as
+  the explicit argument of `f<f<1>()>`, its evaluation, the body it
+  instantiates) reports only the uses inside it; the enclosing
+  expression's pending uses and held template-id warnings are set aside
+  until it decides them, so a use it calls is reported once, as a call
+  (`Sema::setting_aside_uses_outside`, `flush_pending_deleted_in`,
+  `in_inst_context`; as `pending_odr` is partitioned, spec/sema.md §5.2;
+  WP-1170, `dcl.fct.def.delete/use-beside-constant-subexpression.cpp`).
+  §4.8:
   `check_class_default_init` (from `act_on_uninit`) checks the default
   constructor (deleted, inaccessible, const default-init) and the
   destructor (deleted, access) of a variable.

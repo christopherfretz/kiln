@@ -1166,7 +1166,23 @@ impl Sema<'_, '_> {
         // argument) is not instantiated (clang `CheckNonDependent`).
         for &(i, p) in &nondeduced {
             let o = arg_opts.get(i).copied().unwrap_or(IcsOptions::NONE);
+            // A function template-id argument of a candidate: clang
+            // resolves it here once and the candidate reuses the
+            // sequence (spec/sema-lambda.md §3.5).
+            // One still an overload set is resolved by the conversion.
+            let tid = args[i].expr.filter(|_| o.contains(IcsOptions::CANDIDATE_ARG)).and_then(
+                |e| self.template_id_arg(e).map(|set| (e, set)),
+            );
+            if let Some((e, false)) = tid
+                && self.mismatched_template_id(e, p).is_none()
+            {
+                self.rerun_template_id_resolution(e, p);
+            }
+            let tid = tid.map(|t| t.0);
             let x = self.try_implicit_conversion(&args[i], p, o);
+            if let Some(e) = tid {
+                self.ovl.nondep_ics.push((e, x));
+            }
             if x.is_bad() {
                 let mut f = DeductionFailure::new(Tdk::NonDependentConversionFailure, d);
                 f.args = Some(sugared);
