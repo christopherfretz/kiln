@@ -315,7 +315,28 @@ impl Substituter<'_, '_, '_> {
             .filter_map(|&p| self.sema.ast.template_parm(p).and_then(|i| i.constraint))
             .collect();
         cs.extend(req);
-        cs.extend(self.sema.ast.templates.trailing_requires.get(pattern).copied());
+        let trailing = self.sema.ast.templates.trailing_requires.get(pattern).copied();
+        cs.extend(trailing);
+        // A trailing requires-clause may name the function's parameters
+        // (`requires (sizeof(u) > 1)`), not declared yet: parameters with
+        // the substituted types stand for them, dropped again before the
+        // pattern is redeclared (WP-1146).
+        let mut fn_params = Vec::new();
+        if trailing.is_some() {
+            let ps: Vec<DeclId> = self
+                .sema
+                .ast
+                .decls
+                .function(pattern)
+                .map(|f| self.sema.ast.lists.iter::<DeclId>(f.params).collect())
+                .unwrap_or_default();
+            let loc = self.sema.ast.decls.get(pattern).loc();
+            for p in ps {
+                if !self.locals.contains_key(&p) && self.nested_prototype_param(p, loc).is_ok() {
+                    fn_params.push(p);
+                }
+            }
+        }
         let mut m = kiln_source::fx::FxHashMap::default();
         let mut apart = false;
         let saved_used = self.outer_used.replace(false);
@@ -335,6 +356,9 @@ impl Substituter<'_, '_, '_> {
             }
         }
         self.outer_used.set(saved_used);
+        for p in fn_params {
+            self.locals.remove(&p);
+        }
         (m, apart)
     }
 

@@ -805,7 +805,7 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
     /// `TransformFunctionTypeParams` instantiating the `ParmVarDecl`s).
     /// It keeps its index and function-scope depth for the mangling of
     /// a still-dependent reference.
-    fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
+    pub(crate) fn nested_prototype_param(&mut self, d: DeclId, loc: Loc) -> SubstResult<DeclId> {
         let node = *self.sema.ast.decls.get(d);
         let Some(pd) = self.sema.ast.decls.param(d).copied() else { return Ok(d) };
         let t = pd.original_ty.unwrap_or_else(|| self.decl_ty(d));
