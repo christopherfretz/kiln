@@ -1106,6 +1106,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | done (#496) |
 | WP-1137 | exception-spec accepts-invalid tails: C++98 deduction-time list checks, C++17 implicit/override written lists, nested function types in substitution | WP-1052 | done (#505) |
 | WP-1053 | partial-spec ordering tails: constrained partial specs (order.rs:477), member-template partial specs (order.rs:465), non-deducible F<T..., int> | WP-1017 | done (#455) |
+| WP-1212 | partial ordering: a template template parameter deduced from a longer synthesized template-id takes the rest as defaults (container-rebind trio ambiguous) | WP-1053 | in progress |
 | WP-1054 | SILENT DROP: class template members whose declaration fails at instantiation are dropped without a diagnostic, so instantiation-time wrong-tag errors are missed (clang dcl.type.elab/p3.cpp:60) | WP-1017 | done (#435) |
 | WP-1050 | module cache eviction: bound the std/std.compat module cache size and age (kiln_driver module_cache.rs) | WP-984 | done (#479) |
 | WP-1051 | -MD on a module cache hit lists every libc++ header the std module read; match clang dependency output for import std | WP-984 | done (#467) |
