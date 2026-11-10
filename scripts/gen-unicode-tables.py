@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate kiln_lex's Unicode tables from the Unicode Character Database.
+"""Generate kiln's Unicode tables from the Unicode Character Database.
 
-Outputs (both @generated, never edited by hand):
+Outputs (all @generated, never edited by hand):
 
 * crates/kiln_lex/src/unicode_tables.rs -- UAX #31 identifier properties
   (XID_Start, XID_Continue) and the normalization data needed to decide
@@ -14,14 +14,24 @@ Outputs (both @generated, never edited by hand):
   loose-matching key and front-coded in blocks; plus the algorithmic NR2
   hex-suffixed name ranges (CJK UNIFIED IDEOGRAPH-XXXX and friends).
   Hangul syllable names (NR1) are computed in code, not stored.
+* crates/kiln_diag/src/unicode_tables.rs -- the character classes clang's
+  diagnostic printer uses (llvm/lib/Support/Unicode.cpp, LLVM 22, which
+  generates them from UCD 15.1.0): printable (general categories L, M, N,
+  P, S and Zs; U+00AD is special-cased in code, as LLVM does), formatting
+  (Cf), zero-width combining marks (Mn, Me) and double-width
+  (East_Asian_Width F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and,
+  as in LLVM's table, U+4DC0..U+4DFF). Checked range for range against
+  LLVM 22's tables when last regenerated (spec/diag.md section 6.3).
 
 Usage:  scripts/gen-unicode-tables.py [UCD_VERSION]   (default 15.1.0)
+        cargo fmt --all            (the checked-in files are rustfmt'd)
 
 The files are downloaded from unicode.org into a temporary directory, or read
 from $UCD_DIR if set. Their SHA-256 checksums are pinned below per version;
 a mismatch (or an unpinned version) aborts the run so a table change is
 always a deliberate, reviewed edit of this script. The version default
-matches clang 19, kiln's conformance oracle.
+matches clang 19 and 22 (kiln's conformance oracles): both use UCD 15.1.0
+for identifiers, character names and the diagnostic printer's tables.
 """
 import hashlib
 import os
@@ -34,6 +44,8 @@ VERSION = sys.argv[1] if len(sys.argv) > 1 else "15.1.0"
 BASE = f"https://www.unicode.org/Public/{VERSION}/ucd/"
 SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                    "crates", "kiln_lex", "src")
+DIAG_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                        "crates", "kiln_diag", "src")
 
 CHECKSUMS = {
     "15.1.0": {
@@ -41,6 +53,8 @@ CHECKSUMS = {
             "f55d0db69123431a7317868725b1fcbf1eab6b265d756d1bd7f0f6d9f9ee108b",
         "DerivedNormalizationProps.txt":
             "8875dccee2bc1a7c1fe568a3b502a9e78c9e0495afd96b6568b4294d0ed1f7e1",
+        "EastAsianWidth.txt":
+            "b08191401dc125f4e84ef262a95754faae6b737c79538e17ea9664a63434e94e",
         "NameAliases.txt":
             "fbf0e640bab36e165c4da5b6a98bdd963fcb4f923b5097f26f6f7f18b9678698",
         "UnicodeData.txt":
@@ -253,6 +267,62 @@ def write_tables(paths, ccc, decomp):
     return os.path.getsize(out)
 
 
+def parse_categories(path):
+    """Return {cp: general category} for every assigned code point,
+    expanding the `<..., First>`/`<..., Last>` ranges."""
+    gc = {}
+    first = None
+    for fields in records(path):
+        cp, name, cat = int(fields[0], 16), fields[1], fields[2]
+        if name.endswith(", First>"):
+            first = cp
+            continue
+        if name.endswith(", Last>"):
+            for c in range(first, cp + 1):
+                gc[c] = cat
+            first = None
+            continue
+        gc[cp] = cat
+    return gc
+
+
+def category_ranges(gc, pred):
+    return merge((cp, cp) for cp, cat in gc.items() if pred(cat))
+
+
+# Double-width ranges LLVM adds to East_Asian_Width F|W (Unicode.cpp,
+# charWidth): the two pictograph blocks its comment names, and the Yijing
+# Hexagram Symbols block its table carries (East_Asian_Width=N in 15.1.0).
+EXTRA_DOUBLE_WIDTH = [(0x1F300, 0x1F5FF), (0x1F900, 0x1F9FF), (0x4DC0, 0x4DFF)]
+
+
+def write_diag_tables(paths):
+    gc = parse_categories(paths["UnicodeData.txt"])
+    wide = [(lo, hi) for (lo, hi), in [
+        ((int(r[0].split("..")[0], 16), int(r[0].split("..")[-1], 16)),)
+        for r in records(paths["EastAsianWidth.txt"]) if r[1] in ("F", "W")]]
+    tables = [
+        ("PRINTABLE", "Printable code points (`llvm::sys::unicode::isPrintable`):\n"
+         "/// general categories L, M, N, P, S and Zs. U+00AD is special-cased by\n"
+         "/// the caller.", category_ranges(gc, lambda c: c[0] in "LMNPS" or c == "Zs")),
+        ("FORMATTING", "Formatting code points (`llvm::sys::unicode::isFormatting`):\n"
+         "/// general category Cf.", category_ranges(gc, lambda c: c == "Cf")),
+        ("COMBINING", "Zero-width code points (`charWidth` 0): non-spacing and\n"
+         "/// enclosing marks, general categories Mn and Me.",
+         category_ranges(gc, lambda c: c in ("Mn", "Me"))),
+        ("DOUBLE_WIDTH", "Double-width code points (`charWidth` 2):\n"
+         "/// East_Asian_Width F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and\n"
+         "/// U+4DC0..U+4DFF as LLVM's table has them.",
+         merge(wide + EXTRA_DOUBLE_WIDTH)),
+    ]
+    out = os.path.join(DIAG_SRC, "unicode_tables.rs")
+    with open(out, "w", encoding="utf-8") as f:
+        header(f)
+        for name, doc, ranges in tables:
+            emit_ranges(f, name, doc, ranges)
+    return os.path.getsize(out), {name: len(r) for name, _, r in tables}
+
+
 def write_names(paths, names, nr2):
     entries = [(n, cp, "") for cp, n in names.items()]
     for fields in records(paths["NameAliases.txt"]):
@@ -318,9 +388,11 @@ def main():
         names, nr2, ccc, decomp = parse_unicode_data(paths["UnicodeData.txt"])
         tables = write_tables(paths, ccc, decomp)
         size, count = write_names(paths, names, nr2)
+        diag, counts = write_diag_tables(paths)
     print(f"unicode_tables.rs: {tables} bytes")
     print(f"unicode_names.rs: {size} bytes ({count} names and aliases, "
           f"{len(nr2)} NR2 ranges)")
+    print(f"kiln_diag unicode_tables.rs: {diag} bytes ({counts})")
 
 
 main()

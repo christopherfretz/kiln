@@ -793,19 +793,13 @@ fn decode_string_impl(
             units.push_char(c);
         }
     } else {
-        for_each_item(
-            body,
-            parts.body.start,
-            bits,
-            opts,
-            unevaluated,
-            &mut diags,
-            |item, _, _| match item {
+        for_each_item(body, parts.body.start, bits, opts, unevaluated, &mut diags, |item, _, _| {
+            match item {
                 Some(Item::Char(c)) => units.push_char(c),
                 Some(Item::Unit(u)) => units.push_unit(u),
                 None => {}
-            },
-        );
+            }
+        });
     }
     StringLiteral {
         encoding: parts.encoding,
