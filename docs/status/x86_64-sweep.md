@@ -148,6 +148,20 @@ CPU and load differ, so only the RSS ratio carries across.
   for the TU counts. x86 function multiversioning (`target_clones`) is
   still rejected: WP-1059, xfail
   `tests/conformance/ext.multiversion/target-clones-x86.cpp`.
+- With `-mavx2` accepted (WP-1000), the 1.0 RC sweep (run
+  `42788235805`) builds OpenCV's AVX2 dispatch TUs, and 12 of its
+  `modules/core/*.avx2.cpp` failed with "code generation for
+  `__builtin_ia32_X` is not supported yet" (`extract128i256`,
+  `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`): builtins
+  clang lowers to generic IR, which kiln's 1:1 table never covered, so
+  the build stopped (0/7 tests; clang 7/7). **Fixed** (WP-1242): every
+  declared x86 builtin is lowered as clang's `EmitX86BuiltinExpr`, except
+  23 (`maskmovq`, Key Locker, the AMX `*_internal`) for which
+  `__has_builtin` is now 0, and a call of an x86 builtin sets clang's
+  `"min-legal-vector-width"` (spec/landed/codegen/WP-630.md "Generic x86
+  lowering"; `tests/conformance/target.x86/opencv-avx2-tu.cpp`,
+  `avx2-fma-f16c-run.cpp`, the `*-ir.cpp` family tests). The opencv
+  counts are re-measured at the next sweep.
 - glibc's x86-64 `bits/floatn.h` says `typedef __float128 _Float128;`.
   kiln makes `_Float128` its own P1467 type and drops that typedef, so a
   `_Float128` function (`logf128`) is not a `__float128` one, as it is
