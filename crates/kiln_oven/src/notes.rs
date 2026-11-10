@@ -29,6 +29,10 @@ pub struct FrameMark {
     frames: u32,
     entry: u32,
     depth: u32,
+    /// The evaluation is a potential-constant check's
+    /// ([`Oven::evaluate_call`], [`Oven::evaluate_potential`], a frame
+    /// job): its frames are the check's own, not the program's.
+    potential: bool,
 }
 
 /// clang's default `-fconstexpr-backtrace-limit`.
@@ -259,26 +263,40 @@ impl Oven {
             frames: u32::try_from(self.stack.len()).unwrap_or(u32::MAX),
             entry: u32::try_from(self.run.entry).unwrap_or(u32::MAX),
             depth: self.ctx_depth,
+            potential: self.run.potential.is_some(),
         }
     }
 
-    /// The call stack of the evaluation paused in a bridge callback (a
-    /// reflection intrinsic's [`SemaBridge::meta`]), innermost first, as
-    /// the "in call to 'f(args)'" notes of a failure's backtrace with the
-    /// same elision (`-fconstexpr-backtrace-limit`): what sema appends to
-    /// the instantiation context of an error in an instantiation the
-    /// callback required (spec/oven.md "Interface", WP-1248). Rendered
-    /// only when such an error prints.
+    /// The call stack of the evaluation that was paused at `mark` (a
+    /// reflection intrinsic's [`SemaBridge::meta`], [`Oven::frame_mark`])
+    /// and still is, innermost first, as the "in call to 'f(args)'" notes
+    /// of a failure's backtrace with the same elision
+    /// (`-fconstexpr-backtrace-limit`): what sema appends to the
+    /// instantiation context of an error in an instantiation the callback
+    /// required (spec/oven.md "Interface", WP-1248). The evaluation may be
+    /// paused under a nested one (an evaluation the callback's work
+    /// started, at a greater depth, whose frames sit above the mark on
+    /// the same stack): only the marked evaluation's frames print, so each
+    /// paused evaluation's notes end the context at its own call (WP-1258).
+    /// Empty when this Oven does not hold that evaluation, and for a
+    /// potential-constant check's evaluation (sema's never-constant check,
+    /// whose call frames are its own, not the program's: WP-1258).
+    /// Rendered only when such an error prints.
     pub fn paused_call_notes(
         &self,
+        mark: FrameMark,
         ast: &Ast,
         sources: Option<&kiln_source::SourceManager>,
     ) -> Vec<Note> {
         let mut notes = Vec::new();
-        if self.stack.len() <= self.run.entry + 1 {
+        let cur = self.frame_mark();
+        let held = cur == mark
+            || (cur.depth > mark.depth && cur.frames >= mark.frames && cur.entry >= mark.frames);
+        let (lo, hi) = (mark.entry as usize + 1, mark.frames as usize);
+        if !held || mark.potential || hi <= lo || hi > self.stack.len() {
             return notes;
         }
-        self.call_stack(ast, &mut notes);
+        self.call_stack_of(ast, lo..hi, &mut notes);
         for n in &mut notes {
             if n.msg.contains(LOC_MARK) {
                 n.msg = resolve_locs(sources, &n.msg);
@@ -1050,7 +1068,12 @@ impl Oven {
     }
 
     fn call_stack(&self, ast: &Ast, notes: &mut Vec<Note>) {
-        let frames = &self.stack[self.run.entry + 1..];
+        self.call_stack_of(ast, self.run.entry + 1..self.stack.len(), notes);
+    }
+
+    /// [`Self::call_stack`] of the frames `range` of the stack.
+    fn call_stack_of(&self, ast: &Ast, range: std::ops::Range<usize>, notes: &mut Vec<Note>) {
+        let frames = &self.stack[range];
         let active = frames.len();
         let (mut skip0, mut skip1) = (active, active);
         let limit = self.backtrace_limit;
