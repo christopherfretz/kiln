@@ -1016,7 +1016,7 @@ name and its arguments as the qualifier writes them, without the
 defaulted ones the canonical type adds, so `R<T>::value` for
 `template <class, class = void> struct R` is `sr1RIT_EE5value` (WP-783),
 else `E` after the levels); unary/binary operator,
-`qu`, `st`/`sz`, `at`/`az` and `cv`/`sc`/`cc`/`rc`/`dc` encodings;
+`qu`, `st`/`sz`, `at`/`az`, `u11__alignof__` and `cv`/`sc`/`cc`/`rc`/`dc` encodings;
 `sp <expr>` for a pack expansion, `sZ <param>` for `sizeof...`,
 `u <trait> <type>* E` for a type trait, `cl <callee> <args> E` for a call
 and an `UnresolvedLookupExpr` as an unresolved name (the parser records
@@ -1169,6 +1169,24 @@ equivalent). Tests: `tests/mangle/substituted_pack.cpp`,
 `tests/mangle/default_arg_operand.cpp`,
 `tests/codegen/mangle_substituted_pack.cpp`,
 `tests/conformance/temp.over.link/substituted-pack-two-units-run.cpp`.
+**`sizeof`, `alignof`, `__alignof__`, `__datasizeof` (WP-1226).** clang
+19 and 22 (`mangleExpression`, `UnaryExprOrTypeTraitExprClass`) agree. A
+non-instantiation-dependent operand is the result's integer literal,
+typed as the integer type it is implicitly converted to, else `size_t`:
+`alignof`/`__alignof__` of an expression naming a variable or data
+member is that declaration's alignment (`decl_align`, `alignas`
+included), `__datasizeof` a class's `dsize` (a POD's size), any other
+type's size, and the preferred alignment is the ABI one on both
+targets. A dependent `sizeof` is `st <type>` / `sz <expr>`, `alignof`
+`at <type>` / `az <expr>`; GNU `__alignof__` is the vendor extended
+expression `u11__alignof__ <type> E`, or `u11__alignof__ <template-arg>
+E` for an expression (a non-primary one wrapped in `X ... E`), the form
+since clang 12 (libstdc++'s `aligned_storage<sizeof(T)>::type` is
+`N...15aligned_storageIXstT_EXu11__alignof__N...21__aligned_storage_msaIXstS1_EE6__typeEEEE4typeE`).
+A dependent `__datasizeof` or `vec_step` has no encoding (clang's
+"cannot yet mangle"; kiln's `cg_cannot_mangle_expression`). Tests:
+`tests/mangle/trait_operand.cpp`, `tests/codegen/mangle_alignof_operand.cpp`,
+`tests/conformance/temp.over.link/alignof-operand-two-units-run.cpp`.
 **Closures in function template signatures (WP-1077).** A lambda in
 a function template's return type, parameter type or NTTP type is
 substituted with the signature whenever deduction forms a
