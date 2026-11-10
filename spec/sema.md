@@ -925,6 +925,37 @@ Redeclaration and linkage rules:
   template specialization of 'h' not in a namespace enclosing 'N'" with
   "explicitly specialized declaration is here" (`check_spec_scope`).
   Test: `tests/conformance/dcl.meaning/qualified-declarator-special-names.cpp`.
+  **Exemptions (WP-1174)**, as clang: `diagnoseQualifiedDeclaration`
+  (SemaDecl.cpp) skips the does-not-enclose check only when given a
+  template-id or `IsMemberSpecialization`. `HandleDeclarator` passes the
+  declarator's template-id and `IsMemberSpecialization = false`, so of
+  the variables and functions only a template-id declarator
+  (`template<> void A::f<int>()`, `template<> int A::vt<char>`) is
+  exempt; its scope is checked as a specialization's
+  (`CheckTemplateSpecializationScope`, kiln `check_spec_scope`). A
+  function template, member function template, variable template, a
+  member of a class template, an explicit specialization without a
+  template-id (`template<> void A::g(int)`) and a member specialization
+  (`template<> void A::S<int>::g()`) all get the scope error. Tags
+  (`diagnose_qualified_tag`; clang's `ActOnTag` with `TemplateId =
+  nullptr, IsMemberSpecialization` and `CheckClassTemplate` with
+  neither): a class, enumeration, class template, member class of a class
+  template or nested class template defined or redeclared out of its
+  scope is diagnosed the same way and still declared (clang marks it
+  invalid and goes on); only a member class specialization (`template<>
+  struct A::S<int>::N {}`, also with an extraneous `template<>`) is
+  exempt, and a class template (partial) specialization, a template-id,
+  is checked by `check_spec_scope`. In a namespace a tag's qualifier
+  naming that namespace is `-Wextra-qualification`. Directly in an
+  export, `export struct ::X {}` is "cannot name the global scope" (clang
+  checks `TranslationUnitDecl` before `ExportDecl`) and the redeclaration
+  is still checked for its linkage (spec/modules.md). Tests:
+  `tests/conformance/dcl.meaning/qualified-template-not-enclosing.cpp`,
+  `qualified-template-enclosing-run.cpp`,
+  `tests/conformance/module.interface/export-qualified-tag-errors.cpp`.
+  **Gap:** a member class specialization outside a namespace enclosing
+  its class template is accepted (clang's "member class specialization
+  of 'N' not in class 'S' or an enclosing namespace").
   **Deviation:** a class template specialization scope prints without its
   arguments (`'TT'`, clang `'TT<int>'`).
 - **Default-initialization without a default constructor**
@@ -5662,6 +5693,18 @@ lvalue it is (clang's `PerformMoveOrCopyInitialization`): `T& f(T&& t)
 { return t; }` and a class with only a `C(C&)` copy constructor are
 accepted in C++20. `decltype(auto)` of `return (x);` is then `T&`.
 Test: `tests/conformance/class.copy.elision/p3-cxx20-two-stage.cpp`.
+The "possibly parenthesized id-expression" of the implicit move, of the
+NRVO candidate and of a thrown local (`implicit_move`,
+`copy_elision_candidate`, `thrown_var_in_scope`) is found with clang's
+`Expr::IgnoreParens` (`Sema::ignore_parens`, as in clang
+`getNamedReturnInfo` and `IsThrownVarInScope`): parentheses, GNU
+`__extension__`, and a resolved `_Generic` or `__builtin_choose_expr`
+(their selected operand), but not a result- or condition-dependent one,
+which is looked through once instantiation resolves it. The xvalue
+`ImplicitCastExpr <NoOp>` wraps the whole operand (the selection stays
+an lvalue under it), and the variable stays an NRVO candidate (WP-1176).
+Tests: `tests/conformance/class.copy.elision/implicit-move-through-*.cpp`,
+`nrvo-through-generic-selection-ir.cpp`.
 
 ### 5.6 `typeid` (`rtti.rs`)
 `act_on_typeid(Ok(expr) | Err(type), loc, rparen)` ([expr.typeid]):

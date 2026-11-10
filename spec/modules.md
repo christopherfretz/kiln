@@ -132,7 +132,7 @@ declaration (never inside one). Sema tracks the current unit's phase:
 | [module.import]/1 imports before other declarations | `imports must immediately follow the module declaration` |
 | [module.import] partitions | `module partition imports must be within a module purview` |
 | [module.interface]/1 | `export declaration can only be used within a module interface`; `export declaration appears within another export declaration`; `export declaration appears within anonymous namespace`; `anonymous namespaces cannot be exported` |
-| [module.interface]/1, /6: an export declares namespace members only (WP-1159) | `cannot export 'x' as it is not at namespace scope`, at the declarator-id (a tag's name), for a qualified definition or redeclaration of a class member (static data member, member function, member function template, nested class or enumeration, of a class or class template) directly in an export (through `export { }` and `extern "C++"`, not through an exported namespace); a template-id declarator (`export template<> void S::g<int>()`) is exempt, a namespace member's qualified redeclaration is checked by the module-linkage rule below instead (with no `-Wextra-qualification`), and `export void ::f()` is `definition or redeclaration of 'f' cannot name the global scope`, as clang (`diagnoseQualifiedDeclaration`). The member is still declared and defined as written; clang drops a member function or variable (so its body's uses of the class's members are `use of undeclared identifier`) and an enumeration's enumerators, kiln does not cascade. Deviation: `namespace B { export void A::g() {} }` keeps kiln's `cannot define or redeclare 'g' here because namespace 'B' does not enclose namespace 'A'`, which clang 19/22 miss |
+| [module.interface]/1, /6: an export declares namespace members only (WP-1159) | `cannot export 'x' as it is not at namespace scope`, at the declarator-id (a tag's name), for a qualified definition or redeclaration of a class member (static data member, member function, member function template, nested class or enumeration, of a class or class template) directly in an export (through `export { }` and `extern "C++"`, not through an exported namespace); a template-id declarator (`export template<> void S::g<int>()`) is exempt, a namespace member's qualified redeclaration is checked by the module-linkage rule below instead (with no `-Wextra-qualification`), and `export void ::f()` (also `export struct ::X {}`, which is then still checked as an exported redeclaration, WP-1174) is `definition or redeclaration of 'f' cannot name the global scope`, as clang (`diagnoseQualifiedDeclaration`). The member is still declared and defined as written; clang drops a member function or variable (so its body's uses of the class's members are `use of undeclared identifier`) and an enumeration's enumerators, kiln does not cascade. Deviation: `namespace B { export void A::g() {} }` keeps kiln's `cannot define or redeclare 'g' here because namespace 'B' does not enclose namespace 'A'`, which clang 19/22 miss |
 | [module.interface]/3 (C++20 wording) | `declaration of 'x' with internal linkage cannot be exported`; `cannot export redeclaration 'x' here since the previous declaration has module linkage`; `using declaration referring to 'x' with internal linkage cannot be exported` / `... with module linkage ...` (+ note `target of using declaration`) |
 | [module.global.frag]/1, [cpp.pre] (P3868, `-fclang-compat=22`) | a preprocessing directive other than null, line-marker, `#line`, `#pragma`, `#error`, `#warning` or `#ident`, in the main file before `module;`, makes `module;` the first declaration too late: the two errors above, with clang 22's note at the first such `#` (kiln_pp records it in `ModuleDirective::after_directive`; sema `module_note_pp_directive`) |
 | [cpp.module]/2 (P3034) | `module name component 'X' cannot be an object-like macro` (clang 19 and 22 expand the macro instead) |
@@ -1062,7 +1062,7 @@ What an image must hold, the id it is keyed by, and where it stands:
 | types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
 | expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
 | template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
-| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); pointers to string literals, lifetime-extended temporaries and labels, and reflections of alias template specializations, data member specifications and annotations (WP-1160); not an alias template specialization with a non-type argument, nor an annotation `define_aggregate` made | the same encoding, its entities remapped; the values part 1 leaves out |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); pointers to string literals, lifetime-extended temporaries and labels, and reflections of alias template specializations (non-type arguments as converted values, WP-1168), data member specifications and annotations (WP-1160); not an annotation `define_aggregate` made | the same encoding, its entities remapped; the values part 1 leaves out |
 | Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
 | source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
 | identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
@@ -1424,12 +1424,12 @@ same entity:
   specialization with its canonical arguments and aliased type
   (`Ast::reflection_type`), and the type store interns it, so the
   importer's rebuilt type is its own `^^Ptr<int>`. A non-type argument is
-  kept as written (an expression), which has no key, so a reflection of
-  `Arr<char, 3>` falls back (`a reflection of an alias template
-  specialization with no key`); that spelling is not even equal to
-  itself within one unit yet
-  (`tests/conformance/expr.reflect/alias-spec-value-arg-identity.cpp`,
-  xfail).
+  its converted value there (sema-templates.md §4.10, WP-1168), so
+  `^^Arr<char, 1 + 2>` is carried and equals the importer's
+  `^^Arr<char, 3>`
+  (`tests/conformance/module.interface/carried-alias-value-arg-run.cpp`). A specialization whose list still is not canonical
+  falls back (`a reflection of an alias template specialization with no
+  key`).
 - **Data member specification.** The Oven interns specifications by
   their contents ([meta.reflection.define.aggregate]: two calls with
   equal arguments give one reflection), so the importer interning the
