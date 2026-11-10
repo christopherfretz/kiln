@@ -240,6 +240,9 @@ included). The defects found so far, each with the test that records it:
   `temp.deduct.type/constrained-placeholder-nttp-prior-param-constrained-ref-run.cpp`
   carries `requires: clang>=22`; its sibling without `-constrained-ref`
   keeps the shape with an unconstrained `R` for both oracles (WP-1254).
+  Any clang oracle compile that dies of a signal is retried once
+  (spec/harness.md "Oracle crash retry"), so a rare crash on some other
+  test leaves an advisory instead of costing a CI run.
 
 `cargo xtask libcxx` is deliberately outside `ci`. It runs libc++'s own
 tests (a pinned upstream release, fetched by `scripts/fetch-libcxx-tests.sh`)

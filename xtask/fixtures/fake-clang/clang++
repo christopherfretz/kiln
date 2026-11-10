@@ -1,0 +1,60 @@
+#!/bin/sh
+# A stand-in for a crashing clang oracle, for the oracle-retry self-test
+# (`xtask/src/test/tests.rs`, spec/harness.md "Oracle"). It identifies as
+# ${KILN_FAKE_CC:-clang++-19} and acts on a `// fake-clang: <what>` line in
+# the source. A `-once` mode acts on the first compile of each `-o` output
+# only (it leaves `<output>.fake-clang` behind), so the harness's single
+# retry gets through:
+#   segv-once         dies of SIGSEGV
+#   driver-segv-once  reports a frontend killed by SIGSEGV, as Debian's
+#                     clang driver does for its out-of-process cc1 (exit 1)
+#   segv-always       dies of SIGSEGV every time
+#   reject-once       reports an error (exit 1)
+#   sigkill-once      dies of SIGKILL (what the kernel's OOM killer sends)
+#   oom-once          reports `LLVM ERROR: out of memory` and an aborted
+#                     frontend (exit 1)
+# Otherwise, and once a `-once` mode has acted, it runs
+# ${KILN_FAKE_CC:-clang++-19} with the same arguments.
+cc=${KILN_FAKE_CC:-clang++-19}
+if [ "$1" = "--version" ]; then
+  exec "$cc" --version
+fi
+src=
+out=
+prev=
+for a in "$@"; do
+  case "$a" in
+    *.cpp | *.c | *.h) src=$a ;;
+  esac
+  [ "$prev" = "-o" ] && out=$a
+  prev=$a
+done
+what=$(sed -n 's|^// fake-clang: *||p' "$src" 2>/dev/null | head -n 1)
+case "$what" in
+  *-once)
+    [ -n "$out" ] || exec "$cc" "$@"
+    [ -e "$out.fake-clang" ] && exec "$cc" "$@"
+    : > "$out.fake-clang"
+    ;;
+esac
+case "$what" in
+  segv-once | segv-always) kill -SEGV $$ ;;
+  driver-segv-once)
+    echo "clang++: error: unable to execute command: Segmentation fault (core dumped)" >&2
+    echo "clang++: error: clang frontend command failed due to signal (use -v to see invocation)" >&2
+    exit 1
+    ;;
+  reject-once)
+    echo "$src:1:1: error: fake rejection" >&2
+    exit 1
+    ;;
+  sigkill-once) kill -KILL $$ ;;
+  oom-once)
+    echo "LLVM ERROR: out of memory" >&2
+    echo "Allocation failed" >&2
+    echo "clang++: error: unable to execute command: Aborted (core dumped)" >&2
+    echo "clang++: error: clang frontend command failed due to signal (use -v to see invocation)" >&2
+    exit 1
+    ;;
+esac
+exec "$cc" "$@"

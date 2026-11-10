@@ -58,6 +58,11 @@ impl Output {
         out_of_memory(self.status, &self.stderr_str())
     }
 
+    /// The signal that killed the process, if one did (not a timeout).
+    pub fn signal(&self) -> Option<i32> {
+        self.status.and_then(signal_of)
+    }
+
     /// Describes how the process ended: `exit code 3`, `signal 11`, `timed out`.
     pub fn describe_end(&self) -> String {
         match self.status {

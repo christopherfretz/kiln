@@ -20,6 +20,8 @@ use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
 
 #[path = "gcc.rs"]
 mod gcc;
+#[path = "oracle_retry.rs"]
+mod oracle_retry;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
@@ -902,9 +904,15 @@ impl Test<'_> {
         Some(cap.plus(process::kiln_stack_reservation_mib(&args)))
     }
 
-    /// Runs a compiler (`who`, for messages) under its cap. Failing to start
-    /// it is broken; running out of memory under the cap is KILLED.
-    fn exec(&mut self, who: &str, cmd: &Command, timeout: Duration) -> Result<Output, Problem> {
+    /// Runs a compiler (`who`, for messages) under its cap, once. Failing to
+    /// start it is broken; running out of memory under the cap is KILLED.
+    /// [`Self::exec`] is this, plus the clang oracle's one retry.
+    fn exec_once(
+        &mut self,
+        who: &str,
+        cmd: &Command,
+        timeout: Duration,
+    ) -> Result<Output, Problem> {
         let cap = self.compile_cap(Path::new(cmd.get_program()), cmd);
         let shown = Shown(cmd).to_string();
         let r = self.run_capped(&shown, cmd, None, cap, timeout);
