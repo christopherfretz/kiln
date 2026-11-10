@@ -27,4 +27,10 @@ constexpr unsigned long choose_size() { return sizeof(__builtin_choose_expr(0, '
 inline int &choose_lv(int &a, int &b) { return __builtin_choose_expr(1, a, b); }
 // A dependent condition, chosen at instantiation.
 template <int N> constexpr int choose_t(int x) { return __builtin_choose_expr(N, x * 10, x); }
+
+// Implicit move ([class.copy.elision]/3, WP-1176): a returned parameter
+// named through `_Generic` or `__builtin_choose_expr` is moved, not
+// copied. (A parameter, not a local: NRVO would elide a local's move.)
+template <class T> constexpr T gmove(T x) { return _Generic(0, int: x, default: x); }
+template <class T> constexpr T cmove(T x, T y) { return __builtin_choose_expr(1, x, y); }
 } // namespace ig

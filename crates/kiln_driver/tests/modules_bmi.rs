@@ -791,7 +791,7 @@ fn kind2_declaration_image_generic_and_choose() {
          int main() { return ttag<long>() + qual_tag() + ctag('a') == 25 ? 0 : 1; }\n",
     )
     .unwrap();
-    for (src, pcm, decls) in [("g.cppm", "g.pcm", 21), ("t.cppm", "t.pcm", 10)] {
+    for (src, pcm, decls) in [("g.cppm", "g.pcm", 27), ("t.cppm", "t.pcm", 10)] {
         let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", src, "-o", pcm]);
         assert_eq!(o.code, 0, "{}", o.stderr);
         let carried = format!("with a declaration image of {decls} declarations");
@@ -808,7 +808,7 @@ fn kind2_declaration_image_generic_and_choose() {
     let out = Command::new(d.join("u")).output().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "1 3 14 | 9 7 | 1 2 3 0 1 0 | 5 | 6 60 6 | 8\n"
+        "1 3 14 | 9 7 | 1 2 3 0 1 0 | 5 | 6 60 6 | 8 | 100 100\n"
     );
     let notes = image_notes(&d, &["-fmodule-file=gt=tblank.pcm", "tu.cpp", "t.o", "-o", "tu"]);
     assert_eq!(notes, ["note: imported 'gt' from its declaration image"]);
