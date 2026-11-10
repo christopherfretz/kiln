@@ -271,7 +271,8 @@ impl Cg<'_> {
     /// to a named module (its tables belong to the module's unit).
     fn module_attached_class(&self, rd: DeclId) -> Option<DeclId> {
         self.class_def(rd).filter(|&def| {
-            self.ast.module_attachment(def).is_some() && !self.class_is_templated_or_instantiated(def)
+            self.ast.module_attachment(def).is_some()
+                && !self.class_is_templated_or_instantiated(def)
         })
     }
 
