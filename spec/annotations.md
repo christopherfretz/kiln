@@ -199,6 +199,24 @@ target scope" or (1.2) X is a non-defining friend declaration.
   annotation for 'f<char>' requested here"). A query must call
   `require_annotations` first (§9). Tests: `templates.cpp`,
   `invalid-operand.cpp`.
+- **An explicit specialization of a function** (a function template's, a
+  member function template's, `template<> template<>`, or a member
+  function of a class template specialization) is its own entity
+  ([temp.expl.spec]): its first declaration is the specialization kiln
+  created to match it, which already holds (or deferred) the pattern's
+  annotations, so `drop_pattern_annotations` empties that list when the
+  specialization becomes explicit and `instantiate_annotations` skips the
+  entity's deferred ones (the parameters still get the pattern
+  parameters', as GCC 16.1). Each `template<>` redeclaration takes the
+  annotations written on it (`declare_explicit_spec`), so
+  `annotations_of` lists those of every declaration of the explicit
+  specialization, in order. An explicit instantiation
+  (`template [[=a]] R f<T>(...)`, also `extern template` and a member of a
+  class template specialization) is a declaration of the instantiation:
+  the pattern's annotations are substituted first, then its own appended
+  (`explicit_inst_annotations`). A static data member's explicit
+  specialization keeps the member's (GCC 16.1). Test:
+  `meta.reflection.annotation/explicit-specialization-run.cpp` (WP-1216).
 
 ## 6. Diagnostics
 
