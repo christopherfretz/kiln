@@ -341,7 +341,8 @@ impl Sema<'_, '_> {
             && let Some(ule) = self.mismatched_template_id(e, to)
         {
             let set = ArgInfo { ty: QualType::OVERLOAD, expr: Some(ule), ..*a };
-            return self.overload_set_ics(&set, to, opts);
+            let r = self.addr_operand(e);
+            return self.taking_over_numbers(r, |s| s.overload_set_ics(&set, to, opts));
         }
         if self.ast.types.is_reference(to) {
             return self.ref_ics(a, to, opts);

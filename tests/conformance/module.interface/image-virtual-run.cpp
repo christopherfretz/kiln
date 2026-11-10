@@ -1,8 +1,8 @@
 // [module.interface], [class.virtual], [expr.const]/5, spec/modules.md
 // §11.11 "Part 2a": virtual calls across a module boundary, and an
 // importer overriding an imported virtual function. Under
-// `--bmi-image` the unit falls back to replaying its source ("a
-// polymorphic class"), with the same behaviour.
+// `--bmi-image` the classes come from the declaration image (WP-1120),
+// with the replay's behaviour.
 //@ expect: run
 //@ std: c++20
 //@ module: imgv=Inputs/img-virtual.cppm

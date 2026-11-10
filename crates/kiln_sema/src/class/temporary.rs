@@ -415,7 +415,9 @@ impl Sema<'_, '_> {
     /// extended as well, but its initializer is shared by every call:
     /// the use gets a copy of its own with fresh temporaries
     /// ([`Sema::fresh_temporaries`], clang's rewritten default argument
-    /// in a lifetime-extending context).
+    /// in a lifetime-extending context). So does a default member
+    /// initializer an aggregate initialization uses ([class.temporary]/7,
+    /// WP-1177).
     pub(crate) fn extend_init_temporaries(&mut self, v: DeclId) {
         if self.var_storage(v) != StorageDuration::Automatic {
             return;
@@ -466,10 +468,12 @@ impl Sema<'_, '_> {
                     }
                     // A use rebuilt already (a shared pattern node, or a
                     // nested default argument) holds its own temporaries.
-                    ExprKind::CXXDefaultArgExpr => match ex.default_arg_rewritten(x) {
-                        Some(r) => defaults.push(r),
-                        None => uses.push(x),
-                    },
+                    ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                        match self.rewritten_operand(x) {
+                            Some(r) => defaults.push(r),
+                            None => uses.push(x),
+                        }
+                    }
                     // An immediate invocation's temporaries end within its
                     // own constant evaluation ([expr.const]/16).
                     ExprKind::ExprWithCleanups
@@ -486,7 +490,7 @@ impl Sema<'_, '_> {
                 }
             }
             for u in std::mem::take(&mut uses) {
-                let Some(d) = self.ast.default_arg_expr(u) else { continue };
+                let Some(d) = self.default_use_expr(u) else { continue };
                 let Some(r) = self.fresh_temporaries(d, 0) else { continue };
                 if self.ast.exprs.set_default_arg_rewritten(u, r).is_ok() {
                     defaults.push(r);
@@ -511,8 +515,65 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// A copy of the expression `e` of a default argument, shared by
-    /// every call, whose full-expression temporaries are fresh
+    /// The shared expression a default argument or default member
+    /// initializer use `u` stands for, as [`Sema::fresh_temporaries`]
+    /// copies it: a default argument without its `ExprWithCleanups`
+    /// ([`kiln_ast::Ast::default_arg_expr`]), a member initializer with
+    /// its own stripped. A member initializer without one has no
+    /// temporaries to rebuild (clang rebuilds one in a lifetime-extending
+    /// context only when it is an `ExprWithCleanups`,
+    /// `BuildCXXDefaultInitExpr`). A use rebuilt already gives its copy.
+    fn default_use_expr(&self, u: ExprId) -> Option<ExprId> {
+        let ex = &self.ast.exprs;
+        if ex.get(u).kind() == ExprKind::CXXDefaultArgExpr {
+            return self.ast.default_arg_expr(u);
+        }
+        if let Some(r) = self.rewritten_operand(u) {
+            return Some(r);
+        }
+        let init = self.ast.default_init_expr(u)?;
+        (ex.get(init).kind() == ExprKind::ExprWithCleanups).then(|| ex.operand(init))
+    }
+
+    /// The default member initializer use `u` met by
+    /// [`Sema::temporaries_bound_by`] or [`Sema::temporaries_in_aggregate`]
+    /// (CWG1815, [class.temporary]/6): the temporaries a reference member
+    /// binds in it are extended with the variable the aggregate
+    /// initializes, so the use gets its own copy
+    /// ([`Sema::fresh_temporaries`]; clang 20+). The temporaries it does
+    /// not bind belong to the variable's full-expression
+    /// ([intro.execution]/5). `None` when it has none or cannot be copied
+    /// (its temporaries then stay with the shared initializer).
+    ///
+    /// The copy keeps the member initializer's `ExprWithCleanups` (as
+    /// clang's does): the variable's own initializer has none when the
+    /// shared one held every temporary, and the temporaries it does not
+    /// extend are destroyed at the end of the copy.
+    fn rebuilt_default_init(&mut self, u: ExprId) -> Option<ExprId> {
+        if let Some(r) = self.ast.exprs.default_arg_rewritten(u) {
+            return Some(r);
+        }
+        let d = self.default_use_expr(u)?;
+        let r = self.fresh_temporaries(d, 0)?;
+        let init = self.ast.default_init_expr(u)?;
+        let r = self.ast.exprs.clone_with_children(init, &mut self.ast.lists, &[r])?;
+        self.ast.exprs.set_default_arg_rewritten(u, r).ok()?;
+        Some(r)
+    }
+
+    /// The copy a default argument or member initializer use `u` was
+    /// rebuilt with, without the `ExprWithCleanups` a member initializer
+    /// rebuilt for a variable keeps ([`Sema::rebuilt_default_init`]): a
+    /// lifetime-extending context takes all its temporaries.
+    fn rewritten_operand(&self, u: ExprId) -> Option<ExprId> {
+        let ex = &self.ast.exprs;
+        let r = ex.default_arg_rewritten(u)?;
+        Some(if ex.get(r).kind() == ExprKind::ExprWithCleanups { ex.operand(r) } else { r })
+    }
+
+    /// A copy of the expression `e` of a default argument (or default
+    /// member initializer), shared by every use, whose full-expression
+    /// temporaries are fresh
     /// `MaterializeTemporaryExpr`s (and whose nested default arguments
     /// are rebuilt too), the nodes above them copied and the rest shared;
     /// `None` when it materializes none, or when a node on the way is of
@@ -521,11 +582,13 @@ impl Sema<'_, '_> {
     /// Nested full-expressions and unevaluated operands are not entered,
     /// as in [`Sema::extend_init_temporaries`].
     ///
+    /// A `CXXDefaultInitExpr` on the way is rebuilt like a nested
+    /// default argument (WP-1177): its member initializer, without its
+    /// own `ExprWithCleanups`, gets fresh temporaries of the use's
+    /// full-expression.
+    ///
     /// Evaluated kinds left uncopied, whose temporaries stay with the
-    /// call's full-expression: `CXXDefaultInitExpr` (the member's
-    /// initializer is shared, also outside a default argument; clang 22
-    /// rebuilds it: a WP-1166 follow-up) and the vendor builtins
-    /// `AtomicExpr`, `ShuffleVectorExpr`, `GenericSelectionExpr` and
+    /// call's full-expression: the vendor builtins `AtomicExpr`, `ShuffleVectorExpr`, `GenericSelectionExpr` and
     /// `PseudoObjectExpr`. The others cannot hold a temporary of a used
     /// default argument: C-only `DesignatedInitUpdateExpr`;
     /// `ArrayInitLoopExpr` and `CXXInheritedCtorInitExpr` (lambda
@@ -556,8 +619,8 @@ impl Sema<'_, '_> {
             {
                 return None;
             }
-            ExprKind::CXXDefaultArgExpr => {
-                let inner = self.ast.default_arg_expr(e)?;
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                let inner = self.default_use_expr(e)?;
                 let r = self.fresh_temporaries(inner, depth + 1)?;
                 let u = self.ast.exprs.clone_with_children(e, &mut self.ast.lists, &[])?;
                 let _ = self.ast.exprs.set_default_arg_rewritten(u, r);
@@ -644,7 +707,7 @@ impl Sema<'_, '_> {
     /// array temporaries, the right operand of a comma and both arms of a
     /// conditional), followed by those bound by the reference members of
     /// an aggregate temporary.
-    pub(crate) fn temporaries_bound_by(&self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
+    pub(crate) fn temporaries_bound_by(&mut self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
         if depth > 256 {
             return;
         }
@@ -697,6 +760,11 @@ impl Sema<'_, '_> {
                 }
                 self.temporaries_in_aggregate(self.ast.exprs.operand(e), out, depth + 1);
             }
+            ExprKind::CXXDefaultInitExpr => {
+                if let Some(r) = self.rebuilt_default_init(e) {
+                    self.temporaries_bound_by(r, out, depth + 1);
+                }
+            }
             _ => {}
         }
     }
@@ -704,7 +772,7 @@ impl Sema<'_, '_> {
     /// The temporaries bound by the reference members of the aggregate
     /// prvalue `e` (an `InitListExpr` or parenthesized aggregate
     /// initialization, through no-op casts), recursively.
-    fn temporaries_in_aggregate(&self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
+    fn temporaries_in_aggregate(&mut self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
         if depth > 256 {
             return;
         }
@@ -730,6 +798,16 @@ impl Sema<'_, '_> {
             // like a reference bound to it ([dcl.init.list]/6).
             ExprKind::CXXStdInitializerListExpr => {
                 self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
+            }
+            // Only an aggregate or a `std::initializer_list` member can
+            // hold a temporary its initializer extends.
+            ExprKind::CXXDefaultInitExpr
+                if self.ast.types.as_record(n.ty()).is_some()
+                    || self.ast.types.is_array(n.ty()) =>
+            {
+                if let Some(r) = self.rebuilt_default_init(e) {
+                    self.temporaries_in_aggregate(r, out, depth + 1);
+                }
             }
             ExprKind::InitListExpr | ExprKind::CXXParenListInitExpr => {
                 let list = if n.kind() == ExprKind::InitListExpr {
