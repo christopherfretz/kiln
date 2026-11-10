@@ -126,6 +126,7 @@ impl Sema<'_, '_> {
                 Some((_, i)) if n.kind().is_function() => {
                     self.function_spec_name(d, i.template, i.args)
                 }
+                Some((_, i)) => self.spec_decl_name(i.template, i.args),
                 _ => self.qualified_decl_name(d),
             };
             let msg = match kind {
@@ -224,10 +225,13 @@ impl Sema<'_, '_> {
                 })
         };
         // clang `isExternalWithNoLinkageType`: external formal linkage, not
-        // `extern "C"`, and a type that is not externally visible.
+        // `extern "C"`, and a type without external linkage
+        // ([basic.link]/15: a class template specialization has linkage
+        // whatever its arguments, so `extern W<T> v;` instantiated with a
+        // local `T` is not this error but `-Wundefined-internal` below).
         if !mangle::has_internal_linkage(&self.ast, d)
             && !mangle::is_extern_c(&self.ast, d)
-            && n.ty().is_some_and(|t| !mangle::type_externally_visible(&self.ast, t))
+            && n.ty().is_some_and(|t| !mangle::type_has_external_linkage(&self.ast, t))
         {
             return Some(Undefined::NoLinkageType);
         }
