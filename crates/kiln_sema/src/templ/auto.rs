@@ -14,7 +14,7 @@
 //! ill-formed, but `auto (*)()` and `C auto` constraints are not).
 
 use kiln_ast::decl::{DeclFlags, DeclKind};
-use kiln_ast::types::{AutoKeyword, TemplateArg, TypeKind, TypeView};
+use kiln_ast::types::{ArgView, AutoKeyword, TemplateArg, TypeKind, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::Loc;
 
@@ -449,9 +449,22 @@ impl Sema<'_, '_> {
         if let Some(x) = extra {
             args.extend_from_slice(self.ast.types.args(x));
         }
-        let list = self.ast.types.arg_list(&args);
-        // `C auto` names `C<T, args...>`, completed with C's defaults.
-        let list = self.concept_default_args(c, list, loc);
+        // A constant argument still as written (`C<tag{3}> auto`, or
+        // `C<f(R)> auto` once substituted) is converted to the concept's
+        // parameter first, as a concept-id's is ([temp.arg.nontype]/2;
+        // WP-1235): its satisfaction reads the parameter's value.
+        let list = if extra.is_some_and(|x| {
+            self.ast.types.args(x).iter().any(|a| matches!(a.view(), ArgView::Expr { .. }))
+        }) {
+            match self.check_template_args(c, &args, &[], loc) {
+                Ok(conv) => self.settle_inst_sugar(conv.sugared),
+                Err(()) => return false,
+            }
+        } else {
+            let list = self.ast.types.arg_list(&args);
+            // `C auto` names `C<T, args...>`, completed with C's defaults.
+            self.concept_default_args(c, list, loc)
+        };
         let sat = self.check_concept(c, list, loc);
         if self.sat_ok(sat) {
             return true;

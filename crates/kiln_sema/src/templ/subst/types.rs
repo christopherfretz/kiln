@@ -700,19 +700,14 @@ impl Substituter<'_, '_, '_> {
                 // Deduced from a type-dependent initializer
                 // (`Sema::dependent_auto`): deduced again from the
                 // substituted one.
-                // Its type-constraint's arguments are substituted only
-                // when an inner level is retained (a member template of a
-                // class template specialization, its own parameters
-                // renumbered): a member's `C<N> auto` return type then keeps
-                // no reference to the class's `N`, which a later
-                // substitution of the member template's own arguments would
-                // read at the same depth (WP-1235). Otherwise they stay as
-                // written and are substituted with the return type's
-                // deduction.
+                // Its type-constraint's arguments are substituted as an
+                // undeduced one's below: a member's `C<N> auto` return
+                // type keeps no reference to the class's `N`, which a
+                // later substitution of the member template's own
+                // arguments would read at the same depth (WP-1235).
                 Some(d) if d == QualType::DEPENDENT => {
-                    let retained = self.args.levels.iter().any(|l| l.mode == LevelMode::Retain);
                     let args = match args {
-                        Some(a) if !pack && retained => Some(self.args(a, loc)?),
+                        Some(a) if !pack => Some(self.args(a, loc)?),
                         a => a,
                     };
                     Ok(self.sema.ast.types.auto_type(keyword, None, concept, args, pack))

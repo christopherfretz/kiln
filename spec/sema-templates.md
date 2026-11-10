@@ -6475,6 +6475,11 @@ the index of the failed requirement.
   member template's own parameters at that depth ([temp.deduct.general]/2)
   never sees the class's `N` (WP-1235,
   tests/conformance/temp.arg.explicit/member-constrained-auto-return-outer-param-run.cpp).
+  When the deduced type is checked against the constraint
+  ([dcl.type.auto.deduct]/2), a constant argument still as written
+  (`C<tag{3}> auto`, or `C<f(R1, R2)> auto` once substituted) is first
+  converted to the concept's parameter, as a concept-id's is
+  ([temp.arg.nontype]/2; tests/conformance/dcl.spec.auto/constrained-return-*-constraint-arg-run.cpp).
 
 ### 8.7 Note chains (clang's exact texts; used by §10.4)
 
