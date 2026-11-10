@@ -2261,7 +2261,7 @@ variable templates, unresolved-lookup expressions (a dependent call
 calls, and every construct the first slice lists.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 7` since WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 9` since WP-1120, 8 for WP-1132, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2363,9 +2363,17 @@ class template's pattern (S4). The payloads are:
   n, then per initializer: `CtorInitKind` u8, target u32, written
   index u8, the initializer's expression index, location). A `Base`
   initializer's target is the base's position in the class's base
-  list; a `Field` initializer's is a field record of the same class
-  (which may follow the constructor); a `Delegating` one's is 0. Only a
-  constructor with a carried body has initializers;
+  list; a `VirtualBase` one's (WP-1120) is the virtual base's type
+  (an unqualified type index, a class the constructor's class has as a
+  direct or indirect base); a `Field` initializer's is a field record
+  of the same class (which may follow the constructor); a `Delegating`
+  one's is 0. Only a constructor with a carried body has initializers;
+  then the functions it overrides (WP-1120; n, then each a record: a
+  first declaration of a member function, destructor or conversion
+  function, or an implicit destructor or assignment operator record,
+  never itself). Only a first declaration of a member function,
+  destructor or conversion function lists any; a redeclaration takes
+  its first declaration's list;
 - variable: type, `VarSpec` bits (u32), the initializer (an expression
   index or `u32::MAX`) and the evaluation state (`u32::MAX` not
   evaluated, `u32::MAX - 1` not a constant, else a constant index);
@@ -2380,8 +2388,11 @@ class template's pattern (S4). The payloads are:
 - namespace and export: nothing;
 - class (S3): the `TagKind` byte, then 0 (a declaration) or 1 and the
   definition: its `DefinitionBits` (u64, without `COMPLETE` and
-  `BEING_DEFINED`), the end (the first record after its members) and
-  the base-specifiers (n, then per base: type, location, access);
+  `BEING_DEFINED`), the end (the first record after its members), the
+  key function (WP-1120; `u32::MAX`, or a member function, destructor
+  or conversion function record declared inside the class) and the
+  base-specifiers (n, then per base: type, location, access, and a
+  byte that is 1 for a virtual base, 0 otherwise);
 - field (S3): type, the carried `FieldData` flags (`mutable`, the
   initializer style, has a default member initializer), the bit-field
   width and the default member initializer (expression indices or
@@ -2520,13 +2531,33 @@ namespace, after the class's end, with the in-class declaration as
   S2 (an inline member body is carried, a non-inline one is braces only,
   [class.mfct]/1, because the module's object file defines it); a
   constructor's ctor-initializers;
+- carried for polymorphic classes (WP-1120): the `POLYMORPHIC`,
+  `ABSTRACT` and `HAS_VIRTUAL_BASES` definition bits; the `FnSpec`
+  bits `virtual` (semantic and as written), `pure`, `override` and
+  `final` ([class.virtual], [class.abstract]; a `final` class is its
+  `final` attribute); each first declaration's overridden functions,
+  the set sema computed at the declaration ([class.virtual]/2; the
+  importer installs it, a redeclaration shares it), so final-overrider
+  and vtable layout inputs are the replay's; the class's key function
+  (the cold `key_function` map, Itanium ABI §5.2.3), so the importer
+  emits a vtable, VTT, RTTI and thunks with the same symbols and
+  linkage as a replay or a kind-1 import (the vtable of a
+  module-attached class belongs to the unit); a base-specifier's
+  `virtual` and a constructor's `VirtualBase` initializers ([class.mi]/4,
+  [class.base.init]/7). A carried destructor body re-runs the
+  destructor's `operator delete` lookup ([class.dtor]/16) so a virtual
+  destructor's deleting variant is the replay's;
 - recomputed: the implicit special members. The record says only which
   ones sema had declared (sema declares them lazily, [class.copy.ctor]/6
   and peers, plus whatever the module's own bodies used); the importer
   calls the same `declare_implicit` on the completed class, so their
   signatures, `noexcept` and `constexpr` come from the carried bits and
   match the replay's, and any other one is declared on demand as
-  usual. Their definitions are synthesized on first ODR-use as for a
+  usual (declaring one may declare another first, as a derived class's
+  default constructor declares its base's: that record then takes the
+  member already declared). An implicit destructor or assignment
+  operator recomputes the functions it overrides and its `virtual`
+  bit. Their definitions are synthesized on first ODR-use as for a
   replayed class. Layout, the record's size and the field offsets are
   recomputed by the importer's codegen and constant evaluator from the
   members; special names are recomputed from the class.
@@ -2542,17 +2573,29 @@ complete earlier class, that a class is defined once and its end lies
 inside its parent's, that bases are earlier complete classes (not
 itself), that access bytes are 1 to 3 exactly on class members, that
 function kinds match their context, that only constructors have
-ctor-initializers, and every initializer's target.
+ctor-initializers, and every initializer's target; since WP-1120 also
+that a key function is a member function, destructor or conversion
+function record inside its class ("bad key function"), that overridden
+functions are first declarations of member functions (or implicit
+destructor or assignment operator records) other than the function
+itself and only a first declaration lists any ("bad overridden
+functions"), and that a base's `virtual` byte is 0 or 1.
 
-A class falls back (with its `-v` reason) when it is polymorphic or has
-a virtual function ("a polymorphic class", "a virtual function"), has a
-virtual base, inherits constructors or assignment operators, is an
+A class falls back (with its `-v` reason) when it is a polymorphic
+class template or one with virtual bases ("a polymorphic class
+template", "a virtual function in a class template": S4 does not carry
+them yet), declares a destroying `operator delete` ("a destroying
+operator delete"), redeclares a virtual function with other overridden
+functions than its first declaration's, overrides a function outside
+the image ("an override of a function outside the image"; S6), has a
+key function outside the image, inherits constructors or assignment operators, is an
 anonymous union or struct (or a member of one, or names one through a
 typedef), is a template or a closure type, is incomplete, has
 implicit special members that sema declared eagerly to resolve
 overloads ("a class whose implicit special members need overload
 resolution": a member or base with a non-trivial or ambiguous special
-member; WP-1065 follow-up), declares a friend (WP-1072/WP-1097), a
+member, unless the class is polymorphic or has virtual bases, which
+declares them eagerly anyway; WP-1121), declares a friend (WP-1072/WP-1097), a
 class-specific allocation function, a defaulted comparison or an
 out-of-line defaulted function, a `[[no_unique_address]]` field, any
 other side data sema keeps in its member maps ("a declaration with
@@ -2593,10 +2636,10 @@ classes and templates). The follow-ups, in priority order:
    loaded eagerly, but every record stays addressable by index for
    S-lazy (WP-1069);
 2. S3: classes (fields, methods, bases, special members). **Done for
-   non-polymorphic classes (WP-1065)**, see "Classes (S3)". Its
-   follow-ups: polymorphic classes and virtual functions (vtables, key
-   functions, the `dynamic_cast`/`typeid` RTTI they need), virtual
-   bases, friends (WP-1072/WP-1097), anonymous unions and structs,
+   non-template classes (WP-1065), polymorphic ones with virtual
+   functions, key functions and virtual bases since WP-1120**, see
+   "Classes (S3)". Its follow-ups: `dynamic_cast`/`typeid` in bodies
+   and polymorphic class templates (S4), friends (WP-1072/WP-1097), anonymous unions and structs,
    classes whose implicit members need overload resolution, inherited
    constructors, defaulted comparisons and out-of-line defaulted
    functions, class-specific allocation functions,
@@ -2620,10 +2663,11 @@ included there, and the purview is only `export namespace std { using
 std::...; }`. With S3 in, the constructs between `std` and the image
 are, by stage:
 
-- S3 follow-ups: classes are carried since WP-1065, but not yet the
-  polymorphic ones (`exception`, `ios_base`, `locale::facet`,
-  `memory_resource`, `error_category`), virtual bases (`basic_istream`
-  and `basic_ostream` over `basic_ios`), friends (granted across
+- S3 follow-ups: classes are carried since WP-1065 and polymorphic
+  ones with virtual bases since WP-1120 (`exception`, `ios_base`,
+  `locale::facet`, `memory_resource`, `error_category`; the class
+  templates among them, `basic_istream` and `basic_ostream` over
+  `basic_ios`, wait for S4), friends (granted across
   libc++, `__wrap_iter`'s for one), anonymous unions (`optional`,
   `variant`, `string`'s representation) or classes whose implicit
   members need overload resolution (most wrappers of a member with a

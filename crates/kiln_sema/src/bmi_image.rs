@@ -10,9 +10,10 @@
 //!
 //! Coverage. Only what can be rebuilt exactly is written: the list is
 //! spec/modules.md §11.11 "Part 2a" (declarations, function bodies,
-//! initializers and, since S3, non-template non-polymorphic classes).
-//! Anything else (a template, a polymorphic class, a global module
-//! fragment, an import, a declaration outside the unit's main file, ...)
+//! initializers, since S3 non-template classes, and since WP-1120
+//! polymorphic ones with virtual bases). Anything else (a polymorphic
+//! class template, a global module fragment, an import, a declaration
+//! outside the unit's main file, ...)
 //! makes the writer emit no image, and the importer replays the source as
 //! before (the fallback; correctness first; `-v` prints the reason).
 //!

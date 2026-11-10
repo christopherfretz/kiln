@@ -1,6 +1,5 @@
 // Polymorphic classes for image-virtual-run.cpp (spec/modules.md §11.11
-// "Part 2a"): the declaration image does not carry them yet, so the
-// unit is written without one and the importer replays its source.
+// "Part 2a"): the declaration image carries them (WP-1120).
 export module imgv;
 namespace iv {
 export struct Shape {
