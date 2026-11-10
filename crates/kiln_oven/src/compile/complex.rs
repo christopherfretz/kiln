@@ -130,7 +130,7 @@ impl Compiler<'_> {
         if ast.exprs.get(e).kind() != ExprKind::ConstantExpr {
             return None;
         }
-        let img = ast.consts.aggregate(ast.exprs.constant_value(e)?)?;
+        let img = ast.consts.aggregate(self.stored_value(e)?)?;
         ast.types.as_complex(img.ty)?;
         let Some(elem) = elem else { return Some([0, 0]) };
         let es = usize::try_from(self.o.types.size(elem)).ok()?.min(16);

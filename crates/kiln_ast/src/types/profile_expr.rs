@@ -41,11 +41,14 @@ use crate::expr::{ExprDeps, ExprFlags, ExprKind as K, TypeidOperand};
 use crate::ids::{ArgListId, DeclId, ExprId, ListId, NnsId, ProfileId, QualType, RawId};
 use crate::names::DeclNameView;
 use crate::templates::Requirement;
-use crate::types::{Nns, TagKeyword, TypeView};
+use crate::types::{ArgView, Nns, TagKeyword, TypeView};
 use kiln_source::symbol::Symbol;
 
 /// An absent optional operand.
 const NONE: u32 = 0;
+/// Opens explicit template arguments profiled one by one
+/// ([`Ast::push_args`]); no argument list id reaches it.
+const ARGS_EXPR: u32 = u32::MAX;
 /// Marks a tag word of a unique (never-equivalent) expression.
 const UNIQUE: u32 = 0xFF00_0000;
 
@@ -387,7 +390,7 @@ impl Ast {
     /// `VisitDeclRefExpr` profiles no written arguments): its
     /// non-dependent argument expressions have no profile, so keeping them
     /// would make `mag<1>` in a redeclared requires-clause differ.
-    fn ref_args_word(&self, d: DeclId, l: Option<ArgListId>) -> u32 {
+    fn ref_args(&self, d: DeclId, l: Option<ArgListId>, out: &mut Vec<u32>, stack: &mut Vec<Work>) {
         match l {
             Some(l)
                 if !self.types.arg_list_flags(l).intersects(TypeFlags::DEPENDENT_INSTANTIATION)
@@ -396,9 +399,33 @@ impl Ast {
                         DeclKind::FunctionTemplate | DeclKind::VarTemplate
                     ) =>
             {
-                NONE
+                out.push(NONE);
             }
-            _ => self.args_word(l),
+            _ => self.push_args(l, out, stack),
+        }
+    }
+
+    /// The explicit template arguments `l` of a name: the canonical list,
+    /// or, when it holds a non-dependent expression (which has no profile
+    /// and is canonical only as itself: `C::template g<1>()`, a list no
+    /// parameter has converted yet), [`ARGS_EXPR`] and each argument, an
+    /// expression by its profile, so a redeclaration's equivalent
+    /// arguments are equal ([temp.over.link]/5; WP-1169).
+    fn push_args(&self, l: Option<ArgListId>, out: &mut Vec<u32>, stack: &mut Vec<Work>) {
+        let Some(l) = l else { return out.push(NONE) };
+        let canon = self.types.canonical_args(l);
+        let args = self.types.args(canon);
+        if !args.iter().any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. })) {
+            return out.push(canon.raw());
+        }
+        out.extend([ARGS_EXPR, args.len() as u32]);
+        for &a in args {
+            match a.view() {
+                ArgView::Expr { expr, profile: None } => {
+                    stack.extend([Work::Word(a.kind as u32), Work::Expr(expr)]);
+                }
+                _ => stack.extend([a.kind as u32, a.a, a.b].map(Work::Word)),
+            }
         }
     }
 
@@ -461,21 +488,21 @@ impl Ast {
             K::DeclRefExpr => {
                 out.push(tag(k, 0));
                 self.decl_words(x.decl(e), out);
-                out.push(
-                    self.ref_args_word(
-                        x.decl(e),
-                        x.decl_ref_extra(e).and_then(|r| r.template_args),
-                    ),
+                self.ref_args(
+                    x.decl(e),
+                    x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    out,
+                    stack,
                 );
             }
             K::MemberExpr => {
                 out.push(tag(k, u32::from(n.has(ExprFlags::ARROW))));
                 self.decl_words(x.decl(e), out);
-                out.push(
-                    self.ref_args_word(
-                        x.decl(e),
-                        x.decl_ref_extra(e).and_then(|r| r.template_args),
-                    ),
+                self.ref_args(
+                    x.decl(e),
+                    x.decl_ref_extra(e).and_then(|r| r.template_args),
+                    out,
+                    stack,
                 );
                 stack.push(Work::Opt(id(n.a())));
             }
@@ -491,17 +518,13 @@ impl Ast {
                     out.pop();
                     self.decl_words(d, out);
                 }
-                out.extend([
-                    self.nns_word(self.templates.expr_nns.get(e).copied()),
-                    self.args_word(self.templates.expr_targs.get(e).copied()),
-                ]);
+                out.push(self.nns_word(self.templates.expr_nns.get(e).copied()));
+                self.push_args(self.templates.expr_targs.get(e).copied(), out, stack);
             }
-            K::DependentScopeDeclRefExpr => out.extend([
-                tag(k, 0),
-                self.nns_word(NnsId::from_raw(n.a())),
-                n.b(),
-                self.args_word(self.templates.expr_targs.get(e).copied()),
-            ]),
+            K::DependentScopeDeclRefExpr => {
+                out.extend([tag(k, 0), self.nns_word(NnsId::from_raw(n.a())), n.b()]);
+                self.push_args(self.templates.expr_targs.get(e).copied(), out, stack);
+            }
             K::CXXDependentScopeMemberExpr => {
                 let base = id(n.a());
                 // The arrow only matters with an explicit object.
@@ -520,8 +543,8 @@ impl Ast {
                     tag(k, arrow | u32::from(spelled.is_some()) << 1),
                     n.b(),
                     if spelled.is_some() { NONE } else { self.nns_word(nns) },
-                    self.args_word(self.templates.expr_targs.get(e).copied()),
                 ]);
+                self.push_args(self.templates.expr_targs.get(e).copied(), out, stack);
                 if let Some(q) = spelled {
                     self.spelled_nns_words(q, out);
                 }
@@ -779,9 +802,8 @@ impl Ast {
                         Reflectee::Decl(d) => {
                             out.push(tag(k, 5));
                             self.decl_words(d, out);
-                            out.push(
-                                self.ref_args_word(d, self.templates.expr_targs.get(e).copied()),
-                            );
+                            let l = self.templates.expr_targs.get(e).copied();
+                            self.ref_args(d, l, out, stack);
                         }
                         _ => out.extend([tag(k, 0) | UNIQUE, e.raw()]),
                     }

@@ -2593,11 +2593,24 @@ reports a dropped statement, part or declaration lookup.
   (`temp.friend/p9-constrained-friend-must-be-definition.cpp`; the
   defining forms, instantiated twice, in
   `p9-constrained-friend-definitions-run.cpp`). A [temp.friend]/5
-  member-template friend (`template<class U> friend R A<U>::f()
-  requires C<U>;`) is not checked here: its constraint names only its own
-  parameter (clang 22 reports it as a non-template friend; WP-1130's
-  `dependent-member-friend-constraints-overloads-run.cpp` relies on
-  accepting it).
+  friend (`template<class U> friend R A<U>::f() requires C<U>;`) is not
+  checked here: its head is the qualifier's ([temp.friend]/5), not the
+  befriended function's. It befriends the non-template member `f` of each
+  `A<U>`, so it is a non-template friend declaration with a
+  requires-clause, and as a qualified friend it cannot be a definition
+  ([class.friend]/6): ill-formed by [temp.friend]/9 (WP-1146, following
+  clang 19 and 22; the standard does not say otherwise, and g++ 16
+  rejects the friend for other reasons). `declare_member_friend_fn`
+  (`non_template_member_friend_requires`) reports it, for a friend
+  without a member template head, in a templated class as above at the
+  friend's own `template` (no -Wunsupported-friend, as clang drops the
+  declaration first), and in a non-template class, where the friend's
+  head does not make the function templated, as `non-templated function
+  cannot have a requires clause` at the clause (then the warning). The
+  friend is invalid and befriends nothing
+  (`temp.friend/non-template-member-friend-requires-not-definition.cpp`).
+  A member template friend (`template<class U> template<class V> friend R
+  A<U>::g(V) requires C<V>;`) keeps its clause, compared as below.
 - A friend function or function template declared with a qualified name
   in a templated class (`template<class U> friend R N::f(X<U>);`,
   `friend R N::g(T);`) whose template head or type is dependent is not
@@ -2794,13 +2807,36 @@ reports a dropped statement, part or declaration lookup.
     constraints match, and `template<C U>` does not name `template<class
     U> requires C<U>` (only functionally equivalent). A friend whose
     levels outside its own head are not all known (still in a class
-    template's pattern, `MemberFriend::enclosing` unset) keeps WP-1098's
-    unconstrained comparison (`member_friend_constraints_match`); each
+    template's pattern, `MemberFriend::enclosing` unset) does not compare
+    its constraints and is speculative (`member_friend_constraints_match`
+    gives `None`, `Grant::Speculative`, as clang decides a dependent
+    friend in each instantiation; WP-1146); each
     instantiation of its class registers it again with every level known,
     and that one is compared, so a friend in a member class template
     `O<X>::B<Y>` is compared in `O<int>::B<int>` and `O<int>::B<long>`
     alike (WP-1145, `member-friend-of-member-class-template-run.cpp`;
-    g++ rejects each such friend). The abbreviated friend
+    g++ rejects each such friend). The pattern's friend only might
+    befriend a member (speculative, as below), so an access it would
+    allow is decided by the instantiations (WP-1146,
+    `member-friend-of-member-class-template-overloads-run.cpp`). Every
+    instantiated friend is formed from its pattern in the class
+    template's definition with all levels at once (a member class
+    template of `O<X>` is instantiated from `O<X>::B<Y>`'s pattern, not
+    from one of `O<int>`), so none is instantiated twice. A trailing
+    requires-clause naming the function's parameters (`requires
+    (sizeof(u) > 1)`, `requires requires { u + 1; }`) is substituted on
+    each side with parameters of the substituted types
+    (`nested_prototype_param`: the friend's declarator parameters,
+    `MemberFriend::fn_params`, and the member pattern's, also in
+    `member_cmp_constraints`), so they compare by position and type
+    ([temp.over.link]/5, [temp.over.link]/7), not by name (WP-1146,
+    `member-friend-requires-names-params-run.cpp`). The same holds for a
+    qualified friend template in a class template
+    (`template<class U> friend int A<T>::f(U u, W<T> &) requires
+    (sizeof(u) > 1);`): `friend_cmp_constraints` declares the pattern's
+    parameters before substituting the clause
+    (`qualified-friend-requires-names-params-run.cpp`; clang 19 and g++
+    16 agree, clang 22 matches none of these friends). The abbreviated friend
     `template<class T> friend int A<T>::f(C auto);` has the invented head
     as its member template head (`open_invented_head_list`).
     The answer is cached per (friend, member). A member of a class
@@ -3393,7 +3429,15 @@ substituting (clang's `CurrentInstantiationRebuilder`; WP-1154,
 spec/sema-class.md §8.3 "Out-of-line declarator scope"): `ty` hands every
 type to `Sema::rebuild_ci_type`, and a `DependentScopeDeclRefExpr`
 `C<X>::m` whose qualifier names the current instantiation is formed again
-as the class's own id-expression when lookup finds `m`.
+as the class's own id-expression when lookup finds `m`. With explicit
+template arguments (`C<X>::template f<U>`) it is formed as the class's
+template-id (WP-1169). A `PackExpansionExpr` rebuilds its pattern, and a
+`PackIndexingExpr` its index; the rebuilt index replaces the written one
+only while it stays value-dependent (`ci_index_value_dependent`, a
+`sizeof`/`alignof` of a non-dependent type is not), so a rebuilt index
+that clang would leave unconverted does not become equivalent to the
+in-class one. `Substituter::ci_expr_operand_ty` rebuilds the operand of
+`typeof` and the index of an unselected pack-indexing type.
 
 ### 5.3 Types
 

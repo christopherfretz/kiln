@@ -822,6 +822,38 @@ the non-constexpr `f`; the shift-count check of `<<`/`>>`
 (`diagnose_shift_count`) folds its operand, invocations included, when
 the operator is built.
 
+### WP-1171: the overflow trial and the shift count read stored values (2026-11-09)
+
+The two re-evaluations WP-1129 left open are gone (spec/sema.md §5.10
+"Default arguments", "Shift counts", §5.28). The `-Winteger-overflow`
+trial descends into a default argument instead of evaluating the call
+and reads a default use's stored value (`default_immediate_value`), and
+a default use is checked when its call's full-expression is completed,
+so defarg's `f() + h()` trial no longer evaluates `fib(27)` unmemoized
+before failing on the non-constexpr `f`. A shift count that is an
+immediate invocation is evaluated once (`prefold_immediate`).
+
+TU: the WP-1129 defarg context above (`common.h`, `N` 4096). Commands:
+`kiln++ -std=c++2c -fconstexpr-steps=1000000000 -c -o /dev/null
+defarg.cpp` and the same with `clang++-19`; `/usr/bin/time -f "%e %M"`,
+median of 3; counts from `-fconstexpr-stats`. Harness profile, branch
+wp/1171 (main d6627f3aa + WP-1171).
+
+| defarg | before | after |
+|---|---|---|
+| `fib` calls (`calls count`, trials not counted) | 635622 | 635622 (one `fib(27)`) |
+| memo misses (the trial's unmemoized `fib` calls) | 635649 | 28 |
+| trial steps | 1271242 | 0 |
+| kiln wall / RSS (debug build, `-fsyntax-only -fconstexpr-steps=100000000`) | 1.32 s / 23.8 MB | 0.90 s / 23.7 MB |
+| kiln wall / RSS (harness) | n/a | 0.25 s / 66.7 MB |
+| clang++-19 | 2.19 s / 99.6 MB | 2.19 s / 99.6 MB |
+
+Without `-fconstexpr-steps` both compilers now reject defarg (`fib(27)`
+exceeds the default step limit); before, kiln accepted it only because
+the unlimited trial had filled the memo first. Regression tests: driver
+`immediate_invocations_are_not_folded_again` (trial steps 0 for
+`def() + def()`, one evaluation for `x << csum(7)`).
+
 ### WP-1163: the never-constant walk runs a loop in one evaluation (2026-11-09)
 
 The [dcl.constexpr]/6 walk (spec/sema.md "Never constant") ran a loop
