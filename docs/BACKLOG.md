@@ -947,6 +947,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-899 | driver: `-ffat-lto-objects` emits real fat objects (machine code + bitcode); now bitcode-only (crates/kiln_driver/src/codegen_flags.rs:28) | WP-873 | open |
 | WP-1127 | spec/driver.md truth-up: every accepted/ignored/rejected flag claim checked against the driver code | WP-1125 | done (#494) |
 | WP-1138 | driver flag correctness: `-fsanitize=memtag[-*]` on x86-64 is "unsupported option ... for target" (clang group rule), AArch64 memtag-stack needs +memtag; `-fdebug-default-version=` last wins, checked only with DWARF | WP-1127 | done (#504) |
+| WP-1151 | driver sanitizer tails: memtag/address-family pair, AArch64 shadow-call-stack needs `-ffixed-x18`, `-mcpu=` CPU feature table (clang 19/22), `-Xclang -target-feature +mte` per compat | WP-1138 | in progress |
 | WP-900 | codegen: `-fstrict-vtable-pointers` invariant.group metadata and `-f[no-]vectorize`/`-fslp-vectorize` pipeline toggles (codegen_flags.rs:146) | WP-873 | deferred |
 | WP-901 | diag: `-fdiagnostics-show-template-tree` output (codegen_flags.rs:145) | WP-873 | deferred |
 | WP-902 | codegen: C++26 constant init of a shared virtual base (consts.rs:569 record_elems); xfail class.mi/shared-virtual-base-constant-init-run.cpp | WP-873 | done (#438) |
@@ -1037,6 +1038,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-997 | codegen: subobject NTTP constant uses typed GEP vs clang `getelementptr (i8, …)` (ABI slice equal) | WP-933 | open |
 | WP-998 | codegen: `deref<&cg>` loads a const global clang folds (`static const int cg = 3`) | WP-933 | done (#438, WP-902; real gap was ref<cg>() through a reference NTTP, deref<&cg>() is a load in clang too) |
 | WP-999 | WP-126 remainder: oven pseudo/explicit-destructor lifetime, `p->N::~T()`, member-same-name-as-class diag, out-of-class friend templates, owned friend classes in class templates, dependent friend specializations in dump, `typename C<X>::T` rebuilt only at top level, `typename` error locations/recovery | WP-126 | open |
+| WP-1154 | rebuild expressions (`decltype`, array bounds, `noexcept`, expression template args) in an out-of-line member's signature in the current instantiation | WP-1152 | in progress |
 | WP-1152 | WP-999 correctness subset: oven explicit/pseudo-destructor lifetime, qualified destructor names `p->N::~T()`, `typename C<X>::T` rebuild under nested type constructors | WP-999 | done (#512) |
 | WP-1155 | rejects-valid: template-ids on the pseudo-destructor path (`p->~A<int>()`, `p->N::I::~B<int>()`), `p->T::Inner::~Inner()` in a dependent scope | WP-1152 | in progress |
 | WP-1003 | codegen: `-fcoverage-mapping`, emit the coverage mapping section (driver coverage_flags.rs:187 errors today) | WP-941 | done (#445) |
@@ -1060,6 +1062,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-984 | modules: import std; BMI cache keyed by fingerprint, CMake CXX_MODULE_STD, two-step import std harness test | WP-917 | done (#429) |
 | WP-1125 | docs: 1.0 truth-up of README, USER_GUIDE, KNOWN_ISSUES, COMPATIBILITY, STABILITY against main (std module cache section, stale limitations, link check) | WP-984 | done (#492) |
 | WP-985 | modules: serialised-AST BMI (kind 2): fresh DeclIds + ODR merge, carry evaluated constexpr/consteval state and instantiations | WP-917 | done (#425) |
+| WP-1159 | accepts-invalid: `export` on an out-of-class member definition ([module.interface]/1, clang `err_export_non_namespace_scope_name`) | WP-1047 | in progress |
 | WP-986 | modules: convert skip(clang) module tests (export-run, visibility, partitions-run, private-run, export-import-run, import-std-*) to module:/unit: | WP-917 | done (#436) |
 | WP-981 | oven: narrow signed `++`/`--` must promote and wrap (WP-961 x86_64 stable_sort xfail) | WP-961 | done (#419, fixed in WP-980) |
 | WP-1029 | parser drops `__extension__`; `decltype(__extension__ t)` mangles `Dt` where clang writes `DT` | WP-980 | done (#432) |
@@ -1088,6 +1091,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1045 | CI: install libclang-rt-19-dev/libclang-rt-22-dev in .github/actions/kiln-ci/action.yml:38 so `requires: sanitizer-runtime` run tests (ASan/UBSan ignorelist runs) execute in CI instead of skipping | WP-1032 | done (#427, WP-1034) |
 | WP-1046 | modules kind 2: carry constant results of evaluations inside template instantiations (10,142 of the uncarried std results; spec/modules.md §11.11 Part 2) | WP-985 | done (#464) |
 | WP-1047 | modules kind 2: carry pointer, reference and reflection constant values | WP-985 | done (#516) |
+| WP-1160 | modules kind 2: carry string-literal/temporary/label pointer constants and alias/data-member-spec/annotation reflections; -v reason on partial carry | WP-1047 | in progress |
 | WP-1048 | modules kind 2 part 2: serialised decl/type/expression image, fresh DeclIds, ODR merging, lazy loading (cuts import std time) | WP-985 | done (#434, part 2a; rest is WP-1064..1070) |
 | WP-1049 | driver --help: reverse test that every option the argument parser accepts is listed in help.rs (or on an explicit hidden list), next to every_listed_option_is_accepted (crates/kiln_driver/src/help.rs:366) | WP-1027 | open |
 | WP-1052 | exception-spec tails: implicit member exception-spec type lists (except.rs:1109), dependent and pack throw lists in template definitions (except.rs:1127) incl. clang eager dependent throw(T) error, nested function-type rule (except.rs:1100) | WP-1017 | done (#496) |
