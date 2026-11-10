@@ -42,10 +42,10 @@ impl Sema<'_, '_> {
     /// whose declarator-id is qualified: what to do with the declaration.
     /// Every declarator-id is checked: an identifier, an
     /// operator-function-id, a conversion-function-id, a
-    /// literal-operator-id, a constructor or destructor name (WP-235). A
-    /// template-id declarator or a templated declaration (`has_head`) is
-    /// checked elsewhere (clang's `CheckTemplateSpecializationScope`,
-    /// [`Sema::check_spec_scope`]).
+    /// literal-operator-id, a constructor or destructor name (WP-235),
+    /// also of a templated declaration (WP-1174). Only a template-id
+    /// declarator's enclosing scope is checked elsewhere (clang's
+    /// `CheckTemplateSpecializationScope`, [`Sema::check_spec_scope`]).
     pub(crate) fn diagnose_qualified_declaration(
         &mut self,
         ds: &DeclSpec,
