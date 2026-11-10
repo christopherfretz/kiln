@@ -663,7 +663,10 @@ impl Sema<'_, '_> {
         let sm = self.diags.sm();
         let bmi = &mut self.bmi;
         let file = |f| file_index(bmi, None, sm, f);
-        inst::value_bytes(&self.ast, sm, file, v, typed).map(Carried::Wire).ok_or(why)
+        let oven = self.oven.as_deref();
+        inst::value_bytes(&self.ast, oven, sm, file, v, typed)
+            .map(Carried::Wire)
+            .map_err(|w| w.unwrap_or(why))
     }
 }
 
@@ -716,8 +719,10 @@ const VERSIONED: u32 = u32::MAX;
 
 /// The section format version written (spec/modules.md §11.11
 /// "Encoding"): 2 adds instantiation keys, 3 the values of tags 5 to 9
-/// (WP-1047).
-const VERSION: u32 = 3;
+/// (WP-1047), 4 string literal, temporary and label pointer bases and
+/// alias template specialization, data member specification and
+/// annotation reflections (WP-1160).
+const VERSION: u32 = 4;
 
 fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -1232,7 +1237,13 @@ mod tests {
     /// "Encoding"), as an entry's bytes.
     fn wire_values() -> Vec<Vec<u8>> {
         use inst::{
-            BASE_CONST, BASE_DECL, BASE_TYPE_INFO, REFL_ALIAS, REFL_TYPE, TY_LREF, TY_POINTER,
+            BASE_CONST, BASE_DECL, BASE_LABEL, BASE_STRING, BASE_TEMPORARY, BASE_TYPE_INFO,
+            DMS_ALIGN, DMS_NAME, REFL_ALIAS, REFL_ALIAS_SPEC, REFL_TYPE, TY_LREF, TY_POINTER,
+        };
+        let at = |v: &mut Vec<u8>, off: u32| {
+            for w in [0, off, 0, off] {
+                put_u32(v, w);
+            }
         };
         let int = [0u8, 0, 5];
         let mut out = Vec::new();
@@ -1290,6 +1301,52 @@ mod tests {
         out.push(v);
         // A reference's value.
         out.push([&[TAG_TYPED, 0, TY_LREF][..], &int, &pointer].concat());
+        // WP-1160: a string literal + 1, a label address, and a
+        // temporary of `t1` with its value, designating an int.
+        let mut v = vec![TAG_POINTER, 0, BASE_STRING];
+        at(&mut v, 20);
+        put_var(&mut v, 1);
+        out.push(v);
+        let mut v = vec![TAG_POINTER, 0, BASE_LABEL];
+        decl_ent(&mut v, "a", 21);
+        at(&mut v, 22);
+        put_var(&mut v, 0);
+        out.push(v);
+        let mut v = vec![TAG_POINTER, 2, BASE_TEMPORARY];
+        decl_ent(&mut v, "t1", 23);
+        put_var(&mut v, 0);
+        v.extend_from_slice(&int);
+        v.push(1);
+        v.extend_from_slice(&int);
+        put_value(&mut v, &Carried::Int { signed: true, width: 32, words: vec![42].into() });
+        put_var(&mut v, 0);
+        v.extend_from_slice(&int);
+        out.push(v);
+        // `^^Ptr<int>` (an alias template specialization), a data member
+        // specification `{.name = "x", .alignment = 8}` with one
+        // annotation, and the second annotation at one position of the
+        // first base specifier of `C`.
+        let mut v = vec![TAG_REFLECTION, 0, REFL_ALIAS_SPEC];
+        decl_ent(&mut v, "Ptr", 25);
+        put_u32(&mut v, 1);
+        v.push(b'T');
+        v.extend_from_slice(&int);
+        v.extend_from_slice(&[0, TY_POINTER, 0, 0, 5]);
+        out.push(v);
+        let mut v = [&[TAG_REFLECTION, 9][..], &int, &[DMS_NAME | DMS_ALIGN]].concat();
+        put_bytes(&mut v, b"x");
+        put_u32(&mut v, 8);
+        put_var(&mut v, 1);
+        v.push(6);
+        v.extend_from_slice(&int);
+        put_value(&mut v, &Carried::Int { signed: true, width: 32, words: vec![5].into() });
+        out.push(v);
+        let mut v = vec![TAG_REFLECTION, 10, 1];
+        put_var(&mut v, 0);
+        decl_ent(&mut v, "C", 27);
+        at(&mut v, 28);
+        put_var(&mut v, 1);
+        out.push(v);
         out
     }
 
@@ -1340,8 +1397,20 @@ mod tests {
                 assert!(inst::check_value(&mut Rd(&v[..n]), 1).is_err(), "truncated to {n}");
             }
         }
-        // A pointer to an entity at a path the section lacks.
+        // A pointer to an entity at a path the section lacks, and the
+        // WP-1160 forms naming a path the section lacks or out of range.
         assert!(inst::check_value(&mut Rd(&wire_values()[0]), 0).is_err());
+        let vals = wire_values();
+        let n = vals.len();
+        for i in [n - 6, n - 5, n - 4, n - 3, n - 1] {
+            assert!(inst::check_value(&mut Rd(&vals[i]), 0).is_err(), "value {i}");
+        }
+        let mut dms = vals[vals.len() - 2].clone();
+        dms[5] = 16;
+        assert_eq!(inst::check_value(&mut Rd(&dms), 1), bad("bad reflection"));
+        let mut ann = vals[vals.len() - 1].clone();
+        ann[2] = 2;
+        assert_eq!(inst::check_value(&mut Rd(&ann), 1), bad("bad reflection"));
         let mut old = Vec::new();
         put_value(&mut old, &Carried::Bool(true));
         assert_eq!(old, [TAG_BOOL, 1], "older values keep their bytes");
@@ -1385,9 +1454,9 @@ mod tests {
             decode(&trailing),
             Err(SectionError("carried constants: trailing bytes".into()))
         );
-        let mut v4 = b.clone();
-        v4[4..8].copy_from_slice(&4u32.to_le_bytes());
-        assert_eq!(decode(&v4).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
+        let mut v5 = b.clone();
+        v5[4..8].copy_from_slice(&5u32.to_le_bytes());
+        assert_eq!(decode(&v5).unwrap_err(), bad::<()>("unsupported section version").unwrap_err());
         let paths_len = 4 + (4 + 6) + (4 + 3);
         let insts_at = 8 + paths_len;
         // The first key's entity tag.

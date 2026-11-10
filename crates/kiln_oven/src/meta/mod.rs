@@ -269,6 +269,9 @@ pub struct MetaCtx {
     /// gives a function template's `T` (`extract<T>`, `reflect_constant`;
     /// WP-479).
     pub callee: Option<DeclId>,
+    /// The first register above the calling frame's (where a global
+    /// thawed for [`crate::Oven::meta_freeze_at`] is evaluated).
+    pub(crate) top: u32,
 }
 
 /// An intrinsic's result, written by the bridge.

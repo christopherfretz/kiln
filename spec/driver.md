@@ -392,16 +392,55 @@ docs/design/sanitizers.md) reads the sanitizer options as clang 19's
   each error names the values of that argument that enable a diagnosed
   kind, and a later `-fno-sanitize=` removes the group only if it names
   the group or `all`. On `AArch64`, `memtag` and `memtag-stack` also need
-  the `mte` target feature (`-march=...+memtag`; kiln reads the final
-  feature set, `-Xclang -target-feature -Xclang +mte` included, where
-  clang 19 and 22 differ, and knows no `-mcpu=` features): without it,
-  after the option errors,
+  the `mte` target feature (`-march=...+memtag`, or a `-mcpu=` CPU that
+  has it, e.g. `cortex-x2`; WP-1151: clang's `hasTargetFeatureMTE` reads
+  the driver's own `-target-feature` list, so `-mcpu=cortex-x2+nomemtag`
+  lacks it; `-Xclang -target-feature -Xclang +mte` counts at
+  `-fclang-compat=22` only, any `+mte` item even before a later `-mte`,
+  as clang 22 appends the `-Xclang` items to that list and clang 19 checks
+  before it does; "Target features"): without it, after the option
+  errors and the incompatible pairs,
   `'-fsanitize=memtag-stack' requires hardware support (+memtag). For
   Armv8 or Armv9, try compiling with -march=armv8a+memtag or
   -march=armv9a+memtag` (`drv_stack_tagging_requires_hardware_feature`),
   also under `-fsyntax-only` and `-E`; `memtag-heap` and `memtag-globals`
   need no feature. Tests: `sanitize.rs` `memtag_target_support`,
   `crates/kiln_driver/tests/driver.rs` `memtag_sanitizers_by_target`.
+- Sanitizers clang checks that kiln does not implement (WP-1151, clang
+  19/22 `SanitizerArgs`, same in both). `memtag*`, `shadow-call-stack`,
+  `kernel-address`, `kernel-hwaddress`, `kernel-memory`, `scudo`,
+  `safe-stack` and `kcfi` take part in the checks below
+  as clang's enabled kinds (after `-fno-sanitize=` and target support),
+  besides their "not supported by kiln" error:
+  - after the per-option errors (`vptr` with `-fno-rtti`, target
+    support) and before the incompatible pairs,
+    `-fsanitize=shadow-call-stack` on `AArch64` is `invalid argument
+    '<arg>' only allowed with '-ffixed-x18'` (`drv_argument_only_allowed_with`;
+    `<arg>` the last argument that enabled it) unless `-ffixed-x18` is
+    given or the `--target=` OS reserves x18 (LLVM
+    `AArch64::isX18ReservedByDefault`: Android, OpenHarmony, Fuchsia,
+    Darwin, Windows; `sanitize::x18_reserved_by_default`). x86-64 has no
+    such rule.
+  - the incompatible pairs are clang's whole `IncompatibleGroups` table
+    in its order: after the `address`, `thread`, `leak`,
+    `kernel-address` and `hwaddress` rows, `scudo` and `safe-stack`
+    (Linux: with `leak` too) with the address family, `thread`, `memory`;
+    `kernel-hwaddress` with those and `safe-stack`; `kernel-memory` with
+    those and `scudo`; `memtag` (any member) with `address`,
+    `kernel-address`, `hwaddress`, `kernel-hwaddress`; `kcfi` with
+    `function` (so with `undefined`). Each
+    removes the kinds of its right side, so a later pair does not see
+    them (`-fsanitize=memtag,kernel-hwaddress,address` gives the
+    `kernel-hwaddress`/`address` error, then `memtag`/`kernel-hwaddress`,
+    then the hardware error), and a kiln sanitizer removed by a pair is
+    not enabled.
+  - `-ffixed-x18` adds `+reserve-x18` to the `AArch64` target features;
+    on x86-64 it is `unsupported option '-ffixed-x18' for target
+    '<triple>'` (the `--target` as written).
+  Tests: `sanitize.rs` `clang_checked_pairs`, `crates/kiln_driver/tests/driver.rs`
+  `memtag_pairs_and_shadow_call_stack` and
+  `xclang_target_feature_mte_by_compat` (both against clang++-19/22
+  where installed).
 - Sanitizers kiln implements: address, hwaddress, thread, memory, leak,
   fuzzer, fuzzer-no-link, the `undefined` group, unsigned-integer-overflow
   and unsigned-shift-base. Any other clang sanitizer (cfi, dataflow,
@@ -851,9 +890,36 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   `a` optional (`armv8a`), as clang's. Each level enables its default
   extensions (those of every lower level, plus its own: `crc`, `lse`,
   `rdm` at v8.1, ..., `sve2` at v9.0, ...). Without `-march=`, the last
-  `-mcpu=` is used: `generic` (armv8-a, adds `+ete,+trbe`) followed by
-  `+ext` modifiers. When `-march=` is present, `-mcpu=` contributes nothing
-  (clang uses the CPU only without an architecture).
+  `-mcpu=` is used: a CPU followed by `+ext` modifiers (below). When
+  `-march=` is present, the `-mcpu=` CPU is still checked (an unknown one
+  is the error below) and is still the `"target-cpu"`, but contributes no
+  features, except clang 19's `+zcm,+zcz` of the Apple CPUs (clang's
+  `getAArch64TargetFeatures` / `getAArch64TargetCPU`).
+- **CPUs** (WP-1151). `-mcpu=<cpu>` takes the CPUs of clang's
+  `AArch64TargetParser`, per oracle (81 at clang 19, 98 at clang 22, the
+  A-profile ones `--print-supported-cpus` lists; case-insensitive), from
+  the plain-data table `crates/kiln_driver/src/aarch64_cpus.rs`
+  (`CPUS_19`, `CPUS_22`; one line per CPU: name, canonical CPU,
+  architecture feature, the driver's extension list, the
+  `"target-features"` closure, the `-march=`-proof features), generated
+  by `scripts/gen-aarch64-cpus.py` from both clangs' `-###` and `-S
+  -emit-llvm` output. The CPU's extensions are the touched set of LLVM's
+  `ExtensionSet::addCPUDefaults` (`cortex-x2` has `+mte`, `+sve2`, ...);
+  the `+ext` modifiers apply over them with the CPU's architecture's
+  special cases and the dependencies (including SME and FP8: `sme` needs
+  `bf16`, and at clang 22 `fullfp16`; `fp8` needs `bf16`, `faminmax`,
+  `lut` at clang 19 and `neon` at clang 22). An alias names its
+  canonical CPU in `"target-cpu"` (clang 22's `apple-a18` is `apple-m4`);
+  `generic` is `"target-cpu"="generic"` with `+ete,+trbe`. The
+  function's `"target-features"` are the CPU's architecture closure
+  overridden by the driver's list (clang's `-target-feature`s), and the
+  predefines follow (`__ARM_FEATURE_SME`, `__ARM_FEATURE_FP8`, ... in
+  spec/pp.md "AArch64 target macros"). Tests: `features.rs`
+  `mcpu_cpu_table`, `crates/kiln_driver/tests/driver.rs`
+  `mcpu_target_features_match_clang` and `mcpu_table_covers_clang`
+  (against clang++-19/22 where installed). Deviation: the Armv8-R CPUs
+  (`cortex-r82`, `cortex-r82ae`) are unsupported values, as
+  `-march=armv8-r` is.
 - **Extensions** are case-insensitive and applied left to right (empty
   `+` segments are skipped): `+x` enables `x` and, transitively, its
   dependencies; `+nox` disables `x` if it is enabled and, transitively,
@@ -876,11 +942,13 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
   `scalable`, the default) fixes the SVE vector length: `vscale_range(N/128,
   N/128)` on every definition and `__ARM_FEATURE_SVE_BITS N`, with or
   without `sve` (clang alike).
-- **Result.** `TargetFeatures { sve, extra, arch, sve_vector_bits }`:
+- **Result.** `TargetFeatures { sve, extra, arch, sve_vector_bits, cpu, memtag_hw, ... }`
+  (`cpu`: the canonical CPU, the `AArch64` `"target-cpu"`, `generic` when none):
   - `sve` sets `ParseOptions::sve` / `Sema::sve` (SVE types usable,
     spec/types.md §5.1) and `CodegenOptions::sve` (`vscale_range(1,16)`,
     spec/codegen.md §7aa; at `-fclang-compat=19` only with NEON too, as
     clang 19's `SveMode`);
+  - `memtag_hw`: clang's `hasTargetFeatureMTE` ("Sanitizers");
   - `extra` (the touched features, `+` if on, `-` if off, minus the
     base's `fp-armv8`, `neon` and `v8a`) overrides the default AArch64
     `"target-features"` entries (`CodegenOptions::target_features`), which
@@ -890,7 +958,7 @@ modelled: clang 22 by default, clang 19 at `-fclang-compat=19`.
     `__ARM_ARCH`, `__ARM_FP`, `__ARM_NEON*` and `__ARM_FEATURE_*`
     predefines derive (spec/pp.md "AArch64 target macros").
 - **Errors.** Any other architecture, CPU or extension (`armv8.0-a`,
-  `armv7-a`, `cortex-a57`, `sme`, ...) is `unsupported argument '<v>' to
+  `armv7-a`, `cortex-a1`, `sme`, ...) is `unsupported argument '<v>' to
   option '-march='` (`-mcpu=` alike), and so is a `-msve-vector-bits=`
   value outside the list (`'<v>' to option '-msve-vector-bits='`).
   `native` is accepted (no features; "Codegen flags"). On

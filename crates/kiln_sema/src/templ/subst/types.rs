@@ -22,7 +22,7 @@ use crate::templ::written::WrittenKey;
 
 impl Substituter<'_, '_, '_> {
     /// `decltype(e)` with `e` substituted (clang `TransformDecltypeType`).
-    fn decltype_ty(&mut self, expr: ExprId, loc: Loc) -> SubstResult<QualType> {
+    pub(crate) fn decltype_ty(&mut self, expr: ExprId, loc: Loc) -> SubstResult<QualType> {
         self.sema.enter_decltype();
         let e = self.expr(expr);
         self.sema.exit_decltype(e.ok());
@@ -41,6 +41,11 @@ impl Substituter<'_, '_, '_> {
     /// Substitutes into type `q` (its qualifiers kept, collapsing as the
     /// constructors do).
     pub fn ty(&mut self, q: QualType, loc: Loc) -> SubstResult<QualType> {
+        if let Some(qual) = self.ci_rebuild {
+            // Rebuilt in the current instantiation, not substituted.
+            let r = self.sema.rebuild_ci_type(q, qual, loc, 0);
+            return if self.sema.is_error_type(r) { Err(SubstFail) } else { Ok(r) };
+        }
         let flags = self.sema.ast.types.qflags(q);
         // A variably modified type is always rebuilt: its bound names
         // the instantiation's entities (clang `SubstType`).

@@ -94,6 +94,35 @@ impl Substituter<'_, '_, '_> {
         r
     }
 
+    /// `C<X>::m` (a `DependentScopeDeclRefExpr` with the rebuilt
+    /// qualifier `nns`) while rebuilding in the current instantiation
+    /// ([`Substituter::ci_rebuild`]): when `C<X>` names the current
+    /// instantiation and lookup there finds `m`, the id-expression the
+    /// class itself would form (clang's `CurrentInstantiationRebuilder`
+    /// over `TransformDependentScopeDeclRefExpr`, [temp.dep.type]/1).
+    /// `None` otherwise (a member of a dependent base, a template-id):
+    /// the name stays dependent.
+    fn ci_member_ref(
+        &mut self,
+        e: ExprId,
+        nns: NnsId,
+        name: DeclName,
+        begin: Loc,
+        loc: Loc,
+    ) -> Option<ExprId> {
+        let qual = self.ci_rebuild?;
+        if self.sema.ast.templates.expr_targs.get(e).is_some() {
+            return None;
+        }
+        let ctx = self.sema.rebuild_ci_nns_record(nns, qual, begin, 0)?;
+        let found = self.sema.lookup_qualified_dn(ctx, name, crate::lookup::LookupKind::Ordinary);
+        if found.decls.is_empty() {
+            return None;
+        }
+        let q = crate::using::Qualifier { ctx, nns, loc: begin };
+        Some(self.sema.act_on_id_expression_dn(name, loc, Some(q)))
+    }
+
     /// A name written `N::template x<A>` that is still unresolved after
     /// substitution keeps its `template` keyword (clang's
     /// `TransformDependentScopeDeclRefExpr` / `TransformUnresolvedLookupExpr`
@@ -663,6 +692,9 @@ impl Substituter<'_, '_, '_> {
                 let name = self.member_name(name, loc)?;
                 let begin = self.sema.ast.templates.expr_begin.get(e).copied().unwrap_or(loc);
                 let nns = self.nns(nns, begin)?;
+                if let Some(r) = self.ci_member_ref(e, nns, name, begin, loc) {
+                    return Ok(r);
+                }
                 if self.nns_still_dependent(nns) {
                     // Substituted with dependent arguments (an alias
                     // template named in a template): still dependent.

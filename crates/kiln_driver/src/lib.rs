@@ -8,6 +8,7 @@
 //! linking; WP-052b, [`codegen_cmd`]) are implemented.
 #![forbid(unsafe_code)]
 
+mod aarch64_cpus;
 pub mod args;
 mod cdb;
 pub mod codegen_cmd;
@@ -639,7 +640,8 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     // spec/driver.md "Sanitizers".
     let (sanitize, sanitize_errors) = args.sanitize(!tc.target.is_aarch64(), tc.target.triple);
-    let mte = target_features.enabled().iter().any(|f| f == "mte");
+    // WP-1151: clang's `hasTargetFeatureMTE`, by `-fclang-compat=`.
+    let mte = target_features.memtag_hw;
     for e in &sanitize_errors {
         emit_arg_error(e, &drv);
     }

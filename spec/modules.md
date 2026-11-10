@@ -132,6 +132,7 @@ declaration (never inside one). Sema tracks the current unit's phase:
 | [module.import]/1 imports before other declarations | `imports must immediately follow the module declaration` |
 | [module.import] partitions | `module partition imports must be within a module purview` |
 | [module.interface]/1 | `export declaration can only be used within a module interface`; `export declaration appears within another export declaration`; `export declaration appears within anonymous namespace`; `anonymous namespaces cannot be exported` |
+| [module.interface]/1, /6: an export declares namespace members only (WP-1159) | `cannot export 'x' as it is not at namespace scope`, at the declarator-id (a tag's name), for a qualified definition or redeclaration of a class member (static data member, member function, member function template, nested class or enumeration, of a class or class template) directly in an export (through `export { }` and `extern "C++"`, not through an exported namespace); a template-id declarator (`export template<> void S::g<int>()`) is exempt, a namespace member's qualified redeclaration is checked by the module-linkage rule below instead (with no `-Wextra-qualification`), and `export void ::f()` is `definition or redeclaration of 'f' cannot name the global scope`, as clang (`diagnoseQualifiedDeclaration`). The member is still declared and defined as written; clang drops a member function or variable (so its body's uses of the class's members are `use of undeclared identifier`) and an enumeration's enumerators, kiln does not cascade. Deviation: `namespace B { export void A::g() {} }` keeps kiln's `cannot define or redeclare 'g' here because namespace 'B' does not enclose namespace 'A'`, which clang 19/22 miss |
 | [module.interface]/3 (C++20 wording) | `declaration of 'x' with internal linkage cannot be exported`; `cannot export redeclaration 'x' here since the previous declaration has module linkage`; `using declaration referring to 'x' with internal linkage cannot be exported` / `... with module linkage ...` (+ note `target of using declaration`) |
 | [module.global.frag]/1, [cpp.pre] (P3868, `-fclang-compat=22`) | a preprocessing directive other than null, line-marker, `#line`, `#pragma`, `#error`, `#warning` or `#ident`, in the main file before `module;`, makes `module;` the first declaration too late: the two errors above, with clang 22's note at the first such `#` (kiln_pp records it in `ModuleDirective::after_directive`; sema `module_note_pp_directive`) |
 | [cpp.module]/2 (P3034) | `module name component 'X' cannot be an object-like macro` (clang 19 and 22 expand the macro instead) |
@@ -313,18 +314,27 @@ declarations still merge as entities ([module.global.frag]/1: the global
 module is one module; [basic.def.odr]/15), as clang's
 `makeMergedDefinitionVisible` does. A declaration of another named unit's
 global module fragment is never visible to the current unit except by a
-merge (`module_hidden_global`), so:
+merge, and neither is a global-module declaration of a non-module unit or
+header unit the current unit does not import: the importer's own
+declarations before the `import` that builds a module unit in-process
+belong, for that unit, to another translation unit (WP-1156). Both are
+*hidden global* declarations (`module_hidden_global`), so:
 
 - *Lookup* takes the found declaration when it is visible, else a visible
   redeclaration of the same entity (`module_visible_redecl`, clang
   `findAcceptableDecl`; a template's through its pattern's chain): the
   lookup table holds only the latest redeclaration, which may be the
   hidden one.
-- *A redefinition* whose previous definition is such a hidden GMF
+- *A redefinition* whose previous definition is such a hidden global
   declaration is not diagnosed: the previous definition (and the template
   it describes) is merged into the current unit (`module_merge_hidden_
   definition`). A class or enumeration body is then skipped like a
-  redefinition's (§4.4 of spec/sema.md); a variable, a variable template
+  redefinition's (§4.4 of spec/sema.md), and so is the body of a class
+  template's explicit or partial specialization ([temp.expl.spec]/1,
+  [temp.spec.partial.general]/1; WP-1156: libstdc++'s
+  `numeric_limits<_Float32>`, whose tokens differ between units once
+  glibc's `<math.h>` has defined `__builtin_nansf32` as a macro, so the
+  position check above cannot match it); a variable, a variable template
   specialization and a function keep the new definition as a
   redeclaration of the entity; a concept is created out of lookup.
 - *An opaque enum redeclaration* (which creates no declaration of its
@@ -1052,7 +1062,7 @@ What an image must hold, the id it is keyed by, and where it stands:
 | types | `QualType` into the type context | replayed; a carried value's type is its expression's | type table, re-interned |
 | expressions, statements, attributes, lists | `ExprId`, `StmtId`, `AttrId`, `ListId` | replayed | bodies the importer can use (inline, constexpr, templates), per declaration |
 | template specializations and implicit instantiations | sema's instantiation tables | replayed | carried, merged by (template, arguments) |
-| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); not yet pointers to string literals, temporaries and labels, nor data member specification and annotation reflections | the same encoding, its entities remapped; the values part 1 leaves out |
+| constant values | `ConstValueId` in the `ConstStore` | **carried**: integers, enumerators, `bool`, floating point, null pointers; pointers, references and pointers to members by the entities they name, reflections, and aggregates holding any of these (WP-1047); pointers to string literals, lifetime-extended temporaries and labels, and reflections of alias template specializations, data member specifications and annotations (WP-1160); not an alias template specialization with a non-type argument, nor an annotation `define_aggregate` made | the same encoding, its entities remapped; the values part 1 leaves out |
 | Oven state (frozen heap objects, memo tables) | the Oven | not carried | frozen objects as constant values; memo tables stay per TU |
 | source positions | `FileId`, `Loc` | keys only (see "Identity") | location table over the capsule's file table |
 | identifiers | `Symbol` (`kiln_source::Interner`) | replayed | string table, re-interned |
@@ -1199,7 +1209,7 @@ crate that reads them: the carried constants are `kiln_sema::bmi_ast`.
 Section 1, little-endian:
 
 ```
-marker   u32 0xffffffff, then u32 version (3)
+marker   u32 0xffffffff, then u32 version (4)
 paths    u32 count, then each path (u32 length, UTF-8)
 insts    u32 count, then each instantiation key (u32 length, bytes,
          see "Instantiation keys"), numbered from 1 in first-use order
@@ -1227,16 +1237,42 @@ entries  u32 count (at least 1), then each entry:
                              2 typeid object: ty
                              3 template parameter object: ty, value
                              4 constant object: ty, value
+                             (version 4, WP-1160:)
+                             5 string literal: at (its expression's
+                               position, as an entry's `at`)
+                             6 lifetime-extended temporary: ent the
+                               extending declaration, var its mangling
+                               index, ty the temporary's type, u8 0|1,
+                               then if 1: ty, value (its value)
+                             7 label: ent the label, at (the
+                               `&&label` expression's position)
                            var byte offset, [ty designated subobject]
          7 member pointer: u8 flags (bit 0 function, bit 1 derived),
                            ent member, var count, count x ent path
          8 reflection:     u8 reflectee tag (`Reflectee::tag`), then
-                             type: u8 0 then ty, or 1 then ent (an alias)
+                             type: u8 0 then ty, or 1 then ent (an alias),
+                               or (version 4) 2 then ent (an alias
+                               template), args (as in a key), ty (the
+                               aliased type): an alias template
+                               specialization
                              declaration, namespace, namespace alias,
                              template: ent
                              null: nothing
                              value, object: ty, value
                              base, parameter: ent, var index
+                             (version 4, WP-1160:)
+                             data member specification: ty, u8 flags
+                               (bit 0 name, 1 alignment, 2 bit width,
+                               3 no_unique_address), [name: bytes
+                               (u32 length, an identifier)], [u32
+                               alignment], [u32 width], var count,
+                               count x reflectee (its annotations)
+                             annotation: u8 0 (of the entity) or 1 then
+                               var base index (of that base specifier),
+                               ent the entity (the class, for a base),
+                               at (the annotation's position), var
+                               ordinal among that list's annotations at
+                               that position
          9 aggregate+:     bytes (u32 length), var padding count, then
                            (var start, var length); var reloc count, then
                            (var at, ty, value); var union count, then
@@ -1245,15 +1281,18 @@ entries  u32 count (at least 1), then each entry:
 ```
 
 A value part 1 could carry keeps part 1's bytes (tags 0-4), also inside
-an aggregate+ or a key; tags 5-10 appear only in version 3 sections.
+an aggregate+ or a key; tags 5-10 appear only in version 3 and 4
+sections, and the pointer bases 5-7 and reflection forms above marked
+version 4 only in version 4 sections.
 Values nest at most 48 levels, like keys (an entry's value has no length cap).
 
 - **Versioned.** Version 1 (WP-985) had no marker, version or
   instantiation table, and no `inst` field; its first word is the path
   count, never `0xffffffff`. The reader reads version 1 as written (every
-  entry at index 0) and rejects any version but 1, 2 and 3 (`unsupported
+  entry at index 0) and rejects any version but 1 to 4 (`unsupported
   section version`). Version 2 (WP-1046) is version 3 without tags 5-10
-  and the `U` entity. Only carried keys are written: an instantiation key
+  and the `U` entity; version 3 (WP-1047) is version 4 without the forms
+  marked version 4 above. Only carried keys are written: an instantiation key
   no kept entry uses is dropped and the rest renumbered.
 - **Deterministic.** Paths are in first-use order and entries in
   first-evaluation order (no hash-map iteration), so the same inputs give
@@ -1273,7 +1312,19 @@ Values nest at most 48 levels, like keys (an entry's value has no length cap).
   specializations, an `M`/`P` through the specialization's members.
   Every resolved declaration is checked by writing its key again and
   comparing the bytes, so a value names exactly the writer's entity or
-  is not used (`bmi_ast/value.rs`). Any failure is a `SectionError`, turned into §11.4's
+  is not used (`bmi_ast/value.rs`). The version-4 forms resolve the same
+  way (WP-1160): a string literal or label address to the importer's
+  own `StringLiteral` or `&&label` expression at the position (two at
+  one position resolve to neither; a label must be the label the value
+  names), a temporary to the importer's lifetime-extended temporary of
+  that extending declaration and mangling index whose type is the
+  written one, an annotation to the ordinal-th of the entity's (or base
+  specifier's) annotations at that position, unless the entity's
+  annotations are still to be instantiated; a data member specification
+  is checked as `data_member_spec` checks its options (an identifier,
+  a power-of-two alignment, a name or a width, not both alignment and
+  width, nor width and `no_unique_address`, no name on a zero width;
+  annotations that are values or objects) and interned in the Oven. Any failure is a `SectionError`, turned into §11.4's
   `fatal error: module file 'x.pcm' is corrupt: carried constants:
   <reason>`. The framing errors (`a kind-2 file without sections`,
   `unknown section`, `sections out of order`) are `BmiError`s with the
@@ -1333,14 +1384,65 @@ file and does not force kind 1. Sema then records every evaluation
   instantiated a template must still instantiate it);
 - it succeeded, its value's type is its expression's (or it is a
   reference's value, see "Identity"), and every entity, type and value it
-  names has a key (see "Encoding"); a pointer to a string literal, a
-  temporary or a label, and a data member specification or annotation
-  reflection have none;
+  names has a key (see "Encoding", and "Identity of the WP-1160 values"
+  below for the ones that have none);
 - no other evaluation with the same key gave a different result (the
   same evaluation made again, a constraint checked twice, keeps its
   result).
 
 The rest are evaluated again by the importer, as in kind 1.
+
+#### Identity of the WP-1160 values
+
+Each carried value must be the object or entity the importer's replay
+would have produced, so a pointer compares equal to the importer's own
+pointer to the same object and a reflection to its own reflection of the
+same entity:
+
+- **String literal.** The replay creates the literal's object from the
+  literal's expression; the value names that expression by position, and
+  the importer's own expression there is the replay's ([lex.string]/9
+  lets two evaluations of one literal give one object; kiln always does).
+  A non-dependent literal in a template body is one expression every
+  specialization shares (substitution keeps it), so `name<int>()` and
+  `name<long>()` both carry. Two literal expressions at one position (a
+  template expression formed again by an instantiation) resolve to
+  neither, and the importer evaluates. `__func__` and the other
+  predefined names are carried as the string literal they denote.
+- **Lifetime-extended temporary.** The replay makes the temporary when it
+  analyses the extending declaration, numbered by its mangling index; the
+  value names it by both ([class.temporary]/6), so the importer's pointer
+  is to its own temporary (the one its IR emits). The temporary's value
+  travels with it and is given to the importer's temporary if it has none
+  yet, as the replay's evaluation would; one that has a different value
+  is not used. A temporary that is not lifetime-extended cannot be a
+  constant's result ([expr.const]), so there is nothing to carry.
+- **Label.** The value names the label and the `&&label` expression's
+  position; the importer's own expression there must name the same
+  label.
+- **Alias template specialization.** `^^Ptr<int>` keeps the alias
+  specialization with its canonical arguments and aliased type
+  (`Ast::reflection_type`), and the type store interns it, so the
+  importer's rebuilt type is its own `^^Ptr<int>`. A non-type argument is
+  kept as written (an expression), which has no key, so a reflection of
+  `Arr<char, 3>` falls back (`a reflection of an alias template
+  specialization with no key`); that spelling is not even equal to
+  itself within one unit yet
+  (`tests/conformance/expr.reflect/alias-spec-value-arg-identity.cpp`,
+  xfail).
+- **Data member specification.** The Oven interns specifications by
+  their contents ([meta.reflection.define.aggregate]: two calls with
+  equal arguments give one reflection), so the importer interning the
+  same contents gets the reflection its own `data_member_spec` call
+  gives. One whose type or annotation values have no key falls back.
+- **Annotation.** An annotation is a property of its entity
+  ([dcl.attr.annotation]); the value names the entity, its position and
+  its ordinal among the entity's annotations at that position (a macro
+  argument expanded twice puts two at one position), so it is the
+  importer's own annotation.
+  One `define_aggregate` made has no position (`an annotation reflection
+  made by define_aggregate`), and one whose entity has no key or whose
+  position is outside the replayed source falls back too.
 
 #### Fallback
 
@@ -1350,7 +1452,7 @@ is the default. The choice is never a warning. Under `-v` the driver
 prints one of:
 
 ```
-note: wrote module file 'm.pcm' as kind 2, carrying N constant results[, M inside template instantiations]
+note: wrote module file 'm.pcm' as kind 2, carrying N constant results[, M inside template instantiations][ (first not carried: <reason>)]
 note: wrote module file 'm.pcm' as kind 1: no constant result to carry (first not carried: <reason>)
 note: wrote module file 'm.pcm' as kind 1, as -fkiln-bmi-kind=1 requests
 ```
@@ -1366,8 +1468,17 @@ pointer or reference value whose object has no key`, `a pointer-to-member
 value whose member has no key`, `a reflection value with no key`, `an
 aggregate holding a value with no key`, `a reference value` (a reference's
 value naming something without a key), `two evaluations at one
-position`. The reason is printed only when nothing was carried. When the unit made no evaluation at
-all, the parenthesis is left out. The reader accepts both kinds, so
+position`, and (WP-1160) `a pointer to a string literal outside the
+replayed source`, `a pointer to a temporary whose declaration has no
+key`, `a label address whose label has no key`, `a reflection of an
+alias template specialization with no key`, `a data member
+specification with a value that has no key`, `an annotation reflection
+made by define_aggregate`, `an annotation reflection whose entity has no
+key`, `an annotation reflection outside the replayed source`. The reason
+is printed whenever any evaluation was not carried, also beside a kind-2
+count (WP-1160; before, only when nothing was carried). When every
+evaluation was carried, or the unit made none, the parenthesis is left
+out. The reader accepts both kinds, so
 mixing them in one build is fine.
 
 On libc++ 19's `std.cppm`, part 1 carried 2900 results, and part 2
@@ -2783,6 +2894,14 @@ interface or `stdapp`'s source never rebuilds the std module.
 - `module.global.frag/gmf-merge-importer.cpp` (+ `Inputs/gmi-*.cppm`):
   entities declared in both an importer's and an imported unit's GMF
   merge (§6, "Merging by entity"; WP-460), compared with clang.
+- `module.global.frag/gmf-spec-merge.cpp` (+ `Inputs/gmf-spec-merge.cppm`,
+  WP-1156): a class and a class template's explicit and partial
+  specializations defined by an importer before its `import` and after
+  it merge with the imported unit's GMF definitions.
+  `gmf-floatn-limits.cpp` and `gmf-floatn-limits-run.cpp` (+
+  `Inputs/gmf-floatn-*.cppm`): libstdc++'s `numeric_limits<_Float32>`/
+  `<_Float64>` specializations across the module boundary, with `<math.h>`
+  before and after `<limits>` on each side.
 - `module.import/header-unit*.cpp`: header units (macros visible): kiln
   builds them in-process, clang through the harness's `header-unit:`
   lines (`-fmodule-header`, WP-986).
@@ -2902,8 +3021,8 @@ interface or `stdapp`'s source never rebuilds the std module.
   `fmt_module` ({fmt} 12.1.0 with `FMT_MODULE=ON` and an importer) build
   with Ninja through kiln-scan-deps against a clang 19 control
   (docs/status/oss/{cmake_modules,fmt_module}.md);
-  `module.global.frag/gmf-floatn-limits.cpp` is the `fmt_module`
-  libstdc++ failure, xfail.
+  `module.global.frag/gmf-floatn-limits.cpp` reduces the `fmt_module`
+  libstdc++ failure, fixed by WP-1156 (§6).
 - Kind 2 (WP-985, §11.11): `crates/kiln_sema/src/bmi_ast.rs` unit
   tests (the section's round trip, no bytes without a carried entry,
   trailing bytes and an out-of-range path index rejected, and a fuzz
@@ -2925,14 +3044,19 @@ interface or `stdapp`'s source never rebuilds the std module.
   `kind2_carries_pointer_and_reflection_values` (WP-1047: the importer
   of `module.interface/Inputs/cv.cppm` and `cr.cppm` re-evaluates none of
   their constant evaluations under kind 2 but the failed trial
-  evaluations, and its IR is the same under both kinds);
+  evaluations, and its IR is the same under both kinds; WP-1160 adds
+  `cl.cppm` and `cx.cppm`, the `-v` reason beside a kind-2 count, and
+  16 damaged sections of each behind a valid checksum);
   `crates/kiln_sema/src/bmi_ast.rs` `wire_*` and `fuzz_wire_values`
-  (every value of tags 5-10 and a key holding pointer and reflection
-  arguments round-trip; their truncations, flips and overlong varints are
-  rejected without a panic); the `-run` tests
+  (every value of tags 5-10, the version-4 pointer bases and reflection
+  forms, and a key holding pointer and reflection arguments round-trip;
+  their truncations, flips, out-of-range paths, flags and overlong
+  varints are rejected without a panic); the `-run` tests
   `module.interface/carried-pointers-run.cpp` and
   `carried-reflections-run.cpp` (address and specialization identity
   across the two units, `&X<&g>::x`, `&Wrap<^^S>::x`, template parameter
-  objects);
+  objects), `carried-literals-run.cpp` (string literals, temporaries and
+  labels, WP-1160) and `carried-reflections-more-run.cpp` (alias template
+  specializations, data member specifications and annotations, WP-1160);
   and every `module:` test under `cargo xtask test --bmi-kind 1` and
   `--bmi-kind 2` (spec/harness.md "Module-file kinds"), both in `ci`.

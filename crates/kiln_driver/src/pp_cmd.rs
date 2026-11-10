@@ -698,7 +698,7 @@ impl Job<'_> {
                 } else {
                     String::new()
                 };
-                format!("kind 2, carrying {} constant results{inst}", c.carried)
+                format!("kind 2, carrying {} constant results{inst}{}", c.carried, skip(c))
             }
             Some(c) if decl_image.is_some() => {
                 format!("kind 2, carrying no constant result{}", skip(c))

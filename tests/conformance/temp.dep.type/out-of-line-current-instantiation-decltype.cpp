@@ -2,10 +2,9 @@
 // `decltype` operand written before the declarator-id of an out-of-line
 // member names the member of the current instantiation, so
 // `decltype(typename C<X>::T())` is equivalent to the in-class
-// `decltype(T())` (clang's `RebuildExprInCurrentInstantiation`).
+// `decltype(T())` (clang's `RebuildExprInCurrentInstantiation`; WP-1154).
 //@ expect: run
 //@ strict-diags
-//@ xfail(kiln): WP-1152 follow-up, decltype operands are not rebuilt in the current instantiation
 //@ stdout: 7
 extern "C" int printf(const char*, ...);
 template <class X> struct C {
