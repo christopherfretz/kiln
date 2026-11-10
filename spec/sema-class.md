@@ -2084,7 +2084,8 @@ the `-Wdangling-gsl` extensions to more `std` members and the
   `basic.stc.thread/local-lvalue-run.cpp`).
 - **NRVO marking (clang 19 `Scope::updateNRVOCandidate` / `applyNRVO` /
   `computeNRVO`).** A copy-elision candidate of `return e` is `e` (through
-  parentheses) naming a non-volatile, non-reference local variable with
+  clang's `IgnoreParens`: parentheses, `__extension__`, a resolved
+  `_Generic`/`__builtin_choose_expr`; spec/sema.md §5.5) naming a non-volatile, non-reference local variable with
   automatic storage (not a parameter, not `thread_local`, not an exception
   variable) whose type is the class return type ignoring cv (or either is
   dependent). `ReturnStmt.b` = that candidate (dump `nrvo_candidate(Var 'x'
