@@ -153,13 +153,16 @@ impl Cg<'_> {
             return Ok(BuiltinCall::Emitted(p));
         }
         let name = row.info.name;
+        let short = name.strip_prefix(x86::PREFIX).unwrap_or(name);
+        let width =
+            crate::x86_gen::required_width(short, row.info.sig, self.opts.clang_compat >= 22);
+        self.f.vector_width = self.f.vector_width.max(width);
         if let Some(v) = self.x86_custom(name, e, &args, rty)? {
             return Ok(BuiltinCall::Emitted(v));
         }
         if let Some(map) = by_name(name) {
             return self.x86_mapped(&map, b, e, &args, rty).map(BuiltinCall::Emitted);
         }
-        let short = name.strip_prefix(x86::PREFIX).unwrap_or(name);
         if let Some(v) = self.x86_generic(b, short, e, &args, rty)? {
             return Ok(BuiltinCall::Emitted(v));
         }
@@ -401,8 +404,7 @@ impl Cg<'_> {
                 let mask = (0..total).map(|i| (i & !3) + ((im >> (2 * (i & 3))) & 3)).collect();
                 self.shuffle(a, None, mask)
             }
-            "pshuflw" | "pshufhw" | "pshuflw256" | "pshufhw256" | "pshuflw512"
-            | "pshufhw512" => {
+            "pshuflw" | "pshufhw" | "pshuflw256" | "pshufhw256" | "pshuflw512" | "pshufhw512" => {
                 let a = arg(self, 0)?;
                 let im = imm(self, 1)?;
                 let (_, total) = self.x86_lanes(rty);

@@ -23,8 +23,9 @@
 //! other errors are operand checks the made-up operands trip (a NEON
 //! type code, a shift immediate) and only drop the call.
 //!
-//! On x86 every feature is on (`x86_features::all_flags`), and a call
-//! sema rejects with each operand count is retried with the last operand
+//! On x86 every feature is on (`x86_features::all_flags`), and a
+//! `__builtin_ia32_*` call sema rejects with each operand count is
+//! retried with the last operand
 //! `4` (a rounding mode, a gather scale) and then with the operands `1`,
 //! `2`, ... (distinct AMX tile numbers; WP-1242).
 //!
@@ -183,6 +184,7 @@ impl Probe {
             left = next;
         }
         if !self.flags.is_empty() {
+            left.retain(|n| n.starts_with("__builtin_ia32_"));
             let last4 = |k: usize| {
                 let mut a = vec!["Any{}".to_string(); k - 1];
                 a.push("4".into());

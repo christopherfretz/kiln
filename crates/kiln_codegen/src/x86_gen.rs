@@ -9,9 +9,7 @@
 
 use kiln_ast::ExprId;
 use kiln_ast::decl::builtin as id;
-use kiln_llvm::{
-    Attr, BinOp, CastOp, FastMath, Flags, IntPredicate, TypeId as LTy, intrinsics,
-};
+use kiln_llvm::{Attr, BinOp, CastOp, FastMath, Flags, IntPredicate, TypeId as LTy, intrinsics};
 
 use crate::fir::{Fir, Op, V};
 use crate::module::{Cg, R, err};
@@ -138,7 +136,9 @@ fn family(n: &str) -> Option<Fam> {
         "selectsh_128" | "selectss_128" | "selectsd_128" => ScalarSelect,
         "sqrtph" | "sqrtph256" | "sqrtph512" | "sqrtps512" | "sqrtpd512" => Sqrt,
         "sqrtsh_round_mask" | "sqrtss_round_mask" | "sqrtsd_round_mask" => ScalarSqrt,
-        "cvtneps2bf16_128_mask" | "cvtneps2bf16_256_mask" | "cvtneps2bf16_512_mask"
+        "cvtneps2bf16_128_mask"
+        | "cvtneps2bf16_256_mask"
+        | "cvtneps2bf16_512_mask"
         | "cvtsbf162ss_32" => Bf16,
         "pmovqd512_mask" | "pmovwb512_mask" => Trunc,
         "cvtdq2ps512_mask" | "cvtqq2ps512_mask" | "cvtqq2pd512_mask" | "vcvtw2ph512_mask"
@@ -148,10 +148,12 @@ fn family(n: &str) -> Option<Fam> {
         "xsave" | "xsave64" | "xrstor" | "xrstor64" | "xsaveopt" | "xsaveopt64" | "xrstors"
         | "xrstors64" | "xsavec" | "xsavec64" | "xsaves" | "xsaves64" | "xsetbv" => Xsave,
         "prefetchi" => Prefetchi,
-        "vfmaddcph512_mask" | "vfcmaddcph512_mask" | "vfmaddcsh_round_mask"
-        | "vfcmaddcsh_round_mask" | "vfmaddcsh_round_mask3" | "vfcmaddcsh_round_mask3" => {
-            ComplexFma
-        }
+        "vfmaddcph512_mask"
+        | "vfcmaddcph512_mask"
+        | "vfmaddcsh_round_mask"
+        | "vfcmaddcsh_round_mask"
+        | "vfmaddcsh_round_mask3"
+        | "vfcmaddcsh_round_mask3" => ComplexFma,
         "vpermilpd" | "vpermilps" | "vpermilpd256" | "vpermilps256" | "vpermilpd512"
         | "vpermilps512" => Permil,
         "permdf256" | "permdi256" | "permdf512" | "permdi512" => Perm4x64,
@@ -166,29 +168,31 @@ fn family(n: &str) -> Option<Fam> {
         _ if (n.starts_with("vfmadd") || n.starts_with("vfmsub")) && n.contains("3_mask") => {
             ScalarFma
         }
-        _ if ["kand", "kandn", "kor", "kxnor", "kxor", "knot", "kunpck", "kortestc", "kortestz"]
-            .iter()
-            .any(|s| sized(n, s, K4).is_some())
+        _ if [
+            "kand", "kandn", "kor", "kxnor", "kxor", "knot", "kunpck", "kortestc", "kortestz",
+        ]
+        .iter()
+        .any(|s| sized(n, s, K4).is_some())
             || sized(n, "kshiftli", K4).is_some()
             || sized(n, "kshiftri", K4).is_some() =>
         {
             MaskOp
         }
-        _ if ["cmpb", "cmpw", "cmpd", "cmpq"].iter().any(|s| {
-            n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["cmpb", "cmpw", "cmpd", "cmpq"]
+            .iter()
+            .any(|s| n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             IntCmp(true)
         }
-        _ if ["ucmpb", "ucmpw", "ucmpd", "ucmpq"].iter().any(|s| {
-            n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["ucmpb", "ucmpw", "ucmpd", "ucmpq"]
+            .iter()
+            .any(|s| n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             IntCmp(false)
         }
-        _ if ["cmpph", "cmpps", "cmppd"].iter().any(|s| {
-            n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["cmpph", "cmpps", "cmppd"]
+            .iter()
+            .any(|s| n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             FpCmp
         }
@@ -200,15 +204,15 @@ fn family(n: &str) -> Option<Fam> {
         {
             Funnel
         }
-        _ if ["pternlogd", "pternlogq"].iter().any(|s| {
-            n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["pternlogd", "pternlogq"]
+            .iter()
+            .any(|s| n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             Ternlog(false)
         }
-        _ if ["pternlogd", "pternlogq"].iter().any(|s| {
-            n.strip_suffix("_maskz").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["pternlogd", "pternlogq"]
+            .iter()
+            .any(|s| n.strip_suffix("_maskz").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             Ternlog(true)
         }
@@ -220,15 +224,15 @@ fn family(n: &str) -> Option<Fam> {
             Select
         }
         _ if sized(n, "vplzcntd", U3).is_some() || sized(n, "vplzcntq", U3).is_some() => Lzcnt,
-        _ if ["reduce_fadd_", "reduce_fmul_", "reduce_fmax_", "reduce_fmin_"].iter().any(|s| {
-            sized(n, s, &["pd512", "ps512", "ph512", "ph256", "ph128"]).is_some()
-        }) =>
+        _ if ["reduce_fadd_", "reduce_fmul_", "reduce_fmax_", "reduce_fmin_"]
+            .iter()
+            .any(|s| sized(n, s, &["pd512", "ps512", "ph512", "ph256", "ph128"]).is_some()) =>
         {
             Reduce
         }
-        _ if ["fpclassph", "fpclassps", "fpclasspd"].iter().any(|s| {
-            n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()
-        }) =>
+        _ if ["fpclassph", "fpclassps", "fpclasspd"]
+            .iter()
+            .any(|s| n.strip_suffix("_mask").and_then(|m| sized(m, s, V3)).is_some()) =>
         {
             FpClass
         }
@@ -290,8 +294,7 @@ fn masked_mem(n: &str) -> Option<Fam> {
         Fam::MaskedStore(false)
     } else if matches!(m, "storesh128" | "storess128" | "storesd128") {
         Fam::MaskedStore(false)
-    } else if m.strip_prefix("movdqa32store").or(m.strip_prefix("movdqa64store")).is_some_and(v)
-    {
+    } else if m.strip_prefix("movdqa32store").or(m.strip_prefix("movdqa64store")).is_some_and(v) {
         Fam::MaskedStore(true)
     } else if m.strip_prefix("expandload").is_some_and(ty) {
         Fam::ExpandLoad
@@ -887,7 +890,10 @@ impl Cg<'_> {
     /// The `(type, immarg)` parameters of an intrinsic taking `ops`, the
     /// operands at `imm` being `immarg`.
     fn x86_params(&self, ops: &[V], imm: &[usize]) -> Vec<(LTy, bool)> {
-        ops.iter().enumerate().map(|(i, &v)| (self.f.fir.ty(&self.m, v), imm.contains(&i))).collect()
+        ops.iter()
+            .enumerate()
+            .map(|(i, &v)| (self.f.fir.ty(&self.m, v), imm.contains(&i)))
+            .collect()
     }
 
     /// The alignment of the vector type of argument `a` (clang
@@ -1131,11 +1137,8 @@ impl Cg<'_> {
             }
             "kortestc" | "kortestz" => {
                 let or = logic(self, BinOp::Or, false);
-                let c = if stem == "kortestc" {
-                    self.x86_ones(t)
-                } else {
-                    V::C(self.m.const_zero(t))
-                };
+                let c =
+                    if stem == "kortestc" { self.x86_ones(t) } else { V::C(self.m.const_zero(t)) };
                 let cmp = self.icmp(IntPredicate::Eq, or, c);
                 self.cast(CastOp::ZExt, cmp, rty)
             }
@@ -1159,9 +1162,63 @@ impl Cg<'_> {
     }
 }
 
+/// clang's `RequiredVectorWidth` of x86 builtin `n` (prototype `sig`):
+/// the `"min-legal-vector-width"` a call raises its function to
+/// (`EmitBuiltinExpr` after `checkTargetFeatures`). It is the widest
+/// vector the prototype names, a pointee included, except where clang's
+/// table says otherwise: the AMX `*_internal` tile forms (none), the MMX
+/// `cvt*pi*` conversions (64), `pblendd128` and `vpermilvar{pd,ps}` (256),
+/// and `extract128i256` (256 in clang 19, 128 from clang 22). Checked
+/// against clang 19's and 22's for every row (WP-1242). Without it a
+/// 512-bit builtin in a function with no 512-bit parameter, under a CPU
+/// that prefers 256-bit vectors (`-march=skylake-avx512`), is split by
+/// the backend, which cannot split the `llvm.x86.*` intrinsics.
+pub(crate) fn required_width(n: &str, sig: &str, v22: bool) -> u64 {
+    match n {
+        "cvtpd2pi" | "cvtpi2pd" | "cvtpi2ps" | "cvtps2pi" | "cvttpd2pi" | "cvttps2pi" => {
+            return 64;
+        }
+        "pblendd128" | "vpermilvarpd" | "vpermilvarps" => return 256,
+        "extract128i256" => return if v22 { 128 } else { 256 },
+        _ if n.ends_with("_internal") => return 0,
+        _ => {}
+    }
+    let b = sig.as_bytes();
+    let mut w = 0u64;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'V' {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut lanes = 0u64;
+        while let Some(d) = b.get(i).filter(|c| c.is_ascii_digit()) {
+            lanes = lanes * 10 + u64::from(d - b'0');
+            i += 1;
+        }
+        while matches!(b.get(i), Some(b'U' | b'S')) {
+            i += 1;
+        }
+        let bits = if b[i..].starts_with(b"LLi") {
+            64
+        } else {
+            match b.get(i) {
+                Some(b'c') => 8,
+                Some(b's' | b'h' | b'x' | b'y') => 16,
+                Some(b'i' | b'f') => 32,
+                Some(b'd') => 64,
+                _ => 0,
+            }
+        };
+        w = w.max(lanes * bits);
+    }
+    w
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Fam, family};
+    use super::{Fam, family, required_width};
 
     #[test]
     fn families() {
@@ -1192,5 +1249,20 @@ mod tests {
         assert_eq!(family("cmpps"), None);
         assert_eq!(family("scatterdpd"), None);
         assert_eq!(family("gathersiv2df"), None);
+    }
+
+    #[test]
+    fn widths() {
+        assert_eq!(required_width("permti256", "V4LLiV4LLiV4LLiIi", true), 256);
+        assert_eq!(required_width("pmuludq512", "V8LLiV16iV16i", true), 512);
+        assert_eq!(required_width("vcvtph2ps", "V4fV8s", true), 128);
+        assert_eq!(required_width("pabsb", "V8cV8c", false), 64);
+        assert_eq!(required_width("cvtpi2ps", "V4fV4fV2i", false), 64);
+        assert_eq!(required_width("pblendd128", "V4iV4iV4iIi", true), 256);
+        assert_eq!(required_width("extract128i256", "V2LLiV4LLiIi", false), 256);
+        assert_eq!(required_width("extract128i256", "V2LLiV4LLiIi", true), 128);
+        assert_eq!(required_width("rdtsc", "ULLi", true), 0);
+        assert_eq!(required_width("aesencwide128kl_u8", "UcV2LLi*V2LLiC*vC*", true), 128);
+        assert_eq!(required_width("vcvtph2ps512_mask", "V16fV16sV16fUsIi", true), 512);
     }
 }
