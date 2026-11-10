@@ -1669,7 +1669,8 @@ silently (`diag = None`) at those sites. S3O lists them.
      (`template <fs F>`, [dcl.type.class.deduct]/2) a value whose type is a
      specialization of that template (its copy deduction candidate,
      [over.match.class.deduct]/1.3; `ctad_placeholder_matches`; WP-1217,
-     `tests/conformance/temp.spec.partial.match/nttp-class-placeholder-run.cpp`);
+     `tests/conformance/temp.spec.partial.match/nttp-class-placeholder-run.cpp`,
+     `nttp-class-placeholder-qualified-run.cpp`);
      a deduced pack element by element. So
      `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
      primary does not bind `template<int N> A<N>` (WP-1105,
