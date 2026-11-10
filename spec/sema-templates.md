@@ -7143,10 +7143,27 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
   the `static_assert`), then the frames older than the call. GCC 16.1
   prints the same chain as "in 'constexpr' expansion of" lines. The
   frames render only when such an error prints, and only while the Oven
-  sema holds is the one paused in that call (the mark matches): an error
-  reached through a nested evaluation the call started prints its
-  instantiation notes alone. A frame elided by
-  `-ftemplate-backtrace-limit` takes the call frames with it.
+  sema holds still holds the evaluation paused in that call: the mark
+  matches, or the Oven runs a nested evaluation the call's work started
+  (a greater nesting depth, its entry above the marked frames on the
+  same stack). Every `meta_calls` entry whose anchor frame is printed
+  contributes, innermost first, each its own evaluation's frames only
+  (`stack[mark.entry+1 .. mark.frames]`), so an error in an
+  instantiation a nested evaluation's query requires (a `static_assert`
+  in a class template specialization the outer query instantiates) ends
+  each evaluation's part of the context with its call frames, down to
+  the outermost `static_assert`, as GCC names both evaluations (WP-1258).
+  A frame elided by `-ftemplate-backtrace-limit` keeps its call frames:
+  they print after the "(skipping K contexts in backtrace)" note, in
+  their place innermost first, before the next frame shown
+  (`InstantiationStack::context_notes`'s `keep` notes; a frame's second
+  note, `frame_extra_note`, is elided with it). The evaluation of the
+  never-constant check (spec/sema.md, `never_constant.rs`, a
+  potential-constant evaluation: `Oven::evaluate_call`,
+  `Oven::evaluate_potential`, a frame job) is the check's own, not a call
+  of the program's: its mark is flagged potential and contributes no
+  call frames, so the check's instantiation error prints as one outside
+  any evaluation does (WP-1258).
 
 **Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,
