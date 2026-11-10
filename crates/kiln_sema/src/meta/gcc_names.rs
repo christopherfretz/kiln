@@ -1046,8 +1046,10 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
                     }
                     self.nonconsecutive('>');
                 }
-                if k == DeclKind::VarTemplateSpecialization
-                    && let Some((_, info)) = ast.spec_info(d)
+                // A variable template specialization (an implicit one is
+                // a `Var`) with its arguments: `ns::vt<int>` (WP-1258).
+                if let Some((_, info)) = ast.spec_info(d)
+                    && ast.decls.get(info.template).kind() == DeclKind::VarTemplate
                 {
                     let args = ast.types.canonical_args(info.args);
                     let n = ast.types.args(args).len();

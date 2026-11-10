@@ -3742,7 +3742,14 @@ follow clang trunk's P3068 branch.
   note that read carries elsewhere ("read of dereferenced one-past-the-end
   pointer is not allowed in a constant expression"), as a `static_assert`
   message prints the characters read before its failure (WP-1251;
-  `expr.throw/constexpr-uncaught-what-{unterminated,utf8-cap,fails}.cpp`); else, or
+  `expr.throw/constexpr-uncaught-what-{unterminated,utf8-cap,fails}.cpp`).
+  The bytes kept are escaped as all program-provided text a diagnostic
+  prints (`kiln_diag::escape_diag_text`, spec/diag.md §6.2; the cap
+  counts the bytes before escaping): a newline or a tab prints as is, a
+  control character as `<U+XXXX>`, a byte that is not valid UTF-8 as
+  `<XX>`, as clang prints a `static_assert` message (GCC 16.1 prints
+  C escapes, `\x0a`, and keeps every note on one line; WP-1259,
+  `expr.throw/constexpr-uncaught-what-escape.cpp`). Else, or
   when that call is not constant or the first read faults,
   "unhandled exception of type 'T' thrown from here" at the operand when
   `T` has size 1 (an empty class, a `char`, a class of one `char`: the
@@ -4087,9 +4094,15 @@ impl Oven {
     pub fn disassemble(&self) -> String;                          // debugging aid
     // The evaluation paused in a bridge callback (WP-1248): a token for it,
     // and its call stack as "in call to 'f(args)'" notes, innermost first,
-    // elided as a failure's backtrace (-fconstexpr-backtrace-limit).
+    // elided as a failure's backtrace (-fconstexpr-backtrace-limit). The
+    // notes are those of the evaluation `mark` names, while this Oven still
+    // holds it paused (the mark matches, or a nested evaluation runs above
+    // it on the same stack): its own frames only. Empty for a mark taken in
+    // a potential-constant evaluation (`evaluate_call`, `evaluate_potential`,
+    // a frame job: sema's never-constant check), whose frames are the
+    // check's own (WP-1258).
     pub fn frame_mark(&self) -> FrameMark;
-    pub fn paused_call_notes(&self, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
+    pub fn paused_call_notes(&self, mark: FrameMark, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
 }
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }
 ```

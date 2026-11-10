@@ -229,7 +229,7 @@ impl Sema<'_, '_> {
             let bytes = oven.dms_name_bytes();
             let Some(s) = std::str::from_utf8(bytes).ok().filter(|s| kiln_lex::is_identifier(s))
             else {
-                let shown = String::from_utf8_lossy(bytes);
+                let shown = kiln_diag::escape_diag_text(bytes);
                 return fail(loc, format!("'{shown}' is not a valid identifier"));
             };
             if is_keyword(s) {

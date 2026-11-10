@@ -495,7 +495,21 @@ impl kiln_ast::consts::PrintEnv for SpellEnv<'_, '_, '_> {
         self.names.shape(ty)
     }
 
+    /// A declaration as clang names it, its scope's specializations with
+    /// their arguments (`S<int>::m`); for GCC a variable template
+    /// specialization with its own as well (`ns::vt<int>`, WP-1258).
     fn decl_name(&self, decl: DeclId, out: &mut String) {
+        if self.gcc
+            && self
+                .sema
+                .ast
+                .spec_info(decl)
+                .is_some_and(|(_, i)| self.sema.kind_of(i.template) == DeclKind::VarTemplate)
+            && let Some(s) = self.sema.gcc_reflection_operand(Reflectee::Decl(decl))
+        {
+            out.push_str(&s);
+            return;
+        }
         self.names.decl_name(decl, out);
     }
 

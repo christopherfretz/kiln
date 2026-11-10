@@ -1277,11 +1277,11 @@ impl Sema<'_, '_> {
         // constructor's mem-initializer state.
         let outer = std::mem::take(&mut self.mem_inits);
         let (body_errors, errors) = (self.inst.body_errors, self.diags.error_count());
-        let asserts = self.inst.static_assert_errors;
+        let checked = self.inst.checked_decl_errors;
         self.instantiate_function_definition_inner(f, poi);
         self.inst.body_errors = body_errors + self.diags.error_count().saturating_sub(errors);
         // Counted once, in `body_errors`.
-        self.inst.static_assert_errors = asserts;
+        self.inst.checked_decl_errors = checked;
         self.mem_inits = outer;
         // clang `InstantiateFunctionDefinition` ends with
         // `HandleTopLevelDecl` (coverage's zero record for an

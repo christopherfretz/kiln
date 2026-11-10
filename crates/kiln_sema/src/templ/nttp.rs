@@ -669,15 +669,26 @@ impl Sema<'_, '_> {
             Scalar::MemberPtr { member, derived, .. } => {
                 let class = self.declaring_class(member)?;
                 let declared = self.ast.decls.get(member).ty()?;
+                let class_ty = self.tag_type(class).ty();
+                // Qualified by the class (`&S<long>::m`), as clang's is.
+                let qualifier = Some(self.ast.types.nns(kiln_ast::types::Nns::Type {
+                    prefix: None,
+                    ty: class_ty.into(),
+                    template_kw: false,
+                }));
+                let extra = kiln_ast::expr::DeclRefExtra {
+                    qualifier,
+                    template_args: None,
+                    found_decl: None,
+                };
                 let r = self.builder().decl_ref(
                     member,
                     declared,
                     loc,
-                    None,
+                    Some(extra),
                     NonOdrUse::None,
                     ExprFlags::NONE,
                 );
-                let class_ty = self.tag_type(class).ty();
                 let mp = self.ast.types.member_pointer(declared, class_ty);
                 let a =
                     self.builder().unary(UnaryOp::AddrOf, r, mp, loc, ExprFlags::CANNOT_OVERFLOW);

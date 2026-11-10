@@ -202,6 +202,17 @@ impl<'a> AstNames<'a> {
         self.write_component(d, out);
     }
 
+    /// [`Self::write_qualified_name`] with each class template
+    /// specialization in the scope followed by its arguments
+    /// (`ns::R<int>::y`), as clang's `printQualifiedName` names a
+    /// declaration in a diagnostic: how a constant (a template argument,
+    /// an "in call to" argument) and a reflection name a declaration
+    /// (spec/reflection-repr.md §5, WP-1258).
+    pub fn write_qualified_spec_name(&self, d: DeclId, out: &mut String) {
+        self.write_scope_prefix(d, true, out);
+        self.write_component(d, out);
+    }
+
     /// Appends the name `-fdump-ast-filter` matches and prints after
     /// `Dumping` (clang `NamedDecl::printQualifiedName`, spec/ast-dump.md
     /// §1): [`Self::write_qualified_name`], but a class template
@@ -1696,7 +1707,7 @@ impl PrintEnv for AstNames<'_> {
     }
 
     fn decl_name(&self, decl: DeclId, out: &mut String) {
-        self.write_qualified_name(decl, out);
+        self.write_qualified_spec_name(decl, out);
     }
 
     fn decl_type(&self, decl: DeclId) -> Option<QualType> {
@@ -1729,7 +1740,7 @@ impl PrintEnv for AstNames<'_> {
                 _ => false,
             };
             if same {
-                self.write_qualified_name(m, out);
+                self.write_qualified_spec_name(m, out);
                 return true;
             }
         }
@@ -1737,7 +1748,7 @@ impl PrintEnv for AstNames<'_> {
     }
 
     /// A reflection in its stable form (spec/reflection-repr.md §5):
-    /// `^^int`, `^^ns::f`, `^^::`, `^^(value of type int)`.
+    /// `^^int`, `^^ns::f`, `^^S<int>::m`, `^^::`, `^^(value of type int)`.
     fn reflection(&self, id: crate::ids::ReflectionId, out: &mut String) {
         use crate::reflect::Reflectee;
         use std::fmt::Write;
@@ -1749,17 +1760,26 @@ impl PrintEnv for AstNames<'_> {
         out.push_str("^^");
         match r {
             Reflectee::Null => {}
-            Reflectee::Type(t) => self.type_name(t, out),
+            // As kept (an alias by its name), every name with its scope
+            // (`^^S<int>::In`, `^^n::P`): the reflect-expression keeps no
+            // qualifier sugar (WP-1258).
+            Reflectee::Type(t) => write_type(
+                &self.ast.types,
+                self,
+                t,
+                PrintOptions { full_scope: true, ..PrintOptions::SUGARED },
+                out,
+            ),
             Reflectee::Namespace(d)
                 if self.ast.decls.get(d).kind() == DeclKind::TranslationUnit =>
             {
                 out.push_str("::");
             }
             Reflectee::Decl(d) | Reflectee::Namespace(d) | Reflectee::NamespaceAlias(d) => {
-                self.write_qualified_name(d, out);
+                self.write_qualified_spec_name(d, out);
             }
             Reflectee::Template(n) => match self.ast.types.template_decl(n) {
-                Some(d) => self.write_qualified_name(d, out),
+                Some(d) => self.write_qualified_spec_name(d, out),
                 None => out.push_str("(template)"),
             },
             Reflectee::Value(v) | Reflectee::Object(v) => {
@@ -1774,7 +1794,7 @@ impl PrintEnv for AstNames<'_> {
             }
             Reflectee::BaseSpec(d, i) => {
                 let _ = write!(out, "(base #{i} of ");
-                self.write_qualified_name(d, out);
+                self.write_qualified_spec_name(d, out);
                 out.push(')');
             }
             Reflectee::DataMemberSpec(m) => {
@@ -1785,7 +1805,7 @@ impl PrintEnv for AstNames<'_> {
             }
             Reflectee::FnParam(f, i) => {
                 let _ = write!(out, "(parameter #{i} of ");
-                self.write_qualified_name(f, out);
+                self.write_qualified_spec_name(f, out);
                 out.push(')');
             }
         }
@@ -1852,7 +1872,7 @@ impl PrintEnv for Ast {
     }
 
     fn decl_name(&self, decl: DeclId, out: &mut String) {
-        AstNames::new(self).write_qualified_name(decl, out);
+        AstNames::new(self).write_qualified_spec_name(decl, out);
     }
 
     fn decl_type(&self, decl: DeclId) -> Option<QualType> {

@@ -3732,12 +3732,25 @@ recomputed exactly as for non-template code (clang's
   body triggered do not count (`inst.body_errors`). Neither do the
   errors of a `static_assert` whose condition substituted, the
   assertion failing or the condition not being constant
-  (`inst.static_assert_errors`; WP-1247): clang's
+  (`inst.checked_decl_errors`; WP-1247): clang's
   `BuildStaticAssertDeclaration` returns the failed declaration, not
   `StmtError`, so the body is valid. The closure stays, and a constant
   evaluation that calls it, or reads a variable template it initializes,
   goes on to report its next independent error, as GCC 16.1 and clang
-  do. Consequences of a body that does fail:
+  do. A consteval block whose expression substituted but whose
+  evaluation fails (not a constant expression, an uncaught exception;
+  [dcl.pre]/P3289R1) is counted the same way (`consteval_block_decl`;
+  WP-1257): it is one error, the program is ill-formed, and the lambda
+  is not invalidated, so a later call or copy of it, or a closure
+  returned from a function template, reports nothing more. A block in a
+  function template body, a class template member function or a generic
+  lambda's call operator already failed only itself (the failed
+  declaration is no statement error). GCC 16.1 reports one error per
+  block too, but where a constant evaluation runs through such a lambda
+  it treats the enclosing body as erroneous: its next error names no
+  independent cause, and a consteval caller gets a further "called in a
+  constant expression" error. kiln follows the standard and reports only
+  the independent next error. Consequences of a body that does fail:
   - The closure type is discarded (`act_on_lambda_error`), so no cascade
     follows from a closure whose call operator returns `void`. Neither a
     `return l();` nor an NSDMI `int m = [] { ... }();` gets one.
@@ -3747,7 +3760,10 @@ recomputed exactly as for non-template code (clang's
 
   Test `expr.prim.lambda/lambda-body-substitution-failure.cpp`; the
   `static_assert` case `temp.inst/failed-static-assert-lambda-next-error.cpp`
-  and `temp.inst/failed-static-assert-lambda-keeps-evaluating.cpp`.
+  and `temp.inst/failed-static-assert-lambda-keeps-evaluating.cpp`; the
+  consteval-block cases `dcl.pre/consteval-block-lambda-no-cascade.cpp`,
+  `dcl.pre/consteval-block-lambda-next-error.cpp` and
+  `dcl.pre/run-consteval-block-lambda-template.cpp`.
 - **A condition over a failed local** (WP-826). The condition of an
   `if` (not `if constexpr`), `while`, `for` or `switch`, or a `for`
   increment, that fails without a new error (it names a local whose
@@ -7143,10 +7159,27 @@ toward `-ftemplate-depth`. They are clang's `NonInstantiationEntries`.
   the `static_assert`), then the frames older than the call. GCC 16.1
   prints the same chain as "in 'constexpr' expansion of" lines. The
   frames render only when such an error prints, and only while the Oven
-  sema holds is the one paused in that call (the mark matches): an error
-  reached through a nested evaluation the call started prints its
-  instantiation notes alone. A frame elided by
-  `-ftemplate-backtrace-limit` takes the call frames with it.
+  sema holds still holds the evaluation paused in that call: the mark
+  matches, or the Oven runs a nested evaluation the call's work started
+  (a greater nesting depth, its entry above the marked frames on the
+  same stack). Every `meta_calls` entry whose anchor frame is printed
+  contributes, innermost first, each its own evaluation's frames only
+  (`stack[mark.entry+1 .. mark.frames]`), so an error in an
+  instantiation a nested evaluation's query requires (a `static_assert`
+  in a class template specialization the outer query instantiates) ends
+  each evaluation's part of the context with its call frames, down to
+  the outermost `static_assert`, as GCC names both evaluations (WP-1258).
+  A frame elided by `-ftemplate-backtrace-limit` keeps its call frames:
+  they print after the "(skipping K contexts in backtrace)" note, in
+  their place innermost first, before the next frame shown
+  (`InstantiationStack::context_notes`'s `keep` notes; a frame's second
+  note, `frame_extra_note`, is elided with it). The evaluation of the
+  never-constant check (spec/sema.md, `never_constant.rs`, a
+  potential-constant evaluation: `Oven::evaluate_call`,
+  `Oven::evaluate_potential`, a frame job) is the check's own, not a call
+  of the program's: its mark is flagged potential and contributes no
+  call frames, so the check's instantiation error prints as one outside
+  any evaluation does (WP-1258).
 
 **Deduplication.** `Sema::emit` sets the diagnostic's dedup context to
 `InstantiationStack::context_key()`, a hash of every frame's `(kind,

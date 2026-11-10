@@ -367,7 +367,7 @@ pub trait SemaBridge {
     /// an `info`'s [`kiln_ast::ReflectionId`] bits, a scalar's value, the address
     /// of anything else) and writes the result to `out`. `oven` is the
     /// running evaluator: it reads operands from its memory
-    /// ([`Oven::meta_c_string`]) and is lent back to sema for anything
+    /// ([`Oven::meta_c_bytes`]) and is lent back to sema for anything
     /// that evaluates. A `Mutating` op is never called in a trial.
     ///
     /// # Errors

@@ -222,13 +222,18 @@ template-argument printing use the same `<form>` (`dump/names.rs`):
 | Reflectee | Form |
 |---|---|
 | `Null` | `std::meta::info()` |
-| `Type` | `^^` + the type as kept (`^^I`, `^^const int *`, `^^Tm<int>`) |
+| `Type` | `^^` + the type as kept, its sugar (an alias, a template specialization) printed with its full scope (`^^I`, `^^const int *`, `^^Tm<int>`, `^^const S<int>::In *`): the reflect-expression keeps no qualifier as written |
 | global namespace | `^^::` |
-| `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name (`^^ns::f`, `^^S::m`) |
+| `Decl`, `Namespace`, `NamespaceAlias`, `Template` | `^^` + the qualified name, each class template specialization in its scope followed by its arguments as clang's `printQualifiedName` names a declaration in a diagnostic (`^^ns::f`, `^^S::m`, `^^S<int>::m`, `^^ns::R<char, 3>::Q::y`; WP-1258) |
 | `Value` / `Object` | `^^(value of type T)` / `^^(object of type T)` |
 | `BaseSpec` | `^^(base #i of C)` |
 | `FnParam` | `^^(parameter #i of f)` |
 | `DataMemberSpec` / `Annotation` | `^^(data member spec #n)` / `^^(annotation #n)` |
+
+A constant naming a declaration (a template argument `X<&S<int>::m>`, an
+"in call to" argument) names it the same way (`PrintEnv::decl_name`).
+`display_string_of` follows GCC 16.1 instead (spec/reflection.md §3.9),
+which also prints the arguments (`S<int>::m`, `ns::vt<int>`).
 
 The form is stable: tests may match it. Golden:
 `tests/conformance/expr.reflect/ast-dump.cpp.expected`.
