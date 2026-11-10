@@ -17,6 +17,30 @@ TranslationUnitDecl
 |             | `-IntegerLiteral 'int' 1
 |             |-DeclRefExpr 'M' lvalue ParmVar 'm' 'M'
 |             `-IntegerLiteral 'int' 0
+|-FunctionDecl generic 'M (M)'
+| |-ParmVarDecl used m 'M'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXConstructExpr 'M' 'void (M &&) noexcept'
+|       `-ImplicitCastExpr 'M' xvalue <NoOp>
+|         `-GenericSelectionExpr 'M' lvalue
+|           |-IntegerLiteral 'int' 0
+|           |-case 'int' selected
+|           | `-DeclRefExpr 'M' lvalue ParmVar 'm' 'M'
+|           `-default
+|             `-IntegerLiteral 'int' 0
+|-FunctionDecl generic_parens 'M (M)'
+| |-ParmVarDecl used m 'M'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXConstructExpr 'M' 'void (M &&) noexcept'
+|       `-ImplicitCastExpr 'M' xvalue <NoOp>
+|         `-ParenExpr 'M' lvalue
+|           `-GenericSelectionExpr 'M' lvalue
+|             |-IntegerLiteral 'int' 0
+|             `-default selected
+|               `-ParenExpr 'M' lvalue
+|                 `-DeclRefExpr 'M' lvalue ParmVar 'm' 'M'
 |-FunctionDecl extension 'M (M)'
 | |-ParmVarDecl used m 'M'
 | `-CompoundStmt
@@ -25,7 +49,23 @@ TranslationUnitDecl
 |       `-ImplicitCastExpr 'M' xvalue <NoOp>
 |         `-UnaryOperator 'M' lvalue prefix '__extension__' cannot overflow
 |           `-DeclRefExpr 'M' lvalue ParmVar 'm' 'M'
-`-FunctionDecl thrown 'void (M &&)'
+|-FunctionDecl thrown 'void (M &&)'
+| |-ParmVarDecl used r 'M &&'
+| `-CompoundStmt
+|   |-DeclStmt
+|   | `-VarDecl used m 'M' cinit
+|   |   `-CXXConstructExpr 'M' 'void (M &&) noexcept'
+|   |     `-CXXStaticCastExpr 'M' xvalue static_cast<M &&> <NoOp>
+|   |       `-DeclRefExpr 'M' lvalue ParmVar 'r' 'M &&'
+|   `-CXXThrowExpr 'void'
+|     `-CXXConstructExpr 'M' 'void (M &&) noexcept'
+|       `-ImplicitCastExpr 'M' xvalue <NoOp>
+|         `-ChooseExpr 'M' lvalue
+|           |-ConstantExpr 'int' value=0
+|           | `-IntegerLiteral 'int' 0
+|           |-IntegerLiteral 'int' 0
+|           `-DeclRefExpr 'M' lvalue Var 'm' 'M'
+`-FunctionDecl thrown_generic 'void (M &&)'
   |-ParmVarDecl used r 'M &&'
   `-CompoundStmt
     |-DeclStmt
@@ -36,8 +76,7 @@ TranslationUnitDecl
     `-CXXThrowExpr 'void'
       `-CXXConstructExpr 'M' 'void (M &&) noexcept'
         `-ImplicitCastExpr 'M' xvalue <NoOp>
-          `-ChooseExpr 'M' lvalue
-            |-ConstantExpr 'int' value=0
-            | `-IntegerLiteral 'int' 0
+          `-GenericSelectionExpr 'M' lvalue
             |-IntegerLiteral 'int' 0
-            `-DeclRefExpr 'M' lvalue Var 'm' 'M'
+            `-case 'int' selected
+              `-DeclRefExpr 'M' lvalue Var 'm' 'M'
