@@ -256,7 +256,8 @@ How to read the run (Actions tab, the `sweep` workflow):
 
 | suite / project | x86_64 kiln | clang 19 control | parity |
 |---|---|---|---|
-| libc++ 22.1.8 (9247 tests) | 8749 pass, 4 fail, 46 xfail, 1 xpass, 446 unsupported, 1 timeout: 99.4% (`std/` 99.5%, `libcxx/` 97.9%) | — | the same 4 environment fails as aarch64 (b) |
+| libc++ 22.1.8 (9247 tests), final RC `ae54fd2fa` | 8748 pass, 4 fail, 46 xfail, 1 xpass, 446 unsupported, 2 timeout: 99.4% | — | the same 4 environment fails as aarch64 (b); the extra timeout is `offset_range` |
+| libc++ 22.1.8 (9247 tests), first RC `e6199e693` | 8749 pass, 4 fail, 46 xfail, 1 xpass, 446 unsupported, 1 timeout: 99.4% (`std/` 99.5%, `libcxx/` 97.9%) | — | the same 4 environment fails as aarch64 (b) |
 | fmt | 21/21 tests, 50/50 TUs | 21/21, 50/50 | yes |
 | nlohmann_json | 97/97, 93/93 TUs | 97/97, 93/93 | yes |
 | abseil | 232/232, 413/413 TUs | 232/232, 413/413 | yes |
@@ -265,7 +266,7 @@ How to read the run (Actions tab, the `sweep` workflow):
 | grpc | 117/118 tests, 5732/5732 TUs, 120/120 links | 117/118, 5732/5732, 120/120 | yes (identical to the control) |
 | bitcoin_core (TU count too) | 357/357, 487/487 TUs | 357/357, 487/487 | yes, TUs included |
 | cmake_app | 721/723, 587/587 TUs | 721/723, 587/587 | yes (the same 2 fail under both) |
-| opencv (TU count too) | **regression**: 12 of the 98 TUs it built failed, so 0/7 tests ran | 7/7, 537/537 TUs | no: x86_64 regression, WP-1242 |
+| opencv (TU count too) | final RC `ae54fd2fa`: 7/7 tests (configure, build and test exit 0). First RC: 12 of the 98 TUs it built failed, so 0/7 tests ran | 7/7, 537/537 TUs | yes on the final RC (WP-1242); no on the first RC |
 | daw_json_link | 147/147, 159/159 TUs | 147/147, 159/159 | yes |
 
 Record the run in [x86_64-sweep.md](x86_64-sweep.md) (run id, commit,
@@ -276,18 +277,25 @@ The first RC's run: `sweep/rc-1.0.0`, run `42788235805`, `e6199e693`, recorded
 in [x86_64-sweep.md](x86_64-sweep.md) "1.0 RC sweep". The x86-2 gaps are
 closed: libc++ went from 8714 pass and 38 fail (99.0%) to 99.4%,
 `IRTests` builds, and bitcoin_core compiles all 487 TUs now that the
-`-m<feature>` flags are accepted (WP-1000). Every project is at parity
+`-m<feature>` flags are accepted (WP-1000). Every project was at parity
 except opencv (the opencv kiln job was re-run after its first attempt
 could not clone the source).
 
-opencv regressed on x86_64. Twelve `modules/core/*.avx2.cpp` dispatch
-TUs use x86 builtins that kiln does not lower yet
-(`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
+On the first RC, opencv regressed on x86_64. Twelve
+`modules/core/*.avx2.cpp` dispatch TUs use x86 builtins that kiln did
+not lower (`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
 `__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
 `__builtin_ia32_vfmaddps256`). Before WP-1000 kiln rejected `-mavx2`, so
-opencv's build did not compile those TUs. aarch64 is not affected. The
-fix is WP-1242, merged into the final release candidate `ae54fd2fa`; its
-x86_64 sweep re-measures opencv.
+opencv's build did not compile those TUs. aarch64 was not affected.
+WP-1242 fixed it.
+
+The final RC's run: run `42819709794`, `ae54fd2fa`, recorded in
+[x86_64-sweep.md](x86_64-sweep.md) "1.0 RC sweep". opencv is fixed:
+configure, build and test exit 0 and 7/7 tests pass, as clang (601 s
+wall). libc++ is 8748 pass and 2 timeouts against the first RC's 8749
+and 1: `ifstream` `offset_range`, the long test that also times out
+under load on aarch64 (b), timed out here too. The other projects of
+the final RC's sweep are not recorded here yet.
 
 ## (d) Open-source projects (aarch64)
 

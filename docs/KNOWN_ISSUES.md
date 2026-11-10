@@ -22,17 +22,12 @@ If you hit something not listed here, please
   `target("...")` functions work. `-mgeneral-regs-only`, `-msoft-float`,
   `-mretpoline` and a few other x86 code-generation flags are still
   `unknown argument` (spec/driver.md "x86-64 target features").
-- **OpenCV on x86_64: fixed in the final release candidate, sweep
-  pending.** In the first release candidate's x86_64 sweep
-  ([status/x86_64-sweep.md](status/x86_64-sweep.md)) every project was
-  at parity with clang except OpenCV: 12 of its `modules/core/*.avx2.cpp`
-  dispatch TUs used x86 builtins kiln did not lower
-  (`__builtin_ia32_extract128i256`, `__builtin_ia32_permti256`,
-  `__builtin_ia32_vcvtph2ps256`, `__builtin_ia32_vfmaddpd256`,
-  `__builtin_ia32_vfmaddps256`). They are compiled since WP-1000 made
-  kiln accept `-mavx2`. WP-1242, in the final release candidate, lowers
-  every x86 builtin clang lowers to generic IR; the x86_64 sweep of the
-  final release candidate re-measures OpenCV. aarch64 is not affected.
+- **OpenCV on x86_64: fixed.** The final release candidate's x86_64
+  sweep ([status/x86_64-sweep.md](status/x86_64-sweep.md)) passes
+  OpenCV's 7 tests, as clang. In the first release candidate's sweep 12
+  of its `modules/core/*.avx2.cpp` dispatch TUs used x86 builtins kiln
+  did not lower (`__builtin_ia32_extract128i256` and others), so 0 of 7
+  ran. WP-1242 lowers every x86 builtin clang lowers to generic IR.
 - **23 x86 builtins are not supported**: `__builtin_ia32_maskmovq`, the
   Key Locker builtins and the AMX `t*_internal` tile builtins.
   `__has_builtin` answers 0 for each, and a call that reaches code
@@ -233,8 +228,8 @@ simdjson (117 of 117; its one earlier failure needed `-Wuninitialized`,
 WP-696), mp-units (25 of 25) and oneTBB (139 of 139, with a clang-22 C
 driver for its LTO link; see [Build systems](#build-systems)) were
 re-run at parity for the release. On x86_64, OpenCV did not build in
-the first release candidate's sweep (see [Platforms](#platforms)). The
-other:
+the first release candidate's sweep and is fixed in the final one (see
+[Platforms](#platforms)). The other:
 
 - **Boost metaprogramming libraries**: 2235 of 2253 TUs (clang 19:
   2240). Of the 18 TUs that fail, 13 also fail under clang 19; the other

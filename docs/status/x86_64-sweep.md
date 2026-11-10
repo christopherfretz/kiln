@@ -37,15 +37,21 @@ branches are deleted (a run continues when its branch is deleted).
   branch `sweep/rc-1.0.0`): the full sweep, libc++ 6 shards and the ten
   projects with kiln and with the clang 19 control, with `sweep.yml` as
   on main (no added flags). Results in "1.0 RC sweep".
+- final RC, `42819709794` (`ae54fd2fa`, the final 1.0 release
+  candidate): the same sweep. Results in "1.0 RC sweep".
 
 ## 1.0 RC sweep (rc-1.0.0)
 
-Run `42788235805` on `e6199e693`, the first release candidate. kiln against the clang 19 control on
-an identical runner, libstdc++ 14. Tests are "passed / total".
+Run `42788235805` on `e6199e693`, the first release candidate, and run
+`42819709794` on `ae54fd2fa`, the final one. kiln against the clang 19
+control on an identical runner, libstdc++ 14. Tests are "passed /
+total". The project results below are the first RC's unless they say
+otherwise.
 
 | scope | total | pass | fail | xfail | xpass | unsupported | timeout | pass rate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| libc++, all, x86_64 | 9247 | 8749 | 4 | 46 | 1 | 446 | 1 | 99.4% |
+| libc++, all, x86_64, final RC `ae54fd2fa` | 9247 | 8748 | 4 | 46 | 1 | 446 | 2 | 99.4% |
+| libc++, all, x86_64, first RC `e6199e693` | 9247 | 8749 | 4 | 46 | 1 | 446 | 1 | 99.4% |
 | libc++, all, aarch64 (the same RC, [libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8748 | 4 | 47 | 1 | 446 | 1 | 99.4% |
 
 `std/` 99.5% and `libcxx/` 97.9% on both. The 4 FAILs are the
@@ -53,7 +59,10 @@ filesystem permission tests listed under "Both arches: environment and
 known" (the runner and the container run as root); the XPASS is
 `variant.hash/hash.depr.verify.cpp`, as on aarch64; the timeout is
 `atomics` `lost_wakeup`, the flaky load timeout of x86-2 and x86-4
-(aarch64 timed out on `ifstream` `offset_range` instead). The other
+(aarch64 timed out on `ifstream` `offset_range` instead). On the final
+RC, x86_64 has one more timeout, `offset_range`, the long test that
+also times out on aarch64; the 4 FAILs and the XPASS are the same. The
+other
 x86_64-only failure of x86-2, `stable_sort` (WP-981), passes, and of
 x86-2's 38 failures only the 4 environment ones are left.
 
@@ -72,20 +81,23 @@ x86-2's 38 failures only the 4 environment ones are left.
   under both).
 - **daw_json_link**: 147/147, 159/159 TUs; clang the same.
 - **grpc**: 117/118, 5732/5732 TUs, 120/120 links; clang the same.
-- **opencv**: **regression**. kiln built 98 TUs, 12 of them failed, and
-  0/7 tests ran; clang 7/7, 537/537 TUs. The 12 are
+- **opencv**: **fixed on the final RC**. Run `42819709794` on
+  `ae54fd2fa`: configure, build and test exit 0, 7/7 tests pass, as
+  clang (601 s wall). On the first RC it was a **regression**: kiln
+  built 98 TUs, 12 of them failed, and 0/7 tests ran; clang 7/7, 537/537
+  TUs. The 12 are
   `modules/core/*.avx2.cpp` dispatch TUs that use x86 builtins kiln does
   not lower yet: `__builtin_ia32_extract128i256`,
   `__builtin_ia32_permti256`, `__builtin_ia32_vcvtph2ps256`,
   `__builtin_ia32_vfmaddpd256` and `__builtin_ia32_vfmaddps256`. The
   first sweep never compiled them (7/7 with 473 TUs: kiln rejected
-  `-mavx2` then); WP-1000 made kiln accept the flag and exposed them. The
-  fix is WP-1242, in the final release candidate `ae54fd2fa` (see the
-  triage below). aarch64 is not affected. (The kiln job's first attempt
+  `-mavx2` then); WP-1000 made kiln accept the flag and exposed them.
+  WP-1242 fixed them (see the triage below). aarch64 was not affected. (The kiln job's first attempt
   could not clone the source, a DNS failure on the runner; this is the
   re-run.)
 
-Every other project is at parity with clang, TU counts included.
+Every other project of the first RC's sweep is at parity with clang, TU
+counts included.
 
 ## libc++ 22.1.8 (x86-2; x86-4 is identical)
 
@@ -214,8 +226,8 @@ CPU and load differ, so only the RSS ratio carries across.
   `__has_builtin` is now 0, and a call of an x86 builtin sets clang's
   `"min-legal-vector-width"` (spec/landed/codegen/WP-630.md "Generic x86
   lowering"; `tests/conformance/target.x86/opencv-avx2-tu.cpp`,
-  `avx2-fma-f16c-run.cpp`, the `*-ir.cpp` family tests). The opencv
-  counts are re-measured at the next sweep.
+  `avx2-fma-f16c-run.cpp`, the `*-ir.cpp` family tests). The final RC's
+  sweep (run `42819709794`, `ae54fd2fa`) passes opencv's 7/7 tests.
 - glibc's x86-64 `bits/floatn.h` says `typedef __float128 _Float128;`.
   kiln makes `_Float128` its own P1467 type and drops that typedef, so a
   `_Float128` function (`logf128`) is not a `__float128` one, as it is
