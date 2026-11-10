@@ -5,6 +5,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): compares with clang's __array_extent and other trait builtins, which GCC 16.1 lacks
 #include "kiln_meta_traits.h"
 using namespace std::meta;
 

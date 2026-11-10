@@ -10,6 +10,7 @@
 //@ skip(clang): clang does not implement P2996 reflection
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 crashes (internal compiler error in dependent_type_p)
 #include "kiln_meta.h"
 using namespace std::meta;
 constexpr auto ctx = access_context::unchecked();

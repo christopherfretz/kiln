@@ -9,6 +9,7 @@
 //@ requires: clang>=22
 //@ expect: compile-ok
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1 has no __builtin_is_within_lifetime
 namespace std {
 template <class T> consteval bool is_within_lifetime(const T* p) noexcept {
   return __builtin_is_within_lifetime(p);

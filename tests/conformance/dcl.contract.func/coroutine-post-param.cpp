@@ -8,8 +8,9 @@
 //@ expect: compile-fail
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
-//@ diag: 23:19 error "a postcondition of a coroutine cannot odr-use the non-reference parameter 'x'"
-//@ diag: 26:18 error "a postcondition of a coroutine cannot odr-use the non-reference parameter 'x'"
+//@ diag: 24:19 error "a postcondition of a coroutine cannot odr-use the non-reference parameter 'x'"
+//@ diag: 27:18 error "a postcondition of a coroutine cannot odr-use the non-reference parameter 'x'"
+//@ xfail(gcc): GCC 16.1 accepts a postcondition that odr-uses a coroutine's non-reference parameter (spec/contracts.md §9)
 #include <coroutine>
 struct task {
   struct promise_type {

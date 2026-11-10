@@ -7,7 +7,8 @@
 //@ skip(clang): clang does not implement P2996 reflection
 //@ expect: compile-fail
 //@ strict-diags
-//@ diag: 14:37 error "expression contains unexpanded parameter pack 'Bs'"
+//@ diag: 15:37 error "expression contains unexpanded parameter pack 'Bs'"
+//@ xfail(gcc): GCC 16.1 accepts the unexpanded pack in a base-specifier's annotation
 #include "kiln_meta.h"
 struct A {};
 template <class... Bs> struct D : Bs... {};

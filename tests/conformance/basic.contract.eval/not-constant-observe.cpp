@@ -7,10 +7,11 @@
 //@ strict-diags
 //@ skip(clang): clang 22 does not implement P2900 contracts
 //@ args: -fcontract-evaluation-semantic=observe
-//@ diag: 16:30 warning "contract condition is not constant"
-//@ diag: 18:15 note "in call to 'h(1)'"
 //@ diag: 17:30 warning "contract condition is not constant"
-//@ diag: 19:15 note "in call to 'k(-1)'"
+//@ diag: 19:15 note "in call to 'h(1)'"
+//@ diag: 18:30 warning "contract condition is not constant"
+//@ diag: 20:15 note "in call to 'k(-1)'"
+//@ xfail(gcc): GCC 16.1 rejects the exception escaping the predicate under observe (spec/contracts.md §9)
 int nc(int x) { return x; }
 constexpr bool thr(int x) { if (x < 0) throw x; return true; }
 constexpr int h(const int a) pre(nc(a) > 0) { return a; }

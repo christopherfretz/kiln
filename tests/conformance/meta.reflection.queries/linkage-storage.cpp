@@ -14,6 +14,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
+//@ xfail(gcc): GCC 16.1's has_linkage disagrees on entities without linkage (a namespace alias among them)
 #include "kiln_meta_queries.h"
 using namespace std::meta;
 

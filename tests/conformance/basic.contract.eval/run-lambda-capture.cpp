@@ -14,6 +14,7 @@
 //@ stdout: 1
 //@ stdout: handler 1
 //@ stdout: terminate
+//@ xfail(gcc): GCC 16.1 rejects naming a parameter in a lambda in a predicate (spec/contracts.md §9)
 #include <contracts>
 #include <cstdio>
 #include <cstdlib>
