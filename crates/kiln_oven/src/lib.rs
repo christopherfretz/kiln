@@ -70,7 +70,6 @@ use kiln_source::fx::{FxHashMap, FxHashSet};
 
 pub use failure::{EvalFailure, FailKind, Note, Overflow};
 pub use frame::{FrameEval, FrameObject};
-pub use notes::FrameMark;
 pub use meta::materialize::{ExcCtor, MetaThrow, Shape};
 pub use meta::member_cache::{
     CachedList, MemberCache, MemberEntry, MemberList, filter_members, member_kind,
@@ -80,6 +79,7 @@ pub use meta::{
     MetaErrorKind, MetaOp, MetaOut, OptionsPlan, OvenFault, Purity, QueryOp, RawOptions, TemplOp,
     TraitOp, ValueOp, info_arg,
 };
+pub use notes::FrameMark;
 pub use stats::{EvalRecord, EvalStats, EvalTotals, JobTotals};
 
 /// Whether this build checks every trial-fold walk against the full path

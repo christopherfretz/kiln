@@ -897,7 +897,8 @@ mod tests {
         let mut s = InstantiationStack::default();
         s.push(frame(FrameKind::ClassInstantiation, 1));
         assert_eq!(
-            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| Vec::new()).len(),
+            s.context_notes(10, &|_| Some("A<int>".into()), &|f| f.kind.note(), &|_| Vec::new())
+                .len(),
             1
         );
         assert!(s.context_notes(10, &|_| None, &|f| f.kind.note(), &|_| Vec::new()).is_empty());

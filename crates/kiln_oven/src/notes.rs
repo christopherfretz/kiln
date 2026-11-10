@@ -56,8 +56,7 @@ fn resolve_locs(sources: Option<&kiln_source::SourceManager>, msg: &str) -> Stri
         out.push_str(first);
     }
     while let (Some(raw), Some(rest)) = (parts.next(), parts.next()) {
-        let p =
-            raw.parse::<u32>().ok().and_then(|r| sources?.presumed_line_col(Loc::from_raw(r)));
+        let p = raw.parse::<u32>().ok().and_then(|r| sources?.presumed_line_col(Loc::from_raw(r)));
         match p {
             Some(p) => {
                 let _ = write!(out, "{}:{}:{}", p.file_name, p.line, p.col);
