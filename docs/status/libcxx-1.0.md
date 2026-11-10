@@ -3,7 +3,7 @@
 The whole libc++ 22.1.8 suite (`std/` and `libcxx/`, 9247 tests) at
 `-std=c++26 -fclang-compat=22`, run with the `kiln++` of the 1.0 release
 archive of the first release candidate (`e6199e693`) on aarch64,
-2026-11-10, as
+2026-11-10, and again with that of the final one (`ae54fd2fa`), as
 [release-1.0.md](release-1.0.md) "(b)" describes. The earlier full runs
 and their failure clusters are in [libcxx-m5.md](libcxx-m5.md) and
 [libcxx.md](libcxx.md) "M5: libc++ 22 full suite".
@@ -15,8 +15,10 @@ and their failure clusters are in [libcxx-m5.md](libcxx-m5.md) and
 | all | 9247 | 8748 | 4 | 47 | 1 | 446 (31) | 1 | **99.4%** |
 | `std/` | 8424 | 8229 | 4 | 36 | 1 | 153 (9) | 1 | 99.5% |
 | `libcxx/` | 823 | 519 | 0 | 11 | 0 | 293 (22) | 0 | 97.9% |
+| all, final RC `ae54fd2fa` | 9247 | 8747 | 4 | 47 | 1 | 446 | 2 | **99.4%** |
 | all, last full run (M5, WP-461) | 9247 | 8716 | 9 | 64 | 0 | 457 (31) | 1 | 99.2% |
 
+The `std/` and `libcxx/` rows and the report below are the first RC's.
 No test was killed and none hit a compiler error. What is left:
 
 - **4 FAIL, environment.** The run tests check that a permission-denied
@@ -33,6 +35,12 @@ No test was killed and none hit a compiler error. What is left:
 - **1 TIMEOUT**, `std/input.output/file.streams/fstreams/ifstream.members/offset_range.pass.cpp`,
   at the 20 s run limit under host load. The x86_64 run timed out on a
   different test (`atomics` `lost_wakeup`) and passed this one.
+
+The final RC's run has the same 4 FAILs and XPASS and 2 TIMEOUTs:
+`offset_range` and the `atomics` test `lost_wakeup.pass.cpp`, the other
+long test that times out under load. Re-run alone, `lost_wakeup`
+passes (1 of 1, 21.4 s). The x86_64 sweep of the final RC also has 2
+timeouts.
 
 The 9 correctness failures of the M5 run (WP-460, WP-491) pass.
 

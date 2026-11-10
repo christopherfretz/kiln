@@ -46,6 +46,14 @@ kiln compiles C++ only. `kiln` can preprocess C (`-E` on `.c`, `.h`,
 compiles a `.c` file as C++, with a warning, as `clang++` does. C support
 is [WP-243](BACKLOG.md) and is not part of 1.0.
 
+## Reflection
+
+- **`std::meta::reflect_constant`, `reflect_constant_array` and
+  `define_static_array` of a reflection of a constexpr member function
+  of a class template specialization** do not instantiate that member's
+  definition; GCC 16.1 does. Found by the reference workload; planned
+  for 1.0.1 (WP-1252).
+
 ## Uninitialized variables at C++26
 
 kiln implements C++26 erroneous behaviour (P2795) and clang 22 does not.
@@ -215,8 +223,8 @@ What is left:
 
   The `std::hash<std::monostate>` wording test that was on this list now
   passes.
-- **1 long test** that times out under heavy host load and passes at its
-  full timeout.
+- **2 long tests**, `offset_range` and `lost_wakeup`, that time out
+  under heavy host load and pass when run alone.
 
 ## Open-source projects with gaps
 

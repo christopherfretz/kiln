@@ -17,7 +17,11 @@ different number, update those pages in the same change.
   template-ids, `members_of` and `display_string_of`) and the Oven's
   uncaught-exception note. A section re-run on `ae54fd2fa` says so.
 - Reference workload: the reference workload's maintainers verified
-  `e6199e693`: PASS.
+  `e6199e693`: PASS, and `ae54fd2fa`: PASS. On `ae54fd2fa` its cold
+  build exits 0, 2081 of 2081 unit tests pass, and its diagnostics lane
+  passes 941 of 947 with no new failures (922 on the first RC). The one
+  residual is a 1.0.1 item, WP-1252
+  ([../KNOWN_ISSUES.md](../KNOWN_ISSUES.md#reflection)).
 - Host: aarch64 Linux unless a section says otherwise. Record the load
   average of each run, since the host is shared.
 - Every command runs from the kiln checkout after
@@ -28,8 +32,12 @@ different number, update those pages in the same change.
 The commands were checked on a subset when this page was written
 (WP-1202): one bench entry per compiler, one libc++ test, one corpus
 directory. For the first RC (`e6199e693`), the archive gate and (a) to
-(g) are filled in. libc++ (both architectures), the OSS projects and the
-x86_64 sweep are re-run on `ae54fd2fa`.
+(g) are filled in. On the final RC (`ae54fd2fa`), the archive gate, (b)
+libc++, (c) the x86_64 sweep, (d) the aarch64 OSS projects and (e) the
+paper table were run again; each section gives both.
+
+**The release gate is complete on `ae54fd2fa`: every check passed. The
+1.0.0 tag waits only on the operator's go.**
 
 ## RC gate: the release archive
 
@@ -91,6 +99,10 @@ kiln++ -std=c++26 --gcc-toolchain="$GCC16" refl.cpp -o refl && ./refl   # 2 P
 | hello world | pass: `hello` |
 | `import std;` (`-stdlib=libc++`) | pass: `import std 3` |
 | reflection | pass: `2 P` (`--gcc-toolchain` GCC 16.1) |
+
+The final RC (`ae54fd2fa`, aarch64): `cargo xtask ci --quick`, the m3
+gate, `cargo xtask dist --check`, `sha256sum -c` and the smoke programs
+all pass.
 
 Validated at WP-1202 (2026-11-09) on the aarch64 archive then still
 named 0.0.1: `dist --check` passed, both checksums OK, and the three
@@ -197,6 +209,7 @@ failing test with its detail and cluster key. Commit both under
 
 | | total | pass | fail | xfail | unsupported (driver) | timeout | pass rate | per-directory list |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
+| final 1.0 RC (`ae54fd2fa`) | 9247 | 8747 | 4 (+1 xpass) | 47 | 446 | 2 | 99.4% | [libcxx-1.0.md](libcxx-1.0.md) |
 | first 1.0 RC (`e6199e693`) | 9247 | 8748 | 4 (+1 xpass) | 47 | 446 (31) | 1 | 99.4% | [libcxx-1.0.md](libcxx-1.0.md) |
 | last full run (libcxx-m5.md) | 9247 | 8716 | 9 | 64 | 457 (31) | 1 | 99.2% | [libcxx-m5.md](libcxx-m5.md) |
 
@@ -215,6 +228,11 @@ The first RC's run: 2026-11-10, aarch64, `-j 3`, 3462 s. `std/` 8229 of 8424
   row (WP-432) that kiln now passes.
 - 1 TIMEOUT, `ifstream.members/offset_range.pass.cpp`, at the 20 s run
   limit under host load.
+
+The final RC's run, with its release archive's `kiln++`: the same 4
+FAILs and XPASS, 0 killed, and 2 TIMEOUTs, `offset_range` and
+`atomics` `lost_wakeup.pass.cpp`. `lost_wakeup` is the long test known
+to time out under load; re-run alone it passes (1 of 1, 21.4 s).
 
 [libcxx-1.0.md](libcxx-1.0.md) has the summary and the `--report` output;
 the TSV is not committed.
@@ -263,7 +281,7 @@ How to read the run (Actions tab, the `sweep` workflow):
 | abseil | 232/232, 413/413 TUs | 232/232, 413/413 | yes |
 | llvm_project (`SupportTests`, `ADTTests`, `IRTests`) | all three build and pass (`IRTests` 732), 1504/1504 TUs, 4/4 links | the same | yes |
 | duckdb | 4618/4628, 421/421 TUs | 4618/4628, 421/421 | yes (the same 10 fail under both) |
-| grpc | 117/118 tests, 5732/5732 TUs, 120/120 links | 117/118, 5732/5732, 120/120 | yes (identical to the control) |
+| grpc | final RC `ae54fd2fa`: 117/118 tests (configure and build exit 0). First RC: 117/118 tests, 5732/5732 TUs, 120/120 links | 117/118, 5732/5732, 120/120 | yes on both RCs; `end2end_http2_test` fails under both (exit 137) |
 | bitcoin_core (TU count too) | 357/357, 487/487 TUs | 357/357, 487/487 | yes, TUs included |
 | cmake_app | 721/723, 587/587 TUs | 721/723, 587/587 | yes (the same 2 fail under both) |
 | opencv (TU count too) | final RC `ae54fd2fa`: 7/7 tests (configure, build and test exit 0). First RC: 12 of the 98 TUs it built failed, so 0/7 tests ran | 7/7, 537/537 TUs | yes on the final RC (WP-1242); no on the first RC |
@@ -294,8 +312,10 @@ The final RC's run: run `42819709794`, `ae54fd2fa`, recorded in
 configure, build and test exit 0 and 7/7 tests pass, as clang (601 s
 wall). libc++ is 8748 pass and 2 timeouts against the first RC's 8749
 and 1: `ifstream` `offset_range`, the long test that also times out
-under load on aarch64 (b), timed out here too. The other projects of
-the final RC's sweep are not recorded here yet.
+under load on aarch64 (b), timed out here too. grpc: configure and build
+exit 0 and 117 of 118 tests pass (3893 s wall); the one failure,
+`end2end_http2_test` (exit 137), is the one the first RC's kiln and
+clang runs also had. The rows not marked final RC are the first RC's.
 
 ## (d) Open-source projects (aarch64)
 
@@ -328,6 +348,20 @@ opencv are in (c). The three LLVM rows (`llvm_full`, `llvm_clang`,
 `llvm_selfhost`) were not re-run and keep their last results.
 
 Every project with a result is at parity with clang 19 or better.
+
+The final RC (`ae54fd2fa`): the 40 aarch64 projects were built and
+tested again with its `kiln++`; the clang columns are the pre-release
+run's. Every project's configure, build and test outcome is the first
+RC's, except:
+
+- rocksdb: its test step now exits 0 (it exited 8 on the first RC,
+  whose 3 flaky tests passed on re-run).
+- eigen: 538/539. `matrix_function_1` fails on a random seed, and the
+  clang build fails with the same seeds (1794317079 and 5).
+- spdlog: one `daily_logger` case failed with "Failed open folder
+  test_logs", a filesystem race; it passes on re-run (3 of 3).
+
+The ratings below do not change.
 
 | project | tag | kiln tests | clang 19 tests | rating |
 |---|---|---|---|---|
@@ -394,6 +428,10 @@ partial (P2786, removed from C++26 at Kona), 0 todo, 0 untested, as at
 WP-1202. `features --compiler` with the archive's `kiln++`: 607 done-row
 tests, 607 pass, 0 fail, 61 of them also compared with GCC 16; the
 oracle is clang++-22.
+
+The final RC (`ae54fd2fa`): the same counts (STANDARD_SUPPORT.md is
+unchanged), and `features --compiler` with its archive's `kiln++` passes
+all 607 done-row tests.
 
 The corpus counts are the last lines of the full CI run, with the clang
 22 self-check:

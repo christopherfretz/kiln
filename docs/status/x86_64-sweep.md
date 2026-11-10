@@ -52,7 +52,8 @@ otherwise.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | libc++, all, x86_64, final RC `ae54fd2fa` | 9247 | 8748 | 4 | 46 | 1 | 446 | 2 | 99.4% |
 | libc++, all, x86_64, first RC `e6199e693` | 9247 | 8749 | 4 | 46 | 1 | 446 | 1 | 99.4% |
-| libc++, all, aarch64 (the same RC, [libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8748 | 4 | 47 | 1 | 446 | 1 | 99.4% |
+| libc++, all, aarch64, final RC ([libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8747 | 4 | 47 | 1 | 446 | 2 | 99.4% |
+| libc++, all, aarch64, first RC ([libcxx-1.0.md](libcxx-1.0.md)) | 9247 | 8748 | 4 | 47 | 1 | 446 | 1 | 99.4% |
 
 `std/` 99.5% and `libcxx/` 97.9% on both. The 4 FAILs are the
 filesystem permission tests listed under "Both arches: environment and
@@ -80,7 +81,9 @@ x86-2's 38 failures only the 4 environment ones are left.
 - **cmake_app**: 721/723, 587/587 TUs; clang the same (the same 2 fail
   under both).
 - **daw_json_link**: 147/147, 159/159 TUs; clang the same.
-- **grpc**: 117/118, 5732/5732 TUs, 120/120 links; clang the same.
+- **grpc**: 117/118, 5732/5732 TUs, 120/120 links; clang the same. On
+  the final RC: configure and build exit 0, 117/118 (3893 s wall); the
+  failure is `end2end_http2_test` (exit 137), as in both first-RC runs.
 - **opencv**: **fixed on the final RC**. Run `42819709794` on
   `ae54fd2fa`: configure, build and test exit 0, 7/7 tests pass, as
   clang (601 s wall). On the first RC it was a **regression**: kiln

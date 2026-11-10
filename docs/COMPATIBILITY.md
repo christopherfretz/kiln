@@ -126,7 +126,7 @@ selected with `-stdlib=libc++` ([spec/driver.md](../spec/driver.md)).
 
 | Standard library | Test suite | Pass rate | Rating |
 |---|---|---|---|
-| libc++ 22.1.8 | libc++'s own test suite (9247 tests), `-std=c++26` | 99.4% on the 1.0 release candidate ([status/libcxx-1.0.md](status/libcxx-1.0.md)); the 4 failures are permission tests that cannot pass as root | **Near-perfect** |
+| libc++ 22.1.8 | libc++'s own test suite (9247 tests), `-std=c++26` | 99.4% on both 1.0 release candidates ([status/libcxx-1.0.md](status/libcxx-1.0.md)); the 4 failures are permission tests that cannot pass as root | **Near-perfect** |
 | libc++ 19.1.7 | libc++'s own test suite (`std/`) | 98.3% | **Solid** |
 | libc++ 19 | The 10 wave-1 open-source projects' test suites, built with `-stdlib=libc++` | 100% of clang's passing tests | **Flawless** |
 | libstdc++ (GCC 14, the default) | Every public header (109) compiled at `-std=c++20` and `-std=c++26` | 100% | **Flawless** |
@@ -228,7 +228,7 @@ passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
 
 ## Libraries and applications
 
-47 projects: 46 **Flawless**, 1 **Near-perfect** (the Boost metaprogramming libraries: 5 TUs that clang 19 accepts and clang 22 rejects, as kiln does). The 1.0 release run (2026-11-09/10, [status/release-1.0.md](status/release-1.0.md) "(d)") put every project at parity with clang 19 or better; the rows below give its numbers where they changed. The libc++ column is the WP-694 run against
+47 projects: 46 **Flawless**, 1 **Near-perfect** (the Boost metaprogramming libraries: 5 TUs that clang 19 accepts and clang 22 rejects, as kiln does). The 1.0 release run (2026-11-09/10, [status/release-1.0.md](status/release-1.0.md) "(d)") put every project at parity with clang 19 or better; the rows below give its numbers where they changed. The final RC (`ae54fd2fa`) re-ran the 40 aarch64 projects with the same outcome as the first RC, apart from flakes that clang shares or that pass on re-run (eigen `matrix_function_1` on a random seed, a spdlog filesystem race). The libc++ column is the WP-694 run against
 libc++ 19. Every other build uses the host's libstdc++ 14. Test counts are
 "kiln passed / total"; the clang count is the same unless it is given.
 
@@ -372,7 +372,7 @@ are fixed or have a follow-up WP.
 | Bitcoin Core | 357/357 and 487/487 TUs, as clang (the first sweep built 475: the `-m<feature>` flags, added by WP-1000, were not accepted) | **Flawless** |
 | OpenCV | 7/7 on the final RC `ae54fd2fa`, as clang. In the first RC's sweep 12 `modules/core/*.avx2.cpp` dispatch TUs used x86 builtins kiln did not lower (`__builtin_ia32_extract128i256`, `permti256`, `vcvtph2ps256`, `vfmaddpd256`, `vfmaddps256`), so the build stopped after 98 TUs and 0/7 tests ran; WP-1000's `-mavx2` had exposed them, and WP-1242 fixed them | **Flawless** |
 | LLVM Support, ADT, IR | all three binaries build and pass as clang, 1504/1504 TUs (at the first sweep `IRTests` did not build, a `_Float128` gap fixed by WP-1058) | **Flawless** |
-| gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
+| gRPC | 117/118 as clang (the same `end2end_http2_test` 300 s timeout under both), on both RCs; 5732/5732 TUs, 120/120 links; geomean CPU time 0.96× and RSS 0.44× of clang's, peak TU RSS 311 MB vs 796 MB | **Flawless** |
 
 ## Rejecting invalid code
 
