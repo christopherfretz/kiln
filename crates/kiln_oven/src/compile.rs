@@ -6558,7 +6558,9 @@ fn extends_temporaries(ast: &kiln_ast::Ast, d: DeclId) -> bool {
             {
                 return true;
             }
-            ExprKind::CXXDefaultArgExpr => work.extend(ast.exprs.default_arg_rewritten(e)),
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                work.extend(ast.exprs.default_arg_rewritten(e));
+            }
             ExprKind::LambdaExpr | ExprKind::StmtExpr | ExprKind::ExprWithCleanups => {}
             _ => ast.exprs.children_into(e, &ast.lists, &mut work),
         }
