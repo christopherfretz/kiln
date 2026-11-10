@@ -5395,7 +5395,12 @@ The `SpecKind` transitions are those of §4.5.
   `decltype(A)` of a template parameter object is the deduced class type
   without `const` ([dcl.type.decltype]/1.3; `decltype_of` on a
   `SubstNonTypeTemplateParmExpr` of class type); `decltype((A))` is
-  `const T&` (WP-201).
+  `const T&` (WP-201). The same holds when the substituted argument is
+  still the written one, a `DeclRefExpr` to a variable (a
+  type-constraint's `Of<sp> auto`): a parameter declared `auto` or of a
+  non-dependent non-reference type is never a reference
+  (`nttp_never_reference`; WP-1217,
+  `tests/conformance/dcl.type.decltype/constraint-class-nttp-not-reference.cpp`).
 - **Uses.** An id-expression naming a class-type NTTP in the pattern is an
   lvalue of type `const T` (builder `decl_ref_category`,
   `build_decl_ref_extra`); a reference NTTP names its referent (an
