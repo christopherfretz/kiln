@@ -1236,7 +1236,7 @@ impl Sema<'_, '_> {
     /// `AddTemplateOverloadCandidate` excludes such a template before
     /// deduction and substitution, which may otherwise be ill-formed
     /// outside the immediate context.
-    fn drop_explicit_ctor_templates(
+    pub(crate) fn drop_explicit_ctor_templates(
         &mut self,
         set: &mut super::OverloadCandidateSet,
         found: &mut Vec<DeclId>,
@@ -1293,6 +1293,24 @@ impl Sema<'_, '_> {
         first_opts: IcsOptions,
         list_only: bool,
     ) {
+        self.add_ctor_candidates_ex(set, c, first_opts, list_only, false);
+    }
+
+    /// [`Self::add_ctor_candidates`]; with `copy_init` (a non-list
+    /// copy-initialization, [over.match.ctor]/1, [over.match.copy]/1.1),
+    /// the non-dependently explicit constructor templates are noted as
+    /// non-viable without being deduced
+    /// ([`Self::drop_explicit_ctor_templates`]; clang
+    /// `ResolveConstructorOverload` passes `AllowExplicit = false` to
+    /// `AddTemplateOverloadCandidate`).
+    pub(crate) fn add_ctor_candidates_ex(
+        &mut self,
+        set: &mut super::OverloadCandidateSet,
+        c: DeclId,
+        first_opts: IcsOptions,
+        list_only: bool,
+        copy_init: bool,
+    ) {
         let c = self.class_def(c);
         self.ensure_implicit(c, crate::class::SpecialKind::DefaultCtor);
         self.ensure_implicit(c, crate::class::SpecialKind::CopyCtor);
@@ -1301,6 +1319,9 @@ impl Sema<'_, '_> {
         found.clear();
         found.extend(self.usable_ctors(c));
         found.extend(self.ctor_shadows(c));
+        if copy_init {
+            self.drop_explicit_ctor_templates(set, &mut found);
+        }
         self.add_found_candidates(set, &found, CandidateKind::Ctor, first_opts, list_only);
         set.found = found;
     }

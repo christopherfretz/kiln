@@ -4865,7 +4865,19 @@ immediate context: errors are hard.
   substitution that would be ill-formed outside the immediate context
   (libc++'s explicit `basic_string(const T&)` with `T = void`) is not
   reached (WP-694; test
-  `over.match.copy/explicit-ctor-template-not-deduced.cpp`).
+  `over.match.copy/explicit-ctor-template-not-deduced.cpp`). The same
+  holds in every non-list copy-initialization by constructor
+  (`Sema::resolve_ctor_ex` with `InitStyle::Copy`,
+  `Sema::add_ctor_candidates_ex`; clang `ResolveConstructorOverload`
+  passes `AllowExplicit = false`): from a non-class type
+  ([over.match.copy]/1.1) and from the class itself or a derived class
+  ([over.match.ctor]/1, [dcl.init.general]/16.6.2, e.g. a parameter of
+  class type initialized from a derived-class argument, or
+  `__is_convertible(D, B)`). Deducing such a template there could reach a
+  self-dependent constraint, a hard error (Boost.Outcome's explicit
+  value-or-error converting constructor, whose default template argument
+  checks the `basic_result` concept being satisfied; WP-1223, test
+  `over.match.ctor/explicit-ctor-template-not-deduced-derived-run.cpp`).
 - **Return types** ([temp.deduct.general]/11.10). A substituted
   signature (or any substituted function type) whose return type is an
   array or function type fails with `function cannot return

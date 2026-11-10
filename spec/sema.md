@@ -5083,9 +5083,12 @@ Names there are not odr-used.
   evaluator supplies the `std::meta` metafunctions and a `constexpr`
   `std::uncaught_exceptions` without a definition).
 - The classification, in order:
-  - external formal linkage, not `extern "C"`, and a type that is not
-    externally visible (a lambda, local class or unnamed-namespace class
-    in the function type or the variable type): an error,
+  - external formal linkage, not `extern "C"`, and a type without
+    external linkage (a lambda, local class or unnamed-namespace class
+    in the function type or the variable type; [basic.link]/15: a class
+    template specialization, and a member of one, has linkage whatever
+    its template arguments, so `W<Local>` and `W<Local>::N` do not count
+    here, `mangle::type_has_external_linkage`, WP-1224): an error,
     "{function|variable} 'N' is used but not defined in this translation
     unit, and cannot be defined in any other translation unit because
     its type does not have linkage";
@@ -5097,8 +5100,8 @@ Names there are not odr-used.
     `gnu_inline`): `-Wundefined-inline`, "inline function 'N' is not
     defined"; an inline variable: the error "inline variable 'N' is not
     defined".
-- A function template specialization is named with its template
-  arguments (`g<(lambda at f.cpp:3:5)>`); each specialization of one
+- A function or variable template specialization is named with its
+  template arguments (`g<(lambda at f.cpp:3:5)>`); each specialization of one
   template is reported, all at the template's location.
 - Not implemented: clang's vtable-use marking (an undefined virtual
   member of an unnamed-namespace class whose vtable is used is not
