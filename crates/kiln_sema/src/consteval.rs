@@ -91,6 +91,11 @@ pub(crate) struct ImmPending {
     /// written or not (an escalation names it, at the constructor, as
     /// clang's `DiagnoseImmediateEscalatingReason` does).
     member_init: Option<(DeclId, bool)>,
+    /// The results of the immediate invocations evaluated as the
+    /// expression is built, by a check of its operator
+    /// ([`Sema::prefold_immediate`]): read by the end of the
+    /// full-expression instead of evaluating them again (WP-1171).
+    prefolded: Vec<(ExprId, Result<ConstValueId, EvalFailure>)>,
 }
 
 /// [`Sema`]'s immediate-invocation state.
@@ -114,7 +119,18 @@ pub(crate) struct ImmState {
     /// reads the value instead of evaluating the call
     /// ([`Sema::early_immediate_value`]).
     early_values: HashMap<ExprId, ConstValueId>,
+    /// The default arguments and default member initializers used by
+    /// that full-expression outside its immediate invocations, checked
+    /// there already (`None`) or, in an immediate-escalating function,
+    /// with the results of their immediate invocations in
+    /// [`Sema::default_invocations`] order up to the first failure
+    /// (WP-1171): consumed by [`Sema::finish_immediate_invocations`].
+    early_defaults: Vec<(ExprId, Option<DefaultResults>)>,
 }
+
+/// The results of the immediate invocations of a default argument or
+/// default member initializer at a use ([`ImmState::early_defaults`]).
+type DefaultResults = Vec<(ExprId, Result<ConstValueId, EvalFailure>)>;
 
 /// The pending state of an enclosing full-expression set aside by
 /// [`Sema::set_aside_outer_immediates`].
@@ -123,6 +139,7 @@ pub(crate) struct OuterImm {
     candidates: Vec<(ExprId, DeclId)>,
     refs: Vec<ExprId>,
     default_uses: Vec<DefaultUse>,
+    prefolded: Vec<(ExprId, Result<ConstValueId, EvalFailure>)>,
 }
 
 /// The pending state taken by [`Sema::take_immediate_state`].
@@ -275,7 +292,11 @@ impl Sema<'_, '_> {
     /// `ConstantEvaluated` context for it, `SubstDefaultTemplateArgument`).
     pub(crate) fn set_aside_outer_immediates(&mut self, e: ExprId) -> OuterImm {
         let p = &self.imm.pending;
-        if p.candidates.is_empty() && p.refs.is_empty() && p.default_uses.is_empty() {
+        if p.candidates.is_empty()
+            && p.refs.is_empty()
+            && p.default_uses.is_empty()
+            && p.prefolded.is_empty()
+        {
             return OuterImm::default();
         }
         let mut inside = HashSet::new();
@@ -298,7 +319,10 @@ impl Sema<'_, '_> {
         let (keep, default_uses) =
             std::mem::take(&mut p.default_uses).into_iter().partition(|u| inside.contains(&u.expr));
         p.default_uses = keep;
-        OuterImm { candidates, refs, default_uses }
+        let (keep, prefolded) =
+            std::mem::take(&mut p.prefolded).into_iter().partition(|c| inside.contains(&c.0));
+        p.prefolded = keep;
+        OuterImm { candidates, refs, default_uses, prefolded }
     }
 
     /// Returns what [`Sema::set_aside_outer_immediates`] set aside to the
@@ -308,6 +332,7 @@ impl Sema<'_, '_> {
         p.candidates.extend(out.candidates);
         p.refs.extend(out.refs);
         p.default_uses.extend(out.default_uses);
+        p.prefolded.extend(out.prefolded);
     }
 
     /// The next full-expression is the initializer of `v`.
@@ -631,12 +656,32 @@ impl Sema<'_, '_> {
         escalating: Option<DeclId>,
         ctor: bool,
     ) {
+        self.check_default_use_with(decl, loc, escalating, ctor, Vec::new());
+    }
+
+    /// [`Sema::check_default_use`] reading the results `early` that
+    /// [`Sema::evaluate_immediates_early`] obtained for this use (a prefix
+    /// of its invocations) instead of evaluating them again (WP-1171).
+    fn check_default_use_with(
+        &mut self,
+        decl: DeclId,
+        loc: Loc,
+        escalating: Option<DeclId>,
+        ctor: bool,
+        early: DefaultResults,
+    ) {
         let mut found = Vec::new();
         self.default_invocations(decl, &mut found);
+        let mut early = early.into_iter().peekable();
         for c in found {
             let at = self.begin_loc(c);
-            let r = self
-                .eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
+            let r = match early.next_if(|&(x, _)| x == c) {
+                Some((_, r)) => r,
+                None => self.eval_const(
+                    self.ast.exprs.operand(c),
+                    EvalContext::new(EvalKind::Consteval, at),
+                ),
+            };
             let fail = match r {
                 // Codegen reads it at each use without source-location
                 // values instead of evaluating the call again (WP-1129).
@@ -772,8 +817,42 @@ impl Sema<'_, '_> {
                 }
                 self.imm.early.swap_remove(i).1
             }
+            None => self.prefolded_or_eval(c),
+        }
+    }
+
+    /// The result [`Sema::prefold_immediate`] kept for immediate
+    /// invocation `c`, else a fresh evaluation.
+    fn prefolded_or_eval(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
+        let p = &mut self.imm.pending.prefolded;
+        match p.iter().position(|&(x, _)| x == c) {
+            Some(i) => p.swap_remove(i).1,
             None => self.eval_immediate(c),
         }
+    }
+
+    /// The value of `c`, an immediate invocation of the full-expression
+    /// being built and not yet evaluated, for a check made as its operator
+    /// is built (the shift count, clang `DiagnoseBadShiftValues` reading
+    /// `EvaluateAsInt` of the unvalued `ConstantExpr`): evaluated now and
+    /// the result kept for the end of the full-expression, which reads it
+    /// instead of evaluating the call again ([expr.const]/16, WP-1171).
+    /// `None` when `c` is not such an invocation; `Some(Err(()))` when it
+    /// is not a constant expression (reported at the end).
+    pub(crate) fn prefold_immediate(&mut self, c: ExprId) -> Option<Result<ConstValueId, ()>> {
+        if self.ast.exprs.get(c).kind() != ExprKind::ConstantExpr
+            || self.ast.exprs.constant_value(c).is_some()
+            || !self.imm.pending.candidates.iter().any(|&(x, _)| x == c)
+        {
+            return None;
+        }
+        if let Some((_, r)) = self.imm.pending.prefolded.iter().find(|&&(x, _)| x == c) {
+            return Some(r.as_ref().map(|&v| v).map_err(|_| ()));
+        }
+        let r = self.eval_immediate(c);
+        let v = r.as_ref().map(|&v| v).map_err(|_| ());
+        self.imm.pending.prefolded.push((c, r));
+        Some(v)
     }
 
     /// The value of `e` if it is the call of an immediate invocation that
@@ -796,21 +875,75 @@ impl Sema<'_, '_> {
     /// each invocation is evaluated once ([expr.const]/16, WP-1129). The
     /// results are reported by [`Sema::finish_immediate_invocations`], in
     /// the same order as before.
+    ///
+    /// So are those of the default arguments and default member
+    /// initializers it uses, which are also reported here (clang
+    /// evaluates and reports them as it builds each use,
+    /// `BuildCXXDefaultArgExpr`, before the full-expression's checks and
+    /// its own invocations; WP-1171): a successful value is stored for the
+    /// use (`set_default_immediate_value`), which the overflow trial's fold
+    /// of a call reads as a leaf, as clang's reads the valued
+    /// `ConstantExpr` of the rebuilt default argument. In an
+    /// immediate-escalating function a failure escalates it instead, at
+    /// the end of the full-expression as before: only the results are
+    /// kept for then.
     pub(crate) fn evaluate_immediates_early(&mut self, e: ExprId) {
         let p = &self.imm.pending;
-        if p.candidates.is_empty() || p.default_init {
+        if (p.candidates.is_empty() && p.default_uses.is_empty()) || p.default_init {
             return;
         }
         let candidates = std::mem::take(&mut self.imm.pending.candidates);
-        let (outer, ..) = self.classify_immediate(e, &candidates, &[], &[]);
+        let uses = std::mem::take(&mut self.imm.pending.default_uses);
+        let (outer, _, _, live) = self.classify_immediate(e, &candidates, &[], &uses);
         self.imm.pending.candidates = candidates;
+        self.imm.pending.default_uses = uses;
+        let escalating =
+            self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
+        for u in live {
+            if self.imm.early_defaults.iter().any(|&(x, _)| x == u.expr) {
+                continue;
+            }
+            let mut found = Vec::new();
+            self.default_invocations(u.decl, &mut found);
+            let rebuilt = !found.is_empty() || self.ast.exprs.source_loc_values(u.expr).is_some();
+            let mut results = Vec::with_capacity(found.len());
+            for c in found {
+                let r = self.eval_immediate(c);
+                let failed = match r {
+                    Ok(v) => {
+                        self.ast.exprs.set_default_immediate_value(c, v);
+                        false
+                    }
+                    Err(_) => true,
+                };
+                results.push((c, r));
+                // The rest wait for the check: one that fails may make
+                // the enclosing function immediate, which stops it.
+                if failed {
+                    break;
+                }
+            }
+            // A default argument clang rebuilds at the use is completed
+            // again there, its invocations unvalued (so evaluated again by
+            // clang's trial; read as leaves here).
+            if rebuilt && let Some(root) = self.ast.decls.param(u.decl).and_then(|p| p.default_arg)
+            {
+                self.check_default_arg_overflow(u.expr, root);
+            }
+            if escalating.is_none() {
+                self.check_default_use_with(u.decl, u.loc, None, false, results);
+                self.imm.early_defaults.push((u.expr, None));
+            } else {
+                self.imm.early_defaults.push((u.expr, Some(results)));
+            }
+        }
         for (c, _) in outer {
             if self.ast.exprs.constant_value(c).is_some()
                 || self.imm.early.iter().any(|&(x, _)| x == c)
             {
                 continue;
             }
-            let r = self.eval_immediate(c);
+            let r = self.prefolded_or_eval(c);
             if let Ok(v) = r {
                 let _ = self.ast.exprs.set_constant_value(c, v);
                 let op = self.ast.exprs.operand(c);
@@ -860,6 +993,7 @@ impl Sema<'_, '_> {
             for u in uses {
                 self.check_default_use(u.decl, u.loc, None, false);
             }
+            self.imm.pending.prefolded.clear();
             return;
         }
         let (outer, nested, bad_refs, uses) = self.classify_immediate(e, &candidates, &refs, &uses);
@@ -936,8 +1070,18 @@ impl Sema<'_, '_> {
         let bad_refs = self.check_consteval_only_leaves(bad_refs, e, var, escalating);
         self.check_immediate_refs(bad_refs, escalating);
         for u in uses {
-            self.check_default_use(u.decl, u.loc, escalating, false);
+            let early = match self.imm.early_defaults.iter().position(|&(x, _)| x == u.expr) {
+                Some(i) => match self.imm.early_defaults.swap_remove(i).1 {
+                    Some(r) => r,
+                    None => continue,
+                },
+                None => Vec::new(),
+            };
+            self.check_default_use_with(u.decl, u.loc, escalating, false, early);
         }
+        self.imm.early_defaults.clear();
+        // Those of nested invocations, not evaluated on their own.
+        self.imm.pending.prefolded.clear();
     }
 
     /// The references to immediate functions outside every immediate
