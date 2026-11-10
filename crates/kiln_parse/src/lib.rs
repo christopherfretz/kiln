@@ -341,6 +341,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let ast = Ast::new(interner, TypeContext::with_options(target.types.clone(), type_opts));
     let lit_opts = LiteralOptions {
         char8: opts.char8,
+        clang19_escapes: opts.clang_compat < 22,
         ..LiteralOptions::new(opts.std, encoding_params(&target))
     };
     let mut s = Sema::for_target(ast, diags, target);

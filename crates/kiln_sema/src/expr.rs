@@ -2561,7 +2561,9 @@ impl Sema<'_, '_> {
         if !matches!(enc, StringEncoding::Ordinary | StringEncoding::Utf8) {
             return None;
         }
-        Some(kiln_diag::escape_diag_text(bytes.strip_suffix(&[0]).unwrap_or(bytes)))
+        // The pool stores no terminator: a trailing 0 is a real unit (clang
+        // prints `"a\x"`'s recovery value as `a<U+0000>`).
+        Some(kiln_diag::escape_diag_text(bytes))
     }
 
     // -- literals ----------------------------------------------------------------

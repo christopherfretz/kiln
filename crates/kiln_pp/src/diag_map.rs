@@ -164,7 +164,9 @@ pub fn literal_diags(
             K::FloatSuffixExtension => Diag::new(DiagId::lit_float_suffix_ext, at).arg(range),
             K::FloatSuffixGnu => Diag::new(DiagId::lit_float_suffix_gnu, start),
             K::IntegerTooLarge => Diag::new(DiagId::sema_int_literal_too_large, start),
-            K::UnknownEscape { ch } => Diag::new(DiagId::lit_unknown_escape, at).arg(ch),
+            K::UnknownEscape { ch } => {
+                Diag::new(DiagId::lit_unknown_escape, at).arg(ch).range(span)
+            }
             K::NonstandardEscape { ch } => Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch),
             K::EscapeNoDigits { esc } => Diag::new(DiagId::lit_escape_no_digits, at).arg(esc),
             K::EscapeMissingBrace { esc } => {
@@ -198,7 +200,7 @@ pub fn literal_diags(
             K::UnevaluatedStringEscape { ch } => {
                 let esc =
                     if range.starts_with('\\') { range.to_owned() } else { format!("\\{ch}") };
-                Diag::new(DiagId::lit_unevaluated_escape, at).arg(esc)
+                Diag::new(DiagId::lit_unevaluated_escape, at).arg(esc).range(span)
             }
             K::UnevaluatedStringUdSuffix => Diag::new(DiagId::lit_unevaluated_udl, start),
             _ => {

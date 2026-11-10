@@ -2865,6 +2865,12 @@ impl Parser<'_, '_> {
 
     /// A sequence of adjacent string literals ([lex.string]/7), as an
     /// unevaluated operand ([lex.string.uneval]) when `unevaluated`.
+    /// An unevaluated string with an error (an invalid escape sequence,
+    /// an encoding prefix, a ud-suffix) is `None`, as clang's
+    /// `ParseUnevaluatedStringLiteralExpression` returns `ExprError`:
+    /// its user (a `static_assert`, an attribute, `= delete(…)`) is
+    /// then dropped or loses its message rather than cascading
+    /// (`spec/sema.md` §unevaluated strings).
     pub(crate) fn parse_string_literal(&mut self, unevaluated: bool) -> PExpr {
         let mut toks = Vec::new();
         let mut spellings = Vec::new();
@@ -2879,6 +2885,9 @@ impl Parser<'_, '_> {
         }
         let mut pieces: Vec<(StringLiteral<'_>, Loc)> = Vec::new();
         let mut error = false;
+        // clang's `hadError`: a "soft" escape error in an unevaluated
+        // string keeps the string (with clang's recovery value).
+        let mut hard = false;
         for (t, sp) in toks.iter().zip(&spellings) {
             let s = if unevaluated {
                 decode_unevaluated_string(sp, self.lit_opts)
@@ -2887,6 +2896,7 @@ impl Parser<'_, '_> {
             };
             self.literal_diags(t, sp, &s.diags, None);
             error |= s.has_error;
+            hard |= s.had_error;
             pieces.push((s, t.span.lo));
         }
         // [lex.string.concat]/2: every ud-suffix of the concatenation is
@@ -2905,11 +2915,15 @@ impl Parser<'_, '_> {
                         .arg(sfx.to_owned());
                     self.s.emit(m);
                     error = true;
+                    hard = true;
                 }
                 Some(_) => {}
             }
         }
-        if error {
+        if unevaluated && hard {
+            return None;
+        }
+        if error && !unevaluated {
             return Some(self.s.act_on_error_expr(&[], toks[0].span.lo));
         }
         let ud = toks
@@ -2921,14 +2935,18 @@ impl Parser<'_, '_> {
     }
 
     /// The value of the unevaluated string literal token `t` (for a
-    /// linkage specification), lossily as UTF-8.
-    pub(crate) fn unevaluated_text(&self, t: &Token) -> String {
+    /// linkage specification), lossily as UTF-8; `None` after an error
+    /// (diagnosed here), as [`Self::parse_string_literal`].
+    pub(crate) fn unevaluated_text(&self, t: &Token) -> Option<String> {
         let sp = self.spelling_of(t);
         let s = decode_unevaluated_string(&sp, self.lit_opts);
         self.literal_diags(t, &sp, &s.diags, None);
+        if s.had_error {
+            return None;
+        }
         match &s.units {
-            CodeUnits::U8(b) => String::from_utf8_lossy(b).into_owned(),
-            _ => String::new(),
+            CodeUnits::U8(b) => Some(String::from_utf8_lossy(b).into_owned()),
+            _ => Some(String::new()),
         }
     }
 }
