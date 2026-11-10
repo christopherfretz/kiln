@@ -127,7 +127,11 @@ impl Sema<'_, '_> {
                 }
                 _ => opts,
             };
-            self.add_ctor_candidates(&mut set, c, opts, false);
+            // A copy-initialization from the class itself or a derived
+            // class deduces no non-dependently explicit constructor
+            // template ([over.match.ctor]/1: converting constructors only;
+            // clang `AddTemplateOverloadCandidate` without `AllowExplicit`).
+            self.add_ctor_candidates_ex(&mut set, c, opts, false, style == InitStyle::Copy);
         }
         if let [arg] = args
             && !actual_ctor
@@ -147,7 +151,8 @@ impl Sema<'_, '_> {
         c: DeclId,
         opts: IcsOptions,
     ) {
-        let found = self.converting_ctors(c, true);
+        let mut found = self.converting_ctors(c, true);
+        self.drop_explicit_ctor_templates(set, &mut found);
         self.add_found_candidates(set, &found, crate::overload::CandidateKind::Ctor, opts, false);
     }
 
