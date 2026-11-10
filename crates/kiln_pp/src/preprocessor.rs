@@ -101,6 +101,10 @@ pub enum Marker {
     UnitEnd {
         /// The unit's key.
         key: String,
+        /// The unit's declaration image, built after its preamble's
+        /// tokens (S6, spec/modules.md §11.11 "Imports, partitions and
+        /// using-declarations"), and the import's span.
+        image: Option<(Rc<crate::bmi::ImageSection>, Span)>,
     },
     /// An `#embed` directive ([cpp.embed]) produced the tokens that follow:
     /// its `prefix`, the bytes (see [`Preprocessor::is_embed_byte`]) and its
@@ -231,6 +235,12 @@ pub(crate) struct FileFrame<'a> {
     /// An `#include`d file whose `-ftime-trace` `Source` span is open
     /// (ended when the frame pops; spec/driver.md "Time trace").
     pub(crate) traced: bool,
+    /// An imported unit's main file read only up to its declaration
+    /// image's preamble (spec/modules.md §11.11 "Imports, partitions and
+    /// using-declarations"): decided at the preamble's end.
+    pub(crate) image_stop: Option<Box<crate::modules::ImageStop>>,
+    /// The image the unit ends with, once the preamble's end accepted it.
+    pub(crate) image_done: Option<(Rc<crate::bmi::ImageSection>, Span)>,
 }
 
 /// A macro expansion or a token stream being read.
@@ -634,6 +644,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             unit: None,
             bad_utf8,
             traced,
+            image_stop: None,
+            image_done: None,
         })));
         self.file_change(FileChange::Enter { file, from, system, extern_c });
     }
@@ -1066,6 +1078,20 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
     /// conditionals; returns true if this is the end of the main file
     /// (`t` is returned), else pops the file and returns false.
     fn end_of_file(&mut self, t: Token) -> bool {
+        // S6: an imported unit's main file cut at its image's preamble
+        // either ends the unit here or goes on as a replay.
+        let cut = matches!(self.frames.last(), Some(Frame::File(f)) if f.image_stop.is_some());
+        let image = if cut {
+            if !self.image_stop_reached() {
+                return false;
+            }
+            match self.frames.last_mut() {
+                Some(Frame::File(f)) => f.image_done.take(),
+                _ => None,
+            }
+        } else {
+            None
+        };
         let conds = match self.frames.last_mut() {
             Some(Frame::File(f)) => std::mem::take(&mut f.conds),
             _ => Vec::new(),
@@ -1082,10 +1108,12 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             kiln_source::trace::source_end();
         }
         let exited = f.file;
+        let imaged = image.is_some();
         if let Some(save) = f.unit.take() {
-            self.end_unit(save);
+            self.end_unit(save, image);
         }
         if conds.is_empty()
+            && !imaged
             && let Some(m) = f.mi.controlling_macro()
         {
             let main_dir = self.main_file.map(|m| crate::search::parent_dir(self.sm.file_name(m)));

@@ -96,6 +96,10 @@ pub enum Event {
     UnitEnd {
         /// The unit's key.
         key: String,
+        /// The unit's declaration image, built after its preamble's
+        /// tokens (S6, spec/modules.md §11.11 "Imports, partitions and
+        /// using-declarations"), and the import's span.
+        image: Option<(std::rc::Rc<kiln_pp::bmi::ImageSection>, Span)>,
     },
     /// A loop-hint pragma (`#pragma unroll`, `#pragma clang loop`, ...;
     /// clang's `annot_pragma_loop_hint` tokens, spec/parse.md §2.3),
@@ -393,7 +397,9 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
                 let e = Event::UnitBegin { key, header, span, carried, image };
                 self.events.push_back((next, e));
             }
-            Marker::UnitEnd { key } => self.events.push_back((next, Event::UnitEnd { key })),
+            Marker::UnitEnd { key, image } => {
+                self.events.push_back((next, Event::UnitEnd { key, image }));
+            }
             Marker::Module { span, import, directive: None, .. } => {
                 // The directive's tokens end with `;` ([cpp.module],
                 // [cpp.import]); the parser never sees them.

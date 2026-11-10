@@ -27,7 +27,7 @@ use kiln_ast::decl::{
     FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
     VarSpec, VarStorage,
 };
-use kiln_ast::modules::Owner;
+use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
@@ -423,6 +423,11 @@ struct Image {
     module: String,
     kw: u32,
     name_loc: u32,
+    /// S6: the main-file offset just past the unit's last top-level
+    /// module or import directive, which an importer replays before it
+    /// builds the records; [`NONE`] for a primary interface without
+    /// imports (the reader then applies the module directive itself).
+    preamble: u32,
     /// The unit's declared names.
     names: Vec<String>,
     /// The names (indices into `names`, ascending) of its declarations at
@@ -861,6 +866,7 @@ fn encode(img: &Image) -> Vec<u8> {
     w.str(&img.module);
     w.u32(img.kw);
     w.u32(img.name_loc);
+    w.u32(img.preamble);
     w.len(img.names.len());
     for s in &img.names {
         w.str(s);
@@ -1352,6 +1358,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     let mut img = Image { main: r.str()?, module: r.str()?, ..Image::default() };
     img.kw = r.u32()?;
     img.name_loc = r.u32()?;
+    img.preamble = r.u32()?;
     for which in 0..2 {
         let n = r.count(4)?;
         let mut v = Vec::with_capacity(n);
@@ -3210,13 +3217,26 @@ impl Writer<'_, '_, '_> {
         let mt = &ast.modules;
         let sm = s.diags.sm();
         let unit = mt.units.first().ok_or("no module unit")?;
-        if mt.units.len() != 1 || !unit.imports.is_empty() {
-            return Err("an import");
+        let partition = match unit.kind {
+            UnitKind::Interface => false,
+            UnitKind::PartitionInterface | UnitKind::PartitionImplementation => true,
+            _ => return Err("a unit that is not a module interface or partition"),
+        };
+        let module = unit.module.clone().ok_or("no module declaration")?;
+        // S6: a unit with imports, or a partition, is entered by replaying
+        // its preamble; the records follow it (spec/modules.md §11.11
+        // "Imports, partitions and using-declarations").
+        if partition || !unit.imports.is_empty() || mt.units.len() != 1 {
+            let (end, bad) = s.module_preamble();
+            if bad {
+                return Err("an import outside the module's main file");
+            }
+            self.img.preamble = end.ok_or("an import outside the module's main file")?;
         }
-        if unit.kind != kiln_ast::modules::UnitKind::Interface || unit.partition.is_some() {
-            return Err("a unit that is not a primary module interface");
-        }
-        self.img.module = unit.module.clone().ok_or("no module declaration")?;
+        self.img.module = match &unit.partition {
+            Some(p) if partition => format!("{module}:{p}"),
+            _ => module,
+        };
         let (kw, kw_loc, private) = s.module_main_frame().ok_or("no module declaration")?;
         if private {
             return Err("a private module fragment");
@@ -3245,6 +3265,10 @@ impl Writer<'_, '_, '_> {
                 continue;
             }
             let o = mt.owner(d);
+            if o.unit != 0 {
+                // Imported, or replayed for an import of the preamble.
+                continue;
+            }
             if !o.purview {
                 // Predefined declarations have no location in a real
                 // file; anything else is a global module fragment.
@@ -3304,6 +3328,11 @@ impl Writer<'_, '_, '_> {
             }
             kind_gate(n.kind())?;
             self.cold_gate(d)?;
+            let at = self.loc(n.loc())?;
+            if self.img.preamble != NONE && at != NONE && at < self.img.preamble {
+                // Before the preamble's end: the importer replays it.
+                return Err("a declaration before the module's last import");
+            }
             let h = self.head(d)?;
             // The specialization references its types name come first
             // (S4b): `record` must not add records before its own.
@@ -3494,7 +3523,7 @@ impl Sema<'_, '_> {
             names: FxHashMap::default(),
             pnames: FxHashMap::default(),
             tmemo: FxHashMap::default(),
-            img: Image::default(),
+            img: Image { preamble: NONE, ..Image::default() },
             bs: BodyState::default(),
             overrides: Vec::new(),
             keys: Vec::new(),
@@ -3520,9 +3549,26 @@ impl Sema<'_, '_> {
     /// `main` (spec/modules.md §11.11 "Part 2a"). A malformed image is
     /// the module file's corrupt-file fatal error at `at`, and nothing is
     /// built.
-    pub fn load_module_image(&mut self, path: &str, bytes: &[u8], main: FileId, at: Loc) {
+    pub fn load_module_image(
+        &mut self,
+        path: &str,
+        bytes: &[u8],
+        main: FileId,
+        at: Loc,
+        after_preamble: bool,
+    ) {
         let len = self.diags.sm().text(main).len();
+        let key = self.module_current_key().to_owned();
         let checked = decode(bytes).and_then(|img| {
+            // S6: an image with a preamble is built at its end, in the
+            // unit the replayed preamble entered, which must be the
+            // image's; one without is built in place of the unit.
+            if after_preamble != (img.preamble != NONE) {
+                return bad("a preamble that does not match the import");
+            }
+            if after_preamble && (key != img.module || img.preamble as usize > len) {
+                return bad("a preamble that does not enter the image's unit");
+            }
             let off_ok = |o: u32| o == NONE || (o as usize) <= len;
             let mut offs = vec![img.kw, img.name_loc];
             for d in &img.decls {
@@ -3570,11 +3616,13 @@ impl Sema<'_, '_> {
         let lo =
             |s: &Self, o: u32| if o == NONE { Loc::INVALID } else { s.diags.sm().loc(main, o) };
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
-        self.act_on_module_directive(
-            kw,
-            true,
-            Directive::Module { name: &img.module, partition: None, kw_loc: name_loc },
-        );
+        if img.preamble == NONE {
+            self.act_on_module_directive(
+                kw,
+                true,
+                Directive::Module { name: &img.module, partition: None, kw_loc: name_loc },
+            );
+        }
         let unit = self.module_current_unit();
         let names: Vec<DeclName> =
             img.names.iter().map(|n| DeclName::ident(self.intern(n))).collect();
@@ -4245,6 +4293,7 @@ mod tests {
             module: "m".into(),
             kw: 0,
             name_loc: 7,
+            preamble: NONE,
             names: ["ns", "f", "E", "a", "T", "v", "g"].map(String::from).to_vec(),
             gated: Vec::new(),
             pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),

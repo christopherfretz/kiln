@@ -677,6 +677,20 @@ fn blank_source(d: &Path, pcm: &str, out: &str) {
     std::fs::write(d.join(out), bmi::write(&c)).unwrap();
 }
 
+/// [`blank_source`] for a unit whose image has a preamble (S6): keeps
+/// the preamble, which the importer replays, and blanks the rest.
+fn blank_after_preamble(d: &Path, pcm: &str, out: &str) {
+    use kiln_pp::bmi;
+    let mut c = bmi::read(&std::fs::read(d.join(pcm)).unwrap()).unwrap();
+    let img = c.sections.iter().find(|s| s.tag == bmi::SECTION_IMAGE).expect("an image");
+    let p = bmi::image_header(&img.bytes).unwrap().preamble.expect("a preamble") as usize;
+    let text = &mut c.files[0].text;
+    let rest: String = text[p..].chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    text.truncate(p);
+    text.push_str(&rest);
+    std::fs::write(d.join(out), bmi::write(&c)).unwrap();
+}
+
 /// The import notes of an image-enabled `-v` compile of `args`, which
 /// succeeds.
 fn image_notes(d: &Path, args: &[&str]) -> Vec<String> {
@@ -1135,6 +1149,133 @@ fn kind2_declaration_image_using() {
     }
     assert_eq!(errs[0].len(), 3, "{:#?}", errs[0]);
     assert_eq!(errs[0], errs[1]);
+}
+
+const IMGP_A: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-part-a.cppm");
+const IMGP_B: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-part-b.cppm");
+const IMGPART: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-part.cppm");
+const IMGP_IMPL: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-part-impl.cpp");
+const IMGR: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-part-reexp.cppm");
+const IMGPART_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-part-run.cpp");
+const IMGP_HIDDEN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-part-hidden.cpp");
+
+/// Stage S6 (§11.11 "Imports, partitions and using-declarations",
+/// WP-1068): interface and implementation partitions, a primary that
+/// re-exports one and imports the other, and a module that imports one
+/// module and re-exports another all carry an image after a replayed
+/// preamble. With everything after each preamble blanked, the consumer
+/// and an implementation unit build, the program runs, the IR is the
+/// replay's and the visibility errors are the same. A preamble ending in
+/// an open conditional replays the rest of its unit.
+#[test]
+#[allow(clippy::too_many_lines)] // one module project, built both ways
+fn kind2_declaration_image_imports() {
+    let d = scratch("image-imports");
+    let units = [
+        ("imgu", "u.cppm", IMGU),
+        ("imgp:a", "pa.cppm", IMGP_A),
+        ("imgp:b", "pb.cppm", IMGP_B),
+        ("imgp", "p.cppm", IMGPART),
+        ("imgr", "r.cppm", IMGR),
+    ];
+    std::fs::write(d.join("impl.cpp"), IMGP_IMPL).unwrap();
+    std::fs::write(d.join("run.cpp"), IMGPART_RUN).unwrap();
+    std::fs::write(d.join("h.cpp"), IMGP_HIDDEN).unwrap();
+    let mut mf: Vec<String> = Vec::new();
+    let mut blank: Vec<String> = Vec::new();
+    for (i, (name, src, text)) in units.iter().enumerate() {
+        std::fs::write(d.join(src), text).unwrap();
+        let pcm = format!("m{i}.pcm");
+        let mut args: Vec<&str> = vec!["-v", "-fkiln-bmi-image"];
+        args.extend(mf.iter().map(String::as_str));
+        args.extend(["--precompile", src, "-o", &pcm]);
+        let o = kiln(&d, &args);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stderr.contains("with a declaration image of "), "{name}: {}", o.stderr);
+        let mut args: Vec<&str> = mf.iter().map(String::as_str).collect();
+        let obj = format!("m{i}.o");
+        args.extend(["-c", &pcm, "-o", &obj]);
+        ok(&d, &args);
+        let b = format!("b{i}.pcm");
+        if i == 0 {
+            blank_source(&d, &pcm, &b);
+        } else {
+            blank_after_preamble(&d, &pcm, &b);
+        }
+        mf.push(format!("-fmodule-file={name}={pcm}"));
+        blank.push(format!("-fmodule-file={name}={b}"));
+    }
+    let objs = ["m0.o", "m1.o", "m2.o", "m3.o", "m4.o"];
+
+    let mut args: Vec<&str> = blank.iter().map(String::as_str).collect();
+    args.extend(["-c", "impl.cpp", "-o", "impl.o"]);
+    let notes = image_notes(&d, &args);
+    assert_eq!(notes.len(), 3, "{notes:#?}");
+    assert!(notes.iter().all(|n| n.ends_with("from its declaration image")), "{notes:#?}");
+    let mut args: Vec<&str> = blank.iter().map(String::as_str).collect();
+    args.extend(["run.cpp", "impl.o", "-o", "run"]);
+    args.extend(objs);
+    let notes = image_notes(&d, &args);
+    assert_eq!(notes.len(), 5, "{notes:#?}");
+    assert!(notes.iter().all(|n| n.ends_with("from its declaration image")), "{notes:#?}");
+    let out = Command::new(d.join("run")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "25 42 9 7 14\n");
+
+    let mut irs = Vec::new();
+    for (flag, m) in [("-fkiln-bmi-image", &blank), ("-fno-kiln-bmi-image", &mf)] {
+        let mut args: Vec<&str> = vec![flag];
+        args.extend(m.iter().map(String::as_str));
+        args.extend(["-S", "-emit-llvm", "run.cpp", "-o", "run.ll"]);
+        ok(&d, &args);
+        irs.push(std::fs::read_to_string(d.join("run.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for (flag, m) in [("-fkiln-bmi-image", &blank), ("-fno-kiln-bmi-image", &mf)] {
+        let mut args: Vec<&str> = vec![flag];
+        args.extend(m.iter().map(String::as_str));
+        args.extend(["-fsyntax-only", "h.cpp"]);
+        let o = kiln(&d, &args);
+        assert_ne!(o.code, 0, "{}", o.stderr);
+        let e: Vec<String> = o
+            .stderr
+            .lines()
+            .filter(|l| l.contains("error: "))
+            .map(|l| l[l.find("h.cpp").unwrap_or(0)..].to_owned())
+            .collect();
+        errs.push(e);
+    }
+    assert_eq!(errs[0].len(), 3, "{:#?}", errs[0]);
+    assert_eq!(errs[0], errs[1]);
+
+    // The stop inside an open `#if`: the rest of the unit is replayed.
+    std::fs::write(
+        d.join("c.cppm"),
+        "export module imgc;\n#if 1\nimport imgp;\n#endif\nexport constexpr int cv() { return 3; }\n",
+    )
+    .unwrap();
+    let mut args: Vec<&str> = vec!["-v", "-fkiln-bmi-image"];
+    args.extend(mf[1..4].iter().map(String::as_str));
+    args.extend(["--precompile", "c.cppm", "-o", "c.pcm"]);
+    let o = kiln(&d, &args);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    std::fs::write(d.join("cu.cpp"), "import imgc;\nstatic_assert(cv() == 3);\n").unwrap();
+    let mut args: Vec<&str> = mf[1..4].iter().map(String::as_str).collect();
+    args.extend(["-fmodule-file=imgc=c.pcm", "-fsyntax-only", "cu.cpp"]);
+    let notes = image_notes(&d, &args);
+    assert!(
+        notes.contains(&"note: replayed 'imgc': its preamble ends in a conditional".to_owned()),
+        "{notes:#?}"
+    );
 }
 
 /// A unit with a node the image does not carry is written without one,

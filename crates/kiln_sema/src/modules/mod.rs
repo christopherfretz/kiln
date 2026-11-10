@@ -96,6 +96,11 @@ pub(crate) struct ModSema {
     /// Set while a failed lookup is redone ignoring visibility, to
     /// diagnose a missing import ([`Sema::module_hidden_lookup`]).
     see_hidden: std::cell::Cell<bool>,
+    /// The main-file offset just past the main unit's last module or
+    /// import directive, and whether one of them left no offset (the
+    /// declaration image's preamble, spec/modules.md §11.11 "Imports,
+    /// partitions and using-declarations").
+    preamble: (Option<u32>, bool),
 }
 
 impl ModSema {
@@ -1022,6 +1027,30 @@ impl Sema<'_, '_> {
     pub(crate) fn module_main_frame(&self) -> Option<(Loc, Loc, bool)> {
         let f = self.modules.frames.first()?;
         Some((f.module_kw, f.module_loc, f.private_loc.is_valid()))
+    }
+
+    /// A module or import directive of the current unit ended at main-file
+    /// offset `end` (`None`: in an included file or a macro expansion);
+    /// kept for the main unit only ([`Sema::module_preamble`]).
+    pub fn module_note_directive_end(&mut self, end: Option<u32>) {
+        if self.modules.frames.len() > 1 {
+            return;
+        }
+        match end {
+            Some(e) => self.modules.preamble.0 = Some(e),
+            None => self.modules.preamble.1 = true,
+        }
+    }
+
+    /// The main unit's preamble end and whether a directive left no
+    /// offset ([`Sema::module_note_directive_end`]).
+    pub(crate) fn module_preamble(&self) -> (Option<u32>, bool) {
+        self.modules.preamble
+    }
+
+    /// The current unit's key (`M`, `M:P`; empty for the main file).
+    pub(crate) fn module_current_key(&self) -> &str {
+        self.ast.modules.units.get(usize::from(self.modules.cur())).map_or("", |u| u.key.as_str())
     }
 
     /// The current unit's index (spec/modules.md §6 dedup records).

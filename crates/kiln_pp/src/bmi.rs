@@ -406,13 +406,28 @@ pub enum Sniffed {
     Missing,
 }
 
-/// The main file path and the gated names an image section lists up
-/// front (spec/modules.md §11.11 "Part 2a", "Encoding"): the names of
-/// its declarations at global namespace scope, which the importer's
-/// preprocessor checks against the names it has seen there before it uses
-/// the image; `None` when the header does not decode (the reader then
-/// reports the file as corrupt).
-pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
+/// What the preprocessor reads from an image section's header
+/// ([`image_header`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageHeader<'a> {
+    /// The unit's main file path.
+    pub main: &'a str,
+    /// S6 (spec/modules.md §11.11 "Imports, partitions and
+    /// using-declarations"): the main-file offset just past the unit's
+    /// last top-level module or import directive, replayed before the
+    /// image is built; `None` for a unit that replays nothing.
+    pub preamble: Option<u32>,
+    /// The gated names.
+    pub gated: Vec<&'a str>,
+}
+
+/// The main file path, the preamble and the gated names an image section
+/// lists up front (spec/modules.md §11.11 "Part 2a", "Encoding"): the
+/// names of its declarations at global namespace scope, which the
+/// importer's preprocessor checks against the names it has seen there
+/// before it uses the image; `None` when the header does not decode (the
+/// reader then reports the file as corrupt).
+pub fn image_header(bytes: &[u8]) -> Option<ImageHeader<'_>> {
     let mut at = 0usize;
     let u32_at = |at: &mut usize| -> Option<u32> {
         let b = bytes.get(*at..at.checked_add(4)?)?;
@@ -430,6 +445,7 @@ pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
     let _module = str_at(&mut at)?;
     let _kw = u32_at(&mut at)?;
     let _name_loc = u32_at(&mut at)?;
+    let preamble = Some(u32_at(&mut at)?).filter(|&p| p != u32::MAX);
     let n = u32_at(&mut at)? as usize;
     if n.saturating_mul(4) > bytes.len() - at {
         return None;
@@ -442,7 +458,7 @@ pub fn image_header(bytes: &[u8]) -> Option<(&str, Vec<&str>)> {
     let gated = (0..g)
         .map(|_| names.get(u32_at(&mut at)? as usize).copied())
         .collect::<Option<Vec<_>>>()?;
-    Some((main, gated))
+    Some(ImageHeader { main, preamble, gated })
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.

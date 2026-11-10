@@ -111,6 +111,7 @@ impl Parser<'_, '_> {
                         }
                     };
                     self.s.act_on_module_directive(lo, d.export, dir);
+                    self.s.module_note_directive_end(d.end);
                 }
                 Event::UnitBegin { key, header, span, carried, image } => {
                     self.s.act_on_unit_begin(&key, header);
@@ -118,10 +119,15 @@ impl Parser<'_, '_> {
                         self.s.install_carried_constants(&c.path, &c.bytes, span.lo);
                     }
                     if let Some(i) = image {
-                        self.s.load_module_image(&i.path, &i.bytes, i.main_file, span.lo);
+                        self.s.load_module_image(&i.path, &i.bytes, i.main_file, span.lo, false);
                     }
                 }
-                Event::UnitEnd { key } => self.s.act_on_unit_end(&key),
+                Event::UnitEnd { key, image } => {
+                    if let Some((i, span)) = image {
+                        self.s.load_module_image(&i.path, &i.bytes, i.main_file, span.lo, true);
+                    }
+                    self.s.act_on_unit_end(&key);
+                }
                 other => self.on_event(other),
             }
         }
