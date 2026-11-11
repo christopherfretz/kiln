@@ -88,6 +88,7 @@ pub struct Function {
     pub(crate) names: Vec<Box<str>>,
     pub(crate) blocks: Vec<BlockData>,
     pub(crate) layout: Vec<BlockId>,
+    body_pending: bool,
     pub(crate) ops: Vec<Value>,
     pub(crate) idx: Vec<u32>,
     pub(crate) calls: Vec<CallData>,
@@ -135,6 +136,7 @@ impl Function {
             names: Vec::new(),
             blocks: Vec::new(),
             layout: Vec::new(),
+            body_pending: false,
             ops: Vec::new(),
             idx: Vec::new(),
             calls: Vec::new(),
@@ -189,9 +191,15 @@ impl Function {
         &self.arg_names[n as usize]
     }
 
-    /// True if the function has no body.
+    /// True if the function has no body, built or pending.
     pub fn is_declaration(&self) -> bool {
-        self.layout.is_empty()
+        self.layout.is_empty() && !self.body_pending
+    }
+
+    /// Marks the function as having a body that is built later (or, with
+    /// `false`, no longer pending: about to be built).
+    pub fn set_body_pending(&mut self, pending: bool) {
+        self.body_pending = pending;
     }
 
     /// Blocks in layout order.
