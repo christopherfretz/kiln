@@ -3214,6 +3214,17 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   `__cxa_guard_acquire`, the initializer under a `__cxa_guard_abort`
   EH cleanup (`Cleanup::GuardAbort`), `__cxa_guard_release`, then the
   destructor registration.
+- **C statics (WP-1295).** C never guards and never emits a dynamic
+  initializer: sema rejects a static-storage initializer that does not
+  fold as an address or arithmetic constant ("initializer element is
+  not a compile-time constant", `kiln_sema` `check_c_static_init`, C23
+  6.7.10p4), so every C static is static data. Address constants
+  through casts fold in the Oven (spec/oven.md "Address constants"); a
+  pointer-to-integer address constant is a `Scalar::Pointer` of
+  integer type, emitted as `ptrtoint (ptr @g to i64)` (with a GEP for
+  an offset), also as an integer member of an aggregate
+  (`member_ptr_reloc`), and `PtrBase::Absolute` is an integer constant
+  or `inttoptr`.
 - **Lifetime-extended temporaries.** A temporary bound to a reference
   with static storage becomes `_ZGR<var>_` (`let_global`): constant when
   the Oven folded it (the fold bridge now records

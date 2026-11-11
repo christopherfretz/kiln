@@ -755,9 +755,10 @@ impl Oven {
     /// clang's `ConstantEmitter` does (`static intptr_t i = (intptr_t)&g;`,
     /// C23 6.6p9): the integer freezes as a [`kiln_ast::consts::Scalar::Pointer`]
     /// of integer type, which codegen emits as `ptrtoint`. Codegen sets it
-    /// around its initializer folds only; sema never does, so no integer
-    /// constant expression it reads holds an address (spec/oven.md
-    /// "Pointers that point at nothing").
+    /// around its initializer folds; sema sets it only for the C check that
+    /// a static initializer is constant, which reads success and never the
+    /// value, so no integer constant expression sema reads holds an address
+    /// (spec/oven.md "Address constants").
     pub fn set_fold_addr_int(&mut self, on: bool) {
         self.addr_int = on;
     }
