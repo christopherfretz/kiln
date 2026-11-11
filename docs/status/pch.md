@@ -10,7 +10,8 @@ differential that keeps the two paths equal are in place for that work.
 
 ## Setup
 
-- kiln at the WP-1036 branch, `harness` profile (`cargo build --profile
+- kiln at the WP-1036 branch (the census re-run after merging #610),
+  `harness` profile (`cargo build --profile
   harness -p kiln_driver`). clang 19.1.7 (Debian).
 - aarch64 Linux, 24 cores. The host was shared with other builds.
 - `-std=c++26` (clang: `-std=c++2c`).
@@ -96,16 +97,21 @@ joined into one PCH.
   - The set is `<cassert>`, `<cerrno>`, `<cfloat>`, `<ciso646>`,
     `<climits>`, `<cstdbool>`, `<cstdint>` and `<version>`.
   - Their union is carried: one image of 162 records.
-  - The first refusals for the other 98:
-    - explicit or partial specialization: 40
+  - The first refusals for the other 98, after WP-1283 (#610, which
+    carries class template specializations):
+    - a type: 48
     - a template argument: 20
-    - a type: 17
     - a member function template: 13
+    - a specialization of a template outside the image: 7
+    - a default template argument: 2
     - a class member outside its class: 2 (`<cctype>`, `<cwctype>`)
     - one each: an internal image inconsistency (`<cfenv>`), an
       attribute (`<csignal>`), a parameter with an adjusted type
       (`<csetjmp>`), a type declared outside the image, a member
       template, and side data.
+  - Before #610, 40 of the 98 were first refused for an explicit or
+    partial specialization, and 17 for a type. The carried set is the
+    same either way.
   - Timed with a TU that uses `INT_MAX` and `errno`. kiln no PCH, load
     and replay all take 0.02 s for `-fsyntax-only` (11 to 12 MB) and
     0.03 s for `-O0 -c` (52 MB). clang 19 PCH takes 0.01 s at 85 MB.
