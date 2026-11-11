@@ -1115,6 +1115,11 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     __attribute__((noinline));`. A variable or member declarator does not
     (`expected ';' after top level declarator` / `at end of declaration
     list` at the `asm`, as clang). `tests/codegen/asm_label_gnu_attrs.cpp`.
+  - Every declarator after the first, in a simple declaration and in a
+    member declaration, may begin with GNU `__attribute__((...))`, which
+    applies to that declarator (clang `ParseDeclGroup`,
+    `ParseCXXClassMemberDeclaration`, WP-1301): `int a, __attribute__((x)) b;`.
+    `tests/conformance/dcl.attr.grammar/gnu-attributes-on-later-declarator.cpp`.
   - A function declarator with a label is never a definition: a
     following `{` is parsed as an initializer, which Sema rejects
     (`illegal initializer`).
