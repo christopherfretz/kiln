@@ -398,6 +398,10 @@ impl Sema<'_, '_> {
     /// non-designated clauses, each at most once per list. Run once,
     /// when the list is parsed (not again at instantiation).
     pub fn act_on_init_list_syntax(&mut self, l: &InitList) {
+        // C99 6.7.8 has all three (clang checks them only in C++).
+        if self.is_c() {
+            return;
+        }
         let Some(first) = l.items.first() else { return };
         // A designated pack expansion `.m = e...` is a
         // `PackExpansionExpr`, not a `DesignatedInitExpr`, to these
@@ -2488,8 +2492,9 @@ impl Sema<'_, '_> {
                 }
                 // [dcl.init.aggr]/3.1: designators in declaration order
                 // (clang `ext_designated_init_reordered`, checked for the
-                // designators of the list itself).
-                if sub.braced && cur > nb && cur - nb - 1 > idx {
+                // designators of the list itself). C designators may come
+                // in any order (C23 6.7.10p19).
+                if sub.braced && cur > nb && cur - nb - 1 > idx && !self.is_c() {
                     let prev = fields[cur - nb - 1];
                     let msg = self
                         .diag(DiagId::sema_designated_init_reordered, self.value_begin(item))

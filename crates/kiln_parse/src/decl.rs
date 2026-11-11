@@ -2126,6 +2126,11 @@ impl Parser<'_, '_> {
         named: bool,
         ctx: DeclaratorContext,
     ) -> bool {
+        // C11 6.7.2.3, 6.2.1/4: C declares a tag anywhere a type specifier
+        // may appear; one in a parameter list is Sema's `-Wvisibility`.
+        if self.s.is_c() {
+            return false;
+        }
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
         let mut invalid = false;
         if type_spec {
@@ -2154,6 +2159,9 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        if self.s.is_c() {
+            return;
+        }
         let rule = match (Self::tag_site(ds, ctx), ctx) {
             (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
             (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
@@ -2179,6 +2187,9 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
     fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        if self.s.is_c() {
+            return;
+        }
         let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
         for c in &d.chunks {
             if matches!(c, Chunk::Function { .. }) {
@@ -3597,6 +3608,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one step per parameter-declaration part")]
     pub(crate) fn parse_param_clause(
         &mut self,
         d: &mut Declarator,
@@ -3610,7 +3622,8 @@ impl Parser<'_, '_> {
             if self.at(Punct::RParen) || self.at_eof() {
                 break;
             }
-            if self.eat(Punct::Ellipsis).is_some() {
+            if let Some(l) = self.eat(Punct::Ellipsis) {
+                self.c_check_ellipsis_first(params.is_empty(), l);
                 variadic = true;
                 break;
             }
@@ -5043,8 +5056,36 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// GNU `{ y: 2 }`, the old-style field designator, in C (clang
+    /// `ParseInitializerWithPotentialDesignator`): pushes it onto
+    /// `designator`, true if there was one. It takes no `=`.
+    fn gnu_old_style_designator(&mut self, designator: &mut Vec<Designator>) -> bool {
+        if !self.s.is_c() || !self.peek_is(1, Punct::Colon) {
+            return false;
+        }
+        let Some(n) = self.ident() else { return false };
+        let l = self.bump().span.lo;
+        let d = self.s.diag(DiagId::parse_gnu_old_style_field_designator, l);
+        self.emit(d);
+        self.bump();
+        designator.push(Designator::Field(n, l));
+        true
+    }
+
+    /// C17 6.7.6/1: a parameter-type-list names a parameter before the
+    /// `...` at `l`; C23 allows `(...)` (clang `err_ellipsis_first_param`).
+    fn c_check_ellipsis_first(&mut self, first: bool, l: Loc) {
+        if first && self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23) {
+            self.s.error(DiagId::parse_ellipsis_first_param, l);
+        }
+    }
+
     /// [`Self::parse_init_list`], with whether the designations were
     /// valid instead of dropping the list.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the designator forms and the list recovery in one loop"
+    )]
     fn parse_init_list_checked(&mut self) -> Result<(InitList, bool), ()> {
         if !self.stack_ok() {
             return Err(());
@@ -5060,7 +5101,11 @@ impl Parser<'_, '_> {
         let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let mut designator = Vec::new();
+            let old_style = self.gnu_old_style_designator(&mut designator);
             loop {
+                if old_style {
+                    break;
+                }
                 if self.at(Punct::Period) {
                     self.bump();
                     let Some(n) = self.ident() else {
@@ -5103,6 +5148,7 @@ impl Parser<'_, '_> {
                 valid = false;
             }
             if !designator.is_empty()
+                && !old_style
                 && !self.at(Punct::LBrace)
                 && self.expect(Punct::Equal).is_none()
             {

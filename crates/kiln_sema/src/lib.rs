@@ -552,6 +552,10 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// C: the tags declared in the parameter list of the function
+    /// declarator just parsed, in scope in its body if it is a definition
+    /// (C23 6.2.1p4, [`Sema::c_inject_param_tags`]).
+    pub(crate) c_param_tags: Vec<(kiln_source::symbol::Symbol, DeclId)>,
     /// Block-scope variables whose qualified declarator-id was rejected
     /// (`static T(::a);`, [`qualified_decl::QualifiedDecl::DropLocal`]):
     /// declared invalid in the block, standing for a namespace member, so
@@ -1413,6 +1417,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            c_param_tags: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             vis_stack: Vec::new(),
             vis_namespaces: Vec::new(),

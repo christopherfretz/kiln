@@ -15,18 +15,24 @@
 //!   incomplete until the end of the translation unit, where an array of
 //!   unknown bound becomes `[1]` (6.9.2p5) and any other incomplete type
 //!   is an error (clang `ActOnEndOfTranslationUnit`).
+//! - A tag first declared in a parameter list has function prototype
+//!   scope (C23 6.2.1p4): later parameters of that list find it, the
+//!   function's body does too when the declarator is a definition, and
+//!   nothing else does. It is clang's `-Wvisibility` warning.
 
 use kiln_ast::attr::AttrKind;
-use kiln_ast::decl::{DeclFlags, FnStorage, VarStorage};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, FnStorage, VarStorage};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 use kiln_source::fx::FxHashSet;
+use kiln_source::symbol::Symbol;
 
 use crate::Sema;
 use crate::conv;
+use crate::declspec::{DeclSpec, StorageSpec};
 use crate::init::StringInit;
 use crate::literal::c_char_type;
 
@@ -35,14 +41,84 @@ use crate::literal::c_char_type;
 const DEPTH: u32 = 64;
 
 impl Sema<'_, '_> {
+    /// A C declaration with no declarators outside a structure (C23
+    /// 6.7p2, clang `ParsedFreeStandingDeclSpec`): with `typedef` it is
+    /// "typedef requires a name"; an unnamed structure or union declares
+    /// no anonymous member there (6.7.2.1p15 makes one only a member), so
+    /// it declares nothing. True if diagnosed here.
+    pub(crate) fn c_decl_spec_only(&mut self, ds: &DeclSpec) -> bool {
+        if !self.is_c() || ds.invalid || self.kind_of(self.ctx) == DeclKind::CXXRecord {
+            return false;
+        }
+        if matches!(ds.storage, Some((StorageSpec::Typedef, _))) {
+            self.emit(self.diag(DiagId::sema_typedef_without_a_name, ds.loc));
+            return true;
+        }
+        let anonymous = ds.tag.is_some_and(|t| {
+            ds.tag_declares
+                && self
+                    .ast
+                    .decls
+                    .record(t)
+                    .is_some_and(|r| r.defn.contains(DefinitionBits::ANONYMOUS))
+        });
+        if anonymous {
+            self.emit(self.diag(DiagId::sema_no_declarators, ds.loc));
+        }
+        anonymous
+    }
+
+    /// True if a tag declared now has C function prototype scope (C23
+    /// 6.2.1p4): the innermost parameter-declaration-clause is open.
+    pub(crate) fn c_in_proto_tag_scope(&self) -> bool {
+        self.is_c() && self.in_prototype_scope() && !self.prototype_params.is_empty()
+    }
+
+    /// The tag `n` declared earlier in the innermost open parameter list.
+    pub(crate) fn c_proto_tag(&self, n: Symbol) -> Option<DeclId> {
+        let f = self.prototype_params.last()?;
+        f.tags.iter().rev().find(|t| t.0 == n).map(|t| t.1)
+    }
+
+    /// Gives the new tag `d` named `n` prototype scope: hidden from
+    /// file-scope lookup, found by the rest of the parameter list.
+    pub(crate) fn c_declare_proto_tag(&mut self, n: Symbol, d: DeclId) {
+        self.builder().unregister_name(d);
+        if let Some(f) = self.prototype_params.last_mut() {
+            f.tags.push((n, d));
+        }
+    }
+
+    /// The outermost parameter list just closed declared `tags`: kept for
+    /// the function body, if the declarator is a definition (clang
+    /// `ActOnStartOfFunctionDef` re-adds the `DeclsInPrototype`).
+    pub(crate) fn c_end_proto_tags(&mut self, tags: Vec<(Symbol, DeclId)>) {
+        if self.is_c() && self.prototype_params.is_empty() {
+            self.c_param_tags = tags;
+        }
+    }
+
+    /// The function body scope just opened: the tags of its parameter
+    /// list are in scope there.
+    pub(crate) fn c_inject_param_tags(&mut self) {
+        if !self.is_c() {
+            return;
+        }
+        for (n, d) in std::mem::take(&mut self.c_param_tags) {
+            self.push_local(n, d);
+        }
+    }
+
     /// clang `canRedefineFunction`: in C, a GNU89 (`-fgnu89-inline` or
     /// `gnu_inline`) `extern inline` definition `f` is inline-only, and a
     /// later definition, even a `static` one, replaces it.
     pub(crate) fn c_can_redefine_function(&self, f: DeclId) -> bool {
         self.is_c()
-            && self.ast.decls.function(f).is_some_and(|x| {
-                x.spec.is_inline() && x.spec.storage() == FnStorage::Extern
-            })
+            && self
+                .ast
+                .decls
+                .function(f)
+                .is_some_and(|x| x.spec.is_inline() && x.spec.storage() == FnStorage::Extern)
             && (self.gnu89_inline || self.find_attr(f, AttrKind::GNU_INLINE).is_some())
     }
 
@@ -294,5 +370,124 @@ impl Sema<'_, '_> {
             return Some(self.recover(ty, &[e], at));
         }
         Some(self.ast.exprs.compound_literal_init(lit))
+    }
+}
+
+impl Sema<'_, '_> {
+    /// C23 6.7.5p3 (function specifiers): an inline definition of a
+    /// function with external linkage shall not reference an identifier
+    /// with internal linkage. clang `diagnoseUseOfInternalDeclInInlineFunction`
+    /// (`-Wstatic-in-inline`, C only): `d` named at `loc` in the current
+    /// function. The warning is pedantic-only when the use is in the main
+    /// file, or names an inline or `const` function.
+    pub(crate) fn c_check_static_in_inline(&mut self, d: DeclId, loc: Loc) {
+        if !self.is_c() || !matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function) {
+            return;
+        }
+        let Some(cur) = self.func.as_ref().map(|f| f.decl) else { return };
+        let inline = |s: &Self, f: DeclId| {
+            s.ast.decls.function(f).is_some_and(|x| x.spec.is_inline())
+                || s.ast.decls.function(s.ast.first(f)).is_some_and(|x| x.spec.is_inline())
+        };
+        if !inline(self, cur) || !self.has_external_linkage(cur) || !self.has_internal_linkage(d) {
+            return;
+        }
+        let is_fn = self.kind_of(d) == DeclKind::Function;
+        let quiet = self.in_main_file(loc)
+            || (is_fn && (inline(self, d) || self.find_attr(d, AttrKind::CONST).is_some()));
+        let id = if quiet {
+            DiagId::sema_internal_in_extern_inline_quiet
+        } else {
+            DiagId::sema_internal_in_extern_inline
+        };
+        let name = format!("'{}'", self.decl_name(d));
+        let mut msg = self.diag(id, loc).arg(u8::from(!is_fn)).arg(name.clone());
+        if let Some(note) = self.c_suggest_static(cur) {
+            msg = msg.with_note(note);
+        }
+        let decl_at = self.ast.decls.get(self.ast.first(d)).loc();
+        let note = self.diag(DiagId::note_entity_declared_at, decl_at).arg(name);
+        self.emit(msg.with_note(note));
+    }
+
+    /// clang `MaybeSuggestAddingStaticToDecl`: the "use 'static'" note on
+    /// inline function `cur`, at its first declaration's start, when that
+    /// declaration has no storage class written.
+    fn c_suggest_static(&self, cur: DeclId) -> Option<kiln_diag::Diag> {
+        let first = self.ast.first(cur);
+        if !self.ast.decls.function(first).is_some_and(|x| x.spec.storage() == FnStorage::None) {
+            return None;
+        }
+        let at = self
+            .ast
+            .decls
+            .cold
+            .begin_loc
+            .get(first)
+            .copied()
+            .unwrap_or(self.ast.decls.get(first).loc());
+        let fname = format!("'{}'", self.decl_name(cur));
+        Some(
+            self.diag(DiagId::note_convert_inline_to_static, at)
+                .arg(fname)
+                .fixit(kiln_diag::FixIt::insert(at, "static ")),
+        )
+    }
+
+    /// C23 6.7.5p3: an inline definition of a function with external
+    /// linkage shall not contain a definition of a modifiable object with
+    /// static storage duration. clang `warn_static_local_in_extern_inline`
+    /// (`-Wstatic-local-in-inline`): a block-scope `static` object of a
+    /// type that is not `const`, written at `storage_loc`, in a function
+    /// whose definition here is discarded (clang
+    /// `isFunctionDefinitionDiscarded`: another translation unit provides
+    /// the external definition).
+    pub(crate) fn c_check_static_local_in_inline(&mut self, ty: QualType, storage_loc: Loc) {
+        if !self.is_c() || self.ast.types.effective_quals(ty).is_const() {
+            return;
+        }
+        let Some(cur) = self.func.as_ref().map(|f| f.decl) else { return };
+        if !self.c_inline_definition_discarded(cur) {
+            return;
+        }
+        let mut msg = self.diag(DiagId::sema_static_local_in_extern_inline, storage_loc);
+        if let Some(note) = self.c_suggest_static(cur) {
+            msg = msg.with_note(note);
+        }
+        self.emit(msg);
+    }
+
+    /// Whether the definition of function `f` (being defined) is an
+    /// inline definition that is not externally visible (clang
+    /// `GetGVALinkageForFunction == GVA_AvailableExternally`, by the
+    /// declarations seen so far). C99 (C23 6.7.5p7): every file-scope
+    /// declaration is `inline` and none is `extern`. GNU89
+    /// (`-fgnu89-inline`, or `gnu_inline`): the definition is `extern
+    /// inline` and no declaration is `inline` without `extern`. The
+    /// codegen rule is `kiln_codegen`'s `c_inline_definition_only`.
+    fn c_inline_definition_discarded(&self, f: DeclId) -> bool {
+        let ast = &self.ast;
+        let spec = |r: DeclId| ast.decls.function(r).map(|x| x.spec);
+        let first = ast.first(f);
+        if !ast.redecls_of(first).any(|r| spec(r).is_some_and(kiln_ast::decl::FnSpec::is_inline))
+            || !self.has_external_linkage(f)
+        {
+            return false;
+        }
+        let ext = |s: kiln_ast::decl::FnSpec| s.storage() == FnStorage::Extern;
+        if self.gnu89_inline || self.find_attr(f, AttrKind::GNU_INLINE).is_some() {
+            return spec(f).is_some_and(|s| s.is_inline() && ext(s))
+                && !ast
+                    .redecls_of(first)
+                    .any(|r| spec(r).is_some_and(|s| s.is_inline() && !ext(s)));
+        }
+        let file_scope = |r: DeclId| {
+            ast.decls
+                .lexical_ctx(r)
+                .is_some_and(|c| ast.decls.get(c).kind() == DeclKind::TranslationUnit)
+        };
+        !ast.redecls_of(first)
+            .filter(|&r| file_scope(r))
+            .any(|r| spec(r).is_some_and(|s| !s.is_inline() || ext(s)))
     }
 }

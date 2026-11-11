@@ -225,6 +225,7 @@ sema_dangling_variable_implicit = Warning [Dangling] (1) "temporary {0:whose add
 sema_dangling_variable_member = Warning [Dangling] (2) "temporary {0:whose address is used as value of|bound to} {0:|reference }member of local variable {1} will be destroyed at the end of the full-expression";
 sema_dangling_variable_member_implicit = Warning [Dangling] (1) "temporary {0:whose address is used as value of|implicitly bound to} {0:|reference }member of local variable will be destroyed at the end of the full-expression";
 sema_decl_attribute_on_stmt = Error (1) "'{0}' attribute cannot be applied to a statement";
+sema_decl_in_param_list = Warning [Visibility] (1) "declaration of {0} will not be visible outside of this function";
 sema_decl_negative_array_size = Error (1) "'{0}' declared as an array with a negative size";
 sema_decl_shadow = WarningOff [Shadow] (2) "declaration shadows a {0:structured binding|local variable|variable in {1}|static data member of {1}|field of {1}|typedef in {1}|type alias in {1}}";
 sema_decl_shadow_uncaptured_local = WarningOff [ShadowUncapturedLocal] (2) "declaration shadows a {0:structured binding|local variable|variable in {1}|static data member of {1}|field of {1}|typedef in {1}|type alias in {1}}";

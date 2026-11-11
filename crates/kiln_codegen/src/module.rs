@@ -1025,7 +1025,8 @@ impl<'a> Cg<'a> {
         // Sema completed that one's type (clang `EmitTentativeDefinition`
         // of `getActingDefinition`, WP-1286).
         if ast.lang_c && v.init.is_none() {
-            let init = ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|x| x.init.is_some()));
+            let init =
+                ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|x| x.init.is_some()));
             let last = ast.redecls_of(d).find(|&r| {
                 ast.decls.var(r).is_some_and(|x| x.spec.storage() != VarStorage::Extern)
             });

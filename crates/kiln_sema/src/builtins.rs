@@ -640,7 +640,8 @@ impl Sema<'_, '_> {
             if !compatible {
                 let c89 = !self.c_at_least(kiln_lex::CStd::C99);
                 let n = format!("'{}'", self.ast.symbols().as_str(name));
-                let note = self.diag(DiagId::note_previous_declaration, self.ast.decls.get(p).loc());
+                let note =
+                    self.diag(DiagId::note_previous_declaration, self.ast.decls.get(p).loc());
                 let msg = self.diag(DiagId::sema_use_out_of_scope_declaration, loc);
                 self.emit(msg.arg(n).arg(u8::from(c89)).with_note(note));
                 self.register_local(name, p);

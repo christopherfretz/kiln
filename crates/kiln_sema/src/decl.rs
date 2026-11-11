@@ -156,6 +156,9 @@ pub struct PrototypeFrame {
     pub(crate) params: Vec<(Symbol, DeclId)>,
     /// The number of parameters declared so far.
     pub(crate) index: usize,
+    /// C: the named tags declared in the clause (C23 6.2.1p4,
+    /// [`Sema::c_declare_proto_tag`]).
+    pub(crate) tags: Vec<(Symbol, DeclId)>,
 }
 
 pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
@@ -558,6 +561,7 @@ impl Sema<'_, '_> {
             depth: self.scopes.len(),
             params: Vec::new(),
             index: 0,
+            tags: Vec::new(),
         });
     }
 
@@ -638,7 +642,9 @@ impl Sema<'_, '_> {
     /// The end of the declarator part a parameter-declaration-clause
     /// scopes (see [`Sema::act_on_start_prototype`]).
     pub fn act_on_end_prototype(&mut self) {
-        self.prototype_params.pop();
+        if let Some(f) = self.prototype_params.pop() {
+            self.c_end_proto_tags(f.tags);
+        }
     }
 
     /// After a qualified declarator-id `N::name` (clang's
@@ -1205,8 +1211,12 @@ impl Sema<'_, '_> {
         };
         let quals = *quals;
         let scopes = d.qualifier.map_or(0, |q| self.act_on_enter_declarator_scope(q));
-        let mut frame =
-            PrototypeFrame { depth: self.scopes.len(), params: Vec::new(), index: params.len() };
+        let mut frame = PrototypeFrame {
+            depth: self.scopes.len(),
+            params: Vec::new(),
+            index: params.len(),
+            tags: Vec::new(),
+        };
         for p in params {
             if let (Some((n, _)), Some(pd)) = (p.name, p.decl) {
                 frame.params.push((n, pd));
@@ -4767,8 +4777,9 @@ impl Sema<'_, '_> {
                 } else {
                     self.prev_candidates_dn(dname, None)
                 };
-                let c_fn =
-                    |x: DeclId| self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x);
+                let c_fn = |x: DeclId| {
+                    self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x)
+                };
                 // Else one declared in another block, or implicitly ([6.2.7]/2;
                 // clang `findLocallyScopedExternCDecl`).
                 let ns = self.enclosing_namespace();
@@ -5191,11 +5202,10 @@ impl Sema<'_, '_> {
                             // The first of an implicit chain (clang's
                             // locally scoped extern-C lookup).
                             let f = self.ast.first(p);
-                            let f = if self.ast.decls.get(f).has(DeclFlags::IMPLICIT) { f } else { p };
+                            let f =
+                                if self.ast.decls.get(f).has(DeclFlags::IMPLICIT) { f } else { p };
                             let l = self.ast.decls.get(f).loc();
-                            msg.with_note(
-                                self.diag(DiagId::note_previous_implicit_declaration, l),
-                            )
+                            msg.with_note(self.diag(DiagId::note_previous_implicit_declaration, l))
                         }
                         None => self.note_prev(msg, p, def),
                     };
@@ -5326,8 +5336,13 @@ impl Sema<'_, '_> {
         }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
-        // `operator->` result ([over.ref]).
-        if (self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+        // `operator->` result ([over.ref]) and a C inline function's
+        // "use 'static'" note (`Sema::c_suggest_static`).
+        if (self
+            .ast
+            .decls
+            .function(f)
+            .is_some_and(|x| x.spec.is_pure() || (self.is_c() && x.spec.is_inline()))
             || self.ast.decls.get(f).name().as_operator() == Some(OverloadedOperator::Arrow))
             && ds.loc.is_valid()
             && ds.loc != self.ast.decls.get(f).loc()
@@ -6770,6 +6785,11 @@ impl Sema<'_, '_> {
         let v = self.builder().var(h, ty, spec, prev_ok);
         if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
+        if let Some((StorageSpec::Static, l)) = ds.storage
+            && self.in_local_scope()
+        {
+            self.c_check_static_local_in_inline(ty, l);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_instantiation_dependent_type(ty) {
@@ -8218,6 +8238,7 @@ impl Sema<'_, '_> {
         let mut fs = Scope::new(ScopeKind::Function, None);
         fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);
+        self.c_inject_param_tags();
         self.ctx = f;
         let params: Vec<DeclId> = self
             .ast
@@ -8552,6 +8573,16 @@ impl Sema<'_, '_> {
         opaque_enum: bool,
         nloc: Loc,
     ) -> Vec<DeclId> {
+        // C23 6.2.1p4: in a parameter list, a declaration redeclares only
+        // a tag of that list; a reference finds it first.
+        if qualifier.is_none() && self.c_in_proto_tag_scope() {
+            if let Some(d) = self.c_proto_tag(n) {
+                return vec![d];
+            }
+            if use_ != TagUse::Reference {
+                return Vec::new();
+            }
+        }
         match (qualifier, use_) {
             (None, _) if templ => self
                 .lookup_current_scope(n)
@@ -8902,7 +8933,7 @@ impl Sema<'_, '_> {
             } else {
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
             };
-            if found.is_empty() && qualifier.is_none() {
+            if found.is_empty() && qualifier.is_none() && !self.c_in_proto_tag_scope() {
                 conflict = self.diagnose_tag_kind_conflict(
                     keyword,
                     n,
@@ -9080,6 +9111,16 @@ impl Sema<'_, '_> {
             self.check_forward_ref_enum(prev, nloc);
         }
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
+        let proto_tag = self.c_in_proto_tag_scope() && qualifier.is_none() && !conflict;
+        if proto_tag && prev.is_none() && (name.is_some() || is_enum) {
+            self.c_warn_tag_in_param_list(d);
+        }
+        if proto_tag
+            && prev.is_none()
+            && let Some((n, _)) = name
+        {
+            self.c_declare_proto_tag(n, d);
+        }
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
@@ -9101,6 +9142,7 @@ impl Sema<'_, '_> {
             && self.in_local_scope()
             && qualifier.is_none()
             && !conflict
+            && !proto_tag
         {
             self.push_local(n, d);
         }
@@ -9131,8 +9173,11 @@ impl Sema<'_, '_> {
             return;
         }
         // C: clang's pedantic `ext_forward_ref_enum` (WP-1286).
-        let id =
-            if self.is_c() { DiagId::sema_forward_ref_enum_c } else { DiagId::sema_forward_ref_enum };
+        let id = if self.is_c() {
+            DiagId::sema_forward_ref_enum_c
+        } else {
+            DiagId::sema_forward_ref_enum
+        };
         self.emit(self.diag(id, at));
     }
 
@@ -9221,6 +9266,16 @@ impl Sema<'_, '_> {
     /// a parameter-declaration-clause up to the end of its declarator,
     /// including default arguments, the exception specification and the
     /// trailing return type, but not a lambda body within them.
+    /// C11 6.2.1/4: a tag first declared in a parameter list has
+    /// function prototype scope (or the function's block scope, for a
+    /// definition), so no other declaration can name it: clang's
+    /// `warn_decl_in_param_list` `-Wvisibility`.
+    fn c_warn_tag_in_param_list(&mut self, d: DeclId) {
+        let t = format!("'{}'", self.decl_ty_str(self.tag_type(d)));
+        let msg = self.diag(DiagId::sema_decl_in_param_list, self.ast.decls.get(d).loc());
+        self.emit(msg.arg(t));
+    }
+
     pub fn in_prototype_scope(&self) -> bool {
         self.prototype_params.last().is_some_and(|f| f.depth == self.scopes.len())
             || self.scopes.last().is_some_and(|s| s.kind == ScopeKind::Prototype)
@@ -10774,6 +10829,9 @@ impl Sema<'_, '_> {
     /// a class, else a `Var`) is returned so that a block's `DeclStmt`
     /// can own it.
     pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
+        if self.c_decl_spec_only(ds) {
+            return None;
+        }
         if let Some(t) = ds.tag {
             let n = *self.ast.decls.get(t);
             if ds.tag_declares

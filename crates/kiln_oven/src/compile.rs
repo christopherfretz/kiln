@@ -5975,12 +5975,14 @@ impl Compiler<'_> {
     /// initialization, Sema's `check_flexible_array_init`).
     fn is_flexible_elements_init(&self, f: DeclId, x: ExprId) -> bool {
         let ast = self.ast();
-        ast.decls.get(f).ty().is_some_and(|q| {
-            matches!(ast.types.canonical_view(q), TypeView::IncompleteArray(_))
-        }) && matches!(
-            ast.types.canonical_view(ast.exprs.get(x).ty()),
-            TypeView::ConstantArray(c) if c.size > 0
-        )
+        ast.decls
+            .get(f)
+            .ty()
+            .is_some_and(|q| matches!(ast.types.canonical_view(q), TypeView::IncompleteArray(_)))
+            && matches!(
+                ast.types.canonical_view(ast.exprs.get(x).ty()),
+                TypeView::ConstantArray(c) if c.size > 0
+            )
     }
 
     fn has_name(&self, d: DeclId) -> bool {

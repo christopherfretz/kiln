@@ -2394,6 +2394,7 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         self.check_sve_use(d, loc);
+        self.c_check_static_in_inline(d, loc);
         // [dcl.spec.auto.general]/11: a placeholder variable's type is
         // not known inside its own initializer.
         if n.kind() == DeclKind::Var

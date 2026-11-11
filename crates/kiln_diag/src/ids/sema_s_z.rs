@@ -73,6 +73,7 @@ sema_static_block_func = Error (0) "function declared in block scope cannot have
 sema_static_data_member_reinit = Error (1) "static data member '{0}' already has an initializer";
 sema_static_downcast_via_virtual = Error (3) "cannot cast {0} to {1} via virtual base {2}";
 sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+sema_static_local_in_extern_inline = Warning [StaticLocalInInline] (0) "non-constant static local variable in inline function may be different in different files";
 sema_static_main = Error (0) "'main' is not allowed to be declared static";
 sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";
 sema_static_member_bad_init = Error (1) "static data member of type {0} must be initialized out of line";
@@ -230,6 +231,7 @@ sema_typecheck_negative_array_size = Error (0) "array size is negative";
 sema_typedef_not_bitfield = Error (1) "typedef member '{0}' cannot be a bit-field";
 sema_typedef_not_identifier = Error (0) "typedef name must be an identifier";
 sema_typedef_template = Error (0) "a typedef cannot be a template";
+sema_typedef_without_a_name = ExtWarn [MissingDeclarations] (0) "typedef requires a name";
 sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
 sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
 // [dcl.type.class.deduct]/1: a typename-specifier naming a template
