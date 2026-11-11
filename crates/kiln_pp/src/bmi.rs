@@ -586,11 +586,17 @@ pub fn write(c: &Capsule) -> Vec<u8> {
 
 /// Writes `bytes` to `path` atomically: to a temporary file beside it,
 /// then renamed over it, so an interrupted compile never leaves a
-/// half-written module file.
+/// half-written module file. A path that exists and is not a regular
+/// file (`-o /dev/null`, a FIFO) is written in place, as clang does:
+/// renaming over it would replace the device with a regular file.
 ///
 /// # Errors
 /// The I/O error of creating, writing or renaming the file.
 pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        let mut f = std::fs::OpenOptions::new().write(true).open(path)?;
+        return f.write_all(bytes).and_then(|()| f.flush());
+    }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}", std::process::id()));
     let tmp = std::path::PathBuf::from(tmp);
@@ -1168,5 +1174,16 @@ mod tests {
             ]
         );
         assert!(mismatches(&rec, &rec).is_empty());
+    }
+
+    /// `-o /dev/null` writes through the device; renaming a temporary file
+    /// over it (as root) would replace /dev/null with a regular file.
+    #[cfg(unix)]
+    #[test]
+    fn write_file_keeps_a_device_output_a_device() {
+        use std::os::unix::fs::FileTypeExt as _;
+        let null = Path::new("/dev/null");
+        write_file(null, b"module bytes").unwrap();
+        assert!(std::fs::metadata(null).unwrap().file_type().is_char_device());
     }
 }
