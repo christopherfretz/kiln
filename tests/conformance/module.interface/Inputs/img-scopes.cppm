@@ -1,6 +1,7 @@
 // The module of image-scopes-run.cpp: linkage specifications (braced,
 // braceless, "C" and "C++"), literal exception specifications, inline and unnamed namespaces, reserved names
-// in the namespace std, which a new-expression before it has sema declare.
+// in the namespace std, which a new-expression before it has sema declare,
+// and builtin functions sema declares at their first use.
 export module imgs;
 
 export extern "C" int imgs_c_add(int a, int b) { return a + b; }
@@ -46,6 +47,12 @@ export int heap_val() {
   delete p;
   return v;
 }
+
+// Builtin functions: inline bodies the importer instantiates or evaluates
+// call its own declarations of them.
+export constexpr unsigned long imgs_len(const char *s) { return __builtin_strlen(s); }
+export inline int imgs_clz(unsigned x) { return __builtin_clz(x); }
+export int imgs_abs(int x) { return __builtin_abs(x); }
 
 export namespace std {
 inline namespace __imgs {

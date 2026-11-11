@@ -2016,6 +2016,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // complete class and a previous declaration; an implicit
             // member names a complete class.
             let ok = match (&d.payload, d.lexical) {
+                // A builtin function, at global scope (WP-1278).
+                (Payload::Implicit { kind: scope::BUILTIN_KIND }, _) => {
+                    top.is_none() && d.ctx == NONE && d.lexical == NONE
+                }
                 (Payload::Implicit { .. }, _) => {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
                 }
@@ -2101,7 +2105,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         && img.decls.get(x as usize).is_some_and(|o| match o.payload {
                             Payload::Function { kind: 1 | 3 | 4, .. } => o.prev == NONE,
                             // An implicit assignment operator or destructor.
-                            Payload::Implicit { kind } => kind >= 3,
+                            Payload::Implicit { kind } => (3..=5).contains(&kind),
                             _ => false,
                         })
                 };
@@ -2215,6 +2219,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Field { flags, .. } => {
                 if flags & !FIELD_FLAGS != 0 {
                     return bad("bad field flags");
+                }
+            }
+            Payload::Implicit { kind: scope::BUILTIN_KIND } => {
+                if d.prev != NONE {
+                    return bad("bad builtin function record");
                 }
             }
             Payload::Implicit { kind } => {
@@ -2845,7 +2854,7 @@ impl Writer<'_, '_, '_> {
         Ok(match n.kind() {
             DeclKind::Namespace => {
                 let nd = ast.decls.namespace(d).ok_or("a malformed namespace")?;
-                self.namespace_flags(i, u32::from(nd.flags))?;
+                self.namespace_flags(i, nd.flags)?;
                 Payload::Namespace
             }
             DeclKind::Export => Payload::Export,
@@ -3761,6 +3770,9 @@ impl Writer<'_, '_, '_> {
             // Declared again by the importer with its unnamed namespace.
             return Ok(());
         }
+        if n.has(DeclFlags::IMPLICIT) && self.builtin_record(d)? {
+            return Ok(());
+        }
         if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
             // An implicitly declared special member: the importer
             // declares it again (spec/modules.md §11.11 "Classes").
@@ -4048,6 +4060,9 @@ impl Sema<'_, '_> {
             if files.len() != img.files.len() {
                 return bad("a file table the importer did not load");
             }
+            if !self.image_builtins_ok(&img) {
+                return bad("a builtin function the importer does not declare");
+            }
             let off_ok = |o: u32| Locs::in_space(&bases, &img.files, &img.slocs, o);
             let mut offs = vec![img.kw, img.name_loc];
             for d in &img.decls {
@@ -4317,6 +4332,9 @@ impl Sema<'_, '_> {
                     let a = access_of(r.access);
                     self.builder().access_spec(ctx, a, h.loc)
                 }
+                Payload::Implicit { kind: scope::BUILTIN_KIND } => {
+                    self.image_builtin(img, i as u32)
+                }
                 Payload::Implicit { kind } => {
                     let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
                     // Declaring one implicit member can declare another
@@ -4392,10 +4410,14 @@ impl Sema<'_, '_> {
                 }
                 Payload::UsingEnum { e } => self.builder().using_enum(h, ids[*e as usize]),
             };
-            if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
+            // A builtin function is the importer's own declaration.
+            let builtin = r.payload == Payload::Implicit { kind: scope::BUILTIN_KIND };
+            if !builtin && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
                 image_flags(self, d, r.flags);
             }
-            self.image_attrs(img, i as u32, d, main, &mut attr_exprs);
+            if !builtin {
+                self.image_attrs(img, i as u32, d, main, &mut attr_exprs);
+            }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
         }
@@ -5011,6 +5033,8 @@ mod tests {
                     body::StmtRec { kind: 0, aux: 0, loc: 104, words: vec![2, 0, 1, 120] },
                 ],
             },
+            attrs: attrs::Attrs::default(),
+            scopes: scope::Scopes::default(),
         }
     }
 
@@ -5175,7 +5199,7 @@ mod tests {
     fn rejects_corrupt_class_records() {
         type Corrupt = (&'static str, fn(&mut Image));
         let corrupt: [Corrupt; 13] = [
-            ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 6 }),
+            ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 7 }),
             ("duplicate implicit", |i| {
                 let d = i.decls[14].clone();
                 i.decls.insert(15, d);

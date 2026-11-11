@@ -439,10 +439,9 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
             && match op_of(AttrKind(r.kind)) {
                 None => false,
                 Some(Op::Words(am, bm)) => r.a <= am && r.b <= bm && r.s == NONE,
-                Some(Op::Sym) => r.a == 0 && r.b == 0 && str_ok(r.s),
+                Some(Op::Sym | Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
                 Some(Op::Exprs) => expr_ok(r.a) && expr_ok(r.b) && r.s == NONE,
                 Some(Op::Builtin) => r.b == 0 && spelled(r.s, r.a),
-                Some(Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
                 Some(Op::Ints) => {
                     r.s == NONE
                         && (r.a as usize)

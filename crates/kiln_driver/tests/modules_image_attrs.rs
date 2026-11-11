@@ -1,7 +1,7 @@
 //! WP-1278: attributes in the declaration image (spec/modules.md §11.11
 //! "Attributes"). An importer that builds a module from its image sees
-//! the attributes the replayed source has: codegen visibility, abi_tag
-//! mangling, exclude_from_explicit_instantiation, and the nodiscard and
+//! the attributes the replayed source has: codegen visibility, `abi_tag`
+//! mangling, `exclude_from_explicit_instantiation`, and the nodiscard and
 //! deprecated warnings at the use site with their notes in the header,
 //! and the nonnull indices the sanitizer checks.
 #![forbid(unsafe_code)]
