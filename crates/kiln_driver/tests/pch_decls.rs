@@ -225,6 +225,25 @@ fn uncarried_header_is_replayed() {
     same(&d, "l.pch", &["-S", "-emit-llvm"], "l.cpp");
 }
 
+/// spec/modules.md §11.11 (WP-1284; [dcl.enum]/2, [class.pre]/1): an
+/// unnamed enumeration or class no typedef names (glibc's `<fenv.h>`
+/// declares its `FE_*` constants so) is carried; it was an internal
+/// image inconsistency.
+#[test]
+fn unnamed_types_are_carried() {
+    let d = scratch("unnamed");
+    let header = "\
+enum { FE_A = 1, FE_B = 2 };
+struct { int z; } anon_v = {3};
+inline int anon_sum() { return FE_A + FE_B + anon_v.z; }
+";
+    let note = produce(&d, "u", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    std::fs::write(d.join("u.cpp"), "int main() { return anon_sum() + FE_B + anon_v.z; }\n")
+        .unwrap();
+    same(&d, "u.pch", &["-S", "-emit-llvm", "-O0"], "u.cpp");
+}
+
 /// Sema state the image does not carry and the consumer depends on (a
 /// pending `#pragma weak`, a block-scope `extern` a later definition
 /// redeclares) means no image: an image consumer made `f` strong and

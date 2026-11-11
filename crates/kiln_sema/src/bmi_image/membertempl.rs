@@ -28,7 +28,10 @@ use super::{Image, LEX_TU, NONE, Payload, Res, bad, classtempl};
 pub(super) fn template_patterns(img: &Image) -> FxHashMap<u32, u32> {
     let mut m = FxHashMap::default();
     for (i, d) in img.decls.iter().enumerate() {
-        if let Payload::Template { pattern, .. } = d.payload {
+        // A concept (WP-1284) has no pattern.
+        if let Payload::Template { pattern, .. } = d.payload
+            && pattern != NONE
+        {
             let _ = m.entry(pattern).or_insert(i as u32);
         }
     }

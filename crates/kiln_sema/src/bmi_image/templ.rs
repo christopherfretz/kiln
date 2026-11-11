@@ -12,7 +12,10 @@ use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_ast::{DeclId, ExprId};
 
+use kiln_ast::templates::{TemplateInfo, TemplateParamList};
+
 use super::body::{Built, Root};
+use super::constraints::CONCEPT_KIND;
 use super::{NONE, Payload, W, Writer};
 use crate::Sema;
 
@@ -25,9 +28,7 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let t = &ast.templates;
         let p = *ast.template_parm(d).ok_or("a malformed template parameter")?;
-        if p.constraint.is_some() || t.ttp_owner.contains(d) {
-            return Err("a constrained template parameter");
-        }
+        // A constraint is carried by `constraint_roots` (WP-1284).
         if p.params.is_some() {
             return Err("a template template parameter");
         }
@@ -73,12 +74,17 @@ impl Writer<'_, '_, '_> {
         })
     }
 
-    /// A template record (S4): a function or class template at namespace
-    /// scope.
+    /// A template record (S4): a function, class, alias or variable
+    /// template, a member template or a template in a template (WP-1292);
+    /// a concept (WP-1284), with no pattern. Constraints are carried by
+    /// `constraint_roots`, a redeclaration by `template_prev`.
     pub(super) fn template(&mut self, d: DeclId) -> W<Payload> {
         let s = self.s;
         let ast = &s.ast;
         let info = *ast.template_info(d).ok_or("a malformed template")?;
+        if ast.decls.get(d).kind() == DeclKind::Concept {
+            return self.concept(d, &info);
+        }
         let pattern = info.pattern.ok_or("a malformed template")?;
         let kind = match ast.decls.get(d).kind() {
             DeclKind::FunctionTemplate => 0,
@@ -86,22 +92,13 @@ impl Writer<'_, '_, '_> {
             DeclKind::TypeAliasTemplate => 2,
             _ => 3,
         };
-        if info.constraint.is_some() || ast.templates.trailing_requires.contains(pattern) {
-            return Err("a constrained template");
-        }
         if s.templ.body_invalid.contains(&pattern) {
             return Err("a template made invalid by its body");
         }
         let pat =
             *self.recs.get(&pattern).ok_or("a template whose pattern is outside the image")?;
         let list = *ast.templates.param_list(info.params);
-        if list.requires.is_some() {
-            return Err("a constrained template");
-        }
-        let mut params = Vec::new();
-        for p in ast.lists.iter::<DeclId>(list.params) {
-            params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
-        }
+        let params = self.template_params(&list)?;
         if kind != 0 && pat + 1 != self.img.decls.len() as u32 {
             return Err("a class template whose pattern is not just before it");
         }
@@ -131,6 +128,37 @@ impl Writer<'_, '_, '_> {
         let Some(p) = ast.prev(pattern) else { return Ok(NONE) };
         let t = ast.described_template(p).ok_or("a redeclared template")?;
         self.recs.get(&t).copied().ok_or("a redeclaration of an entity outside the image")
+    }
+
+    /// The parameter records of template head `list`.
+    fn template_params(&self, list: &TemplateParamList) -> W<Vec<u32>> {
+        let mut params = Vec::new();
+        for p in self.s.ast.lists.iter::<DeclId>(list.params) {
+            params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
+        }
+        Ok(params)
+    }
+
+    /// A concept's record (WP-1284): a `Template` record of kind
+    /// [`CONCEPT_KIND`] without a pattern; its constraint-expression is
+    /// a constraint record.
+    fn concept(&mut self, d: DeclId, info: &TemplateInfo) -> W<Payload> {
+        let ast = &self.s.ast;
+        if ast.decls.redecl(d).is_some_and(|r| r.prev.is_some()) {
+            return Err("a redeclared template");
+        }
+        let list = *ast.templates.param_list(info.params);
+        let params = self.template_params(&list)?;
+        Ok(Payload::Template {
+            kind: CONCEPT_KIND,
+            pattern: NONE,
+            tloc: self.loc(list.template_loc)?,
+            using: NONE,
+            langle: self.loc(list.l_angle)?,
+            rangle: self.loc(list.r_angle)?,
+            depth: list.depth,
+            params,
+        })
     }
 
     /// Whether `d` is the pattern of a template of kind `kind` (WP-1279:

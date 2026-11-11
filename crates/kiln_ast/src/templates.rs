@@ -521,6 +521,11 @@ impl TemplateTables {
         self.requires.get(i as usize)
     }
 
+    /// The number of requires-expression records.
+    pub fn requires_len(&self) -> u32 {
+        self.requires.len() as u32
+    }
+
     /// Specialization record `i` (a [`TemplLink::Specialization`] index).
     pub fn spec(&self, i: u32) -> Option<&SpecInfo> {
         self.specs.get(i as usize)
@@ -1359,6 +1364,26 @@ impl AstBuilder<'_> {
         }
     }
 
+    /// Sets template parameter list `l`'s requires-clause ([temp.pre]/9;
+    /// the declaration image's importer builds the clause after the
+    /// list, spec/modules.md §11.11 "Constraints").
+    pub fn set_param_list_requires(&mut self, l: TemplateParamListId, e: ExprId) {
+        if let Some(p) = self.ast.templates.param_lists.get_mut(l.index() as usize) {
+            p.requires = Some(e);
+        }
+    }
+
+    /// Sets concept `d`'s constraint-expression ([temp.concept]/1; the
+    /// declaration image's importer, after [`Self::concept_deferred`]).
+    pub fn set_concept_constraint(&mut self, d: DeclId, e: ExprId) {
+        let n = self.ast.decls.get(d);
+        if n.kind() == DeclKind::Concept
+            && let Some(i) = self.ast.templates.infos.get_mut(n.data() as usize)
+        {
+            i.constraint = Some(e);
+        }
+    }
+
     /// Sets template parameter `d`'s default argument.
     ///
     /// # Errors
@@ -1508,13 +1533,29 @@ impl AstBuilder<'_> {
 
     /// A concept ([temp.concept]): `template<params> concept C = e;`.
     pub fn concept(&mut self, h: DeclHead, params: TemplateParamListId, e: ExprId) -> DeclId {
+        self.concept_with(h, params, Some(e))
+    }
+
+    /// A concept whose constraint-expression is set later
+    /// ([`Self::set_concept_constraint`]; the declaration image's
+    /// importer builds expressions after declarations).
+    pub fn concept_deferred(&mut self, h: DeclHead, params: TemplateParamListId) -> DeclId {
+        self.concept_with(h, params, None)
+    }
+
+    fn concept_with(
+        &mut self,
+        h: DeclHead,
+        params: TemplateParamListId,
+        e: Option<ExprId>,
+    ) -> DeclId {
         let i = self.ast.templates.infos.len() as u32;
         let d = self.ast.decls.next_id();
         self.ast.templates.infos.push(TemplateInfo {
             decl: d,
             params,
             pattern: None,
-            constraint: Some(e),
+            constraint: e,
         });
         let depth = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = depth.saturating_sub(1);
@@ -2346,6 +2387,25 @@ impl AstBuilder<'_> {
         e
     }
 
+    /// A requires-expression record (body `body`, its parameters and
+    /// requirements); its index, a `RequiresExpr`'s `b`. The declaration
+    /// image builds the record of an imported expression with it.
+    pub fn requires_record(
+        &mut self,
+        body: DeclId,
+        params: &[DeclId],
+        reqs: &[Requirement],
+    ) -> u32 {
+        let t = &mut self.ast.templates;
+        let first = t.requirements.len() as u32;
+        t.requirements.extend_from_slice(reqs);
+        let params = self.ast.lists.push(params);
+        let t = &mut self.ast.templates;
+        let i = t.requires.len() as u32;
+        t.requires.push(RequiresData { body, params, first, len: reqs.len() as u32 });
+        i
+    }
+
     /// A requires-expression ([expr.prim.req]): a `bool` prvalue,
     /// value-dependent when a requirement is.
     pub fn requires_expr(
@@ -2379,13 +2439,7 @@ impl AstBuilder<'_> {
             dep |= !d.is_none();
             unexpanded |= d.contains(ExprDeps::UNEXPANDED_PACK);
         }
-        let t = &mut self.ast.templates;
-        let first = t.requirements.len() as u32;
-        t.requirements.extend_from_slice(reqs);
-        let params = self.ast.lists.push(params);
-        let t = &mut self.ast.templates;
-        let i = t.requires.len() as u32;
-        t.requires.push(RequiresData { body, params, first, len: reqs.len() as u32 });
+        let i = self.requires_record(body, params, reqs);
         let mut deps = if dep { ExprDeps::VALUE_INST } else { ExprDeps::NONE };
         if unexpanded {
             deps |= ExprDeps::UNEXPANDED_PACK;
