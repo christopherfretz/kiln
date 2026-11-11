@@ -195,6 +195,7 @@ UserDefinedLiterals = "user-defined-literals" [];
 UserDefinedWarnings = "user-defined-warnings" [];
 Varargs = "varargs" [];
 VecElemSize = "vec-elem-size" [];
+Visibility = "visibility" [];
 VlaCxxExtension = "vla-cxx-extension" [];
 VoidPointerToEnumCast = "void-pointer-to-enum-cast" [];
 ZeroLengthArray = "zero-length-array" [];

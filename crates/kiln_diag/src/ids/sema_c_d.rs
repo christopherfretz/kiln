@@ -50,6 +50,7 @@ sema_c_non_prototype_unsupported = Warning [DeprecatedNonPrototype] (0) "a funct
 sema_c_ordered_comparison_function_pointers = ExtWarn [OrderedCompareFunctionPointers] (2) "ordered comparison of function pointers ({0} and {1})";
 sema_c_ordered_comparison_pointer_integer = Warning (2) "ordered comparison between pointer and integer ({0} and {1})";
 sema_c_ordered_comparison_pointer_zero = Extension (2) "ordered comparison between pointer and zero ({0} and {1}) is an extension";
+sema_c_param_tag_not_visible = Warning [Visibility] (1) "declaration of {0} will not be visible outside of this function";
 sema_c_pointer_to_enum_cast = Warning [PointerToEnumCast] (2) "cast to smaller integer type {1} from {0}";
 // C 6.3.2.3p6 (WP-1285): a pointer converted to a narrower integer is
 // implementation-defined in C, not an error (clang `CheckCStyleCast`)

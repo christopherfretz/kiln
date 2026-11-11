@@ -1040,7 +1040,11 @@ file's `additional_flags` (a `set additional_flags` replaces the suite's
 flags, as in GCC) and then `-w`. Every source is compiled with `-E`, `-S`
 or `-c` by the action (`preprocess`, `compile`, `assemble`, `link`,
 `run`), the objects are linked with `-lm`, and for `run` the executable
-runs in the case's scratch directory.
+runs in the case's scratch directory. kiln's flags start with
+`-fclang-compat=<major>` when the clang oracle's major version is one kiln
+emulates (`oracle::SUPPORTED`), so kiln's defaults (clang 22's
+`-Wincompatible-pointer-types` error, WP-1285) follow the oracle it is
+compared with; the compiler line in the summary shows the flag.
 
 **Directives.** `dg-do <action> [{ target|xfail <sel> }]` sets the action
 (a non-matching target skips the case); `dg-skip-if "<why>" { <sel> } {

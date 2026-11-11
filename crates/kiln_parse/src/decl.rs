@@ -2139,8 +2139,17 @@ impl Parser<'_, '_> {
             invalid = true;
         }
         if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
-            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
-            invalid = true;
+            if self.s.is_c() {
+                // C17 6.2.1p4: a tag in a parameter list has prototype
+                // scope; clang warns (`-Wvisibility`). WP-1285.
+                let ty = self.s.elaborated_tag_type(d, keyword);
+                let loc = self.s.ast.decls.get(d).loc();
+                let msg = self.s.diag(DiagId::sema_c_param_tag_not_visible, loc);
+                self.emit(msg.arg(self.s.ty_arg(ty)));
+            } else {
+                self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+                invalid = true;
+            }
         }
         if invalid {
             ds.invalid = true;
@@ -2156,8 +2165,12 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        // C defines a tag in any type name or parameter type (C17
+        // 6.7.2.3p6, 6.2.1p4).
+        if self.s.is_c() {
+            return;
+        }
         let rule = match (Self::tag_site(ds, ctx), ctx) {
-            (TagSite::TypeId, _) if self.s.is_c() => return,
             (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
             (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
             (TagSite::Context, DeclaratorContext::Prototype) => TagDefinedIn::ParamType,

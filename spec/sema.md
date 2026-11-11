@@ -8768,7 +8768,11 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   may be defined in a cast, `sizeof`, `_Alignof`, `_Generic` association,
   `__builtin_offsetof` or a function's result type; C has no base clause,
   so `_Generic(e, struct S: 1)` names `S`. A forward reference to an
-  `enum` is a pedantic extension, not C++'s error.
+  `enum` is a pedantic extension, not C++'s error. A tag defined in a
+  parameter type is scoped to the prototype (6.2.1p4): a named tag or
+  any `enum` warns "declaration of 'T' will not be visible outside of
+  this function" (`-Wvisibility`, on by default), an unnamed `struct` or
+  `union` is silent (`tests/c/decl/param-tag-visibility.c`).
 - **Comma operator** (C17 6.5.17p2). The right operand takes the
   array/function-to-pointer and lvalue conversions (`conv::decay`), so
   the result is a prvalue: `sizeof (0, f)` is a pointer's size.
