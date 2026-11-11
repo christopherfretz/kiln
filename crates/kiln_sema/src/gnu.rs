@@ -626,10 +626,41 @@ impl Sema<'_, '_> {
         if self.func.is_none() && !self.check_constant_literal_init(ty, init, lparen, l.lbrace) {
             return self.recover(ty, &[init], lparen);
         }
+        if self.is_c() {
+            // C17 6.5.2.5p4-5: a literal of any type is an lvalue naming an
+            // unnamed object, of static storage duration at file scope and
+            // automatic (to the end of the enclosing block) otherwise; it is
+            // no temporary.
+            let e = if self.func.is_none() {
+                let ctx = self.literal_object_ctx();
+                self.builder().file_scope_compound_literal(ctx, ty, init, lparen).0
+            } else {
+                self.builder().c_compound_literal(ty, init, lparen)
+            };
+            self.builder().record_end_loc(e, l.rbrace);
+            return e;
+        }
         let e = self.builder().compound_literal(ty, init, lparen);
         self.builder().record_end_loc(e, l.rbrace);
         // A class literal is a temporary ([class.temporary]/4).
         if class { self.maybe_bind_temporary(e) } else { e }
+    }
+
+    /// The context of a file-scope literal's object: the enclosing
+    /// namespace (or translation unit).
+    fn literal_object_ctx(&self) -> DeclId {
+        let mut ctx = self.ctx;
+        while !matches!(
+            self.ast.decls.get(ctx).kind(),
+            DeclKind::Namespace
+                | DeclKind::TranslationUnit
+                | DeclKind::LinkageSpec
+                | DeclKind::Export
+        ) && let Some(c) = self.ast.decls.get(ctx).ctx()
+        {
+            ctx = c;
+        }
+        ctx
     }
 
     /// An array compound literal: a prvalue of the written array type, its
@@ -670,18 +701,12 @@ impl Sema<'_, '_> {
                 return self.builder().recovery(Some(ty), ValueCategory::LValue, &[init], lparen);
             }
             // The object's context is the enclosing namespace.
-            let mut ctx = self.ctx;
-            while !matches!(
-                self.ast.decls.get(ctx).kind(),
-                DeclKind::Namespace
-                    | DeclKind::TranslationUnit
-                    | DeclKind::LinkageSpec
-                    | DeclKind::Export
-            ) && let Some(c) = self.ast.decls.get(ctx).ctx()
-            {
-                ctx = c;
-            }
+            let ctx = self.literal_object_ctx();
             return self.builder().file_scope_compound_literal(ctx, ty, init, lparen).0;
+        }
+        if self.is_c() {
+            // C17 6.5.2.5p4: an lvalue of automatic storage duration.
+            return self.builder().c_compound_literal(ty, init, lparen);
         }
         self.builder().compound_literal(ty, init, lparen)
     }

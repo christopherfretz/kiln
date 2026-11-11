@@ -455,6 +455,12 @@ pub(crate) fn convert(
                 super::raw_cast(s, CastKind::LValueToRValue, e, u, ValueCategory::PRValue, None);
             return Some(Ok(x));
         }
+        if to_rec
+            && ctx == ConvCtx::Argument
+            && let Some(x) = s.transparent_union_argument(e, to)
+        {
+            return Some(Ok(x));
+        }
         let err = error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some("0"));
         return Some(Err(err));
     }
@@ -543,6 +549,44 @@ pub(crate) fn convert(
         }
         let h = fix_hint(s, e, from, to);
         return Some(Err(error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some(h))));
+    }
+    None
+}
+
+/// One member of a transparent union parameter
+/// ([`Sema::transparent_union_argument`], clang
+/// `CheckTransparentUnionArgumentConstraints`): `e` converted to member
+/// type `fty` when that is a compatible assignment, else `None` (with no
+/// diagnostic). A pointer member also takes any `void *` and a null
+/// pointer constant.
+pub(crate) fn argument_member(s: &mut Sema<'_, '_>, e: ExprId, fty: QualType) -> Option<ExprId> {
+    let from = ty(s, e);
+    let from_d = decayed_type(s, e);
+    let types = &s.ast.types;
+    let arith = |q: QualType| types.is_arithmetic(q) || types.as_enum(q).is_some();
+    if types.is_pointer(fty) {
+        if types.is_pointer(from_d) {
+            let to_c = types.canonical(fty);
+            let from_c = types.canonical(from_d);
+            let void = types.pointee(from_c).is_some_and(|p| types.is_void(p));
+            if !void && check_pointers(s, to_c, from_c) != PtrCheck::Compatible {
+                return None;
+            }
+            let x = decay(s, e);
+            return Some(cast_to(s, CastKind::BitCast, x, fty, None));
+        }
+        null_pointer_constant(s, e)?;
+        let x = decay(s, e);
+        return Some(cast_to(s, CastKind::NullToPointer, x, fty, None));
+    }
+    if types.as_record(fty).is_some() {
+        return match convert(s, e, fty, ConvCtx::Argument) {
+            Some(Ok(x)) => Some(x),
+            _ => None,
+        };
+    }
+    if arith(fty) && arith(from_d) && s.vector_parts(from).is_none() {
+        return super::implicit_convert(s, e, fty, ConvCtx::Argument).ok();
     }
     None
 }

@@ -10,6 +10,7 @@ AmbiguousReversedOperator = "ambiguous-reversed-operator" [];
 ArgumentOutsideRange = "argument-outside-range" [];
 ArrayCompare = "array-compare" [];
 ArrayCompareCxx26 = "array-compare-cxx26" [];
+ArrayParameter = "array-parameter" [];
 AsmOperandWidths = "asm-operand-widths" [];
 Assume = "assume" [];
 AtomicImplicitSeqCst = "atomic-implicit-seq-cst" [];

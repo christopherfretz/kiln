@@ -1599,6 +1599,15 @@ impl Sema<'_, '_> {
                         self.emit(msg);
                     }
                     ty = match size {
+                        // C17 6.7.6.2p4: `[*]`, a variable length array of
+                        // unspecified size (only in a prototype).
+                        None if let Some(&(_, star)) =
+                            d.array_stars.iter().find(|&&(j, _)| j == i) =>
+                        {
+                            self.emit(self.diag(self.vla_ext_id(), star));
+                            let b = self.vla_star_bound();
+                            self.ast.types.variable_array(ty, b)
+                        }
                         None => self.ast.types.incomplete_array(ty),
                         Some(e) if self.expr_is_value_dependent(*e) => {
                             // [temp.dep.constexpr]: checked at instantiation.
@@ -1749,7 +1758,11 @@ impl Sema<'_, '_> {
                     if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
                         self.check_volatile_params(params);
                     }
-                    let mut ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+                    // clang `getCanonicalParamType`: a variably modified
+                    // parameter type has its bounds replaced by `[*]` in
+                    // the function type (C17 6.7.6.3p15).
+                    let mut ptys: Vec<QualType> =
+                        params.iter().map(|p| self.vla_star_decayed(p.ty)).collect();
                     // C17 6.9.1p10 (clang `ActOnFunctionDeclarator`): a K&R
                     // definition's type has the default-promoted parameter
                     // types, without a prototype.
@@ -1869,8 +1882,16 @@ impl Sema<'_, '_> {
                 | DeclaratorContext::ForInit
                 | DeclaratorContext::Condition
                 | DeclaratorContext::TypeName
-        ) && self.in_local_scope();
+        ) && self.in_local_scope()
+            // C17 6.7.6.2p2: a parameter may be variably modified; clang
+            // accepts one in C++ too (after `-Wvla-cxx-extension`).
+            || d.ctx == DeclaratorContext::Prototype && !self.in_template();
         if local {
+            if self.is_c() {
+                // C has no constant-expression notes for a bound.
+                self.emit(self.diag(self.vla_ext_id(), loc));
+                return Some(Err(c));
+            }
             let wloc = Self::fold_lone_invalid(&mut f, loc);
             let w = Self::with_failure_notes(self.diag(self.vla_ext_id(), wloc), f);
             self.emit(w);
@@ -1972,7 +1993,16 @@ impl Sema<'_, '_> {
 
     /// clang `ext_vla_cxx` / `ext_vla_cxx_in_gnu_mode` (off by default in
     /// a GNU dialect).
+    /// The warning for a variable length array: C99 `-Wvla` (off by
+    /// default), C89 `-Wvla-extension`, C++ `-Wvla-cxx-extension`.
     fn vla_ext_id(&self) -> DiagId {
+        if self.is_c() {
+            return if self.c_at_least(kiln_lex::CStd::C99) {
+                DiagId::sema_vla_used
+            } else {
+                DiagId::sema_vla_c99_extension
+            };
+        }
         if self.gnu { DiagId::sema_vla_cxx_extension_gnu } else { DiagId::sema_vla_cxx_extension }
     }
 
@@ -2126,6 +2156,11 @@ impl Sema<'_, '_> {
         ty = self.apply_cc_attrs(ty, &mut attrs, true);
         let declared = ty;
         ty = self.adjust_param_type(ty);
+        // C17 6.7.6.3p7: the qualifiers in the outermost `[ ]` qualify the
+        // adjusted pointer.
+        if !d.array_param_quals.is_empty() && self.ast.types.is_array(declared) {
+            ty = self.ast.types.qualify(ty, d.array_param_quals);
+        }
         let mut original_ty = (ty != declared).then_some(declared);
         if let Some(l) = d.ellipsis {
             // [dcl.fct]/16, [temp.variadic]/5: a function parameter pack
@@ -5208,6 +5243,7 @@ impl Sema<'_, '_> {
         }
         if let Some(p) = prev_ok {
             self.check_param_nullability(p, &params);
+            self.check_array_param_form(p, &params);
             self.check_param_indeterminate(p, &params);
         }
         // clang marks the redeclaration invalid and leaves it out of the
@@ -8264,6 +8300,13 @@ impl Sema<'_, '_> {
                 self.push_local(sym, p);
             }
             let pty = self.ast.decls.get(p).ty().unwrap_or(QualType::ERROR);
+            // C17 6.7.6.2p4: `[*]` only in a prototype that is not part
+            // of a definition (clang `diagnoseArrayStarInParamType`).
+            let written = self.ast.decls.param(p).and_then(|x| x.original_ty).unwrap_or(pty);
+            if self.has_vla_star(written) {
+                let loc = self.ast.decls.get(p).loc();
+                self.emit(self.diag(DiagId::sema_array_star_in_function_definition, loc));
+            }
             // clang `CheckParmsForFunctionDef`: a definition's
             // `pass_object_size` parameter must be `const` (reported at
             // the parameter's name, the attribute unquoted, as clang).
