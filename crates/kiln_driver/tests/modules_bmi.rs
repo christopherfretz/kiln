@@ -772,6 +772,63 @@ fn kind2_declaration_image_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGPK: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-pack.cppm");
+const IMGPK_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-pack-run.cpp");
+
+/// WP-1279 (§11.11 "Templates as patterns"): template parameter packs,
+/// function parameter packs, `sizeof...`, fold-expressions, `auto` in
+/// patterns and non-type default template arguments come from the image.
+/// With the unit's source blanked, an importer still instantiates them,
+/// its IR is the replay's, and an ill-formed instantiation (an error at a
+/// fold's operator, a rejected default) is diagnosed exactly as after a
+/// replay.
+#[test]
+fn kind2_declaration_image_packs() {
+    let d = scratch("image-packs");
+    std::fs::write(d.join("p.cppm"), IMGPK).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGPK_RUN).unwrap();
+    std::fs::write(
+        d.join("err.cpp"),
+        "import imgp;\nstruct S {};\n\
+         int main() { S s; ip::sum(s, s); return ip::sz<S, 1, 2>() + ip::def<s>() + ip::all(s); }\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "p.cppm", "-o", "p.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "p.pcm", "-o", "p.o"]);
+    blank_source(&d, "p.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgp=blank.pcm", "u.cpp", "p.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgp' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1 3 10 11 1 7 0 6 2 3 9 | 4 4 8 5\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "p.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgp=m.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgp=p.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(errs[0].contains("p.cppm:10:"), "{}", errs[0]);
+    assert!(
+        errs[0].contains("in instantiation of function template specialization"),
+        "{}",
+        errs[0]
+    );
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 const IMGG: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-generic.cppm");
 const IMGG_RUN: &str =
@@ -1447,8 +1504,9 @@ fn kind2_declaration_image_fallback() {
             "an explicit or partial specialization",
         ),
         (
-            "export module f;\nexport template <int N = 1> struct B { int f() { return N; } };\n",
-            "a default template argument of a non-type parameter",
+            "export module f;\nexport template <class T = int> struct B;\n\
+             export template <class T> struct B { T v; };\n",
+            "a default template argument",
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; B(T t) : v(t) {} };\n",
@@ -1474,8 +1532,8 @@ fn kind2_declaration_image_fallback() {
         ),
         ("export module f;\nexport template <class T> constexpr T v = T(1);\n", "a template"),
         (
-            "export module f;\nexport template <class... T> int n(T...) { return sizeof...(T); }\n",
-            "a template parameter pack",
+            "export module f;\nexport template <class... B> struct S : B... {};\n",
+            "a pack expansion",
         ),
         (
             "export module f;\nexport template <class T> requires (sizeof(T) > 1) T id(T t) { return t; }\n",

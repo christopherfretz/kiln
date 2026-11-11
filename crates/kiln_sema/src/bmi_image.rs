@@ -32,7 +32,7 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
-    ArgView, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -44,6 +44,7 @@ use crate::modules::Directive;
 mod body;
 mod locs;
 mod spec;
+mod templ;
 
 use body::{Bodies, BodyState, Root};
 pub(crate) use locs::Locs;
@@ -218,6 +219,12 @@ enum TyRec {
     },
     /// The injected-class-name type of a class template's pattern (S4b).
     Injected(u32),
+    /// A pack expansion `P...` in a pattern (WP-1279).
+    Pack(QRef),
+    /// An unconstrained `auto` or `decltype(auto)` (WP-1279): bit 0 the
+    /// keyword (`decltype(auto)`), bit 1 deduced as the dependent type (a
+    /// placeholder in a pattern).
+    Auto(u8),
 }
 
 /// A template argument (S4b): a type, or an integral or `bool` value of
@@ -412,15 +419,22 @@ enum Payload {
         depth: u16,
         index: u16,
         typename_kw: bool,
+        /// A template parameter pack (WP-1279).
+        pack: bool,
         begin: u32,
         /// Its default template argument, a type (S4b).
         default: Option<QRef>,
     },
-    /// A non-type template parameter (S4).
+    /// A non-type template parameter (S4); a pack (WP-1279); its default
+    /// template argument's expression record or [`NONE`], and whether
+    /// that argument carries its canonical profile (WP-1279).
     Nttp {
         ty: QRef,
         depth: u16,
         index: u16,
+        pack: bool,
+        default: u32,
+        profile: bool,
     },
     /// A template (S4): `kind` 0 a function template; its pattern record
     /// (earlier, same name and context) and its template-head (the
@@ -900,18 +914,20 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*init);
         }
         Payload::Implicit { kind } => w.u8(*kind),
-        Payload::Ttp { depth, index, typename_kw, begin, default } => {
+        Payload::Ttp { depth, index, typename_kw, pack, begin, default } => {
             w.u16(*depth);
             w.u16(*index);
-            w.u8(u8::from(*typename_kw));
+            w.u8(u8::from(*typename_kw) | u8::from(*pack) << 1);
             w.u32(*begin);
             w.u32(default.map_or(0, |q| q.ty));
             w.u8(default.map_or(0, |q| q.quals));
         }
-        Payload::Nttp { ty, depth, index } => {
+        Payload::Nttp { ty, depth, index, pack, default, profile } => {
             w.q(*ty);
             w.u16(*depth);
             w.u16(*index);
+            w.u8(u8::from(*pack) | u8::from(*profile) << 1);
+            w.u32(*default);
         }
         Payload::Template { kind, pattern, tloc, langle, rangle, depth, params } => {
             w.u8(*kind);
@@ -1046,6 +1062,8 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(under.map_or(0, |q| q.quals));
             }
             TyRec::Injected(d) => (w.u8(17), w.u32(*d)).1,
+            TyRec::Pack(q) => (w.u8(19), w.q(*q)).1,
+            TyRec::Auto(k) => (w.u8(20), w.u8(*k)).1,
             TyRec::Subst { repl, assoc, index, pack } => {
                 w.u8(18);
                 w.q(*repl);
@@ -1313,20 +1331,27 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         K_IMPLICIT => Payload::Implicit { kind: r.u8()? },
         K_TTP => {
             let (depth, index) = (r.u16()?, r.u16()?);
-            let typename_kw = match r.u8()? {
-                0 => false,
-                1 => true,
-                _ => return bad("bad flag byte"),
-            };
+            let bits = r.u8()?;
+            if bits > 3 {
+                return bad("bad flag byte");
+            }
+            let (typename_kw, pack) = (bits & 1 != 0, bits & 2 != 0);
             let begin = r.u32()?;
             let default = match r.q()? {
                 QRef { ty: 0, quals: 0 } => None,
                 QRef { ty: 0, .. } => return bad("bad type reference"),
                 q => Some(q),
             };
-            Payload::Ttp { depth, index, typename_kw, begin, default }
+            Payload::Ttp { depth, index, typename_kw, pack, begin, default }
         }
-        K_NTTP => Payload::Nttp { ty: r.q()?, depth: r.u16()?, index: r.u16()? },
+        K_NTTP => {
+            let (ty, depth, index, bits) = (r.q()?, r.u16()?, r.u16()?, r.u8()?);
+            if bits > 3 {
+                return bad("bad flag byte");
+            }
+            let (pack, profile, default) = (bits & 1 != 0, bits & 2 != 0, r.u32()?);
+            Payload::Nttp { ty, depth, index, pack, default, profile }
+        }
         K_TEMPLATE => {
             let kind = r.u8()?;
             let (pattern, tloc, langle, rangle) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?);
@@ -1368,7 +1393,8 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         | TyRec::IArray(q)
         | TyRec::Paren(q)
         | TyRec::Elab(_, q)
-        | TyRec::QArray(_, q) => (vec![*q], Vec::new()),
+        | TyRec::QArray(_, q)
+        | TyRec::Pack(q) => (vec![*q], Vec::new()),
         TyRec::ElabQ(_, steps, q) => {
             let (mut qs, mut ds) = (vec![*q], Vec::new());
             for st in steps {
@@ -1395,7 +1421,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             (args.iter().map(|a| a.q()).chain(*under).collect(), vec![*template])
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
-        TyRec::Sugar(_) => (Vec::new(), Vec::new()),
+        TyRec::Sugar(_) | TyRec::Auto(_) => (Vec::new(), Vec::new()),
     }
 }
 
@@ -1603,6 +1629,11 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 TyRec::Tst { template, args, under }
             }
             17 => TyRec::Injected(r.u32()?),
+            19 => TyRec::Pack(r.q()?),
+            20 => match r.u8()? {
+                k @ 0..=3 => TyRec::Auto(k),
+                _ => return bad("bad placeholder type"),
+            },
             18 => {
                 let repl = r.q()?;
                 let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
@@ -2118,10 +2149,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 if fn_spec(*spec).is_none() {
                     return bad("bad function specifiers");
                 }
+                let pack = if d.flags & DEP != 0 { ParamData::PACK } else { 0 };
                 for p in params {
                     if (p.name != NONE && p.name as usize >= img.pnames.len())
                         || p.flags & !(DECL_FLAGS | (d.flags & DEP)) != 0
-                        || p.pflags & !ParamData::SCOPE_DEPTH_MASK != 0
+                        || p.pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0
                     {
                         return bad("bad parameter");
                     }
@@ -2559,6 +2591,15 @@ impl Writer<'_, '_, '_> {
             TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
             TypeView::Record(d) => TyRec::Record(self.type_decl(self.s.ast.first(d), t)?),
             TypeView::TemplateTypeParm(d) => TyRec::Ttp(self.type_decl(d, t)?),
+            TypeView::PackExpansion { pattern, num_expansions: None } => {
+                TyRec::Pack(self.qref(pattern)?)
+            }
+            TypeView::Auto { keyword, deduced, concept: None, args: None, pack: false }
+                if keyword != AutoKeyword::GnuAutoType
+                    && deduced.is_none_or(|q| q == QualType::DEPENDENT) =>
+            {
+                TyRec::Auto(keyword as u8 | u8::from(deduced.is_some()) << 1)
+            }
             TypeView::Typedef { .. } if self.s.builtin_sugar().iter().any(|q| q.ty() == t) => {
                 let k = self.s.builtin_sugar().iter().position(|q| q.ty() == t).unwrap_or(0);
                 TyRec::Sugar(k as u8)
@@ -2909,102 +2950,6 @@ impl Writer<'_, '_, '_> {
         })
     }
 
-    /// A template parameter record (S4): a type or non-type parameter of
-    /// a namespace-scope template, neither a pack, constrained nor with a
-    /// default argument.
-    fn template_parm(&mut self, d: DeclId) -> W<Payload> {
-        let ast = &self.s.ast;
-        let t = &ast.templates;
-        let p = *ast.template_parm(d).ok_or("a malformed template parameter")?;
-        if p.pack {
-            return Err("a template parameter pack");
-        }
-        if p.constraint.is_some() || t.ttp_owner.contains(d) {
-            return Err("a constrained template parameter");
-        }
-        if p.params.is_some() {
-            return Err("a template template parameter");
-        }
-        let default = match t.defaults.get(d).map(TemplateArg::view) {
-            None => None,
-            Some(ArgView::Type(q)) if !t.inherited_defaults.contains(d) => Some(q),
-            Some(_) if ast.decls.get(d).kind() == DeclKind::TemplateTypeParm => {
-                return Err("a default template argument");
-            }
-            Some(_) => return Err("a default template argument of a non-type parameter"),
-        };
-        if t.inherited_defaults.contains(d) {
-            return Err("a default template argument");
-        }
-        if p.depth != 0 {
-            return Err("a member template or a template in a template");
-        }
-        let n = ast.decls.get(d);
-        if n.kind() == DeclKind::NonTypeTemplateParm {
-            if default.is_some() {
-                return Err("a default template argument of a non-type parameter");
-            }
-            let ty = self.qref(n.ty().ok_or("a malformed template parameter")?)?;
-            return Ok(Payload::Nttp { ty, depth: p.depth, index: p.index });
-        }
-        let begin = match ast.decls.cold.begin_loc.get(d) {
-            Some(&l) => self.loc(l)?,
-            None => NONE,
-        };
-        let default = default.map(|q| self.qref(q)).transpose()?;
-        Ok(Payload::Ttp {
-            depth: p.depth,
-            index: p.index,
-            typename_kw: p.typename_kw,
-            begin,
-            default,
-        })
-    }
-
-    /// A template record (S4): a function template at namespace scope.
-    fn template(&mut self, d: DeclId) -> W<Payload> {
-        let s = self.s;
-        let ast = &s.ast;
-        let info = *ast.template_info(d).ok_or("a malformed template")?;
-        let pattern = info.pattern.ok_or("a malformed template")?;
-        let kind = u8::from(ast.decls.get(d).kind() == DeclKind::ClassTemplate);
-        let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
-        if redecl(d) || redecl(pattern) {
-            return Err("a redeclared template");
-        }
-        if info.constraint.is_some() || ast.templates.trailing_requires.contains(pattern) {
-            return Err("a constrained template");
-        }
-        if s.templ.body_invalid.contains(&pattern) {
-            return Err("a template made invalid by its body");
-        }
-        let pat =
-            *self.recs.get(&pattern).ok_or("a template whose pattern is outside the image")?;
-        let list = *ast.templates.param_list(info.params);
-        if list.requires.is_some() {
-            return Err("a constrained template");
-        }
-        if list.depth != 0 {
-            return Err("a member template or a template in a template");
-        }
-        let mut params = Vec::new();
-        for p in ast.lists.iter::<DeclId>(list.params) {
-            params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
-        }
-        if kind == 1 && pat + 1 != self.img.decls.len() as u32 {
-            return Err("a class template whose pattern is not just before it");
-        }
-        Ok(Payload::Template {
-            kind,
-            pattern: pat,
-            tloc: self.loc(list.template_loc)?,
-            langle: self.loc(list.l_angle)?,
-            rangle: self.loc(list.r_angle)?,
-            depth: list.depth,
-            params,
-        })
-    }
-
     /// Rejects declarations whose cold side data the image does not carry.
     fn cold_gate(&self, d: DeclId) -> W<()> {
         let c = &self.s.ast.decls.cold;
@@ -3344,7 +3289,9 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let pd = *ast.decls.param(p).ok_or("a malformed parameter")?;
         let n = ast.decls.get(p);
-        if pd.original_ty.is_some() || pd.flags & !ParamData::SCOPE_DEPTH_MASK != 0 {
+        // A function parameter pack (WP-1279) only in a pattern.
+        let pack = if n.has(DeclFlags::DEPENDENT_CTX) { ParamData::PACK } else { 0 };
+        if pd.original_ty.is_some() || pd.flags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
             return Err("a parameter with an adjusted type or a pack");
         }
         if let Some(e) = pd.default_arg {
@@ -4081,6 +4028,7 @@ impl Sema<'_, '_> {
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
+        let mut nttp_defaults: Vec<(DeclId, u32, bool)> = Vec::new();
         // S4: the pattern records, built as the parser builds a pattern.
         let patterns: FxHashSet<u32> = img
             .decls
@@ -4288,9 +4236,9 @@ impl Sema<'_, '_> {
                     defaulted.push((f, r.flags));
                     f
                 }
-                Payload::Ttp { depth, index, typename_kw, begin, default } => {
+                Payload::Ttp { depth, index, typename_kw, pack, begin, default } => {
                     let t =
-                        self.builder().template_type_parm(h, *depth, *index, false, *typename_kw);
+                        self.builder().template_type_parm(h, *depth, *index, *pack, *typename_kw);
                     if *begin != NONE {
                         let _ = self.ast.decls.cold.begin_loc.insert(t, lo(self, *begin));
                     }
@@ -4300,9 +4248,13 @@ impl Sema<'_, '_> {
                     }
                     t
                 }
-                Payload::Nttp { ty, depth, index } => {
+                Payload::Nttp { ty, depth, index, pack, default, profile } => {
                     let pty = self.image_ty(img, &mut tys, &ids, *ty);
-                    self.builder().non_type_template_parm(h, pty, *depth, *index, false)
+                    let t = self.builder().non_type_template_parm(h, pty, *depth, *index, *pack);
+                    if *default != NONE {
+                        nttp_defaults.push((t, *default, *profile));
+                    }
+                    t
                 }
                 Payload::Template { kind, pattern, tloc, langle, rangle, depth, params } => {
                     let ps: Vec<DeclId> = params.iter().map(|&p| ids[p as usize]).collect();
@@ -4360,6 +4312,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        self.image_nttp_defaults(&nttp_defaults, &built);
         for (f, width, init) in fields {
             if width != NONE {
                 let _ = self.ast.decls.set_field_bit_width(f, built.expr(width));
@@ -4705,6 +4658,15 @@ impl Sema<'_, '_> {
                 Some(&t) => self.injected_type_of(t).unwrap_or(QualType::INT),
                 None => QualType::INT,
             },
+            TyRec::Pack(q) => {
+                let q = qt(self, *q);
+                self.ast.types.pack_expansion(q, None)
+            }
+            TyRec::Auto(k) => {
+                let kw = if *k & 1 != 0 { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
+                let deduced = (*k & 2 != 0).then_some(QualType::DEPENDENT);
+                self.ast.types.auto_type(kw, deduced, None, None, false)
+            }
             TyRec::Subst { repl, assoc, index, pack } => {
                 let r = qt(self, *repl);
                 let a = ids.get(*assoc as usize).copied().unwrap_or(self.ast.tu);
@@ -5377,13 +5339,27 @@ mod tests {
                 DEP,
                 pname,
                 302,
-                Payload::Ttp { depth: 0, index: 0, typename_kw: false, begin: 296, default: None },
+                Payload::Ttp {
+                    depth: 0,
+                    index: 0,
+                    typename_kw: false,
+                    pack: false,
+                    begin: 296,
+                    default: None,
+                },
             ),
             head(
                 DEP,
                 pname + 1,
                 308,
-                Payload::Nttp { ty: q(BuiltinType::Int as u32), depth: 0, index: 1 },
+                Payload::Nttp {
+                    ty: q(BuiltinType::Int as u32),
+                    depth: 0,
+                    index: 1,
+                    pack: false,
+                    default: NONE,
+                    profile: false,
+                },
             ),
             head(
                 DEP,
@@ -5459,8 +5435,14 @@ mod tests {
                 i.decls.push(t);
             }),
             ("parameter depth", |i| {
-                i.decls[11].payload =
-                    Payload::Nttp { ty: QRef { ty: 1, quals: 0 }, depth: 1, index: 1 };
+                i.decls[11].payload = Payload::Nttp {
+                    ty: QRef { ty: 1, quals: 0 },
+                    depth: 1,
+                    index: 1,
+                    pack: false,
+                    default: NONE,
+                    profile: false,
+                };
             }),
         ];
         for (what, f) in corrupt {
@@ -5517,6 +5499,7 @@ mod tests {
                     depth: 0,
                     index: 0,
                     typename_kw: false,
+                    pack: false,
                     begin: 396,
                     default: Some(q(int)),
                 },

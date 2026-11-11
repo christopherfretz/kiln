@@ -106,8 +106,9 @@ pub(super) struct Bodies {
 }
 
 /// Cold annotations carried: `end_loc`, `cast_written`, `trait_rhs_loc`,
-/// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, in this order
-/// after the slots.
+/// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, a fold's
+/// `...` (sema's `fold_ellipsis`, WP-1279), in this order after the
+/// slots.
 const COLD_END: u8 = 1;
 const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
@@ -117,7 +118,8 @@ const COLD_OP: u8 = 16;
 /// member initializer (WP-1177, spec/sema.md §7.6a): an expression field,
 /// so the copy is written before its use.
 const COLD_REWRITE: u8 = 32;
-const COLD_ALL: u8 = 63;
+const COLD_ELLIPSIS: u8 = 64;
+const COLD_ALL: u8 = 127;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -151,6 +153,8 @@ pub(super) enum Dc {
     /// A declaration reference's found declaration: a [`Dc::Value`] or
     /// the function template a specialization was named through.
     Found,
+    /// A template parameter pack or a function parameter pack (WP-1279).
+    Pack,
 }
 
 /// A field: how one or more words are read.
@@ -276,7 +280,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 50] = {
+pub(super) const EXPR_KINDS: [ExprKind; 53] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -332,6 +336,11 @@ pub(super) const EXPR_KINDS: [ExprKind; 50] = {
         X::CXXDependentScopeMemberExpr,
         // WP-1132: `_Generic`, resolved or (in a pattern) result-dependent.
         X::GenericSelectionExpr,
+        // WP-1279: `sizeof...(P)`, `e...` and fold-expressions, in a
+        // pattern.
+        X::SizeOfPackExpr,
+        X::PackExpansionExpr,
+        X::CXXFoldExpr,
     ]
 };
 
@@ -396,7 +405,10 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         | X::CXXReinterpretCastExpr => [f(F::E), f(F::Path)],
         X::InitListExpr => [f(F::EL), Sd(Side::InitList)],
         X::UnaryExprOrTypeTraitExpr if flag4 => [f(F::Qt), Z],
-        X::UnaryOperator | X::ExprWithCleanups | X::UnaryExprOrTypeTraitExpr => [f(F::E), Z],
+        X::UnaryOperator
+        | X::ExprWithCleanups
+        | X::UnaryExprOrTypeTraitExpr
+        | X::PackExpansionExpr => [f(F::E), Z],
         X::TypeTraitExpr => [f(F::QL), f(F::Bool)],
         X::CXXNoexceptExpr => [f(F::E), f(F::Bool)],
         X::ConstantExpr => [f(F::E), f(F::OCv)],
@@ -408,6 +420,8 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CXXConstructExpr | X::CXXTemporaryObjectExpr => [f(F::D(Dc::Ctor)), f(F::EL)],
         X::CXXDefaultInitExpr => [f(F::D(Dc::Field)), f(F::D(Dc::Ctx))],
         X::CXXBindTemporaryExpr => [f(F::E), f(F::D(Dc::Dtor))],
+        X::SizeOfPackExpr => [f(F::D(Dc::Pack)), Z],
+        X::CXXFoldExpr => [f(F::OE), f(F::OE)],
         _ => [Z, Z],
     }
 }
@@ -425,7 +439,9 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::CXXDefaultInitExpr => aux == 1,
         X::PredefinedExpr => usize::from(aux) < kiln_ast::expr::PredefinedKind::ALL.len(),
         X::UnaryOperator => UnaryOp::from_u8(aux).is_some(),
-        X::BinaryOperator | X::CompoundAssignOperator => BinaryOp::from_u8(aux).is_some(),
+        X::BinaryOperator | X::CompoundAssignOperator | X::CXXFoldExpr => {
+            BinaryOp::from_u8(aux).is_some()
+        }
         X::ChooseExpr => aux <= 2,
         X::CXXOperatorCallExpr => OverloadedOperator::from_u8(aux).is_some(),
         X::ImplicitCastExpr
@@ -494,6 +510,7 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
         (COLD_BEGIN, F::Loc),
         (COLD_OP, F::Loc),
         (COLD_REWRITE, F::E),
+        (COLD_ELLIPSIS, F::Loc),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -776,7 +793,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return false;
     }
     if w & PARAM != 0 {
-        return matches!(dc, Dc::Value | Dc::Param) && ((w & !PARAM) as usize) < nparams;
+        return matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
     if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
@@ -852,6 +869,9 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
         Dc::Param => false,
+        Dc::Pack => {
+            matches!(d.payload, Payload::Ttp { pack: true, .. } | Payload::Nttp { pack: true, .. })
+        }
         // A default argument or member initializer's use context: any
         // declaration context the image carries.
         Dc::Ctx => matches!(
@@ -991,7 +1011,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             || e.cold & !COLD_ALL != 0
             || (e.cold & COLD_REWRITE != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
-            || e.deps & !ExprDeps::TYPE_VALUE_INST.bits() != 0
+            || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
             return bad("bad expression bits");
         }
@@ -1043,6 +1063,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             Payload::Field { width, init, .. } => {
                 if [*width, *init].iter().any(|&x| x != NONE && x as usize >= ne) {
                     return bad("bad field initializer");
+                }
+            }
+            Payload::Nttp { default, profile, .. } => {
+                if (*default != NONE && *default as usize >= ne) || (*default == NONE && *profile) {
+                    return bad("bad default template argument");
                 }
             }
             Payload::Var { init, eval, .. } => {
@@ -1107,6 +1132,8 @@ pub(super) enum Root {
     FieldInit(u32, ExprId),
     /// Constructor record, ctor-initializer position, initializer.
     CtorInit(u32, u32, ExprId),
+    /// Non-type template parameter record, default argument (WP-1279).
+    TemplDefault(u32, ExprId),
 }
 
 /// The writer's body state.
@@ -1299,7 +1326,8 @@ impl Writer<'_, '_, '_> {
                 let n = *ast.exprs.get(e);
                 let k = n.kind();
                 let ki = EXPR_KINDS.iter().position(|&x| x == k).ok_or(expr_reason(k))?;
-                if n.deps().intersects(ExprDeps::UNEXPANDED_PACK.with(ExprDeps::ERROR)) {
+                // An unexpanded pack (WP-1279) occurs only in a pattern.
+                if n.deps().intersects(ExprDeps::ERROR) {
                     return Err("a pack expansion or an invalid expression");
                 }
                 if !expr_aux_ok(k, n.aux()) {
@@ -1358,6 +1386,10 @@ impl Writer<'_, '_, '_> {
                 if let Some(r) = ast.exprs.default_arg_rewritten(e) {
                     cold |= COLD_REWRITE;
                     v.push(Fv::E(Some(r)));
+                }
+                if let Some(&l) = self.s.templ.fold_ellipsis.get(&e) {
+                    cold |= COLD_ELLIPSIS;
+                    v.push(Fv::Loc(l));
                 }
                 Ok((ki as u8, n.raw_bits(), u16::from(n.aux()), cold, v))
             }
@@ -1831,7 +1863,8 @@ impl Writer<'_, '_, '_> {
                 | Root::Init(rec, _)
                 | Root::FieldWidth(rec, _)
                 | Root::FieldInit(rec, _)
-                | Root::CtorInit(rec, _, _) => rec,
+                | Root::CtorInit(rec, _, _)
+                | Root::TemplDefault(rec, _) => rec,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
             if let Some(&d) = inv.get(&rec) {
@@ -1895,6 +1928,10 @@ impl Writer<'_, '_, '_> {
                     {
                         inits[k as usize].init = i;
                     }
+                }
+                Root::TemplDefault(rec, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    self.set_nttp_default(rec, i);
                 }
             }
         }
@@ -2062,7 +2099,12 @@ impl Sema<'_, '_> {
             let ty = self.image_ty(img, tys, ids, e.ty);
             let loc = main.get(e.loc);
             let mut deps = ExprDeps::NONE;
-            for d in [ExprDeps::TYPE, ExprDeps::VALUE, ExprDeps::INSTANTIATION] {
+            for d in [
+                ExprDeps::TYPE,
+                ExprDeps::VALUE,
+                ExprDeps::INSTANTIATION,
+                ExprDeps::UNEXPANDED_PACK,
+            ] {
                 if e.deps & d.bits() != 0 {
                     deps |= d;
                 }
@@ -2091,11 +2133,14 @@ impl Sema<'_, '_> {
             }
             // Only on a default-argument use (the copy precedes it, so it
             // is already built); anything else is dropped.
-            if e.cold & COLD_REWRITE != 0
+            let rewrite = if e.cold & COLD_REWRITE != 0 { ExprId::from_raw(next()) } else { None };
+            if let Some(r) = rewrite
                 && matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr)
-                && let Some(r) = ExprId::from_raw(next())
             {
                 let _ = self.ast.exprs.set_default_arg_rewritten(id, r);
+            }
+            if e.cold & COLD_ELLIPSIS != 0 {
+                self.templ.fold_ellipsis.insert(id, Loc::from_raw(next()));
             }
         }
         for (i, s) in b.stmts.iter().enumerate() {
