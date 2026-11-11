@@ -361,6 +361,18 @@ pub fn local_extern_ns(ast: &Ast, d: DeclId) -> Option<DeclId> {
 pub fn is_extern_c(ast: &Ast, d: DeclId) -> bool {
     let first = ast.first(d);
     let n = ast.decls.get(first);
+    // In C every entity with external linkage has C language linkage
+    // (clang `getDeclLanguageLinkage`): a local variable has none unless
+    // it is a block-scope `extern` declaration.
+    if ast.lang_c {
+        if !matches!(n.kind(), DeclKind::Function | DeclKind::Var) {
+            return false;
+        }
+        let local_var = n.kind() == DeclKind::Var
+            && enclosing_function(ast, first).is_some()
+            && ast.decls.var(first).is_none_or(|v| v.spec.storage() != VarStorage::Extern);
+        return !local_var && !internal_by_storage(ast, first);
+    }
     let Some(c) = n.ctx() else { return false };
     let ck = ast.decls.get(c).kind();
     if is_record_kind(ck) {
@@ -463,7 +475,10 @@ fn internal_by_storage(ast: &Ast, d: DeclId) -> bool {
             // internal linkage (`const volatile int cv = 1;` is external).
             // P2788: a `const` variable attached to a named module has
             // module (or, exported, external) linkage.
-            const_non_volatile(ast, q)
+            // In C a file-scope `const` object has external linkage
+            // ([C17 6.2.2]/5).
+            !ast.lang_c
+                && const_non_volatile(ast, q)
                 && !v.spec.is_inline()
                 && (!ast.modules.active || ast.module_attachment(first).is_none())
                 && v.spec.storage() != VarStorage::Extern
@@ -917,6 +932,11 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
     if is_extern_c(ast, d) && !ast.is_overloadable(d) {
         return true;
     }
+    // C has no mangling (clang `shouldMangleCXXName` is false outside
+    // C++): an internal-linkage `static int s;` is plain `s` too.
+    if ast.lang_c {
+        return !ast.is_overloadable(d);
+    }
     match n.kind() {
         DeclKind::Function => decl_name(ast, d) == "main" && in_global_ns(ast, d),
         // Only variables with internal linkage are mangled at global scope
@@ -1137,6 +1157,13 @@ pub fn mangle_param_object(ast: &Ast, anon: &mut AnonIds, d: DeclId) -> String {
 pub fn mangle_static_local(ast: &Ast, anon: &mut AnonIds, d: DeclId, index: u32) -> String {
     if let Some(l) = asm_label(ast, d) {
         return l;
+    }
+    // C: `<function's linkage name>.<name>` (clang `getStaticDeclName`);
+    // a same-named one is uniqued by the module (`.1`), as LLVM does.
+    if ast.lang_c
+        && let Some(f) = enclosing_function(ast, d)
+    {
+        return format!("{}.{}", mangle_decl(ast, anon, f), decl_name(ast, d));
     }
     let mut s = mangle_decl(ast, anon, d);
     push_discriminator(&mut s, index);

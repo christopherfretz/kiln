@@ -9,6 +9,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Layer | Where | What it proves |
 |---|---|---|
 | Unit tests | `crates/*/src`, `crates/*/tests` | Module contracts in `spec/` |
+| C | `tests/c/<area>/` (`hello`, `lex`, `predefined`, `linkage`, `interop`; spec/harness.md "C tests"); a default root | C mode (WP-1275): C lexing and keywords, the C predefines and feature queries vs `clang-22 -x c`, C linkage, C/C++ interop, `run` at every C standard |
 | Conformance | `tests/conformance/<section>/` | Standard behavior by section ([lex], [cpp], [expr.const], ...) |
 | Stress | `tests/stress/` | Deep nesting, huge packs, the stack guard, runaway-allocation regressions, under `mem<=N` budgets |
 | Differential | `tests/differential/` | Same result as clang (-E tokens, program stdout, AST/layout facts) |

@@ -47,7 +47,9 @@ impl Test<'_> {
         mode: &[&str],
         out: Option<&Path>,
     ) -> Command {
-        let mut c = Command::new(gcc);
+        // `g++-16 -x c` would link libstdc++; a C test runs `gcc-16` (WP-1275).
+        let mut c =
+            Command::new(if self.case.lang == Lang::C { c_driver(gcc) } else { gcc.to_owned() });
         c.current_dir(&self.cfg.root);
         match (self.case.lang, self.case.is_header) {
             (Lang::C, _) => {

@@ -50,8 +50,12 @@ pub use tokens::{Event, LoopHintInfo, TokenSource};
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ParseOptions {
-    /// The language standard.
+    /// The language standard (in C mode, the C++ standard sharing C's
+    /// lexical rules; see [`Self::c`]).
     pub std: Std,
+    /// The C standard when the input is C; `None` is C++
+    /// ([`kiln_sema::Sema::c`]; spec/driver.md "Language mode").
+    pub c: Option<kiln_lex::CStd>,
     /// Keep every token of the translation unit instead of a sliding
     /// window (the pre-WP-055 whole-file buffer; for measurements only).
     pub keep_tokens: bool,
@@ -137,6 +141,7 @@ impl Default for ParseOptions {
     fn default() -> Self {
         ParseOptions {
             std: Std::Cxx26,
+            c: None,
             keep_tokens: false,
             record_carried: false,
             record_image: false,
@@ -363,6 +368,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
+    s.c = opts.c;
     s.clang_compat = opts.clang_compat;
     s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
@@ -383,6 +389,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
     s.ast.contract_semantic = opts.contract_semantic;
+    s.ast.lang_c = opts.c.is_some();
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;

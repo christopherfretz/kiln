@@ -109,6 +109,32 @@ is `parse_tu` with the default limits, keeping only the AST; unit tests
 use it. All three live in `kiln_parse`, so tests and the driver share
 one path.
 
+### 1.4 C mode (WP-1275)
+`ParseOptions::c: Option<CStd>` (from the driver, spec/driver.md
+"Language mode") parses a C translation unit with the C++ parser: the
+grammar C shares with C++ (declarations, structs, unions, enums,
+functions, statements, expressions) is parsed as C++ and checked by
+`Sema` in C mode (spec/sema.md §1.0). The parser copies `c` to
+`Sema::c`. What differs is the keyword table (`Keywords::for_c`, built
+after the C++ table in `Parser::new`), which is clang `-x c`'s (C89
+3.1.1, C99/C11/C17 6.4.1, C23 6.4.1):
+- the `keywords::CXX_ONLY_KEYWORDS` (`class`, `template`, `namespace`,
+  `new`, `this`, the alternative tokens `and` … `xor_eq`, the casts, …)
+  are identifiers in every C mode;
+- `_Bool` is a keyword (C++ has none); `restrict` from C99; `inline`
+  from C99 and in gnu89; `asm` only in gnu modes;
+- the `keywords::C23_KEYWORDS` (`bool`, `true`, `false`, `nullptr`,
+  `alignas`, `alignof`, `constexpr`, `static_assert`, `thread_local`)
+  and `typeof`/`typeof_unqual` are keywords from C23 only (`typeof` in
+  every gnu mode).
+
+`crates/kiln_parse/tests/c_keywords.rs` checks the table against the
+preprocessor's `__is_identifier` answers in every C standard, which
+`kiln_pp`'s `features_c` test checks against `clang-19 -x c` (spec/pp.md
+"Feature queries in C"). Not yet: `_Imaginary` and `_Decimal32/64/128`
+(keywords in clang C, identifiers in kiln); `__builtin_types_compatible_p`
+(a clang C keyword; its semantics are WP-1276's). Tests: `tests/c/lex/`.
+
 ## 2. Token source (`tokens.rs`, `pragma.rs`)
 
 The parser reads phase-4 tokens ([lex.phases]/1.4: macro-expanded, with

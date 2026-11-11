@@ -1,6 +1,6 @@
 //! Preprocessor options.
 
-use kiln_lex::{LexOptions, Std};
+use kiln_lex::{CStd, LexOptions, Std};
 
 /// Which clang release's answers kiln reproduces (`-fclang-compat=<major>`,
 /// spec/pp.md "clang compatibility level"): the version predefines
@@ -83,6 +83,12 @@ pub struct PpOptions {
     /// Language standard (affects the lexer, `#elifdef`, `#warning`,
     /// `__VA_OPT__`, module directives).
     pub std: Std,
+    /// The C standard when the input is C (`None`: C++); passed to the
+    /// lexer ([`LexOptions::c`]; spec/driver.md "Language mode").
+    pub c: Option<CStd>,
+    /// A GNU dialect (`-std=gnuNN`); passed to the lexer
+    /// ([`LexOptions::gnu`]).
+    pub gnu: bool,
     /// `-trigraphs`.
     pub trigraphs: bool,
     /// Accept `$` in identifiers (clang default: yes).
@@ -90,6 +96,9 @@ pub struct PpOptions {
     /// `-C`: keep comments in the output (they reach [`crate::Preprocessor::next`]
     /// as `TokKind::Comment` tokens, except inside directives).
     pub keep_comments: bool,
+    /// The output is preprocessed text (`-E`, `-M`): strict C89 lexes `//`
+    /// as two `/` tokens there ([`LexOptions::preprocessed_output`]).
+    pub preprocessed_output: bool,
     /// `-CC`: implies `-C`, and also keeps comments inside macro
     /// arguments. (Comments in `#define` bodies are not retained yet:
     /// clang keeps them, rewriting `//` comments as `/* */`.)
@@ -154,9 +163,12 @@ impl PpOptions {
     pub fn new(std: Std) -> PpOptions {
         PpOptions {
             std,
+            c: None,
+            gnu: false,
             trigraphs: false,
             dollar_in_identifiers: true,
             keep_comments: false,
+            preprocessed_output: false,
             keep_macro_comments: false,
             predefines: String::new(),
             defines: Vec::new(),
@@ -180,10 +192,13 @@ impl PpOptions {
     /// The lexer options these options imply.
     pub fn lex_options(&self) -> LexOptions {
         let mut o = LexOptions::new(self.std);
+        o.c = self.c;
+        o.gnu = self.gnu;
         o.trigraphs = self.trigraphs;
         o.dollar_in_identifiers = self.dollar_in_identifiers;
         o.keep_comments = self.keep_comments || self.keep_macro_comments;
         o.reflection = self.reflection;
+        o.preprocessed_output = self.preprocessed_output;
         o
     }
 

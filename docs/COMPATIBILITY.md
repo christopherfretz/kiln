@@ -137,6 +137,18 @@ Per-run detail: [status/libcxx.md](status/libcxx.md),
 [status/libcxx-m5.md](status/libcxx-m5.md),
 [status/libstdcxx.md](status/libstdcxx.md).
 
+## C
+
+`kiln` compiles C from 1.1.0 (WP-1275). The seed corpus `tests/c/`
+(hello world at every standard, C keywords and lexing, the predefined
+macros and feature-test answers at every standard, symbol names, C/C++
+interop) matches `clang-22 -x c` and `clang-19 -x c`; every
+`__has_feature`/`__has_builtin`/`__has_attribute`/`__has_c_attribute`/
+`__is_identifier` answer kiln knows matches both clangs in every C
+standard on both targets. C-only semantics are in progress
+([KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode)), so no C project has been
+rated yet.
+
 ## C++20 modules
 
 Named modules, partitions, implementation units, global and private
