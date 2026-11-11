@@ -4227,9 +4227,7 @@ pub mod builtin {
             "memalign" => "malloc.h",
             "bcmp" | "bcopy" | "bzero" | "index" | "rindex" => "strings.h",
             _ if n.ends_with("printf") || n.ends_with("scanf") => "stdio.h",
-            _ if n.starts_with("mem") || n.starts_with("str") || n.starts_with("stp") => {
-                "string.h"
-            }
+            _ if n.starts_with("mem") || n.starts_with("str") || n.starts_with("stp") => "string.h",
             _ if n.starts_with("wcs") || n.starts_with("wmem") => "wchar.h",
             _ if n.starts_with("is") || n.starts_with("to") => "ctype.h",
             _ if info.sig.contains('X') => "complex.h",
