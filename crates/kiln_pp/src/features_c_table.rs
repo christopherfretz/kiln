@@ -2,9 +2,10 @@
 //
 // C-mode deltas on the C++ answers (spec/pp.md "Feature queries in C"):
 // configuration bit `target * 10 + std * 2 + gnu`, targets aarch64, x86_64; stds c89
-// c99 c11 c17 c23. Sorted by (kind, key); masks of one key are disjoint.
+// c99 c11 c17 c23. C19/C22 are sorted by (kind, key), the
+// _FLAGS tables by (flag, kind, key); masks of one key are disjoint.
 
-use super::{CDelta, Kind};
+use super::{CDelta, CFlagDelta, FeatureFlag, Kind};
 
 /// `clang-19 -x c` answers that differ from `clang++-19`'s.
 pub(super) static C19: &[CDelta] = &[
@@ -1415,4 +1416,18 @@ pub(super) static C22: &[CDelta] = &[
     CDelta(Kind::CAttribute, "msvc::noinline", 1, 0xfffff),
     CDelta(Kind::CAttribute, "nodiscard", 202_003, 0xfffff),
     CDelta(Kind::CAttribute, "noreturn", 202_202, 0xfffff),
+];
+
+/// `clang-19 -x c <flag>` answers that differ from kiln's prediction under
+/// the flag (the C++ overlays, then `C19`).
+pub(super) static C19_FLAGS: &[CFlagDelta] = &[
+    CFlagDelta(FeatureFlag::MsExtensions, Kind::Feature, "is_sealed", 0, 0xfffff),
+    CFlagDelta(FeatureFlag::MsExtensions, Kind::Extension, "is_sealed", 0, 0xfffff),
+];
+
+/// `clang-22 -x c <flag>` answers that differ from kiln's prediction under
+/// the flag (the C++ overlays, then `C22`).
+pub(super) static C22_FLAGS: &[CFlagDelta] = &[
+    CFlagDelta(FeatureFlag::MsExtensions, Kind::Feature, "is_sealed", 0, 0xfffff),
+    CFlagDelta(FeatureFlag::MsExtensions, Kind::Extension, "is_sealed", 0, 0xfffff),
 ];

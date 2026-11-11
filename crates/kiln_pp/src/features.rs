@@ -14,7 +14,8 @@
 //! In C ([`ClangFeatures::with_c`]) the answers are those of the C++
 //! standard the C standard lexes as, with the deltas of
 //! `features_c_table.rs` (`scripts/gen-features-c.sh`, from `clang-19 -x c`
-//! and `clang-22 -x c`) applied last (spec/pp.md §"Feature queries in C").
+//! and `clang-22 -x c`) applied after the flag overlays, then each set
+//! flag's C deltas (spec/pp.md §"Feature queries in C").
 
 use std::cmp::Ordering;
 
@@ -45,6 +46,11 @@ struct Delta(Kind, &'static str, u32, u16);
 /// A C answer that replaces the C++ one: (query, key, value, C
 /// configuration mask, bit `target * 10 + std * 2 + gnu`).
 struct CDelta(Kind, &'static str, u32, u32);
+
+/// A C answer under a flag that replaces the prediction (the C++ answer
+/// under the flag with the [`CDelta`]s applied): (flag, query, key, value,
+/// C configuration mask).
+struct CFlagDelta(FeatureFlag, Kind, &'static str, u32, u32);
 
 /// The query a table answers. Declaration order is the overlay sort order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -403,6 +409,20 @@ impl ClangFeatures {
             for d in deltas[lo..].iter().take_while(|d| d.0 == kind && d.1 == key) {
                 if d.3 & self.c_bit != 0 {
                     v = d.2;
+                }
+            }
+            let flag_deltas = if clang22 { c_table::C22_FLAGS } else { c_table::C19_FLAGS };
+            for &f in &self.flags {
+                let lo = flag_deltas.partition_point(|d| {
+                    (d.0, d.1).cmp(&(f, kind)).then_with(|| d.2.cmp(key)) == Ordering::Less
+                });
+                for d in flag_deltas[lo..]
+                    .iter()
+                    .take_while(|d| d.0 == f && d.1 == kind && d.2 == key)
+                {
+                    if d.4 & self.c_bit != 0 {
+                        v = d.3;
+                    }
                 }
             }
         }
