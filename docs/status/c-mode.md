@@ -151,7 +151,7 @@ Wrong results come first: each is a miscompile.
    (wrong exit, SIGSEGV or a run timeout: 20010122-1, pr47925, pr65956).
    Example: execute/20000717-1.c. Covered by wp/1276 at `dd6ba3cf7` (36 of
    the 37 pass; the other is bcp-1.c -O2, item 2). Repro:
-   `tests/c/stmt/fall-off-non-void-run.c`, which passes on that build.
+   WP-1276's `tests/c/run/fall-off-end.c` (and `fall-off-end-c89.c`).
 2. execute/bcp-1.c -O2: `__builtin_constant_p` of a parameter of an inlined
    function folds to 0 in the front end, where clang emits `llvm.is.constant`
    and lets the optimizer decide. The result is legal, so this is a note, not
@@ -266,8 +266,6 @@ Plus, from the OSS rows:
 
 ### Xfail repros (`xfail(kiln): WP-1282 follow-up, …`, all pass under clang-19)
 
-- `tests/c/stmt/fall-off-non-void-run.c`: falloff miscompile (passes on
-  wp/1276 at `dd6ba3cf7`; drop the xfail when WP-1276 lands).
 - `tests/c/expr/gnu-binary-conditional-logical.c`: the `?:` ICE (C).
 - `tests/conformance/expr.cond/gnu-binary-conditional-logical-run.cpp`: the
   `?:` ICE (C++).
