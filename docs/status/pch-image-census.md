@@ -399,6 +399,25 @@ stdcxx, before: 25559 top-level declarations, 17535 carried, 8024 not  (19.2 s, 
 stdcxx, after:  25559 top-level declarations, 18468 carried, 7091 not  (14.8 s, 101 MiB)
 ```
 
+With WP-1284 (#617) merged (`IMAGE_VERSION` 17), against WP-1284's
+"after":
+
+```
+allstd, WP-1284:      26765 top-level declarations, 19044 carried, 7721 not  (18.2 s, 118 MiB)
+allstd, both slices:  26765 top-level declarations, 19915 carried, 6850 not  (17.3 s, 119 MiB)
+stdcxx, WP-1284:      25333 top-level declarations, 18381 carried, 6952 not  (16.7 s, 100 MiB)
+stdcxx, both slices:  25333 top-level declarations, 19452 carried, 5881 not  (15.4 s, 105 MiB)
+```
+
++871 / +1071 over WP-1284. WP-1284's "a member function template"
+row (191 / 253, declarations that reached a member template once their
+constraints were carried) is gone; what is left of this slice's rows
+is "a member template or a template in a template" (1 / 11, partial
+specializations of member class templates, `classtempl.rs:144`:
+`__function::__callable<_Fp, true>`, `function.h:839`), "a friend template" (15 / 15) and "a
+friend declaration in a class template" (5 / 16). The tables below are
+from the branch before the merge.
+
 +795 and +933 carried. The slice carries member templates and
 templates in templates, redeclared templates with inherited default
 arguments, pack expansions in base specifiers, polymorphic class
@@ -465,21 +484,22 @@ Reading:
   stop the walk first; they are WP-1292 follow-ups (see the brief's
   remainder) or WP-1284's.
 
-WP-1036 path tally on this branch (docs/status/pch.md "Which path the
-differential takes" and "Re-run with a small loop"):
+WP-1036 path tally on this branch, with WP-1284 merged
+(docs/status/pch.md "Which path the differential takes" and "Re-run
+with a small loop"):
 
 - `cargo xtask test --pch-diff check` over the conformance PCH and
   modules directories, `tests/differential` and `tests/header-guard`:
-  141 compared, all equal; 17 took the image and 124 replayed, as
-  before (64 of the replays are for "a type the image does not carry",
-  22 for a template argument, 13 for "a template").
-- One header per PCH: libc++ 19, 8 of 106 take the image (the same
-  `<cassert>`, `<cerrno>`, `<cfloat>`, `<ciso646>`, `<climits>`,
-  `<cstdbool>`, `<cstdint>`, `<version>`); libstdc++ 14, 0 of 109 (73
-  for the block-scope `terminate` declaration, WP-1293, and 36 for a
-  type). The libc++ first refusals moved from "a member function
-  template" (13), "a default template argument" (2) and "a member
-  template" (1) to the next feature: "a template" (13; variable
-  template specializations and deduction guides), a type (49) and
-  attributes (3). The carried set is unchanged: 82 of the other 98
-  stop first on a type, a template argument or a template.
+  141 compared, all equal; 19 took the image and 122 replayed (17 and
+  124 before either slice; 60 of the replays are for a template
+  argument, 25 for a type, 13 for "a template").
+- One header per PCH: libc++ 19, 9 of 106 take the image (`<cassert>`,
+  `<cerrno>`, `<cfenv>`, `<cfloat>`, `<ciso646>`, `<climits>`,
+  `<cstdbool>`, `<cstdint>`, `<version>`; `<cfenv>` is new); libstdc++
+  14, 0 of 109 (73 for the block-scope `terminate` declaration,
+  WP-1293, and 36 for a type). The libc++ first refusals moved from "a
+  member function template" (13), "a default template argument" (2)
+  and "a member template" (1) to the next feature: a template argument
+  (53, WP-1300's non-type argument expressions among them), a type
+  (16), "a template" (13; variable template specializations) and a
+  specialization outside the image (7).
