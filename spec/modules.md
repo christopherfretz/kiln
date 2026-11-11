@@ -694,7 +694,11 @@ no includer).
   fails the length or checksum check.
 - **Written atomically**: to `<path>.tmp.<pid>` and renamed, so a failed
   or interrupted compile never leaves a half-written module file. A
-  compile with errors writes no module file (and removes nothing).
+  compile with errors writes no module file (and removes nothing). An
+  output path that exists and is not a regular file (`-o /dev/null`, a
+  FIFO) is written in place, as clang does: renaming over it would
+  replace the device with a regular file (WP-1281). The same holds for
+  the `-emit-pch` record and the module cache's stamps.
 
 The format version changes whenever the layout does; the reader accepts
 only its own. `kiln_pp::bmi` holds the format because a capsule is
@@ -1909,8 +1913,9 @@ patterns (S4, below); other templates still fall back.
   Since S3 an elaborated type may be qualified (`ns::S`, `::ns::C::T`)
   when every qualifier step is `::`, one of the image's namespaces or
   one of its classes;
-- every location is invalid, or a file location in the unit's main file
-  (a macro expansion falls back);
+- every location is invalid, or one the location records carry: since
+  S7 (WP-1070) in any file and in macro expansions, except a predefined
+  buffer or a file with `#line` directives (see "Locations (S7)");
 - no name lies in a namespace named `std` or is reserved.
 
 The first offending node's reason is the `-v` note's (see "Fallback").
@@ -2461,8 +2466,89 @@ that re-exports the primary, and a consumer that uses all of them in a
   (`kind2_declaration_image_imports`, `image-part-run.cpp`,
   `image-part-hidden.cpp`).
 
+**Locations (S7, WP-1070).** Before S7 every carried location had to be
+in the unit's main file, so a purview that #included a header, or any
+declaration a macro produced, replayed. S7 carries the locations of the
+module's source manager (spec/source.md) that the image uses, in an
+image location space of its own:
+
+- **File table.** One `file` per buffer the image's locations are in:
+  its spelled name (as diagnostics print it), its absolute path when the
+  module file was built (empty for an in-memory buffer), the decoded
+  text's length, its content hash (FNV-1a 64, `kiln_source::hash`, the
+  hash module files share) and whether it was entered as a system
+  header. An in-memory buffer (`<scratch space>`, which token pasting
+  and `_Pragma` write) carries its text inline. Entry 0 is the unit's
+  main file.
+- **Location records.** One `sloc` per inclusion range or macro
+  expansion entry of the module's source manager that a carried
+  location is in, or that such a range or entry names: an inclusion
+  (`file`, the image location of the `#include` that entered it or
+  `u32::MAX` for the buffer's own range, and its file-kind marks, so
+  `# 1 "x" 3` and `#pragma GCC system_header` survive), the expansion of
+  a macro's body (spelling, length, the invocation's range, the macro
+  name's range) or a macro argument's (spelling, length, the
+  parameter's range). Record `k` covers image locations `[base_k,
+  base_k + len_k]` with `base_0 = 0` and `base_{k+1} = base_k + len_k +
+  1`, where `len_k` is the file's length or the expansion's; a record
+  names only earlier records (the source manager allocates every
+  dependency before what names it), and expansion records are made once
+  per entry, so every declaration in one expansion shares them. Record
+  0 is the main file's own range: a main-file location is its offset,
+  as before S7.
+- **Writing.** A location is carried by carrying its range or entry,
+  dependencies first (an explicit stack, no recursion). It falls back
+  with the reasons listed under "Bodies" (a predefined buffer, `#line`,
+  invalid UTF-8) or when the image's space (below the reserved words)
+  is used up.
+- **Reading.** The reader checks the records against each other and
+  the file table (every record names earlier records, a spelled range
+  stays in one record, record 0 is the main file's range, an in-memory
+  text matches its hash), then recreates them in order with
+  `add_inclusion` and `add_expansion`, so an imported declaration's
+  location is an ordinary location of the importer: its caret, its
+  include stack ("In file included from m.cppm:3:") and its macro notes
+  ("expanded from macro") are the replay's, byte for byte
+  (`kind2_image_header_locations`). The main file is the module file's
+  recorded copy, as for replay. Every other file is added with
+  `add_lazy_file`: it is stat'ed and identified but not read, so a file
+  the importer later `#include`s is the same buffer; its text is read
+  only when a diagnostic needs a line or a column.
+- **Changed files.** A header whose size differs from its record, or
+  that is missing, makes the unit replay ("'./h.h' changed since the
+  module file was built", "'./h.h' is missing"); replay uses the module
+  file's recorded copies, so the carets are the replay's. A file
+  already loaded with other text replays the same way. A file of the
+  recorded size whose text then fails the hash uses the module file's
+  recorded copy (`-v`: "note: './h.h' changed since its module file was
+  built; its recorded text is shown"), and failing that prints no line
+  or column at all ("its text is not available"). Either way no
+  diagnostic points at a wrong position (`kind2_image_edited_header`).
+
+**Fallback census (WP-1070).** `-fkiln-bmi-image-census` (hidden, with
+`--precompile` or `-fmodule-output`) builds the image a second time in
+census mode and prints on stderr, after the compile's diagnostics, how
+much of the unit it carries: "image census for '<module>': N top-level
+declarations, C carried, R not", then one line per fallback reason with
+its count and the first example in source order (`file:line:col`, or
+the declaration's kind and name when it has no location), most frequent
+first, then the attributes of the declarations refused for their
+attributes, by name. A top-level declaration is one whose lexical
+parent is the translation unit, a namespace, an export or a linkage
+specification (a member, a parameter or a template's pattern counts as
+its outermost such declaration; carried scopes are not counted
+themselves). The census records the *first* reason of each, rolls the
+declaration back and goes on; a failing namespace is kept as a
+placeholder so its members are counted on their own. A reason that is
+the consequence of an earlier refusal ("... outside the image") is
+prefixed `cascade: `. The module file written is the one without the
+flag, byte for byte, and the image's own `-v` fallback reason is
+unchanged (`kind2_image_census`). A unit with no image for a
+unit-level reason prints "image census for '<module>': no image:
+<reason>", and a non-module TU "image census: not a module unit".
+
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 11` since WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 12` since WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2479,6 +2565,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            names:u32 str*            declared names
            gated:u32 u32*            ascending indices into names: the
                                      global-scope names (the pp's gate)
+           files:u32 file*           S7: the file table (0: main file)
+           slocs:u32 sloc*           S7: the location records
            pnames:u32 str*           parameter and local names (not gated)
            types:u32 type*
            decls:u32 offset:u32*decls blob_len:u32 decl*
@@ -2521,7 +2609,16 @@ step    := 0 | 1 decl:u32 | 2 qref template:u8   `::`, namespace, type
          | 3 decl:u32                namespace alias (S6)
 decl    := kind:u8 flags:u8 owner:u8 access:u8 name:u32 ctx:u32
            lexical:u32 loc:u32 prev:u32 payload
+file    := name:str path:str len:u32 hash:u64 flags:u8 [text:str]
+                                     flags: 1 system, 2 text follows
+sloc    := 0 file:u32 from:u32 marks:u32 (off:u32 kind:u8)*   inclusion
+         | 1 spelling:u32 len:u32 exp_lo:u32 exp_hi:u32
+             name_lo:u32 name_hi:u32                          macro body
+         | 2 spelling:u32 len:u32 exp_lo:u32 exp_hi:u32       macro arg
 ```
+
+Every `loc` word above (and in the body records) is an image location
+(S7, "Locations" below); `u32::MAX` is none.
 
 In a record, `u32::MAX` means none (for `ctx`, the translation unit),
 and `lexical` is `u32::MAX` when it equals `ctx` and `u32::MAX - 1` for
@@ -2730,7 +2827,12 @@ Falls back (each with its `-v` reason):
   WP-1064 in the backlog;
 - a lifetime-extended temporary with a constant value (bound to a
   `static` or `constexpr` reference) or at namespace scope;
-- any location in a macro expansion or another file: S7.
+- a location in a predefined buffer (`<built-in>`, `<command line>`:
+  "a location in a predefined buffer (<built-in>, <command line>)"),
+  in a file with `#line` directives or line markers, whose presumed
+  file is not one of the file table's ("a file with #line directives
+  or line markers"), or in a file that was not valid UTF-8 (S7, see
+  "Locations").
 
 **Classes (S3, WP-1065).** A class (`struct`, `class` or `union`) is
 a class record; its members are the records between it and its end:
@@ -2883,7 +2985,12 @@ classes and templates). The follow-ups, in priority order:
    using-declarations of imported or global-module-fragment entities),
    namespaces reopened across units, class-scope using-declarations;
 6. S-lazy: the lazy lookup hook (see above);
-7. S7: locations in other files and in macro expansions.
+7. S7: locations in other files and in macro expansions. **Done
+   (WP-1070)**, see "Locations (S7)"; its follow-ups: `#line` and line
+   markers (a presumed-file table), locations in `<built-in>` and
+   `<command line>` (carry the predefines buffer), and reading the
+   file table at `import` time only for the files a diagnostic needs
+   (today every non-main file is stat'ed when the image is read).
 
 **What `import std;` still needs after S3.** libc++'s `std.cppm` falls
 back on its first node, the global module fragment (S5): every header is
@@ -2912,7 +3019,11 @@ are, by stage:
   using-declaration naming a declaration outside the image"), so they
   wait for S5 and the external-reference follow-up;
 - S7: locations in the headers (other files) and in macro expansions
-  (`_LIBCPP_*`);
+  (`_LIBCPP_*`) are carried since WP-1070; the fallback census of a
+  purview that #includes every libc++ header (docs/status/pch-image-census.md)
+  puts its remaining location fallbacks at two declarations (a
+  `<built-in>` location) out of about 25 thousand, behind attributes,
+  reserved names and templates;
 - follow-ups under WP-1064: attributes with arguments
   (`__attribute__((__visibility__(...), __abi_tag__(...)))` through
   `_LIBCPP_HIDE_FROM_ABI`, `[[__assume__]]`), `try`/`catch` (in

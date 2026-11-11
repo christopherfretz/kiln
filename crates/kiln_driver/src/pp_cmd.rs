@@ -489,6 +489,7 @@ impl Job<'_> {
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
+        opts.preprocessed_output = !staged;
         if !staged {
             // `-E -dD`/`-dI` print the directives in place (`-dM` and
             // `-M` print no text); `-M -MG` lists a missing header
@@ -532,6 +533,9 @@ impl Job<'_> {
         fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
         let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
             .map(|f| f.with_compat(a.predef.clang_compat));
+        if let Some(c) = self.std.c {
+            features = features.map(|f| f.with_c(c, self.std.gnu));
+        }
         if self.toolchain.target.is_aarch64() {
             // WP-558: the NEON builtins answer from the enabled features.
             let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();
@@ -671,6 +675,81 @@ impl Job<'_> {
                 None => writeln!(err, "note: imported '{}' from its declaration image", i.key),
                 Some(why) => writeln!(err, "note: replayed '{}': {why}", i.key),
             };
+        }
+    }
+
+    /// With `-v`, one note per header of an imported declaration image
+    /// that a diagnostic needed and that changed on disk since the module
+    /// file was built: its recorded text was shown instead, or none was
+    /// left to show (spec/modules.md §11.11 "File table").
+    pub(crate) fn note_lazy_buffers(&self, sm: &SourceManager, engine: &DiagEngine<'_>) {
+        if !self.args.verbose {
+            return;
+        }
+        engine.flush();
+        let mut err = self.stderr.clone();
+        for (f, how) in sm.lazy_fallbacks() {
+            let name = sm.file_name(f);
+            let _ = match how {
+                kiln_source::LazyOutcome::Copy => writeln!(
+                    err,
+                    "note: '{name}' changed since its module file was built; its recorded text is shown"
+                ),
+                _ => writeln!(
+                    err,
+                    "note: '{name}' changed since its module file was built; its text is not available"
+                ),
+            };
+        }
+    }
+
+    /// After a compile: the `-v` notes on lazy buffers, then the census.
+    pub(crate) fn write_image_reports(
+        &self,
+        sm: &SourceManager,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        self.note_lazy_buffers(sm, engine);
+        self.write_image_census(census, engine);
+    }
+
+    /// `-fkiln-bmi-image-census`: the census table on stderr
+    /// (spec/modules.md §11.11 "Fallback census").
+    pub(crate) fn write_image_census(
+        &self,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        if !self.args.bmi_image_census {
+            return;
+        }
+        engine.flush();
+        let mut err = self.stderr.clone();
+        let Some(c) = census else {
+            let _ = writeln!(err, "image census: not a module unit");
+            return;
+        };
+        if let Some(why) = c.unit {
+            let _ = writeln!(err, "image census for '{}': no image: {why}", c.module);
+            return;
+        }
+        let refused: usize = c.rows.iter().map(|r| r.count).sum();
+        let _ = writeln!(
+            err,
+            "image census for '{}': {} top-level declarations, {} carried, {refused} not",
+            c.module,
+            c.top_level,
+            c.top_level - refused.min(c.top_level),
+        );
+        for r in &c.rows {
+            let _ = writeln!(err, "{:>7}  {}  (first: {})", r.count, r.reason, r.example);
+        }
+        if !c.attrs.is_empty() {
+            let _ = writeln!(err, "attributes of the attributed declarations:");
+            for (a, n) in &c.attrs {
+                let _ = writeln!(err, "{n:>7}  {a}");
+            }
         }
     }
 
@@ -1017,6 +1096,12 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
 
     fn has_cpp_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
         let v = self.0.has_cpp_attribute(scope, name);
+        if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
+    }
+
+    fn has_c_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
+        // C23 `[[attr]]` is the C++11 syntax to attribute triage.
+        let v = self.0.has_c_attribute(scope, name);
         if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
     }
 

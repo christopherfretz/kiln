@@ -189,8 +189,10 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   which also takes clang's type-operand form `_Generic(T, ...)`
   (`__has_extension(c_generic_selections)` is 1). Only the selected
   association is evaluated, including in constant expressions.
-- **C**: `kiln` (not `kiln++`) treats `.c`, `.h` and `.i` as C, and can
-  only preprocess them (`-E`). See
+- **C**: `kiln` (not `kiln++`) treats `.c`, `.h` and `.i` as C and
+  compiles them (`-std=c89`, `c99`, `c11`, `c17`, `c23` and `gnuNN`;
+  default `gnu17`, as clang). C and C++ objects link together: C names
+  are not mangled. C semantics are in progress; see
   [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode).
 
 ### Modules
@@ -538,8 +540,8 @@ All `-fkiln-*` flags are experimental.
   opt out.
 - The PGO flags are rejected (see [Coverage](#coverage)).
 - `--target=` accepts only aarch64 and x86_64 Linux triples.
-- `-x c` and `.c` inputs can only be preprocessed. `kiln++` warns about a
-  `.c` input and compiles it as C++, as `clang++` does.
+- `kiln++` warns about a `.c` input and compiles it as C++, as
+  `clang++` does; `kiln`, or `-x c`, compiles it as C.
 - The full list of intentional differences is spec/driver.md,
   "Deviations from clang 19".
 

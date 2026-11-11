@@ -219,9 +219,11 @@ pub struct ImageSection {
     pub path: String,
     /// The [`SECTION_IMAGE`] bytes (moved out of the capsule).
     pub bytes: Vec<u8>,
-    /// The unit's main file, loaded as the replay loads it (§11.2): the
-    /// image's locations are offsets into it.
-    pub main_file: kiln_source::FileId,
+    /// The buffers of the image's file table (§11.11 "File table"), in
+    /// table order: index 0 is the unit's main file, loaded as the replay
+    /// loads it (§11.2); the others are lazy buffers, in-memory buffers,
+    /// or files the importer had loaded with the recorded text.
+    pub files: Vec<kiln_source::FileId>,
 }
 
 /// One kind-2 section: a tag and its bytes, which this crate does not
@@ -419,6 +421,26 @@ pub struct ImageHeader<'a> {
     pub preamble: Option<u32>,
     /// The gated names.
     pub gated: Vec<&'a str>,
+    /// S7: the file table (index 0: the main file).
+    pub files: Vec<ImageFile<'a>>,
+}
+
+/// One entry of an image's file table (spec/modules.md §11.11 "File
+/// table").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageFile<'a> {
+    /// The buffer's name, as diagnostics print it.
+    pub name: &'a str,
+    /// Its absolute path when it was built (empty for an in-memory buffer).
+    pub path: &'a str,
+    /// The decoded text's length.
+    pub len: u32,
+    /// The text's [`checksum`] (`kiln_source::hash::content_hash`).
+    pub hash: u64,
+    /// It was entered as a system header.
+    pub system: bool,
+    /// An in-memory buffer's text.
+    pub text: Option<&'a str>,
 }
 
 /// The main file path, the preamble and the gated names an image section
@@ -458,7 +480,21 @@ pub fn image_header(bytes: &[u8]) -> Option<ImageHeader<'_>> {
     let gated = (0..g)
         .map(|_| names.get(u32_at(&mut at)? as usize).copied())
         .collect::<Option<Vec<_>>>()?;
-    Some(ImageHeader { main, preamble, gated })
+    let nf = u32_at(&mut at)? as usize;
+    if nf.saturating_mul(21) > bytes.len() - at {
+        return None;
+    }
+    let mut files = Vec::with_capacity(nf);
+    for _ in 0..nf {
+        let (name, path, len) = (str_at(&mut at)?, str_at(&mut at)?, u32_at(&mut at)?);
+        let lo = u64::from(u32_at(&mut at)?);
+        let hash = lo | (u64::from(u32_at(&mut at)?) << 32);
+        let flags = *bytes.get(at)?;
+        at += 1;
+        let text = if flags & 2 != 0 { Some(str_at(&mut at)?) } else { None };
+        files.push(ImageFile { name, path, len, hash, system: flags & 1 != 0, text });
+    }
+    Some(ImageHeader { main, preamble, gated, files })
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.
@@ -550,11 +586,17 @@ pub fn write(c: &Capsule) -> Vec<u8> {
 
 /// Writes `bytes` to `path` atomically: to a temporary file beside it,
 /// then renamed over it, so an interrupted compile never leaves a
-/// half-written module file.
+/// half-written module file. A path that exists and is not a regular
+/// file (`-o /dev/null`, a FIFO) is written in place, as clang does:
+/// renaming over it would replace the device with a regular file.
 ///
 /// # Errors
 /// The I/O error of creating, writing or renaming the file.
 pub fn write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        let mut f = std::fs::OpenOptions::new().write(true).open(path)?;
+        return f.write_all(bytes).and_then(|()| f.flush());
+    }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(format!(".tmp.{}", std::process::id()));
     let tmp = std::path::PathBuf::from(tmp);
@@ -590,15 +632,7 @@ fn corrupt<T>(why: &str) -> Res<T> {
     Err(BmiError::Corrupt(why.to_owned()))
 }
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-
-fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
+use kiln_source::hash::{FNV_OFFSET, fnv1a64_extend as fnv};
 
 /// The length of magic, format version and kind.
 const PREFIX_LEN: usize = 13;
@@ -1140,5 +1174,16 @@ mod tests {
             ]
         );
         assert!(mismatches(&rec, &rec).is_empty());
+    }
+
+    /// `-o /dev/null` writes through the device; renaming a temporary file
+    /// over it (as root) would replace /dev/null with a regular file.
+    #[cfg(unix)]
+    #[test]
+    fn write_file_keeps_a_device_output_a_device() {
+        use std::os::unix::fs::FileTypeExt as _;
+        let null = Path::new("/dev/null");
+        write_file(null, b"module bytes").unwrap();
+        assert!(std::fs::metadata(null).unwrap().file_type().is_char_device());
     }
 }

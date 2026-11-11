@@ -622,7 +622,7 @@ fn kind2_declaration_image() {
     // importer that does not replay it still compiles.
     let mut c = bmi::read(&good).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
     ok(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
     let o = kiln(&d, &["-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
@@ -661,7 +661,7 @@ fn kind2_declaration_image_bodies() {
     ok(&d, &["-c", "b.pcm", "-o", "b.o"]);
     let mut c = bmi::read(&good).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
     ok(&d, &["-fkiln-bmi-image", "-fmodule-file=b=blank.pcm", "u.cpp", "b.o", "-o", "u"]);
     assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
@@ -673,7 +673,7 @@ fn blank_source(d: &Path, pcm: &str, out: &str) {
     use kiln_pp::bmi;
     let mut c = bmi::read(&std::fs::read(d.join(pcm)).unwrap()).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join(out), bmi::write(&c)).unwrap();
 }
 
@@ -685,7 +685,7 @@ fn blank_after_preamble(d: &Path, pcm: &str, out: &str) {
     let img = c.sections.iter().find(|s| s.tag == bmi::SECTION_IMAGE).expect("an image");
     let p = bmi::image_header(&img.bytes).unwrap().preamble.expect("a preamble") as usize;
     let text = &mut c.files[0].text;
-    let rest: String = text[p..].chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    let rest: String = text[p..].bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     text.truncate(p);
     text.push_str(&rest);
     std::fs::write(d.join(out), bmi::write(&c)).unwrap();
@@ -1418,8 +1418,8 @@ fn kind2_declaration_image_fallback() {
             "a try block",
         ),
         (
-            "export module f;\n#define ONE 1\nexport constexpr int g() { return ONE; }\n",
-            "in a macro expansion",
+            "export module f;\n#line 40 \"other.h\"\nexport constexpr int g() { return 1; }\n",
+            "a file with #line directives or line markers",
         ),
         (
             "export module f;\nexport template <class T> struct S { virtual T f() const { return T(); } };\n",
@@ -1566,4 +1566,165 @@ fn kind2_damaged_image_is_diagnosed() {
             );
         }
     }
+}
+
+/// The header of the S7 tests: functions, classes and templates, some of
+/// them made by macros, #included in the purview of `m` (HM).
+const HH: &str = "#define DECL_FN(name, v) inline int name() { return v; }\n\
+                  #define CALL_NOPE(o) o.nope()\n\
+                  #define TWICE(x) ((x) + (x))\n\
+                  namespace hh {\n\
+                  inline int add(int a, int b) { return a + b; }\n\
+                  struct P { int x; int get() const { return x; } };\n\
+                  template <class T> T twice(T t) { return TWICE(t.w); }\n\
+                  template <class T> struct Box { T v; void bad() { CALL_NOPE(v); } };\n\
+                  DECL_FN(seven, 7)\n\
+                  }\n";
+const HM: &str = "export module m;\nexport {\n#include \"h.h\"\n}\n\
+                  export constexpr int sq(int x) { return x * x; }\n";
+/// Errors located in the header: two instantiations whose bodies are
+/// ill-formed there (through macros), and a call with a note there.
+const HUSE: &str = "import m;\nint main() {\n  hh::Box<int> b{1};\n  b.bad();\n\
+                    return hh::add(1) + hh::twice(3) + hh::seven() + hh::P{4}.get() + sq(2);\n}\n";
+
+fn setup_hm(name: &str) -> PathBuf {
+    let d = scratch(name);
+    std::fs::write(d.join("h.h"), HH).unwrap();
+    std::fs::write(d.join("m.cppm"), HM).unwrap();
+    std::fs::write(d.join("u.cpp"), HUSE).unwrap();
+    ok(&d, &["-fkiln-bmi-image", "--precompile", "m.cppm", "-o", "m.pcm"]);
+    d
+}
+
+/// The failing compile of `u.cpp` against `m.pcm`, with `flag`.
+fn header_errors(d: &Path, flag: &str) -> String {
+    let o = kiln(d, &[flag, "-fsyntax-only", "-fmodule-file=m=m.pcm", "u.cpp"]);
+    assert_eq!(o.code, 1, "{flag}: {}", o.stderr);
+    o.stderr
+}
+
+/// Whether a `-v` compile of `u.cpp` built `m` from its image, and its
+/// lines naming `h.h` or the import.
+fn header_notes(d: &Path) -> (bool, Vec<String>) {
+    let o = kiln(d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=m=m.pcm", "u.cpp"]);
+    let notes: Vec<String> = o
+        .stderr
+        .lines()
+        .filter(|l| l.starts_with("note: imported '") || l.starts_with("note: replayed '"))
+        .chain(o.stderr.lines().filter(|l| l.starts_with("note: './h.h'")))
+        .map(str::to_owned)
+        .collect();
+    (notes.iter().any(|l| l == "note: imported 'm' from its declaration image"), notes)
+}
+
+/// Stage S7 (§11.11 "File table", "Expansion records", WP-1070): a
+/// purview that #includes a header is carried by the image, and a
+/// diagnostic in an imported header declaration shows the same caret,
+/// include stack, macro notes and instantiation notes as after a replay.
+#[test]
+fn kind2_image_header_locations() {
+    let d = setup_hm("image-header");
+    let (image, notes) = header_notes(&d);
+    assert!(image, "{notes:?}");
+    let img = header_errors(&d, "-fkiln-bmi-image");
+    for want in [
+        "./h.h:5:12: note: 'add' declared here\n    5 | inline int add(int a, int b) { return a + b; }\n      |            ^\n",
+        "./h.h:8:51: error: member reference base type 'int' is not a structure or union\n    8 | template <class T> struct Box { T v; void bad() { CALL_NOPE(v); } };\n      |                                                   ^\n",
+        "./h.h:2:23: note: expanded from macro 'CALL_NOPE'\n    2 | #define CALL_NOPE(o) o.nope()\n      |                       ^\n",
+        "u.cpp:4:5: note: in instantiation of member function 'hh::Box<int>::bad' requested here",
+        "In file included from m.cppm:3:\n./h.h:7:49: error: member reference base type 'int' is not a structure or union",
+    ] {
+        assert!(img.contains(want), "{want}\n{img}");
+    }
+    assert_eq!(img, header_errors(&d, "-fno-kiln-bmi-image"), "image and replay agree");
+}
+
+/// A header edited after its module file was built never gives a wrong
+/// caret: with the same size the image is used and the module file's
+/// recorded text is shown (with a `-v` note); with another size, or
+/// missing, the unit replays from its recorded text, with the reason.
+#[test]
+fn kind2_image_edited_header() {
+    let d = setup_hm("image-edited-header");
+    let before = header_errors(&d, "-fno-kiln-bmi-image");
+    std::fs::write(d.join("h.h"), HH.replace("nope()", "nopf()")).unwrap();
+    let (image, notes) = header_notes(&d);
+    assert!(image, "{notes:?}");
+    assert!(
+        notes.iter().any(|l| l
+            == "note: './h.h' changed since its module file was built; its recorded text is shown"),
+        "{notes:?}"
+    );
+    assert_eq!(header_errors(&d, "-fkiln-bmi-image"), before, "same size: the recorded text");
+    // Without a diagnostic in it, the header's text is never read.
+    std::fs::write(d.join("ok.cpp"), "import m;\nint main() { return hh::add(1, 2) - 3; }\n")
+        .unwrap();
+    let o =
+        kiln(&d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=m=m.pcm", "ok.cpp"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("note: imported 'm' from its declaration image")
+            && !o.stderr.contains("changed since"),
+        "{}",
+        o.stderr
+    );
+    for (edit, why) in [
+        (
+            Some(format!("{HH}// one more line\n")),
+            "'./h.h' changed since the module file was built",
+        ),
+        (None, "'./h.h' is missing"),
+    ] {
+        match &edit {
+            Some(t) => std::fs::write(d.join("h.h"), t).unwrap(),
+            None => std::fs::remove_file(d.join("h.h")).unwrap(),
+        }
+        let (image, notes) = header_notes(&d);
+        assert!(
+            !image && notes.iter().any(|l| l.starts_with("note: replayed 'm'") && l.contains(why)),
+            "{notes:?}"
+        );
+        assert_eq!(header_errors(&d, "-fkiln-bmi-image"), before, "{why}: the replay's carets");
+    }
+}
+
+/// `-fkiln-bmi-image-census` (§11.11 "Fallback census") counts the first
+/// fallback reason of each top-level declaration, with an example, and
+/// writes the same module file as without it.
+#[test]
+fn kind2_image_census() {
+    let d = scratch("image-census");
+    std::fs::write(
+        d.join("c.cppm"),
+        "export module c;\n\
+         export inline int g() { try { return 1; } catch (...) { return 0; } }\n\
+         export inline int h() { try { return 2; } catch (...) { return 0; } }\n\
+         export inline int k() { return [] { return 1; }(); }\n\
+         export constexpr int sq(int x) { return x * x; }\n\
+         export struct S { int a; };\n",
+    )
+    .unwrap();
+    std::fs::write(d.join("p.cpp"), "int main() {}\n").unwrap();
+    ok(&d, &["-fkiln-bmi-image", "--precompile", "c.cppm", "-o", "c.pcm"]);
+    let o = kiln(
+        &d,
+        &["-fkiln-bmi-image", "-fkiln-bmi-image-census", "--precompile", "c.cppm", "-o", "c2.pcm"],
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let lines: Vec<&str> = o.stderr.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "image census for 'c': 5 top-level declarations, 2 carried, 3 not",
+            "      2  a try block  (first: c.cppm:2:19)",
+            "      1  a local declaration the image does not carry  (first: c.cppm:4:19)",
+        ],
+        "{}",
+        o.stderr
+    );
+    let (a, b) =
+        (std::fs::read(d.join("c.pcm")).unwrap(), std::fs::read(d.join("c2.pcm")).unwrap());
+    assert!(a == b, "the census leaves the module file unchanged");
+    let o = kiln(&d, &["-fkiln-bmi-image-census", "-fsyntax-only", "p.cpp"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, "image census: not a module unit\n"));
 }

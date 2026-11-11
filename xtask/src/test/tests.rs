@@ -131,7 +131,7 @@ fn report(results: &[TestResult]) -> String {
 /// header corpus under `tests/differential/pp` (`cargo xtask gen-pp-corpus`;
 /// `xtask ci` runs it) but with the hand-written `pp/torture`.
 fn seed_roots(root: &Path) -> Vec<PathBuf> {
-    let mut roots = vec![root.join("tests/conformance")];
+    let mut roots = vec![root.join("tests/c"), root.join("tests/conformance")];
     if let Ok(dir) = std::fs::read_dir(root.join("tests/differential")) {
         let mut subdirs: Vec<PathBuf> = dir
             .filter_map(Result::ok)

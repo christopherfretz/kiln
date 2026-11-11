@@ -540,6 +540,7 @@ impl<'a> Lexer<'a> {
                 b'/' => {
                     let (c2, _) = self.src.decode(self.pos + 1);
                     match c2 {
+                        Some('/') if !self.c89_line_comment() => return None,
                         Some('/') => {
                             if let Some(t) = self.line_comment() {
                                 return Some(t);
@@ -606,6 +607,15 @@ impl<'a> Lexer<'a> {
 
     /// Lexes a `//` comment starting at `self.pos` ([lex.comment]). The
     /// newline ending it is not consumed.
+    /// Whether the `//` at `self.pos` starts a comment. Always, except in
+    /// strict C89, which has no line comments (C89 3.1.9): there clang 19
+    /// and 22 lex `//` as a comment when compiling (even `a //**/ b`,
+    /// which C89 reads as `a / b`) and as two `/` in preprocessed output
+    /// (spec/lex.md "C mode").
+    fn c89_line_comment(&self) -> bool {
+        self.opts.c != Some(CStd::C89) || self.opts.gnu || !self.opts.preprocessed_output
+    }
+
     fn line_comment(&mut self) -> Option<Token> {
         let start = self.pos;
         let (_, s1) = self.src.decode(start + 1);

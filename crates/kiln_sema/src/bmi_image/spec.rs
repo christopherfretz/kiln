@@ -12,7 +12,7 @@ use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TemplLinkKind};
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TemplateArg, TemplateName, TypeView};
 use kiln_ast::{DeclId, QualType, TypeId};
-use kiln_source::{FileId, Loc};
+use kiln_source::Loc;
 
 use super::{ArgRec, DECL_FLAGS, DeclRec, Image, NONE, Payload, TyRec, W, Writer};
 use crate::Sema;
@@ -340,7 +340,7 @@ impl Sema<'_, '_> {
     /// once every body is built: a `constexpr` definition is instantiated
     /// at once, any other queued for the end of the translation unit, as
     /// replay's own use does.
-    pub(super) fn image_mark_specs(&mut self, img: &Image, ids: &[DeclId], main: FileId) {
+    pub(super) fn image_mark_specs(&mut self, img: &Image, ids: &[DeclId], main: &super::Locs) {
         for (i, r) in img.decls.iter().enumerate() {
             if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
                 continue;
@@ -349,7 +349,7 @@ impl Sema<'_, '_> {
             if d == self.ast.tu {
                 continue;
             }
-            let loc = if r.loc == NONE { Loc::INVALID } else { self.diags.sm().loc(main, r.loc) };
+            let loc = main.get(r.loc);
             let func = self.ast.decls.function(d).is_some();
             if r.flags & DeclFlags::USED.bits() != 0 {
                 if func {

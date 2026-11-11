@@ -119,12 +119,12 @@ impl Parser<'_, '_> {
                         self.s.install_carried_constants(&c.path, &c.bytes, span.lo);
                     }
                     if let Some(i) = image {
-                        self.s.load_module_image(&i.path, &i.bytes, i.main_file, span.lo, false);
+                        self.s.load_module_image(&i.path, &i.bytes, &i.files, span.lo, false);
                     }
                 }
                 Event::UnitEnd { key, image } => {
                     if let Some((i, span)) = image {
-                        self.s.load_module_image(&i.path, &i.bytes, i.main_file, span.lo, true);
+                        self.s.load_module_image(&i.path, &i.bytes, &i.files, span.lo, true);
                     }
                     self.s.act_on_unit_end(&key);
                 }

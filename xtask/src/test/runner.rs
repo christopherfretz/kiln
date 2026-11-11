@@ -547,7 +547,12 @@ impl Test<'_> {
         mode: &[&str],
         out: Option<&Path>,
     ) -> Command {
-        let mut c = Command::new(program);
+        // A clang++ compiles a C test as its C driver does (WP-1275).
+        let exe = match self.case.lang {
+            Lang::C if !self.is_kiln(program) => c_driver(program),
+            _ => program.to_owned(),
+        };
+        let mut c = Command::new(exe);
         crate::util::isolate_caches(&mut c);
         c.current_dir(&self.cfg.root);
         if self.is_kiln(program) {
@@ -903,13 +908,33 @@ impl Test<'_> {
         for (i, unit) in spec.units.iter().enumerate() {
             let src = self.module_source(unit);
             let obj = self.unit_object(&format!("unit{i}"), oracle);
-            let mut c = Command::new(program);
+            // A unit in the other language (a `.c` unit of a C++ test, a
+            // C++ unit of a `.c` test) is compiled as that language at its
+            // default standard (WP-1275).
+            let lang = if src.extension().is_some_and(|x| x == "c") { Lang::C } else { Lang::Cxx };
+            let other = lang != self.case.lang;
+            let kiln = self.is_kiln(program);
+            let mut c = Command::new(if lang == Lang::C && !kiln {
+                c_driver(program)
+            } else {
+                program.to_owned()
+            });
             crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
-            if self.is_kiln(program) {
+            if kiln {
                 c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
             }
-            c.arg(format!("-std={}", spec.std));
+            // kiln++ compiles a `.c` file as C++ unless told otherwise.
+            if lang == Lang::C {
+                c.args(["-x", "c"]);
+            } else if other {
+                c.args(["-x", "c++"]);
+            }
+            match (other, lang) {
+                (true, Lang::C) => c.arg("-std=c17"),
+                (true, Lang::Cxx) => c.arg("-std=c++26"),
+                (false, _) => c.arg(format!("-std={}", spec.std)),
+            };
             c.args(self.no_crash_reports(program));
             if let Some(n) = self.clang_compat(program, spec) {
                 c.arg(format!("-fclang-compat={n}"));
@@ -2641,15 +2666,55 @@ fn has_sanitizer_runtime(clang: &Path) -> bool {
     ok
 }
 
+/// The C driver installed beside the C++ driver `program` (`clang++-19`
+/// -> `clang-19`, `g++-16` -> `gcc-16`, in the same directory, or on
+/// `PATH` for a bare name), which a C test's compile runs (spec/harness.md
+/// "C tests"); `program` itself when there is none.
+pub(crate) fn c_driver(program: &Path) -> PathBuf {
+    let Some(name) = program.file_name().and_then(|n| n.to_str()) else {
+        return program.to_owned();
+    };
+    let c = if let Some(rest) = name.strip_prefix("clang++") {
+        format!("clang{rest}")
+    } else if let Some(i) = name.rfind("g++") {
+        format!("{}gcc{}", &name[..i], &name[i + 3..])
+    } else {
+        return program.to_owned();
+    };
+    match program.parent().filter(|p| !p.as_os_str().is_empty()) {
+        Some(d) => Some(d.join(&c)).filter(|p| p.is_file()),
+        None => std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(&c).is_file()))
+            .then(|| PathBuf::from(&c)),
+    }
+    .unwrap_or_else(|| program.to_owned())
+}
+
 #[cfg(test)]
 mod compat_tests {
     use super::{
-        DumpKind, GCC_MODE, Status, compat_for, compiler_flags, crash_diagnostics_off,
+        DumpKind, GCC_MODE, Status, c_driver, compat_for, compiler_flags, crash_diagnostics_off,
         debugger_gate_in, diag_directives_for, first_missing_check, gcc_links, includes_kiln_meta,
         ir_diff, ir_normalize, ir_target_flag, module_syntax_line, stand_in_skip,
         without_gcc_preinclude,
     };
     use crate::test::directives::{CompilerKind, Lang, parse};
+
+    /// A C test's compile runs the C driver beside the C++ one (WP-1275).
+    #[test]
+    fn c_driver_is_found_beside_the_cxx_driver() {
+        let d = std::env::temp_dir().join(format!("kiln-cdriver-wp1275-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        for f in ["clang++-19", "clang-19", "g++-16", "gcc-16", "clang++-7"] {
+            std::fs::write(d.join(f), "").unwrap();
+        }
+        assert_eq!(c_driver(&d.join("clang++-19")), d.join("clang-19"));
+        assert_eq!(c_driver(&d.join("g++-16")), d.join("gcc-16"));
+        // No C driver beside it, or not a C++ driver: the program itself.
+        assert_eq!(c_driver(&d.join("clang++-7")), d.join("clang++-7"));
+        assert_eq!(c_driver(&d.join("kiln++")), d.join("kiln++"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     /// WP-1249: GCC as the compiler under test gets the mode's and the
     /// test's flags in GCC's spelling (`oracle::gcc_args`); kiln and clang
