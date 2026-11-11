@@ -856,6 +856,20 @@ fn param_dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams
 }
 
+/// The declaration a chain of shadow records from `w` ends in; `None`
+/// when the chain does not point strictly backwards.
+fn shadow_end(img: &Image, w: u32) -> Option<u32> {
+    let mut at = w;
+    while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) = img.decls.get(at as usize)
+    {
+        if *target >= at {
+            return None;
+        }
+        at = *target;
+    }
+    Some(at)
+}
+
 /// Whether declaration word `w` names something of class `dc`.
 pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == LEX_TU {
@@ -881,16 +895,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     // S6: a declaration found through a using-declaration's shadow (of
     // a shadow ...): the declaration it ends in.
     if dc == Dc::Found && matches!(d.payload, Payload::Shadow { .. }) {
-        let mut at = w;
-        while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) =
-            img.decls.get(at as usize)
-        {
-            if *target >= at {
-                return false;
-            }
-            at = *target;
-        }
-        return dc_ok(img, nparams, at, Dc::Found);
+        return shadow_end(img, w).is_some_and(|at| dc_ok(img, nparams, at, Dc::Found));
     }
     // A specialization or member reference (S4b) names what its pattern
     // declares: a function template's pattern function, a class
