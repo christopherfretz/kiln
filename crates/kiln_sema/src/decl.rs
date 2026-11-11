@@ -3067,7 +3067,7 @@ impl Sema<'_, '_> {
     /// template pattern is not recorded: only its instantiations
     /// redeclare the entity ([temp.spec.general]/2; clang does not chain
     /// a dependent-context local extern, WP-330).
-    fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
+    pub(crate) fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
         if self.in_local_scope()
             && !self.in_template()
             && let Some(ns) = self.enclosing_namespace()
@@ -3167,7 +3167,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if !self.in_local_scope() || ds.storage.is_some() || d.ctx == DeclaratorContext::Condition {
+        // clang warns only in C++ (`warnAboutAmbiguousFunction`).
+        if !self.in_local_scope()
+            || ds.storage.is_some()
+            || d.ctx == DeclaratorContext::Condition
+            || self.is_c()
+        {
             return;
         }
         let parens = Span::new(*loc, rparen.with_offset(1));
@@ -4762,8 +4767,14 @@ impl Sema<'_, '_> {
                 } else {
                     self.prev_candidates_dn(dname, None)
                 };
-                let p = cands.into_iter().rev().find(|&x| {
-                    self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x)
+                let c_fn =
+                    |x: DeclId| self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x);
+                // Else one declared in another block, or implicitly ([6.2.7]/2;
+                // clang `findLocallyScopedExternCDecl`).
+                let ns = self.enclosing_namespace();
+                let p = cands.into_iter().rev().find(|&x| c_fn(x)).or_else(|| {
+                    let mut l = self.local_externs.iter().rev();
+                    l.find(|&&(n, s, x)| Some(n) == ns && s == name && c_fn(x)).map(|x| x.2)
                 });
                 extern_c_redecl |= p.is_some();
                 p
@@ -5174,6 +5185,17 @@ impl Sema<'_, '_> {
                         Some(info) => {
                             let loc = self.ast.decls.get(p).loc();
                             self.builtin_type_note(msg, &info, loc)
+                        }
+                        // clang `getNoteDiagForInvalidRedeclaration`.
+                        None if self.ast.decls.get(p).has(DeclFlags::IMPLICIT) && self.is_c() => {
+                            // The first of an implicit chain (clang's
+                            // locally scoped extern-C lookup).
+                            let f = self.ast.first(p);
+                            let f = if self.ast.decls.get(f).has(DeclFlags::IMPLICIT) { f } else { p };
+                            let l = self.ast.decls.get(f).loc();
+                            msg.with_note(
+                                self.diag(DiagId::note_previous_implicit_declaration, l),
+                            )
                         }
                         None => self.note_prev(msg, p, def),
                     };
@@ -6331,7 +6353,9 @@ impl Sema<'_, '_> {
         }
         let (proto, params, knr) = if an { (b, bp, ap) } else { (a, ap, bp) };
         let proto_ty = if an { ty } else { pty };
-        if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) {
+        // clang `MergeFunctionDecl`: not for an implicit declaration.
+        let implicit = an && self.ast.decls.get(p).has(DeclFlags::IMPLICIT);
+        if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) && !implicit {
             let pdef = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
             let (at, other, later, other_def) =
                 if an { (ploc, loc, 1, def) } else { (loc, ploc, 0, pdef) };

@@ -309,6 +309,7 @@ sema_unused_variable_template = WarningOff [UnusedTemplate] (1) "unused variable
 sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
 sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
 sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
+sema_use_out_of_scope_declaration = ExtWarn [OutOfScopeFunction] (2) "use of out-of-scope declaration of {0}{1:| whose type is not compatible with that of an implicit declaration}";
 sema_use_with_wrong_tag = Error (1) "use of '{0}' with tag type that does not match previous declaration";
 sema_user_literal_reserved = Warning [UserDefinedLiterals] (2) "user-defined literal suffixes {0:<ERROR>|not starting with '_'|containing '__'} are reserved{1:; no literal will invoke this operator|}";
 sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";

@@ -133,6 +133,7 @@ NullConversion = "null-conversion" [];
 NullDereference = "null-dereference" [];
 Nullability = "nullability" [];
 NullabilityDeclspec = "nullability-declspec" [];
+OutOfScopeFunction = "out-of-scope-function" [];
 OverloadedVirtual = "overloaded-virtual" [];
 PointerBoolConversion = "pointer-bool-conversion" [];
 PointerSign = "pointer-sign" [];
