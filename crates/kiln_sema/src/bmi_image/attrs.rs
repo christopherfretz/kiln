@@ -44,6 +44,9 @@ enum Op {
     Sym,
     /// `a` and `b` are each an expression or zero.
     Exprs,
+    /// `a` is an expression or zero, `b` zero (`aligned(E)`; the
+    /// `alignas(type-id)` form, a type in `b`, is not carried).
+    ExprA,
     /// `a` is a builtin id (written with its spelling), `b` zero.
     Builtin,
     /// `a` is a list of integer literals of type `size_t` (`nonnull`'s
@@ -136,6 +139,9 @@ const TABLE: &[(AttrKind, Op)] = &[
     (AttrKind::UNAVAILABLE, Op::Exprs),
     (AttrKind::REQUIRE_CONSTANT_INIT, FLAG),
     (AttrKind::NONNULL, Op::Ints),
+    // WP-1310: the alignment expression (`__attribute__((aligned(E)))`,
+    // `alignas(E)`), checked when it was written.
+    (AttrKind::ALIGNED, Op::ExprA),
     (AttrKind::ASM_LABEL, Op::Label),
 ];
 
@@ -151,7 +157,7 @@ pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
         Some(Op::Sym) => (node.a as usize) < nsyms && node.b == 0,
         Some(Op::Exprs) => true,
         Some(Op::Builtin) => node.b == 0 && builtin::info(node.a).is_some(),
-        Some(Op::Ints) => node.b == 0,
+        Some(Op::ExprA | Op::Ints) => node.b == 0,
         Some(Op::Label) => node.b == 0 && node.a != 0,
     }
 }
@@ -228,15 +234,23 @@ impl Writer<'_, '_, '_> {
         ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).all(|a| carried(ast.attrs.get(a), n))
     }
 
-    /// Whether `d`'s symbol (`cold.asm_label`) is the asm label written
-    /// on `d` itself, which its attribute record carries.
+    /// Whether `d`'s symbol (`cold.asm_label`, keyed by the first
+    /// declaration) is an asm label written on a declaration of `d`'s
+    /// entity, whose attribute record carries it. The writing
+    /// declaration may be a later one (glibc's `__REDIRECT` redeclares a
+    /// prototype with a label, WP-1310): it is in the image too, since a
+    /// redeclaration whose previous declaration is outside the image is
+    /// refused, and the reader re-keys its label on the first.
     pub(super) fn own_asm_label(&self, d: DeclId) -> bool {
         let ast = &self.s.ast;
         let Some(&lit) = ast.decls.cold.asm_label.get(d) else { return true };
-        ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).any(|a| {
-            let n = ast.attrs.get(a);
-            n.kind == AttrKind::ASM_LABEL && n.flags & 2 == 0 && n.a == lit.raw()
-        })
+        let own = |r: DeclId| {
+            ast.lists.iter::<AttrId>(ast.attrs.of_decl(r)).any(|a| {
+                let n = ast.attrs.get(a);
+                n.kind == AttrKind::ASM_LABEL && n.flags & 2 == 0 && n.a == lit.raw()
+            })
+        };
+        own(d) || (ast.decls.redecl(d).is_some() && ast.redecls_of(d).any(own))
     }
 
     fn attr_str(&mut self, s: &str) -> u32 {
@@ -296,7 +310,7 @@ impl Writer<'_, '_, '_> {
                     r.s = self.attr_str(&t);
                     r.a = 0;
                 }
-                Op::Exprs => {
+                Op::Exprs | Op::ExprA => {
                     exprs = [ExprId::try_new(node.a), ExprId::try_new(node.b)];
                     (r.a, r.b) = (NONE, NONE);
                 }
@@ -441,6 +455,7 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
                 Some(Op::Words(am, bm)) => r.a <= am && r.b <= bm && r.s == NONE,
                 Some(Op::Sym | Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
                 Some(Op::Exprs) => expr_ok(r.a) && expr_ok(r.b) && r.s == NONE,
+                Some(Op::ExprA) => expr_ok(r.a) && r.b == NONE && r.s == NONE,
                 Some(Op::Builtin) => r.b == 0 && spelled(r.s, r.a),
                 Some(Op::Ints) => {
                     r.s == NONE
@@ -499,7 +514,7 @@ impl Sema<'_, '_> {
             let syntax = syntax_of(r.syntax).unwrap_or_default();
             let (x, y) = match op_of(kind) {
                 Some(Op::Sym) => (self.intern(&a.strs[r.s as usize]).index(), 0),
-                Some(Op::Exprs) => (0, 0),
+                Some(Op::Exprs | Op::ExprA) => (0, 0),
                 Some(Op::Ints) => {
                     let ty = self.size_type();
                     let run = &a.ints[r.a as usize..r.a as usize + r.b as usize];
@@ -523,7 +538,7 @@ impl Sema<'_, '_> {
             };
             let id =
                 self.ast.attrs.push(AttrNode { kind, syntax, flags: r.flags, loc, a: x, b: y });
-            if op_of(kind) == Some(Op::Exprs) && (r.a != NONE || r.b != NONE) {
+            if matches!(op_of(kind), Some(Op::Exprs | Op::ExprA)) && (r.a != NONE || r.b != NONE) {
                 pending.push((id, r.a, r.b));
             }
             if r.name != NONE && loc.is_valid() {

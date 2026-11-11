@@ -783,6 +783,9 @@ pub struct Sema<'a, 'sm> {
     /// The type `__builtin_va_list` names (its typedef sugar; the `A` of
     /// a builtin signature), once declared.
     pub(crate) va_list_type: Option<QualType>,
+    /// The types of the implicit typedefs `__int128_t` and `__uint128_t`
+    /// ([`builtins::declare_int128_typedefs`]).
+    pub(crate) int128_typedefs: [Option<QualType>; 2],
     /// The typedefs and alias-declarations naming an ext vector type
     /// directly, in declaration order: an element access names its
     /// result through the first that matches (clang `ExtVectorDecls`).
@@ -1333,7 +1336,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
     ) -> Self {
         let tu = ast.tu;
         templ::builtins::declare_builtin_templates(&mut ast);
-        builtins::declare_int128_typedefs(&mut ast, &target);
+        let int128_typedefs = builtins::declare_int128_typedefs(&mut ast, &target);
         let size_t = QualType::unqual(target.size_t);
         let ptrdiff_t = QualType::unqual(target.ptrdiff_t);
         let mut s = Sema {
@@ -1474,6 +1477,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             pending_alias_vla: None,
             reverse_using_shadows: false,
             va_list_type: None,
+            int128_typedefs,
             ext_vector_typedefs: Vec::new(),
             splice_fast: 0,
             typeid_operands: Vec::new(),

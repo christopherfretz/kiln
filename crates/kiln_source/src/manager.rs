@@ -847,6 +847,23 @@ impl SourceManager {
         !self.file(file).line_directives.read().unwrap_or_else(PoisonError::into_inner).is_empty()
     }
 
+    /// The `#line` directives and line markers recorded in `file`
+    /// ([`add_line_directive`](Self::add_line_directive)), in offset
+    /// order: `(offset, presumed line, presumed name)`, the name `None`
+    /// for the buffer's own. Adding them again in order to a buffer with
+    /// the same text gives the same presumed locations.
+    pub fn line_directives(&self, file: FileId) -> Vec<(u32, u32, Option<String>)> {
+        let f = self.file(file);
+        let dirs = f.line_directives.read().unwrap_or_else(PoisonError::into_inner);
+        dirs.iter()
+            .map(|d| {
+                let name =
+                    d.name.and_then(|n| self.presumed_names.get(n)).map(|n| (**n).to_owned());
+                (d.offset, d.new_line, name)
+            })
+            .collect()
+    }
+
     /// The file-kind marks ([`set_file_kind`](Self::set_file_kind)) in the
     /// buffer range or inclusion range containing the file location
     /// `loc`, as `(offset in the range, kind)` in offset order.

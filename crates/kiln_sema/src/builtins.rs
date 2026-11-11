@@ -37,16 +37,21 @@ mod atomic;
 /// 64-bit targets). They are ordinary `Typedef` decls marked `IMPLICIT`,
 /// so a program's `typedef __int128 __int128_t;` redeclares them and
 /// `-ast-dump` skips them, as clang.
-pub(crate) fn declare_int128_typedefs(ast: &mut Ast, target: &TargetTypes) {
+/// Returns their typedef types (`None` on a target without them).
+pub(crate) fn declare_int128_typedefs(
+    ast: &mut Ast,
+    target: &TargetTypes,
+) -> [Option<QualType>; 2] {
     if target.pointer_bytes < 8 {
-        return;
+        return [None; 2];
     }
     let tu = ast.tu;
-    for (name, ty) in [("__int128_t", QualType::INT128), ("__uint128_t", QualType::UINT128)] {
+    [("__int128_t", QualType::INT128), ("__uint128_t", QualType::UINT128)].map(|(name, ty)| {
         let n = DeclName::ident(ast.symbols().intern(name));
         let h = DeclHead::new(tu, n, Loc::INVALID).flags(DeclFlags::IMPLICIT);
-        let _ = ast.builder().typedef(h, DeclKind::Typedef, ty, None);
-    }
+        let d = ast.builder().typedef(h, DeclKind::Typedef, ty, None);
+        Some(ast.types.typedef_type(d, ty).into())
+    })
 }
 
 impl Sema<'_, '_> {
@@ -62,6 +67,16 @@ impl Sema<'_, '_> {
     /// `__signed_size_t`, `__ptrdiff_t`).
     pub(crate) fn builtin_sugar(&self) -> [QualType; 3] {
         [self.size_t_sugar, self.signed_size_t_sugar, self.ptrdiff_t_sugar]
+    }
+
+    /// The implicit typedef types a declaration image names by index
+    /// (spec/modules.md "Types", `TyRec::Sugar`): [`Self::builtin_sugar`],
+    /// then `__int128_t`, `__uint128_t` and `__builtin_va_list` (WP-1310),
+    /// `None` where the target declares none. The importer names its own.
+    pub(crate) fn image_sugar(&self) -> [Option<QualType>; 6] {
+        let [a, b, c] = self.builtin_sugar();
+        let [i, u] = self.int128_typedefs;
+        [Some(a), Some(b), Some(c), i, u, self.va_list_type]
     }
 
     pub(crate) fn declare_size_t_sugar(&mut self) {
@@ -2946,6 +2961,10 @@ pub(crate) struct SrcLocCache {
     /// function), refined at the end of that function's body
     /// ([`Sema::finish_source_locs`]).
     deferred: Vec<(ExprId, DeclId)>,
+    /// A declaration image's default argument and member initializer
+    /// uses with values: (use, location, context, `__impl` object),
+    /// computed once the image is built (WP-1310).
+    pub(crate) image_uses: Vec<(ExprId, Loc, DeclId, bool)>,
 }
 
 /// The bit of `SourceLocKind::SourceLocStruct` in a kinds mask.
@@ -2981,6 +3000,38 @@ impl Sema<'_, '_> {
             self.mark_function_name_dependent(e, ctx);
         }
         e
+    }
+
+    /// The values of source-location builtin call `e` a declaration image
+    /// built (WP-1310), at its own location and context as
+    /// [`Self::act_on_source_loc_expr`] computed them. A
+    /// `__builtin_source_location()` finds `std::source_location::__impl`
+    /// first; the producer checked it, so its absence leaves no values.
+    pub(crate) fn image_source_loc(&mut self, e: ExprId) {
+        let kind = self.ast.exprs.source_loc_kind(e);
+        let ctx = self.ast.exprs.source_loc_context(e);
+        let loc = self.ast.exprs.get(e).loc();
+        self.image_source_loc_use(e, loc, ctx, kind == SourceLocKind::SourceLocStruct);
+    }
+
+    /// The values at a use `e` of a default argument or member
+    /// initializer holding a source-location builtin, at `loc` in
+    /// context `ctx` as the producer recorded them (WP-1310; `location`:
+    /// the `__impl` object too).
+    pub(crate) fn image_source_loc_use(
+        &mut self,
+        e: ExprId,
+        loc: Loc,
+        ctx: DeclId,
+        location: bool,
+    ) {
+        if location && self.srcloc.impl_decl.is_none() {
+            match self.lookup_source_location_impl() {
+                Some(d) if self.source_location_impl_ok(d) => self.srcloc.impl_decl = Some(d),
+                _ => return,
+            }
+        }
+        self.record_source_loc(e, loc, ctx, location);
     }
 
     /// The type `std::source_location::__impl`, spelled with its scope as
@@ -3104,6 +3155,8 @@ impl Sema<'_, '_> {
             line,
             column,
             location,
+            at: loc,
+            ctx,
         };
         let _ = self.ast.exprs.set_source_loc_values(e, v);
         if v.location.is_some()

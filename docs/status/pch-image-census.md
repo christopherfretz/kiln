@@ -594,3 +594,57 @@ replayed. The headers' first refusals move inward rather than flip:
 headers that passed it stop on "mem-initializers of a constructor in a
 class template" (3 → 9), "a declaration in a template" (30 → 34) or "a
 template expression" (16 → 19).
+
+## WP-1310: whole standard headers (2026-11-11)
+
+Debug build of the WP-1310 branch (main at `876dfe167`, IMAGE_VERSION 22);
+same two purviews and commands as the WP-1283 section. "before" is the
+WP-1307 section's "after" (the same main).
+
+```
+allstd, before: 26761 top-level declarations, 21441 carried, 5320 not
+allstd, after:  26761 top-level declarations, 21894 carried, 4867 not  (16.7 s, 128 MiB)
+stdcxx, before: 25287 top-level declarations, 21083 carried, 4204 not
+stdcxx, after:  25287 top-level declarations, 21462 carried, 3825 not  (16.9 s, 111 MiB)
+```
+
++453 / +379 carried. The wave is judged by the units that flip from
+replay to the image rather than by declarations, so it took the
+cascade roots that stop whole headers: attributed block-scope
+declarations, constructor mem-initializers in class templates,
+enumerations in class templates, parameters of an adjusted type, the
+`__int128_t` / `__uint128_t` / `__builtin_va_list` typedefs, `aligned`
+attributes, locations in the predefined buffers, builtin records that
+fall inside a class (an "internal image inconsistency" before), asm
+labels given on a later redeclaration (glibc's `__REDIRECT`), C
+linkage specifications in a namespace (a PCH only) and the
+source-location builtins (spec/modules.md §11.11).
+
+Whole headers carried, each built alone as a PCH under
+`-fkiln-pch-image -v` (the `pch.md` method):
+
+- libc++ 19 (118 extension-less headers): 17 → 32. New: `<cctype>`,
+  `<cinttypes>`, `<clocale>`, `<csetjmp>`, `<csignal>`, `<cstdarg>`,
+  `<cstddef>`, `<cstdio>`, `<cstdlib>`, `<cstring>`, `<ctime>`,
+  `<cwctype>`, `<initializer_list>`, `<source_location>`, `<typeinfo>`.
+- libstdc++ 14 (109 headers): 0 → 29 (`<cassert>` through `<version>`,
+  including `<limits>`, `<typeinfo>`, `<initializer_list>`,
+  `<source_location>`, `<cstdio>`, `<cwchar>`).
+- libc++ header-guard units (`tests/header-guard/libcxx`, 106) with no
+  refusal: 11 → 27 (`<cxxabi.h>` among them).
+
+First refusals of the headers still replayed: libc++ "a template
+expression" 34, "a defaulted comparison or an out-of-line defaulted
+function" 16, "a specialization of a template outside the image" 7;
+libstdc++ "a specialization type the image does not carry" 39, "an
+explicit specialization using a non-type default argument" 16, "a
+redeclaration of an entity outside the image" 12, "an explicit
+instantiation in a namespace outside the image" 10.
+
+Bench headers (`bench/pch/{gnu,mid,lcx}.h`), first refusal before →
+after: `gnu` "an invalid or attributed local declaration" → "an
+explicit specialization using a non-type default argument"; `mid` the
+same → the same as `gnu`; `lcx` "a template expression" → the same. All
+three still replay; `gnu` still has 3648 of 24591 declarations
+refused, so the next waves are needed before a bench case flips.
+

@@ -1505,6 +1505,11 @@ pub struct SourceLocValues {
     pub column: u32,
     /// `__builtin_source_location()`, when the use needs it.
     pub location: Option<ConstValueId>,
+    /// The location the values are for (a declaration image computes
+    /// them again from it and `ctx`, WP-1310).
+    pub at: Loc,
+    /// The declaration context the values are for.
+    pub ctx: DeclId,
 }
 
 /// The cold record of an `ArrayTypeTraitExpr` (§9.4).

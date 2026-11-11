@@ -369,6 +369,77 @@ fn local_externs_take_the_image() {
     }
 }
 
+/// Attributes on block-scope declarations ([dcl.attr.grammar]/5; the
+/// shape of libstdc++'s `std::__terminate`, a GNU-attributed block-scope
+/// redeclaration) and the mem-initializers of constructors of class
+/// templates as parsed ([class.base.init], [temp.inst]/4: members, a
+/// dependent base through a typedef, braced lists, delegation, a pack
+/// expansion, a constructor template, an out-of-line definition) are
+/// carried (WP-1310), and a referenced pattern leaves its template
+/// unreferenced as replay does.
+#[test]
+fn local_attributes_and_pattern_inits_are_carried() {
+    let d = scratch("wp1310");
+    let header = "\
+namespace s {
+void stop(int) noexcept;
+inline void call_stop(int c) noexcept {
+  void stop(int) noexcept __attribute__((__noreturn__, __cold__));
+  if (c) stop(c);
+}
+}
+inline int locals() { [[maybe_unused]] int a = 3; __attribute__((unused)) int b = 4; return a + b; }
+template <class T> struct Base { T b; Base(T x) : b(x) {} };
+template <class T> struct Iter {
+  T *p;
+  Iter() : p(nullptr) {}
+  explicit Iter(T *q) : p(q) {}
+  template <class U> Iter(const Iter<U> &o) : p(o.p) {}
+};
+template <class T> struct Der : Base<T> {
+  typedef Base<T> base_type;
+  int k, arr[2];
+  Der(T x) : base_type(x), k{3}, arr{1, 2} {}
+  Der() : Der(T(7)) {}
+};
+template <class... Bs> struct Multi : Bs... { Multi(int v) : Bs(v)... {} };
+struct B1 { int a; B1(int x) : a(x) {} };
+struct B2 { int c; B2(int x) : c(x + 1) {} };
+template <class T> struct Out { T v; Out(T); };
+template <class T> Out<T>::Out(T x) : v(x * 2) {}
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+void s::stop(int) noexcept { __builtin_abort(); }
+int main() {
+  int x = 4; s::call_stop(0);
+  Iter<int> a(&x); Iter<const int> b(a); Iter<int> z;
+  Der<int> d(5); Der<long> e; Multi<B1, B2> m(10); Out<int> o(3);
+  return *b.p + !z.p + d.b + d.k + d.arr[1] + int(e.b) + m.a + m.c + o.v + locals();
+}
+";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    let ir = same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    assert!(ir.stdout.contains("cold noreturn"), "{}", ir.stdout);
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+    // A mem-initializer that does not instantiate is diagnosed as replay
+    // diagnoses it.
+    std::fs::write(
+        d.join("b.cpp"),
+        "struct NC {};\nvoid f() { Out<NC> o(NC{}); Der<NC> d; Multi<B1> m; }\n",
+    )
+    .unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
+    assert!(o.stderr.contains("invalid operands to binary expression"), "{}", o.stderr);
+    assert!(o.stderr.contains("no matching constructor"), "{}", o.stderr);
+}
+
 /// `check` builds the image and replays, and finds them equal.
 #[test]
 fn check_runs_both() {
