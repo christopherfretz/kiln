@@ -558,6 +558,7 @@ fn run_in(
         Json::obj([
             ("label", Json::str(&label)),
             ("commit", commit.as_ref().map_or(Json::Null, Json::str)),
+            ("kiln_built_here", Json::Bool(opts.compiler.is_none())),
             ("cases", Json::obj(infos.iter().map(|(k, v)| (*k, v.to_json())))),
         ]),
     ));
@@ -583,6 +584,7 @@ fn run_in(
                 when: &record::human_time(now),
                 stamp: &stamp,
                 commit: commit.as_deref(),
+                built_here: opts.compiler.is_none(),
                 test: (&test.path.display().to_string(), &test.id.version),
                 oracle: (&oracle.path.display().to_string(), &oracle.id.version),
                 host: format!("{}, {} CPUs", cx.host.arch, cx.host.cpus),
@@ -746,7 +748,10 @@ pub struct RegionContext<'a> {
     pub label: &'a str,
     pub when: &'a str,
     pub stamp: &'a str,
+    /// `git rev-parse` of the harness's tree.
     pub commit: Option<&'a str>,
+    /// Whether the run built kiln from that tree (no `--compiler`).
+    pub built_here: bool,
     /// Path and `--version` line.
     pub test: (&'a str, &'a str),
     pub oracle: (&'a str, &'a str),
@@ -864,14 +869,18 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
         cx.stamp
     );
     let _ = writeln!(s);
-    let _ = writeln!(
-        s,
-        "- kiln: `{}` ({}), at commit {}.",
-        cx.test.1,
-        cx.test.0,
-        cx.commit.map_or_else(|| "unknown".to_owned(), |c| format!("`{c}`"))
-    );
-    let _ = writeln!(s, "- clang: `{}` ({}).", cx.oracle.1, cx.oracle.0);
+    let commit = cx.commit.map_or_else(|| "unknown".to_owned(), |c| format!("`{c}`"));
+    if cx.built_here {
+        let _ = writeln!(s, "- kiln: `{}`, the release build of commit {commit}.", cx.test.1);
+    } else {
+        let _ = writeln!(
+            s,
+            "- kiln: `{}`, given by `--compiler` (the label names its tree); the bench ran \
+             from commit {commit}.",
+            cx.test.1
+        );
+    }
+    let _ = writeln!(s, "- clang: `{}` (`{oracle_name}`).", cx.oracle.1);
     let _ = writeln!(
         s,
         "- Host {}. Each number is the median of {} runs: wall time in seconds, peak RSS in MiB \
