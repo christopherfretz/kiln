@@ -42,12 +42,15 @@ use crate::Sema;
 use crate::modules::Directive;
 
 mod body;
+mod locs;
 mod spec;
 
 use body::{Bodies, BodyState, Root};
+pub(crate) use locs::Locs;
+use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 11;
+pub(crate) const IMAGE_VERSION: u32 = 12;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -433,6 +436,10 @@ struct Image {
     /// The names (indices into `names`, ascending) of its declarations at
     /// global namespace scope: the preprocessor's gate ([`gated_names`]).
     gated: Vec<u32>,
+    /// S7: the buffers the image's locations are in (index 0: the main
+    /// file) and the location records ([`locs`]).
+    files: Vec<FileRec>,
+    slocs: Vec<SlocRec>,
     /// Parameter and local names (not gated).
     pnames: Vec<String>,
     types: Vec<TyRec>,
@@ -874,6 +881,44 @@ fn encode(img: &Image) -> Vec<u8> {
     w.len(img.gated.len());
     for &g in &img.gated {
         w.u32(g);
+    }
+    w.len(img.files.len());
+    for f in &img.files {
+        w.str(&f.name);
+        w.str(&f.path);
+        w.u32(f.len);
+        w.u64(f.hash);
+        w.u8(u8::from(f.system) | (u8::from(f.text.is_some()) << 1));
+        if let Some(t) = &f.text {
+            w.str(t);
+        }
+    }
+    w.len(img.slocs.len());
+    for s in &img.slocs {
+        match s {
+            SlocRec::File { file, from, marks } => {
+                w.u8(0);
+                w.u32(*file);
+                w.u32(*from);
+                w.len(marks.len());
+                for &(o, k) in marks {
+                    w.u32(o);
+                    w.u8(k);
+                }
+            }
+            SlocRec::Macro { spelling, len, exp, name } => {
+                w.u8(1);
+                for v in [*spelling, *len, exp[0], exp[1], name[0], name[1]] {
+                    w.u32(v);
+                }
+            }
+            SlocRec::Arg { spelling, len, exp } => {
+                w.u8(2);
+                for v in [*spelling, *len, exp[0], exp[1]] {
+                    w.u32(v);
+                }
+            }
+        }
     }
     w.len(img.pnames.len());
     for s in &img.pnames {
@@ -1346,6 +1391,50 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
     }
 }
 
+/// Decodes the file table and the location records (S7), and checks
+/// them ([`locs::validate`]).
+fn decode_locs(r: &mut Rd<'_>, img: &mut Image) -> Res<()> {
+    let n = r.count(21)?;
+    img.files = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (name, path, len, hash) = (r.str()?, r.str()?, r.u32()?, r.u64()?);
+        let flags = r.u8()?;
+        if flags > 3 {
+            return bad("bad file flags");
+        }
+        let text = if flags & 2 != 0 { Some(r.str()?) } else { None };
+        img.files.push(FileRec { name, path, len, hash, system: flags & 1 != 0, text });
+    }
+    let n = r.count(13)?;
+    img.slocs = Vec::with_capacity(n);
+    for _ in 0..n {
+        let s = match r.u8()? {
+            0 => {
+                let (file, from) = (r.u32()?, r.u32()?);
+                let m = r.count(5)?;
+                let mut marks = Vec::with_capacity(m);
+                for _ in 0..m {
+                    marks.push((r.u32()?, r.u8()?));
+                }
+                SlocRec::File { file, from, marks }
+            }
+            1 => SlocRec::Macro {
+                spelling: r.u32()?,
+                len: r.u32()?,
+                exp: [r.u32()?, r.u32()?],
+                name: [r.u32()?, r.u32()?],
+            },
+            2 => SlocRec::Arg { spelling: r.u32()?, len: r.u32()?, exp: [r.u32()?, r.u32()?] },
+            _ => return bad("bad location record"),
+        };
+        img.slocs.push(s);
+    }
+    match locs::validate(&img.files, &img.slocs) {
+        Ok(_) => Ok(()),
+        Err(why) => bad(why),
+    }
+}
+
 /// Decodes and validates an image. Total: any malformed input is an
 /// [`ImageError`]; an `Ok` image can be built without further checks
 /// other than its offsets against the main file's length.
@@ -1375,6 +1464,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                     _ => return bad("a gated name out of range"),
                 }
             }
+            decode_locs(&mut r, &mut img)?;
         } else {
             img.pnames = v;
         }
@@ -2176,6 +2266,8 @@ struct Head {
 struct Writer<'s, 'a, 'b> {
     s: &'s Sema<'a, 'b>,
     main: FileId,
+    /// S7: the file table and location records made so far.
+    lt: std::cell::RefCell<LocTable>,
     recs: FxHashMap<DeclId, u32>,
     names: FxHashMap<String, u32>,
     pnames: FxHashMap<String, u32>,
@@ -2244,15 +2336,9 @@ fn reserved(s: &str) -> bool {
 }
 
 impl Writer<'_, '_, '_> {
+    /// The image location of `l` (S7: [`locs`]).
     fn loc(&self, l: Loc) -> W<u32> {
-        if !l.is_valid() {
-            return Ok(NONE);
-        }
-        let sm = self.s.diags.sm();
-        match sm.offset_of(l) {
-            Some((f, o)) if f == self.main && sm.loc(f, o) == l && o < LEX_TU => Ok(o),
-            _ => Err("a declaration outside the module's main file or in a macro expansion"),
-        }
+        self.lt.borrow_mut().loc(self.s.diags.sm(), l)
     }
 
     fn name_ix(map: &mut FxHashMap<String, u32>, list: &mut Vec<String>, s: &str) -> u32 {
@@ -3336,7 +3422,11 @@ impl Writer<'_, '_, '_> {
             kind_gate(n.kind())?;
             self.cold_gate(d)?;
             let at = self.loc(n.loc())?;
-            if self.img.preamble != NONE && at != NONE && at < self.img.preamble {
+            let main_at = locs::main_pos(sm, self.main, n.loc());
+            if self.img.preamble != NONE
+                && at != NONE
+                && main_at.is_none_or(|p| p < self.img.preamble)
+            {
                 // Before the preamble's end: the importer replays it.
                 return Err("a declaration before the module's last import");
             }
@@ -3523,9 +3613,14 @@ impl Sema<'_, '_> {
         let Some((main, _)) = sm.offset_of(kw_loc) else {
             return none("a module declaration outside a file");
         };
+        let lt = match LocTable::new(sm, main) {
+            Ok(lt) => lt,
+            Err(why) => return none(why),
+        };
         let mut w = Writer {
             s: self,
             main,
+            lt: std::cell::RefCell::new(lt),
             recs: FxHashMap::default(),
             names: FxHashMap::default(),
             pnames: FxHashMap::default(),
@@ -3539,6 +3634,7 @@ impl Sema<'_, '_> {
         if let Err(why) = w.collect() {
             return none(why);
         }
+        (w.img.files, w.img.slocs) = w.lt.into_inner().finish();
         w.img.gated = gated_names(&w.img);
         let decls = w.img.decls.len();
         let bytes = encode(&w.img);
@@ -3552,18 +3648,19 @@ impl Sema<'_, '_> {
     }
 
     /// Builds the unit just begun from the declaration image `bytes` of
-    /// module file `path`, whose main file the preprocessor loaded as
-    /// `main` (spec/modules.md §11.11 "Part 2a"). A malformed image is
-    /// the module file's corrupt-file fatal error at `at`, and nothing is
-    /// built.
+    /// module file `path`, whose file table the preprocessor loaded as
+    /// `files` (index 0: the main file; spec/modules.md §11.11 "Part 2a",
+    /// "File table"). A malformed image is the module file's corrupt-file
+    /// fatal error at `at`, and nothing is built.
     pub fn load_module_image(
         &mut self,
         path: &str,
         bytes: &[u8],
-        main: FileId,
+        files: &[FileId],
         at: Loc,
         after_preamble: bool,
     ) {
+        let Some(&main) = files.first() else { return };
         let len = self.diags.sm().text(main).len();
         let key = self.module_current_key().to_owned();
         let checked = decode(bytes).and_then(|img| {
@@ -3576,7 +3673,13 @@ impl Sema<'_, '_> {
             if after_preamble && (key != img.module || img.preamble as usize > len) {
                 return bad("a preamble that does not enter the image's unit");
             }
-            let off_ok = |o: u32| o == NONE || (o as usize) <= len;
+            let Ok(bases) = locs::validate(&img.files, &img.slocs) else {
+                return bad("bad location records");
+            };
+            if files.len() != img.files.len() {
+                return bad("a file table the importer did not load");
+            }
+            let off_ok = |o: u32| Locs::in_space(&bases, &img.files, &img.slocs, o);
             let mut offs = vec![img.kw, img.name_loc];
             for d in &img.decls {
                 offs.push(d.loc);
@@ -3602,10 +3705,13 @@ impl Sema<'_, '_> {
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
-            Ok(img)
+            match Locs::build(self.diags.sm(), &img.files, &img.slocs, &bases, files) {
+                Ok(m) => Ok((img, m)),
+                Err(why) => bad(why),
+            }
         });
         match checked {
-            Ok(img) => self.build_image(&img, main),
+            Ok((img, m)) => self.build_image(&img, &m),
             Err(ImageError(why)) => {
                 kiln_diag::Diag::new(
                     kiln_diag::DiagId::pp_module_file_corrupt,
@@ -3619,9 +3725,8 @@ impl Sema<'_, '_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
-    fn build_image(&mut self, img: &Image, main: FileId) {
-        let lo =
-            |s: &Self, o: u32| if o == NONE { Loc::INVALID } else { s.diags.sm().loc(main, o) };
+    fn build_image(&mut self, img: &Image, main: &Locs) {
+        let lo = |_: &Self, o: u32| main.get(o);
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
         if img.preamble == NONE {
             self.act_on_module_directive(
@@ -4302,6 +4407,15 @@ mod tests {
         let int = BuiltinType::Int as u32;
         Image {
             main: "m.cppm".into(),
+            files: vec![FileRec {
+                name: "m.cppm".into(),
+                path: "/m.cppm".into(),
+                len: 4096,
+                hash: 0,
+                system: false,
+                text: None,
+            }],
+            slocs: vec![SlocRec::File { file: 0, from: NONE, marks: Vec::new() }],
             module: "m".into(),
             kw: 0,
             name_loc: 7,

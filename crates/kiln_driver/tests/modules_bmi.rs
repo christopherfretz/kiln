@@ -622,7 +622,7 @@ fn kind2_declaration_image() {
     // importer that does not replay it still compiles.
     let mut c = bmi::read(&good).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
     ok(&d, &["-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
     let o = kiln(&d, &["-fsyntax-only", "-fmodule-file=im=blank.pcm", "u.cpp"]);
@@ -661,7 +661,7 @@ fn kind2_declaration_image_bodies() {
     ok(&d, &["-c", "b.pcm", "-o", "b.o"]);
     let mut c = bmi::read(&good).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join("blank.pcm"), bmi::write(&c)).unwrap();
     ok(&d, &["-fkiln-bmi-image", "-fmodule-file=b=blank.pcm", "u.cpp", "b.o", "-o", "u"]);
     assert!(Command::new(d.join("u")).status().unwrap().success(), "program from the image");
@@ -673,7 +673,7 @@ fn blank_source(d: &Path, pcm: &str, out: &str) {
     use kiln_pp::bmi;
     let mut c = bmi::read(&std::fs::read(d.join(pcm)).unwrap()).unwrap();
     let text = &mut c.files[0].text;
-    *text = text.chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    *text = text.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     std::fs::write(d.join(out), bmi::write(&c)).unwrap();
 }
 
@@ -685,7 +685,7 @@ fn blank_after_preamble(d: &Path, pcm: &str, out: &str) {
     let img = c.sections.iter().find(|s| s.tag == bmi::SECTION_IMAGE).expect("an image");
     let p = bmi::image_header(&img.bytes).unwrap().preamble.expect("a preamble") as usize;
     let text = &mut c.files[0].text;
-    let rest: String = text[p..].chars().map(|ch| if ch == '\n' { '\n' } else { ' ' }).collect();
+    let rest: String = text[p..].bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }).collect();
     text.truncate(p);
     text.push_str(&rest);
     std::fs::write(d.join(out), bmi::write(&c)).unwrap();
@@ -1418,8 +1418,8 @@ fn kind2_declaration_image_fallback() {
             "a try block",
         ),
         (
-            "export module f;\n#define ONE 1\nexport constexpr int g() { return ONE; }\n",
-            "in a macro expansion",
+            "export module f;\n#line 40 \"other.h\"\nexport constexpr int g() { return 1; }\n",
+            "a file with #line directives or line markers",
         ),
         (
             "export module f;\nexport template <class T> struct S { virtual T f() const { return T(); } };\n",

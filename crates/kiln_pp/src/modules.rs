@@ -900,15 +900,27 @@ impl Preprocessor<'_, '_> {
             self.log_image(key, Some("it imports other units".to_owned()));
             return Some(c);
         }
-        self.log_image(key, None);
-        let carried = take_carried(path, &mut c);
-        let main = c.files.swap_remove(0);
-        drop(c);
-        let Some(main_file) = self.load_recorded(&main.path, main.text) else {
+        let (main_path, main_text) = (c.files[0].path.clone(), c.files[0].text.clone());
+        let Some(main_file) = self.load_recorded(&main_path, main_text) else {
             self.emit(Diag::new(DiagId::pp_module_file_not_found, span).arg(path));
             return None;
         };
-        let image = Rc::new(bmi::ImageSection { path: path.to_owned(), bytes, main_file });
+        // S7: the image's other files, without reading them; one that
+        // changed replays (§11.11 "File table").
+        let files = match bmi::image_header(&bytes) {
+            Some(h) => match self.image_files(path, &h.files, main_file) {
+                Ok(files) => files,
+                Err(why) => {
+                    self.log_image(key, Some(why));
+                    return Some(c);
+                }
+            },
+            None => vec![main_file],
+        };
+        self.log_image(key, None);
+        let carried = take_carried(path, &mut c);
+        drop(c);
+        let image = Rc::new(bmi::ImageSection { path: path.to_owned(), bytes, files });
         let Some(m) = &mut self.modules else { return None };
         m.built.insert(key.to_owned(), Vec::new());
         self.queue(Marker::UnitBegin {
@@ -964,7 +976,8 @@ impl Preprocessor<'_, '_> {
         let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
         let Some(stop) = f.image_stop.take() else { return false };
         let open = !f.conds.is_empty();
-        let why = if open {
+        let main = f.file;
+        let mut why = if open {
             Some("its preamble ends in a conditional".to_owned())
         } else {
             stop.gated
@@ -972,6 +985,15 @@ impl Preprocessor<'_, '_> {
                 .find(|n| self.name_seen(n))
                 .map(|n| format!("its image declares '{n}', already seen"))
         };
+        let mut files = vec![main];
+        if why.is_none()
+            && let Some(h) = bmi::image_header(&stop.bytes)
+        {
+            match self.image_files(&stop.path, &h.files, main) {
+                Ok(v) => files = v,
+                Err(w) => why = Some(w),
+            }
+        }
         if let Some(why) = why {
             self.log_image(&stop.key, Some(why));
             let interner = self.interner;
@@ -996,8 +1018,7 @@ impl Preprocessor<'_, '_> {
         self.see_gated(&stop.gated);
         self.log_image(&stop.key, None);
         let Some(Frame::File(f)) = self.frames.last_mut() else { return false };
-        let image =
-            Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, main_file: f.file });
+        let image = Rc::new(bmi::ImageSection { path: stop.path, bytes: stop.bytes, files });
         f.image_done = Some((image, stop.span));
         true
     }
@@ -1009,6 +1030,53 @@ impl Preprocessor<'_, '_> {
     fn name_seen(&self, n: &str) -> bool {
         let Some(g) = &self.name_gate else { return true };
         self.interner.get(n).is_some_and(|s| g.seen(s))
+    }
+
+    /// S7: the buffers of the file table `files` of the image of module
+    /// file `path`, whose entry 0 is the unit's main file, loaded as
+    /// `main` (spec/modules.md §11.11 "File table"). An in-memory entry
+    /// becomes a buffer with its text; a file the importer has loaded must
+    /// hold the recorded text; any other becomes a lazy buffer, read only
+    /// when a diagnostic needs it, with the module file's copy as its
+    /// fallback. `Err` is why the unit replays instead: a file that is
+    /// missing or changed size, or a loaded one with other text.
+    fn image_files(
+        &self,
+        path: &str,
+        files: &[bmi::ImageFile<'_>],
+        main: FileId,
+    ) -> Result<Vec<FileId>, String> {
+        use kiln_source::{LazyCopy, LazyFile};
+        let changed = |n: &str| format!("'{n}' changed since the module file was built");
+        let mut ids = Vec::with_capacity(files.len());
+        for (i, f) in files.iter().enumerate() {
+            if i == 0 {
+                // The unit's own text is the module file's recorded copy,
+                // as replay shows it.
+                ids.push(main);
+                continue;
+            }
+            let id = if let Some(t) = f.text {
+                self.sm.add_virtual(f.name, t.to_owned()).map_err(|e| e.to_string())?
+            } else {
+                let (mp, name) = (path.to_owned(), f.name.to_owned());
+                let copy: LazyCopy = Box::new(move || {
+                    let c = bmi::read_file(Path::new(&mp)).ok()?;
+                    c.files.into_iter().find(|c| c.path == name).map(|c| c.text)
+                });
+                match self.sm.add_lazy_file(f.name, Path::new(f.path), f.len, f.hash, Some(copy)) {
+                    LazyFile::Added(id) => id,
+                    LazyFile::Loaded(id) if self.sm.same_content(id, f.len, f.hash) => id,
+                    LazyFile::Loaded(_) | LazyFile::Changed => return Err(changed(f.name)),
+                    LazyFile::Missing => return Err(format!("'{}' is missing", f.name)),
+                    LazyFile::Exhausted => {
+                        return Err(kiln_source::LocSpaceExhausted.to_string());
+                    }
+                }
+            };
+            ids.push(id);
+        }
+        Ok(ids)
     }
 
     fn log_image(&mut self, key: &str, replayed: Option<String>) {

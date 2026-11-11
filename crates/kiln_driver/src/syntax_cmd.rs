@@ -254,6 +254,7 @@ impl SyntaxJob<'_> {
         }
         drop(pp);
         result.dep_list = deps;
+        job.note_lazy_buffers(sm, engine);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let mut err = job.stderr.clone();
         a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);

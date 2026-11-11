@@ -219,9 +219,11 @@ pub struct ImageSection {
     pub path: String,
     /// The [`SECTION_IMAGE`] bytes (moved out of the capsule).
     pub bytes: Vec<u8>,
-    /// The unit's main file, loaded as the replay loads it (§11.2): the
-    /// image's locations are offsets into it.
-    pub main_file: kiln_source::FileId,
+    /// The buffers of the image's file table (§11.11 "File table"), in
+    /// table order: index 0 is the unit's main file, loaded as the replay
+    /// loads it (§11.2); the others are lazy buffers, in-memory buffers,
+    /// or files the importer had loaded with the recorded text.
+    pub files: Vec<kiln_source::FileId>,
 }
 
 /// One kind-2 section: a tag and its bytes, which this crate does not
@@ -419,6 +421,26 @@ pub struct ImageHeader<'a> {
     pub preamble: Option<u32>,
     /// The gated names.
     pub gated: Vec<&'a str>,
+    /// S7: the file table (index 0: the main file).
+    pub files: Vec<ImageFile<'a>>,
+}
+
+/// One entry of an image's file table (spec/modules.md §11.11 "File
+/// table").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageFile<'a> {
+    /// The buffer's name, as diagnostics print it.
+    pub name: &'a str,
+    /// Its absolute path when it was built (empty for an in-memory buffer).
+    pub path: &'a str,
+    /// The decoded text's length.
+    pub len: u32,
+    /// The text's [`checksum`] (`kiln_source::hash::content_hash`).
+    pub hash: u64,
+    /// It was entered as a system header.
+    pub system: bool,
+    /// An in-memory buffer's text.
+    pub text: Option<&'a str>,
 }
 
 /// The main file path, the preamble and the gated names an image section
@@ -458,7 +480,21 @@ pub fn image_header(bytes: &[u8]) -> Option<ImageHeader<'_>> {
     let gated = (0..g)
         .map(|_| names.get(u32_at(&mut at)? as usize).copied())
         .collect::<Option<Vec<_>>>()?;
-    Some(ImageHeader { main, preamble, gated })
+    let nf = u32_at(&mut at)? as usize;
+    if nf.saturating_mul(21) > bytes.len() - at {
+        return None;
+    }
+    let mut files = Vec::with_capacity(nf);
+    for _ in 0..nf {
+        let (name, path, len) = (str_at(&mut at)?, str_at(&mut at)?, u32_at(&mut at)?);
+        let lo = u64::from(u32_at(&mut at)?);
+        let hash = lo | (u64::from(u32_at(&mut at)?) << 32);
+        let flags = *bytes.get(at)?;
+        at += 1;
+        let text = if flags & 2 != 0 { Some(str_at(&mut at)?) } else { None };
+        files.push(ImageFile { name, path, len, hash, system: flags & 1 != 0, text });
+    }
+    Some(ImageHeader { main, preamble, gated, files })
 }
 
 /// Sniffs the file at `path`, reading at most 8 bytes.

@@ -812,6 +812,22 @@ impl SourceManager {
             .collect()
     }
 
+    /// True if `file`'s text has length `len` and [`content_hash`]
+    /// `hash`. A lazy buffer not read yet is compared by what it was
+    /// recorded with, without reading it.
+    pub fn same_content(&self, file: FileId, len: u32, hash: u64) -> bool {
+        let f = self.file(file);
+        if f.len != len {
+            return false;
+        }
+        if let Origin::Lazy { hash: h, .. } = &f.origin
+            && f.body.get().is_none()
+        {
+            return *h == hash;
+        }
+        f.available() && content_hash(f.text().as_bytes()) == hash
+    }
+
     /// The buffer of the file at `path`, if it is loaded (identified as
     /// [`load_file`](Self::load_file) identifies it), without reading it.
     pub fn loaded_file(&self, path: &Path) -> Option<FileId> {
