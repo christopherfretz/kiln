@@ -102,8 +102,11 @@ impl Sema<'_, '_> {
                         .arg(tag as u8);
                     self.emit(msg.per_instantiation());
                 }
-                let msg = self.diag(DiagId::sema_c99_flexible_array_member, n.loc());
-                self.emit(msg.per_instantiation());
+                // C99 6.7.2.1p16: standard in C99 and later.
+                if !self.c_at_least(kiln_lex::CStd::C99) {
+                    let msg = self.diag(DiagId::sema_c99_flexible_array_member, n.loc());
+                    self.emit(msg.per_instantiation());
+                }
                 let elem = self.base_element(ty);
                 if !self.is_dependent_type(elem) && self.is_destructed_type(elem) {
                     let msg = self

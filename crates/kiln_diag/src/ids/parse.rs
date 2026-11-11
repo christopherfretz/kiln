@@ -26,6 +26,7 @@ parse_c11_noreturn = Extension [C11Extensions] (0) "'_Noreturn' is a C11 extensi
 parse_c2y_generic_with_type_arg = Extension [C2yExtensions] (0) "passing a type argument as the first operand to '_Generic' is a C2y extension";
 parse_c99_array_usage_cxx = Error (1) "{0:qualifier in|static} array size is a C99 feature, not permitted in C++";
 parse_c99_complex = Extension [C99Extensions] (0) "'_Complex' is a C99 extension";
+parse_c_empty_initializer = Extension [C23Extensions] (0) "use of an empty initializer is a C23 extension";
 parse_capture_default_first = Error (0) "capture default must be first";
 parse_class_on_template_template_param = Error (1) "template template parameter requires {0} after the parameter list";
 parse_concept_has_constraints = Error (0) "concept cannot have associated constraints";

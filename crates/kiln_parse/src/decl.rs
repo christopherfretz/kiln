@@ -5050,6 +5050,12 @@ impl Parser<'_, '_> {
             return Err(());
         }
         let lbrace = self.bump().span.lo;
+        // C23 6.7.10p1: `{}` is an initializer from C23 on (clang
+        // `ext_c_empty_initializer`, in `ParseBraceInitializer`).
+        if self.s.is_c() && self.at(Punct::RBrace) && !self.s.c_at_least(kiln_lex::CStd::C23) {
+            let d = self.s.diag(DiagId::parse_c_empty_initializer, lbrace);
+            self.emit(d);
+        }
         let mut items = Vec::new();
         let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {
