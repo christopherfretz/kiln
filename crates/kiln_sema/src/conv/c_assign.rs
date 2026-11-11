@@ -361,7 +361,40 @@ fn error(
     }
     let mut err = ConvError::new(id, args);
     err.range = Some(s.expr_range(e));
+    if let Some(op @ ("1" | "2")) = hint {
+        err.fixits = insertion_fixits(s, e, if op == "1" { "*" } else { "&" });
+    }
     err
+}
+
+/// clang's `tryToFixConversion` insertions: `op` before `e`, wrapped in
+/// parentheses unless `e` (implicit casts stripped) is a postfix, primary,
+/// cast or unary expression.
+fn insertion_fixits(s: &Sema<'_, '_>, e: ExprId, op: &str) -> Vec<kiln_diag::FixIt> {
+    let mut inner = e;
+    for _ in 0..256 {
+        if s.ast.exprs.get(inner).kind() != ExprKind::ImplicitCastExpr {
+            break;
+        }
+        inner = s.ast.exprs.operand(inner);
+    }
+    let begin = s.begin_loc(e);
+    let bare = matches!(
+        s.ast.exprs.get(inner).kind(),
+        ExprKind::ArraySubscriptExpr
+            | ExprKind::CallExpr
+            | ExprKind::DeclRefExpr
+            | ExprKind::MemberExpr
+            | ExprKind::ParenExpr
+            | ExprKind::UnaryOperator
+            | ExprKind::CStyleCastExpr
+    );
+    if bare {
+        return vec![kiln_diag::FixIt::insert(begin, op)];
+    }
+    let last = s.expr_end_loc(e);
+    let end = s.token_end(last).unwrap_or(last);
+    vec![kiln_diag::FixIt::insert(begin, format!("{op}(")), kiln_diag::FixIt::insert(end, ")")]
 }
 
 /// [`super::implicit_convert`] in C for the cases 6.5.16.1 constrains:
@@ -412,7 +445,7 @@ pub(crate) fn convert(
             let x = decay(s, e);
             let x = cast_to(s, CastKind::NullToPointer, x, to, None);
             if !literal {
-                let at = s.begin_loc(e);
+                let at = s.ast.exprs.get(e).loc();
                 let d = s.diag(DiagId::sema_c_non_literal_null, at).arg(s.ty_arg(to));
                 let d = d.range(s.expr_range(e));
                 s.emit(d);
