@@ -141,6 +141,23 @@ fn lowering(name: &str) -> Option<(&'static str, T, &'static [T])> {
         // byte vector.
         "vqtbl1_v" => ("llvm.aarch64.neon.tbl1.v8i8", T::V(E::I8, 8), &[B16, T::V(E::I8, 8)]),
         "vqtbl1q_v" => ("llvm.aarch64.neon.tbl1.v16i8", B16, &[B16, B16]),
+        // The two- to four-register lookups and the lookups with a
+        // fallback `vqtbx` (WP-1288): the tables are `<16 x i8>` each,
+        // the index (and fallback) as wide as the result.
+        "vqtbl2_v" => ("llvm.aarch64.neon.tbl2.v8i8", B8I, &[B16, B16, B8I]),
+        "vqtbl2q_v" => ("llvm.aarch64.neon.tbl2.v16i8", B16, &[B16, B16, B16]),
+        "vqtbl3_v" => ("llvm.aarch64.neon.tbl3.v8i8", B8I, &[B16, B16, B16, B8I]),
+        "vqtbl3q_v" => ("llvm.aarch64.neon.tbl3.v16i8", B16, &[B16, B16, B16, B16]),
+        "vqtbl4_v" => ("llvm.aarch64.neon.tbl4.v8i8", B8I, &[B16, B16, B16, B16, B8I]),
+        "vqtbl4q_v" => ("llvm.aarch64.neon.tbl4.v16i8", B16, &[B16, B16, B16, B16, B16]),
+        "vqtbx1_v" => ("llvm.aarch64.neon.tbx1.v8i8", B8I, &[B8I, B16, B8I]),
+        "vqtbx1q_v" => ("llvm.aarch64.neon.tbx1.v16i8", B16, &[B16, B16, B16]),
+        "vqtbx2_v" => ("llvm.aarch64.neon.tbx2.v8i8", B8I, &[B8I, B16, B16, B8I]),
+        "vqtbx2q_v" => ("llvm.aarch64.neon.tbx2.v16i8", B16, &[B16, B16, B16, B16]),
+        "vqtbx3_v" => ("llvm.aarch64.neon.tbx3.v8i8", B8I, &[B8I, B16, B16, B16, B8I]),
+        "vqtbx3q_v" => ("llvm.aarch64.neon.tbx3.v16i8", B16, &[B16, B16, B16, B16, B16]),
+        "vqtbx4_v" => ("llvm.aarch64.neon.tbx4.v8i8", B8I, &[B8I, B16, B16, B16, B16, B8I]),
+        "vqtbx4q_v" => ("llvm.aarch64.neon.tbx4.v16i8", B16, &[B16, B16, B16, B16, B16, B16]),
         // The dot products (WP-803; clang `EmitCommonNeonBuiltinExpr`'s
         // `vdot` case): overloaded on the accumulator and the byte vector.
         "vdot_s32" => ("llvm.aarch64.neon.sdot.v2i32.v8i8", I2, &[I2, B8I, B8I]),
@@ -303,9 +320,16 @@ enum Shape {
     /// `vcvt{n,a,m,p}[q]_{s,u}{32,64}_v` (operand `v`; WP-803):
     /// `fcvt{n,a,m,p}{s,u}.VTy.FTy(bitcast v to FTy)`.
     CvtR(u8),
-    /// `vtbl1_v`, `vtbl2_v` (operands `t0`[, `t1`], `i`; WP-803):
-    /// `tbl1.v8i8(shuffle t0, t1 or zero, i)`.
+    /// `vtbl{1,2,3,4}_v` (operands `t0`..`t{k-1}`, `i`; WP-803, WP-1288):
+    /// `tbl{P}.v8i8(pairs, i)`, the 64-bit tables concatenated in pairs
+    /// (the last padded with zero; clang `packTBLDVectorList`).
     Tbl(u8),
+    /// `vtbx{1,2,3,4}_v` (operands `a`, `t0`..`t{k-1}`, `i`; WP-1288;
+    /// clang `EmitAArch64TblBuiltinExpr`): for an even `k`,
+    /// `tbx{k/2}.v8i8(a, pairs, i)`; for an odd `k`, the `tbl` of the
+    /// padded pairs, with `a`'s byte where `i >= 8k` (an `and`/`or`
+    /// select by `sext (icmp uge i, 8k)`).
+    Tbx(u8),
     /// `vqmovun_v` (operand `v`; WP-803): as [`Shape::QMovn`] with
     /// `sqxtun`.
     QMovun,
@@ -495,6 +519,7 @@ impl Shape {
             Shape::CvtR(_) => 2,
             Shape::Ld1Lane | Shape::St1Lane | Shape::Ext | Shape::Perm(_) => 4,
             Shape::Tbl(k) => k as usize + 2,
+            Shape::Tbx(k) => k as usize + 3,
         }
     }
 
@@ -526,7 +551,10 @@ impl Shape {
             Shape::ShlCall { .. } => &[1, 2],
             Shape::CvtR(_) => &[1],
             Shape::Padal | Shape::Tbl(1) => &[2],
-            Shape::Tbl(_) => &[3],
+            Shape::Tbl(2) | Shape::Tbx(1) => &[3],
+            Shape::Tbl(3) | Shape::Tbx(2) => &[4],
+            Shape::Tbl(_) | Shape::Tbx(3) => &[5],
+            Shape::Tbx(_) => &[6],
             Shape::Sra | Shape::Sri | Shape::Sli => &[2, 3],
             Shape::FmaLane { .. } => &[3, 4],
             Shape::Perm(_) => &[3],
@@ -602,6 +630,12 @@ fn shape(name: &str) -> Option<Shape> {
             "vmull" if n.ends_with("_v") => Some(Shape::Mull),
             "vtbl1" if n.ends_with("_v") => Some(Shape::Tbl(1)),
             "vtbl2" if n.ends_with("_v") => Some(Shape::Tbl(2)),
+            "vtbl3" if n.ends_with("_v") => Some(Shape::Tbl(3)),
+            "vtbl4" if n.ends_with("_v") => Some(Shape::Tbl(4)),
+            "vtbx1" if n.ends_with("_v") => Some(Shape::Tbx(1)),
+            "vtbx2" if n.ends_with("_v") => Some(Shape::Tbx(2)),
+            "vtbx3" if n.ends_with("_v") => Some(Shape::Tbx(3)),
+            "vtbx4" if n.ends_with("_v") => Some(Shape::Tbx(4)),
             "vqrshrn_n" if n.ends_with("_v") => Some(Shape::QShrnN {
                 s: "llvm.aarch64.neon.sqrshrn",
                 u: "llvm.aarch64.neon.uqrshrn",
@@ -1244,30 +1278,75 @@ impl Cg<'_> {
                 let rty = self.lty(ast.exprs.get(e).ty());
                 Some(self.neon_bitcast(r, vt, rty, e)?)
             }
-            Shape::Tbl(k) => {
+            Shape::Tbl(k) | Shape::Tbx(k) => {
                 if elt != E::I8 || n != 8 {
                     return err(self.loc_of(e), format!("invalid type code for {name}"));
                 }
-                let t0 = self.emit_scalar(args[0])?;
-                let t0 = self.neon_as(t0, vt, args[0])?;
-                let t1 = if k == 2 {
-                    let t1 = self.emit_scalar(args[1])?;
-                    self.neon_as(t1, vt, args[1])?
+                let tbx = matches!(s, Shape::Tbx(_));
+                let first = usize::from(tbx);
+                let a = if tbx {
+                    let a = self.emit_scalar(args[0])?;
+                    Some(self.neon_as(a, vt, args[0])?)
                 } else {
-                    V::C(self.m.const_zero(vt))
+                    None
                 };
-                let ix = usize::from(k);
+                let k = usize::from(k);
+                let mut tables = Vec::with_capacity(k);
+                for &t in &args[first..first + k] {
+                    let v = self.emit_scalar(t)?;
+                    tables.push(self.neon_as(v, vt, t)?);
+                }
+                let ix = first + k;
                 let i = self.emit_scalar(args[ix])?;
                 let i = self.neon_as(i, vt, args[ix])?;
-                let t = self.shuffle(t0, Some(t1), (0..16).collect());
+                // clang `packTBLDVectorList`: each pair as one 128-bit
+                // table, an odd last one beside zero.
+                let mut pairs = Vec::with_capacity(k.div_ceil(2));
+                for c in tables.chunks(2) {
+                    let hi = match c.get(1) {
+                        Some(&t1) => t1,
+                        None => V::C(self.m.const_zero(vt)),
+                    };
+                    pairs.push(self.shuffle(c[0], Some(hi), (0..16).collect()));
+                }
                 let tt = self.neon_ty(T::V(E::I8, 16));
-                let f = intrinsics::target_nomem(
-                    &mut self.m,
-                    "llvm.aarch64.neon.tbl1.v8i8",
-                    vt,
-                    &[tt, vt],
-                );
-                Some(self.intrinsic_call(f, vec![t, i]))
+                let np = pairs.len();
+                if let Some(a) = a
+                    && k % 2 == 0
+                {
+                    let full = format!("llvm.aarch64.neon.tbx{np}.v8i8");
+                    let mut ps = vec![vt];
+                    ps.extend(std::iter::repeat_n(tt, np));
+                    ps.push(vt);
+                    let f = intrinsics::target_nomem(&mut self.m, &full, vt, &ps);
+                    let mut vals = vec![a];
+                    vals.extend(pairs);
+                    vals.push(i);
+                    Some(self.intrinsic_call(f, vals))
+                } else {
+                    let full = format!("llvm.aarch64.neon.tbl{np}.v8i8");
+                    let mut ps: Vec<LTy> = std::iter::repeat_n(tt, np).collect();
+                    ps.push(vt);
+                    let f = intrinsics::target_nomem(&mut self.m, &full, vt, &ps);
+                    let mut vals = pairs;
+                    vals.push(i);
+                    let r = self.intrinsic_call(f, vals);
+                    match a {
+                        None => Some(r),
+                        Some(a) => {
+                            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                            let lim = (8 * k) as i128;
+                            let bound = self.neon_splat(et, n, lim, e, name)?;
+                            let c = self.icmp(IntPredicate::Uge, i, bound);
+                            let m = self.cast(CastOp::SExt, c, vt);
+                            let ones = self.neon_splat(et, n, -1, e, name)?;
+                            let x = self.bin(BinOp::And, Flags::NONE, m, a);
+                            let not = self.bin(BinOp::Xor, Flags::NONE, m, ones);
+                            let y = self.bin(BinOp::And, Flags::NONE, not, r);
+                            Some(self.bin(BinOp::Or, Flags::NONE, x, y))
+                        }
+                    }
+                }
             }
             Shape::ShllN => {
                 let half = matches!(elt, E::I16 | E::I32 | E::I64).then(|| int_elt(elt.bits() / 2));
@@ -1564,6 +1643,8 @@ mod tests {
         assert_eq!(s("vld4_v"), Some(Shape::LdN(4)));
         assert_eq!(s("vst3q_v"), Some(Shape::StN(3)));
         assert_eq!(s("vtbl2_v"), Some(Shape::Tbl(2)));
+        assert_eq!(s("vtbl4_v"), Some(Shape::Tbl(4)));
+        assert_eq!(s("vtbx3_v"), Some(Shape::Tbx(3)));
         assert_eq!(s("vcvtnq_u32_v"), Some(Shape::CvtR(b'n')));
         assert_eq!(s("vcvtm_s64_v"), Some(Shape::CvtR(b'm')));
         assert!(

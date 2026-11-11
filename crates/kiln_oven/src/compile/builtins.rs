@@ -1085,6 +1085,10 @@ impl Compiler<'_> {
             | id::RETURN_ADDRESS
             // WP-782: nor the thread pointer.
             | id::THREAD_POINTER
+            // WP-1288: nor the return-address codecs and the cache flush.
+            | id::EXTRACT_RETURN_ADDR
+            | id::FROB_RETURN_ADDR
+            | id::CLEAR_CACHE
             // WP-1057: nor the cycle counter.
             | id::READCYCLECOUNTER
             // WP-610: nor `__builtin_prefetch`.

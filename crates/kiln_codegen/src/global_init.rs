@@ -132,7 +132,7 @@ impl Cg<'_> {
     }
 
     /// clang `Expr::HasSideEffects(Ctx, /*IncludePossibleEffects=*/true)`.
-    fn may_have_side_effects(&self, e: ExprId) -> bool {
+    pub(crate) fn may_have_side_effects(&self, e: ExprId) -> bool {
         let ast = self.ast;
         let exprs = &ast.exprs;
         let mut stack = vec![e];

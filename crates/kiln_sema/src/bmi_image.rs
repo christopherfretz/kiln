@@ -48,6 +48,8 @@ mod classtempl;
 mod declocs;
 mod locs;
 mod membertempl;
+mod pch;
+pub use pch::PchDecls;
 mod scope;
 mod spec;
 mod templ;
@@ -2082,11 +2084,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
                 // A class template's record follows its pattern's record,
                 // inside the pattern's definition (S4b), in the pattern's
-                // context (a class too, WP-1292).
-                (Payload::Template { kind: 1, pattern, .. }, NONE) if top == Some(*pattern) => {
+                // context (a class too, WP-1292; an out-of-line definition
+                // of a member class template, its lexical context too).
+                (Payload::Template { kind: 1, pattern, .. }, lex) if top == Some(*pattern) => {
                     match stack.len() {
-                        1 => scope(d.ctx),
-                        n => stack[n - 2].0 == d.ctx as usize,
+                        1 if lex == NONE => scope(d.ctx),
+                        1 => closed(d.ctx) && d.prev != NONE,
+                        n => lex == NONE && stack[n - 2].0 == d.ctx as usize,
                     }
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
@@ -2488,6 +2492,8 @@ struct Writer<'s, 'a, 'b> {
     usings: FxHashMap<(DeclId, DeclName, DeclId), u32>,
     /// `-fkiln-bmi-image-census`: record every refusal and go on.
     census: Option<Census>,
+    /// WP-1036: the image of a precompiled header ([`pch`]).
+    pch: bool,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -3158,7 +3164,10 @@ impl Writer<'_, '_, '_> {
         let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
             return Err("a function declared through a typedef");
         };
-        let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d));
+        // A destructor written without one keeps its implicit
+        // specification deferred even once computed (WP-1036).
+        let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d))
+            || (first && s.implicit_exc_dtors.contains(&d));
         let ty = if deferred {
             // The exception specification names the function itself:
             // build the type without it (the importer defers it again).
@@ -3201,7 +3210,9 @@ impl Writer<'_, '_, '_> {
                 if st.get(b).kind() != StmtKind::CompoundStmt {
                     return Err("a function-try-block");
                 }
-                if pattern || Self::carries_body(spec) {
+                // A precompiled header's every body: each consumer emits
+                // the header's definitions (WP-1036).
+                if pattern || self.pch || Self::carries_body(spec) {
                     // Patched by `walk_roots`.
                     self.bs.roots.push(Root::Body(i, b));
                     if kind == 2 {
@@ -3457,35 +3468,8 @@ impl Writer<'_, '_, '_> {
         let ast = &s.ast;
         let mt = &ast.modules;
         let sm = s.diags.sm();
-        let unit = mt.units.first().ok_or("no module unit")?;
-        let partition = match unit.kind {
-            UnitKind::Interface => false,
-            UnitKind::PartitionInterface | UnitKind::PartitionImplementation => true,
-            _ => return Err("a unit that is not a module interface or partition"),
-        };
-        let module = unit.module.clone().ok_or("no module declaration")?;
-        // S6: a unit with imports, or a partition, is entered by replaying
-        // its preamble; the records follow it (spec/modules.md §11.11
-        // "Imports, partitions and using-declarations").
-        if partition || !unit.imports.is_empty() || mt.units.len() != 1 {
-            let (end, bad) = s.module_preamble();
-            if bad {
-                return Err("an import outside the module's main file, or code after its `;`");
-            }
-            self.img.preamble = end.ok_or("an import outside the module's main file")?;
-        }
-        self.img.module = match &unit.partition {
-            Some(p) if partition => format!("{module}:{p}"),
-            _ => module,
-        };
-        let (kw, kw_loc, private) = s.module_main_frame().ok_or("no module declaration")?;
-        if private {
-            return Err("a private module fragment");
-        }
-        self.img.kw = self.loc(kw)?;
-        self.img.name_loc = self.loc(kw_loc)?;
-        if self.img.kw == NONE || self.img.name_loc == NONE {
-            return Err("no module declaration");
+        if !self.pch {
+            self.module_header()?;
         }
         self.img.main = sm.file_name(self.main).to_owned();
         let mut st = Pass::default();
@@ -3591,6 +3575,43 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.walk_roots()
+    }
+
+    /// The module unit's name, keyword and preamble words of the image.
+    fn module_header(&mut self) -> W<()> {
+        let s = self.s;
+        let mt = &s.ast.modules;
+        let unit = mt.units.first().ok_or("no module unit")?;
+        let partition = match unit.kind {
+            UnitKind::Interface => false,
+            UnitKind::PartitionInterface | UnitKind::PartitionImplementation => true,
+            _ => return Err("a unit that is not a module interface or partition"),
+        };
+        let module = unit.module.clone().ok_or("no module declaration")?;
+        // S6: a unit with imports, or a partition, is entered by replaying
+        // its preamble; the records follow it (spec/modules.md §11.11
+        // "Imports, partitions and using-declarations").
+        if partition || !unit.imports.is_empty() || mt.units.len() != 1 {
+            let (end, bad) = s.module_preamble();
+            if bad {
+                return Err("an import outside the module's main file, or code after its `;`");
+            }
+            self.img.preamble = end.ok_or("an import outside the module's main file")?;
+        }
+        self.img.module = match &unit.partition {
+            Some(p) if partition => format!("{module}:{p}"),
+            _ => module,
+        };
+        let (kw, kw_loc, private) = s.module_main_frame().ok_or("no module declaration")?;
+        if private {
+            return Err("a private module fragment");
+        }
+        self.img.kw = self.loc(kw)?;
+        self.img.name_loc = self.loc(kw_loc)?;
+        if self.img.kw == NONE || self.img.name_loc == NONE {
+            return Err("no module declaration");
+        }
+        Ok(())
     }
 
     fn marks(&self) -> Marks {
@@ -3750,11 +3771,14 @@ impl Writer<'_, '_, '_> {
             return Ok(());
         }
         let o = mt.owner(d);
+        if self.pch && (o.unit != 0 || o.purview) {
+            return Err("a module import or declaration in the header");
+        }
         if o.unit != 0 {
             // Imported, or replayed for an import of the preamble.
             return Ok(());
         }
-        if !o.purview {
+        if !(o.purview || self.pch && self.pch_own(d)) {
             // Predefined declarations have no location in a real
             // file; anything else is a global module fragment.
             let real = sm
@@ -3923,6 +3947,7 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             keys: Vec::new(),
             usings: FxHashMap::default(),
             census: census.then(Census::default),
+            pch: false,
         })
     }
 }
@@ -4139,7 +4164,9 @@ impl Sema<'_, '_> {
     fn build_image(&mut self, img: &Image, main: &Locs) {
         let lo = |_: &Self, o: u32| main.get(o);
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
-        if img.preamble == NONE {
+        // A precompiled header's image (no module name) is built in the
+        // translation unit's global module (WP-1036).
+        if img.preamble == NONE && !img.module.is_empty() {
             self.act_on_module_directive(
                 kw,
                 true,
@@ -4255,6 +4282,11 @@ impl Sema<'_, '_> {
                     }
                     let f = self.builder().function(h, kind, fty, spec, prev);
                     self.ast.templates.pattern_next = false;
+                    if *deferred && kind == DeclKind::CXXDestructor && prev.is_none() {
+                        // Written without one ([except.spec]/8): a
+                        // redeclaration may omit it too (WP-1036).
+                        self.implicit_exc_dtors.insert(f);
+                    }
                     if !ci.is_empty() {
                         ctors.push((f, i));
                     }

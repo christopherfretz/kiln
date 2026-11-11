@@ -214,7 +214,13 @@ impl Sema<'_, '_> {
     pub(super) fn image_inherited_defaults(&mut self, ts: &[DeclId]) {
         for &t in ts {
             let Some(info) = self.ast.template_info(t).copied() else { continue };
-            let Some(prev) = self.ast.decls.redecl(t).and_then(|r| r.prev) else { continue };
+            let Some(prev) = info
+                .pattern
+                .and_then(|p| self.ast.prev(p))
+                .and_then(|p| self.ast.described_template(p))
+            else {
+                continue;
+            };
             self.merge_template_defaults(t);
             let old = self
                 .head_comparable_decl(prev)

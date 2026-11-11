@@ -545,6 +545,13 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         &self.lex_opts
     }
 
+    /// The predefines buffer (`<built-in>`), once the main file is
+    /// entered.
+    #[must_use]
+    pub fn predefines_file(&self) -> Option<FileId> {
+        self.predef_file
+    }
+
     /// The main source file, once entered.
     pub fn main_file(&self) -> Option<FileId> {
         self.main_file

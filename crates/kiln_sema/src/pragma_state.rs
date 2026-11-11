@@ -100,6 +100,20 @@ impl Sema<'_, '_> {
             fp_stack: self.fp_pragma.1.iter().map(fp_bits).collect(),
         }
     }
+
+    /// Installs a precompiled header's pragma state in place of the
+    /// header's pragmas (WP-1036; the state the header left, read from
+    /// its preprocessor-state record). FP bits no override has (a
+    /// corrupt record) leave the FP state as it is.
+    pub fn install_pragma_state(&mut self, p: &PragmaState) {
+        self.pack = (p.pack, p.pack_stack.clone());
+        self.ms_struct_pragma = p.ms_struct;
+        self.vis_stack.clone_from(&p.visibility);
+        let stack: Option<Vec<FpOverride>> = p.fp_stack.iter().map(|&b| fp_from_bits(b)).collect();
+        if let (Some(fp), Some(stack)) = (fp_from_bits(p.fp), stack) {
+            self.fp_pragma = (fp, stack);
+        }
+    }
 }
 
 #[cfg(test)]

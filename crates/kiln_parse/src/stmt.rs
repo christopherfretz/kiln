@@ -41,6 +41,7 @@ impl Parser<'_, '_> {
         let fp_outer = self.s.fp_pragma_state();
         self.take_fp_pragmas(FpAt::Compound);
         let mut stmts = Vec::new();
+        self.parse_local_labels(&mut stmts);
         while !self.at(Punct::RBrace) && !self.at_eof() {
             self.in_stmt_expr = stmt_expr;
             if let Some(s) = self.parse_statement() {
@@ -63,6 +64,32 @@ impl Parser<'_, '_> {
         let block = self.s.act_on_compound_fp(&stmts, lbrace, rbrace, fp);
         self.s.check_empty_loop_bodies(&stmts);
         (block, rbrace)
+    }
+
+    /// GNU local label declarations at the start of a block (clang
+    /// `ParseCompoundStatementBody`): `__label__ name, name...;`, each a
+    /// declaration statement of the new labels.
+    fn parse_local_labels(&mut self, stmts: &mut Vec<StmtId>) {
+        while let Some(at) = self.eat_kw(Kw::Label) {
+            let mut decls = Vec::new();
+            loop {
+                let Some(name) = self.ident() else {
+                    self.expected_here("identifier");
+                    break;
+                };
+                let loc = self.bump().span.lo;
+                decls.push(self.s.act_on_local_label(name, loc));
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+            }
+            if self.eat(Punct::Semi).is_none() {
+                self.s.error(DiagId::parse_expected_semi_declaration, self.prev_end());
+            }
+            if !decls.is_empty() {
+                stmts.push(self.s.act_on_decl_stmt(&decls, at));
+            }
+        }
     }
 
     /// A sub-statement in its own block scope ([stmt.pre]/1); a dropped

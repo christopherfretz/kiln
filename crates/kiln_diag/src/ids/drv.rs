@@ -58,6 +58,9 @@ drv_pch_config_value = Error (2) "{0} differs in precompiled file '{1}' vs. curr
 drv_pch_config_value_19 = Error (2) "{0} differs in PCH file{1:} vs. current file";
 drv_pch_corrupt = Fatal (1) "malformed or corrupted precompiled file: '{0}'";
 drv_pch_corrupt_19 = Fatal (1) "malformed or corrupted AST file: '{0}'";
+// WP-1036: `-fkiln-pch-image=check` compiles with the declaration image
+// and with replay and compares the two.
+drv_pch_decls_mismatch = Error (2) "the declaration image of precompiled header '{0}' differs from replaying the header: {1}";
 drv_pch_different_branch = Error (2) "PCH file built from a different branch ({0}) than the compiler ({1})";
 // WP-1037: clang's `-include-pch <dir>` finds no acceptable PCH in it.
 drv_pch_dir_no_pch = Error (1) "no suitable precompiled header file found in directory '{0}'";

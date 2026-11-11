@@ -80,6 +80,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
 | `--results <file.tsv>` | Write one line per test (see "Results file"). |
 | `--shard <K/N>` | Run only shard K of N (1 ≤ K ≤ N; anything else is a usage error): of the sorted selection (after `--filter`), the tests whose 0-based index is K − 1 modulo N. Round robin, so the shards of one selection are disjoint, cover it, and get a similar mix of directories. The start line is preceded by `xtask libcxx: shard K/N: <n> of <total> tests`. The x86_64 sweep (`.github/workflows/sweep.yml`, WP-961) runs the full suite as 6 shards. |
+| `--pch-diff load\|replay\|check` | Compile each pass test's leading `#include`s into a PCH and the test with `-include-pch` of it (see "PCH differential"). kiln only: with a clang `--compiler` it is a usage error, as is any other value. |
 | `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/` and the run's `TMPDIR` root `<temp>/kiln-tmp-<pid>-<nanos>/` (see "Commands"). |
 | `--no-fail` | Exit 0 even when the run has failures. |
 | `-v` | Print every result, with the tail of the failing step's stderr. |
@@ -106,6 +107,53 @@ by the M4 exit headers' (docs/ROADMAP.md M4): `std/containers/sequences/vector`,
 `std/containers/views/mdspan`, `std/input.output/iostream.format/print.fun`,
 `std/containers/container.adaptors/flat.map`, on `llvmorg-22.1.8` with
 libc++ 22 ("Toolchain"); its baseline is in `docs/status/libcxx.md`.
+
+### PCH differential
+
+`--pch-diff <mode>` (WP-1036; spec/harness.md "PCH differential" is the
+corpus form) runs every test through a precompiled header of its own
+prefix, so that the libc++ suite checks that `-include-pch` gives the
+result of textual inclusion. It applies to a test when:
+
+- its kind is a pass kind (`.pass.cpp`, `.compile.pass.cpp`,
+  `.link.pass.cpp`); a `.verify.cpp` runs plainly, because `-verify`
+  sees only the consumer's diagnostics (an image consumer does not
+  diagnose the header again), and a fail kind's outcome does not show
+  a difference;
+- it has no `MODULE_DEPENDENCIES`, and no flag that starts with
+  `-include` or `-x`;
+- it opens with `#include` lines (`leading_includes`: blank lines and
+  comments may come between them; the first other line ends them).
+
+Every other test runs as without the option. For one that applies:
+
+1. **The PCH.** The leading `#include`s are written, in order, to
+   `pchdiff.h` in the test's scratch directory, and a copy of the test
+   with those lines emptied (every other line keeps its number) to
+   `src/<file>`. kiln builds the PCH with the test's compile flags,
+   `-iquote <test dir>` (for its quoted `#include`s) and
+   `-fkiln-pch-image -v`, under the same memory limit and compile
+   timeout as a compile step. If that fails, the test fails at
+   `compile`, with `the PCH of the leading #includes does not build`.
+2. **The test** compiles the copy with `-include-pch <pch>`, the mode's
+   consumer flag (`load`: `-fkiln-pch-image=load`; `replay`:
+   `-fno-kiln-pch-image`; `check`: `-fkiln-pch-image=check`) and
+   `-iquote <test dir>`. Its outcome is judged as without the option.
+   So a gate is green under `--pch-diff` exactly when it is green
+   without it.
+
+**The path tally.** After the summary line, `pch-diff <mode>: N tests
+with a PCH` is printed, then one line per path a consumer takes, with
+its count. The path is taken from the producer's `-v` note (`image (N
+records)` or `replay: <why>`); in `replay` mode it is `replay`.
+
+**Measured** (m3 gate, libc++ 19, `-j 4`, harness profile,
+2026-11-11): `load` and `replay` both give 636 pass and 6 unsupported,
+as without the option. 575 tests get a PCH, and all of them replay:
+the image carries no libc++ header yet. The reasons are a type the
+image does not carry (217), a member function template (157), a
+template argument the image does not carry (104), an explicit or
+partial specialization (94), and a declaration in a template (3).
 
 ## Build profiles
 

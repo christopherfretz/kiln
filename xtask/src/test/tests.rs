@@ -69,6 +69,7 @@ fn cli_parsing() {
             debug_sweep: false,
             bmi_kind: None,
             bmi_image: false,
+            pch_diff: None,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -1091,6 +1092,16 @@ fn bmi_kind_option() {
     let o = parse_args(strings(&["--bmi-image"])).unwrap().unwrap();
     assert_eq!((o.bmi_kind, o.bmi_image), (Some(2), true));
     assert!(parse_args(strings(&["--bmi-image", "--bmi-kind", "1"])).is_err());
+}
+
+#[test]
+fn pch_diff_option() {
+    use crate::util::pch_diff::PchDiff;
+    let o = |a: &[&str]| parse_args(strings(a)).unwrap().unwrap().pch_diff;
+    assert_eq!(o(&["--pch-diff", "load"]), Some(PchDiff::Load));
+    assert_eq!(o(&["--pch-diff=replay"]), Some(PchDiff::Replay));
+    assert_eq!(o(&["--pch-diff=check"]), Some(PchDiff::Check));
+    assert!(parse_args(strings(&["--pch-diff", "image"])).is_err());
 }
 
 #[test]

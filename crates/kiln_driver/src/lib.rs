@@ -27,6 +27,7 @@ pub mod link;
 pub mod llvm;
 pub mod module_cache;
 mod pch;
+mod pch_check;
 mod pch_image;
 pub mod pp_cmd;
 pub mod rsp;
@@ -451,8 +452,20 @@ pub(crate) fn syntax_only(
     diag_opts: &DiagOptions,
     io: &Io,
 ) -> JobResult {
-    let job =
-        Job { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() };
+    // `-fkiln-pch-image=check` (WP-1036).
+    let input = pch_check::Input { tc, std, path, stdin_text, diag_opts, stderr: &io.stderr };
+    if let Some(r) = pch_check::syntax_only(args, &input) {
+        return r;
+    }
+    let job = Job {
+        args,
+        toolchain: tc,
+        std,
+        path,
+        stdin_text: input.stdin_text,
+        diag_opts,
+        stderr: io.stderr.clone(),
+    };
     SyntaxJob(job).run()
 }
 
@@ -683,11 +696,13 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         print_version(&mut io.stderr, &tc, true);
     }
     let inputs = existing_inputs(&args, &drv);
-    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`) as inputs:
+    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`, `-rpath`) as inputs:
     // `clang++ -Wl,--version` runs the linker alone (Meson's linker probe,
     // WP-920).
-    let linker_inputs =
-        args.link.iter().any(|l| matches!(l.kind, LinkOptKind::Input | LinkOptKind::Xlinker));
+    let linker_inputs = args
+        .link
+        .iter()
+        .any(|l| matches!(l.kind, LinkOptKind::Input | LinkOptKind::Xlinker | LinkOptKind::Rpath));
     if inputs.is_empty() && !(linker_inputs && args.inputs.is_empty()) {
         if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
             return 0;

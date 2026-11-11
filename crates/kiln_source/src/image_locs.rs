@@ -412,6 +412,20 @@ impl Locs {
         bases: &[u32],
         ids: &[FileId],
     ) -> Result<Locs, &'static str> {
+        Locs::build_rooted(sm, files, slocs, bases, ids, Loc::INVALID)
+    }
+
+    /// As [`build`](Self::build), the image's own buffers (those with no
+    /// includer) entered by an `#include` at `root` when it is valid (a
+    /// precompiled header's, from the predefines; WP-1036).
+    pub fn build_rooted(
+        sm: &SourceManager,
+        files: &[FileRec],
+        slocs: &[SlocRec],
+        bases: &[u32],
+        ids: &[FileId],
+        root: Loc,
+    ) -> Result<Locs, &'static str> {
         let mut m = Locs { runs: Vec::with_capacity(slocs.len()) };
         for (k, s) in slocs.iter().enumerate() {
             let len = sloc_len(files, s).unwrap_or(0);
@@ -423,7 +437,9 @@ impl Locs {
                     if span.hi.to_raw() - span.lo.to_raw() != len {
                         return Err("a file whose length differs from its record");
                     }
-                    let at = if *from == NONE {
+                    let at = if *from == NONE && root.is_valid() {
+                        sm.add_inclusion(id, root).map_err(|_| "no location space")?
+                    } else if *from == NONE {
                         sm.loc(id, 0)
                     } else {
                         sm.add_inclusion(id, m.get(*from)).map_err(|_| "no location space")?
