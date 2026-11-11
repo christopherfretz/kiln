@@ -784,7 +784,8 @@ impl Cg<'_> {
                 && self.f.fir.ty(&self.m, inner) == LTy::I1
             {
                 let last = self.f.fir.cur().and_then(|b| self.f.fir.block_insts(b).last().copied());
-                let bound = self.f.opaque.values().any(|o| matches!(o, Opaque::Rv(Some(x)) if *x == v));
+                let bound =
+                    self.f.opaque.values().any(|o| matches!(o, Opaque::Rv(Some(x)) if *x == v));
                 if !bound && (last == Some(i) || self.f.fir.uses(v) == 0) {
                     self.f.fir.erase(i);
                 }
