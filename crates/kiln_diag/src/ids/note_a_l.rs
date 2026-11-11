@@ -58,6 +58,7 @@ note_constexpr_virtual_base_here = Note (0) "virtual base class declared here";
 note_constinit_missing_here = Note (0) "variable declared constinit here";
 note_constinit_specified_here = Note (0) "required by 'constinit' specifier here";
 note_constraint_substitution_here = Note (0) "while substituting template arguments into constraint expression here";
+note_convert_inline_to_static = Note (1) "use 'static' to give inline function {0} internal linkage";
 note_coroutine_function_declare_noexcept = Note (0) "must be declared with 'noexcept'";
 note_coroutine_promise_call_implicitly_required = Note (1) "call to {0} implicitly required by coroutine function here";
 note_coroutine_promise_implicit_await_transform_required_here = Note (0) "call to 'await_transform' implicitly required by 'co_await' here";

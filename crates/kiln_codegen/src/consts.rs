@@ -682,6 +682,17 @@ impl Cg<'_> {
                     .and_then(|p| inits.get(p + bases.len()).copied());
                 // A `bool` vector member (or array of them) is its
                 // `<N x i1>` constant.
+                // GNU: an initialized flexible array member's elements
+                // (folded on their own, `fold::flexible_elements_init`)
+                // extend the constant past the object.
+                if let Some(x) = sub
+                    && let Some(c) = self.folds.get(x)
+                    && Some(x) == e.and_then(|l| crate::fold::flexible_elements_init(ast, l))
+                {
+                    let xt = ast.exprs.get(x).ty();
+                    out.push((at, self.const_value(c, xt, Some(x), false)?));
+                    continue;
+                }
                 let fm = ast.decls.get(f).ty().map(|q| self.const_ir_type(q));
                 let m = fm
                     .as_ref()

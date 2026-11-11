@@ -73,6 +73,7 @@ sema_static_block_func = Error (0) "function declared in block scope cannot have
 sema_static_data_member_reinit = Error (1) "static data member '{0}' already has an initializer";
 sema_static_downcast_via_virtual = Error (3) "cannot cast {0} to {1} via virtual base {2}";
 sema_static_float_init = WarningError [StaticFloatInit] (1) "in-class initializer for static data member of type {0} requires 'constexpr' specifier";
+sema_static_local_in_extern_inline = Warning [StaticLocalInInline] (0) "non-constant static local variable in inline function may be different in different files";
 sema_static_main = Error (0) "'main' is not allowed to be declared static";
 sema_static_member_anon_class = Error (2) "static data member '{0}' not allowed in anonymous {1}";
 sema_static_member_bad_init = Error (1) "static data member of type {0} must be initialized out of line";
@@ -170,6 +171,12 @@ sema_template_tag_noparams = Error (2) "extraneous 'template<>' in declaration o
 sema_template_template_param_no_params = Error (0) "template template parameter must have its own template parameters";
 sema_template_template_param_not_at_least_as_constrained = Error (2) "template template argument {0} is more constrained than template template parameter {1}";
 sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
+// clang `err_tentative_def_incomplete_type` (C, end of the TU; WP-1286).
+sema_tentative_def_incomplete_type = Error (1) "tentative definition has type {0} that is never completed";
+// clang `warn_tentative_incomplete_array` (C23 6.9.2p5; WP-1286).
+sema_tentative_incomplete_array = Warning [TentativeDefinitionArray] (0) "tentative array definition assumed to have one element";
+// clang `ext_typecheck_decl_incomplete_type` (C23 6.9.2p3; WP-1286).
+sema_tentative_static_incomplete_type = Warning [TentativeDefinitionIncompleteType] (1) "tentative definition of variable with internal linkage has incomplete non-array type {0}";
 sema_this_bool_conversion = Warning [UndefinedBoolConversion] (0) "'this' pointer cannot be null in well-defined C++ code; pointer may be assumed to always convert to true";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_null_compare = Warning [TautologicalUndefinedCompare] (1) "'this' pointer cannot be null in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";
@@ -224,6 +231,7 @@ sema_typecheck_negative_array_size = Error (0) "array size is negative";
 sema_typedef_not_bitfield = Error (1) "typedef member '{0}' cannot be a bit-field";
 sema_typedef_not_identifier = Error (0) "typedef name must be an identifier";
 sema_typedef_template = Error (0) "a typedef cannot be a template";
+sema_typedef_without_a_name = ExtWarn [MissingDeclarations] (0) "typedef requires a name";
 sema_typeid_incomplete = Error (1) "'typeid' of incomplete type {0}";
 sema_typeid_no_rtti = Error (0) "use of typeid requires -frtti";
 // [dcl.type.class.deduct]/1: a typename-specifier naming a template
@@ -303,6 +311,7 @@ sema_unused_variable_template = WarningOff [UnusedTemplate] (1) "unused variable
 sema_unused_voidptr = Warning [UnusedValue] (0) "expression result unused; should this cast be to 'void'?";
 sema_use_deleted_function = Error (1) "attempt to use a deleted function{0}";
 sema_use_of_empty_using_if_exists = Error (0) "reference to unresolved using declaration";
+sema_use_out_of_scope_declaration = ExtWarn [OutOfScopeFunction] (2) "use of out-of-scope declaration of {0}{1:| whose type is not compatible with that of an implicit declaration}";
 sema_use_with_wrong_tag = Error (1) "use of '{0}' with tag type that does not match previous declaration";
 sema_user_literal_reserved = Warning [UserDefinedLiterals] (2) "user-defined literal suffixes {0:<ERROR>|not starting with '_'|containing '__'} are reserved{1:; no literal will invoke this operator|}";
 sema_using_decl_can_not_refer_to_class_member = Error (0) "using declaration cannot refer to class member";
