@@ -185,13 +185,12 @@ impl SyntaxJob<'_> {
                 .emit(engine);
             return;
         };
-        if let Some(signed) = a.predef.char_signed {
-            target.types.char_signed = signed;
-        }
+        target.types.char_signed = a.predef.char_signed.unwrap_or(target.types.char_signed);
         let x86 = !job.toolchain.target.is_aarch64();
         // WP-630: `cx16` makes 128-bit atomics lock-free (clang
         // `X86TargetInfo::setMaxAtomicWidth`).
-        if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        if feats.x86_cx16() {
             target.types.max_atomic_inline_bytes = 16;
         }
         let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
@@ -202,7 +201,7 @@ impl SyntaxJob<'_> {
             let v = Rc::clone(v);
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
-        let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        let writes_kind2 = a.bmi_kind != Some(1) && job.module_output_path().is_some();
         let popts = ParseOptions {
             std: job.std.lex,
             gnu: job.std.gnu,
@@ -230,10 +229,9 @@ impl SyntaxJob<'_> {
             permissive: a.permissive,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
-            record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),
-            record_image: a.bmi_image
-                && a.bmi_kind != Some(1)
-                && job.module_output_path().is_some(),
+            record_carried: writes_kind2,
+            record_image: a.bmi_image && writes_kind2,
+            image_census: a.bmi_image_census,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -254,6 +252,7 @@ impl SyntaxJob<'_> {
         }
         drop(pp);
         result.dep_list = deps;
+        job.write_image_reports(sm, tu.image_census.as_ref(), engine);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let mut err = job.stderr.clone();
         a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);

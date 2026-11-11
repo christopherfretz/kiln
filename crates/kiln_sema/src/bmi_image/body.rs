@@ -35,9 +35,9 @@ use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, Strin
 use kiln_source::fx::FxHashSet;
 
 use super::{
-    Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FileId, FnBody,
-    FnSpec, FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr,
-    Writer, bad, var_spec,
+    Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FnBody, FnSpec,
+    FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr, Writer,
+    bad, var_spec,
 };
 
 /// A parameter reference in a declaration field: `PARAM | i` names the
@@ -1811,7 +1811,46 @@ impl Writer<'_, '_, '_> {
 
     /// Walks every pending root and patches the records that point at it.
     pub(super) fn walk_roots(&mut self) -> W<()> {
+        // `-fkiln-bmi-image-census`: the record each root belongs to, and
+        // the top-level record whose roots are being walked (a local's
+        // roots follow its function's).
+        let mut owner: Option<DeclId> = None;
+        let inv: FxHashMap<u32, DeclId> = if self.census.is_some() {
+            self.recs.iter().map(|(&d, &i)| (i, d)).collect()
+        } else {
+            FxHashMap::default()
+        };
+        if self.census.is_some() {
+            // The census's examples are the first in source order (the
+            // census writes no image, so the walk order is free).
+            self.bs.roots.reverse();
+        }
         while let Some(r) = self.bs.roots.pop() {
+            let rec = match r {
+                Root::Body(rec, _)
+                | Root::Init(rec, _)
+                | Root::FieldWidth(rec, _)
+                | Root::FieldInit(rec, _)
+                | Root::CtorInit(rec, _, _) => rec,
+                Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
+            };
+            if let Some(&d) = inv.get(&rec) {
+                owner = Some(d);
+            }
+            if let Err(why) = self.walk_root(r) {
+                match owner {
+                    Some(d) if self.census.is_some() => self.census_fail(d, why, false),
+                    _ if self.census.is_some() => {}
+                    _ => return Err(why),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Walks one pending root ([`Writer::walk_roots`]).
+    fn walk_root(&mut self, r: Root) -> W<()> {
+        {
             match r {
                 Root::Body(rec, s) => {
                     let i = self.walk(Node::S(s))?;
@@ -1965,7 +2004,7 @@ impl Sema<'_, '_> {
         tys: &mut Vec<QualType>,
         ids: &[DeclId],
         params: &[DeclId],
-        main: FileId,
+        main: &super::Locs,
     ) -> Built {
         let b = &img.bodies;
         let mut consts = Vec::with_capacity(b.consts.len());
@@ -2021,7 +2060,7 @@ impl Sema<'_, '_> {
             }
             let (a, bb, used) = self.image_slots(shape, &vals, Node::E(built.expr(0)));
             let ty = self.image_ty(img, tys, ids, e.ty);
-            let loc = if e.loc == NONE { Loc::INVALID } else { self.diags.sm().loc(main, e.loc) };
+            let loc = main.get(e.loc);
             let mut deps = ExprDeps::NONE;
             for d in [ExprDeps::TYPE, ExprDeps::VALUE, ExprDeps::INSTANTIATION] {
                 if e.deps & d.bits() != 0 {
@@ -2070,7 +2109,7 @@ impl Sema<'_, '_> {
                 vals.push(v);
             }
             let (a, bb, _) = self.image_slots(shape, &vals, Node::S(built.stmt(0)));
-            let loc = if s.loc == NONE { Loc::INVALID } else { self.diags.sm().loc(main, s.loc) };
+            let loc = main.get(s.loc);
             let id = self.ast.stmts.push(StmtNode::new(k, s.aux, loc, a, bb));
             debug_assert_eq!(id, built.stmt(i as u32));
         }
@@ -2087,7 +2126,7 @@ impl Sema<'_, '_> {
         params: &[DeclId],
         built: &Built,
         strs: &[StringLitId],
-        main: FileId,
+        main: &super::Locs,
         f: F,
         w: &[u32],
     ) -> u32 {
@@ -2139,7 +2178,7 @@ impl Sema<'_, '_> {
                 let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
                 DeclName::ident(self.intern(n)).to_raw()
             }
-            F::Loc => self.image_loc(main, w[0]).to_raw(),
+            F::Loc => main.get(w[0]).to_raw(),
             // The AST's raw list ([`AstBuilder::generic_selection`]):
             // control, its location, then (type, location, expression)
             // per association.
@@ -2151,14 +2190,14 @@ impl Sema<'_, '_> {
                     }
                     _ => built.ebase + w[1],
                 };
-                v.extend([ctrl, self.image_loc(main, w[gen_ctrl_words(f)]).to_raw()]);
+                v.extend([ctrl, main.get(w[gen_ctrl_words(f)]).to_raw()]);
                 for a in gen_assocs(f, w) {
                     let ty = if a[0] == NONE {
                         0
                     } else {
                         self.image_ty(img, tys, ids, QRef { ty: a[0], quals: a[1] as u8 }).to_raw()
                     };
-                    v.extend([ty, self.image_loc(main, a[2]).to_raw(), built.ebase + a[3]]);
+                    v.extend([ty, main.get(a[2]).to_raw(), built.ebase + a[3]]);
                 }
                 self.ast.lists.push_raw(&v).raw()
             }
@@ -2225,11 +2264,7 @@ impl Sema<'_, '_> {
                 let v: Vec<u32> = w[1..]
                     .chunks(2)
                     .map(|a| {
-                        let loc = if a[1] == NONE {
-                            Loc::INVALID
-                        } else {
-                            self.diags.sm().loc(main, a[1])
-                        };
+                        let loc = main.get(a[1]);
                         let node = word_attr(a[0], loc)
                             .unwrap_or_else(|| unreachable!("validated attribute"));
                         self.ast.attrs.push(node).raw()
@@ -2238,11 +2273,6 @@ impl Sema<'_, '_> {
                 self.ast.lists.push_raw(&v).raw()
             }
         }
-    }
-
-    /// Main-file offset `o` as a location ([`NONE`]: none).
-    fn image_loc(&self, main: FileId, o: u32) -> Loc {
-        if o == NONE { Loc::INVALID } else { self.diags.sm().loc(main, o) }
     }
 
     /// The two slot values from the token values; also how many tokens

@@ -77,7 +77,30 @@ Buffers:
   opened file whole in one sized read, the length from the metadata
   already fetched (no second `fstat` or probe read as `fs::read` makes).
 - `add_virtual(name: &str, contents: String) -> Result<FileId, LocSpaceExhausted>`:
-  never deduplicated.
+  never deduplicated. `is_virtual(FileId)` is true for such a buffer.
+- Lazy buffers (WP-1070, the declaration image's file table,
+  spec/modules.md §11.11 "File table"): `add_lazy_file(name, path, len,
+  hash, copy: Option<LazyCopy>) -> LazyFile` adds the file at `path`,
+  recorded with decoded length `len` and content hash `hash`, under the
+  buffer name `name`, without reading it. The file is only stat'ed and
+  identified (device and inode, as `load_file`), so a later `load_file`
+  of it returns this buffer. `LazyFile` is `Added(id)`, `Loaded(id)`
+  (the file is already a buffer: the caller compares its content),
+  `Missing` (absent or not a regular file), `Changed` (its size is not
+  `len`) or `Exhausted`. The buffer's range has length `len` at once, so
+  locations in it need no text. The text is read on first use (`text`,
+  `line_col`, `presumed_line_col`, line tables) and checked against
+  `len` and `hash`; on a mismatch `copy` (the module file's recorded
+  text, read again on demand) is used under the same check, and failing
+  that the buffer is `len` spaces with no lines or columns
+  (`line_col` / `presumed_line_col` are `None` in it), so a changed file
+  never prints a wrong position. `lazy_fallbacks() -> Vec<(FileId,
+  LazyOutcome)>` lists the lazy buffers read so far whose file had
+  changed, with `LazyOutcome::Copy` or `Unavailable` (`Disk` is the
+  matching case, not listed). `same_content(file, len, hash)` compares a
+  buffer's content, a lazy one not read yet by what it was recorded
+  with. `loaded_file(&Path) -> Option<FileId>` finds the buffer of a
+  loaded file without reading it.
 - `file_count()`, `text(FileId) -> &str` (always valid UTF-8),
   `file_name(FileId) -> &str`, `load_report(FileId) -> &LoadReport` (empty
   for virtual buffers).
@@ -119,7 +142,10 @@ File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
   `is_in_system_macro(Loc)` (clang `isInSystemMacro`) is true for a macro
   location whose spelling is in a system header, stepping out of
   `<scratch space>` spellings first; `is_written_in_scratch_space(Loc)`
-  tests the presumed file name.
+  tests the presumed file name. `file_kind_marks(Loc) -> Vec<(u32,
+  FileKind)>`: the marks in the range containing the file location, as
+  (offset in the range, kind) in offset order (the declaration image
+  copies them, spec/modules.md §11.11 "Location records").
 - kiln_pp marks: the start of an inclusion range entered as a system
   header, the `system_header` token of `#pragma GCC system_header`, and
   the line after a line marker (flags 3 / `3 4`, or neither: `User`).
@@ -220,7 +246,8 @@ Presumed locations ([cpp.line]):
   Directives may be added in any order; re-adding at an existing offset
   replaces (a header without guards re-entered re-adds its directives).
   Range checking of `new_line` ([cpp.line]/3) is kiln_pp's job. Panics if
-  `at_offset > len`.
+  `at_offset > len`. `has_line_directives(FileId)` is true once one has
+  been added.
 - `presumed_line_col(Loc) -> Option<PresumedLoc>`: macro locations use
   `expansion_loc`; the last directive at or before the offset applies;
   `col` is the physical byte column; the line saturates at `u32::MAX`.
@@ -241,6 +268,12 @@ text; skipping it is the lexer's job.
   kiln_ast stores `Symbol`s without linking the lexer; spec/types.md §17
   T2). `Symbol` is a 4-byte dense index; `Symbol::from_index` is the
   inverse of `index()` for packed encodings.
+- Content hash: `kiln_source::hash::{content_hash, fnv1a64_extend,
+  FNV_OFFSET}`, FNV-1a 64 (offset basis `0xcbf29ce484222325`, prime
+  `0x100000001b3`). It is the one hash of file contents that module files
+  record (spec/modules.md §11.3 capsule checksums, §11.11 file table);
+  kiln_pp's `bmi::checksum` delegates to it. Not a defence against
+  deliberate collisions: a module file is trusted input.
 - `kiln_source::fx::{FxHasher, FxBuildHasher, FxHashMap, FxHashSet}`: the
   rustc `FxHash`, used by every compiler-internal hash table.
 - `Interner::intern` / `get` first probe a small per-thread cache
