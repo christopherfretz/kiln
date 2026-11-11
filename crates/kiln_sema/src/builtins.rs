@@ -231,7 +231,10 @@ impl Sema<'_, '_> {
             }
             return;
         }
-        let Some(info) = self.lib_builtin_info(f) else { return };
+        let Some(info) = self.lib_builtin_info(f) else {
+            self.warn_incompatible_lib_first_decl(f);
+            return;
+        };
         if let Some(id) = builtin::lib_twin(info.name, self.clang_compat) {
             let _ = self.ast.decls.cold.lib_builtin.insert(f, id);
         }
@@ -584,6 +587,16 @@ impl Sema<'_, '_> {
     /// and not one named by a `-fno-builtin-<name>` (clang
     /// `Builtin::Context::initializeBuiltins`).
     pub(crate) fn lib_builtin_info(&mut self, f: DeclId) -> Option<builtin::Info> {
+        let info = self.lib_row_named(f)?;
+        let noreturn = info.attrs & builtin::attr::NORETURN != 0;
+        self.c_linkage_file_scope_fn_of_type(f, info.sig, noreturn).then_some(info)
+    }
+
+    /// The [`builtin::LIB`] row function `f` is named after, if it is
+    /// declared at this `-fclang-compat` level and dialect and not
+    /// disabled by `-fno-builtin` ([`Sema::lib_builtin_info`] less the
+    /// type check).
+    fn lib_row_named(&self, f: DeclId) -> Option<builtin::Info> {
         if self.kind_of(f) != DeclKind::Function || self.no_builtin {
             return None;
         }
@@ -598,8 +611,51 @@ impl Sema<'_, '_> {
         {
             return None;
         }
+        Some(info)
+    }
+
+    /// WP-1312: `-Wincompatible-library-redeclaration` on the first
+    /// explicit declaration of C library function `f` (no implicit one
+    /// before it) whose type is not compatible with the library row's:
+    /// clang's redeclaration lookup creates the builtin declaration
+    /// (`LazilyCreateBuiltin`) and `MergeFunctionDecl` warns against it,
+    /// with the note at the new declaration's name. Only in C; whether
+    /// `f` is then the library function is unchanged.
+    fn warn_incompatible_lib_first_decl(&mut self, f: DeclId) {
+        if !self.is_c() {
+            return;
+        }
+        let Some(info) = self.lib_row_named(f) else { return };
+        let file_ctx = self.ast.decls.get(f).ctx().is_some_and(|c| {
+            let r = self.ast.redecl_context(c);
+            matches!(self.kind_of(r), DeclKind::TranslationUnit)
+        });
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        let is_static =
+            self.ast.decls.function(f).is_some_and(|x| x.spec.storage() == FnStorage::Static);
+        if !file_ctx || is_static || self.ast.types.is_error(ty) {
+            return;
+        }
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return;
+        }
+        let have_noreturn = self.ast.types.proto(ty).is_some_and(|p| p.info().noreturn());
+        let fi = FuncInfo::new().with_variadic(variadic);
+        let cmp =
+            self.ast.types.function(ret, &params, fi.with_noreturn(have_noreturn), ExcSpec::None);
+        if conv::c_assign::compatible(self, cmp, ty) {
+            return;
+        }
         let noreturn = info.attrs & builtin::attr::NORETURN != 0;
-        self.c_linkage_file_scope_fn_of_type(f, info.sig, noreturn).then_some(info)
+        let want = self.ast.types.function(ret, &params, fi.with_noreturn(noreturn), ExcSpec::None);
+        let loc = self.ast.decls.get(f).loc();
+        let note = self
+            .diag(DiagId::note_previous_builtin_declaration, loc)
+            .arg(info.name)
+            .arg(self.ty_arg(want));
+        let msg = self.diag(DiagId::sema_incompatible_library_redecl, loc).arg(info.name);
+        self.emit(msg.with_note(note));
     }
 
     /// Declares the builtin function `name` (first used at `loc`) if it

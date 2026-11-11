@@ -851,9 +851,19 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         } else {
             kiln_diag::DiagId::sema_expr_not_ice
         };
-        let d = Self::with_failure_notes(self.diag(id, at), f);
+        let d = self.not_ice_diag(id, at);
+        // C: clang's integer-constant-expression check gives no
+        // evaluation notes (WP-1312).
+        let d = if self.is_c() { d } else { Self::with_failure_notes(d, f) };
         self.emit(d);
         folded
+    }
+
+    /// `id` (`sema_expr_not_ice` or `sema_expr_not_ice_folded`) at `at`:
+    /// clang's `err_expr_not_ice` says "integer" in C and "integral" in
+    /// C++ (WP-1312).
+    pub(crate) fn not_ice_diag(&self, id: kiln_diag::DiagId, at: Loc) -> Diag {
+        self.diag(id, at).arg(i32::from(!self.is_c()))
     }
 
     /// `d` with the notes explaining the failed evaluation `f` (the

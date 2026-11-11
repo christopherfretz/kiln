@@ -366,8 +366,11 @@ const KILN_FEATURES: &[(u64, &str, &str)] = &[
     (202_400, "__cpp_trivial_union", "202603L"),
 ];
 
-/// The driver-injected `-D` that clang's driver appends after the user's
-/// (it follows the unwind-table defaults on Linux).
+/// The driver-injected `-D` that clang 19's driver appends after the
+/// user's (it follows the unwind-table defaults on Linux). clang 22
+/// defines it among the built-in macros instead, so at
+/// `-fclang-compat=22` it stays there and the `<built-in>` line of the
+/// `<command line>` marker under `-E` matches (WP-1312).
 const DRIVER_DEFINES: &[&str] = &["__GCC_HAVE_DWARF2_CFI_ASM"];
 
 /// Builds the predefines buffer text from `base` (the contents of a
@@ -399,7 +402,7 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
         set(&mut m, "__VERSION__", &q);
     }
     let mut driver: Vec<(String, String)> = Vec::new();
-    for d in DRIVER_DEFINES {
+    for d in DRIVER_DEFINES.iter().filter(|_| cfg.clang_compat == ClangCompat::Clang19) {
         if let Some(v) = m.remove(*d) {
             driver.push(((*d).to_owned(), v));
         }
@@ -964,6 +967,24 @@ mod tests {
         ));
         assert!(s.contains("#define __KILN__ 1\n"));
         assert!(s.contains("#define __STRICT_ANSI__ 1\n"));
+    }
+
+    /// WP-1312: clang 22 defines `__GCC_HAVE_DWARF2_CFI_ASM` among the
+    /// built-in macros, clang 19 after the `-D`s, so the `<command line>`
+    /// marker's `<built-in>` line under `-E` matches each.
+    #[test]
+    fn driver_define_placement_per_compat() {
+        let mut cfg = PredefConfig::new(true);
+        cfg.clang_compat = ClangCompat::Clang22;
+        let s = build_predefines(BASE, &cfg, &[]);
+        let (builtin, cmdline) = s.split_once("# 1 \"<command line>\" 1\n").unwrap();
+        assert!(builtin.contains("#define __GCC_HAVE_DWARF2_CFI_ASM 1\n"), "{s}");
+        assert!(!cmdline.contains("__GCC_HAVE_DWARF2_CFI_ASM"), "{s}");
+        cfg.clang_compat = ClangCompat::Clang19;
+        let s = build_predefines(BASE, &cfg, &[]);
+        let (builtin, cmdline) = s.split_once("# 1 \"<command line>\" 1\n").unwrap();
+        assert!(!builtin.contains("__GCC_HAVE_DWARF2_CFI_ASM"), "{s}");
+        assert!(cmdline.contains("#define __GCC_HAVE_DWARF2_CFI_ASM 1\n"), "{s}");
     }
 
     /// WP-361, [cpp.predefined]/2 and [basic.extended.fp]: the P1467

@@ -460,6 +460,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     let mut p = Parser::new(s, src, lit_opts);
     // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
+    if opts.pch.is_none() {
+        p.warn_if_empty_c_translation_unit();
+    }
     p.parse_translation_unit();
     drop(phase);
     let (s, src) = p.finish();

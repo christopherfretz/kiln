@@ -18,9 +18,22 @@ fn rest_of_line<'s>(sm: &'s SourceManager, d: &LexDiag) -> &'s str {
     rest.split(['\n', '\r']).next().unwrap_or("")
 }
 
+/// clang's `ext_delimited_escape_sequence` for a delimited (`named` false:
+/// `\x{}`, `\o{}`, `\u{}`) or named (`\N{}`) escape: a C++23 extension
+/// in C++; in C a Clang extension, except that clang 22 calls a delimited
+/// one a C2y extension (WP-1312).
+fn delimited_escape_ext(at: Span, named: bool, opts: &LexOptions) -> Diag {
+    let which = match (opts.c.is_some(), named, opts.clang19) {
+        (false, _, _) => 1,
+        (true, false, false) => 2,
+        (true, _, _) => 0,
+    };
+    Diag::new(DiagId::lex_delimited_escape_ext, at).arg(i32::from(named)).arg(which)
+}
+
 /// The diagnostic for `d`, or `None` for kinds kiln has no id for yet
 /// (they are dropped; see `spec/pp.md`).
-pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
+pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag, opts: &LexOptions) -> Option<Diag> {
     use LexDiagKind as K;
     let span = d.span;
     let diag = match d.kind {
@@ -97,8 +110,8 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
                 .unwrap_or("");
             Diag::new(DiagId::lex_ucn_unknown_name, span).arg(name)
         }
-        K::UcnDelimitedExtension => Diag::new(DiagId::lex_delimited_escape_ext, span).arg(0),
-        K::UcnNamedExtension => Diag::new(DiagId::lex_delimited_escape_ext, span).arg(1),
+        K::UcnDelimitedExtension => delimited_escape_ext(span, false, opts),
+        K::UcnNamedExtension => delimited_escape_ext(span, true, opts),
         K::IdentifierNotNfc => Diag::new(DiagId::lex_identifier_not_nfc, span),
         K::DollarInIdentifier => Diag::new(DiagId::lex_dollar_in_identifier, span),
         K::SpaceshipCompat => Diag::new(DiagId::lex_spaceship_compat, span),
@@ -215,10 +228,16 @@ pub fn literal_diags(
                     .arg(ch)
                     .range(Span::new(b.lo, span.lo.max(b.lo)))
             }
-            K::DelimitedEscapeExtension | K::UcnDelimitedExtension => {
-                Diag::new(DiagId::lex_delimited_escape_ext, at).arg(0)
+            // clang 22 reports these at the literal's start, clang 19 at
+            // the escape; at the start, each escape still gets its own.
+            K::DelimitedEscapeExtension | K::UcnDelimitedExtension | K::UcnNamedExtension => {
+                let named = matches!(d.kind, K::UcnNamedExtension);
+                if opts.clang19 {
+                    delimited_escape_ext(at, named, opts)
+                } else {
+                    delimited_escape_ext(start, named, opts).allow_duplicate()
+                }
             }
-            K::UcnNamedExtension => Diag::new(DiagId::lex_delimited_escape_ext, at).arg(1),
             K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at).range(span),
             K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at).range(span),
             K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at).range(span),
@@ -254,7 +273,7 @@ pub fn literal_diags(
             }
             _ => {
                 let lex = LexDiag { kind: d.kind, span };
-                match lex_diag(sm, &lex) {
+                match lex_diag(sm, &lex, opts) {
                     Some(diag) => diag,
                     None => continue,
                 }

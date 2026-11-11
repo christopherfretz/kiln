@@ -11,8 +11,8 @@ use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, ListId, QualType, StmtId};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
 use kiln_source::symbol::Symbol;
+use kiln_source::{ExpansionKind, Loc};
 
 use crate::Sema;
 use crate::class::InitStyle as CtorStyle;
@@ -234,6 +234,23 @@ impl Sema<'_, '_> {
                 self.recover_err(&[cond, lhs, rhs], loc)
             }
         }
+    }
+
+    /// C before C23: tag `d` defined in the type-id of the
+    /// `__builtin_offsetof` at `builtin_loc` (clang
+    /// `ext_type_defined_in_offsetof`, at the tag; named `offsetof` when
+    /// that macro spells the builtin; WP-1312). C23 allows it (N2350).
+    pub fn c_type_defined_in_offsetof(&mut self, d: DeclId, builtin_loc: Loc) {
+        if self.c_at_least(kiln_lex::CStd::C23) {
+            return;
+        }
+        let sm = self.diags.sm();
+        let by_macro = sm.expansion_info(builtin_loc).is_some_and(|x| {
+            matches!(x.kind, ExpansionKind::Macro { name } if sm.span_text(name) == Some("offsetof"))
+        });
+        let loc = self.ast.decls.get(d).loc();
+        let msg = self.diag(DiagId::sema_c_type_defined_in_offsetof, loc).arg(u8::from(by_macro));
+        self.emit(msg);
     }
 
     /// `__builtin_offsetof(ty, comps...)` at `loc` (clang

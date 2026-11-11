@@ -199,6 +199,7 @@ impl PpOptions {
         o.keep_comments = self.keep_comments || self.keep_macro_comments;
         o.reflection = self.reflection;
         o.preprocessed_output = self.preprocessed_output;
+        o.clang19 = self.clang19_escapes;
         o
     }
 

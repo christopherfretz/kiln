@@ -378,6 +378,11 @@ impl TypeNames for DiagNames<'_> {
         self.ast.decls.record(decl).map_or("struct", |r| r.tag.keyword())
     }
 
+    fn tag_named_by_typedef(&self, decl: DeclId) -> bool {
+        self.ast.decls.typedef_for_anon(decl).is_some()
+            || self.ast.decls.typedef_for_anon(self.ast.first(decl)).is_some()
+    }
+
     fn write_decl_name(&self, decl: DeclId, scoped: bool, out: &mut String) {
         let k = self.ast.decls.get(decl).kind();
         if scoped

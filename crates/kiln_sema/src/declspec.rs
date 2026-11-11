@@ -651,6 +651,9 @@ pub struct ParamInfo {
     /// `this` before the parameter-declaration: an explicit object
     /// parameter ([dcl.fct]/6, P0847).
     pub explicit_object: Option<Loc>,
+    /// C: `static` in the outermost `[ ]` (`int a[static 4]`;
+    /// [`kiln_ast::decl::ParamData::STATIC_ARRAY`]).
+    pub array_static: bool,
 }
 
 /// The default argument of a [`ParamInfo`] ([dcl.fct.default]).

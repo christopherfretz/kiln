@@ -35,6 +35,7 @@ note_await_ready_no_bool_conversion = Note (0) "return type of 'await_ready' is 
 note_bitfield_decl = Note (0) "bit-field is declared here";
 note_building_deduction_guide_here = Note (0) "while building implicit deduction guide first needed here";
 note_builtin_non_usual_declared_here = Note (1) "non-usual {0} declared here";
+note_callee_static_array = Note (0) "callee declares array parameter as static here";
 note_candidate_deleted = Note (1) "candidate function has been {0:explicitly|implicitly} deleted";
 note_cannot_use_trivial_abi_reason = Note (2) "'trivial_abi' is disallowed on {0} because {1:its copy constructors and move constructors are all deleted|it is polymorphic|it has a base of a non-trivial class type|it has a virtual base|it has a __weak field|it has a field of a non-trivial class type}";
 note_carries_dependency_missing_first_decl = Note (0) "declaration missing '[[carries_dependency]]' attribute is here";

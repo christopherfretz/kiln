@@ -114,6 +114,14 @@ pub trait TypeNames {
         "struct"
     }
 
+    /// Whether unnamed tag `decl` is named by a typedef for linkage
+    /// purposes (clang `getTypedefNameForAnonDecl`): under
+    /// [`PrintOptions::c_policy`] it prints without its keyword.
+    fn tag_named_by_typedef(&self, decl: DeclId) -> bool {
+        let _ = decl;
+        false
+    }
+
     /// For the invented type parameter of an abbreviated function
     /// template ([dcl.fct]/22), which prints as `auto` or `C<A...> auto`:
     /// `Some(constraint)` with the type-constraint's concept and its whole
@@ -1267,6 +1275,32 @@ impl Printer<'_> {
         names.write_decl_name(d, scoped, &mut self.out);
     }
 
+    /// clang `printTag`'s `HasKindDecoration`: an unnamed tag written at
+    /// `start` right after its keyword drops its own kind
+    /// (`(unnamed struct at F:L:C)` becomes `(unnamed at F:L:C)`).
+    fn strip_unnamed_kind(&mut self, start: usize) {
+        let Some(seg) = self.out.get(start..) else { return };
+        for lead in ["(unnamed ", "(anonymous "] {
+            let Some(rest) = seg.strip_prefix(lead) else { continue };
+            for kw in ["struct", "union", "class", "enum"] {
+                let Some(after) = rest.strip_prefix(kw) else { continue };
+                let cut = if after.starts_with(' ') {
+                    kw.len() + 1
+                } else if after.starts_with(')') {
+                    // `(unnamed struct)`: drop the space before it too.
+                    self.out
+                        .replace_range(start + lead.len() - 1..start + lead.len() + kw.len(), "");
+                    return;
+                } else {
+                    return;
+                };
+                let at = start + lead.len();
+                self.out.replace_range(at..at + cut, "");
+                return;
+            }
+        }
+    }
+
     fn expr(&mut self, e: ExprId) {
         let names = self.names;
         names.write_expr(e, &mut self.out);
@@ -1451,12 +1485,19 @@ impl Printer<'_> {
                     self.space_before_ph();
                     return;
                 }
-                if self.c_policy {
+                // clang `printTag`: no keyword for a tag named by a
+                // typedef; after one, an unnamed tag does not repeat it.
+                let kw = self.c_policy && !self.names.tag_named_by_typedef(d);
+                if kw {
                     let names = self.names;
                     self.push(names.tag_keyword(d));
                     self.push(" ");
                 }
+                let start = self.out.len();
                 self.decl(d, self.scope);
+                if kw {
+                    self.strip_unnamed_kind(start);
+                }
                 // clang's `printTo` keeps trailing default arguments
                 // under `PrintCanonicalTypes`.
                 let written = if self.canon_args { None } else { self.names.args_as_written(d) };
@@ -1490,10 +1531,15 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::Enum(d) => {
-                if self.c_policy {
+                let kw = self.c_policy && !self.names.tag_named_by_typedef(d);
+                if kw {
                     self.push("enum ");
                 }
+                let start = self.out.len();
                 self.decl(d, self.scope);
+                if kw {
+                    self.strip_unnamed_kind(start);
+                }
                 self.space_before_ph();
             }
             TypeView::UnresolvedUsing(d) => {
@@ -1585,6 +1631,16 @@ impl Printer<'_> {
                 self.space_before_ph();
             }
             TypeView::Elaborated { keyword, nns, named } => {
+                // clang 22 `printTag`: a tag named by a typedef for linkage
+                // purposes prints without its keyword (`'S'`, no `aka`).
+                let keyword = match self.ctx.view(split(self.ctx, named).0) {
+                    TypeView::Record(d) | TypeView::Enum(d)
+                        if self.c22 && self.names.tag_named_by_typedef(d) =>
+                    {
+                        TagKeyword::None
+                    }
+                    _ => keyword,
+                };
                 if keyword != TagKeyword::None && !self.suppress_tag {
                     self.push(keyword.spelling());
                     self.push(" ");
@@ -1598,8 +1654,15 @@ impl Printer<'_> {
                 if keyword != TagKeyword::None {
                     self.c_policy = false;
                 }
+                let start = self.out.len();
                 self.with_scope(false, |p| p.before(named));
                 self.c_policy = c_policy;
+                // clang 22 prints the keyword with the tag itself, so an
+                // unnamed one does not repeat it (`'struct (unnamed at
+                // F:L:C)'`; clang 19: `(unnamed struct at F:L:C)`).
+                if keyword != TagKeyword::None && !self.suppress_tag && self.c22 {
+                    self.strip_unnamed_kind(start);
+                }
             }
             TypeView::QualifiedArray { quals, base } => {
                 // Unreachable through `split`; print transparently.

@@ -56,6 +56,14 @@ pub(crate) struct SwitchState {
     pub default: Option<Loc>,
     /// Set when the condition was invalid (suppresses case checks).
     pub invalid: bool,
+    /// C: the condition type before the integral promotion (clang
+    /// `GetTypeBeforeIntegralPromotion`), for the case value overflow
+    /// check; `None` in C++.
+    pub c_unpromoted: Option<QualType>,
+    /// The `-Wswitch` case value overflow warnings, in source order;
+    /// emitted when the switch ends, last case first (clang walks its
+    /// `SwitchCase` list in `ActOnFinishSwitchStmt`).
+    pub overflow: Vec<kiln_diag::Diag>,
 }
 
 /// Per-function state while its body is analysed.
@@ -1039,6 +1047,7 @@ impl Sema<'_, '_> {
             (c, QualType::INT, true)
         };
         let cond = self.act_on_full_expr(cond);
+        let c_unpromoted = (self.is_c() && ok).then(|| conv::strip_cv(self, tv));
         if let Some(f) = self.func.as_mut() {
             f.has_switch = true;
             f.switches.push(SwitchState {
@@ -1049,6 +1058,8 @@ impl Sema<'_, '_> {
                 cases: Vec::new(),
                 default: None,
                 invalid,
+                c_unpromoted,
+                overflow: Vec::new(),
             });
             f.breakables.push(false);
         }
@@ -1072,7 +1083,10 @@ impl Sema<'_, '_> {
             None => None,
         };
         let cases = match cases {
-            Some(sw) => {
+            Some(mut sw) => {
+                for d in std::mem::take(&mut sw.overflow).into_iter().rev() {
+                    self.emit(d);
+                }
                 self.check_case_ranges(&sw);
                 self.check_switch_cases(&sw, cond, loc);
                 sw.cases
@@ -1236,6 +1250,9 @@ impl Sema<'_, '_> {
                 let ce = self.builder().constant_expr(conv, Some(cv));
                 let ce = self.act_on_constant_full_expr(ce);
                 self.case_narrowing(narrowed, at, cond_ty);
+                if !invalid {
+                    self.c_case_overflow(e, at);
+                }
                 (ce, iv.filter(|_| !invalid))
             }
             Err(mut f) => {
@@ -1245,8 +1262,15 @@ impl Sema<'_, '_> {
                 let full = self.act_on_constant_full_expr(conv);
                 self.case_narrowing(narrowed, at, cond_ty);
                 let at = Self::fold_lone_invalid(&mut f, at);
-                let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
-                let d = Self::with_failure_notes(msg, f);
+                // C: an integer constant expression (clang
+                // `VerifyIntegerConstantExpression`, no evaluation notes;
+                // WP-1312).
+                let d = if self.is_c() {
+                    self.not_ice_diag(DiagId::sema_expr_not_ice, at)
+                } else {
+                    let msg = self.diag(DiagId::sema_expr_not_cce, at).arg("case value");
+                    Self::with_failure_notes(msg, f)
+                };
                 self.emit(d);
                 (full, None)
             }
@@ -1330,6 +1354,36 @@ impl Sema<'_, '_> {
             .range(self.expr_range(e));
         self.emit(d);
         Err((self.recover_err(&[e], at), None))
+    }
+
+    /// C (WP-1312): clang's `-Wswitch` "overflow converting case value"
+    /// warning for case value `e` at `at`, queued on the switch: the
+    /// value, at its own width, does not survive a round trip through the
+    /// unpromoted condition type (clang `checkCaseValue`).
+    fn c_case_overflow(&mut self, e: ExprId, at: Loc) {
+        let Some(un) = self.func.as_ref().and_then(|f| f.switches.last()?.c_unpromoted) else {
+            return;
+        };
+        let ety = self.ast.exprs.get(e).ty();
+        let info = |s: &Self, t| crate::constfold::int_info(&s.ast, t);
+        let (Some((ow, os)), Some((uw, us))) = (info(self, ety), info(self, un)) else {
+            return;
+        };
+        if uw >= ow {
+            return;
+        }
+        let Some(orig) = self.fold_int(e) else { return };
+        let to = crate::impcast::truncate_to(crate::impcast::truncate_to(orig, uw, us), ow, os);
+        if to == orig {
+            return;
+        }
+        let d = self
+            .diag(DiagId::sema_case_value_overflow, at)
+            .arg(orig.to_string())
+            .arg(to.to_string());
+        if let Some(sw) = self.func.as_mut().and_then(|f| f.switches.last_mut()) {
+            sw.overflow.push(d);
+        }
     }
 
     /// clang `CheckConvertedConstantConversions`: the second standard

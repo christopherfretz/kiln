@@ -9,9 +9,10 @@
 //!
 //! Every entry point is called only when `Sema::is_c()`.
 
+use kiln_ast::decl::ParamData;
 use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, UnaryOp};
 use kiln_ast::types::TypeView;
-use kiln_ast::{ExprId, QualType};
+use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_source::Loc;
 
@@ -159,7 +160,22 @@ impl Sema<'_, '_> {
                 warn(self, DiagId::sema_c_ordered_comparison_function_pointers);
             }
             if c_assign::compatible(self, lpe.without_quals(), rpe.without_quals()) {
-                // C17 6.5.8p2: compatible object types, qualifiers aside.
+                // C17 6.5.8p2: compatible object types, qualifiers aside;
+                // before C11 both complete or both incomplete (clang
+                // `ext_typecheck_compare_complete_incomplete_pointers`,
+                // WP-1312).
+                let (lc, rc) = (self.is_complete(lpe), self.is_complete(rpe));
+                if ordered && lc != rc && !self.c_at_least(kiln_lex::CStd::C11) {
+                    let msg = self
+                        .diag(DiagId::sema_c_compare_complete_incomplete_pointers, loc)
+                        .arg(self.ty_arg(lt))
+                        .arg(self.second_ty_arg(lt, rt))
+                        .arg(u8::from(!lc))
+                        .arg(u8::from(!rc))
+                        .range(self.expr_range(l))
+                        .range(self.expr_range(r));
+                    self.emit(msg);
+                }
             } else if !ordered && (self.ast.types.is_void(lpe) || self.ast.types.is_void(rpe)) {
                 // C17 6.5.9p2: a pointer to void; against a function
                 // pointer only a null pointer constant is standard.
@@ -342,6 +358,50 @@ impl Sema<'_, '_> {
         (t3, f3, ty)
     }
 
+    /// C17 6.7.6.3p7: the argument `arg` (converted) of a call at
+    /// `call_at` for parameter `p` declared `T a[static N]` must point
+    /// to at least `N` elements (clang `CheckStaticArrayArgument`,
+    /// WP-1312): a null pointer constant is `-Wnonnull`, an array of
+    /// fewer elements (or, of another element type, fewer bytes) is
+    /// `-Warray-bounds`; each notes the parameter.
+    pub(crate) fn c_check_static_array_arg(&mut self, call_at: Loc, p: DeclId, arg: ExprId) {
+        let Some(pd) = self.ast.decls.param(p).copied() else { return };
+        let Some(orig) = pd.original_ty.filter(|_| pd.flags & ParamData::STATIC_ARRAY != 0) else {
+            return;
+        };
+        let note = self.diag(DiagId::note_callee_static_array, self.ast.decls.get(p).loc());
+        let a = self.ignore_paren_imp_casts(arg);
+        if c_assign::null_pointer_constant(self, a).is_some() {
+            let msg = self.diag(DiagId::sema_null_arg, call_at).range(self.expr_range(a));
+            self.emit(msg.with_note(note));
+            return;
+        }
+        let t = &self.ast.types;
+        let Some(n) = t.array_size(orig) else { return };
+        let at = self.ety(self.ignore_paren_casts(a));
+        let Some(an) = t.array_size(at) else { return };
+        let (pe, ae) = (t.element(orig), t.element(at));
+        let same = matches!((pe, ae), (Some(x), Some(y)) if t.same_type(t.canonical(x).without_quals(), t.canonical(y).without_quals()));
+        let (have, want, bytes) = if same {
+            (an, n, 0u8)
+        } else {
+            let size = |q| crate::target::size_align(&self.ast, q, self.abi()).map(|(s, _)| s);
+            match (size(at), size(orig)) {
+                (Some(x), Some(y)) => (x, y, 1),
+                _ => return,
+            }
+        };
+        if have < want {
+            let msg = self
+                .diag(DiagId::sema_static_array_too_small, call_at)
+                .arg(have.to_string())
+                .arg(want.to_string())
+                .arg(bytes)
+                .range(self.expr_range(a));
+            self.emit(msg.with_note(note));
+        }
+    }
+
     /// C 6.5.3.2p4: `*p` of a `void *` (any qualifiers) is an expression of
     /// type `void`, which may only be discarded or be an operand of `?:`,
     /// `,` or a cast to `void`; clang accepts it with an on-by-default
@@ -349,8 +409,14 @@ impl Sema<'_, '_> {
     /// (clang `CheckIndirectionOperand`; WP-1285).
     pub(super) fn c_void_deref(&mut self, x: ExprId, pointee: QualType, loc: Loc) -> ExprId {
         let pt = self.ety(x);
-        let msg = self.diag(DiagId::sema_c_void_ptr_dereference, loc).arg(self.ty_arg(pt));
-        self.emit(msg.range(self.expr_range(x)));
+        // Not in an unevaluated operand, nor (C99 6.5.3.2p3) as the
+        // operand of `&` (clang `CheckIndirectionOperand`, WP-1312).
+        let quiet =
+            self.unevaluated > 0 || (self.deref_after_amp && self.c_at_least(kiln_lex::CStd::C99));
+        if !quiet {
+            let msg = self.diag(DiagId::sema_c_void_ptr_dereference, loc).arg(self.ty_arg(pt));
+            self.emit(msg.range(self.expr_range(x)));
+        }
         self.builder().unary(UnaryOp::Deref, x, pointee, loc, ExprFlags::CANNOT_OVERFLOW)
     }
 

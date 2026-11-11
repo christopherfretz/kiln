@@ -2100,6 +2100,13 @@ impl Sema<'_, '_> {
             let f = self.c_implicit_function_decl(sym, loc);
             return self.build_decl_ref(f, loc);
         }
+        // C23 has neither: with no argument-dependent lookup to wait
+        // for, clang reports the name at once, before the arguments
+        // (WP-1312).
+        if self.is_c() {
+            self.diagnose_undeclared_call_name(name, loc);
+            return self.recover_err(&[], loc);
+        }
         self.builder().unresolved_lookup(name, &[], true, None, None, loc)
     }
 

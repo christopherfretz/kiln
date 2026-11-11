@@ -124,6 +124,73 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
     still cascade on qualifiers inside a parameter's `[ ]`
     (`tests/c/decl/array-param-qualifiers.c`, xfail, WP-1287).
 
+## WP-1312 C diagnostics batch (wp/1312, 2026-11-11)
+
+Warnings and wording from the WP-1296/1297/1299/1302/1305/1306/1309
+follow-up rows, compared with clang 19 and 22 (spec/sema.md §1.0.5).
+Nothing changes what is accepted, rejected or emitted.
+
+Done:
+
+- 1: no `aka` for a typedef of an anonymous tag.
+- 2: "variably modified type in a constant expression".
+- 3: `[static N]` arguments: -Warray-bounds (too small) and -Wnonnull
+  (null).
+- 5: "(unnamed at" wording, per compat level.
+- 7: -Wsizeof-array-decay and -Wsizeof-array-argument.
+- 8: pedantic `&*` on `void *` and `&` of `void`; GNU `?:` without a
+  middle operand; a tag defined in `offsetof`'s type before C23.
+- 9: the wording half of the pre-C11 complete/incomplete pointer
+  comparison.
+- 10, 13: a C23 call of an undeclared name is reported before its
+  arguments (so C `__is_same(int, int)` reads as clang's, with WP-1311's
+  "expected expression" for the type keywords); a declarator without a
+  name is "expected identifier or '('".
+- 11: -Wempty-translation-unit.
+- 14: -Wstrict-prototypes.
+- 15: `<built-in>` line numbers under `-E`.
+- 16: `\N{}` and the other delimited escapes in C, per compat level.
+- 18: an incomplete-type variable with an initializer is reported at its
+  name.
+- 19: "static declaration follows non-static" points at the previous
+  definition.
+- 20: the C2y extern-inline wording (clang 19 text kept), -Wswitch
+  "overflow converting case value", and the compound literal's range
+  ending at `}`.
+- 22: -Wincompatible-library-redeclaration on a first declaration,
+  including WP-1311's `<stdlib.h>` rows (`exit`, `free`, `strtol`).
+
+Already correct on main: 4 (-Wvisibility, every form probed), 6 in C
+(-Wunused-volatile-lvalue), 12 (`_Decimal` wording), 21 (all 281
+`extern "C"` diag tests pass under clang++-19 and clang++-22), and 23
+(the culprit location matches clang 19 on the probes).
+
+Skipped: 17. The `StubIfEvaluator` is only the fallback when no `#if`
+evaluator is installed. The driver always installs `IfEval`, so its
+ranges are never shown to a user.
+
+Measured with the harness build of wp/1312:
+
+- gcc.c-torture (`-O0,-O2`, four suites, `--oracles none`, so kiln at
+  compat 22): 6896/7572 at base `2f9bf7eae` and at head, no per-case
+  change.
+- The five C OSS rows are green with the same probe counts as before
+  (zlib 19 (0), sqlite 45 (4), zstd 65 (9), c-ares 311 (29)), and no
+  warnings in the build phase.
+
+Found while doing this, but not changed here (each changes what kiln
+accepts, rejects or emits):
+
+- `extern "C"` in a C file is accepted silently; clang reports "expected
+  identifier or '('".
+- `&(c ? *p : *p)` on `void *` is accepted.
+- `sizeof(+a)` on an array is accepted.
+- Excess array initializer elements are an error, where clang warns.
+- -Wunused-variable fires on an invalid declaration.
+- C89 -Wdeclaration-after-statement is missing.
+- Case-value overflow in C++98 is not checked.
+- The "expanded from macro" note for `offsetof` is missing.
+
 ## C OSS rows
 
 `scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)

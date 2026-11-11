@@ -80,6 +80,7 @@ sema_nttp_incomplete = Error (1) "non-type template parameter has incomplete typ
 sema_nttp_non_literal = Error (1) "non-type template parameter has non-literal type {0}";
 sema_nttp_not_structural = Error (1) "type {0} of non-type template parameter is not a structural type";
 sema_nttp_rvalue_ref = Error (1) "non-type template parameter has rvalue reference type {0}";
+sema_null_arg = Warning [NonNull] (0) "null passed to a callee that requires a non-null argument";
 sema_null_conversion = Warning [NullConversion] (2) "implicit conversion of {0} constant to {1}";
 sema_null_in_arithmetic = Warning [NullArithmetic] (0) "use of NULL in arithmetic operation";
 sema_null_in_comparison = Warning [NullArithmetic] (2) "comparison between NULL and non-pointer {0:({1} and NULL)|(NULL and {1})}";

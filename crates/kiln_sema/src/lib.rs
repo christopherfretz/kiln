@@ -487,6 +487,9 @@ pub struct Sema<'a, 'sm> {
     /// The id-expression being built is a qualified name that is the
     /// whole operand of unary `&` ([`Sema::act_on_id_expression_in`]).
     pub(crate) address_operand: bool,
+    /// C: the `*` being built directly follows a unary `&` (clang's
+    /// `IsAfterAmp`; [`Sema::act_on_deref_after_amp`]).
+    pub(crate) deref_after_amp: bool,
     /// [`stmt::FnState::volatile_assigns`] outside a function body (a
     /// namespace-scope initializer, a default member initializer).
     pub(crate) volatile_assigns: Vec<ExprId>,
@@ -1404,6 +1407,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             func: None,
             unevaluated: 0,
             address_operand: false,
+            deref_after_amp: false,
             volatile_assigns: Vec::new(),
             decltype_calls: Vec::new(),
             agg_list_end: None,

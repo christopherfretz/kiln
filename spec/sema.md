@@ -227,6 +227,67 @@ compound literals) are WP-1276's.
   [dcl.attr.noreturn]/1 first-declaration error is C++'s only
   (`check_noreturn_on_first_decl`, standard spelling only).
 
+#### 1.0.5 C diagnostics (WP-1312)
+
+C-only warnings and wording, matched against clang 19 and 22. None of
+them changes what is accepted, rejected or emitted.
+
+- `[static N]` array parameters (C23 6.7.7.4p7, clang
+  `CheckStaticArrayArgument`, `expr/c_ops.rs` `c_check_static_array_arg`).
+  A parameter declared with `static` in its array bound has
+  `ParamData::STATIC_ARRAY`. An argument that is a null pointer constant
+  gives -Wnonnull ("null passed to a callee that requires a non-null
+  argument"; `nonnull` is in `format`, as in clang). An array argument
+  smaller than the bound gives -Warray-bounds: elements are compared when
+  the element types match, bytes otherwise. Both add the note "callee
+  declares array parameter as static here".
+- `sizeof` warnings (clang `CheckUnaryExprOrTypeTraitOperand`):
+  - -Wsizeof-array-argument: `sizeof` of a parameter declared as an
+    array.
+  - -Wsizeof-array-decay: `sizeof` of a pointer operation whose operand
+    is a decayed array.
+  - Both are in `most` and also apply in C++.
+- Pedantic forms:
+  - `&` of a `void` expression is "ISO C forbids taking the address of
+    an expression of type 'void'", unless the operand is `*p` in C99 or
+    later. `*` on a `void *` directly under `&` is silent in C99 or
+    later, as is any `*` in an unevaluated operand.
+  - GNU `?:` with the middle operand omitted is
+    -Wgnu-conditional-omitted-operand (in `gnu`).
+  - A tag defined in the type of `__builtin_offsetof` before C23 is
+    -Wc23-extensions ("defining a type within '__builtin_offsetof'";
+    it says 'offsetof' when the call comes from the macro of that name).
+  - Before C11, an ordered comparison of pointers to compatible types
+    where one is complete and the other incomplete is -Wc11-extensions.
+- Library redeclarations (`builtins.rs` `warn_incompatible_lib_first_decl`):
+  a first, file-scope, non-static declaration of a predefined library
+  function with an incompatible type gives
+  -Wincompatible-library-redeclaration even if the function was never
+  called before it.
+- `switch` (`stmt.rs` `c_case_overflow`): a case value that changes when
+  converted to the unpromoted condition type gives -Wswitch, "overflow
+  converting case value to switch condition type".
+- Wording:
+  - A static function used in an extern inline function reads "using
+    static … is a C2y extension" at clang 22; the clang 19 text is kept
+    as a `_19` row.
+  - "static declaration follows non-static" says "previous definition"
+    when the earlier declaration is a definition.
+  - An incomplete-type variable with an initializer is reported at its
+    name.
+  - A type keyword where an expression is expected is "expected
+    expression".
+  - A declarator without a name is "expected identifier or '('".
+  - A C23 call of an undeclared name is reported before its arguments
+    are parsed.
+  - A compound literal's diagnostic range ends at its `}`.
+
+Tests: `tests/c/expr/{static-array-argument,sizeof-array-decay,void-deref-address-c89,void-deref-address-c17,gnu-conditional-omitted-operand,offsetof-type-definition,pointer-compare-complete-incomplete}.c`,
+`tests/c/parse/type-keyword-not-expression.c`,
+`tests/c/stmt/switch-case-value-overflow.c`,
+`tests/c/decl/{incomplete-variable-braced-init,static-follows-non-static-note,static-in-inline-19,static-in-inline-22,incompatible-library-redeclaration}.c`
+and the group 1 tests listed in docs/status/c-mode.md.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output

@@ -3,6 +3,7 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_c99_flexible_array_member = Extension [C99Extensions] (0) "flexible array members are a C99 feature";
+sema_c_addrof_void = Extension (0) "ISO C forbids taking the address of an expression of type 'void'";
 // WP-1276: C assignment constraints (clang `DiagnoseAssignmentResult`; {2} is the action).
 sema_c_assign_discards_nested_qualifiers = ExtWarn [IncompatiblePointerTypesDiscardsQualifiers] (3) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} discards qualifiers in nested pointer types";
 sema_c_assign_discards_qualifiers = ExtWarn [IncompatiblePointerTypesDiscardsQualifiers] (3) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} discards qualifiers";
@@ -21,6 +22,7 @@ sema_c_call_without_prototype = Warning [DeprecatedNonPrototype] (2) "passing ar
 sema_c_cast_non_int_to_pointer = Error (1) "operand of type {0} cannot be cast to a pointer type";
 // C 6.5.4p4: a pointer and a floating type do not convert by a cast
 sema_c_cast_pointer_to_non_int = Error (1) "pointer cannot be cast to type {0}";
+sema_c_compare_complete_incomplete_pointers = Extension [C11Extensions] (4) "pointer comparisons before C11 need to be between two complete or two incomplete types; {0} is {2:|in}complete and {1} is {3:|in}complete";
 // C 6.5.8/6.5.9 constraint violations that clang (and GCC) accept with a
 // warning in C (WP-1285)
 sema_c_comparison_distinct_pointers = ExtWarn [CompareDistinctPointerTypes] (2) "comparison of distinct pointer types ({0} and {1})";
@@ -54,9 +56,11 @@ sema_c_pointer_to_enum_cast = Warning [PointerToEnumCast] (2) "cast to smaller i
 // C 6.3.2.3p6 (WP-1285): a pointer converted to a narrower integer is
 // implementation-defined in C, not an error (clang `CheckCStyleCast`)
 sema_c_pointer_to_int_cast = Warning [PointerToIntCast] (2) "cast to smaller integer type {1} from {0}";
+sema_c_strict_prototypes = Extension [StrictPrototypes] (0) "a function declaration without a prototype is deprecated in all versions of C";
 // GNU `void *` subscript (C mode, WP-1285)
 sema_c_subscript_void_pointer = Extension [GnuPointerArith] (0) "subscript of a pointer to void is a GNU extension";
 sema_c_tag_without_keyword = Error (2) "must use '{0}' tag to refer to type '{1}'";
+sema_c_type_defined_in_offsetof = Extension [C23Extensions] (1) "defining a type within '{0:__builtin_offsetof|offsetof}' is a C23 extension";
 sema_c_void_pointer_to_enum_cast = Warning [VoidPointerToEnumCast] (2) "cast to smaller integer type {1} from {0}";
 sema_c_void_pointer_to_int_cast = Warning [VoidPointerToIntCast] (2) "cast to smaller integer type {1} from {0}";
 // C 6.5.3.2p4 (WP-1285): `*p` of a `void *` is a `void` expression in C
@@ -91,6 +95,7 @@ sema_carries_dependency_missing_on_first_decl = Error (1) "{0:function|parameter
 sema_carries_dependency_param_not_function_decl = Error (0) "'[[carries_dependency]]' attribute only allowed on parameter in a function declaration or lambda";
 sema_case_empty_range = Warning (0) "empty case range specified";
 sema_case_not_in_switch = Error (0) "'case' statement not in switch statement";
+sema_case_value_overflow = Warning [Switch] (2) "overflow converting case value to switch condition type ({0} to {1})";
 sema_cast_nonnull_to_bool = Warning [PointerBoolConversion] (2) "nonnull {0:function call|parameter} '{1}' will evaluate to 'true' on first encounter";
 sema_cast_to_incomplete = Error (1) "cast to incomplete type {0}";
 sema_catch_incomplete = Error (1) "cannot catch incomplete type {0}";

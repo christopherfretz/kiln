@@ -163,6 +163,9 @@ pub struct Parser<'a, 'sm> {
     /// The token position just past the last unary `&`: an id-expression
     /// starting there is the operand of `&` (clang's `isAddressOfOperand`).
     pub(crate) addr_operand_at: Option<usize>,
+    /// C: the `__builtin_offsetof` whose type-id is being parsed, until a
+    /// tag is defined in it ([`Sema::c_type_defined_in_offsetof`]).
+    pub(crate) offsetof_at: Option<Loc>,
     /// The declarator being parsed is a handler's exception-declaration,
     /// whose direct declarator takes a misplaced `...` (clang
     /// `ParseDirectDeclarator` consumes one wherever a name may follow;
@@ -381,6 +384,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             greater_off_depth: 0,
             pack_hint: false,
             addr_operand_at: None,
+            offsetof_at: None,
             catch_declarator: false,
             in_exception_decl: false,
             type_id_constraint: Loc::INVALID,
