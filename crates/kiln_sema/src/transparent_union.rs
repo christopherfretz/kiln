@@ -161,6 +161,66 @@ impl Sema<'_, '_> {
             .then_some(def)
     }
 
+    /// clang `mergeFunctionParameterTypes` (GNU, C only): in a
+    /// redeclaration, a parameter of transparent union type is
+    /// compatible with one whose type is compatible with an
+    /// (unqualified) member of the union, and the merged parameter is
+    /// that member's type (`mergeTransparentUnionType`). Returns the
+    /// function types `pty` and `ty` with each such pair of parameters
+    /// replaced by the member type, or `None` when no pair matches.
+    pub(crate) fn c_transparent_param_merge(
+        &mut self,
+        pty: QualType,
+        ty: QualType,
+    ) -> Option<(QualType, QualType)> {
+        let (a, b) = (self.ast.types.proto(pty).copied()?, self.ast.types.proto(ty).copied()?);
+        let mut pa = self.ast.types.params(&a).to_vec();
+        let mut pb = self.ast.types.params(&b).to_vec();
+        if pa.len() != pb.len() {
+            return None;
+        }
+        let mut changed = false;
+        for (x, y) in pa.iter_mut().zip(pb.iter_mut()) {
+            let m = self
+                .transparent_member_match(*x, *y)
+                .or_else(|| self.transparent_member_match(*y, *x));
+            if let Some(m) = m {
+                (*x, *y) = (m, m);
+                changed = true;
+            }
+        }
+        if !changed {
+            return None;
+        }
+        let (ea, eb) = (self.ast.types.exc_spec(&a), self.ast.types.exc_spec(&b));
+        let ta = self.ast.types.function(a.ret(), &pa, a.info(), ea);
+        let tb = self.ast.types.function(b.ret(), &pb, b.info(), eb);
+        Some((ta, tb))
+    }
+
+    /// The first unqualified member type of transparent union `u`
+    /// compatible with `other`.
+    fn transparent_member_match(&self, u: QualType, other: QualType) -> Option<QualType> {
+        self.transparent_union_members(u)?
+            .into_iter()
+            .find(|&t| crate::conv::c_assign::compatible(self, t, other))
+    }
+
+    /// The unqualified member types of `u` when it is a union that kept
+    /// `transparent_union`.
+    pub(crate) fn transparent_union_members(&self, u: QualType) -> Option<Vec<QualType>> {
+        let def = self.transparent_union_of(u)?;
+        Some(
+            self.ast
+                .decls
+                .members(def)
+                .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+                .filter_map(|m| self.ast.decls.get(m).ty())
+                .map(|t| crate::conv::strip_cv(self, t))
+                .collect(),
+        )
+    }
+
     /// clang `CheckTransparentUnionArgumentConstraints`: argument `e`
     /// passed to a parameter of transparent union type `to` (after the
     /// plain assignment check failed) initializes the first member that

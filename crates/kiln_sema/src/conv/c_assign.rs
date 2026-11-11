@@ -178,10 +178,25 @@ fn compatible_unqual(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> 
                 let (x, y) =
                     (types.canonical(x).without_quals(), types.canonical(y).without_quals());
                 compatible_at(s, x, y, depth)
+                    || transparent_member_compatible(s, x, y, depth)
+                    || transparent_member_compatible(s, y, x, depth)
             })
         }
         _ => false,
     }
+}
+
+/// GNU (clang `mergeFunctionParameterTypes`): parameter type `u`, a
+/// union that kept `transparent_union`, is compatible with `other` when
+/// one of its unqualified member types is.
+fn transparent_member_compatible(
+    s: &Sema<'_, '_>,
+    u: QualType,
+    other: QualType,
+    depth: u32,
+) -> bool {
+    s.transparent_union_members(u)
+        .is_some_and(|ms| ms.into_iter().any(|t| compatible_at(s, t, other, depth)))
 }
 
 /// clang's sign-insensitive pointee: plain `char` and the signed integer

@@ -137,8 +137,12 @@ impl Sema<'_, '_> {
             || b.info().no_proto()
             || a.info() != b.info()
             || types.exc_spec(&a) != types.exc_spec(&b)
-            || !conv::c_assign::compatible(self, pty, ty)
         {
+            return None;
+        }
+        // GNU: a transparent union parameter merges with a member's type.
+        let (pty, ty) = self.c_transparent_param_merge(pty, ty).unwrap_or((pty, ty));
+        if !conv::c_assign::compatible(self, pty, ty) {
             return None;
         }
         Some(self.c_composite_at(ty, pty, DEPTH))

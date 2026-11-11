@@ -607,9 +607,16 @@ impl Cg<'_> {
             // and is narrowed to its declared one (clang
             // `emitArgumentDemotion`).
             let sq = sig.params.get(i).copied().unwrap_or(pq);
+            // A transparent union parameter that a redeclaration merged
+            // with a member's type (clang `mergeTransparentUnionType`)
+            // arrives as that member either way (the ABI passes the union
+            // as its first field).
+            let transparent = |q| kiln_abi::call::transparent_union_first_field(ast, q).is_some();
             let demote = self.opts.c.is_some()
                 && ast.types.canonical(sq).without_quals()
-                    != ast.types.canonical(pq).without_quals();
+                    != ast.types.canonical(pq).without_quals()
+                && !transparent(sq)
+                && !transparent(pq);
             let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no, loc)?;
             vals.push(match pv {
                 ParamVal::Direct(v) if demote => {
