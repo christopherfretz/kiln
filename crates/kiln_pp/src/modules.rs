@@ -53,6 +53,10 @@ pub struct ModuleOptions {
     /// `std.compat` (spec/modules.md §11.12): asked wherever one of them
     /// would otherwise be built from its source in `std_dir`.
     pub std_cache: Option<StdModuleCache>,
+    /// A header unit's exported macros are made visible as they are,
+    /// not through a write and read of the preprocessor-state record
+    /// (spec/modules.md §11.13 "Header units"). Off by default.
+    pub no_unit_record: bool,
 }
 
 /// A lookup in the toolchain's module-file cache (spec/modules.md
@@ -1435,6 +1439,7 @@ impl Preprocessor<'_, '_> {
     /// queues [`Marker::UnitEnd`].
     pub(crate) fn end_unit(
         &mut self,
+        unit: FileId,
         save: Box<UnitSave>,
         image: Option<(Rc<bmi::ImageSection>, Span)>,
     ) {
@@ -1454,6 +1459,14 @@ impl Preprocessor<'_, '_> {
                 .cloned()
                 .collect();
             v.sort_by_key(|d| d.name_span.lo);
+            // spec/modules.md §11.13 "Header units": the export goes
+            // through the record; a unit it cannot carry keeps its
+            // in-process definitions.
+            if self.modules.as_ref().is_some_and(|m| !m.opts.no_unit_record)
+                && let Some(back) = self.unit_round_trip(unit, &v)
+            {
+                v = back;
+            }
             v
         } else {
             Vec::new()

@@ -234,6 +234,14 @@ impl LocTable {
         Ok(())
     }
 
+    /// The file table index of `file`, adding it to the table (with no
+    /// location record) if no location in it was carried: the
+    /// preprocessor-state record keys include guards and `#pragma once`
+    /// files by it.
+    pub fn file_index(&mut self, sm: &SourceManager, file: FileId) -> W<u32> {
+        self.file(sm, file)
+    }
+
     /// The file table index of `file`.
     fn file(&mut self, sm: &SourceManager, file: FileId) -> W<u32> {
         if let Some(&i) = self.file_ix.get(&file) {

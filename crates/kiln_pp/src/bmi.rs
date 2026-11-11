@@ -40,9 +40,12 @@ pub const SECTION_CONSTS: u32 = 1;
 /// The declaration and type image (spec/modules.md §11.11 "Part 2a";
 /// encoded by `kiln_sema::bmi_image`).
 pub const SECTION_IMAGE: u32 = 2;
+/// The preprocessor-state record (spec/modules.md §11.12; encoded by
+/// [`crate::state`]).
+pub const SECTION_PP: u32 = 3;
 /// The highest section tag this reader knows. Tags above it are reserved
 /// for later parts of the serialised AST (§11.11, "Sections").
-pub const SECTION_MAX: u32 = SECTION_IMAGE;
+pub const SECTION_MAX: u32 = SECTION_PP;
 /// The includer index of the predefines buffer (`<built-in>`).
 pub const INCLUDER_BUILTIN: u32 = u32::MAX;
 /// The includer index of a request without an includer.
@@ -571,17 +574,77 @@ pub fn write(c: &Capsule) -> Vec<u8> {
         }
     }
     if !c.sections.is_empty() {
-        let mut sorted: Vec<&Section> = c.sections.iter().collect();
-        sorted.sort_by_key(|s| s.tag);
-        w.len(sorted.len());
-        for s in sorted {
-            w.u32(s.tag);
-            w.bytes(&s.bytes);
-        }
+        section_block(&mut w, &c.sections);
     }
     let sum = checksum(&w.0);
     w.u64(sum);
     w.0
+}
+
+/// The section block of a kind-2 file: the count, then each section's
+/// tag and bytes, by increasing tag.
+fn section_block(w: &mut W, sections: &[Section]) {
+    let mut sorted: Vec<&Section> = sections.iter().collect();
+    sorted.sort_by_key(|s| s.tag);
+    w.len(sorted.len());
+    for s in sorted {
+        w.u32(s.tag);
+        w.bytes(&s.bytes);
+    }
+}
+
+/// The section block alone, as a precompiled header carries it after its
+/// `KILNPCH` record (spec/modules.md §11.12 "In a precompiled header"):
+/// the kind-2 block ([`write`]) followed by its [`checksum`].
+#[must_use]
+pub fn write_sections(sections: &[Section]) -> Vec<u8> {
+    let mut w = W(Vec::new());
+    section_block(&mut w, sections);
+    let sum = checksum(&w.0);
+    w.u64(sum);
+    w.0
+}
+
+/// Reads a block written by [`write_sections`]. Total: every malformed
+/// input is an error.
+///
+/// # Errors
+/// [`BmiError::Corrupt`] for a truncated block, an unknown or repeated
+/// tag, trailing bytes or a checksum mismatch.
+pub fn read_sections(bytes: &[u8]) -> Result<Vec<Section>, BmiError> {
+    let Some(body_len) = bytes.len().checked_sub(8) else { return corrupt("truncated") };
+    let mut src = &bytes[..body_len];
+    let mut r = R { kind: KIND_SECTIONS, src: &mut src, left: body_len as u64, sum: FNV_OFFSET };
+    let sections = sections(&mut r)?;
+    if r.left != 0 {
+        return corrupt("trailing bytes");
+    }
+    let mut t = [0u8; 8];
+    t.copy_from_slice(&bytes[body_len..]);
+    if u64::from_le_bytes(t) != checksum(&bytes[..body_len]) {
+        return corrupt("checksum mismatch");
+    }
+    Ok(sections)
+}
+
+/// Reads a section block ([`section_block`]).
+fn sections(r: &mut R<'_>) -> Res<Vec<Section>> {
+    let n = r.count(8)?;
+    if n == 0 {
+        return corrupt("a kind-2 file without sections");
+    }
+    let mut sections: Vec<Section> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let tag = r.u32()?;
+        if tag == 0 || tag > SECTION_MAX {
+            return corrupt("unknown section");
+        }
+        if sections.last().is_some_and(|s| s.tag >= tag) {
+            return corrupt("sections out of order");
+        }
+        sections.push(Section { tag, bytes: r.bytes()? });
+    }
+    Ok(sections)
 }
 
 /// Writes `bytes` to `path` atomically: to a temporary file beside it,
@@ -890,24 +953,7 @@ fn body(r: &mut R<'_>) -> Res<Capsule> {
             bytes,
         });
     }
-    let mut sections = Vec::new();
-    if r.kind == KIND_SECTIONS {
-        let n = r.count(8)?;
-        if n == 0 {
-            return corrupt("a kind-2 file without sections");
-        }
-        sections.reserve(n);
-        for _ in 0..n {
-            let tag = r.u32()?;
-            if tag == 0 || tag > SECTION_MAX {
-                return corrupt("unknown section");
-            }
-            if sections.last().is_some_and(|s: &Section| s.tag >= tag) {
-                return corrupt("sections out of order");
-            }
-            sections.push(Section { tag, bytes: r.bytes()? });
-        }
-    }
+    let sections = if r.kind == KIND_SECTIONS { sections(r)? } else { Vec::new() };
     if r.left != 0 {
         return corrupt("trailing bytes");
     }

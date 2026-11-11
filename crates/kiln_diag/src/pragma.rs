@@ -177,8 +177,6 @@ impl Pragmas {
         true
     }
 
-    /// The preprocessor left an included file and resumes its includer at
-    /// `resume`: the current state continues there.
     /// The current state and the `push` stack, as the states they name
     /// (`(id, severity, flags)` with flags bit 0 `user`, bit 1
     /// `no_werror`, bit 2 `no_fatal`; ids sorted).
@@ -233,6 +231,8 @@ impl Pragmas {
         }
     }
 
+    /// The preprocessor left an included file and resumes its includer at
+    /// `resume`: the current state continues there.
     pub(crate) fn file_exit(&mut self, sm: &SourceManager, resume: Loc) {
         if self.is_empty() || !resume.is_valid() {
             return;
