@@ -736,7 +736,9 @@ impl Cg<'_> {
     /// A member pointer stored in an image: the Oven records it as a
     /// relocation (a `MemberPtr` or member `Null` scalar) over its `i64`
     /// (data) or `{ i64, i64 }` (function) storage, whose bytes are 0; a
-    /// null data member pointer is `-1` (Itanium).
+    /// null data member pointer is `-1` (Itanium). So is an address an
+    /// integer member holds (a `Pointer` of integer type: `ptrtoint`, C23
+    /// 6.6p9, spec/codegen.md "Static initialization").
     fn member_ptr_reloc(&mut self, img: &Img, off: u64, it: &IrType, t: LTy) -> R<Option<Value>> {
         if !matches!(it, IrType::Int(64) | IrType::Struct(..)) {
             return Ok(None);
@@ -747,6 +749,9 @@ impl Cg<'_> {
                 s @ (Scalar::MemberPtr { .. }
                 | Scalar::Null { kind: NullKind::MemberData | NullKind::MemberFunction, .. }),
             ) => self.scalar_const(s, t).map(Some),
+            ConstValue::Scalar(s @ Scalar::Pointer { .. }) if matches!(it, IrType::Int(64)) => {
+                self.scalar_const(s, t).map(Some)
+            }
             _ => Ok(None),
         }
     }
