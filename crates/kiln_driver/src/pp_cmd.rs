@@ -454,6 +454,7 @@ impl Job<'_> {
             record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
             scan: a.scan_deps,
             image: a.bmi_image,
+            no_unit_record: false,
         })
     }
 

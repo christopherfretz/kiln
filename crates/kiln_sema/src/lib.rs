@@ -103,6 +103,7 @@ mod nullability;
 mod oven_bridge;
 pub mod overload;
 mod packed;
+mod pragma_state;
 mod predefined;
 mod qualified_decl;
 mod range_for;
@@ -163,6 +164,7 @@ pub use declspec::{
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit};
 pub use gnu::{OffsetofComponent, StmtExprScope};
+pub use pragma_state::{PragmaState, fp_bits, fp_from_bits};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::profile::Level as ProfileLevel;

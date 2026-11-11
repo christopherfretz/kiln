@@ -48,6 +48,10 @@ pub struct SemaPragmas {
     /// `visibility` attribute push), innermost last: `(code, location)`
     /// with 0 default, 1 hidden, 2 protected.
     pub visibility: Vec<Option<(u32, Loc)>>,
+    /// The FP pragma override in effect and the `float_control(push)`
+    /// entries, in sema's bit encoding (`kiln_sema::fp_bits`).
+    pub fp: u64,
+    pub fp_stack: Vec<u64>,
 }
 
 /// The state a record is the difference from: the preprocessor at the
@@ -570,6 +574,11 @@ impl PpState {
                 None => rest.push(0),
             }
         }
+        rest.extend_from_slice(&s.fp.to_le_bytes());
+        put_len(&mut rest, s.fp_stack.len());
+        for f in &s.fp_stack {
+            rest.extend_from_slice(&f.to_le_bytes());
+        }
         let (files, slocs) = e.locs.finish();
         let mut out = Vec::with_capacity(rest.len() + e.defs.len() + 4096);
         put32(&mut out, VERSION);
@@ -635,6 +644,8 @@ pub struct PpRecord {
     pack_stack: Vec<(Option<String>, u16)>,
     ms_struct: bool,
     visibility: Vec<Option<(u32, u32)>>,
+    fp: u64,
+    fp_stack: Vec<u64>,
 }
 
 fn tok_flags(bits: u8) -> W<TokFlags> {
@@ -884,6 +895,12 @@ impl PpRecord {
                 _ => return Err("a bad visibility entry"),
             });
         }
+        let fp = r.u64()?;
+        let n = r.count(8)?;
+        let mut fp_stack = Vec::with_capacity(n);
+        for _ in 0..n {
+            fp_stack.push(r.u64()?);
+        }
         if !r.0.is_empty() {
             return Err("trailing bytes in the preprocessor-state record");
         }
@@ -907,6 +924,8 @@ impl PpRecord {
             pack_stack,
             ms_struct,
             visibility,
+            fp,
+            fp_stack,
         })
     }
 
@@ -1036,6 +1055,8 @@ impl PpRecord {
                 pack_stack: self.pack_stack.clone(),
                 ms_struct: self.ms_struct,
                 visibility: self.visibility.iter().map(|v| v.map(|(c, at)| (c, loc(at)))).collect(),
+                fp: self.fp,
+                fp_stack: self.fp_stack.clone(),
             },
         })
     }

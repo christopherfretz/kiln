@@ -255,6 +255,9 @@ pub struct ParsedTu {
     /// The fallback census, when [`ParseOptions::image_census`] and the
     /// main unit is a module unit.
     pub image_census: Option<kiln_sema::ImageCensus>,
+    /// Sema's pragma state at the end of the translation unit, for the
+    /// preprocessor-state record of a PCH (spec/modules.md §11.13).
+    pub pragmas: kiln_sema::PragmaState,
 }
 
 impl ParsedTu {
@@ -416,6 +419,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let image = s.take_module_image();
     let image_census = if opts.image_census { s.image_census() } else { None };
     let carried_hits = s.carried_hits();
+    let pragmas = s.pragma_state();
     let (ast, oven) = s.into_parts();
     let tu = ParsedTu {
         ast,
@@ -427,6 +431,7 @@ pub fn parse_preprocessed<'a, 'sm>(
         carried_hits,
         image,
         image_census,
+        pragmas,
     };
     (tu, src.into_preprocessor())
 }
