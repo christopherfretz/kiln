@@ -155,6 +155,9 @@ before (WP-1070): 25544 top-level declarations, 10938 carried, 14606 not
 after (WP-1278):  26898 top-level declarations, 16775 carried, 10123 not
 ```
 
+With WP-1279 merged as well: 26898 top-level declarations, 17680
+carried, 9218 not. The rows below are WP-1278's alone.
+
 There are more top-level declarations because the linkage
 specifications and namespaces `std` that were refused whole are now
 scopes, so their members count on their own. The rows WP-1278 targets:
