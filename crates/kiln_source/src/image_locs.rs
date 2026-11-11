@@ -35,6 +35,17 @@ pub struct FileRec {
     /// An in-memory buffer's text (`<scratch space>`, a module file's
     /// copy of a changed file): carried inline.
     pub text: Option<String>,
+    /// An in-memory buffer's line markers and `#line` directives
+    /// ([`SourceManager::line_directives`]): the predefines buffer's
+    /// `# 1 "<command line>"` sections. Empty for a file on disk.
+    pub lines: Vec<(u32, u32, Option<String>)>,
+}
+
+/// A predefined buffer's name (`<built-in>`, `<command line>`; not
+/// `<scratch space>`): a buffer of the compile, not of the header, so it
+/// is not entered from a precompiled header's root.
+pub fn is_predefined(name: &str) -> bool {
+    name.starts_with('<') && name != "<scratch space>"
 }
 
 /// One location record.
@@ -248,11 +259,10 @@ impl LocTable {
             return Ok(i);
         }
         let name = sm.file_name(file);
-        if name.is_empty() || !self.predefined && name.starts_with('<') && name != "<scratch space>"
-        {
+        if name.is_empty() || is_predefined(name) && !sm.is_virtual(file) {
             return Err("a location in a predefined buffer (<built-in>, <command line>)");
         }
-        if !self.predefined && sm.has_line_directives(file) {
+        if !self.predefined && !sm.is_virtual(file) && sm.has_line_directives(file) {
             return Err("a file with #line directives or line markers");
         }
         if !sm.load_report(file).is_clean() {
@@ -274,6 +284,7 @@ impl LocTable {
             hash: content_hash(text.as_bytes()),
             system: false,
             text: sm.is_virtual(file).then(|| text.to_owned()),
+            lines: if sm.is_virtual(file) { sm.line_directives(file) } else { Vec::new() },
         };
         let i = self.files.len() as u32;
         self.files.push(rec);
@@ -334,6 +345,12 @@ pub fn validate(files: &[FileRec], slocs: &[SlocRec]) -> Result<Vec<u32>, &'stat
         }
         if f.text.is_none() && f.path.is_empty() {
             return Err("a file without a path or text");
+        }
+        if !f.lines.is_empty() && f.text.is_none()
+            || f.lines.iter().any(|l| l.0 > f.len || l.1 == 0)
+            || f.lines.windows(2).any(|w| w[0].0 >= w[1].0)
+        {
+            return Err("a file's line directives out of order or outside it");
         }
     }
     let mut bases: Vec<u32> = Vec::with_capacity(slocs.len());
@@ -437,7 +454,11 @@ impl Locs {
                     if span.hi.to_raw() - span.lo.to_raw() != len {
                         return Err("a file whose length differs from its record");
                     }
-                    let at = if *from == NONE && root.is_valid() {
+                    for (o, line, name) in &files[*file as usize].lines {
+                        sm.add_line_directive(id, *o, *line, name.as_deref());
+                    }
+                    let own = is_predefined(&files[*file as usize].name);
+                    let at = if *from == NONE && root.is_valid() && !own {
                         sm.add_inclusion(id, root).map_err(|_| "no location space")?
                     } else if *from == NONE {
                         sm.loc(id, 0)
@@ -600,7 +621,8 @@ pub fn decode(r: &mut Reader<'_>) -> W<(Vec<FileRec>, Vec<SlocRec>, Vec<u32>)> {
             return Err("bad file flags");
         }
         let text = if flags & 2 != 0 { Some(r.str()?) } else { None };
-        files.push(FileRec { name, path, len, hash, system: flags & 1 != 0, text });
+        let lines = Vec::new();
+        files.push(FileRec { name, path, len, hash, system: flags & 1 != 0, text, lines });
     }
     let n = r.count(13)?;
     let mut slocs = Vec::with_capacity(n);

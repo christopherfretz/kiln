@@ -54,6 +54,7 @@ mod friend;
 mod localexterns;
 mod locs;
 mod membertempl;
+mod patinit;
 mod pch;
 pub use pch::PchDecls;
 mod requires;
@@ -68,7 +69,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 21;
+pub(crate) const IMAGE_VERSION: u32 = 22;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -168,6 +169,8 @@ struct Pass {
     open_enum: Option<u32>,
     /// The open class definitions, innermost last.
     open: Vec<u32>,
+    /// Per open class definition record, its last member (WP-1310).
+    open_last: FxHashMap<u32, DeclId>,
     /// The implicitly declared special members, recorded after every
     /// class closed.
     implicit: Vec<(DeclId, u32, u8)>,
@@ -217,7 +220,8 @@ enum TyRec {
     QArray(u8, QRef),
     /// One of the implicit builtin typedefs every translation unit
     /// declares (`__size_t` 0, `__signed_size_t` 1, `__ptrdiff_t` 2:
-    /// the types of `sizeof` and pointer subtraction); the importer
+    /// the types of `sizeof` and pointer subtraction; `__int128_t` 3,
+    /// `__uint128_t` 4, `__builtin_va_list` 5, WP-1310); the importer
     /// names its own.
     Sugar(u8),
     /// The class declared by a record.
@@ -307,6 +311,9 @@ struct ParamRec {
     flags: u8,
     /// The default argument's expression record, or [`NONE`].
     default: u32,
+    /// The type as written when it was adjusted ([dcl.fct]/5: an array
+    /// or function type; WP-1310).
+    orig: Option<QRef>,
 }
 
 /// A function's body.
@@ -436,9 +443,13 @@ enum Payload {
         #[allow(clippy::option_option)]
         def: Option<Option<(QRef, QRef)>>,
     },
+    /// An enumerator: its value, `None` in a dependent enumeration (a
+    /// class template's member, WP-1310), whose initializer as written
+    /// is the expression `init` ([`NONE`]: none, or not dependent).
     Enumerator {
         ty: QRef,
-        value: i128,
+        value: Option<i128>,
+        init: u32,
     },
     Typedef {
         alias: bool,
@@ -614,6 +625,8 @@ struct Image {
     lexterns: localexterns::LocalExterns,
     /// WP-1307: explicit instantiations of class templates.
     explinsts: explinst::ExplInsts,
+    /// WP-1310: mem-initializers of constructors in class templates.
+    patinits: patinit::PatInits,
     /// WP-1300: the expressions types and template arguments hold, one
     /// section each ([`exprs`]).
     texprs: Vec<Bodies>,
@@ -956,6 +969,13 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                 w.u16(p.pflags);
                 w.u8(p.flags);
                 w.u32(p.default);
+                match p.orig {
+                    Some(q) => {
+                        w.u8(1);
+                        w.q(q);
+                    }
+                    None => w.u8(0),
+                }
             }
             match body {
                 FnBody::None => w.u8(0),
@@ -1004,9 +1024,16 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                 }
             }
         }
-        Payload::Enumerator { ty, value } => {
+        Payload::Enumerator { ty, value, init } => {
             w.q(*ty);
-            w.0.extend_from_slice(&value.to_le_bytes());
+            match value {
+                Some(v) => {
+                    w.u8(1);
+                    w.0.extend_from_slice(&v.to_le_bytes());
+                }
+                None => w.u8(0),
+            }
+            w.u32(*init);
         }
         Payload::Typedef { underlying, .. } => w.q(*underlying),
         Payload::Record { tag, def } => {
@@ -1116,9 +1143,21 @@ fn encode(img: &Image) -> Vec<u8> {
         w.str(&f.path);
         w.u32(f.len);
         w.u64(f.hash);
-        w.u8(u8::from(f.system) | (u8::from(f.text.is_some()) << 1));
+        let lines = u8::from(!f.lines.is_empty()) << 2;
+        w.u8(u8::from(f.system) | (u8::from(f.text.is_some()) << 1) | lines);
         if let Some(t) = &f.text {
             w.str(t);
+        }
+        if !f.lines.is_empty() {
+            w.len(f.lines.len());
+            for (o, line, name) in &f.lines {
+                w.u32(*o);
+                w.u32(*line);
+                w.u8(u8::from(name.is_some()));
+                if let Some(n) = name {
+                    w.str(n);
+                }
+            }
         }
     }
     w.len(img.slocs.len());
@@ -1259,6 +1298,7 @@ fn encode(img: &Image) -> Vec<u8> {
     written::encode_written(&mut w, &img.written);
     localexterns::encode_local_externs(&mut w, &img.lexterns);
     explinst::encode_explicit_insts(&mut w, &img.explinsts);
+    patinit::encode_pattern_inits(&mut w, &img.patinits);
     exprs::encode_texprs(&mut w, &img.texprs, &img.late_nx);
     w.0
 }
@@ -1409,17 +1449,24 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                 1 => true,
                 _ => return bad("bad flag byte"),
             };
-            let n = r.count(20)?;
+            let n = r.count(21)?;
             let mut params = Vec::with_capacity(n);
             for _ in 0..n {
-                params.push(ParamRec {
+                let mut p = ParamRec {
                     name: r.u32()?,
                     loc: r.u32()?,
                     ty: r.q()?,
                     pflags: r.u16()?,
                     flags: r.u8()?,
                     default: r.u32()?,
-                });
+                    orig: None,
+                };
+                p.orig = match r.u8()? {
+                    0 => None,
+                    1 => Some(r.q()?),
+                    _ => return bad("bad parameter type as written"),
+                };
+                params.push(p);
             }
             let body = match r.u8()? {
                 0 => FnBody::None,
@@ -1458,7 +1505,15 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::Enum { scoped, fixed, def }
         }
-        K_ENUMERATOR => Payload::Enumerator { ty: r.q()?, value: r.i128()? },
+        K_ENUMERATOR => {
+            let ty = r.q()?;
+            let value = match r.u8()? {
+                0 => None,
+                1 => Some(r.i128()?),
+                _ => return bad("bad enumerator value"),
+            };
+            Payload::Enumerator { ty, value, init: r.u32()? }
+        }
         K_TYPEDEF | K_ALIAS => Payload::Typedef { alias: code == K_ALIAS, underlying: r.q()? },
         K_RECORD => {
             let tag = r.u8()?;
@@ -1630,7 +1685,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
         Payload::Function { ty, params, inits, .. } => std::iter::once(*ty)
-            .chain(params.iter().map(|p| p.ty))
+            .chain(params.iter().flat_map(|p| std::iter::once(p.ty).chain(p.orig)))
             .chain(inits.iter().filter(|x| x.kind == 1).map(|x| QRef { ty: x.target, quals: 0 }))
             .collect(),
         Payload::Field { ty, .. }
@@ -1683,11 +1738,25 @@ fn decode_locs(r: &mut Rd<'_>, img: &mut Image) -> Res<()> {
     for _ in 0..n {
         let (name, path, len, hash) = (r.str()?, r.str()?, r.u32()?, r.u64()?);
         let flags = r.u8()?;
-        if flags > 3 {
+        if flags > 7 {
             return bad("bad file flags");
         }
         let text = if flags & 2 != 0 { Some(r.str()?) } else { None };
-        img.files.push(FileRec { name, path, len, hash, system: flags & 1 != 0, text });
+        let mut lines = Vec::new();
+        if flags & 4 != 0 {
+            let m = r.count(9)?;
+            lines.reserve(m);
+            for _ in 0..m {
+                let (o, line) = (r.u32()?, r.u32()?);
+                let name = match r.u8()? {
+                    0 => None,
+                    1 => Some(r.str()?),
+                    _ => return bad("bad line directive"),
+                };
+                lines.push((o, line, name));
+            }
+        }
+        img.files.push(FileRec { name, path, len, hash, system: flags & 1 != 0, text, lines });
     }
     let n = r.count(13)?;
     img.slocs = Vec::with_capacity(n);
@@ -1796,7 +1865,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 TyRec::QArray(c, q)
             }
             12 => match r.u8()? {
-                k @ 0..=2 => TyRec::Sugar(k),
+                k @ 0..=5 => TyRec::Sugar(k),
                 _ => return bad("unknown builtin typedef"),
             },
             13 => TyRec::Record(r.u32()?),
@@ -1872,6 +1941,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.written = written::decode_written(&mut r)?;
     img.lexterns = localexterns::decode_local_externs(&mut r)?;
     img.explinsts = explinst::decode_explicit_insts(&mut r)?;
+    img.patinits = patinit::decode_pattern_inits(&mut r)?;
     (img.texprs, img.late_nx) = exprs::decode_texprs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
@@ -2097,6 +2167,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     declocs::validate_decl_locs(img)?;
     localexterns::validate_local_externs(img)?;
     explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
+    patinit::validate_pattern_inits(img, &|q| qref_at(q, nd))?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2234,8 +2305,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             && d.lexical != NONE
             && d.lexical != LEX_TU;
         let owner_class = if befriended { d.lexical } else { d.ctx };
-        let dep_class = kind_of(owner_class)
-            .is_some_and(|c| c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. }));
+        // A dependent member enumeration claims its enumerators (WP-1310).
+        let dep_class = kind_of(owner_class).is_some_and(|c| {
+            c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. } | Payload::Enum { .. })
+        });
         if dep_class {
             if d.flags & DEP == 0 || !claimed[owner_class as usize] {
                 return bad("a member of an unclaimed dependent class");
@@ -2289,9 +2362,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // complete class and a previous declaration; an implicit
             // member names a complete class.
             let ok = match (&d.payload, d.lexical) {
-                // A builtin function, at global scope (WP-1278).
+                // A builtin function, at global scope (WP-1278); declared
+                // lazily, its record may fall among the members of the
+                // class whose member first used it (WP-1310).
                 (Payload::Implicit { kind: scope::BUILTIN_KIND }, _) => {
-                    top.is_none() && d.ctx == NONE && d.lexical == NONE
+                    d.ctx == NONE && d.lexical == NONE
                 }
                 (Payload::Implicit { .. }, _) => {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
@@ -2310,6 +2385,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // A befriended function or class (WP-1292): in its
                 // namespace, declared in the open class.
                 _ if friend::kind_bits(d) != 0 => friend::friend_context_ok(d, top, scope(d.ctx)),
+                // A class an elaborated-type-specifier of a member
+                // declaration introduces (WP-1310): in its namespace,
+                // declared in the open class.
+                (Payload::Record { def: None, .. }, NONE)
+                    if top.is_some() && d.prev == NONE && scope(d.ctx) =>
+                {
+                    true
+                }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
             };
@@ -2471,9 +2554,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     open_enum = Some(i);
                 }
             }
-            Payload::Enumerator { ty, .. } => {
+            Payload::Enumerator { ty, value, init } => {
                 if ty.quals != 0 {
                     return bad("bad enumerator type");
+                }
+                // Dependent: no value, in a dependent record's scope.
+                if value.is_some() && *init != NONE || value.is_none() && d.flags & DEP == 0 {
+                    return bad("bad dependent enumerator");
                 }
             }
             Payload::Record { tag, def } => {
@@ -2968,8 +3055,11 @@ impl Writer<'_, '_, '_> {
             {
                 TyRec::Auto(keyword as u8 | u8::from(deduced.is_some()) << 1)
             }
-            TypeView::Typedef { .. } if self.s.builtin_sugar().iter().any(|q| q.ty() == t) => {
-                let k = self.s.builtin_sugar().iter().position(|q| q.ty() == t).unwrap_or(0);
+            TypeView::Typedef { .. }
+                if self.s.image_sugar().iter().any(|q| q.is_some_and(|q| q.ty() == t)) =>
+            {
+                let sugar = self.s.image_sugar();
+                let k = sugar.iter().position(|q| q.is_some_and(|q| q.ty() == t)).unwrap_or(0);
                 TyRec::Sugar(k as u8)
             }
             TypeView::Typedef { decl, .. } => TyRec::Typedef(self.type_decl(decl, t)?),
@@ -3093,8 +3183,14 @@ impl Writer<'_, '_, '_> {
                 Self::name_ix(&mut self.names, &mut self.img.names, &s)
             }
             V::Operator(op) => N_OP + u32::from(op as u8),
+            // A constructor template's too: its pattern's name (WP-1310).
             V::Constructor(t)
-                if n.kind() == DeclKind::CXXConstructor && class_canon() == Some(t) =>
+                if (n.kind() == DeclKind::CXXConstructor
+                    || (n.kind() == DeclKind::FunctionTemplate
+                        && ast.template_info(d).and_then(|i| i.pattern).is_some_and(|p| {
+                            ast.decls.get(p).kind() == DeclKind::CXXConstructor
+                        })))
+                    && class_canon() == Some(t) =>
             {
                 N_CTOR
             }
@@ -3320,6 +3416,15 @@ impl Writer<'_, '_, '_> {
                 if n.ty() != ast.decls.get(parent).ty() {
                     return Err("an enumerator whose type is not its enumeration");
                 }
+                if ec.value.is_none() && n.has(DeclFlags::DEPENDENT_CTX) && self.dep_member(d) {
+                    // A dependent enumeration's (WP-1310): substituted by
+                    // each instantiation of its class.
+                    if let Some(e) = ec.init {
+                        self.bs.roots.push(Root::EnumInit(i, e));
+                    }
+                    let ty = self.qref(n.ty().ok_or("a malformed enumerator")?)?;
+                    return Ok(Payload::Enumerator { ty, value: None, init: NONE });
+                }
                 let v = ec.value.ok_or("an enumerator without a value")?;
                 // The value's type is the underlying type as written, a
                 // typedef (`uint8_t`) or `bool` included (WP-1307); the
@@ -3341,7 +3446,7 @@ impl Writer<'_, '_, '_> {
                 if q.quals != 0 {
                     return Err("an enumerator value the image does not carry");
                 }
-                Payload::Enumerator { ty: q, value }
+                Payload::Enumerator { ty: q, value: Some(value), init: NONE }
             }
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let td = *ast.decls.typedef(d).ok_or("a malformed typedef")?;
@@ -3442,14 +3547,6 @@ impl Writer<'_, '_, '_> {
             Some((TemplLinkKind::Pattern, _)) => true,
             Some(_) => return Err("a template specialization"),
         };
-        // A pattern constructor's mem-initializers live in the template
-        // state as parsed (`InstState::pattern_mem_inits`), not in the
-        // declaration: not carried yet (S4b).
-        if pattern
-            && (s.inst.pattern_mem_inits.contains_key(&d) || s.inst.failed_mem_inits.contains(&d))
-        {
-            return Err("mem-initializers of a constructor in a class template");
-        }
         let spec = fd.spec;
         let bits = spec.bits();
         if fn_spec(bits) != Some(spec) {
@@ -3542,6 +3639,10 @@ impl Writer<'_, '_, '_> {
                     self.bs.roots.push(Root::Body(i, b));
                     if kind == 2 {
                         inits = self.ctor_inits(d, i)?;
+                        if pattern {
+                            // As parsed, in the template state (WP-1310).
+                            self.pattern_mem_inits(d, i)?;
+                        }
                     }
                     FnBody::None
                 } else {
@@ -3736,9 +3837,10 @@ impl Writer<'_, '_, '_> {
         } else {
             pd.flags
         };
-        if pd.original_ty.is_some() || pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
+        if pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
             return Err("a parameter with an adjusted type or a pack");
         }
+        let orig = pd.original_ty.map(|q| self.qref(q)).transpose()?;
         if let Some(e) = pd.default_arg {
             // Patched by `walk_roots`.
             self.bs.roots.push(Root::Default(g, e));
@@ -3764,6 +3866,7 @@ impl Writer<'_, '_, '_> {
             pflags,
             flags: n.flags().bits() & (DECL_FLAGS | DEP),
             default: NONE,
+            orig,
         })
     }
 
@@ -4256,8 +4359,20 @@ impl Writer<'_, '_, '_> {
         if !matches!(payload, Payload::Enumerator { .. }) && !tmpl_of_open {
             // Close the classes this declaration is not a member of.
             let befriended = n.misc().friend() != FriendKind::None;
+            // The class an elaborated-type-specifier in a member
+            // declaration introduces into the enclosing namespace
+            // ([dcl.type.elab]/3, [basic.scope.pdecl]/7; WP-1310), declared
+            // in the open class as a friend is.
+            let elaborated = matches!(payload, Payload::Record { def: None, .. })
+                && h.prev == NONE
+                && h.lexical == NONE
+                && !befriended;
             while let Some(&top) = st.open.last() {
-                if h.lexical == NONE && h.ctx == top || befriended && h.lexical == top {
+                let inside = || st.open_last.get(&top).is_some_and(|&l| l > d);
+                if h.lexical == NONE && h.ctx == top
+                    || befriended && h.lexical == top
+                    || elaborated && inside()
+                {
                     break;
                 }
                 self.close_class(top);
@@ -4302,6 +4417,9 @@ impl Writer<'_, '_, '_> {
         }
         if class_def {
             st.open.push(i);
+            if let Some(last) = ast.decls.record(d).and_then(|r| r.members.last) {
+                st.open_last.insert(i, last);
+            }
         }
         Ok(())
     }
@@ -4517,6 +4635,7 @@ impl Sema<'_, '_> {
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
             explinst::explicit_inst_locs(&img, &mut offs);
+            patinit::pattern_init_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -4576,6 +4695,7 @@ impl Sema<'_, '_> {
         // defaulted and implicit members to define again once used.
         let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
+        let mut enum_inits: Vec<(DeclId, u32)> = Vec::new();
         // Static assertions in class templates, completed after the bodies.
         let mut asserts: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
@@ -4593,6 +4713,10 @@ impl Sema<'_, '_> {
             .collect();
         let mut attr_exprs = attrs::AttrExprs::new();
         let saved_depth = self.ast.templates.dependent_depth;
+        // A pattern's `USED` / `REFERENCED` are set once its template is
+        // built: the template takes the pattern's flags as it is made, as
+        // the parser makes it before any use (WP-1310).
+        let pats = membertempl::template_patterns(img);
         for (i, r) in img.decls.iter().enumerate() {
             // A dependent record (template parameter, pattern, local of a
             // pattern) is built inside a template parameter scope, so the
@@ -4700,6 +4824,10 @@ impl Sema<'_, '_> {
                         let ploc = lo(self, p.loc);
                         let index = u16::try_from(k).unwrap_or(u16::MAX);
                         let pd = self.builder().param(f, pname, ploc, pty, index, p.pflags);
+                        if let Some(q) = p.orig {
+                            let o = self.image_ty(img, &mut tys, &ids, q);
+                            self.ast.decls.set_param_original_ty(pd, o);
+                        }
                         image_flags(self, pd, p.flags);
                         ps.push(pd);
                     }
@@ -4754,11 +4882,16 @@ impl Sema<'_, '_> {
                     }
                     e
                 }
-                Payload::Enumerator { ty, value } => {
-                    let vty = self.image_ty(img, &mut tys, &ids, *ty);
+                Payload::Enumerator { ty, value, init } => {
                     let d = self.builder().enumerator(h, None);
-                    let cv = self.int_const(vty, *value);
-                    let _ = self.ast.decls.set_enumerator_value(d, cv);
+                    if let Some(v) = value {
+                        let vty = self.image_ty(img, &mut tys, &ids, *ty);
+                        let cv = self.int_const(vty, *v);
+                        let _ = self.ast.decls.set_enumerator_value(d, cv);
+                    }
+                    if *init != NONE {
+                        enum_inits.push((d, *init));
+                    }
                     d
                 }
                 Payload::Typedef { alias, underlying } => {
@@ -4897,6 +5030,7 @@ impl Sema<'_, '_> {
                             _ => DeclKind::FunctionTemplate,
                         };
                         let t = self.builder().template_decl(k, pat, list, prev);
+                        image_flags(self, pat, img.decls[*pattern as usize].flags);
                         if prev.is_some() {
                             redecl_templates.push(t);
                         }
@@ -4938,7 +5072,10 @@ impl Sema<'_, '_> {
             };
             // A builtin function is the importer's own declaration.
             let builtin = r.payload == Payload::Implicit { kind: scope::BUILTIN_KIND };
-            if !builtin && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
+            if !builtin
+                && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. })
+                && !pats.contains_key(&(i as u32))
+            {
                 image_flags(self, d, r.flags);
             }
             if !builtin {
@@ -4974,10 +5111,14 @@ impl Sema<'_, '_> {
         self.image_written(img, &mut tys, &ids, main);
         self.image_nttp_defaults(&nttp_defaults, &built);
         self.image_late_nx(img, &ids, &built);
+        self.image_pattern_inits(img, &mut tys, &ids, main, &built);
         self.image_inherited_defaults(&redecl_templates);
         for (d, cond, msg) in asserts {
             let message = (msg != NONE).then(|| built.expr(msg));
             self.ast.decls.set_static_assert_exprs(d, built.expr(cond), message);
+        }
+        for (d, init) in enum_inits {
+            self.ast.decls.replace_enumerator_init(d, built.expr(init));
         }
         for (f, width, init) in fields {
             if width != NONE {
@@ -5069,6 +5210,17 @@ impl Sema<'_, '_> {
             } else if flags & DeclFlags::REFERENCED.bits() != 0 {
                 self.exc_spec_needed(f, loc);
             }
+        }
+        // Source-location builtin calls get their values once every
+        // declaration and body is built (the function names they need).
+        for i in 0..img.bodies.exprs.len() as u32 {
+            let e = built.expr(i);
+            if self.ast.exprs.get(e).kind() == kiln_ast::expr::ExprKind::SourceLocExpr {
+                self.image_source_loc(e);
+            }
+        }
+        for (e, at, ctx, location) in std::mem::take(&mut self.srcloc.image_uses) {
+            self.image_source_loc_use(e, at, ctx, location);
         }
         self.module_owner_changed();
     }
@@ -5339,7 +5491,9 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 self.ast.types.qualify(q, Quals::from_bits(*c))
             }
-            TyRec::Sugar(k) => self.builtin_sugar()[usize::from(*k).min(2)],
+            TyRec::Sugar(k) => {
+                self.image_sugar()[usize::from(*k).min(5)].unwrap_or(QualType::ERROR)
+            }
             TyRec::Tst { template, args, under } => {
                 let args: Vec<TemplateArg> = args
                     .iter()
@@ -5409,6 +5563,7 @@ mod tests {
                 hash: 0,
                 system: false,
                 text: None,
+                lines: Vec::new(),
             }],
             slocs: vec![SlocRec::File { file: 0, from: NONE, marks: Vec::new() }],
             module: "m".into(),
@@ -5469,6 +5624,7 @@ mod tests {
                             pflags: 0x100,
                             flags: 0,
                             default: NONE,
+                            orig: None,
                         }],
                         body: FnBody::Braces(50, 51),
                     },
@@ -5497,7 +5653,7 @@ mod tests {
                     lexical: NONE,
                     loc: 70,
                     prev: NONE,
-                    payload: Payload::Enumerator { ty: q(int), value: -3 },
+                    payload: Payload::Enumerator { ty: q(int), value: Some(-3), init: NONE },
                 },
                 DeclRec {
                     flags: 0,
@@ -5545,6 +5701,7 @@ mod tests {
                             pflags: 0x100,
                             flags: 4,
                             default: 0,
+                            orig: None,
                         }],
                         body: FnBody::Stmt(2),
                     },
@@ -5626,6 +5783,7 @@ mod tests {
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
             explinsts: explinst::ExplInsts::default(),
+            patinits: patinit::PatInits::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
@@ -6097,6 +6255,7 @@ mod tests {
                         pflags: 0x100,
                         flags: DEP,
                         default: NONE,
+                        orig: None,
                     }],
                     body: FnBody::Braces(320, 321),
                 },

@@ -420,6 +420,32 @@ the census and the corpus, `harness` for the libc++ gate.
 - The module directories pass under `--bmi-image`, `--bmi-kind 1` and
   `--bmi-kind 2` (96 of 96 each).
 
+## WP-1310: whole standard headers (2026-11-11)
+
+The wave took the roots that keep whole headers off the image (list in
+pch-image-census.md, WP-1310). kiln at the WP-1310 branch, `debug`
+profile for the census and the corpus.
+
+- **Corpus `--pch-diff check`** (`cpp.include`, the `module.*`
+  directories, `tests/differential/pp`, `tests/header-guard`): 166
+  compared, 73 took the image (was 36 of 155). Without the nine new
+  `cpp.include` tests (all through the image) 64 of 157. Replay
+  reasons: a template expression 34, a defaulted comparison 15, a
+  specialization of a template outside the image 7, a type declared
+  outside the image 6, and 5 or fewer each for the rest. One
+  difference: `module.global.frag/gmf-floatn-limits.cpp` (its prefix
+  `<limits>` is now carried). `load` agrees on diagnostics and IR, but
+  under `check` the declaration dumps differ, because entities a
+  named module's global module fragment also declares are not merged
+  with the image's (the importer keeps them as separate invalid
+  copies). This is already the case on main for any header that is
+  carried (a three-line repro); a follow-up.
+- **Headers carried** (each alone, `-fkiln-pch-image -v`): libc++ 19
+  17 → 32 of 118; libstdc++ 14 0 → 29 of 109.
+- **Bench path:** all three cases still replay (`gnu`, `mid`: "an
+  explicit specialization using a non-type default argument"; `lcx`:
+  "a template expression").
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers

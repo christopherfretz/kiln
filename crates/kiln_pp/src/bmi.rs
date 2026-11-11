@@ -495,6 +495,18 @@ pub fn image_header(bytes: &[u8]) -> Option<ImageHeader<'_>> {
         let flags = *bytes.get(at)?;
         at += 1;
         let text = if flags & 2 != 0 { Some(str_at(&mut at)?) } else { None };
+        if flags & 4 != 0 {
+            // The buffer's line directives: `(u32, u32, u8 named, name)`,
+            // read by the image's own decoder.
+            for _ in 0..u32_at(&mut at)? {
+                let _ = (u32_at(&mut at)?, u32_at(&mut at)?);
+                let has_name = *bytes.get(at)?;
+                at += 1;
+                if has_name != 0 {
+                    str_at(&mut at)?;
+                }
+            }
+        }
         files.push(ImageFile { name, path, len, hash, system: flags & 1 != 0, text });
     }
     Some(ImageHeader { main, preamble, gated, files })

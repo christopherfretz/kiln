@@ -2300,10 +2300,10 @@ name, an index into `pnames` since a dependent member name is no
 declaration of the image and is not gated; bits 1 for `->`, and the
 operator location as cold annotation 16). Mem-initializers of a
 constructor of a class template live in sema side tables
-(`pattern_mem_inits`), which the image does not carry: such a
-constructor falls back ("mem-initializers of a constructor in a class
-template"), since instantiating it without them would silently
-default-initialize its bases and members. A non-template class's
+(`pattern_mem_inits`), which the image carries since WP-1310 (see
+"Pattern mem-initializers" below; before, such a constructor fell back,
+since instantiating it without them would silently default-initialize
+its bases and members). A non-template class's
 `Base` ctor-initializer names its base by the type as written (`B<int>`,
 an alias), which the writer matches canonically against the base list.
 
@@ -2313,7 +2313,7 @@ specializations (of a class or a member), friend declarations in a
 class template, dependent array bounds and other types holding an
 expression, non-type template arguments written in a type, default
 non-type template arguments, packs, mem-initializers of class
-template constructors, implicit special members of specializations,
+template constructors (carried since WP-1310), implicit special members of specializations,
 variable templates, unresolved-lookup expressions (a dependent call
 `g(t)`), a qualified or `template`-keyword dependent member access
 (`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
@@ -2450,7 +2450,7 @@ X<int>;` and `template struct X<int>;` of a carried class template's
 primary pattern, at namespace scope or by a qualified name, make no
 record: the writer skips the specialization and its instantiated
 members as it skips an implicit instantiation, and writes an entry in
-an image section of their own (the last, after the local externs): the
+an image section of their own (after the local externs): the
 template record, the arguments as written (`ArgRec`s), the
 template-name's location, the lexical scope (a namespace record, or
 `u32::MAX` for the translation unit) and a byte of owner bits (bit 0
@@ -2475,6 +2475,62 @@ instantiation in an unsupported scope"; in a namespace that is itself
 not carried, the cascade "an explicit instantiation in a namespace
 outside the image"), and explicit instantiations of
 function and variable templates ("a template specialization").
+
+**Pattern mem-initializers (WP-1310).** A constructor definition in a
+class template (or a constructor template's pattern) keeps its
+mem-initializers as parsed (`pattern_mem_inits`), not as
+`CtorInit`s: each instantiation substitutes into them and checks the
+result as the parser's action would ([temp.inst]/4,
+[class.base.init]). A section of their own (after the explicit
+instantiations) lists, per such constructor record in ascending order,
+the `:` location and each mem-initializer: its mem-initializer-id (an
+index into `pnames` for an identifier, or the type the parser
+resolved), where it was written, whether it is a pack expansion
+(`B(args)...`) and its initializer (`= expression`, a parenthesized
+list with its parentheses, or a braced-init-list, nested at most 64
+deep). The expressions are records of the bodies section. The
+validator requires a constructor record, valid expression slots,
+names and types; the reader installs the list on the constructor once
+the bodies are built, before anything can instantiate it. Still
+falling back: a mem-initializer whose definition-time check failed
+("a mem-initializer that failed its definition-time check", already
+diagnosed) and a designated braced-init-list ("a designated
+initializer in a mem-initializer"). A constructor template's
+function-template record is named `N_CTOR`, as its pattern. A pattern
+record's used/referenced flags are applied after its template record
+is built (they are monotone, and the template copies its pattern's),
+so a referenced pattern does not mark the template. Tests:
+`pch-pattern-inits-run.cpp`, `image-pattern-inits-run.cpp` and their
+`-errors` pairs, `kind2_declaration_image_pattern_inits`.
+
+**Smaller forms carried by WP-1310.** Attributes on block-scope
+declarations (libstdc++'s `void __terminate() noexcept
+__attribute__((__noreturn__))` redeclared in a body) are carried as a
+namespace-scope declaration's are, for the attribute kinds the table
+lists; an invalid local declaration falls back with "an invalid local
+declaration", a local with another flag with "a local declaration with
+flags the image does not carry". A class an elaborated-type-specifier
+in a member declaration introduces (`struct S { struct D *p; };`,
+[dcl.type.elab]/3; `<__locale_t.h>`) is a record of the enclosing
+namespace that falls between the class's members: it closes no open
+class, and the validator accepts a class declaration with no lexical
+context inside a class definition. Parameters of an adjusted type (`<cstdio>`'s `char[L_tmpnam]`,
+`<csetjmp>`'s `struct __jmp_buf_tag __env[1]`) carry the type as
+written (see the function payload; a requires-expression's parameter
+still falls back, its section has no field for it). A builtin function's record
+(declared lazily at its first use) may fall among the members of the
+class whose member function first used it; the validator accepts it
+anywhere (before, the writer's own check refused such an image as "an
+internal image inconsistency", `<typeinfo>`, `<limits>`). Enumerations in class templates
+(`template <class T> struct is_integral { enum { value = 0 }; };`) carry
+their enumerators as dependent (see the enumerator payload). The type
+tags for `__int128_t`, `__uint128_t` and `__builtin_va_list`, `aligned`
+attributes and locations in the predefined buffers are described under
+"Types", "Attributes" and "File table". Tests: `pch-local-attrs-run.cpp`,
+`pch-predef-aligned-*.cpp`, `image-predef-aligned-*.cpp`,
+`pch-member-enums-*.cpp`, `image-member-enums-*.cpp`,
+`pch-builtin-in-class-run.cpp`, `image-builtin-in-class-run.cpp`,
+`local_attributes_and_pattern_inits_are_carried`.
 
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
@@ -2862,8 +2918,15 @@ image location space of its own:
   text's length, its content hash (FNV-1a 64, `kiln_source::hash`, the
   hash module files share) and whether it was entered as a system
   header. An in-memory buffer (`<scratch space>`, which token pasting
-  and `_Pragma` write) carries its text inline. Entry 0 is the unit's
-  main file.
+  and `_Pragma` write) carries its text inline. Since WP-1310 so do
+  the predefined buffers (`<built-in>`, `<command line>`: a predefined
+  macro such as `__CHAR_BIT__` expanded in a template), with their line
+  markers and `#line` directives as `(offset, presumed line, presumed
+  name or none)` triples (file flag 4), which the reader adds to the
+  buffer again so a note in it prints the same presumed position; a
+  predefined buffer is entered at its own range, never from a
+  precompiled header's root. A file on disk with `#line` directives
+  still falls back. Entry 0 is the unit's main file.
 - **Location records.** One `sloc` per inclusion range or macro
   expansion entry of the module's source manager that a carried
   location is in, or that such a range or entry names: an inclusion
@@ -2928,7 +2991,12 @@ kind, says how a kind's words travel, and it is the whole format:
   (value and location), empty for every parameter;
 - an asm label, written as its text. A written label (flag 2 clear)
   also names the first declaration's symbol, as the parser
-  records it; an inherited one (flag 2) must match that symbol.
+  records it; an inherited one (flag 2) must match that symbol. The
+  label may be written on a later declaration than the first (glibc's
+  `__REDIRECT` redeclares a prototype with one, WP-1310): the first
+  declaration's symbol is carried by that declaration's record, which
+  is in the image because a redeclaration of an entity outside it is
+  refused (`pch-redirect-label-run.cpp`).
 
 A function's builtin identity (the `builtin_id`, `lib_builtin` and
 `gnu_lib_twin` side tables) travels as (record, map, id, spelling), the
@@ -2940,10 +3008,12 @@ replayed declaration's attributes. A kind the table does not list, or
 a node whose words fall outside its row, falls back with "an attribute
 the image does not carry yet", and the census lists the kind by name:
 a wrong attribute on an imported declaration is a miscompile, so the
-image never guesses. Not carried yet: `preferred_name` (a type
-argument), `diagnose_if` and `enable_if` (conditions evaluated at the
-call), `aligned` and `alignas` (the `alignment` side table), `gsl::Owner`
-and `gsl::Pointer` with a type argument.
+image never guesses. `aligned` and `alignas` with an expression or no
+argument are carried since WP-1310 (row `ExprA`: `a` the expression or
+none, the target's biggest alignment; the layout reads the attribute).
+Not carried yet: `preferred_name` (a type argument), `diagnose_if` and
+`enable_if` (conditions evaluated at the call), `alignas(type-id)` (a
+type in `b`), `gsl::Owner` and `gsl::Pointer` with a type argument.
 
 ```
 attrs   := strs:u32 str*
@@ -2965,9 +3035,13 @@ the scopes and names beyond named namespaces and export blocks:
 - a linkage specification is an `Export` record (unnamed and
   transparent) listed with its language and whether it is braceless;
   the importer builds the `LinkageSpec`. A C one in a namespace falls
-  back: [dcl.link]/6 makes its functions and variables the same
-  entities as the global ones of their names, which the gate does not
-  cover;
+  back in a module: [dcl.link]/6 makes its functions and variables the
+  same entities as the global ones of their names, which a module's
+  reader does not record. A precompiled header carries it (WP-1310):
+  the header's own links are redeclaration chains, and the reader
+  records the header's C-linkage entities, namespaced ones included, in
+  the consumer's extern C context (libc++ `<cxxabi.h>`;
+  `pch-extern-c-namespace-run.cpp`, `-errors.cpp`);
 - an inline namespace is a `Namespace` record listed as inline;
 - an unnamed namespace is a `Namespace` record with no name. The
   importer extends the unnamed namespace its scope already has
@@ -3170,7 +3244,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 21` since WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 22` since WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -3306,8 +3380,12 @@ class template's pattern (S4). The payloads are:
   definition left it unevaluated in the unit too, WP-1300),
   the parameters (n, then per
   parameter: name index into `pnames` or none, location, type, the
-  parameter flags u16, the storage flags u8 and the default argument, an
-  expression index or `u32::MAX`), then the body: 0 (none), 1 and the
+  parameter flags u16, the storage flags u8, the default argument, an
+  expression index or `u32::MAX`, and since WP-1310 a byte, 1 when the
+  type as written follows (an array or function type the declaration
+  adjusted, [dcl.fct]/5: `char[20]`, `int (*)(int)` written `int(int)`;
+  instantiating a function template's pattern substitutes into it)),
+  then the body: 0 (none), 1 and the
   offsets of its braces (a dropped non-inline body), or 2 and a
   statement index (a carried body, S2), then the ctor-initializers (S3;
   n, then per initializer: `CtorInitKind` u8, target u32, written
@@ -3333,10 +3411,16 @@ class template's pattern (S4). The payloads are:
   the temporary's index;
 - enumeration: scoped, the fixed underlying and promotion types (or 0),
   and when complete the computed ones;
-- enumerator: its type and the value (16 bytes, little-endian `i128`);
-  the type may be sugared (an enumeration whose fixed underlying type
-  is a typedef) and the value a `bool` (as 0 or 1), since WP-1307; a
-  qualified type falls back;
+- enumerator: its type, a byte (1: a value follows, 16 bytes,
+  little-endian `i128`; 0: none) and the initializer (`u32`, an
+  expression or `u32::MAX`); the type may be sugared (an enumeration
+  whose fixed underlying type is a typedef) and the value a `bool` (as
+  0 or 1), since WP-1307; a qualified type falls back. Since WP-1310 an
+  enumerator of a dependent enumeration (a member of a class template
+  or of its member class) has no value and keeps its initializer as
+  written, which each instantiation of the class substitutes; a value
+  with an initializer, or no value outside a dependent context, is
+  malformed;
 - typedef and alias: the underlying type;
 - namespace and export: nothing;
 - class (S3): the `TagKind` byte, then 0 (a declaration) or 1 and the
@@ -3404,7 +3488,10 @@ written before the `CXXDefaultArgExpr` or `CXXDefaultInitExpr` it belongs
 to and rejected on any other kind; spec/sema.md §7.6a, WP-1166, WP-1177:
 without it an importer gave the copy's temporaries full-expression
 lifetime). A `CXXDefaultInitExpr` copy uses the same field, so the format
-word did not change for it.
+word did not change for it. Bit 512 (WP-1310) is a `CXXDefaultArgExpr` or
+`CXXDefaultInitExpr` use whose initializer holds a source-location
+builtin: the location and context its values are for and a `bool`, the
+`__impl` object too (rejected on any other kind).
 
 The carried kinds (`EXPR_KINDS`, `STMT_KINDS`; append-only tables, the
 record's kind byte is the index):
@@ -3430,7 +3517,19 @@ record's kind byte is the index):
   and their index; since S3 member access, `this`, member calls,
   constructions (`CXXConstructExpr`, `T(args)`), default member
   initializers, bound temporaries (the destructor to run) and
-  derived-to-base casts with their path;
+  derived-to-base casts with their path; since WP-1310 the
+  source-location builtins (`__builtin_LINE()` and the rest, aux the
+  `SourceLocKind`, slot a the context the call was written in). Their
+  values are not carried: once the image's declarations and bodies are
+  built the importer computes them again, at the call's own location
+  and context, and at each default argument or member initializer use
+  at the bit-512 location and context, as sema computed them at the
+  producer (`__builtin_source_location()` finds and checks
+  `std::source_location::__impl` first). A consteval
+  `std::source_location::current()` called in a header body still
+  falls back, its result being a pointer constant ("a constant the
+  image does not carry"). Tests: `pch-source-loc-run.cpp`,
+  `image-source-loc-run.cpp`;
 - statements: compound, declaration, expression, null, `if`, `switch`,
   `case`, `default`, `break`, `continue`, `while`, `do`, `for`,
   range-`for`, `return`, label, `goto`, and attributed statements whose
@@ -3458,7 +3557,10 @@ index and reference of the right class) before anything is built. Each
 type that a builtin spells through sugar (`__size_t`,
 `__signed_size_t`, `__ptrdiff_t`, the types of `sizeof` and pointer
 differences) is type tag 12, which the reader maps to its own sugar
-node.
+node; since WP-1310 so are the implicit typedefs `__int128_t` (3),
+`__uint128_t` (4) and `__builtin_va_list` (5), which the importer
+declares too (a specialization for `__int128_t`, `<cstdarg>`'s
+`__gnuc_va_list`).
 
 The reader builds the records through `AstBuilder` in order, after the
 declarations they refer to: parameters and locals first, then the
@@ -3488,12 +3590,12 @@ Falls back (each with its `-v` reason):
   WP-1064 in the backlog;
 - a lifetime-extended temporary with a constant value (bound to a
   `static` or `constexpr` reference) or at namespace scope;
-- a location in a predefined buffer (`<built-in>`, `<command line>`:
-  "a location in a predefined buffer (<built-in>, <command line>)"),
-  in a file with `#line` directives or line markers, whose presumed
-  file is not one of the file table's ("a file with #line directives
-  or line markers"), or in a file that was not valid UTF-8 (S7, see
-  "Locations").
+- a location in a predefined buffer that is not in memory ("a
+  location in a predefined buffer (<built-in>, <command line>)"; the
+  in-memory ones are carried since WP-1310), in a file on disk with
+  `#line` directives or line markers, whose presumed file is not one of
+  the file table's ("a file with #line directives or line markers"), or
+  in a file that was not valid UTF-8 (S7, see "Locations").
 
 **Classes (S3, WP-1065).** A class (`struct`, `class` or `union`) is
 a class record; its members are the records between it and its end:
@@ -3682,8 +3784,8 @@ classes and templates). The follow-ups, in priority order:
 6. S-lazy: the lazy lookup hook (see above);
 7. S7: locations in other files and in macro expansions. **Done
    (WP-1070)**, see "Locations (S7)"; its follow-ups: `#line` and line
-   markers (a presumed-file table), locations in `<built-in>` and
-   `<command line>` (carry the predefines buffer), and reading the
+   markers in files on disk (a presumed-file table; the predefines
+   buffer's are carried since WP-1310), and reading the
    file table at `import` time only for the files a diagnostic needs
    (today every non-main file is stat'ed when the image is read).
 

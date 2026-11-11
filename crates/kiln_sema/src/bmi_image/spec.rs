@@ -28,7 +28,9 @@ impl Writer<'_, '_, '_> {
         n.has(DeclFlags::DEPENDENT_CTX)
             && n.ctx().and_then(|c| self.recs.get(&c)).is_some_and(|&r| {
                 let c = &self.img.decls[r as usize];
-                c.flags & super::DEP != 0 && matches!(c.payload, Payload::Record { .. })
+                // A member enumeration's enumerators too (WP-1310).
+                c.flags & super::DEP != 0
+                    && matches!(c.payload, Payload::Record { .. } | Payload::Enum { .. })
             })
     }
 

@@ -128,8 +128,12 @@ const COLD_LOOKUP: u16 = 128;
 /// (`t.template get<3>()`, the templates' `template_kw`, WP-1284;
 /// [temp.names]/3): its location. The first bit of the wider field.
 const COLD_TEMPLATE_KW: u16 = 256;
+/// A default argument or member initializer use whose initializer holds
+/// a source-location builtin (WP-1310): the location and context its
+/// values are for, and whether they include the `__impl` object.
+const COLD_SRCLOC: u16 = 512;
 /// Every annotation bit.
-const COLD_ALL: u16 = 511;
+const COLD_ALL: u16 = 1023;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -309,7 +313,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 58] = {
+pub(super) const EXPR_KINDS: [ExprKind; 59] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -383,6 +387,9 @@ pub(super) const EXPR_KINDS: [ExprKind; 58] = {
         // WP-1300: a substituted non-type parameter, as an alias
         // specialization's underlying type holds it ([temp.alias]/2).
         X::SubstNonTypeTemplateParmExpr,
+        // WP-1310: a source-location builtin call, its values computed
+        // again by the importer (libc++ `<source_location>`).
+        X::SourceLocExpr,
     ]
 };
 
@@ -469,6 +476,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::ConceptSpecializationExpr => [f(F::D(Dc::Concept)), f(F::TA)],
         X::RequiresExpr => [f(F::RB), f(F::Reqs)],
         X::SubstNonTypeTemplateParmExpr => [f(F::D(Dc::Value)), f(F::E)],
+        X::SourceLocExpr => [f(F::D(Dc::Ctx)), Z],
         _ => [Z, Z],
     }
 }
@@ -485,6 +493,7 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         }
         X::CXXDefaultInitExpr => aux == 1,
         X::PredefinedExpr => usize::from(aux) < kiln_ast::expr::PredefinedKind::ALL.len(),
+        X::SourceLocExpr => usize::from(aux) < kiln_ast::expr::SourceLocKind::ALL.len(),
         X::UnaryOperator => UnaryOp::from_u8(aux).is_some(),
         X::BinaryOperator | X::CompoundAssignOperator | X::CXXFoldExpr => {
             BinaryOp::from_u8(aux).is_some()
@@ -563,6 +572,9 @@ fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
         (COLD_LOOKUP, F::Nns),
         (COLD_LOOKUP, F::TA),
         (COLD_TEMPLATE_KW, F::Loc),
+        (COLD_SRCLOC, F::Loc),
+        (COLD_SRCLOC, F::D(Dc::Ctx)),
+        (COLD_SRCLOC, F::Bool),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -1005,6 +1017,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     return bad("bad field initializer");
                 }
             }
+            Payload::Enumerator { init, .. } => {
+                if *init != NONE && *init as usize >= ne {
+                    return bad("bad enumerator initializer");
+                }
+            }
             Payload::Assert { cond, msg } => {
                 if *cond as usize >= ne || (*msg != NONE && *msg as usize >= ne) {
                     return bad("bad static assertion");
@@ -1183,7 +1200,7 @@ pub(super) fn validate_section(
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
             || e.cold & !COLD_ALL != 0
-            || (e.cold & COLD_REWRITE != 0
+            || (e.cold & (COLD_REWRITE | COLD_SRCLOC) != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
@@ -1324,6 +1341,11 @@ pub(super) enum Root {
     /// WP-1300: function record, exception words, a `noexcept` operand
     /// naming the function's parameters ([`super::exprs::LateNx`]).
     Noexcept(u32, u8, ExprId),
+    /// WP-1310: a slot of the pattern mem-initializers
+    /// ([`super::patinit`]), the expression.
+    PatInit(u32, ExprId),
+    /// WP-1310: a dependent enumerator's record, its initializer.
+    EnumInit(u32, ExprId),
 }
 
 /// The writer's body state.
@@ -1567,6 +1589,19 @@ impl Writer<'_, '_, '_> {
             cold |= COLD_TEMPLATE_KW;
             v.push(Fv::Loc(l));
         }
+        if let Some(sv) = ast.exprs.source_loc_values(e)
+            && matches!(
+                ast.exprs.get(e).kind(),
+                ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr
+            )
+        {
+            cold |= COLD_SRCLOC;
+            v.extend([
+                Fv::Loc(sv.at),
+                Fv::D(Some(sv.ctx), Dc::Ctx),
+                Fv::Raw(u32::from(sv.location.is_some())),
+            ]);
+        }
         cold
     }
 
@@ -1611,7 +1646,16 @@ impl Writer<'_, '_, '_> {
                     || c.designators.contains(e)
                     || c.syntactic_list.contains(e)
                     || c.array_trait.contains(e)
-                    || c.source_loc.contains(e)
+                    // A builtin call's own values, and a default argument
+                    // or member initializer use's, are computed again
+                    // (WP-1310).
+                    || (c.source_loc.contains(e)
+                        && !matches!(
+                            k,
+                            ExprKind::SourceLocExpr
+                                | ExprKind::CXXDefaultArgExpr
+                                | ExprKind::CXXDefaultInitExpr
+                        ))
                     || c.union_field.contains(e)
                     || c.offsetof_pattern.contains(e)
                     || c.splice_args.contains(e)
@@ -2104,8 +2148,19 @@ impl Writer<'_, '_, '_> {
             return Err("a local declaration the image does not carry");
         }
         let allowed = LOCAL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits();
-        if n.flags().bits() & !allowed != 0 {
-            return Err("an invalid or attributed local declaration");
+        let mut extra = n.flags().bits() & !allowed;
+        if extra & DeclFlags::INVALID.bits() != 0 {
+            return Err("an invalid local declaration");
+        }
+        if extra & DeclFlags::HAS_ATTRS.bits() != 0 {
+            // Carried as a top-level declaration's are (WP-1310).
+            if !self.attrs_carried(d) {
+                return Err(super::attrs::UNCARRIED);
+            }
+            extra &= !DeclFlags::HAS_ATTRS.bits();
+        }
+        if extra != 0 {
+            return Err("a local declaration with flags the image does not carry");
         }
         let lexical = if n.has(DeclFlags::HAS_LEXICAL_CTX) {
             match ast.decls.lexical_ctx(d) {
@@ -2144,6 +2199,7 @@ impl Writer<'_, '_, '_> {
             self.qref(t)?;
         }
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
+        let attrs = self.attr_recs(d, i)?;
         let payload = match kind {
             DeclKind::Label => Payload::Label,
             DeclKind::LifetimeExtendedTemporary => {
@@ -2173,6 +2229,7 @@ impl Writer<'_, '_, '_> {
             payload,
         });
         self.recs.insert(d, i);
+        self.attr_commit(i, attrs);
         Ok(i)
     }
 
@@ -2203,7 +2260,9 @@ impl Writer<'_, '_, '_> {
                 | Root::TemplDefault(rec, _)
                 | Root::Cons(rec, _, _)
                 | Root::Assert(rec, _, _)
-                | Root::Noexcept(rec, _, _) => rec,
+                | Root::Noexcept(rec, _, _)
+                | Root::EnumInit(rec, _) => rec,
+                Root::PatInit(..) => NONE,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
             if let Some(&d) = inv.get(&rec) {
@@ -2254,6 +2313,14 @@ impl Writer<'_, '_, '_> {
                         *width = i;
                     }
                 }
+                Root::EnumInit(rec, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Enumerator { init, .. } =
+                        &mut self.img.decls[rec as usize].payload
+                    {
+                        *init = i;
+                    }
+                }
                 Root::FieldInit(rec, e) => {
                     let i = self.walk(Node::E(e))?;
                     if let Payload::Field { init, .. } = &mut self.img.decls[rec as usize].payload {
@@ -2295,6 +2362,10 @@ impl Writer<'_, '_, '_> {
                 Root::Cons(_, k, e) => {
                     let i = self.walk(Node::E(e))?;
                     self.img.cons.recs[k as usize].expr = i;
+                }
+                Root::PatInit(k, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    self.img.patinits.exprs[k as usize] = i;
                 }
             }
         }
@@ -2572,6 +2643,14 @@ impl Sema<'_, '_> {
         }
         if e.cold & COLD_TEMPLATE_KW != 0 {
             let _ = self.ast.templates.template_kw.insert(id, Loc::from_raw(next()));
+        }
+        if e.cold & COLD_SRCLOC != 0 {
+            let at = Loc::from_raw(next());
+            let ctx = DeclId::from_raw(next());
+            let location = next() != 0;
+            if let Some(ctx) = ctx {
+                self.srcloc.image_uses.push((id, at, ctx, location));
+            }
         }
     }
 

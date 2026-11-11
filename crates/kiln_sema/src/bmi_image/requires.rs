@@ -163,7 +163,12 @@ impl Writer<'_, '_, '_> {
         let base = self.img.reqs.nparams as u32;
         let mut ps = Vec::with_capacity(params.len());
         for (k, &p) in params.iter().enumerate() {
-            ps.push(self.param(p, base + k as u32)?);
+            let pr = self.param(p, base + k as u32)?;
+            if pr.orig.is_some() {
+                // Not in this section's encoding.
+                return Err("a parameter with an adjusted type or a pack");
+            }
+            ps.push(pr);
         }
         let i = self.img.reqs.recs.len() as u32;
         for (k, &p) in params.iter().enumerate() {
@@ -315,6 +320,7 @@ pub(super) fn decode_requires(r: &mut Rd<'_>) -> Res<ReqBodies> {
                 pflags: r.u16()?,
                 flags: r.u8()?,
                 default: NONE,
+                orig: None,
             });
         }
         let ni = r.count(6)?;

@@ -1982,10 +1982,6 @@ fn kind2_declaration_image_fallback() {
             "a template",
         ),
         (
-            "export module f;\nexport template <class T> struct B { T v; B(T t) : v(t) {} };\n",
-            "mem-initializers of a constructor in a class template",
-        ),
-        (
             "export module f;\nexport template <class T> struct A { int f() { return 1; } };\n\
              export inline int h() { A<int> a; return a.f(); }\n",
             "an implicit member of a class template specialization",
@@ -2348,6 +2344,37 @@ fn kind2_declaration_image_dependent_types() {
         "m.cppm:15:51: error: no member named 'inner' in 'B'",
         "m.cppm:14:53: error: no member named 'value' in 'C'",
         "note: implicit deduction guide declared as 'template <class T> Wrap(T *p) -> id::Wrap<T>'",
+    ] {
+        assert!(errs.contains(want), "{want}: {errs}");
+    }
+}
+
+const IMGPI: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-pattern-inits.cppm");
+const IMGPI_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-pattern-inits-run.cpp");
+const IMGPI_ERR: &str =
+    include_str!("../../../tests/conformance/module.interface/image-pattern-inits-errors.cpp");
+
+/// WP-1310 (§11.11 "Pattern mem-initializers"): the mem-initializers of
+/// class template constructors, as parsed, and attributed locals come
+/// from the image. With the unit's source blanked an importer still
+/// instantiates them, its IR is the replay's, and a mem-initializer that
+/// does not instantiate is diagnosed in the module, as after a replay
+/// ([class.base.init], [temp.inst]/4).
+#[test]
+fn kind2_declaration_image_pattern_inits() {
+    let errs = image_round_trip(
+        "image-pi",
+        "imgpi",
+        IMGPI,
+        IMGPI_RUN,
+        IMGPI_ERR,
+        "4 1 5 3 2 7 10 11 6 7\n",
+    );
+    for want in [
+        "m.cppm:29:43: error: invalid operands to binary expression ('NC' and 'int')",
+        "m.cppm:18:23: error: no matching conversion for functional-style cast from 'int' to 'NC'",
     ] {
         assert!(errs.contains(want), "{want}: {errs}");
     }
