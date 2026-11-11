@@ -518,7 +518,7 @@ fn gcc_as_the_compiler_under_test() {
     o.compiler = Some(root.join("xtask/fixtures/fake-gcc/g++"));
     o.no_gcc = true;
     let results = execute(&o).unwrap();
-    check_fixture_statuses(&results, 9);
+    check_fixture_statuses(&results, 12);
     let flags = results.iter().find(|r| r.name.ends_with("pass-flags-in-gcc-spelling.cpp"));
     let log = flags.unwrap().log.join("\n");
     assert!(log.contains("-fmax-errors=5 -fconstexpr-ops-limit=1000"), "{log}");
@@ -531,6 +531,42 @@ fn gcc_as_the_compiler_under_test() {
     let run = results.iter().find(|r| r.name.ends_with("pass-run-output.cpp"));
     let log = run.unwrap().log.join("\n");
     assert!(log.contains("-lstdc++exp"), "a link names libstdc++exp: {log}");
+    // WP-1261: every GCC command of a `unit:` test (the test file, the
+    // unit, the link) gets GCC's spelling; the clang oracle gets the
+    // test's flags unchanged.
+    let unit = results.iter().find(|r| r.name.ends_with("pass-unit-two-step-run.cpp")).unwrap();
+    let gcc: Vec<&String> = unit.log.iter().filter(|l| l.contains("fake-gcc/g++")).collect();
+    assert_eq!(gcc.len(), 4, "flag probe, test file, unit, link: {gcc:#?}");
+    assert!(gcc[0].contains("gcc-flag-probe.cpp"), "{}", gcc[0]);
+    for l in &gcc {
+        for clang_only in [
+            "-Qunused-arguments",
+            "-Rpass-missed",
+            "-Wunreachable-code-aggressive",
+            "-fno-crash-diagnostics",
+        ] {
+            assert!(!l.contains(clang_only), "{clang_only} reached GCC: {l}");
+        }
+        assert!(l.contains("-Werror=unused-variable"), "{l}");
+    }
+    assert!(gcc[2].contains("unit-five.cpp") && gcc[2].contains("tests/support/meta-header"));
+    let link = gcc[3].split(" [mem").next().unwrap();
+    assert!(link.ends_with("-lstdc++exp"), "libstdc++exp last: {link}");
+    let oracle = unit.log.iter().filter(|l| l.starts_with("$ clang++-19")).collect::<Vec<_>>();
+    assert!(oracle.iter().any(|l| l.contains("-Qunused-arguments")), "{oracle:#?}");
+    let warn = results.iter().find(|r| r.name.ends_with("pass-clang-warning-flags.cpp"));
+    let log = warn.unwrap().log.join("\n");
+    assert!(log.contains("-Wall -Werror=unused-variable"), "{log}");
+    for clang_only in ["-Weverything", "-Wno-c++98-compat", "invalid-static-assert", "-Rsearch"] {
+        assert!(!log.contains(clang_only), "{clang_only} reached GCC: {log}");
+    }
+    let probe = results.iter().find(|r| r.name.ends_with("skip-flags-gcc-rejects.cpp")).unwrap();
+    let why = probe.reason.as_deref().unwrap_or_default();
+    assert!(
+        why.starts_with("GCC under test: GCC rejects the test's flags")
+            && why.contains("-fsanitize-ignorelist="),
+        "{why}"
+    );
 }
 
 /// A clang oracle compile that dies of a signal is retried once
@@ -562,6 +598,14 @@ fn clang_oracle_crash_is_retried_once() {
     has("error-reject-not-retried-run.cpp", "fake rejection");
     has("error-sigkill-not-retried-run.cpp", "rejected the test (killed by signal 9)");
     has("error-oom-not-retried-run.cpp", "LLVM ERROR: out of memory");
+    // WP-1264: the clang oracle's compiles leave no crash reproducer.
+    let retried = by_name(&results, "pass-segv-once-run.cpp").unwrap();
+    let oracle: Vec<&String> =
+        retried.log.iter().filter(|l| l.contains("fake-clang/clang++ ")).collect();
+    assert!(!oracle.is_empty(), "{:#?}", retried.log);
+    for l in oracle {
+        assert!(l.contains("-fno-crash-diagnostics"), "{l}");
+    }
     let advised: Vec<&str> =
         results.iter().filter(|r| r.advisory.is_some()).map(|r| r.name.as_str()).collect();
     assert_eq!(advised.len(), 2, "{advised:?}");

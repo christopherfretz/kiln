@@ -103,7 +103,7 @@ directives are also ERRORs.
 | `requires: clang<X[.Y[.Z]]` | The complement: run only when every clang the test runs is OLDER than `X.Y.Z`; same clangs, same version reading (an unreadable version never meets it), and the SKIP reason `requires clang<X.Y.Z; the oracle is clang <version>`. Both bounds may appear (the lower is reported first). For an expectation a later clang release changed and kiln has not followed yet — the oracle-switch residual (docs/status/wp-184-oracle-switch.md); kiln alone (no clang run) still runs the test. WP-355. |
 | `min-oracle: N` | Run only when every clang the test runs (the same clangs as `requires: clang>=`) is release `N` or later (`N` a positive major version); otherwise **SKIP** with the reason `min-oracle N; the compiler is clang <version>`. The line `crates/kiln_codegen/tests/ir_vs_clang.rs` reads for an IR case that follows a newer clang where an older one differs (that test compares such a case only under oracle `N` or later); kiln alone (no clang run) still runs the test, at its usual `-fclang-compat`. WP-405. |
 | `module: <name>=<path>` | A module interface (or partition) unit the test imports, `<path>` relative to the test's directory (an absolute path is an ERROR; placeholders apply, so `std=%{libcxx_modules}/std.cppm` names libc++'s module source, WP-984); repeatable, each `<name>` once (a partition as `M:P`), listed in dependency order. Only for `compile-ok` (not `verify`), `compile-fail`, `no-crash` and `run` tests. Single-step (the default for compile kinds): kiln gets `-fmodule-file=<name>=<source>` (it builds the unit in-process, spec/modules.md part A); clang first precompiles each unit, in order, with `<clang> -std=<std> <args> <earlier units' -fmodule-file=...> --precompile -x c++-module <source> -o <scratch>/oracle-<name>.pcm` and then gets `-fmodule-file=<name>=<bmi>`. Two-step (`two-step`, and always for `run`; WP-917): kiln, too, writes module files, with `-fmodule-output=<scratch>/<name>.pcm -c -x c++-module <source> -o <scratch>/<name>.o` (`--precompile` alone when no object is needed), and gets `-fmodule-file=<name>=<scratch>/<name>.pcm`; clang compiles each `.pcm` with `-c` for its object. `:` in a name is `-` in the file name. Either way the flags follow `args` and precede the test file. A missing unit or one clang rejects is **ERROR**, one kiln rejects or crashes on **FAIL**; a compiler that is neither kiln nor clang **SKIP**s, and the GCC oracle is not run. The same lines `ir_vs_clang` reads (spec/codegen.md §6, "IR-diff corpus"). WP-405, WP-917. |
-| `unit: <path>` | A further translation unit of a `run` test (an implementation unit, or a plain unit that imports the modules), `<path>` relative to the test's directory; repeatable. Each is compiled with `-c` after the test file, with the `module:` flags, to `<scratch>/[oracle-]unit<N>.o`; the program links the modules' objects, the units' and the test's (`-Qunused-arguments <args> <objects> -o ...`). The diags compared are the test file's compile's; a failing module, unit or link step fails the test (kiln) or makes it ERROR (oracle). WP-917. |
+| `unit: <path>` | A further translation unit of a `run` test (an implementation unit, or a plain unit that imports the modules), `<path>` relative to the test's directory; repeatable. Each is compiled with `-c` after the test file, with the `module:` flags, to `<scratch>/[oracle-]unit<N>.o`; the program links the modules' objects, the units' and the test's (`-Qunused-arguments <args> <objects> -o ...`; for GCC as the compiler under test, `<args> <objects> -o ... -lstdc++exp`, its args in GCC's spelling and no `-Qunused-arguments`, which GCC rejects, WP-1261). The diags compared are the test file's compile's; a failing module, unit or link step fails the test (kiln) or makes it ERROR (oracle). A test with `unit:` lines and no `module:` or `header-unit:` line also runs under GCC as the compiler under test (WP-1261); any other compiler that is neither kiln nor clang SKIPs. WP-917. |
 | `header-unit: "<path>"` / `header-unit: <name>` | A header unit the test imports (`import "<path>";` / `import <name>;`), for the same kinds as `module:`; repeatable, each spelling once; a quoted path is relative to the test's directory (absolute is an ERROR). Kiln gets nothing: it builds a header unit in-process at its import (spec/modules.md §3; header-unit module files are §11.10). A clang (the compiler under test or the oracle) first builds each, in order, with `<clang> -std=<std> <args> -fmodule-header=user -x c++-user-header <test dir>/<path> -o <scratch>/[oracle-]hu<N>.pcm` (an angled name: `-fmodule-header=system -x c++-system-header <name>`, found on the include path), before any `module:` unit, and every later compile of the test (module units, the test file, `unit:` files) gets `-fmodule-file=<that file>` ahead of the `module:` flags. A `run` test with a `header-unit:` line is two-step (its test file is compiled with `-c`, then linked). A header unit the compiler under test rejects fails the test, one the oracle rejects or a missing file makes it ERROR; a compiler that is neither kiln nor clang SKIPs, and the GCC oracle is not run. clang warns `-Wexperimental-header-units` at the import, so tests pass `-Wno-experimental-header-units` in `args:` (kiln accepts and ignores it). WP-986. |
 | `two-step` | No value. Compile kinds with `module:` lines only (a `run` test is always two-step; anything else is an ERROR): kiln compiles the units to module files and imports those instead of the sources, so the test exercises the module file reader (spec/modules.md §11). WP-917. |
 | `pch: <path>` | A precompiled-header test (WP-1023): `compile-ok`, `compile-fail` and `run` only (anything else is an ERROR), at most once, `<path>` relative to the test's directory. Before anything else the compiler under test, and a clang (or kiln) oracle, each build `<program> -std=<std> [-fclang-compat=N] <args> -x c++-header <path> -o <scratch>/[oracle-]test.pch` (`-x c-header` for C); the test file's compile then adds `-include-pch <that file>` after the `module:` flags (`unit:` files do not get it). A producer the compiler under test rejects FAILs the test (so `xfail` applies); one the oracle rejects, or a missing header, is an ERROR. Needs kiln or clang as the compiler (else SKIP); no GCC comparison. The two steps are clang's own PCH workflow, so the oracle checks the same build shape kiln does. |
@@ -202,9 +202,12 @@ Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
   submit a bug report`.
 
 This holds whatever the expectation is, except under `expect: ice`. An
-internal compiler error never satisfies `compile-fail`. kiln gets
-`-fno-crash-diagnostics` right after `-std=`, so a crashing test writes no
-reproducer into `$TMPDIR`.
+internal compiler error never satisfies `compile-fail`. kiln and clang,
+as the compiler under test or the oracle, get `-fno-crash-diagnostics`
+right after `-std=` on every compile (the test file, `module:`, `unit:`,
+`header-unit:` and `pch:` builds), so a crashing test writes no
+reproducer into `$TMPDIR` (WP-1264 added the clangs). GCC writes none and
+gets nothing.
 
 | Kind | Mode | Pass condition |
 |---|---|---|
@@ -337,6 +340,11 @@ None of these are retried:
 - the compiler under test, kiln or not, even when it is the same clang as
   the oracle
 
+Every compile by a clang oracle (or a kiln one) gets `-fno-crash-diagnostics`
+right after `-std=`, as the compiler under test does ("Crashes"), so a
+crashing oracle leaves no preprocessed-source and script reproducers in
+`$TMPDIR` of a CI runner (WP-1264); a test's own `args:` come later and win.
+
 The command log shows `# the oracle crashed (signal N); retrying it once`
 and, when the retry crashes too, `# the oracle crashed again (...); not
 retried` (`xtask/src/test/oracle_retry.rs`; self-test
@@ -363,9 +371,16 @@ IR and diagnostic wording are **never** compared with GCC (`diag:` and
 `<args>` are the test's with the kiln- and clang-only flags dropped
 (`-fclang-compat=`, `-fkiln-*`, `-fconstexpr-report=`, `-stdlib=`,
 `-resource-dir <dir>`, `-Xclang <arg>`, `--gcc-toolchain=<dir>`: GCC
-uses its own library) and two renamed
+uses its own library), two renamed
 (`-ferror-limit=N` to `-fmax-errors=N`, `-fconstexpr-steps=N` to
-`-fconstexpr-ops-limit=N`). Reflection is `-std=c++26 -freflection` in
+`-fconstexpr-ops-limit=N`), and clang's diagnostic-only flags, which GCC
+rejects, dropped too (WP-1261): `-Qunused-arguments`, `-Weverything`,
+`-f[no-]crash-diagnostics[=...]`, the `-R<remark>` flags, and every
+`-W<name>`, `-Wno-<name>`, `-Werror=<name>` and `-Wno-error=<name>` whose
+`<name>` (up to any `=`) this GCC does not list for the test's language
+(`<gcc> -Q --help=warnings -fsyntax-only -x c|c++ /dev/null`, read once per
+run; a GCC that lists nothing keeps them all). `-Wno-everything` becomes
+`-w`. The map is `oracle::gcc_args_with`. Reflection is `-std=c++26 -freflection` in
 both compilers (verified on GCC 16.1.0); libstdc++'s `<meta>` is GCC's
 default library.
 
@@ -406,16 +421,33 @@ kiln: the implementer's check that a reflection or contracts test's
 expectation is GCC 16.1's too. It is not a CI step. It mirrors
 `--compiler clang++-N`, minus what is kiln's and clang's own:
 
-- **Flags.** Every compile of the compiler under test gets the mode's
-  flags and the test's `args` in GCC's spelling, mapped exactly as for the
-  GCC oracle ("GCC oracle": `oracle::gcc_args`; `--gcc-toolchain=` and the
-  other kiln/clang-only flags dropped, `-ferror-limit=`/`-fconstexpr-steps=`
-  renamed), so `no-crash`'s `-ferror-limit=0` reaches GCC as
-  `-fmax-errors=0`. A compile that links (no `-c`, `-S`, `-E` or
-  `-fsyntax-only`) also gets `-lstdc++exp` last, since GCC keeps the
-  default contract-violation handler and
-  `invoke_default_contract_violation_handler` there. The clang oracle,
-  when the test compares with one, gets the test's flags unchanged.
+- **Flags.** Every command of the compiler under test (the test file's
+  compile, a `unit:` file's, the two-step link) gets the mode's flags and
+  the test's `args` in GCC's spelling, mapped exactly as for the GCC
+  oracle ("GCC oracle": `oracle::gcc_args_with`; `--gcc-toolchain=`, the
+  other kiln/clang-only flags and the clang diagnostic-only flags dropped,
+  `-ferror-limit=`/`-fconstexpr-steps=` renamed), so `no-crash`'s
+  `-ferror-limit=0` reaches GCC as `-fmax-errors=0`; no flag reaches GCC
+  raw (WP-1261). A compile that links (no `-c`, `-S`, `-E` or
+  `-fsyntax-only`), and the two-step link, also get `-lstdc++exp` last,
+  since GCC keeps the default contract-violation handler and
+  `invoke_default_contract_violation_handler` there; the link gets no
+  `-Qunused-arguments` (GCC rejects it and has no unused-argument warning
+  to silence). GCC gets no `-fno-crash-diagnostics` either: it writes no
+  reproducer. The clang oracle, when the test compares with one, gets the
+  test's flags unchanged.
+- **The flag probe.** A test with `args` first has GCC compile a one-line
+  file, `<gcc> -std=<std> -fsyntax-only -I<stand-in dir> <mapped args> -x
+  c|c++ <scratch>/gcc-flag-probe.{c,cpp}`. If GCC still rejects a mapped
+  flag that has no GCC equivalent and that dropping would change the
+  test's meaning (`-fsanitize=cfi`, `-flto=thin`, `--target=`,
+  `-fsanitize-ignorelist=`, `-fprofile-instr-generate`, ...), its error is
+  not located in a file (`g++: error: unrecognized command-line option
+  ...`, `cc1plus: error: ...`), and the test is **SKIP**ped with the reason
+  `GCC under test: GCC rejects the test's flags (<that line>)`. A probe
+  that fails otherwise, or cannot run, lets the test run as usual. The
+  probe runs after every other skip and is logged with the test's
+  commands.
 - **The stand-in `kiln_meta.h`.** `-I<repo_root>/tests/support/meta-header`
   comes first on GCC's command line, before the test's `args`, as in the
   header-differential mode, so a reflection test's `#include "kiln_meta.h"`
@@ -434,7 +466,11 @@ expectation is GCC 16.1's too. It is not a CI step. It mirrors
   `stdout-file:`/`exit:`, and the clang oracle (`oracle: clang`, the
   default) agrees on both. `debugger`: the debugger scripts' output, as
   under clang. `pp`: the output and the oracle comparison, as
-  under clang. A crash or hang is a FAIL, as for any compiler.
+  under clang, after the line marker of `stdc-predef.h` (which GCC
+  includes, `#define`s only, before every hosted translation unit; kiln
+  and clang include nothing) is dropped from GCC's `-E` output
+  (`runner::without_gcc_preinclude`, WP-1261). A crash or hang is a
+  FAIL, as for any compiler.
 - **Not checked: `diag:` and `strict-diags`.** Their text is kiln's and
   clang's wording (spec/diag.md), which GCC does not share, so under GCC
   the `diag:` list is not matched and `strict-diags` is not applied
@@ -443,8 +479,20 @@ expectation is GCC 16.1's too. It is not a CI step. It mirrors
   GCC run is for.
 - **Not run: SKIP**, with the reasons above: kiln-specific tests (`oven:`,
   `inst-report:`), `verify`, `ast`, `cfg`, `layout`, `vtables`, `ir`,
-  `ice`, `module:`/`unit:`/`header-unit:` and `pch:` tests ("Test kinds",
-  "kiln-specific tests"). `oracle: gcc` is not compared (GCC is already the
+  `ice`, `module:`/`header-unit:` and `pch:` tests (a test with only
+  `unit:` lines runs, built in two steps, WP-1261; "Test kinds",
+  "kiln-specific tests"). So is a test that is itself a module unit or
+  imports one, which kiln and clang take with `-std=c++20` and up but GCC
+  only with `-fmodules` (its CMIs going to `gcm.cache/` in the working
+  directory, which the harness does not drive): a line of the test file
+  that, left-trimmed and without a leading `export `, opens `module;`,
+  `module <name>`/`module :<partition>` or `import <name>`/`import
+  :<partition>`/`import <header>`/`import "header"` ([module.unit]/1,
+  [module.import]/1; `module::` and `import =` are identifiers), and a
+  test whose `args` name `-fmodule-file=` or `-fprebuilt-module-path=`
+  (clang module flags; GCC reads `-fmodule-file=` as a D option). The
+  reason names the line or the flag (`runner::gcc_module_syntax`,
+  WP-1261). `oracle: gcc` is not compared (GCC is already the
   compiler under test); such a test runs against its own expectations.
 - **Markers.** `skip(gcc)` and `xfail(gcc)` apply (a GCC disagreement
   with kiln's expected behaviour is an `xfail(gcc): <reason>`), as do the
@@ -1517,7 +1565,17 @@ or infrastructure error. Parse errors name their line.
   `gcc_under_test_stand_in_skip`
   (runner.rs), and `gcc_as_the_compiler_under_test` (tests.rs) over the
   `xtask/fixtures/gcc-compiler` fixtures with `fake-gcc/g++`, which
-  rejects the kiln/clang-only flags as GCC does.
+  rejects the kiln/clang-only flags as GCC does. WP-1261 adds
+  `gcc_args_drop_clang_diagnostic_flags` (oracle.rs),
+  `module_syntax_lines` and `gcc_preinclude_marker_dropped` (runner.rs) and the fixtures
+  `pass-unit-two-step-run.cpp` (every GCC command of a `unit:` test in
+  GCC's spelling, the link without `-Qunused-arguments` and with
+  `-lstdc++exp` last), `pass-clang-warning-flags.cpp` and
+  `skip-flags-gcc-rejects.cpp` (the flag probe), asserted by
+  `gcc_as_the_compiler_under_test`.
+- clang oracle without crash reproducers (WP-1264):
+  `clang_oracle_crash_is_retried_once` (tests.rs) checks every compile of
+  the fake clang oracle carries `-fno-crash-diagnostics`.
 - Debug-info sweep (WP-910): `debug_sweep_mode_selection` (tests.rs);
   the sweep of `tests/conformance` (docs/VALIDATION.md).
 - `module:` / `min-oracle:` (WP-405): `module_and_min_oracle_directives`

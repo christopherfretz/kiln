@@ -2,10 +2,10 @@
 // lambda-declarator rejects (clang `ParseLambdaSpecifiers`). A GNU
 // attribute after the lambda-specifiers or the noexcept-specifier, or
 // ahead of the parameter list, ends the declarator: expected body of
-// lambda expression. An attribute-specifier-seq after the
-// noexcept-specifier or the trailing return type appertains to a type,
-// where `[[noreturn]]` and `[[nodiscard]]` cannot appear. kiln accepted
-// all but the trailing-return one, applying them to the call operator.
+// lambda expression. An attribute-specifier-seq after the noexcept-specifier
+// or the trailing return type appertains to a type, where `[[noreturn]]` and
+// `[[nodiscard]]` cannot appear. kiln accepted all but the trailing-return one.
+//@ skip(gcc): clang's lambda-declarator attribute placement rules; GCC 16.1 parses GNU attributes there differently and only warns on the type-appertaining ones
 //@ expect: compile-fail
 //@ strict-diags
 //@ std: c++23

@@ -4094,9 +4094,15 @@ impl Oven {
     pub fn disassemble(&self) -> String;                          // debugging aid
     // The evaluation paused in a bridge callback (WP-1248): a token for it,
     // and its call stack as "in call to 'f(args)'" notes, innermost first,
-    // elided as a failure's backtrace (-fconstexpr-backtrace-limit).
+    // elided as a failure's backtrace (-fconstexpr-backtrace-limit). The
+    // notes are those of the evaluation `mark` names, while this Oven still
+    // holds it paused (the mark matches, or a nested evaluation runs above
+    // it on the same stack): its own frames only. Empty for a mark taken in
+    // a potential-constant evaluation (`evaluate_call`, `evaluate_potential`,
+    // a frame job: sema's never-constant check), whose frames are the
+    // check's own (WP-1258).
     pub fn frame_mark(&self) -> FrameMark;
-    pub fn paused_call_notes(&self, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
+    pub fn paused_call_notes(&self, mark: FrameMark, ast: &Ast, sources: Option<&SourceManager>) -> Vec<Note>;
 }
 pub mod report { pub fn render(..) -> String; pub fn write(..) -> io::Result<()>; }
 ```

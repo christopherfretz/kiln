@@ -1,9 +1,9 @@
-// [temp.inst], [dcl.init.aggr]/3.1: designated initializer lists in
-// templates: dependent designated init of a dependent aggregate, a
-// deduced return, CTAD, a default member initializer, a default argument,
-// an NTTP argument, a requires-expression (an unknown field is a
-// substitution failure), a designated pack expansion, nested designators,
-// and an anonymous union member of a local class.
+// [temp.inst], [dcl.init.aggr]/3.1: designated initializer lists in templates:
+// dependent designated init of a dependent aggregate, a deduced return, CTAD, a
+// default member initializer, a default argument, an NTTP argument, a
+// requires-expression (an unknown field is a substitution failure), a designated
+// pack expansion, nested designators, and an anonymous union member of a local class.
+//@ skip(gcc): relies on clang's C99 designator extensions (nested designators, a designated pack expansion)
 //@ expect: run
 //@ strict-diags
 //@ diag: 20:41 warning "nested designators are a C99 extension"

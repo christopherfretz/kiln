@@ -15,6 +15,7 @@ use super::directives::{
 use super::discover::TestCase;
 use super::inst_report;
 use crate::clang_ast::{DumpOptions, normalize};
+use crate::oracle::GccWarnings;
 use crate::util::oven_report::{self, Report};
 use crate::util::process::{self, MemLimit, Output, Shown};
 use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
@@ -331,13 +332,11 @@ impl Test<'_> {
             c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
         }
         c.arg(format!("-std={}", spec.std));
-        if self.is_kiln(program) {
-            c.arg("-fno-crash-diagnostics");
-        }
+        c.args(self.no_crash_reports(program));
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
-        c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        c.args(self.args_for(program, spec));
         let lang = if self.case.lang == Lang::C { "c-header" } else { "c++-header" };
         c.args(["-x", lang]).arg(&src).arg("-o").arg(&out);
         let o = self.exec(who, &c, self.cfg.compile_timeout)?;
@@ -405,6 +404,11 @@ impl Test<'_> {
         if let Some(reason) = unsupported_by(&spec, kind) {
             return (Status::Skip, Some(reason), String::new());
         }
+        if kind == CompilerKind::Gcc
+            && let Some(reason) = gcc_module_syntax(&spec, &source)
+        {
+            return (Status::Skip, Some(reason), String::new());
+        }
         if let Some((status, why)) = debugger_gate(&spec, self.cfg.require_debuggers) {
             return (status, Some(why), String::new());
         }
@@ -419,6 +423,9 @@ impl Test<'_> {
                 let reason = format!("no oracle (`{name}` is checked against the oracle's dump)");
                 return (Status::Skip, Some(reason), String::new());
             }
+        }
+        if let Some(reason) = self.gcc_rejected_flags(&spec) {
+            return (Status::Skip, Some(reason), String::new());
         }
         if let Some(verdict) = self.prebuild_modules(&spec) {
             return verdict;
@@ -556,29 +563,23 @@ impl Test<'_> {
             (Lang::Cxx, false) => {}
         }
         c.arg(format!("-std={}", spec.std));
-        if self.is_kiln(program) {
-            // A crashing test must not leave a reproducer in $TMPDIR
-            // (spec/harness.md "Crashes"); `expect: ice` turns it back on in
-            // `mode`, and a test's own `args:` come last and win.
-            c.arg("-fno-crash-diagnostics");
-        }
-        let gcc = program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Gcc;
-        let args: Vec<String> =
-            spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
+        // A crashing test must not leave a reproducer in $TMPDIR, nor a
+        // crashing clang oracle (spec/harness.md "Crashes", "Oracle crash
+        // retry"); `expect: ice` turns it back on in `mode`, and a test's
+        // own `args:` come last and win.
+        c.args(self.no_crash_reports(program));
+        let gcc = self.gcc_under_test(program);
+        let args = self.args_for(program, spec);
         let mode: Vec<String> = mode.iter().map(|m| (*m).to_owned()).collect();
-        c.args(compiler_flags(gcc, &mode));
+        c.args(self.flags_for(program, &mode));
         if let Some(n) = self.clang_compat(program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
         if program == self.cfg.compiler {
             c.args(self.meta_header_flags(true));
         }
-        if gcc {
-            // GCC reads the stand-in `kiln_meta.h` over its own <meta>
-            // (spec/harness.md "GCC as the compiler under test").
-            c.arg(format!("-I{}", stand_in_dir(&self.cfg.root).display()));
-        }
-        c.args(compiler_flags(gcc, &args));
+        c.args(self.gcc_stand_in(program));
+        c.args(&args);
         c.args(self.module_flags(program, spec, spec.modules.len()));
         if spec.pch.is_some() {
             c.arg("-include-pch").arg(self.pch_file(program));
@@ -588,13 +589,89 @@ impl Test<'_> {
             c.arg("-o").arg(o);
         }
         if gcc && out.is_some() && gcc_links(&mode, &args) {
-            // GCC keeps the contract-violation handler (and the other
-            // experimental library parts) in libstdc++exp, which a link
-            // must name after the sources (spec/harness.md "GCC as the
-            // compiler under test").
-            c.arg("-lstdc++exp");
+            c.arg(GCC_LINK_LIB);
         }
         c
+    }
+
+    /// Whether `program` is GCC as the compiler under test (spec/harness.md
+    /// "GCC as the compiler under test").
+    fn gcc_under_test(&self, program: &Path) -> bool {
+        program == self.cfg.compiler && self.cfg.compiler_kind == CompilerKind::Gcc
+    }
+
+    /// `flags` (the mode's or the test's) as `program` takes them: in GCC's
+    /// spelling for GCC under test (`oracle::gcc_args_with`, with that
+    /// GCC's warning list), else unchanged. Every command of GCC under test
+    /// goes through this (WP-1261).
+    fn flags_for(&self, program: &Path, flags: &[String]) -> Vec<String> {
+        let warnings = self
+            .gcc_under_test(program)
+            .then(|| GccWarnings::of(program, self.case.lang == Lang::C))
+            .flatten();
+        compiler_flags(self.gcc_under_test(program), warnings.as_deref(), flags)
+    }
+
+    /// The test's `args:`, placeholders substituted, as `program` takes
+    /// them ([`Self::flags_for`]).
+    fn args_for(&self, program: &Path, spec: &TestSpec) -> Vec<String> {
+        let args: Vec<String> =
+            spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))).collect();
+        self.flags_for(program, &args)
+    }
+
+    /// For GCC under test, the stand-in `kiln_meta.h`'s directory first on
+    /// the include path, so GCC reads it over its own `<meta>`
+    /// (spec/harness.md "GCC as the compiler under test"); else nothing.
+    fn gcc_stand_in(&self, program: &Path) -> Option<String> {
+        self.gcc_under_test(program)
+            .then(|| format!("-I{}", stand_in_dir(&self.cfg.root).display()))
+    }
+
+    /// For GCC under test, why it cannot run the test at all: the test's
+    /// `args:`, in GCC's spelling ([`Self::args_for`]), still hold a flag
+    /// GCC has no equivalent for (`-fsanitize=cfi`, `-flto=thin`,
+    /// `--target=`, `-fsanitize-ignorelist=`, ...). One `-fsyntax-only`
+    /// compile of a one-line file with those flags tells: an error not
+    /// located in a file (`g++: error: unrecognized command-line option
+    /// ...`, `cc1plus: error: ...`) skips the test with that line, rather
+    /// than failing it on a flag it never passes to GCC raw (WP-1261). A
+    /// probe that fails otherwise, or cannot run, lets the test run.
+    fn gcc_rejected_flags(&mut self, spec: &TestSpec) -> Option<String> {
+        let program = self.cfg.compiler.clone();
+        if !self.gcc_under_test(&program) || spec.args.is_empty() {
+            return None;
+        }
+        let (lang, ext) = if self.case.lang == Lang::C { ("c", "c") } else { ("c++", "cpp") };
+        let probe = self.scratch().ok()?.join(format!("gcc-flag-probe.{ext}"));
+        fs::write(&probe, "typedef int kiln_probe_t;\n").ok()?;
+        let mut c = Command::new(&program);
+        crate::util::isolate_caches(&mut c);
+        c.current_dir(&self.cfg.root);
+        c.arg(format!("-std={}", spec.std)).arg("-fsyntax-only");
+        c.args(self.gcc_stand_in(&program));
+        c.args(self.args_for(&program, spec));
+        c.args(["-x", lang]).arg(&probe);
+        let shown = Shown(&c).to_string();
+        let o = self.run_capped(&shown, &c, None, None, self.cfg.compile_timeout).ok()?;
+        if o.success() {
+            return None;
+        }
+        let stderr = o.stderr_str();
+        let line = stderr
+            .lines()
+            .find(|l| l.split_once(": error: ").is_some_and(|(at, _)| !at.contains(':')))?;
+        Some(format!("GCC under test: GCC rejects the test's flags ({})", line.trim()))
+    }
+
+    /// `-fno-crash-diagnostics` for a compile by kiln or a clang, as the
+    /// compiler under test or the oracle (WP-1264): a crash must not leave
+    /// reproducer files in `$TMPDIR` (spec/harness.md "Crashes"). GCC has
+    /// no such flag (it writes no reproducer).
+    fn no_crash_reports(&self, program: &Path) -> Option<&'static str> {
+        let clang_like = (program == self.cfg.compiler && self.cfg.compiler_kind.speaks_clang())
+            || (self.cfg.oracle.as_deref() == Some(program) && self.cfg.oracle_kind.speaks_clang());
+        clang_like.then_some("-fno-crash-diagnostics")
     }
 
     /// The `module:` source of `path` (relative to the test's directory).
@@ -672,7 +749,8 @@ impl Test<'_> {
             crate::util::isolate_caches(&mut c);
             c.current_dir(&self.cfg.root);
             c.arg(format!("-std={}", spec.std));
-            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            c.args(self.no_crash_reports(program));
+            c.args(self.args_for(program, spec));
             if hu.system {
                 c.args(["-fmodule-header=system", "-x", "c++-system-header", &hu.name]);
             } else {
@@ -753,12 +831,11 @@ impl Test<'_> {
                     c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
                 }
                 c.arg(format!("-std={}", spec.std));
+                c.args(self.no_crash_reports(program));
                 if let Some(n) = self.clang_compat(program, spec) {
                     c.arg(format!("-fclang-compat={n}"));
                 }
-                c.args(
-                    spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))),
-                );
+                c.args(self.args_for(program, spec));
                 c.args(self.module_flags(program, spec, i));
                 if let (true, Some(k)) = (kiln, self.cfg.bmi_kind) {
                     c.arg(format!("-fkiln-bmi-kind={k}"));
@@ -833,10 +910,12 @@ impl Test<'_> {
                 c.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
             }
             c.arg(format!("-std={}", spec.std));
+            c.args(self.no_crash_reports(program));
             if let Some(n) = self.clang_compat(program, spec) {
                 c.arg(format!("-fclang-compat={n}"));
             }
-            c.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+            c.args(self.gcc_stand_in(program));
+            c.args(self.args_for(program, spec));
             c.args(self.module_flags(program, spec, spec.modules.len()));
             c.arg("-c").arg(&src).arg("-o").arg(&obj);
             let o = self.exec(who, &c, self.cfg.compile_timeout)?;
@@ -851,9 +930,18 @@ impl Test<'_> {
         if self.is_kiln(program) {
             link.env("KILN_LLVM_DIR", &self.cfg.llvm_dir);
         }
-        link.arg("-Qunused-arguments");
-        link.args(spec.args.iter().map(|a| directives::substitute(a, |n| self.placeholder(n))));
+        let gcc = self.gcc_under_test(program);
+        if !gcc {
+            // The test's compile flags reach the link too; clang would warn
+            // about each one it does not use. GCC has no such warning, and
+            // no `-Qunused-arguments` (it rejects the flag; WP-1261).
+            link.arg("-Qunused-arguments");
+        }
+        link.args(self.args_for(program, spec));
         link.args(&objects).arg("-o").arg(exe);
+        if gcc {
+            link.arg(GCC_LINK_LIB);
+        }
         let o = self.exec(who, &link, self.cfg.compile_timeout)?;
         if !o.success() {
             return Ok(o);
@@ -1625,7 +1713,10 @@ impl Test<'_> {
             )));
         }
         self.check_diags(spec, &diag_parse::parse(&o.stderr_str()))?;
-        let got = o.stdout_str();
+        let mut got = o.stdout_str();
+        if self.cfg.compiler_kind == CompilerKind::Gcc {
+            got = without_gcc_preinclude(&got);
+        }
         let mut failures = String::new();
         let mut golden = self.case.path.clone().into_os_string();
         golden.push(".expected");
@@ -2061,9 +2152,16 @@ const DEBUGGER_TIMEOUT: Duration = Duration::from_secs(60);
 /// The flags of a compile by the compiler under test, as it takes them:
 /// GCC's spelling ([`crate::oracle::gcc_args`]) when it is GCC
 /// (spec/harness.md "GCC as the compiler under test"), else unchanged.
-fn compiler_flags(gcc: bool, flags: &[String]) -> Vec<String> {
-    if gcc { crate::oracle::gcc_args(flags) } else { flags.to_vec() }
+/// `warnings` is that GCC's warning list, when known
+/// ([`crate::oracle::gcc_args_with`]).
+fn compiler_flags(gcc: bool, warnings: Option<&GccWarnings>, flags: &[String]) -> Vec<String> {
+    if gcc { crate::oracle::gcc_args_with(flags, warnings) } else { flags.to_vec() }
 }
+
+/// What GCC under test links after the objects: GCC keeps the default
+/// contract-violation handler (and the other experimental library parts)
+/// in libstdc++exp (spec/harness.md "GCC as the compiler under test").
+const GCC_LINK_LIB: &str = "-lstdc++exp";
 
 /// Whether a GCC compile with these flags links (no `-c`, `-S`, `-E` or
 /// `-fsyntax-only`).
@@ -2084,8 +2182,13 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
     let needs = |what: &str, who: &str| {
         Some(format!("not supported by this compiler (`{what}` needs {who})"))
     };
-    if (!spec.modules.is_empty() || !spec.units.is_empty()) && !kind.speaks_clang() {
+    if !spec.modules.is_empty() && !kind.speaks_clang() {
         return needs("module:", "kiln or clang");
+    }
+    // A `unit:` file is one more ordinary translation unit, which GCC
+    // compiles and links like any other (`build_two_step`; WP-1261).
+    if !spec.units.is_empty() && !kind.speaks_clang() && kind != CompilerKind::Gcc {
+        return needs("unit:", "kiln, clang or GCC");
     }
     if !spec.header_units.is_empty() && !kind.speaks_clang() {
         return needs("header-unit:", "kiln or clang");
@@ -2104,6 +2207,68 @@ fn unsupported_by(spec: &TestSpec, kind: CompilerKind) -> Option<String> {
         return needs("expect: ice", "kiln");
     }
     None
+}
+
+/// `-E` output of GCC under test without the line marker of the header
+/// GCC includes before every hosted translation unit (`stdc-predef.h`,
+/// which holds only `#define`s). kiln and clang include nothing, so the
+/// marker is no difference in the test (WP-1261).
+fn without_gcc_preinclude(out: &str) -> String {
+    out.lines()
+        .filter(|l| {
+            !(l.starts_with("# ")
+                && l.split('"').nth(1).is_some_and(|f| f.ends_with("/stdc-predef.h")))
+        })
+        .flat_map(|l| [l, "\n"])
+        .collect()
+}
+
+/// Why GCC under test cannot run a test written as a module unit, or one
+/// whose `args` name a clang module file (WP-1261). kiln and clang take a
+/// module-declaration or `import` with `-std=c++20` and up; GCC needs
+/// `-fmodules` and writes its CMIs to `gcm.cache/` in the working
+/// directory, which the harness does not drive, and it reads
+/// `-fmodule-file=` as a D option. This is the same rule as `module:`.
+fn gcc_module_syntax(spec: &TestSpec, source: &str) -> Option<String> {
+    let flag = spec
+        .args
+        .iter()
+        .find(|a| a.starts_with("-fmodule-file=") || a.starts_with("-fprebuilt-module-path="));
+    if let Some(flag) = flag {
+        return Some(format!(
+            "not supported by this compiler (`{flag}` is a clang module flag; modules need kiln or clang)"
+        ));
+    }
+    let line = source.lines().map(str::trim_start).find(|l| module_syntax_line(l))?;
+    Some(format!(
+        "not supported by this compiler (`{}` needs -fmodules under GCC; modules need kiln or clang)",
+        line.trim_end()
+    ))
+}
+
+/// Whether `line` (left-trimmed) opens a module-declaration, a global
+/// module fragment (`module;`) or an import-declaration
+/// ([module.unit]/1, [module.import]/1). Both words are plain
+/// identifiers elsewhere, so each counts only before a name, a `:` that
+/// does not start `::`, or (for `module`) a `;` or (for `import`) a
+/// header-name.
+fn module_syntax_line(line: &str) -> bool {
+    let line = line.strip_prefix("export ").map_or(line, str::trim_start);
+    let opens = |kw: &str, header_name: bool| {
+        let Some(rest) = line.strip_prefix(kw) else { return false };
+        let joined = rest.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let rest = rest.trim_start();
+        let mut next = rest.chars();
+        !joined
+            && match next.next() {
+                Some(';') => kw == "module",
+                Some(':') => next.next() != Some(':'),
+                Some('<' | '"') => header_name,
+                Some(c) => c.is_alphabetic() || c == '_',
+                None => false,
+            }
+    };
+    opens("module", false) || opens("import", true)
 }
 
 /// Whether the last `-f[no-]crash-diagnostics[=…]` of `args` turns crash
@@ -2481,7 +2646,8 @@ mod compat_tests {
     use super::{
         DumpKind, GCC_MODE, Status, compat_for, compiler_flags, crash_diagnostics_off,
         debugger_gate_in, diag_directives_for, first_missing_check, gcc_links, includes_kiln_meta,
-        ir_diff, ir_normalize, ir_target_flag, stand_in_skip,
+        ir_diff, ir_normalize, ir_target_flag, module_syntax_line, stand_in_skip,
+        without_gcc_preinclude,
     };
     use crate::test::directives::{CompilerKind, Lang, parse};
 
@@ -2502,13 +2668,48 @@ mod compat_tests {
             "tests/support",
         ]);
         assert_eq!(
-            compiler_flags(true, &args),
+            compiler_flags(true, None, &args),
             v(&["-freflection", "-fmax-errors=0", "-I", "tests/support"])
         );
-        assert_eq!(compiler_flags(false, &args), args);
+        assert_eq!(compiler_flags(false, None, &args), args);
         let mode = v(&["-fsyntax-only", "-ferror-limit=0"]);
-        assert_eq!(compiler_flags(true, &mode), v(&["-fsyntax-only", "-fmax-errors=0"]));
-        assert_eq!(compiler_flags(false, &mode), mode);
+        assert_eq!(compiler_flags(true, None, &mode), v(&["-fsyntax-only", "-fmax-errors=0"]));
+        assert_eq!(compiler_flags(false, None, &mode), mode);
+    }
+
+    /// WP-1261: the lines that make a test a module unit, which GCC under
+    /// test skips ([module.unit]/1, [module.import]/1), and look-alikes
+    /// that use `module`/`import` as identifiers.
+    #[test]
+    fn module_syntax_lines() {
+        for l in [
+            "module;",
+            "export module M;",
+            "module m.dir;",
+            "module :private;",
+            "import std;",
+            "export import :part;",
+            "import <vector>;",
+            "import \"h.h\";",
+        ] {
+            assert!(module_syntax_line(l), "{l}");
+        }
+        for l in
+            ["module::f();", "import = 3;", "modules m;", "importer x;", "import;", "int module;"]
+        {
+            assert!(!module_syntax_line(l), "{l}");
+        }
+    }
+
+    /// WP-1261: GCC's `stdc-predef.h` marker is dropped from its `-E`
+    /// output; every other line stays.
+    #[test]
+    fn gcc_preinclude_marker_dropped() {
+        let out = "# 0 \"t.cpp\"\n# 1 \"/usr/include/stdc-predef.h\" 1 3 4\n# 0 \"<command-line>\" 2\nint x;\n";
+        assert_eq!(
+            without_gcc_preinclude(out),
+            "# 0 \"t.cpp\"\n# 0 \"<command-line>\" 2\nint x;\n"
+        );
     }
 
     /// WP-1249: which `diag:` directives each compiler kind is checked
