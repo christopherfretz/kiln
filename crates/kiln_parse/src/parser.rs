@@ -343,6 +343,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                 kw.remove(s.ast.symbols(), k);
             }
         }
+        if let Some(c) = lex_opts.c {
+            kw.for_c(s.ast.symbols(), c, s.gnu);
+        }
         s.set_std(std);
         let sm = src.source_manager();
         let cur = src.get(0);

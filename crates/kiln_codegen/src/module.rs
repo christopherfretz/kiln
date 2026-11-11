@@ -1983,6 +1983,8 @@ impl<'a> Cg<'a> {
         cc: CallConv,
         variadic: bool,
     ) -> CallInfo {
+        // clang `HasStrictReturn`: C++ only.
+        let strict_return = strict_return && !self.ast.lang_c;
         if !this {
             return classify_call(
                 &mut self.tys,
@@ -2838,13 +2840,16 @@ impl<'a> Cg<'a> {
         if inline == DefInline::Hint {
             a.push(Attr::Flag(AttrKind::InlineHint));
         }
-        if mustprogress {
+        // C has no forward-progress guarantee for functions and no
+        // `norecurse` `main` (clang: C++11 / C++ only).
+        let cxx = !self.ast.lang_c;
+        if mustprogress && cxx {
             a.push(Attr::Flag(AttrKind::MustProgress));
         }
         if inline == DefInline::NoInline || inline == DefInline::OptNone {
             a.push(Attr::Flag(AttrKind::NoInline));
         }
-        if is_main {
+        if is_main && cxx {
             a.push(Attr::Flag(AttrKind::NoRecurse));
         }
         if noreturn {

@@ -204,8 +204,8 @@ impl SyntaxJob<'_> {
         }
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
-            exceptions: a.predef.exceptions.unwrap_or(true),
-            rtti: a.predef.rtti.unwrap_or(true),
+            exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+            rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),

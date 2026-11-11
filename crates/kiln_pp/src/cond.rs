@@ -39,6 +39,11 @@ pub trait IfContext {
     fn char8(&self) -> bool {
         self.std() >= Std::Cxx20
     }
+    /// The C standard when the input is C (`None`: C++). C has no
+    /// operator names and, before C23, no `true`/`false`.
+    fn c(&self) -> Option<kiln_lex::CStd> {
+        None
+    }
     /// Whether literals decode with clang 19's escape rules
     /// ([`crate::PpOptions::clang19_escapes`]).
     fn clang19_escapes(&self) -> bool {

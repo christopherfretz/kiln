@@ -231,8 +231,13 @@ impl<'a, 'sm> TokenSource<'a, 'sm> {
     /// diagnostics go to `diags`.
     pub fn new(pp: Preprocessor<'sm, 'a>, diags: &'a DiagEngine<'sm>) -> Self {
         let interner = pp.interner();
-        let alternatives =
-            ALTERNATIVE_TOKENS.iter().map(|&(s, p)| (interner.intern(s), p)).collect();
+        // C has no alternative tokens: `and` is an identifier
+        // (`<iso646.h>` defines it as a macro; [C17 7.9]).
+        let alternatives = if pp.lex_options().c.is_some() {
+            Vec::new()
+        } else {
+            ALTERNATIVE_TOKENS.iter().map(|&(s, p)| (interner.intern(s), p)).collect()
+        };
         TokenSource {
             pp,
             diags,
