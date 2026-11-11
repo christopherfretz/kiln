@@ -347,6 +347,7 @@ sema_deprecated_volatile_param = Warning [DeprecatedVolatile] (1) "volatile-qual
 sema_deprecated_volatile_return = Warning [DeprecatedVolatile] (1) "volatile-qualified return type {0} is deprecated";
 sema_dereference_incomplete_type = Error (1) "dereference of pointer to incomplete type {0}";
 sema_designated_init_array = ExtWarn [C99Designator] (0) "array designators are a C99 extension";
+sema_designated_init_c89 = Extension [C99Designator] (0) "designated initializers are a C99 feature";
 sema_designated_init_brace_elision = ExtWarn [C99Designator] (0) "brace elision for designated initializer is a C99 extension";
 sema_designated_init_mixed = ExtWarn [C99Designator] (0) "mixture of designated and non-designated initializers in the same initializer list is a C99 extension";
 sema_designated_init_nested = ExtWarn [C99Designator] (0) "nested designators are a C99 extension";

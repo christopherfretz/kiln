@@ -5054,7 +5054,23 @@ impl Parser<'_, '_> {
         let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let mut designator = Vec::new();
-            loop {
+            // A GNU old-style field designator `name: value` (clang
+            // `ParseInitializerWithPotentialDesignator`), in C and C++:
+            // `.name = value`, with no `=` and nothing after it.
+            let old_style = self.peek_is(1, Punct::Colon) && self.ident().is_some();
+            if old_style && let Some(n) = self.ident() {
+                let name = self.bump().span;
+                let colon = self.bump().span;
+                let fix = format!(".{} = ", self.s.ast.symbols().as_str(n));
+                let d = self
+                    .s
+                    .diag(DiagId::parse_gnu_old_style_field_designator, name.lo)
+                    .range(Span::new(name.lo, colon.hi))
+                    .fixit(FixIt::replace(Span::new(name.lo, colon.hi), fix));
+                self.emit(d);
+                designator.push(Designator::Field(n, name.lo));
+            }
+            while !old_style {
                 if self.at(Punct::Period) {
                     self.bump();
                     let Some(n) = self.ident() else {
@@ -5097,6 +5113,7 @@ impl Parser<'_, '_> {
                 valid = false;
             }
             if !designator.is_empty()
+                && !old_style
                 && !self.at(Punct::LBrace)
                 && self.expect(Punct::Equal).is_none()
             {
