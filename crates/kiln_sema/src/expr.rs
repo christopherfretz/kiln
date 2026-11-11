@@ -3948,9 +3948,12 @@ impl Sema<'_, '_> {
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
+        // In C the result converts as by assignment, to an enumeration or
+        // from a complex type too (C17 6.5.16.2p3, 6.5.16.1p1).
         let real_from_complex =
             self.ast.types.as_complex(res_ty).is_some() && self.ast.types.as_complex(lt).is_none();
-        if (real_from_complex || conv::is_unscoped_enum(self, lt))
+        if !self.is_c()
+            && (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
             let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);

@@ -63,7 +63,7 @@ the C-specific rules (tag namespaces, `void *` conversions, the type of
 a character literal, tentative definitions, K&R definitions, VLAs,
 compound literals) are WP-1276's.
 
-#### 1.0.1 C array declarators, VLAs and compound literals (WP-1287)
+#### 1.0.1 C array declarators, VLAs, compound literals and transparent unions (WP-1287)
 - **Array parameters** (C17 6.7.6.2p1, 6.7.6.3p7; `vla.rs`): the
   qualifiers and `static` inside a parameter's outermost `[ ]` (parsed
   by `parse_bracket_quals`, spec/parse.md) qualify the pointer it is
@@ -96,6 +96,24 @@ compound literals) are WP-1276's.
   only arrays (`file_scope_compound_literal`, after the constant
   initializer check). Use sites see the usual lvalue conversion or
   decay. C++ keeps the prvalue rules of §5.8.
+- **Subscripts** (6.5.2.1p2): in C `E1[E2]` is always an lvalue, also on
+  the array member of a structure returned by value (`c_subscript`).
+- **Compound assignment** (6.5.16.2p3): an arithmetic left operand
+  suffices in C, so `e |= X` on an enumeration and `d += 1.0i` on a
+  real operand are valid; the result converts back to the left
+  operand's type. C++ rejects both (clang's incompatible-type error).
+- **`transparent_union`** (clang `handleTransparentUnionAttr`,
+  `transparent_union.rs`): in C the attribute is kept on a union
+  definition (after the class-key, after the closing brace, or on a
+  typedef of a complete union, glibc's `__SOCKADDR_ARG`) whose fields
+  pass the WP-809 field checks; elsewhere it is dropped with clang's
+  warnings. An argument for a parameter of such a union that is not
+  the union itself initializes the first member that takes it (a
+  pointer member a `void *` or null pointer constant, any member a
+  diagnostic-free assignment; clang
+  `CheckTransparentUnionArgumentConstraints`), built as an
+  `InitListExpr` naming that member; the ABI passes the union as its
+  first field (`kiln_abi::call`). C++ keeps WP-809's ignored warning.
 
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or

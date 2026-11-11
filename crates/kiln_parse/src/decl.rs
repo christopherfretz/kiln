@@ -2881,10 +2881,10 @@ impl Parser<'_, '_> {
     /// the array, which only the parameter's outermost one may carry (it
     /// moves to the decayed pointer; spec/sema.md §4.1.1).
     fn parse_bracket_quals(&mut self, d: &mut Declarator, open: Loc) {
-        let mut stat = self.at_kw(Kw::Static).then(|| self.bump().span.lo);
+        let mut static_at = self.at_kw(Kw::Static).then(|| self.bump().span.lo);
         let (quals, nulls) = self.parse_ptr_quals();
-        if stat.is_none() && !quals.is_empty() && self.at_kw(Kw::Static) {
-            stat = Some(self.bump().span.lo);
+        if static_at.is_none() && !quals.is_empty() && self.at_kw(Kw::Static) {
+            static_at = Some(self.bump().span.lo);
         }
         let i = d.chunks.len();
         d.nullability.extend(nulls.into_iter().map(|n| (i, n)));
@@ -2895,7 +2895,7 @@ impl Parser<'_, '_> {
         let star = self.at(Punct::Star) && Self::punct_of(self.peek(1)) == Some(Punct::RSquare);
         if star {
             let at = self.bump().span.lo;
-            if let Some(l) = stat.take() {
+            if let Some(l) = static_at.take() {
                 self.emit(self.s.diag(DiagId::parse_unspecified_vla_size_with_static, l));
             }
             if proto {
@@ -2904,29 +2904,29 @@ impl Parser<'_, '_> {
                 self.emit(self.s.diag(DiagId::parse_array_star_outside_prototype, open));
             }
         } else if self.at(Punct::RSquare)
-            && let Some(l) = stat.take()
+            && let Some(l) = static_at.take()
         {
             self.emit(self.s.diag(DiagId::parse_unspecified_size_with_static, l));
         }
-        if stat.is_none() && quals.is_empty() {
+        if static_at.is_none() && quals.is_empty() {
             return;
         }
         let c = self.s.is_c();
-        let id = match (proto, outer, stat.is_some()) {
+        let id = match (proto, outer, static_at.is_some()) {
             (false, _, true) => DiagId::parse_array_static_outside_prototype,
             (false, _, false) => DiagId::parse_array_qual_outside_prototype,
             (true, true, true) => DiagId::parse_array_static_not_outermost,
             (true, true, false) => DiagId::parse_array_qual_not_outermost,
             (true, false, _) if c => {
                 d.array_param_quals = quals;
-                d.array_param_static = stat.map(|_| open);
+                d.array_param_static = static_at.map(|_| open);
                 return;
             }
             (true, false, _) => DiagId::parse_c99_array_usage_cxx,
         };
         let mut diag = self.s.diag(id, open);
         if id == DiagId::parse_c99_array_usage_cxx {
-            diag = diag.arg(u8::from(stat.is_some()));
+            diag = diag.arg(u8::from(static_at.is_some()));
         } else if !proto && !c {
             d.invalid = true;
         }
