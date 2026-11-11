@@ -32,7 +32,8 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
-    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
+    AutoKeyword, BuiltinType, ExcSpec, FuncInfo, Nns, NoexceptValue, Quals, TagKeyword,
+    TemplateArg, TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -41,8 +42,10 @@ use kiln_source::{FileId, Loc};
 use crate::Sema;
 use crate::modules::Directive;
 
+mod attrs;
 mod body;
 mod locs;
+mod scope;
 mod spec;
 mod templ;
 
@@ -51,7 +54,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 13;
+pub(crate) const IMAGE_VERSION: u32 = 14;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -128,7 +131,7 @@ struct Census {
     /// Reason, count, example, in first-seen order.
     rows: Vec<(String, usize, String)>,
     by_reason: FxHashMap<String, usize>,
-    attrs: FxHashMap<&'static str, usize>,
+    attrs: FxHashMap<String, usize>,
 }
 
 /// The lengths [`Writer::rollback`] restores after a census failure.
@@ -534,6 +537,10 @@ struct Image {
     types: Vec<TyRec>,
     decls: Vec<DeclRec>,
     bodies: Bodies,
+    /// WP-1278: the declarations' attributes and builtin identity.
+    attrs: attrs::Attrs,
+    /// WP-1278: inline namespaces and linkage specifications.
+    scopes: scope::Scopes,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -596,7 +603,7 @@ const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
 /// The fallback reason of a declaration with attributes (the census
 /// names them).
-const ATTRIBUTED: &str = "a declaration with attributes";
+const ATTRIBUTED: &str = attrs::UNCARRIED;
 
 /// `FieldData.flags` carried: `mutable`, the initializer style, a
 /// default member initializer (`[[no_unique_address]]` is an attribute).
@@ -739,8 +746,26 @@ fn exc_spec(e: u8) -> Option<ExcSpec> {
         1 => ExcSpec::BasicNoexcept,
         2 => ExcSpec::DynamicNone,
         3 => ExcSpec::Nothrow,
+        4 => ExcSpec::NothrowAttr,
         _ => return None,
     })
+}
+
+/// The exception specification words 5 (`noexcept(true)`) and 6
+/// (`noexcept(false)`): a `noexcept` whose operand is a `bool` literal (the
+/// C library's `__THROW`), which the importer builds again.
+fn noexcept_literal(ast: &kiln_ast::Ast, e: kiln_ast::ExprId, v: NoexceptValue) -> W<u8> {
+    use kiln_ast::expr::ExprKind;
+    let n = ast.exprs.get(e);
+    let lit = n.kind() == ExprKind::ConstantExpr && {
+        let l = ast.exprs.get(ast.exprs.operand(e));
+        l.kind() == ExprKind::CXXBoolLiteralExpr && l.ty() == QualType::BOOL
+    };
+    match v {
+        NoexceptValue::True if lit => Ok(5),
+        NoexceptValue::False if lit => Ok(6),
+        _ => Err("an exception specification the image does not carry"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1112,6 +1137,8 @@ fn encode(img: &Image) -> Vec<u8> {
         w.u32(d);
     }
     body::encode_bodies(&mut w, &img.bodies);
+    attrs::encode_attrs(&mut w, &img.attrs);
+    scope::encode_scopes(&mut w, &img.scopes);
     w.0
 }
 
@@ -1601,7 +1628,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 }
                 let info = r.u16()?;
                 let exc = r.u8()?;
-                if exc_spec(exc).is_none() {
+                if exc_spec(exc).is_none() && !matches!(exc, 5 | 6) {
                     return bad("bad exception specification");
                 }
                 TyRec::Func { ret, params, info, exc }
@@ -1682,6 +1709,8 @@ fn decode(bytes: &[u8]) -> Res<Image> {
         lookup.push((r.u32()?, r.u32()?, r.u32()?));
     }
     img.bodies = body::decode_bodies(&mut r)?;
+    img.attrs = attrs::decode_attrs(&mut r)?;
+    img.scopes = scope::decode_scopes(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2028,6 +2057,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // complete class and a previous declaration; an implicit
             // member names a complete class.
             let ok = match (&d.payload, d.lexical) {
+                // A builtin function, at global scope (WP-1278).
+                (Payload::Implicit { kind: scope::BUILTIN_KIND }, _) => {
+                    top.is_none() && d.ctx == NONE && d.lexical == NONE
+                }
                 (Payload::Implicit { .. }, _) => {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
                 }
@@ -2078,7 +2111,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Ttp { .. } | Payload::Nttp { .. } => {
                 d.name == NONE || (d.name as usize) < img.pnames.len()
             }
-            Payload::Field { .. } => d.name == NONE || ident(d.name),
+            // An unnamed namespace has no name.
+            Payload::Field { .. } | Payload::Namespace => d.name == NONE || ident(d.name),
+            // An unnamed class or enumeration a typedef names (WP-1278).
+            Payload::Record { .. } | Payload::Enum { .. } if d.name == NONE => {
+                scope::anon_tag(img, i as u32)
+            }
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
@@ -2112,7 +2150,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         && img.decls.get(x as usize).is_some_and(|o| match o.payload {
                             Payload::Function { kind: 1 | 3 | 4, .. } => o.prev == NONE,
                             // An implicit assignment operator or destructor.
-                            Payload::Implicit { kind } => kind >= 3,
+                            Payload::Implicit { kind } => (3..=5).contains(&kind),
                             _ => false,
                         })
                 };
@@ -2227,6 +2265,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Field { flags, .. } => {
                 if flags & !FIELD_FLAGS != 0 {
                     return bad("bad field flags");
+                }
+            }
+            Payload::Implicit { kind: scope::BUILTIN_KIND } => {
+                if d.prev != NONE {
+                    return bad("bad builtin function record");
                 }
             }
             Payload::Implicit { kind } => {
@@ -2364,6 +2407,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
     }
     let _ = nd;
+    attrs::validate_attrs(img)?;
+    scope::validate_scopes(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2593,6 +2638,10 @@ impl Writer<'_, '_, '_> {
                     ExcSpec::BasicNoexcept => 1,
                     ExcSpec::DynamicNone => 2,
                     ExcSpec::Nothrow => 3,
+                    ExcSpec::NothrowAttr => 4,
+                    ExcSpec::NoexceptExpr { expr, value } => {
+                        noexcept_literal(&self.s.ast, expr, value)?
+                    }
                     _ => return Err("an exception specification the image does not carry"),
                 };
                 let ps: Vec<QualType> = types.params(&p).to_vec();
@@ -2731,12 +2780,7 @@ impl Writer<'_, '_, '_> {
             V::Empty => NONE,
             V::Identifier(sym) => {
                 let s = ast.symbols().as_str(sym).to_owned();
-                if reserved(&s) {
-                    return Err("a reserved identifier (`__x`, `_X`)");
-                }
-                if s == "std" || s == "main" {
-                    return Err("a declaration named `std` or `main`");
-                }
+                self.check_name(d, &s)?;
                 Self::name_ix(&mut self.names, &mut self.img.names, &s)
             }
             V::Operator(op) => N_OP + u32::from(op as u8),
@@ -2770,6 +2814,10 @@ impl Writer<'_, '_, '_> {
         if n.kind() == DeclKind::UsingShadow {
             // Every shadow is implicit; the reader's builder marks it.
             extra &= !DeclFlags::IMPLICIT.bits();
+        }
+        if extra & DeclFlags::HAS_ATTRS.bits() != 0 && self.attrs_carried(d) {
+            // Carried by `attr_recs` (WP-1278).
+            extra &= !DeclFlags::HAS_ATTRS.bits();
         }
         if extra != 0 {
             return Err(if extra & DeclFlags::INVALID.bits() != 0 {
@@ -2831,6 +2879,7 @@ impl Writer<'_, '_, '_> {
                 self.using_prev(d)?
             }
             None => NONE,
+            Some(p) if self.implicit_prev(d, p) => NONE,
             Some(p) => self
                 .recs
                 .get(&p)
@@ -2863,12 +2912,11 @@ impl Writer<'_, '_, '_> {
         Ok(match n.kind() {
             DeclKind::Namespace => {
                 let nd = ast.decls.namespace(d).ok_or("a malformed namespace")?;
-                if nd.flags != 0 {
-                    return Err("an inline or unnamed namespace");
-                }
+                self.namespace_flags(i, nd.flags)?;
                 Payload::Namespace
             }
             DeclKind::Export => Payload::Export,
+            DeclKind::LinkageSpec => self.linkage_record(d, i)?,
             DeclKind::Using
             | DeclKind::UsingShadow
             | DeclKind::UsingDirective
@@ -2981,15 +3029,12 @@ impl Writer<'_, '_, '_> {
         if c.inheriting_ctor.contains(d) || c.inherited_ctor.contains(d) {
             return Err("an inherited constructor");
         }
-        if c.typedef_for_anon.contains(d) {
-            return Err("a typedef naming an unnamed class");
-        }
         if c.delete_message.contains(d)
             || c.explicit_expr.contains(d)
             || c.record_pack.contains(d)
             || c.requires_clause.contains(d)
             || c.contracts.contains(d)
-            || c.asm_label.contains(d)
+            || (c.asm_label.contains(d) && !self.own_asm_label(d))
             || c.alignment.contains(d)
             || c.deprecation.contains(d)
             || c.instantiated_from.contains(d)
@@ -3033,9 +3078,6 @@ impl Writer<'_, '_, '_> {
         }
         if fn_spec(bits) != Some(spec) {
             return Err("a coroutine, contract-checked or implicitly defaulted function");
-        }
-        if ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some() {
-            return Err("a builtin or library function");
         }
         if s.inh_ctor_base.contains_key(&d) {
             return Err("an inherited constructor");
@@ -3483,6 +3525,7 @@ impl Writer<'_, '_, '_> {
                 df.key = r;
             }
         }
+        self.anon_typedefs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -3580,12 +3623,17 @@ impl Writer<'_, '_, '_> {
         let at = Some(ast.decls.get(d).loc())
             .filter(|l| l.is_valid())
             .unwrap_or_else(|| ast.decls.get(root).loc());
-        let mut attrs: Vec<&'static str> = Vec::new();
+        let mut attrs: Vec<String> = Vec::new();
         if why == ATTRIBUTED {
             attrs = ast
                 .lists
                 .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(d))
-                .map(|a| crate::decl_attrs::attr_name(ast.attrs.get(a)).unwrap_or("(unnamed)"))
+                .map(|a| ast.attrs.get(a))
+                .filter(|a| !attrs::carried(a, ast.symbols().len()))
+                .map(|a| match crate::decl_attrs::attr_name(a) {
+                    Some(n) => n.to_owned(),
+                    None => format!("(kind {})", a.kind.0),
+                })
                 .collect();
             attrs.sort_unstable();
             attrs.dedup();
@@ -3683,6 +3731,13 @@ impl Writer<'_, '_, '_> {
             let _ = st.skipped.insert(d);
             return Ok(());
         }
+        if n.has(DeclFlags::IMPLICIT) && self.implicit_scope_decl(d) {
+            // Declared again by the importer with its unnamed namespace.
+            return Ok(());
+        }
+        if n.has(DeclFlags::IMPLICIT) && self.builtin_record(d)? {
+            return Ok(());
+        }
         if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
             // An implicitly declared special member: the importer
             // declares it again (spec/modules.md §11.11 "Classes").
@@ -3767,6 +3822,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
+        let attrs = self.attr_recs(d, i)?;
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         self.img.decls.push(DeclRec {
             flags: h.flags,
@@ -3780,6 +3836,7 @@ impl Writer<'_, '_, '_> {
             payload,
         });
         self.recs.insert(d, i);
+        self.attr_commit(i, attrs);
         if let Some(k) = self.using_key(d) {
             self.usings.insert(k, i);
         }
@@ -3818,6 +3875,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
     match k {
         K::Namespace
         | K::Export
+        | K::LinkageSpec
         | K::Function
         | K::Var
         | K::Enum
@@ -3856,7 +3914,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
             Err("a dependent using-declaration")
         }
-        K::LinkageSpec => Err("a linkage specification"),
         _ => Err("a declaration the image does not carry yet"),
     }
 }
@@ -3931,7 +3988,7 @@ impl Sema<'_, '_> {
             .map(|(reason, count, example)| CensusRow { reason, count, example })
             .collect();
         out.rows.sort_by_key(|r| std::cmp::Reverse(r.count));
-        out.attrs = c.attrs.into_iter().map(|(a, n)| (a.to_owned(), n)).collect();
+        out.attrs = c.attrs.into_iter().collect();
         out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Some(out)
     }
@@ -3967,6 +4024,9 @@ impl Sema<'_, '_> {
             };
             if files.len() != img.files.len() {
                 return bad("a file table the importer did not load");
+            }
+            if !self.image_builtins_ok(&img) {
+                return bad("a builtin function the importer does not declare");
             }
             let off_ok = |o: u32| Locs::in_space(&bases, &img.files, &img.slocs, o);
             let mut offs = vec![img.kw, img.name_loc];
@@ -4054,6 +4114,7 @@ impl Sema<'_, '_> {
                 _ => None,
             })
             .collect();
+        let mut attr_exprs = attrs::AttrExprs::new();
         let saved_depth = self.ast.templates.dependent_depth;
         for (i, r) in img.decls.iter().enumerate() {
             // A dependent record (template parameter, pattern, local of a
@@ -4100,10 +4161,13 @@ impl Sema<'_, '_> {
                 LEX_TU => Some(self.ast.tu),
                 x => at(x),
             };
-            let prev = at(r.prev);
+            let mut prev = at(r.prev);
+            if prev.is_none() && matches!(r.payload, Payload::Enum { .. }) {
+                prev = self.image_enum_prev(&h);
+            }
             let d = match &r.payload {
-                Payload::Namespace => self.builder().namespace(h, false, prev),
-                Payload::Export => self.builder().export_decl(ctx, h.loc),
+                Payload::Namespace => self.image_namespace(img, i as u32, h, prev),
+                Payload::Export => self.image_scope(img, i as u32, ctx, h),
                 Payload::Function { kind, ty, spec, deferred, params, body, inits: ci, .. } => {
                     let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = fn_spec(*spec).unwrap_or_default();
@@ -4243,6 +4307,9 @@ impl Sema<'_, '_> {
                     let a = access_of(r.access);
                     self.builder().access_spec(ctx, a, h.loc)
                 }
+                Payload::Implicit { kind: scope::BUILTIN_KIND } => {
+                    self.image_builtin(img, i as u32)
+                }
                 Payload::Implicit { kind } => {
                     let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
                     // Declaring one implicit member can declare another
@@ -4327,11 +4394,17 @@ impl Sema<'_, '_> {
                 }
                 Payload::UsingEnum { e } => self.builder().using_enum(h, ids[*e as usize]),
             };
-            if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
+            // A builtin function is the importer's own declaration.
+            let builtin = r.payload == Payload::Implicit { kind: scope::BUILTIN_KIND };
+            if !builtin && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
                 image_flags(self, d, r.flags);
+            }
+            if !builtin {
+                self.image_attrs(img, i as u32, d, main, &mut attr_exprs);
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
+            self.image_anon_typedef(img, i as u32, &ids);
         }
         self.ast.templates.dependent_depth = saved_depth;
         if let Some((e, computed)) = open.take() {
@@ -4342,6 +4415,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        self.image_attr_exprs(&attr_exprs, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);
         for (f, width, init) in fields {
             if width != NONE {
@@ -4608,6 +4682,22 @@ impl Sema<'_, '_> {
         cur
     }
 
+    /// An exception-specification byte: 5 and 6 are `noexcept(true)` and
+    /// `noexcept(false)` with a bool literal, the rest [`exc_spec`]'s.
+    fn image_exc_spec(&mut self, exc: u8) -> ExcSpec {
+        match exc {
+            5 | 6 => {
+                let v = exc == 5;
+                let lit = self.builder().bool_literal(QualType::BOOL, v, Loc::INVALID);
+                let cv = self.int_const(QualType::BOOL, i128::from(v));
+                let expr = self.builder().constant_expr(lit, Some(cv));
+                let value = if v { NoexceptValue::True } else { NoexceptValue::False };
+                ExcSpec::NoexceptExpr { expr, value }
+            }
+            e => exc_spec(e).unwrap_or_default(),
+        }
+    }
+
     fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
         let qt = |s: &mut Self, q: QRef| -> QualType {
             let base = if q.ty <= BUILTINS {
@@ -4659,7 +4749,7 @@ impl Sema<'_, '_> {
             TyRec::Func { ret, params, info, exc } => {
                 let r = qt(self, *ret);
                 let ps: Vec<QualType> = params.iter().map(|&p| qt(self, p)).collect();
-                let exc = exc_spec(*exc).unwrap_or_default();
+                let exc = self.image_exc_spec(*exc);
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {
@@ -4945,6 +5035,8 @@ mod tests {
                     body::StmtRec { kind: 0, aux: 0, loc: 104, words: vec![2, 0, 1, 120] },
                 ],
             },
+            attrs: attrs::Attrs::default(),
+            scopes: scope::Scopes::default(),
         }
     }
 
@@ -5109,7 +5201,7 @@ mod tests {
     fn rejects_corrupt_class_records() {
         type Corrupt = (&'static str, fn(&mut Image));
         let corrupt: [Corrupt; 13] = [
-            ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 6 }),
+            ("implicit kind", |i| i.decls[14].payload = Payload::Implicit { kind: 7 }),
             ("duplicate implicit", |i| {
                 let d = i.decls[14].clone();
                 i.decls.insert(15, d);

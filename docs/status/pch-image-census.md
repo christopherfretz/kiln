@@ -145,6 +145,59 @@ spelled name).
   using-declarations of `cstddef`, `cstdio` and the other C wrappers,
   which name C library declarations the image refused first.
 
+## WP-1278: attributes, reserved names and scopes (2026-11-11)
+
+The same purview and command, at the WP-1278 branch (debug build): wall
+17.7 s, peak RSS 114 MiB, the same 16 errors.
+
+```
+before (WP-1070): 25544 top-level declarations, 10938 carried, 14606 not
+after (WP-1278):  26898 top-level declarations, 16775 carried, 10123 not
+```
+
+With WP-1279 merged as well: 26898 top-level declarations, 17680
+carried, 9218 not. The rows below are WP-1278's alone.
+
+There are more top-level declarations because the linkage
+specifications and namespaces `std` that were refused whole are now
+scopes, so their members count on their own. The rows WP-1278 targets:
+
+| reason | before | after |
+|---|---:|---:|
+| a declaration with attributes | 4020 | 0 |
+| a reserved identifier (`__x`, `_X`) | 2619 | 0 |
+| an implicit declaration that is not a special member (LinkageSpec) | 263 | 0 |
+| a linkage specification | 27 | 0 |
+| a typedef naming an unnamed class | 18 | 0 |
+| a declaration named `std` or `main` | 13 | 0 |
+| an inline or unnamed namespace | 10 | 0 |
+| cascade: a using-declaration naming a declaration outside the image | 848 | 303 |
+| cascade: a type declared outside the image | 859 | 743 |
+
+The rows that replace them are narrower:
+
+- "an attribute the image does not carry yet" (41): `preferred_name`
+  (18, which names a type), `diagnose_if` (12), `aligned` (6),
+  `alignas` (3) and `enable_if` (2);
+- "an exception specification the image does not carry" (63), "a
+  declaration with side data the image does not carry" (37), "a
+  parameter with an adjusted type or a pack" (36), "a declaration not
+  named by an identifier" (30) and "a C linkage specification in a
+  namespace" (2) are first reasons of declarations that the removed
+  rows used to stop earlier.
+
+The template rows grew (for example "a declaration in a template" 1595
+to 1686, "cascade: a specialization of a template outside the image"
+199 to 655, "a type the image does not carry" 38 to 368) because the
+declarations now reach the template checks. They are WP-1279's. Of the
+type kinds refused as "a type the image does not carry", all but about
+17 are dependent (a dependent name 618, a pack expansion 215,
+`auto` 167, `decltype` 142, a dependent-size array 61, a unary
+transform 28; counted per attempt). The non-dependent ones are
+`decltype` (6), `auto` (4), vector types (4) and member pointers (3).
+All 116 of "a declaration the image does not carry yet" are the body
+of a requires-expression (`RequiresExprBody`), also WP-1279's.
+
 ## Re-running
 
 The purview file is generated as described in "Setup"; the census

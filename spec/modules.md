@@ -1890,8 +1890,9 @@ patterns (S4, below); other templates still fall back.
   - an `export` declaration;
   - a namespace-scope function that is not a template, not deleted or
     defaulted, not a coroutine and has no contract assertions, and is
-    not `main`, with an identifier name and C++ linkage, no attributes,
-    and a compound body (no function-try-block). Since S2 it may be
+    not `main`, with an identifier name and a compound body (no
+    function-try-block). Since WP-1278 it may have C linkage and the
+    attributes "Attributes" lists. Since S2 it may be
     inline, `constexpr` or `consteval` (its body is carried, "Bodies"),
     have a deduced return type, and have default arguments;
   - since S3, a class and its members as "Classes (S3)" below lists;
@@ -1904,7 +1905,10 @@ patterns (S4, below); other templates still fall back.
   - an enumeration (scoped or unscoped, fixed or not) or an enumerator;
   - a `typedef` or alias declaration that is not a template;
 - no declaration is invalid or implicit (since S3, except the implicit
-  special members of a carried class), or carries attributes;
+  special members of a carried class; since WP-1278 also the builtin
+  functions sema declared and their linkage specification, "Scopes and
+  reserved names"), or carries an attribute "Attributes" does not list
+  (before WP-1278, any attribute);
 - every type is built from builtins, pointers, references, constant
   arrays (the bound's expression is dropped), arrays of unknown bound,
   function types (exception specification none, `noexcept` or
@@ -1916,13 +1920,19 @@ patterns (S4, below); other templates still fall back.
 - every location is invalid, or one the location records carry: since
   S7 (WP-1070) in any file and in macro expansions, except a predefined
   buffer or a file with `#line` directives (see "Locations (S7)");
-- no name lies in a namespace named `std` or is reserved.
+- before WP-1278, no name lies in a namespace named `std` or is
+  reserved. Since WP-1278 such names are carried; a declaration at
+  global scope named `main`, with a builtin's name, or with a name sema
+  predeclares there falls back ("Scopes and reserved names"). Inline and
+  unnamed namespaces and linkage specifications (except a C one in a
+  namespace) are carried too.
 
 The first offending node's reason is the `-v` note's (see "Fallback").
 Before the per-kind checks, a declaration kind 2a never carries names
 its family: "a template", "a using-declaration,
-using-directive or namespace alias", "a linkage specification", or "a
-declaration the image does not carry yet" for the rest. Inside a carried
+using-directive or namespace alias" (before S6), "a linkage
+specification" (before WP-1278), or "a declaration the image does not
+carry yet" for the rest. Inside a carried
 body, the expression, statement and local-declaration kinds are those of
 "Bodies" below; any other node falls back with its own reason.
 
@@ -1999,8 +2009,10 @@ lookahead: sema may not yet have declared the tokens before the
 declarator-id, a namespace or class name, a using-declaration, an alias,
 an enumerator) is such a token at global scope, in this file, a header
 or an earlier replay, and an earlier image's gated names are marked. Sema
-declares no identifier at global scope by itself that an image could
-carry (`std` and reserved names fall back). What the gate does not
+declares identifiers at global scope by itself only for builtins and the
+hidden namespace `std`; an image never declares a name of either kind at
+global scope (it falls back, or extends the namespace `std` as the
+parser does: "Scopes and reserved names"). What the gate does not
 count cannot meet a gated declaration:
 
 - an identifier that never reached the parser: a macro name or an
@@ -2610,6 +2622,98 @@ image location space of its own:
   or column at all ("its text is not available"). Either way no
   diagnostic points at a wrong position (`kind2_image_edited_header`).
 
+**Attributes (WP-1278).** Every attribute node of a carried declaration
+is one record of the `attrs` section (`bmi_image/attrs.rs`): the node's
+kind, syntax, flags and location, its two argument words, and the
+written scope and name sema keeps for diagnostics. One table, keyed by
+kind, says how a kind's words travel, and it is the whole format:
+
+- plain words with a bound per word (flag-only kinds hold `0, 0`;
+  `visibility` and `type_visibility` 0 to 2; `format` and
+  `no_sanitize` any);
+- a `Symbol` (`abi_tag`), written as text;
+- expressions (`deprecated`, `nodiscard`, `unavailable`, `alloc_size`,
+  `alloc_align`): expression records of the bodies section, built after
+  the bodies and attached then;
+- a builtin id (`BuiltinAttr`), written with its spelling, which must
+  name the same id in the importer's table;
+- `nonnull`'s parameter indices: a run of `size_t` integer literals
+  (value and location), empty for every parameter;
+- an asm label, written as its text. A written label (flag 2 clear)
+  also names the first declaration's symbol, as the parser
+  records it; an inherited one (flag 2) must match that symbol.
+
+A function's builtin identity (the `builtin_id`, `lib_builtin` and
+`gnu_lib_twin` side tables) travels as (record, map, id, spelling), the
+spelling checked like a builtin attribute's. The importer attaches the
+nodes right after it builds the declaration, in the unit's order, so its
+consumers (codegen visibility and linkage, mangling, the use-site
+warnings with their notes in the header, sanitizer checks) see the
+replayed declaration's attributes. A kind the table does not list, or
+a node whose words fall outside its row, falls back with "an attribute
+the image does not carry yet", and the census lists the kind by name:
+a wrong attribute on an imported declaration is a miscompile, so the
+image never guesses. Not carried yet: `preferred_name` (a type
+argument), `diagnose_if` and `enable_if` (conditions evaluated at the
+call), `aligned` and `alignas` (the `alignment` side table), `gsl::Owner`
+and `gsl::Pointer` with a type argument.
+
+```
+attrs   := strs:u32 str*
+           recs:u32 arec*            ascending by record
+           builtins:u32 (decl:u32 map:u8 id:u32 name:u32)*
+           ints:u32 (value:u32 loc:u32)*
+arec    := decl:u32 kind:u16 syntax:u8 flags:u8 loc:u32 a:u32 b:u32
+           s:u32 scope:u32 name:u32  s, scope, name: strs indices
+```
+
+`syntax` is 0 C++11, 1 GNU, 2 keyword, 3 `__declspec`, 4 pragma. For
+an expression kind `a` and `b` are expression records or none, for
+`nonnull` the start and length of its run in `ints`, for a `Symbol`,
+builtin or label kind `s` is the text and `a` is 0.
+
+**Scopes and reserved names (WP-1278).** `bmi_image/scope.rs` carries
+the scopes and names beyond named namespaces and export blocks:
+
+- a linkage specification is an `Export` record (unnamed and
+  transparent) listed with its language and whether it is braceless;
+  the importer builds the `LinkageSpec`. A C one in a namespace falls
+  back: [dcl.link]/6 makes its functions and variables the same
+  entities as the global ones of their names, which the gate does not
+  cover;
+- an inline namespace is a `Namespace` record listed as inline;
+- an unnamed namespace is a `Namespace` record with no name. The
+  importer extends the unnamed namespace its scope already has
+  ([namespace.unnamed]/1, as the parser does) or declares it with its
+  implicit using-directive, which the writer leaves out;
+- the namespace `std` is carried. The importer extends the hidden one
+  sema declared (around `std::align_val_t`, for a new-expression) if it
+  has one, as the parser's first `namespace std {` does;
+- reserved names are carried. Sema declares two kinds of global-scope
+  names by itself, which the gate cannot see: builtins and the hidden
+  namespace `std`. A declaration at global scope named `main`, with a
+  builtin's name, or with a name sema predeclares there falls back;
+- a builtin function sema declared while compiling the unit (an
+  implicit `Function` in an implicit `extern "C"` linkage
+  specification at global scope) is an `Implicit` record of kind 6,
+  unnamed and at global scope, listed with its builtin id and spelling;
+  its linkage specification has no record. The importer uses the
+  builtin it has declared already or declares it as its own lookup
+  would, so bodies call the importer's declaration. An image naming a
+  builtin the importer does not declare (another table or target) is
+  corrupt; one whose type names `FILE` falls back;
+- an unnamed class or enumeration that a typedef names for linkage
+  purposes ([dcl.typedef]/9) is listed with that typedef; the importer
+  links them when it builds the typedef, so linkage and mangling use the
+  typedef name.
+
+```
+scopes  := inline:u32 u32*           ascending records
+           links:u32 (rec:u32 lang:u8 braceless:u8)*
+           builtins:u32 (rec:u32 id:u32 spelling:str)*
+           anon:u32 (tag:u32 typedef:u32)*   ascending by typedef
+```
+
 **Fallback census (WP-1070).** `-fkiln-bmi-image-census` (hidden, with
 `--precompile` or `-fmodule-output`) builds the image a second time in
 census mode and prints on stderr, after the compile's diagnostics, how
@@ -2618,9 +2722,9 @@ declarations, C carried, R not", then one line per fallback reason with
 its count and the first example in source order (`file:line:col`, or
 the declaration's kind and name when it has no location), most frequent
 first, then the attributes of the declarations refused for their
-attributes, by name. A top-level declaration is one whose lexical
-parent is the translation unit, a namespace, an export or a linkage
-specification (a member, a parameter or a template's pattern counts as
+attributes, by name (a kind with no name as `(kind N)`). A top-level
+declaration is one whose lexical parent is the translation unit, a
+namespace, an export or a linkage specification (a member, a parameter or a template's pattern counts as
 its outermost such declaration; carried scopes are not counted
 themselves). The census records the *first* reason of each, rolls the
 declaration back and goes on; a failing namespace is kept as a
@@ -2633,7 +2737,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 13` since WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 14` since WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2660,6 +2764,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            strings:u32 (enc:u8 len:u32 byte*)*
            exprs:u32 offset:u32*exprs blob_len:u32 expr*
            stmts:u32 offset:u32*stmts blob_len:u32 stmt*
+           attrs                     WP-1278 ("Attributes")
+           scopes                    WP-1278 ("Scopes and reserved names")
 const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
@@ -2717,7 +2823,11 @@ whose steps are `::` (first only), a namespace record of the image, or a
 type (a class of the image, through any carried type) with its
 `template` keyword bit; a namespace step counts as a dependency in the
 type table's order. The exception byte is 0 (none), 1
-(`noexcept`), 2 (`noexcept(true)`) or 3 (`throw()`).
+(`noexcept`), 2 (`throw()`), 3 (canonical non-throwing), and since
+WP-1278 4 (`__attribute__((nothrow))`), 5 (`noexcept(true)`) and 6
+(`noexcept(false)`), both written as a `bool`
+literal, as the C library's `__THROW` expands; the importer builds the
+constant expression again). Any other operand falls back.
 
 The owner byte holds bit 0 = in the purview and bit 1 = exported (the
 `ModuleTable` owner point of the record). The access byte (S3) is a
