@@ -139,6 +139,11 @@ impl Writer<'_, '_, '_> {
             return Err("a specialization of a partial specialization");
         }
         let template = self.template_rec(si.template, u8::from(class))?;
+        // The importer names it while it builds the records, before their
+        // constraints are in (WP-1284).
+        if self.constrained_template(si.template) {
+            return Err("a specialization of a constrained template");
+        }
         let args = self.arg_recs(si.args)?;
         let complete =
             class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));

@@ -44,6 +44,7 @@ use crate::modules::Directive;
 
 mod attrs;
 mod body;
+mod constraints;
 mod locs;
 mod scope;
 mod spec;
@@ -541,6 +542,8 @@ struct Image {
     attrs: attrs::Attrs,
     /// WP-1278: inline namespaces and linkage specifications.
     scopes: scope::Scopes,
+    /// WP-1284: constraints and concepts' constraint-expressions.
+    cons: constraints::Constraints,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1139,6 +1142,7 @@ fn encode(img: &Image) -> Vec<u8> {
     body::encode_bodies(&mut w, &img.bodies);
     attrs::encode_attrs(&mut w, &img.attrs);
     scope::encode_scopes(&mut w, &img.scopes);
+    constraints::encode_constraints(&mut w, &img.cons);
     w.0
 }
 
@@ -1711,6 +1715,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.bodies = body::decode_bodies(&mut r)?;
     img.attrs = attrs::decode_attrs(&mut r)?;
     img.scopes = scope::decode_scopes(&mut r)?;
+    img.cons = constraints::decode_constraints(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -1912,7 +1917,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 Payload::Spec { template, complete, args } => {
                     kind_of(*template).is_some_and(|t| match &t.payload {
                         Payload::Template { kind, params, .. } => {
-                            (*kind == 1 || !*complete)
+                            *kind < constraints::CONCEPT_KIND
+                                && (*kind == 1 || !*complete)
                                 && params.len() == args.len()
                                 && params.iter().zip(args).all(|(&p, a)| {
                                     match (&img.decls[p as usize].payload, a) {
@@ -2288,14 +2294,17 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // S4b: or a class template at namespace scope, its
                 // pattern the class record just before it.
                 let p = *pattern as usize;
-                let ok = *kind <= 3
+                // WP-1284: a concept, at namespace scope, has no pattern.
+                let concept = *kind == constraints::CONCEPT_KIND;
+                let ok = (*kind <= 3 || concept)
                     && *depth == 0
                     && d.flags & DEP == 0
                     && scope(d.ctx)
                     && d.lexical == NONE
                     && d.prev == NONE
-                    && (*kind == 0 || p + 1 == i)
-                    && kind_of(*pattern).is_some_and(|r| {
+                    && (concept
+                        || (*kind == 0 || p + 1 == i)
+                            && kind_of(*pattern).is_some_and(|r| {
                         matches!(
                             (*kind, &r.payload),
                             (0, Payload::Function { kind: 0, .. })
@@ -2308,12 +2317,15 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             && r.owner == d.owner
                             && r.lexical == NONE
                             && r.prev == NONE
-                    })
-                    && !claimed[p];
+                            })
+                            && !claimed[p])
+                    && (!concept || (*pattern == NONE && ident(d.name)));
                 if !ok || params.len() > usize::from(u16::MAX) {
                     return bad("bad template");
                 }
-                claimed[p] = true;
+                if !concept {
+                    claimed[p] = true;
+                }
                 if *kind == 1 {
                     tmpl_params.insert(p, params.len());
                 }
@@ -2409,6 +2421,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let _ = nd;
     attrs::validate_attrs(img)?;
     scope::validate_scopes(img)?;
+    constraints::validate_constraints(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -3009,7 +3022,8 @@ impl Writer<'_, '_, '_> {
             DeclKind::FunctionTemplate
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::VarTemplate => self.template(d)?,
+            | DeclKind::VarTemplate
+            | DeclKind::Concept => self.template(d)?,
             _ => return Err("a declaration the image does not carry yet"),
         })
     }
@@ -3823,6 +3837,7 @@ impl Writer<'_, '_, '_> {
         }
         let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
         let attrs = self.attr_recs(d, i)?;
+        let cons = self.constraint_roots(d)?;
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         self.img.decls.push(DeclRec {
             flags: h.flags,
@@ -3837,6 +3852,7 @@ impl Writer<'_, '_, '_> {
         });
         self.recs.insert(d, i);
         self.attr_commit(i, attrs);
+        self.constraint_commit(i, cons);
         if let Some(k) = self.using_key(d) {
             self.usings.insert(k, i);
         }
@@ -3893,6 +3909,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::ClassTemplate
         | K::TypeAliasTemplate
         | K::VarTemplate
+        | K::Concept
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm
         | K::NamespaceAlias
@@ -3904,7 +3921,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::Friend => Err("a friend declaration"),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
-        | K::Concept
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
         | K::FriendTemplate
@@ -4352,6 +4368,14 @@ impl Sema<'_, '_> {
                     let ps: Vec<DeclId> = params.iter().map(|&p| ids[p as usize]).collect();
                     let (t, l, rr) = (lo(self, *tloc), lo(self, *langle), lo(self, *rangle));
                     let list = self.builder().template_param_list(t, l, rr, *depth, &ps, None);
+                    if *kind == constraints::CONCEPT_KIND {
+                        // Declared as the parser does, inside its head;
+                        // the constraint-expression comes with the bodies.
+                        self.ast.templates.dependent_depth = saved_depth + 1;
+                        let c = self.builder().concept_deferred(h, list);
+                        self.ast.templates.dependent_depth = saved_depth;
+                        c
+                    } else {
                     let pat = ids[*pattern as usize];
                     let k = match kind {
                         1 => DeclKind::ClassTemplate,
@@ -4364,6 +4388,7 @@ impl Sema<'_, '_> {
                         let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
                     }
                     t
+                    }
                 }
                 Payload::Spec { .. } => {
                     let loc = lo(self, r.loc);
@@ -4416,6 +4441,7 @@ impl Sema<'_, '_> {
         self.image_virtuals(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         self.image_attr_exprs(&attr_exprs, &built);
+        self.image_constraints(img, &ids, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);
         for (f, width, init) in fields {
             if width != NONE {
@@ -5037,6 +5063,7 @@ mod tests {
             },
             attrs: attrs::Attrs::default(),
             scopes: scope::Scopes::default(),
+            cons: constraints::Constraints::default(),
         }
     }
 

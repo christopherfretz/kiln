@@ -162,6 +162,8 @@ pub(super) enum Dc {
     /// What an unresolved name found at the definition (WP-1279): a
     /// [`Dc::Found`] or a function or variable template.
     Lookup,
+    /// A concept (WP-1284).
+    Concept,
 }
 
 /// A field: how one or more words are read.
@@ -294,7 +296,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 54] = {
+pub(super) const EXPR_KINDS: [ExprKind; 55] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -358,6 +360,8 @@ pub(super) const EXPR_KINDS: [ExprKind; 54] = {
         // WP-1279: a name found at the definition and looked up again
         // (with argument-dependent lookup) at the instantiation.
         X::UnresolvedLookupExpr,
+        // WP-1284: a dependent concept-id, unchecked.
+        X::ConceptSpecializationExpr,
     ]
 };
 
@@ -440,6 +444,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::SizeOfPackExpr => [f(F::D(Dc::Pack)), Z],
         X::CXXFoldExpr => [f(F::OE), f(F::OE)],
         X::UnresolvedLookupExpr => [f(F::Name), f(F::DL(Dc::Lookup))],
+        X::ConceptSpecializationExpr => [f(F::D(Dc::Concept)), f(F::TA)],
         _ => [Z, Z],
     }
 }
@@ -821,6 +826,12 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
+    if dc == Dc::Concept {
+        return matches!(
+            d.payload,
+            Payload::Template { kind: super::constraints::CONCEPT_KIND, .. }
+        );
+    }
     if dc == Dc::Lookup {
         return matches!(d.payload, Payload::Template { kind: 0 | 3, .. })
             || dc_ok(img, nparams, w, Dc::Found);
@@ -897,7 +908,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Local => matches!(d.payload, Payload::Var { .. }) && is_local(img, d),
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
-        Dc::Param => false,
+        Dc::Param | Dc::Concept => false,
         Dc::Pack => {
             matches!(d.payload, Payload::Ttp { pack: true, .. } | Payload::Nttp { pack: true, .. })
         }
@@ -1175,6 +1186,8 @@ pub(super) enum Root {
     Attr(u32, u32, u8, ExprId),
     /// Non-type template parameter record, default argument (WP-1279).
     TemplDefault(u32, ExprId),
+    /// WP-1284: declaration record, constraint record, the constraint.
+    Cons(u32, u32, ExprId),
 }
 
 /// The writer's body state.
@@ -1372,6 +1385,13 @@ impl Writer<'_, '_, '_> {
                 // An unexpanded pack (WP-1279) occurs only in a pattern.
                 if n.deps().intersects(ExprDeps::ERROR) {
                     return Err("a pack expansion or an invalid expression");
+                }
+                // Satisfaction is checked again by the importer, never
+                // carried (WP-1284): a checked concept-id falls back.
+                if k == ExprKind::ConceptSpecializationExpr
+                    && (n.aux() != 0 || self.s.inst.concepts.expr_sat.contains_key(&e))
+                {
+                    return Err("a checked concept-id");
                 }
                 if !expr_aux_ok(k, n.aux()) {
                     return Err("an expression the image does not carry");
@@ -1951,7 +1971,8 @@ impl Writer<'_, '_, '_> {
                 | Root::FieldInit(rec, _)
                 | Root::CtorInit(rec, _, _)
                 | Root::Attr(rec, _, _, _)
-                | Root::TemplDefault(rec, _) => rec,
+                | Root::TemplDefault(rec, _)
+                | Root::Cons(rec, _, _) => rec,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
             if let Some(&d) = inv.get(&rec) {
@@ -2029,6 +2050,10 @@ impl Writer<'_, '_, '_> {
                     let i = self.walk(Node::E(e))?;
                     self.set_nttp_default(rec, i);
                 }
+                Root::Cons(_, k, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    self.img.cons.recs[k as usize].expr = i;
+                }
             }
         }
         Ok(())
@@ -2073,7 +2098,7 @@ fn expr_reason(k: ExprKind) -> &'static str {
         X::CXXInheritedCtorInitExpr => "an inherited constructor",
         X::CXXPseudoDestructorExpr => "a pseudo-destructor call",
         X::LambdaExpr => "a lambda expression",
-        X::RequiresExpr | X::ConceptSpecializationExpr => "a requires-expression or concept",
+        X::RequiresExpr => "a requires-expression or concept",
         X::CoawaitExpr | X::DependentCoawaitExpr | X::CoyieldExpr => "a coroutine",
         X::CXXReflectExpr | X::CXXSpliceExpr => "a reflection or splice",
         X::UnresolvedLookupExpr
