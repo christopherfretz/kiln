@@ -231,6 +231,7 @@ impl SyntaxJob<'_> {
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
+            gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();

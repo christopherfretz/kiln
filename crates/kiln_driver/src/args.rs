@@ -307,6 +307,12 @@ impl PredefArgs {
     pub fn reflection_for(&self, std: &crate::toolchain::LangStd) -> bool {
         self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
     }
+
+    /// GNU89 inline semantics: C only, `-fgnu89-inline` or a standard
+    /// before C99 (clang `LangOptions::GNUInline`; spec/driver.md).
+    pub fn gnu89_inline_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        std.c.is_some_and(|c| self.gnu89_inline.unwrap_or(c < kiln_lex::CStd::C99))
+    }
 }
 
 /// What to do.

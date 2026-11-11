@@ -170,6 +170,12 @@ sema_template_tag_noparams = Error (2) "extraneous 'template<>' in declaration o
 sema_template_template_param_no_params = Error (0) "template template parameter must have its own template parameters";
 sema_template_template_param_not_at_least_as_constrained = Error (2) "template template argument {0} is more constrained than template template parameter {1}";
 sema_template_variable_noparams = Error (1) "extraneous 'template<>' in declaration of variable '{0}'";
+// clang `err_tentative_def_incomplete_type` (C, end of the TU; WP-1286).
+sema_tentative_def_incomplete_type = Error (1) "tentative definition has type {0} that is never completed";
+// clang `warn_tentative_incomplete_array` (C23 6.9.2p5; WP-1286).
+sema_tentative_incomplete_array = Warning [TentativeDefinitionArray] (0) "tentative array definition assumed to have one element";
+// clang `ext_typecheck_decl_incomplete_type` (C23 6.9.2p3; WP-1286).
+sema_tentative_static_incomplete_type = Warning [TentativeDefinitionIncompleteType] (1) "tentative definition of variable with internal linkage has incomplete non-array type {0}";
 sema_this_bool_conversion = Warning [UndefinedBoolConversion] (0) "'this' pointer cannot be null in well-defined C++ code; pointer may be assumed to always convert to true";
 sema_this_capture = Error (1) "'this' cannot be {0:|implicitly }captured in this context";
 sema_this_null_compare = Warning [TautologicalUndefinedCompare] (1) "'this' pointer cannot be null in well-defined C++ code; comparison may be assumed to always evaluate to {0:true|false}";

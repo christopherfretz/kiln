@@ -67,6 +67,8 @@ pub struct ParseOptions {
     pub rtti: bool,
     /// A GNU dialect (`-std=gnu++NN`, [`kiln_sema::Sema::gnu`]).
     pub gnu: bool,
+    /// GNU89 inline semantics in C ([`kiln_sema::Sema::gnu89_inline`]).
+    pub gnu89_inline: bool,
     /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
     pub inst_limits: kiln_sema::templ::stack::InstLimits,
     /// `-fkiln-instantiation-report[=all|json]`.
@@ -149,6 +151,7 @@ impl Default for ParseOptions {
             exceptions: true,
             rtti: true,
             gnu: false,
+            gnu89_inline: false,
             inst_limits: kiln_sema::templ::stack::InstLimits::default(),
             inst_report: kiln_sema::templ::report::ReportFormat::Off,
             reflection: false,
@@ -371,6 +374,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
+    s.gnu89_inline = opts.gnu89_inline;
     s.c = opts.c;
     s.clang_compat = opts.clang_compat;
     s.cf_protection_branch = opts.cf_protection_branch;

@@ -4003,7 +4003,8 @@ impl Sema<'_, '_> {
         let at = if explicit_member { self.ast.latest(rec) } else { rec };
         let loc = self.ast.decls.get(at).loc();
         // A specialization prints with its arguments (`'A<char>'`).
-        let name = if self.ast.spec_info(rec).is_some() {
+        // In C the type prints with its tag keyword (`'struct S'`).
+        let name = if self.ast.spec_info(rec).is_some() || self.is_c() {
             self.decl_ty_str(self.tag_type(rec))
         } else {
             self.qualified_decl_name(rec)
@@ -5062,6 +5063,7 @@ impl Sema<'_, '_> {
                 // C17 6.2.7p3: without a prototype, the composite type.
                 let c_comp = if self.is_c() {
                     self.c_no_proto_composite(p, pty, ty, d.name_loc())
+                        .or_else(|| self.c_proto_composite(pty, ty))
                 } else {
                     None
                 };
@@ -5079,7 +5081,10 @@ impl Sema<'_, '_> {
                     // the deduced return type.
                     ty = self.adopt_deduced_return(p, ty);
                     let pspec = self.ast.decls.function(p).map(|f| f.spec).unwrap_or_default();
-                    if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
+                    if spec.storage() == FnStorage::Static
+                        && pspec.storage() != FnStorage::Static
+                        && !self.c_can_redefine_function(p)
+                    {
                         let msg = self
                             .diag(DiagId::sema_static_non_static, d.name_loc())
                             .arg(fname.clone());
@@ -6272,8 +6277,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// C ([6.9.2]/2): a file-scope object declaration without an
-    /// initializer and without `extern` is a tentative definition.
     /// C17 6.7.6.3p15: a function type without a prototype (`int f()`)
     /// and a prototype are compatible when the return types are and no
     /// parameter type changes under the default argument promotions (and
@@ -6354,6 +6357,8 @@ impl Sema<'_, '_> {
         ok.then_some(proto_ty)
     }
 
+    /// C ([6.9.2]/2): a file-scope object declaration without an
+    /// initializer and without `extern` is a tentative definition.
     pub(crate) fn c_tentative(&self, v: DeclId) -> bool {
         self.is_c()
             && self.ast.decls.var(v).is_some_and(|x| {
@@ -7868,6 +7873,9 @@ impl Sema<'_, '_> {
             self.decomposition_requires_init(v);
             return;
         }
+        if self.c_tentative_uninit(v) {
+            return;
+        }
         let vn = *self.ast.decls.get(v);
         if self.constexpr_decl_not_definition(v)
             || vn.kind() != DeclKind::Var
@@ -8142,6 +8150,7 @@ impl Sema<'_, '_> {
             // The same function defined in another unit's global module
             // fragment: merged, its body kept (spec/modules.md §6).
             && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
+            && !self.c_can_redefine_function(prev)
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -8290,8 +8299,22 @@ impl Sema<'_, '_> {
             self.check_sve_support(fty, self.ast.decls.get(f).loc());
         }
         self.finish_source_locs(f);
-        if self.ast.definition(f).is_none() {
-            let _ = self.builder().set_body(f, body);
+        match self.ast.definition(f) {
+            None => {
+                let _ = self.builder().set_body(f, body);
+            }
+            // A C GNU89 `extern inline` definition is inline-only: the
+            // later definition is the entity's (clang `canRedefineFunction`).
+            Some(prev)
+                if prev != f
+                    && self.c_can_redefine_function(prev)
+                    && !self.ast.decls.get(f).has(DeclFlags::INVALID) =>
+            {
+                if self.ast.decls.set_body(f, body).is_ok() {
+                    self.ast.replace_definition(f);
+                }
+            }
+            Some(_) => {}
         }
         self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
