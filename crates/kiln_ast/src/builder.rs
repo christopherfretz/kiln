@@ -1945,6 +1945,23 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::ArraySubscriptExpr, vk, deps, 0, ty, loc, base.raw(), idx.raw())
     }
 
+    /// A C subscript `base[idx]`: always an lvalue (C17 6.5.2.1p2, as
+    /// `*((base)+(idx))`), even of an array member of a non-lvalue
+    /// structure (`f().a[i]`, 6.2.4p8).
+    pub fn c_subscript(&mut self, base: ExprId, idx: ExprId, ty: QualType, loc: Loc) -> ExprId {
+        let deps = self.deps(base) | self.deps(idx) | self.type_deps(ty);
+        self.simple(
+            ExprKind::ArraySubscriptExpr,
+            ValueCategory::LValue,
+            deps,
+            0,
+            ty,
+            loc,
+            base.raw(),
+            idx.raw(),
+        )
+    }
+
     /// Records the `]` of a built-in subscript `e` (its clang `getEndLoc`,
     /// `RBracketLoc`), unless `e` is no `ArraySubscriptExpr` or has one.
     pub fn set_subscript_end(&mut self, e: ExprId, rsquare: Loc) {

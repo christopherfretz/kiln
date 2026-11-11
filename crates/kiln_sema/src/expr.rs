@@ -5053,6 +5053,9 @@ impl Sema<'_, '_> {
             self.emit(self.incomplete_note(msg, elem));
             return self.recover_err(&[b, i], loc);
         }
+        if self.is_c() {
+            return self.builder().c_subscript(b, i, elem, loc);
+        }
         self.builder().subscript(b, i, elem, loc)
     }
 
