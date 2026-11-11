@@ -4,6 +4,7 @@
 
 note_macro_expansion_here = Note (1) "expansion of macro '{0}' requested here";
 note_macro_here = Note (1) "macro '{0}' defined here";
+note_main_change_return_type = Note (0) "change return type to 'int'";
 note_marked_deprecated = Note (1) "'{0}' has been explicitly marked deprecated here";
 note_marked_unavailable = Note (1) "'{0}' has been explicitly marked unavailable here";
 note_matching = Note (1) "to match this {0}";

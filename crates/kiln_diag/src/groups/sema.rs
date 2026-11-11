@@ -59,6 +59,7 @@ DynamicExceptionSpec = "dynamic-exception-spec" [];
 ElaboratedEnumClass = "elaborated-enum-class" [];
 EmptyBody = "empty-body" [];
 Exceptions = "exceptions" [];
+ExcessInitializers = "excess-initializers" [];
 ExplicitSpecializationStorageClass = "explicit-specialization-storage-class" [];
 ExternInitializer = "extern-initializer" [];
 // ----- WP-197 (DR482 namespace extra qualification)
@@ -117,6 +118,7 @@ LiteralConversion = "literal-conversion" [];
 LiteralRange = "literal-range" [];
 Main = "main" [];
 MainAttachedToNamedModule = "main-attached-to-named-module" [];
+MainReturnType = "main-return-type" [];
 ManyBracesAroundScalarInit = "many-braces-around-scalar-init" [];
 MicrosoftExceptionSpec = "microsoft-exception-spec" [];
 MissingConstinit = "missing-constinit" [];

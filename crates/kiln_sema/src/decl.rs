@@ -4490,8 +4490,21 @@ impl Sema<'_, '_> {
             }
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
-                self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
-                main_invalid = true;
+                let at = ds.type_loc.unwrap_or(ds.loc);
+                if self.is_c() && self.gnu {
+                    // GNU C accepts it with a warning (clang
+                    // `ext_main_returns_nonint`, WP-1286).
+                    let ret_span = Span::new(at, at);
+                    let note = self
+                        .diag(DiagId::note_main_change_return_type, at)
+                        .range(ret_span)
+                        .fixit(FixIt::replace(ret_span, "int"));
+                    let d = self.diag(DiagId::sema_main_returns_nonint_gnu_c, at).with_note(note);
+                    self.emit(d);
+                } else {
+                    self.error(DiagId::sema_main_returns_nonint, at);
+                    main_invalid = true;
+                }
             }
             main_invalid |= self.check_main_params(&p, d.name_loc());
             // P3618R0 ([basic.start.main]/3): `main` is attached to the

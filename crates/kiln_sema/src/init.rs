@@ -1050,8 +1050,16 @@ impl Sema<'_, '_> {
         let len = self.ast.types.array_size(sty).unwrap_or(0);
         if let Some(n) = self.ast.types.array_size(ty) {
             // `len` counts the terminating NUL, which must fit in C++
-            // ([dcl.init.string]/2).
-            if len > n {
+            // ([dcl.init.string]/2). C drops a NUL that does not fit, and
+            // longer strings are truncated with a warning (C23 6.7.11p15,
+            // clang `ext_initializer_string_for_char_array_too_long`).
+            if self.is_c() {
+                if len > n + 1 {
+                    let d = self.diag(DiagId::sema_init_string_too_long_c, self.begin_loc(s));
+                    let d = d.range(self.expr_range(s));
+                    self.emit(d);
+                }
+            } else if len > n {
                 let msg = self
                     .diag(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc())
                     .arg(n.to_string())
@@ -2095,6 +2103,11 @@ impl Sema<'_, '_> {
     }
 
     fn check_narrowing_impl(&mut self, e: ExprId, to: QualType, entity: QualType) {
+        // C has no narrowing rule: a brace initializer converts each value
+        // as if by assignment (C23 6.7.11p11, p13; WP-1286).
+        if self.is_c() {
+            return;
+        }
         let from = self.ast.exprs.get(e).ty();
         if self.is_error_type(from) || self.is_error_type(to) {
             return;

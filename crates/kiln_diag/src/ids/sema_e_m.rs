@@ -154,6 +154,8 @@ sema_gnu_inline_requires_inline = Warning [IgnoredAttributes] (0) "'gnu_inline' 
 sema_goto_into_protected_scope = Error (0) "cannot jump from this goto statement to its label";
 sema_hidden_overloaded_virtual = WarningOff [OverloadedVirtual] (2) "'{0}' hides overloaded virtual {1:function|functions}";
 sema_ice_not_integral = Error (1) "integral constant expression must have integral or unscoped enumeration type, not {0}";
+// clang `err_ice_not_integral` in C (WP-1286).
+sema_ice_not_integral_c = Error (1) "integer constant expression must have integer type, not {0}";
 sema_ice_too_large_unsigned = Error (2) "integer constant expression evaluates to value {0} that cannot be represented in a {1}-bit unsigned integer type";
 sema_illegal_initializer = Error (0) "illegal initializer (only variables can be initialized)";
 sema_illegal_initializer_type = Error (1) "illegal initializer type {0}";
@@ -225,6 +227,8 @@ sema_init_priority_object_attr = Error (0) "can only use 'init_priority' attribu
 sema_init_priority_reserved = WarningError [InitPriorityReserved] (1) "requested 'init_priority' {0} is reserved for internal use";
 sema_init_reference_member_uninitialized = Error (1) "reference member of type {0} uninitialized";
 sema_init_string_too_long = Error (2) "initializer-string for char array is too long, array size is {0} but initializer has size {1} (including the null terminating character)";
+// clang `ext_initializer_string_for_char_array_too_long` in C (WP-1286).
+sema_init_string_too_long_c = Warning [ExcessInitializers] (0) "initializer-string for char array is too long";
 sema_init_uninit_member = Error (4) "{0:constructor for|implicit default constructor for} {1} must explicitly initialize the {2:reference|const} member {3}";
 sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
 sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";
@@ -309,6 +313,8 @@ sema_main_global_variable_19 = Error (0) "main cannot be declared as global vari
 sema_main_one_arg = Warning [Main] (0) "only one parameter on 'main' declaration";
 sema_main_returns_bool_literal = Warning [Main] (0) "bool literal returned from 'main'";
 sema_main_returns_nonint = Error (0) "'main' must return 'int'";
+// clang `ext_main_returns_nonint` (GNU C; WP-1286).
+sema_main_returns_nonint_gnu_c = Warning [MainReturnType] (0) "return type of 'main' is not 'int'";
 sema_main_surplus_args = Error (1) "too many parameters ({0}) for 'main': must be 0, 2, or 3";
 sema_main_template = Error (0) "'main' cannot be a template";
 sema_main_used = Extension [Main] (0) "referring to 'main' within an expression is a Clang extension";

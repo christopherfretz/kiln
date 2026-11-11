@@ -1249,6 +1249,9 @@ impl Sema<'_, '_> {
         let written = self.ast.exprs.get(e).ty();
         let at = self.begin_loc(e);
         let pty = conv::strip_cv(self, cond_ty);
+        if self.is_c() {
+            return self.c_case_check(e, written, at);
+        }
         if written != QualType::OVERLOAD && !self.ast.types.is_dependent(written) {
             let info = self.arg_info(e);
             let ics = self.try_implicit_conversion(&info, pty, crate::overload::IcsOptions::NONE);
@@ -1281,6 +1284,29 @@ impl Sema<'_, '_> {
             return Ok(None);
         }
         Ok(self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw)))
+    }
+
+    /// C23 6.8.5.3p3, p5: a case value is an integer constant expression,
+    /// converted to the promoted type of the controlling expression with
+    /// no narrowing rule (clang's `ActOnCaseExpr` outside C++11:
+    /// `VerifyIntegerConstantExpression`, `err_ice_not_integral`).
+    fn c_case_check(
+        &mut self,
+        e: ExprId,
+        written: QualType,
+        at: Loc,
+    ) -> Result<Option<i128>, (ExprId, Option<i128>)> {
+        let t = &self.ast.types;
+        let w = conv::strip_cv(self, written);
+        if self.is_error_type(w) || t.is_integral(w) || t.as_enum(w).is_some() {
+            return Ok(None);
+        }
+        let d = self
+            .diag(DiagId::sema_ice_not_integral_c, at)
+            .arg(self.ty_arg(written))
+            .range(self.expr_range(e));
+        self.emit(d);
+        Err((self.recover_err(&[e], at), None))
     }
 
     /// clang `CheckConvertedConstantConversions`: the second standard
