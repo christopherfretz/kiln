@@ -40,7 +40,7 @@ pub const SECTION_CONSTS: u32 = 1;
 /// The declaration and type image (spec/modules.md §11.11 "Part 2a";
 /// encoded by `kiln_sema::bmi_image`).
 pub const SECTION_IMAGE: u32 = 2;
-/// The preprocessor-state record (spec/modules.md §11.12; encoded by
+/// The preprocessor-state record (spec/modules.md §11.13; encoded by
 /// [`crate::state`]).
 pub const SECTION_PP: u32 = 3;
 /// The highest section tag this reader knows. Tags above it are reserved
@@ -594,7 +594,7 @@ fn section_block(w: &mut W, sections: &[Section]) {
 }
 
 /// The section block alone, as a precompiled header carries it after its
-/// `KILNPCH` record (spec/modules.md §11.12 "In a precompiled header"):
+/// `KILNPCH` record (spec/modules.md §11.13 "In a precompiled header"):
 /// the kind-2 block ([`write`]) followed by its [`checksum`].
 #[must_use]
 pub fn write_sections(sections: &[Section]) -> Vec<u8> {

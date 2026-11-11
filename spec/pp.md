@@ -680,6 +680,59 @@ is a port of clang's `PrintPPOutputPPCallbacks`. It covers:
 belong to WP-017, which builds them on `macro_defined` and
 `inclusion_directive` (see the open questions).
 
+### Preprocessor-state record (WP-1280)
+
+`kiln_pp::state` writes and installs the preprocessor state a header
+leaves behind. The record's contents and byte layout are
+spec/modules.md §11.13.
+
+- **Points.** A preprocessor with `StateHooks` (`set_state_hooks`,
+  before the first token) counts the *points* of the main file's
+  predefines buffer. Point `k` is reached where the buffer's `k`-th
+  `#include` (from 0) begins, or at the end of the buffer if it has
+  fewer. The driver puts every `-include` (and a PCH's header, when
+  it is replayed) there, so point 0 is "the predefines and the command
+  line read, nothing `-include`d yet". Points count only in the main
+  file's own predefines buffer, not in a header unit's copy of it.
+- **Baseline.** `baseline: true` takes `state_baseline()` at point 0.
+- **Snapshot.** `state_snapshot(&baseline)` is the state now as the
+  difference from the baseline:
+  - the definitions made or replaced, and the baseline macros
+    undefined;
+  - the `push_macro` stacks that changed;
+  - the new poisoned identifiers, guards and once files;
+  - `__COUNTER__`, the open diagnostic pushes, the new attribute
+    macros, and the diagnostic engine's pragma state.
+
+  At the end of the main file, the main file's controlling macro
+  counts as its guard. A producer takes the snapshot at the end of
+  the TU. A checker (`checkpoint: Some(k)`) takes it at point `k`,
+  which is where the replayed header ends.
+- **Install.** `install: Some((k, state))` makes `state` the
+  preprocessor's state at point `k`, as if the header had been read
+  there:
+  - it adds the macros, applies the undefs and sets the push stacks,
+    poisons and `__COUNTER__`;
+  - it marks the guarded and once files as entered, so including them
+    again skips them as after a real read, and the `-M` and
+    `suggest_include` guard records see them;
+  - it adds the diagnostic pushes;
+  - it installs the diagnostic pragma state at the point's location
+    (`pragma_install`).
+
+  Nothing is lexed: macro bodies are the record's tokens, and their
+  spellings are read from their files when printed.
+- **Header units.** `end_unit` passes a unit's exported macros through
+  a write and a read of the record (`unit_round_trip`), unless
+  `ModuleOptions::no_unit_record` is set.
+- **`describe`.** `PpState::describe` gives one sorted line per item,
+  such as `define Z = 1/0.0 @./x.h+17` or `guard ./g.h G_H`. Sema's
+  pragma state is not part of it. The driver's check mode compares
+  the record with replay through it.
+- **Tests.** `crates/kiln_pp/tests/pp_state.rs` compares replay with
+  the installed record on `-E`, `-dM -E` and diagnostics, including
+  the whole pp torture corpus.
+
 ## Behavior (the standard is normative; clang 19 decides what it leaves open)
 
 - **Directives.** Only a `#` that is physically at the start of a line
