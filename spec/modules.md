@@ -3233,9 +3233,17 @@ namespace, after the class's end, with the in-class declaration as
   calls the same `declare_implicit` on the completed class, so their
   signatures, `noexcept` and `constexpr` come from the carried bits and
   match the replay's, and any other one is declared on demand as
-  usual (declaring one may declare another first, as a derived class's
+  usual. The ones sema declared eagerly at `}` because they need
+  overload resolution over a member's or base's special members (a
+  non-trivial, deleted, inaccessible or non-`const`-parameter one,
+  `finish_special_members`), or because the class is dynamic, are among
+  the carried records, so the importer declares the same set as the
+  replay, each computed (deleted or not) from the completed class as
+  there (WP-1292; before it such a class fell
+  back, "a class whose implicit special members need overload
+  resolution"). Declaring one may declare another first, as a derived class's
   default constructor declares its base's: that record then takes the
-  member already declared). An implicit destructor or assignment
+  member already declared. An implicit destructor or assignment
   operator recomputes the functions it overrides and its `virtual`
   bit. Their definitions are synthesized on first ODR-use as for a
   replayed class. Layout, the record's size and the field offsets are
@@ -3268,12 +3276,7 @@ functions than its first declaration's, overrides a function outside
 the image ("an override of a function outside the image"; S6), has a
 key function outside the image, inherits constructors or assignment operators, is an
 anonymous union or struct (or a member of one, or names one through a
-typedef), is a template or a closure type, is incomplete, has
-implicit special members that sema declared eagerly to resolve
-overloads ("a class whose implicit special members need overload
-resolution": a member or base with a non-trivial or ambiguous special
-member, unless the class is polymorphic or has virtual bases, which
-declares them eagerly anyway; WP-1121), declares a friend template or
+typedef), is a template or a closure type, is incomplete, declares a friend template or
 befriends a member function or is a class template with friends
 (friends of other classes are carried since WP-1292), a
 class-specific allocation function, a defaulted comparison or an
@@ -3341,10 +3344,10 @@ classes and templates). The follow-ups, in priority order:
    functions, key functions and virtual bases since WP-1120**, see
    "Classes (S3)". Its follow-ups: `dynamic_cast`/`typeid` in bodies
    (polymorphic class templates and friends of classes are carried
-   since WP-1292; friend templates and friends in class templates are
-   not), anonymous unions and structs,
-   classes whose implicit members need overload resolution, inherited
-   constructors, defaulted comparisons and out-of-line defaulted
+   since WP-1292, and so are classes whose implicit members need
+   overload resolution; friend templates and friends in class templates
+   are not), anonymous unions and structs,
+   inherited constructors, defaulted comparisons and out-of-line defaulted
    functions, class-specific allocation functions,
    `[[no_unique_address]]`, the member side maps (qualified member
    names), and in bodies `new`/`delete` (the implicit global allocation
@@ -3382,10 +3385,9 @@ are, by stage:
   `locale::facet`, `memory_resource`, `error_category`; the class
   templates among them, `basic_istream` and `basic_ostream` over
   `basic_ios`, wait for S4), friends (granted across
-  libc++, `__wrap_iter`'s for one), anonymous unions (`optional`,
-  `variant`, `string`'s representation) or classes whose implicit
-  members need overload resolution (most wrappers of a member with a
-  user-declared special member), `[[no_unique_address]]` (allocators,
+  libc++, `__wrap_iter`'s for one; those of non-template classes are
+  carried since WP-1292), anonymous unions (`optional`,
+  `variant`, `string`'s representation), `[[no_unique_address]]` (allocators,
   `unique_ptr`'s deleter through `_LIBCPP_COMPRESSED_PAIR`), and in bodies
   `new`/`delete` and lambdas; every one of these is inside a template
   in libc++ and so also waits for S4;

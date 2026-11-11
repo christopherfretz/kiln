@@ -941,12 +941,14 @@ fn kind2_declaration_image_member_templates() {
 }
 
 /// WP-1292 (§11.11 "Polymorphic class templates and pack bases",
-/// "Friends"): with the unit's source blanked, an importer still
-/// instantiates polymorphic class templates and pack-expansion bases,
-/// finds hidden friends by argument-dependent lookup and lets befriended
-/// classes read private members, and its IR is the replay's.
+/// "Friends", "Implicit members"): with the unit's source blanked, an
+/// importer still instantiates polymorphic class templates and
+/// pack-expansion bases, finds hidden friends by argument-dependent
+/// lookup, lets befriended classes read private members and declares the
+/// implicit members that need overload resolution, and its IR is the
+/// replay's.
 #[test]
-fn kind2_declaration_image_polymorphic_templates_and_friends() {
+fn kind2_declaration_image_polymorphic_templates_friends_and_implicit_members() {
     for (name, module, user, stdout) in [
         (
             "imgpoly",
@@ -959,6 +961,12 @@ fn kind2_declaration_image_polymorphic_templates_and_friends() {
             include_str!("../../../tests/conformance/module.interface/Inputs/img-friend.cppm"),
             include_str!("../../../tests/conformance/module.interface/image-friend-run.cpp"),
             "1 0 12 105 6 5 0\n",
+        ),
+        (
+            "imgim",
+            include_str!("../../../tests/conformance/module.interface/Inputs/img-implicit.cppm"),
+            include_str!("../../../tests/conformance/module.interface/image-implicit-members-run.cpp"),
+            "3 3 4 5 1\n",
         ),
     ] {
         let d = scratch(&format!("image-{name}"));
@@ -1844,10 +1852,6 @@ fn kind2_declaration_image_fallback() {
         (
             "export module f;\nexport template <class T> struct S { friend int g(S) { return 1; } };\n",
             "a declaration in a template",
-        ),
-        (
-            "export module f;\nexport struct B { ~B() {} };\nexport struct D : B {};\nexport constexpr int k = 1;\n",
-            "a class whose implicit special members need overload resolution",
         ),
         (
             "export module f;\nexport struct S { int x; template <class T> friend int g(T, S s) { return s.x; } };\nexport constexpr int k = 1;\n",

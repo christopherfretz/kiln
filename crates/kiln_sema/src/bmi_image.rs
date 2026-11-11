@@ -3426,15 +3426,11 @@ impl Writer<'_, '_, '_> {
         if b.contains(DefinitionBits::ANONYMOUS) {
             return Err("an anonymous union or struct member");
         }
-        // A dynamic class declares its implicit members eagerly anyway
-        // (`finish_special_bits`), and they are carried as implicit
-        // records in id order; a non-dynamic one still falls back
-        // (WP-1121).
-        let dynamic = b.contains(DefinitionBits::POLYMORPHIC)
-            || b.contains(DefinitionBits::HAS_VIRTUAL_BASES);
-        if !dynamic && crate::class::SpecialKind::any_needs_overload(b) {
-            return Err("a class whose implicit special members need overload resolution");
-        }
+        // The implicit members sema declared eagerly at `}`
+        // (`finish_special_members`: a dynamic class's, and those that need
+        // overload resolution) are carried as implicit records in id order,
+        // and the importer declares them again on the completed class
+        // (WP-1292).
         let bits = b.without(DefinitionBits::COMPLETE).bits();
         if bits & !DEF_BITS != 0 {
             return Err("a class with properties the image does not carry yet");
