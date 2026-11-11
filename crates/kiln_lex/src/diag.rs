@@ -92,6 +92,8 @@ pub enum LexDiagKind {
     EscapedNewlineBlockCommentEnd,
     /// A `//` comment continued by a line splice (`ext_multi_line_line_comment`).
     MultiLineLineComment,
+    /// A `//` comment in strict C89 (`ext_line_comment`), once per buffer.
+    C89LineComment,
 
     // ----- literals (lexed to their end only; contents are WP-011) -----
     /// A string literal with no closing `"` on its line
@@ -368,6 +370,7 @@ impl LexDiagKind {
             | K::BackslashNewlineEof
             | K::NoNewlineAtEof
             | K::MultiLineLineComment
+            | K::C89LineComment
             | K::UcnDelimitedExtension
             | K::UcnNamedExtension
             | K::DollarInIdentifier

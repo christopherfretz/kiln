@@ -66,16 +66,36 @@ fn lex_c99_hex_float() {
 }
 
 /// C89 3.1.9: strict C89 has no `//` comments. clang lexes them as
-/// comments when compiling, as two `/` in preprocessed output; gnu89 and
-/// later C have them.
+/// comments when compiling (except `//*` before the file's first line
+/// comment, which is `/` then a block comment), as two `/` in preprocessed
+/// output; gnu89 and later C have them.
 #[test]
 fn lex_c89_line_comments() {
     let pp = LexOptions { preprocessed_output: true, ..c(CStd::C89, false) };
-    assert_eq!(spell("a //**/ b\nc", c(CStd::C89, false)), "a c");
+    assert_eq!(spell("a //**/ b\nc", c(CStd::C89, false)), "a / b c");
+    assert_eq!(spell("a // x\nb //**/ c\nd", c(CStd::C89, false)), "a b d");
     assert_eq!(spell("a //**/ b\nc", pp), "a / b c");
     assert_eq!(spell("a // b\n", pp), "a / / b");
     let gnu = LexOptions { preprocessed_output: true, ..c(CStd::C89, true) };
     assert_eq!(spell("a // b\nc", gnu), "a c");
     let c99 = LexOptions { preprocessed_output: true, ..c(CStd::C99, false) };
     assert_eq!(spell("a // b\nc", c99), "a c");
+}
+
+/// The -pedantic "// comments are not allowed in this language" extension
+/// is reported once per file, at the first line comment; gnu89 has none.
+#[test]
+fn lex_c89_line_comment_warns_once() {
+    use kiln_lex::LexDiagKind;
+    let count = |o| {
+        let l = lex_with("a // x\nb // y\n", o);
+        l.diags
+            .iter()
+            .filter(|d| d.0 == LexDiagKind::C89LineComment)
+            .map(|d| (d.1, d.2))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(count(c(CStd::C89, false)).len(), 1);
+    assert!(count(c(CStd::C89, true)).is_empty());
+    assert!(count(c(CStd::C99, false)).is_empty());
 }

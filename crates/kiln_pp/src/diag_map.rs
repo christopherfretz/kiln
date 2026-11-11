@@ -45,6 +45,7 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
             Diag::new(DiagId::lex_escaped_newline_block_comment_end, span)
         }
         K::MultiLineLineComment => Diag::new(DiagId::lex_multi_line_line_comment, span),
+        K::C89LineComment => Diag::new(DiagId::lex_line_comment, span),
         K::UnterminatedString => Diag::new(DiagId::lex_unterminated_string, span),
         K::UnterminatedChar => Diag::new(DiagId::lex_unterminated_char, span),
         K::UnterminatedRawString => {

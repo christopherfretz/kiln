@@ -204,11 +204,17 @@ as `clang-19 -x c` lexes them:
 - **Raw strings** are a GNU extension of gnu99 and later (`gnu: true`);
   otherwise `R"(…)"` is `R` and a string.
 - **Line comments** (C89 3.1.9 has none): gnu89 and C99 on always have
-  them. Strict C89 has them when compiling (clang 19 and 22 accept
-  `4 //**/ 2` as `4`), and none in preprocessed output
-  (`preprocessed_output: true`, set by the driver for `-E`): there `//`
-  is two `/` tokens, so `a //**/ b` prints as `a / b` and macros expand on
-  the rest of the line.
+  them. Strict C89 has them when compiling, as clang's lexer does: `//`
+  is a comment unless `*` follows it (after any splice) and no line
+  comment has been seen yet in this lexer's file (`4 //**/ 2` is `4 / 2`
+  until the first `//` comment, `4` after it; a comment in a skipped group
+  counts). The first one is reported as `C89LineComment` (clang
+  `ext_line_comment`, "// comments are not allowed in this language",
+  `-Wcomment`, `-pedantic` only), once per file, not in skipped groups.
+  In preprocessed output (`preprocessed_output: true`, set by the driver
+  for `-E`) there are none, skipped groups included: `//` is two `/`
+  tokens, so `a //**/ b` prints as `a / b` and macros expand on the rest
+  of the line.
 - Alternative tokens (`and`, `bitor`, …) are identifiers: the keyword
   tables are the parser's and the preprocessor's (spec/parse.md §1,
   spec/pp.md "C mode"); the lexer has no keywords.
@@ -233,7 +239,8 @@ Tests: `crates/kiln_lex/tests/c_mode.rs`, `tests/c/lex/`.
   false. Only a block comment, a raw string literal or a line splice can
   carry a logical line past a terminator, so the rest of the line (`R`)
   qualifies when it is non-empty and holds no `R"`, no `??/` (trigraphs
-  on), no `\` as its last non-blank byte, and every `/*` in it is
+  on), no `\` as its last non-blank byte, no `//` when compiling strict
+  C89 before the file's first line comment ("C mode"), and every `/*` in it is
   followed on the line by a `*/` whose preceding byte is not a `/` that
   could itself open a comment (`/*/`) -- rules that hold whether a given
   `/*` is a comment or sits inside a literal. Afterwards `next()` yields

@@ -100,6 +100,10 @@ pub struct Lexer<'a> {
     /// Spans of the comments lexed since the last
     /// [`take_comments`](Lexer::take_comments), when recording is on.
     comments: Option<Vec<Span>>,
+    /// Strict C89 only: a `//` comment has been lexed in this buffer, so
+    /// `//` is a comment from here on (clang's per-lexer `LineComment`,
+    /// set by the first one, which `ext_line_comment` reports).
+    c89_line_comments: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -163,6 +167,7 @@ impl<'a> Lexer<'a> {
             diags: Vec::new(),
             scratch: String::new(),
             comments: None,
+            c89_line_comments: false,
         }
     }
 
@@ -246,7 +251,8 @@ impl<'a> Lexer<'a> {
     /// literal and a line splice. So the rest of the line qualifies unless
     /// it holds a `/*` with no `*/` after it on the line (or one that a
     /// `/*/` could reopen), an `R"`, a `\` as its last non-blank byte, or
-    /// (with trigraphs) a `??/`. Lexing on from there gives the same
+    /// (with trigraphs) a `??/`, or, compiling strict C89 before the
+    /// file's first line comment, a `//`. Lexing on from there gives the same
     /// following tokens as lexing the skipped ones would have; no
     /// diagnostics are recorded and nothing is interned for the skipped
     /// bytes.
@@ -260,6 +266,19 @@ impl<'a> Lexer<'a> {
         let Some(rest) = self.src.bytes.get(from..) else {
             return false;
         };
+        // Strict C89 compiling: the file's first `//` comment changes how
+        // later `//*` lex, and clang's raw lexer sees it in a skipped group
+        // too, so a line that may hold it is lexed.
+        if self.opts.c == Some(CStd::C89)
+            && !self.opts.gnu
+            && !self.c89_line_comments
+            && !self.opts.preprocessed_output
+        {
+            let eol = rest.iter().position(|&c| c == b'\n' || c == b'\r').unwrap_or(rest.len());
+            if rest[..eol].windows(2).any(|w| w == b"//") {
+                return false;
+            }
+        }
         let at = |k: usize| rest.get(k).copied();
         let trigraphs = self.opts.trigraphs;
         // `R"` or `??/` at `k`: both can matter even inside what looks
@@ -605,19 +624,31 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Lexes a `//` comment starting at `self.pos` ([lex.comment]). The
-    /// newline ending it is not consumed.
     /// Whether the `//` at `self.pos` starts a comment. Always, except in
-    /// strict C89, which has no line comments (C89 3.1.9): there clang 19
-    /// and 22 lex `//` as a comment when compiling (even `a //**/ b`,
-    /// which C89 reads as `a / b`) and as two `/` in preprocessed output
-    /// (spec/lex.md "C mode").
+    /// strict C89, which has no line comments (C89 3.1.9). There clang 19
+    /// and 22 (`Lexer::LexTokenInternal`) lex `//` as two `/` in
+    /// preprocessed output, skipped groups included. When compiling,
+    /// `//` is a comment unless `*` follows it (`a //**/ b` is C89's
+    /// `a / b`), and every `//` is one after the buffer's first line
+    /// comment (spec/lex.md "C mode").
     fn c89_line_comment(&self) -> bool {
-        self.opts.c != Some(CStd::C89) || self.opts.gnu || !self.opts.preprocessed_output
+        if self.opts.c != Some(CStd::C89) || self.opts.gnu || self.c89_line_comments {
+            return true;
+        }
+        let (_, s1) = self.src.decode(self.pos + 1);
+        !self.opts.preprocessed_output && self.src.decode(self.pos + 1 + s1).0 != Some('*')
     }
 
+    /// Lexes a `//` comment starting at `self.pos` ([lex.comment]). The
+    /// newline ending it is not consumed.
     fn line_comment(&mut self) -> Option<Token> {
         let start = self.pos;
+        if self.opts.c == Some(CStd::C89) && !self.opts.gnu && !self.c89_line_comments {
+            // clang `ext_line_comment`, once per buffer (the preprocessor
+            // drops it in a skipped group, as clang's raw lexer does).
+            self.c89_line_comments = true;
+            self.diag(LexDiagKind::C89LineComment, start, start + 2);
+        }
         let (_, s1) = self.src.decode(start + 1);
         let body = start + 1 + s1;
         let bytes = self.src.bytes;

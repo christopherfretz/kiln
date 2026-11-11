@@ -15,6 +15,7 @@ lex_invalid_char = Error (1) "unexpected character <U+{0}>";
 lex_invalid_digit = Error (2) "invalid digit '{0}' in {1} constant";
 lex_invalid_suffix = Error (2) "invalid suffix '{0}' on {1:integer|floating} constant";
 lex_invalid_utf8 = Error (0) "source file is not valid UTF-8";
+lex_line_comment = Extension [Comment] (0) "// comments are not allowed in this language";
 lex_literal_error = Error (1) "{0}";
 lex_literal_warning = Warning (1) "{0}";
 lex_multi_line_line_comment = Extension [Comment] (0) "multi-line // comment";
