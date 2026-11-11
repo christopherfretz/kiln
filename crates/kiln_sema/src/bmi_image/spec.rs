@@ -61,6 +61,7 @@ impl Writer<'_, '_, '_> {
         if let Some(ArgView::Type(q)) = ast.templates.defaults.get(d).map(TemplateArg::view) {
             qs.push(q);
         }
+        self.spec_arg_types(d, &mut qs);
         for q in qs {
             let _ = self.qref(q);
         }
@@ -71,34 +72,40 @@ impl Writer<'_, '_, '_> {
         let args: Vec<TemplateArg> = self.s.ast.types.args(list).to_vec();
         let mut out = Vec::with_capacity(args.len());
         for a in args {
-            out.push(match a.view() {
-                ArgView::Type(q) => ArgRec::Type(self.qref(q)?),
-                ArgView::Value { ty, value } => {
-                    let v = match self.s.ast.consts.scalar(value) {
-                        Some(Scalar::Int { signed, bits, .. }) => if signed {
-                            bits.to_i128()
-                        } else {
-                            bits.to_u128().and_then(|u| i128::try_from(u).ok())
-                        }
-                        .ok_or(ARG)?,
-                        Some(Scalar::Bool { value, .. }) => i128::from(value),
-                        _ => return Err(ARG),
-                    };
-                    let q = self.qref(ty)?;
-                    if q.ty > super::BUILTINS || q.quals != 0 {
-                        return Err(ARG);
-                    }
-                    ArgRec::Value(q, v)
-                }
-                _ => return Err(ARG),
-            });
+            out.push(self.arg_rec(a)?);
         }
         Ok(out)
     }
 
+    /// The image argument of `a`: a type, or an integral or `bool` value
+    /// of a builtin type.
+    pub(super) fn arg_rec(&mut self, a: TemplateArg) -> W<ArgRec> {
+        Ok(match a.view() {
+            ArgView::Type(q) => ArgRec::Type(self.qref(q)?),
+            ArgView::Value { ty, value } => {
+                let v = match self.s.ast.consts.scalar(value) {
+                    Some(Scalar::Int { signed, bits, .. }) => if signed {
+                        bits.to_i128()
+                    } else {
+                        bits.to_u128().and_then(|u| i128::try_from(u).ok())
+                    }
+                    .ok_or(ARG)?,
+                    Some(Scalar::Bool { value, .. }) => i128::from(value),
+                    _ => return Err(ARG),
+                };
+                let q = self.qref(ty)?;
+                if q.ty > super::BUILTINS || q.quals != 0 {
+                    return Err(ARG);
+                }
+                ArgRec::Value(q, v)
+            }
+            _ => return Err(ARG),
+        })
+    }
+
     /// The record of template `t` (any declaration of it), a carried
     /// template of kind `kind`.
-    fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
+    pub(super) fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
         let t = self.s.ast.first(t);
         match self.recs.get(&t) {
             Some(&r)
@@ -132,10 +139,20 @@ impl Writer<'_, '_, '_> {
             return Err("a variable template specialization");
         }
         // Instantiated (or to be) from the primary template's own
-        // pattern: neither a partial specialization nor a member template.
+        // pattern, or from a carried partial specialization whose
+        // definition is complete (WP-1283: the importer matches the same
+        // partial specializations, built in the same order); not from a
+        // member template.
         let from_template = ast.template_info(si.from).is_some()
             || ast.described_template(si.from).map(|t| ast.first(t)) == Some(si.template);
-        if si.from_args.is_some() || !from_template {
+        let from_partial = si.from_args.is_some()
+            && ast.partial_spec_info(si.from).is_some()
+            && self.recs.get(&si.from).is_some_and(|&p| {
+                super::classtempl::partial_of(&self.img, p).is_some()
+                    && matches!(&self.img.decls[p as usize].payload,
+                        Payload::Record { def: Some(df), .. } if df.end != NONE)
+            });
+        if !from_partial && (si.from_args.is_some() || !from_template) {
             return Err("a specialization of a partial specialization");
         }
         let template = self.template_rec(si.template, u8::from(class))?;
@@ -251,7 +268,9 @@ impl Writer<'_, '_, '_> {
                             && q.ty > super::BUILTINS
                             && matches!(self.img.types[(q.ty - super::BUILTINS - 1) as usize],
                                 TyRec::Record(r) if matches!(self.img.decls[r as usize].payload,
-                                    Payload::Spec { template: st, .. } if st == template));
+                                    Payload::Spec { template: st, .. } if st == template)
+                                    || super::classtempl::explicit_of(&self.img, r)
+                                        == Some(template));
                         if !ok {
                             return Err("a specialization type the image does not carry");
                         }
@@ -261,8 +280,17 @@ impl Writer<'_, '_, '_> {
                 TyRec::Tst { template, args, under }
             }
             TypeView::InjectedClassName { pattern, .. } => {
-                let tmpl = ast.described_template(ast.first(pattern));
-                TyRec::Injected(self.template_rec(tmpl.ok_or("a partial specialization")?, 1)?)
+                let p = ast.first(pattern);
+                match ast.described_template(p) {
+                    Some(tmpl) => TyRec::Injected(self.template_rec(tmpl, 1)?),
+                    // A carried partial specialization's (WP-1283).
+                    None => match self.recs.get(&p) {
+                        Some(&r) if super::classtempl::partial_of(&self.img, r).is_some() => {
+                            TyRec::Injected(r)
+                        }
+                        _ => return Err("an explicit or partial specialization"),
+                    },
+                }
             }
             TypeView::Record(d) if ast.spec_info(ast.first(d)).is_some() => {
                 let Some(r) = self.spec_rec(d)? else { return Err(ARG) };
