@@ -338,6 +338,7 @@ impl Substituter<'_, '_, '_> {
             ref_qual: RefQual::None,
             trailing,
             ambiguous: false,
+            no_proto: false,
         });
         Some(d)
     }

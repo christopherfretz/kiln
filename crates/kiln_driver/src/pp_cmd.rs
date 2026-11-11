@@ -246,6 +246,7 @@ impl Job<'_> {
             .macros(p.clang_compat.major() >= 22);
         cfg.opt = p.opt;
         cfg.no_inline = p.no_inline;
+        cfg.gnu89_inline = p.gnu89_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
         cfg.pch_lines = self.args.pch.image_use.as_ref().map_or(0, |u| u.lines);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);

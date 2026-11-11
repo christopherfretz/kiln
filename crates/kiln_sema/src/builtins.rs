@@ -620,6 +620,25 @@ impl Sema<'_, '_> {
         f
     }
 
+    /// C89 3.3.2.2 (clang `ImplicitlyDefineFunction`): the implicit
+    /// declaration `extern int name();` of an undeclared identifier called
+    /// at `loc`, at file scope; warned about (off by default) in C89, an
+    /// error by default from C99.
+    pub(crate) fn c_implicit_function_decl(&mut self, name: Symbol, loc: Loc) -> DeclId {
+        let id = if self.c_at_least(kiln_lex::CStd::C99) {
+            DiagId::sema_c_implicit_function_decl_c99
+        } else {
+            DiagId::sema_c_implicit_function_decl
+        };
+        let msg = self.diag(id, loc).arg(self.ast.symbols().as_str(name).to_owned());
+        self.emit(msg);
+        let fi = FuncInfo::new().with_no_proto(true);
+        let ty = self.ast.types.function(QualType::INT, &[], fi, ExcSpec::None);
+        let h = DeclHead::new(self.ast.tu, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
+        let spec = FnSpec::new().with_storage(FnStorage::Extern);
+        self.builder().function(h, DeclKind::Function, ty, spec, None)
+    }
+
     fn lazily_create_builtin_at_tu(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
         if !self.target_has_builtin(id) {
@@ -2287,7 +2306,7 @@ impl Sema<'_, '_> {
     /// `float` ([expr.call]/13). clang's second test, a promoted type
     /// differing from the underlying type only in signedness, never
     /// holds for a standard promotable type, so it is not repeated.
-    fn va_arg_promotion(&mut self, t: QualType) -> Option<QualType> {
+    pub(crate) fn va_arg_promotion(&self, t: QualType) -> Option<QualType> {
         let canon = |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals();
         if canon(self, t) == QualType::FLOAT {
             return Some(QualType::DOUBLE);

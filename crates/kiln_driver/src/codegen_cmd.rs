@@ -21,7 +21,7 @@ use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, Input, LinkOptKind};
+use crate::args::{Action, Args, DriverMode, Input, LinkOptKind};
 use crate::link::Command;
 use crate::pp_cmd::{Job, PpInputs, SharedDeps, SharedSkips};
 use crate::time_trace::{self, InputTrace};
@@ -200,6 +200,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         stack_protector: f.stack_protector(),
         unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
         no_plt: f.no_plt,
+        common: f.common,
         static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         trapv: f.trapv,
@@ -361,6 +362,10 @@ impl CodegenJob<'_> {
             let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 c: job.std.c,
+                gnu89_inline: job
+                    .std
+                    .c
+                    .is_some_and(|c| a.predef.gnu89_inline.unwrap_or(c < kiln_lex::CStd::C99)),
                 exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
                 rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
                 ident: ident(),
@@ -1084,6 +1089,11 @@ pub(crate) fn toolchain_link_args(args: &Args, tc: &Toolchain) -> Vec<String> {
 
 fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Command {
     let mut cmd = Command::new(tc, Tool::Linker);
+    // WP-1282: the C driver (`kiln`, `--driver-mode=gcc`) links as `clang`
+    // does, without the C++ standard library (no `-lstdc++ -lm`).
+    if args.mode == DriverMode::Gcc {
+        cmd.arg("--driver-mode=gcc");
+    }
     // `-v` reaches the linking `clang++` too, so its own `-v` lines (the
     // linker's command line) follow: build systems read the implicit link
     // directories and libraries from them (CMake's compiler ABI probe).
@@ -1515,6 +1525,18 @@ mod tests {
             cmd.args,
             ["-O2", "-lm", "a.o", "-L/x", "b.o", "-Wl,-z,now", "-static", "-o", "a.out"]
         );
+    }
+
+    /// WP-1282: `kiln` links as `clang`, `kiln++` as `clang++`.
+    #[test]
+    fn link_c_driver_mode() {
+        let tc = searched_toolchain();
+        let c = Args::parse_as("kiln", &["a.o".to_owned()]);
+        let cmd = link_command(&c, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["--driver-mode=gcc", "a.o", "-o", "a.out"]);
+        let cxx = Args::parse_as("kiln", &["--driver-mode=g++".to_owned(), "a.o".to_owned()]);
+        let cmd = link_command(&cxx, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["a.o", "-o", "a.out"]);
     }
 
     #[test]

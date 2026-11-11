@@ -68,6 +68,7 @@ impl Parser<'_, '_> {
             ref_qual: kiln_ast::types::RefQual::None,
             trailing: Some((QualType::VOID, loc)),
             ambiguous: false,
+            no_proto: false,
         });
         self.s.act_on_lambda_declarator(id, d, &specs);
         let saved_stmt_expr = std::mem::replace(&mut self.in_stmt_expr, false);

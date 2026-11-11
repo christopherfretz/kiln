@@ -283,6 +283,11 @@ pub struct PredefArgs {
     /// `-O` level, and every definition but an `always_inline` one is
     /// `noinline` (clang `CodeGenOptions::OnlyAlwaysInlining`).
     pub no_inline: bool,
+    /// `-fgnu89-inline` (C only; a later `-fno-gnu89-inline` resets it):
+    /// GNU89 `inline` semantics and `__GNUC_GNU_INLINE__`; `None` is the
+    /// standard's default (GNU89 before C99, as clang's
+    /// `LangOptions::GNUInline`).
+    pub gnu89_inline: Option<bool>,
     /// The last of `-f[no-]reflection` (P2996; WP-267, WP-920): the
     /// `^^`/`[: :]` tokens and the kiln reflection intrinsics. `None`: on
     /// at C++26 and off below it ([`PredefArgs::reflection_for`]).
@@ -1783,6 +1788,8 @@ impl Args {
             "-fno-coro-aligned-allocation" => p.coro_aligned_allocation = false,
             "-fno-inline" => p.no_inline = true,
             "-finline" => p.no_inline = false,
+            "-fgnu89-inline" => p.gnu89_inline = Some(true),
+            "-fno-gnu89-inline" => p.gnu89_inline = None,
             _ => return false,
         }
         true
@@ -2147,6 +2154,8 @@ mod tests {
         let a = parse("-fno-inline a.cpp");
         assert!(a.predef.no_inline);
         assert!(!parse("-fno-inline -finline a.cpp").predef.no_inline);
+        assert_eq!(parse("-fgnu89-inline a.c").predef.gnu89_inline, Some(true));
+        assert_eq!(parse("-fgnu89-inline -fno-gnu89-inline a.c").predef.gnu89_inline, None);
     }
 
     #[test]

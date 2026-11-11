@@ -644,6 +644,14 @@ The program's basename, as invoked, prefixes the driver diagnostics
 `clang++-19: error:`; `--driver-mode=` does not change it. `--version`
 prints the same text under both names.
 
+The mode also picks the link (WP-1282), as clang's driver name does:
+`kiln` mode passes `--driver-mode=gcc` first to the linking `clang++`,
+which then links as `clang` (no `-lstdc++ -lm`, so a C program does not
+need libstdc++ and a configure probe for a libm function without `-lm`
+fails as it does under clang); `kiln++` mode links as `clang++`. The
+inputs' languages do not matter: `kiln a.o` with a C++ `a.o` links no
+C++ library, as `clang a.o` does not.
+
 ## Input languages
 
 An input's language is its `-x` (the last one before it; `-x none`

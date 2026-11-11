@@ -324,7 +324,9 @@ fn complex_real(
         return Ok(cast_to(s, ck, e, to, None));
     }
     let Some(el) = s.ast.types.as_complex(from) else { return Ok(e) };
-    if !s.explicit_conv {
+    // C17 6.3.1.7p2: in C a complex value converts to a real type by
+    // discarding its imaginary part.
+    if !s.explicit_conv && !s.is_c() {
         let (fa, ta) = (s.ty_arg(from), s.ty_arg(to));
         let mut err = ConvError::new(DiagId::sema_complex_to_real_cxx, vec![fa, ta]);
         err.at = Some(s.begin_loc(e));
