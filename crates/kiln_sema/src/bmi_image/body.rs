@@ -107,8 +107,8 @@ pub(super) struct Bodies {
 
 /// Cold annotations carried: `end_loc`, `cast_written`, `trait_rhs_loc`,
 /// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, a fold's
-/// `...` (sema's `fold_ellipsis`, WP-1279), in this order after the
-/// slots.
+/// `...` (sema's `fold_ellipsis`, WP-1279), a name's qualifier and
+/// template arguments (WP-1279), in this order after the slots.
 const COLD_END: u8 = 1;
 const COLD_WRITTEN: u8 = 2;
 const COLD_RHS: u8 = 4;
@@ -119,7 +119,11 @@ const COLD_OP: u8 = 16;
 /// so the copy is written before its use.
 const COLD_REWRITE: u8 = 32;
 const COLD_ELLIPSIS: u8 = 64;
-const COLD_ALL: u8 = 127;
+/// A name's written qualifier and explicit template arguments (the
+/// templates' `expr_nns` / `expr_targs`, WP-1279): an [`F::Nns`] and an
+/// [`F::TA`]. Every bit of `cold` is now in use: a further annotation
+/// needs a wider field (and an `IMAGE_VERSION` bump).
+const COLD_LOOKUP: u8 = 128;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -155,6 +159,9 @@ pub(super) enum Dc {
     Found,
     /// A template parameter pack or a function parameter pack (WP-1279).
     Pack,
+    /// What an unresolved name found at the definition (WP-1279): a
+    /// [`Dc::Found`] or a function or variable template.
+    Lookup,
 }
 
 /// A field: how one or more words are read.
@@ -191,9 +198,16 @@ pub(super) enum F {
     /// argument-free kind, syntax and flags ([`attr_word`]) and the
     /// location.
     AL,
-    /// A member name of a dependent member access (S4): an identifier,
-    /// as an index into the image's undeclared names (`pnames`).
+    /// A member name of a dependent member access (S4) or an unresolved
+    /// name (WP-1279): an identifier, as an index into the image's
+    /// undeclared names (`pnames`), or an operator-function-id, as
+    /// `N_OP` plus the operator.
     Name,
+    /// Explicit template arguments (WP-1279): 0 for none, else 1 plus
+    /// the count, then three words per argument: 0 and a [`QRef`] for a
+    /// type, 1, the expression and whether it has a profile for an
+    /// expression.
+    TA,
     /// A `_Generic` selection's operands (WP-1132): the association
     /// count `n`, the controlling operand, then `n` associations of four
     /// words each, the type as a [`QRef`] ([`NONE`] and 0 for `default`),
@@ -280,7 +294,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 53] = {
+pub(super) const EXPR_KINDS: [ExprKind; 54] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -341,6 +355,9 @@ pub(super) const EXPR_KINDS: [ExprKind; 53] = {
         X::SizeOfPackExpr,
         X::PackExpansionExpr,
         X::CXXFoldExpr,
+        // WP-1279: a name found at the definition and looked up again
+        // (with argument-dependent lookup) at the instantiation.
+        X::UnresolvedLookupExpr,
     ]
 };
 
@@ -422,6 +439,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CXXBindTemporaryExpr => [f(F::E), f(F::D(Dc::Dtor))],
         X::SizeOfPackExpr => [f(F::D(Dc::Pack)), Z],
         X::CXXFoldExpr => [f(F::OE), f(F::OE)],
+        X::UnresolvedLookupExpr => [f(F::Name), f(F::DL(Dc::Lookup))],
         _ => [Z, Z],
     }
 }
@@ -457,7 +475,8 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::CXXThisExpr
         | X::ExprWithCleanups
         | X::CXXUnresolvedConstructExpr
-        | X::CXXDependentScopeMemberExpr => aux <= 1,
+        | X::CXXDependentScopeMemberExpr
+        | X::UnresolvedLookupExpr => aux <= 1,
         _ => aux == 0,
     }
 }
@@ -511,6 +530,8 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
         (COLD_OP, F::Loc),
         (COLD_REWRITE, F::E),
         (COLD_ELLIPSIS, F::Loc),
+        (COLD_LOOKUP, F::Nns),
+        (COLD_LOOKUP, F::TA),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -535,6 +556,10 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
             F::Path => match *words.get(p)? as usize {
                 0 => 1,
                 n => 1 + 2 * (n - 1),
+            },
+            F::TA => match *words.get(p)? as usize {
+                0 => 1,
+                n => 1 + 3 * (n - 1),
             },
             F::Nns => {
                 let n = *words.get(p)? as usize;
@@ -796,6 +821,10 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams;
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
+    if dc == Dc::Lookup {
+        return matches!(d.payload, Payload::Template { kind: 0 | 3, .. })
+            || dc_ok(img, nparams, w, Dc::Found);
+    }
     if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
         return true;
     }
@@ -834,7 +863,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Record { .. }))
     };
     match dc {
-        Dc::Value | Dc::Found => {
+        Dc::Value | Dc::Found | Dc::Lookup => {
             matches!(
                 d.payload,
                 Payload::Function { .. }
@@ -927,7 +956,17 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 w[1..].chunks(2).all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 }))
             }
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
-            F::Name => (w[0] as usize) < img.pnames.len(),
+            F::Name => {
+                (w[0] as usize) < img.pnames.len()
+                    || w[0].checked_sub(super::N_OP).is_some_and(|o| {
+                        u8::try_from(o).ok().and_then(OverloadedOperator::from_u8).is_some()
+                    })
+            }
+            F::TA => w[1..].chunks(3).all(|a| match a[0] {
+                0 => a[2] <= 7 && qref_ok(QRef { ty: a[1], quals: a[2] as u8 }),
+                1 => (a[1] as usize) < e_lim && a[2] <= 1,
+                _ => false,
+            }),
             F::Gen | F::GenT => {
                 let q =
                     |ty: u32, quals: u32| quals <= 7 && qref_ok(QRef { ty, quals: quals as u8 });
@@ -1008,7 +1047,6 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         if e.bits & 3 == 3
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
-            || e.cold & !COLD_ALL != 0
             || (e.cold & COLD_REWRITE != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
@@ -1174,6 +1212,7 @@ enum Fv {
     AL(ListId),
     Path(Option<ListId>),
     Name(DeclName),
+    TA(Option<kiln_ast::ArgListId>),
     /// A `_Generic`'s raw operand list; true for a type-name control.
     Gen(ListId, bool),
 }
@@ -1226,6 +1265,7 @@ impl Writer<'_, '_, '_> {
             F::Nns => Fv::Nns(NnsId::from_raw(raw)),
             F::AL => Fv::AL(ListId::from_raw(raw).ok_or(BAD)?),
             F::Name => Fv::Name(DeclName::from_raw(raw).ok_or(BAD)?),
+            F::TA => Fv::TA(kiln_ast::ArgListId::from_raw(raw)),
             F::Gen | F::GenT => Fv::Gen(ListId::from_raw(raw).ok_or(BAD)?, f == F::GenT),
         })
     }
@@ -1353,8 +1393,6 @@ impl Writer<'_, '_, '_> {
                     || c.union_field.contains(e)
                     || c.offsetof_pattern.contains(e)
                     || c.splice_args.contains(e)
-                    || t.expr_targs.contains(e)
-                    || t.expr_nns.contains(e)
                     || t.size_of_pack_origin.contains(e)
                     || t.pseudo_dtor_name.contains(e)
                     || t.pseudo_dtor_first.contains(e)
@@ -1391,6 +1429,14 @@ impl Writer<'_, '_, '_> {
                     cold |= COLD_ELLIPSIS;
                     v.push(Fv::Loc(l));
                 }
+                let (nns, targs) = (t.expr_nns.get(e).copied(), t.expr_targs.get(e).copied());
+                if nns.is_some() || targs.is_some() {
+                    cold |= COLD_LOOKUP;
+                    v.extend([Fv::Nns(nns), Fv::TA(targs)]);
+                }
+                if k == ExprKind::UnresolvedLookupExpr {
+                    self.lookup_ok(e)?;
+                }
                 Ok((ki as u8, n.raw_bits(), u16::from(n.aux()), cold, v))
             }
             Node::S(s) => {
@@ -1422,6 +1468,13 @@ impl Writer<'_, '_, '_> {
                 }
                 Fv::SL(l) => {
                     v.extend(lists.get(l).iter().filter_map(|&w| StmtId::from_raw(w)).map(Node::S));
+                }
+                // An expression argument (`f<N + 1>(x)`).
+                Fv::TA(Some(l)) => {
+                    v.extend(self.s.ast.types.args(l).iter().filter_map(|a| match a.view() {
+                        kiln_ast::types::ArgView::Expr { expr, .. } => Some(Node::E(expr)),
+                        _ => None,
+                    }));
                 }
                 // The control expression (not a type), then every
                 // association's expression ([`ExprArena::generic_assocs`]).
@@ -1546,9 +1599,14 @@ impl Writer<'_, '_, '_> {
             Fv::Name(n) => {
                 // Not a declared name of the unit (a member found at
                 // instantiation): not gated, like a local's.
-                let s = self.ident(n).ok_or("a dependent member not named by an identifier")?;
-                out.push(Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s));
+                if let kiln_ast::names::DeclNameView::Operator(op) = self.s.ast.names.view(n) {
+                    out.push(super::N_OP + u32::from(op as u8));
+                } else {
+                    let s = self.ident(n).ok_or("a dependent name not named by an identifier")?;
+                    out.push(Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s));
+                }
             }
+            Fv::TA(l) => self.targ_words(l, out)?,
             Fv::Loc(l) => out.push(self.loc(l)?),
             Fv::Qt(q) => {
                 let q = self.qref(q)?;
@@ -1637,6 +1695,31 @@ impl Writer<'_, '_, '_> {
             }
             out.push(self.loc(Loc::from_raw(c[1]))?);
             out.push(expr(self, c[2])?);
+        }
+        Ok(())
+    }
+
+    /// Explicit template arguments `l` as an [`F::TA`] token (WP-1279).
+    fn targ_words(&mut self, l: Option<kiln_ast::ArgListId>, out: &mut Vec<u32>) -> W<()> {
+        use kiln_ast::types::ArgView;
+        let Some(l) = l else {
+            out.push(0);
+            return Ok(());
+        };
+        let args = self.s.ast.types.args(l).to_vec();
+        out.push(args.len() as u32 + 1);
+        for a in args {
+            match a.view() {
+                ArgView::Type(q) => {
+                    let q = self.qref(q)?;
+                    out.extend([0, q.ty, u32::from(q.quals)]);
+                }
+                ArgView::Expr { expr, profile } => {
+                    let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
+                    out.extend([1, e, u32::from(profile.is_some())]);
+                }
+                _ => return Err("a template argument the image does not carry"),
+            }
         }
         Ok(())
     }
@@ -2142,6 +2225,15 @@ impl Sema<'_, '_> {
             if e.cold & COLD_ELLIPSIS != 0 {
                 self.templ.fold_ellipsis.insert(id, Loc::from_raw(next()));
             }
+            if e.cold & COLD_LOOKUP != 0 {
+                let (nns, targs) = (NnsId::from_raw(next()), kiln_ast::ArgListId::from_raw(next()));
+                if let Some(n) = nns {
+                    let _ = self.ast.templates.expr_nns.insert(id, n);
+                }
+                if let Some(t) = targs {
+                    let _ = self.ast.templates.expr_targs.insert(id, t);
+                }
+            }
         }
         for (i, s) in b.stmts.iter().enumerate() {
             let k = STMT_KINDS[usize::from(s.kind)];
@@ -2220,8 +2312,34 @@ impl Sema<'_, '_> {
             }
             F::Str => strs[w[0] as usize].raw(),
             F::Name => {
-                let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
-                DeclName::ident(self.intern(n)).to_raw()
+                if let Some(o) = w[0].checked_sub(super::N_OP) {
+                    u8::try_from(o)
+                        .ok()
+                        .and_then(OverloadedOperator::from_u8)
+                        .map_or(DeclName::EMPTY, DeclName::operator)
+                        .to_raw()
+                } else {
+                    let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
+                    DeclName::ident(self.intern(n)).to_raw()
+                }
+            }
+            F::TA => {
+                if w[0] == 0 {
+                    return 0;
+                }
+                let mut args = Vec::with_capacity(w.len() / 3);
+                for a in w[1..].chunks(3) {
+                    args.push(if a[0] == 0 {
+                        let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: a[2] as u8 });
+                        kiln_ast::types::TemplateArg::ty(q)
+                    } else {
+                        let e = ExprId::from_raw(built.ebase + a[1])
+                            .unwrap_or_else(|| unreachable!("validated operand"));
+                        let profile = (a[2] != 0).then(|| self.ast.profile_expr(e));
+                        kiln_ast::types::TemplateArg::expr(e, profile)
+                    });
+                }
+                self.ast.types.arg_list(&args).raw()
             }
             F::Loc => main.get(w[0]).to_raw(),
             // The AST's raw list ([`AstBuilder::generic_selection`]):

@@ -161,6 +161,31 @@ impl Writer<'_, '_, '_> {
         "a declaration in a template"
     }
 
+    /// Whether unresolved name `e` is carried (WP-1279): what it found
+    /// at the definition is namespace-scope functions and function or
+    /// variable templates, with nothing sema keeps beside it (a
+    /// using-shadow or naming class, an implicit member reference).
+    pub(super) fn lookup_ok(&self, e: ExprId) -> W<()> {
+        let s = self.s;
+        let ast = &s.ast;
+        if s.ovl.ule_found.contains_key(&e) || s.member_refs.contains_key(&e) {
+            return Err("a template expression");
+        }
+        for d in ast.unresolved_decls(e) {
+            let n = ast.decls.get(d);
+            let member = n.ctx().is_some_and(|c| ast.decls.record(c).is_some());
+            if member
+                || !matches!(
+                    n.kind(),
+                    DeclKind::Function | DeclKind::FunctionTemplate | DeclKind::VarTemplate
+                )
+            {
+                return Err("a template expression");
+            }
+        }
+        Ok(())
+    }
+
     /// Patches non-type parameter record `rec`'s default argument to
     /// expression record `i` ([`Writer::walk_roots`]).
     pub(super) fn set_nttp_default(&mut self, rec: u32, i: u32) {

@@ -936,6 +936,65 @@ fn kind2_declaration_image_variable_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGL: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-lookup.cppm");
+const IMGL_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-lookup-run.cpp");
+
+/// WP-1279: patterns calling unresolved names (overload sets, qualified
+/// names, explicit template arguments, variable templates, operators,
+/// argument-dependent lookup, folds) are carried by the image. With the
+/// unit's source blanked, an importer still instantiates and runs them,
+/// its IR is the replay's, and errors inside an instantiated pattern
+/// point into the module with the replay's instantiation notes.
+#[test]
+fn kind2_declaration_image_unresolved_names() {
+    let d = scratch("image-lookup");
+    std::fs::write(d.join("l.cppm"), IMGL).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGL_RUN).unwrap();
+    std::fs::write(
+        d.join("err.cpp"),
+        "import imgu;\nstruct V {};\nint a = iu::call(nullptr);\nint b = iu::adl(V{});\n\
+         int c = iu::expl<V>(V{});\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "l.cppm", "-o", "l.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "l.pcm", "-o", "l.o"]);
+    blank_source(&d, "l.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgu=blank.pcm", "u.cpp", "l.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgu' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "2 3 6 8 3 5 6 70 5 10\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "l.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgu=m.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgu=l.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    for want in [
+        "l.cppm:7:54: error: no matching function for call to 'f'",
+        "l.cppm:16:52: error: no matching function for call to 'h'",
+        "l.cppm:5:50: error",
+        "in instantiation of function template specialization 'iu::call<std::nullptr_t>'",
+        "err.cpp:5:5: error: no viable conversion from 'V' to 'int'",
+    ] {
+        assert!(errs[0].contains(want), "{want}: {}", errs[0]);
+    }
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 const IMGG: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-generic.cppm");
 const IMGG_RUN: &str =
@@ -1661,8 +1720,7 @@ fn kind2_declaration_image_fallback() {
             "a redeclared template",
         ),
         (
-            "export module f;\nexport template <class T> T g(T t) { return t; }\n\
-             export template <class T> T h(T t) { return g(t); }\n",
+            "export module f;\nexport template <class T> int h(T t) { return T::v(); }\n",
             "a template expression",
         ),
         (
