@@ -1728,9 +1728,10 @@ store Oven state, is a follow-up; it would share the module-file format
   it is an empty group: no diagnostic belongs to it. Every PCH problem
   is an error whatever `-W` options are given, as in clang.
 - **`-fkiln-pch-image[=write|check|load]`, `-fno-kiln-pch-image`**
-  (WP-1280) control the PCH's preprocessor-state record
-  ([below](#the-preprocessor-state-record--fkiln-pch-image)). A kiln
-  extension, off by default. Bare `-fkiln-pch-image` means `=write`.
+  (WP-1280, WP-1036) control the PCH's preprocessor-state record
+  ([below](#the-preprocessor-state-record--fkiln-pch-image)) and its
+  declaration image ([below](#the-declaration-image-wp-1036)). A kiln
+  extension, off by default (the decision is recorded there). Bare `-fkiln-pch-image` means `=write`.
   The last one wins, and any other value is `invalid value '<v>' in
   '-fkiln-pch-image=<v>'`.
 - **Accepted, no effect:**
@@ -1876,9 +1877,10 @@ preprocessor state at the end of the header (spec/modules.md §11.13).
 This covers macros with their locations, undefs, guards and once
 files, `push_macro` stacks, poisoned identifiers, the diagnostic pragma
 stack and `__COUNTER__`. It also carries Sema's pragma stacks (pack,
-visibility, FP), which nothing installs yet. Until WP-1036 a compile
-still replays the header; the record is checked against that replay,
-or stands in for the header in `-E` and `-M`.
+visibility, FP). In `-E` and `-M` the record is checked against a
+replay or stands in for the header; a compile with `load` installs it
+together with the declaration image
+([below](#the-declaration-image-wp-1036)), or replays.
 
 - **`write`.** The producer's job takes the baseline before its first
   `-include` and the snapshot after the parse, so the record includes
@@ -1907,7 +1909,9 @@ or stands in for the header in `-E` and `-M`.
   cannot be loaded is `error: cannot load the preprocessor-state record
   of precompiled header 'p.pch': <why>`. One cause is a file changed
   since the record was written that the size check missed, found when
-  a token in it is printed. A compile with `load` checks, as with
+  a token in it is printed. A compile with `load` uses the declaration
+  image when the PCH carries one ([below](#the-declaration-image-wp-1036)),
+  and otherwise replays the header and checks the record, as with
   `check`.
 - **Unusable record.** With `check` or `load`, a PCH without an image,
   or one whose image is unreadable or lacks `SECTION_PP`, is replayed
@@ -1926,6 +1930,95 @@ or stands in for the header in `-E` and `-M`.
   - a stale header rejected;
   - a PCH with no record.
 
+### The declaration image (WP-1036)
+
+A producer with `-fkiln-pch-image` also writes the header's
+declarations as a declaration image (spec/modules.md §11.11
+"Precompiled headers"), in a second section (`SECTION_IMAGE`) beside
+`SECTION_PP`. A `load` compile then builds those declarations into the
+translation unit instead of parsing the header. A consumer that is fast
+but differs from replay would be a miscompile, so the image is used
+only whole, and every doubt replays the header.
+
+- **All or nothing.** The producer writes the image only when it
+  carries every declaration of the translation unit in a real file
+  (the header and what it includes; the producer's `-include`s too).
+  The first declaration the image refuses (the census reason,
+  spec/modules.md §11.11 "Fallback census") means no image is written.
+  The PCH is still written with its record. The census of a header is
+  `-fkiln-bmi-image-census` on the producer.
+- **Producer `-v` note.** With `-v`, the producer says which path a
+  `load` consumer will take: `note: precompiled header 'p.pch':
+  consumers use its declaration image (N records)`, or `...: consumers
+  replay the header: <why>` (the first reason refused, such as `a
+  member function template`).
+- **`load` consumer.** The record is installed at the point where the
+  header's `-include` would begin (as in `-E`), and the image's file
+  table is loaded into the source manager. The declarations are built
+  before the unit's first token, in the global module. The unit may
+  redeclare, define, specialize and instantiate what the header
+  declares, and code is emitted for the header's definitions as with
+  textual inclusion. Sema's pragma state from the record (pack,
+  `ms_struct`, visibility, FP) is installed with them. Consumer
+  `-include`s the producer had are dropped: the record and the image
+  stand in for the producer's `-include`s and the header together, or
+  neither does. `load` runs the PCH validation (Diagnostics), and the
+  depfile lists the PCH's inputs.
+- **Consumer `-v` note.** `note: precompiled header 'p.pch':
+  declaration image (N records)`, or `note: precompiled header 'p.pch'
+  is replayed: <why>`.
+- **Fallback: replay.** The header is replayed as in [Replay](#replay),
+  with the record checked, as with `check`, when:
+  - the PCH has no declaration image (`it has no declaration image`);
+  - a file the PCH was built from changed and `-fno-validate-pch` let
+    it through (`'<file>' changed`);
+  - the PCH has no usable record (the unusable-record warning above;
+    the replay is unchecked).
+
+  Nothing of the image is used on a fallback. The two paths are never
+  mixed.
+- **A damaged image is an error.** An image section that does not
+  decode, or whose location records do not check, is `fatal error:
+  malformed or corrupted precompiled file: '<why> in kiln PCH
+  'p.pch''`. A damaged section block is `'<err> in kiln PCH image
+  sections 'p.pch''`. Neither is a partial build or a silent replay.
+- **`check`.** A compile whose PCH carries an image runs twice in the
+  process, once as a `load` consumer and once replaying, and compares
+  the two (`pch_check.rs`):
+  - the declarations each ends with (the declaration nodes of
+    `-fdump-ast=all-files`, without `static_assert`s and without
+    evaluated `value=`s, which replay computes while parsing and the
+    image when used);
+  - the diagnostics;
+  - the IR, or the `-fsyntax-only` output.
+
+  The first difference is `error: the declaration image of precompiled
+  header 'p.pch' differs from replaying the header: <what> at line N:
+  '<image>' (image) vs '<replay>' (replay)`. The replay's results are
+  the job's. In `-E`/`-M` with a producer that had `-include`s, the
+  record is checked by a separate replay of the `-include`s and the
+  header with no output (`-E` itself replays only the header).
+- **Not the default.** `-fkiln-pch-image` stays off by default, though
+  the harness differential (spec/harness.md "PCH differential") is
+  green on both paths. The image carries no header of the C++ standard
+  library yet: every libc++ PCH in the m3 gate, and 124 of the 141
+  corpus PCHs, take the fallback. A default `load` would only add the
+  producer's image pass and a warning-capable record to every PCH
+  build. The default flips when the image carries the standard
+  headers (WP-1283, WP-1284).
+- **Measured.** See docs/status/pch.md.
+- **Tests.** `crates/kiln_driver/tests/pch_decls.rs` covers:
+  - image against replay (declarations, IR);
+  - diagnostics into the header;
+  - pragma state across the boundary;
+  - an uncarried header replayed;
+  - `check` running both;
+  - a stale image replayed;
+  - a damaged image as an error.
+
+  The harness differential runs `--pch-diff load|replay` over the
+  corpus slice in `cargo xtask ci` and over libc++ (spec/libcxx.md).
+
 ### Deviations
 
 - A touch that leaves the content unchanged is accepted. A same-size edit
@@ -1941,6 +2034,16 @@ or stands in for the header in `-E` and `-M`.
   preprocesses it; kiln reports a clang PCH (above) and goes on without
   it.
 - A PCH is not an object: `-fpch-codegen` emits nothing.
+- A `load` consumer that uses the declaration image does not diagnose
+  the header again: its warnings came from the producer, as with
+  clang's PCH. A replay consumer reports them again, as kiln always
+  did.
+- A module unit that kiln builds in-process for `-fmodule-file=M=a.cppm`
+  begins with the importer's predefines, which carry its `-include`
+  and `-include-pch` lines. So the PCH also applies to the module unit,
+  and a declaration it adds before `module;` is an error there. A
+  two-step build with the same flags behaves the same. clang never
+  builds a module unit from an importer's command line.
 
 ## Dependency output
 

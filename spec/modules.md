@@ -3146,6 +3146,27 @@ is on and the gate passes. It then moves the section out of the capsule
 file is lexed. The unit's exported macros are none (a named module), so
 nothing else is lost.
 
+**Precompiled headers (WP-1036).** A PCH's declaration image
+(`bmi_image/pch.rs`; the driver side is spec/driver.md "The declaration
+image") is the same format with one difference: the module name is
+empty and the module keyword, name and preamble words are `NONE`. A
+module name is never empty, so neither reader accepts the other's
+image. The producer writes the header's declarations as if the header
+were the purview of a unit: every top-level declaration of the
+translation unit in a real file, owned by no module. Every function
+body is carried, not just the inline ones, because a consumer emits
+the header's definitions as textual inclusion does. The writer runs in
+`pch` mode. The first declaration it refuses means no image at all,
+never a partial one. `-fkiln-bmi-image-census` on the producer counts
+the header's reasons. The consumer (`Sema::load_pch_image`) decodes and
+checks the image when the driver chooses the path, before
+preprocessing. It loads the image's file table into the source manager
+and builds the records before the unit's first token, in the global
+module (owner byte 0, the unit's own), so the unit may redeclare,
+define, specialize and instantiate them. `install_pragma_state` sets
+the header's Sema pragma stacks from the record (§11.13). The section
+layout is the module image's, so IMAGE_VERSION is unchanged.
+
 #### Part 2a coverage and follow-ups
 
 2a's image covers modules made only of the node kinds above. Every other
@@ -3484,7 +3505,8 @@ PCH (spec/driver.md "Precompiled headers", `-fkiln-pch-image`), and
 header units' exported macros go through it. Loading it replaces
 reading the header for everything the preprocessor keeps; Sema's state
 (the declarations, and the pragma state below, which is carried but
-not yet installed) is WP-1036's.
+installed with the declaration image of a PCH, §11.11 "Precompiled
+headers") is WP-1036's.
 
 **What it holds.** The difference between the state where the header
 begins (the *baseline*: the predefines and the command line read, no
@@ -3515,7 +3537,8 @@ begins (the *baseline*: the predefines and the command line read, no
   loaded, so a diagnostic after it sees the header's mappings and
   `pop` returns to the state before.
 - **Sema pragma state** (the inventory; written by the producer from
-  `kiln_sema::PragmaState`, carried, not yet installed or compared):
+  `kiln_sema::PragmaState`, carried, and installed by a PCH's image
+  consumer, WP-1036; not compared by `check`):
   the `#pragma pack` value and push stack (label, value), `#pragma
   ms_struct`, the `#pragma GCC visibility` stack (default, hidden,
   protected, or an attribute push, with its location) and the FP pragma
@@ -3530,7 +3553,7 @@ begins (the *baseline*: the predefines and the command line read, no
     yet (spec/pp.md deviation 3);
   - every other pragma reaches Sema as tokens. Sema state other than
     the stacks above, such as a pending `#pragma weak`, is carried with
-    the declarations by WP-1036.
+    the declarations by WP-1036 only where the image carries it.
 
 **Compact tokens; no lexing on load.** A body token is its kind (a tag
 and a payload: the identifier's name index, the literal's encoding, the
