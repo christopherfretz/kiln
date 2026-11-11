@@ -756,7 +756,19 @@ impl<'a> Lexer<'a> {
             } else {
                 nl + 1
             };
-            if !warned && !bytes[i..].starts_with(b"//") {
+            // clang `SkipLineComment`: no warning when the spliced-in line
+            // carries on a comment block, i.e. a `/` is its first or second
+            // character, or it is `//` after whitespace.
+            let next = &bytes[i..];
+            let ws = |c: &u8| is_hws(*c) || *c == b'\n' || *c == b'\r';
+            let continues = next.first() == Some(&b'/')
+                || next.get(1) == Some(&b'/')
+                || next.first().is_some_and(ws)
+                    && next
+                        .iter()
+                        .position(|c| !ws(c))
+                        .is_some_and(|p| next[p..].starts_with(b"//"));
+            if !warned && !continues {
                 warned = true;
                 self.diag(LexDiagKind::MultiLineLineComment, start, start + 2);
             }
