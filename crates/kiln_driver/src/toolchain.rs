@@ -90,11 +90,16 @@ pub struct LangStd {
     /// The lexer's standard. C is lexed as the closest C++ standard (see
     /// `spec/driver.md` "Deviations").
     pub lex: kiln_lex::Std,
+    /// The C standard of a C input (`None` for C++): the one source of
+    /// the language mode the lexer, preprocessor, parser, `Sema` and
+    /// codegen receive (spec/driver.md "Language mode").
+    pub c: Option<kiln_lex::CStd>,
 }
 
 impl LangStd {
     /// The standard named by `-std=<s>`.
     pub fn parse(s: &str) -> Option<LangStd> {
+        use kiln_lex::CStd as C;
         use kiln_lex::Std as S;
         let (gnu, rest) = match s.strip_prefix("gnu") {
             Some(r) => (true, r),
@@ -110,12 +115,14 @@ impl LangStd {
             return Self::cxx(v, false);
         }
         let v = if gnu { rest } else { s };
-        let (base, lex) = match v {
-            "c89" | "c90" | "iso9899:1990" | "89" | "90" => ("c89", S::Cxx98),
-            "c99" | "c9x" | "iso9899:1999" | "99" | "9x" => ("c99", S::Cxx98),
-            "c11" | "c1x" | "iso9899:2011" | "11" | "1x" => ("c11", S::Cxx11),
-            "c17" | "c18" | "iso9899:2017" | "iso9899:2018" | "17" | "18" => ("c17", S::Cxx11),
-            "c23" | "c2x" | "iso9899:2024" | "23" | "2x" => ("c23", S::Cxx17),
+        let (base, lex, c) = match v {
+            "c89" | "c90" | "iso9899:1990" | "89" | "90" => ("c89", S::Cxx98, C::C89),
+            "c99" | "c9x" | "iso9899:1999" | "99" | "9x" => ("c99", S::Cxx98, C::C99),
+            "c11" | "c1x" | "iso9899:2011" | "11" | "1x" => ("c11", S::Cxx11, C::C11),
+            "c17" | "c18" | "iso9899:2017" | "iso9899:2018" | "17" | "18" => {
+                ("c17", S::Cxx11, C::C17)
+            }
+            "c23" | "c2x" | "iso9899:2024" | "23" | "2x" => ("c23", S::Cxx17, C::C23),
             _ => return None,
         };
         // `gnu89` but not `gnuc89`; `c89` but not `89`.
@@ -124,7 +131,7 @@ impl LangStd {
         } else {
             v.starts_with('c') || v.starts_with("iso")
         };
-        spelled_ok.then_some(LangStd { base, cplusplus: false, gnu, lex })
+        spelled_ok.then_some(LangStd { base, cplusplus: false, gnu, lex, c: Some(c) })
     }
 
     fn cxx(v: &str, gnu: bool) -> Option<LangStd> {
@@ -140,15 +147,33 @@ impl LangStd {
             "26" | "2c" => ("c++26", S::Cxx26),
             _ => return None,
         };
-        Some(LangStd { base, cplusplus: true, gnu, lex })
+        Some(LangStd { base, cplusplus: true, gnu, lex, c: None })
     }
 
     /// clang's default: `gnu++17` for C++, `gnu17` for C.
     pub fn default_for(cplusplus: bool) -> LangStd {
         if cplusplus {
-            LangStd { base: "c++17", cplusplus, gnu: true, lex: kiln_lex::Std::Cxx17 }
+            LangStd { base: "c++17", cplusplus, gnu: true, lex: kiln_lex::Std::Cxx17, c: None }
         } else {
-            LangStd { base: "c17", cplusplus, gnu: true, lex: kiln_lex::Std::Cxx11 }
+            LangStd {
+                base: "c17",
+                cplusplus,
+                gnu: true,
+                lex: kiln_lex::Std::Cxx11,
+                c: Some(kiln_lex::CStd::C17),
+            }
+        }
+    }
+
+    /// The parser options of the language mode: the standard, the C
+    /// standard and the GNU dialect, the rest defaulted (spec/driver.md
+    /// "Language mode").
+    pub fn parse_options(&self) -> kiln_parse::ParseOptions {
+        kiln_parse::ParseOptions {
+            std: self.lex,
+            c: self.c,
+            gnu: self.gnu,
+            ..kiln_parse::ParseOptions::default()
         }
     }
 

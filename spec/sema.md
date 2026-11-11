@@ -48,6 +48,21 @@ Constructors:
 - `Sema::for_target(ast, diags, Target)` takes the target directly.
   The parser uses this one.
 
+### 1.0 Language mode (`c`, WP-1275)
+
+`Sema::c: Option<kiln_lex::CStd>` is the C standard of a C translation
+unit (`C89`, `C99`, `C11`, `C17`, `C23`, ordered); `None`, the default,
+is C++. The parser copies it from `ParseOptions::c`, which the driver
+fills from the input's language and `-std=` (spec/driver.md "Language
+mode"). Code asks `Sema::is_c()` (C at all) and
+`Sema::c_at_least(CStd::C11)` (C of that standard or later); it never
+infers C from `Sema::std`, which in C mode is only the C++ standard whose
+lexical rules C shares. C mode reuses the C++ semantics of the common
+subset (structs, unions, enums, functions, pointers, arrays, statements);
+the C-specific rules (tag namespaces, `void *` conversions, the type of
+a character literal, tentative definitions, K&R definitions, VLAs,
+compound literals) are WP-1276's.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output

@@ -1,6 +1,6 @@
 //! Preprocessor options.
 
-use kiln_lex::{LexOptions, Std};
+use kiln_lex::{CStd, LexOptions, Std};
 
 /// Which clang release's answers kiln reproduces (`-fclang-compat=<major>`,
 /// spec/pp.md "clang compatibility level"): the version predefines
@@ -83,6 +83,9 @@ pub struct PpOptions {
     /// Language standard (affects the lexer, `#elifdef`, `#warning`,
     /// `__VA_OPT__`, module directives).
     pub std: Std,
+    /// The C standard when the input is C (`None`: C++); passed to the
+    /// lexer ([`LexOptions::c`]; spec/driver.md "Language mode").
+    pub c: Option<CStd>,
     /// `-trigraphs`.
     pub trigraphs: bool,
     /// Accept `$` in identifiers (clang default: yes).
@@ -154,6 +157,7 @@ impl PpOptions {
     pub fn new(std: Std) -> PpOptions {
         PpOptions {
             std,
+            c: None,
             trigraphs: false,
             dollar_in_identifiers: true,
             keep_comments: false,
@@ -180,6 +184,7 @@ impl PpOptions {
     /// The lexer options these options imply.
     pub fn lex_options(&self) -> LexOptions {
         let mut o = LexOptions::new(self.std);
+        o.c = self.c;
         o.trigraphs = self.trigraphs;
         o.dollar_in_identifiers = self.dollar_in_identifiers;
         o.keep_comments = self.keep_comments || self.keep_macro_comments;
