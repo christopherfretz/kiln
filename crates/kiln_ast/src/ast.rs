@@ -79,6 +79,10 @@ pub struct Ast {
     /// (`-fcontract-evaluation-semantic=`; spec/contracts.md §6): what a
     /// contract assertion whose semantic slot is 0 does.
     pub contract_semantic: crate::stmt::ContractSemantic,
+    /// The translation unit is C, not C++ (`kiln -x c`; spec/sema.md
+    /// §1.0): every entity has C language linkage, so names are not
+    /// mangled ([C17 6.2.2], clang `shouldMangleCXXName`).
+    pub lang_c: bool,
     /// The `std::contracts::contract_violation` data of each contract
     /// assertion sema built outside a template pattern (spec/contracts.md
     /// §6.3): recorded by sema, read by codegen.
@@ -284,6 +288,7 @@ impl Ast {
             tu,
             modules: crate::modules::ModuleTable::default(),
             contract_semantic: crate::stmt::ContractSemantic::default(),
+            lang_c: false,
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             symbols,
             inst: InstantiationMeter::default(),

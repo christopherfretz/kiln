@@ -21,7 +21,7 @@ use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, Input, Lang, LinkOptKind};
+use crate::args::{Action, Args, Input, LinkOptKind};
 use crate::link::Command;
 use crate::pp_cmd::{Job, PpInputs, SharedDeps, SharedSkips};
 use crate::time_trace::{self, InputTrace};
@@ -315,10 +315,8 @@ impl CodegenJob<'_> {
         let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
-            std: job.std.lex,
-            gnu: job.std.gnu,
-            exceptions: a.predef.exceptions.unwrap_or(true),
-            rtti: a.predef.rtti.unwrap_or(true),
+            exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+            rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),
@@ -344,7 +342,7 @@ impl CodegenJob<'_> {
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
-            ..ParseOptions::default()
+            ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();
         let (mut tu, mut pp) =
@@ -359,8 +357,9 @@ impl CodegenJob<'_> {
             let fp = a.fp_model();
             let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
-                exceptions: a.predef.exceptions.unwrap_or(true),
-                rtti: a.predef.rtti.unwrap_or(true),
+                c: job.std.c,
+                exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+                rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
                 ident: ident(),
                 outline_atomics: a
                     .outline_atomics
@@ -1387,10 +1386,6 @@ fn frontend(
             return None;
         }
     };
-    if lang == Lang::C {
-        report(Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg("compiling C"));
-        return None;
-    }
     let job = Job {
         args,
         toolchain: tc,

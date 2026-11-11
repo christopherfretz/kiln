@@ -41,10 +41,26 @@ If you hit something not listed here, please
 
 ## C mode
 
-kiln compiles C++ only. `kiln` can preprocess C (`-E` on `.c`, `.h`,
-`.i`, or `-x c`), but compiling C is `not implemented yet`. `kiln++`
-compiles a `.c` file as C++, with a warning, as `clang++` does. C support
-is [WP-243](BACKLOG.md) and is not part of 1.0.
+`kiln` compiles C (`.c`, `.h`, `.i`, or `-x c`; `-std=c89` to `c23` and
+the `gnu` dialects) from 1.1.0: C lexing and keywords, clang's C
+predefines and feature-test answers, and C linkage (unmangled names) are
+clang's. `kiln++` compiles a `.c` file as C++, with a warning, as
+`clang++` does. What is not done yet:
+
+- **C-only semantics.** The parts of C that C++ shares (structs, unions,
+  enums, functions, pointers, arrays, statements) are checked by the C++
+  rules. Where C differs, kiln still applies C++'s rule for now: implicit
+  `void *` conversions, the separate tag namespace, the type of `'a'`
+  (`int` in C), tentative definitions, K&R definitions, implicit `int`
+  and implicit function declarations in C89, VLAs and compound literals
+  ([WP-1276](BACKLOG.md)).
+- `_Imaginary` and `_Decimal32`/`64`/`128` are identifiers, not keywords;
+  `__builtin_types_compatible_p` is not a keyword.
+- Strict `-std=c89` `-E` output: `//` after a line splice or inside a
+  skipped `#if` group is not handled as clang does, and `-pedantic`
+  gives no line-comment warning.
+- C99/C11 use C++'s table of characters allowed in identifiers.
+- `-x c-header` precompiled headers are not built.
 
 ## Reflection
 

@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""kiln-cc: the logging C compiler wrapper of the OSS build harness (WP-1277).
+
+Use it as CMAKE_C_COMPILER / CC for a row with `c = "kiln"`. It is kiln-cxx
+for C: it runs `$KILN_OSS_CC` (default clang-19; oss-build.sh sets the kiln
+driver `kiln` beside kiln++ for the kiln build and the row's `c_compiler`
+for the control) under the same caps, and logs the same JSON line to
+`$KILN_OSS_LOG`, with `lang` "c" (or "asm" for a `.S` CMake gives the C
+compiler). It never adds `-stdlib=`. The contract is
+spec/landed/harness/WP-666.md "The wrapper".
+"""
+
+import importlib.machinery
+import importlib.util
+import os
+import sys
+
+_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "kiln-cxx")
+_loader = importlib.machinery.SourceFileLoader("kiln_cxx", _path)
+_spec = importlib.util.spec_from_loader("kiln_cxx", _loader)
+kiln_cxx = importlib.util.module_from_spec(_spec)
+_loader.exec_module(kiln_cxx)
+
+if __name__ == "__main__":
+    sys.exit(kiln_cxx.main(lang="c"))

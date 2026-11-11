@@ -457,8 +457,9 @@ fn syntax_only() {
         o.stderr,
         "kiln++: error: -fdump-ast without -fsyntax-only is not implemented yet\n"
     );
-    let o = kiln(&["-fsyntax-only", "-x", "c", "-"], "");
-    assert_eq!(o.stderr, "error: -fsyntax-only for C is not implemented yet\n");
+    // C (WP-1275): `bool` is an identifier before C23.
+    let o = kiln(&["-fsyntax-only", "-x", "c", "-"], "int bool, this;\n");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
 
 /// `-flax-vector-conversions[=none|integer|all]`, `-fno-lax-vector-conversions`
@@ -1115,15 +1116,12 @@ fn driver_modes() {
     let o = kiln(&["-E", "-P", "-x", "c", &c_src], "");
     assert_eq!((o.code, o.stderr.as_str(), o.stdout.as_str()), (0, "", "int a = __cplusplus;\n"));
 
-    // `kiln`: C by extension (C is preprocessed, not compiled yet), C++
-    // otherwise, standard input C.
+    // `kiln`: C by extension (a `.h` is a C header), C++ otherwise,
+    // standard input C.
     let o = kiln_named(Some("kiln"), &["-E", "-P", &c_src], "");
     assert_eq!((o.code, o.stderr.as_str(), o.stdout.as_str()), (0, "", "int a = __cplusplus;\n"));
     let o = kiln_named(Some("kiln"), &["-fsyntax-only", &h_src], "");
-    assert_eq!(
-        (o.code, o.stderr.as_str()),
-        (1, "error: -fsyntax-only for C is not implemented yet\n")
-    );
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
     let o = kiln_named(Some("kiln"), &["-E", "-P", "-"], "__cplusplus __STDC_VERSION__\n");
     assert_eq!((o.code, o.stdout.as_str()), (0, "__cplusplus 201710L\n"));
     let o = kiln_named(Some("kiln"), &["-E", "-P", "-x", "c++", &c_src], "");

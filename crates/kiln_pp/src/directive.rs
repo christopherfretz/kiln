@@ -174,7 +174,10 @@ impl<'a> Preprocessor<'a, '_> {
             TokKind::Eod => DiagId::pp_macro_name_missing,
             TokKind::Identifier(s) => {
                 let name = self.interner.as_str(s);
-                if let Some((_, op)) = OPERATOR_NAMES.iter().find(|(n, _)| *n == name) {
+                // C has no operator names: `#define and &&` is `<iso646.h>`.
+                if self.opts.c.is_none()
+                    && let Some((_, op)) = OPERATOR_NAMES.iter().find(|(n, _)| *n == name)
+                {
                     self.emit(
                         Diag::new(DiagId::pp_operator_macro_name, t.tok.span).arg(name).arg(op),
                     );
@@ -799,11 +802,21 @@ impl IfContext for IfCx<'_, '_, '_> {
     }
 
     fn char8(&self) -> bool {
-        self.pp.opts.char8.unwrap_or(self.pp.opts.std >= Std::Cxx20)
+        // C23's `u8'x'` is an `unsigned char` (C23 6.4.4.5): unsigned in
+        // `#if` like a `char8_t`.
+        let default = match self.pp.opts.c {
+            Some(c) => c >= kiln_lex::CStd::C23,
+            None => self.pp.opts.std >= Std::Cxx20,
+        };
+        self.pp.opts.char8.unwrap_or(default)
     }
 
     fn clang19_escapes(&self) -> bool {
         self.pp.opts.clang19_escapes
+    }
+
+    fn c(&self) -> Option<kiln_lex::CStd> {
+        self.pp.opts.c
     }
 }
 

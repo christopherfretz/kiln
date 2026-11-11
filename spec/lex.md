@@ -55,8 +55,11 @@ pub enum TokKind {
 }
 pub enum Encoding { Ordinary, Wide, Utf8, Utf16, Utf32 }
 pub struct TokFlags(u8); // LEADING_SPACE START_OF_LINE NEEDS_CLEANING DIGRAPH HAS_UCN UD_SUFFIX
-pub struct LexOptions { std: Std, trigraphs: bool /*false*/, dollar_in_identifiers: bool /*true*/,
-                        keep_comments: bool /*false*/ }   // Default: Std::Cxx26
+pub struct LexOptions { std: Std, c: Option<CStd> /*None = C++*/, gnu: bool /*false*/,
+                        trigraphs: bool /*false*/, dollar_in_identifiers: bool /*true*/,
+                        keep_comments: bool /*false*/, reflection: bool /*false*/,
+                        preprocessed_output: bool /*false*/ }   // Default: Std::Cxx26
+pub enum CStd { C89, C99, C11, C17, C23 }  // ordered; see "C mode"
 pub enum LexMode { Normal, HeaderName }
 pub struct Interner;  // thread-safe (&self), Symbol(u32); shared by all lexers of a TU
 pub fn spelling(sm, &Token, &LexOptions) -> Cow<str>; pub fn clean(text, TokKind, trigraphs) -> String;
@@ -185,6 +188,33 @@ handler"). Recording is off by default and costs nothing then.
 - `NEEDS_CLEANING`, `DIGRAPH`, `HAS_UCN` (spelled with a UCN), `UD_SUFFIX`.
   These and the two above are exact; `-E` printing and `#`/`##` use them.
 
+### C mode (WP-1275)
+`LexOptions::c = Some(CStd)` lexes C (spec/driver.md "Language mode").
+`std` is then the C++ standard whose rules C shares (c89/c99 → C++98,
+c11/c17 → C++11, c23 → C++17), so pp-numbers (C99 6.4.8 hex floats
+`0x1p+3` from C99 on), digit separators (C23 6.4.4.1) and `u8`
+character constants (C23 6.4.4.5) follow it; the C++-only forms are off,
+as `clang-19 -x c` lexes them:
+- **Punctuators** (C23 6.4.6): `.*`, `->*` and `<=>` are not tokens
+  (`a.*b` is `.` `*`); `::` is one in every C mode, as in clang.
+- **`<::`** ([lex.pptoken]/3.2) is C++'s rule: in C `<:` is always the
+  digraph (`a<::b` is `a` `<:` `:` `b`).
+- **No ud-suffixes** (C23 6.4.4, 6.4.5): `"s"_x` is a string and an
+  identifier.
+- **Raw strings** are a GNU extension of gnu99 and later (`gnu: true`);
+  otherwise `R"(…)"` is `R` and a string.
+- **Line comments** (C89 3.1.9 has none): gnu89 and C99 on always have
+  them. Strict C89 has them when compiling (clang 19 and 22 accept
+  `4 //**/ 2` as `4`), and none in preprocessed output
+  (`preprocessed_output: true`, set by the driver for `-E`): there `//`
+  is two `/` tokens, so `a //**/ b` prints as `a / b` and macros expand on
+  the rest of the line.
+- Alternative tokens (`and`, `bitor`, …) are identifiers: the keyword
+  tables are the parser's and the preprocessor's (spec/parse.md §1,
+  spec/pp.md "C mode"); the lexer has no keywords.
+
+Tests: `crates/kiln_lex/tests/c_mode.rs`, `tests/c/lex/`.
+
 ### Directive and header-name protocol
 - `in_directive`: the next newline (not consumed) or end of input yields
   `Eod`; returning `Eod` clears `in_directive`. kiln_pp sets it after a
@@ -253,7 +283,10 @@ kiln-only `raw_string_literal` (`wide_raw_string_literal`, …), `other`,
   records only `UcnBasicOrControl` (clang reports both).
 - Literal-module deviations are listed under "Literals".
 - No `FormFeedInDirective`/`VerticalTabInDirective`; no clang mathematical
-  notation identifier extension; no C mode.
+  notation identifier extension.
+- C mode: no C99/C11 UCN identifier tables (C uses the C++ ones); strict
+  C89 `//` in skipped groups and after a splice under `-E` is not
+  mirrored; no `-pedantic` line-comment warning in C89.
 
 ## Performance obligations
 - Zero allocation per token (see Allocation).
@@ -476,7 +509,7 @@ search over blocks with a fixed 128-byte key buffer: no allocation.
   not UCN-expanded or NFC-checked.
 
 ### What remains (not WP-011)
-- C mode (`'a'` is `int`, no `u8` characters, …): no C mode anywhere yet.
+- C literal semantics (`'a'` is `int`, …): kiln_sema in C mode (WP-1276).
 - Did-you-mean notes for unknown/loose `\N{}` names.
 - GNU `q`/`i`/`j` suffixes, MS `i64`, `_BitInt` `wb`/`uwb`.
 - Types of literals, whether an integer fits its suffix's type, and exact

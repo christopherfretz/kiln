@@ -36,7 +36,7 @@ cargo xtask test [options] [paths...]
 
 `--flag=value` is accepted for every option that takes a value.
 
-`paths` are files or directories (default: `tests/conformance`,
+`paths` are files or directories (default: `tests/c`, `tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`, whichever
 exist; `tests/debuginfo` is a default root everywhere, its tests SKIP
 without gdb and lldb-19, see "Debugger tests").
@@ -193,6 +193,24 @@ repo-relative name:
 `.c` files get `-x c`, and `.h` test files get `-x c++`. A kiln-specific test
 compiled by kiln also gets `-fconstexpr-report=<scratch>/constexpr-report.jsonl`
 last (see "kiln-specific tests").
+
+### C tests
+
+A `.c` test (WP-1275; corpus `tests/c/`, a default root) is C: `std:`
+takes `c89 c99 c11 c17 c23` (default `c17`); a GNU dialect is
+`args: -std=gnuNN`, which wins as the last `-std=`. Every compile of it
+runs the C driver beside the C++ one (`c_driver`: `clang++-19` →
+`clang-19`, `g++-16` → `gcc-16`, in the same directory or on `PATH` for
+a bare name; the program itself when there is none), so the oracle is
+`clang-22 -x c` under kiln, a clang++ under test runs as clang, and GCC
+links no libstdc++. kiln itself is run as given: `-x c` selects C. A
+`unit:` file in the other language (a `.c` unit of a C++ test, a C++
+unit of a `.c` test) is compiled as that language (`-x c` / `-x c++`,
+which kiln++ needs to compile a `.c` as C) at its default standard
+(`c17` / `c++26`) and linked with the test (`tests/c/interop/`). The
+`expect: pp`, `ir` and `run` kinds and `skip(gcc):` work as for C++;
+an `ir` test that matches only clang 22's attributes carries
+`min-oracle: 22`.
 
 Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
 
@@ -980,6 +998,128 @@ and, with `-v`, the failing cases' paths relative to `<dir>`. Exit status
 0 when no case failed, 1 when one did, 2 for an error. `cargo xtask bench
 --external` is the same run, measured (spec/bench.md "External corpora").
 
+## GCC testsuites
+
+`cargo xtask gcc-torture` (WP-1277) runs GCC's own C torture tests
+through kiln's C driver, GCC 16.1 and clang-19, case by case, and records
+how each compiler did. It is informational, like `clang-neg` and
+`libstdcxx`: never in `ci`, exit status non-zero only for a tool error
+(kiln did not build, an oracle could not be started, an output could not
+be written), never for a failing test.
+
+**Source.** The tests are GPL and are never vendored.
+`scripts/fetch-gcc-tests.sh [<tag>] [<dir>]` makes a shallow,
+blob-filtered sparse checkout of `gcc/testsuite/gcc.c-torture` (plus the
+seven `gcc.dg` / `gcc.target` files torture tests `#include` by relative
+path) at `releases/gcc-16.1.0` (the GCC oracle's release) into
+`.oss/gcc-tests` (gitignored, about 15 MB). Each run calls the script,
+which fetches the checkout when it is missing and otherwise only refreshes
+its sparse set (a failed refresh of an existing checkout is a warning);
+`--tests <checkout>` points at another one, used as is. Nothing from the tests is
+written into the tree; the outputs go to the target directory, and only
+counts, test ids and one-line diagnostics reach a status page.
+
+**Suites** (`--suite`, default `execute,ieee,builtins`; `compile` is
+opt-in), as GCC's `.exp` drivers run them:
+
+- `execute`: `execute/*.c`, gcc-dg-runtest, default action `run`, `-w`.
+- `ieee`: `execute/ieee/*.c`, c-torture-execute, `-fno-inline`, `.x` files.
+- `builtins`: `execute/builtins/*.c` (not `*-lib.c`), each linked with
+  its `<test>-lib.c` when present and `lib/main.c`, with GCC's builtins
+  flags (`-fno-tree-dse -fno-tree-loop-distribute-patterns -fno-tracer
+  -fno-ipa-ra -fno-inline-functions`), `.x` files.
+- `compile`: `compile/*.c`, gcc-dg-runtest, default action `assemble`, `-w`.
+
+**Cases.** One case per test and option set (`--opt`, default
+`-O0,-O2`). The compile flags are, in order, `-std=<std>` (`--std`,
+default `gnu23`, GCC 16's default; `none` omits it), the option set, then
+the test's flags. For the dg suites those are `dg-options` (replacing the
+suite's `-w` default) and `dg-additional-options`, each applied only when
+its target selector matches. For the c-torture suites they are the `.x`
+file's `additional_flags` (a `set additional_flags` replaces the suite's
+flags, as in GCC) and then `-w`. Every source is compiled with `-E`, `-S`
+or `-c` by the action (`preprocess`, `compile`, `assemble`, `link`,
+`run`), the objects are linked with `-lm`, and for `run` the executable
+runs in the case's scratch directory.
+
+**Directives.** `dg-do <action> [{ target|xfail <sel> }]` sets the action
+(a non-matching target skips the case); `dg-skip-if "<why>" { <sel> } {
+<include> } { <exclude> }` skips when the selector matches, every include
+option is among the case's flags (`*` matches anything) and no exclude
+option is; `dg-require-effective-target <name> [{ target <sel> }]` skips
+when the name is false; `dg-xfail-if` / `dg-xfail-run-if` / an `xfail`
+selector mark the case xfail (a column, not a pass: an xfail case still
+gets its real class); `dg-timeout-factor` scales both timeouts;
+an applicable `dg-error` makes the case negative (it passes when the
+compile is rejected; the message is not matched). A `.x` file is evaluated
+by a small Tcl subset (`set`, `lappend`, `if`/`elseif`/`else`, `return`,
+`continue`, `global`, `load_lib`, with `istarget`,
+`check_effective_target_*` and `string match` as substitutions and
+short-circuit `&&`/`||`): `return 1` skips the test,
+`torture_execute_xfail` on a matching target marks it xfail,
+`torture_eval_before_compile` is re-run per option set with `option`
+bound and its `continue` skips that option set, and anything it cannot
+evaluate is a skip reason (`.x: <error>`), so an unsupported construct is
+counted rather than guessed.
+
+**Effective targets** (`xtask/src/gcc_tests/target.rs`) describe a hosted
+LP64 GNU/Linux target (aarch64 or x86_64, glibc, PIE) identically for all
+three compilers: the point is the same cases through each, not per-compiler
+probing. `__OPTIMIZE__` follows the option set (true unless the last `-O`
+is `-O0`); `run_expensive_tests` follows `GCC_TEST_RUN_EXPENSIVE`. A name
+the table does not know skips the case as `unknown effective target <n>`,
+so a new name shows up in the skip list.
+
+**Flags a compiler rejects.** Each compiler probes every flag unit
+(`--param x=y`, `-include f` and the like are one unit) once against a
+trivial TU; a unit it rejects is dropped from its cases and listed in the
+TSV's `dropped` column and the summary's dropped-flags section, so a GCC
+`-fno-tree-*` flag does not turn every clang or kiln case into a reject.
+
+**Classes**, per compiler and case: `pass`; `compile-reject` (a valid test
+the compile or link step rejected; detail: the first error without its
+location); `crash` (an internal compiler error, a panic, a signal or
+non-standard exit status from the compiler, or the memory cap); `wrong`
+(the program exited non-zero or died on a signal: GCC's tests `abort()`
+on a wrong answer); `timeout` (compile, link or run outran
+`--timeout` / `--run-timeout`, defaults 120 s and 10 s); `accept-invalid`
+(a negative test compiled clean); `not-run` (the compiler could not be
+started). Each step runs under `--mem-limit` (default 2048 MiB address
+space, plus kiln's stack reservation for kiln) and holds a jobserver token;
+a step that cannot be spawned is retried twice, 2 s apart, before it is
+`not-run`.
+
+**Why `gnu23`.** GCC 16 defaults to `-std=gnu23` and its own torture runs
+pass no `-std`, so the default keeps GCC's view of the tests. clang-19
+rejects old-style (K&R) definitions and more implicit-int forms under C23
+than under `gnu17` (on aarch64, clang-19 passes about 6800 of 7572 cases at
+`gnu23` and 7057 at `gnu17`); those cases show as "kiln fails, clang
+fails too" and say nothing about kiln-only gaps. `--std gnu17` measures
+the older dialect.
+
+**Outputs.** `--tsv` (default `<target>/xtask-gcc-torture/results.tsv`):
+one row per case, columns `test opt kiln kiln_detail gcc gcc_detail clang
+clang_detail xfail dropped` (`-` for an oracle not run; skipped cases read
+`skip` and the reason, collapsed to one `*` row when every option set skips
+alike). `--summary` (default `.../summary.md`): the run's header
+(commits, compilers, flags, limits, wall time), results by class per
+compiler, kiln's pass rate by suite and option set, kiln against the
+oracles (passes both pass and kiln does not, and the reverse), kiln's
+failure clusters (class plus detail with quoted names and numbers folded,
+top 60 with example tests), skip reasons and dropped flags. `--report
+<page>` splices the same region between `<!-- gcc-torture:begin ... -->`
+and `<!-- gcc-torture:end -->` in a status page, keeping the hand-written
+triage around it. `--list` prints the planned cases and skips and runs
+nothing.
+
+**Reuse.** The pieces under `xtask/src/gcc_tests/` are suite-independent:
+the checkout (`locate`), the Tcl list subset (`tcl`), directive extraction
+and per-option resolution (`dg`), selectors and effective targets
+(`target`), `.x` evaluation (`xfile`), a compiler with flag probing and
+the compile/link/run step (`Tool`, `Case`), and the classes and cluster
+keys (`outcome`). A g++.dg runner adds its suite list and default actions
+(and `dg-error` line matching if it wants more than accept/reject) on top.
+
 ## Resource limits
 
 A runaway test must die alone. On 2026-10-31 one `kiln -fdump-ast` that
@@ -1261,7 +1401,7 @@ runs, stopping at the first failing step:
 2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
    target dir as for `--compiler`'s default);
 
-then the corpus runs, all over the default paths (`tests/conformance`,
+then the corpus runs, all over the default paths (`tests/c`, `tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the
@@ -1707,6 +1847,15 @@ or infrastructure error. Parse errors name their line.
   with a stale count, a renamed section and a wrong `__cplusplus`), and a
   check that `docs/STANDARD_SUPPORT.md` itself parses, names only existing
   tests and has a summary matching its sections.
+- `xtask/src/gcc_tests/{tcl,target,dg,xfile,outcome,torture}.rs` and
+  `mod.rs` (WP-1277): "GCC testsuites": Tcl lists, braces, quotes and
+  `string match` globs; selectors and the effective-target table
+  (`__OPTIMIZE__` per option set); directive extraction and per-option
+  `dg-options`/`dg-additional-options`/`dg-skip-if`/`dg-require-effective-
+  target`/xfail resolution; `.x` evaluation (flag replacement, `return 1`,
+  `torture_eval_before_compile`); the result classes and cluster keys;
+  the option parser, planning and skip collapsing, the TSV, the summary and
+  its splice; flag units. All on inline text, so `ci` needs no checkout.
 
 ## Open questions
 

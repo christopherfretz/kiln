@@ -100,6 +100,9 @@ use kiln_source::Loc;
 pub struct CodegenOptions {
     /// The module's `source_filename`.
     pub source_filename: String,
+    /// The C standard when the translation unit is C; `None` (the
+    /// default) is C++ (spec/driver.md "Language mode").
+    pub c: Option<kiln_lex::CStd>,
     /// C++ exceptions are enabled (`-fexceptions`, the default). When
     /// disabled every function is `nounwind`.
     pub exceptions: bool,
@@ -704,6 +707,7 @@ impl Default for CodegenOptions {
     fn default() -> Self {
         CodegenOptions {
             source_filename: String::new(),
+            c: None,
             exceptions: true,
             rtti: true,
             ident: String::new(),

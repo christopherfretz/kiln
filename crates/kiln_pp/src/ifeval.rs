@@ -138,6 +138,8 @@ struct Ev<'c> {
     std: Std,
     /// `u8` literals are `char8_t` ([`IfContext::char8`]).
     char8: bool,
+    /// The C standard, in C ([`IfContext::c`]).
+    c: Option<kiln_lex::CStd>,
     /// The symbol of `defined`, once seen (symbols are equal exactly when
     /// their strings are, so later checks compare symbols).
     defined: Option<Symbol>,
@@ -165,9 +167,9 @@ fn op_punct(name: &str) -> Option<Punct> {
 
 impl<'c> Ev<'c> {
     fn new(cx: &'c mut dyn IfContext, params: EncodingParams) -> Self {
-        let (std, char8) = (cx.std(), cx.char8());
+        let (std, char8, c) = (cx.std(), cx.char8(), cx.c());
         let tok = cx.next();
-        Ev { cx, tok, params, std, char8, defined: None }
+        Ev { cx, tok, params, std, char8, c, defined: None }
     }
 
     fn bump(&mut self) {
@@ -180,6 +182,9 @@ impl<'c> Ev<'c> {
 
     /// The operator name `sym` stands for, if it is one ([lex.digraph]/2).
     fn op_name(&self, sym: Symbol) -> Option<Punct> {
+        if self.c.is_some() {
+            return None;
+        }
         op_punct(self.name(sym))
     }
 
@@ -283,10 +288,14 @@ impl<'c> Ev<'c> {
     fn identifier(&mut self, s: Symbol, live: bool) -> Val {
         let span = self.tok.span;
         self.bump();
-        match self.name(s) {
-            "true" => return Val::signed(1),
-            "false" => return Val::signed(0),
-            _ => {}
+        // In C `true`/`false` are keywords only from C23 (C23 6.10.2/13;
+        // before it they are identifiers, so 0).
+        if self.c.is_none_or(|c| c >= kiln_lex::CStd::C23) {
+            match self.name(s) {
+                "true" => return Val::signed(1),
+                "false" => return Val::signed(0),
+                _ => {}
+            }
         }
         if live && self.cx.is_enabled(DiagId::pp_undef_identifier) {
             let name = self.cx.interner().as_str(s).to_owned();
