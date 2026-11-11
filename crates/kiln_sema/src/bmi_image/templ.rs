@@ -8,7 +8,7 @@
 //! replay is a miscompile, so every form here is carried whole or not at
 //! all.
 
-use kiln_ast::decl::DeclKind;
+use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_ast::{DeclId, ExprId};
 
@@ -86,7 +86,11 @@ impl Writer<'_, '_, '_> {
         let ast = &s.ast;
         let info = *ast.template_info(d).ok_or("a malformed template")?;
         let pattern = info.pattern.ok_or("a malformed template")?;
-        let kind = u8::from(ast.decls.get(d).kind() == DeclKind::ClassTemplate);
+        let kind = match ast.decls.get(d).kind() {
+            DeclKind::FunctionTemplate => 0,
+            DeclKind::ClassTemplate => 1,
+            _ => 2,
+        };
         let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
         if redecl(d) || redecl(pattern) {
             return Err("a redeclared template");
@@ -110,18 +114,34 @@ impl Writer<'_, '_, '_> {
         for p in ast.lists.iter::<DeclId>(list.params) {
             params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
         }
-        if kind == 1 && pat + 1 != self.img.decls.len() as u32 {
+        if kind != 0 && pat + 1 != self.img.decls.len() as u32 {
             return Err("a class template whose pattern is not just before it");
         }
+        let using = match s.templ.alias_using_loc.get(&pattern) {
+            Some(&l) if kind == 2 => self.loc(l)?,
+            _ => NONE,
+        };
         Ok(Payload::Template {
             kind,
             pattern: pat,
             tloc: self.loc(list.template_loc)?,
+            using,
             langle: self.loc(list.l_angle)?,
             rangle: self.loc(list.r_angle)?,
             depth: list.depth,
             params,
         })
+    }
+
+    /// Whether alias declaration `d` is the pattern of an alias template
+    /// (WP-1279), carried as a dependent alias record before its
+    /// template record.
+    pub(super) fn alias_pattern(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        matches!(ast.templ_link(d).get(), Some((TemplLinkKind::Pattern, _)))
+            && ast
+                .described_template(d)
+                .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::TypeAliasTemplate)
     }
 
     /// Patches non-type parameter record `rec`'s default argument to

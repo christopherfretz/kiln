@@ -438,11 +438,14 @@ enum Payload {
     },
     /// A template (S4): `kind` 0 a function template; its pattern record
     /// (earlier, same name and context) and its template-head (the
-    /// `template`, `<` and `>` locations, depth, parameter records).
+    /// `template`, `<` and `>` locations, depth, parameter records);
+    /// kind 1 a class template, kind 2 an alias template, whose `using`
+    /// keyword is `using` ([`NONE`] for the other kinds; WP-1279).
     Template {
         kind: u8,
         pattern: u32,
         tloc: u32,
+        using: u32,
         langle: u32,
         rangle: u32,
         depth: u16,
@@ -929,9 +932,9 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u8(u8::from(*pack) | u8::from(*profile) << 1);
             w.u32(*default);
         }
-        Payload::Template { kind, pattern, tloc, langle, rangle, depth, params } => {
+        Payload::Template { kind, pattern, tloc, using, langle, rangle, depth, params } => {
             w.u8(*kind);
-            for v in [*pattern, *tloc, *langle, *rangle] {
+            for v in [*pattern, *tloc, *using, *langle, *rangle] {
                 w.u32(v);
             }
             w.u16(*depth);
@@ -1354,14 +1357,15 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_TEMPLATE => {
             let kind = r.u8()?;
-            let (pattern, tloc, langle, rangle) = (r.u32()?, r.u32()?, r.u32()?, r.u32()?);
+            let (pattern, tloc, using) = (r.u32()?, r.u32()?, r.u32()?);
+            let (langle, rangle) = (r.u32()?, r.u32()?);
             let depth = r.u16()?;
             let n = r.count(4)?;
             let mut params = Vec::with_capacity(n);
             for _ in 0..n {
                 params.push(r.u32()?);
             }
-            Payload::Template { kind, pattern, tloc, langle, rangle, depth, params }
+            Payload::Template { kind, pattern, tloc, using, langle, rangle, depth, params }
         }
         K_SPEC => {
             let template = r.u32()?;
@@ -1794,6 +1798,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             TyRec::Injected(_) | TyRec::Tst { .. },
                             Payload::Template { kind: 1, .. }
                         )
+                        | (TyRec::Tst { under: Some(_), .. }, Payload::Template { kind: 2, .. })
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
@@ -1815,7 +1820,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         // A specialization type's underlying type is the record type of
         // a specialization reference of the same template.
-        if let TyRec::Tst { template, under: Some(u), .. } = t {
+        if let TyRec::Tst { template, under: Some(u), .. } = t
+            && !matches!(
+                img.decls.get(*template as usize).map(|r| &r.payload),
+                Some(Payload::Template { kind: 2, .. })
+            )
+        {
             let ok = u.quals == 0
                 && u.ty > BUILTINS
                 && matches!(img.types.get((u.ty - BUILTINS - 1) as usize),
@@ -2235,7 +2245,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // S4b: or a class template at namespace scope, its
                 // pattern the class record just before it.
                 let p = *pattern as usize;
-                let ok = *kind <= 1
+                let ok = *kind <= 2
                     && *depth == 0
                     && d.flags & DEP == 0
                     && scope(d.ctx)
@@ -2245,7 +2255,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     && kind_of(*pattern).is_some_and(|r| {
                         matches!(
                             (*kind, &r.payload),
-                            (0, Payload::Function { kind: 0, .. }) | (1, Payload::Record { .. })
+                            (0, Payload::Function { kind: 0, .. })
+                                | (1, Payload::Record { .. })
+                                | (2, Payload::Typedef { alias: true, .. })
                         ) && r.flags & DEP != 0
                             && r.name == d.name
                             && r.ctx == d.ctx
@@ -2916,7 +2928,7 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let td = *ast.decls.typedef(d).ok_or("a malformed typedef")?;
-                if !td.templ.is_none() {
+                if !td.templ.is_none() && !self.alias_pattern(d) {
                     return Err("a template");
                 }
                 Payload::Typedef {
@@ -2945,7 +2957,9 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::AccessSpec => Payload::Access,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
-            DeclKind::FunctionTemplate | DeclKind::ClassTemplate => self.template(d)?,
+            DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
+                self.template(d)?
+            }
             _ => return Err("a declaration the image does not carry yet"),
         })
     }
@@ -3817,6 +3831,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXConversion
         | K::FunctionTemplate
         | K::ClassTemplate
+        | K::TypeAliasTemplate
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm
         | K::NamespaceAlias
@@ -3829,7 +3844,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
         | K::VarTemplate
-        | K::TypeAliasTemplate
         | K::Concept
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
@@ -3968,8 +3982,8 @@ impl Sema<'_, '_> {
                         offs.extend(df.bases.iter().map(|b| b.loc));
                     }
                     Payload::Ttp { begin, .. } => offs.push(*begin),
-                    Payload::Template { tloc, langle, rangle, .. } => {
-                        offs.extend([*tloc, *langle, *rangle]);
+                    Payload::Template { tloc, using, langle, rangle, .. } => {
+                        offs.extend([*tloc, *using, *langle, *rangle]);
                     }
                     _ => {}
                 }
@@ -4176,7 +4190,12 @@ impl Sema<'_, '_> {
                 Payload::Typedef { alias, underlying } => {
                     let u = self.image_ty(img, &mut tys, &ids, *underlying);
                     let kind = if *alias { DeclKind::TypeAlias } else { DeclKind::Typedef };
-                    self.builder().typedef(h, kind, u, prev)
+                    if patterns.contains(&(i as u32)) {
+                        self.ast.templates.pattern_next = true;
+                    }
+                    let t = self.builder().typedef(h, kind, u, prev);
+                    self.ast.templates.pattern_next = false;
+                    t
                 }
                 Payload::Record { tag, def } => {
                     let tag = tag_of(*tag);
@@ -4256,17 +4275,21 @@ impl Sema<'_, '_> {
                     }
                     t
                 }
-                Payload::Template { kind, pattern, tloc, langle, rangle, depth, params } => {
+                Payload::Template { kind, pattern, tloc, using, langle, rangle, depth, params } => {
                     let ps: Vec<DeclId> = params.iter().map(|&p| ids[p as usize]).collect();
                     let (t, l, rr) = (lo(self, *tloc), lo(self, *langle), lo(self, *rangle));
                     let list = self.builder().template_param_list(t, l, rr, *depth, &ps, None);
                     let pat = ids[*pattern as usize];
-                    let k = if *kind == 1 {
-                        DeclKind::ClassTemplate
-                    } else {
-                        DeclKind::FunctionTemplate
+                    let k = match kind {
+                        1 => DeclKind::ClassTemplate,
+                        2 => DeclKind::TypeAliasTemplate,
+                        _ => DeclKind::FunctionTemplate,
                     };
-                    self.builder().template_decl(k, pat, list, None)
+                    let t = self.builder().template_decl(k, pat, list, None);
+                    if *using != NONE {
+                        let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
+                    }
+                    t
                 }
                 Payload::Spec { .. } => {
                     let loc = lo(self, r.loc);
@@ -4650,9 +4673,10 @@ impl Sema<'_, '_> {
                     .collect();
                 let under = under.map(|u| qt(self, u));
                 let tmpl = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
+                let alias = self.ast.decls.get(tmpl).kind() == DeclKind::TypeAliasTemplate;
                 let name = self.ast.types.template_name_of(tmpl);
                 let list = self.ast.types.arg_list(&args);
-                self.ast.types.template_specialization(name, list, under, false)
+                self.ast.types.template_specialization(name, list, under, alias)
             }
             TyRec::Injected(t) => match ids.get(*t as usize) {
                 Some(&t) => self.injected_type_of(t).unwrap_or(QualType::INT),
@@ -5391,6 +5415,7 @@ mod tests {
                     kind: 0,
                     pattern: 12,
                     tloc: 290,
+                    using: NONE,
                     langle: 294,
                     rangle: 310,
                     depth: 0,
@@ -5525,6 +5550,7 @@ mod tests {
                     kind: 1,
                     pattern: 15,
                     tloc: 390,
+                    using: NONE,
                     langle: 394,
                     rangle: 410,
                     depth: 0,

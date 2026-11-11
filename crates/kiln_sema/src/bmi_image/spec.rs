@@ -122,7 +122,9 @@ impl Writer<'_, '_, '_> {
             return Ok(Some(r));
         }
         let si = *si;
-        if si.kind != SpecKind::ImplicitInstantiation {
+        // A class specialization only named (`using B = X<int>;`, WP-1279)
+        // is `Undeclared`: the importer names it the same way.
+        if !matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared) {
             return Err("an explicit specialization or instantiation");
         }
         let class = ast.decls.get(d).kind() == DeclKind::CXXRecord;
@@ -226,12 +228,17 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         Ok(Some(match ast.types.view(t) {
             TypeView::TemplateSpecialization { name, args, underlying, alias } => {
-                if alias {
-                    return Err("an alias template");
-                }
                 let TemplateName::Template(td) = ast.types.template_name_view(name) else {
                     return Err("a template named through a qualifier or parameter");
                 };
+                if alias {
+                    // An alias template specialization (WP-1279): its
+                    // underlying type is the substituted pattern.
+                    let template = self.template_rec(td, 2).map_err(|_| "an alias template")?;
+                    let args = self.arg_recs(args)?;
+                    let u = underlying.ok_or("an alias template")?;
+                    return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));
+                }
                 let template = self.template_rec(td, 1)?;
                 let args = self.arg_recs(args)?;
                 let under = match underlying {

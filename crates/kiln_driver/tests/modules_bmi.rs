@@ -829,6 +829,58 @@ fn kind2_declaration_image_packs() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGA: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-alias.cppm");
+const IMGA_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-alias-run.cpp");
+
+/// WP-1279 (§11.11 "Templates as patterns"): alias templates come from
+/// the image, with their `using` keyword. With the unit's source blanked,
+/// an importer still substitutes and deduces through them, its IR is the
+/// replay's, and an error in an alias's substitution is diagnosed exactly
+/// as after a replay, at the alias's `using` in the module.
+#[test]
+fn kind2_declaration_image_alias_templates() {
+    let d = scratch("image-alias");
+    std::fs::write(d.join("a.cppm"), IMGA).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGA_RUN).unwrap();
+    std::fs::write(
+        d.join("err.cpp"),
+        "import imga;\nia::Ptr<int &> p;\nia::Arr3<void> a;\n\
+         int x = ia::unbox(3);\nia::Fn<int, int> f;\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "a.cppm", "-o", "a.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "a.pcm", "-o", "a.o"]);
+    blank_source(&d, "a.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imga=blank.pcm", "u.cpp", "a.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imga' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7 5 9 8 3\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "a.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imga=m.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imga=a.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    for want in ["a.cppm:4:20: error", "a.cppm:6:20: error", "a.cppm:11:20: note"] {
+        assert!(errs[0].contains(want), "{want}: {}", errs[0]);
+    }
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 const IMGG: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-generic.cppm");
 const IMGG_RUN: &str =
