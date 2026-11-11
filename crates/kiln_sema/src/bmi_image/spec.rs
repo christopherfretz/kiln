@@ -67,7 +67,7 @@ impl Writer<'_, '_, '_> {
     }
 
     /// The image arguments of argument list `list`.
-    fn arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
+    pub(super) fn arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
         let args: Vec<TemplateArg> = self.s.ast.types.args(list).to_vec();
         let mut out = Vec::with_capacity(args.len());
         for a in args {

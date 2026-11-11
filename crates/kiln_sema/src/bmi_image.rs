@@ -45,6 +45,7 @@ use crate::modules::Directive;
 mod attrs;
 mod body;
 mod constraints;
+mod deptypes;
 mod locs;
 mod requires;
 mod scope;
@@ -230,6 +231,9 @@ enum TyRec {
     /// keyword (`decltype(auto)`), bit 1 deduced as the dependent type (a
     /// placeholder in a pattern).
     Auto(u8),
+    /// A dependent name, transform, member pointer or vector type
+    /// (WP-1284, [`deptypes`]).
+    Dep(deptypes::DepTy),
 }
 
 /// A template argument (S4b): a type, or an integral or `bool` value of
@@ -259,6 +263,9 @@ enum NnsRec {
     Ty(QRef, bool),
     /// A namespace alias record (S6).
     Alias(u32),
+    /// A dependent identifier `name::` (an index into the parameter
+    /// names; WP-1284, [`deptypes`]).
+    Ident(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -830,6 +837,7 @@ impl Wr {
                     self.u8(u8::from(*t));
                 }
                 NnsRec::Alias(d) => (self.u8(3), self.u32(*d)).1,
+                NnsRec::Ident(n) => (self.u8(4), self.u32(*n)).1,
             }
         }
     }
@@ -1098,6 +1106,7 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Injected(d) => (w.u8(17), w.u32(*d)).1,
             TyRec::Pack(q) => (w.u8(19), w.q(*q)).1,
             TyRec::Auto(k) => (w.u8(20), w.u8(*k)).1,
+            TyRec::Dep(d) => (w.u8(21), deptypes::encode_dep(&mut w, d)).1,
             TyRec::Subst { repl, assoc, index, pack } => {
                 w.u8(18);
                 w.q(*repl);
@@ -1251,6 +1260,7 @@ impl<'a> Rd<'a> {
                     }
                 }
                 3 => NnsRec::Alias(self.u32()?),
+                4 => NnsRec::Ident(self.u32()?),
                 _ => return bad("bad qualifier step"),
             });
         }
@@ -1438,7 +1448,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             let (mut qs, mut ds) = (vec![*q], Vec::new());
             for st in steps {
                 match st {
-                    NnsRec::Global => {}
+                    NnsRec::Global | NnsRec::Ident(_) => {}
                     NnsRec::Ns(d) | NnsRec::Alias(d) => ds.push(*d),
                     NnsRec::Ty(q, _) => qs.push(*q),
                 }
@@ -1461,6 +1471,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) | TyRec::Auto(_) => (Vec::new(), Vec::new()),
+        TyRec::Dep(d) => deptypes::dep_refs(d),
     }
 }
 
@@ -1673,6 +1684,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 k @ 0..=3 => TyRec::Auto(k),
                 _ => return bad("bad placeholder type"),
             },
+            21 => TyRec::Dep(deptypes::decode_dep(&mut r)?),
             18 => {
                 let repl = r.q()?;
                 let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
@@ -1784,6 +1796,7 @@ fn unlisted(img: &Image, d: &DeclRec) -> bool {
 fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
     steps.iter().all(|s| match *s {
         NnsRec::Global | NnsRec::Ty(..) => true,
+        NnsRec::Ident(n) => (n as usize) < img.pnames.len(),
         NnsRec::Ns(x) => {
             (x as usize) < below
                 && matches!(img.decls.get(x as usize).map(|r| &r.payload), Some(Payload::Namespace))
@@ -1831,7 +1844,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
-                        | (TyRec::ElabQ(..), Payload::Namespace | Payload::NsAlias { .. })
+                        | (
+                            TyRec::ElabQ(..) | TyRec::Dep(_),
+                            Payload::Namespace | Payload::NsAlias { .. }
+                        )
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
                         | (
                             TyRec::Injected(_) | TyRec::Tst { .. },
@@ -1851,6 +1867,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             && !steps_ok(img, steps, nd)
         {
             return bad("bad qualifier step");
+        }
+        if let TyRec::Dep(d) = t
+            && !deptypes::dep_ok(img, d, nd)
+        {
+            return bad("bad dependent type");
         }
         if let TyRec::Func { info, .. } = t
             && FuncInfo::from_bits(*info).bits() != *info
@@ -2583,8 +2604,9 @@ impl Writer<'_, '_, '_> {
                 Nns::Global => None,
                 Nns::Namespace { prefix, .. }
                 | Nns::Type { prefix, .. }
-                | Nns::NamespaceAlias { prefix, .. } => prefix,
-                _ => return Err("a qualifier naming a dependent name or splice"),
+                | Nns::NamespaceAlias { prefix, .. }
+                | Nns::Identifier { prefix, .. } => prefix,
+                Nns::Splice(_) => return Err("a qualifier naming a splice"),
             };
             chain.push(v);
         }
@@ -2613,7 +2635,8 @@ impl Writer<'_, '_, '_> {
                     }
                     _ => return Err("a qualifier naming a namespace alias outside the image"),
                 },
-                _ => return Err("a malformed qualifier"),
+                Nns::Identifier { name, .. } => NnsRec::Ident(self.sym_ix(name)),
+                Nns::Splice(_) => return Err("a malformed qualifier"),
             });
         }
         Ok(steps)
@@ -2696,7 +2719,7 @@ impl Writer<'_, '_, '_> {
                 }
                 TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
             }
-            _ => return Err("a type the image does not carry"),
+            v => self.dep_ty(v)?.ok_or("a type the image does not carry")?,
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
         self.img.types.push(rec);
@@ -4417,7 +4440,7 @@ impl Sema<'_, '_> {
                         h.name = DeclName::operator(op);
                     }
                     let nns =
-                        self.image_nns(steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
+                        self.image_nns(img, steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
                     self.builder().using_decl(h, nns)
                 }
                 Payload::Shadow { target } => {
@@ -4643,7 +4666,7 @@ impl Sema<'_, '_> {
         } else {
             let j = (q.ty - BUILTINS - 1) as usize;
             while tys.len() <= j {
-                let t = self.image_build_ty(&img.types[tys.len()], tys, ids);
+                let t = self.image_build_ty(img, &img.types[tys.len()], tys, ids);
                 tys.push(t);
             }
             tys[j]
@@ -4691,6 +4714,7 @@ impl Sema<'_, '_> {
     /// type step's type.
     fn image_nns(
         &mut self,
+        img: &Image,
         steps: &[NnsRec],
         ids: &[DeclId],
         ty: &mut dyn FnMut(&mut Self, QRef) -> QualType,
@@ -4715,6 +4739,10 @@ impl Sema<'_, '_> {
                     },
                     None => Nns::Global,
                 },
+                NnsRec::Ident(i) => Nns::Identifier {
+                    prefix: cur,
+                    name: self.intern(img.pnames.get(i as usize).map_or("", String::as_str)),
+                },
             };
             cur = Some(self.ast.types.nns(n));
         }
@@ -4737,7 +4765,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
+    fn image_build_ty(
+        &mut self,
+        img: &Image,
+        t: &TyRec,
+        tys: &[QualType],
+        ids: &[DeclId],
+    ) -> QualType {
         let qt = |s: &mut Self, q: QRef| -> QualType {
             let base = if q.ty <= BUILTINS {
                 BuiltinType::from_index(q.ty).map_or(QualType::INT, BuiltinType::qual_type)
@@ -4780,7 +4814,7 @@ impl Sema<'_, '_> {
                 self.ast.types.elaborated(k, None, q)
             }
             TyRec::ElabQ(k, steps, q) => {
-                let cur = self.image_nns(steps, ids, &mut |s, q| qt(s, q));
+                let cur = self.image_nns(img, steps, ids, &mut |s, q| qt(s, q));
                 let q = qt(self, *q);
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, cur, q)
@@ -4833,6 +4867,7 @@ impl Sema<'_, '_> {
                 let pack = pack.checked_sub(1);
                 self.ast.types.subst_template_type_parm(r, a, *index, pack)
             }
+            TyRec::Dep(d) => self.image_dep_ty(img, d, ids, &mut |s, q| qt(s, q)),
         }
     }
 }
