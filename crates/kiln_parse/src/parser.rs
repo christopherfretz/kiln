@@ -1021,6 +1021,43 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             && !self.template_args_dependent(open, close)
     }
 
+    /// The explicit specialization of class template `d` named by the
+    /// template-id whose arguments lie between `open` and `close`, when each
+    /// argument is a decimal literal or `sizeof(name)`. The lookahead does
+    /// not form the specialization, and its members may differ from the
+    /// primary template's and the other specializations' (Boost.ScopeExit's
+    /// `resolve<sizeof(args)>::cmp1<0>::cmp2`: `cmp1` is a member template
+    /// of one explicit specialization and a variable of another).
+    fn lookahead_explicit_spec(&self, d: DeclId, open: usize, close: usize) -> Option<DeclId> {
+        if self.s.ast.decls.get(d).kind() != DeclKind::ClassTemplate {
+            return None;
+        }
+        let mut vals = Vec::new();
+        let mut i = open + 1;
+        while i < close {
+            let t = self.tok_at(i);
+            let (v, next) = if t.kind == TokKind::PpNumber {
+                (self.spelling_of(&t).parse::<i128>().ok()?, i + 1)
+            } else if self.kw_of(t) == Some(Kw::Sizeof)
+                && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+                && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen)
+            {
+                (self.s.lookahead_sizeof_name(self.ident_of(self.tok_at(i + 2))?)?, i + 4)
+            } else {
+                return None;
+            };
+            vals.push(v);
+            i = if next == close {
+                next
+            } else if self.tok_at(next).kind == TokKind::Punct(Punct::Comma) {
+                next + 1
+            } else {
+                return None;
+            };
+        }
+        self.s.explicit_spec_for_int_args(d, &vals)
+    }
+
     /// [`Parser::scan_name_walk`] from token `i`, the first component
     /// after a `::` whose scope `scope` is already known.
     fn scan_name_walk_in(
@@ -1100,8 +1137,18 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         dep_tid = true;
                     }
                 }
-                nondep_class |= !split && self.nondependent_template_qualifier(class, end, close);
-                class = type_if_args(class);
+                let nondep = !split && self.nondependent_template_qualifier(class, end, close);
+                nondep_class |= nondep;
+                let spec = match class {
+                    NameClass::TypeTemplate(d) if nondep => {
+                        self.lookahead_explicit_spec(d, end, close)
+                    }
+                    _ => None,
+                };
+                class = match spec {
+                    Some(s) => NameClass::Type(QualType::DEPENDENT, s),
+                    None => type_if_args(class),
+                };
                 if split {
                     return Ok((close, true, class, name, qual));
                 }

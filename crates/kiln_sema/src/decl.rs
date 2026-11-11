@@ -11607,6 +11607,45 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The definition of the explicit specialization of class template
+    /// `tmpl` whose arguments are the integers `vals`, for the parser's
+    /// lookahead (`Parser::lookahead_explicit_spec`).
+    pub fn explicit_spec_for_int_args(&self, tmpl: DeclId, vals: &[i128]) -> Option<DeclId> {
+        use kiln_ast::templates::SpecKind;
+        use kiln_ast::types::ArgView;
+        let types = &self.ast.types;
+        let first = self.ast.first(tmpl);
+        let s = self.ast.templates.specs_of(first).iter().copied().find(|&s| {
+            let Some((_, i)) = self.ast.spec_info(s) else { return false };
+            let args = types.args(types.canonical_args(i.args));
+            i.kind == SpecKind::ExplicitSpecialization
+                && args.len() == vals.len()
+                && args.iter().zip(vals).all(|(a, &v)| {
+                    matches!(a.view(), ArgView::Value { value, .. } if self.const_int(value) == Some(v))
+                })
+        })?;
+        self.ast.definition(s)
+    }
+
+    /// `sizeof(name)` for the parser's lookahead: `name` names a variable
+    /// or a type that is complete and not dependent.
+    pub fn lookahead_sizeof_name(&self, name: Symbol) -> Option<i128> {
+        let ty = match self.classify_name(name, None) {
+            NameClass::Value(d)
+                if matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar) =>
+            {
+                self.ast.decls.get(d).ty()?
+            }
+            NameClass::Type(_, d) => self.ast.decls.get(d).ty()?,
+            _ => return None,
+        };
+        if self.is_dependent_type(ty) || self.ast.types.is_reference(ty) {
+            return None;
+        }
+        let (size, _) = target::size_align(&self.ast, ty, &self.abi)?;
+        i128::try_from(size).ok()
+    }
+
     /// The context a qualifier `q` given to [`Sema::classify_name`] is
     /// looked up in: a typedef qualifier names its class or enumeration,
     /// as in `nested_name_from_found` ([basic.lookup.qual.general]/1).
