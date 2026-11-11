@@ -244,6 +244,76 @@ inline int anon_sum() { return FE_A + FE_B + anon_v.z; }
     same(&d, "u.pch", &["-S", "-emit-llvm", "-O0"], "u.cpp");
 }
 
+/// spec/modules.md §11.11 "Expressions in types" (WP-1300): types and
+/// template arguments holding an expression are carried, and a consumer
+/// substitutes them as replay does ([temp.alias]/2, [temp.arg.nontype]):
+/// `decltype(nullptr)` ([lex.nullptr]), non-type template arguments
+/// written as expressions, dependent and non-dependent
+/// `decltype(e)` ([dcl.type.decltype]), `noexcept(e)` on a function type
+/// ([except.spec]/2; an operand naming the function's parameters is set
+/// after the bodies), value-dependent array bounds ([temp.dep.constexpr])
+/// and a pack expansion of a known length ([temp.variadic]).
+#[test]
+fn expressions_in_types_are_carried() {
+    let d = scratch("exprs");
+    let header = "\
+typedef decltype(nullptr) nullptr_t;
+inline nullptr_t np() { return nullptr; }
+template <class T, T v> struct ic { static constexpr T value = v; using type = ic; };
+template <bool B> using bc = ic<bool, B>;
+template <class T> struct is_ptr : ic<bool, false> {};
+template <class T> struct is_ptr<T *> : ic<bool, true> {};
+template <class T> using size_of = ic<unsigned long, sizeof(T)>;
+template <class T> using not_ptr = bc<!is_ptr<T>::value>;
+using two = ic<int, 1 + 1>;
+inline int g = 4;
+inline decltype(g + 1L) dl() { return g + 1L; }
+template <class T> decltype(T() + 1) plus1(T t) { return t + 1; }
+template <class T> void sw(T &) noexcept(noexcept(T())) {}
+template <class T> struct pr { T a; void swap(pr &o) noexcept(noexcept(a = o.a)) { a = o.a; } };
+template <class T> void swap(pr<T> &x, pr<T> &y) noexcept(noexcept(x.swap(y))) { x.swap(y); }
+inline void h(int &x) noexcept(noexcept(x + 1)) {}
+inline void nx() noexcept(sizeof(int) > 2) {}
+template <class T> struct arr { T data[sizeof(T) + 1]; };
+template <int N> struct buf { char b[N * 2]; };
+template <class... Ts> struct tup { static constexpr unsigned long n = sizeof...(Ts); };
+template <class... Ts> using tup2 = tup<Ts..., Ts...>;
+";
+    let note = produce(&d, "x", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+int main() {
+  nullptr_t z = np(); (void)z;
+  static_assert(bc<true>::value && !is_ptr<int>::value && is_ptr<int *>::value);
+  static_assert(size_of<int>::value == sizeof(int) && not_ptr<int>::value && two::value == 2);
+  static_assert(!not_ptr<int *>::value && noexcept(nx()));
+  int i = 1; sw(i); static_assert(noexcept(sw(i)));
+  pr<int> p{1}, q{2}; swap(p, q); h(i); static_assert(noexcept(swap(p, q)) && noexcept(h(i)));
+  arr<short> a{}; buf<3> b{};
+  static_assert(sizeof(a.data) == 3 * sizeof(short) && sizeof(b.b) == 6 && tup2<int, char>::n == 4);
+  return int(dl()) + plus1(1) + int(sizeof a) + int(sizeof b);
+}
+";
+    std::fs::write(d.join("x.cpp"), tu).unwrap();
+    assert!(path_note(&d, "x.pch", "x.cpp").contains("': declaration image ("));
+    same(&d, "x.pch", &["-fsyntax-only", "-Wall"], "x.cpp");
+    same(&d, "x.pch", &["-S", "-emit-llvm", "-O0"], "x.cpp");
+    let check = ["-fkiln-pch-image=check", "-include-pch", "x.pch", "-S", "-emit-llvm"];
+    assert_eq!(ok(&d, &[&check[..], &["x.cpp", "-o", "-"]].concat()).stderr, "");
+    // A substitution failure inside a carried expression is diagnosed as
+    // replay diagnoses it.
+    std::fs::write(
+        d.join("y.cpp"),
+        "struct S {};\nint k = plus1(S());\nbuf<-1> nb;\nint v = sizeof(arr<void>);\n\
+          struct N { N &operator=(const N &) = delete; };\nvoid u() { pr<N> a, b; swap(a, b); }\n",
+    )
+    .unwrap();
+    let o = same(&d, "x.pch", &["-fsyntax-only"], "y.cpp");
+    assert!(o.stderr.contains("substitution failure [with T = S]"), "{}", o.stderr);
+    assert!(o.stderr.contains("in instantiation of exception specification"), "{}", o.stderr);
+    assert!(o.stderr.contains("5 errors generated"), "{}", o.stderr);
+}
+
 /// Sema state the image does not carry and the consumer depends on (a
 /// pending `#pragma weak`) means no image: an image consumer made `f`
 /// strong.

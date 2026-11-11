@@ -396,7 +396,7 @@ fn check_exp(
 }
 
 /// The importer's side: image location to importer location.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Locs {
     /// `(image base, length, importer location of the base)`, by base.
     runs: Vec<(u32, u32, Loc)>,

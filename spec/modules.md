@@ -2230,6 +2230,23 @@ as replay's own use does. Constants the unit computed for
 specializations stay in the constant section (WP-1046), so
 initializers evaluated in the interface are not evaluated again.
 
+The importer completes a specialization while it reads the records,
+before the pattern's expressions (initializers, bit-field widths,
+default member initializers) are set with the bodies (WP-1300). So:
+a complete class specialization whose pattern has a bit-field or a
+default member initializer is not carried ("a specialization of a
+class template with a bit-field or a default member initializer"; it
+would lose them); once the bodies and initializers are in, each
+static data member of a complete class specialization still without
+the in-class initializer its pattern now has is instantiated from it,
+not made `inline` (`static const int w = sizeof(T);`, eager at the
+class's instantiation, [temp.inst]/3); and each static data member or
+member referenced or used is referenced again (`note_var_referenced`,
+unevaluated when the unit only referenced it), so a constant one is
+instantiated at once even when the unit's body only names it without
+odr-using it (`B<2>::v`, [basic.def.odr]/4), as replay's reference
+does.
+
 *Second slice (WP-1139): class templates.* Template kind 1 is a class
 template. The parser's order is kept: the template parameters, the
 pattern (a class record with `DEPENDENT_CTX`, rebuilt after
@@ -2303,8 +2320,8 @@ unresolved names.* Carried since the third slice:
   a pack). A function parameter pack of a pattern is a parameter
   record whose `ParamData::PACK` bit the validator accepts in a
   `DEPENDENT_CTX` record only. A pack expansion type `Ts...` is type
-  tag 19, `pack(pattern:qref)` (one with a known expansion count falls
-  back); `sizeof...(Ts)` (`SizeOfPackExpr`, the pack's parameter
+  tag 19, `pack(pattern:qref)` (one with a known expansion count is
+  WP-1300's, "Expressions in types"); `sizeof...(Ts)` (`SizeOfPackExpr`, the pack's parameter
   record, which must be a pack), `PackExpansionExpr` (its pattern) and
   a fold `(0 + ... + f(xs))` (`CXXFoldExpr`: both optional operands,
   the operator in aux as for a binary operator, the `...`
@@ -2497,7 +2514,11 @@ overridden sets are empty, as sema leaves them). A base-specifier's
 flag byte has bit 0 `virtual` and bit 1 pack expansion
 ([temp.variadic]/5.2): a pack base `Ts...` carries its pattern `Ts`
 as its type, only in a dependent class, where the validator checks it
-as any dependent base. Test: `image-poly-template-run.cpp`.
+as any dependent base. Test: `image-poly-template-run.cpp`. A dependent
+base is a type parameter or a dependent specialization, also named
+through a dependent alias template specialization the validator looks
+through (`bc<!is_ptr<T>::value>`, WP-1300; test
+`cpp.include/pch-expr-alias-base-run.cpp`).
 
 **Friends (WP-1292).** `bmi_image/friend.rs` carries the friend
 declarations ([class.friend]) of classes that are not templates:
@@ -2919,9 +2940,9 @@ written `Wrap w(x)`, with its deduced type once known). A qualifier may
 have a dependent-identifier step (`T::inner::`, step 4). The importer
 builds each with the type context's constructors, so canonical types
 are the replay's. A placeholder whose template is named through a
-qualifier or a parameter, and an expression-bearing type (`decltype`,
-`noexcept(expr)`, a dependent array bound or vector size, an
-expression template argument), fall back.
+qualifier or a parameter, and a vector of value-dependent size, fall
+back; the other expression-bearing types are "Expressions in types"
+below.
 
 *Written locations.* A dependent type or qualifier component has no
 location of its own; the parser records where each was written
@@ -2961,6 +2982,65 @@ dep     := 0 keyword:u8 n:u32 step* name:u32          dependent name
 step    += 4 name:u32                dependent identifier
 ```
 
+**Expressions in types (WP-1300).** `bmi_image/exprs.rs` carries the
+types and template arguments that hold an expression. Each expression
+is an *expression section* of `texprs`: a body arena of its own
+(constants, strings, expressions, no statements) whose last
+expression is the root. The forms:
+
+- `decltype(e)` ([dcl.type.decltype]), type tag 22 kind 0: the
+  section, the computed type (the `Dependent` builtin for a
+  type-dependent operand) and flags (bit 0 instantiation-dependent,
+  bit 1 canonical). `decltype(nullptr)`, `std::nullptr_t`, is the
+  first of these (`<bits/c++config.h>`, `<stddef.h>`);
+- a value-dependent array bound `T[e]` ([temp.dep.constexpr]), kind 1;
+- a pack expansion `P...` of a known expansion count
+  ([temp.variadic]), kind 2;
+- `noexcept(e)` on a function type whose operand is not a `bool`
+  literal ([except.spec]/2): exception bytes 7 (`noexcept(e)` false), 8
+  (true) and 9 (value-dependent), followed by the section;
+- a template argument written as an expression ([temp.arg.nontype]),
+  in a written specialization (an alias template's arguments, a class
+  template's when they are not a literal of the converted value, a
+  dependent template specialization's): `targ` 2 with the section and
+  whether the argument has a profile.
+
+The canonical forms (`DependentDecltype`, a dependent array of a
+profile bound) are written through the profile's first expression
+with the canonical bit, and the importer takes the canonical type of
+what it builds, so both share replay's profile and canonical type. The
+importer builds a section with the first type naming it, before any
+declaration record uses the type and before the image's bodies. It
+recomputes each profile as replay does: `dependent_profile` for a
+type's operand and `profile_expr` for an argument's. The validator
+requires each type's sections to name only records its record bound
+allows, and each section to be named by at least one type.
+
+A section may not name a function or requires-expression parameter
+or a local declaration, because the importer builds types first. The
+writer refuses such a type with "an expression in a type naming a
+parameter or local declaration". There is one exception: a function's
+own `noexcept(e)` whose operand names its parameters, such as
+`noexcept(noexcept(x.swap(y)))`. That function's type is carried with
+no exception specification. A `late` entry gives the function record,
+the exception byte and the operand's expression in the image's
+bodies, and the importer sets the specification once the bodies are
+built, as the declarator did. A trailing `decltype` naming
+parameters still falls back. `SubstNonTypeTemplateParmExpr` (the
+parameter record and its replacement), which an alias
+specialization's substituted underlying type holds, is appended to
+the kind table.
+
+```
+texprs  := n:u32 (consts strings exprs stmts)*   stmts empty
+           late:u32 (rec:u32 exc:u8 expr:u32)*
+type    += 22 ex                     WP-1300
+ex      := 0 sect:u32 under:qref flags:u8        decltype(e)
+         | 1 elem:qref sect:u32 canon:u8         dependent array
+         | 2 pattern:qref n:u32                  counted pack
+targ    += 2 sect:u32 profile:u8                 an expression
+```
+
 **Fallback census (WP-1070).** `-fkiln-bmi-image-census` (hidden, with
 `--precompile` or `-fmodule-output`) builds the image a second time in
 census mode and prints on stderr, after the compile's diagnostics, how
@@ -2984,7 +3064,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 19` since WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 20` since WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -3020,6 +3100,7 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            written                   WP-1284 ("Dependent types and names")
            lexterns:u32 u32*         WP-1293: block-scope declaration
                                      records, in `local_externs` order
+           texprs                    WP-1300 ("Expressions in types")
 cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
            params:u32 u32*) args:u32 carg*      ascending by rec
 carg    := 0 qref | 1 qref value:i128   a type, a value
@@ -3040,7 +3121,7 @@ type    := tag:u8 payload            1 pointer(qref), 2 lref(qref),
                                      5 iarray(qref), 6 paren(qref),
                                      7 elab(keyword:u8, qref),
                                      8 function(ret:qref, n:u32, qref*,
-                                       info:u16, exc:u8),
+                                       info:u16, exc:u8 [sect:u32]),
                                      9 enum(decl:u32),
                                      10 typedef(decl:u32),
                                      11 qarray(cv:u8, qref),
@@ -3086,7 +3167,9 @@ type table's order. The exception byte is 0 (none), 1
 WP-1278 4 (`__attribute__((nothrow))`), 5 (`noexcept(true)`) and 6
 (`noexcept(false)`), both written as a `bool`
 literal, as the C library's `__THROW` expands; the importer builds the
-constant expression again). Any other operand falls back.
+constant expression again). Since WP-1300, 7 to 9 are `noexcept(e)`
+of any other operand, followed by its expression section ("Expressions
+in types").
 
 The owner byte holds bit 0 = in the purview and bit 1 = exported (the
 `ModuleTable` owner point of the record). The access byte (S3) is a
@@ -3110,7 +3193,11 @@ class template's pattern (S4). The payloads are:
   constructor, 3 destructor, 4 conversion function; 0 exactly when the
   context is not a class), type, `FnSpec` bits (u32), a byte that is 1
   when the exception specification is deferred to the function (an
-  implicitly `noexcept` destructor; the type is written without one),
+  implicitly `noexcept` destructor, or an explicitly defaulted special
+  member whose specification the unit left unevaluated; the type is
+  written without one; a referenced defaulted member whose byte is 1 is
+  not evaluated by the importer, since a reference from a template
+  definition left it unevaluated in the unit too, WP-1300),
   the parameters (n, then per
   parameter: name index into `pnames` or none, location, type, the
   parameter flags u16, the storage flags u8 and the default argument, an
