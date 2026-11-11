@@ -365,6 +365,37 @@ pub enum LinkOptKind {
     /// The value of `-Xlinker <arg>` (`arg` is the value): passed as
     /// `-Xlinker <arg>`, unused as `-Xlinker <arg>: 'linker' input unused`.
     Xlinker,
+    /// The directory of `-rpath <dir>` (`arg` is the directory): passed as
+    /// `-rpath <dir>`, unused as `-rpath <dir>: 'linker' input unused`
+    /// (WP-1288).
+    Rpath,
+}
+
+impl LinkOptKind {
+    /// The option spelled before `arg` on the link line and in the unused
+    /// warning: `-Xlinker`, `-rpath`, or none.
+    pub fn separate(self) -> Option<&'static str> {
+        match self {
+            Self::Xlinker => Some("-Xlinker"),
+            Self::Rpath => Some("-rpath"),
+            Self::Input | Self::Option | Self::Silent => None,
+        }
+    }
+}
+
+/// An assembler option: `-Wa,<a>,<b>` or `-Xassembler <a>` (WP-1288).
+/// kiln has no assembler step (`llc` writes the object), so the values are
+/// checked against the integrated assembler options clang accepts and
+/// otherwise have no effect, except `--compress-debug-sections`, which acts
+/// as `-gz` (spec/driver.md "Assembler options").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AsmOpt {
+    /// The option as written: `-Wa,--noexecstack` or `-Xassembler`.
+    pub arg: String,
+    /// The option named in "unsupported argument": `-Wa,` or `-Xassembler`.
+    pub opt: &'static str,
+    /// The values, in order (`-Wa,` split at commas).
+    pub values: Vec<String>,
 }
 
 /// A command-line error.
@@ -644,6 +675,8 @@ pub struct Args {
     pub compile: CompileArgs,
     /// Linker options, in order.
     pub link: Vec<LinkOpt>,
+    /// `-Wa,` and `-Xassembler` options, in order (WP-1288).
+    pub asm: Vec<AsmOpt>,
     /// The last `-O<level>` as written (`-O2`, `-Os`, ...).
     pub opt_flag: Option<String>,
     /// `-disable-llvm-passes` (a cc1 option, usually behind `-Xclang`):
@@ -975,6 +1008,29 @@ impl Args {
                 });
                 continue;
             }
+            // `-rpath <dir>` (separate only, as clang): to the link step.
+            // `-Xassembler <arg>`: one assembler option.
+            if arg == "-rpath" || arg == "-Xassembler" {
+                let Some(next) = argv.get(i) else {
+                    a.errors.push(ArgError::MissingValue(arg.to_owned()));
+                    continue;
+                };
+                i += 1;
+                if arg == "-rpath" {
+                    a.link.push(LinkOpt {
+                        pos: a.inputs.len(),
+                        arg: next.clone(),
+                        kind: LinkOptKind::Rpath,
+                    });
+                } else {
+                    a.asm.push(AsmOpt {
+                        arg: format!("-Xassembler {next}"),
+                        opt: "-Xassembler",
+                        values: vec![next.clone()],
+                    });
+                }
+                continue;
+            }
             let mut xclang = false;
             if arg == "-Xclang" {
                 let Some(next) = argv.get(i) else {
@@ -1076,7 +1132,57 @@ impl Args {
         a.errors.extend(a.coverage.errors().into_iter().chain(a.debug.errors()));
         let _ = a.fp.resolve(a.predef.ofast, a.clang22(), &mut a.errors);
         a.errors.extend(a.unknown_at_compat_19());
+        if a.debug.compress.is_none() {
+            a.debug.compress = a.asm_check().1;
+        }
         a
+    }
+
+    /// The `-Wa,` / `-Xassembler` values clang's integrated assembler
+    /// rejects (clang `CollectArgsForIntegratedAssembler`, checked only
+    /// when a source is assembled into an object, WP-1288), and the
+    /// `--compress-debug-sections` they ask for. kiln writes objects with
+    /// `llc`, which already marks the stack non-executable
+    /// (`.note.GNU-stack`), so the accepted values other than the
+    /// compression have no effect.
+    pub fn asm_check(&self) -> (Vec<ArgError>, Option<crate::debug_flags::DebugCompression>) {
+        use crate::debug_flags::DebugCompression as Z;
+        let mut errors = Vec::new();
+        let mut compress = None;
+        let mut take_value = false;
+        for o in &self.asm {
+            for v in &o.values {
+                if std::mem::take(&mut take_value) {
+                    continue;
+                }
+                let (flag, value) =
+                    v.split_once('=').map_or((v.as_str(), None), |(f, x)| (f, Some(x)));
+                match (flag, value) {
+                    ("--noexecstack" | "-L" | "--fatal-warnings" | "--no-warn" | "-W", None)
+                    | ("-force_cpusubtype_ALL" | "--allow-experimental-crel" | "--no-crel", None)
+                    | ("-march" | "-mcpu" | "-mfpu", Some(_))
+                    | ("-mrelax-relocations", Some("yes" | "no")) => {}
+                    ("-I", None) => take_value = true,
+                    _ if v.starts_with("-I") || v.starts_with("-gdwarf-") => {}
+                    ("--compress-debug-sections" | "-compress-debug-sections", None) => {
+                        compress = Some(Z::Zlib);
+                    }
+                    ("--compress-debug-sections" | "-compress-debug-sections", Some(z)) => {
+                        compress = Some(match z {
+                            "none" => Z::None,
+                            "zlib" => Z::Zlib,
+                            "zstd" => Z::Zstd,
+                            _ => {
+                                errors.push(ArgError::InvalidFlagValue(v.clone(), z.to_owned()));
+                                continue;
+                            }
+                        });
+                    }
+                    _ => errors.push(ArgError::UnsupportedValue(o.opt.to_owned(), v.clone())),
+                }
+            }
+        }
+        (errors, compress)
     }
 
     /// The resolved sanitizers (spec/driver.md "Sanitizers") and their
@@ -1464,6 +1570,12 @@ impl Args {
                     self.dump_ast_filter = Some(v.to_owned());
                 } else if let Some(v) = arg.strip_prefix("-fdump-ast=") {
                     self.dump_ast = Some(v.to_owned());
+                } else if let Some(v) = arg.strip_prefix("-Wa,") {
+                    self.asm.push(AsmOpt {
+                        arg: arg.to_owned(),
+                        opt: "-Wa,",
+                        values: v.split(',').map(str::to_owned).collect(),
+                    });
                 } else if arg.starts_with("-Wl,") || arg.starts_with("-fuse-ld=") {
                     self.link.push(LinkOpt {
                         pos: self.inputs.len(),
@@ -2100,6 +2212,29 @@ mod tests {
             [("--push-state", LinkOptKind::Xlinker), ("--whole-archive", LinkOptKind::Xlinker)]
         );
         assert_eq!(parse("a.o -Xlinker").errors, [ArgError::MissingValue("-Xlinker".into())]);
+        // WP-1288: `-rpath <dir>` and the assembler options.
+        let a = parse("-rpath /opt/x -Wa,--noexecstack,-I,/inc -Xassembler -mbig-obj a.c");
+        assert_eq!(a.errors, []);
+        assert_eq!(a.inputs.len(), 1);
+        let link: Vec<_> = a.link.iter().map(|l| (l.arg.as_str(), l.kind)).collect();
+        assert_eq!(link, [("/opt/x", LinkOptKind::Rpath)]);
+        assert_eq!(a.asm[0].values, ["--noexecstack", "-I", "/inc"]);
+        assert_eq!(a.asm[1].arg, "-Xassembler -mbig-obj");
+        let u = |o: &str, v: &str| ArgError::UnsupportedValue(o.into(), v.into());
+        assert_eq!(a.asm_check().0, [u("-Xassembler", "-mbig-obj")]);
+        assert_eq!(parse("a.c -rpath").errors, [ArgError::MissingValue("-rpath".into())]);
+        let a = parse("-Wa,--compress-debug-sections=zstd a.c");
+        assert_eq!(a.debug.compress, Some(crate::debug_flags::DebugCompression::Zstd));
+        let a = parse("-gz=none -Wa,--compress-debug-sections a.c");
+        assert_eq!(a.debug.compress, Some(crate::debug_flags::DebugCompression::None));
+        let a = parse("-Wa,--compress-debug-sections=lz4,foo,-gdwarf-5,-march=armv8-a a.c");
+        assert_eq!(
+            a.asm_check().0,
+            [
+                ArgError::InvalidFlagValue("--compress-debug-sections=lz4".into(), "lz4".into()),
+                u("-Wa,", "foo")
+            ]
+        );
         let a = parse("-fno-inline a.cpp");
         assert!(a.predef.no_inline);
         assert!(!parse("-fno-inline -finline a.cpp").predef.no_inline);
