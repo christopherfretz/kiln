@@ -1754,13 +1754,19 @@ impl Sema<'_, '_> {
         if self.inst.deferred_nsdmis.is_empty() {
             return;
         }
-        let Some((spec, init)) = self.inst.deferred_nsdmis.remove(&f) else { return };
+        let Some(&(spec, init)) = self.inst.deferred_nsdmis.get(&f) else { return };
+        let pattern = self.ast.instantiated_from(f).unwrap_or(f);
+        // Still unparsed: the caller diagnoses the use; the entry stays
+        // so that a SFINAE use does not lose it.
+        let Some(init) = init.or_else(|| self.ast.decls.field(pattern).and_then(|x| x.init)) else {
+            return;
+        };
+        let _ = self.inst.deferred_nsdmis.remove(&f);
         if self.inst.fatal {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;
         }
         let Some((args, pairs)) = self.inst.nsdmi_ctx.get(&spec).cloned() else { return };
-        let pattern = self.ast.instantiated_from(f).unwrap_or(f);
         if !self.push_inst_frame(FrameKind::Nsdmi, f, pattern, poi) {
             self.ast.decls.set_flags(f, DeclFlags::INVALID);
             return;
@@ -2261,10 +2267,11 @@ impl Substituter<'_, '_, '_> {
                 if let Some(l) = local.as_deref_mut() {
                     sub.collect_local_method(spec, x, m, l);
                 }
-                if n.kind() == DeclKind::Field
-                    && let Some(init) = sub.sema.ast.decls.field(m).and_then(|f| f.init)
-                {
-                    nsdmis.push((x, init));
+                // A nested class template specialized while its outermost
+                // enclosing class is incomplete has no pattern
+                // initializer yet ([class.mem.general]/8).
+                if n.kind() == DeclKind::Field && sub.sema.field_has_nsdmi(m) {
+                    nsdmis.push((x, sub.sema.ast.decls.field(m).and_then(|f| f.init)));
                 }
             }
         }
@@ -2289,12 +2296,19 @@ impl Substituter<'_, '_, '_> {
     /// and of its anonymous members) are instantiated with the outermost
     /// local class's complete-class contexts, after the declaration parts
     /// (the parser replays them so; `LocalLate::Nsdmi`, WP-905).
-    fn class_nsdmis(&mut self, spec: DeclId, local: bool, nsdmis: Vec<(DeclId, kiln_ast::ExprId)>) {
+    fn class_nsdmis(
+        &mut self,
+        spec: DeclId,
+        local: bool,
+        nsdmis: Vec<(DeclId, Option<kiln_ast::ExprId>)>,
+    ) {
         let fields: Vec<_> =
             nsdmis.into_iter().filter(|&(f, _)| self.sema.kind_of(f) == DeclKind::Field).collect();
         if self.local_late.is_some() && (local || self.sema.decl_in_local_scope(spec)) {
             for (field, init) in fields {
-                self.push_local_late(LocalLate::Nsdmi { field, init });
+                if let Some(init) = init {
+                    self.push_local_late(LocalLate::Nsdmi { field, init });
+                }
             }
         } else if !local {
             let ctx = (self.args.clone(), self.pairs.clone());
@@ -2306,7 +2320,9 @@ impl Substituter<'_, '_, '_> {
         } else {
             self.sema.act_on_start_delayed_class(spec);
             for (field, init) in fields {
-                self.nsdmi(field, init);
+                if let Some(init) = init {
+                    self.nsdmi(field, init);
+                }
             }
             self.sema.act_on_finish_delayed_class(spec);
         }

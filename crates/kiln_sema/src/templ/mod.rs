@@ -448,8 +448,10 @@ pub struct InstState {
     /// initializer is not instantiated yet, with the class and the
     /// pattern initializer ([temp.inst]/3: when a constructor or an
     /// aggregate initialization uses it; clang
-    /// `InstantiateInClassInitializer`).
-    pub(crate) deferred_nsdmis: kiln_source::fx::FxHashMap<DeclId, (DeclId, ExprId)>,
+    /// `InstantiateInClassInitializer`). `None` when the class was
+    /// instantiated before the pattern's initializer was parsed
+    /// ([class.mem.general]/8); it is looked up at first use.
+    pub(crate) deferred_nsdmis: kiln_source::fx::FxHashMap<DeclId, (DeclId, Option<ExprId>)>,
     /// The substitution state of each class owning a
     /// `deferred_nsdmis` field: its arguments and context pairs.
     pub(crate) nsdmi_ctx:
