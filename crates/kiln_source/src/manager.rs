@@ -211,7 +211,7 @@ struct LineDirective {
 /// the file, read again on demand.
 pub type LazyCopy = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
-/// How a lazy buffer's text was found ([`SourceManager::lazy_outcomes`]).
+/// How a lazy buffer's text was found ([`SourceManager::lazy_fallbacks`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LazyOutcome {
     /// The file on disk had the recorded length and content hash.

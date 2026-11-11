@@ -1656,6 +1656,18 @@ fn kind2_image_edited_header() {
         "{notes:?}"
     );
     assert_eq!(header_errors(&d, "-fkiln-bmi-image"), before, "same size: the recorded text");
+    // Without a diagnostic in it, the header's text is never read.
+    std::fs::write(d.join("ok.cpp"), "import m;\nint main() { return hh::add(1, 2) - 3; }\n")
+        .unwrap();
+    let o =
+        kiln(&d, &["-v", "-fkiln-bmi-image", "-fsyntax-only", "-fmodule-file=m=m.pcm", "ok.cpp"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("note: imported 'm' from its declaration image")
+            && !o.stderr.contains("changed since"),
+        "{}",
+        o.stderr
+    );
     for (edit, why) in [
         (
             Some(format!("{HH}// one more line\n")),

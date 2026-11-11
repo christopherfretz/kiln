@@ -386,7 +386,9 @@ impl Locs {
             let base = match s {
                 SlocRec::File { file, from, marks } => {
                     let id = *ids.get(*file as usize).ok_or("a file the importer has not")?;
-                    if sm.text(id).len() != len as usize {
+                    // By the range, not the text: a lazy buffer stays unread.
+                    let span = sm.file_span(id);
+                    if span.hi.to_raw() - span.lo.to_raw() != len {
                         return Err("a file whose length differs from its record");
                     }
                     let at = if *from == NONE {
