@@ -21,7 +21,10 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::builtin;
-use kiln_ast::{AttrId, DeclId, ExprId};
+use kiln_ast::expr::{ExprKind, Radix};
+use kiln_ast::ids::RawId;
+use kiln_ast::strings::StringEncoding;
+use kiln_ast::{AttrId, DeclId, ExprId, ListId, StringLitId};
 use kiln_source::symbol::Symbol;
 
 use super::body::Root;
@@ -43,6 +46,15 @@ enum Op {
     Exprs,
     /// `a` is a builtin id (written with its spelling), `b` zero.
     Builtin,
+    /// `a` is a list of integer literals of type `size_t` (`nonnull`'s
+    /// parameter indices; the empty list names every parameter), `b`
+    /// zero. Written as a run of [`Attrs::ints`].
+    Ints,
+    /// `a` is the ordinary string literal of an asm label (written as
+    /// its text), `b` zero. A written label (not one inherited from a
+    /// previous declaration, flag 2) also names the first declaration's
+    /// symbol (`cold.asm_label`).
+    Label,
 }
 
 const ANY: u32 = u32::MAX;
@@ -123,6 +135,8 @@ const TABLE: &[(AttrKind, Op)] = &[
     (AttrKind::GSL_POINTER, FLAG),
     (AttrKind::UNAVAILABLE, Op::Exprs),
     (AttrKind::REQUIRE_CONSTANT_INIT, FLAG),
+    (AttrKind::NONNULL, Op::Ints),
+    (AttrKind::ASM_LABEL, Op::Label),
 ];
 
 fn op_of(k: AttrKind) -> Option<Op> {
@@ -137,6 +151,8 @@ pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
         Some(Op::Sym) => (node.a as usize) < nsyms && node.b == 0,
         Some(Op::Exprs) => true,
         Some(Op::Builtin) => node.b == 0 && builtin::info(node.a).is_some(),
+        Some(Op::Ints) => node.b == 0,
+        Some(Op::Label) => node.b == 0 && node.a != 0,
     }
 }
 
@@ -160,7 +176,8 @@ pub(super) struct AttrRec {
     flags: u8,
     loc: u32,
     /// The words; for [`Op::Exprs`] expression record indices or
-    /// [`NONE`].
+    /// [`NONE`]; for [`Op::Ints`] the first of the run of
+    /// [`Attrs::ints`] and its length.
     pub(super) a: u32,
     pub(super) b: u32,
     /// [`Op::Sym`]: the text; [`Op::Builtin`]: the builtin's spelling;
@@ -189,6 +206,9 @@ pub(super) struct Attrs {
     /// Ascending by record.
     pub(super) recs: Vec<AttrRec>,
     builtins: Vec<BuiltinRec>,
+    /// The integer literals of [`Op::Ints`] arguments: value and
+    /// location.
+    ints: Vec<(u32, u32)>,
 }
 
 /// What the writer computed for one declaration, committed with its
@@ -197,6 +217,7 @@ pub(super) struct Attrs {
 pub(super) struct Pending {
     recs: Vec<(AttrRec, [Option<ExprId>; 2])>,
     builtins: Vec<BuiltinRec>,
+    ints: Vec<Vec<(u32, u32)>>,
 }
 
 impl Writer<'_, '_, '_> {
@@ -205,6 +226,17 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.symbols().len();
         ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).all(|a| carried(ast.attrs.get(a), n))
+    }
+
+    /// Whether `d`'s symbol (`cold.asm_label`) is the asm label written
+    /// on `d` itself, which its attribute record carries.
+    pub(super) fn own_asm_label(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        let Some(&lit) = ast.decls.cold.asm_label.get(d) else { return true };
+        ast.lists.iter::<AttrId>(ast.attrs.of_decl(d)).any(|a| {
+            let n = ast.attrs.get(a);
+            n.kind == AttrKind::ASM_LABEL && n.flags & 2 == 0 && n.a == lit.raw()
+        })
     }
 
     fn attr_str(&mut self, s: &str) -> u32 {
@@ -272,6 +304,32 @@ impl Writer<'_, '_, '_> {
                     let info = builtin::info(node.a).ok_or(UNCARRIED)?;
                     r.s = self.attr_str(info.name);
                 }
+                Op::Ints => {
+                    let list = ListId::from_raw(node.a).unwrap_or(ListId::EMPTY);
+                    let mut run = Vec::new();
+                    for e in ast.lists.iter::<ExprId>(list) {
+                        let n = ast.exprs.get(e);
+                        let v = (n.kind() == ExprKind::IntegerLiteral && n.ty() == s.size_type())
+                            .then(|| ast.exprs.int_value(e))
+                            .flatten()
+                            .and_then(|v| u32::try_from(v).ok())
+                            .ok_or(UNCARRIED)?;
+                        run.push((v, self.loc(n.loc())?));
+                    }
+                    (r.a, r.b) = (p.ints.len() as u32, run.len() as u32);
+                    p.ints.push(run);
+                }
+                Op::Label => {
+                    let lit = StringLitId::from_raw(node.a).ok_or(UNCARRIED)?;
+                    let (enc, bytes) = ast.strings.get(lit);
+                    let text = (enc == StringEncoding::Ordinary)
+                        .then(|| std::str::from_utf8(bytes).ok())
+                        .flatten()
+                        .ok_or(UNCARRIED)?
+                        .to_owned();
+                    r.s = self.attr_str(&text);
+                    r.a = 0;
+                }
             }
             p.recs.push((r, exprs));
         }
@@ -280,8 +338,14 @@ impl Writer<'_, '_, '_> {
 
     /// Adds `p` to the image, once its declaration's record is in.
     pub(super) fn attr_commit(&mut self, rec: u32, p: Pending) {
-        for (r, exprs) in p.recs {
+        let mut runs = p.ints.into_iter();
+        for (mut r, exprs) in p.recs {
             let k = self.img.attrs.recs.len() as u32;
+            if op_of(AttrKind(r.kind)) == Some(Op::Ints) {
+                let run = runs.next().unwrap_or_default();
+                r.a = self.img.attrs.ints.len() as u32;
+                self.img.attrs.ints.extend(run);
+            }
             self.img.attrs.recs.push(r);
             for (slot, e) in (0u8..).zip(exprs) {
                 if let Some(e) = e {
@@ -315,6 +379,11 @@ pub(super) fn encode_attrs(w: &mut Wr, a: &Attrs) {
         w.u32(b.id);
         w.u32(b.name);
     }
+    w.len(a.ints.len());
+    for &(v, loc) in &a.ints {
+        w.u32(v);
+        w.u32(loc);
+    }
 }
 
 pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
@@ -340,6 +409,10 @@ pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
         let id = r.u32()?;
         let name = r.u32()?;
         a.builtins.push(BuiltinRec { decl, map, id, name });
+    }
+    let n = r.count(8)?;
+    for _ in 0..n {
+        a.ints.push((r.u32()?, r.u32()?));
     }
     Ok(a)
 }
@@ -369,6 +442,13 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
                 Some(Op::Sym) => r.a == 0 && r.b == 0 && str_ok(r.s),
                 Some(Op::Exprs) => expr_ok(r.a) && expr_ok(r.b) && r.s == NONE,
                 Some(Op::Builtin) => r.b == 0 && spelled(r.s, r.a),
+                Some(Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
+                Some(Op::Ints) => {
+                    r.s == NONE
+                        && (r.a as usize)
+                            .checked_add(r.b as usize)
+                            .is_some_and(|e| e <= a.ints.len())
+                }
             };
         if !ok {
             return bad("bad attribute record");
@@ -421,6 +501,25 @@ impl Sema<'_, '_> {
             let (x, y) = match op_of(kind) {
                 Some(Op::Sym) => (self.intern(&a.strs[r.s as usize]).index(), 0),
                 Some(Op::Exprs) => (0, 0),
+                Some(Op::Ints) => {
+                    let ty = self.size_type();
+                    let run = &a.ints[r.a as usize..r.a as usize + r.b as usize];
+                    let mut lits = Vec::with_capacity(run.len());
+                    for &(v, at) in run {
+                        let at = main.get(at);
+                        lits.push(self.builder().int_literal(ty, u64::from(v), Radix::Decimal, at));
+                    }
+                    (self.ast.lists.push(&lits).raw(), 0)
+                }
+                Some(Op::Label) => {
+                    let text = a.strs[r.s as usize].as_bytes();
+                    let lit = self.ast.strings.intern(StringEncoding::Ordinary, text);
+                    if r.flags & 2 == 0 {
+                        let first = self.ast.first(d);
+                        let _ = self.ast.decls.cold.asm_label.insert(first, lit);
+                    }
+                    (lit.raw(), 0)
+                }
                 _ => (r.a, r.b),
             };
             let id =

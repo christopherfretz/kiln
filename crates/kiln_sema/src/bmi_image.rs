@@ -32,7 +32,8 @@ use kiln_ast::names::{DeclName, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
-    ArgView, BuiltinType, ExcSpec, FuncInfo, Nns, Quals, TagKeyword, TemplateArg, TypeView,
+    ArgView, BuiltinType, ExcSpec, FuncInfo, Nns, NoexceptValue, Quals, TagKeyword, TemplateArg,
+    TypeView,
 };
 use kiln_ast::{DeclHead, DeclId, NnsId, QualType, TypeId};
 use kiln_source::fx::{FxHashMap, FxHashSet};
@@ -129,7 +130,7 @@ struct Census {
     /// Reason, count, example, in first-seen order.
     rows: Vec<(String, usize, String)>,
     by_reason: FxHashMap<String, usize>,
-    attrs: FxHashMap<&'static str, usize>,
+    attrs: FxHashMap<String, usize>,
 }
 
 /// The lengths [`Writer::rollback`] restores after a census failure.
@@ -728,8 +729,26 @@ fn exc_spec(e: u8) -> Option<ExcSpec> {
         1 => ExcSpec::BasicNoexcept,
         2 => ExcSpec::DynamicNone,
         3 => ExcSpec::Nothrow,
+        4 => ExcSpec::NothrowAttr,
         _ => return None,
     })
+}
+
+/// The exception specification words 5 (`noexcept(true)`) and 6
+/// (`noexcept(false)`): a `noexcept` whose operand is a `bool` literal (the
+/// C library's `__THROW`), which the importer builds again.
+fn noexcept_literal(ast: &kiln_ast::Ast, e: kiln_ast::ExprId, v: NoexceptValue) -> W<u8> {
+    use kiln_ast::expr::ExprKind;
+    let n = ast.exprs.get(e);
+    let lit = n.kind() == ExprKind::ConstantExpr && {
+        let l = ast.exprs.get(ast.exprs.operand(e));
+        l.kind() == ExprKind::CXXBoolLiteralExpr && l.ty() == QualType::BOOL
+    };
+    match v {
+        NoexceptValue::True if lit => Ok(5),
+        NoexceptValue::False if lit => Ok(6),
+        _ => Err("an exception specification the image does not carry"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1579,7 +1598,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 }
                 let info = r.u16()?;
                 let exc = r.u8()?;
-                if exc_spec(exc).is_none() {
+                if exc_spec(exc).is_none() && !matches!(exc, 5 | 6) {
                     return bad("bad exception specification");
                 }
                 TyRec::Func { ret, params, info, exc }
@@ -2561,6 +2580,10 @@ impl Writer<'_, '_, '_> {
                     ExcSpec::BasicNoexcept => 1,
                     ExcSpec::DynamicNone => 2,
                     ExcSpec::Nothrow => 3,
+                    ExcSpec::NothrowAttr => 4,
+                    ExcSpec::NoexceptExpr { expr, value } => {
+                        noexcept_literal(&self.s.ast, expr, value)?
+                    }
                     _ => return Err("an exception specification the image does not carry"),
                 };
                 let ps: Vec<QualType> = types.params(&p).to_vec();
@@ -3040,7 +3063,7 @@ impl Writer<'_, '_, '_> {
             || c.record_pack.contains(d)
             || c.requires_clause.contains(d)
             || c.contracts.contains(d)
-            || c.asm_label.contains(d)
+            || (c.asm_label.contains(d) && !self.own_asm_label(d))
             || c.alignment.contains(d)
             || c.deprecation.contains(d)
             || c.instantiated_from.contains(d)
@@ -3626,14 +3649,17 @@ impl Writer<'_, '_, '_> {
         let at = Some(ast.decls.get(d).loc())
             .filter(|l| l.is_valid())
             .unwrap_or_else(|| ast.decls.get(root).loc());
-        let mut attrs: Vec<&'static str> = Vec::new();
+        let mut attrs: Vec<String> = Vec::new();
         if why == ATTRIBUTED {
             attrs = ast
                 .lists
                 .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(d))
                 .map(|a| ast.attrs.get(a))
                 .filter(|a| !attrs::carried(a, ast.symbols().len()))
-                .map(|a| crate::decl_attrs::attr_name(a).unwrap_or("(unnamed)"))
+                .map(|a| match crate::decl_attrs::attr_name(a) {
+                    Some(n) => n.to_owned(),
+                    None => format!("(kind {})", a.kind.0),
+                })
                 .collect();
             attrs.sort_unstable();
             attrs.dedup();
@@ -3985,7 +4011,7 @@ impl Sema<'_, '_> {
             .map(|(reason, count, example)| CensusRow { reason, count, example })
             .collect();
         out.rows.sort_by_key(|r| std::cmp::Reverse(r.count));
-        out.attrs = c.attrs.into_iter().map(|(a, n)| (a.to_owned(), n)).collect();
+        out.attrs = c.attrs.into_iter().collect();
         out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Some(out)
     }
@@ -4699,7 +4725,17 @@ impl Sema<'_, '_> {
             TyRec::Func { ret, params, info, exc } => {
                 let r = qt(self, *ret);
                 let ps: Vec<QualType> = params.iter().map(|&p| qt(self, p)).collect();
-                let exc = exc_spec(*exc).unwrap_or_default();
+                let exc = match *exc {
+                    5 | 6 => {
+                        let v = *exc == 5;
+                        let lit = self.builder().bool_literal(QualType::BOOL, v, Loc::INVALID);
+                        let cv = self.int_const(QualType::BOOL, i128::from(v));
+                        let expr = self.builder().constant_expr(lit, Some(cv));
+                        let value = if v { NoexceptValue::True } else { NoexceptValue::False };
+                        ExcSpec::NoexceptExpr { expr, value }
+                    }
+                    e => exc_spec(e).unwrap_or_default(),
+                };
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {

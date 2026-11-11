@@ -1,5 +1,5 @@
 // The module of image-scopes-run.cpp: linkage specifications (braced,
-// braceless, "C" and "C++"), inline and unnamed namespaces, reserved names
+// braceless, "C" and "C++"), literal exception specifications, inline and unnamed namespaces, reserved names
 // in the namespace std, which a new-expression before it has sema declare.
 export module imgs;
 
@@ -8,6 +8,11 @@ export extern "C" {
 int imgs_c_mul(int a, int b) { return a * b; }
 }
 export extern "C++" int imgs_cxx(int a) { return a - 1; }
+// Exception specifications written as literals, as a C library header's
+// __THROW expands in C++ ([except.spec]/2), and the nothrow attribute.
+export extern "C" int imgs_nt(int a) noexcept(true) { return a + 4; }
+export int imgs_nf(int a) noexcept(false) { return a + 5; }
+export __attribute__((nothrow)) int imgs_na(int a) { return a + 6; }
 
 export namespace lib {
 inline namespace v2 {

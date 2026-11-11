@@ -13,6 +13,8 @@ struct [[gnu::abi_tag("t2")]] Tagged {
 Tagged make_tagged(int x);
 __attribute__((visibility("hidden"))) int hidden_fn(int x);
 [[gnu::noinline]] int slow(int x);
+int relabeled(int x) __asm__("ia_relabeled_impl");
+__attribute__((nonnull(2))) int second(int *p, int *q);
 template <class T> struct B {
   __attribute__((exclude_from_explicit_instantiation)) int ex() { return 1; }
   int in() { return 2; }

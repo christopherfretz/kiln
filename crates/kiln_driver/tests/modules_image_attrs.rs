@@ -2,7 +2,8 @@
 //! "Attributes"). An importer that builds a module from its image sees
 //! the attributes the replayed source has: codegen visibility, abi_tag
 //! mangling, exclude_from_explicit_instantiation, and the nodiscard and
-//! deprecated warnings at the use site with their notes in the header.
+//! deprecated warnings at the use site with their notes in the header,
+//! and the nonnull indices the sanitizer checks.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -50,6 +51,8 @@ const AH: &str = "#define HIDE __attribute__((visibility(\"hidden\")))\n\
                   Tagged make_tagged(int x);\n\
                   struct [[nodiscard]] Res { int v; };\n\
                   Res make_res();\n\
+                  __attribute__((nonnull(2))) int second(int *p, int *q);\n\
+                  __attribute__((nonnull)) int every(int *p, int *q);\n\
                   template <class T> struct B {\n\
                     __attribute__((exclude_from_explicit_instantiation)) int ex() { return 1; }\n\
                     int in() { return 2; }\n\
@@ -68,7 +71,8 @@ const AUSE: &str = "import a;\n\
                     \x20 int r = aa::old(2);\n\
                     \x20 aa::B<int> b;\n\
                     \x20 return r + aa::hidden_fn(1) + aa::shown_fn(2) + aa::tagged(3)\n\
-                    \x20      + aa::make_tagged(4).v + b.ex() + b.in();\n\
+                    \x20      + aa::make_tagged(4).v + b.ex() + b.in()\n\
+                    \x20      + aa::second(&r, &r) + aa::every(&r, &r);\n\
                     }\n";
 
 /// Whether a `-v` compile of `args` built `a` from its image.
@@ -118,4 +122,17 @@ fn image_attributes_behave_as_replayed() {
         assert!(ir.contains(want), "{want}\n{ir}");
     }
     assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    // The nonnull indices: -fsanitize=nonnull-attribute checks the second
+    // argument of `second` and both of `every`, either way.
+    let san = [&ir_args[..], &["-fsanitize=nonnull-attribute"]].concat();
+    assert!(from_image(&d, &san), "the image is used");
+    let mut irs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        ok(&d, &[&[flag][..], &san].concat());
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    let checks = irs[0].matches("call void @__ubsan_handle_nonnull_arg").count();
+    assert_eq!(checks, 3, "{}", irs[0]);
+    assert!(irs[0] == irs[1], "sanitized IR differs between the image and the replay");
 }
