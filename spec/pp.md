@@ -440,7 +440,9 @@ spellings). At level 22 the answers are clang 22.1.8's, measured by
 `scripts/gen-features.sh` over the same configurations and flags as
 clang 19: 894 base deltas (`COMPAT22`, applied after the base entries)
 and 130 flag overlays (`COMPAT22_OVERLAYS`, applied after the clang 19
-overlays). The level does **not** change the `__cpp_*` feature-test
+overlays). At level 19 the driver also sets `PpOptions::clang19_escapes`, so
+`#if` character literals decode an empty `\x{}`/`\o{}` as clang 19 does
+(spec/lex.md, empty delimited escapes; WP-1268). The level does **not** change the `__cpp_*` feature-test
 macros, which say what kiln implements (docs/STANDARD_SUPPORT.md),
 nor what kiln accepts: kiln's builtins are a superset of both clangs'
 (spec/sema-templates.md §9.1 "clang 22 rows"). In compile modes the

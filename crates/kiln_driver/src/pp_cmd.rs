@@ -275,6 +275,7 @@ impl Job<'_> {
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection_for(&self.std);
         o.char8 = a.predef.char8_t;
+        o.clang19_escapes = a.predef.clang_compat == kiln_pp::ClangCompat::Clang19;
         o.main_is_header = a.pch.header_main;
         o.meta_hint = self.meta_hint();
         o.predefines = predefines;

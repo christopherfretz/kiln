@@ -426,6 +426,7 @@ impl<'c> Ev<'c> {
             &spelling,
             LiteralOptions {
                 char8: Some(self.char8),
+                clang19_escapes: self.cx.clang19_escapes(),
                 ..LiteralOptions::new(self.std, self.params)
             },
         );

@@ -115,8 +115,13 @@ fn lex_string_uneval_escape_ranges() {
     );
     assert_eq!(
         esc(r#""\x{}b""#),
-        [(D::DelimitedEscapeEmpty, r"\x{}".to_owned()), uneval('x', r"\x{}")]
+        [(D::DelimitedEscapeEmpty, r"\x{".to_owned()), uneval('x', r"\x{}")]
     );
+    // Clang's ranges: an empty `\u{}` includes the `}`, an unterminated
+    // `\N{` is `\N{`, an unknown name is the name.
+    assert_eq!(esc(r#""\u{}""#), [(D::DelimitedEscapeEmpty, r"\u{}".to_owned())]);
+    assert_eq!(esc(r#""\N{abc""#), [(D::UcnEscapeIncomplete, r"\N{".to_owned())]);
+    assert_eq!(esc(r#""\N{LATIN}""#), [(D::UcnUnknownName, "LATIN".to_owned())]);
     assert_eq!(esc(r#""\xg""#), [(D::EscapeNoDigits { esc: 'x' }, r"\x".to_owned())]);
     assert_eq!(esc(r#""\u0041\U00000041\N{LATIN CAPITAL LETTER A}""#), []);
     // clang 19 returns before the check for an empty `\x{}`.

@@ -482,8 +482,8 @@ vertical tab, form feed, carriage return) and printable or format (Cf)
 characters print as they are; any other code point (a control character,
 U+2028/U+2029, a private-use or noncharacter code point) as `<U+XXXX>`;
 each byte that is not part of valid UTF-8 as `<XX>` (uppercase hex).
-Printability follows §9.4 and deviation D5 (clang also escapes the
-unassigned code points). A newline is not escaped, as in clang: the
+Printability follows §9.4 (an unassigned code point, such as U+0378,
+escapes too). A newline is not escaped, as in clang: the
 message continues on the next line. The callers:
 
 - a failed `static_assert`'s message, a string literal or a `size()` /
@@ -843,6 +843,27 @@ of invalid UTF-8 (restored from the source manager's load report), as
 clang does. Column arithmetic for carets and ranges uses display columns
 (clang's `SourceColumnMap`).
 
+The character classes are LLVM 22's (`llvm/lib/Support/Unicode.cpp`),
+exactly: kiln_diag's `unicode_tables.rs` holds sorted range tables that
+`scripts/gen-unicode-tables.py` generates from UCD 15.1.0, the version
+LLVM 22 generates its tables from (WP-1268; the generated file is checked
+in and `@generated`; re-run the script, then `cargo fmt --all`):
+
+- printable (`isPrintable`): general categories L, M, N, P, S and Zs,
+  plus U+00AD SOFT HYPHEN (special-cased in code, as LLVM does); 711
+  ranges. Unassigned code points are not printable;
+- formatting (`isFormatting`, §6.2): general category Cf; 21 ranges;
+- width 0 (`charWidth`): general categories Mn and Me; 343 ranges;
+- width 2: East_Asian_Width F or W, plus U+1F300..U+1F5FF,
+  U+1F900..U+1F9FF and U+4DC0..U+4DFF (LLVM's table carries the Yijing
+  hexagrams although 15.1.0 gives them N); 100 ranges.
+
+Lookup is a binary search over `(lo, hi)` pairs (about 9 KB of read-only
+data). When the generator last ran, each table equalled LLVM 22's range
+for range. clang 19's tables give the same answers for every code point
+the corpus exercises (`dcl.pre/static-assert-message-unassigned-code-point.cpp`
+passes under both).
+
 ### 9.5 Fix-its
 
 Under `-fdiagnostics-fixit-info`, insertion fix-its on a shown line produce
@@ -1074,7 +1095,7 @@ diagnostic differently (`... within a module purview`), the corpus test is
 | D2 | Adjacent fix-its are not merged (`mergeFixits`). | No caller needs it yet. |
 | D3 | No word wrap / `-fmessage-length`. | The driver default is no wrapping. |
 | D4 | `-fdiagnostics-color=auto` means off. | No terminal probing. |
-| D5 | Unicode printability and width are approximate (ASCII exact; combining/wide ranges coarse). | clang uses LLVM's full tables; no third-party deps here. |
+| D5 | (Resolved by WP-1268: printability, formatting and width use LLVM 22's tables, §9.4.) Unicode version: UCD 15.1.0, as LLVM 22; a later LLVM's tables need a regenerated `unicode_tables.rs`. | |
 | D6 | Unknown-option suggestions consider kiln's groups only, so e.g. `-Wbogus` suggests `-Wmost` where clang's larger table ties and suggests nothing, and `-Rbogus` suggests nothing where clang suggests `-Rpass`. | Kiln lacks clang's group membership data. |
 | D7 | (Resolved by WP-203: the observable macro-argument rule is implemented, §8.4.) | |
 | D8 | (Resolved by WP-056: the include stack is printed.) | |

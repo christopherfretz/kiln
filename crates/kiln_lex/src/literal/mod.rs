@@ -577,8 +577,11 @@ impl Escapes<'_> {
             return (None, false, i);
         }
         if digits == 0 {
+            // clang's range for an empty `\x{}`/`\o{}` stops before the
+            // `}`; for `\u{}` it includes it.
+            let hi = if char_escape { i - 1 } else { i };
             if char_escape && self.clang19 {
-                self.diags.push_soft(LexDiagKind::DelimitedEscapeEmpty, at, i);
+                self.diags.push_soft(LexDiagKind::DelimitedEscapeEmpty, at, hi);
                 // clang 19 leaves the `}` of an empty `\x{}`/`\o{}`
                 // unconsumed, so it lexes as a further character (making
                 // `'\x{}'` a multicharacter literal), and returns before
@@ -586,7 +589,7 @@ impl Escapes<'_> {
                 self.skip_unevaluated = true;
                 return (Some(0), false, i - 1);
             }
-            self.diags.push(LexDiagKind::DelimitedEscapeEmpty, at, i);
+            self.diags.push(LexDiagKind::DelimitedEscapeEmpty, at, hi);
             return (None, false, i);
         }
         if char_escape {
@@ -608,7 +611,8 @@ impl Escapes<'_> {
                 }
                 let start = next + 1;
                 let Some(close) = self.s[start..].find('}').map(|k| start + k) else {
-                    self.diags.push(LexDiagKind::UcnEscapeIncomplete, at, self.s.len());
+                    // clang's range is `\N{`.
+                    self.diags.push(LexDiagKind::UcnEscapeIncomplete, at, start);
                     return (None, self.s.len());
                 };
                 let end = close + 1;

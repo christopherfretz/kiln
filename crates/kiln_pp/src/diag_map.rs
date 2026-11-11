@@ -167,26 +167,41 @@ pub fn literal_diags(
             K::UnknownEscape { ch } => {
                 Diag::new(DiagId::lit_unknown_escape, at).arg(ch).range(span)
             }
-            K::NonstandardEscape { ch } => Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch),
-            K::EscapeNoDigits { esc } => Diag::new(DiagId::lit_escape_no_digits, at).arg(esc),
-            K::EscapeMissingBrace { esc } => {
-                Diag::new(DiagId::lit_escape_missing_brace, at).arg(esc)
+            K::NonstandardEscape { ch } => {
+                Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch).range(span)
             }
-            K::DelimitedEscapeEmpty => Diag::new(DiagId::lit_delimited_escape_empty, at),
-            K::DelimitedEscapeUnterminated => Diag::new(DiagId::pp_expected, at).arg("'}'"),
+            K::EscapeNoDigits { esc } => {
+                Diag::new(DiagId::lit_escape_no_digits, at).arg(esc).range(span)
+            }
+            K::EscapeMissingBrace { esc } => {
+                Diag::new(DiagId::lit_escape_missing_brace, at).arg(esc).range(span)
+            }
+            K::DelimitedEscapeEmpty => {
+                Diag::new(DiagId::lit_delimited_escape_empty, at).range(span)
+            }
+            K::DelimitedEscapeUnterminated => {
+                Diag::new(DiagId::pp_expected, at).arg("'}'").range(span)
+            }
+            // clang's range runs from the backslash to the bad digit.
             K::DelimitedEscapeInvalidDigit { ch } => {
-                Diag::new(DiagId::lit_delimited_escape_invalid, backslash()).arg(ch)
+                let b = backslash();
+                Diag::new(DiagId::lit_delimited_escape_invalid, b)
+                    .arg(ch)
+                    .range(Span::new(b.lo, span.lo.max(b.lo)))
             }
             K::DelimitedEscapeExtension | K::UcnDelimitedExtension => {
                 Diag::new(DiagId::lex_delimited_escape_ext, at).arg(0)
             }
             K::UcnNamedExtension => Diag::new(DiagId::lex_delimited_escape_ext, at).arg(1),
-            K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at),
-            K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at),
-            K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at),
-            K::UcnUnknownName => Diag::new(DiagId::lex_ucn_unknown_name, at).arg(ucn_name(range)),
+            K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at).range(span),
+            K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at).range(span),
+            K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at).range(span),
+            K::UcnUnknownName => {
+                Diag::new(DiagId::lex_ucn_unknown_name, at).arg(ucn_name(range)).range(span)
+            }
             K::UcnNameLooseMatch { .. } => Diag::new(DiagId::lex_ucn_unknown_name, at)
                 .arg(ucn_name(range))
+                .range(span)
                 .with_note(Diag::new(DiagId::note_ucn_name_loose_match, at)),
             K::CharTooLarge => Diag::new(DiagId::lit_char_too_large, start),
             K::MultiCharLiteral => Diag::new(DiagId::lit_multichar, start),

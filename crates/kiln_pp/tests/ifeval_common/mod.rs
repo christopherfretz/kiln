@@ -130,6 +130,8 @@ pub fn run_kiln_with(
     if predefs {
         predefines(triple, std).clone_into(&mut opts.predefines);
     }
+    // The oracle is clang 19 (`'\x{}'` keeps its `}` there).
+    opts.clang19_escapes = true;
     opts.reproducible_time = Some(("Jan  1 2000".to_owned(), "00:00:00".to_owned()));
     let mut pp = Preprocessor::new(&sm, &engine, &interner, opts);
     pp.set_include_resolver(Box::new(r));
