@@ -351,6 +351,7 @@ impl CodegenJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
+        crate::pch_image::finish(a, &mut pp, sm, interner, engine, None);
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {

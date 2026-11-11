@@ -42,6 +42,7 @@ pub mod print;
 mod profile;
 mod resolver;
 mod search;
+pub mod state;
 mod tok;
 
 pub use builtin::{Builtin, FeatureQueries, NoFeatures, TargetQuery};

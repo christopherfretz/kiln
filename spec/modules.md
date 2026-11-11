@@ -2282,6 +2282,91 @@ variable templates, unresolved-lookup expressions (a dependent call
 (`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
 calls, and every construct the first slice lists.
 
+*Third slice (WP-1279): packs, defaults, alias and variable templates,
+unresolved names.* Carried since the third slice:
+
+- *Packs.* A template parameter record's flag byte has bit 1 for a
+  pack (a type parameter's byte keeps bit 0 for `typename`; a
+  non-type parameter's record gains a flag byte after its index, bit 0
+  a pack). A function parameter pack of a pattern is a parameter
+  record whose `ParamData::PACK` bit the validator accepts in a
+  `DEPENDENT_CTX` record only. A pack expansion type `Ts...` is type
+  tag 19, `pack(pattern:qref)` (one with a known expansion count falls
+  back); `sizeof...(Ts)` (`SizeOfPackExpr`, the pack's parameter
+  record, which must be a pack), `PackExpansionExpr` (its pattern) and
+  a fold `(0 + ... + f(xs))` (`CXXFoldExpr`: both optional operands,
+  the operator in aux as for a binary operator, the `...`
+  location as cold annotation 64) are appended to the kind table. An
+  unexpanded pack in an expression's `deps` byte is accepted.
+- *Placeholder types in patterns.* A dependent `auto` or
+  `decltype(auto)` (a return type deduced at instantiation) is type
+  tag 20, `auto(k:u8)`: bit 0 for `decltype(auto)`, bit 1 when the
+  placeholder was deduced to the dependent type. A constrained
+  placeholder, `__auto_type` and a deduced non-dependent placeholder
+  fall back.
+- *Default arguments of non-type parameters.* The non-type parameter
+  record's flag byte has bit 1 when the default carries a canonical
+  profile, followed by `default:u32`, an expression record (or none).
+  The expression is a body root of the parameter, written with the
+  bodies and patched into the record; the reader builds the parameter
+  without it and, once the bodies are built, gives it the expression
+  through `set_template_default`, recomputing the profile with
+  `profile_expr` when the bit says the writer's argument had one (as
+  `act_on_template_default` stores it). A default inherited from an
+  earlier declaration belongs to a redeclared template and falls back.
+- *Alias templates.* Template kind 2: the pattern is the dependent
+  alias record (a `Typedef` record with its alias bit) immediately
+  before the template record; the template record carries the `using`
+  location as a fifth location word (`using`, 0 for the other kinds),
+  so errors in an alias's substitution and "template is declared
+  here" point where replay puts them. A type naming an alias
+  specialization is type tag 16 whose template is a kind-2 record and
+  whose underlying type is the substituted pattern (an alias
+  specialization is no declaration, so there is no kind-18 record).
+- *Variable templates.* Template kind 3: the pattern is the dependent
+  variable record immediately before the template record, its
+  initializer an ordinary initializer root; the importer instantiates
+  it as after a replay.
+- *Named class specializations.* A specialization reference record
+  may name a class specialization of `SpecKind::Undeclared` (only
+  named, `using B = X<int>;`), which the importer names the same way.
+- *Unresolved names.* A dependent call or reference through an
+  unqualified, qualified or template-id name (`f(t)`, `iu::f(t)`,
+  `g<T>(t)`, `size<T>`, `a + b` resolved to a namespace-scope
+  operator function) is `UnresolvedLookupExpr`, appended to the kind
+  table: the name (a `pnames` index, or `N_OP + op` for an
+  operator-function-id), the candidate set found at definition time
+  ([temp.dep.candidate]; each candidate a function, function template
+  or variable template record, which the validator checks), and aux 1
+  when argument-dependent lookup applies. Cold annotation 128 carries,
+  for any expression, the written qualifier (`expr_nns`) and the
+  explicit template argument list (`expr_targs`): the qualifier as an
+  `Nns` field, the list as `0` for none or `1 + n` then three words per
+  argument, `0 qref quals` a type or `1 expr profile` an expression
+  record (with its profile bit); other argument kinds fall back with
+  "a template argument the image does not carry". Instantiation
+  redoes lookup exactly as after replay, so argument-dependent lookup
+  at the point of instantiation finds the importer's own functions.
+  A name whose candidates include a class member, or one sema keeps
+  extra state for (a using-shadow or naming class, `ule_found`; an
+  implicit member reference, `member_refs`), falls back with "a
+  template expression".
+
+The census separates the "a declaration in a template" reason: a
+partial specialization ("an explicit or partial specialization"), a
+member of a class the image does not carry ("a member of a class
+outside the image", a cascade of that class's own reason), and the
+rest. Still falling back after the third slice: concepts, constrained
+parameters and templates, requires-clauses and requires-expressions,
+template template parameters, member templates and templates in
+templates, redeclared templates (and inherited defaults), deduction
+guides, explicit and partial specializations, non-dependent references
+with written template arguments (`size<int>`, `sq<3>`: "a template
+argument list"), `DependentScopeDeclRefExpr` (`T::v`),
+`UnresolvedMemberExpr`, the `template` keyword in a dependent name,
+dependent array bounds, pack expansions in base specifiers, and
+friends.
+
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
 that re-exports (`export import`), and a module partition. It also
@@ -2548,7 +2633,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 12` since WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 13` since WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2819,8 +2904,8 @@ Falls back (each with its `-v` reason):
 - lambdas ("a lambda expression"; a closure is a local class): S3
   follow-up;
 - template expressions, requires-expressions and concepts: S4 (in a
-  function template's pattern, "a template expression" until the
-  unresolved-lookup kinds land, see "Templates as patterns");
+  pattern, the dependent kinds other than those the slices carry are
+  "a template expression", see "Templates as patterns");
 - `try` blocks and function-try-blocks, coroutines, expansion
   statements, `asm`, contract assertions, computed `goto`, and
   attributes with arguments (`[[assume(...)]]`): follow-ups under
@@ -2975,8 +3060,10 @@ classes and templates). The follow-ups, in priority order:
    lambdas;
 3. S4: templates as patterns. **First slice landed: namespace-scope
    function templates (WP-1066)**; **second slice landed:
-   specialization references and class templates (WP-1139)**, see
-   "Templates as patterns" and its follow-ups;
+   specialization references and class templates (WP-1139)**;
+   **third slice landed: packs, non-type defaults, alias and variable
+   templates, unresolved names (WP-1279)**, see "Templates as
+   patterns" and its follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
 5. S6: imports, re-exports and partitions. **Landed (WP-1068)**, see
@@ -3278,6 +3365,143 @@ interface or `stdapp`'s source never rebuilds the std module.
 - Pruning (WP-1050, above) runs only when some compile uses the cache,
   as in clang: a cache no compile touches again is never pruned, and
   its entries (about 9 MiB each) stay until removed by hand.
+
+### 11.13 The preprocessor-state record (WP-1280)
+
+The preprocessor state a header leaves behind, as a module-file section
+(`SECTION_PP` = 3, `kiln_pp::state`). It is the first piece of a real
+PCH (spec/driver.md "Precompiled headers", `-fkiln-pch-image`), and
+header units' exported macros go through it. Loading it replaces
+reading the header for everything the preprocessor keeps; Sema's state
+(the declarations, and the pragma state below, which is carried but
+not yet installed) is WP-1036's.
+
+**What it holds.** The difference between the state where the header
+begins (the *baseline*: the predefines and the command line read, no
+`-include` yet) and the state at its end (spec/pp.md
+"Preprocessor-state record" defines the points):
+
+- **Macros.** Every definition made or replaced, by name, with its
+  locations (the name's range, where the definition starts and its
+  length), its parameters, its flags (function-like, variadic, named
+  variadic, used, allowed to be redefined) and its body as compact
+  tokens. A builtin macro's definition (`__LINE__`, `__COUNTER__`, ...,
+  as a `push_macro` stack holds it) is its builtin index. **Undefs**:
+  the baseline macros no longer defined (`#undef __GNUC_MINOR__`).
+- **Include guards and `#pragma once`.** Each guarded file with its
+  guard macro, and each once file, as file-table entries; at the end of
+  the header, the header's own guard counts, as it would once included.
+  In-memory buffers are left out (they cannot be included again).
+- **`push_macro` stacks** that changed (an entry is a definition or
+  "undefined") and **poisoned identifiers** with the poisoning
+  pragma's range.
+- **`__COUNTER__`**, the number of `#pragma clang diagnostic push`es not
+  popped, and the attribute macros the header defined (WP-1065; their
+  definition and end locations and token text).
+- **The `#pragma clang|GCC diagnostic` state**: every mapping state the
+  header made (diagnostic name, severity, the user/no-`-Werror`/no-fatal
+  bits), the state in effect and the push stack (`kiln_diag`
+  `PragmaSnapshot`); installed as the state at the point the record is
+  loaded, so a diagnostic after it sees the header's mappings and
+  `pop` returns to the state before.
+- **Sema pragma state** (the inventory; written by the producer from
+  `kiln_sema::PragmaState`, carried, not yet installed or compared):
+  the `#pragma pack` value and push stack (label, value), `#pragma
+  ms_struct`, the `#pragma GCC visibility` stack (default, hidden,
+  protected, or an attribute push, with its location) and the FP pragma
+  override and `float_control(push)` stack (`kiln_sema::fp_bits`).
+  The rest of the inventory:
+  - `once`, `push_macro`/`pop_macro`, `GCC poison` and `clang|GCC
+    diagnostic` are the preprocessor state above;
+  - `message`, `warning`, `error`, `GCC system_header`, `GCC
+    dependency`, `region`/`endregion` and `mark` act where they appear
+    and leave no state;
+  - `clang deprecated`, `final` and `restrict_expansion` keep no state
+    yet (spec/pp.md deviation 3);
+  - every other pragma reaches Sema as tokens. Sema state other than
+    the stacks above, such as a pending `#pragma weak`, is carried with
+    the declarations by WP-1036.
+
+**Compact tokens; no lexing on load.** A body token is its kind (a tag
+and a payload: the identifier's name index, the literal's encoding, the
+punctuator's index, the character of an `other` token), its lexer and
+preprocessor flags and its offsets in the definition's range. Nothing is
+lexed when the record is read: a token's spelling is read from its file
+only when something prints it (`-E`, `#`, `##`, a diagnostic), through a
+lazy buffer (spec/source.md `add_lazy_file`).
+
+**Layout** (little-endian `u32`s; a string is its length then UTF-8):
+
+```
+u32 VERSION (1)
+file table and location records      §11.11 "File table" / "Location records"
+u32 n, n names                       every identifier the record uses
+u32 n, n definitions                 0 user | 1 builtin, see above
+u32 n, n definition indexes          macros
+u32 n, n name indexes                undefs
+u32 n, n (name, u32 k, k definition indexes or u32::MAX)   push stacks
+u32 n, n (name, lo, hi)              poisoned
+u32 n, n (file index, name)          guards
+u32 n, n file indexes                once
+u32 counter, u32 diagnostic pushes
+u32 n, n (name, def, end, tokens)    attribute macros
+u32 n, n mapping states, u32 current, u32 n, n state indexes   diagnostics
+u32 pack, u32 n, n (u8 has-label, [label], u32 value), u8 ms_struct
+u32 n, n (u8 present, [u32 code, location])               visibility
+u64 fp, u32 n, n u64                 FP override and stack
+```
+
+The file table's entry 0 is the header (the main file of the producer).
+Unlike a declaration image's, the table also carries the predefined
+buffers (`<built-in>`, `<command line>`) inline and files with `#line`
+(a macro defined by `-D` or by a producer's `-include` keeps its
+definition location). The reader is total: every truncation and byte
+change decodes to an error or to a well-formed record
+(`record_is_total`). Materializing ties the record to an importer's
+source manager: a file it already has with the recorded length and hash
+is reused, any other is added lazily; a missing file, or one whose size
+changed, is an error, and a same-size edit is found when its text is
+first read (the driver then reports the record unusable).
+
+**In a precompiled header.** The section block of a kind-2 file
+(§11.3: the count, each section's tag and bytes) followed by its
+FNV-1a 64 checksum (`bmi::write_sections`), after the `KILNPCH` text
+(spec/driver.md "Format").
+
+**Header units.** A header unit's exported macros are written to a
+record with the unit's file as entry 0, read back and materialized,
+and the importer sees the materialized definitions (`end_unit`,
+`unit_round_trip`); a unit the record cannot carry keeps its in-process
+definitions. `ModuleOptions::no_unit_record` turns the round trip off.
+The header-unit tests (`tests/conformance/module.import/`,
+`header-unit*.cpp`) pass with it on.
+
+**Tests.** `crates/kiln_pp/tests/pp_state.rs`: macros and undefs,
+redefinition diagnostics pointing into the header, `push_macro` and
+poison, `__COUNTER__`, the diagnostic stack, totality, and the pp
+torture corpus (`tests/differential/pp/torture/*.cpp` each as the
+header, every `Inputs/` header included again after it), each comparing
+`-E`, `-dM -E` and diagnostics of replay with the installed record.
+`crates/kiln_driver/tests/pch_image.rs` covers the driver.
+
+**Measured** (harness build, aarch64, WP-1280; median of 5;
+`-std=c++26`, the PCH built with `-fkiln-pch-image`, then `-E -P` of a
+small TU with `-include-pch`):
+
+- `<bits/stdc++.h>` (libstdc++ 14): a 465 KB record (549 KB PCH)
+  for 4964 macros. Replay takes 0.23 s and 31 MB; loading the record
+  takes 0.01 s and 8.9 MB (0.02 s with `-fno-validate-pch`).
+- Every libc++ public header (106 `#include`s): a 542 KB record
+  (679 KB PCH) for 4569 macros. Replay takes 0.24 s and 45 MB; the
+  record, 0.02 s and 9.2 MB.
+- For reference, clang++-19 builds its PCH of `<bits/stdc++.h>` in
+  1.45 s and 282 MB. A `-fsyntax-only` with that PCH takes 0.32 s and
+  162 MB, and `-E` of the header takes 0.13 s and 94 MB. clang's PCH
+  carries the AST as well, so the numbers do not compare one-to-one.
+
+The -E and -dM -E outputs after the header are identical, as are the
+diagnostics. The `-fkiln-pch-image=check` mode is clean on both, in
+`-E` and in `-fsyntax-only`.
 
 ## Tests
 

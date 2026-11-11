@@ -1104,6 +1104,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1027 | driver: refresh `--help` (lib.rs:139 still says "-g (ignored)"; add -fclang-compat, -fcontract-evaluation-semantic, -fsanitize, --coverage/-fprofile-instr-generate, -fcrash-diagnostics*, -fconstexpr-ops-limit, -fcoro-aligned-allocation, -flto, -fmodule-file, -fprebuilt-module-path, --llvm-dir (WP-1024)) | WP-1022 | done (#426) |
 | WP-1028 | dist: ship USER_GUIDE/KNOWN_ISSUES/CHANGELOG/CONTRIBUTING/SECURITY in share/doc/kiln and make README links resolve inside the release archive (xtask/src/dist.rs:329) | WP-1022 | done (#426, WP-1027) |
 | WP-1036 | PCH speed: serialised-AST/Oven-state PCH reusing the spec/modules.md §11 module-file format and the WP-985 kind-2 BMI; `KILNPCH 1` (spec/driver.md:1149) becomes its fingerprint/validation layer (crates/kiln_driver/src/pch.rs:460) | WP-1023 | open |
+| WP-1280 | PCH wave 2: preprocessor-state record (macros, guards, `#pragma once`, push_macro, poison, pragma stacks, `__COUNTER__`) as a module-file section; header units and `-fkiln-pch-image` on it | WP-1036 | in progress |
 | WP-1037 | driver: `-include foo.h` probes for `foo.h.pch` as clang's driver does (spec/driver.md:1313) | WP-1023 | done (#510) |
 | WP-1153 | driver PCH tails: `-E` goes on past an unreadable `-include-pch`, `--include`/`--include=` alias `-include`, `-Xclang -include-pch` wins over a later driver one; WP-1157 oracle pin | WP-1037 | done (#525) |
 | WP-1038 | decision: PCH staleness by content hash (kiln) vs mtime (clang): keep or match (spec/driver.md:1309) | WP-1023 | decided: keep content hash (operator 11-09) |
@@ -1151,6 +1152,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1067 | modules image S5: global module fragment with ODR merging (WP-460 semantics) replacing the name gate (bmi_image.rs:1251, kiln_pp modules.rs:739) | WP-1048 | open |
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | done (#556) |
 | WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
+| WP-1279 | PCH image: templates, S4 third slice (packs, template defaults, alias templates, out-of-image member cascade) | WP-1069 | in progress |
 | WP-1070 | modules image S7: locations in other files and macro expansions (bmi_image.rs:868); then flip -fkiln-bmi-image on once std is covered | WP-1048 | in progress |
 | WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | done (#443) |
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | done (#447) |
