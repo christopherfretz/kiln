@@ -147,7 +147,8 @@ usage: cargo xtask ci [--quick] [--oracle-only] [--step <steps>] [--shard <K/N>]
                                targets), the mangling differential (mangle_vs_clang)
                                as its own command
                    self-check  the clang++-N corpus self-check
-                   kiln        cargo build -p kiln_driver, then the kiln corpus run
+                   kiln        cargo build -p kiln_driver, then the kiln corpus run,
+                               its --bmi-kind runs and the --pch-diff slice
                  an unselected step prints `skipped (--step)`
   --shard <K/N>  run only shard K of N of each corpus run (`cargo xtask test
                  --shard K/N`); needs a selected self-check or kiln step
@@ -464,17 +465,30 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         None => test::CorpusOutcome::Skipped("--step".to_owned()),
     };
     let (bmi1, bmi2) = (bmi_kind(1), bmi_kind(2));
+    // The PCH differential's slice (spec/harness.md "PCH differential"):
+    // the image path and the replay fallback, kiln only.
+    let pch_diff = |m: util::pch_diff::PchDiff| match &kiln {
+        Some(kiln) if !args.oracle_only => ci_pch_diff(kiln, m, args.shard),
+        Some(_) => test::CorpusOutcome::Skipped("--oracle-only".to_owned()),
+        None => test::CorpusOutcome::Skipped("--step".to_owned()),
+    };
+    let (pch_load, pch_replay) =
+        (pch_diff(util::pch_diff::PchDiff::Load), pch_diff(util::pch_diff::PchDiff::Replay));
 
     let shard = args.shard.map_or_else(String::new, |s| format!(", shard {s}"));
     let self_check_name = format!("{corpus_compiler} self-check{shard}");
     let kiln_name = format!("kiln{shard}");
     let bmi1_name = format!("kiln --bmi-kind 1{shard}");
     let bmi2_name = format!("kiln --bmi-kind 2{shard}");
+    let pch_load_name = format!("kiln --pch-diff load{shard}");
+    let pch_replay_name = format!("kiln --pch-diff replay{shard}");
     let runs = [
         (self_check_name.as_str(), self_check),
         (kiln_name.as_str(), kiln_mode),
         (bmi1_name.as_str(), bmi1),
         (bmi2_name.as_str(), bmi2),
+        (pch_load_name.as_str(), pch_load),
+        (pch_replay_name.as_str(), pch_replay),
     ];
     for (name, run) in &runs {
         eprintln!("xtask ci: corpus ({name}): {}", run.line());
@@ -533,6 +547,42 @@ fn ci_corpus(
         require_sanitizer_runtime: test::require_sanitizer_runtime_from_env(),
         shard,
         bmi_kind,
+        ..test::Options::default()
+    };
+    let start = std::time::Instant::now();
+    let run = test::execute(&opts);
+    if let Err(e) = &run {
+        eprintln!("xtask test: error: {e}");
+    }
+    test::CorpusOutcome::of(&run, start.elapsed())
+}
+
+/// The directories `ci` runs the PCH differential over (spec/harness.md
+/// "PCH differential"): the PCH tests and the module interfaces, a few
+/// seconds.
+const PCH_DIFF_SLICE: [&str; 2] =
+    ["tests/conformance/cpp.include", "tests/conformance/module.interface"];
+
+/// `cargo xtask test --compiler <kiln> --pch-diff <mode>` over
+/// [`PCH_DIFF_SLICE`].
+fn ci_pch_diff(
+    kiln: &std::path::Path,
+    mode: util::pch_diff::PchDiff,
+    shard: Option<test::Shard>,
+) -> test::CorpusOutcome {
+    let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
+    eprintln!(
+        "xtask ci: cargo xtask test --compiler {} --pch-diff {} {}{shard_flag}",
+        kiln.display(),
+        mode.as_str(),
+        PCH_DIFF_SLICE.join(" ")
+    );
+    let root = test::repo_root();
+    let opts = test::Options {
+        compiler: Some(kiln.to_path_buf()),
+        pch_diff: Some(mode),
+        shard,
+        paths: PCH_DIFF_SLICE.iter().map(|d| root.join(d)).collect(),
         ..test::Options::default()
     };
     let start = std::time::Instant::now();

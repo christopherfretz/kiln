@@ -121,6 +121,12 @@ impl Preprocessor<'_, '_> {
         self.state_hooks = Some(Box::new(hooks));
     }
 
+    /// The hooks installed, if any (the state still to be installed).
+    #[must_use]
+    pub fn state_hooks(&self) -> Option<&StateHooks> {
+        self.state_hooks.as_deref()
+    }
+
     /// Removes and returns the hooks with what they took.
     pub fn take_state_hooks(&mut self) -> Option<StateHooks> {
         self.state_hooks.take().map(|b| *b)

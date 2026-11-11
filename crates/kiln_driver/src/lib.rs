@@ -27,6 +27,7 @@ pub mod link;
 pub mod llvm;
 pub mod module_cache;
 mod pch;
+mod pch_check;
 mod pch_image;
 pub mod pp_cmd;
 pub mod rsp;
@@ -451,8 +452,20 @@ pub(crate) fn syntax_only(
     diag_opts: &DiagOptions,
     io: &Io,
 ) -> JobResult {
-    let job =
-        Job { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() };
+    // `-fkiln-pch-image=check` (WP-1036).
+    let input = pch_check::Input { tc, std, path, stdin_text, diag_opts, stderr: &io.stderr };
+    if let Some(r) = pch_check::syntax_only(args, &input) {
+        return r;
+    }
+    let job = Job {
+        args,
+        toolchain: tc,
+        std,
+        path,
+        stdin_text: input.stdin_text,
+        diag_opts,
+        stderr: io.stderr.clone(),
+    };
     SyntaxJob(job).run()
 }
 

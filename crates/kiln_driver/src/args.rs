@@ -803,6 +803,33 @@ pub struct PchArgs {
     /// The `-include-pch` file's preprocessor-state record, for
     /// `-fkiln-pch-image=check`/`load` (set by `crate::pch`).
     pub image_use: Option<PchImageUse>,
+    /// `-fkiln-pch-image=check` for a compile whose PCH has a declaration
+    /// image: what a `load` consumer compiles with, run next to the
+    /// replay and compared with it (WP-1036; set by `crate::pch`).
+    pub check_load: Option<Box<PchCheckLoad>>,
+}
+
+/// The arguments a `load` consumer differs in from replay's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PchCheckLoad {
+    /// The `-include`s left after the PCH's.
+    pub includes: Vec<String>,
+    /// The record installed and the declaration image built.
+    pub image_use: PchImageUse,
+}
+
+impl Args {
+    /// The `load` consumer's arguments of a `-fkiln-pch-image=check`
+    /// compile (spec/driver.md "Precompiled headers").
+    #[must_use]
+    pub fn pch_load_variant(&self) -> Option<Args> {
+        let c = self.pch.check_load.as_deref()?;
+        let mut a = self.clone();
+        a.includes.clone_from(&c.includes);
+        a.pch.image_use = Some(c.image_use.clone());
+        a.pch.check_load = None;
+        Some(a)
+    }
 }
 
 /// `-fkiln-pch-image`'s mode (spec/driver.md "Precompiled headers").
@@ -816,11 +843,13 @@ pub enum PchImage {
     /// §11.13) next to the fingerprint.
     Write,
     /// As `Write`; the consumer replays the header and compares the
-    /// state replay reached with the record's.
+    /// state replay reached with the record's; a compile also builds the
+    /// declaration image and compares the two (WP-1036).
     Check,
-    /// As `Write`; `-E`/`-M` install the record instead of replaying the
-    /// header (a compile checks, as `Check`: the declarations still come
-    /// from replay until WP-1036).
+    /// As `Write`; the consumer installs the record and builds the
+    /// declaration image instead of replaying the header (`-E`/`-M`
+    /// install the record only), or replays it when the image is
+    /// missing, refused or stale (WP-1036).
     Load,
 }
 
@@ -836,7 +865,29 @@ pub struct PchImageUse {
     /// The state point replay reaches the end of the header at: the
     /// producer's `-include`s, then the header.
     pub checkpoint: u32,
+    /// A compile's declaration image (WP-1036), built in place of the
+    /// header with the record installed.
+    pub decls: Option<PchDeclsUse>,
+    /// With `install`: the precompiled `-include`s and header, which the
+    /// predefines keep a line for each of ([`kiln_pp::PCH_LINE`]).
+    pub lines: u32,
 }
+
+/// A decoded PCH declaration image, shared by the jobs (equal when it
+/// is the same one), and the name replay gives the header.
+#[derive(Clone, Debug)]
+pub struct PchDeclsUse {
+    pub image: std::sync::Arc<kiln_sema::PchDecls>,
+    pub header: String,
+}
+
+impl PartialEq for PchDeclsUse {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.image, &other.image) && self.header == other.header
+    }
+}
+
+impl Eq for PchDeclsUse {}
 
 /// Where the last `-include-pch` sits against the probed `-include`s
 /// (WP-1037; clang's frontend uses the last `-include-pch` it sees).
