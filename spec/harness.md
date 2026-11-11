@@ -991,10 +991,13 @@ be written), never for a failing test.
 
 **Source.** The tests are GPL and are never vendored.
 `scripts/fetch-gcc-tests.sh [<tag>] [<dir>]` makes a shallow,
-blob-filtered sparse checkout of `gcc/testsuite/gcc.c-torture` at
-`releases/gcc-16.1.0` (the GCC oracle's release) into `.oss/gcc-tests`
-(gitignored, about 15 MB); the runner fetches it on first use, and
-`--tests <checkout>` points at another one. Nothing from the tests is
+blob-filtered sparse checkout of `gcc/testsuite/gcc.c-torture` (plus the
+seven `gcc.dg` / `gcc.target` files torture tests `#include` by relative
+path) at `releases/gcc-16.1.0` (the GCC oracle's release) into
+`.oss/gcc-tests` (gitignored, about 15 MB). Each run calls the script,
+which fetches the checkout when it is missing and otherwise only refreshes
+its sparse set (a failed refresh of an existing checkout is a warning);
+`--tests <checkout>` points at another one, used as is. Nothing from the tests is
 written into the tree; the outputs go to the target directory, and only
 counts, test ids and one-line diagnostics reach a status page.
 
@@ -1064,7 +1067,17 @@ on a wrong answer); `timeout` (compile, link or run outran
 `--timeout` / `--run-timeout`, defaults 120 s and 10 s); `accept-invalid`
 (a negative test compiled clean); `not-run` (the compiler could not be
 started). Each step runs under `--mem-limit` (default 2048 MiB address
-space, plus kiln's stack reservation for kiln) and holds a jobserver token.
+space, plus kiln's stack reservation for kiln) and holds a jobserver token;
+a step that cannot be spawned is retried twice, 2 s apart, before it is
+`not-run`.
+
+**Why `gnu23`.** GCC 16 defaults to `-std=gnu23` and its own torture runs
+pass no `-std`, so the default keeps GCC's view of the tests. clang-19
+rejects old-style (K&R) definitions and more implicit-int forms under C23
+than under `gnu17` (on aarch64, clang-19 passes 6792 of 7572 cases at
+`gnu23` and 7057 at `gnu17`); those cases show as "kiln fails, clang
+fails too" and say nothing about kiln-only gaps. `--std gnu17` measures
+the older dialect.
 
 **Outputs.** `--tsv` (default `<target>/xtask-gcc-torture/results.tsv`):
 one row per case, columns `test opt kiln kiln_detail gcc gcc_detail clang

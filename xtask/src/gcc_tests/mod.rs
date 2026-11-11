@@ -5,7 +5,7 @@
 //! read it there.
 //!
 //! The pieces are suite-independent so that a later g++.dg / g++.old-deja
-//! runner reuses them: [`locate`] (the checkout, fetched on first use),
+//! runner reuses them: [`locate`] (the checkout, fetched or refreshed by each run),
 //! [`tcl`] (the list syntax and `string match` globs), [`dg`] (directive
 //! extraction and per-option resolution), [`target`] (selectors and
 //! effective targets), [`xfile`] (the `.x` files of the c-torture suites),
@@ -34,8 +34,11 @@ use outcome::{Class, Verdict};
 pub const GCC_TAG: &str = "releases/gcc-16.1.0";
 
 /// `<checkout>/gcc/testsuite` for `--tests <checkout>` or, by default,
-/// `<root>/.oss/gcc-tests`, running `scripts/fetch-gcc-tests.sh` when the
-/// default checkout is missing (an explicit one must exist).
+/// `<root>/.oss/gcc-tests`, which `scripts/fetch-gcc-tests.sh` makes or
+/// refreshes on every run (idempotent: an existing checkout at the tag only
+/// gets its sparse set updated, so files added to it arrive). An explicit
+/// checkout must exist; a refresh failure over an existing default
+/// checkout is a warning.
 pub fn locate(root: &Path, tests: Option<&Path>) -> Result<PathBuf, String> {
     let suite = |c: &Path| c.join("gcc").join("testsuite");
     if let Some(t) = tests {
@@ -50,17 +53,24 @@ pub fn locate(root: &Path, tests: Option<&Path>) -> Result<PathBuf, String> {
         };
     }
     let dir = root.join(".oss").join("gcc-tests");
-    if !suite(&dir).join("gcc.c-torture").is_dir() {
+    let present = suite(&dir).join("gcc.c-torture").is_dir();
+    if !present {
         eprintln!("xtask: fetching GCC's tests ({GCC_TAG}) into {}", dir.display());
-        let st = Command::new(root.join("scripts").join("fetch-gcc-tests.sh"))
-            .arg(GCC_TAG)
-            .arg(&dir)
-            .stdout(std::process::Stdio::null())
-            .status()
-            .map_err(|e| format!("cannot run scripts/fetch-gcc-tests.sh: {e}"))?;
-        if !st.success() {
-            return Err(format!("scripts/fetch-gcc-tests.sh failed ({st})"));
+    }
+    let st = Command::new(root.join("scripts").join("fetch-gcc-tests.sh"))
+        .arg(GCC_TAG)
+        .arg(&dir)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("cannot run scripts/fetch-gcc-tests.sh: {e}"));
+    match st {
+        Ok(st) if st.success() => {}
+        Ok(st) if !present => return Err(format!("scripts/fetch-gcc-tests.sh failed ({st})")),
+        Err(e) if !present => return Err(e),
+        Ok(st) => {
+            eprintln!("xtask: warning: refreshing {} failed ({st}); using it as is", dir.display());
         }
+        Err(e) => eprintln!("xtask: warning: {e}; using {} as is", dir.display()),
     }
     Ok(suite(&dir))
 }
@@ -283,12 +293,31 @@ impl Tool {
             _ => case.mem,
         };
         let mut c = process::limited(&c, limit);
-        match process::run(&mut c, case.compile_timeout) {
-            Ok(o) => Ok(outcome::compile_step(o.status, &o.stderr_str(), step)),
-            Err(e) => Err(Verdict::new(
-                Class::NotRun,
-                format!("cannot run {} `{}`: {e}", self.role.name(), self.path.display()),
-            )),
+        // A spawn failure is retried twice: on the dev host's shared
+        // filesystem a burst of spawns once failed with ENOENT for a few
+        // seconds (93 cases of a 7572-case run, every compiler alike) and
+        // passed on a re-run.
+        let mut tries = 0;
+        loop {
+            match process::run(&mut c, case.compile_timeout) {
+                Ok(o) => return Ok(outcome::compile_step(o.status, &o.stderr_str(), step)),
+                Err(_) if tries < 2 => {
+                    tries += 1;
+                    std::thread::sleep(Duration::from_secs(2));
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                Err(e) => {
+                    return Err(Verdict::new(
+                        Class::NotRun,
+                        format!(
+                            "cannot run {} `{}`: {e} (working directory {})",
+                            self.role.name(),
+                            self.path.display(),
+                            if dir.is_dir() { "present" } else { "missing" }
+                        ),
+                    ));
+                }
+            }
         }
     }
 }

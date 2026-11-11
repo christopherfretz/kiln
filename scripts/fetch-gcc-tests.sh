@@ -26,9 +26,15 @@ case "$TAG" in
   *..*|*' '*) echo "fetch-gcc-tests: bad tag '$TAG'" >&2; exit 2;;
 esac
 REPO="${GCC_REPO:-https://github.com/gcc-mirror/gcc.git}"
-# The suites the runners read. The torture runner needs only these two
-# directories (the `.x` files beside the tests are read, never run).
-PATHS=(/gcc/testsuite/gcc.c-torture/execute/ /gcc/testsuite/gcc.c-torture/compile/)
+# The suites the runners read. The torture runner needs these two
+# directories (the `.x` files beside the tests are read, never run) and the
+# few files of other suites that torture tests #include by relative path
+# (`grep -rh '#include "\.\./' gcc.c-torture` lists them).
+PATHS=(/gcc/testsuite/gcc.c-torture/execute/ /gcc/testsuite/gcc.c-torture/compile/
+  /gcc/testsuite/gcc.dg/20030309-1.c /gcc/testsuite/gcc.dg/pr98304-1.c
+  /gcc/testsuite/gcc.dg/tree-ssa/pr105777.c /gcc/testsuite/gcc.dg/tree-ssa/pr109938.c
+  /gcc/testsuite/gcc.dg/tree-ssa/pr109986.c /gcc/testsuite/gcc.dg/tree-ssa/pr30314.c
+  /gcc/testsuite/gcc.target/powerpc/ppc-switch-2.c)
 ws="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dir="${1:-$ws/.oss/gcc-tests}"
 
