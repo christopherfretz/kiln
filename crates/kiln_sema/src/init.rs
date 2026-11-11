@@ -160,6 +160,9 @@ impl Sema<'_, '_> {
     pub(crate) fn string_init_compat(&self, elem: QualType, s: ExprId) -> StringInit {
         use kiln_ast::expr::StringKind as K;
         use kiln_ast::types::BuiltinType as B;
+        if self.is_c() {
+            return self.c_string_init_compat(elem, s);
+        }
         let c = self.ast.types.canonical(elem);
         let b = self.ast.types.builtin(c.without_quals());
         let char_like = matches!(b, Some(B::Char | B::SChar | B::UChar));
@@ -969,6 +972,11 @@ impl Sema<'_, '_> {
                     return self.recover(ty, &[e], at);
                 }
             }
+            if self.is_c()
+                && let Some(x) = self.c_array_init_from_compound_literal(ty, e, at)
+            {
+                return x;
+            }
             // clang `isCharType` / `IsWideCharCompatible` (which
             // compares qualifiers too) pick the suggested literal; none
             // for `char8_t` or `const wchar_t`.
@@ -1063,8 +1071,16 @@ impl Sema<'_, '_> {
         let len = self.ast.types.array_size(sty).unwrap_or(0);
         if let Some(n) = self.ast.types.array_size(ty) {
             // `len` counts the terminating NUL, which must fit in C++
-            // ([dcl.init.string]/2).
-            if len > n {
+            // ([dcl.init.string]/2). C drops a NUL that does not fit, and
+            // longer strings are truncated with a warning (C23 6.7.11p15,
+            // clang `ext_initializer_string_for_char_array_too_long`).
+            if self.is_c() {
+                if len > n + 1 {
+                    let d = self.diag(DiagId::sema_init_string_too_long_c, self.begin_loc(s));
+                    let d = d.range(self.expr_range(s));
+                    self.emit(d);
+                }
+            } else if len > n {
                 let msg = self
                     .diag(DiagId::sema_init_string_too_long, self.ast.exprs.get(s).loc())
                     .arg(n.to_string())
@@ -2108,6 +2124,11 @@ impl Sema<'_, '_> {
     }
 
     fn check_narrowing_impl(&mut self, e: ExprId, to: QualType, entity: QualType) {
+        // C has no narrowing rule: a brace initializer converts each value
+        // as if by assignment (C23 6.7.11p11, p13; WP-1286).
+        if self.is_c() {
+            return;
+        }
         let from = self.ast.exprs.get(e).ty();
         if self.is_error_type(from) || self.is_error_type(to) {
             return;
@@ -2530,13 +2551,19 @@ impl Sema<'_, '_> {
             // §5.8: a flexible array member's initializer (clang
             // `CheckFlexibleArrayInit`).
             if cur >= nb && self.is_flexible_array_type(ety) {
-                if !self.check_flexible_array_init(fields[cur - nb], item) {
-                    *pos = items.len();
-                    return self.recover(ty, &[], lbrace);
+                match self.check_flexible_array_init(fields[cur - nb], item) {
+                    None => {
+                        *pos = items.len();
+                        return self.recover(ty, &[], lbrace);
+                    }
+                    Some(false) => {
+                        *pos += 1;
+                        cur += 1;
+                        continue;
+                    }
+                    // Initialized below as an array of unknown bound.
+                    Some(true) => {}
                 }
-                *pos += 1;
-                cur += 1;
-                continue;
             }
             let dtor_at = self.item_begin(item);
             let top_designated = dtors && k.is_some();

@@ -6022,6 +6022,14 @@ impl Compiler<'_> {
                             self.ast().decls.field(fi.decl).and_then(|f| f.init).map(|d| (d, true))
                         }
                     };
+                    // GNU: the elements of an initialized flexible array
+                    // member lie past the object; the code generator
+                    // folds and emits them on their own (WP-1286).
+                    if let Some((x, false)) = x
+                        && self.is_flexible_elements_init(fi.decl, x)
+                    {
+                        continue;
+                    }
                     self.elem_step(tr, fi.offset, fi.ty, self.o.types.size(fi.ty), x.map(|x| x.0));
                     if let Some((x, dflt)) = x {
                         let saved = self.this_override;
@@ -6057,6 +6065,21 @@ impl Compiler<'_> {
             }
             _ => self.unsupported(e),
         }
+    }
+
+    /// Whether `x` initializes the flexible array member `f` (of type
+    /// `T[]`) with elements (an array of known bound; a GNU static
+    /// initialization, Sema's `check_flexible_array_init`).
+    fn is_flexible_elements_init(&self, f: DeclId, x: ExprId) -> bool {
+        let ast = self.ast();
+        ast.decls
+            .get(f)
+            .ty()
+            .is_some_and(|q| matches!(ast.types.canonical_view(q), TypeView::IncompleteArray(_)))
+            && matches!(
+                ast.types.canonical_view(ast.exprs.get(x).ty()),
+                TypeView::ConstantArray(c) if c.size > 0
+            )
     }
 
     fn has_name(&self, d: DeclId) -> bool {

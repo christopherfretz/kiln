@@ -344,6 +344,7 @@ impl CodegenJob<'_> {
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
+            gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             pch,
             ..job.std.parse_options()
         };
@@ -362,10 +363,7 @@ impl CodegenJob<'_> {
             let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 c: job.std.c,
-                gnu89_inline: job
-                    .std
-                    .c
-                    .is_some_and(|c| a.predef.gnu89_inline.unwrap_or(c < kiln_lex::CStd::C99)),
+                gnu89_inline: a.predef.gnu89_inline_for(&job.std),
                 exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
                 rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
                 ident: ident(),

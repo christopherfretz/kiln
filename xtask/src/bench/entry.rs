@@ -22,6 +22,10 @@ pub enum Mode {
     /// Compile and link once (`-o <scratch>`, unmeasured), then measure
     /// the program: generated-code speed, not the compiler's.
     Run,
+    /// A PCH build (`-x c++-header <h> -o <pch>`): the `pch` group's build
+    /// entries only (`spec/bench.md` "The pch group"). Records carry it; a
+    /// `mode:` directive cannot name it.
+    PchBuild,
 }
 
 impl Mode {
@@ -32,6 +36,7 @@ impl Mode {
             "emit-llvm" => Self::EmitLlvm,
             "obj" => Self::Obj,
             "run" => Self::Run,
+            "pch-build" => Self::PchBuild,
             _ => return None,
         })
     }
@@ -43,6 +48,7 @@ impl Mode {
             Self::EmitLlvm => "emit-llvm",
             Self::Obj => "obj",
             Self::Run => "run",
+            Self::PchBuild => "pch-build",
         }
     }
 
@@ -51,7 +57,8 @@ impl Mode {
     /// `Run` adds only `-o <executable>`, which is not recorded.
     pub fn flags(self) -> &'static [&'static str] {
         match self {
-            Self::Run => &[],
+            // The pch group builds its own command lines (`pch::args`).
+            Self::Run | Self::PchBuild => &[],
             Self::Syntax => &["-fsyntax-only"],
             Self::Pp => &["-E", "-o", "/dev/null"],
             Self::EmitLlvm => &["-S", "-emit-llvm", "-o", "/dev/null"],
@@ -157,6 +164,9 @@ pub fn parse_spec(source: &str) -> Result<BenchSpec, Vec<DirectiveError>> {
         match d.key {
             "mode" => match Mode::parse(value) {
                 Some(_) if mode.is_some() => err("duplicate `mode`".into()),
+                Some(Mode::PchBuild) => {
+                    err("`mode: pch-build` belongs to the pch group's own entries".into());
+                }
                 Some(m) => mode = Some(m),
                 None => err(format!("unknown mode `{value}` (syntax|pp|emit-llvm|obj|run)")),
             },
@@ -269,7 +279,9 @@ pub struct Entry {
 }
 
 /// Top-level directories of the bench root that never hold entries.
-const RESERVED: &[&str] = &["results", "baselines"];
+/// `pch` holds the pch group's header sets and translation units, which the
+/// group runs itself (`super::pch`, `spec/bench.md` "The pch group").
+const RESERVED: &[&str] = &["results", "baselines", super::pch::GROUP];
 
 /// Expands `inputs` (files or directories under `bench_root`) into a sorted,
 /// de-duplicated entry list, keeping ids that contain `filter`.
@@ -459,6 +471,11 @@ mod tests {
             ["line 1: unknown mode `link` (syntax|pp|emit-llvm|obj|run)"]
         );
         assert_eq!(errs("//@ mode: pp\n//@ mode: pp\n"), ["line 2: duplicate `mode`"]);
+        assert_eq!(
+            errs("//@ mode: pch-build\n"),
+            ["line 1: `mode: pch-build` belongs to the pch group's own entries"]
+        );
+        assert_eq!(Mode::parse("pch-build"), Some(Mode::PchBuild), "records carry it");
         assert_eq!(errs("//@ mode\n"), ["line 1: `mode` requires a value (`mode: ...`)"]);
         assert_eq!(errs("//@ std: c17\n").len(), 1);
         assert!(errs("//@ expect: run\n")[0].contains("`cargo xtask test` directive"));

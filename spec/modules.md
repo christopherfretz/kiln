@@ -2356,7 +2356,12 @@ unresolved names.* Carried since the third slice:
   `Nns` field, the list as `0` for none or `1 + n` then three words per
   argument, `0 qref quals` a type or `1 expr profile` an expression
   record (with its profile bit); other argument kinds fall back with
-  "a template argument the image does not carry". Instantiation
+  "a template argument the image does not carry". Cold annotation 256
+  (WP-1284) is the location of the `template` keyword in a qualified
+  dependent name (`T::template get<3>`, the templates' `template_kw`,
+  [temp.names]/3); in a dependent member access (`t.template get<1>`)
+  the keyword is `CXXDependentScopeMemberExpr` aux bit 2 (bit 1 is
+  `->`), and the decoder rejects any other aux bit. Instantiation
   redoes lookup exactly as after replay, so argument-dependent lookup
   at the point of instantiation finds the importer's own functions.
   A name whose candidates include a class member, or one sema keeps
@@ -2379,6 +2384,10 @@ argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
 dependent array bounds, pack expansions in base specifiers, and
 friends.
+WP-1284 carries concepts, constraints, requires-expressions, dependent
+names and types, `DependentScopeDeclRefExpr` and deduction guides (see
+"Constraints", "Dependent types and names" and "Deduction guides"
+below).
 
 **Class template specializations (WP-1283).** `bmi_image/classtempl.rs`
 carries a unit's explicit and partial class template specializations
@@ -2772,13 +2781,98 @@ the scopes and names beyond named namespaces and export blocks:
 - an unnamed class or enumeration that a typedef names for linkage
   purposes ([dcl.typedef]/9) is listed with that typedef; the importer
   links them when it builds the typedef, so linkage and mangling use the
-  typedef name.
+  typedef name. One that no typedef names (`enum { FE_INVALID = 1 };`,
+  [dcl.enum]/2) is carried unnamed (WP-1284; the reader used to reject
+  it, so the writer's self-check made such a header "an internal image
+  inconsistency").
 
 ```
 scopes  := inline:u32 u32*           ascending records
            links:u32 (rec:u32 lang:u8 braceless:u8)*
            builtins:u32 (rec:u32 id:u32 spelling:str)*
            anon:u32 (tag:u32 typedef:u32)*   ascending by typedef
+```
+
+**Constraints (WP-1284).** `bmi_image/constraints.rs` and
+`bmi_image/requires.rs` carry constrained templates, concepts and
+requires-expressions as patterns ([temp.constr], [expr.prim.req]):
+
+- a concept is a `Template` record of kind 4 with no pattern. Every
+  constraint is a body expression listed in the `cons` section with
+  the record it belongs to and its kind: 0 a template parameter's
+  immediately-declared constraint ([temp.param]/4), 1 a template head's
+  requires-clause, 2 a function's trailing requires-clause, 3 a
+  concept's constraint-expression. Each record has at most one of each
+  kind, a kind-1 one is on a template, a kind-2 one on a function, and
+  every concept has its kind 3. The importer patches them in after the
+  bodies, as the parser attaches them;
+- a specialization reference to a constrained template (or to a class
+  template with a constrained member) falls back with "a specialization
+  of a constrained template": the importer would check its constraints
+  while it builds the records, before they are in. So does a concept
+  merged with another unit's, and a type-constraint naming a concept
+  template parameter;
+- satisfaction is never carried. A concept-id the unit checked falls
+  back; a dependent one is carried unchecked and checked by the
+  importer's instantiations exactly as after a replay, with the same
+  notes in the module;
+- a dependent requires-expression is a body expression whose body is a
+  record of the `reqs` section (its context, location, flags,
+  parameters and the invented `expr-type` parameters of its
+  return-type requirements, [expr.prim.req.compound]/1). The importer
+  declares them before it builds the bodies. A non-dependent one (the
+  unit evaluated it) and one whose access checks wait for an
+  instantiation fall back.
+
+**Dependent types and names (WP-1284).** `bmi_image/deptypes.rs`
+carries the dependent types a pattern names as type tag 21: a
+dependent name (`typename T::type`, `T::inner::type`), a dependent
+template specialization (`T::template rebind<U>`), a type-trait
+transform (`__remove_cv(T)`), a member pointer whose class or pointee
+is dependent, a vector of dependent element type, and a deduced class
+template placeholder ([dcl.type.class.deduct]: the type of a variable
+written `Wrap w(x)`, with its deduced type once known). A qualifier may
+have a dependent-identifier step (`T::inner::`, step 4). The importer
+builds each with the type context's constructors, so canonical types
+are the replay's. A placeholder whose template is named through a
+qualifier or a parameter, and an expression-bearing type (`decltype`,
+`noexcept(expr)`, a dependent array bound or vector size, an
+expression template argument), fall back.
+
+*Written locations.* A dependent type or qualifier component has no
+location of its own; the parser records where each was written
+(`templ.written_locs`, spec/sema-templates.md §5.8) and substitution
+reports a failure there. The `written` section carries the entries
+whose key the image carries (a type of the type table, a qualifier all
+of whose components are carried), so an error substituting an
+imported pattern has the replay's position and caret.
+
+**Deduction guides (WP-1284).** The implicit guides
+([over.match.class.deduct]/1) are not carried: the importer forms them
+on first use from the class template's constructors, as after a
+replay, so a deduction's candidates and notes are the same. An explicit
+guide is a `Function` record of kind 5 named by the special name word
+`0xFFFF_FF03`, at namespace scope, alone or as a function template's
+pattern; the importer builds it with `deduction_guide`, naming the
+class template its return type specializes. A guide whose return type
+is not written as `C<args>` (an alias or a qualifier), a member guide,
+and one with an `explicit(expr)` specifier fall back.
+
+```
+cons    := n:u32 (kind:u8 decl:u32 expr:u32)*
+reqs    := n:u32 (ctx:u32 loc:u32 flags:u8
+                  np:u32 (name:u32 loc:u32 ty:qref pflags:u16 flags:u8)*
+                  ni:u32 (depth:u16 loc:u32)*)*
+written := n:u32 (key wn:u32 loc:u32*)*   by first location
+key     := 0 qref | 1 n:u32 step*
+type    += 21 dep                    WP-1284
+dep     := 0 keyword:u8 n:u32 step* name:u32          dependent name
+         | 1 keyword:u8 n:u32 step* name:u32 n:u32 targ*
+         | 2 kind:u8 base:qref result:qref            transform
+         | 3 pointee:qref class:qref                  member pointer
+         | 4 elem:qref count:u32 kind:u8              vector
+         | 5 template:u32 deduced:qref                deduced placeholder
+step    += 4 name:u32                dependent identifier
 ```
 
 **Fallback census (WP-1070).** `-fkiln-bmi-image-census` (hidden, with
@@ -2804,7 +2898,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 15` since WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 16` since WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2836,6 +2930,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            cspecs:u32 cspec*         WP-1283 ("Class template specializations")
            declocs:u32 (rec:u32 kind:u8 loc:u32)*   WP-1283, ascending
                                      (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
+           cons reqs                 WP-1284 ("Constraints")
+           written                   WP-1284 ("Dependent types and names")
 cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
            params:u32 u32*) args:u32 carg*      ascending by rec
 carg    := 0 qref | 1 qref value:i128   a type, a value
@@ -2845,7 +2941,7 @@ const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
          | 3 qref kind:u8                    null pointer / member
-expr    := kind:u8 bits:u8 aux:u8 cold:u8 deps:u8 ty:qref loc:u32
+expr    := kind:u8 bits:u8 aux:u8 cold:u16 deps:u8 ty:qref loc:u32
            n:u32 word*n          deps: ExprDeps bits (S4; 1 type,
                                      2 value, 4 instantiation)
 stmt    := kind:u8 aux:u16 loc:u32 n:u32 word*n
@@ -3012,8 +3108,9 @@ expression index and a location, or with bits 16, the type-name form,
 a `qref` and its location). A declaration reference is a record index,
 `0x8000_0000 | i` for the image's i-th parameter (counting the
 parameters of the function records in order), or `u32::MAX - 1` for the
-translation unit. The expression record's `cold` byte says which cold
-annotations follow the slots: 1 end location, 2 written type, 4
+translation unit. The expression record's `cold` mask (a byte until
+WP-1284 widened it to `u16`) says which cold annotations follow the
+slots: 1 end location, 2 written type, 4
 operator location, 8 begin location, 16 member-access operator
 location (S4b), 32 the copy of a default argument or default member
 initializer rebuilt for a lifetime-extending use (an expression index,

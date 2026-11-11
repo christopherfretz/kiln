@@ -990,7 +990,9 @@ impl Sema<'_, '_> {
             p != d
                 && (self.own_alias_attr(p).is_some()
                     || if kind.is_function() {
+                        // A GNU89 `extern inline` body is inline-only.
                         self.ast.decls.function(p).is_some_and(|f| f.body.is_some())
+                            && !self.c_can_redefine_function(p)
                     } else {
                         self.is_var_definition(p)
                     })

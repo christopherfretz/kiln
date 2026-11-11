@@ -6,6 +6,7 @@
 mod compare;
 pub(crate) mod entry;
 mod generate;
+mod pch;
 mod perf_md;
 pub(crate) mod record;
 mod scaling;
@@ -45,6 +46,11 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       --compare-with, e.g. clang++-22; never judged against
                       baselines)
   bench/reflect:      the reflection shapes S1-S10 of `cargo xtask gen-reflect`
+  bench/pch:          kiln's precompiled headers against clang's (a run of its
+                      own): no PCH, PCH build, PCH load (image) and replay, on
+                      four header sets, kiln and --compare-with (default
+                      clang++-19); judged on memory only; --record writes
+                      bench/baselines/pch.json and docs/status/pch.md
 
 off-queue modes (spec/bench.md, Scaling sweeps and External corpora):
   --scaling <shape>        compile gen-reflect shape s1..s10 at N and 4N; report
@@ -67,6 +73,9 @@ options:
                            mapped as for the GCC oracle) and print
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
+  --label <name>           bench/pch only: write docs/status/pch.md region <name>
+                           with --record (default `main`; a labelled run records
+                           no baselines)
   --runs <N>               runs per entry (default: 5; the fastest and slowest are
                            dropped when N >= 3)
   --threshold-time <PCT>   allowed wall-clock regression in percent (default: 5)
@@ -119,6 +128,8 @@ pub struct Options {
     pub scaling_n: Option<usize>,
     /// `--external <dir>`.
     pub external: Option<PathBuf>,
+    /// `--label <name>`: the pch group's page region (`pch`).
+    pub label: Option<String>,
 }
 
 impl Default for Options {
@@ -137,6 +148,7 @@ impl Default for Options {
             scaling: None,
             scaling_n: None,
             external: None,
+            label: None,
         }
     }
 }
@@ -167,6 +179,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--filter" => o.filter = Some(value("--filter")?),
             "--scaling" => o.scaling = Some(value("--scaling")?),
             "--external" => o.external = Some(PathBuf::from(value("--external")?)),
+            "--label" => {
+                let v = value("--label")?;
+                let ok = |c: char| c.is_ascii_alphanumeric() || "-_.+/@".contains(c);
+                if v.is_empty() || !v.chars().all(ok) {
+                    return Err(format!("bad --label `{v}` (letters, digits and -_.+/@)"));
+                }
+                o.label = Some(v);
+            }
             "--n" => {
                 let v = value("--n")?;
                 o.scaling_n = Some(
@@ -409,7 +429,17 @@ pub fn execute(
     inputs: &[PathBuf],
 ) -> Result<Report, String> {
     let start = Instant::now();
-    let (with_slice, rest) = slice::split_inputs(&layout.bench, inputs);
+    let (with_pch, inputs) = pch::split_inputs(&layout.bench, inputs)?;
+    if with_pch {
+        if !inputs.is_empty() {
+            return Err(format!("bench/{} is a run of its own: name it alone", pch::GROUP));
+        }
+        return pch::run(opts, layout, compiler);
+    }
+    if opts.label.is_some() {
+        return Err(format!("`--label` applies to bench/{} only", pch::GROUP));
+    }
+    let (with_slice, rest) = slice::split_inputs(&layout.bench, &inputs);
     let mut entries = if rest.is_empty() {
         Vec::new()
     } else {
@@ -1324,8 +1354,17 @@ fn record_baselines(
 
 /// Writes `<dir>/<stamp>.json`, adding `-1`, `-2`, ... if the name is taken.
 fn write_results(dir: &Path, stamp: &str, rec: &RunRecord) -> Result<PathBuf, String> {
+    write_results_json(dir, stamp, &rec.to_json())
+}
+
+/// [`write_results`] of a record with extra keys (the pch group's `pch`).
+fn write_results_json(
+    dir: &Path,
+    stamp: &str,
+    rec: &crate::util::json::Json,
+) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let text = rec.to_json().to_pretty();
+    let text = rec.to_pretty();
     for n in 0.. {
         let name = if n == 0 { format!("{stamp}.json") } else { format!("{stamp}-{n}.json") };
         let path = dir.join(name);

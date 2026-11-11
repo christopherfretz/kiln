@@ -1,7 +1,7 @@
 # Bench: `cargo xtask bench`
 
 Status: implemented (WP-004; constexpr counters and per-entry thresholds
-WP-006; `perf.md` merging WP-006b; the `libcxx-slice` entry WP-317). Code: `xtask/src/bench/`, with shared pieces in
+WP-006; `perf.md` merging WP-006b; the `libcxx-slice` entry WP-317; the `pch` group WP-1294). Code: `xtask/src/bench/`, with shared pieces in
 `xtask/src/util/` (`process.rs` measured runs, `header.rs` the `//@` scanner,
 `json.rs` the record format). Policy background is `docs/VALIDATION.md`
 "Performance tracking"; this file is the normative contract for the harness,
@@ -20,6 +20,7 @@ cargo xtask bench [options] [paths...]
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
 | `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference), or `clang++-19` for the history of `docs/status/perf.md`. |
 | `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
+| `--label <name>` | `bench/pch` only: with `--record`, write region `<name>` of `docs/status/pch.md` and no baselines ("The pch group"). Default `main`. |
 | `--runs <N>` | Runs per entry, N >= 1. Default 5. |
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
 | `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
@@ -160,6 +161,140 @@ applies to these ids.
   failed side is `FAIL` in the table and left out of the aggregates, whose
   count says how many tests they cover. These rows are not in the ordinary
   ratio table or its geometric means.
+
+## The pch group
+
+`bench/pch` measures kiln's precompiled headers (spec/driver.md, "The
+declaration image") against clang's on fixed header sets
+(`xtask/src/bench/pch.rs`, WP-1294). It is a run of its own:
+
+- **Selection.** Only an explicit `bench/pch` path selects it, and it must
+  be the only path (otherwise exit 2). The default run over `bench/` skips
+  the directory, which is reserved like `results/` and `baselines/`, so its
+  `.cpp` files are never ordinary entries. Naming a file under it is a usage
+  error. `--filter` narrows the run by entry id.
+- **Compilers.** `--compiler` must be kiln (the default release `kiln++`).
+  The comparison compiler is `--compare-with`, default `clang++-19`, and it
+  must be clang. Both measure every variant they have, back to back.
+- **Cases.** Each case is a header set `bench/pch/<case>.h` and a
+  translation unit `bench/pch/<case>.cpp` (`.c` for C). The unit has no
+  `#include` of its own. It uses what the set declares, so a consumer that
+  skipped the header cannot compile it.
+
+  | Case | Header set | Flags |
+  |---|---|---|
+  | `gnu` | `<bits/stdc++.h>` (libstdc++ 14) | `-std=c++26` |
+  | `lcx` | the 106 public libc++ 19 headers of docs/status/pch-image-census.md, one `#include` each | `-std=c++26 -stdlib=libc++` |
+  | `mid` | `<algorithm>`, `<map>`, `<string>`, `<vector>` (libstdc++ 14) | `-std=c++26` |
+  | `c` | `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<zlib.h>` | `-std=c17`, a C header (`-x c-header`) and a C unit (`-x c`) |
+
+- **Variants.** Each case has the entries `pch/<case>/<variant>`. The
+  baseline name is `<case>/<variant>` in `bench/baselines/pch.json`. They
+  run in this order, the build first:
+
+  | Variant | Mode | kiln | clang |
+  |---|---|---|---|
+  | `build` | `pch-build` | `-fkiln-pch-image -x c++-header <case>.h -o <pch>` | `-x c++-header <case>.h -o <pch>` |
+  | `none-syntax` | `syntax` | `-include <case>.h -fsyntax-only` | the same |
+  | `none-obj` | `obj` | `-include <case>.h -O0 -c -o <obj>` | the same |
+  | `load-syntax` | `syntax` | `-fkiln-pch-image=load -include-pch <pch> -fsyntax-only` | `-include-pch <pch> -fsyntax-only` |
+  | `load-obj` | `obj` | `-fkiln-pch-image=load -include-pch <pch> -O0 -c -o <obj>` | `-include-pch <pch> -O0 -c -o <obj>` |
+  | `replay-syntax` | `syntax` | `-fno-kiln-pch-image -include-pch <pch> -fsyntax-only` | none |
+  | `replay-obj` | `obj` | `-fno-kiln-pch-image -include-pch <pch> -O0 -c -o <obj>` | none |
+
+  Every command starts with the case's flags and ends with the unit (the
+  build ends with `-o <pch>`). `<pch>` is `<case>.<kind>.pch` and `<obj>`
+  is `<case>.<kind>.o` in the run's scratch directory under the target
+  directory. Neither is ever `/dev/null`. The recorded `flags` keep the
+  `<pch>` and `<obj>` placeholders, so the recorded flags are the same in
+  every checkout. `mode: pch-build` exists only for these records. A
+  bench entry's `mode:` directive cannot name it. A consumer selected
+  without its build (`--filter`) builds the PCH once, unmeasured.
+- **Measurement.** As any entry (`--runs`, default 5, median; the memory
+  cap). No constexpr or instantiation reports are requested. The 1-minute
+  load average is sampled at the start of the run and of each case.
+- **The path taken.** After its variants, each case runs kiln twice more,
+  unmeasured:
+  - the build with `-v`, to a separate PCH, for the producer's note
+    (`consumers use its declaration image (N records)` or `consumers
+    replay the header: <why>`);
+  - `load-syntax` with `-v`, for the consumer's note (`declaration image
+    (N records)` or `is replayed: <why>`).
+
+  The consumer's note gives the path: `image`, `replay`, or `unknown` when
+  there is no note. When the image is taken, `-fkiln-pch-image=check` is
+  run at `-fsyntax-only` and at `-O0 -c`. It compiles both paths in one
+  process and fails on any difference, and that failure fails the run as
+  an image/replay difference, which is a bug in the image. This is a smoke
+  check of the measured cases only. The correctness check is the harness's
+  `--pch-diff` (spec/harness.md "PCH differential").
+- **Judged.** kiln's entries are judged against `bench/baselines/pch.json`
+  as in "Regression policy", but wall time is not judged unless
+  `--threshold-time` is given. Memory is the signal, because wall time on
+  the shared host moves about 1.4x with its load. Its default threshold is
+  5% (`pch::MEM_PCT`), not 2%: two identical recordings differed by up to
+  2.5% (`gnu/build`, 86 MB). `--threshold-mem` overrides it. clang's
+  side is never judged or recorded; a failed clang compile still fails the
+  run. The printed ratio table covers the variants both compilers have.
+- **Recorded.**
+  - The results file (`bench/results/<stamp>.json`) is the ordinary
+    record with both compilers' runs, plus a `pch` key:
+    - `label` and `commit` (`git rev-parse --short=9 HEAD` of the root);
+    - `cases.<case>`: `load_avg_1m`, `pch_bytes_kiln`, `pch_bytes_clang`,
+      `path`, `producer_note`, `consumer_note`, and `check`, which is
+      `null` when not run, `"equal"`, or the first error.
+
+    Readers of results ignore the key ("Records").
+  - `--record` writes kiln's baselines into `bench/baselines/pch.json`.
+    It also rewrites the `main` region of `docs/status/pch.md`.
+  - `--record --label <name>` rewrites only region `<name>` and records no
+    baselines. It is for a run with another kiln, for example a branch's
+    build passed by `--compiler`. A label is letters, digits and `-_.+/@`.
+  - With `--filter`, `--record` still writes the baselines but leaves the
+    page alone, because a region holds every case.
+- **The page region.** It is the text between `<!-- xtask bench pch
+  <label>: begin ... -->` and `<!-- xtask bench pch <label>: end -->`. The
+  generator replaces it in place, or adds a new label after the last
+  region (or at the end of a page that has none). Everything outside the
+  markers is prose and is kept verbatim.
+
+  A region has a header: the date, the results stamp, the kiln version and
+  commit, the clang version, the host, the run count, the RSS source and
+  each case's load average. Then, per case:
+  - the path line with both notes and the check result;
+  - both PCH file sizes;
+  - a table of every variant in page order (none, build, load, replay),
+    with kiln and clang seconds and MiB and the kiln/clang time and memory
+    ratios;
+  - the wall time of PCH load relative to no PCH, for each compiler;
+  - the case's command lines.
+- **Cost.** About 3 minutes at 5 runs on the shared aarch64 host, and about
+  40 seconds at `--runs 1`. It is not part of `cargo xtask ci` and runs in
+  no CI workflow. Run it by hand when the PCH writer or consumer changes,
+  and before a release:
+
+  ```sh
+  cargo xtask bench bench/pch                   # judge against pch.json
+  cargo xtask bench bench/pch --record          # new baselines + region `main`
+  cargo xtask bench bench/pch --record --label wp-NNNN@<sha> \
+      --compiler <that tree's target>/release/kiln++
+  ```
+
+**Reproducing one number by hand.** Run from the repo root, with `T` a
+scratch directory (`T=$(mktemp -d)`), and time each command with
+`/usr/bin/time -f "%e s %M KB"`. For example, the `gnu` case's PCH load
+at `-O0 -c`:
+
+```sh
+kiln++ -std=c++26 -fkiln-pch-image -x c++-header bench/pch/gnu.h -o $T/gnu.kiln.pch
+kiln++ -std=c++26 -fkiln-pch-image=load -include-pch $T/gnu.kiln.pch -O0 -c -o $T/gnu.o bench/pch/gnu.cpp
+clang++-19 -std=c++26 -x c++-header bench/pch/gnu.h -o $T/gnu.clang.pch
+clang++-19 -std=c++26 -include-pch $T/gnu.clang.pch -O0 -c -o $T/gnu.o bench/pch/gnu.cpp
+```
+
+Add `-v` to a kiln command to see its PCH note. Every region of
+docs/status/pch.md lists each case's full command lines
+(`pch::command_line`).
 
 ## Directives
 
@@ -638,6 +773,16 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
   compile flags are the runner's (base flags, the test's own flags, then
   `-fsyntax-only` or the verify flags), and a `.sh.cpp`, UNSUPPORTED or
   XFAIL test is refused.
+- `xtask/src/bench/pch.rs`: the command lines of every case and variant
+  (never `/dev/null`, every output a placeholder), the case files present,
+  the `-v` notes and the path they give, wall time not judged unless asked
+  (a 3x slower run passes, 3% more memory passes, 10% more regresses),
+  regions replaced in place and added after the last one, the
+  hand-reproduction lines,
+  explicit selection (a file under `bench/pch` refused), and the whole
+  bench root skipping the group.
+- `xtask/src/bench/entry.rs` `rejects_bad_headers`: `mode: pch-build`
+  refused as a directive and parsed for records.
 - `xtask/src/bench/tests.rs`: command-line parsing, results-name collisions,
   and an end-to-end smoke test with `clang++-19` (skipped when absent) over
   `xtask/fixtures/bench/`: record (with perf.md), compare green, a doctored

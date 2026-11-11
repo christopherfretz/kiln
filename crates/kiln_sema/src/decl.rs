@@ -156,6 +156,9 @@ pub struct PrototypeFrame {
     pub(crate) params: Vec<(Symbol, DeclId)>,
     /// The number of parameters declared so far.
     pub(crate) index: usize,
+    /// C: the named tags declared in the clause (C23 6.2.1p4,
+    /// [`Sema::c_declare_proto_tag`]).
+    pub(crate) tags: Vec<(Symbol, DeclId)>,
 }
 
 pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
@@ -600,6 +603,7 @@ impl Sema<'_, '_> {
             depth: self.scopes.len(),
             params: Vec::new(),
             index: 0,
+            tags: Vec::new(),
         });
     }
 
@@ -680,7 +684,9 @@ impl Sema<'_, '_> {
     /// The end of the declarator part a parameter-declaration-clause
     /// scopes (see [`Sema::act_on_start_prototype`]).
     pub fn act_on_end_prototype(&mut self) {
-        self.prototype_params.pop();
+        if let Some(f) = self.prototype_params.pop() {
+            self.c_end_proto_tags(f.tags);
+        }
     }
 
     /// After a qualified declarator-id `N::name` (clang's
@@ -1247,8 +1253,12 @@ impl Sema<'_, '_> {
         };
         let quals = *quals;
         let scopes = d.qualifier.map_or(0, |q| self.act_on_enter_declarator_scope(q));
-        let mut frame =
-            PrototypeFrame { depth: self.scopes.len(), params: Vec::new(), index: params.len() };
+        let mut frame = PrototypeFrame {
+            depth: self.scopes.len(),
+            params: Vec::new(),
+            index: params.len(),
+            tags: Vec::new(),
+        };
         for p in params {
             if let (Some((n, _)), Some(pd)) = (p.name, p.decl) {
                 frame.params.push((n, pd));
@@ -3144,7 +3154,7 @@ impl Sema<'_, '_> {
     /// template pattern is not recorded: only its instantiations
     /// redeclare the entity ([temp.spec.general]/2; clang does not chain
     /// a dependent-context local extern, WP-330).
-    fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
+    pub(crate) fn note_local_extern(&mut self, name: Symbol, d: DeclId) {
         if self.in_local_scope()
             && !self.in_template()
             && let Some(ns) = self.enclosing_namespace()
@@ -3244,7 +3254,12 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        if !self.in_local_scope() || ds.storage.is_some() || d.ctx == DeclaratorContext::Condition {
+        // clang warns only in C++ (`warnAboutAmbiguousFunction`).
+        if !self.in_local_scope()
+            || ds.storage.is_some()
+            || d.ctx == DeclaratorContext::Condition
+            || self.is_c()
+        {
             return;
         }
         let parens = Span::new(*loc, rparen.with_offset(1));
@@ -4080,7 +4095,8 @@ impl Sema<'_, '_> {
         let at = if explicit_member { self.ast.latest(rec) } else { rec };
         let loc = self.ast.decls.get(at).loc();
         // A specialization prints with its arguments (`'A<char>'`).
-        let name = if self.ast.spec_info(rec).is_some() {
+        // In C the type prints with its tag keyword (`'struct S'`).
+        let name = if self.ast.spec_info(rec).is_some() || self.is_c() {
             self.decl_ty_str(self.tag_type(rec))
         } else {
             self.qualified_decl_name(rec)
@@ -4567,8 +4583,21 @@ impl Sema<'_, '_> {
             }
             let ret = p.ret();
             if !self.ast.types.same_type(ret, QualType::INT) && !self.is_error_type(ret) {
-                self.error(DiagId::sema_main_returns_nonint, ds.type_loc.unwrap_or(ds.loc));
-                main_invalid = true;
+                let at = ds.type_loc.unwrap_or(ds.loc);
+                if self.is_c() && self.gnu {
+                    // GNU C accepts it with a warning (clang
+                    // `ext_main_returns_nonint`, WP-1286).
+                    let ret_span = Span::new(at, at);
+                    let note = self
+                        .diag(DiagId::note_main_change_return_type, at)
+                        .range(ret_span)
+                        .fixit(FixIt::replace(ret_span, "int"));
+                    let d = self.diag(DiagId::sema_main_returns_nonint_gnu_c, at).with_note(note);
+                    self.emit(d);
+                } else {
+                    self.error(DiagId::sema_main_returns_nonint, at);
+                    main_invalid = true;
+                }
             }
             main_invalid |= self.check_main_params(&p, d.name_loc());
             // P3618R0 ([basic.start.main]/3): `main` is attached to the
@@ -4825,8 +4854,15 @@ impl Sema<'_, '_> {
                 } else {
                     self.prev_candidates_dn(dname, None)
                 };
-                let p = cands.into_iter().rev().find(|&x| {
+                let c_fn = |x: DeclId| {
                     self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x)
+                };
+                // Else one declared in another block, or implicitly ([6.2.7]/2;
+                // clang `findLocallyScopedExternCDecl`).
+                let ns = self.enclosing_namespace();
+                let p = cands.into_iter().rev().find(|&x| c_fn(x)).or_else(|| {
+                    let mut l = self.local_externs.iter().rev();
+                    l.find(|&&(n, s, x)| Some(n) == ns && s == name && c_fn(x)).map(|x| x.2)
                 });
                 extern_c_redecl |= p.is_some();
                 p
@@ -5126,6 +5162,7 @@ impl Sema<'_, '_> {
                 // C17 6.2.7p3: without a prototype, the composite type.
                 let c_comp = if self.is_c() {
                     self.c_no_proto_composite(p, pty, ty, d.name_loc())
+                        .or_else(|| self.c_proto_composite(pty, ty))
                 } else {
                     None
                 };
@@ -5143,7 +5180,10 @@ impl Sema<'_, '_> {
                     // the deduced return type.
                     ty = self.adopt_deduced_return(p, ty);
                     let pspec = self.ast.decls.function(p).map(|f| f.spec).unwrap_or_default();
-                    if spec.storage() == FnStorage::Static && pspec.storage() != FnStorage::Static {
+                    if spec.storage() == FnStorage::Static
+                        && pspec.storage() != FnStorage::Static
+                        && !self.c_can_redefine_function(p)
+                    {
                         let msg = self
                             .diag(DiagId::sema_static_non_static, d.name_loc())
                             .arg(fname.clone());
@@ -5233,6 +5273,16 @@ impl Sema<'_, '_> {
                         Some(info) => {
                             let loc = self.ast.decls.get(p).loc();
                             self.builtin_type_note(msg, &info, loc)
+                        }
+                        // clang `getNoteDiagForInvalidRedeclaration`.
+                        None if self.ast.decls.get(p).has(DeclFlags::IMPLICIT) && self.is_c() => {
+                            // The first of an implicit chain (clang's
+                            // locally scoped extern-C lookup).
+                            let f = self.ast.first(p);
+                            let f =
+                                if self.ast.decls.get(f).has(DeclFlags::IMPLICIT) { f } else { p };
+                            let l = self.ast.decls.get(f).loc();
+                            msg.with_note(self.diag(DiagId::note_previous_implicit_declaration, l))
                         }
                         None => self.note_prev(msg, p, def),
                     };
@@ -5364,8 +5414,13 @@ impl Sema<'_, '_> {
         }
         // A pure virtual function's notes point at its decl-specifiers
         // (clang `getBeginLoc`, §4.11), as does the `->` note on an
-        // `operator->` result ([over.ref]).
-        if (self.ast.decls.function(f).is_some_and(|x| x.spec.is_pure())
+        // `operator->` result ([over.ref]) and a C inline function's
+        // "use 'static'" note (`Sema::c_suggest_static`).
+        if (self
+            .ast
+            .decls
+            .function(f)
+            .is_some_and(|x| x.spec.is_pure() || (self.is_c() && x.spec.is_inline()))
             || self.ast.decls.get(f).name().as_operator() == Some(OverloadedOperator::Arrow))
             && ds.loc.is_valid()
             && ds.loc != self.ast.decls.get(f).loc()
@@ -5987,8 +6042,10 @@ impl Sema<'_, '_> {
         field_invalid |= invalid || failed_spec || self.is_error_type(ty);
         // [class.bit]/1 (CWG2229): an unnamed bit-field is not
         // cv-qualified (clang `err_anon_bitfield_qualifiers`, at the
-        // field's location; the field is invalid).
+        // field's location; the field is invalid). C allows it (clang
+        // checks C++ only; WP-1286).
         if !field_invalid
+            && !self.is_c()
             && name.is_none()
             && d.bit_width.is_some()
             && self.ast.types.canonical(ty).quals().bits() != 0
@@ -6337,8 +6394,6 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
-    /// C ([6.9.2]/2): a file-scope object declaration without an
-    /// initializer and without `extern` is a tentative definition.
     /// C17 6.7.6.3p15: a function type without a prototype (`int f()`)
     /// and a prototype are compatible when the return types are and no
     /// parameter type changes under the default argument promotions (and
@@ -6391,7 +6446,9 @@ impl Sema<'_, '_> {
         }
         let (proto, params, knr) = if an { (b, bp, ap) } else { (a, ap, bp) };
         let proto_ty = if an { ty } else { pty };
-        if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) {
+        // clang `MergeFunctionDecl`: not for an implicit declaration.
+        let implicit = an && self.ast.decls.get(p).has(DeclFlags::IMPLICIT);
+        if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) && !implicit {
             let pdef = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
             let (at, other, later, other_def) =
                 if an { (ploc, loc, 1, def) } else { (loc, ploc, 0, pdef) };
@@ -6419,6 +6476,8 @@ impl Sema<'_, '_> {
         ok.then_some(proto_ty)
     }
 
+    /// C ([6.9.2]/2): a file-scope object declaration without an
+    /// initializer and without `extern` is a tentative definition.
     pub(crate) fn c_tentative(&self, v: DeclId) -> bool {
         self.is_c()
             && self.ast.decls.var(v).is_some_and(|x| {
@@ -6804,6 +6863,11 @@ impl Sema<'_, '_> {
         let v = self.builder().var(h, ty, spec, prev_ok);
         if ambiguous || no_member || redefined || unmerged || self.storage_invalidates_var(ds, d) {
             self.ast.decls.set_flags(v, DeclFlags::INVALID);
+        }
+        if let Some((StorageSpec::Static, l)) = ds.storage
+            && self.in_local_scope()
+        {
+            self.c_check_static_local_in_inline(ty, l);
         }
         // As for a typedef (§5.8): `static int (*s)(typename T::type);`.
         if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_instantiation_dependent_type(ty) {
@@ -7934,6 +7998,9 @@ impl Sema<'_, '_> {
             self.decomposition_requires_init(v);
             return;
         }
+        if self.c_tentative_uninit(v) {
+            return;
+        }
         let vn = *self.ast.decls.get(v);
         if self.constexpr_decl_not_definition(v)
             || vn.kind() != DeclKind::Var
@@ -8208,6 +8275,7 @@ impl Sema<'_, '_> {
             // The same function defined in another unit's global module
             // fragment: merged, its body kept (spec/modules.md §6).
             && (deleted.is_some() || !self.module_merge_hidden_definition(prev))
+            && !self.c_can_redefine_function(prev)
         {
             let msg = self
                 .diag(DiagId::sema_redefinition, self.ast.decls.get(f).loc())
@@ -8249,6 +8317,7 @@ impl Sema<'_, '_> {
         let mut fs = Scope::new(ScopeKind::Function, None);
         fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);
+        self.c_inject_param_tags();
         self.ctx = f;
         let params: Vec<DeclId> = self
             .ast
@@ -8363,8 +8432,22 @@ impl Sema<'_, '_> {
             self.check_sve_support(fty, self.ast.decls.get(f).loc());
         }
         self.finish_source_locs(f);
-        if self.ast.definition(f).is_none() {
-            let _ = self.builder().set_body(f, body);
+        match self.ast.definition(f) {
+            None => {
+                let _ = self.builder().set_body(f, body);
+            }
+            // A C GNU89 `extern inline` definition is inline-only: the
+            // later definition is the entity's (clang `canRedefineFunction`).
+            Some(prev)
+                if prev != f
+                    && self.c_can_redefine_function(prev)
+                    && !self.ast.decls.get(f).has(DeclFlags::INVALID) =>
+            {
+                if self.ast.decls.set_body(f, body).is_ok() {
+                    self.ast.replace_definition(f);
+                }
+            }
+            Some(_) => {}
         }
         self.check_constexpr_body_vars(f, body);
         if self.kind_of(f) == DeclKind::CXXDestructor
@@ -8591,6 +8674,16 @@ impl Sema<'_, '_> {
         opaque_enum: bool,
         nloc: Loc,
     ) -> Vec<DeclId> {
+        // C23 6.2.1p4: in a parameter list, a declaration redeclares only
+        // a tag of that list; a reference finds it first.
+        if qualifier.is_none() && self.c_in_proto_tag_scope() {
+            if let Some(d) = self.c_proto_tag(n) {
+                return vec![d];
+            }
+            if use_ != TagUse::Reference {
+                return Vec::new();
+            }
+        }
         match (qualifier, use_) {
             (None, _) if templ => self
                 .lookup_current_scope(n)
@@ -8941,7 +9034,7 @@ impl Sema<'_, '_> {
             } else {
                 self.tag_redecl_lookup(n, qualifier, use_, head.is_some(), opaque_enum, nloc)
             };
-            if found.is_empty() && qualifier.is_none() {
+            if found.is_empty() && qualifier.is_none() && !self.c_in_proto_tag_scope() {
                 conflict = self.diagnose_tag_kind_conflict(
                     keyword,
                     n,
@@ -9120,6 +9213,16 @@ impl Sema<'_, '_> {
             self.check_forward_ref_enum(prev, nloc);
         }
         let d = self.new_tag_decl(h, keyword, (scoped, fixed), prev, plain_ref);
+        let proto_tag = self.c_in_proto_tag_scope() && qualifier.is_none() && !conflict;
+        if proto_tag && prev.is_none() && (name.is_some() || is_enum) {
+            self.c_warn_tag_in_param_list(d);
+        }
+        if proto_tag
+            && prev.is_none()
+            && let Some((n, _)) = name
+        {
+            self.c_declare_proto_tag(n, d);
+        }
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
@@ -9141,6 +9244,7 @@ impl Sema<'_, '_> {
             && (self.in_local_scope() || self.c_hoisted_to_block(ctx))
             && qualifier.is_none()
             && !conflict
+            && !proto_tag
         {
             self.push_local(n, d);
         }
@@ -9265,6 +9369,16 @@ impl Sema<'_, '_> {
     /// a parameter-declaration-clause up to the end of its declarator,
     /// including default arguments, the exception specification and the
     /// trailing return type, but not a lambda body within them.
+    /// C11 6.2.1/4: a tag first declared in a parameter list has
+    /// function prototype scope (or the function's block scope, for a
+    /// definition), so no other declaration can name it: clang's
+    /// `warn_decl_in_param_list` `-Wvisibility`.
+    fn c_warn_tag_in_param_list(&mut self, d: DeclId) {
+        let t = format!("'{}'", self.decl_ty_str(self.tag_type(d)));
+        let msg = self.diag(DiagId::sema_decl_in_param_list, self.ast.decls.get(d).loc());
+        self.emit(msg.arg(t));
+    }
+
     pub fn in_prototype_scope(&self) -> bool {
         self.prototype_params.last().is_some_and(|f| f.depth == self.scopes.len())
             || self.scopes.last().is_some_and(|s| s.kind == ScopeKind::Prototype)
@@ -10818,6 +10932,9 @@ impl Sema<'_, '_> {
     /// a class, else a `Var`) is returned so that a block's `DeclStmt`
     /// can own it.
     pub fn act_on_decl_spec_only(&mut self, ds: &DeclSpec) -> Option<DeclId> {
+        if self.c_decl_spec_only(ds) {
+            return None;
+        }
         if let Some(t) = ds.tag {
             let n = *self.ast.decls.get(t);
             if ds.tag_declares
