@@ -890,8 +890,13 @@ fn same_file(_file: &std::fs::File, path: &Path) -> bool {
 }
 
 /// Writes `bytes` to `path` through a temporary file beside it, named
-/// for this process, thread and moment, renamed into place.
+/// for this process, thread and moment, renamed into place. A path that
+/// is not a regular file is left to `kiln_pp::bmi::write_file`, which
+/// writes it in place.
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        return kiln_pp::bmi::write_file(path, bytes);
+    }
     let nanos =
         SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let mut tmp = path.as_os_str().to_owned();
