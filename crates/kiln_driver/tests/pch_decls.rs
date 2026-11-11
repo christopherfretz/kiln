@@ -258,6 +258,30 @@ fn uncarried_sema_state_is_replayed() {
     }
 }
 
+/// A block-scope `extern` or function declaration the header also
+/// declares at namespace scope (libstdc++'s `std::terminate` in
+/// `std::__terminate`) is not refused for the sema state: the
+/// consumer's redeclaration finds the namespace-scope one. (The image
+/// writer refuses the chain itself today, a redeclaration of a
+/// block-scope declaration it does not carry; either way the consumer
+/// matches replay.)
+#[test]
+fn redeclared_local_extern_is_not_sema_state() {
+    let d = scratch("local-extern");
+    let header = "inline int g() { extern int v; return v; }\nextern int v;\n\
+                  namespace n { inline void t() { void k(); k(); } }\nnamespace n { void k(); }\n";
+    let note = produce(&d, "y", header);
+    assert!(!note.contains("a block-scope extern"), "{note}");
+    let tu = "int v = 4;\nvoid n::k() {}\nint main() { n::t(); return g() + v; }\n";
+    std::fs::write(d.join("y.cpp"), tu).unwrap();
+    let ir = same(&d, "y.pch", &["-S", "-emit-llvm"], "y.cpp");
+    assert!(ir.stdout.contains("@v = dso_local global i32 4"), "{}", ir.stdout);
+    assert!(!ir.stdout.contains("@v.1") && !ir.stdout.contains("@_ZN1n1kEv.1"), "{}", ir.stdout);
+    let check = ["-fkiln-pch-image=check", "-include-pch", "y.pch", "-S", "-emit-llvm"];
+    let o = ok(&d, &[&check[..], &["y.cpp", "-o", "-"]].concat());
+    assert_eq!(o.stderr, "");
+}
+
 /// `check` builds the image and replays, and finds them equal.
 #[test]
 fn check_runs_both() {

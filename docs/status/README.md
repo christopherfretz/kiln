@@ -78,6 +78,9 @@ Performance:
 
 Correctness and diagnostics:
 
+- `pch.md`: the PCH declaration image consumer against replay, no PCH
+  and clang 19's PCH, the path each header set takes, and the largest
+  carried std header set (WP-1036).
 - `pch-image-census.md`: how much of every libc++ header the module
   declaration image carries, by first fallback reason
   (`-fkiln-bmi-image-census`, WP-1070).

@@ -1947,6 +1947,18 @@ only whole, and every doubt replays the header.
   spec/modules.md §11.11 "Fallback census") means no image is written.
   The PCH is still written with its record. The census of a header is
   `-fkiln-bmi-image-census` on the producer.
+  Sema state that the image does not carry, and that a later
+  declaration of the consumer depends on, also means no image:
+  - `a #pragma weak naming an undeclared identifier`: the pragma makes
+    the consumer's definition weak.
+  - `a block-scope extern or function declaration`: a block-scope
+    `extern` or function declaration in a header body, when the header
+    does not also declare the entity at namespace scope. The consumer's
+    namespace-scope declaration would redeclare it ([basic.link]/6).
+    The namespace-scope declaration is matched by name, namespace and
+    (for a function) type. An example is libstdc++'s `std::terminate`
+    in `std::__terminate` once `<exception>` is included.
+  The census does not report this sema state.
 - **Producer `-v` note.** With `-v`, the producer says which path a
   `load` consumer will take: `note: precompiled header 'p.pch':
   consumers use its declaration image (N records)`, or `...: consumers
