@@ -300,12 +300,13 @@ Plus, from the OSS rows:
 - `tests/c/decl/array-param-qualifiers.c`: `[restrict]` and `[static N]` in
   parameters.
 - `tests/c/expr/fnptr-null-pointer-compare.c`: function pointer compared
-  with `(void *)0`.
+  with `(void *)0`. Passes since WP-1285.
 - `tests/c/expr/init-list-no-narrowing.c`: C++ narrowing in C brace
   initializers.
 - `tests/c/expr/cast-pointer-to-narrow-integer.c`: pointer cast to a narrower
-  integer.
-- `tests/c/expr/void-pointer-arithmetic.c`: GNU `void *` arithmetic.
+  integer. Passes since WP-1285.
+- `tests/c/expr/void-pointer-arithmetic.c`: GNU `void *` arithmetic. Passes
+  since WP-1285.
 - `tests/c/stmt/goto-past-initializer.c`: goto past an initialized
   declaration.
 - `tests/c/decl/char-array-exact-string-init.c`: string literal that fills
