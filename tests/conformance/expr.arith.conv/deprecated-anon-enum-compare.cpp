@@ -4,10 +4,11 @@
 // so disabling the former silences it. Reduced from the reference workload: static
 // assertions comparing `Trait<T>::VALUE` (an unnamed enum per instantiation).
 //@ std: c++23
+//@ expect: compile-fail
 //@ args: -Werror -Wall -Wenum-compare-conditional -Wno-deprecated-anon-enum-enum-conversion
 //@ strict-diags
-//@ diag: 21:22 error "comparison of different enumeration types ('TE' and 'E1') is deprecated"
-//@ diag: 22:26 error "conditional expression between different enumeration types ('E1' and 'E2') is deprecated"
+//@ diag: 22:22 error "comparison of different enumeration types ('TE' and 'E1') is deprecated"
+//@ diag: 23:26 error "conditional expression between different enumeration types ('E1' and 'E2') is deprecated"
 template <class T> struct A {
     enum { VALUE = alignof(T) };
 };
