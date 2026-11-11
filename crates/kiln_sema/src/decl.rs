@@ -6757,18 +6757,18 @@ impl Sema<'_, '_> {
                     // declaration is tentative; a redefinition is found
                     // when one is added (`c_init_redefines`).
                     let tentative = self.is_c() && !self.in_local_scope();
-                    if self.diagnose_var_storage_redecl(p, spec.storage(), &n, d.name_loc()) {
-                        redefined = true;
-                    } else if {
-                        self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
-                        self.diagnose_var_redecl_conflict(
-                            p,
-                            &n,
-                            d.name_loc(),
-                            ext || tentative,
-                            prev_def,
-                        )
-                    } {
+                    let conflict =
+                        self.diagnose_var_storage_redecl(p, spec.storage(), &n, d.name_loc()) || {
+                            self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
+                            self.diagnose_var_redecl_conflict(
+                                p,
+                                &n,
+                                d.name_loc(),
+                                ext || tentative,
+                                prev_def,
+                            )
+                        };
+                    if conflict {
                         redefined = true;
                     } else {
                         prev_ok = Some(p);
