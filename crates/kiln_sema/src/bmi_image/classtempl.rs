@@ -92,6 +92,12 @@ pub(super) fn partial_of(img: &Image, rec: u32) -> Option<u32> {
     img.cspecs.get(rec).filter(|c| c.head.is_some()).map(|c| c.template)
 }
 
+/// The parameter count of carried partial specialization `rec`'s
+/// template-head (WP-1292).
+pub(super) fn partial_head_len(img: &Image, rec: u32) -> Option<usize> {
+    img.cspecs.get(rec).and_then(|c| c.head.as_ref()).map(|h| h.params.len())
+}
+
 /// The template record of `rec` when it is a carried explicit
 /// specialization.
 pub(super) fn explicit_of(img: &Image, rec: u32) -> Option<u32> {
