@@ -326,3 +326,101 @@ Reading:
 - Not done in this slice and unchanged: member templates (640 / 423),
   friends (180 / 231), polymorphic class templates (45 / 44), implicit
   special members needing overload resolution (45 / 82).
+
+## WP-1292: member templates, friends, implicit members (2026-11-11)
+
+Debug build of the WP-1292 branch, on top of WP-1283 (#610); same two
+purviews and commands as the WP-1283 section. "before" is that
+section's "after".
+
+```
+allstd, before: 26898 top-level declarations, 18007 carried, 8891 not  (18.8 s, 115 MiB)
+allstd, after:  26898 top-level declarations, 18802 carried, 8096 not  (16.5 s, 118 MiB)
+stdcxx, before: 25559 top-level declarations, 17535 carried, 8024 not  (19.2 s,  99 MiB)
+stdcxx, after:  25559 top-level declarations, 18468 carried, 7091 not  (14.8 s, 101 MiB)
+```
+
++795 and +933 carried. The slice carries member templates and
+templates in templates, redeclared templates with inherited default
+arguments, pack expansions in base specifiers, polymorphic class
+templates, friends of classes that are not templates (hidden friends
+found by ADL among them), and classes whose implicit special members
+need overload resolution (spec/modules.md §11.11). It went in three
+steps; the middle columns are the census after the first (member
+templates) and second (friends, polymorphic class templates, pack
+bases). Rows that changed by more than 20 in either purview; "—" is a
+row the WP-1283 table does not list:
+
+| allstd | stdcxx | first reason |
+|---|---|---|
+| 640 → 1 → 1 → 1 | 423 → 9 → 9 → 9 | a member template or a template in a template |
+| 180 → 181 → 0 → 0 | 231 → 233 → 0 → 0 | a friend declaration |
+| — → 421 → 0 → 0 | — → 253 → 0 → 0 | a declaration in an unsupported context |
+| 45 → 45 → 0 → 0 | 44 → 44 → 0 → 0 | a polymorphic class template |
+| 45 → 45 → 68 → 0 | 82 → 82 → 118 → 0 | a class whose implicit special members need overload resolution |
+| — → 969 → 1206 → 1083 | — → 417 → 469 → 186 | cascade: a member of a class outside the image |
+| — → 262 → 443 → 558 | — → 233 → 425 → 640 | cascade: a redeclaration of an entity outside the image |
+| 730 → 736 → 678 → 581 | 735 → 749 → 700 → 637 | cascade: a specialization of a template outside the image |
+| 631 → 634 → 585 → 475 | 625 → 608 → 547 → 551 | cascade: a type declared outside the image |
+| — → 280 → 276 → 339 | — → 315 → 334 → 384 | cascade: a body referring to a declaration outside the image |
+| — → 303 → 303 → 297 | — → 206 → 173 → 126 | cascade: a using-declaration naming a declaration outside the image |
+| — → 1069 → 1079 → 1091 | — → 706 → 703 → 713 | cascade: an alias template outside the image |
+| 40 → 42 → 67 → 73 | 25 → 25 → 49 → 71 | a static assertion in a template |
+| 36 → 36 → 61 → 64 | 5 → 5 → 5 → 14 | an out-of-line member of a class nested in a template |
+| — → 52 → 91 → 99 | — → 68 → 88 → 104 | mem-initializers of a constructor in a class template |
+| — → 0 → 10 → 14 | — → 0 → 7 → 10 | a friend template |
+| — → 0 → 3 → 3 | — → 0 → 6 → 13 | a friend declaration in a class template |
+
+Reading:
+
+- "a declaration in an unsupported context" (421 / 253 after the first
+  step) was a cascade of friends: out-of-line definitions of members of
+  classes refused for their friends (`partial_ordering::less`,
+  `__compare/ordering.h:114`, whose class is refused at
+  `ordering.h:43`). With friends carried both rows are gone; what
+  remains of friends is the friend templates and the friends of class
+  templates (14 + 3 / 10 + 13).
+- The two largest cascades have concrete roots:
+  - "a member of a class outside the image" (1083 / 186): the member
+    is carried but its class is not. In `allstd`, 842 of them are
+    members of `basic_string` (`string:752`), refused as "a
+    redeclaration of an entity outside the image": the pattern's first
+    declaration is `template <class _CharT, class _Traits, class
+    _Alloc> friend class basic_string;` in class template
+    `__wrap_iter` (`__iterator/wrap_iter.h:101`), a friend template.
+    Skipping friend redeclarations alone gains only 17, because the
+    members then stop on the next missing feature. The other roots
+    are attributes (92), a template argument (48, `limits:462`), a
+    redeclared partial specialization (48, `vector:1848`) and a
+    specialization outside the image (30). `char_traits<char>`, declared
+    (`__fwd/string.h:25`) before its definition, is refused as "a class
+    member outside its class definition".
+  - "an alias template outside the image" (1091 / 713): rooted in
+    WP-1284's dependent non-type arguments (`_BoolConstant =
+    integral_constant<bool, _Val>`, `integral_constant.h:38`), as in
+    the WP-1283 section. It grows a little as more of its users are
+    reached.
+- "a static assertion in a template", "an out-of-line member of a
+  class nested in a template" and "mem-initializers of a constructor in
+  a class template" grow because member templates and friends no longer
+  stop the walk first; they are WP-1292 follow-ups (see the brief's
+  remainder) or WP-1284's.
+
+WP-1036 path tally on this branch (docs/status/pch.md "Which path the
+differential takes" and "Re-run with a small loop"):
+
+- `cargo xtask test --pch-diff check` over the conformance PCH and
+  modules directories, `tests/differential` and `tests/header-guard`:
+  141 compared, all equal; 17 took the image and 124 replayed, as
+  before (64 of the replays are for "a type the image does not carry",
+  22 for a template argument, 13 for "a template").
+- One header per PCH: libc++ 19, 8 of 106 take the image (the same
+  `<cassert>`, `<cerrno>`, `<cfloat>`, `<ciso646>`, `<climits>`,
+  `<cstdbool>`, `<cstdint>`, `<version>`); libstdc++ 14, 0 of 109 (73
+  for the block-scope `terminate` declaration, WP-1293, and 36 for a
+  type). The libc++ first refusals moved from "a member function
+  template" (13), "a default template argument" (2) and "a member
+  template" (1) to the next feature: "a template" (13; variable
+  template specializations and deduction guides), a type (49) and
+  attributes (3). The carried set is unchanged: 82 of the other 98
+  stop first on a type, a template argument or a template.
