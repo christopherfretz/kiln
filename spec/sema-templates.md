@@ -3986,7 +3986,9 @@ impl Sema<'_, '_> {
   A warning whose default mapping is an error still fails it.
   clang's `SFINAEFailure` warnings fail it whatever their mapping
   (`is_sfinae_failure`): the designated-initializer order/override
-  ExtWarns (spec/sema.md) and the narrowing ones, `-Wc++11-narrowing`
+  ExtWarns (spec/sema.md), the regular-vs-reversed rewritten-operator
+  tie (`-Wambiguous-reversed-operator`, spec/sema-overload.md §5.3;
+  WP-1322) and the narrowing ones, `-Wc++11-narrowing`
   in a list-initialization or a converted constant expression
   ([dcl.init.list]/3.7, [expr.const]), so a trait probing `T{v}` under
   `#pragma GCC diagnostic ignored "-Wnarrowing"` or `-Wno-narrowing`

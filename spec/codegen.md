@@ -2667,7 +2667,10 @@ clang 19 `-O0` on both targets. Layouts come from `kiln_abi::vtable`.
   evaluated or names a most-derived object, yields the static `_ZTI`.
   Otherwise the type_info pointer is loaded from vtable slot -1; a glvalue
   that comes from a pointer dereference is first null-checked with a
-  call to `__cxa_bad_typeid`.
+  call to `__cxa_bad_typeid`. The functions an evaluated operand calls
+  were odr-used by sema (spec/sema-class.md §5.8), so they are emitted
+  like any other use (`tests/conformance/expr.typeid/ir-polymorphic-operand-odr-use.cpp`,
+  WP-1322: `typeid(*p)` with a class template's `operator*`).
 - **Pointers to virtual members**: `&C::vf` is `{index * 8 + 1, adj}` on
   x86-64 and `{index * 8, 2 * adj + 1}` on AArch64; calls through them
   take the virtual branch already present in WP-079's `memptr.rs`.

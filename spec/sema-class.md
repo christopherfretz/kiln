@@ -2159,7 +2159,18 @@ list-initialization that would consider an initializer-list ctor is
 (`'A' is not polymorphic`) → `Dynamic`. `typeid` ([expr.typeid]) needs
 `std::type_info` declared (`you need to include <typeinfo> before using the
 'typeid' operator`); only a glvalue of polymorphic class type is potentially
-evaluated; the result is an lvalue `const std::type_info`.
+evaluated; the result is an lvalue `const std::type_info`. An expression
+operand is parsed (and substituted) as an unevaluated operand first, as
+clang's; once it is known to be a polymorphic glvalue (per instantiation,
+when its type is dependent) it is made potentially evaluated (clang's
+`TransformToPotentiallyEvaluated`): its names outside nested unevaluated
+operands and lambda bodies lose `non_odr_use_unevaluated`, the functions it
+calls (members of class template specializations, inline functions,
+conversion functions, lambda call operators, implicit special members,
+temporaries' destructors) are odr-used, so defined or instantiated
+([basic.def.odr]/4, [temp.inst]/5), and its temporaries belong to the
+enclosing full-expression (`mark_typeid_operand_evaluated`, WP-1322). A
+non-polymorphic operand stays unevaluated: nothing in it is odr-used.
 
 ## 6. Record layout (`kiln_abi`, abi.md §8)
 
@@ -3418,9 +3429,8 @@ walk per query) and the final overriders (`class/virtual/graph.rs`
 9. (WP-066b) Out-of-line static data member initializers and the parameter
    types of out-of-line member definitions are not looked up in class
    scope (names before the declarator-id's class are); the body is.
-10. (WP-078a) The operand of a potentially-evaluated `typeid` is not
-    re-transformed: names in it keep `non_odr_use_unevaluated`, and the
-    "expression with side effects will be evaluated" warning is not
-    emitted.
+10. (WP-078a; resolved by WP-1322) The operand of a potentially-evaluated
+    `typeid` is not re-transformed, but its nodes are re-marked as
+    potentially evaluated (§5.8), with the same odr-uses and dump.
 11. (WP-078a) The key function does not change when a later out-of-line
     `inline` definition makes the candidate inline (clang recomputes it).
