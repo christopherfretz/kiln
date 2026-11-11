@@ -5085,6 +5085,8 @@ mod tests {
             },
             attrs: attrs::Attrs::default(),
             scopes: scope::Scopes::default(),
+            cspecs: classtempl::ClassSpecs::default(),
+            declocs: declocs::DeclLocs::default(),
         }
     }
 

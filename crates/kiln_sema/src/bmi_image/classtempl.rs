@@ -118,7 +118,7 @@ impl Writer<'_, '_, '_> {
                 ArgView::Pack(l) => {
                     out.extend(ast.types.args(l).iter().filter_map(|x| {
                         if let ArgView::Type(q) = x.view() { Some(q) } else { None }
-                    }))
+                    }));
                 }
                 _ => {}
             }
@@ -234,11 +234,11 @@ impl Writer<'_, '_, '_> {
         let ArgView::Value { ty, .. } = c.view() else { return None };
         let ast = &self.s.ast;
         let e = ast.exprs.get(expr);
-        let literal = match (e.kind(), ast.types.builtin(ty)) {
-            (ExprKind::CXXBoolLiteralExpr, Some(BuiltinType::Bool)) => true,
-            (ExprKind::IntegerLiteral, Some(BuiltinType::Int)) => true,
-            _ => false,
-        };
+        let literal = matches!(
+            (e.kind(), ast.types.builtin(ty)),
+            (ExprKind::CXXBoolLiteralExpr, Some(BuiltinType::Bool))
+                | (ExprKind::IntegerLiteral, Some(BuiltinType::Int))
+        );
         (literal && e.ty() == ty && ty.quals_bits() == 0).then_some(c)
     }
 
@@ -492,6 +492,7 @@ pub(super) fn validate_class_specs(
 impl Sema<'_, '_> {
     /// Builds class specialization record `i` (header `h`, class-key
     /// `tag`), as the parser's declaration of it does.
+    #[allow(clippy::too_many_arguments, reason = "the reader's tables and the record's head")]
     pub(super) fn image_class_spec(
         &mut self,
         img: &Image,
