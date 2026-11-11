@@ -4,7 +4,7 @@
 // unit it becomes a definition initialized to zero. A later definition
 // with an initializer takes precedence.
 //@ expect: run
-//@ stdout: 0 5 0 0
+//@ stdout: 0 5 0 2
 int printf(const char *, ...);
 int a;
 int a;
@@ -16,7 +16,11 @@ static int c;
 int arr[3];
 int arr[3];
 struct P { int x, y; } pt;
+const int k;
+struct P q;
+int e2 = 2;
+int e2;
 int main(void) {
-  printf("%d %d %d %d\n", a, b, c, arr[0] + pt.x + pt.y);
+  printf("%d %d %d %d\n", a, b, c, arr[0] + pt.x + pt.y + k + q.x + e2);
   return 0;
 }

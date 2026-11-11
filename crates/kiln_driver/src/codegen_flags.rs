@@ -64,6 +64,8 @@ pub struct CodegenFlags {
     pub async_unwind_tables: Option<bool>,
     /// The last of `-fno-plt` (true) / `-fplt`.
     pub no_plt: bool,
+    /// The last of `-fcommon` (true) / `-fno-common`.
+    pub common: bool,
     /// The last of `-fc++-static-destructors[=all|thread-local|none]` /
     /// `-fno-c++-static-destructors` (WP-805).
     pub static_destructors: StaticDestructors,
@@ -171,8 +173,6 @@ const ZERO_CALL_KINDS: &[&str] = &[
 const IGNORED: &[&str] = &[
     "-fstack-clash-protection",
     "-fno-stack-clash-protection",
-    "-fcommon",
-    "-fno-common",
     "-fstack-usage",
     "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
@@ -230,6 +230,8 @@ impl CodegenFlags {
             "-fno-asynchronous-unwind-tables" => set(&mut self.async_unwind_tables, false),
             "-fno-plt" => self.no_plt = true,
             "-fplt" => self.no_plt = false,
+            "-fcommon" => self.common = true,
+            "-fno-common" => self.common = false,
             "-fc++-static-destructors" => self.static_destructors = StaticDestructors::All,
             "-fno-c++-static-destructors" => self.static_destructors = StaticDestructors::None,
             "-fwrapv" => set(&mut self.wrapv, true),

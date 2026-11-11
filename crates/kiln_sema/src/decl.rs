@@ -6196,6 +6196,16 @@ impl Sema<'_, '_> {
         self.emit(msg);
     }
 
+    /// C ([6.9.2]/2): a file-scope object declaration without an
+    /// initializer and without `extern` is a tentative definition.
+    pub(crate) fn c_tentative(&self, v: DeclId) -> bool {
+        self.is_c()
+            && self.ast.decls.var(v).is_some_and(|x| {
+                x.init.is_none() && matches!(x.spec.storage(), VarStorage::None | VarStorage::Static)
+            })
+            && self.ast.decls.get(v).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::TranslationUnit)
+    }
+
     pub(crate) fn is_var_definition(&self, v: DeclId) -> bool {
         // [basic.def]/2.4: a static data member declared in its class is
         // a definition only when inline (constexpr implies inline).
@@ -6509,10 +6519,21 @@ impl Sema<'_, '_> {
                     // clang `VarDecl::isThisDeclarationADefinition`: an
                     // `alias` declaration is a definition (`hasDefiningAttr`),
                     // so `int v;` after one redefines `v`.
-                    let prev_def = self.is_var_definition(p) || self.own_alias_attr(p).is_some();
+                    let prev_def = (self.is_var_definition(p) && !self.c_tentative(p))
+                        || self.own_alias_attr(p).is_some();
                     let n = sym_str(self, name);
                     self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
-                    if self.diagnose_var_redecl_conflict(p, &n, d.name_loc(), ext, prev_def) {
+                    // C ([6.9.2]/2): without its initializer the new
+                    // declaration is tentative; a redefinition is found
+                    // when one is added (`c_init_redefines`).
+                    let tentative = self.is_c() && !self.in_local_scope();
+                    if self.diagnose_var_redecl_conflict(
+                        p,
+                        &n,
+                        d.name_loc(),
+                        ext || tentative,
+                        prev_def,
+                    ) {
                         redefined = true;
                     } else {
                         prev_ok = Some(p);
@@ -6720,8 +6741,10 @@ impl Sema<'_, '_> {
             return false;
         }
         let t = self.base_element(self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR));
-        if !self.ast.types.effective_quals(t).is_const()
-            && !kiln_abi::mangle::is_extern_c(&self.ast, v)
+        // C warns for every one (clang `warn_extern_init`).
+        if (self.is_c()
+            || !self.ast.types.effective_quals(t).is_const()
+                && !kiln_abi::mangle::is_extern_c(&self.ast, v))
             && !self.ast.spec_info(v).is_some_and(|(_, i)| {
                 !matches!(i.kind, SpecKind::Undeclared | SpecKind::ExplicitSpecialization)
             })
@@ -6766,10 +6789,15 @@ impl Sema<'_, '_> {
     /// invalid; true when it did.
     fn extern_init_redefines(&mut self, v: DeclId, spec: VarSpec, loc: Loc) -> bool {
         let ext = spec.storage() == VarStorage::Extern || self.ast.decls.is_single_line_linkage(v);
-        if !ext || self.in_local_scope() || self.is_in_class_static(v) {
+        // C: every file-scope declaration is checked here, a tentative
+        // definition redefining nothing ([6.9.2]/2).
+        if !(ext || self.is_c()) || self.in_local_scope() || self.is_in_class_static(v) {
             return false;
         }
-        let def = self.ast.redecls_of(v).find(|&x| x != v && self.is_var_definition(x));
+        let def = self
+            .ast
+            .redecls_of(v)
+            .find(|&x| x != v && self.is_var_definition(x) && !self.c_tentative(x));
         let Some(def) = def else { return false };
         let name = self.ast.decls.get(v).name();
         let msg = self.diag(DiagId::sema_redefinition, loc).arg(self.decl_name_str(name));
@@ -7778,7 +7806,10 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return;
         }
-        if self.element_class(elem).is_some() {
+        if self.is_c() {
+            // C: an object without an initializer is valid, const or not
+            // ([6.7.9]/10).
+        } else if self.element_class(elem).is_some() {
             // [dcl.init.general]/7–8, [class.dtor]/15 (WP-067a).
             self.check_class_default_init(v, ty, loc);
         } else if quals.is_const() {

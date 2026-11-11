@@ -49,6 +49,9 @@ pub struct PredefConfig {
     pub opt: OptLevel,
     /// `-fno-inline`: `__NO_INLINE__` even when optimizing.
     pub no_inline: bool,
+    /// C `-f[no-]gnu89-inline`: `__GNUC_GNU_INLINE__` in place of
+    /// `__GNUC_STDC_INLINE__` (or the reverse); `None` keeps the base's.
+    pub gnu89_inline: Option<bool>,
     /// `-include <file>`s: `#include "<file>"` lines after the command
     /// line's macros, in the `<command line>` section (clang
     /// `AddImplicitInclude`), so they are found from the working directory.
@@ -150,6 +153,7 @@ impl PredefConfig {
             aarch64: true,
             opt: OptLevel::None,
             no_inline: false,
+            gnu89_inline: None,
             implicit_includes: Vec::new(),
             exceptions: cplusplus,
             rtti: cplusplus,
@@ -569,6 +573,15 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         }
         Some(false) => set(m, "__CHAR_UNSIGNED__", "1"),
         None => {}
+    }
+    if let Some(gnu) = cfg.gnu89_inline.filter(|_| !cfg.cplusplus) {
+        let (on, off) = if gnu {
+            ("__GNUC_GNU_INLINE__", "__GNUC_STDC_INLINE__")
+        } else {
+            ("__GNUC_STDC_INLINE__", "__GNUC_GNU_INLINE__")
+        };
+        m.remove(off);
+        set(m, on, "1");
     }
     match cfg.opt {
         OptLevel::None => {}

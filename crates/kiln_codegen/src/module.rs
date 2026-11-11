@@ -1289,6 +1289,12 @@ impl<'a> Cg<'a> {
 
     pub fn fn_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
+        // C: an inline function is discardable only when internal or an
+        // inline definition; an external one is a strong definition.
+        if self.opts.c.is_some() {
+            return self.c_inline_specified(d)
+                && (self.fn_internal(d) || self.c_inline_definition_only(ast.first(d)));
+        }
         self.is_implicit_instantiation(d)
             || ast.redecls_of(d).any(|r| {
                 ast.decls.function(r).is_some_and(|f| {
@@ -1358,6 +1364,48 @@ impl<'a> Cg<'a> {
     fn defined_elsewhere(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
             || self.is_gnu_inline_fn(first)
+            || self.c_inline_definition_only(first)
+    }
+
+    /// C: some declaration of function `d` is `inline`.
+    fn c_inline_specified(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_inline()))
+    }
+
+    /// C: function `first`, with external linkage, has an inline
+    /// definition that is not externally visible, so another translation
+    /// unit provides the symbol (clang
+    /// `FunctionDecl::isInlineDefinitionExternallyVisible` false;
+    /// spec/landed/sema-conv/WP-1276.md "inline"). C99 ([6.7.4]/7): every
+    /// file-scope declaration is `inline` and none `extern`. GNU89
+    /// (`-fgnu89-inline`, before C99, or `gnu_inline`): the definition is
+    /// `extern inline` and no declaration is `inline` without `extern`.
+    fn c_inline_definition_only(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        if self.opts.c.is_none() || self.fn_internal(first) || !self.c_inline_specified(first) {
+            return false;
+        }
+        let spec = |r: DeclId| ast.decls.function(r).map(|f| f.spec);
+        let ext = |s: kiln_ast::decl::FnSpec| s.storage() == kiln_ast::decl::FnStorage::Extern;
+        let gnu = self.opts.gnu89_inline
+            || self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE);
+        if gnu {
+            let def = ast.redecls_of(first).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
+            let Some(def_spec) = def.and_then(spec) else { return false };
+            if !(def_spec.is_inline() && ext(def_spec)) {
+                return false;
+            }
+            return !ast.redecls_of(first).any(|r| spec(r).is_some_and(|s| s.is_inline() && !ext(s)));
+        }
+        let file_scope = |r: DeclId| {
+            ast.decls
+                .lexical_ctx(r)
+                .is_some_and(|c| ast.decls.get(c).kind() == DeclKind::TranslationUnit)
+        };
+        !ast.redecls_of(first)
+            .filter(|&r| file_scope(r))
+            .any(|r| spec(r).is_some_and(|s| !s.is_inline() || ext(s)))
     }
 
     /// clang `basicGVALinkageForFunction`'s GNU inline rule: in C++ an
@@ -1369,7 +1417,8 @@ impl<'a> Cg<'a> {
     /// library, provides the symbol (spec/codegen.md "GNU inline
     /// functions").
     fn is_gnu_inline_fn(&self, first: DeclId) -> bool {
-        self.ast.decls.function(first).is_some()
+        self.opts.c.is_none()
+            && self.ast.decls.function(first).is_some()
             && self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE)
             && !self.fn_internal(first)
     }
@@ -3132,9 +3181,17 @@ impl<'a> Cg<'a> {
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
         let section = self.decl_section(d);
+        // C `-fcommon`: only tentative definitions, no section or TLS
+        // (clang `isVarDeclStrongDefinition`).
+        let common = self.opts.common
+            && self.opts.c.is_some()
+            && section.is_none()
+            && ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
+            && ast.redecls_of(d).all(|r| ast.decls.var(r).is_some_and(|v| v.init.is_none()))
+            && !self.var_is_tls(d);
         let sanitizer = self.global_sanitizer(d, g, needs_init);
         let gv = self.m.global_mut(g);
-        gv.is_constant = constant;
+        gv.is_constant = constant && !common;
         gv.align = Some(align);
         gv.visibility = vis;
         gv.section = section;
@@ -3157,6 +3214,9 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::WeakOdr;
             gv.dso_local = true;
             gv.comdat = comdat;
+        } else if common {
+            gv.linkage = Linkage::Common;
+            gv.dso_local = true;
         } else {
             gv.linkage = Linkage::External;
             gv.dso_local = true;

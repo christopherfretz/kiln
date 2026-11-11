@@ -317,6 +317,14 @@ pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
         let v = a.strip_prefix("-fvisibility=").unwrap_or(a);
         return Err(Box::new(Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(a).arg(v)));
     }
+    // clang's cc1: `-fgnu89-inline` is C only.
+    if cplusplus && args.predef.gnu89_inline == Some(true) {
+        return Err(Box::new(
+            Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID)
+                .arg("-fgnu89-inline")
+                .arg("C++"),
+        ));
+    }
     let Some(s) = &args.std else { return Ok(LangStd::default_for(cplusplus)) };
     let std = LangStd::parse(s).ok_or_else(|| {
         Box::new(
