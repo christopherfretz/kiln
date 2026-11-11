@@ -4,6 +4,7 @@
 
 use std::cmp::Ordering;
 
+use crate::c_ident_tables::{C11_ALLOWED, C11_DISALLOWED_INITIAL, C99_ALLOWED, C99_DISALLOWED_INITIAL};
 use crate::unicode_names::{BLOCK, MAX_NAME_LEN, NAME_BLOCKS, NAMES, NR2_RANGES};
 use crate::unicode_tables::{
     CANON_DECOMP, CCC, COMPOSE, NFC_QC_MAYBE, NFC_QC_NO, XID_CONTINUE, XID_START,
@@ -58,6 +59,92 @@ pub(crate) fn is_xid_start(c: char) -> bool {
 /// [lex.name]: a non-ASCII character with the `XID_Continue` property.
 pub(crate) fn is_xid_continue(c: char) -> bool {
     !c.is_ascii() && in_table(XID_CONTINUE, c as u32)
+}
+
+/// Which table decides whether a non-ASCII character may appear in an
+/// identifier: C++ and C23 use `XID_Start`/`XID_Continue` ([lex.name],
+/// C23 6.4.2.1), C11 and C17 use C11 Annex D, C99 (and, for UTF-8,
+/// C89) use C99 Annex D (clang 19 `isAllowedIDChar`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum IdTables {
+    /// UAX #31 `XID_Start` / `XID_Continue`.
+    Xid,
+    /// C11 D.1 / D.2.
+    C11,
+    /// C99 Annex D and 6.4.2.1p3.
+    C99,
+}
+
+impl IdTables {
+    /// `c` (non-ASCII) may appear in an identifier after its first
+    /// character.
+    pub(crate) fn allowed(self, c: char) -> bool {
+        match self {
+            IdTables::Xid => is_xid_start(c) || is_xid_continue(c) || math_profile(c, false),
+            IdTables::C11 => in_table(C11_ALLOWED, c as u32),
+            IdTables::C99 => in_table(C99_ALLOWED, c as u32),
+        }
+    }
+
+    /// `c` (non-ASCII) may begin an identifier.
+    pub(crate) fn allowed_initially(self, c: char) -> bool {
+        match self {
+            IdTables::Xid => is_xid_start(c) || math_profile(c, true),
+            IdTables::C11 => self.allowed(c) && !in_table(C11_DISALLOWED_INITIAL, c as u32),
+            IdTables::C99 => self.allowed(c) && !in_table(C99_DISALLOWED_INITIAL, c as u32),
+        }
+    }
+}
+
+/// The UAX #31 mathematical notation profile clang 19 accepts as an
+/// extension in XID identifiers (`isMathematicalExtensionID`): these
+/// may start an identifier, ...
+const MATH_START: &[(u32, u32)] = &[
+    (0x2202, 0x2202),
+    (0x2207, 0x2207),
+    (0x221E, 0x221E),
+    (0x1D6C1, 0x1D6C1),
+    (0x1D6DB, 0x1D6DB),
+    (0x1D6FB, 0x1D6FB),
+    (0x1D715, 0x1D715),
+    (0x1D735, 0x1D735),
+    (0x1D74F, 0x1D74F),
+    (0x1D76F, 0x1D76F),
+    (0x1D789, 0x1D789),
+    (0x1D7A9, 0x1D7A9),
+    (0x1D7C3, 0x1D7C3),
+];
+/// ... and these (super- and subscript digits) continue one.
+const MATH_CONTINUE: &[(u32, u32)] =
+    &[(0xB2, 0xB3), (0xB9, 0xB9), (0x2070, 0x2070), (0x2074, 0x207E), (0x2080, 0x208E)];
+
+/// `c` is in the mathematical notation profile (start-only if `first`).
+fn math_profile(c: char, first: bool) -> bool {
+    in_table(MATH_START, c as u32) || (!first && in_table(MATH_CONTINUE, c as u32))
+}
+
+impl IdTables {
+    /// `c` is allowed here only as clang's mathematical-notation
+    /// extension (`ext_mathematical_notation`).
+    pub(crate) fn math_extension(self, c: char, first: bool) -> bool {
+        self == IdTables::Xid
+            && !is_xid_start(c)
+            && (first || !is_xid_continue(c))
+            && math_profile(c, first)
+    }
+}
+
+/// `-Wc99-compat` (clang `maybeDiagnoseIDCharCompat`): `Some(true)` if
+/// `c` cannot start an identifier in C99, `Some(false)` if it cannot
+/// appear in one at all, `None` if C99 accepts it here.
+pub(crate) fn c99_incompat(c: char, first: bool) -> Option<bool> {
+    if !in_table(C99_ALLOWED, c as u32) {
+        Some(false)
+    } else if first && in_table(C99_DISALLOWED_INITIAL, c as u32) {
+        Some(true)
+    } else {
+        None
+    }
 }
 
 /// Non-ASCII characters clang treats as whitespace (with
@@ -467,6 +554,36 @@ pub fn is_identifier(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn c_tables_sorted() {
+        for t in [C99_ALLOWED, C99_DISALLOWED_INITIAL, C11_ALLOWED, C11_DISALLOWED_INITIAL] {
+            assert!(t.iter().all(|&(lo, hi)| lo <= hi));
+            assert!(t.windows(2).all(|w| w[0].1 < w[1].0));
+        }
+    }
+
+    /// C99 Annex D, C11 D.1/D.2 and UAX #31 differ exactly where clang 19's
+    /// tables do.
+    #[test]
+    fn c_id_tables() {
+        use IdTables::{C11, C99, Xid};
+        // U+00A8 DIAERESIS: C11 only.
+        assert!(C11.allowed_initially('\u{A8}') && !C99.allowed('\u{A8}') && !Xid.allowed('\u{A8}'));
+        // U+0300 combining grave: allowed, not initially, in C11 and XID; not C99.
+        assert!(C11.allowed('\u{300}') && !C11.allowed_initially('\u{300}'));
+        assert!(Xid.allowed('\u{300}') && !Xid.allowed_initially('\u{300}'));
+        assert!(!C99.allowed('\u{300}'));
+        // U+0660 ARABIC-INDIC DIGIT ZERO: a C99 "digit".
+        assert!(C99.allowed('\u{660}') && !C99.allowed_initially('\u{660}'));
+        assert!(C11.allowed_initially('\u{660}'));
+        // U+1F600: C11 range 8, not XID, not C99.
+        assert!(C11.allowed_initially('\u{1F600}') && !Xid.allowed('\u{1F600}'));
+        assert!(!C99.allowed('\u{1F600}'));
+        assert_eq!(c99_incompat('\u{A8}', false), Some(false));
+        assert_eq!(c99_incompat('\u{660}', true), Some(true));
+        assert_eq!(c99_incompat('\u{660}', false), None);
+    }
 
     #[test]
     fn xid_tables() {

@@ -32,7 +32,7 @@ use std::ops::Range;
 use kiln_source::{SourceManager, Span};
 
 use crate::diag::{LexDiag, LexDiagKind, LexSeverity};
-use crate::options::{LexOptions, Std};
+use crate::options::{CStd, LexOptions, Std};
 use crate::token::{Encoding, TokFlags, Token};
 use crate::unicode::{NameMatch, lookup_char_name};
 
@@ -88,6 +88,9 @@ pub struct LiteralOptions {
     /// multicharacter literal) and is not then an invalid escape in an
     /// unevaluated string; clang 22 consumes the `}` and reports both.
     pub clang19_escapes: bool,
+    /// C mode ([`LexOptions::c`]): the C rules for universal character
+    /// names in literals (C11 6.4.3p2 until C23; none in C89).
+    pub c: Option<CStd>,
 }
 
 impl Default for LiteralOptions {
@@ -100,7 +103,7 @@ impl Default for LiteralOptions {
 impl LiteralOptions {
     /// Options for `std` and `params`.
     pub const fn new(std: Std, params: EncodingParams) -> Self {
-        LiteralOptions { std, params, char8: None, clang19_escapes: false }
+        LiteralOptions { std, params, char8: None, clang19_escapes: false, c: None }
     }
 
     /// Whether a UTF-8 literal has `char8_t` type: the `char8` field, else
@@ -504,6 +507,8 @@ struct Escapes<'a> {
     std: Std,
     /// [`LiteralOptions::clang19_escapes`].
     clang19: bool,
+    /// [`LiteralOptions::c`].
+    c: Option<CStd>,
     /// Unevaluated string ([lex.string.uneval]): numeric escapes are
     /// errors.
     unevaluated: bool,
@@ -783,11 +788,18 @@ impl Escapes<'_> {
                 (None, end)
             }
             Some(c) => {
-                // C++98/03 [lex.charset]/2: no UCN for a control or basic
-                // source character, even in a literal ($, @, ` excepted).
-                if self.std < Std::Cxx11 && cp < 0xA0 && !matches!(cp, 0x24 | 0x40 | 0x60) {
+                // C++98/03 [lex.charset]/2 and C before C23 (C11 6.4.3p2):
+                // no UCN for a control or basic source character, even in
+                // a literal ($, @, ` excepted).
+                let strict = self.c.map_or(self.std < Std::Cxx11, |c| c < CStd::C23);
+                if strict && cp < 0xA0 && !matches!(cp, 0x24 | 0x40 | 0x60) {
                     self.diags.push(LexDiagKind::UcnBasicOrControl { cp }, at, end);
                     return (None, end);
+                }
+                // C89 has no UCNs; clang still decodes this one, with
+                // `warn_ucn_not_valid_in_c89_literal`.
+                if self.c == Some(CStd::C89) {
+                    self.diags.push(LexDiagKind::UcnNotValidInC89Literal, at, end);
                 }
                 (Some(Item::Char(c)), end)
             }
@@ -828,6 +840,7 @@ fn for_each_item(
                 bits,
                 std: opts.std,
                 clang19: opts.clang19_escapes,
+                c: opts.c,
                 unevaluated,
                 skip_unevaluated: false,
                 diags,

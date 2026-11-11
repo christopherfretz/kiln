@@ -467,6 +467,7 @@ impl<'c> Ev<'c> {
         }
     }
 
+                c: self.c,
     /// `EvaluateDirectiveSubExpr`: operator-precedence parsing of the
     /// binary operators of precedence `min` and above, `lhs` already read.
     fn sub_expr(&mut self, mut lhs: Val, min: u8, live: bool) -> R<Val> {

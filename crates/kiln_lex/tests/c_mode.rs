@@ -99,3 +99,83 @@ fn lex_c89_line_comment_warns_once() {
     assert!(count(c(CStd::C89, true)).is_empty());
     assert!(count(c(CStd::C99, false)).is_empty());
 }
+
+/// C99 6.4.2.1p3 / Annex D, C11 6.4.2.1p3 / D.1-D.2, C23 6.4.2.1 (XID):
+/// which non-ASCII characters an identifier may contain, per standard.
+/// U+00A8 is C11-only, U+0660 a C99 "digit" (not initially), U+0300 a
+/// combining mark (C11 and XID: not initially; C99: never).
+#[test]
+fn lex_c_identifier_tables() {
+    use kiln_lex::LexDiagKind as D;
+    let run = |text: &str, o| {
+        let l = lex_with(text, o);
+        let d = l.diags.iter().map(|d| d.0);
+        let d = d.filter(|d| !matches!(d, D::C99CompatUnicodeId { .. }));
+        (l.idents.join(" "), d.collect::<Vec<_>>())
+    };
+    let c11 = c(CStd::C11, false);
+    let c99 = c(CStd::C99, false);
+    let c23 = c(CStd::C23, false);
+    assert_eq!(run("\u{A8}x a\u{660}\n", c11), ("\u{A8}x a\u{660}".to_string(), vec![]));
+    let (ids, d) = run("\u{A8}x\n", c99);
+    assert_eq!((ids.as_str(), d), ("x", vec![D::InvalidChar { ch: '\u{A8}' }]));
+    let (ids, d) = run("\u{660}x\n", c99);
+    assert_eq!(ids, "x");
+    assert_eq!(d, [D::CharNotAllowedInIdentifier { ch: '\u{660}', at_start: true }]);
+    let (ids, d) = run("q\u{300}\n", c99);
+    assert_eq!(ids, "q\u{300}");
+    assert_eq!(d, [D::CharNotAllowedInIdentifier { ch: '\u{300}', at_start: false }]);
+    assert_eq!(run("q\u{300}\n", c11).1, []);
+    // U+1F600 is in C11 D.1 but not XID.
+    assert_eq!(run("\u{1F600}\n", c11).0, "\u{1F600}");
+    assert_eq!(run("\u{1F600}x\n", c23).1, [D::InvalidChar { ch: '\u{1F600}' }]);
+    // -Wc99-compat on characters C99 rejects (here, or initially).
+    let compat = |text: &str| {
+        lex_with(text, c11)
+            .diags
+            .iter()
+            .filter_map(|d| match d.0 {
+                D::C99CompatUnicodeId { start } => Some(start),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(compat("\u{A8}x a\u{A8} \u{660}y a\u{660}\n"), [false, false, true]);
+}
+
+/// C89 has no universal character names (clang 19 `-Wunicode`): `\u` at
+/// a token start is a lone `\` and an identifier; inside an identifier
+/// it ends it.
+#[test]
+fn lex_c89_no_ucns() {
+    use kiln_lex::LexDiagKind as D;
+    for gnu in [false, true] {
+        let l = lex_with("\\u00AA a\\u00AA\n", c(CStd::C89, gnu));
+        assert_eq!(l.spellings, ["\\", "u00AA", "a", "\\", "u00AA"]);
+        let d: Vec<_> = l.diags.iter().map(|d| d.0).collect();
+        assert_eq!(d, [D::UcnNotValidInC89, D::UcnNotValidInC89]);
+    }
+    assert_eq!(lex_with("\\u00AA\n", c(CStd::C99, false)).idents, ["\u{AA}"]);
+}
+
+/// C11 6.4.3p2 (a UCN shall not name a basic character, in a literal too,
+/// until C23) and C89's lack of UCNs (clang 19
+/// `warn_ucn_not_valid_in_c89_literal`, decoded anyway).
+#[test]
+fn lex_c_literal_ucns() {
+    use kiln_lex::LexDiagKind as D;
+    use kiln_lex::literal::{LiteralOptions, decode_string};
+    let lit = |sp: &str, cs: CStd| {
+        let o = LiteralOptions { c: Some(cs), ..LiteralOptions::new(c(cs, false).std, Default::default()) };
+        let s = decode_string(sp, o);
+        (s.units.iter().collect::<Vec<u32>>(), s.diags.iter().map(|d| d.kind).collect::<Vec<_>>())
+    };
+    for cs in [CStd::C89, CStd::C99, CStd::C11, CStd::C17] {
+        assert_eq!(lit(r#""\u0041""#, cs).1, [D::UcnBasicOrControl { cp: 0x41 }], "{cs:?}");
+    }
+    assert_eq!(lit(r#""\u0041""#, CStd::C23), (vec![0x41], vec![]));
+    assert_eq!(lit(r#""\u0024""#, CStd::C11).1, []);
+    assert_eq!(lit(r#""\u00AA""#, CStd::C89), (vec![0xC2, 0xAA], vec![D::UcnNotValidInC89Literal]));
+    assert_eq!(lit(r#""\uD800""#, CStd::C89).1, [D::UcnInvalidCodePoint { cp: 0xD800 }]);
+    assert_eq!(lit(r#""\u00AA""#, CStd::C99).1, []);
+}
