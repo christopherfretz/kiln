@@ -71,6 +71,12 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
   that a C link cannot resolve. Repro:
   `tests/c/run/static-local-address-constant-cast.c` (xfail). The
   workload was not run.
+- After the measurement (not re-measured):
+  - K&R definitions whose declaration list starts with `const` now compile:
+    compile/20040309-1.c, compile/980825-1.c and execute/930513-2.c.
+    C parses no function qualifiers.
+  - pr34334 (a file-scope anonymous union) compiles after the merge of
+    main.
 
 ## WP-1288 re-measure (wp/1288, 2026-11-11)
 

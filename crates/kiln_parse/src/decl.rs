@@ -3977,6 +3977,12 @@ impl Parser<'_, '_> {
         d: &mut Declarator,
         delayable: bool,
     ) -> (ExcSpec, Quals, RefQual, Option<(QualType, Loc)>) {
+        // C has none of them (clang `ParseFunctionDeclarator` parses them
+        // only in C++): a `const` after a K&R declarator starts its
+        // declaration list (C17 6.9.1p6).
+        if self.s.is_c() {
+            return (ExcSpec::default(), Quals::NONE, RefQual::None, None);
+        }
         let mut exc = None;
         let mut quals = Quals::NONE;
         let mut ref_qual = RefQual::None;
