@@ -2287,7 +2287,7 @@ impl Sema<'_, '_> {
     /// `float` ([expr.call]/13). clang's second test, a promoted type
     /// differing from the underlying type only in signedness, never
     /// holds for a standard promotable type, so it is not repeated.
-    pub(crate) fn va_arg_promotion(&mut self, t: QualType) -> Option<QualType> {
+    pub(crate) fn va_arg_promotion(&self, t: QualType) -> Option<QualType> {
         let canon = |s: &Self, q: QualType| s.ast.types.canonical(q).without_quals();
         if canon(self, t) == QualType::FLOAT {
             return Some(QualType::DOUBLE);

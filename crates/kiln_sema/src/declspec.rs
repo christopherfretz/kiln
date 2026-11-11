@@ -860,6 +860,10 @@ pub struct Declarator {
     /// implied `auto` rather than a written decl-specifier
     /// ([expr.prim.lambda.closure]/3).
     pub lambda: bool,
+    /// C before C23: the identifier list of a K&R function declarator
+    /// applied to the name (`f(a, b)`, C17 6.7.6.3p3), typed by the
+    /// declaration list of its definition (6.9.1p6).
+    pub knr_idents: Option<Vec<(Symbol, Loc)>>,
     /// The outermost grouping parentheses and the number of chunks inside
     /// them (`B (x)`: `(0, loc of '(')`; [dcl.type.class.deduct]/2).
     pub outer_paren: Option<(usize, Loc)>,
@@ -986,6 +990,7 @@ impl Declarator {
             conv_type_loc: Loc::INVALID,
             site: DeclSite::Plain,
             lambda: false,
+            knr_idents: None,
             outer_paren: None,
             parens: Vec::new(),
             after_comma: false,

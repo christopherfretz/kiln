@@ -118,7 +118,15 @@ pub struct ConvError {
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args, notes: Vec::new(), at: None, range: None, recovered: None, fixits: Vec::new() }
+        ConvError {
+            id,
+            args,
+            notes: Vec::new(),
+            at: None,
+            range: None,
+            recovered: None,
+            fixits: Vec::new(),
+        }
     }
 
     /// The diagnostic, with its caret at `e`'s location.

@@ -1618,7 +1618,15 @@ impl Sema<'_, '_> {
                     };
                 }
                 Chunk::Function {
-                    params, variadic, loc, exc, quals, ref_qual, trailing, no_proto, ..
+                    params,
+                    variadic,
+                    loc,
+                    exc,
+                    quals,
+                    ref_qual,
+                    trailing,
+                    no_proto,
+                    ..
                 } => {
                     prev_ref = false;
                     let mut info = FuncInfo::new()
@@ -1720,7 +1728,15 @@ impl Sema<'_, '_> {
                     if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
                         self.check_volatile_params(params);
                     }
-                    let ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+                    let mut ptys: Vec<QualType> = params.iter().map(|p| p.ty).collect();
+                    // C17 6.9.1p10 (clang `ActOnFunctionDeclarator`): a K&R
+                    // definition's type has the default-promoted parameter
+                    // types, without a prototype.
+                    if *no_proto {
+                        for t in &mut ptys {
+                            *t = self.va_arg_promotion(*t).unwrap_or(*t);
+                        }
+                    }
                     ty = self.ast.types.function(ty, &ptys, info, *exc);
                 }
             }
@@ -5005,10 +5021,15 @@ impl Sema<'_, '_> {
                 } else {
                     ty
                 };
-                let c_compat = self.is_c() && self.c_no_proto_compatible(p, pty, ty, d.name_loc());
-                if c_compat && self.ast.types.proto(ty).is_some_and(|x| x.info().no_proto()) {
-                    // C17 6.2.7p3: the composite is the prototype.
-                    ty = pty;
+                // C17 6.2.7p3: without a prototype, the composite type.
+                let c_comp = if self.is_c() {
+                    self.c_no_proto_composite(p, pty, ty, d.name_loc())
+                } else {
+                    None
+                };
+                let c_compat = c_comp.is_some();
+                if let Some(t) = c_comp {
+                    ty = t;
                 }
                 if missing_err {
                     invalid_redecl = true;
@@ -6212,46 +6233,90 @@ impl Sema<'_, '_> {
     /// at `loc`) lacks a prototype. clang `warn_non_prototype_changes_behavior`:
     /// the one without a prototype means `(void)` in C23, which conflicts
     /// with a prototype that has parameters; that is warned either way.
-    pub(crate) fn c_no_proto_compatible(
+    /// C17 6.2.7p3: the composite of the types `pty` of `p` and `ty` of
+    /// its redeclaration at `loc` when either has no prototype (`f()` or
+    /// a K&R definition's), with clang's `-Wdeprecated-non-prototype`
+    /// diagnostics (`MergeFunctionDecl`, `ActOnFinishFunctionBody`);
+    /// `None` when both have a prototype or the types conflict.
+    pub(crate) fn c_no_proto_composite(
         &mut self,
         p: DeclId,
         pty: QualType,
         ty: QualType,
         loc: Loc,
-    ) -> bool {
-        let (Some(a), Some(b)) = (self.ast.types.proto(pty).copied(), self.ast.types.proto(ty).copied())
-        else {
-            return false;
-        };
-        if a.info().no_proto() == b.info().no_proto() {
-            return false;
+    ) -> Option<QualType> {
+        let a = self.ast.types.proto(pty).copied()?;
+        let b = self.ast.types.proto(ty).copied()?;
+        let (an, bn) = (a.info().no_proto(), b.info().no_proto());
+        if !an && !bn {
+            return None;
         }
-        let proto = if a.info().no_proto() { b } else { a };
-        let params = self.ast.types.params(&proto).to_vec();
-        if !params.is_empty() || proto.info().variadic() {
-            let ploc = self.ast.decls.get(p).loc();
-            let def = self.templ.fn_def_next;
+        let ap = self.ast.types.params(&a).to_vec();
+        let bp = self.ast.types.params(&b).to_vec();
+        let ploc = self.ast.decls.get(p).loc();
+        let def = self.templ.fn_def_next;
+        if an && bn {
+            // A K&R definition after `f()`: at the declaration, no note.
+            if ap.is_empty() && !bp.is_empty() && def {
+                let msg = self.diag(DiagId::sema_c_non_prototype_conflict, ploc).arg(1u8).arg(1u8);
+                self.emit(msg);
+            }
+            let same_ret = self.ast.types.same_type(a.ret(), b.ret());
+            return match (ap.is_empty(), bp.is_empty()) {
+                _ if !same_ret => None,
+                (true, _) => Some(ty),
+                // clang `MergeFunctionDecl`: `f()` after a K&R definition
+                // inherits its parameters as a prototype.
+                (_, true) => {
+                    let info = a.info().with_no_proto(false).with_variadic(false);
+                    let exc = self.ast.types.exc_spec(&a);
+                    Some(self.ast.types.function(a.ret(), &ap, info, exc))
+                }
+                _ => self.ast.types.same_type(pty, ty).then_some(pty),
+            };
+        }
+        let (proto, params, knr) = if an { (b, bp, ap) } else { (a, ap, bp) };
+        let proto_ty = if an { ty } else { pty };
+        if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) {
             let pdef = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
             let (at, other, later, other_def) =
-                if a.info().no_proto() { (ploc, loc, 1, def) } else { (loc, ploc, 0, pdef) };
+                if an { (ploc, loc, 1, def) } else { (loc, ploc, 0, pdef) };
             let msg = self
                 .diag(DiagId::sema_c_non_prototype_conflict, at)
                 .arg(later)
                 .arg(u8::from(other_def))
                 .with_note(self.diag(DiagId::sema_c_conflicting_prototype_note, other));
             self.emit(msg);
+        } else if an && !knr.is_empty() {
+            // A prototype after a K&R definition.
+            let msg = self
+                .diag(DiagId::sema_c_non_prototype_unsupported, ploc)
+                .with_note(self.diag(DiagId::sema_c_conflicting_prototype_note, loc));
+            self.emit(msg);
         }
-        self.ast.types.same_type(a.ret(), b.ret())
+        let ok = self.ast.types.same_type(a.ret(), b.ret())
             && !proto.info().variadic()
-            && params.iter().all(|&t| self.va_arg_promotion(t).is_none())
+            && if knr.is_empty() {
+                params.iter().all(|&t| self.va_arg_promotion(t).is_none())
+            } else {
+                knr.len() == params.len()
+                    && knr.iter().zip(&params).all(|(&k, &t)| self.ast.types.same_type(k, t))
+            };
+        ok.then_some(proto_ty)
     }
 
     pub(crate) fn c_tentative(&self, v: DeclId) -> bool {
         self.is_c()
             && self.ast.decls.var(v).is_some_and(|x| {
-                x.init.is_none() && matches!(x.spec.storage(), VarStorage::None | VarStorage::Static)
+                x.init.is_none()
+                    && matches!(x.spec.storage(), VarStorage::None | VarStorage::Static)
             })
-            && self.ast.decls.get(v).ctx().is_some_and(|c| self.kind_of(c) == DeclKind::TranslationUnit)
+            && self
+                .ast
+                .decls
+                .get(v)
+                .ctx()
+                .is_some_and(|c| self.kind_of(c) == DeclKind::TranslationUnit)
     }
 
     pub(crate) fn is_var_definition(&self, v: DeclId) -> bool {
@@ -8868,8 +8933,8 @@ impl Sema<'_, '_> {
                 self.module_check_export_member(q, &s, nloc);
             }
         }
-        let ctx = qualifier
-            .unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_, name.is_some())));
+        let ctx =
+            qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_, name.is_some())));
         // The parameter hid the lookup: the tag the reference declares is
         // the home context's own, if it has one (clang's redeclaration
         // lookup in the injection scope).

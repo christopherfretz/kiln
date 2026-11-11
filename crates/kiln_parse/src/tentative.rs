@@ -537,7 +537,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match self.kw() {
             Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => self.i += 1,
-            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::TypeofUnqual | Kw::Atomic | Kw::BitInt | Kw::ExtInt)) => {
+            Some(
+                k @ (Kw::Decltype
+                | Kw::Typeof
+                | Kw::TypeofUnqual
+                | Kw::Atomic
+                | Kw::BitInt
+                | Kw::ExtInt),
+            ) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;

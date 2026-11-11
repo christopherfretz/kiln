@@ -1388,15 +1388,19 @@ impl<'a> Cg<'a> {
         }
         let spec = |r: DeclId| ast.decls.function(r).map(|f| f.spec);
         let ext = |s: kiln_ast::decl::FnSpec| s.storage() == kiln_ast::decl::FnStorage::Extern;
-        let gnu = self.opts.gnu89_inline
-            || self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE);
+        let gnu =
+            self.opts.gnu89_inline || self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE);
         if gnu {
-            let def = ast.redecls_of(first).find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
+            let def = ast
+                .redecls_of(first)
+                .find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
             let Some(def_spec) = def.and_then(spec) else { return false };
             if !(def_spec.is_inline() && ext(def_spec)) {
                 return false;
             }
-            return !ast.redecls_of(first).any(|r| spec(r).is_some_and(|s| s.is_inline() && !ext(s)));
+            return !ast
+                .redecls_of(first)
+                .any(|r| spec(r).is_some_and(|s| s.is_inline() && !ext(s)));
         }
         let file_scope = |r: DeclId| {
             ast.decls
@@ -1953,12 +1957,24 @@ impl<'a> Cg<'a> {
     /// The lowered signature of function type `fty` with an implicit
     /// object parameter of type `this*` when `this` is set.
     pub fn sig_this(&mut self, fty: QualType, extern_c: bool, this: Option<DeclId>) -> Sig {
+        let variadic = self.ast.types.proto(fty).expect("function prototype").variadic();
+        self.sig_this_va(fty, extern_c, this, variadic)
+    }
+
+    /// [`Cg::sig_this`], variadic as `variadic` says (a C definition
+    /// without a prototype is not).
+    pub(crate) fn sig_this_va(
+        &mut self,
+        fty: QualType,
+        extern_c: bool,
+        this: Option<DeclId>,
+        variadic: bool,
+    ) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
         let params: Vec<QualType> = ast.types.params(&p).to_vec();
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
-        let variadic = p.variadic();
         let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
         let info =
             self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);

@@ -95,7 +95,8 @@ impl Sema<'_, '_> {
         let n = *self.ast.exprs.get(ule);
         let name = self.ast.unresolved_name(ule);
         let decls = self.ast.unresolved_decls(ule);
-        let adl = n.aux() != 0;
+        // C has no argument-dependent lookup.
+        let adl = n.aux() != 0 && !self.is_c();
         let extra = self.ovl.ule_found.remove(&ule);
         let naming = extra.as_ref().and_then(|x| x.naming);
         let mut cands: Vec<(DeclId, DeclId)> = decls

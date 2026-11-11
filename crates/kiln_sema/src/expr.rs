@@ -3376,8 +3376,7 @@ impl Sema<'_, '_> {
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
         let c = self.is_c();
-        let ty =
-            if op.is_postfix() || atomic.is_some() || c { conv::strip_cv(self, t) } else { t };
+        let ty = if op.is_postfix() || atomic.is_some() || c { conv::strip_cv(self, t) } else { t };
         let r = self.builder().unary(op, e, ty, loc, flags);
         if c && !op.is_postfix() {
             self.ast.exprs.set_c_prefix_incdec_prvalue(r);
@@ -5346,10 +5345,31 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
+        // clang `warn_call_wrong_number_of_arguments`: a call of a function
+        // without a prototype whose definition has another parameter count.
+        if proto.info().no_proto()
+            && let Some(d) = named
+            && let Some(def) = self
+                .ast
+                .redecls_of(d)
+                .find(|&r| self.ast.decls.function(r).is_some_and(|f| f.body.is_some()))
+            && let Some(f) = self.ast.decls.function(def)
+            && self.ast.lists.len(f.params) != args.len()
+        {
+            let many = args.len() > self.ast.lists.len(f.params);
+            let msg = self
+                .diag(DiagId::sema_c_knr_wrong_arg_count, rparen)
+                .arg(u8::from(many))
+                .arg(self.decl_name(d))
+                .range(self.expr_range(callee));
+            self.emit(msg);
+        }
         // clang `warn_strict_uses_without_prototype`, at the `(`: not for
-        // an implicitly declared function.
+        // an implicitly declared function, nor through a K&R definition's
+        // type (clang takes its prototype).
         if proto.info().no_proto()
             && !args.is_empty()
+            && self.ast.types.params(&proto).is_empty()
             && !named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::IMPLICIT))
         {
             let name = named.map(|d| self.decl_name(d)).unwrap_or_default();
@@ -5449,7 +5469,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> Option<Vec<ExprId>> {
-        let params: Vec<QualType> = self.ast.types.params(proto).to_vec();
+        let mut params: Vec<QualType> = self.ast.types.params(proto).to_vec();
+        // C17 6.5.2.2p6: a call through a K&R definition's type converts
+        // the arguments it has; the count is only warned about.
+        if proto.info().no_proto() {
+            params.truncate(args.len());
+        }
         let variadic = proto.info().variadic();
         let n = params.len();
         let have = args.len();

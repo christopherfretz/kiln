@@ -119,6 +119,20 @@ fn compatible_unqual(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> 
                 _ => false,
             }
         }
+        (TypeView::Function(f), TypeView::Function(g))
+            if f.info().no_proto() || g.info().no_proto() =>
+        {
+            // C17 6.7.6.3p15: against a type without a prototype. A K&R
+            // definition's parameters only check redeclarations (clang
+            // refers to the function as `ret ()`, DR 316).
+            if !compatible_at(s, f.ret(), g.ret(), depth) {
+                return false;
+            }
+            let p = if f.info().no_proto() { g } else { f };
+            p.info().no_proto()
+                || !p.variadic()
+                    && types.params(&p).iter().all(|&t| s.va_arg_promotion(t).is_none())
+        }
         (TypeView::Function(f), TypeView::Function(g)) => {
             if !compatible_at(s, f.ret(), g.ret(), depth)
                 || f.variadic() != g.variadic()
@@ -128,7 +142,8 @@ fn compatible_unqual(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> 
             }
             let (pf, pg) = (types.params(&f), types.params(&g));
             pf.iter().zip(pg).all(|(&x, &y)| {
-                let (x, y) = (types.canonical(x).without_quals(), types.canonical(y).without_quals());
+                let (x, y) =
+                    (types.canonical(x).without_quals(), types.canonical(y).without_quals());
                 compatible_at(s, x, y, depth)
             })
         }
@@ -144,11 +159,7 @@ fn sign_insensitive(s: &mut Sema<'_, '_>, q: QualType) -> QualType {
         return QualType::UCHAR;
     }
     let base = enum_int(s, q).unwrap_or(q);
-    if super::rank::int_signed(s, base) {
-        super::rank::unsigned_counterpart(s, base)
-    } else {
-        q
-    }
+    if super::rank::int_signed(s, base) { super::rank::unsigned_counterpart(s, base) } else { q }
 }
 
 /// clang's `checkPointerTypesForAssignment` of `rhs` to `lhs`, both
@@ -426,7 +437,8 @@ pub(crate) fn convert(
                 return Some(Ok(e));
             }
             let u = super::strip_cv(s, from);
-            let x = super::raw_cast(s, CastKind::LValueToRValue, e, u, ValueCategory::PRValue, None);
+            let x =
+                super::raw_cast(s, CastKind::LValueToRValue, e, u, ValueCategory::PRValue, None);
             return Some(Ok(x));
         }
         let err = error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some("0"));

@@ -76,7 +76,16 @@ impl Cg<'_> {
         };
         let this = self.this_class_of(first);
         let extern_c = mangle::is_extern_c(ast, first);
-        let sig = self.sig_this(fty, extern_c, this);
+        // C: a function defined without a prototype takes exactly its
+        // (promoted) parameters; only a declaration is `(...)`.
+        let variadic = ast.types.proto(fty).is_some_and(|p| {
+            p.variadic()
+                && !(p.info().no_proto()
+                    && ast
+                        .redecls_of(first)
+                        .any(|r| ast.decls.function(r).is_some_and(|f| f.body.is_some())))
+        });
+        let sig = self.sig_this_va(fty, extern_c, this, variadic);
         let ps = ast.pass_object_size_params(first);
         Ok(self.with_object_sizes(sig, fty, &ps, extern_c))
     }
