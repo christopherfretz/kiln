@@ -964,9 +964,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     expression and do not count as a type specifier (`int`-defaulting is
     unchanged); the statement disambiguator treats them as
     decl-specifiers and as ptr-operator qualifiers. Their meaning is in
-    spec/sema.md §4.1.1. Not parsed: block pointers `^` (no `-fblocks`)
-    and qualifiers inside a parameter's array brackets (`int a[_Nonnull]`,
-    like the C99 `int a[const]`, is "expected expression").
+    spec/sema.md §4.1.1. Not parsed: block pointers `^` (no `-fblocks`).
+- **Array bracket qualifiers** (`parse_bracket_quals`, C17 6.7.6.2p1,
+  WP-1287; clang `ParseBracketDeclarator`): after `[`, an optional
+  `static`, cv/`restrict`/`_Atomic` qualifiers and nullability, and
+  `static` again after the qualifiers, then `*` (when the `]` follows)
+  or the bound. On a parameter's outermost array they are recorded on
+  the declarator (`array_param_quals`, `array_stars`) for sema's
+  adjustment (spec/sema.md §1.0.1); in C++ they are "... is a C99
+  feature" errors, on an inner array "... non-outermost array type
+  derivation", `static` without a bound or with `*` is its own error,
+  and `[*]` outside a prototype is "star modifier used outside of
+  function prototype". A nullability qualifier applies to the array
+  and moves to the decayed pointer.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -1422,7 +1432,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `is_cxx_type_id_at(pos + 1, InParens)` says the parentheses hold a
     type-id. `( type-id ) { ... }` is a compound literal instead
     (`act_on_compound_literal`), followed by postfix operators as in
-    clang's `ParseCompoundLiteralExpression`.
+    clang's `ParseCompoundLiteralExpression`; after `sizeof` or
+    `alignof` too, where it is the operand expression
+    (`trait_type_or_literal`; `sizeof (struct S){ 0 }.m`), but not after
+    GNU `typeof`, whose `( type-id )` may precede a function body.
   - When that type-id was *ambiguous* (the second flag: the abstract
     declarator could also be an expression, `(T())`, `(T(*)())`), the
     tokens after the matching `)` decide ([dcl.ambig.res]/2,

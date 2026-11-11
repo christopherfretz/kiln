@@ -1327,7 +1327,7 @@ impl Parser<'_, '_> {
     /// error.
     pub(crate) fn parse_typeof_specifier(&mut self, unqual: bool) -> Option<QualType> {
         let loc = self.bump().span.lo;
-        match self.parse_trait_operand()? {
+        match self.parse_trait_operand(false)? {
             crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
             crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e?, loc, unqual),
         }

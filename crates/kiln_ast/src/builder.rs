@@ -3475,6 +3475,24 @@ impl<'a> AstBuilder<'a> {
         )
     }
 
+    /// A C compound literal in a function (C17 6.5.2.5p4, clang
+    /// `BuildCompoundLiteralExpr` in C): an lvalue naming an unnamed
+    /// object of automatic storage duration that lives until the
+    /// enclosing block ends; `init` as for [`Self::compound_literal`].
+    pub fn c_compound_literal(&mut self, ty: QualType, init: ExprId, loc: Loc) -> ExprId {
+        let deps = self.type_deps(ty) | self.deps(init);
+        self.simple(
+            ExprKind::CompoundLiteralExpr,
+            ValueCategory::LValue,
+            deps,
+            0,
+            ty,
+            loc,
+            init.raw(),
+            0,
+        )
+    }
+
     /// A namespace-scope array compound literal `( T[] ) { ... }` (clang
     /// `BuildCompoundLiteralExpr` with `isFileScope`): an lvalue naming an
     /// object of static storage duration, the implicit unnamed internal

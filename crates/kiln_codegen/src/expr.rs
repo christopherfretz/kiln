@@ -2644,7 +2644,8 @@ impl Cg<'_> {
                 let addr = Addr { v: V::C(gval(g)), ty, align };
                 Ok(LV { addr, q, bf: None, vidx: None, tb: Tb::Type })
             }
-            ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) => {
+            // A C literal of any type is an lvalue (C17 6.5.2.5p4).
+            ExprKind::CompoundLiteralExpr if !self.is_aggregate(q) || self.opts.c.is_some() => {
                 self.compound_literal_lvalue(e)
             }
             ExprKind::MaterializeTemporaryExpr
@@ -2827,15 +2828,20 @@ impl Cg<'_> {
         Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, tb: Tb::Type })
     }
 
-    /// clang `EmitCompoundLiteralLValue` for a scalar, vector or complex
-    /// literal in a function: its initializer stored into a fresh
-    /// temporary (`EmitAnyExprToMem`; a C++ literal is not destroyed here).
+    /// clang `EmitCompoundLiteralLValue` for a literal in a function: its
+    /// initializer stored into a fresh temporary (`EmitAnyExprToMem`; a
+    /// C++ literal is not destroyed here). A C aggregate literal (C17
+    /// 6.5.2.5p4, an lvalue) is built in place the same way; its object
+    /// lives until the block ends (p5), so the alloca has no lifetime
+    /// markers.
     pub(crate) fn compound_literal_lvalue(&mut self, e: ExprId) -> R<LV> {
         let ast = self.ast;
         let q = ast.exprs.get(e).ty();
         let init = ast.exprs.compound_literal_init(e);
         let tmp = self.temp(q);
-        if self.is_complex(q) {
+        if self.is_aggregate(q) {
+            self.emit_agg_into(init, tmp, false)?;
+        } else if self.is_complex(q) {
             let v = self.emit_complex(init)?;
             self.cx_store(v, tmp, q);
         } else {

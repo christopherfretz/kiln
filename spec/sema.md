@@ -63,6 +63,40 @@ the C-specific rules (tag namespaces, `void *` conversions, the type of
 a character literal, tentative definitions, K&R definitions, VLAs,
 compound literals) are WP-1276's.
 
+#### 1.0.1 C array declarators, VLAs and compound literals (WP-1287)
+- **Array parameters** (C17 6.7.6.2p1, 6.7.6.3p7; `vla.rs`): the
+  qualifiers and `static` inside a parameter's outermost `[ ]` (parsed
+  by `parse_bracket_quals`, spec/parse.md) qualify the pointer it is
+  adjusted to (`int a[restrict const static 4]` is `int *const
+  restrict`); either outside a function parameter's outermost bound is
+  an error, as in clang. `-Warray-parameter` (in `-Wall`) warns when a
+  redeclaration's array parameter has a different constant bound or
+  form, with the previous declaration's note.
+- **VLAs** (6.7.6.2p4-p5): a non-constant bound makes a `VariableArray`
+  (flagged `VARIABLY_MODIFIED`, never interned); `[*]` (only in a
+  prototype; in a definition an error) is the shared star bound
+  (`TypeContext::vla_star_bound`, printed `[*]`). A function type's
+  parameters are star-decayed, so `void f(int n, int a[n][n])` and
+  `void f(int, int a[*][*])` are compatible; the `ParmVarDecl` keeps the
+  written type, whose bounds codegen evaluates in the prologue. Pointer
+  compatibility (`conv::c_assign::compatible`, 6.2.7) treats a VLA
+  bound as matching any bound, which also gives `composite_pointer`
+  its C rule (pointers to compatible types compare and convert). A
+  `goto` or `switch` jump into the scope of a VLA is an error
+  (spec/sema.md §7; `tests/c/stmt/jump-into-vla-scope.c`). `-Wvla` is
+  off by default, `-Wvla-extension` warns before C99 under
+  `-pedantic`. In C++ the same VLAs are the GNU extension
+  (`-Wvla-cxx-extension`), as in clang. A variably modified expression
+  never folds: the Oven traps it (spec/oven.md).
+- **Compound literals** (6.5.2.5p4-p5): in C every literal is an lvalue
+  `CompoundLiteralExpr`, never a temporary (no `maybe_bind_temporary`,
+  no `MaterializeTemporaryExpr`): inside a function it names an
+  automatic object living to the end of its block (`c_compound_literal`),
+  at file scope an implicit internal static variable for every type, not
+  only arrays (`file_scope_compound_literal`, after the constant
+  initializer check). Use sites see the usual lvalue conversion or
+  decay. C++ keeps the prvalue rules of §5.8.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output
@@ -6137,8 +6171,8 @@ for them.
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
   type, `x` gets the usual unary conversions first.
 - **Compound literals** `( T ) { ... }` (`act_on_compound_literal`;
-  clang's `BuildCompoundLiteralExpr`): a prvalue
-  `CompoundLiteralExpr` of the written type, holding the
+  clang's `BuildCompoundLiteralExpr`): in C++ a prvalue (in C an
+  lvalue, §1.0.1) `CompoundLiteralExpr` of the written type, holding the
   list-initialization of cv-unqualified `T`, done as if by a C-style
   cast at the `(`. clang's diagnostics follow from that:
   - a reference type cannot bind to an initializer list;

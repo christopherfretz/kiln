@@ -4990,6 +4990,20 @@ impl Compiler<'_> {
                 self.emit_at(Op::GlobalAddr, 0, &[r, g], e);
                 Place::Mem(r)
             }
+            // A C literal in a function is an lvalue naming an unnamed
+            // automatic object (C17 6.5.2.5p4, WP-1287), held until the
+            // evaluation ends.
+            ExprKind::CompoundLiteralExpr
+                if self.ast().exprs.get(e).value_category()
+                    == kiln_ast::expr::ValueCategory::LValue =>
+            {
+                let ty = self.ety(e);
+                let init = self.ast().exprs.compound_literal_init(e);
+                let r = self.reg();
+                self.alloc(r, ty, Origin::Temp(e), false, e);
+                self.init(init, r, ty);
+                Place::Mem(r)
+            }
             ExprKind::StringLiteral => {
                 let s = self.ast().exprs.string_lit(e);
                 let ty = self.ety(e);
