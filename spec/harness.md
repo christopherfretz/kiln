@@ -36,7 +36,7 @@ cargo xtask test [options] [paths...]
 
 `--flag=value` is accepted for every option that takes a value.
 
-`paths` are files or directories (default: `tests/conformance`,
+`paths` are files or directories (default: `tests/c`, `tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`, whichever
 exist; `tests/debuginfo` is a default root everywhere, its tests SKIP
 without gdb and lldb-19, see "Debugger tests").
@@ -193,6 +193,24 @@ repo-relative name:
 `.c` files get `-x c`, and `.h` test files get `-x c++`. A kiln-specific test
 compiled by kiln also gets `-fconstexpr-report=<scratch>/constexpr-report.jsonl`
 last (see "kiln-specific tests").
+
+### C tests
+
+A `.c` test (WP-1275; corpus `tests/c/`, a default root) is C: `std:`
+takes `c89 c99 c11 c17 c23` (default `c17`); a GNU dialect is
+`args: -std=gnuNN`, which wins as the last `-std=`. Every compile of it
+runs the C driver beside the C++ one (`c_driver`: `clang++-19` →
+`clang-19`, `g++-16` → `gcc-16`, in the same directory or on `PATH` for
+a bare name; the program itself when there is none), so the oracle is
+`clang-22 -x c` under kiln, a clang++ under test runs as clang, and GCC
+links no libstdc++. kiln itself is run as given: `-x c` selects C. A
+`unit:` file in the other language (a `.c` unit of a C++ test, a C++
+unit of a `.c` test) is compiled as that language (`-x c` / `-x c++`,
+which kiln++ needs to compile a `.c` as C) at its default standard
+(`c17` / `c++26`) and linked with the test (`tests/c/interop/`). The
+`expect: pp`, `ir` and `run` kinds and `skip(gcc):` work as for C++;
+an `ir` test that matches only clang 22's attributes carries
+`min-oracle: 22`.
 
 Any compile ends as a **FAIL** ("compiler crashed" / "compiler hung") if:
 
@@ -1261,7 +1279,7 @@ runs, stopping at the first failing step:
 2. `cargo build -p kiln_driver` (the binary the kiln-mode run tests, in the
    target dir as for `--compiler`'s default);
 
-then the corpus runs, all over the default paths (`tests/conformance`,
+then the corpus runs, all over the default paths (`tests/c`, `tests/conformance`,
 `tests/debuginfo`, `tests/differential` and `tests/stress`) with the default oracle
 `clang++-N` (N from `KILN_ORACLE`, default 22; "Oracle toolchain"), the
 default GCC oracle ("GCC oracle") and the

@@ -1,4 +1,4 @@
-//! Lexer configuration: [`LexOptions`], [`Std`], [`LexMode`].
+//! Lexer configuration: [`LexOptions`], [`Std`], [`CStd`], [`LexMode`].
 
 /// The C++ language standard, as far as lexing depends on it.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -21,12 +21,38 @@ pub enum Std {
     Cxx26,
 }
 
+/// The C language standard (`-std=c89` .. `-std=c23`, and the `gnu`
+/// dialects), when the translation unit is C rather than C++
+/// ([`LexOptions::c`]; spec/driver.md "Language mode").
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum CStd {
+    /// C89 / C90 (ISO/IEC 9899:1990).
+    C89,
+    /// C99: `inline`, `restrict`, `_Bool`, `_Complex`, `_Imaginary`.
+    C99,
+    /// C11: `_Alignas`, `_Alignof`, `_Atomic`, `_Generic`, `_Noreturn`,
+    /// `_Static_assert`, `_Thread_local`.
+    C11,
+    /// C17 (C18): no new keywords.
+    C17,
+    /// C23: `bool`, `true`, `false`, `nullptr`, `constexpr`, ..., digit
+    /// separators and `u8` character literals.
+    C23,
+}
+
 /// Options fixed for the lifetime of a [`crate::Lexer`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 pub struct LexOptions {
-    /// Language standard. Default: [`Std::Cxx26`].
+    /// Language standard. Default: [`Std::Cxx26`]. In C mode
+    /// ([`Self::c`]) the C++ standard sharing C's lexical rules
+    /// (spec/lex.md "C mode").
     pub std: Std,
+    /// The C standard when the input is C; `None` (the default) is C++.
+    pub c: Option<CStd>,
+    /// A GNU dialect (`-std=gnuNN`). Only C reads it: raw string literals
+    /// are a GNU extension there from gnu99 on (clang 19).
+    pub gnu: bool,
     /// Translate trigraphs in phase 1 ([lex.trigraph], removed in C++17).
     /// Default: `false` (clang's default for C++17 and later); when off,
     /// trigraphs outside comments are diagnosed with
@@ -43,6 +69,10 @@ pub struct LexOptions {
     /// (C++26 only). Default: `false`; like clang and GCC 16, the tokens
     /// exist only in reflection mode, so `^^` is otherwise `^` `^`.
     pub reflection: bool,
+    /// The tokens are for preprocessed output (`-E`). Only strict C89
+    /// reads it: there `//` starts no comment in preprocessed output
+    /// (clang 19; spec/lex.md "C mode"). Default: `false`.
+    pub preprocessed_output: bool,
 }
 
 impl LexOptions {
@@ -50,10 +80,13 @@ impl LexOptions {
     pub const fn new(std: Std) -> Self {
         LexOptions {
             std,
+            c: None,
+            gnu: false,
             trigraphs: false,
             dollar_in_identifiers: true,
             keep_comments: false,
             reflection: false,
+            preprocessed_output: false,
         }
     }
 }

@@ -627,6 +627,12 @@ impl Cg<'_> {
     /// `llvm.loop.mustprogress`; a loop with a constant-true condition
     /// and an empty body also takes `mustprogress` off the function.
     fn loop_must_progress(&mut self, cond: Option<ExprId>, body: Option<StmtId>) -> bool {
+        // C ([C11 6.8.5]/6): only a loop whose controlling expression is
+        // not a constant expression may be assumed to terminate, from C11.
+        if let Some(c) = self.opts.c {
+            let constant = cond.is_none_or(|e| self.fold_int(e).is_some());
+            return c >= kiln_lex::CStd::C11 && !constant;
+        }
         let cond_true = match cond {
             None => true,
             Some(c) => self.fold_bool(c) == Some(true),

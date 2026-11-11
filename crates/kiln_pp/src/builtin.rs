@@ -35,6 +35,8 @@ pub enum Builtin {
     HasConstexprBuiltin,
     HasAttribute,
     HasCppAttribute,
+    /// `__has_c_attribute` (C only; `__has_cpp_attribute` is C++ only).
+    HasCAttribute,
     HasDeclspecAttribute,
     HasWarning,
     IsIdentifier,
@@ -60,6 +62,7 @@ impl Builtin {
         ("_Pragma", Builtin::Pragma),
         ("__FLT_EVAL_METHOD__", Builtin::FltEvalMethod),
         ("__has_cpp_attribute", Builtin::HasCppAttribute),
+        ("__has_c_attribute", Builtin::HasCAttribute),
         ("__BASE_FILE__", Builtin::BaseFile),
         ("__INCLUDE_LEVEL__", Builtin::IncludeLevel),
         ("__TIMESTAMP__", Builtin::Timestamp),
@@ -160,6 +163,23 @@ pub trait FeatureQueries {
             "fallthrough" | "maybe_unused" => 201_603,
             "likely" | "unlikely" | "no_unique_address" => 201_803,
             "nodiscard" => 201_907,
+            _ => 0,
+        }
+    }
+
+    /// `__has_c_attribute(scope::name)` / `__has_c_attribute(name)` (C
+    /// only): the C23 standard attributes (C23 6.7.13.1 Table 6.6).
+    fn has_c_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
+        if scope.is_some() {
+            return 0;
+        }
+        let name = name.strip_prefix("__").and_then(|n| n.strip_suffix("__")).unwrap_or(name);
+        match name {
+            "deprecated" => 201_904,
+            "fallthrough" => 201_910,
+            "maybe_unused" => 202_106,
+            "nodiscard" => 202_003,
+            "noreturn" | "_Noreturn" => 202_202,
             _ => 0,
         }
     }

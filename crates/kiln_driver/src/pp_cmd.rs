@@ -267,6 +267,8 @@ impl Job<'_> {
     fn pp_options(&self, predefines: String) -> PpOptions {
         let a = self.args;
         let mut o = PpOptions::new(self.std.lex);
+        o.c = self.std.c;
+        o.gnu = self.std.gnu;
         o.trigraphs = a.trigraphs.unwrap_or(
             !(self.std.gnu || self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx17),
         );
@@ -486,6 +488,7 @@ impl Job<'_> {
         }
         let mut opts = self.pp_options(predefines);
         opts.parser_pragmas = staged;
+        opts.preprocessed_output = !staged;
         if !staged {
             // `-E -dD`/`-dI` print the directives in place (`-dM` and
             // `-M` print no text); `-M -MG` lists a missing header
@@ -529,6 +532,9 @@ impl Job<'_> {
         fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
         let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
             .map(|f| f.with_compat(a.predef.clang_compat));
+        if let Some(c) = self.std.c {
+            features = features.map(|f| f.with_c(c, self.std.gnu));
+        }
         if self.toolchain.target.is_aarch64() {
             // WP-558: the NEON builtins answer from the enabled features.
             let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();
@@ -1089,6 +1095,12 @@ impl kiln_pp::FeatureQueries for StagedFeatures {
 
     fn has_cpp_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
         let v = self.0.has_cpp_attribute(scope, name);
+        if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
+    }
+
+    fn has_c_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
+        // C23 `[[attr]]` is the C++11 syntax to attribute triage.
+        let v = self.0.has_c_attribute(scope, name);
         if v != 0 && self.unsupported_attribute(AttrSyntax::Cxx11, scope, name) { 0 } else { v }
     }
 

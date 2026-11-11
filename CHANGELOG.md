@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
+## [Unreleased]
+
+Planned as 1.1.0.
+
+### Added
+
+- C mode: `kiln` (or `-x c`) compiles C at `-std=c89`, `c99`, `c11`,
+  `c17`, `c23` and the `gnu` dialects (default `gnu17`). C lexing (no
+  C++-only punctuators, user-defined literals or alternative tokens),
+  C keywords, clang's C predefined macros and feature-test answers
+  (`__has_c_attribute`; `__has_cpp_attribute` is C++ only), and C
+  linkage (unmangled names, `fn.var` static locals), so C and C++ objects
+  link together. C-only semantics are still in progress
+  ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode)) (WP-1275).
+
 ## [1.0.1] - 2026-11-11
 
 A bug-fix release. Nothing in it changes what [docs/STABILITY.md](docs/STABILITY.md)

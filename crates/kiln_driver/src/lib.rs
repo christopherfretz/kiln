@@ -431,25 +431,17 @@ fn read_stdin(stdin: &mut dyn Read) -> String {
     }
 }
 
-/// One `-fsyntax-only` input (C is not implemented yet).
+/// One `-fsyntax-only` input.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn syntax_only(
     args: &Args,
     tc: &Toolchain,
     std: LangStd,
-    lang: Lang,
     path: &str,
     stdin_text: Option<String>,
     diag_opts: &DiagOptions,
     io: &Io,
 ) -> JobResult {
-    if lang == Lang::C {
-        let sm = SourceManager::new();
-        let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
-        Diag::new(DiagId::drv_not_implemented, Span::INVALID).arg("-fsyntax-only for C").emit(&e);
-        e.flush();
-        return JobResult { errors: 1, ..JobResult::default() };
-    }
     let job =
         Job { args, toolchain: tc, std, path, stdin_text, diag_opts, stderr: io.stderr.clone() };
     SyntaxJob(job).run()
@@ -809,7 +801,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             });
             let r = {
                 let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
-                syntax_only(args, &tc, std, lang, &input.path, stdin, &diag_opts, &io)
+                syntax_only(args, &tc, std, &input.path, stdin, &diag_opts, &io)
             };
             if let Some(mut t) = trace {
                 t.failed = r.errors > 0;

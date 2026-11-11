@@ -1257,6 +1257,12 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   `llvm.loop.mustprogress`. A loop with a constant-true or absent
   condition and an empty body clears `mustprogress` on the function and
   gets no `mustprogress` entry; a range-based for loop never gets one.
+- **C** (`CodegenOptions::c`, WP-1275): a function gets no
+  `mustprogress` attribute and `main` no `norecurse` (clang: C++11 / C++
+  only), and no return attribute is strict (`HasStrictReturn` is C++'s).
+  A loop's `llvm.loop.mustprogress` follows [C11 6.8.5]/6: only from C11,
+  and only when the controlling expression is not a constant expression
+  (none in C89/C99). Test: `tests/c/linkage/symbol-names.c` (`expect: ir`).
 - **Loop metadata at -O1** (WP-431; clang `LoopInfoStack::push`,
   [intro.progress]/1): at `CodegenOptions::opt_level == 1` exactly (clang
   `-O`/`-O1`/`-Og`, where `UnrollLoops` is off) every loop's node also
