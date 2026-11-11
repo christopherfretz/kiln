@@ -694,7 +694,11 @@ no includer).
   fails the length or checksum check.
 - **Written atomically**: to `<path>.tmp.<pid>` and renamed, so a failed
   or interrupted compile never leaves a half-written module file. A
-  compile with errors writes no module file (and removes nothing).
+  compile with errors writes no module file (and removes nothing). An
+  output path that exists and is not a regular file (`-o /dev/null`, a
+  FIFO) is written in place, as clang does: renaming over it would
+  replace the device with a regular file (WP-1281). The same holds for
+  the `-emit-pch` record and the module cache's stamps.
 
 The format version changes whenever the layout does; the reader accepts
 only its own. `kiln_pp::bmi` holds the format because a capsule is
