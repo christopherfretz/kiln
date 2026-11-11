@@ -187,5 +187,8 @@ fn lex_name_math_notation_extension() {
     let m = |c: char| [D::MathematicalNotation { ch: c }, D::C99CompatUnicodeId { start: false }];
     assert_eq!(d, [m('\u{2202}'), m('\u{2070}'), m('\u{2081}'), m('\u{2207}')].concat());
     // A Math_Continue character cannot start an identifier.
-    assert_eq!(diag_kinds("\u{2070}x\n", cxx26()), [D::CharNotAllowedInIdentifier { ch: '\u{2070}', at_start: true }]);
+    assert_eq!(
+        diag_kinds("\u{2070}x\n", cxx26()),
+        [D::CharNotAllowedInIdentifier { ch: '\u{2070}', at_start: true }]
+    );
 }

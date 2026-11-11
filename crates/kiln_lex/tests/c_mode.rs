@@ -166,7 +166,10 @@ fn lex_c_literal_ucns() {
     use kiln_lex::LexDiagKind as D;
     use kiln_lex::literal::{LiteralOptions, decode_string};
     let lit = |sp: &str, cs: CStd| {
-        let o = LiteralOptions { c: Some(cs), ..LiteralOptions::new(c(cs, false).std, Default::default()) };
+        let o = LiteralOptions {
+            c: Some(cs),
+            ..LiteralOptions::new(c(cs, false).std, Default::default())
+        };
         let s = decode_string(sp, o);
         (s.units.iter().collect::<Vec<u32>>(), s.diags.iter().map(|d| d.kind).collect::<Vec<_>>())
     };

@@ -416,9 +416,8 @@ impl ClangFeatures {
                 let lo = flag_deltas.partition_point(|d| {
                     (d.0, d.1).cmp(&(f, kind)).then_with(|| d.2.cmp(key)) == Ordering::Less
                 });
-                for d in flag_deltas[lo..]
-                    .iter()
-                    .take_while(|d| d.0 == f && d.1 == kind && d.2 == key)
+                for d in
+                    flag_deltas[lo..].iter().take_while(|d| d.0 == f && d.1 == kind && d.2 == key)
                 {
                     if d.4 & self.c_bit != 0 {
                         v = d.3;

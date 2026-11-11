@@ -724,9 +724,8 @@ impl<'c> Ev<'c> {
             _ => unreachable!("precedence() admits only binary operators"),
         };
         if overflow && live {
-            self.cx.emit(
-                Diag::new(DiagId::pp_expr_overflow, op_span).range(lhs.span).range(rhs.span),
-            );
+            self.cx
+                .emit(Diag::new(DiagId::pp_expr_overflow, op_span).range(lhs.span).range(rhs.span));
         }
         Ok(Val { span: Span::new(lhs.span.lo, rhs.span.hi), ident: None, ..res })
     }

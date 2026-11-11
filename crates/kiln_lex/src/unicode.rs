@@ -4,7 +4,9 @@
 
 use std::cmp::Ordering;
 
-use crate::c_ident_tables::{C11_ALLOWED, C11_DISALLOWED_INITIAL, C99_ALLOWED, C99_DISALLOWED_INITIAL};
+use crate::c_ident_tables::{
+    C11_ALLOWED, C11_DISALLOWED_INITIAL, C99_ALLOWED, C99_DISALLOWED_INITIAL,
+};
 use crate::unicode_names::{BLOCK, MAX_NAME_LEN, NAME_BLOCKS, NAMES, NR2_RANGES};
 use crate::unicode_tables::{
     CANON_DECOMP, CCC, COMPOSE, NFC_QC_MAYBE, NFC_QC_NO, XID_CONTINUE, XID_START,
@@ -569,7 +571,9 @@ mod tests {
     fn c_id_tables() {
         use IdTables::{C11, C99, Xid};
         // U+00A8 DIAERESIS: C11 only.
-        assert!(C11.allowed_initially('\u{A8}') && !C99.allowed('\u{A8}') && !Xid.allowed('\u{A8}'));
+        assert!(
+            C11.allowed_initially('\u{A8}') && !C99.allowed('\u{A8}') && !Xid.allowed('\u{A8}')
+        );
         // U+0300 combining grave: allowed, not initially, in C11 and XID; not C99.
         assert!(C11.allowed('\u{300}') && !C11.allowed_initially('\u{300}'));
         assert!(Xid.allowed('\u{300}') && !Xid.allowed_initially('\u{300}'));

@@ -35,8 +35,9 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
         K::C99CompatUnicodeId { start } => {
             Diag::new(DiagId::lex_c99_compat_unicode_id, span).arg(u32::from(start))
         }
-        K::MathematicalNotation { ch } => Diag::new(DiagId::lex_mathematical_notation, span)
-            .arg(format!("{:04X}", u32::from(ch))),
+        K::MathematicalNotation { ch } => {
+            Diag::new(DiagId::lex_mathematical_notation, span).arg(format!("{:04X}", u32::from(ch)))
+        }
         K::UcnNotValidInC89 => Diag::new(DiagId::lex_ucn_not_valid_in_c89, span),
         K::UcnNotValidInC89Literal => Diag::new(DiagId::lex_ucn_not_valid_in_c89_literal, span),
         K::UnicodeWhitespace { .. } => Diag::new(DiagId::lex_unicode_whitespace, span),
