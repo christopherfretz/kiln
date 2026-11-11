@@ -65,6 +65,12 @@ drv_pch_file_modified = Fatal (3) "file '{0}' has been modified since the precom
 // WP-1037: clang's driver probe of `-include <h>` for `<h>.gch`.
 drv_pch_ignoring_gch_dir = Warning [IgnoredGch] (1) "precompiled header directory '{0}' was ignored because it contains no clang PCH files";
 drv_pch_ignoring_gch_file = Warning [IgnoredGch] (1) "precompiled header '{0}' was ignored because it is not a clang PCH file";
+// WP-1280: the preprocessor-state record of a PCH (spec/driver.md
+// "Precompiled headers", `-fkiln-pch-image`).
+drv_pch_image_load = Error (2) "cannot load the preprocessor-state record of precompiled header '{0}': {1}";
+drv_pch_image_mismatch = Error (2) "the preprocessor-state record of precompiled header '{0}' differs from replaying the header: {1}";
+drv_pch_image_not_written = Warning (2) "precompiled header '{0}' is written without its preprocessor-state record: {1}";
+drv_pch_image_unusable = Warning (2) "the preprocessor-state record of precompiled header '{0}' is not used ({1}); the header is replayed";
 drv_pch_invalid = Fatal (1) "file '{0}' is not a valid PCH file: file doesn't start with precompiled file magic";
 drv_pch_invalid_19 = Fatal (1) "file '{0}' is not a valid precompiled PCH file: file doesn't start with AST file magic";
 drv_pch_macro_def_differs = Error (4) "definition of macro '{0}' differs between the precompiled file '{1}' ('{2}') and the command line ('{3}')";

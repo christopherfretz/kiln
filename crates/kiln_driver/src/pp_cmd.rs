@@ -36,6 +36,9 @@ pub struct JobResult {
     pub dep_list: Option<SharedDeps>,
     /// Errors reported.
     pub errors: u32,
+    /// A precompiling job's preprocessor-state record, or why it could
+    /// not be written (`-fkiln-pch-image`, WP-1280).
+    pub pch_image: Option<Result<Vec<u8>, String>>,
 }
 
 /// The dependency list a preprocessor's callbacks fill (`-M`, `-MD`).
@@ -457,6 +460,7 @@ impl Job<'_> {
             record: !a.scan_deps && (a.precompile || a.module_output.is_some()),
             scan: a.scan_deps,
             image: a.bmi_image,
+            no_unit_record: false,
         })
     }
 
@@ -577,6 +581,7 @@ impl Job<'_> {
             })),
             (None, None) => {}
         }
+        crate::pch_image::start(a, &mut pp, sm, interner, engine);
         match main {
             MainInput::File(f) => pp.enter_main_file(f),
             MainInput::Capsule(bytes) => {
@@ -882,6 +887,7 @@ impl Job<'_> {
             };
             print_preprocessed(&mut pp, opts, &mut result.output);
         }
+        crate::pch_image::finish(a, &mut pp, sm, interner, engine, None);
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
     }

@@ -1719,6 +1719,12 @@ store Oven state, is a follow-up; it would share the module-file format
 - **`-Winvalid-pch`** is accepted and is a known warning group. In clang
   it is an empty group: no diagnostic belongs to it. Every PCH problem
   is an error whatever `-W` options are given, as in clang.
+- **`-fkiln-pch-image[=write|check|load]`, `-fno-kiln-pch-image`**
+  (WP-1280) control the PCH's preprocessor-state record
+  ([below](#the-preprocessor-state-record--fkiln-pch-image)). A kiln
+  extension, off by default. Bare `-fkiln-pch-image` means `=write`.
+  The last one wins, and any other value is `invalid value '<v>' in
+  '-fkiln-pch-image=<v>'`.
 - **Accepted, no effect:**
   - `-f[no-]pch-instantiate-templates`: instantiation happens on replay
     in any case.
@@ -1751,8 +1757,16 @@ target <triple>
 macro D\t<name>\t<definition>           -D/-U of the producer, in order
 macro U\t<name>
 file <size>\t<fnv1a64 hex>\t<0|1 system>\t<spelled>\t<absolute>
+image <length>\t<fnv1a64 hex of the image>   (with -fkiln-pch-image)
 end <fnv1a64 hex of every byte before this line>
+<the image: <length> bytes>
 ```
+
+The text runs up to and including the `end` line, and only the text has
+to be UTF-8. The image is the bytes after it. Without an `image` line,
+any byte after `end` makes the record corrupt ("trailing bytes"). With
+one, the bytes after `end` must be exactly the image, with that length
+and checksum.
 
 The `file` lines list every file the producer read (the dependency list
 `-MD` writes), with each file's size and content hash. An unknown line, a
@@ -1846,6 +1860,63 @@ with clang++-19, and `preprocess_unreadable_pch`).
 producer input and every file it read. The consumer's depfile lists the
 PCH's inputs first and then its own files. `-MMD` drops the system files
 from both.
+
+### The preprocessor-state record (`-fkiln-pch-image`)
+
+WP-1280 gives a PCH the first part of a serialized form: the
+preprocessor state at the end of the header (spec/modules.md §11.13).
+This covers macros with their locations, undefs, guards and once
+files, `push_macro` stacks, poisoned identifiers, the diagnostic pragma
+stack and `__COUNTER__`. It also carries Sema's pragma stacks (pack,
+visibility, FP), which nothing installs yet. Until WP-1036 a compile
+still replays the header; the record is checked against that replay,
+or stands in for the header in `-E` and `-M`.
+
+- **`write`.** The producer's job takes the baseline before its first
+  `-include` and the snapshot after the parse, so the record includes
+  the producer's `-include`s. It writes the record as the PCH's image
+  (Format above): a section block (`bmi::write_sections`) holding
+  `SECTION_PP`. If the state cannot be recorded (for example, a
+  location the file table cannot carry), the PCH is still written,
+  without its image, with `warning: precompiled header 'p.pch' is
+  written without its preprocessor-state record: <why>`.
+- **`check`** (the self-check mode). The consumer replays as usual
+  ([Replay](#replay)) and compares the state at the end of the replayed
+  header with the record, line by line (`PpState::describe`). The first
+  difference is `error: the preprocessor-state record of precompiled
+  header 'p.pch' differs from replaying the header: only the record has
+  '<line>'` (or `only replay has '<line>'`). If replay does not reach
+  the end of the header and nothing else failed, the error says so.
+  `-E` replays only the header, so a PCH built with `-include` cannot
+  be checked there (the record is unusable; see below).
+- **`load`.** In `-E` and `-M*`, the record is installed in place of the
+  header, at the point where the header's `-include` would begin. A
+  consumer `-include` that the producer had is dropped, as in a
+  compile. The output, macros, guards and diagnostics after that point
+  match replay. Since the record stands in for the header's files,
+  `load` runs the PCH validation (Diagnostics; `-fno-validate-pch`
+  skips it), and the depfile lists the PCH's inputs. A record that
+  cannot be loaded is `error: cannot load the preprocessor-state record
+  of precompiled header 'p.pch': <why>`. One cause is a file changed
+  since the record was written that the size check missed, found when
+  a token in it is printed. A compile with `load` checks, as with
+  `check`.
+- **Unusable record.** With `check` or `load`, a PCH without an image,
+  or one whose image is unreadable or lacks `SECTION_PP`, is replayed
+  unchecked with `warning: the preprocessor-state record of
+  precompiled header 'p.pch' is not used (<why>); the header is
+  replayed`.
+- **Measured** (spec/modules.md §11.13). For `<bits/stdc++.h>`, the
+  record is 465 KB. `-E` with `load` takes 0.01 s and 9 MB, against
+  0.23 s and 31 MB for replay.
+- **Tests.** `crates/kiln_driver/tests/pch_image.rs` covers:
+  - `load` against replay;
+  - poison across the boundary;
+  - `check` in `-E` and in a compile;
+  - the producer's `-include`s;
+  - a reported mismatch;
+  - a stale header rejected;
+  - a PCH with no record.
 
 ### Deviations
 

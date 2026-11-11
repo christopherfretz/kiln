@@ -30,6 +30,20 @@ use crate::policy::{Mapping, Policy, Severity};
 /// Mappings a state replaces, over the command-line policy.
 type Overrides = HashMap<DiagId, Mapping>;
 
+/// The `#pragma clang diagnostic` state at one point, detached from
+/// locations ([`crate::DiagEngine::pragma_snapshot`]): the states the
+/// current state and the `push` stack name, each as its overrides.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PragmaSnapshot {
+    /// Each state's overrides: `(id, severity, flags)`, flags bit 0 set
+    /// by a pragma, bit 1 `-Wno-error`, bit 2 `-Wno-fatal-errors`.
+    pub states: Vec<Vec<(DiagId, Severity, u8)>>,
+    /// The current state (an index into `states`).
+    pub cur: u32,
+    /// The states saved by `push`, innermost last.
+    pub stack: Vec<u32>,
+}
+
 #[derive(Debug)]
 pub(crate) struct Pragmas {
     /// Index 0 is the command-line state (no overrides).
@@ -161,6 +175,65 @@ impl Pragmas {
         self.states.push(Arc::new(over));
         self.transition(at, s);
         true
+    }
+
+    /// The current state and the `push` stack, as the states they name
+    /// (`(id, severity, flags)` with flags bit 0 `user`, bit 1
+    /// `no_werror`, bit 2 `no_fatal`; ids sorted).
+    pub(crate) fn snapshot(&self) -> PragmaSnapshot {
+        let mut snap = PragmaSnapshot::default();
+        let mut ix: HashMap<u32, u32> = HashMap::new();
+        let mut state = |s: u32, snap: &mut PragmaSnapshot| -> u32 {
+            *ix.entry(s).or_insert_with(|| {
+                let mut v: Vec<(DiagId, Severity, u8)> = self.states[s as usize]
+                    .iter()
+                    .map(|(&id, m)| {
+                        let f = u8::from(m.user)
+                            | (u8::from(m.no_werror) << 1)
+                            | (u8::from(m.no_fatal) << 2);
+                        (id, m.severity, f)
+                    })
+                    .collect();
+                v.sort_by_key(|e| e.0 as usize);
+                snap.states.push(v);
+                u32::try_from(snap.states.len() - 1).unwrap_or(u32::MAX)
+            })
+        };
+        snap.cur = state(self.cur, &mut snap);
+        for &s in &self.stack {
+            let k = state(s, &mut snap);
+            snap.stack.push(k);
+        }
+        snap
+    }
+
+    /// Makes `snap`'s current state current from `at` on and appends its
+    /// stack to the `push` stack.
+    pub(crate) fn install(&mut self, at: Loc, snap: &PragmaSnapshot) {
+        let base = u32::try_from(self.states.len()).unwrap_or(u32::MAX);
+        for st in &snap.states {
+            let mut over = Overrides::new();
+            for &(id, severity, f) in st {
+                over.insert(
+                    id,
+                    Mapping {
+                        severity,
+                        user: f & 1 != 0,
+                        no_werror: f & 2 != 0,
+                        no_fatal: f & 4 != 0,
+                    },
+                );
+                if severity != Severity::Ignored {
+                    self.enabled[id as usize] = true;
+                }
+            }
+            self.states.push(Arc::new(over));
+        }
+        self.stack.extend(snap.stack.iter().map(|&k| base.saturating_add(k)));
+        // An empty current state is the default one: nothing changes.
+        if snap.states.get(snap.cur as usize).is_some_and(|s| !s.is_empty()) {
+            self.transition(at, base.saturating_add(snap.cur));
+        }
     }
 
     /// The preprocessor left an included file and resumes its includer at
