@@ -2781,7 +2781,10 @@ the scopes and names beyond named namespaces and export blocks:
 - an unnamed class or enumeration that a typedef names for linkage
   purposes ([dcl.typedef]/9) is listed with that typedef; the importer
   links them when it builds the typedef, so linkage and mangling use the
-  typedef name.
+  typedef name. One that no typedef names (`enum { FE_INVALID = 1 };`,
+  [dcl.enum]/2) is carried unnamed (WP-1284; the reader used to reject
+  it, so the writer's self-check made such a header "an internal image
+  inconsistency").
 
 ```
 scopes  := inline:u32 u32*           ascending records
