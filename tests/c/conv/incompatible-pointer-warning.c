@@ -1,7 +1,7 @@
 // C17 6.5.16.1p1: assigning between pointers to incompatible types is a
-// constraint violation; clang 19 diagnoses it with a warning
-// (-Wincompatible-pointer-types) and converts as a cast would. Dropping
-// qualifiers warns under -Wincompatible-pointer-types-discards-qualifiers.
+// constraint violation; clang 19 diagnoses it with a warning (clang 22: an error)
+// (-Wincompatible-pointer-types) and converts as a cast would. Dropping qualifiers warns under -Wincompatible-pointer-types-discards-qualifiers.
+//@ requires: clang<22
 //@ expect: compile-ok
 //@ strict-diags
 //@ diag: 15:7 warning "incompatible pointer types initializing 'long *' with an expression of type 'int *'"

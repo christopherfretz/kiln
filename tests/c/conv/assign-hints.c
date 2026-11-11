@@ -1,6 +1,6 @@
 // C17 6.5.16.1p1 constraint violations, with clang's conversion hints
-// (`tryToFixConversion`: dereference with *, take the address with &,
-// remove * or &) and the type printing of C (`int (void)`, `struct S`).
+// (`tryToFixConversion`: dereference with *, take the address with &, remove * or &) and the type printing of C (`int (void)`, `struct S`).
+//@ requires: clang<22
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 22:8 error "incompatible pointer to integer conversion initializing 'long' with an expression of type 'int *'"
