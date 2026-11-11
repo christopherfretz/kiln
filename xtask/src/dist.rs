@@ -12,10 +12,11 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use crate::util;
+use crate::{pgo, util};
 
 const USAGE: &str = "\
 usage: cargo xtask dist [--target <triple>] [--out <dir>] [--check] [--keep]
+                        [--pgo [--llvm-dir <dir>]]
 
 Builds kiln with the `dist` profile and feature and writes, in <dir>
 (default <target-dir>/kiln-dist):
@@ -37,6 +38,14 @@ $SOURCE_DATE_EPOCH (default: the commit time of HEAD, else 0).
                      KILN_GCC), a constexpr-heavy TU, no build-host path in the binary
                      or any output, and the debuglink matching the symbols archive
   --keep             keep the staging and check directories
+  --pgo              build profile-guided (spec/harness.md \"PGO build\"): an
+                     instrumented dist build in <target-dir>/pgo/dist/instrumented, the
+                     PGO training corpus, `llvm-profdata merge`, then the dist build
+                     with -Cprofile-use; about three times the build time; --target
+                     must then be the host
+  --llvm-dir <dir>   with --pgo: the LLVM installation whose bin/llvm-profdata merges
+                     (default: KILN_LLVM_DIR, then kiln's LLVM search for rustc's LLVM
+                     major, then rustup's llvm-tools component)
 
 environment: OBJCOPY (default objcopy, else llvm-objcopy-19), SOURCE_DATE_EPOCH,
 KILN_GIT_SHA (the commit recorded in the binary; default from git)
@@ -48,6 +57,8 @@ struct Opts {
     out: Option<PathBuf>,
     check: bool,
     keep: bool,
+    pgo: bool,
+    llvm_dir: Option<PathBuf>,
 }
 
 fn parse(args: impl Iterator<Item = String>) -> Result<Option<Opts>, String> {
@@ -67,8 +78,13 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Option<Opts>, String> {
             "--out" => o.out = Some(PathBuf::from(value("--out")?)),
             "--check" if inline.is_none() => o.check = true,
             "--keep" if inline.is_none() => o.keep = true,
+            "--pgo" if inline.is_none() => o.pgo = true,
+            "--llvm-dir" => o.llvm_dir = Some(PathBuf::from(value("--llvm-dir")?)),
             _ => return Err(format!("unknown argument `{a}`")),
         }
+    }
+    if o.llvm_dir.is_some() && !o.pgo {
+        return Err("--llvm-dir needs --pgo".to_owned());
     }
     Ok(Some(o))
 }
@@ -129,7 +145,11 @@ fn run(opts: &Opts) -> Result<(), String> {
     let out = absolute(&out)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("cannot create {}: {e}", out.display()))?;
     let forbidden = forbidden_paths(&root, &target_dir);
-    let exe = build(&root, &target_dir, opts.target.as_deref(), &forbidden)?;
+    let exe = if opts.pgo {
+        pgo_build(&root, &target_dir, opts, &forbidden)?
+    } else {
+        build(&root, &target_dir, opts.target.as_deref(), &forbidden)?
+    };
     let built = package(&root, &out, &exe, &triple, opts.keep)?;
     if opts.check {
         check(&root, &out, &built, &triple, &forbidden, opts.keep)?;
@@ -238,6 +258,36 @@ fn build(
         dir.push(t);
     }
     let exe = dir.join("dist").join(format!("kiln{}", std::env::consts::EXE_SUFFIX));
+    exe.is_file().then_some(exe.clone()).ok_or_else(|| format!("{} was not built", exe.display()))
+}
+
+/// `--pgo`: the dist build as a [`pgo::Plan`] (the same cargo arguments and
+/// rustflags as [`build`]), its profile made by [`pgo::make_profile`], then
+/// [`pgo::final_build`]; the path of the `kiln` binary.
+fn pgo_build(
+    root: &Path,
+    target_dir: &Path,
+    opts: &Opts,
+    forbidden: &[(String, &'static str)],
+) -> Result<PathBuf, String> {
+    let target_dir = absolute(target_dir)?;
+    let mut cargo_args: Vec<String> =
+        ["--locked", "--profile", "dist", "-p", "kiln_driver", "--features", "dist"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+    if let Some(t) = &opts.target {
+        cargo_args.extend(["--target".to_owned(), t.clone()]);
+    }
+    let encoded = encoded_rustflags(forbidden).to_string_lossy().into_owned();
+    let flags = pgo::strip_profile_flags(
+        encoded.split('\x1f').filter(|f| !f.is_empty()).map(str::to_owned).collect(),
+    );
+    let plan = pgo::Plan { profile: "dist", cargo_args, flags, target: opts.target.clone() };
+    let dirs = pgo::PgoDirs::new(&target_dir, &plan);
+    pgo::make_profile(root, &target_dir, &plan, opts.llvm_dir.as_deref(), &dirs.profdata, false)?;
+    pgo::final_build(root, &target_dir, &plan, &dirs.profdata)?;
+    let exe = plan.exe_dir(&target_dir).join(format!("kiln{}", std::env::consts::EXE_SUFFIX));
     exe.is_file().then_some(exe.clone()).ok_or_else(|| format!("{} was not built", exe.display()))
 }
 
@@ -911,7 +961,12 @@ mod tests {
             p(&["--target", "x86_64-unknown-linux-gnu", "--out=d", "--check"]).unwrap().unwrap();
         assert_eq!(o.target.as_deref(), Some("x86_64-unknown-linux-gnu"));
         assert_eq!(o.out.as_deref(), Some(Path::new("d")));
-        assert!(o.check && !o.keep);
+        assert!(o.check && !o.keep && !o.pgo);
+        let o = p(&["--pgo", "--llvm-dir=/usr/lib/llvm-22"]).unwrap().unwrap();
+        assert!(o.pgo);
+        assert_eq!(o.llvm_dir.as_deref(), Some(Path::new("/usr/lib/llvm-22")));
+        assert!(p(&["--llvm-dir", "/l"]).is_err(), "--llvm-dir needs --pgo");
+        assert!(p(&["--pgo=yes"]).is_err());
         assert!(p(&["--help"]).unwrap().is_none());
         assert!(p(&["--target"]).is_err());
         assert!(p(&["--bogus"]).is_err());

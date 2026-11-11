@@ -22,6 +22,7 @@ mod landed;
 mod libcxx;
 mod libstdcxx;
 mod oracle;
+mod pgo;
 mod test;
 mod util;
 
@@ -66,6 +67,14 @@ commands:
               SHA256SUMS (dist profile, split debug info, deterministic); --check
               smoke-tests the extracted install tree; not part of ci (`cargo xtask
               dist --help`; spec/harness.md \"Dist\", spec/driver.md \"Installation layout\")
+  build       `cargo build --release -p kiln_driver`; --pgo makes it profile-guided
+              (instrumented build, training corpus, merge, final build; about three
+              times the build time); `cargo xtask build --help`; spec/harness.md \"PGO build\"
+  pgo-profile the PGO pre-step alone: instrumented build, training and merge into one
+              .profdata file for a later `cargo build --release` with
+              RUSTFLAGS=-Cprofile-use=<file> (`cargo xtask pgo-profile --help`)
+  pgo-train   the PGO training step alone: an instrumented kiln++ compiles the training
+              corpus (`cargo xtask pgo-train --help`; --list prints the corpus)
   jobserver   status|refill: count, or top up, the shared jobserver pool's idle tokens
               (`cargo xtask jobserver --help`; spec/harness.md \"Jobserver\")
   ci          the merge gate: diag-split --check, the spec/landed lint, fmt --check, clippy
@@ -101,6 +110,9 @@ fn main() -> ExitCode {
         Some("features") => features::main(args),
         Some("stress") => stress(args),
         Some("dist") => dist::main(args),
+        Some("build") => pgo::build_main(args),
+        Some("pgo-profile") => pgo::profile_main(args),
+        Some("pgo-train") => pgo::train_main(args),
         Some("jobserver") => jobs::main(args),
         Some("ci") => ci(args),
         _ => {

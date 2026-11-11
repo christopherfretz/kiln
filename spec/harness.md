@@ -1591,8 +1591,9 @@ from `tests/conformance/stress/`, with
 
 ## Dist
 
-`cargo xtask dist [--target <triple>] [--out <dir>] [--check] [--keep]`
-(`xtask/src/dist.rs`, WP-927) builds the release archives of the install
+`cargo xtask dist [--target <triple>] [--out <dir>] [--check] [--keep]
+[--pgo [--llvm-dir <dir>]]` (`xtask/src/dist.rs`, WP-927; `--pgo` makes
+step 1 profile-guided, "PGO build") builds the release archives of the install
 layout (spec/driver.md "Installation layout"). It is not part of `ci`: a
 `dist` build is a full thin-LTO release build, several minutes. The
 tag-only workflow `.github/workflows/release.yml` runs it with `--check`
@@ -1672,6 +1673,149 @@ the workflow itself.
    byte-identical re-archive) and `xtask/src/doclinks.rs` `tests` run in
    `cargo test`; the build
    and `--check` run in release.yml and by hand.
+
+## PGO build
+
+A profile-guided build of kiln itself (WP-1308, `xtask/src/pgo.rs`): the
+same source and Cargo profile, optimized with a profile of kiln compiling
+the training corpus below. It is opt-in; without the switch every command
+here builds exactly what it did before. Not part of `ci` (it is three
+release builds' worth of time).
+
+**Commands.**
+
+- `cargo xtask build [--pgo] [--target <triple>] [--features <list>]
+  [--llvm-dir <dir>]`. Without `--pgo`: exactly `cargo build --release -p
+  kiln_driver` (plus `--target`/`--features`), environment untouched. With
+  `--pgo`: `pgo-profile` into `<target-dir>/pgo/release/kiln.profdata`,
+  then the same release build with `-Cprofile-use=<that path>`, so the
+  binary lands where `cargo build --release` puts it.
+- `cargo xtask dist --pgo [--llvm-dir <dir>]` ("Dist"): the same with the
+  `dist` build's cargo arguments and rustflags (its `--remap-path-prefix`
+  set included) for both builds, state under `<target-dir>/pgo/dist/`;
+  packaging and `--check` are unchanged.
+- `cargo xtask pgo-profile --out <file> [--target <triple>] [--features
+  <list>] [--llvm-dir <dir>] [-v]`: the pre-step alone (steps 1-3), for a
+  packager whose own build is a stock `cargo build --release`.
+- `cargo xtask pgo-train --compiler <kiln++> --profile-dir <dir> [-v]`:
+  step 2 alone, for an instrumented binary built some other way; it then
+  prints the `llvm-profdata merge` line with the discovered tool.
+  `--list` prints the training corpus and the held-out set.
+
+`--pgo` (and `pgo-profile`) with a `--target` other than the host is an
+error: the training runs the instrumented binary on the build machine.
+
+**Steps.** Every entry point runs the same functions, so the all-in-one
+switch and the step-by-step path cannot drift:
+
+1. *Instrumented build:* the plan's `cargo build` with
+   `CARGO_TARGET_DIR=<target-dir>/pgo/<flavour>/instrumented` and
+   `-Cprofile-generate=<target-dir>/pgo/<flavour>/profiles` added to the
+   rustflags. The profile directory is then emptied (the instrumented
+   build scripts write profiles of their own while the build runs).
+2. *Training* (`pgo::train`): the instrumented `kiln++` compiles each
+   training case once through the bench harness's own command
+   construction (`bench::train`, which shares `bench::prepare` with the
+   measurement: `-std=`, the mode's flags, `args:`, the reflection shapes'
+   `--gcc-toolchain`, the counter-report flags, `generate:` sources, the
+   `mode: run` program build and the memory cap), with
+   `LLVM_PROFILE_FILE=<dir>/kiln-%m.profraw` (one merged file per binary)
+   and `KILN_RESOURCE_DIR=<checkout>/resource` unless already set (a
+   `dist` binary has no source-tree fallback). A case that fails fails the
+   command, naming every failed case; so does a run that leaves no
+   `.profraw` file (the compiler was not instrumented).
+3. *Merge:* `llvm-profdata merge -o <out> <dir>/*.profraw` (printed).
+4. *Final build:* the same plan in the normal target directory with
+   `-Cprofile-use=<absolute path>` and
+   `-Cllvm-args=-pgo-warn-missing-function`; xtask hides those per-function
+   warnings and prints how many there were, in kiln's crates and in build
+   scripts (below).
+
+**Rustflags.** Both builds get the caller's flags as cargo reads them
+(`CARGO_ENCODED_RUSTFLAGS`, else `RUSTFLAGS`, else
+`CARGO_BUILD_RUSTFLAGS`; a `[build] rustflags` in a cargo config file is
+not read) with any `-Cprofile-use` / `-Cprofile-generate` removed, then
+pass them as `CARGO_ENCODED_RUSTFLAGS`. The `-Cprofile-use` path is always
+absolute: a relative one is resolved per crate and fails.
+
+**What must match between the two builds** (checked on rustc 1.95 with
+`-pgo-warn-missing-function`, WP-1308): the rustc, the source tree, the
+`--target` argument (an explicit `--target <host>` is a different build
+from none: every function misses), the feature set (the crate whose
+features differ misses entirely), `-C debuginfo` and
+`--remap-path-prefix` (a few internal functions, such as drop glue, miss).
+The target directory, the Cargo profile's name (`release` against
+`dist`), and whether cargo is run by xtask or directly do not matter.
+
+**Telling that a profile applied.** A missing profile file is a hard
+error from rustc. A profile that does not match the build is not: rustc
+just optimizes without it. `-Cllvm-args=-pgo-warn-missing-function` makes
+rustc warn once per function the profile has no data for (`warning: <cgu>:
+no profile data available for function <symbol> ...`). Functions the
+training never reached are in the profile with zero counts and do not
+warn, so a matching profile leaves no kiln function without data (WP-1308
+measured 0 in kiln's crates, with and without a packager's `-C
+debuginfo=2 --remap-path-prefix` given to both builds) and warns only for
+the build scripts (541: built with the flags too when there is no
+`--target`, never run by the training); a mismatched one warns for
+nearly every function of the crates it does not match (the release
+profile used by a `--target aarch64-unknown-linux-gnu` build: 27,013
+warnings across kiln's crates). `cargo build -v`
+shows `-Cprofile-use` on each `rustc` line.
+
+**`llvm-profdata` discovery** (`pgo::ToolSearch`), before anything is
+built. The tool's LLVM major must equal rustc's (`rustc -vV`, `LLVM
+version:`; rustc 1.95 is LLVM 22.1.2): a profile is read only by the LLVM
+that knows its format version. Candidates, in order, the first whose
+`bin/llvm-profdata` exists and whose `--version` (`LLVM version <v>`) has
+that major wins:
+
+1. `--llvm-dir=<dir>`, else `$KILN_LLVM_DIR`: explicit, so a missing tool
+   or another major is an error naming the directory, never a
+   fall-through;
+2. kiln's own LLVM search for that one major (spec/driver.md "LLVM
+   discovery"): `llvm-config` and `llvm-config-N` on `PATH`, the layouts
+   `/usr/lib/llvm-N`, `/usr/lib64/llvmN`, Homebrew's `llvm@N` and `llvm`,
+   `/usr`, then `opt-N` and `clang++-N` on `PATH` (the installation above
+   each);
+3. `llvm-profdata-N`, then `llvm-profdata`, on `PATH`;
+4. rustup's `llvm-tools` component,
+   `<rustc --print sysroot>/lib/rustlib/<host>/bin/llvm-profdata`.
+
+None usable is an error listing each candidate with why it was skipped.
+
+**Training corpus and held-out set** (`pgo::TRAINING`, `pgo::HELD_OUT`;
+`cargo xtask pgo-train --list`). Training: every bench entry except the
+held-out ones and the groups that are runs of their own (`bench/pch`,
+`bench/libcxx-slice`), 44 cases: `frontend/` less the held-out ones,
+`oven/` less sort/string/table, all of `pp/` and `runtime/`, and the
+reflection shapes S1-S5 and S9. Held out, never trained on so a bench run
+against a plain build measures the gain honestly (19 cases):
+`frontend/format-like-g`, `registration-wide-obj`, `templates`,
+`templates_deep`, `templates_wide`, `templates-wide-g`, all four of
+`overload/`, `oven/sort`, `sort-nohdr`, `string`, `table`, `table-nohdr`,
+and the shapes S6, S7, S8, S10. A bench entry added later is in neither
+list until it is put in one. The unit test `pgo::tests::corpus_lists`
+checks that each listed file exists and that the lists are sorted,
+duplicate-free and disjoint.
+
+**What the steps need.** No network access. The checkout (with
+`Cargo.lock`'s crates available, vendored or cached: the pre-step builds
+xtask, whose third-party crates beyond `kiln_driver`'s `hashbrown` are
+`signal-hook`, `signal-hook-registry`, `libc` and `errno`), the LLVM
+installation kiln drives (with `llvm-profdata`, `clang++` and the libc++
+headers some cases include), a libstdc++ (the system GCC's), and
+`/usr/bin/time` if present (only for peak RSS). The one optional input
+is GCC 16.1 (`KILN_GCC`, else `g++-16` on `PATH`): the reflection shapes
+S1-S5 include its `<meta>`. Without it they are left out of the training
+with a warning naming them; this is the only part of the corpus that
+depends on the machine.
+
+**Cost and gain** (aarch64; WP-1308, docs/status/perf.md "PGO build"):
+the instrumented build costs about one release build, the training under
+a minute (29 s for the 44 cases at load 12), the final build one more
+release build: 1m19s + 29 s + 1m55s against 1m46s for a plain release
+build on the shared box. The gain is in the status page.
 
 ## Feature table
 
