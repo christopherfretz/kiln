@@ -19,6 +19,9 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
 
 ## Summary
 
+- Current (WP-1295, 2026-11-11): all five C OSS rows (zlib, sqlite, lua,
+  c-ares, zstd) build with kiln and pass their tests; see "C OSS rows". The
+  bullets below are the WP-1282 baseline.
 - C mode on main compiles roughly 71% of gcc.c-torture cases at gnu23
   (clang-19: 91%). With wp/1276 that rises to 86%, and the "wrong" class
   falls from 67 to 36 cases, 34 of which clang-19 gets wrong too.
@@ -119,51 +122,59 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
 ## C OSS rows
 
 `scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)
-against `--compiler clang`. "TUs" counts the build-phase C TUs in
-`compile.jsonl`; configure-probe TUs are reported separately.
+against `--compiler clang`, re-measured by WP-1295 on 2026-11-11 with the
+harness build of wp/1295 at `e54b84796` (origin/main `c60f69910` merged,
+WP-1286 included; sqlite at `38398d21b`, before that merge, and again at
+the handback head, below). "TUs" are the build-phase TUs of the report
+(`tus`, C and the C++ test drivers); "probes" counts configure-phase
+compiles and how many fail.
 
-| row (tag) | configure | build | tests | C TUs main | C TUs wp/1276 | clang-19 |
+| row (tag) | configure | build | tests | TUs | probes (fail) | clang-19 |
 |---|---|---|---|---|---|---|
-| zlib (v1.3.2) | ok | fails | 1/6 main, 6/6 wp/1276 | 22/30 | 37/37 (build and tests ok) | 37/37, 6/6 |
-| sqlite (3.54.1) | ok, 2 divergent probes | fails | not run (no `sqlite3`) | 0/2 | 1/2 (sqlite3.c ok) | 2/2, workload ok |
-| lua (v5.4.8) | n/a (make) | fails | not run (no `lua`) | 3/34 | 26/34 | 34/34, ok |
-| c-ares (v1.34.9) | ok, probes cascade | fails | 0/2 | 2/91 | 2/91 | 99/99 C + 27 C++, 2/2 |
-| zstd (v1.5.7) | ok, ASM probes fail | fails | 0/3 | 18/74 | 48/74 | 118/118, 3/3 |
+| zlib (v1.3.2) | ok | ok | 6/6, minigzip round trips ok | 37/37 | 19 (0) | 37/37, 6/6 |
+| sqlite (3.54.1) | ok, probes match clang | ok | workload ok | 2/2 | 45 (4, the same 4 as clang) | 2/2, workload ok |
+| lua (v5.4.8) | n/a (make) | ok | all.lua (`_U`) "final OK" | 34/34 | 0 | 34/34, ok |
+| c-ares (v1.34.9) | ok | ok | ctest 2/2, arestest 1199 passed | 126/126 | 311 (29) | 99/99 C + 27 C++, 2/2 |
+| zstd (v1.5.7) | ok, ASM identification unknown | ok | 3/3, playTests ok | 118/118 | 65 (9) | 118/118, 3/3 |
 
-First blocker per row:
+All five rows build with kiln and pass their tests: the C OSS bar of
+1.1.0 is met. The failing probes are platform probes clang fails too
+(sqlite: one `_x` negative-size probe and three expected
+undefined-reference function probes; c-ares: missing headers such as
+`sys/sockio.h`, `SOCKET` and `closesocket`, and `res_servicename`,
+`inet_net_pton` and `__system_property_get`).
 
-- **zlib**, main: `void *` to object pointer conversions (`gzwrite.c:44`,
-  `inftrees.c:64`) and old-style calls (`gzlib.c:81`, "no matching function
-  for call to 'gz_error'"). All are covered by wp/1276, where the row is
-  green.
-- **sqlite**, main: the tentative definition `sqlite3WhereTrace`
-  (`sqlite3.c:24491`, "redefinition") and `void *` assignments
-  (`shell.c:1121`), both covered by wp/1276. With wp/1276, `shell.c:19268`
-  fails on `case 0xca093fa0:` in a switch on an `int` ("case value evaluates
-  to 3389603744, which cannot be narrowed"), which is not covered.
-  - Configure: `-rpath /usr/local/lib` is rejected as an unknown argument; the
-    probe falls back to `-Wl,-rpath` and succeeds.
-  - The math-library probe diverges, so kiln's link line lacks `-lm`.
-  - Three expected function probe failures print `ld: DWARF error: mangled
-    line number section (bad file number)` before the undefined reference.
-    This is cosmetic, but the object kiln wrote with `-O2 -g` has a line table
-    `ld` cannot read. It does not reproduce on a one-line TU.
-- **lua**, main: `void *` conversions and old-style calls (covered). With
-  wp/1276: 8 TUs fail on `ldebug.c:135`, "comparison of distinct pointer
-  types" for `lua_Hook` against `NULL` (not covered;
-  `tests/c/expr/fnptr-null-pointer-compare.c`).
-- **c-ares**: glibc's `netdb.h:690` declares `getaddrinfo_a(..., struct gaicb
-  *__list[__restrict_arr], ...)`; "qualifier in array size is a C99 feature,
-  not permitted in C++" fails 69 configure probes, including the `struct
-  timeval` probe. `ares_setup.h:205` then redefines `struct timeval` in 89 of
-  91 TUs. Not covered by wp/1276 (`tests/c/decl/array-param-qualifiers.c`).
-  Fixing the qualifier unblocks the whole row.
-- **zstd**, main: 40 TUs fail on `zstd.h:1880`, the `NULL` member initializer
-  of `ZSTD_customMem` (`void *` to function pointer), which is covered. With
-  wp/1276, 26 TUs fail on "comparison of distinct pointer types" (function
-  pointer against `NULL`, not covered). Configure: CMake's ASM compiler
-  identification probes `-V`, `-qversion` and others, and `kiln` rejects
-  `-Wa,--noexecstack`, so the flag is dropped from the build (clang keeps it).
+First blocker per row, and what cleared it:
+
+- **zlib**: none since WP-1276.
+- **sqlite**: three block-scope statics whose initializers are address
+  constants through pointer casts (`trimFunc`, `sqlite3Initialize`,
+  `sqlite3RegisterJsonFunctions`) were guarded with `__cxa_guard`, which a
+  C link cannot resolve. WP-1295 folds them (spec/oven.md "Address
+  constants") and makes a non-constant C static initializer an error
+  (`tests/c/run/static-local-address-constant-cast.c`,
+  `tests/c/run/static-address-constant-forms.c`,
+  `tests/c/decl/static-init-not-constant.c`). The `case 0xca093fa0:` in
+  `shell.c` was cleared by WP-1286. The `-lm` probe ("Checking libs for
+  ceil...-lm") and `-rpath /usr/local/lib` (WP-1288) now match clang.
+  Three of the expected function-probe failures still print `ld: DWARF
+  error: mangled line number section (bad file number)` before the
+  undefined reference; this is cosmetic (see the WP-1282 note).
+- **lua**: the function pointer compared with `NULL` (`ldebug.c:135`) was
+  cleared by WP-1285; no new blocker.
+- **c-ares**: the qualifiers inside a parameter's `[ ]` (glibc
+  `netdb.h:690`) were cleared by WP-1287; configure no longer cascades
+  and no new blocker appeared.
+- **zstd**: green since WP-1286. CMake's ASM compiler identification is
+  still "unknown"; the build does not need it.
+
+Compile cost (perf record, not a regression): sqlite's two TUs at `-O2`
+(the row's `CFLAGS`, autotools `make`; kiln and kiln++ from the harness
+profile, clang-19 the control; `.oss/build/sqlite/<compiler>/compile.jsonl`):
+
+- `sqlite3.c`: kiln 33.6 s, 0.73 GB peak RSS; clang-19 30.6 s, 0.92 GB;
+- `shell.c` (with `sqlite3.c` linked in one command): kiln 39.2 s,
+  0.74 GB; clang-19 35.3 s, 0.93 GB.
 
 ## grpc and simdjson C halves (`c = "kiln"`, from 95ae39b29)
 
