@@ -590,15 +590,7 @@ fn corrupt<T>(why: &str) -> Res<T> {
     Err(BmiError::Corrupt(why.to_owned()))
 }
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-
-fn fnv(mut h: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
+use kiln_source::hash::{FNV_OFFSET, fnv1a64_extend as fnv};
 
 /// The length of magic, format version and kind.
 const PREFIX_LEN: usize = 13;

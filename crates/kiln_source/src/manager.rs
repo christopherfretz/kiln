@@ -7,6 +7,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::{error, fmt, fs, io};
 
 use crate::arena::AppendVec;
+use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
 
 /// Exclusive end of the file-location space (`[1, 2^31)`).
@@ -205,13 +206,61 @@ struct LineDirective {
     name: Option<u32>,
 }
 
+/// The recorded text of a lazy buffer, when the file on disk no longer
+/// holds it ([`SourceManager::add_lazy_file`]): a module file's copy of
+/// the file, read again on demand.
+pub type LazyCopy = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+/// How a lazy buffer's text was found ([`SourceManager::lazy_outcomes`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LazyOutcome {
+    /// The file on disk had the recorded length and content hash.
+    Disk,
+    /// The file changed; the recorded copy was used.
+    Copy,
+    /// Neither the file nor a copy had the recorded content: the buffer
+    /// has no lines or columns (its locations are not printed).
+    Unavailable,
+}
+
+/// Where a buffer's text comes from.
+enum Origin {
+    /// Read from disk ([`SourceManager::load_file`]).
+    Disk,
+    /// In memory ([`SourceManager::add_virtual`]).
+    Virtual,
+    /// On disk at `path`, read on first use and checked against the
+    /// recorded `hash`; `copy` is the fallback.
+    Lazy { path: PathBuf, hash: u64, copy: Option<LazyCopy> },
+}
+
+impl fmt::Debug for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Origin::Disk => f.write_str("Disk"),
+            Origin::Virtual => f.write_str("Virtual"),
+            Origin::Lazy { path, .. } => write!(f, "Lazy({})", path.display()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Body {
+    text: Box<str>,
+    report: LoadReport,
+    outcome: LazyOutcome,
+}
+
 #[derive(Debug)]
 struct FileEntry {
     /// Raw value of the buffer's first location.
     start: u32,
     name: Box<str>,
-    text: Box<str>,
-    report: LoadReport,
+    /// Length of the text, known before a lazy buffer is read.
+    len: u32,
+    origin: Origin,
+    /// The text: set at creation, or on first use for a lazy buffer.
+    body: OnceLock<Body>,
     /// Offsets of the first byte of every line; built on first use.
     lines: OnceLock<Box<[u32]>>,
     /// Sorted by `offset`.
@@ -220,12 +269,82 @@ struct FileEntry {
 
 impl FileEntry {
     fn len(&self) -> u32 {
-        self.text.len() as u32
+        self.len
+    }
+
+    /// True unless this is a lazy buffer whose file changed: such a buffer
+    /// keeps the recorded text, and a load of the file gets a new one.
+    fn available_as_disk(&self) -> bool {
+        !matches!(self.origin, Origin::Lazy { .. }) || self.body().outcome == LazyOutcome::Disk
+    }
+
+    fn body(&self) -> &Body {
+        self.body.get_or_init(|| match &self.origin {
+            Origin::Lazy { path, hash, copy } => resolve_lazy(path, self.len, *hash, copy.as_ref()),
+            // Eager buffers set their body at creation.
+            Origin::Disk | Origin::Virtual => Body {
+                text: String::new().into_boxed_str(),
+                report: LoadReport::default(),
+                outcome: LazyOutcome::Unavailable,
+            },
+        })
+    }
+
+    fn text(&self) -> &str {
+        &self.body().text
+    }
+
+    /// False for a lazy buffer whose recorded text could not be found.
+    fn available(&self) -> bool {
+        self.body().outcome != LazyOutcome::Unavailable
     }
 
     fn line_starts(&self) -> &[u32] {
-        self.lines.get_or_init(|| compute_line_starts(&self.text))
+        self.lines.get_or_init(|| compute_line_starts(self.text()))
     }
+}
+
+/// Reads a lazy buffer: the file at `path` when its decoded text has
+/// length `len` and content hash `hash`, else `copy` under the same
+/// check, else `len` spaces marked unavailable (so offsets stay in
+/// bounds while no line or column is reported).
+fn resolve_lazy(path: &Path, len: u32, hash: u64, copy: Option<&LazyCopy>) -> Body {
+    let matches = |t: &str| t.len() == len as usize && content_hash(t.as_bytes()) == hash;
+    let disk = fs::File::open(path)
+        .and_then(|mut f| f.metadata().and_then(|m| read_open_file(&mut f, &m)))
+        .ok()
+        .map(decode_utf8)
+        .filter(|(t, _)| matches(t));
+    if let Some((text, report)) = disk {
+        return Body { text: text.into_boxed_str(), report, outcome: LazyOutcome::Disk };
+    }
+    if let Some(t) = copy.and_then(|c| c()).filter(|t| matches(t)) {
+        return Body {
+            text: t.into_boxed_str(),
+            report: LoadReport::default(),
+            outcome: LazyOutcome::Copy,
+        };
+    }
+    Body {
+        text: " ".repeat(len as usize).into_boxed_str(),
+        report: LoadReport::default(),
+        outcome: LazyOutcome::Unavailable,
+    }
+}
+
+/// What [`SourceManager::add_lazy_file`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LazyFile {
+    /// A lazy buffer was added.
+    Added(FileId),
+    /// The file is loaded already, as this buffer: compare its text.
+    Loaded(FileId),
+    /// The file is missing or not a regular file.
+    Missing,
+    /// The file's size is not the recorded length.
+    Changed,
+    /// File location space is used up.
+    Exhausted,
 }
 
 /// One range of file location space: a buffer's own range (created with
@@ -582,10 +701,17 @@ impl SourceManager {
         };
         drop(file);
         let mut by_path = lock(&self.by_path);
-        if let Some(&id) = by_path.get(&key) {
+        if let Some(&id) = by_path.get(&key)
+            && self.file(id).available_as_disk()
+        {
             return Ok((id, Some(text)));
         }
-        match self.push_file(path.to_string_lossy().into(), text, LoadReport::default()) {
+        match self.push_file(
+            path.to_string_lossy().into(),
+            text,
+            LoadReport::default(),
+            Origin::Disk,
+        ) {
             Ok(id) => {
                 by_path.insert(key, id);
                 Ok((id, None))
@@ -605,7 +731,9 @@ impl SourceManager {
         }
         let key = file_key(path, &meta)?;
         let mut by_path = lock(&self.by_path);
-        if let Some(&id) = by_path.get(&key) {
+        if let Some(&id) = by_path.get(&key)
+            && self.file(id).available_as_disk()
+        {
             return Ok(id);
         }
         if meta.len() >= FILE_SPACE_END {
@@ -617,7 +745,7 @@ impl SourceManager {
             return Err(LoadError::LocSpaceExhausted);
         }
         let (text, report) = decode_utf8(bytes);
-        let id = self.push_file(path.to_string_lossy().into(), text, report)?;
+        let id = self.push_file(path.to_string_lossy().into(), text, report, Origin::Disk)?;
         by_path.insert(key, id);
         Ok(id)
     }
@@ -625,7 +753,96 @@ impl SourceManager {
     /// Adds an in-memory buffer named `name` (e.g. `<built-in>`,
     /// `<command line>`, `<scratch space>`). Never deduplicated.
     pub fn add_virtual(&self, name: &str, contents: String) -> Result<FileId, LocSpaceExhausted> {
-        self.push_file(name.into(), contents, LoadReport::default())
+        self.push_file(name.into(), contents, LoadReport::default(), Origin::Virtual)
+    }
+
+    /// Adds the file at `path`, recorded (by a declaration image,
+    /// spec/modules.md §11.11 "File table") with decoded length `len` and
+    /// [`content_hash`] `hash`, under the buffer name `name`, without
+    /// reading it: the file is only opened and identified, so a later
+    /// [`load_file`](Self::load_file) of it finds this buffer. The text is
+    /// read on first use (a line, a column, the text itself) and checked
+    /// against `len` and `hash`; when it no longer matches, `copy` (the
+    /// recorded text) is used under the same check, and failing that the
+    /// buffer is unavailable: [`line_col`](Self::line_col) and
+    /// [`presumed_line_col`](Self::presumed_line_col) are `None` in it, so
+    /// no wrong position is ever printed. A later load of a lazy buffer
+    /// whose file changed gets a new buffer with the file's text.
+    pub fn add_lazy_file(
+        &self,
+        name: &str,
+        path: &Path,
+        len: u32,
+        hash: u64,
+        copy: Option<LazyCopy>,
+    ) -> LazyFile {
+        let Ok(meta) = fs::metadata(path) else { return LazyFile::Missing };
+        if !meta.is_file() {
+            return LazyFile::Missing;
+        }
+        let Ok(key) = file_key(path, &meta) else { return LazyFile::Missing };
+        let mut by_path = lock(&self.by_path);
+        if let Some(&id) = by_path.get(&key) {
+            return LazyFile::Loaded(id);
+        }
+        if meta.len() != u64::from(len) {
+            return LazyFile::Changed;
+        }
+        let origin = Origin::Lazy { path: path.to_owned(), hash, copy };
+        match self.push_entry(name.into(), len, None, origin) {
+            Ok(id) => {
+                by_path.insert(key, id);
+                LazyFile::Added(id)
+            }
+            Err(LocSpaceExhausted) => LazyFile::Exhausted,
+        }
+    }
+
+    /// Every lazy buffer read so far ([`add_lazy_file`](Self::add_lazy_file))
+    /// whose file no longer held the recorded text, with how it was
+    /// resolved, in creation order.
+    pub fn lazy_fallbacks(&self) -> Vec<(FileId, LazyOutcome)> {
+        (0..self.files.len())
+            .filter_map(|i| {
+                let f = self.files.get(i)?;
+                let o = f.body.get()?.outcome;
+                (matches!(f.origin, Origin::Lazy { .. }) && o != LazyOutcome::Disk)
+                    .then_some((FileId(i), o))
+            })
+            .collect()
+    }
+
+    /// The buffer of the file at `path`, if it is loaded (identified as
+    /// [`load_file`](Self::load_file) identifies it), without reading it.
+    pub fn loaded_file(&self, path: &Path) -> Option<FileId> {
+        let meta = fs::metadata(path).ok()?;
+        let key = file_key(path, &meta).ok()?;
+        lock(&self.by_path).get(&key).copied()
+    }
+
+    /// True for an in-memory buffer ([`add_virtual`](Self::add_virtual)).
+    pub fn is_virtual(&self, file: FileId) -> bool {
+        matches!(self.file(file).origin, Origin::Virtual)
+    }
+
+    /// True if `file` has a `#line` directive or line marker
+    /// ([`add_line_directive`](Self::add_line_directive)).
+    pub fn has_line_directives(&self, file: FileId) -> bool {
+        !self.file(file).line_directives.read().unwrap_or_else(PoisonError::into_inner).is_empty()
+    }
+
+    /// The file-kind marks ([`set_file_kind`](Self::set_file_kind)) in the
+    /// buffer range or inclusion range containing the file location
+    /// `loc`, as `(offset in the range, kind)` in offset order.
+    pub fn file_kind_marks(&self, loc: Loc) -> Vec<(u32, FileKind)> {
+        let Some((r, _)) = self.find_range(loc) else { return Vec::new() };
+        let kinds = self.kinds.read().unwrap_or_else(PoisonError::into_inner);
+        let from = kinds.partition_point(|&(l, _)| l < r.start);
+        kinds[from..]
+            .iter()
+            .take_while(|&&(l, _)| l <= r.start + r.len)
+            .map(|&(l, k)| (l - r.start, k))
+            .collect()
     }
 
     fn push_file(
@@ -633,18 +850,39 @@ impl SourceManager {
         name: Box<str>,
         text: String,
         report: LoadReport,
+        origin: Origin,
+    ) -> Result<FileId, LocSpaceExhausted> {
+        if text.len() as u64 >= FILE_SPACE_END {
+            return Err(LocSpaceExhausted);
+        }
+        let len = text.len() as u32;
+        let body = Body { text: text.into_boxed_str(), report, outcome: LazyOutcome::Disk };
+        self.push_entry(name, len, Some(body), origin)
+    }
+
+    fn push_entry(
+        &self,
+        name: Box<str>,
+        len: u32,
+        body: Option<Body>,
+        origin: Origin,
     ) -> Result<FileId, LocSpaceExhausted> {
         let mut alloc = lock(&self.alloc);
         let start = alloc.next_file;
-        let end = start + text.len() as u64 + 1;
+        let end = start + u64::from(len) + 1;
         if end > FILE_SPACE_END {
             return Err(LocSpaceExhausted);
+        }
+        let cell = OnceLock::new();
+        if let Some(b) = body {
+            let _ = cell.set(b);
         }
         let idx = self.files.push(FileEntry {
             start: start as u32,
             name,
-            text: text.into_boxed_str(),
-            report,
+            len,
+            origin,
+            body: cell,
             lines: OnceLock::new(),
             line_directives: RwLock::new(Vec::new()),
         });
@@ -802,7 +1040,7 @@ impl SourceManager {
 
     /// The buffer's text: always valid UTF-8.
     pub fn text(&self, file: FileId) -> &str {
-        &self.file(file).text
+        self.file(file).text()
     }
 
     /// The buffer's name: the path as first loaded, or the virtual name.
@@ -812,7 +1050,7 @@ impl SourceManager {
 
     /// Decoding report for the buffer (empty for virtual buffers).
     pub fn load_report(&self, file: FileId) -> &LoadReport {
-        &self.file(file).report
+        &self.file(file).body().report
     }
 
     /// The location of byte `offset` of `file`. `offset == text.len()` is
@@ -886,6 +1124,9 @@ impl SourceManager {
     /// ending in a terminator is column 1 of the (empty) line after it.
     pub fn line_col(&self, loc: Loc) -> Option<LineCol> {
         let (file, f, off) = self.find_file(self.expansion_loc(loc))?;
+        if !f.available() {
+            return None;
+        }
         let (line, col) = line_col_in(f.line_starts(), off);
         Some(LineCol { file, line, col })
     }
@@ -900,11 +1141,15 @@ impl SourceManager {
     /// line does not exist.
     pub fn line_text(&self, file: FileId, line: u32) -> Option<&str> {
         let f = self.file(file);
+        if !f.available() {
+            return None;
+        }
         let starts = f.line_starts();
         let i = (line as usize).checked_sub(1)?;
         let start = *starts.get(i)? as usize;
-        let end = starts.get(i + 1).map_or(f.text.len(), |&e| e as usize);
-        let s = &f.text[start..end];
+        let text = f.text();
+        let end = starts.get(i + 1).map_or(text.len(), |&e| e as usize);
+        let s = &text[start..end];
         let s = s.strip_suffix('\n').unwrap_or(s);
         Some(s.strip_suffix('\r').unwrap_or(s))
     }
@@ -916,13 +1161,13 @@ impl SourceManager {
         let (lo_file, f, lo) = self.find_file(self.spelling_loc(span.lo))?;
         if let Some(d) = self.same_entry_distance(span.lo, span.hi) {
             // Same entry: the spelled range is as long as the span.
-            return f.text.get(lo as usize..(lo + d) as usize);
+            return f.text().get(lo as usize..(lo + d) as usize);
         }
         let (hi_file, _, hi) = self.find_file(self.spelling_loc(span.hi))?;
         if lo_file != hi_file || lo > hi {
             return None;
         }
-        f.text.get(lo as usize..hi as usize)
+        f.text().get(lo as usize..hi as usize)
     }
 
     // ----- macro expansions ----------------------------------------------
@@ -1190,6 +1435,9 @@ impl SourceManager {
     /// before it. A line number that would exceed `u32::MAX` saturates.
     pub fn presumed_line_col(&self, loc: Loc) -> Option<PresumedLoc<'_>> {
         let (file, f, off) = self.find_file(self.expansion_loc(loc))?;
+        if !f.available() {
+            return None;
+        }
         let (line, col) = line_col_in(f.line_starts(), off);
         let directive = {
             let dirs = f.line_directives.read().unwrap_or_else(PoisonError::into_inner);

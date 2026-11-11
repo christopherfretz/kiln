@@ -25,6 +25,7 @@
 pub mod activity;
 mod arena;
 pub mod fx;
+pub mod hash;
 mod loc;
 mod manager;
 pub mod symbol;
@@ -32,6 +33,7 @@ pub mod trace;
 
 pub use loc::{FileId, Loc, Span};
 pub use manager::{
-    ExpansionInfo, ExpansionKind, FileKind, LineCol, LoadError, LoadReport, LocSpaceExhausted,
-    PresumedLoc, Replacement, SourceManager, SourcePathStyle, read_open_file,
+    ExpansionInfo, ExpansionKind, FileKind, LazyCopy, LazyFile, LazyOutcome, LineCol, LoadError,
+    LoadReport, LocSpaceExhausted, PresumedLoc, Replacement, SourceManager, SourcePathStyle,
+    read_open_file,
 };
