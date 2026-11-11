@@ -776,8 +776,9 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
 - `xtask/src/bench/pch.rs`: the command lines of every case and variant
   (never `/dev/null`, every output a placeholder), the case files present,
   the `-v` notes and the path they give, wall time not judged unless asked
-  (a 3x slower run passes, 3% more memory passes, 10% more regresses), regions replaced in
-  place and added after the last one, the hand-reproduction lines,
+  (a 3x slower run passes, 3% more memory passes, 10% more regresses),
+  regions replaced in place and added after the last one, the
+  hand-reproduction lines,
   explicit selection (a file under `bench/pch` refused), and the whole
   bench root skipping the group.
 - `xtask/src/bench/entry.rs` `rejects_bad_headers`: `mode: pch-build`
