@@ -8443,13 +8443,28 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// True if `ctx`, the home of a tag hoisted out of a C member list
+    /// ([`Self::tag_decl_context`]), is a function: the tag (or an
+    /// enumerator of it) is then a block-scope name.
+    fn c_hoisted_to_block(&self, ctx: DeclId) -> bool {
+        self.is_c() && self.kind_of(ctx).is_function()
+    }
+
+    /// True if an unscoped enumerator of enumeration `e` is a block-scope
+    /// name: declared in a block, or (C) in a member list in a block.
+    fn enumerator_is_local(&self, e: DeclId) -> bool {
+        self.in_local_scope()
+            || self.ast.decls.get(e).ctx().is_some_and(|c| self.c_hoisted_to_block(c))
+    }
+
     /// The scope a new tag declared by `struct S;`-style uses goes into
     /// ([basic.scope.pdecl]/7): the nearest enclosing namespace or block
     /// scope, skipping classes and prototypes for a mere reference.
-    /// C17 6.2.1p4 (clang `getNonFieldDeclScope`): in C a named tag
+    /// C17 6.2.1p4 (clang `getNonFieldDeclScope`): in C a named tag, or
+    /// any enumeration (whose enumerators then reach file or block scope),
     /// declared in a member list is declared in the enclosing scope.
-    fn tag_decl_context(&self, use_: TagUse, named: bool) -> DeclId {
-        if use_ != TagUse::Reference && !(self.is_c() && named) {
+    fn tag_decl_context(&self, use_: TagUse, hoist: bool) -> DeclId {
+        if use_ != TagUse::Reference && !(self.is_c() && hoist) {
             return self.ctx;
         }
         let mut ctx = self.ctx;
@@ -9006,8 +9021,9 @@ impl Sema<'_, '_> {
                 self.module_check_export_member(q, &s, nloc);
             }
         }
-        let ctx =
-            qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_, name.is_some())));
+        let ctx = qualifier.unwrap_or_else(|| {
+            self.tag_home(self.tag_decl_context(use_, name.is_some() || is_enum))
+        });
         // The parameter hid the lookup: the tag the reference declares is
         // the home context's own, if it has one (clang's redeclaration
         // lookup in the injection scope).
@@ -9073,7 +9089,7 @@ impl Sema<'_, '_> {
             return d;
         }
         if let Some((n, _)) = name
-            && self.in_local_scope()
+            && (self.in_local_scope() || self.c_hoisted_to_block(ctx))
             && qualifier.is_none()
             && !conflict
         {
@@ -9947,7 +9963,7 @@ impl Sema<'_, '_> {
                 self.take_annotations(d, &mut attrs);
                 let _ = self.builder().attach_attrs(d, &attrs);
             }
-            if !scoped && self.in_local_scope() {
+            if !scoped && self.enumerator_is_local(e) {
                 self.push_local(name, d);
             }
             return d;
@@ -10009,7 +10025,7 @@ impl Sema<'_, '_> {
             self.take_annotations(d, &mut attrs);
             let _ = self.builder().attach_attrs(d, &attrs);
         }
-        if !scoped && self.in_local_scope() {
+        if !scoped && self.enumerator_is_local(e) {
             self.push_local(name, d);
         }
         if let Some(b) = self.enums.last_mut() {

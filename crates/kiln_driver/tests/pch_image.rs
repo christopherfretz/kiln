@@ -200,9 +200,10 @@ fn check_reports_a_mismatch() {
 }
 
 /// A header edited after the PCH was built: `load` still runs the
-/// fingerprint check, which rejects it; without the check the record
-/// itself notices (spec/modules.md §11.13, the file table's lengths and
-/// hashes), here when it reads the changed file's spellings.
+/// fingerprint check, which rejects it; without the check the consumer
+/// finds the file's text changed (spec/modules.md §11.13, the file
+/// table's lengths and hashes) and replays the header (WP-1036), even
+/// for an edit that keeps the file's size.
 #[test]
 fn stale_header_rejected() {
     let d = setup("stale");
@@ -216,11 +217,19 @@ fn stale_header_rejected() {
         o.stderr
     );
     assert_eq!(o.stdout, "");
-    std::fs::write(d.join("s.cpp"), "G\n").unwrap();
-    let load = ["-fkiln-pch-image=load", "-include-pch", "h.pch", "-E", "s.cpp"];
-    let o = kiln(&d, &[&["-Xclang", "-fno-validate-pch"][..], &load].concat());
-    assert_eq!(o.code, 1, "{}", o.stderr);
-    assert!(o.stderr.contains("cannot load the preprocessor-state record"), "{}", o.stderr);
+    for mode in ["-E", "-fsyntax-only"] {
+        std::fs::write(d.join("s.cpp"), "int s = G;\n").unwrap();
+        let load = ["-fkiln-pch-image=load", "-include-pch", "h.pch", mode, "s.cpp"];
+        let o = ok(&d, &[&["-v", "-Xclang", "-fno-validate-pch"][..], &load].concat());
+        assert!(
+            o.stderr.contains("note: precompiled header 'h.pch' is replayed: 'g.h' changed"),
+            "{}",
+            o.stderr
+        );
+        if mode == "-E" {
+            assert!(o.stdout.contains("int s = 9;"), "{}", o.stdout);
+        }
+    }
 }
 
 /// A PCH built without the record is replayed, with a warning.

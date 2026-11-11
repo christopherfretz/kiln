@@ -315,6 +315,7 @@ impl CodegenJob<'_> {
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        let pch = crate::pch_image::sema_load(a, &pp, sm, engine).ok()?;
         let popts = ParseOptions {
             exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
             rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
@@ -343,6 +344,7 @@ impl CodegenJob<'_> {
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
+            pch,
             ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();
@@ -593,6 +595,10 @@ pub fn compile(
             warn_unused_link_inputs(args, inputs, &drv);
         }
     }
+    if check_asm_opts(args, phase, sources, &drv) {
+        drv.flush();
+        return 1;
+    }
     let temp = TempDir::new();
     let plan = plan(args, tc, inputs, phase, &temp);
     if args.deps.cdb_fragment.is_some() {
@@ -636,6 +642,31 @@ pub fn compile(
     status.max(i32::from(drv.error_count() > 0))
 }
 
+/// The `-Wa,` / `-Xassembler` checks (spec/driver.md "Assembler
+/// options", WP-1288): clang checks the values only when a source is
+/// assembled (`-c`, or a link); `-S` and `-emit-llvm` never look at them.
+/// Without a source they are unused: `-Wa,` always, `-Xassembler` only
+/// under `-c` (clang's link job claims it silently). Returns true on an
+/// error.
+fn check_asm_opts(args: &Args, phase: Phase, sources: usize, drv: &DiagEngine<'_>) -> bool {
+    if args.asm.is_empty() || !matches!(phase, Phase::Object | Phase::Link) {
+        return false;
+    }
+    if sources > 0 {
+        let (errors, _) = args.asm_check();
+        for e in &errors {
+            crate::emit_arg_error(e, drv);
+        }
+        return !errors.is_empty();
+    }
+    if !args.quiet_unused_arguments {
+        for o in args.asm.iter().filter(|o| phase == Phase::Object || o.opt == "-Wa,") {
+            Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(&o.arg).emit(drv);
+        }
+    }
+    false
+}
+
 /// `<x>: 'linker' input unused` and `argument unused during compilation`
 /// for a compile-only run, in command-line order.
 fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>) {
@@ -649,9 +680,10 @@ fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>)
                     Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(&o.arg).emit(drv);
                 }
                 LinkOptKind::Silent => {}
-                LinkOptKind::Xlinker => {
+                LinkOptKind::Xlinker | LinkOptKind::Rpath => {
+                    let opt = o.kind.separate().unwrap_or_default();
                     Diag::new(DiagId::drv_linker_input_unused, Span::INVALID)
-                        .arg(format!("-Xlinker {}", o.arg))
+                        .arg(format!("{opt} {}", o.arg))
                         .emit(drv);
                 }
             }
@@ -1163,8 +1195,8 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     }
     let opts_at = |cmd: &mut Command, pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
-            if o.kind == LinkOptKind::Xlinker {
-                cmd.arg("-Xlinker");
+            if let Some(opt) = o.kind.separate() {
+                cmd.arg(opt);
             }
             cmd.arg(o.arg.clone());
         }
@@ -1406,7 +1438,23 @@ fn frontend(
         diag_opts,
         stderr: io.stderr.clone(),
     };
-    let (ir, _, deps) = CodegenJob(job).run();
+    let checked = crate::pch_check::codegen(
+        args,
+        &crate::pch_check::Input {
+            tc,
+            std,
+            path: &input.path,
+            stdin_text: job.stdin_text.clone(),
+            diag_opts,
+            stderr: &io.stderr,
+        },
+    );
+    let (ir, deps) = if let Some(r) = checked {
+        r
+    } else {
+        let (ir, _, deps) = CodegenJob(job).run();
+        (ir, deps)
+    };
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
     {

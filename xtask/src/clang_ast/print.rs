@@ -1203,6 +1203,12 @@ impl<'a> Printer<'a, '_> {
                 line = l;
                 kids_out = self.kid_trees(n)?;
             }
+            // GNU `__label__ a;` (WP-1288): `LabelDecl [used] a`.
+            "LabelDecl" => {
+                let mut l = decl_head(n, k);
+                push_opt(&mut l, name(n));
+                line = l;
+            }
             "NamespaceAliasDecl"
             | "UsingDirectiveDecl"
             | "UsingShadowDecl"

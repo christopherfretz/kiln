@@ -117,6 +117,7 @@ parse_gnu_auto_type = Extension [GnuAutoType] (0) "'__auto_type' is a GNU extens
 parse_gnu_case_range = Extension [GnuCaseRange] (0) "case ranges are a GNU extension";
 parse_gnu_case_range_19 = Extension [GnuCaseRange] (0) "use of GNU case range extension";
 parse_gnu_indirect_goto = Extension [GnuLabelAsValue] (0) "use of GNU indirect-goto extension";
+parse_gnu_old_style_field_designator = Extension [GnuDesignator] (0) "use of GNU old-style field designator extension";
 parse_incomplete_array_member_init = Error (0) "array bound cannot be deduced from a default member initializer";
 parse_init_list_bin_op = Error (2) "initializer list cannot be used on the {0:left|right} hand side of operator '{1}'";
 parse_invalid_decl_spec_combination = Error (1) "cannot combine with previous '{0}' declaration specifier";

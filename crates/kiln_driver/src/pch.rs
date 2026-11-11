@@ -14,6 +14,7 @@
 //! `end` line, the header's preprocessor state (spec/modules.md §11.13;
 //! `crate::pch_image`), framed by an `image <len>\t<sum>` line.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use kiln_diag::{Diag, DiagId, DiagOptions};
@@ -21,7 +22,10 @@ use kiln_pp::CmdMacro;
 use kiln_pp::bmi;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, DepHeaders, IncludePchOrder, Input, PchImage, PchImageUse};
+use crate::args::{
+    Action, Args, DepHeaders, IncludePchOrder, Input, PchCheckLoad, PchDeclsUse, PchImage,
+    PchImageUse,
+};
 use crate::codegen_cmd::{self, Phase};
 use crate::deps::DepList;
 use crate::toolchain::{LangStd, Toolchain};
@@ -384,6 +388,10 @@ fn cwd() -> PathBuf {
 /// header replayed as `-include`s and its input files seeded into the
 /// dependency output. `Ok(None)` without `-include-pch`; `Err(())` after
 /// reporting a rejected PCH (the compile stops, as clang's does).
+// One decision per path (`-E`/`-M`, the image, replay), in the order
+// the record and the image are checked: split, each part would take
+// the same dozen locals.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn consumer(
     args: &Args,
     tc: &Toolchain,
@@ -446,21 +454,51 @@ pub(crate) fn consumer(
         }
     };
     let mut out = args.clone();
-    let image = image_section(args, pch, &rec, preprocess, &e);
-    if preprocess {
-        if let Some(bytes) = image.clone()
-            && args.pch.image == PchImage::Load
-        {
-            // `-fkiln-pch-image=load`: the record stands in for the
-            // header, so the header must be the one it was built from.
-            if !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
-                finish(e);
-                return Err(());
+    let Ok(image) = image_section(args, pch, &rec, &e) else {
+        finish(e);
+        return Err(());
+    };
+    let load = args.pch.image == PchImage::Load;
+    // `load` stands the record (and for a compile the declaration image)
+    // in for the header, so the header must be the one it was built
+    // from: the fingerprint's check, then every file's text (a stale
+    // file, which `-fno-validate-pch` lets through, is replayed).
+    let checked = load && image.is_some();
+    let lines = u32::try_from(rec.includes.len() + 1).unwrap_or(u32::MAX);
+    if checked && !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
+        finish(e);
+        return Err(());
+    }
+    let stale = || rec.files.iter().find_map(|f| stale_file(f)).map(|n| format!("'{n}' changed"));
+    // `check` keeps replaying a stale header against the record (which
+    // reports the difference) but builds no image beside it.
+    let mut stale_why = None;
+    let image = match image {
+        Some(s) if !preprocess || load => match stale() {
+            Some(why) => {
+                note_path(args, stderr, pch, Err(&why));
+                stale_why = Some(why);
+                if load { None } else { Some(s) }
             }
+            None => Some(s),
+        },
+        s => s,
+    };
+    if preprocess {
+        if let Some(s) = &image
+            && load
+        {
             out.includes =
                 args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
-            out.pch.image_use =
-                Some(PchImageUse { pch: pch.to_owned(), bytes, install: true, checkpoint: 0 });
+            let lines = u32::try_from(1 + args.includes.len() - out.includes.len()).unwrap_or(1);
+            out.pch.image_use = Some(PchImageUse {
+                pch: pch.to_owned(),
+                bytes: std::sync::Arc::clone(&s.pp),
+                install: true,
+                checkpoint: 0,
+                decls: None,
+                lines,
+            });
             out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
             finish(e);
             return Ok(Some(out));
@@ -468,66 +506,195 @@ pub(crate) fn consumer(
         // clang `-E` does not load the PCH: it preprocesses the header the
         // PCH was built from, then the `-include`s (no checks).
         out.includes = std::iter::once(resolve(&rec.main)).chain(args.includes.clone()).collect();
-        out.pch.image_use = image.map(|bytes| PchImageUse {
+        let image = image.filter(|_| !load);
+        if let Some(s) = &image
+            && !rec.includes.is_empty()
+        {
+            // `check`: the record covers the producer's `-include`s,
+            // which `-E` does not replay; a replay of them and the
+            // header with no output checks it.
+            let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
+            includes.push(resolve(&rec.main));
+            let record = PchImageUse {
+                pch: pch.to_owned(),
+                bytes: std::sync::Arc::clone(&s.pp),
+                install: false,
+                checkpoint: lines,
+                decls: None,
+                lines: 0,
+            };
+            let input =
+                crate::pch_check::Input { tc, std, path: "-", stdin_text: None, diag_opts, stderr };
+            let ok = crate::pch_check::preprocess_record(args, &input, includes, record);
+            finish(e);
+            return if ok { Ok(Some(out)) } else { Err(()) };
+        }
+        out.pch.image_use = image.map(|s| PchImageUse {
             pch: pch.to_owned(),
-            bytes,
+            bytes: s.pp,
             install: false,
             checkpoint: 1,
+            decls: None,
+            lines: 0,
         });
         finish(e);
         return Ok(Some(out));
     }
-    if !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
+    if !checked && !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
         finish(e);
         return Err(());
     }
-    // A compile replays the producer's `-include`s, then the header.
+    out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+    // WP-1036: the record and the declaration image stand in for the
+    // producer's `-include`s and the header, or neither does (`check`:
+    // the compile is also run so, and compared with replay).
+    let variant = match &image {
+        Some(s) if stale_why.is_none() => {
+            match s.decls.as_deref().map(kiln_sema::PchDecls::decode) {
+                Some(Ok(d)) => {
+                    note_path(args, stderr, pch, Ok(d.decls()));
+                    Some(PchCheckLoad {
+                        includes: args
+                            .includes
+                            .iter()
+                            .filter(|i| !rec.includes.contains(i))
+                            .cloned()
+                            .collect(),
+                        image_use: PchImageUse {
+                            pch: pch.to_owned(),
+                            bytes: std::sync::Arc::clone(&s.pp),
+                            install: true,
+                            checkpoint: 0,
+                            decls: Some(PchDeclsUse {
+                                image: std::sync::Arc::new(d),
+                                header: replay_name(&resolve(&rec.main)),
+                            }),
+                            lines,
+                        },
+                    })
+                }
+                Some(Err(why)) => {
+                    Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)
+                        .arg(format!("{why} in kiln PCH '{pch}'"))
+                        .emit(&e);
+                    finish(e);
+                    return Err(());
+                }
+                None => {
+                    note_path(args, stderr, pch, Err("it has no declaration image"));
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    if load && let Some(v) = variant {
+        out.includes = v.includes;
+        out.pch.image_use = Some(v.image_use);
+        finish(e);
+        return Ok(Some(out));
+    }
+    // A compile replays the producer's `-include`s, then the header
+    // (`check`: and compares the state reached with the record).
     let checkpoint = u32::try_from(rec.includes.len() + 1).unwrap_or(u32::MAX);
-    out.pch.image_use =
-        image.map(|bytes| PchImageUse { pch: pch.to_owned(), bytes, install: false, checkpoint });
+    out.pch.image_use = image.filter(|_| !load).map(|s| PchImageUse {
+        pch: pch.to_owned(),
+        bytes: s.pp,
+        install: false,
+        checkpoint,
+        decls: None,
+        lines: 0,
+    });
     finish(e);
     let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
     includes.push(resolve(&rec.main));
     includes.extend(args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned());
     out.includes = includes;
-    out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+    out.pch.check_load = variant.map(Box::new);
     Ok(Some(out))
 }
 
-/// The preprocessor-state record of `rec` (its `SECTION_PP` section)
-/// for `-fkiln-pch-image=check`/`load`, or `None` (with a warning when
-/// one was asked for but cannot be used: the header is then replayed
-/// unchecked).
+/// The buffer name replay's `-include <spelled>` gives the header: found
+/// from the predefines, so in the working directory (`kiln_pp`'s
+/// resolver, `HeaderSearch::LookupFile`).
+fn replay_name(spelled: &str) -> String {
+    if spelled.starts_with('/') { spelled.to_owned() } else { kiln_pp::join_path(".", spelled) }
+}
+
+/// The name of `f` when its text is no longer the one recorded.
+fn stale_file(f: &FileEntry) -> Option<&str> {
+    let ok = std::fs::read(&f.abs)
+        .is_ok_and(|b| b.len() as u64 == f.size && bmi::checksum(&b) == f.hash);
+    (!ok).then_some(f.spelled.as_str())
+}
+
+/// `-v`: which path a consumer of `pch` takes (WP-1036): the
+/// declaration image (`Ok`: its declaration count) or a replay of the
+/// header, and why.
+fn note_path(args: &Args, stderr: &SharedWriter, pch: &str, path: Result<usize, &str>) {
+    if !args.verbose {
+        return;
+    }
+    let mut err = stderr.clone();
+    let _ = match path {
+        Ok(n) => writeln!(err, "note: precompiled header '{pch}': declaration image ({n} records)"),
+        Err(why) => writeln!(err, "note: precompiled header '{pch}' is replayed: {why}"),
+    };
+}
+
+/// A PCH's `-fkiln-pch-image` sections.
+struct Sections {
+    /// The preprocessor-state record (`SECTION_PP`).
+    pp: std::sync::Arc<Vec<u8>>,
+    /// The declaration image (`SECTION_IMAGE`), when the producer
+    /// carried every declaration of the header.
+    decls: Option<Vec<u8>>,
+}
+
+/// The `-fkiln-pch-image` sections of `rec` for `check`/`load`, or
+/// `None` (with a warning when one was asked for but cannot be used: the
+/// header is then replayed unchecked); `Err` after reporting a damaged
+/// section block.
 fn image_section(
     args: &Args,
     pch: &str,
     rec: &Record,
-    preprocess: bool,
     e: &kiln_diag::DiagEngine<'_>,
-) -> Option<std::sync::Arc<Vec<u8>>> {
+) -> Result<Option<Sections>, ()> {
     if !matches!(args.pch.image, PchImage::Check | PchImage::Load) {
-        return None;
+        return Ok(None);
     }
     let unusable = |why: &str| {
         Diag::new(DiagId::drv_pch_image_unusable, Span::INVALID).arg(pch).arg(why).emit(e);
         None
     };
     let Some(img) = &rec.image else {
-        return unusable("it was built without -fkiln-pch-image");
+        return Ok(unusable("it was built without -fkiln-pch-image"));
     };
-    if preprocess && args.pch.image == PchImage::Check && !rec.includes.is_empty() {
-        // `-E` replays only the header, not the producer's `-include`s
-        // the record covers.
-        return unusable("it was built with -include, which -E does not replay");
-    }
     let sections = match bmi::read_sections(img) {
         Ok(s) => s,
-        Err(err) => return unusable(&err.to_string()),
+        Err(err) => {
+            // The block is checksummed: a damaged PCH, not one to guess
+            // around (WP-1036).
+            Diag::new(DiagId::drv_pch_corrupt, Span::INVALID)
+                .arg(format!("{err} in kiln PCH image sections '{pch}'"))
+                .emit(e);
+            return Err(());
+        }
     };
-    match sections.into_iter().find(|s| s.tag == bmi::SECTION_PP) {
-        Some(s) => Some(std::sync::Arc::new(s.bytes)),
-        None => unusable("it has no preprocessor-state section"),
+    let mut pp = None;
+    let mut decls = None;
+    for s in sections {
+        match s.tag {
+            bmi::SECTION_PP => pp = Some(std::sync::Arc::new(s.bytes)),
+            bmi::SECTION_IMAGE => decls = Some(s.bytes),
+            _ => {}
+        }
     }
+    Ok(match pp {
+        Some(pp) => Some(Sections { pp, decls }),
+        None => unusable("it has no preprocessor-state section"),
+    })
 }
 
 /// The first file in the directory `dir`, by name, that is a kiln PCH
@@ -984,6 +1151,21 @@ fn write_pch(
         }
         None => None,
     };
+    if args.verbose && image.is_some() {
+        // WP-1036: the path a `load` consumer takes.
+        let mut err = io.stderr.clone();
+        let _ = match r.pch_decls {
+            Some(Ok(n)) => writeln!(
+                err,
+                "note: precompiled header '{out}': consumers use its declaration image ({n} records)"
+            ),
+            Some(Err(why)) => writeln!(
+                err,
+                "note: precompiled header '{out}': consumers replay the header: {why}"
+            ),
+            None => Ok(()),
+        };
+    }
     let Some(list) = r.dep_list else { return 0 };
     let list = list.borrow();
     let here = cwd();

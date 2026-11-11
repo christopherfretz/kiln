@@ -779,14 +779,19 @@ impl Cg<'_> {
         }
         // clang `EmitIntToBoolConversion`: a logical value zero-extended
         // and wanted as a logical value again is the `i1` itself (the
-        // `zext` is zapped when nothing else uses it).
+        // `zext` is zapped when nothing else uses it). A value bound to an
+        // `OpaqueValueExpr` (the common operand of `a ?: b`, a pseudo-object
+        // or array-init source) is used again later: clang's
+        // `protectFromPeepholes` keeps it, so the `zext` stays.
         if let V::I(_) = v {
             let i = Fir::last_inst(v);
             if let Op::Cast { op: CastOp::ZExt, v: inner, .. } = *self.f.fir.op(i)
                 && self.f.fir.ty(&self.m, inner) == LTy::I1
             {
                 let last = self.f.fir.cur().and_then(|b| self.f.fir.block_insts(b).last().copied());
-                if last == Some(i) || self.f.fir.uses(v) == 0 {
+                let bound =
+                    self.f.opaque.values().any(|o| matches!(o, Opaque::Rv(Some(x)) if *x == v));
+                if !bound && (last == Some(i) || self.f.fir.uses(v) == 0) {
                     self.f.fir.erase(i);
                 }
                 return inner;

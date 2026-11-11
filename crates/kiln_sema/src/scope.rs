@@ -67,6 +67,10 @@ pub struct Scope {
     /// the point of declaration to the end of the block
     /// ([basic.lookup.unqual]/4, [over.match.oper]/3.2, [lex.ext]/5).
     pub local_names: Vec<(DeclName, DeclId)>,
+    /// GNU local labels (`__label__ name;`) declared at the start of this
+    /// block: they shadow the function's labels of the same name inside
+    /// it (spec/sema.md §7.4).
+    pub labels: Vec<(Symbol, DeclId)>,
     /// Namespaces nominated by `using namespace` in this scope.
     pub using_dirs: Vec<DeclId>,
     /// The NRVO candidate of this scope (spec/sema-class.md §5.5).
@@ -109,6 +113,7 @@ impl Scope {
             locals: Vec::new(),
             local_ops: Vec::new(),
             local_names: Vec::new(),
+            labels: Vec::new(),
             using_dirs: Vec::new(),
             nrvo: NrvoState::default(),
             try_barrier: false,

@@ -3203,9 +3203,17 @@ impl Parser<'_, '_> {
                 // initializer, the parentheses are a function declarator
                 // only if they could be a parameter clause. A member
                 // declarator has no direct-initializer (`direct_init` is
-                // unset), so there `(` always starts its parameters.
+                // unset), so there `(` always starts its parameters. C has
+                // no direct-initializer (clang `isCXXFunctionDeclarator`
+                // runs for C++ only): `struct S f(s1, n)` with `s1` a
+                // variable is a K&R identifier list.
                 let mut ambiguous = false;
-                if !abstract_ok && d.direct_init && !d.grouping && d.name.is_some() {
+                if !abstract_ok
+                    && d.direct_init
+                    && !d.grouping
+                    && d.name.is_some()
+                    && !self.s.is_c()
+                {
                     let (function, amb) = self.is_cxx_function_declarator(d.name.map(|n| n.0));
                     if !function {
                         break;
@@ -5093,6 +5101,52 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The C99 designators of one initializer (`.name`, `[index]`, GNU
+    /// `[first ... last]`), appended to `designator`. On an error the list
+    /// is skipped through its `}` and `Err` returned.
+    fn parse_designators(&mut self, designator: &mut Vec<Designator>) -> Result<(), ()> {
+        loop {
+            if self.at(Punct::Period) {
+                self.bump();
+                let Some(n) = self.ident() else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                let l = self.bump().span.lo;
+                designator.push(Designator::Field(n, l));
+            } else if self.at(Punct::LSquare)
+                && (!designator.is_empty() || self.array_designator_start())
+            {
+                let l = self.bump().span.lo;
+                let Some(e) = self.parse_constant_expr() else {
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                // A GNU array range designator `[first ... last]`.
+                let range = if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
+                    let d = self.s.diag(DiagId::sema_gnu_array_range, ellipsis);
+                    self.emit(d);
+                    let Some(last) = self.parse_constant_expr() else {
+                        self.skip_until(&[Punct::RBrace], false, true);
+                        return Err(());
+                    };
+                    Some((last, ellipsis))
+                } else {
+                    None
+                };
+                self.expect_closing(Punct::RSquare, Punct::LSquare, l);
+                designator.push(match range {
+                    Some((last, ellipsis)) => Designator::Range(e, last, l, ellipsis),
+                    None => Designator::Index(e, l),
+                });
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// [`Self::parse_init_list`], with whether the designations were
     /// valid instead of dropping the list.
     fn parse_init_list_checked(&mut self) -> Result<(InitList, bool), ()> {
@@ -5104,49 +5158,30 @@ impl Parser<'_, '_> {
         let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let mut designator = Vec::new();
-            loop {
-                if self.at(Punct::Period) {
-                    self.bump();
-                    let Some(n) = self.ident() else {
-                        self.error_here(DiagId::parse_expected_unqualified_id);
-                        self.skip_until(&[Punct::RBrace], false, true);
-                        return Err(());
-                    };
-                    let l = self.bump().span.lo;
-                    designator.push(Designator::Field(n, l));
-                } else if self.at(Punct::LSquare)
-                    && (!designator.is_empty() || self.array_designator_start())
-                {
-                    let l = self.bump().span.lo;
-                    let Some(e) = self.parse_constant_expr() else {
-                        self.skip_until(&[Punct::RBrace], false, true);
-                        return Err(());
-                    };
-                    // A GNU array range designator `[first ... last]`.
-                    let range = if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
-                        let d = self.s.diag(DiagId::sema_gnu_array_range, ellipsis);
-                        self.emit(d);
-                        let Some(last) = self.parse_constant_expr() else {
-                            self.skip_until(&[Punct::RBrace], false, true);
-                            return Err(());
-                        };
-                        Some((last, ellipsis))
-                    } else {
-                        None
-                    };
-                    self.expect_closing(Punct::RSquare, Punct::LSquare, l);
-                    designator.push(match range {
-                        Some((last, ellipsis)) => Designator::Range(e, last, l, ellipsis),
-                        None => Designator::Index(e, l),
-                    });
-                } else {
-                    break;
-                }
+            // A GNU old-style field designator `name: value` (clang
+            // `ParseInitializerWithPotentialDesignator`), in C and C++:
+            // `.name = value`, with no `=` and nothing after it.
+            let old_style = self.peek_is(1, Punct::Colon) && self.ident().is_some();
+            if old_style && let Some(n) = self.ident() {
+                let name = self.bump().span;
+                let colon = self.bump().span;
+                let fix = format!(".{} = ", self.s.ast.symbols().as_str(n));
+                let d = self
+                    .s
+                    .diag(DiagId::parse_gnu_old_style_field_designator, name.lo)
+                    .range(Span::new(name.lo, colon.hi))
+                    .fixit(FixIt::replace(Span::new(name.lo, colon.hi), fix));
+                self.emit(d);
+                designator.push(Designator::Field(n, name.lo));
+            }
+            if !old_style {
+                self.parse_designators(&mut designator)?;
             }
             if !designator.is_empty() && !self.s.act_on_designation(&designator) {
                 valid = false;
             }
             if !designator.is_empty()
+                && !old_style
                 && !self.at(Punct::LBrace)
                 && self.expect(Punct::Equal).is_none()
             {

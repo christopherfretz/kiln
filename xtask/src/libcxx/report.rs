@@ -397,6 +397,7 @@ mod tests {
             max_rss_kb: Some(2048),
             compile_rss_kb: Some(1024),
             first_error: None,
+            pch_path: None,
         }
     }
 

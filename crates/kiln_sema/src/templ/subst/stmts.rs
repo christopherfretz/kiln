@@ -837,6 +837,13 @@ impl Substituter<'_, '_, '_> {
             }
             DeclKind::StaticAssert => self.static_assert_decl(d).map(|x| x.0),
             DeclKind::ConstevalBlock => self.consteval_block_decl(d).map(|x| x.0),
+            // GNU `__label__ name;`: redeclared in the instantiation's
+            // block, where the substituted `goto`s and labels find it by
+            // name (clang `VisitLabelDecl`).
+            DeclKind::Label => {
+                let (name, at) = self.label_name(d)?;
+                Ok(self.sema.act_on_local_label(name, at))
+            }
             DeclKind::Using | DeclKind::UnresolvedUsingValue => self.local_using_decl(d, loc),
             // A block-scope using-directive ([namespace.udir]): the
             // nominated namespace is never dependent; redone in the
