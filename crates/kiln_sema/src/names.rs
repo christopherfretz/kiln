@@ -10,4 +10,5 @@ use crate::Sema;
 /// The diagnostic names of `sema`'s AST, at its `-fclang-compat` level.
 pub fn sema_names<'s>(sema: &'s Sema<'_, '_>) -> SemaNames<'s> {
     SemaNames::new(&sema.ast, Some(sema.diags.sm()), sema.clang_compat)
+        .with_c_lang(sema.c.map(|c| c >= kiln_lex::CStd::C23))
 }

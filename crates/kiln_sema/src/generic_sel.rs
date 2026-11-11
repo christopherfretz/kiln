@@ -86,7 +86,7 @@ impl Sema<'_, '_> {
         let matches: Vec<usize> = assocs
             .iter()
             .enumerate()
-            .filter(|(_, a)| a.ty.is_some_and(|t| self.ast.types.same_type(ctrl_ty, t)))
+            .filter(|(_, a)| a.ty.is_some_and(|t| self.generic_compatible(ctrl_ty, t)))
             .map(|(i, _)| i)
             .collect();
         if matches.len() > 1 {
@@ -118,6 +118,16 @@ impl Sema<'_, '_> {
     /// `CreateGenericSelectionExpr`'s loop): `(error, dependent)`, where
     /// `error` is a diagnostic that invalidates the selection and
     /// `dependent` is set by a dependent association type.
+    /// Whether association type `b` matches `a`: C17 6.2.7 compatibility
+    /// in C (an enumeration matches its underlying type), sameness in C++.
+    fn generic_compatible(&self, a: QualType, b: QualType) -> bool {
+        if self.is_c() {
+            conv::c_assign::compatible(self, a, b)
+        } else {
+            self.ast.types.same_type(a, b)
+        }
+    }
+
     fn check_assoc_types(&mut self, assocs: &[GenericAssoc], is_expr: bool) -> (bool, bool) {
         let (mut type_error, mut dependent) = (false, false);
         for (i, a) in assocs.iter().enumerate() {
@@ -141,7 +151,7 @@ impl Sema<'_, '_> {
             // C11 6.5.1.1p2: no two associations name compatible types.
             for b in &assocs[i + 1..] {
                 let Some(u) = b.ty else { continue };
-                if self.is_dependent_type(u) || !self.ast.types.same_type(t, u) {
+                if self.is_dependent_type(u) || !self.generic_compatible(t, u) {
                     continue;
                 }
                 let note = self.diag(DiagId::note_compat_assoc, a.ty_loc).arg(self.ty_arg(t));

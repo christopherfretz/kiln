@@ -237,6 +237,14 @@ pub struct CodegenOptions {
     /// translation unit is `nonlazybind`, and the module carries
     /// `RtLibUseGOT` (clang `CodeGenOpts.NoPLT`).
     pub no_plt: bool,
+    /// C `-fcommon`: a variable defined only by tentative definitions
+    /// has `common` linkage (clang `isVarDeclStrongDefinition`; the
+    /// default is `-fno-common`).
+    pub common: bool,
+    /// C: GNU89 `inline` semantics (`-fgnu89-inline`, or before C99):
+    /// a plain `inline` definition is external, an `extern inline` one
+    /// provides none (clang `LangOptions::GNUInline`).
+    pub gnu89_inline: bool,
     /// Signed integer overflow is defined (`-fwrapv`,
     /// `-fno-strict-overflow`; clang `SOB_Defined`): no `nsw` on signed
     /// arithmetic.
@@ -739,6 +747,8 @@ impl Default for CodegenOptions {
             stack_protector: StackProtector::Off,
             unwind_tables: Some(UnwindTables::Async),
             no_plt: false,
+            common: false,
+            gnu89_inline: false,
             static_destructors: StaticDestructors::All,
             wrapv: false,
             wrapv_pointer: false,

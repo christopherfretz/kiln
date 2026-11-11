@@ -302,7 +302,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                     Some(Punct::LParen) => Tpr::Ambiguous,
                     _ => Tpr::True,
                 },
-                Kw::Decltype | Kw::Typeof | Kw::Atomic | Kw::BitInt | Kw::ExtInt => {
+                Kw::Decltype | Kw::Typeof | Kw::TypeofUnqual | Kw::Atomic | Kw::BitInt | Kw::ExtInt => {
                     // Without `(`, `_Atomic` is the type qualifier: as `const`.
                     if self.punct_at(self.i + 1) != Some(Punct::LParen) {
                         return if k == Kw::Atomic { Tpr::True } else { Tpr::Error };
@@ -537,7 +537,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         }
         match self.kw() {
             Some(Kw::Atomic) if self.punct_at(self.i + 1) != Some(Punct::LParen) => self.i += 1,
-            Some(k @ (Kw::Decltype | Kw::Typeof | Kw::Atomic | Kw::BitInt | Kw::ExtInt)) => {
+            Some(
+                k @ (Kw::Decltype
+                | Kw::Typeof
+                | Kw::TypeofUnqual
+                | Kw::Atomic
+                | Kw::BitInt
+                | Kw::ExtInt),
+            ) => {
                 self.i += 1;
                 if !self.at(Punct::LParen) || !self.skip_group_here() {
                     return Tpr::Error;

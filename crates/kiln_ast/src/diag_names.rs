@@ -27,6 +27,8 @@ pub struct DiagNames<'s> {
     /// A function template specialization whose own arguments print with
     /// their types ([`Self::typed_args_of`]).
     typed_args: Option<DeclId>,
+    /// [`TypeNames::c_lang`]: `Some(c23)` for a C translation unit.
+    c_lang: Option<bool>,
 }
 
 impl<'s> DiagNames<'s> {
@@ -43,6 +45,7 @@ impl<'s> DiagNames<'s> {
             closure_as_lambda: clang_compat >= 22,
             clang_compat,
             typed_args: None,
+            c_lang: None,
         }
     }
 
@@ -80,6 +83,7 @@ impl<'s> DiagNames<'s> {
             closure_as_lambda: false,
             clang_compat: 22,
             typed_args: None,
+            c_lang: None,
         }
     }
 
@@ -92,6 +96,13 @@ impl<'s> DiagNames<'s> {
     #[must_use]
     pub fn typed_args_of(self, f: DeclId) -> Self {
         DiagNames { typed_args: Some(f), ..self }
+    }
+
+    /// These names, printing a C translation unit (`Some(c23)`) as
+    /// clang's C printing policy does ([`TypeNames::c_lang`]).
+    #[must_use]
+    pub fn with_c_lang(self, c_lang: Option<bool>) -> Self {
+        DiagNames { c_lang, ..self }
     }
 
     /// These names, printing a closure type in a scope as `(lambda)` at
@@ -342,6 +353,10 @@ impl DiagNames<'_> {
 impl TypeNames for DiagNames<'_> {
     fn clang_compat(&self) -> u32 {
         self.clang_compat
+    }
+
+    fn c_lang(&self) -> Option<bool> {
+        self.c_lang
     }
 
     fn specialization_args(&self, decl: DeclId) -> Option<crate::ids::ArgListId> {

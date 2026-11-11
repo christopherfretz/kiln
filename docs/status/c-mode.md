@@ -1,0 +1,620 @@
+# C mode status
+
+Where `kiln` (the C driver) stands on real C code, measured by WP-1282 on
+2026-11-11 as the input for the wave-2 C work packages (WP-243). Two builds
+were measured:
+
+- **main**: kiln at `5a58f96ab` (wp/1282, which is origin/main `cc2f76a8f`
+  plus the measurement fixes below). It has the WP-1275 C front end
+  (language bit, lexing, linkage) but none of the WP-1276 C semantics.
+- **wp/1276**: the in-flight WP-1276 branch (conversions, tentative
+  definitions, the tag namespace, K&R and implicit int, and more), built
+  read-only into a private target dir: the OSS rows at `80e415482`, the
+  torture run and every repro at `dd6ba3cf7`. It shows what is left once
+  WP-1276 lands; that remainder is the wave-2 list.
+
+The oracles are clang-19 (`clang-19 -x c`, the control for every OSS row) and
+GCC 16.1 (torture only). Re-run everything with the commands in each section;
+`cargo xtask gcc-torture` fetches the GCC tests outside the repo.
+
+## Summary
+
+- C mode on main compiles roughly 71% of gcc.c-torture cases at gnu23
+  (clang-19: 91%). With wp/1276 that rises to 86%, and the "wrong" class
+  falls from 67 to 36 cases, 34 of which clang-19 gets wrong too.
+- No C OSS row builds on main. With wp/1276, zlib is fully green (37/37 TUs,
+  6/6 tests) and sqlite3.c compiles; lua, zstd and c-ares each stop on a
+  single construct that WP-1276 does not cover (comparing a function pointer
+  with `(void *)0`, and qualifiers inside a parameter's `[ ]`).
+- grpc and simdjson keep `c = "clang"`: their C TUs do not all compile (no
+  flip re-landed).
+- Miscompiles and crashes, ranked first in every list below:
+  1. falling off the end of a non-void C function traps or is unreachable
+     on main (C allows it if the caller does not use the value). wp/1276
+     covers it at `dd6ba3cf7`;
+  2. an ICE on the GNU `a ?: b` with a logical condition, not covered by
+     wp/1276.
+
+## C OSS rows
+
+`scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)
+against `--compiler clang`. "TUs" counts the build-phase C TUs in
+`compile.jsonl`; configure-probe TUs are reported separately.
+
+| row (tag) | configure | build | tests | C TUs main | C TUs wp/1276 | clang-19 |
+|---|---|---|---|---|---|---|
+| zlib (v1.3.2) | ok | fails | 1/6 main, 6/6 wp/1276 | 22/30 | 37/37 (build and tests ok) | 37/37, 6/6 |
+| sqlite (3.54.1) | ok, 2 divergent probes | fails | not run (no `sqlite3`) | 0/2 | 1/2 (sqlite3.c ok) | 2/2, workload ok |
+| lua (v5.4.8) | n/a (make) | fails | not run (no `lua`) | 3/34 | 26/34 | 34/34, ok |
+| c-ares (v1.34.9) | ok, probes cascade | fails | 0/2 | 2/91 | 2/91 | 99/99 C + 27 C++, 2/2 |
+| zstd (v1.5.7) | ok, ASM probes fail | fails | 0/3 | 18/74 | 48/74 | 118/118, 3/3 |
+
+First blocker per row:
+
+- **zlib**, main: `void *` to object pointer conversions (`gzwrite.c:44`,
+  `inftrees.c:64`) and old-style calls (`gzlib.c:81`, "no matching function
+  for call to 'gz_error'"). All are covered by wp/1276, where the row is
+  green.
+- **sqlite**, main: the tentative definition `sqlite3WhereTrace`
+  (`sqlite3.c:24491`, "redefinition") and `void *` assignments
+  (`shell.c:1121`), both covered by wp/1276. With wp/1276, `shell.c:19268`
+  fails on `case 0xca093fa0:` in a switch on an `int` ("case value evaluates
+  to 3389603744, which cannot be narrowed"), which is not covered.
+  - Configure: `-rpath /usr/local/lib` is rejected as an unknown argument; the
+    probe falls back to `-Wl,-rpath` and succeeds.
+  - The math-library probe diverges, so kiln's link line lacks `-lm`.
+  - Three expected function probe failures print `ld: DWARF error: mangled
+    line number section (bad file number)` before the undefined reference.
+    This is cosmetic, but the object kiln wrote with `-O2 -g` has a line table
+    `ld` cannot read. It does not reproduce on a one-line TU.
+- **lua**, main: `void *` conversions and old-style calls (covered). With
+  wp/1276: 8 TUs fail on `ldebug.c:135`, "comparison of distinct pointer
+  types" for `lua_Hook` against `NULL` (not covered;
+  `tests/c/expr/fnptr-null-pointer-compare.c`).
+- **c-ares**: glibc's `netdb.h:690` declares `getaddrinfo_a(..., struct gaicb
+  *__list[__restrict_arr], ...)`; "qualifier in array size is a C99 feature,
+  not permitted in C++" fails 69 configure probes, including the `struct
+  timeval` probe. `ares_setup.h:205` then redefines `struct timeval` in 89 of
+  91 TUs. Not covered by wp/1276 (`tests/c/decl/array-param-qualifiers.c`).
+  Fixing the qualifier unblocks the whole row.
+- **zstd**, main: 40 TUs fail on `zstd.h:1880`, the `NULL` member initializer
+  of `ZSTD_customMem` (`void *` to function pointer), which is covered. With
+  wp/1276, 26 TUs fail on "comparison of distinct pointer types" (function
+  pointer against `NULL`, not covered). Configure: CMake's ASM compiler
+  identification probes `-V`, `-qversion` and others, and `kiln` rejects
+  `-Wa,--noexecstack`, so the flag is dropped from the build (clang keeps it).
+
+## grpc and simdjson C halves (`c = "kiln"`, from 95ae39b29)
+
+Both rows stay `c = "clang"`. The flip was measured with 95ae39b29 applied
+locally and is **not** re-landed:
+
+- **simdjson v4.2.4**: C 0/5 TUs (`void *` and `NULL` conversions, covered
+  by wp/1276); C++ 134/134; tests 117/117 (they do not depend on the C TUs).
+  The build exits 2 on the C TUs.
+- **grpc v1.85.1**: configured with kiln-cc for C and clang++-19 for C++. Each
+  of the 589 unique C files in `compile_commands.json` was replayed through
+  kiln and through clang-19.
+  - kiln compiles 21. clang compiles 498; the 90 clang also fails are c-ares
+    TUs that inherit kiln's broken configure probes (the timeval cascade
+    above).
+  - Clusters:
+    - 443 `third_party/upb/upb/mem/alloc.h:44`, "cannot initialize a
+      parameter of type 'size_t *' with an rvalue of type 'void *'"
+      (`NULL` passed for a pointer parameter; covered by wp/1276);
+    - 90 c-ares timeval;
+    - 17 `void *` return and 5 `void *` assignment (covered);
+    - 4 old-style call (`address_sorting_posix.c:62`, covered);
+    - 2 `__builtin_neon_vqtbl2q_v` not supported in codegen
+      (`third_party/utf8_range/utf8_range.c` via `arm_neon.h:56634`; C++ is
+      affected too, and wp/1276 does not cover it);
+    - 2 `register` (`third_party/zlib/deflate.c:1350`, covered).
+  - Slowest kiln TU 0.28 s, against 0.45 s for clang.
+
+## gcc.c-torture
+
+`cargo xtask gcc-torture --suite execute,ieee,builtins,compile --opt -O0,-O2`
+at the default `-std=gnu23` and again with `--std gnu17`, 3813 tests and 7572
+cases. The generated regions at the end of this page hold the full tables. The
+wp/1276 row is the same command with `--compiler <wp/1276 build>/kiln
+--oracles none --tsv <file>`.
+
+### Pass rate by class (cases of 7572)
+
+| run | pass | compile-reject | crash | wrong | timeout |
+|---|---:|---:|---:|---:|---:|
+| kiln main, gnu23 | 5355 (70.7%) | 2125 | 20 | 67 | 5 |
+| kiln main, gnu17 | 5353 (70.7%) | 2127 | 20 | 67 | 5 |
+| kiln wp/1276 `dd6ba3cf7`, gnu23 | 6480 (85.6%) | 1035 | 19 | 36 | 2 |
+| clang-19, gnu23 | 6887 (91.0%) | 648 | 0 | 37 | 0 |
+| clang-19, gnu17 (WP-1277 baseline) | 7057 (93.2%) | 478 | 0 | 37 | 0 |
+| GCC 16.1, gnu23 | 7572 | 0 | 0 | 0 | 0 |
+
+By suite and option set at gnu23, kiln main against clang-19 (GCC passes
+every case):
+
+- execute -O0: 1281 against 1540 (of 1677); execute -O2: 1274 against 1529;
+- ieee -O0: 59 against 64 (of 69); ieee -O2: 60 against 65;
+- builtins -O0: 21 against 35 (of 59); builtins -O2: 17 against 28;
+- compile -O0: 1321 against 1813 (of 1981); compile -O2: 1322 against 1813.
+
+kiln fails where clang-19 and GCC both pass in 1553 cases. kiln passes where
+clang fails in 21 cases, all of them clang's own wrong or reject results.
+
+### Crashes and wrong results (main, gnu23)
+
+Wrong results come first: each is a miscompile.
+
+1. **Falling off the end of a non-void function** (36 of the 37 wrong cases
+   where clang passes). C (6.9.2p12) makes it undefined only if the caller uses the
+   value; kiln emits the C++ trap at -O0 (SIGTRAP) and `unreachable` at -O2
+   (wrong exit, SIGSEGV or a run timeout: 20010122-1, pr47925, pr65956).
+   Example: execute/20000717-1.c. Covered by wp/1276 at `dd6ba3cf7` (36 of
+   the 37 pass; the other is bcp-1.c -O2, item 2). Repro:
+   WP-1276's `tests/c/run/fall-off-end.c` (and `fall-off-end-c89.c`).
+2. execute/bcp-1.c -O2: `__builtin_constant_p` of a parameter of an inlined
+   function folds to 0 in the front end, where clang emits `llvm.is.constant`
+   and lets the optimizer decide. The result is legal, so this is a note, not
+   a miscompile. execute/builtin-constant.c -O2 is the same issue under
+   wp/1276.
+3. A wp/1276 regression at `80e415482` (execute/20071202-1.c, a compound
+   literal assigned over the object it reads, and two others) was reported
+   and is fixed at `dd6ba3cf7`, which has no regression against main.
+
+Crashes:
+
+1. **ICE "phi operand %N is defined"** for GNU `a ?: b` whose condition is
+   `||` or `&&` (18 cases: pr54103-1..4, pr42716, pr44119, pr89655,
+   pr111414-1, execute/pr68249). C++ crashes too. Not covered by wp/1276.
+   Repros: `tests/c/expr/gnu-binary-conditional-logical.c`,
+   `tests/conformance/expr.cond/gnu-binary-conditional-logical-run.cpp`.
+2. compile/pr65680.c (2 cases): `struct S { int f; } a[100000000000000001][3]
+   = {0};` hits the out-of-memory abort instead of a diagnostic or a sparse
+   initializer. clang-19 compiles the C form. clang++-19 crashes on the C++
+   form, so the repro is inline here rather than a corpus test (the harness
+   never masks an out-of-memory kill with xfail).
+
+Timeouts: compile/limits-structnest.c (deeply nested structs; clang rejects it
+on its bracket-nesting limit, GCC compiles it) and the three -O2 falloff run
+timeouts above (they pass on wp/1276 at `dd6ba3cf7`).
+
+### Failure clusters, ranked
+
+Cases where kiln main fails at gnu23 and clang-19 passes, grouped by kiln's
+first diagnostic. "wp/1276" gives how many of those cases pass at
+`dd6ba3cf7`: yes means at least 90%, partial means some, no means none.
+"now wrong" counts the cases that compile under wp/1276 but run wrong.
+
+| cases | construct | kiln's first diagnostic | example | wp/1276 |
+|---:|---|---|---|---|
+| 502 | K&R definitions (`f(a, b) int a;`: identifier-list parameters parsed as type names); 10 are GNU `__label__` | unknown type name '…' | compile/20000326-2.c | partial (452/502) |
+| 157 | implicit int | a type specifier is required for all declarations | compile/900313-1.c | partial (135/157) |
+| 114 | call through an old-style (unprototyped) declaration | no matching function for call to '…' | compile/20030518-1.c | yes (109/114; 1 now wrong) |
+| 76 | `void *` and pointer assignment conversions | incompatible pointer types assigning to '…' from '…' | compile/20070529-2.c | partial (68/76) |
+| 72 | `register` storage class | ISO C++17 does not allow 'register' storage class specifier | compile/20010112-1.c | yes (68/72) |
+| 61 | pointer conversions in initializers (lvalue) | cannot initialize a variable of type '…' with an lvalue of type '…' | compile/20030904-1.c | yes (59/61) |
+| 55 | pointer conversions in initializers (rvalue) | cannot initialize a variable of type '…' with an rvalue of type '…' | compile/20040121-1.c | yes (51/55) |
+| 46 | implicit function declarations, GNU builtins | use of undeclared identifier '…' | compile/20000224-1.c | partial (24/46) |
+| 37 | falling off a non-void function (miscompile) | wrong result (SIGTRAP at -O0) | execute/20000717-1.c | yes (36/37) |
+| 26 | pointer cast to a narrower integer | cast from pointer to smaller type '…' loses information | compile/20000105-2.c | no |
+| 26 | C++ narrowing applied to C brace init (non-constant) | non-constant-expression cannot be narrowed … in initializer list | compile/icfmatch.c | no |
+| 26 | arithmetic on `void *` (GNU) | arithmetic on pointers to void / on a pointer to void | compile/20021108-1.c | no |
+| 26 | C++ narrowing applied to C brace init (constant) | constant expression evaluates to N which cannot be narrowed | compile/pr69989-2.c | no |
+| 22 | variable length arrays | variable length arrays are not supported yet | compile/20010202-1.c | no (in WP-1276's stated scope) |
+| 18 | address of a compound literal (an lvalue in C) | cannot take the address of an rvalue of type '…' | compile/compound-literal-2.c | no (in WP-1276's stated scope) |
+| 16 | GNU `a ?: b` with a logical condition (crash) | ICE: phi operand %N is defined | compile/pr111414-1.c | no |
+| 16 | redefinition (tentative definitions, compatible redeclarations) | redefinition of '…' | compile/20000120-2.c | partial (4/16) |
+| 16 | qualifier-dropping assignment (a C warning) | assigning to '…' from '…' discards qualifiers | compile/20010426-1.c | yes (16/16) |
+| 14 | uninitialized `const` object | default initialization of an object of const type '…' | compile/20041211-1.c | yes (14/14) |
+| 14 | pointer conversions in `return` (lvalue) | cannot initialize return object … with an lvalue | compile/pr93927-1.c | partial (10/14) |
+| 12 | goto past an initialized declaration | cannot jump from this goto statement to its label | compile/irreducible-loop.c | no |
+| 12 | pointer conversions in `return` (rvalue) | cannot initialize return object … with an rvalue | compile/pr111059-10.c | yes (12/12) |
+| 10 | pointer conversions in array element init | cannot initialize an array element … with an lvalue | compile/931004-1.c | yes (10/10) |
+| 10 | `_Complex` conversions | implicit conversion from '…' to '…' is not permitted in C++ | compile/complex-1.c | yes (10/10) |
+| 10 | pointer conversions in member init | cannot initialize a member subobject … with an lvalue | execute/20000722-1.c | partial (4/10) |
+| 10 | string literal that fills a char array exactly | initializer-string for char array is too long | execute/memchr-1.c | no |
+| 8 | file-scope `int a[];` (tentative array) | definition of variable with array type needs an explicit size | compile/920624-1.c | no |
+| 8 | incomplete type at a tentative definition | variable has incomplete type '…' | compile/930525-1.c | no |
+| 8 | array initialized from a string or expression (GNU) | array initializer must be an initializer list | compile/930927-1.c | no |
+| 8 | `void main` | 'main' must return 'int' | compile/BUG12.c | no |
+
+Clusters clang-19 rejects as well are not ranked; they are mostly GNU
+extensions clang does not implement. The largest are 56 nested function
+definitions ("function definition is not allowed here") and 32
+variable-length struct fields ("fields must have a constant size").
+
+### Wave-2 input: what wp/1276 leaves (gnu23, clang-19 passes)
+
+435 cases of 7572 remain at `dd6ba3cf7`, in ranked order. The falloff
+miscompile is gone; the two cases left in the wrong class are the
+`__builtin_constant_p` note (bcp-1.c and builtin-constant.c at -O2).
+
+1. 18 crash: the `?:` ICE.
+2. 74 pointer-to-narrow-integer casts (37 tests).
+3. 54 C++ narrowing in C brace initializers and case labels (non-constant 26,
+   constant 26, case labels 2; sqlite shell.c too).
+4. 36 `void *` arithmetic.
+5. 24 implicit function declarations and missing GNU builtins (12 tests:
+   `__builtin_setjmp`/`longjmp`, `__builtin_exit`, `__builtin_mul_overflow_p`,
+   `__builtin_shuffle`, implicit `memcmp` and `strlen`).
+6. 22 VLAs and 20 compound-literal lvalues (both in WP-1276's stated scope,
+   and not yet passing at `dd6ba3cf7`).
+7. 12 each:
+   - redefinition;
+   - unknown type name (10 are GNU `__label__` local labels);
+   - goto past an initializer;
+   - comparison of distinct pointer types (`pr106537-1.c`, and the lua and
+     zstd function pointer against `NULL` case);
+   - exact-fit string initializers.
+8. 8 or fewer each:
+   - tentative arrays;
+   - array init from a string;
+   - `void main`;
+   - flexible array member initialization;
+   - `restrict` on a member function;
+   - pointer and integer comparison;
+   - `void` operands of `?:`;
+   - `sizeof` of a function type;
+   - types defined in a cast, a `sizeof` or a return type;
+   - forward-referenced enums;
+   - assignment to a compound literal;
+   - qualified anonymous bit-fields.
+
+Plus, from the OSS rows:
+- `[restrict]` and `[static N]` in parameters (c-ares, all 89 TUs);
+- `__builtin_neon_vqtbl2q_v` codegen (grpc).
+
+### Xfail repros (`xfail(kiln): WP-1282 follow-up, …`, all pass under clang-19)
+
+- `tests/c/expr/gnu-binary-conditional-logical.c`: the `?:` ICE (C).
+- `tests/conformance/expr.cond/gnu-binary-conditional-logical-run.cpp`: the
+  `?:` ICE (C++).
+- `tests/c/decl/array-param-qualifiers.c`: `[restrict]` and `[static N]` in
+  parameters.
+- `tests/c/expr/fnptr-null-pointer-compare.c`: function pointer compared
+  with `(void *)0`.
+- `tests/c/expr/init-list-no-narrowing.c`: C++ narrowing in C brace
+  initializers.
+- `tests/c/expr/cast-pointer-to-narrow-integer.c`: pointer cast to a narrower
+  integer.
+- `tests/c/expr/void-pointer-arithmetic.c`: GNU `void *` arithmetic.
+- `tests/c/stmt/goto-past-initializer.c`: goto past an initialized
+  declaration.
+- `tests/c/decl/char-array-exact-string-init.c`: string literal that fills
+  the array exactly.
+- `tests/c/stmt/switch-case-value-converted.c`: case constants are converted,
+  not narrowed.
+
+## Driver and harness follow-ups (not C semantics)
+
+- Fixed here: `crates/kiln_driver/src/codegen_cmd.rs`, the link-only path.
+  It forwards library and linker inputs, so link probes such as sqlite's
+  `HAVE_LOG` no longer diverge. Unit tests are in `link_*`.
+- Fixed here: `xtask/src/gcc_tests/torture.rs`, `--report` keys its region by
+  `--std`, so the gnu23 and gnu17 runs sit side by side in this page
+  (spec/harness.md).
+- Open:
+  - `kiln` rejects `-rpath DIR` (sqlite configure);
+  - `-Wa,--noexecstack` is unknown (zstd drops it);
+  - CMake's ASM compiler identification flags (`-V`, `-qversion`, and the
+    rest) are not recognized;
+  - link errors print with a `clang++:` prefix ahead of kiln's own line;
+  - `ld` cannot read the `-O2 -g` line table of some configure probes;
+  - `__builtin_constant_p` should lower to `llvm.is.constant` (bcp-1.c);
+  - compile/limits-structnest.c times out;
+  - compile/pr65680.c runs out of memory (see Crashes).
+
+## Perf log
+
+Small C TUs: kiln's wall time is 1.3x to 1.6x clang-19's (startup and pipeline
+dominated), and its peak RSS is about 35% lower. On sqlite3.c, the one large
+C TU, kiln (wp/1276) is 11% slower and uses 20% less memory. Every entry runs
+in the row's build dir, with the flags exactly as recorded in that row's
+`compile.jsonl` (`argv`, `wall_s` and `max_rss_kb`); `<cc>` is `kiln` or
+`clang-19`.
+
+- zlib v1.3.2, `inflate.c`, from `.oss/build/zlib/<c>`:
+  - command: `<cc> -DHAVE_HIDDEN -DNO_FSEEKO -DZLIB_BUILD -DZLIB_DLL
+    -D_LARGEFILE64_SOURCE=1 -I. -I../../src/zlib -O3 -DNDEBUG -fPIC -c
+    ../../src/zlib/inflate.c`;
+  - kiln 0.384 s and 71132 KB; clang-19 0.244 s and 109744 KB.
+- zstd v1.5.7, `lib/compress/huf_compress.c`, from `.oss/build/zstd/<c>/lib`:
+  - command: `<cc> -DXXH_NAMESPACE=ZSTD_ -DZSTD_LEGACY_SUPPORT=5
+    -DZSTD_MULTITHREAD -Dlibzstd_shared_EXPORTS -I. -I<src>/build/cmake/lib
+    -Wall -Wextra -Wundef -Wshadow -Wcast-align -Wcast-qual
+    -Wstrict-prototypes -Qunused-arguments -O3 -DNDEBUG -fPIC
+    -DZSTD_DISABLE_ASM -c <src>/lib/compress/huf_compress.c`;
+  - clang also gets `-Wa,--noexecstack`;
+  - kiln 0.443 s and 70188 KB; clang-19 0.339 s and 114868 KB.
+- lua v5.4.8, `lmem.c`, from `.oss/build/lua/<c>/make`:
+  - command: `<cc> -Wall -O2 -Wfatal-errors -Wextra -Wshadow -Wundef
+    -Wwrite-strings -Wredundant-decls -Wdisabled-optimization
+    -Wdouble-promotion -Wmissing-declarations -Wdeclaration-after-statement
+    -Wmissing-prototypes -Wnested-externs -Wstrict-prototypes -Wc++-compat
+    -Wold-style-definition -std=c99 -DLUA_USE_LINUX -fno-stack-protector
+    -fno-common -c -o lmem.o lmem.c`;
+  - kiln 0.081 s and 65148 KB; clang-19 0.051 s and 101496 KB.
+- sqlite 3.54.1, `sqlite3.c` (wp/1276 build), from
+  `.oss/build/sqlite/<c>/autotools`:
+  - command: `<cc> -c <src>/sqlite3.c -o sqlite3.o -O2 -g -I. -fPIC
+    -DSQLITE_ENABLE_CARRAY -DSQLITE_ENABLE_DBPAGE_VTAB
+    -DSQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_ENABLE_FTS4 -DSQLITE_ENABLE_FTS5
+    -DSQLITE_ENABLE_GEOPOLY -DSQLITE_ENABLE_MATH_FUNCTIONS
+    -DSQLITE_ENABLE_PERCENTILE -DSQLITE_ENABLE_PREUPDATE_HOOK
+    -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_SESSION -DSQLITE_HAVE_ZLIB=1
+    -DSQLITE_THREADSAFE=1`;
+  - kiln 31.8 s and 741152 KB; clang-19 28.6 s and 926572 KB.
+
+## gcc.c-torture at -std=gnu23 (generated)
+
+Written by `cargo xtask gcc-torture --report docs/status/c-mode.md`; kiln `55efa0a42` has the same compiler as this page's main build.
+
+<!-- gcc-torture:begin (generated by cargo xtask gcc-torture) -->
+
+GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarch64-unknown-linux-gnu`.
+
+- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `55efa0a42`
+- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --profile harness`
+- kiln: kiln version 1.0.1 (C++26 frontend, LLVM IR backend)
+- gcc: gcc (GCC) 16.1.0
+- clang: Debian clang version 19.1.7 (3+b1)
+- option sets: -O0, -O2; -std=gnu23 first
+- limits: 2048 MiB address space per step (plus kiln's stack reservation); compile/link timeout 120 s, run timeout 10 s; -j 4
+- 3813 tests, 7572 cases run, 27 skip rows; wall 1026 s
+
+### Results by class (cases)
+
+| class | kiln | gcc | clang |
+|---|---:|---:|---:|
+| pass | 5355 | 7572 | 6887 |
+| compile-reject | 2125 | 0 | 648 |
+| crash | 20 | 0 | 0 |
+| wrong | 67 | 0 | 37 |
+| timeout | 5 | 0 | 0 |
+| total | 7572 | 7572 | 7572 |
+
+### Pass by suite and option set
+
+| suite | opt | cases | kiln | gcc | clang |
+|---|---|---:|---:|---:|---:|
+| execute | -O0 | 1677 | 1281 | 1677 | 1540 |
+| execute | -O2 | 1677 | 1274 | 1677 | 1529 |
+| ieee | -O0 | 69 | 59 | 69 | 64 |
+| ieee | -O2 | 69 | 60 | 69 | 65 |
+| builtins | -O0 | 59 | 21 | 59 | 35 |
+| builtins | -O2 | 59 | 17 | 59 | 28 |
+| compile | -O0 | 1981 | 1321 | 1981 | 1813 |
+| compile | -O2 | 1981 | 1322 | 1981 | 1813 |
+
+### kiln against the oracles (cases)
+
+- kiln fails, every oracle passes: 1553
+- kiln fails, gcc fails too: 0
+- kiln passes, gcc fails: 0
+- kiln fails, clang fails too: 664
+- kiln passes, clang fails: 21
+- kiln failures GCC's testsuite marks xfail: 0
+
+### kiln failure clusters (104 clusters, top 60)
+
+| cases | cluster | examples |
+|---:|---|---|
+| 704 | compile-reject: error: unknown type name '…' | compile/20000326-2.c -O0, compile/20000326-2.c -O2, compile/20000403-1.c -O0 |
+| 240 | compile-reject: error: a type specifier is required for all declarations | compile/20040317-3.c -O0, compile/20040317-3.c -O2, compile/20080704-1.c -O0 |
+| 180 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20000224-1.c -O0 |
+| 118 | compile-reject: error: no matching function for call to '…' | compile/20030518-1.c -O0, compile/20030518-1.c -O2, compile/20040214-2.c -O0 |
+| 82 | compile-reject: error: cannot initialize a variable of type '…' with an lvalue of type '…' | compile/20030904-1.c -O0, compile/20030904-1.c -O2, compile/20071118-1.c -O0 |
+| 74 | compile-reject: error: ISO C++N does not allow '…' storage class specifier [-Wregister] | compile/20010112-1.c -O0, compile/20010112-1.c -O2, compile/20011114-4.c -O0 |
+| 72 | compile-reject: error: incompatible pointer types assigning to '…' from '…' | compile/20070529-2.c -O0, compile/20070529-2.c -O2, compile/20070915-1.c -O0 |
+| 56 | compile-reject: error: function definition is not allowed here | compile/20010226-1.c -O0, compile/20010226-1.c -O2, compile/20020309-1.c -O0 |
+| 42 | compile-reject: error: cannot initialize a variable of type '…' with an rvalue of type '…' | compile/20040121-1.c -O0, compile/20040121-1.c -O2, compile/20080419-1.c -O0 |
+| 34 | compile-reject: error: variable length arrays are not supported yet | compile/20010202-1.c -O0, compile/20010202-1.c -O2, compile/20030716-1.c -O0 |
+| 33 | wrong: signal: N (SIGABRT) | execute/20031003-1.c -O0, execute/20060930-1.c -O2, execute/20230630-2.c -O0 |
+| 32 | compile-reject: error: fields must have a constant size: '…' extension will never be supported | compile/20010605-1.c -O0, compile/20010605-1.c -O2, compile/20020210-1.c -O0 |
+| 26 | compile-reject: error: cast from pointer to smaller type '…' loses information | compile/20000105-2.c -O0, compile/20000105-2.c -O2, compile/20020910-1.c -O0 |
+| 26 | compile-reject: error: non-constant-expression cannot be narrowed from type '…' to '…' in initializer list [-Wc++N-narrowing] | compile/icfmatch.c -O0, compile/icfmatch.c -O2, compile/pr34856.c -O0 |
+| 20 | wrong: signal: N (SIGTRAP) | execute/20000717-1.c -O0, execute/20000717-5.c -O0, execute/20010122-1.c -O0 |
+| 18 | compile-reject: error: cannot initialize a variable of type '…' (aka '…') with an rvalue of type '…' | compile/pr106537-1.c -O0, compile/pr106537-1.c -O2, compile/pr106537-2.c -O0 |
+| 16 | compile-reject: error: assigning to '…' from '…' discards qualifiers | compile/20010426-1.c -O0, compile/20010426-1.c -O2, compile/20120727-1.c -O0 |
+| 16 | compile-reject: error: cannot take the address of an rvalue of type '…' | compile/compound-literal-2.c -O0, compile/compound-literal-2.c -O2, compile/compound-literal-3.c -O0 |
+| 16 | compile-reject: error: redefinition of '…' | compile/20000120-2.c -O0, compile/20000120-2.c -O2, compile/20011119-1.c -O0 |
+| 16 | crash: internal compiler error: phi operand %N is defined | compile/pr111414-1.c -O0, compile/pr111414-1.c -O2, compile/pr44119.c -O0 |
+| 14 | compile-reject: error: arithmetic on a pointer to void | compile/20180309-1.c -O0, compile/20180309-1.c -O2, compile/20190827-1.c -O0 |
+| 14 | compile-reject: error: arithmetic on pointers to void | compile/20021108-1.c -O0, compile/20021108-1.c -O2, compile/labels-1.c -O0 |
+| 14 | compile-reject: error: default initialization of an object of const type '…' | compile/20041211-1.c -O0, compile/20041211-1.c -O2, compile/20121107-1.c -O0 |
+| 12 | compile-reject: error: cannot initialize return object of type '…' with an lvalue of type '…' | compile/pr93927-1.c -O0, compile/pr93927-1.c -O2, compile/pr93927-2.c -O0 |
+| 12 | compile-reject: error: cannot jump from this goto statement to its label | compile/irreducible-loop.c -O0, compile/irreducible-loop.c -O2, compile/pr69740-1.c -O0 |
+| 12 | compile-reject: error: constant expression evaluates to N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr69989-2.c -O0, compile/pr69989-2.c -O2, execute/20100416-1.c -O0 |
+| 11 | wrong: exit N | execute/20000717-1.c -O2, execute/20000717-5.c -O2, execute/20020404-1.c -O2 |
+| 10 | compile-reject: error: cannot initialize a member subobject of type '…' with an lvalue of type '…' | execute/20000722-1.c -O0, execute/20000722-1.c -O2, execute/20010123-1.c -O0 |
+| 10 | compile-reject: error: cannot initialize an array element of type '…' with an lvalue of type '…' | compile/931004-1.c -O0, compile/931004-1.c -O2, compile/gen_tst.c -O0 |
+| 10 | compile-reject: error: cannot initialize return object of type '…' with an rvalue of type '…' | compile/pr111059-10.c -O0, compile/pr111059-10.c -O2, compile/pr111059-12.c -O0 |
+| 10 | compile-reject: error: constant expression evaluates to -N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr45059.c -O0, compile/pr45059.c -O2, compile/pr60502.c -O0 |
+| 10 | compile-reject: error: definition of variable with array type needs an explicit size or an initializer | compile/920624-1.c -O0, compile/920624-1.c -O2, compile/921203-1.c -O0 |
+| 10 | compile-reject: error: implicit conversion from '…' to '…' is not permitted in C++ | compile/complex-1.c -O0, compile/complex-1.c -O2, compile/pr25513.c -O0 |
+| 10 | compile-reject: error: incompatible pointer types assigning to '…' (aka '…') from '…' | execute/20031201-1.c -O0, execute/20031201-1.c -O2, execute/20071120-1.c -O0 |
+| 10 | compile-reject: error: initialization of a flexible array member with elements is not supported yet | compile/pr33382.c -O0, compile/pr33382.c -O2, compile/pr36154.c -O0 |
+| 10 | compile-reject: error: initializer-string for char array is too long, array size is N but initializer has size N (including the null terminating character) | execute/memchr-1.c -O0, execute/memchr-1.c -O2, execute/pr86714.c -O0 |
+| 10 | compile-reject: error: variable has incomplete type '…' | compile/pr85401.c -O0, compile/pr85401.c -O2, compile/pr96998.c -O0 |
+| 8 | compile-reject: error: '…' must return '…' | compile/BUG12.c -O0, compile/BUG12.c -O2, compile/dic.c -O0 |
+| 8 | compile-reject: error: array initializer must be an initializer list | compile/930927-1.c -O0, compile/930927-1.c -O2, compile/pr48517.c -O0 |
+| 8 | compile-reject: error: cannot initialize a variable of type '…' (aka '…') with an lvalue of type '…' | compile/pr32372.c -O0, compile/pr32372.c -O2, compile/pr42705.c -O0 |
+| 8 | compile-reject: error: indirect goto in function with no address-of-label expressions | compile/920826-1.c -O0, compile/920826-1.c -O2, compile/pr30984.c -O0 |
+| 6 | compile-reject: error: cannot combine with previous '…' declaration specifier | compile/20010903-2.c -O0, compile/20010903-2.c -O2, compile/20011023-1.c -O0 |
+| 6 | compile-reject: error: cannot initialize an array element of type '…' with an rvalue of type '…' | execute/builtins/fprintf.c -O0, execute/builtins/fprintf.c -O2, execute/builtins/fputs.c -O0 |
+| 6 | compile-reject: error: comparison between pointer and integer ('…' and '…') | compile/20070419-1.c -O0, compile/20070419-1.c -O2, compile/pr106030.c -O0 |
+| 6 | compile-reject: error: left operand to ? is void, but right operand is of type '…' | compile/20000211-1.c -O0, compile/20000211-1.c -O2, compile/pr82337.c -O0 |
+| 6 | compile-reject: error: member access into incomplete type '…' | execute/pr22141-1.c -O0, execute/pr22141-1.c -O2, execute/pr22141-2.c -O0 |
+| 4 | compile-reject: error: '…' cannot be defined in a type specifier | compile/20011217-2.c -O0, compile/20011217-2.c -O2, compile/920928-4.c -O0 |
+| 4 | compile-reject: error: '…' cannot be defined in the result type of a function | compile/900116-1.c -O0, compile/900116-1.c -O2, compile/pr113616.c -O0 |
+| 4 | compile-reject: error: ISO C++ forbids forward references to '…' types | compile/990928-1.c -O0, compile/990928-1.c -O2, execute/930408-1.c -O0 |
+| 4 | compile-reject: error: anonymous bit-field cannot have qualifiers | compile/pr43191.c -O0, compile/pr43191.c -O2, compile/pr98199.c -O0 |
+| 4 | compile-reject: error: expected '…' | compile/20010124-1.c -O0, compile/20010124-1.c -O2, compile/ifreg.c -O0 |
+| 4 | compile-reject: error: expected '…' after top level declarator | compile/990203-1.c -O0, compile/990203-1.c -O2, compile/ext.c -O0 |
+| 4 | compile-reject: error: expected unqualified-id | compile/20010714-1.c -O0, compile/20010714-1.c -O2, compile/layout.c -O0 |
+| 4 | compile-reject: error: expression is not assignable | compile/compound-literal-1.c -O0, compile/compound-literal-1.c -O2, compile/struct-non-lval-1.c -O0 |
+| 4 | compile-reject: error: invalid application of '…' to a function type | compile/20011106-1.c -O0, compile/20011106-1.c -O2, execute/align-3.c -O0 |
+| 4 | compile-reject: error: invalid application of '…' to an incomplete type '…' | execute/20000223-1.c -O0, execute/20000223-1.c -O2, execute/20001203-2.c -O0 |
+| 4 | compile-reject: error: no viable overloaded '…' | compile/pr101437.c -O0, compile/pr101437.c -O2, execute/20010518-2.c -O0 |
+| 4 | compile-reject: error: non-void function '…' should return a value | compile/20020418-1.c -O0, compile/20020418-1.c -O2, compile/20020927-1.c -O0 |
+| 4 | compile-reject: error: static declaration of '…' follows non-static declaration | compile/20021120-1.c -O0, compile/20021120-1.c -O2, compile/20021120-2.c -O0 |
+| 4 | compile-reject: link: undefined reference to `… | execute/builtins/abs-2.c -O2, execute/builtins/uabs-2.c -O2, execute/ieee/fp-cmp-7.c -O0 |
+
+### Skips (rows; `*` rows cover every option set)
+
+| rows | reason |
+|---:|---|
+| 13 | dg-do target does not match |
+| 6 | requires effective target run_expensive_tests |
+| 1 | dg-require-dll |
+| 1 | dg-require-profiling |
+| 1 | dg-require-stack-check |
+| 1 | dg-skip-if: target ! { i?86-*-* x86_64-*-* } |
+| 1 | requires effective target dfp |
+| 1 | requires effective target fgraphite |
+| 1 | requires effective target fopenmp |
+| 1 | requires effective target nonpic |
+
+### Flags a compiler rejected (dropped from its cases)
+
+- kiln: `--param ggc-min-expand=0`, `--param ggc-min-expand=1`, `--param ggc-min-heapsize=1024`, `--param=max-sched-extend-regions-iters=10`, `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fexpensive-optimizations`, `-ffat-lto-objects`, `-ffloat-store`, `-fgimple`, `-fgnu89-inline`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmodulo-sched`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-gcse`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-inline-functions`, `-fno-ipa-cp`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-ivopts`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tracer`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dce`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-fno-tree-vrp`, `-fno-vect-cost-model`, `-fnon-call-exceptions`, `-foptimize-strlen`, `-fpack-struct`, `-fsave-optimization-record`, `-fsched2-use-superblocks`, `-fschedule-insns2`, `-fselective-scheduling2`, `-ftracer`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`, `-funroll-all-loops`, `-funroll-loops`, `-funswitch-loops`, `-std=c2y`
+- clang: `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fgimple`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-foptimize-strlen`, `-fsched2-use-superblocks`, `-fselective-scheduling2`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`
+
+<!-- gcc-torture:end -->
+
+## gcc.c-torture at -std=gnu17 (generated)
+
+Written by `cargo xtask gcc-torture --std gnu17 --report docs/status/c-mode.md`.
+
+<!-- gcc-torture:begin std=gnu17 (generated by cargo xtask gcc-torture) -->
+
+GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarch64-unknown-linux-gnu`.
+
+- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `120df355b`
+- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --std gnu17 --profile harness`
+- kiln: kiln version 1.0.1 (C++26 frontend, LLVM IR backend)
+- gcc: gcc (GCC) 16.1.0
+- clang: Debian clang version 19.1.7 (3+b1)
+- option sets: -O0, -O2; -std=gnu17 first
+- limits: 2048 MiB address space per step (plus kiln's stack reservation); compile/link timeout 120 s, run timeout 10 s; -j 4
+- 3813 tests, 7572 cases run, 27 skip rows; wall 975 s
+
+### Results by class (cases)
+
+| class | kiln | gcc | clang |
+|---|---:|---:|---:|
+| pass | 5353 | 7570 | 7057 |
+| compile-reject | 2127 | 2 | 478 |
+| crash | 20 | 0 | 0 |
+| wrong | 67 | 0 | 37 |
+| timeout | 5 | 0 | 0 |
+| total | 7572 | 7572 | 7572 |
+
+### Pass by suite and option set
+
+| suite | opt | cases | kiln | gcc | clang |
+|---|---|---:|---:|---:|---:|
+| execute | -O0 | 1677 | 1280 | 1676 | 1576 |
+| execute | -O2 | 1677 | 1273 | 1676 | 1565 |
+| ieee | -O0 | 69 | 59 | 69 | 68 |
+| ieee | -O2 | 69 | 60 | 69 | 69 |
+| builtins | -O0 | 59 | 21 | 59 | 35 |
+| builtins | -O2 | 59 | 17 | 59 | 28 |
+| compile | -O0 | 1981 | 1321 | 1981 | 1858 |
+| compile | -O2 | 1981 | 1322 | 1981 | 1858 |
+
+### kiln against the oracles (cases)
+
+- kiln fails, every oracle passes: 1715
+- kiln fails, gcc fails too: 2
+- kiln passes, gcc fails: 0
+- kiln fails, clang fails too: 504
+- kiln passes, clang fails: 11
+- kiln failures GCC's testsuite marks xfail: 0
+
+### kiln failure clusters (105 clusters, top 60)
+
+| cases | cluster | examples |
+|---:|---|---|
+| 704 | compile-reject: error: unknown type name '…' | compile/20000326-2.c -O0, compile/20000326-2.c -O2, compile/20000403-1.c -O0 |
+| 240 | compile-reject: error: a type specifier is required for all declarations | compile/20040317-3.c -O0, compile/20040317-3.c -O2, compile/20080704-1.c -O0 |
+| 180 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20000224-1.c -O0 |
+| 118 | compile-reject: error: no matching function for call to '…' | compile/20030518-1.c -O0, compile/20030518-1.c -O2, compile/20040214-2.c -O0 |
+| 82 | compile-reject: error: cannot initialize a variable of type '…' with an lvalue of type '…' | compile/20030904-1.c -O0, compile/20030904-1.c -O2, compile/20071118-1.c -O0 |
+| 74 | compile-reject: error: ISO C++N does not allow '…' storage class specifier [-Wregister] | compile/20010112-1.c -O0, compile/20010112-1.c -O2, compile/20011114-4.c -O0 |
+| 72 | compile-reject: error: incompatible pointer types assigning to '…' from '…' | compile/20070529-2.c -O0, compile/20070529-2.c -O2, compile/20070915-1.c -O0 |
+| 56 | compile-reject: error: function definition is not allowed here | compile/20010226-1.c -O0, compile/20010226-1.c -O2, compile/20020309-1.c -O0 |
+| 42 | compile-reject: error: cannot initialize a variable of type '…' with an rvalue of type '…' | compile/20040121-1.c -O0, compile/20040121-1.c -O2, compile/20080419-1.c -O0 |
+| 34 | compile-reject: error: variable length arrays are not supported yet | compile/20010202-1.c -O0, compile/20010202-1.c -O2, compile/20030716-1.c -O0 |
+| 34 | wrong: signal: N (SIGABRT) | execute/20031003-1.c -O0, execute/20060930-1.c -O2, execute/20230630-2.c -O0 |
+| 32 | compile-reject: error: fields must have a constant size: '…' extension will never be supported | compile/20010605-1.c -O0, compile/20010605-1.c -O2, compile/20020210-1.c -O0 |
+| 26 | compile-reject: error: cast from pointer to smaller type '…' loses information | compile/20000105-2.c -O0, compile/20000105-2.c -O2, compile/20020910-1.c -O0 |
+| 26 | compile-reject: error: non-constant-expression cannot be narrowed from type '…' to '…' in initializer list [-Wc++N-narrowing] | compile/icfmatch.c -O0, compile/icfmatch.c -O2, compile/pr34856.c -O0 |
+| 20 | wrong: signal: N (SIGTRAP) | execute/20000717-1.c -O0, execute/20000717-5.c -O0, execute/20010122-1.c -O0 |
+| 18 | compile-reject: error: cannot initialize a variable of type '…' (aka '…') with an rvalue of type '…' | compile/pr106537-1.c -O0, compile/pr106537-1.c -O2, compile/pr106537-2.c -O0 |
+| 16 | compile-reject: error: assigning to '…' from '…' discards qualifiers | compile/20010426-1.c -O0, compile/20010426-1.c -O2, compile/20120727-1.c -O0 |
+| 16 | compile-reject: error: cannot take the address of an rvalue of type '…' | compile/compound-literal-2.c -O0, compile/compound-literal-2.c -O2, compile/compound-literal-3.c -O0 |
+| 16 | compile-reject: error: redefinition of '…' | compile/20000120-2.c -O0, compile/20000120-2.c -O2, compile/20011119-1.c -O0 |
+| 16 | crash: internal compiler error: phi operand %N is defined | compile/pr111414-1.c -O0, compile/pr111414-1.c -O2, compile/pr44119.c -O0 |
+| 14 | compile-reject: error: arithmetic on a pointer to void | compile/20180309-1.c -O0, compile/20180309-1.c -O2, compile/20190827-1.c -O0 |
+| 14 | compile-reject: error: arithmetic on pointers to void | compile/20021108-1.c -O0, compile/20021108-1.c -O2, compile/labels-1.c -O0 |
+| 14 | compile-reject: error: default initialization of an object of const type '…' | compile/20041211-1.c -O0, compile/20041211-1.c -O2, compile/20121107-1.c -O0 |
+| 12 | compile-reject: error: cannot initialize return object of type '…' with an lvalue of type '…' | compile/pr93927-1.c -O0, compile/pr93927-1.c -O2, compile/pr93927-2.c -O0 |
+| 12 | compile-reject: error: cannot jump from this goto statement to its label | compile/irreducible-loop.c -O0, compile/irreducible-loop.c -O2, compile/pr69740-1.c -O0 |
+| 12 | compile-reject: error: constant expression evaluates to N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr69989-2.c -O0, compile/pr69989-2.c -O2, execute/20100416-1.c -O0 |
+| 11 | wrong: exit N | execute/20000717-1.c -O2, execute/20000717-5.c -O2, execute/20020404-1.c -O2 |
+| 10 | compile-reject: error: cannot initialize a member subobject of type '…' with an lvalue of type '…' | execute/20000722-1.c -O0, execute/20000722-1.c -O2, execute/20010123-1.c -O0 |
+| 10 | compile-reject: error: cannot initialize an array element of type '…' with an lvalue of type '…' | compile/931004-1.c -O0, compile/931004-1.c -O2, compile/gen_tst.c -O0 |
+| 10 | compile-reject: error: cannot initialize return object of type '…' with an rvalue of type '…' | compile/pr111059-10.c -O0, compile/pr111059-10.c -O2, compile/pr111059-12.c -O0 |
+| 10 | compile-reject: error: constant expression evaluates to -N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr45059.c -O0, compile/pr45059.c -O2, compile/pr60502.c -O0 |
+| 10 | compile-reject: error: definition of variable with array type needs an explicit size or an initializer | compile/920624-1.c -O0, compile/920624-1.c -O2, compile/921203-1.c -O0 |
+| 10 | compile-reject: error: implicit conversion from '…' to '…' is not permitted in C++ | compile/complex-1.c -O0, compile/complex-1.c -O2, compile/pr25513.c -O0 |
+| 10 | compile-reject: error: incompatible pointer types assigning to '…' (aka '…') from '…' | execute/20031201-1.c -O0, execute/20031201-1.c -O2, execute/20071120-1.c -O0 |
+| 10 | compile-reject: error: initialization of a flexible array member with elements is not supported yet | compile/pr33382.c -O0, compile/pr33382.c -O2, compile/pr36154.c -O0 |
+| 10 | compile-reject: error: initializer-string for char array is too long, array size is N but initializer has size N (including the null terminating character) | execute/memchr-1.c -O0, execute/memchr-1.c -O2, execute/pr86714.c -O0 |
+| 10 | compile-reject: error: variable has incomplete type '…' | compile/pr85401.c -O0, compile/pr85401.c -O2, compile/pr96998.c -O0 |
+| 8 | compile-reject: error: '…' must return '…' | compile/BUG12.c -O0, compile/BUG12.c -O2, compile/dic.c -O0 |
+| 8 | compile-reject: error: array initializer must be an initializer list | compile/930927-1.c -O0, compile/930927-1.c -O2, compile/pr48517.c -O0 |
+| 8 | compile-reject: error: cannot initialize a variable of type '…' (aka '…') with an lvalue of type '…' | compile/pr32372.c -O0, compile/pr32372.c -O2, compile/pr42705.c -O0 |
+| 8 | compile-reject: error: indirect goto in function with no address-of-label expressions | compile/920826-1.c -O0, compile/920826-1.c -O2, compile/pr30984.c -O0 |
+| 6 | compile-reject: error: cannot combine with previous '…' declaration specifier | compile/20010903-2.c -O0, compile/20010903-2.c -O2, compile/20011023-1.c -O0 |
+| 6 | compile-reject: error: cannot initialize an array element of type '…' with an rvalue of type '…' | execute/builtins/fprintf.c -O0, execute/builtins/fprintf.c -O2, execute/builtins/fputs.c -O0 |
+| 6 | compile-reject: error: comparison between pointer and integer ('…' and '…') | compile/20070419-1.c -O0, compile/20070419-1.c -O2, compile/pr106030.c -O0 |
+| 6 | compile-reject: error: left operand to ? is void, but right operand is of type '…' | compile/20000211-1.c -O0, compile/20000211-1.c -O2, compile/pr82337.c -O0 |
+| 6 | compile-reject: error: member access into incomplete type '…' | execute/pr22141-1.c -O0, execute/pr22141-1.c -O2, execute/pr22141-2.c -O0 |
+| 4 | compile-reject: error: '…' cannot be defined in a type specifier | compile/20011217-2.c -O0, compile/20011217-2.c -O2, compile/920928-4.c -O0 |
+| 4 | compile-reject: error: '…' cannot be defined in the result type of a function | compile/900116-1.c -O0, compile/900116-1.c -O2, compile/pr113616.c -O0 |
+| 4 | compile-reject: error: ISO C++ forbids forward references to '…' types | compile/990928-1.c -O0, compile/990928-1.c -O2, execute/930408-1.c -O0 |
+| 4 | compile-reject: error: anonymous bit-field cannot have qualifiers | compile/pr43191.c -O0, compile/pr43191.c -O2, compile/pr98199.c -O0 |
+| 4 | compile-reject: error: expected '…' | compile/20010124-1.c -O0, compile/20010124-1.c -O2, compile/ifreg.c -O0 |
+| 4 | compile-reject: error: expected '…' after top level declarator | compile/990203-1.c -O0, compile/990203-1.c -O2, compile/ext.c -O0 |
+| 4 | compile-reject: error: expected unqualified-id | compile/20010714-1.c -O0, compile/20010714-1.c -O2, compile/layout.c -O0 |
+| 4 | compile-reject: error: expression is not assignable | compile/compound-literal-1.c -O0, compile/compound-literal-1.c -O2, compile/struct-non-lval-1.c -O0 |
+| 4 | compile-reject: error: invalid application of '…' to a function type | compile/20011106-1.c -O0, compile/20011106-1.c -O2, execute/align-3.c -O0 |
+| 4 | compile-reject: error: invalid application of '…' to an incomplete type '…' | execute/20000223-1.c -O0, execute/20000223-1.c -O2, execute/20001203-2.c -O0 |
+| 4 | compile-reject: error: no viable overloaded '…' | compile/pr101437.c -O0, compile/pr101437.c -O2, execute/20010518-2.c -O0 |
+| 4 | compile-reject: error: non-void function '…' should return a value | compile/20020418-1.c -O0, compile/20020418-1.c -O2, compile/20020927-1.c -O0 |
+| 4 | compile-reject: error: static declaration of '…' follows non-static declaration | compile/20021120-1.c -O0, compile/20021120-1.c -O2, compile/20021120-2.c -O0 |
+| 4 | compile-reject: link: undefined reference to `… | execute/builtins/abs-2.c -O2, execute/builtins/uabs-2.c -O2, execute/ieee/fp-cmp-7.c -O0 |
+
+### Skips (rows; `*` rows cover every option set)
+
+| rows | reason |
+|---:|---|
+| 13 | dg-do target does not match |
+| 6 | requires effective target run_expensive_tests |
+| 1 | dg-require-dll |
+| 1 | dg-require-profiling |
+| 1 | dg-require-stack-check |
+| 1 | dg-skip-if: target ! { i?86-*-* x86_64-*-* } |
+| 1 | requires effective target dfp |
+| 1 | requires effective target fgraphite |
+| 1 | requires effective target fopenmp |
+| 1 | requires effective target nonpic |
+
+### Flags a compiler rejected (dropped from its cases)
+
+- kiln: `--param ggc-min-expand=0`, `--param ggc-min-expand=1`, `--param ggc-min-heapsize=1024`, `--param=max-sched-extend-regions-iters=10`, `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fexpensive-optimizations`, `-ffat-lto-objects`, `-ffloat-store`, `-fgimple`, `-fgnu89-inline`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmodulo-sched`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-gcse`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-inline-functions`, `-fno-ipa-cp`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-ivopts`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tracer`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dce`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-fno-tree-vrp`, `-fno-vect-cost-model`, `-fnon-call-exceptions`, `-foptimize-strlen`, `-fpack-struct`, `-fsave-optimization-record`, `-fsched2-use-superblocks`, `-fschedule-insns2`, `-fselective-scheduling2`, `-ftracer`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`, `-funroll-all-loops`, `-funroll-loops`, `-funswitch-loops`, `-std=c2y`
+- clang: `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fgimple`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-foptimize-strlen`, `-fsched2-use-superblocks`, `-fselective-scheduling2`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`
+
+<!-- gcc-torture:end std=gnu17 -->

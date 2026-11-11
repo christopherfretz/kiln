@@ -243,6 +243,7 @@ impl Job<'_> {
             .macros(p.clang_compat.major() >= 22);
         cfg.opt = p.opt;
         cfg.no_inline = p.no_inline;
+        cfg.gnu89_inline = p.gnu89_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);

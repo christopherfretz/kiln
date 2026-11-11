@@ -56,6 +56,7 @@ impl Parser<'_, '_> {
     }
 
     /// lambda-expression ([expr.prim.lambda.general]/1). At the `[`.
+    #[allow(clippy::too_many_lines, reason = "the lambda-declarator parts in grammar order")]
     pub(crate) fn parse_lambda_expr(&mut self) -> PExpr {
         let Some(intro) = self.parse_lambda_introducer() else {
             // clang: each skip consumes its stop token, so the last one
@@ -151,6 +152,7 @@ impl Parser<'_, '_> {
             ref_qual: kiln_ast::types::RefQual::None,
             trailing,
             ambiguous: false,
+            no_proto: false,
         });
         if !self.at(Punct::LBrace) {
             self.error_here(DiagId::parse_expected_lambda_body);

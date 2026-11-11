@@ -363,6 +363,10 @@ impl Sema<'_, '_> {
         loc: Loc,
         end: Loc,
     ) -> OperResult {
+        // C has no operator overloading (`overloadable` names functions).
+        if self.is_c() {
+            return OperResult::Builtin;
+        }
         let rewrites = self.std >= kiln_lex::Std::Cxx20;
         self.overloaded_operator(form, args, braced, loc, end, rewrites)
     }

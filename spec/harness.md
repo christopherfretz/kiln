@@ -1109,7 +1109,10 @@ failure clusters (class plus detail with quoted names and numbers folded,
 top 60 with example tests), skip reasons and dropped flags. `--report
 <page>` splices the same region between `<!-- gcc-torture:begin ... -->`
 and `<!-- gcc-torture:end -->` in a status page, keeping the hand-written
-triage around it. `--list` prints the planned cases and skips and runs
+triage around it. A run at a `--std` other than the default gnu23 has its
+own region, `<!-- gcc-torture:begin std=<std> ... -->` to
+`<!-- gcc-torture:end std=<std> -->` (`std=none` for `--std none`), so one
+page holds runs at several standards (WP-1282). `--list` prints the planned cases and skips and runs
 nothing.
 
 **Reuse.** The pieces under `xtask/src/gcc_tests/` are suite-independent:
