@@ -24,7 +24,7 @@
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
-    FnSpec, FnStorage, FriendKind, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
+    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
     VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
@@ -46,6 +46,7 @@ mod attrs;
 mod body;
 mod classtempl;
 mod declocs;
+mod friend;
 mod locs;
 mod membertempl;
 mod pch;
@@ -299,6 +300,8 @@ struct BaseRec {
     access: u8,
     /// `virtual` (WP-1120).
     virt: bool,
+    /// A pack expansion `Ts...` (WP-1292; `ty` is the pattern `Ts`).
+    pack: bool,
 }
 
 /// A class definition: its frozen `DefinitionBits` (without
@@ -311,6 +314,9 @@ struct RecDef {
     end: u32,
     key: u32,
     bases: Vec<BaseRec>,
+    /// The befriended records (first declarations), in the order the
+    /// class declared them (WP-1292, `friend.rs`).
+    friends: Vec<u32>,
 }
 
 /// A ctor-initializer: `kind` is `CtorInitKind` (`Base` 0: `target` the
@@ -495,6 +501,15 @@ enum Payload {
     UsingEnum {
         e: u32,
     },
+    /// A friend declaration in its class (WP-1292, `friend.rs`): the
+    /// befriended function's record `target`, or a type friend `ty`
+    /// (`target` [`NONE`]) with the class record its elaborated
+    /// specifier declared, `owned`, or [`NONE`].
+    Friend {
+        target: u32,
+        ty: Option<QRef>,
+        owned: u32,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -576,6 +591,7 @@ const K_SHADOW: u8 = 21;
 const K_USING_DIR: u8 = 22;
 const K_NS_ALIAS: u8 = 23;
 const K_USING_ENUM: u8 = 24;
+const K_FRIEND: u8 = 25;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -604,6 +620,7 @@ impl Payload {
             Payload::UsingDir { .. } => K_USING_DIR,
             Payload::NsAlias { .. } => K_NS_ALIAS,
             Payload::UsingEnum { .. } => K_USING_ENUM,
+            Payload::Friend { .. } => K_FRIEND,
         }
     }
 }
@@ -939,7 +956,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
                         w.q(b.ty);
                         w.u32(b.loc);
                         w.u8(b.access);
-                        w.u8(u8::from(b.virt));
+                        w.u8(u8::from(b.virt) | u8::from(b.pack) << 1);
+                    }
+                    w.len(d.friends.len());
+                    for &f in &d.friends {
+                        w.u32(f);
                     }
                 }
             }
@@ -991,6 +1012,17 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
         | Payload::UsingDir { ns: x }
         | Payload::NsAlias { target: x }
         | Payload::UsingEnum { e: x } => w.u32(*x),
+        Payload::Friend { target, ty, owned } => {
+            w.u32(*target);
+            match ty {
+                None => w.u8(0),
+                Some(q) => {
+                    w.u8(1);
+                    w.q(*q);
+                }
+            }
+            w.u32(*owned);
+        }
     }
 }
 
@@ -1354,14 +1386,19 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
                     let mut bases = Vec::with_capacity(n);
                     for _ in 0..n {
                         let (ty, loc, access) = (r.q()?, r.u32()?, r.u8()?);
-                        let virt = match r.u8()? {
-                            0 => false,
-                            1 => true,
-                            _ => return bad("bad flag byte"),
-                        };
-                        bases.push(BaseRec { ty, loc, access, virt });
+                        let f = r.u8()?;
+                        if f > 3 {
+                            return bad("bad flag byte");
+                        }
+                        let (virt, pack) = (f & 1 != 0, f & 2 != 0);
+                        bases.push(BaseRec { ty, loc, access, virt, pack });
                     }
-                    Some(RecDef { bits, end, key, bases })
+                    let n = r.count(4)?;
+                    let mut friends = Vec::with_capacity(n);
+                    for _ in 0..n {
+                        friends.push(r.u32()?);
+                    }
+                    Some(RecDef { bits, end, key, bases, friends })
                 }
                 _ => return bad("bad flag byte"),
             };
@@ -1420,6 +1457,15 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         K_USING_DIR => Payload::UsingDir { ns: r.u32()? },
         K_NS_ALIAS => Payload::NsAlias { target: r.u32()? },
         K_USING_ENUM => Payload::UsingEnum { e: r.u32()? },
+        K_FRIEND => {
+            let target = r.u32()?;
+            let ty = match r.u8()? {
+                0 => None,
+                1 => Some(r.q()?),
+                _ => return bad("bad flag byte"),
+            };
+            Payload::Friend { target, ty, owned: r.u32()? }
+        }
         _ => return bad("unknown declaration kind"),
     };
     Ok(DeclRec { flags, owner, access, name, ctx, lexical, loc, prev, payload })
@@ -1490,6 +1536,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
             })
             .collect(),
         Payload::Ttp { default, .. } => default.iter().copied().collect(),
+        Payload::Friend { ty, .. } => ty.iter().copied().collect(),
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
         Payload::Function { ty, params, inits, .. } => std::iter::once(*ty)
@@ -1529,7 +1576,8 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
             | Payload::Member { .. }
             | Payload::Using { .. }
             | Payload::UsingDir { .. }
-            | Payload::UsingEnum { .. },
+            | Payload::UsingEnum { .. }
+            | Payload::Friend { .. },
             _,
         ) => false,
         _ => a.code() == b.code(),
@@ -2015,7 +2063,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             continue;
         }
         if d.flags & !(DECL_FLAGS | DEP) != 0
-            || d.owner > 3
+            || d.owner >> 2 > 2
             || matches!(d.payload, Payload::Label | Payload::Let { .. })
         {
             return bad("bad declaration flags");
@@ -2093,6 +2141,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         n => lex == NONE && stack[n - 2].0 == d.ctx as usize,
                     }
                 }
+                // A befriended function or class (WP-1292): in its
+                // namespace, declared in the open class.
+                _ if friend::kind_bits(d) != 0 => friend::friend_context_ok(d, top, scope(d.ctx)),
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
             };
@@ -2106,7 +2157,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if d.access > 3 || (!in_class && !member_enum && d.access != 0) {
             return bad("bad member access");
         }
-        if d.lexical != NONE && d.lexical != LEX_TU && !scope(d.lexical) {
+        if d.lexical != NONE
+            && d.lexical != LEX_TU
+            && !scope(d.lexical)
+            && friend::kind_bits(d) == 0
+        {
             return bad("bad lexical context");
         }
         if d.prev != NONE && !kind_of(d.prev).is_some_and(|p| same_kind(&p.payload, &d.payload)) {
@@ -2117,7 +2172,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Export
             | Payload::Access
             | Payload::Implicit { .. }
-            | Payload::UsingDir { .. } => d.name == NONE,
+            | Payload::UsingDir { .. }
+            | Payload::Friend { .. } => d.name == NONE,
             // The target's, the enumeration's or the pattern's name
             // (checked below); a using-declarator may name an operator.
             Payload::Shadow { .. } | Payload::UsingEnum { .. } | Payload::Template { .. } => true,
@@ -2275,9 +2331,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         return bad("a class defined twice");
                     }
                     def_end[chain[i]] = end;
+                    friend::validate_friend_list(img, df.end, &df.friends)?;
                     let complete = |x: u32| chain.get(x as usize).is_some_and(|&c| def_end[c] <= i);
                     for b in &df.bases {
-                        let ok = base_class(img, b.ty, &complete).is_some()
+                        // A pack expansion's pattern is dependent.
+                        let ok = (!b.pack && base_class(img, b.ty, &complete).is_some())
                             || (d.flags & DEP != 0 && dependent_base(img, b.ty));
                         if b.access > 3 || !ok {
                             return bad("bad base class");
@@ -2365,7 +2423,6 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             }
                     });
                     if !ok || claimed[x as usize] {
-                        if std::env::var_os("KILN_IMG_DEBUG").is_some() { eprintln!("TMPDEBUG tpl {i} {d:?} pscope={pscope} x={x} {:?} claimed={}", img.decls[x as usize], claimed[x as usize]); for (j, r) in img.decls.iter().enumerate() { eprintln!("TMPDEBUG {j}: {r:?}"); } }
                         return bad("bad template parameter list");
                     }
                     claimed[x as usize] = true;
@@ -2420,6 +2477,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad using-enum-declaration");
                 }
             }
+            Payload::Friend { .. } => friend::validate_friend(img, i, d)?,
             Payload::Namespace
             | Payload::Export
             | Payload::Typedef { .. }
@@ -2895,7 +2953,7 @@ impl Writer<'_, '_, '_> {
         }
         let m = n.misc();
         if m.friend() != FriendKind::None {
-            return Err("a friend declaration");
+            self.friend_gate(d)?;
         }
         if m.local_extern()
             || m.name_independent()
@@ -2906,9 +2964,15 @@ impl Writer<'_, '_, '_> {
         let access = m.access() as u8;
         let ctx = match n.ctx() {
             Some(c) if c == ast.tu => NONE,
-            Some(c) => {
-                self.recs.get(&c).copied().ok_or("a declaration in an unsupported context")?
-            }
+            Some(c) => match self.recs.get(&c) {
+                Some(&r) => r,
+                // A member (an out-of-line definition, say) of a class the
+                // image refused: a cascade of the class's own reason.
+                None if ast.decls.get(c).kind() == DeclKind::CXXRecord => {
+                    return Err("a member of a class outside the image");
+                }
+                None => return Err("a declaration in an unsupported context"),
+            },
             None => return Err("a declaration in an unsupported context"),
         };
         let lexical = if n.has(DeclFlags::HAS_LEXICAL_CTX) {
@@ -3062,6 +3126,7 @@ impl Writer<'_, '_, '_> {
                 Payload::Field { ty, flags: fd.flags, width: NONE, init: NONE }
             }
             DeclKind::AccessSpec => Payload::Access,
+            DeclKind::Friend => self.friend_record(d)?,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
             DeclKind::FunctionTemplate
             | DeclKind::ClassTemplate
@@ -3074,9 +3139,6 @@ impl Writer<'_, '_, '_> {
     /// Rejects declarations whose cold side data the image does not carry.
     fn cold_gate(&self, d: DeclId) -> W<()> {
         let c = &self.s.ast.decls.cold;
-        if c.friends.get(d).is_some_and(|&l| !self.s.ast.lists.is_empty(l)) {
-            return Err("a friend declaration");
-        }
         // The overridden functions, key function and deleting
         // destructor's `operator delete` are carried or recomputed
         // (WP-1120); a destroying `operator delete` is not.
@@ -3129,10 +3191,6 @@ impl Writer<'_, '_, '_> {
         }
         let spec = fd.spec;
         let bits = spec.bits();
-        let virt = spec.is_virtual() || spec.is_pure() || spec.is_override() || spec.is_final();
-        if virt && pattern {
-            return Err("a virtual function in a class template");
-        }
         if fn_spec(bits) != Some(spec) {
             return Err("a coroutine, contract-checked or implicitly defaulted function");
         }
@@ -3357,12 +3415,6 @@ impl Writer<'_, '_, '_> {
         if !b.contains(DefinitionBits::COMPLETE) || b.contains(DefinitionBits::BEING_DEFINED) {
             return Err("an incomplete class definition");
         }
-        if ast.decls.get(d).has(DeclFlags::DEPENDENT_CTX)
-            && (b.contains(DefinitionBits::POLYMORPHIC)
-                || b.contains(DefinitionBits::HAS_VIRTUAL_BASES))
-        {
-            return Err("a polymorphic class template");
-        }
         if let Some(&k) = ast.decls.cold.key_function.get(d) {
             self.keys.push((i, k));
         }
@@ -3391,18 +3443,16 @@ impl Writer<'_, '_, '_> {
         let mut bases = Vec::with_capacity(list.len());
         for (pos, g) in list.into_iter().enumerate() {
             let bs = *ast.decls.base_spec(g);
-            if bs.pack_expansion {
-                return Err("a pack expansion");
-            }
             let _ = self.bs.bspec.insert(g, (i, pos as u32));
             bases.push(BaseRec {
                 ty: self.qref(bs.ty)?,
                 loc: self.loc(bs.loc)?,
                 access: bs.access as u8,
                 virt: bs.is_virtual,
+                pack: bs.pack_expansion,
             });
         }
-        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, key: NONE, bases }) })
+        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, key: NONE, bases, friends: Vec::new() }) })
     }
 
     /// Parameter `p`, the image's parameter `g`.
@@ -3561,6 +3611,7 @@ impl Writer<'_, '_, '_> {
                 df.key = r;
             }
         }
+        self.friend_lists()?;
         self.anon_typedefs()?;
         self.decl_locs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
@@ -3883,8 +3934,9 @@ impl Writer<'_, '_, '_> {
         }
         if !matches!(payload, Payload::Enumerator { .. }) && !tmpl_of_open {
             // Close the classes this declaration is not a member of.
+            let befriended = n.misc().friend() != FriendKind::None;
             while let Some(&top) = st.open.last() {
-                if h.lexical == NONE && h.ctx == top {
+                if h.lexical == NONE && h.ctx == top || befriended && h.lexical == top {
                     break;
                 }
                 self.close_class(top);
@@ -3906,7 +3958,9 @@ impl Writer<'_, '_, '_> {
         }
         let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
         let attrs = self.attr_recs(d, i)?;
-        let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
+        let owner = u8::from(o.purview)
+            | (u8::from(o.exported) << 1)
+            | friend::owner_bits(n.misc().friend());
         self.img.decls.push(DeclRec {
             flags: h.flags,
             owner,
@@ -3985,7 +4039,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::UsingEnum
         | K::UsingShadow => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
-        K::Friend => Err("a friend declaration"),
+        K::Friend => Ok(()),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
         | K::Concept
@@ -4038,8 +4092,7 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if let Err(e) = decode(&bytes) {
-            if std::env::var_os("KILN_IMG_DEBUG").is_some() { eprintln!("TMPDEBUG image: {e:?}"); }
+        if decode(&bytes).is_err() {
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -4189,7 +4242,7 @@ impl Sema<'_, '_> {
         // Open class definitions (class, end, frozen bits); fields with a
         // width or initializer; constructors with ctor-initializers;
         // defaulted and implicit members to define again once used.
-        let mut classes: Vec<(DeclId, usize, u64)> = Vec::new();
+        let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
@@ -4221,10 +4274,11 @@ impl Sema<'_, '_> {
             {
                 self.image_complete_enum(img, &mut tys, &ids, e, computed);
             }
-            while let Some(&(c, end, bits)) = classes.last()
+            while let Some(&(c, end, bits, ri)) = classes.last()
                 && end <= i
             {
                 classes.pop();
+                self.image_friends(img, &ids, c, ri);
                 self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
             }
             let owner = Owner { unit, purview: r.owner & 1 != 0, exported: r.owner & 2 != 0 };
@@ -4248,6 +4302,7 @@ impl Sema<'_, '_> {
             if r.flags & DeclFlags::IMPLICIT.bits() != 0 {
                 h.flags = DeclFlags::IMPLICIT;
             }
+            friend::friend_head(&mut h, r);
             if r.access != 0 {
                 h = h.access(access_of(r.access));
             }
@@ -4390,11 +4445,11 @@ impl Sema<'_, '_> {
                                 loc: lo(self, b.loc),
                                 is_virtual: b.virt,
                                 access: access_of(b.access),
-                                pack_expansion: false,
+                                pack_expansion: b.pack,
                             })
                             .collect();
                         let _ = self.ast.decls.set_bases(c, &bases, &mut self.ast.lists);
-                        classes.push((c, df.end as usize, df.bits));
+                        classes.push((c, df.end as usize, df.bits, i));
                     }
                     c
                 }
@@ -4412,6 +4467,16 @@ impl Sema<'_, '_> {
                 Payload::Access => {
                     let a = access_of(r.access);
                     self.builder().access_spec(ctx, a, h.loc)
+                }
+                Payload::Friend { target, ty, owned } => {
+                    let t = match ty {
+                        None => FriendTarget::Decl(ids[*target as usize]),
+                        Some(q) => FriendTarget::Type {
+                            ty: self.image_ty(img, &mut tys, &ids, *q),
+                            owned_tag: at(*owned),
+                        },
+                    };
+                    self.builder().friend(ctx, h.loc, t)
                 }
                 Payload::Implicit { kind: scope::BUILTIN_KIND } => {
                     self.image_builtin(img, i as u32)
@@ -4519,7 +4584,8 @@ impl Sema<'_, '_> {
         if let Some((e, computed)) = open.take() {
             self.image_complete_enum(img, &mut tys, &ids, e, computed);
         }
-        while let Some((c, _, bits)) = classes.pop() {
+        while let Some((c, _, bits, ri)) = classes.pop() {
+            self.image_friends(img, &ids, c, ri);
             self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
         }
         self.image_virtuals(img, &ids);
@@ -5227,7 +5293,7 @@ mod tests {
         };
         let def = |end, bases| Payload::Record {
             tag: 0,
-            def: Some(RecDef { bits: 0, end, key: NONE, bases }),
+            def: Some(RecDef { bits: 0, end, key: NONE, bases, friends: vec![] }),
         };
         img.decls.extend([
             head(base, 1, 0, 200, def(11, vec![])),
@@ -5236,7 +5302,7 @@ mod tests {
                 1,
                 0,
                 210,
-                def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0, virt: false }]),
+                def(14, vec![BaseRec { ty: q(t), loc: 212, access: 0, virt: false, pack: false }]),
             ),
             head(
                 base + 2,
@@ -5753,7 +5819,7 @@ mod tests {
                 420,
                 Payload::Record {
                     tag: 0,
-                    def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![] }),
+                    def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![], friends: vec![] }),
                 },
             ),
             head(

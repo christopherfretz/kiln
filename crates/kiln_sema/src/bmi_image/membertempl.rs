@@ -126,7 +126,6 @@ pub(super) fn claim_outer_heads(
                 _ => false,
             };
             if !ok || claimed[j] {
-                if std::env::var_os("KILN_IMG_DEBUG").is_some() { eprintln!("TMPDEBUG outer i={i} j={j} scope={scope} own={own} heads={heads:?} claimed={}", claimed[j]); for (j, r) in img.decls.iter().enumerate() { eprintln!("TMPDEBUG {j}: {r:?}"); } }
                 return bad("bad template parameter list");
             }
             claimed[j] = true;

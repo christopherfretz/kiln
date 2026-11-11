@@ -884,6 +884,62 @@ fn kind2_declaration_image_class_specs() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGMT: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-membertempl.cppm");
+const IMGMT_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-member-template-run.cpp");
+
+/// WP-1292 (§11.11 "Member templates"): member function and class
+/// templates, their out-of-line definitions (nested heads included) and
+/// templates whose definition inherits a declaration's default arguments
+/// come from the image. With the unit's source blanked, an importer still
+/// instantiates them, its IR is the replay's, and an error inside an
+/// imported member template's pattern is diagnosed exactly as after a
+/// replay.
+#[test]
+fn kind2_declaration_image_member_templates() {
+    let d = scratch("image-member-templates");
+    std::fs::write(d.join("m.cppm"), IMGMT).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGMT_RUN).unwrap();
+    std::fs::write(d.join("err.cpp"), "import imgmt;\nint x = mt::Bad<int>::h(0);\n").unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "m.cppm", "-o", "m.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "m.pcm", "-o", "m.o"]);
+    blank_source(&d, "m.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgmt=blank.pcm", "u.cpp", "m.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgmt' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1 8 7 2 17 7 26 9 5 12 6 1\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "m.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("x.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgmt=x.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgmt=m.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(
+        errs[0].contains("m.cppm:57:50: error: member reference base type 'int' is not a structure"),
+        "{}",
+        errs[0]
+    );
+    assert!(
+        errs[0].contains("in instantiation of function template specialization 'mt::Bad<int>::h<int>'"),
+        "{}",
+        errs[0]
+    );
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 /// WP-1283: a static assertion in a class template is checked again by
 /// each instantiation; the image does not carry it yet, so the unit is
 /// written without one and an importer still rejects a failing
@@ -1739,16 +1795,16 @@ fn kind2_declaration_image_fallback() {
             "a file with #line directives or line markers",
         ),
         (
-            "export module f;\nexport template <class T> struct S { virtual T f() const { return T(); } };\n",
-            "a polymorphic class template",
+            "export module f;\nexport template <class T> struct S { friend int g(S) { return 1; } };\n",
+            "a declaration in a template",
         ),
         (
             "export module f;\nexport struct B { ~B() {} };\nexport struct D : B {};\nexport constexpr int k = 1;\n",
             "a class whose implicit special members need overload resolution",
         ),
         (
-            "export module f;\nexport struct S { int x; friend int g(S s) { return s.x; } };\nexport constexpr int k = 1;\n",
-            "a friend declaration",
+            "export module f;\nexport struct S { int x; template <class T> friend int g(T, S s) { return s.x; } };\nexport constexpr int k = 1;\n",
+            "a friend template",
         ),
         (
             "export module f;\nexport struct S { union { int a; float b; }; };\nexport constexpr int k = 1;\n",
@@ -1769,17 +1825,12 @@ fn kind2_declaration_image_fallback() {
             "a redeclared partial specialization",
         ),
         (
-            "export module f;\nexport template <class T = int> struct B;\n\
-             export template <class T> struct B { T v; };\n",
-            "a default template argument",
+            "export module f;\nexport template <template <class> class TT> struct W {};\n",
+            "a template",
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; B(T t) : v(t) {} };\n",
             "mem-initializers of a constructor in a class template",
-        ),
-        (
-            "export module f;\nexport template <class T> struct B { template <class U> U m(U u) { return u; } };\n",
-            "a member template or a template in a template",
         ),
         (
             "export module f;\nexport template <int N> struct B { static constexpr int v = N; };\n\
@@ -1797,26 +1848,17 @@ fn kind2_declaration_image_fallback() {
         ),
         ("export module f;\nexport template <class T> concept C = true;\n", "a template"),
         (
-            "export module f;\nexport template <class... B> struct S : B... {};\n",
-            "a pack expansion",
+            "export module f;\nexport struct B { int f(); };\nexport struct S { friend int B::f(); };\n",
+            "a friend member function",
         ),
         (
             "export module f;\nexport template <class T> requires (sizeof(T) > 1) T id(T t) { return t; }\n",
             "a constrained template",
         ),
         (
-            "export module f;\nexport struct S { template <class T> T m(T t) { return t; } };\n",
-            "a member function template",
-        ),
-        (
             "export module f;\nexport template <class T> T e(T t) { return t; }\n\
              template <> int e<int>(int t) { return t + 1; }\n",
             "a template specialization",
-        ),
-        (
-            "export module f;\nexport template <class T> T d(T t);\n\
-             export template <class T> T d(T t) { return t; }\n",
-            "a redeclared template",
         ),
         (
             "export module f;\nexport template <class T> int h(T t) { return T::v(); }\n",

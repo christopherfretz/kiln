@@ -2325,7 +2325,8 @@ unresolved names.* Carried since the third slice:
   through `set_template_default`, recomputing the profile with
   `profile_expr` when the bit says the writer's argument had one (as
   `act_on_template_default` stores it). A default inherited from an
-  earlier declaration belongs to a redeclared template and falls back.
+  earlier declaration is not written again: the reader merges it as
+  sema does (below, "Member templates (WP-1292)").
 - *Alias templates.* Template kind 2: the pattern is the dependent
   alias record (a `Typedef` record with its alias bit) immediately
   before the template record; the template record carries the `using`
@@ -2370,10 +2371,10 @@ member of a class the image does not carry ("a member of a class
 outside the image", a cascade of that class's own reason), and the
 rest. Still falling back after the third slice: concepts, constrained
 parameters and templates, requires-clauses and requires-expressions,
-template template parameters, member templates and templates in
-templates, redeclared templates (and inherited defaults), deduction
-guides, explicit and partial specializations (carried since WP-1283,
-below), non-dependent references
+template template parameters, deduction guides (member templates,
+templates in templates, redeclared templates and inherited defaults are
+carried since WP-1292, and explicit and partial specializations since
+WP-1283, below), non-dependent references
 with written template arguments (`size<int>`, `sq<3>`: "a template
 argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
@@ -2417,13 +2418,8 @@ class or of a member template ("a member template or a template in a
 template"), constrained ones ("a constrained template", WP-1284),
 arguments that are dependent expressions ("a partial specialization
 argument the image does not carry"), and variable template
-specializations ("a template"). The rest of WP-1283's scope also still
-falls back, unchanged: member templates and templates in templates
-(the validator requires a template's parameters and the template itself
-to be in a namespace scope at depth 0), redeclared templates and their
-inherited defaults, pack expansions in base specifiers, polymorphic
-class templates, friends, and classes whose implicit special members
-need overload resolution.
+specializations ("a template"). Member templates, templates in
+templates and redeclared templates are carried since WP-1292 (below).
 
 *Static assertions in templates.* A `static_assert` in a class template
 (or a partial specialization) is checked again by each instantiation
@@ -2445,6 +2441,42 @@ carried record, so an imported pattern's instantiation reports what
 replay reports. Before WP-1283 they were missing and such errors
 pointed at the declaration's type-specifier. A function parameter's
 entries are not carried yet (parameters are not records).
+
+**Member templates (WP-1292).** `bmi_image/membertempl.rs` carries
+member function and class templates ([temp.mem]) of classes and class
+templates, at any depth, and their out-of-line definitions.
+
+- *Depth.* A template-head declared in a class has the depth of the
+  number of class templates and partial specializations enclosing it;
+  its parameter records carry that depth. The validator computes the
+  depth from the context chain and checks it.
+- *Out-of-line definitions.* `template <class T> template <class U> T
+  S<T>::mul(U)` and `template <class T> template <class V> struct
+  S<T>::Out { ... }` are preceded by one parameter record per parameter
+  of each enclosing template-head, outermost first, then by the
+  definition's own head's parameters, all in its lexical context. The
+  definition claims the enclosing heads' parameters, its template
+  record claims its own. The pattern's context is the class, its
+  lexical context the namespace, and its `prev` the in-class pattern.
+- *Claims.* Every dependent record belongs to exactly one template: a
+  member of a class template's pattern is claimed by the class, except
+  a member template's pattern and parameters (its template record's)
+  and an out-of-line definition's enclosing heads (the definition's).
+- *Redeclared templates.* Template declarations have no redeclaration
+  link of their own. The writer's `prev` of a template record is the
+  template described by its pattern's previous declaration
+  (`described_template(prev(pattern))`), the declaration sema replaced
+  in lookup, and the reader passes the same `prev` to `template_decl`.
+- *Inherited defaults* ([temp.param]/12). A redeclaration's parameters
+  carry only their own defaults. After the bodies are built, the reader
+  runs, for each redeclared template, what `finish_template_pattern`
+  runs: `merge_template_defaults` and `record_inherited_defaults`
+  against the earlier declaration's head, so `D<>` and `scaled(4)`
+  resolve as after a replay.
+
+Tests: `image-member-template-run.cpp`, `image-member-template-errors.cpp`
+and `kind2_declaration_image_member_templates` (an error inside an
+imported member template's pattern is reported as after a replay).
 
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
