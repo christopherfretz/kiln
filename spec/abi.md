@@ -1844,6 +1844,19 @@ not, none of them a different name for the same entity.
   P2280, which clang 19 does not implement), so it does not call
   `__variant::__as`.
 
+### 8.30 Landed (WP-1275): C names (`Ast::lang_c`)
+A C translation unit (`Ast::lang_c`, set by the parser from
+`ParseOptions::c`) has no mangling (clang `shouldMangleCXXName` is false
+outside C++): every function and variable is its plain name, an
+internal-linkage `static int s;` included (`s`, not `_ZL1s`); only an
+`overloadable` function keeps its Itanium name. Every entity with external
+linkage has C language linkage (`is_extern_c`; a local variable has none
+unless it is a block-scope `extern`). A file-scope `const` object has
+external linkage ([C17 6.2.2]/5; C++'s internal-`const` rule is off). A
+static local is `<function's name>.<name>` (clang `getStaticDeclName`,
+`main.n`), a repeated one uniqued by LLVM (`.1`). Tests:
+`tests/c/linkage/symbol-names.c`, `tests/c/interop/`.
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

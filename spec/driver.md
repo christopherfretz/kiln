@@ -663,8 +663,9 @@ driver warning, once per input, before any job runs:
 `treating '<c type>' input as '<c++ type>' when in C++ mode, this
 behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
 (`-w` and `-Wno-deprecated` silence it); under `-Werror` it is an error
-and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
-(`-fsyntax-only`, codegen) is "not implemented yet" (WP-243).
+and no job runs. A C input runs the whole pipeline (`-E`,
+`-fsyntax-only`, codegen, link) in its language mode (below, WP-1275);
+the C semantics beyond the subset C shares with C++ are WP-1276's.
 
 ### Language mode (WP-1275)
 
@@ -1303,8 +1304,8 @@ the current directory (standard input is `-`). `-o -` is standard output.
 
 - **Inputs.** A source (`.c .i .cc .cp .cpp .CPP .cxx .c++ .C .ii .cppm
   .ixx .h .hh .hpp .hxx .H .inc`, any input after `-x`, and `-`) is
-  compiled; anything else is a linker input. A C source reports
-  `compiling C is not implemented yet`.
+  compiled; anything else is a linker input. A C source compiles in
+  its language mode ("Language mode"): unmangled names, C keywords.
 - **Frontend.** The preprocessor is built as for `-E`
   (`Job::build_preprocessor`), then `parse_preprocessed`, then
   `kiln_codegen::emit_with_diags` (spec/codegen.md) with the target's
@@ -1653,7 +1654,7 @@ store Oven state, is a follow-up; it would share the module-file format
   generating multiple output files`. `-fsyntax-only`, `-E` and `-M`/`-MM`
   treat a header as an ordinary input, and produce nothing. A header is
   its own main file, so `#pragma once` in it gets no warning. C headers
-  are recorded, but compiling C is "not implemented yet" (WP-243).
+  are recorded; `-x c-header` PCH is not built yet (WP-1275 follow-up).
 - **`-include-pch <file>`.** This is separate-only, as in clang:
   `-include-pchX` is `-include` with the value `-pchX`. It is also
   accepted as `-Xclang -include-pch -Xclang <file>`. The last driver
@@ -2519,14 +2520,9 @@ Otherwise they come from the clock. The test harness always sets
 
 Each deviation is covered by a test or a test note.
 
-1. **C is preprocessed with kiln's C++ lexer** at the closest standard:
-   - C89/C99 as C++98;
-   - C11/C17 as C++11;
-   - C23 as C++17.
-
-   C has no C++ keywords-as-operators and no C++ ud-suffix rules. The pp
-   corpus is unaffected, but a C file using `and` as an identifier would
-   be.
+1. **(none remains)** C is lexed with C's rules (spec/lex.md "C mode",
+   WP-1275); it still maps to the closest C++ lexer standard (c89/c99 as
+   C++98, c11/c17 as C++11, c23 as C++17) for everything C and C++ share.
 2. **Driver modes and names.** `--driver-mode=` takes only `g++` and
    `gcc` (clang also takes `cpp`, `cl`, `flang`, `dxc`). `kiln++` is a
    symlink made by the build script, not a second binary target. Standard input is compiled in the mode's
@@ -2548,10 +2544,8 @@ Each deviation is covered by a test or a test note.
    predefines differ in line count because of the `__KILN__` macros. This
    is text-only: token-wise output is identical.
 8. **Only aarch64 and x86_64 Linux targets.**
-9. **C feature queries are answered as C++.** `ClangFeatures` has only
-   C++ configurations, so a C input gets the answers of its lexer
-   standard (deviation 1). For example, `__has_feature(cxx_exceptions)`
-   follows `-fexceptions`, where clang answers 0 in C.
+9. **(none remains)** C feature queries are clang's C answers
+   (spec/pp.md "Feature queries in C", WP-1275).
 10. **No `cc1` frontend command in `-###`/`-v`.** The frontend runs in
     process and prints as ` (in-process) frontend "<in>" -> "<out>"`;
     the backend is a separate `llc` (clang runs it inside `cc1`), and
