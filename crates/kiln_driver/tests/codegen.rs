@@ -176,6 +176,38 @@ fn driver_errors_and_warnings() {
     assert_eq!(text(&o.stderr), "");
 }
 
+/// `-Wa,` / `-Xassembler` and `-rpath` (spec/driver.md, WP-1288), as
+/// clang 19: assembler values are checked only when a source is
+/// assembled; `-rpath <dir>` is a linker input.
+#[test]
+fn assembler_options_and_rpath() {
+    let d = setup("asm");
+    std::fs::write(d.join("lib.o"), "").unwrap();
+    let ok = ["-c", "-Wa,--noexecstack,-I,/x", "-Xassembler", "--fatal-warnings", "add.cpp"];
+    let o = kiln_in(&d, &ok);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let o = kiln_in(&d, &["-c", "-Wa,--noexecstack,foo", "-Xassembler", "-mbig-obj", "add.cpp"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        text(&o.stderr),
+        "kiln++: error: unsupported argument 'foo' to option '-Wa,'\n\
+         kiln++: error: unsupported argument '-mbig-obj' to option '-Xassembler'\n"
+    );
+    let o = kiln_in(&d, &["-S", "-emit-llvm", "-Wa,foo", "add.cpp"]);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let o = kiln_in(&d, &["-c", "-rpath", "/opt/x", "-Wa,foo", "-Xassembler", "bar", "lib.o"]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(
+        text(&o.stderr),
+        "kiln++: warning: -rpath /opt/x: 'linker' input unused [-Wunused-command-line-argument]\n\
+         kiln++: warning: lib.o: 'linker' input unused [-Wunused-command-line-argument]\n\
+         kiln++: warning: argument unused during compilation: '-Wa,foo' [-Wunused-command-line-argument]\n\
+         kiln++: warning: argument unused during compilation: '-Xassembler bar' [-Wunused-command-line-argument]\n"
+    );
+    let o = kiln_in(&d, &["-###", "-rpath", "/opt/x", "add.cpp"]);
+    assert!(text(&o.stderr).contains("\"-rpath\" \"/opt/x\""), "{}", text(&o.stderr));
+}
+
 /// One driver, two names (spec/driver.md "Driver modes"): `kiln` compiles
 /// `.c` as C (WP-1275), `kiln++` as C++ with clang++'s
 /// deprecation warning, and `--driver-mode=g++` makes `kiln` behave as

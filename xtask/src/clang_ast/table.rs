@@ -58,6 +58,8 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("ParmVarDecl", Keep),
     ("VarDecl", Keep),
     ("StaticAssertDecl", Keep),
+    // GNU `__label__` local labels (WP-1288): the `DeclStmt` of a block.
+    ("LabelDecl", Keep),
     // Attributes printed from the class virt-specifiers (§3).
     ("OverrideAttr", Keep),
     ("FinalAttr", Keep),
@@ -193,7 +195,6 @@ pub const TABLE: &[(&str, Disposition)] = &[
     ("DecompositionDecl", Keep),
     ("BindingDecl", Keep),
     ("EmptyDecl", Unsupported(NOT_M2)),
-    ("LabelDecl", Unsupported(NOT_M2)),
     ("FileScopeAsmDecl", Keep),
     ("ExportDecl", Unsupported(NOT_M2)),
     ("ImportDecl", Unsupported(NOT_M2)),
@@ -353,7 +354,7 @@ fn specific_keys(kind: &str) -> Option<&'static [&'static str]> {
         }
         // The type is the binding expression's (the JSON has none).
         "BindingDecl" => &[],
-        "StaticAssertDecl" | "FileScopeAsmDecl" => &[],
+        "StaticAssertDecl" | "FileScopeAsmDecl" | "LabelDecl" => &[],
         "IntegerLiteral" | "FloatingLiteral" | "CharacterLiteral" | "StringLiteral"
         | "CXXBoolLiteralExpr" => &["value"],
         "CXXNullPtrLiteralExpr"
@@ -623,6 +624,8 @@ pub const M2_KINDS: &[&str] = &[
     "DecompositionDecl",
     "BindingDecl",
     "StaticAssertDecl",
+    // GNU local labels (WP-1288).
+    "LabelDecl",
     // GNU asm (WP-140).
     "FileScopeAsmDecl",
     "GCCAsmStmt",

@@ -39,6 +39,9 @@ pub struct JobResult {
     /// A precompiling job's preprocessor-state record, or why it could
     /// not be written (`-fkiln-pch-image`, WP-1280).
     pub pch_image: Option<Result<Vec<u8>, String>>,
+    /// The declaration image the record carries (its declaration count),
+    /// or why the header has none (WP-1036).
+    pub pch_decls: Option<Result<usize, &'static str>>,
 }
 
 /// The dependency list a preprocessor's callbacks fill (`-M`, `-MD`).
@@ -245,6 +248,7 @@ impl Job<'_> {
         cfg.no_inline = p.no_inline;
         cfg.gnu89_inline = p.gnu89_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
+        cfg.pch_lines = self.args.pch.image_use.as_ref().map_or(0, |u| u.lines);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);
         cfg.char8_t = p.char8_t;

@@ -58,6 +58,10 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
                          detail, first cluster key, wall seconds)
   --shard <K/N>          run only every N-th selected test, starting at the K-th
                          (1-based; the N shards are disjoint and cover the selection)
+  --pch-diff load|replay|check
+                         each pass test that opens with #includes is compiled
+                         with -include-pch of a PCH of them, read by that
+                         consumer path (spec/libcxx.md \"PCH differential\")
   --keep                 keep the scratch directories
   --no-fail              exit 0 even on FAIL, XPASS, KILLED, TIMEOUT or ERROR
   -v, --verbose          print every result and failure details
@@ -174,6 +178,8 @@ pub struct Options {
     pub keep: bool,
     pub no_fail: bool,
     pub verbose: bool,
+    /// `--pch-diff`: the PCH differential (spec/libcxx.md "PCH differential").
+    pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
 }
 
 impl Default for Options {
@@ -198,6 +204,7 @@ impl Default for Options {
             keep: false,
             no_fail: false,
             verbose: false,
+            pch_diff: None,
         }
     }
 }
@@ -298,6 +305,13 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--report" => o.report = Some(PathBuf::from(value("--report")?)),
             "--results" => o.results = Some(PathBuf::from(value("--results")?)),
             "--shard" => o.shard = Some(parse_shard(&value("--shard")?)?),
+            "--pch-diff" => {
+                let v = value("--pch-diff")?;
+                o.pch_diff = Some(
+                    crate::util::pch_diff::PchDiff::parse(&v)
+                        .ok_or_else(|| format!("bad --pch-diff `{v}` (load|replay|check)"))?,
+                );
+            }
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
                 o.jobs =
@@ -636,6 +650,7 @@ impl Setup {
             scratch: scratch.to_path_buf(),
             tmp: tmp.to_path_buf(),
             keep: limits.keep,
+            pch_diff: if clang { None } else { limits.pch_diff },
         }
     }
 }
@@ -647,6 +662,7 @@ struct Limits {
     long_run_timeout: Duration,
     mem: Option<MemLimit>,
     keep: bool,
+    pch_diff: Option<crate::util::pch_diff::PchDiff>,
 }
 
 /// One libc++ test compiled at `-fsyntax-only` with exactly the flags the
@@ -705,6 +721,7 @@ pub fn syntax_compiles(
         long_run_timeout: compile_timeout,
         mem,
         keep: false,
+        pch_diff: None,
     };
     let cfg = setup.config(root, compiler, clang, scratch, scratch, &limits);
     let out = tests
@@ -828,7 +845,11 @@ fn execute(opts: &Options) -> Result<bool, String> {
         long_run_timeout: opts.long_run_timeout,
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         keep: opts.keep,
+        pch_diff: opts.pch_diff,
     };
+    if clang && opts.pch_diff.is_some() {
+        return Err("--pch-diff runs kiln only (its producer and consumer flags)".to_owned());
+    }
     let cfg = setup.config(&root, &kiln, clang, &scratch, &tmp, &limits);
     let jobs: Vec<Job<'_>> = tests
         .iter()
@@ -868,6 +889,9 @@ fn execute(opts: &Options) -> Result<bool, String> {
     }
     let compiler = if clang { "clang".to_owned() } else { format!("{} kiln", profile_text(opts)) };
     println!("\n{}; wall {:.1} s; {compiler}", total.summary_line(), wall.as_secs_f64());
+    if let Some(mode) = cfg.pch_diff {
+        println!("{}", pch_paths(mode, &results));
+    }
 
     if let Some(path) = &opts.results {
         std::fs::write(path, results_tsv(&results))
@@ -883,6 +907,23 @@ fn execute(opts: &Options) -> Result<bool, String> {
         println!("xtask libcxx: wrote {}", path.display());
     }
     Ok(results.iter().any(|r| r.outcome.is_failure()))
+}
+
+/// `--pch-diff`'s tally: how many tests read a PCH by each path (the
+/// producer's `-v` note: the image, or replay and why).
+fn pch_paths(mode: crate::util::pch_diff::PchDiff, results: &[TestResult]) -> String {
+    let mut paths: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for r in results {
+        if let Some(p) = &r.pch_path {
+            *paths.entry(p.as_str()).or_default() += 1;
+        }
+    }
+    let total: usize = paths.values().sum();
+    let mut s = format!("pch-diff {}: {total} tests with a PCH", mode.as_str());
+    for (p, n) in &paths {
+        let _ = write!(s, "\n  {n:>5}  {p}");
+    }
+    s
 }
 
 fn run_all(cfg: &Config, jobs: &[Job<'_>], n: usize, verbose: bool) -> Vec<TestResult> {
@@ -1104,6 +1145,7 @@ mod tests {
             max_rss_kb: None,
             compile_rss_kb: None,
             first_error: None,
+            pch_path: None,
         };
         let tsv = results_tsv(&[
             r("std/a.pass.cpp", Outcome::Pass, vec![]),
@@ -1278,6 +1320,9 @@ mod tests {
         sorted.dedup();
         assert_eq!(sorted.len(), m4.len());
         assert_eq!(parse(&["--gate", "m4"]).unwrap().unwrap().gate.as_deref(), Some("m4"));
+        let pd = |v: &str| parse(&["--pch-diff", v]).map(|o| o.unwrap().pch_diff);
+        assert_eq!(pd("replay"), Ok(Some(crate::util::pch_diff::PchDiff::Replay)));
+        assert!(pd("both").is_err());
     }
 
     /// Two tags' checkouts coexist under `.toolchain/libcxx-<tag>`; the

@@ -22,6 +22,7 @@ cargo xtask test [options] [paths...]
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
 | `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
+| `--pch-diff load\|replay\|check` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -909,6 +910,57 @@ unit falls back to replay as before. The run therefore checks that
 image-built imports give the same diagnostics, program output and IR as
 replay. `ci` does not run it while the flag is off by default.
 
+### PCH differential
+
+`--pch-diff <how>` (WP-1036) checks that `-include-pch` behaves like the
+textual inclusion it replaces (spec/driver.md "Precompiled headers"). A
+test runs when it is a C++ source file of kind `compile-ok`,
+`compile-fail`, `run`, `ir` or `no-crash`; has no `pch:`, `unit:` or
+`header-unit:` lines and no `args:` that select an `-include`, `-E`, `-M`
+or `-x`; and opens with `#include <...>`/`#include "..."` lines (blank
+lines and comments between them allowed; the prefix ends at the first
+other line, a `\`-continued line, or a line with an inline `/*`).
+Every other test is a SKIP naming the reason. `xfail` lines are ignored
+and nothing is compared with the oracle (none runs).
+
+kiln compiles a copy of the test in the scratch directory
+(`src/<file>`, with `-iquote <test dir>` so its quoted `#include`s are
+found) twice:
+
+- **plain**: the copy as written.
+- **with the PCH**: the copy with its leading `#include` lines emptied
+  (every other line keeps its number, as a PCH user drops the includes it
+  holds; an unguarded header would otherwise be read twice), and
+  `-include-pch pchdiff.pch` plus the consumer flag: `load`
+  `-fkiln-pch-image=load`, `replay` `-fno-kiln-pch-image`, `check`
+  `-fkiln-pch-image=check`. `pchdiff.pch` is built from `pchdiff.h`, the
+  leading `#include` lines, with the test's `-std`, `args` and the
+  producer's `-fkiln-pch-image -v -x c++-header` (so `load` and `replay`
+  read the same file).
+
+Each build is `-S -emit-llvm` and, for a `run` test, first the binary and
+its run. A test with `module:` lines runs two-step (its units are built
+separately, without the PCH: kiln's in-process build of a unit reads the
+importer's `-include-pch`, as it reads its `-include`s, and anything before
+`module;` is an error). The test **PASSes** when the two builds agree on:
+success or failure; the diagnostics, after dropping the include stack
+(`In file included from` lines), the `N warnings generated.` line and
+kiln's `note: precompiled header` notes, either equal or equal to the
+producer's diagnostics followed by the consumer's (a consumer that loads
+the image does not diagnose the header again); the IR after the usual
+normalization ("IR tests"); and a run test's exit status, stdout
+and stderr. Its reason is the path the producer's `-v` note names (`image
+(N records)` or `replay: <why>`; `replay` under `--pch-diff replay`). A
+plain build that fails is a SKIP ("kiln fails without a PCH"), and so is a
+PCH that does not build when the plain build fails too; a PCH that does
+not build when the test compiles, a crash, or any difference is a
+**FAIL** showing it.
+
+`ci` runs `load` and `replay` over `tests/conformance/cpp.include` and
+`tests/conformance/module.interface` (run 6 under "CI"). `cargo xtask
+libcxx --pch-diff <how>` is the same comparison over libc++ tests
+(spec/libcxx.md).
+
 ### Parity report
 
 `--report-parity <file>` writes, after the run, a markdown summary between
@@ -1425,6 +1477,13 @@ if the first fails, so one cannot hide the other:
    --bmi-kind N)`; "Module-file kinds"). They run with run 4, are
    selected by `--step kiln`, take the same `--shard`, and are judged like
    it.
+6. **PCH differential** (WP-1036): `cargo xtask test --compiler <that
+   kiln> --pch-diff load`, then `--pch-diff replay`, over
+   `tests/conformance/cpp.include` and `tests/conformance/module.interface`
+   only (printed as `corpus (kiln --pch-diff <how>)`; "PCH differential").
+   Like run 5 they are selected by `--step kiln`, take the same `--shard`
+   and are judged like run 4; `--oracle-only` skips them (they run no
+   oracle).
 
 `ci` then prints one line per corpus run, `xtask ci: corpus (<run>): <line>`,
 where `<line>` is the run's summary line ("Output"), `skipped (<reason>)`, or

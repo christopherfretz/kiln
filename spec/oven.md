@@ -1279,6 +1279,8 @@ literal is one instruction and one step, not an interpreted loop.
   allocation", WP-212); `__builtin_debugtrap`, `__builtin_frame_address`
   and `__builtin_return_address`, noted at the call's begin (WP-432),
   and `__builtin_thread_pointer` likewise (WP-782);
+  `__builtin_extract_return_addr`, `__builtin_frob_return_addr` and
+  `__builtin___clear_cache` likewise (WP-1288);
   every `__builtin___X_chk` likewise (WP-803);
   `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
   scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)

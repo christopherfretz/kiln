@@ -13,8 +13,8 @@ use crate::types::TypeId;
 use crate::value::FuncId;
 
 use AttrKind::{
-    Cold, ImmArg, NoAlias, NoCallback, NoCapture, NoFree, NoReturn, NoSync, NoUndef, NoUnwind,
-    NonNull, ReadOnly, Speculatable, WillReturn, WriteOnly,
+    Cold, Convergent, ImmArg, NoAlias, NoCallback, NoCapture, NoFree, NoReturn, NoSync, NoUndef,
+    NoUnwind, NonNull, ReadOnly, Speculatable, WillReturn, WriteOnly,
 };
 
 /// Function-attribute shapes used by the intrinsics below.
@@ -28,6 +28,9 @@ enum Shape {
     Pure,
     /// `nocallback nofree nosync nounwind willreturn [memory(...)]`.
     Basic(Option<MemoryEffects>),
+    /// `convergent nocallback nofree nosync nounwind willreturn
+    /// memory(none)` (`llvm.is.constant`).
+    ConvergentNoMem,
     /// `cold noreturn nounwind memory(inaccessiblemem: write)`.
     Trap,
     /// `cold noreturn nounwind` (LLVM 19's `llvm.ubsantrap`,
@@ -83,6 +86,15 @@ fn fn_attrs(shape: Shape) -> Vec<Attr> {
             v.extend(mem.map(Attr::Memory));
             v
         }
+        Shape::ConvergentNoMem => vec![
+            f(Convergent),
+            f(NoCallback),
+            f(NoFree),
+            f(NoSync),
+            f(NoUnwind),
+            f(WillReturn),
+            Attr::Memory(MemoryEffects::all(ModRef::None)),
+        ],
         Shape::Trap => vec![
             f(Cold),
             f(NoReturn),
@@ -377,6 +389,22 @@ pub fn ubsantrap(m: &mut Module) -> FuncId {
 /// `void @llvm.debugtrap()`.
 pub fn debugtrap(m: &mut Module) -> FuncId {
     declare(m, "llvm.debugtrap", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
+}
+
+/// `void @llvm.clear_cache(ptr, ptr)`: `nounwind`, as clang 19 declares
+/// it (WP-1288).
+pub fn clear_cache(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let n: &[Attr] = &[];
+    declare(m, "llvm.clear_cache", TypeId::VOID, &[(p, n), (p, n)], &[], Shape::NoUnwind(false))
+}
+
+/// `i1 @llvm.is.constant.<ty>(<ty>)` (`__builtin_constant_p` of a
+/// value the frontend could not fold; WP-1288).
+pub fn is_constant(m: &mut Module, ty: TypeId) -> FuncId {
+    let name = overloaded_name(m, "llvm.is.constant", &[ty]);
+    let n: &[Attr] = &[];
+    declare(m, &name, TypeId::I1, &[(ty, n)], &[], Shape::ConvergentNoMem)
 }
 
 /// `i64 @llvm.readcyclecounter()`: `nocallback nofree nosync nounwind

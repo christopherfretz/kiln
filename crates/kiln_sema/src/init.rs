@@ -408,6 +408,19 @@ impl Sema<'_, '_> {
             })
             .collect();
         let first_designator = heads[0];
+        // C99 allows every designator form (C23 6.7.10), so C has only
+        // C89's one "designated initializers are a C99 feature", at the
+        // list's first designator (clang `ActOnInitList` stops these C++
+        // checks at `!CPlusPlus`).
+        if self.is_c() {
+            if !self.c_at_least(kiln_lex::CStd::C99)
+                && let Some(d) = heads.iter().flatten().next()
+            {
+                let msg = self.diag(DiagId::sema_designated_init_c89, self.designator_begin(d));
+                self.emit(msg);
+            }
+            return;
+        }
         let (mut nested, mut array, mut mixed) = (false, false, false);
         for (item, head) in l.items.iter().zip(&heads) {
             if let Some(d) = head {
@@ -2291,7 +2304,7 @@ impl Sema<'_, '_> {
                     // `CheckSubElementType` with `DirectlyDesignated`,
                     // `ext_designated_init_brace_elision`).
                     let direct = !items[*pos].designator.is_empty();
-                    if direct {
+                    if direct && !self.is_c() {
                         let r = self.expr_range(e);
                         let msg = self
                             .diag(DiagId::sema_designated_init_brace_elision, self.begin_loc(e))
@@ -2467,8 +2480,8 @@ impl Sema<'_, '_> {
                 }
                 // [dcl.init.aggr]/3.1: designators in declaration order
                 // (clang `ext_designated_init_reordered`, checked for the
-                // designators of the list itself).
-                if sub.braced && cur > nb && cur - nb - 1 > idx {
+                // designators of the list itself; C has no such rule).
+                if !self.is_c() && sub.braced && cur > nb && cur - nb - 1 > idx {
                     let prev = fields[cur - nb - 1];
                     let msg = self
                         .diag(DiagId::sema_designated_init_reordered, self.value_begin(item))

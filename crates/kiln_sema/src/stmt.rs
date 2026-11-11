@@ -31,6 +31,9 @@ pub(crate) struct LabelInfo {
     pub defined: Option<Loc>,
     /// The first `goto` naming it.
     pub first_use: Option<Loc>,
+    /// A GNU local label (`__label__ name;`), declared at this location:
+    /// found only from its block ([`Scope::labels`]).
+    pub local: Option<Loc>,
 }
 
 /// One enclosing `switch`.
@@ -205,7 +208,27 @@ impl Sema<'_, '_> {
         {
             self.apply_nrvo(&s);
             if s.kind != ScopeKind::Function {
+                self.check_popped_labels(&s);
                 self.diagnose_unused_locals(&s);
+            }
+        }
+    }
+
+    /// clang `CheckPoppedLabel`: a GNU local label of the block being left
+    /// that was never defined is "use of undeclared label" at its
+    /// declaration.
+    fn check_popped_labels(&mut self, s: &Scope) {
+        for &(name, d) in &s.labels {
+            let undefined = self
+                .func
+                .as_ref()
+                .and_then(|f| f.labels.iter().find(|l| l.decl == d))
+                .and_then(|l| if l.defined.is_none() { l.local } else { None });
+            if let Some(at) = undefined {
+                let msg = self
+                    .diag(DiagId::sema_undeclared_label, at)
+                    .arg(self.ast.symbols().as_str(name).to_string());
+                self.emit(msg);
             }
         }
     }
@@ -1402,10 +1425,41 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The label `name` names here (clang `LookupOrCreateLabel`): the
+    /// innermost GNU local label of that name in an enclosing block of
+    /// this function, else the function's label, created at its first
+    /// mention.
     fn label_decl(&mut self, name: Symbol, loc: Loc) -> DeclId {
-        if let Some(l) = self.func.as_ref().and_then(|f| f.labels.iter().find(|l| l.name == name)) {
+        for s in self.scopes.iter().rev() {
+            if let Some(&(_, d)) = s.labels.iter().rev().find(|l| l.0 == name) {
+                return d;
+            }
+            if s.kind == ScopeKind::Function {
+                break;
+            }
+        }
+        if let Some(l) = self
+            .func
+            .as_ref()
+            .and_then(|f| f.labels.iter().find(|l| l.name == name && l.local.is_none()))
+        {
             return l.decl;
         }
+        self.new_label(name, loc, None)
+    }
+
+    /// GNU `__label__ name;` at the start of a block (clang
+    /// `LookupOrCreateLabel` with a `GnuLabelLoc`): a fresh label, visible
+    /// in the current block, that shadows any label of the same name.
+    pub fn act_on_local_label(&mut self, name: Symbol, loc: Loc) -> DeclId {
+        let d = self.new_label(name, loc, Some(loc));
+        if let Some(s) = self.scopes.last_mut() {
+            s.labels.push((name, d));
+        }
+        d
+    }
+
+    fn new_label(&mut self, name: Symbol, loc: Loc, local: Option<Loc>) -> DeclId {
         let ctx = self.func.as_ref().map_or(self.ctx, |f| f.decl);
         let d = self.ast.decls.push(
             NewDecl {
@@ -1421,7 +1475,7 @@ impl Sema<'_, '_> {
             Payload::None(0),
         );
         if let Some(f) = self.func.as_mut() {
-            f.labels.push(LabelInfo { name, decl: d, defined: None, first_use: None });
+            f.labels.push(LabelInfo { name, decl: d, defined: None, first_use: None, local });
         }
         d
     }
@@ -1433,7 +1487,7 @@ impl Sema<'_, '_> {
             .func
             .as_ref()
             .and_then(|f| f.labels.iter().find(|l| l.decl == d))
-            .and_then(|l| l.defined);
+            .and_then(|l| l.defined.map(|at| l.local.unwrap_or(at)));
         if let Some(prev) = prev {
             let msg = self
                 .diag(DiagId::sema_redefinition_of_label, loc)
@@ -1780,6 +1834,7 @@ impl Sema<'_, '_> {
                 self.scopes.last_mut().expect("function scope"),
                 Scope::new(ScopeKind::Function, None),
             );
+            self.check_popped_labels(&s);
             self.diagnose_unused_locals(&s);
             *self.scopes.last_mut().expect("function scope") = s;
         }
@@ -1851,7 +1906,7 @@ impl Sema<'_, '_> {
             }
         }
         for l in &state.labels {
-            if l.defined.is_none() {
+            if l.defined.is_none() && l.local.is_none() {
                 let msg = self
                     .diag(DiagId::sema_undeclared_label, l.first_use.unwrap_or(rbrace))
                     .arg(self.ast.symbols().as_str(l.name).to_string());
