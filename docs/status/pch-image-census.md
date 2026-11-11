@@ -264,3 +264,65 @@ Reading:
   (as the brief asks), a local, uncommitted build that skips those two
   checks gives, over the 25335 declarations it then counts: 12116
   carried at the base, 12966 carried with this slice (+850).
+
+## WP-1283: class template specializations (2026-11-11)
+
+Debug build of the WP-1283 branch, on top of WP-1279. Two purviews:
+
+- `allstd` as in "Setup" (libc++ 19.1.7);
+- `stdcxx`: `export module stdcxx; export { #include <bits/stdc++.h> }`
+  against libstdc++ 14 (`/usr/include/c++/14`), command as above with
+  `-stdlib=libstdc++` (20 errors; the purview is no more a valid unit
+  than `allstd`).
+
+```
+allstd, before: 26898 top-level declarations, 17680 carried, 9218 not  (17.7 s, 114 MiB)
+allstd, after:  26898 top-level declarations, 18007 carried, 8891 not  (18.8 s, 115 MiB)
+stdcxx, before: 25559 top-level declarations, 17292 carried, 8267 not  (15.7 s,  99 MiB)
+stdcxx, after:  25559 top-level declarations, 17535 carried, 8024 not  (19.2 s,  99 MiB)
+```
+
++327 and +243 carried. The slice carries explicit and partial class
+template specializations, specializations in reopened namespaces and by
+qualified names, literal arguments, and declarator locations
+(spec/modules.md §11.11 "Class template specializations"). Rows that
+changed by more than 20 in either purview (allstd before, after;
+stdcxx before, after):
+
+| allstd | stdcxx | first reason |
+|---|---|---|
+| 933 → 0 | 1128 → 0 | an explicit or partial specialization |
+| 589 → 730 | 486 → 735 | cascade: a specialization of a template outside the image |
+| 750 → 631 | 595 → 625 | cascade: a type declared outside the image |
+| 380 → 468 | 622 → 715 | a type the image does not carry |
+| 449 → 521 | 474 → 570 | a template |
+| 198 → 287 | 43 → 68 | a template parameter the image does not carry |
+| 160 → 201 | 135 → 124 | a template argument the image does not carry |
+| 28 → 70 | 22 → 71 | a constrained template |
+| 92 → 114 | 86 → 131 | a member function template |
+| 631 → 640 | 370 → 423 | a member template or a template in a template |
+| 37 → 45 | 56 → 82 | a class whose implicit special members need overload resolution |
+| 0 → 44 | 0 → 16 | an explicit instantiation |
+| 0 → 40 | 0 → 25 | a static assertion in a template |
+| 0 → 36 | 0 → 5 | an out-of-line member of a class nested in a template |
+| 0 → 34 | 0 → 20 | an explicit specialization argument the image does not carry |
+| 23 → 24 | 1 → 30 | an implicit member of a class template specialization |
+
+Reading:
+
+- Most of the 933 / 1128 now reach the next missing feature rather than
+  being carried: the specialized template itself is refused (the
+  specialization cascade, +141 / +249), or the specialization's body
+  needs a type, template argument or member template the image does
+  not carry. The largest roots are WP-1284's: dependent expressions as
+  non-type arguments (`_BoolConstant = integral_constant<bool, _Val>`,
+  `integral_constant.h:38`, roots most of the 923 alias-template
+  cascade) and constrained templates.
+- "a static assertion in a template" is new and deliberate: the image
+  used to drop such assertions silently (spec/modules.md, "Static
+  assertions in templates").
+- "a template" is now mostly variable template specializations
+  (`body.rs` refuses them), deduction guides and concepts.
+- Not done in this slice and unchanged: member templates (640 / 423),
+  friends (180 / 231), polymorphic class templates (45 / 44), implicit
+  special members needing overload resolution (45 / 82).

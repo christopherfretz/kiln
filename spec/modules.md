@@ -2372,7 +2372,8 @@ rest. Still falling back after the third slice: concepts, constrained
 parameters and templates, requires-clauses and requires-expressions,
 template template parameters, member templates and templates in
 templates, redeclared templates (and inherited defaults), deduction
-guides, explicit and partial specializations, non-dependent references
+guides, explicit and partial specializations (carried since WP-1283,
+below), non-dependent references
 with written template arguments (`size<int>`, `sq<3>`: "a template
 argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
@@ -2416,7 +2417,13 @@ class or of a member template ("a member template or a template in a
 template"), constrained ones ("a constrained template", WP-1284),
 arguments that are dependent expressions ("a partial specialization
 argument the image does not carry"), and variable template
-specializations ("a template").
+specializations ("a template"). The rest of WP-1283's scope also still
+falls back, unchanged: member templates and templates in templates
+(the validator requires a template's parameters and the template itself
+to be in a namespace scope at depth 0), redeclared templates and their
+inherited defaults, pack expansions in base specifiers, polymorphic
+class templates, friends, and classes whose implicit special members
+need overload resolution.
 
 *Static assertions in templates.* A `static_assert` in a class template
 (or a partial specialization) is checked again by each instantiation
