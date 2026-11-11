@@ -3251,7 +3251,11 @@ module (owner byte 0, the unit's own), so the unit may redeclare,
 define, specialize and instantiate them. `install_pragma_state` sets
 the header's Sema pragma stacks from the record (§11.13). The section
 layout is the module image's; `lexterns` (WP-1293) is empty in a module
-image.
+image. The consumer also records the header's namespace-scope functions
+and variables with C language linkage in its "extern C context"
+(`Sema::extern_c`, [dcl.link]/6-7) as replay does, so its own C-linkage
+declarations in other namespaces redeclare or conflict with them
+(WP-1293).
 
 #### Part 2a coverage and follow-ups
 

@@ -4510,6 +4510,7 @@ impl Sema<'_, '_> {
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
+        self.image_extern_c(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);

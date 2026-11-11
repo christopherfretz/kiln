@@ -150,4 +150,44 @@ impl Sema<'_, '_> {
             }
         }
     }
+
+    /// Records the image's namespace-scope functions and variables with C
+    /// language linkage in the consumer's "extern C context"
+    /// ([`Sema::extern_c`], [dcl.link]/6-7), as their declarations did
+    /// in replay (`Sema::record_extern_c`), so a consumer's C-linkage
+    /// declaration in another namespace redeclares or conflicts with
+    /// them. A precompiled header's image only (WP-1293).
+    pub(super) fn image_extern_c(&mut self, img: &Image, ids: &[DeclId]) {
+        if !img.module.is_empty() {
+            return;
+        }
+        for (rec, &d) in img.decls.iter().zip(ids) {
+            if !matches!(rec.payload, Payload::Var { .. } | Payload::Function { kind: 0, .. }) {
+                continue;
+            }
+            let n = self.ast.decls.get(d);
+            let Some(name) = n.name().as_ident() else { continue };
+            let at_ns = n.ctx().is_some_and(|c| {
+                matches!(
+                    self.ast.decls.get(self.ast.redecl_context(c)).kind(),
+                    DeclKind::Namespace | DeclKind::TranslationUnit
+                )
+            });
+            if !at_ns
+                || self.ast.described_template(d).is_some()
+                || n.flags().contains(kiln_ast::decl::DeclFlags::INVALID)
+                || !kiln_abi::mangle::is_extern_c(&self.ast, d)
+                || kiln_abi::mangle::has_internal_linkage(&self.ast, d)
+                || !self.ast.pass_object_size_params(d).is_empty()
+            {
+                continue;
+            }
+            match self.extern_c.get(&name) {
+                Some(&old) if self.ast.first(old) != self.ast.first(d) => {}
+                _ => {
+                    self.extern_c.insert(name, d);
+                }
+            }
+        }
+    }
 }
