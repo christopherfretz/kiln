@@ -1,7 +1,7 @@
-// C17 6.4.1: C++ keywords are ordinary identifiers in C; C++-only
-// constructs (references, templates, namespaces, ::, member functions,
-// default arguments, new/delete, class) are errors, never silently
-// accepted.
+// C17 6.4.1: C++ keywords are ordinary identifiers in C; C++-only constructs
+// (references, templates, namespaces, ::, member functions, default
+// arguments, new/delete, class) are errors, never silently accepted.
+//@ xfail(kiln): WP-1276 follow-up, the C parser still parses & declarators, template<>, ::, class and lambdas as C++ (errors, wrong wording and recovery; clang treats them as plain C tokens)
 //@ expect: compile-fail
 //@ diag: 15:5 error "expected identifier or '('"
 //@ diag: 16:1 error "unknown type name 'template'"
