@@ -1791,9 +1791,13 @@ impl Printer<'_> {
                 self.after(e);
             }
             TypeView::VariableArray { elem, size } => {
-                self.push("[");
-                self.expr(size);
-                self.push("]");
+                if self.ctx.vla_star_bound == Some(size) {
+                    self.push("[*]");
+                } else {
+                    self.push("[");
+                    self.expr(size);
+                    self.push("]");
+                }
                 self.after(elem);
             }
             TypeView::DependentSizedArray { elem, size } => {
@@ -1847,32 +1851,38 @@ impl Printer<'_> {
                 }
             }
             TypeView::Attributed { kind, modified, equivalent } => {
-                let saved = self.inside_cc_attr;
-                self.inside_cc_attr = kind == TypeAttrKind::CallingConv;
-                self.after(modified);
-                self.inside_cc_attr = saved;
-                match kind {
-                    TypeAttrKind::Nonnull
-                    | TypeAttrKind::Nullable
-                    | TypeAttrKind::NullUnspecified
-                    | TypeAttrKind::NullableResult
-                    | TypeAttrKind::Other => {}
-                    TypeAttrKind::LifetimeBound => self.push(" [[clang::lifetimebound]]"),
-                    TypeAttrKind::NoDeref => self.push(" __attribute__((noderef))"),
-                    TypeAttrKind::NoReturn => self.push(" __attribute__((noreturn))"),
-                    TypeAttrKind::CallingConv => {
-                        let cc = self.cc_of(equivalent);
-                        let spelling = match cc {
-                            CallConv::C | CallConv::Default => "cdecl",
-                            cc => cc.attribute().unwrap_or("cdecl"),
-                        };
-                        self.push(" __attribute__((");
-                        self.push(spelling);
-                        self.push("))");
-                    }
-                }
+                self.attributed_after(kind, modified, equivalent);
             }
             _ => {}
+        }
+    }
+
+    /// [`Self::after_node`] of an attributed type: the modified type's
+    /// suffix, then the attribute's spelling.
+    fn attributed_after(&mut self, kind: TypeAttrKind, modified: QualType, equivalent: QualType) {
+        let saved = self.inside_cc_attr;
+        self.inside_cc_attr = kind == TypeAttrKind::CallingConv;
+        self.after(modified);
+        self.inside_cc_attr = saved;
+        match kind {
+            TypeAttrKind::Nonnull
+            | TypeAttrKind::Nullable
+            | TypeAttrKind::NullUnspecified
+            | TypeAttrKind::NullableResult
+            | TypeAttrKind::Other => {}
+            TypeAttrKind::LifetimeBound => self.push(" [[clang::lifetimebound]]"),
+            TypeAttrKind::NoDeref => self.push(" __attribute__((noderef))"),
+            TypeAttrKind::NoReturn => self.push(" __attribute__((noreturn))"),
+            TypeAttrKind::CallingConv => {
+                let cc = self.cc_of(equivalent);
+                let spelling = match cc {
+                    CallConv::C | CallConv::Default => "cdecl",
+                    cc => cc.attribute().unwrap_or("cdecl"),
+                };
+                self.push(" __attribute__((");
+                self.push(spelling);
+                self.push("))");
+            }
         }
     }
 

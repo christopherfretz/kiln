@@ -63,6 +63,58 @@ the C-specific rules (tag namespaces, `void *` conversions, the type of
 a character literal, tentative definitions, K&R definitions, VLAs,
 compound literals) are WP-1276's.
 
+#### 1.0.1 C array declarators, VLAs, compound literals and transparent unions (WP-1287)
+- **Array parameters** (C17 6.7.6.2p1, 6.7.6.3p7; `vla.rs`): the
+  qualifiers and `static` inside a parameter's outermost `[ ]` (parsed
+  by `parse_bracket_quals`, spec/parse.md) qualify the pointer it is
+  adjusted to (`int a[restrict const static 4]` is `int *const
+  restrict`); either outside a function parameter's outermost bound is
+  an error, as in clang. `-Warray-parameter` (in `-Wall`) warns when a
+  redeclaration's array parameter has a different constant bound or
+  form, with the previous declaration's note.
+- **VLAs** (6.7.6.2p4-p5): a non-constant bound makes a `VariableArray`
+  (flagged `VARIABLY_MODIFIED`, never interned); `[*]` (only in a
+  prototype; in a definition an error) is the shared star bound
+  (`TypeContext::vla_star_bound`, printed `[*]`). A function type's
+  parameters are star-decayed, so `void f(int n, int a[n][n])` and
+  `void f(int, int a[*][*])` are compatible; the `ParmVarDecl` keeps the
+  written type, whose bounds codegen evaluates in the prologue. Pointer
+  compatibility (`conv::c_assign::compatible`, 6.2.7) treats a VLA
+  bound as matching any bound, which also gives `composite_pointer`
+  its C rule (pointers to compatible types compare and convert). A
+  `goto` or `switch` jump into the scope of a VLA is an error
+  (spec/sema.md §7; `tests/c/stmt/jump-into-vla-scope.c`). `-Wvla` is
+  off by default, `-Wvla-extension` warns before C99 under
+  `-pedantic`. In C++ the same VLAs are the GNU extension
+  (`-Wvla-cxx-extension`), as in clang. A variably modified expression
+  never folds: the Oven traps it (spec/oven.md).
+- **Compound literals** (6.5.2.5p4-p5): in C every literal is an lvalue
+  `CompoundLiteralExpr`, never a temporary (no `maybe_bind_temporary`,
+  no `MaterializeTemporaryExpr`): inside a function it names an
+  automatic object living to the end of its block (`c_compound_literal`),
+  at file scope an implicit internal static variable for every type, not
+  only arrays (`file_scope_compound_literal`, after the constant
+  initializer check). Use sites see the usual lvalue conversion or
+  decay. C++ keeps the prvalue rules of §5.8.
+- **Subscripts** (6.5.2.1p2): in C `E1[E2]` is always an lvalue, also on
+  the array member of a structure returned by value (`c_subscript`).
+- **Compound assignment** (6.5.16.2p3): an arithmetic left operand
+  suffices in C, so `e |= X` on an enumeration and `d += 1.0i` on a
+  real operand are valid; the result converts back to the left
+  operand's type. C++ rejects both (clang's incompatible-type error).
+- **`transparent_union`** (clang `handleTransparentUnionAttr`,
+  `transparent_union.rs`): in C the attribute is kept on a union
+  definition (after the class-key, after the closing brace, or on a
+  typedef of a complete union, glibc's `__SOCKADDR_ARG`) whose fields
+  pass the WP-809 field checks; elsewhere it is dropped with clang's
+  warnings. An argument for a parameter of such a union that is not
+  the union itself initializes the first member that takes it (a
+  pointer member a `void *` or null pointer constant, any member a
+  diagnostic-free assignment; clang
+  `CheckTransparentUnionArgumentConstraints`), built as an
+  `InitListExpr` naming that member; the ABI passes the union as its
+  first field (`kiln_abi::call`). C++ keeps WP-809's ignored warning.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output
@@ -6137,8 +6189,8 @@ for them.
   `OpaqueValueExpr`. Unless both operands are glvalues of the same
   type, `x` gets the usual unary conversions first.
 - **Compound literals** `( T ) { ... }` (`act_on_compound_literal`;
-  clang's `BuildCompoundLiteralExpr`): a prvalue
-  `CompoundLiteralExpr` of the written type, holding the
+  clang's `BuildCompoundLiteralExpr`): in C++ a prvalue (in C an
+  lvalue, §1.0.1) `CompoundLiteralExpr` of the written type, holding the
   list-initialization of cv-unqualified `T`, done as if by a C-style
   cast at the `(`. clang's diagnostics follow from that:
   - a reference type cannot bind to an initializer list;
@@ -8711,6 +8763,76 @@ clang `CheckCompletedExpr` → `CheckForIntOverflow` →
   evaluation's mark, spec/sema-templates.md §10.2): the error prints as
   an instantiation outside any evaluation does.
   Test: `meta.reflection.queries/is-complete-type-never-constant-frames.cpp`.
+
+### 5.29 C expression semantics (`expr/c_ops.rs`, WP-1285)
+In C (`Sema::is_c()`) clang accepts several C constraint violations as
+warnings and converts the operands as GCC does. kiln follows its C paths
+(`CheckCStyleCast`, `CheckCompareOperands`, `CheckConditionalOperands`):
+- **Pointer/integer casts** (C17 6.3.2.3p5-6, 6.5.4; `c_pointer_int_cast`).
+  A cast between a pointer and an integer or enumeration of any width is
+  valid. A pointer cast to a non-`_Bool` integer narrower than a pointer
+  warns "cast to smaller integer type {1} from {0}" at the `(`:
+  `-Wvoid-pointer-to-int-cast` from `void *`, `-Wpointer-to-enum-cast` /
+  `-Wvoid-pointer-to-enum-cast` to an enumeration, else
+  `-Wpointer-to-int-cast`. A non-`_Bool`, non-enumeration integer that is
+  not an integer constant expression, cast to a wider pointer, warns
+  "cast to {1} from smaller integer type {0}" (`-Wint-to-pointer-cast`,
+  `-Wint-to-void-pointer-cast`). The casts are `IntegralToPointer`,
+  `PointerToIntegral` and `PointerToBoolean`. A floating or complex type
+  on either side of a pointer is an error at the operand (6.5.4p4).
+- **`void *` and function-pointer arithmetic** (GNU). `+`, `-`, `++`,
+  `--`, compound assignment and a pointer difference on a pointer to
+  `void` or to a function take element size 1; they warn only under
+  `-Wpointer-arith` (off by default). A `void *` may be subscripted (the
+  element lvalue has type `void`; codegen steps by bytes). `sizeof`,
+  `_Alignof` of `void` or of a function type (or a function designator)
+  are 1, under the same group (`check_trait_operand_named`;
+  `Types::sizeof_value` in the Oven). In C++ all of these stay errors.
+- **Comparisons** (C17 6.5.8, 6.5.9; `c_pointer_comparison`). Two
+  pointers to incompatible types (qualifiers aside) warn
+  `-Wcompare-distinct-pointer-types` (an equality operator with a `void *`
+  operand is valid, except that a function pointer against a non-null
+  `void *` is a pedantic extension). Ordered function pointers warn
+  `-Wordered-compare-function-pointers`. A pointer against a non-null
+  integer warns `-Wpointer-integer-compare` (equality) or with no group
+  (relational); an ordered pointer against a null pointer constant is
+  pedantic. The integer converts to the pointer type
+  (`NullToPointer`/`IntegralToPointer`); distinct pointers bit-cast the
+  right operand to the left's type, or the left to the right's when only
+  the left is a null pointer constant. The result is `int`.
+- **Conditional operator** (C17 6.5.15p3-6; `c_conditional`). Arithmetic
+  operands take the usual arithmetic conversions. A `void` operand
+  converts both to `void` (only one `void`: a pedantic extension). Two
+  structures of the same type give it unqualified. A null pointer
+  constant takes the other pointer's type. Two pointers to compatible
+  types give a pointer to their composite type (6.2.7p3: the bounded
+  array, the prototyped function) carrying both qualifier sets; a pointer
+  to `void` against an object pointer gives a pointer to `void` with both
+  qualifier sets. Incompatible pointers warn "pointer type mismatch"
+  (`-Wpointer-type-mismatch`) and give `void *`; a pointer and an integer
+  warn "pointer/integer type mismatch in conditional expression"
+  (`-Wconditional-type-mismatch`) and give the pointer type.
+- **Incompatible pointer assignment** (C17 6.5.16.1p1;
+  `conv/c_assign.rs`). It is a warning at `-fclang-compat=19` and an
+  error by default (still `-Wincompatible-pointer-types`, so
+  `-Wno-error=` demotes it) at 22, as each clang release.
+- **Tags in type names** (C17 6.7.2.3). A `struct`, `union` or `enum`
+  may be defined in a cast, `sizeof`, `_Alignof`, `_Generic` association,
+  `__builtin_offsetof` or a function's result type; C has no base clause,
+  so `_Generic(e, struct S: 1)` names `S`. A forward reference to an
+  `enum` is a pedantic extension, not C++'s error. A tag defined in a
+  parameter type is scoped to the prototype (6.2.1p4): a named tag or
+  any `enum` warns "declaration of 'T' will not be visible outside of
+  this function" (`-Wvisibility`, on by default), an unnamed `struct` or
+  `union` is silent (`tests/c/decl/param-tag-visibility.c`).
+- **`void` indirection** (C17 6.5.3.2p4, DR 106). `*p` of a pointer to
+  (qualified) `void` is a `void` expression: an on-by-default
+  `-Wvoid-ptr-dereference` extension warning, not C++'s error
+  (`tests/c/expr/void-pointer-dereference.c`).
+- **Comma operator** (C17 6.5.17p2). The right operand takes the
+  array/function-to-pointer and lvalue conversions (`conv::decay`), so
+  the result is a prvalue: `sizeof (0, f)` is a pointer's size.
+Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.c`.
 
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:

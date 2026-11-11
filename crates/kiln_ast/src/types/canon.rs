@@ -285,11 +285,20 @@ impl TypeContext {
     }
 
     /// `T[n]` with a runtime bound (a VLA, GNU extension): a `D/O` node,
-    /// never interned.
+    /// never interned, except `T[*]` (the shared bound
+    /// [`TypeContext::vla_star_bound`]), so that two `[*]` parameter types
+    /// in function types are the same type (C17 6.7.6.3p15).
     pub fn variable_array(&mut self, elem: QualType, size: ExprId) -> QualType {
         let t: TypeId = {
             let flags = self.qflags(elem) | TypeFlags::VARIABLY_MODIFIED;
             let key = Key::pair(TypeKind::VariableArray, 0, raw(elem), size.raw());
+            if self.vla_star_bound == Some(size) {
+                let t = self.intern_with(key, flags, |ctx| {
+                    let ce = ctx.canon_if(elem)?;
+                    Some(Self::uq(ctx.variable_array(ce, size)))
+                });
+                return t.into();
+            }
             let canon = self.canon_if(elem).map(|ce| Self::uq(self.variable_array(ce, size)));
             self.create(&key, flags, canon, None)
         };

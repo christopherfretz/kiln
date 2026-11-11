@@ -1327,7 +1327,7 @@ impl Parser<'_, '_> {
     /// error.
     pub(crate) fn parse_typeof_specifier(&mut self, unqual: bool) -> Option<QualType> {
         let loc = self.bump().span.lo;
-        match self.parse_trait_operand()? {
+        match self.parse_trait_operand(false)? {
             crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
             crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e?, loc, unqual),
         }
@@ -2128,7 +2128,9 @@ impl Parser<'_, '_> {
     ) -> bool {
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
         let mut invalid = false;
-        if type_spec {
+        // C defines a tag anywhere a type name appears (C17 6.7.2.3p6): a
+        // cast, `sizeof`, `_Generic` (clang `ActOnTag` checks `CPlusPlus`).
+        if type_spec && !self.s.is_c() {
             self.s.diag_type_defined_in(d, TagDefinedIn::TypeSpecifier, false);
             invalid = true;
         }
@@ -2137,8 +2139,17 @@ impl Parser<'_, '_> {
             invalid = true;
         }
         if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
-            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
-            invalid = true;
+            if self.s.is_c() {
+                // C17 6.2.1p4: a tag in a parameter list has prototype
+                // scope; clang warns (`-Wvisibility`). WP-1285.
+                let ty = self.s.elaborated_tag_type(d, keyword);
+                let loc = self.s.ast.decls.get(d).loc();
+                let msg = self.s.diag(DiagId::sema_c_param_tag_not_visible, loc);
+                self.emit(msg.arg(self.s.ty_arg(ty)));
+            } else {
+                self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+                invalid = true;
+            }
         }
         if invalid {
             ds.invalid = true;
@@ -2154,6 +2165,11 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        // C defines a tag in any type name or parameter type (C17
+        // 6.7.2.3p6, 6.2.1p4).
+        if self.s.is_c() {
+            return;
+        }
         let rule = match (Self::tag_site(ds, ctx), ctx) {
             (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
             (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
@@ -2179,6 +2195,11 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
     fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        // C17 6.9.1: a function's result type may define a tag (clang
+        // `GetFullTypeForDeclarator` checks `CPlusPlus`).
+        if self.s.is_c() {
+            return;
+        }
         let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
         for c in &d.chunks {
             if matches!(c, Chunk::Function { .. }) {
@@ -2423,7 +2444,9 @@ impl Parser<'_, '_> {
         let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
         let use_ = if can_define
             && (self.at(Punct::LBrace)
-                || (is_class && self.at(Punct::Colon))
+                // C has no base clause: `_Generic(e, struct S: 1)` names
+                // `S` (clang `ParseClassSpecifier` checks `CPlusPlus`).
+                || (is_class && self.at(Punct::Colon) && !self.s.is_c())
                 || final_loc.is_some())
         {
             TagUse::Definition
@@ -2859,38 +2882,75 @@ impl Parser<'_, '_> {
     }
 
     /// C99's `static` and type-qualifier-list in an array declarator's
-    /// brackets (clang `ParseBracketDeclarator`): both are errors in C++
-    /// ("... is a C99 feature" on a parameter's outermost array, else
-    /// "... outside of function prototype", which invalidates the
-    /// declarator), at the `[`. A nullability qualifier there is
-    /// a clang extension: it applies to the array, which only the
-    /// parameter's outermost one may carry (it moves to the decayed
-    /// pointer; spec/sema.md §4.1.1).
+    /// brackets, and the `[*]` of a variable length array of unspecified
+    /// size (clang `ParseBracketDeclarator`, with the checks of
+    /// `GetFullTypeForDeclarator`, all at the `[`; C17 6.7.6.2p1, p4):
+    /// - `static` needs a bound ("may not be used without an array
+    ///   size", at the `static`, which is dropped);
+    /// - outside a parameter declaration they are "... outside of
+    ///   function prototype" (in C++ that invalidates the declarator; C
+    ///   drops them, as clang);
+    /// - inside one but not on the outermost array derivation (an array,
+    ///   pointer or reference chunk is closer to the name) they are
+    ///   "... non-outermost array type derivation" and dropped;
+    /// - on the outermost one they are an error in C++ ("... is a C99
+    ///   feature"); in C they are recorded on the declarator
+    ///   (`Declarator::array_param_quals`), for the adjusted pointer;
+    /// - `[*]` outside a prototype is "star modifier used outside of
+    ///   function prototype" and makes an array of unknown bound; inside
+    ///   one it is recorded (`Declarator::array_stars`).
+    ///
+    /// A nullability qualifier there is a clang extension: it applies to
+    /// the array, which only the parameter's outermost one may carry (it
+    /// moves to the decayed pointer; spec/sema.md §4.1.1).
     fn parse_bracket_quals(&mut self, d: &mut Declarator, open: Loc) {
-        let mut stat = self.at_kw(Kw::Static);
-        if stat {
-            self.bump();
-        }
+        let mut static_at = self.at_kw(Kw::Static).then(|| self.bump().span.lo);
         let (quals, nulls) = self.parse_ptr_quals();
-        if !stat && !quals.is_empty() && self.at_kw(Kw::Static) {
-            self.bump();
-            stat = true;
+        if static_at.is_none() && !quals.is_empty() && self.at_kw(Kw::Static) {
+            static_at = Some(self.bump().span.lo);
         }
         let i = d.chunks.len();
         d.nullability.extend(nulls.into_iter().map(|n| (i, n)));
-        if !stat && quals.is_empty() {
+        let proto = d.ctx == DeclaratorContext::Prototype;
+        // clang `hasOuterPointerLikeChunk`: chunk 0 is the outermost
+        // derivation; a function chunk outside is invalid anyway.
+        let outer = d.chunks.iter().any(|c| !matches!(c, Chunk::Function { .. }));
+        let star = self.at(Punct::Star) && Self::punct_of(self.peek(1)) == Some(Punct::RSquare);
+        if star {
+            let at = self.bump().span.lo;
+            if let Some(l) = static_at.take() {
+                self.emit(self.s.diag(DiagId::parse_unspecified_vla_size_with_static, l));
+            }
+            if proto {
+                d.array_stars.push((i, at));
+            } else {
+                self.emit(self.s.diag(DiagId::parse_array_star_outside_prototype, open));
+            }
+        } else if self.at(Punct::RSquare)
+            && let Some(l) = static_at.take()
+        {
+            self.emit(self.s.diag(DiagId::parse_unspecified_size_with_static, l));
+        }
+        if static_at.is_none() && quals.is_empty() {
             return;
         }
-        let param = d.ctx == DeclaratorContext::Prototype && i == 0;
-        let id = match (param, stat) {
-            (true, _) => DiagId::parse_c99_array_usage_cxx,
-            (false, true) => DiagId::parse_array_static_outside_prototype,
-            (false, false) => DiagId::parse_array_qual_outside_prototype,
+        let c = self.s.is_c();
+        let id = match (proto, outer, static_at.is_some()) {
+            (false, _, true) => DiagId::parse_array_static_outside_prototype,
+            (false, _, false) => DiagId::parse_array_qual_outside_prototype,
+            (true, true, true) => DiagId::parse_array_static_not_outermost,
+            (true, true, false) => DiagId::parse_array_qual_not_outermost,
+            (true, false, _) if c => {
+                d.array_param_quals = quals;
+                d.array_param_static = static_at.map(|_| open);
+                return;
+            }
+            (true, false, _) => DiagId::parse_c99_array_usage_cxx,
         };
         let mut diag = self.s.diag(id, open);
-        if param {
-            diag = diag.arg(u8::from(stat));
-        } else {
+        if id == DiagId::parse_c99_array_usage_cxx {
+            diag = diag.arg(u8::from(static_at.is_some()));
+        } else if !proto && !c {
             d.invalid = true;
         }
         self.emit(diag);

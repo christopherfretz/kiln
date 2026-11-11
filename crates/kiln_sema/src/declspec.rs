@@ -878,6 +878,17 @@ pub struct Declarator {
     /// Not the first declarator of its declaration (clang's
     /// `!isFirstDeclarator()`: a comma precedes it).
     pub after_comma: bool,
+    /// C (C17 6.7.6.2p1, 6.7.6.3p7): the type qualifiers and `static`
+    /// written inside the `[ ]` of a parameter's outermost array
+    /// derivation (chunk 0), applied to the adjusted pointer
+    /// (`int a[const restrict static 2]` is `int *const restrict`).
+    pub array_param_quals: Quals,
+    /// Where that `static` was written (the `[`), with its bound.
+    pub array_param_static: Option<Loc>,
+    /// C (C17 6.7.6.2p4): the `[*]` array chunks (a variable length
+    /// array of unspecified size, only in a prototype that is not a
+    /// definition), by chunk index, with the `*`.
+    pub array_stars: Vec<(usize, Loc)>,
 }
 
 /// Where a declarator appears, refining [`DeclaratorContext`] for the
@@ -997,6 +1008,9 @@ impl Declarator {
             outer_paren: None,
             parens: Vec::new(),
             after_comma: false,
+            array_param_quals: Quals::NONE,
+            array_param_static: None,
+            array_stars: Vec::new(),
             global_qualifier: false,
             virt_override: None,
             virt_final: None,

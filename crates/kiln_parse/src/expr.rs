@@ -780,7 +780,7 @@ impl Parser<'_, '_> {
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
         }
-        match self.parse_trait_operand()? {
+        match self.parse_trait_operand(true)? {
             TraitOperand::Type(ty, rparen) => Some(self.s.act_on_trait_type(kind, ty, loc, rparen)),
             TraitOperand::Expr(e) => {
                 // [expr.alignof]/1 takes a type-id; `alignof e` is a GNU
@@ -800,8 +800,9 @@ impl Parser<'_, '_> {
     /// The operand of `sizeof`/`alignof` or GNU `typeof`, after the
     /// keyword (clang `ParseExprAfterUnaryExprOrTypeTrait`): `( type-id )`,
     /// or an unevaluated unary-expression (a parenthesized one takes its
-    /// postfix suffix). `None` after an error.
-    pub(crate) fn parse_trait_operand(&mut self) -> Option<TraitOperand> {
+    /// postfix suffix). With `literal` (`sizeof`/`alignof`), a `{` after
+    /// a `( type-id )` opens a compound literal. `None` after an error.
+    pub(crate) fn parse_trait_operand(&mut self, literal: bool) -> Option<TraitOperand> {
         self.s.enter_unevaluated();
         let scoped = self.open_paren_template_scope();
         self.s.exit_unevaluated();
@@ -812,7 +813,7 @@ impl Parser<'_, '_> {
                     return None;
                 };
                 let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-                return Some(TraitOperand::Type(ty, rparen));
+                return Some(self.trait_type_or_literal(ty, open, rparen, literal));
             }
             self.s.enter_unevaluated();
             let e = self
@@ -830,12 +831,35 @@ impl Parser<'_, '_> {
                 return None;
             };
             let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
-            return Some(TraitOperand::Type(ty, rparen));
+            return Some(self.trait_type_or_literal(ty, open, rparen, literal));
         }
         self.s.enter_unevaluated();
         let e = self.parse_cast_expr();
         self.s.exit_unevaluated();
         Some(TraitOperand::Expr(e))
+    }
+
+    /// A `( type-id )` trait operand, or the compound literal it opens
+    /// when a `{` follows: `sizeof (struct S){ 0 }` is `sizeof` of a
+    /// unary-expression (C17 6.5.3.4p1; clang's
+    /// `ParseExprAfterUnaryExprOrTypeTrait` → `ParseCompoundLiteralExpression`).
+    fn trait_type_or_literal(
+        &mut self,
+        ty: QualType,
+        open: Loc,
+        rparen: Loc,
+        literal: bool,
+    ) -> TraitOperand {
+        if !literal || !self.at(Punct::LBrace) {
+            return TraitOperand::Type(ty, rparen);
+        }
+        self.s.enter_unevaluated();
+        let e = self.parse_init_list().ok().and_then(|l| {
+            let e = self.s.act_on_compound_literal(ty, &l, open);
+            self.parse_postfix_suffix(e)
+        });
+        self.s.exit_unevaluated();
+        TraitOperand::Expr(e)
     }
 
     /// A builtin type trait `__trait ( ... )` (spec/sema-templates.md

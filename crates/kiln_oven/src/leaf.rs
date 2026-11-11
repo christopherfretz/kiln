@@ -604,7 +604,7 @@ impl Oven {
         match kind {
             TraitKind::SizeOf if !is_vla(ast, q) => {
                 let t = self.types.intern(b, q);
-                Some(u128::from(self.types.size(t)))
+                Some(u128::from(self.types.sizeof_value(t)))
             }
             TraitKind::AlignOf | TraitKind::PreferredAlignOf if !typedef_attributed(ast, q) => {
                 let t = self.types.intern(b, q);

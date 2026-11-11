@@ -98,6 +98,7 @@ note_previous_attribute = Note (0) "previous attribute is here";
 note_previous_binding_pack = Note (0) "previous binding pack specified here";
 note_previous_builtin_declaration = Note (2) "'{0}' is a builtin with type {1}";
 note_previous_declaration = Note (0) "previous declaration is here";
+note_previous_declaration_as = Note (1) "previously declared as {0} here";
 note_previous_default_assoc = Note (0) "previous default generic association is here";
 note_previous_definition = Note (0) "previous definition is here";
 note_previous_exception_handler = Note (1) "for type {0}";
