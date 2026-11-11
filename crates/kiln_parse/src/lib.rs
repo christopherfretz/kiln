@@ -131,6 +131,10 @@ pub struct ParseOptions {
     /// Record the main unit's declaration image for a kind-2 module file
     /// ([`ParsedTu::image`], spec/modules.md §11.11 "Part 2a").
     pub record_image: bool,
+    /// Count why the declaration image cannot carry each top-level
+    /// declaration ([`ParsedTu::image_census`], spec/modules.md §11.11
+    /// "Fallback census").
+    pub image_census: bool,
 }
 
 impl Default for ParseOptions {
@@ -141,6 +145,7 @@ impl Default for ParseOptions {
             keep_tokens: false,
             record_carried: false,
             record_image: false,
+            image_census: false,
             exceptions: true,
             rtti: true,
             gnu: false,
@@ -252,6 +257,9 @@ pub struct ParsedTu {
     /// The main unit's declaration image, when
     /// [`ParseOptions::record_image`] (spec/modules.md §11.11 "Part 2a").
     pub image: Option<kiln_sema::ModuleImage>,
+    /// The fallback census, when [`ParseOptions::image_census`] and the
+    /// main unit is a module unit.
+    pub image_census: Option<kiln_sema::ImageCensus>,
 }
 
 impl ParsedTu {
@@ -413,9 +421,19 @@ pub fn parse_preprocessed<'a, 'sm>(
     let sema_memory = s.memory();
     let carried = s.take_carried_section();
     let image = s.take_module_image();
+    let image_census = if opts.image_census { s.image_census() } else { None };
     let carried_hits = s.carried_hits();
     let (ast, oven) = s.into_parts();
-    let tu =
-        ParsedTu { ast, oven, inst_report, cfg_dump, sema_memory, carried, carried_hits, image };
+    let tu = ParsedTu {
+        ast,
+        oven,
+        inst_report,
+        cfg_dump,
+        sema_memory,
+        carried,
+        carried_hits,
+        image,
+        image_census,
+    };
     (tu, src.into_preprocessor())
 }

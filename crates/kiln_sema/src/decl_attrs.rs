@@ -19,7 +19,7 @@ use crate::declspec::DeclSpec;
 /// The attribute's name as clang prints it (no scope, no `__` affixes);
 /// `None` for the vector and other type attributes, which may appear in
 /// a type position.
-fn attr_name(node: &AttrNode) -> Option<&'static str> {
+pub(crate) fn attr_name(node: &AttrNode) -> Option<&'static str> {
     Some(match node.kind {
         AttrKind::NODISCARD if node.is_gnu_spelling() => "warn_unused_result",
         AttrKind::NODISCARD => "nodiscard",

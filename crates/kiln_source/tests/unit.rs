@@ -838,3 +838,82 @@ fn lex_phases_line_table_matches_bytewise_reference() {
         assert_eq!(sm.line_count(f), line, "case {case}");
     }
 }
+
+// ----- lazy buffers (spec/source.md "Lazy buffers", WP-1070) -----------
+
+#[test]
+fn lazy_file_reads_on_first_use_and_shares_its_id() {
+    use kiln_source::hash::content_hash;
+    use kiln_source::{LazyFile, LazyOutcome};
+    let d = TempDir::new("lazy");
+    let p = d.0.join("h.h");
+    let text = "int a;\nint b;\n";
+    fs::write(&p, text).unwrap();
+    let sm = SourceManager::new();
+    let hash = content_hash(text.as_bytes());
+    let LazyFile::Added(id) = sm.add_lazy_file("h.h", &p, text.len() as u32, hash, None) else {
+        panic!("not added")
+    };
+    assert_eq!(sm.file_name(id), "h.h");
+    assert_eq!(sm.loaded_file(&p), Some(id));
+    let lc = sm.line_col(sm.loc(id, 9)).unwrap();
+    assert_eq!((lc.line, lc.col), (2, 3));
+    assert!(sm.lazy_fallbacks().is_empty());
+    // A load of the same file finds the lazy buffer.
+    assert_eq!(sm.load_file(&p).unwrap(), id);
+    assert!(matches!(
+        sm.add_lazy_file("h.h", &p, text.len() as u32, hash, None),
+        LazyFile::Loaded(i) if i == id
+    ));
+    let _ = LazyOutcome::Disk;
+}
+
+#[test]
+fn lazy_file_changed_uses_the_copy_or_reports_nothing() {
+    use kiln_source::hash::content_hash;
+    use kiln_source::{LazyFile, LazyOutcome};
+    let d = TempDir::new("lazy-changed");
+    let p = d.0.join("h.h");
+    let text = "int a;\nint b;\n";
+    fs::write(&p, "int x;\nint y;\n").unwrap();
+    let sm = SourceManager::new();
+    let hash = content_hash(text.as_bytes());
+    let len = text.len() as u32;
+    assert_eq!(sm.add_lazy_file("h.h", &d.0.join("none.h"), len, hash, None), LazyFile::Missing);
+    assert_eq!(sm.add_lazy_file("h.h", &p, len + 1, hash, None), LazyFile::Changed);
+    let copy: kiln_source::LazyCopy = Box::new(move || Some(text.to_owned()));
+    let LazyFile::Added(id) = sm.add_lazy_file("h.h", &p, len, hash, Some(copy)) else {
+        panic!("not added")
+    };
+    assert_eq!(sm.text(id), text);
+    assert_eq!(sm.lazy_fallbacks(), vec![(id, LazyOutcome::Copy)]);
+    // The importer's own load of the changed file gets its disk text.
+    let other = sm.load_file(&p).unwrap();
+    assert_ne!(other, id);
+    assert_eq!(sm.text(other), "int x;\nint y;\n");
+
+    // Without a copy: no line or column, text of the recorded length.
+    let sm = SourceManager::new();
+    let LazyFile::Added(id) = sm.add_lazy_file("h.h", &p, len, hash, None) else {
+        panic!("not added")
+    };
+    assert_eq!(sm.line_col(sm.loc(id, 9)), None);
+    assert!(sm.presumed_line_col(sm.loc(id, 9)).is_none());
+    assert_eq!(sm.line_text(id, 1), None);
+    assert_eq!(sm.text(id).len(), text.len());
+    assert_eq!(sm.lazy_fallbacks(), vec![(id, LazyOutcome::Unavailable)]);
+}
+
+#[test]
+fn file_queries_for_the_image_file_table() {
+    let sm = SourceManager::new();
+    let v = sm.add_virtual("<scratch space>", "a##b\n".into()).unwrap();
+    assert!(sm.is_virtual(v));
+    assert!(!sm.has_line_directives(v));
+    sm.add_line_directive(v, 0, 10, Some("fake.h"));
+    assert!(sm.has_line_directives(v));
+    let at = sm.add_inclusion(v, Loc::INVALID).unwrap();
+    sm.set_file_kind(at.with_offset(2), FileKind::System);
+    assert_eq!(sm.file_kind_marks(at), vec![(2, FileKind::System)]);
+    assert!(sm.file_kind_marks(sm.loc(v, 0)).is_empty());
+}

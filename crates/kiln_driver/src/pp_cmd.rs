@@ -677,6 +677,81 @@ impl Job<'_> {
         }
     }
 
+    /// With `-v`, one note per header of an imported declaration image
+    /// that a diagnostic needed and that changed on disk since the module
+    /// file was built: its recorded text was shown instead, or none was
+    /// left to show (spec/modules.md §11.11 "File table").
+    pub(crate) fn note_lazy_buffers(&self, sm: &SourceManager, engine: &DiagEngine<'_>) {
+        if !self.args.verbose {
+            return;
+        }
+        engine.flush();
+        let mut err = self.stderr.clone();
+        for (f, how) in sm.lazy_fallbacks() {
+            let name = sm.file_name(f);
+            let _ = match how {
+                kiln_source::LazyOutcome::Copy => writeln!(
+                    err,
+                    "note: '{name}' changed since its module file was built; its recorded text is shown"
+                ),
+                _ => writeln!(
+                    err,
+                    "note: '{name}' changed since its module file was built; its text is not available"
+                ),
+            };
+        }
+    }
+
+    /// After a compile: the `-v` notes on lazy buffers, then the census.
+    pub(crate) fn write_image_reports(
+        &self,
+        sm: &SourceManager,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        self.note_lazy_buffers(sm, engine);
+        self.write_image_census(census, engine);
+    }
+
+    /// `-fkiln-bmi-image-census`: the census table on stderr
+    /// (spec/modules.md §11.11 "Fallback census").
+    pub(crate) fn write_image_census(
+        &self,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        if !self.args.bmi_image_census {
+            return;
+        }
+        engine.flush();
+        let mut err = self.stderr.clone();
+        let Some(c) = census else {
+            let _ = writeln!(err, "image census: not a module unit");
+            return;
+        };
+        if let Some(why) = c.unit {
+            let _ = writeln!(err, "image census for '{}': no image: {why}", c.module);
+            return;
+        }
+        let refused: usize = c.rows.iter().map(|r| r.count).sum();
+        let _ = writeln!(
+            err,
+            "image census for '{}': {} top-level declarations, {} carried, {refused} not",
+            c.module,
+            c.top_level,
+            c.top_level - refused.min(c.top_level),
+        );
+        for r in &c.rows {
+            let _ = writeln!(err, "{:>7}  {}  (first: {})", r.count, r.reason, r.example);
+        }
+        if !c.attrs.is_empty() {
+            let _ = writeln!(err, "attributes of the attributed declarations:");
+            for (a, n) in &c.attrs {
+                let _ = writeln!(err, "{n:>7}  {a}");
+            }
+        }
+    }
+
     /// Writes the main unit's module file once `pp` has read it to its
     /// end without errors (spec/modules.md §11.2, §11.6). A unit that is
     /// not importable is `--precompile`'s error, or `-fmodule-output`'s
