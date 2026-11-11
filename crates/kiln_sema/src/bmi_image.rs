@@ -4682,6 +4682,22 @@ impl Sema<'_, '_> {
         cur
     }
 
+    /// An exception-specification byte: 5 and 6 are `noexcept(true)` and
+    /// `noexcept(false)` with a bool literal, the rest [`exc_spec`]'s.
+    fn image_exc_spec(&mut self, exc: u8) -> ExcSpec {
+        match exc {
+            5 | 6 => {
+                let v = exc == 5;
+                let lit = self.builder().bool_literal(QualType::BOOL, v, Loc::INVALID);
+                let cv = self.int_const(QualType::BOOL, i128::from(v));
+                let expr = self.builder().constant_expr(lit, Some(cv));
+                let value = if v { NoexceptValue::True } else { NoexceptValue::False };
+                ExcSpec::NoexceptExpr { expr, value }
+            }
+            e => exc_spec(e).unwrap_or_default(),
+        }
+    }
+
     fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
         let qt = |s: &mut Self, q: QRef| -> QualType {
             let base = if q.ty <= BUILTINS {
@@ -4733,17 +4749,7 @@ impl Sema<'_, '_> {
             TyRec::Func { ret, params, info, exc } => {
                 let r = qt(self, *ret);
                 let ps: Vec<QualType> = params.iter().map(|&p| qt(self, p)).collect();
-                let exc = match *exc {
-                    5 | 6 => {
-                        let v = *exc == 5;
-                        let lit = self.builder().bool_literal(QualType::BOOL, v, Loc::INVALID);
-                        let cv = self.int_const(QualType::BOOL, i128::from(v));
-                        let expr = self.builder().constant_expr(lit, Some(cv));
-                        let value = if v { NoexceptValue::True } else { NoexceptValue::False };
-                        ExcSpec::NoexceptExpr { expr, value }
-                    }
-                    e => exc_spec(e).unwrap_or_default(),
-                };
+                let exc = self.image_exc_spec(*exc);
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {
