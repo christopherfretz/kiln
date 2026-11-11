@@ -24,8 +24,8 @@
 use kiln_ast::consts::Scalar;
 use kiln_ast::decl::{
     Access, ConstexprKind, CtorInitKind, DeclFlags, DeclKind, Defaulted, DefinitionBits, EnumData,
-    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind, TemplLinkKind,
-    VarSpec, VarStorage,
+    FnSpec, FnStorage, FriendKind, FriendTarget, InitStyle, ModuleOwnership, ParamData, TagKind,
+    TemplLinkKind, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
 use kiln_ast::names::{DeclName, OverloadedOperator};
@@ -3448,7 +3448,10 @@ impl Writer<'_, '_, '_> {
                 pack: bs.pack_expansion,
             });
         }
-        Ok(Payload::Record { tag, def: Some(RecDef { bits, end: NONE, key: NONE, bases, friends: Vec::new() }) })
+        Ok(Payload::Record {
+            tag,
+            def: Some(RecDef { bits, end: NONE, key: NONE, bases, friends: Vec::new() }),
+        })
     }
 
     /// Parameter `p`, the image's parameter `g`.
@@ -5815,7 +5818,13 @@ mod tests {
                 420,
                 Payload::Record {
                     tag: 0,
-                    def: Some(RecDef { bits: 0, end: 19, key: NONE, bases: vec![], friends: vec![] }),
+                    def: Some(RecDef {
+                        bits: 0,
+                        end: 19,
+                        key: NONE,
+                        bases: vec![],
+                        friends: vec![],
+                    }),
                 },
             ),
             head(

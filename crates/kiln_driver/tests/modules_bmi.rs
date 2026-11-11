@@ -928,12 +928,15 @@ fn kind2_declaration_image_member_templates() {
         errs.push(e.stderr);
     }
     assert!(
-        errs[0].contains("m.cppm:57:50: error: member reference base type 'int' is not a structure"),
+        errs[0]
+            .contains("m.cppm:57:50: error: member reference base type 'int' is not a structure"),
         "{}",
         errs[0]
     );
     assert!(
-        errs[0].contains("in instantiation of function template specialization 'mt::Bad<int>::h<int>'"),
+        errs[0].contains(
+            "in instantiation of function template specialization 'mt::Bad<int>::h<int>'"
+        ),
         "{}",
         errs[0]
     );
@@ -965,7 +968,9 @@ fn kind2_declaration_image_polymorphic_templates_friends_and_implicit_members() 
         (
             "imgim",
             include_str!("../../../tests/conformance/module.interface/Inputs/img-implicit.cppm"),
-            include_str!("../../../tests/conformance/module.interface/image-implicit-members-run.cpp"),
+            include_str!(
+                "../../../tests/conformance/module.interface/image-implicit-members-run.cpp"
+            ),
             "3 3 4 5 1\n",
         ),
     ] {

@@ -1699,7 +1699,11 @@ impl Sema<'_, '_> {
     /// it, which `-ast-dump` prints as `inherited from`. Only earlier
     /// declarations pass defaults on; [`Self::merge_template_defaults`]
     /// keeps the union that instantiation reads.
-    pub(crate) fn record_inherited_defaults(&mut self, new: TemplateParamListId, old: TemplateParamListId) {
+    pub(crate) fn record_inherited_defaults(
+        &mut self,
+        new: TemplateParamListId,
+        old: TemplateParamListId,
+    ) {
         let params = |l: TemplateParamListId| -> Vec<DeclId> {
             let list = self.ast.templates.param_list(l);
             self.ast.lists.iter::<DeclId>(list.params).collect()

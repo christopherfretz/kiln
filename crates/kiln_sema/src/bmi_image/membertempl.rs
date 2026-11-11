@@ -119,9 +119,7 @@ pub(super) fn claim_outer_heads(
         for k in 0..n {
             let ok = match img.decls[j].payload {
                 Payload::Ttp { depth: pd, index, .. } | Payload::Nttp { depth: pd, index, .. } => {
-                    usize::from(pd) == depth
-                        && usize::from(index) == k
-                        && img.decls[j].ctx == scope
+                    usize::from(pd) == depth && usize::from(index) == k && img.decls[j].ctx == scope
                 }
                 _ => false,
             };

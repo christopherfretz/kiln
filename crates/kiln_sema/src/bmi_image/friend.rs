@@ -196,7 +196,8 @@ impl Sema<'_, '_> {
         else {
             return;
         };
-        let list: Vec<DeclId> = df.friends.iter().filter_map(|&f| ids.get(f as usize).copied()).collect();
+        let list: Vec<DeclId> =
+            df.friends.iter().filter_map(|&f| ids.get(f as usize).copied()).collect();
         let _ = self.builder().set_friends(c, &list);
     }
 }
