@@ -11,7 +11,9 @@
 //! namespace-scope redeclaration in the header can name it as its
 //! previous declaration. The image also lists those records in
 //! `local_externs` order, so a consumer links its own declarations to
-//! them as replay does.
+//! them as replay does. The reader also re-records the header's
+//! C-linkage entities ([`Sema::extern_c`], [dcl.link]/6-7), the other
+//! namespace-crossing link a declaration makes outside lookup.
 
 use super::body::is_local;
 use super::{Image, NONE, Payload, Rd, Res, W, Wr, Writer, bad};
@@ -49,7 +51,8 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
-    /// Lists the records of `local_externs` (after the records).
+    /// Lists the records of `local_externs` (after the records). In
+    /// census mode, one whose function the census counted is left out.
     pub(super) fn local_externs(&mut self) -> W<()> {
         if !self.pch {
             return Ok(());
@@ -57,8 +60,11 @@ impl Writer<'_, '_, '_> {
         let s = self.s;
         let mut out = Vec::with_capacity(s.local_externs.len());
         for &(_, _, d) in &s.local_externs {
-            let r = self.recs.get(&d).copied();
-            out.push(r.ok_or("a block-scope declaration outside the image")?);
+            match self.recs.get(&d) {
+                Some(&r) => out.push(r),
+                None if self.census.is_some() => {}
+                None => return Err("a block-scope declaration outside the image"),
+            }
         }
         self.img.lexterns.recs = out;
         Ok(())
