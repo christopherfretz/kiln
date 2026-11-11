@@ -5068,6 +5068,11 @@ impl Sema<'_, '_> {
         } else if let Some(p) = prev {
             let pn = *self.ast.decls.get(p);
             if pn.kind() == fkind {
+                // WP-1301: `p` is the implicit declaration of a C library
+                // function (clang `LazilyCreateBuiltin`).
+                let implicit_lib = self.is_c()
+                    && pn.flags().contains(DeclFlags::IMPLICIT)
+                    && self.lib_builtin_info(p).is_some();
                 let mut pty = self.declared_fn_type(p).unwrap_or(QualType::ERROR);
                 // [except.spec]/13: a previous declaration's specification
                 // still uninstantiated is needed now (clang resolves the
@@ -5164,7 +5169,7 @@ impl Sema<'_, '_> {
                 };
                 // C17 6.2.7p3: without a prototype, the composite type.
                 let c_comp = if self.is_c() {
-                    self.c_no_proto_composite(p, pty, ty, d.name_loc())
+                    self.c_no_proto_composite(p, pty, ty, d.name_loc(), implicit_lib)
                         .or_else(|| self.c_proto_composite(pty, ty))
                 } else {
                     None
@@ -5239,6 +5244,25 @@ impl Sema<'_, '_> {
                     let ne = self.written_exc_spec(ty);
                     self.emit(crate::except::per_instantiation_exc(msg, ne));
                     invalid_redecl = true;
+                } else if implicit_lib {
+                    // clang `MergeFunctionDecl`: a predefined library
+                    // function's implicit declaration is only warned
+                    // about; the redeclaration is a new, valid one.
+                    let msg = self
+                        .diag(DiagId::sema_incompatible_library_redecl, d.name_loc())
+                        .arg(fname.clone());
+                    let lib = self.lib_builtin_info(p);
+                    let msg = match (lib, self.ast.decls.get(p).ty()) {
+                        (Some(info), Some(t)) => {
+                            let note = self
+                                .diag(DiagId::note_previous_builtin_declaration, pn.loc())
+                                .arg(info.name)
+                                .arg(self.ty_arg(t));
+                            msg.with_note(note)
+                        }
+                        _ => msg,
+                    };
+                    self.emit(msg);
                 } else {
                     let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
                         (Some(a), Some(b)) => {
@@ -6416,6 +6440,7 @@ impl Sema<'_, '_> {
         pty: QualType,
         ty: QualType,
         loc: Loc,
+        quiet: bool,
     ) -> Option<QualType> {
         let a = self.ast.types.proto(pty).copied()?;
         let b = self.ast.types.proto(ty).copied()?;
@@ -6429,7 +6454,7 @@ impl Sema<'_, '_> {
         let def = self.templ.fn_def_next;
         if an && bn {
             // A K&R definition after `f()`: at the declaration, no note.
-            if ap.is_empty() && !bp.is_empty() && def {
+            if ap.is_empty() && !bp.is_empty() && def && !quiet {
                 let msg = self.diag(DiagId::sema_c_non_prototype_conflict, ploc).arg(1u8).arg(1u8);
                 self.emit(msg);
             }
@@ -6449,8 +6474,9 @@ impl Sema<'_, '_> {
         }
         let (proto, params, knr) = if an { (b, bp, ap) } else { (a, ap, bp) };
         let proto_ty = if an { ty } else { pty };
-        // clang `MergeFunctionDecl`: not for an implicit declaration.
-        let implicit = an && self.ast.decls.get(p).has(DeclFlags::IMPLICIT);
+        // clang `MergeFunctionDecl`: not for an implicit declaration
+        // (`quiet`: the implicit declaration of a library function).
+        let implicit = quiet || an && self.ast.decls.get(p).has(DeclFlags::IMPLICIT);
         if knr.is_empty() && (!params.is_empty() || proto.info().variadic()) && !implicit {
             let pdef = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
             let (at, other, later, other_def) =
@@ -6461,7 +6487,7 @@ impl Sema<'_, '_> {
                 .arg(u8::from(other_def))
                 .with_note(self.diag(DiagId::sema_c_conflicting_prototype_note, other));
             self.emit(msg);
-        } else if an && !knr.is_empty() {
+        } else if !quiet && an && !knr.is_empty() {
             // A prototype after a K&R definition.
             let msg = self
                 .diag(DiagId::sema_c_non_prototype_unsupported, ploc)

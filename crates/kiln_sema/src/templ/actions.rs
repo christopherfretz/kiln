@@ -2083,6 +2083,14 @@ impl Sema<'_, '_> {
         {
             return self.build_decl_ref(b, loc);
         }
+        // C: an undeclared library function is declared with its own
+        // type (clang `LazilyCreateBuiltin`, in every C standard).
+        if self.is_c()
+            && let Some(sym) = name.as_ident()
+            && let Some(f) = self.c_implicit_lib_function_decl(sym, loc)
+        {
+            return self.build_decl_ref(f, loc);
+        }
         // C89 3.3.2.2: a call of an undeclared identifier declares
         // `extern int f();` (clang `ImplicitlyDefineFunction`).
         if self.is_c()

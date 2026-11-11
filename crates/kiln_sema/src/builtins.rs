@@ -671,6 +671,76 @@ impl Sema<'_, '_> {
         self.builder().function(h, DeclKind::Function, ty, spec, None)
     }
 
+    /// C (clang `LazilyCreateBuiltin` for a predefined library function,
+    /// WP-1301): the implicit declaration of the undeclared [`builtin::LIB`]
+    /// function `name` called at `loc`, at file scope with the row's type,
+    /// recognized as the library function (its implicit attributes and
+    /// `__builtin_` twin, so `alloca` lowers inline). C89 warns
+    /// "implicitly declaring library function" and C99 on reports "call
+    /// to undeclared library function" (an error by default), each with
+    /// the note naming the row's header. `None` (the caller declares
+    /// `int name()`) for a name that is no recognized library function
+    /// here (`-fno-builtin`, the `-fclang-compat` level, a GNU-only row
+    /// outside the GNU dialects) or whose type names a `FILE` no typedef
+    /// declares (clang's `GE_Missing_stdio`).
+    pub(crate) fn c_implicit_lib_function_decl(
+        &mut self,
+        name: Symbol,
+        loc: Loc,
+    ) -> Option<DeclId> {
+        if self.no_builtin {
+            return None;
+        }
+        let s = self.ast.symbols().as_str(name);
+        if self.no_builtin_fns.binary_search_by(|n| n.as_str().cmp(s)).is_ok() {
+            return None;
+        }
+        let info = builtin::lib_by_name(s).copied()?;
+        if builtin::lib_min_compat(info.id) > self.clang_compat
+            || (builtin::lib_gnu_only(info.id) && !self.gnu)
+            || (info.sig.contains('P') && self.file_type() == QualType::ERROR)
+        {
+            return None;
+        }
+        let (ret, params, variadic) = self.builtin_signature(info.sig);
+        if ret == QualType::ERROR || params.contains(&QualType::ERROR) {
+            return None;
+        }
+        let noreturn = info.attrs & builtin::attr::NORETURN != 0;
+        let fi = FuncInfo::new().with_variadic(variadic).with_noreturn(noreturn);
+        let ty = self.ast.types.function(ret, &params, fi, ExcSpec::None);
+        let id = if self.c_at_least(kiln_lex::CStd::C99) {
+            DiagId::sema_implicit_lib_function_decl_c99
+        } else {
+            DiagId::sema_implicit_lib_function_decl
+        };
+        let tyarg = self.ty_arg(ty);
+        let msg = self.diag(id, loc).arg(info.name).arg(tyarg);
+        let note = self
+            .diag(DiagId::note_include_header_or_declare, loc)
+            .arg(builtin::lib_header(&info))
+            .arg(info.name);
+        self.emit(msg.with_note(note));
+        let h = DeclHead::new(self.ast.tu, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
+        let spec = FnSpec::new().with_storage(FnStorage::Extern);
+        let f = self.builder().function(h, DeclKind::Function, ty, spec, None);
+        let mut pds = Vec::with_capacity(params.len());
+        for (i, &pty) in params.iter().enumerate() {
+            let idx = u16::try_from(i).unwrap_or(u16::MAX);
+            let ph = DeclHead::new(f, DeclName::EMPTY, Loc::INVALID).flags(DeclFlags::IMPLICIT);
+            pds.push(self.builder().param_head(ph, pty, idx, 0));
+        }
+        if !pds.is_empty() {
+            let _ = self.builder().set_params(f, &pds);
+        }
+        let mut attrs = Vec::new();
+        self.add_known_function_attrs(f, &mut attrs);
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(f, &attrs);
+        }
+        Some(f)
+    }
+
     fn lazily_create_builtin_at_tu(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
         let id = builtin::by_name_at(self.ast.symbols().as_str(name), self.clang_compat)?;
         if !self.target_has_builtin(id) {

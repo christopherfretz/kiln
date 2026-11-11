@@ -21,9 +21,12 @@ impl Sema<'_, '_> {
     /// `MergeVarDecl`: `err_attribute_missing_on_first_decl`, or after
     /// the definition `warn_attribute_precede_definition`).
     ///
-    /// GNU `common` is diagnosed here too and always dropped: on a
-    /// variable it is an error in C++ (clang `handleCommonAttr`), so its
-    /// mutual exclusion with `internal_linkage` cannot arise.
+    /// GNU `common` is diagnosed here too: on a variable it is an error
+    /// in C++ (clang `handleCommonAttr`) and dropped, so its mutual
+    /// exclusion with `internal_linkage` cannot arise there; in C it is
+    /// kept on a variable (a tentative definition then has common
+    /// linkage even under `-fno-common`, clang
+    /// `isVarDeclStrongDefinition`).
     pub(crate) fn check_internal_linkage_attrs(&mut self, d: DeclId, attrs: &mut Vec<AttrId>) {
         if !attrs.iter().any(|&a| {
             matches!(self.ast.attrs.get(a).kind, AttrKind::INTERNAL_LINKAGE | AttrKind::COMMON)
@@ -38,14 +41,18 @@ impl Sema<'_, '_> {
             }
             let name = format!("'{}'", self.attr_shown(&node, "common"));
             // `SubjectList<[Var]>`: any `VarDecl`, a parameter included.
-            let msg = if matches!(
+            let var = matches!(
                 kind,
                 DeclKind::Var
                     | DeclKind::ParmVar
                     | DeclKind::ImplicitParam
                     | DeclKind::VarTemplateSpecialization
                     | DeclKind::VarTemplatePartialSpecialization
-            ) {
+            );
+            if var && self.is_c() {
+                return true;
+            }
+            let msg = if var {
                 self.diag(DiagId::sema_attribute_not_supported_in_cxx, node.loc).arg(name)
             } else {
                 self.diag(DiagId::sema_attribute_wrong_decl_type, node.loc)

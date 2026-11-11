@@ -114,6 +114,42 @@ compound literals) are WP-1276's.
   `CheckTransparentUnionArgumentConstraints`), built as an
   `InitListExpr` naming that member; the ABI passes the union as its
   first field (`kiln_abi::call`). C++ keeps WP-809's ignored warning.
+  A parameter of such a union is compatible with one whose type is
+  compatible with an unqualified member (clang
+  `mergeFunctionParameterTypes`, WP-1301): in a redeclaration, whose
+  composite takes the member type (`c_transparent_param_merge`), and
+  between function pointer types (`c_assign::compatible`). A
+  definition's prologue does not demote between the union and the
+  member, which arrive alike.
+
+#### 1.0.2 C predefined library functions, GNU attributes and `common` (WP-1301)
+
+- **Implicit library declarations** (C89 3.3.2.2; clang
+  `LazilyCreateBuiltin`, `builtins.rs` `c_implicit_lib_function_decl`):
+  in C, a call to an undeclared name that is one of clang's predefined
+  library functions (the `LIB` rows of the builtin table that the
+  standard and `-fno-builtin[-f]` allow, and whose type needs no
+  missing `FILE`) declares it at file scope, implicit and `extern`,
+  with its library type and attributes, not `int ()`: before C99 the
+  warning "implicitly declaring library function 'f' with type T",
+  from C99 the DefaultError "call to undeclared library function 'f'
+  with type T; ISO C99 and later do not support implicit function
+  declarations", both with the note naming the header
+  (`builtin::lib_header`). Otherwise the C89 `int ()` rule applies.
+- **Incompatible library redeclaration** (clang `MergeFunctionDecl`):
+  a later declaration of another type than such an implicit one is
+  the warning -Wincompatible-library-redeclaration with the note
+  "'f' is a builtin with type T" at the implicit declaration, not
+  "conflicting types"; it is a valid redeclaration with its own type.
+  Neither takes the non-prototype diagnostics.
+- **GNU attributes on a later declarator** (clang `ParseDeclGroup`,
+  `ParseStructDeclaration`; spec/parse.md): `int a, __attribute__((x)) b;`
+  and the same in a member declaration, in C and C++.
+- **`_Alignas` is a declaration specifier** (C11 6.7.5; C23 `alignas`):
+  it may follow a type specifier (`int _Alignas(16) x;`).
+- **`common`** (clang `handleCommonAttr`): kept on a C variable (an
+  error only in C++); a tentative definition carrying it has common
+  linkage even under `-fno-common` (`isVarDeclStrongDefinition`).
 
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or

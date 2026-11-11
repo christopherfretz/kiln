@@ -821,7 +821,14 @@ impl Parser<'_, '_> {
             }
             if self.at_attr() || self.at_kw(Kw::Declspec) {
                 let lead = self.pos() == lead_end;
-                let cxx11 = self.at_cxx11_attr() || self.at_kw(Kw::Alignas);
+                // clang `ParseDeclarationSpecifiers`: `_Alignas`, and C23
+                // `alignas`, is a declaration specifier (C17 6.7.5), so it
+                // may follow a type specifier (`unsigned short _Alignas(16)
+                // x;`); C++'s `alignas` is an attribute-specifier.
+                let spec_alignas = self.at_kw(Kw::Alignas)
+                    && (self.spelling_of(&self.tok()) == "_Alignas"
+                        || self.s.c_at_least(kiln_lex::CStd::C23));
+                let cxx11 = !spec_alignas && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas));
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
                 if lead {
@@ -4640,6 +4647,12 @@ impl Parser<'_, '_> {
         let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
+            // clang's `ParseDeclGroup`: a later init-declarator may begin
+            // with GNU attributes, which belong to it alone
+            // (`int a, __attribute__((unused)) b;`).
+            if declarators > 0 {
+                self.parse_declarator_gnu_attr_seq(&mut d);
+            }
             self.parse_declarator_in_group(&ds, &mut d);
             let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);

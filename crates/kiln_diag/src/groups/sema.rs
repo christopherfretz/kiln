@@ -99,6 +99,7 @@ ImplicitInt = "implicit-int" [];
 ImplicitlyUnsignedLiteral = "implicitly-unsigned-literal" [];
 InaccessibleBase = "inaccessible-base" [];
 IncompatibleFunctionPointerTypes = "incompatible-function-pointer-types" [];
+IncompatibleLibraryRedeclaration = "incompatible-library-redeclaration" [];
 IncompatibleMsStruct = "incompatible-ms-struct" [];
 IncompatiblePointerTypesDiscardsQualifiers = "incompatible-pointer-types-discards-qualifiers" [];
 InconsistentMissingOverride = "inconsistent-missing-override" [];

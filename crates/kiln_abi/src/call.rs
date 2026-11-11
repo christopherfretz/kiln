@@ -351,16 +351,21 @@ fn aarch64_sve_fixed(t: &mut IrTypes<'_>, q: QualType) -> Option<ArgKind> {
 /// union that kept `transparent_union` (WP-809) is classified as its
 /// first field.
 fn first_field_if_transparent(ast: &Ast, q: QualType) -> QualType {
-    let TypeView::Record(d) = ast.types.canonical_view(q) else { return q };
+    transparent_union_first_field(ast, q).unwrap_or(q)
+}
+
+/// The first field's type of `q` when it is a union that kept
+/// `transparent_union`, else `None`.
+pub fn transparent_union_first_field(ast: &Ast, q: QualType) -> Option<QualType> {
+    let TypeView::Record(d) = ast.types.canonical_view(q) else { return None };
     let def = ast.definition(d).unwrap_or(d);
     if !props::has_attr(ast, def, kiln_ast::attr::AttrKind::TRANSPARENT_UNION) {
-        return q;
+        return None;
     }
     ast.decls
         .members(def)
         .find(|&m| ast.decls.get(m).kind() == kiln_ast::decl::DeclKind::Field)
         .and_then(|f| ast.decls.get(f).ty())
-        .unwrap_or(q)
 }
 
 fn aarch64_arg(t: &mut IrTypes<'_>, q: QualType, win_variadic: bool) -> ArgKind {

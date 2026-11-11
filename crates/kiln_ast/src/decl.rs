@@ -4215,6 +4215,26 @@ pub mod builtin {
         LIB.iter().find(|e| e.name == name)
     }
 
+    /// WP-1301: the header clang's `Builtins.td` names for the [`LIB`]
+    /// function `info` (`LibBuiltin<"header">`), shown by the implicit
+    /// declaration's note "include the header <h> or explicitly provide a
+    /// declaration for 'f'".
+    pub fn lib_header(info: &Info) -> &'static str {
+        let n = info.name;
+        match n {
+            "abs" | "labs" | "llabs" | "abort" | "malloc" | "calloc" | "realloc"
+            | "aligned_alloc" | "alloca" => "stdlib.h",
+            "memalign" => "malloc.h",
+            "bcmp" | "bcopy" | "bzero" | "index" | "rindex" => "strings.h",
+            _ if n.ends_with("printf") || n.ends_with("scanf") => "stdio.h",
+            _ if n.starts_with("mem") || n.starts_with("str") || n.starts_with("stp") => "string.h",
+            _ if n.starts_with("wcs") || n.starts_with("wmem") => "wchar.h",
+            _ if n.starts_with("is") || n.starts_with("to") => "ctype.h",
+            _ if info.sig.contains('X') => "complex.h",
+            _ => "math.h",
+        }
+    }
+
     /// WP-186: the implicit `format(printf, F, A)` indices of the [`LIB`]
     /// function `name` (clang `Builtins.td` `PrintfFormat` /
     /// `VPrintfFormat`, added by `AddKnownFunctionAttributes` before the
