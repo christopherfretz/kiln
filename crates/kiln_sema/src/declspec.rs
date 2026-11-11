@@ -26,6 +26,8 @@ pub enum StorageSpec {
     Register,
     /// `mutable`.
     Mutable,
+    /// C `auto` (automatic storage duration; C89 3.5.1).
+    Auto,
 }
 
 impl StorageSpec {
@@ -37,6 +39,7 @@ impl StorageSpec {
             StorageSpec::Extern => "extern",
             StorageSpec::Register => "register",
             StorageSpec::Mutable => "mutable",
+            StorageSpec::Auto => "auto",
         }
     }
 }

@@ -427,7 +427,6 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
     "ignored-pragma-optimize",
     "ignored-qualifiers",
     "ignored-reference-qualifiers",
-    "implicit",
     "implicit-atomic-properties",
     "implicit-const-int-float-conversion",
     "implicit-conversion-floating-point-to-bool",

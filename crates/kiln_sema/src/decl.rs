@@ -163,6 +163,13 @@ pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
 }
 
 impl Sema<'_, '_> {
+    /// True if `ds` names no type and that makes the declaration
+    /// invalid: always, except under C89/C99/C11/C17 implicit `int`
+    /// (C89 3.5.2), where the declaration is a valid `int` one.
+    pub(crate) fn untyped_invalid(&self, ds: &DeclSpec) -> bool {
+        !ds.has_type_specifier() && !(self.is_c() && !self.c_at_least(kiln_lex::CStd::C23))
+    }
+
     // -- types ----------------------------------------------------------------
 
     /// The type named by the type-specifiers of `ds` ([dcl.type.simple]),
@@ -198,7 +205,17 @@ impl Sema<'_, '_> {
                 QualType::DOUBLE
             }
             TypeSpecKind::None if !ds.has_type_specifier() => {
-                if !ds.invalid {
+                // C89 3.5.2: implicit `int`; a constraint violation from
+                // C99 (clang 19: an error by default), gone in C23.
+                if ds.invalid {
+                } else if self.is_c() && !self.c_at_least(kiln_lex::CStd::C23) {
+                    let id = if self.c_at_least(kiln_lex::CStd::C99) {
+                        DiagId::sema_c_implicit_int_c99
+                    } else {
+                        DiagId::sema_c_implicit_int
+                    };
+                    self.error(id, loc);
+                } else {
                     self.error(DiagId::parse_missing_type_specifier, loc);
                 }
                 QualType::INT
@@ -2053,13 +2070,17 @@ impl Sema<'_, '_> {
         } else {
             match ds.storage {
                 Some((StorageSpec::Register, loc)) => {
-                    self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                    if !self.is_c() {
+                        self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                    }
                 }
                 Some((_, loc)) => self.error(DiagId::sema_invalid_storage_class_in_func_decl, loc),
                 None => {}
             }
         }
-        let base = self.type_from_declspec(ds);
+        // C implicit `int` is reported at the parameter's name (clang).
+        let at = if self.is_c() && d.name.is_some() { d.name_loc() } else { ds.loc };
+        let base = self.type_from_declspec_at(ds, at);
         let base = self.apply_declspec_vector_attrs(base, ds);
         self.warn_redundant_parens(None, d);
         // A pack's erroneous type recovers as `int` (clang's recovery
@@ -3486,7 +3507,7 @@ impl Sema<'_, '_> {
         // [dcl.spec.general]/3: a function or member declared with no
         // type (`y();`, `struct S { y; };`) is an invalid `int` one, as
         // clang's `ConvertDeclSpecToType`: later uses name it silently.
-        invalid |= !ds.has_type_specifier();
+        invalid |= self.untyped_invalid(ds);
         let decl = if ds.is_typedef() {
             self.act_on_typedef(ds, ty, d, name, false)
         } else if self.ast.types.is_function(ty) {
@@ -4377,7 +4398,7 @@ impl Sema<'_, '_> {
             Some((StorageSpec::Register, loc)) if in_class => {
                 self.error(DiagId::sema_storage_class_for_member, loc);
             }
-            Some((StorageSpec::Register | StorageSpec::Mutable, loc)) => {
+            Some((StorageSpec::Register | StorageSpec::Mutable | StorageSpec::Auto, loc)) => {
                 self.error(DiagId::sema_illegal_storage_class_on_function, loc);
                 invalid_decl = true;
             }
@@ -4504,7 +4525,7 @@ impl Sema<'_, '_> {
         // So is one whose decl-specifiers name no type (`f(int);`,
         // `R::h(int);` after "a type specifier is required", or after an
         // unknown type name; WP-411).
-        invalid_decl |= d.special.is_none() && (ds.type_error || !ds.has_type_specifier());
+        invalid_decl |= d.special.is_none() && (ds.type_error || self.untyped_invalid(ds));
         // So is one whose type has an exception specification beyond one
         // level of indirection (`void (**(*h())())() throw(int);`; clang
         // `D.isInvalidType()`, WP-1102).
@@ -5750,7 +5771,10 @@ impl Sema<'_, '_> {
                         flags |= FieldData::MUTABLE;
                     }
                 }
-                StorageSpec::Extern | StorageSpec::Register | StorageSpec::Static => {
+                StorageSpec::Extern
+                | StorageSpec::Register
+                | StorageSpec::Static
+                | StorageSpec::Auto => {
                     self.error(DiagId::sema_storage_class_for_member, loc);
                 }
                 StorageSpec::Typedef => {
@@ -6131,7 +6155,7 @@ impl Sema<'_, '_> {
     /// member is a field, a static member cannot be `register`); the
     /// variable is invalid.
     pub(crate) fn register_at_file_scope(&self, ds: &DeclSpec, d: &Declarator) -> bool {
-        matches!(ds.storage, Some((StorageSpec::Register, _)))
+        matches!(ds.storage, Some((StorageSpec::Register | StorageSpec::Auto, _)))
             && d.asm_label.is_none()
             && d.qualifier.is_none()
             && !self.in_local_scope()
@@ -6159,10 +6183,18 @@ impl Sema<'_, '_> {
                 // extension (an error by default, `-Wregister`), silently
                 // for a GNU register variable (`asm("reg")`).
                 if d.asm_label.is_none() {
-                    self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                    if !self.is_c() {
+                        self.emit(self.diag(DiagId::sema_register_storage_class, loc));
+                    }
                     if self.register_at_file_scope(ds, d) {
                         self.error(DiagId::sema_illegal_storage_class_on_var, d.name_loc());
                     }
+                }
+            }
+            // C `auto`: automatic storage, an error at file scope.
+            Some((StorageSpec::Auto, _)) => {
+                if self.register_at_file_scope(ds, d) {
+                    self.error(DiagId::sema_illegal_storage_class_on_var, d.name_loc());
                 }
             }
             Some((StorageSpec::Mutable, _)) => {
@@ -6607,7 +6639,7 @@ impl Sema<'_, '_> {
         // (clang's `MergeVarDecl` returns at an invalid new declaration):
         // `y; y;` reports the missing type twice, no redefinition; so
         // does one whose type named no type (`zz v;`, `R::f(v);`; WP-411).
-        let unmerged = ambiguous || !ds.has_type_specifier() || ds.type_error;
+        let unmerged = ambiguous || self.untyped_invalid(ds) || ds.type_error;
         prev = prev.filter(|_| !unmerged);
         // [dcl.link]/6-7: a C-linkage variable of another scope.
         let prev = match prev {

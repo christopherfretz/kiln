@@ -986,6 +986,11 @@ impl Parser<'_, '_> {
                     self.s.error(DiagId::parse_c99_complex, loc);
                     ds.set_complex(loc)
                 }
+                // C `auto` is a storage class (C89 3.5.1); C23 also deduces
+                // with it when no type-specifier follows (C23 6.7.10).
+                Kw::Auto if self.s.is_c() && !self.c23_auto_deduces() => {
+                    ds.set_storage(StorageSpec::Auto, loc)
+                }
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::GnuAutoType => {
                     // clang `ext_auto_type` (`-Wgnu-auto-type`).
@@ -1685,6 +1690,29 @@ impl Parser<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> bool {
+        // C89 3.5.2 implicit `int` (`register r`, `static x = 4`): with no
+        // type-specifier yet, a name followed by what may follow a
+        // declarator-id is the declarator-id (clang's `ParseImplicitInt`,
+        // `isValidAfterIdentifierInDeclarator`).
+        if self.s.is_c()
+            && !self.s.c_at_least(kiln_lex::CStd::C23)
+            && !ds.has_type_specifier()
+            && matches!(
+                Self::punct_of(self.tok_at(end)),
+                Some(
+                    Punct::LSquare
+                        | Punct::LParen
+                        | Punct::RParen
+                        | Punct::Semi
+                        | Punct::Comma
+                        | Punct::Equal
+                        | Punct::LBrace
+                        | Punct::Colon
+                )
+            )
+        {
+            return false;
+        }
         if !self.unknown_type_follows(end, ctx) {
             return false;
         }
@@ -3382,6 +3410,15 @@ impl Parser<'_, '_> {
     /// C before C23: an identifier that names no type, followed by `,` or
     /// `)`, starts a K&R identifier list (clang
     /// `isFunctionDeclaratorIdentifierList`; C17 6.7.6.3p11).
+    /// At C `auto`: true if it is C23 type deduction (`auto x = 1;`), the
+    /// next token not starting a type-specifier (`auto int x;`).
+    fn c23_auto_deduces(&self) -> bool {
+        let next = self.pos() + 1;
+        self.s.c_at_least(kiln_lex::CStd::C23)
+            && !self.kw_of(self.tok_at(next)).is_some_and(is_type_specifier_kw)
+            && !self.names_type_at(next)
+    }
+
     fn at_knr_identifier_list(&self) -> bool {
         self.ident().is_some()
             && self.kw_of(self.tok()).is_none()
