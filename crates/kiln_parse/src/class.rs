@@ -1585,6 +1585,12 @@ impl Parser<'_, '_> {
                 delay_noexcept: !is_typedef,
                 ..LateFnParts::default()
             };
+            // clang's `ParseCXXClassMemberDeclaration` and
+            // `ParseStructDeclaration`: a later member-declarator may
+            // begin with GNU attributes.
+            if !first {
+                self.parse_declarator_gnu_attr_seq(&mut d);
+            }
             if !self.at(Punct::Colon) {
                 self.parse_declarator_in_group(&ds, &mut d);
                 self.parse_trailing_requires(&mut d);

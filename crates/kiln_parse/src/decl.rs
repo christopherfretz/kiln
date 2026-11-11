@@ -4636,6 +4636,12 @@ impl Parser<'_, '_> {
         let mut semi_at = None;
         loop {
             let mut d = self.group_declarator(ctx, &ds);
+            // clang's `ParseDeclGroup`: a later init-declarator may begin
+            // with GNU attributes, which belong to it alone
+            // (`int a, __attribute__((unused)) b;`).
+            if declarators > 0 {
+                self.parse_declarator_gnu_attr_seq(&mut d);
+            }
             self.parse_declarator_in_group(&ds, &mut d);
             let contracts = self.parse_requires_and_contract_specs(&mut d);
             self.set_declarator_end(&mut d);
