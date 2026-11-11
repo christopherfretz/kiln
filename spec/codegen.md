@@ -3495,6 +3495,17 @@ extension, byte-identical at -O0 on both triples (`tests/codegen/vla.cpp`):
   second temporary as in clang (`tests/codegen/compound_literal_scalar.cpp`).
   A non-constant file-scope literal is rejected by sema (`initializer
   element is not a compile-time constant`), so none reaches codegen.
+- **C compound literals** (WP-1287): every C literal is an lvalue, so
+  the lvalue emitter takes `compound_literal_lvalue` for every type in
+  C (C++ keeps it for non-aggregates): an aggregate initializer is
+  emitted into the fresh `alloca` by `emit_agg_into`. Like clang, the
+  alloca gets no lifetime markers, so the object lives to the end of
+  the function, which covers its block. A file-scope literal of any
+  type is its `.compoundliteral` global (§7ab).
+- **C VLAs** (WP-1287): a C-style cast to a variably modified type
+  evaluates its bounds (`emit_vla_bounds`), and a function's parameters
+  evaluate the bounds of their written (not star-decayed) types after
+  the prologue (6.9.1p10), so `sizeof *a` of `int (*a)[n]` reads `n`.
 - Oven fixes found on the way: constant array types of differently
   qualified elements (`const E[3]`, `E[3]`) share one `OTy`
   (`Types::const_arrays`, clang `getUnqualifiedArrayType`), and a pointer

@@ -318,6 +318,23 @@ Plus, from the OSS rows:
 - `tests/c/stmt/switch-case-value-converted.c`: case constants are converted,
   not narrowed.
 
+## Wave-2 re-measurements
+
+- **WP-1287** (array parameters, VLAs, compound literals, plus C
+  subscripts, enum compound assignment and `transparent_union`):
+  gcc.c-torture (all four suites, -O0 and -O2, gnu23, `cargo xtask
+  gcc-torture --oracles clang`) goes from 6480/7572 at `92fc1f18e` to
+  6534/7572 at `800e8d032`, 54 new passes and no regressions;
+  compile/struct-non-lval-1.c (both option sets) passes after the
+  subscript fix. The VLA cluster ("variable length arrays are not
+  supported yet") is 22/22, the compound-literal cluster ("cannot take
+  the address of an rvalue", "expression is not assignable") 26/26.
+  c-ares (`scripts/oss/oss-build.sh c_ares --compiler kiln`) configures
+  (the probes no longer cascade) and 73 of 91 C TUs compile, up from
+  2; the remaining 18 stop only on a function pointer compared with
+  `NULL` (WP-1285). With wp/1285 merged on top, c-ares is green:
+  configure, build, and 2/2 tests.
+
 ## Driver and harness follow-ups (not C semantics)
 
 - Fixed here: `crates/kiln_driver/src/codegen_cmd.rs`, the link-only path.

@@ -274,6 +274,10 @@ pub struct TypeContext {
     pub(crate) target: TargetTypes,
     pub(crate) opts: TypeOptions,
     pub(crate) exhausted: bool,
+    /// The bound every `[*]` variable length array of unspecified size
+    /// (C17 6.7.6.2p4) shares, an integer literal `0` created by sema at
+    /// the first `[*]`: the type prints as `T[*]`.
+    pub vla_star_bound: Option<ExprId>,
 }
 
 impl Default for TypeContext {
@@ -328,6 +332,7 @@ impl TypeContext {
             target,
             opts,
             exhausted: false,
+            vla_star_bound: None,
         };
         for b in BuiltinType::ALL {
             let flags = match b {

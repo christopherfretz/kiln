@@ -2,7 +2,6 @@
 // has static storage duration, inside a function automatic storage
 // associated with the enclosing block.
 //@ expect: run
-//@ xfail(kiln): WP-1276 follow-up, a compound literal is a prvalue in kiln (C17 6.5.2.5p4 makes it an lvalue): & of one and assignment to one are rejected
 //@ stdout: 6 10 3 42
 int printf(const char *, ...);
 struct P { int x, y; };

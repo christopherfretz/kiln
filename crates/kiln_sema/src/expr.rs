@@ -3948,9 +3948,12 @@ impl Sema<'_, '_> {
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
+        // In C the result converts as by assignment, to an enumeration or
+        // from a complex type too (C17 6.5.16.2p3, 6.5.16.1p1).
         let real_from_complex =
             self.ast.types.as_complex(res_ty).is_some() && self.ast.types.as_complex(lt).is_none();
-        if (real_from_complex || conv::is_unscoped_enum(self, lt))
+        if !self.is_c()
+            && (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
             let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
@@ -4066,6 +4069,13 @@ impl Sema<'_, '_> {
             return None;
         }
         if self.ast.types.same_type(lt, rt) {
+            return Some((l, r, lt));
+        }
+        // C17 6.5.8p2, 6.5.9p2: pointers to compatible types (6.2.7). Two
+        // pointers to variable length arrays are never the same type --
+        // each VLA type is its own node -- but are compatible whenever
+        // their elements are, as `int (*)[n]` and `int (*)[m]` are.
+        if self.is_c() && lp && rp && conv::c_assign::compatible(self, lt, rt) {
             return Some((l, r, lt));
         }
         if conv::standard_conversion(self, r, lt, ConvCtx::Comparison).is_some() {
@@ -5045,6 +5055,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_subscript_incomplete_type, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             return self.recover_err(&[b, i], loc);
+        }
+        if self.is_c() {
+            return self.builder().c_subscript(b, i, elem, loc);
         }
         self.builder().subscript(b, i, elem, loc)
     }
