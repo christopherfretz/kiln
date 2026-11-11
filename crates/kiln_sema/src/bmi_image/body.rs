@@ -309,7 +309,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 57] = {
+pub(super) const EXPR_KINDS: [ExprKind; 58] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -380,6 +380,9 @@ pub(super) const EXPR_KINDS: [ExprKind; 57] = {
         // WP-1284: `T::name` / `T::template name<args>`, looked up at the
         // instantiation ([temp.dep.expr]/3).
         X::DependentScopeDeclRefExpr,
+        // WP-1300: a substituted non-type parameter, as an alias
+        // specialization's underlying type holds it ([temp.alias]/2).
+        X::SubstNonTypeTemplateParmExpr,
     ]
 };
 
@@ -465,6 +468,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::UnresolvedLookupExpr => [f(F::Name), f(F::DL(Dc::Lookup))],
         X::ConceptSpecializationExpr => [f(F::D(Dc::Concept)), f(F::TA)],
         X::RequiresExpr => [f(F::RB), f(F::Reqs)],
+        X::SubstNonTypeTemplateParmExpr => [f(F::D(Dc::Value)), f(F::E)],
         _ => [Z, Z],
     }
 }
@@ -978,8 +982,69 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
 #[allow(clippy::too_many_lines)] // one check per section, in order
 pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Res<()> {
     let b = &img.bodies;
-    let nparams = param_count(img);
+    validate_section(img, b, param_count(img), qref_ok, false)?;
+    let ne = b.exprs.len();
+    // The declaration fields that point into the bodies.
+    for d in &img.decls {
+        match &d.payload {
+            Payload::Function { body, params, inits, .. } => {
+                if let FnBody::Stmt(s) = body
+                    && b.stmts.get(*s as usize).is_none_or(|r| r.kind != 0)
+                {
+                    return bad("bad function body");
+                }
+                if params.iter().any(|p| p.default != NONE && p.default as usize >= ne) {
+                    return bad("bad default argument");
+                }
+                if inits.iter().any(|x| x.init as usize >= ne) {
+                    return bad("bad ctor-initializer");
+                }
+            }
+            Payload::Field { width, init, .. } => {
+                if [*width, *init].iter().any(|&x| x != NONE && x as usize >= ne) {
+                    return bad("bad field initializer");
+                }
+            }
+            Payload::Nttp { default, profile, .. } => {
+                if (*default != NONE && *default as usize >= ne) || (*default == NONE && *profile) {
+                    return bad("bad default template argument");
+                }
+            }
+            Payload::Var { init, eval, .. } => {
+                if *init != NONE && *init as usize >= ne {
+                    return bad("bad variable initializer");
+                }
+                if *eval != NONE && *eval != NOT_CONST && *eval as usize >= b.consts.len() {
+                    return bad("bad variable value");
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// One body section's structural checks: the image's bodies, or
+/// (`texpr`, WP-1300) the section of one expression a type or template
+/// argument holds, which has no statements and names no parameter,
+/// local declaration or requires-expression ([`super::exprs`]).
+#[allow(clippy::too_many_lines)] // one check per field kind, in order
+pub(super) fn validate_section(
+    img: &Image,
+    b: &Bodies,
+    nparams: usize,
+    qref_ok: &dyn Fn(QRef) -> bool,
+    texpr: bool,
+) -> Res<()> {
     let (ne, ns) = (b.exprs.len(), b.stmts.len());
+    if texpr && (ne == 0 || ns != 0) {
+        return bad("bad expression section");
+    }
+    let dok = |w: u32, dc: Dc| {
+        (!texpr
+            || ((w == LEX_TU || w & PARAM == 0) && !matches!(dc, Dc::Local | Dc::Label | Dc::Let)))
+            && dc_ok(img, nparams, w, dc)
+    };
     for c in &b.consts {
         if !qref_ok(c.ty()) {
             return bad("bad constant type");
@@ -1002,15 +1067,15 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             F::OE => opt(w[0], e_lim),
             F::S => (w[0] as usize) < s_lim,
             F::OS => opt(w[0], s_lim),
-            F::D(dc) => dc_ok(img, nparams, w[0], dc),
-            F::OD(dc) => w[0] == NONE || dc_ok(img, nparams, w[0], dc),
+            F::D(dc) => dok(w[0], dc),
+            F::OD(dc) => w[0] == NONE || dok(w[0], dc),
             F::Cv => (w[0] as usize) < b.consts.len(),
             F::OCv => opt(w[0], b.consts.len()),
             F::Str => (w[0] as usize) < b.strings.len(),
             F::Qt => w[1] <= 7 && qref_ok(QRef { ty: w[0], quals: w[1] as u8 }),
             F::EL => w[1..].iter().all(|&x| (x as usize) < e_lim),
             F::SL => w[1..].iter().all(|&x| (x as usize) < s_lim),
-            F::DL(dc) => w[1..].iter().all(|&x| dc_ok(img, nparams, x, dc)),
+            F::DL(dc) => w[1..].iter().all(|&x| dok(x, dc)),
             F::QL => {
                 w[1..].chunks(2).all(|q| q[1] <= 7 && qref_ok(QRef { ty: q[0], quals: q[1] as u8 }))
             }
@@ -1025,11 +1090,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 0 => a[2] <= 7 && qref_ok(QRef { ty: a[1], quals: a[2] as u8 }),
                 1 => (a[1] as usize) < e_lim && a[2] <= 1,
                 // A return-type requirement's invented parameter.
-                2 => super::requires::invented_ok(img, a[1], a[2]),
+                2 => !texpr && super::requires::invented_ok(img, a[1], a[2]),
                 _ => false,
             }),
-            F::RB => (w[0] as usize) < img.reqs.recs.len(),
-            F::Reqs => super::requires::reqs_ok(img, w, e_lim, qref_ok),
+            F::RB => !texpr && (w[0] as usize) < img.reqs.recs.len(),
+            F::Reqs => !texpr && super::requires::reqs_ok(img, w, e_lim, qref_ok),
             F::Gen | F::GenT => {
                 let q =
                     |ty: u32, quals: u32| quals <= 7 && qref_ok(QRef { ty, quals: quals as u8 });
@@ -1054,7 +1119,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                 while p < w.len() {
                     let ok = match w[p] {
                         0 => true,
-                        1 => dc_ok(img, nparams, w[p + 1], Dc::Namespace),
+                        1 => dok(w[p + 1], Dc::Namespace),
                         // S6: a namespace alias.
                         3 => img
                             .decls
@@ -1155,50 +1220,47 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             }
         }
     }
-    // The declaration fields that point into the bodies.
-    for d in &img.decls {
-        match &d.payload {
-            Payload::Function { body, params, inits, .. } => {
-                if let FnBody::Stmt(s) = body
-                    && b.stmts.get(*s as usize).is_none_or(|r| r.kind != 0)
-                {
-                    return bad("bad function body");
-                }
-                if params.iter().any(|p| p.default != NONE && p.default as usize >= ne) {
-                    return bad("bad default argument");
-                }
-                if inits.iter().any(|x| x.init as usize >= ne) {
-                    return bad("bad ctor-initializer");
-                }
-            }
-            Payload::Field { width, init, .. } => {
-                if [*width, *init].iter().any(|&x| x != NONE && x as usize >= ne) {
-                    return bad("bad field initializer");
-                }
-            }
-            Payload::Nttp { default, profile, .. } => {
-                if (*default != NONE && *default as usize >= ne) || (*default == NONE && *profile) {
-                    return bad("bad default template argument");
-                }
-            }
-            Payload::Var { init, eval, .. } => {
-                if *init != NONE && *init as usize >= ne {
-                    return bad("bad variable initializer");
-                }
-                if *eval != NONE && *eval != NOT_CONST && *eval as usize >= b.consts.len() {
-                    return bad("bad variable value");
-                }
-            }
-            _ => {}
-        }
-    }
     Ok(())
 }
 
 /// Every main-file offset the bodies hold (for the importer's bound
 /// check).
 pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
-    let b = &img.bodies;
+    section_locs(&img.bodies, out);
+    super::requires::requires_locs(img, out);
+}
+
+/// One past the highest declaration record a validated expression
+/// section names (0 for none): its parameters, the translation unit and
+/// [`NONE`] are no records (WP-1300, [`super::exprs`]).
+pub(super) fn section_decl_bound(b: &Bodies) -> usize {
+    let rec = |w: u32| if w == NONE || w == LEX_TU || w & PARAM != 0 { 0 } else { w as usize + 1 };
+    let mut hi = 0usize;
+    for e in &b.exprs {
+        let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
+        for (f, w) in tokens(&layout(expr_shape(k, e.bits), e.cold), &e.words).unwrap_or_default() {
+            match f {
+                F::D(_) | F::OD(_) => hi = hi.max(rec(w[0])),
+                F::DL(_) => hi = w[1..].iter().fold(hi, |h, &x| h.max(rec(x))),
+                F::Path => hi = w[1..].chunks(2).fold(hi, |h, p| h.max(rec(p[0]))),
+                F::Nns => {
+                    let mut p = 1;
+                    while let Some(&k) = w.get(p) {
+                        if matches!(k, 1 | 3) {
+                            hi = hi.max(w.get(p + 1).map_or(0, |&x| rec(x)));
+                        }
+                        p += [1, 2, 4, 2, 2].get(k as usize).copied().unwrap_or(w.len());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    hi
+}
+
+/// Every main-file offset one body section holds.
+pub(super) fn section_locs(b: &Bodies, out: &mut Vec<u32>) {
     for e in &b.exprs {
         out.push(e.loc);
         let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
@@ -1223,7 +1285,6 @@ pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
             }
         }
     }
-    super::requires::requires_locs(img, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1252,6 +1313,9 @@ pub(super) enum Root {
     TemplDefault(u32, ExprId),
     /// WP-1284: declaration record, constraint record, the constraint.
     Cons(u32, u32, ExprId),
+    /// WP-1300: function record, exception words, a `noexcept` operand
+    /// naming the function's parameters ([`super::exprs::LateNx`]).
+    Noexcept(u32, u8, ExprId),
 }
 
 /// The writer's body state.
@@ -1269,6 +1333,9 @@ pub(super) struct BodyState {
     pub(super) init_fields: Vec<(u32, u32, DeclId)>,
     /// Requires-expression bodies (WP-1284).
     pub(super) req: super::requires::ReqState,
+    /// How many expression sections of types or template arguments are
+    /// being walked (WP-1300, [`Writer::texpr_section`]).
+    pub(super) texpr: u32,
     emap: FxHashMap<ExprId, u32>,
     smap: FxHashMap<StmtId, u32>,
     cmap: FxHashMap<ConstValueId, u32>,
@@ -1316,6 +1383,10 @@ struct Frame {
 }
 
 pub(super) const OUTSIDE: &str = "a body referring to a declaration outside the image";
+/// WP-1300: what an expression in a type may not name (the importer
+/// builds types before parameters and bodies).
+pub(super) const TEXPR_LOCAL: &str =
+    "an expression in a type naming a parameter or local declaration";
 
 impl Writer<'_, '_, '_> {
     /// Whether a function's body is carried as statements (an importer
@@ -1780,6 +1851,37 @@ impl Writer<'_, '_, '_> {
     }
 
     /// The record of written expression `e`.
+    /// The section of expression `e`, held by a type or a template
+    /// argument (WP-1300): written with its own records, constants and
+    /// strings, so the image's bodies (perhaps mid-walk) stay as they
+    /// were. Its root is its last expression.
+    pub(super) fn texpr_section(&mut self, e: ExprId) -> W<Bodies> {
+        if self.bs.texpr >= 8 {
+            return Err("an expression in a type nested too deeply");
+        }
+        let bodies = std::mem::take(&mut self.img.bodies);
+        let bs = &mut self.bs;
+        let saved = (
+            std::mem::take(&mut bs.emap),
+            std::mem::take(&mut bs.smap),
+            std::mem::take(&mut bs.cmap),
+            std::mem::take(&mut bs.strmap),
+            std::mem::take(&mut bs.params),
+            std::mem::take(&mut bs.param_pos),
+        );
+        bs.texpr += 1;
+        let r = self.walk(Node::E(e));
+        let bs = &mut self.bs;
+        bs.texpr -= 1;
+        (bs.emap, bs.smap, bs.cmap, bs.strmap, bs.params, bs.param_pos) = saved;
+        let b = std::mem::replace(&mut self.img.bodies, bodies);
+        let i = r?;
+        if !b.stmts.is_empty() || i as usize + 1 != b.exprs.len() {
+            return Err("a statement in an expression in a type");
+        }
+        Ok(b)
+    }
+
     pub(super) fn expr_word(&self, e: ExprId) -> W<u32> {
         self.bs.emap.get(&e).copied().ok_or("a malformed body")
     }
@@ -1947,6 +2049,8 @@ impl Writer<'_, '_, '_> {
             PARAM | p
         } else if d == self.s.ast.tu {
             LEX_TU
+        } else if self.bs.texpr > 0 && (self.req_param_body(d).is_some() || self.local(d)) {
+            return Err(TEXPR_LOCAL);
         } else if let Some(body) = self.req_param_body(d) {
             self.req_param(d, body)?
         } else if self.local(d) {
@@ -2089,7 +2193,8 @@ impl Writer<'_, '_, '_> {
                 | Root::CtorInit(rec, _, _)
                 | Root::Attr(rec, _, _, _)
                 | Root::TemplDefault(rec, _)
-                | Root::Cons(rec, _, _) => rec,
+                | Root::Cons(rec, _, _)
+                | Root::Noexcept(rec, _, _) => rec,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
             if let Some(&d) = inv.get(&rec) {
@@ -2167,6 +2272,10 @@ impl Writer<'_, '_, '_> {
                     let i = self.walk(Node::E(e))?;
                     self.set_nttp_default(rec, i);
                 }
+                Root::Noexcept(rec, exc, e) => {
+                    let expr = self.walk(Node::E(e))?;
+                    self.img.late_nx.push(super::exprs::LateNx { rec, exc, expr });
+                }
                 Root::Cons(_, k, e) => {
                     let i = self.walk(Node::E(e))?;
                     self.img.cons.recs[k as usize].expr = i;
@@ -2221,7 +2330,6 @@ fn expr_reason(k: ExprKind) -> &'static str {
         X::UnresolvedLookupExpr
         | X::UnresolvedMemberExpr
         | X::CXXDependentScopeMemberExpr
-        | X::SubstNonTypeTemplateParmExpr
         | X::SubstNonTypeTemplateParmPackExpr
         | X::FunctionParmPackExpr
         | X::PackExpansionExpr
@@ -2273,7 +2381,6 @@ impl Built {
 impl Sema<'_, '_> {
     /// Builds the body records of `img` (after its declarations: `ids`
     /// are the records', `params` the parameters in image order).
-    #[allow(clippy::too_many_lines)] // one arm per side record, kept with the schema
     pub(super) fn image_bodies(
         &mut self,
         img: &Image,
@@ -2284,6 +2391,44 @@ impl Sema<'_, '_> {
         main: &super::Locs,
     ) -> Built {
         let b = &img.bodies;
+        let (consts, strs) = self.image_consts_strs(img, b, tys, ids);
+        let built = Built {
+            ebase: self.ast.exprs.len() as u32 + 1,
+            sbase: self.ast.stmts.len() as u32 + 1,
+            consts,
+            reqs,
+        };
+        // Values of every token, as the AST slot would hold them.
+        let mut vals: Vec<u32> = Vec::new();
+        for (i, e) in b.exprs.iter().enumerate() {
+            self.image_expr_rec(img, tys, ids, params, &built, &strs, main, e, i, &mut vals);
+        }
+        for (i, s) in b.stmts.iter().enumerate() {
+            let k = STMT_KINDS[usize::from(s.kind)];
+            let shape = stmt_shape(k);
+            let fields = layout(shape, 0);
+            let toks = tokens(&fields, &s.words).unwrap_or_default();
+            vals.clear();
+            for &(f, w) in &toks {
+                let v = self.image_val(img, tys, ids, params, &built, &strs, main, f, w);
+                vals.push(v);
+            }
+            let (a, bb, _) = self.image_slots(shape, &vals, Node::S(built.stmt(0)));
+            let loc = main.get(s.loc);
+            let id = self.ast.stmts.push(StmtNode::new(k, s.aux, loc, a, bb));
+            debug_assert_eq!(id, built.stmt(i as u32));
+        }
+        built
+    }
+
+    /// The constants and strings of body section `b`.
+    fn image_consts_strs(
+        &mut self,
+        img: &Image,
+        b: &Bodies,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+    ) -> (Vec<ConstValueId>, Vec<StringLitId>) {
         let mut consts = Vec::with_capacity(b.consts.len());
         for c in &b.consts {
             let ty = self.image_ty(img, tys, ids, c.ty());
@@ -2318,100 +2463,115 @@ impl Sema<'_, '_> {
             };
             strs.push(id);
         }
+        (consts, strs)
+    }
+
+    /// Builds expression record `e`, the `i`-th of its section.
+    #[allow(clippy::too_many_arguments)] // the importer's tables
+    fn image_expr_rec(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        params: &[DeclId],
+        built: &Built,
+        strs: &[StringLitId],
+        main: &super::Locs,
+        e: &ExprRec,
+        i: usize,
+        vals: &mut Vec<u32>,
+    ) {
+        let k = EXPR_KINDS[usize::from(e.kind)];
+        let shape = expr_shape(k, e.bits);
+        let fields = layout(shape, e.cold);
+        let toks = tokens(&fields, &e.words).unwrap_or_default();
+        vals.clear();
+        for &(f, w) in &toks {
+            let v = self.image_val(img, tys, ids, params, built, strs, main, f, w);
+            vals.push(v);
+        }
+        let (a, bb, used) = self.image_slots(shape, vals, Node::E(built.expr(0)));
+        let ty = self.image_ty(img, tys, ids, e.ty);
+        let loc = main.get(e.loc);
+        let mut deps = ExprDeps::NONE;
+        for d in
+            [ExprDeps::TYPE, ExprDeps::VALUE, ExprDeps::INSTANTIATION, ExprDeps::UNEXPANDED_PACK]
+        {
+            if e.deps & d.bits() != 0 {
+                deps |= d;
+            }
+        }
+        let node = ExprNode::from_raw(k, e.bits, deps, e.aux, ty, loc, a, bb);
+        let id = self.ast.exprs.push(node);
+        debug_assert_eq!(id, built.expr(i as u32));
+        let mut rest = vals[used..].iter().copied();
+        let mut next = || rest.next().unwrap_or(0);
+        if e.cold & COLD_END != 0 {
+            let _ = self.ast.exprs.cold.end_loc.insert(id, Loc::from_raw(next()));
+        }
+        if e.cold & COLD_WRITTEN != 0
+            && let Some(q) = QualType::from_raw(next())
+        {
+            let _ = self.ast.exprs.cold.cast_written.insert(id, q);
+        }
+        if e.cold & COLD_RHS != 0 {
+            let _ = self.ast.exprs.cold.trait_rhs_loc.insert(id, Loc::from_raw(next()));
+        }
+        if e.cold & COLD_BEGIN != 0 {
+            let _ = self.ast.templates.expr_begin.insert(id, Loc::from_raw(next()));
+        }
+        if e.cold & COLD_OP != 0 {
+            let _ = self.ast.templates.member_op_loc.insert(id, Loc::from_raw(next()));
+        }
+        // Only on a default-argument use (the copy precedes it, so it
+        // is already built); anything else is dropped.
+        let rewrite = if e.cold & COLD_REWRITE != 0 { ExprId::from_raw(next()) } else { None };
+        if let Some(r) = rewrite
+            && matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr)
+        {
+            let _ = self.ast.exprs.set_default_arg_rewritten(id, r);
+        }
+        if e.cold & COLD_ELLIPSIS != 0 {
+            self.templ.fold_ellipsis.insert(id, Loc::from_raw(next()));
+        }
+        if e.cold & COLD_LOOKUP != 0 {
+            let (nns, targs) = (NnsId::from_raw(next()), kiln_ast::ArgListId::from_raw(next()));
+            if let Some(n) = nns {
+                let _ = self.ast.templates.expr_nns.insert(id, n);
+            }
+            if let Some(t) = targs {
+                let _ = self.ast.templates.expr_targs.insert(id, t);
+            }
+        }
+        if e.cold & COLD_TEMPLATE_KW != 0 {
+            let _ = self.ast.templates.template_kw.insert(id, Loc::from_raw(next()));
+        }
+    }
+
+    /// Builds expression section `b` of a type or a template argument
+    /// (WP-1300, [`super::exprs`]): no statements, parameters or
+    /// requires-expressions; returns its root, the last expression.
+    pub(super) fn image_texpr_section(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        b: &Bodies,
+        main: &super::Locs,
+    ) -> Option<ExprId> {
+        let (consts, strs) = self.image_consts_strs(img, b, tys, ids);
         let built = Built {
             ebase: self.ast.exprs.len() as u32 + 1,
             sbase: self.ast.stmts.len() as u32 + 1,
             consts,
-            reqs,
+            reqs: super::requires::ReqsBuilt::default(),
         };
-        // Values of every token, as the AST slot would hold them.
         let mut vals: Vec<u32> = Vec::new();
         for (i, e) in b.exprs.iter().enumerate() {
-            let k = EXPR_KINDS[usize::from(e.kind)];
-            let shape = expr_shape(k, e.bits);
-            let fields = layout(shape, e.cold);
-            let toks = tokens(&fields, &e.words).unwrap_or_default();
-            vals.clear();
-            for &(f, w) in &toks {
-                let v = self.image_val(img, tys, ids, params, &built, &strs, main, f, w);
-                vals.push(v);
-            }
-            let (a, bb, used) = self.image_slots(shape, &vals, Node::E(built.expr(0)));
-            let ty = self.image_ty(img, tys, ids, e.ty);
-            let loc = main.get(e.loc);
-            let mut deps = ExprDeps::NONE;
-            for d in [
-                ExprDeps::TYPE,
-                ExprDeps::VALUE,
-                ExprDeps::INSTANTIATION,
-                ExprDeps::UNEXPANDED_PACK,
-            ] {
-                if e.deps & d.bits() != 0 {
-                    deps |= d;
-                }
-            }
-            let node = ExprNode::from_raw(k, e.bits, deps, e.aux, ty, loc, a, bb);
-            let id = self.ast.exprs.push(node);
-            debug_assert_eq!(id, built.expr(i as u32));
-            let mut rest = vals[used..].iter().copied();
-            let mut next = || rest.next().unwrap_or(0);
-            if e.cold & COLD_END != 0 {
-                let _ = self.ast.exprs.cold.end_loc.insert(id, Loc::from_raw(next()));
-            }
-            if e.cold & COLD_WRITTEN != 0
-                && let Some(q) = QualType::from_raw(next())
-            {
-                let _ = self.ast.exprs.cold.cast_written.insert(id, q);
-            }
-            if e.cold & COLD_RHS != 0 {
-                let _ = self.ast.exprs.cold.trait_rhs_loc.insert(id, Loc::from_raw(next()));
-            }
-            if e.cold & COLD_BEGIN != 0 {
-                let _ = self.ast.templates.expr_begin.insert(id, Loc::from_raw(next()));
-            }
-            if e.cold & COLD_OP != 0 {
-                let _ = self.ast.templates.member_op_loc.insert(id, Loc::from_raw(next()));
-            }
-            // Only on a default-argument use (the copy precedes it, so it
-            // is already built); anything else is dropped.
-            let rewrite = if e.cold & COLD_REWRITE != 0 { ExprId::from_raw(next()) } else { None };
-            if let Some(r) = rewrite
-                && matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr)
-            {
-                let _ = self.ast.exprs.set_default_arg_rewritten(id, r);
-            }
-            if e.cold & COLD_ELLIPSIS != 0 {
-                self.templ.fold_ellipsis.insert(id, Loc::from_raw(next()));
-            }
-            if e.cold & COLD_LOOKUP != 0 {
-                let (nns, targs) = (NnsId::from_raw(next()), kiln_ast::ArgListId::from_raw(next()));
-                if let Some(n) = nns {
-                    let _ = self.ast.templates.expr_nns.insert(id, n);
-                }
-                if let Some(t) = targs {
-                    let _ = self.ast.templates.expr_targs.insert(id, t);
-                }
-            }
-            if e.cold & COLD_TEMPLATE_KW != 0 {
-                let _ = self.ast.templates.template_kw.insert(id, Loc::from_raw(next()));
-            }
+            self.image_expr_rec(img, tys, ids, &[], &built, &strs, main, e, i, &mut vals);
         }
-        for (i, s) in b.stmts.iter().enumerate() {
-            let k = STMT_KINDS[usize::from(s.kind)];
-            let shape = stmt_shape(k);
-            let fields = layout(shape, 0);
-            let toks = tokens(&fields, &s.words).unwrap_or_default();
-            vals.clear();
-            for &(f, w) in &toks {
-                let v = self.image_val(img, tys, ids, params, &built, &strs, main, f, w);
-                vals.push(v);
-            }
-            let (a, bb, _) = self.image_slots(shape, &vals, Node::S(built.stmt(0)));
-            let loc = main.get(s.loc);
-            let id = self.ast.stmts.push(StmtNode::new(k, s.aux, loc, a, bb));
-            debug_assert_eq!(id, built.stmt(i as u32));
-        }
-        built
+        let n = u32::try_from(b.exprs.len().checked_sub(1)?).ok()?;
+        Some(built.expr(n))
     }
 
     /// One token's slot value.

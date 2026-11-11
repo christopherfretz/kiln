@@ -652,6 +652,59 @@ for the census and the corpus, `harness` for the libc++ gate.
 - The module directories and `cpp.include` pass under `--bmi-image`,
   `--bmi-kind 1` and `--bmi-kind 2` (75 of 75 each).
 
+## WP-1300: expressions in types and template arguments (2026-11-11)
+
+The image now carries `decltype(nullptr)`, non-type template arguments
+written as expressions (dependent and not, through alias templates),
+`decltype(e)`, `noexcept(e)` on function types (an operand naming the
+function's parameters too), value-dependent array bounds and pack
+expansions of a known length (spec/modules.md "Expressions in types").
+Four image bugs this exposed are fixed: a constant static data member
+of a specialization that a body only names (`B<2>::v`) was left
+undefined; a complete class specialization lost its pattern's
+bit-field widths and default member initializers (now refused) and
+in-class `static const` initializers (now instantiated afterwards); a
+dependent alias template base failed the validator ("an internal image
+inconsistency", libc++ `<execution>`); and a referenced defaulted
+member's unevaluated exception specification was evaluated (a
+`check` difference). kiln at the WP-1300 branch, `debug` profile for
+the census and the corpus, `harness` for the libc++ gate.
+
+- **libstdc++ 14 (109 headers):** all 109 pass the state check; none is
+  carried. Every one is now first refused at `<bits/c++config.h>`:323,
+  "an invalid or attributed local declaration" (`std::__terminate`'s
+  block-scope `void terminate() noexcept __attribute__((__noreturn__,
+  __cold__));`). The `decltype(nullptr)` at :314 that WP-1293 reported
+  is carried.
+- **Census** (`-fkiln-bmi-image-census`, top-level declarations
+  carried, before → after this WP): `gnu` 19125 → 21473 of 26497,
+  `mid` 7299 → 8359 of 9806, `lcx` 19035 → 21177 of 26763. The
+  remaining leaders are cascades (redeclarations outside the image,
+  specializations of templates outside it, members of classes outside
+  it), local declarations the image does not carry, and templates.
+- **libc++ 19 (118 extension-less headers of `/usr/include/c++/v1`):**
+  117 pass the state check (`__std_clang_module` is an `#error`), 17
+  are carried (11 public: `<cassert>`, `<cerrno>`, `<cfenv>`,
+  `<cfloat>`, `<ciso646>`, `<climits>`, `<cstdbool>`, `<cstdint>`,
+  `<cuchar>`, `<execution>`, `<version>`).
+- **Corpus `--pch-diff check`** (`cpp.include`, the `module.*`
+  directories, `tests/differential`, `tests/header-guard`): 155
+  compared, all equal, 36 took the image (was 25 of 147). Replay
+  reasons: a declaration in a template 30, a template expression 16, a
+  template 13, a declaration not named by an identifier 13, a type
+  declared outside the image 9, a class member outside its class
+  definition 9, a specialization outside the image 7, an attribute 6,
+  and fewer than 5 each for the rest.
+- **libc++ M3 gate:** 636 pass + 6 unsupported, 0 fail (152 s). Under
+  `--pch-diff check` the same; 575 tests had a PCH and all replayed: a
+  type 388 (a constrained placeholder return type, `__integer_like
+  auto`, `<__ranges/size.h>`:82), a template 157, a declaration not
+  named by an identifier 11, a specialization outside the image 6, a
+  type declared outside the image 5, a declaration in a template 3, and
+  one each for five others.
+- The module directories pass under `--bmi-image`, `--bmi-kind 1` and
+  `--bmi-kind 2` (96 of 96 each).
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers

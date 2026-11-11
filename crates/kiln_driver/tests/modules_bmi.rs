@@ -1889,15 +1889,6 @@ fn kind2_declaration_image_fallback() {
             "mem-initializers of a constructor in a class template",
         ),
         (
-            "export module f;\nexport template <int N> struct B { static constexpr int v = N; };\n\
-             export inline int g() { return B<1 + 1>::v; }\n",
-            "a template argument the image does not carry",
-        ),
-        (
-            "export module f;\nexport template <int N> struct B { int a[N]; };\n",
-            "a type the image does not carry",
-        ),
-        (
             "export module f;\nexport template <class T> struct A { int f() { return 1; } };\n\
              export inline int h() { A<int> a; return a.f(); }\n",
             "an implicit member of a class template specialization",
@@ -1915,6 +1906,11 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport template <class T> requires (sizeof(T) > 1) struct A {};\n\
              export inline int g() { return sizeof(A<long>); }\n",
             "a specialization of a constrained template",
+        ),
+        (
+            "export module f;\nexport template <int N> struct F { int a : N; int b = 4; };\n\
+             export inline int g() { F<3> x{}; x.a = 7; return x.a + x.b; }\n",
+            "a specialization of a class template with a bit-field or a default member initializer",
         ),
         (
             "export module f;\nexport template <class T> T e(T t) { return t; }\n\

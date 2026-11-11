@@ -77,6 +77,22 @@ impl Writer<'_, '_, '_> {
         Ok(out)
     }
 
+    /// The image arguments of a type's argument list `list` as written:
+    /// an expression argument as its expression (WP-1300, [`super::exprs`]).
+    pub(super) fn written_arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
+        let args: Vec<TemplateArg> = self.s.ast.types.args(list).to_vec();
+        let mut out = Vec::with_capacity(args.len());
+        for a in args {
+            out.push(match a.view() {
+                ArgView::Expr { expr, profile } => {
+                    ArgRec::Expr(self.texpr(expr)?, profile.is_some())
+                }
+                _ => self.arg_rec(a)?,
+            });
+        }
+        Ok(out)
+    }
+
     /// The image argument of `a`: a type, or an integral or `bool` value
     /// of a builtin type.
     pub(super) fn arg_rec(&mut self, a: TemplateArg) -> W<ArgRec> {
@@ -164,6 +180,22 @@ impl Writer<'_, '_, '_> {
         let args = self.arg_recs(si.args)?;
         let complete =
             class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+        // The importer instantiates a complete one while it reads the
+        // records, before the pattern's bit-field widths and default
+        // member initializers come with the bodies: the specialization
+        // would lose them (WP-1300; static data member initializers are
+        // instantiated again afterwards, `image_spec_member_inits`).
+        if complete
+            && ast.definition(si.from).is_some_and(|p| {
+                ast.members(p).any(|m| {
+                    ast.decls.field(m).is_some_and(|f| f.bit_width.is_some() || f.init.is_some())
+                })
+            })
+        {
+            return Err(
+                "a specialization of a class template with a bit-field or a default member initializer",
+            );
+        }
         let loc = self.loc(si.point_of_instantiation)?;
         let o = ast.modules.owner(d);
         let i = self.img.decls.len() as u32;
@@ -259,7 +291,7 @@ impl Writer<'_, '_, '_> {
                     let template = self
                         .template_rec(td, 2)
                         .map_err(|_| "an alias template outside the image")?;
-                    let args = self.arg_recs(args)?;
+                    let args = self.written_arg_recs(args)?;
                     let u = underlying.ok_or("an alias template")?;
                     return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));
                 }
@@ -339,6 +371,7 @@ impl Sema<'_, '_> {
                 let c = self.int_const(ty, v);
                 TemplateArg::value(ty, c)
             }
+            ArgRec::Expr(i, p) => self.image_expr_arg(i, p),
         }
     }
 
@@ -386,6 +419,33 @@ impl Sema<'_, '_> {
         self.ast.templates.find_member(s, ids[pattern as usize]).unwrap_or(self.ast.tu)
     }
 
+    /// The in-class initializers of the static data members of class
+    /// specialization `spec` that its instantiation, made while the
+    /// image's declarations were read, could not see: the pattern's
+    /// initializers come with the bodies. A non-deferred one
+    /// (`static const int w = sizeof(T);`, [temp.inst]/3) is
+    /// instantiated now, as replay's instantiation of the class did.
+    fn image_spec_member_inits(&mut self, spec: DeclId, loc: Loc) {
+        if self.ast.decls.get(spec).kind() != DeclKind::CXXRecord {
+            return;
+        }
+        let missing: Vec<DeclId> = self
+            .ast
+            .members(spec)
+            .filter(|&m| {
+                self.ast.decls.var(m).is_some_and(|v| v.init.is_none())
+                    && self
+                        .ast
+                        .instantiated_from(m)
+                        .and_then(|p| self.ast.decls.var(p))
+                        .is_some_and(|p| p.init.is_some())
+            })
+            .collect();
+        for m in missing {
+            self.instantiate_missing_static_member_init(m, loc);
+        }
+    }
+
     /// Marks the specializations and members the unit used, used again
     /// once every body is built: a `constexpr` definition is instantiated
     /// at once, any other queued for the end of the translation unit, as
@@ -400,8 +460,24 @@ impl Sema<'_, '_> {
                 continue;
             }
             let loc = main.get(r.loc);
+            if matches!(r.payload, Payload::Spec { .. }) {
+                self.image_spec_member_inits(d, loc);
+            }
             let func = self.ast.decls.function(d).is_some();
-            if r.flags & DeclFlags::USED.bits() != 0 {
+            let used = r.flags & DeclFlags::USED.bits() != 0;
+            if self.ast.decls.var(d).is_some()
+                && (used || r.flags & DeclFlags::REFERENCED.bits() != 0)
+            {
+                // A static data member (or variable template
+                // specialization) is instantiated as replay's reference
+                // did: one usable in constant expressions at once, even
+                // when only named (a non-odr-use, `B<2>::v`), its value
+                // being needed; any other only when odr-used.
+                self.unevaluated += u32::from(!used);
+                self.note_var_referenced(d, loc);
+                self.unevaluated -= u32::from(!used);
+            }
+            if used {
                 if func {
                     self.mark_function_referenced(d, loc);
                 } else {

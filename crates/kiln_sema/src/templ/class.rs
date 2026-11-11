@@ -1712,6 +1712,25 @@ impl Sema<'_, '_> {
         if self.inst.fatal || !self.inst.deferred_inits.remove(&v) {
             return;
         }
+        self.subst_static_member_init(v, poi, true);
+    }
+
+    /// Instantiates the in-class initializer of static data member `v`
+    /// of a specialization that was declared without it although its
+    /// initializer is not deferred: the specialization was instantiated
+    /// from a declaration image before the pattern's initializer was set
+    /// (spec/modules.md §11.11 "Templates as patterns", WP-1300). The
+    /// member stays as declared (not made `inline`).
+    pub(crate) fn instantiate_missing_static_member_init(&mut self, v: DeclId, poi: Loc) {
+        if self.inst.fatal || self.inst.deferred_inits.contains(&v) {
+            return;
+        }
+        self.subst_static_member_init(v, poi, false);
+    }
+
+    /// [`Self::instantiate_static_member_init`]'s substitution; `inline`:
+    /// the member becomes `inline` (a deferred one was declared without).
+    fn subst_static_member_init(&mut self, v: DeclId, poi: Loc, inline: bool) {
         let Some(pattern) = self.ast.instantiated_from(v) else { return };
         let Some(spec) = self.inst_owner(v) else { return };
         let Some((tmpl, args)) = self.spec_args(spec) else { return };
@@ -1723,7 +1742,9 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::StaticDataMember, v, pattern, poi) {
             return;
         }
-        self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_inline(true));
+        if inline {
+            self.ast.decls.mark_var(v, kiln_ast::decl::VarSpec::new().with_inline(true));
+        }
         // The member was declared without its initializer: it takes the
         // pattern's form now (`static constexpr E e{X::v};` is direct-list-
         // initialization, [dcl.init.list]/3.8).

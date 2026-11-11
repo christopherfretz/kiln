@@ -48,6 +48,7 @@ mod classtempl;
 mod constraints;
 mod declocs;
 mod deptypes;
+mod exprs;
 mod friend;
 mod localexterns;
 mod locs;
@@ -61,11 +62,12 @@ mod templ;
 mod written;
 
 use body::{Bodies, BodyState, Root};
+pub(crate) use exprs::TexprState;
 pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 19;
+pub(crate) const IMAGE_VERSION: u32 = 20;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -152,6 +154,7 @@ struct Census {
 struct Marks {
     decls: usize,
     types: usize,
+    texprs: usize,
     roots: usize,
     overrides: usize,
     keys: usize,
@@ -201,6 +204,10 @@ enum TyRec {
         params: Vec<QRef>,
         info: u16,
         exc: u8,
+        /// WP-1300: for `exc` 7 to 9 (`noexcept(e)` false, true or
+        /// dependent, [`exprs`]), the expression section of `e`; else
+        /// [`NONE`].
+        nx: u32,
     },
     Enum(u32),
     Typedef(u32),
@@ -244,6 +251,9 @@ enum TyRec {
     /// A dependent name, transform, member pointer or vector type
     /// (WP-1284, [`deptypes`]).
     Dep(deptypes::DepTy),
+    /// A type holding an expression or a pack expansion count (WP-1300,
+    /// [`exprs`]).
+    Ex(exprs::ExTy),
 }
 
 /// A template argument (S4b): a type, or an integral or `bool` value of
@@ -252,12 +262,18 @@ enum TyRec {
 enum ArgRec {
     Type(QRef),
     Value(QRef, i128),
+    /// An expression as written (WP-1300, [`exprs`]): its section and
+    /// whether it has a profile (a dependent argument's).
+    Expr(u32, bool),
 }
 
 impl ArgRec {
+    /// The argument's type ([`exprs::EXPR_ARG_TY`] for an expression,
+    /// whose type is its own).
     fn q(self) -> QRef {
         match self {
             ArgRec::Type(q) | ArgRec::Value(q, _) => q,
+            ArgRec::Expr(..) => exprs::EXPR_ARG_TY,
         }
     }
 }
@@ -589,6 +605,12 @@ struct Image {
     written: Vec<written::WrittenRec>,
     /// WP-1293: block-scope declarations, in `local_externs` order.
     lexterns: localexterns::LocalExterns,
+    /// WP-1300: the expressions types and template arguments hold, one
+    /// section each ([`exprs`]).
+    texprs: Vec<Bodies>,
+    /// WP-1300: `noexcept(e)` naming the function's own parameters, in
+    /// the bodies ([`exprs::LateNx`]).
+    late_nx: Vec<exprs::LateNx>,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -853,6 +875,11 @@ impl Wr {
                     self.u8(1);
                     self.q(q);
                     self.0.extend_from_slice(&v.to_le_bytes());
+                }
+                ArgRec::Expr(e, p) => {
+                    self.u8(2);
+                    self.u32(e);
+                    self.u8(u8::from(p));
                 }
             }
         }
@@ -1128,7 +1155,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.u8(*k);
                 w.q(*q);
             }
-            TyRec::Func { ret, params, info, exc } => {
+            TyRec::Func { ret, params, info, exc, nx } => {
                 w.u8(8);
                 w.q(*ret);
                 w.len(params.len());
@@ -1137,6 +1164,9 @@ fn encode(img: &Image) -> Vec<u8> {
                 }
                 w.u16(*info);
                 w.u8(*exc);
+                if *exc >= exprs::NX_FALSE {
+                    w.u32(*nx);
+                }
             }
             TyRec::Enum(d) => (w.u8(9), w.u32(*d)).1,
             TyRec::Typedef(d) => (w.u8(10), w.u32(*d)).1,
@@ -1159,6 +1189,7 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Pack(q) => (w.u8(19), w.q(*q)).1,
             TyRec::Auto(k) => (w.u8(20), w.u8(*k)).1,
             TyRec::Dep(d) => (w.u8(21), deptypes::encode_dep(&mut w, d)).1,
+            TyRec::Ex(x) => (w.u8(22), exprs::encode_ex(&mut w, x)).1,
             TyRec::Subst { repl, assoc, index, pack } => {
                 w.u8(18);
                 w.q(*repl);
@@ -1212,6 +1243,7 @@ fn encode(img: &Image) -> Vec<u8> {
     requires::encode_requires(&mut w, &img.reqs);
     written::encode_written(&mut w, &img.written);
     localexterns::encode_local_externs(&mut w, &img.lexterns);
+    exprs::encode_texprs(&mut w, &img.texprs, &img.late_nx);
     w.0
 }
 
@@ -1292,6 +1324,13 @@ impl<'a> Rd<'a> {
             v.push(match self.u8()? {
                 0 => ArgRec::Type(self.q()?),
                 1 => ArgRec::Value(self.q()?, self.i128()?),
+                2 => {
+                    let e = self.u32()?;
+                    match self.u8()? {
+                        p @ 0..=1 => ArgRec::Expr(e, p != 0),
+                        _ => return bad("bad template argument"),
+                    }
+                }
                 _ => return bad("bad template argument"),
             });
         }
@@ -1542,6 +1581,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) | TyRec::Auto(_) => (Vec::new(), Vec::new()),
         TyRec::Dep(d) => deptypes::dep_refs(d),
+        TyRec::Ex(x) => (exprs::ex_refs(x), Vec::new()),
     }
 }
 
@@ -1721,10 +1761,11 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 }
                 let info = r.u16()?;
                 let exc = r.u8()?;
-                if exc_spec(exc).is_none() && !matches!(exc, 5 | 6) {
+                if exc_spec(exc).is_none() && !matches!(exc, 5..=exprs::NX_DEPENDENT) {
                     return bad("bad exception specification");
                 }
-                TyRec::Func { ret, params, info, exc }
+                let nx = if exc >= exprs::NX_FALSE { r.u32()? } else { NONE };
+                TyRec::Func { ret, params, info, exc, nx }
             }
             9 => TyRec::Enum(r.u32()?),
             10 => TyRec::Typedef(r.u32()?),
@@ -1759,6 +1800,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 _ => return bad("bad placeholder type"),
             },
             21 => TyRec::Dep(deptypes::decode_dep(&mut r)?),
+            22 => TyRec::Ex(exprs::decode_ex(&mut r)?),
             18 => {
                 let repl = r.q()?;
                 let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
@@ -1811,6 +1853,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.reqs = requires::decode_requires(&mut r)?;
     img.written = written::decode_written(&mut r)?;
     img.lexterns = localexterns::decode_local_externs(&mut r)?;
+    (img.texprs, img.late_nx) = exprs::decode_texprs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -1850,14 +1893,22 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
 }
 
 /// Whether `q` is a dependent base class type of a class template's
-/// pattern (S4b): a type parameter or a dependent specialization.
+/// pattern (S4b): a type parameter or a dependent specialization, also
+/// named through a dependent alias template specialization
+/// (`__bool_constant<__is_x<T>::value>`, WP-1300).
 fn dependent_base(img: &Image, q: QRef) -> bool {
-    q.quals == 0
-        && q.ty > BUILTINS
-        && matches!(
-            img.types.get((q.ty - BUILTINS - 1) as usize),
-            Some(TyRec::Ttp(_) | TyRec::Tst { under: None, .. })
-        )
+    let mut q = q;
+    for _ in 0..64 {
+        if q.quals != 0 || q.ty <= BUILTINS {
+            return false;
+        }
+        match img.types.get((q.ty - BUILTINS - 1) as usize) {
+            Some(TyRec::Ttp(_) | TyRec::Tst { under: None, .. }) => return true,
+            Some(TyRec::Tst { under: Some(u), .. }) => q = *u,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Whether record `d` (index `i`) stays out of the lookup table: a
@@ -1920,6 +1971,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     // every record named by types `0..=j` built before it.
     let mut pdep = Vec::with_capacity(img.types.len());
     let mut acc = 0usize;
+    let mut texprs_used = vec![false; img.texprs.len()];
     for (j, t) in img.types.iter().enumerate() {
         let (refs, decl) = ty_refs(t);
         if refs.iter().any(|&q| !qref_ok(q, j as u64)) {
@@ -1993,8 +2045,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 return bad("bad specialization type");
             }
         }
+        // WP-1300: the expressions a type holds name earlier types and
+        // records only; the type is built after those records.
+        let below = |q: QRef| qref_ok(q, j as u64);
+        acc = acc.max(exprs::validate_ty_texprs(img, t, &below, &mut texprs_used)?);
         pdep.push(acc);
     }
+    exprs::validate_unused_texprs(img, &texprs_used, &|q| qref_ok(q, nt))?;
     let qref_at = |q: QRef, i: usize| -> bool {
         if !qref_ok(q, nt) {
             return false;
@@ -2599,6 +2656,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     constraints::validate_constraints(img)?;
     requires::validate_requires(img, &|q| qref_ok(q, nt))?;
     written::validate_written(img, &|q| qref_ok(q, nt))?;
+    exprs::validate_late_nx(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2826,6 +2884,13 @@ impl Writer<'_, '_, '_> {
                 let steps = self.nns_steps(n)?;
                 TyRec::ElabQ(keyword as u8, steps, self.qref(named)?)
             }
+            // WP-1300: `noexcept(e)` of any other operand ([`exprs`]).
+            TypeView::Function(p)
+                if matches!(types.exc_spec(&p), ExcSpec::NoexceptExpr { expr, value }
+                    if noexcept_literal(&self.s.ast, expr, value).is_err()) =>
+            {
+                self.noexcept_fn_ty(p)?
+            }
             TypeView::Function(p) => {
                 let exc = match types.exc_spec(&p) {
                     ExcSpec::None => 0,
@@ -2842,7 +2907,7 @@ impl Writer<'_, '_, '_> {
                 let info = p.info().bits();
                 let ret = self.qref(p.ret())?;
                 let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
-                TyRec::Func { ret, params, info, exc }
+                TyRec::Func { ret, params, info, exc, nx: NONE }
             }
             TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
             TypeView::Record(d) => TyRec::Record(self.type_decl(self.s.ast.first(d), t)?),
@@ -2871,7 +2936,10 @@ impl Writer<'_, '_, '_> {
                 }
                 TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
             }
-            v => self.dep_ty(v)?.ok_or("a type the image does not carry")?,
+            v => match self.ex_ty(t, v)? {
+                Some(rec) => rec,
+                None => self.dep_ty(v)?.ok_or("a type the image does not carry")?,
+            },
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
         self.img.types.push(rec);
@@ -3349,7 +3417,10 @@ impl Writer<'_, '_, '_> {
         // specification deferred even once computed (WP-1036).
         let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d))
             || (first && s.implicit_exc_dtors.contains(&d));
-        let ty = if deferred {
+        let late = if deferred { None } else { self.late_noexcept(fty, &proto)? };
+        let ty = if let Some((q, _)) = late {
+            q
+        } else if deferred {
             // The exception specification names the function itself:
             // build the type without it (the importer defers it again).
             let ps: Vec<QualType> = ast.types.params(&proto).to_vec();
@@ -3357,7 +3428,7 @@ impl Writer<'_, '_, '_> {
             let ret = self.qref(proto.ret())?;
             let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
             let t = BUILTINS + 1 + self.img.types.len() as u32;
-            self.img.types.push(TyRec::Func { ret, params, info, exc: 0 });
+            self.img.types.push(TyRec::Func { ret, params, info, exc: 0, nx: NONE });
             QRef { ty: t, quals: fty.quals_bits() }
         } else {
             self.qref(fty)?
@@ -3374,6 +3445,9 @@ impl Writer<'_, '_, '_> {
                 return Err("a parameter shared between declarations");
             }
             params.push(self.param(p, g)?);
+        }
+        if let Some((_, (exc, e))) = late {
+            self.bs.roots.push(Root::Noexcept(i, exc, e));
         }
         let nproto = match self.img.types.get((ty.ty - BUILTINS - 1) as usize) {
             Some(TyRec::Func { params, .. }) => params.len(),
@@ -3794,6 +3868,7 @@ impl Writer<'_, '_, '_> {
         Marks {
             decls: self.img.decls.len(),
             types: self.img.types.len(),
+            texprs: self.img.texprs.len(),
             roots: self.bs.roots.len(),
             overrides: self.overrides.len(),
             keys: self.keys.len(),
@@ -3805,6 +3880,7 @@ impl Writer<'_, '_, '_> {
     fn rollback(&mut self, m: Marks) {
         self.img.decls.truncate(m.decls);
         self.img.types.truncate(m.types);
+        self.img.texprs.truncate(m.texprs);
         self.bs.roots.truncate(m.roots);
         self.overrides.truncate(m.overrides);
         self.keys.truncate(m.keys);
@@ -4345,6 +4421,7 @@ impl Sema<'_, '_> {
                 }
             }
             body::body_locs(&img, &mut offs);
+            exprs::texpr_locs(&img, &mut offs);
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
@@ -4369,8 +4446,14 @@ impl Sema<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
     fn build_image(&mut self, img: &Image, main: &Locs) {
+        let saved = self.image_texprs_enter(img, main);
+        self.build_image_records(img, main);
+        self.image_texprs = saved;
+    }
+
+    #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
+    fn build_image_records(&mut self, img: &Image, main: &Locs) {
         let lo = |_: &Self, o: u32| main.get(o);
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
         // A precompiled header's image (no module name) is built in the
@@ -4506,7 +4589,13 @@ impl Sema<'_, '_> {
                         ctors.push((f, i));
                     }
                     if spec.defaulted() == Defaulted::Explicit {
-                        defaulted.push((f, r.flags));
+                        // Still deferred in the unit (named only in a
+                        // template definition, `tag{}` in a template's
+                        // body): a reference left it unevaluated, as here
+                        // (WP-1300).
+                        let referenced = DeclFlags::REFERENCED.bits();
+                        defaulted
+                            .push((f, if *deferred { r.flags & !referenced } else { r.flags }));
                     }
                     let mut ps = Vec::with_capacity(params.len());
                     for (k, p) in params.iter().enumerate() {
@@ -4762,12 +4851,20 @@ impl Sema<'_, '_> {
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
         self.image_extern_c(img, &ids);
+        // Every type before the bodies: a type built while they are holds
+        // expressions of its own (WP-1300) that would interleave with
+        // theirs, whose ids are consecutive.
+        if let Some(n) = img.types.len().checked_sub(1) {
+            let last = QRef { ty: BUILTINS + 1 + n as u32, quals: 0 };
+            let _ = self.image_ty(img, &mut tys, &ids, last);
+        }
         let reqs = self.image_requires(img, &mut tys, &ids, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
         self.image_written(img, &mut tys, &ids, main);
         self.image_nttp_defaults(&nttp_defaults, &built);
+        self.image_late_nx(img, &ids, &built);
         self.image_inherited_defaults(&redecl_templates);
         for (f, width, init) in fields {
             if width != NONE {
@@ -4960,6 +5057,7 @@ impl Sema<'_, '_> {
         } else {
             let j = (q.ty - BUILTINS - 1) as usize;
             while tys.len() <= j {
+                self.image_texprs_of(img, tys, ids, tys.len());
                 let t = self.image_build_ty(img, &img.types[tys.len()], tys, ids);
                 tys.push(t);
             }
@@ -5059,6 +5157,7 @@ impl Sema<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn image_build_ty(
         &mut self,
         img: &Image,
@@ -5113,10 +5212,10 @@ impl Sema<'_, '_> {
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, cur, q)
             }
-            TyRec::Func { ret, params, info, exc } => {
+            TyRec::Func { ret, params, info, exc, nx } => {
                 let r = qt(self, *ret);
                 let ps: Vec<QualType> = params.iter().map(|&p| qt(self, p)).collect();
-                let exc = self.image_exc_spec(*exc);
+                let exc = self.image_func_exc(*exc, *nx);
                 self.ast.types.function(r, &ps, FuncInfo::from_bits(*info), exc)
             }
             TyRec::Enum(d) | TyRec::Typedef(d) | TyRec::Record(d) | TyRec::Ttp(d) => {
@@ -5166,6 +5265,7 @@ impl Sema<'_, '_> {
                 self.ast.types.subst_template_type_parm(r, a, *index, pack)
             }
             TyRec::Dep(d) => self.image_dep_ty(img, d, ids, &mut |s, q| qt(s, q)),
+            TyRec::Ex(x) => self.image_ex_ty(x, &mut |s, q| qt(s, q)),
         }
     }
 }
@@ -5205,7 +5305,7 @@ mod tests {
             gated: Vec::new(),
             pnames: ["x", "p", "y", "L"].map(String::from).to_vec(),
             types: vec![
-                TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0 },
+                TyRec::Func { ret: q(int), params: vec![q(int)], info: 0, exc: 0, nx: NONE },
                 TyRec::Enum(3),
                 TyRec::Pointer(QRef { ty: BUILTINS + 2, quals: 1 }),
             ],
@@ -5415,6 +5515,8 @@ mod tests {
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
             lexterns: localexterns::LocalExterns::default(),
+            texprs: Vec::new(),
+            late_nx: Vec::new(),
         }
     }
 
@@ -5472,7 +5574,7 @@ mod tests {
         img.types.extend([
             TyRec::Record(10),
             TyRec::Record(11),
-            TyRec::Func { ret: q(void), params: vec![], info: 0, exc: 0 },
+            TyRec::Func { ret: q(void), params: vec![], info: 0, exc: 0, nx: NONE },
             TyRec::ElabQ(0, vec![NnsRec::Ns(0)], q(t + 1)),
         ]);
         let head = |name, ctx, access, loc, payload| DeclRec {
@@ -5822,7 +5924,7 @@ mod tests {
         let t = BUILTINS + 1 + img.types.len() as u32;
         img.types.extend([
             TyRec::Ttp(10),
-            TyRec::Func { ret: q(t), params: vec![q(t)], info: 0, exc: 0 },
+            TyRec::Func { ret: q(t), params: vec![q(t)], info: 0, exc: 0, nx: NONE },
         ]);
         let head = |flags, name, loc, payload| DeclRec {
             flags,

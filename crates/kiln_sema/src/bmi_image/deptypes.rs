@@ -19,8 +19,7 @@
 //! [`NnsRec::Ident`]) is carried by name; the importer forms the same
 //! qualifier, which instantiation resolves as replay does
 //! ([temp.dep.type]/6). Types holding an expression (`decltype(e)`, an
-//! array of a value-dependent bound) still fall back: the importer builds
-//! types before bodies.
+//! array of a value-dependent bound) are [`super::exprs`]'s (WP-1300).
 
 use kiln_ast::types::{
     Nns, TagKeyword, TemplateArg, TemplateName, TypeView, UnaryTransformKind, VectorKind,
@@ -68,7 +67,7 @@ impl Writer<'_, '_, '_> {
             TypeView::DependentTemplateSpecialization { keyword, nns, name, args } => {
                 let steps = self.nns_steps(nns)?;
                 let name = self.sym_ix(name);
-                DepTy::Tmpl { kw: keyword as u8, steps, name, args: self.arg_recs(args)? }
+                DepTy::Tmpl { kw: keyword as u8, steps, name, args: self.written_arg_recs(args)? }
             }
             TypeView::UnaryTransform { kind, base, result } => DepTy::Transform {
                 kind: kind as u8,

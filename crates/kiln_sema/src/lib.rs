@@ -1244,6 +1244,8 @@ pub struct Sema<'a, 'sm> {
     /// Template heads and parse-time template state (WP-069,
     /// spec/sema-templates.md §11.2).
     pub(crate) templ: templ::TemplState,
+    /// The expressions of the declaration image being built (WP-1300).
+    pub(crate) image_texprs: bmi_image::TexprState,
     /// The instantiation engine (spec/sema-templates.md §11.2; WP-070a).
     pub inst: templ::InstState,
     /// The abstract classes whose unimplemented pure virtual functions
@@ -1583,6 +1585,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             initializing: None,
             inst_enable_if: None,
             templ: templ::TemplState::default(),
+            image_texprs: bmi_image::TexprState::default(),
             inst: templ::InstState::default(),
             abstract_noted: kiln_source::fx::FxHashSet::default(),
             srcloc: builtins::SrcLocCache::default(),

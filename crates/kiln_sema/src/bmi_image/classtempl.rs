@@ -266,8 +266,14 @@ impl Writer<'_, '_, '_> {
         let mut out = Vec::with_capacity(written.len());
         for (k, a) in written.into_iter().enumerate() {
             let c = if packs { None } else { converted.get(k).copied() };
-            let a = self.written_arg(a, c).ok_or(super::spec::ARG)?;
-            out.push(self.arg_rec(a)?);
+            out.push(match (self.written_arg(a, c), a.view()) {
+                (Some(a), _) => self.arg_rec(a)?,
+                // WP-1300: any other expression as written.
+                (None, ArgView::Expr { expr, profile }) => {
+                    ArgRec::Expr(self.texpr(expr)?, profile.is_some())
+                }
+                (None, _) => return Err(super::spec::ARG),
+            });
         }
         Ok(out)
     }
@@ -323,6 +329,8 @@ fn encode_arg(w: &mut Wr, a: &CArg) {
             w.u8(2);
             w.u32(*p);
         }
+        // Never written: no specialization argument is an expression.
+        CArg::Arg(ArgRec::Expr(..)) => w.u8(u8::MAX),
         CArg::Pack(v) => {
             w.u8(3);
             w.len(v.len());
@@ -446,7 +454,7 @@ pub(super) fn validate_class_specs(
             CArg::Arg(ArgRec::Type(q)) => qref_at(*q, at),
             CArg::Arg(ArgRec::Value(q, _)) => q.ty <= BUILTINS && q.quals == 0,
             CArg::Parm(p) => params.contains(p),
-            CArg::Pack(_) => false,
+            CArg::Pack(_) | CArg::Arg(ArgRec::Expr(..)) => false,
         };
         let Some(h) = &c.head else {
             if !c.args.iter().all(|a| arg_ok(a, &[])) {

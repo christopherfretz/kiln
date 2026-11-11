@@ -134,6 +134,10 @@ impl Writer<'_, '_, '_> {
 
     /// The section record of `body`, added on first use.
     pub(super) fn req_body(&mut self, body: DeclId) -> W<u32> {
+        if self.bs.texpr > 0 {
+            // WP-1300: a requires-expression in a type stays refused.
+            return Err("a requires-expression in a type");
+        }
         if let Some(&i) = self.bs.req.bodies.get(&body) {
             return Ok(i);
         }
