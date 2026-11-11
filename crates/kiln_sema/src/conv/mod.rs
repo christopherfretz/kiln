@@ -928,11 +928,15 @@ fn bind_reference(
                     return Ok(s.recover_err(&[e], at));
                 }
                 // [class.abstract]/3: the /5.4.1 temporary is an object
-                // of an abstract class (clang's `checkAbstractType`).
-                if !class_src
-                    && let Ok(x) = r
+                // of an abstract class (clang's `checkAbstractType`). From
+                // a class, only a converting constructor creates one, not a
+                // conversion function.
+                if let Ok(x) = r
                     && !s.is_err_expr(x)
-                    && s.require_non_abstract_alloc(at, referee)
+                    && (!class_src
+                        || s.ast.exprs.get(s.ignore_implicit(x)).kind()
+                            == ExprKind::CXXConstructExpr)
+                    && s.require_non_abstract_alloc(at, if class_src { r_un } else { referee })
                 {
                     return Ok(s.recover_err(&[x], at));
                 }
