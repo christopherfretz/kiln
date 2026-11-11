@@ -5585,7 +5585,7 @@ mod tests {
     /// Stage S4: `sample` plus `namespace ns { template <class T, int N>
     /// T tf(T x); }`: the two parameter records, the pattern (dependent,
     /// unlisted) and the template record claiming them.
-    fn template_sample() -> Image {
+    pub(super) fn template_sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let mut img = sample();
         let name = img.names.len() as u32;
@@ -5727,6 +5727,31 @@ mod tests {
         }
     }
 
+    /// spec/modules.md §11.11 "Deduction guides" (WP-1284): an explicit
+    /// guide is a function record of kind `FN_GUIDE` named `N_GUIDE`, at
+    /// namespace scope, as a template's pattern or alone; any other
+    /// pairing of the name and the kind is an error.
+    #[test]
+    fn guide_records() {
+        fn set_fn(i: &mut Image, name: u32, k: u8) {
+            i.decls[12].name = name;
+            i.decls[13].name = name;
+            if let Payload::Function { kind, .. } = &mut i.decls[12].payload {
+                *kind = k;
+            }
+        }
+        let mut img = template_sample();
+        set_fn(&mut img, N_GUIDE, FN_GUIDE);
+        assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+        for (what, name, kind) in
+            [("named guide", 0, FN_GUIDE), ("guide name", N_GUIDE, 0), ("ctor", N_GUIDE, 2)]
+        {
+            let mut img = template_sample();
+            set_fn(&mut img, name, kind);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
     /// Stage S4b: `template_sample` plus `namespace ns { template <class
     /// T = int> struct Box { T v; T w; }; Box<int> bx; }` and a use of the
     /// specialization's `v`: the pattern, the class template record
@@ -5734,7 +5759,7 @@ mod tests {
     /// and the specialization, injected-class-name and substituted
     /// parameter types.
     #[allow(clippy::too_many_lines)] // one sample image, its records in format order
-    fn class_template_sample() -> Image {
+    pub(super) fn class_template_sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;
         let mut img = template_sample();

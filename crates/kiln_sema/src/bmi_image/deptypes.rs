@@ -312,3 +312,95 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::class_template_sample;
+    use super::super::{BUILTINS, decode, encode};
+    use super::*;
+    use kiln_ast::types::BuiltinType;
+
+    /// `class_template_sample` (whose function template parameter `T` is
+    /// type `t`, and whose record 16 is class template `Box`) plus one
+    /// dependent type of each kind, after the types they name.
+    fn dep_sample() -> (Image, u32) {
+        let q = |ty| QRef { ty, quals: 0 };
+        let int = BuiltinType::Int as u32;
+        let mut img = class_template_sample();
+        let t = BUILTINS + 1 + 3;
+        assert_eq!(img.types[3], TyRec::Ttp(10));
+        let x = 0; // the parameter name "x"
+        let first = img.types.len();
+        img.types.extend([
+            TyRec::Dep(DepTy::Name { kw: 5, steps: vec![NnsRec::Ty(q(t), false)], name: x }),
+            TyRec::Dep(DepTy::Name {
+                kw: 5,
+                steps: vec![NnsRec::Ty(q(t), false), NnsRec::Ident(1)],
+                name: x,
+            }),
+            TyRec::Dep(DepTy::Tmpl {
+                kw: 0,
+                steps: vec![NnsRec::Ty(q(t), true)],
+                name: x,
+                args: vec![ArgRec::Type(q(int))],
+            }),
+            TyRec::Dep(DepTy::Transform {
+                kind: UnaryTransformKind::RemoveCv as u8,
+                base: q(t),
+                result: None,
+            }),
+            TyRec::Dep(DepTy::MemPtr { pointee: q(int), class: q(t) }),
+            TyRec::Dep(DepTy::Vector { elem: q(t), count: 4, kind: 0 }),
+            TyRec::Dep(DepTy::Deduced { template: 16, deduced: None }),
+            TyRec::Dep(DepTy::Deduced { template: 16, deduced: Some(q(int)) }),
+        ]);
+        (img, first as u32)
+    }
+
+    /// spec/modules.md §11.11 "Dependent types" (WP-1284): each dependent
+    /// type kind, a dependent-identifier qualifier step and a deduced
+    /// class template placeholder ([dcl.type.class.deduct]) round-trip.
+    #[test]
+    fn dependent_types_round_trip() {
+        let (img, _) = dep_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
+    }
+
+    /// A dependent type naming what is not there, or a deduced
+    /// placeholder of anything but a class template, is an error.
+    #[test]
+    fn rejects_corrupt_dependent_types() {
+        type Corrupt = (&'static str, fn(&mut Image, usize));
+        let corrupt: [Corrupt; 7] = [
+            ("name out of range", |i, f| {
+                i.types[f] = TyRec::Dep(DepTy::Name { kw: 5, steps: vec![], name: 999 });
+            }),
+            ("identifier step out of range", |i, f| {
+                i.types[f + 1] =
+                    TyRec::Dep(DepTy::Name { kw: 5, steps: vec![NnsRec::Ident(999)], name: 0 });
+            }),
+            ("bad keyword", |i, f| {
+                i.types[f] = TyRec::Dep(DepTy::Name { kw: 99, steps: vec![], name: 0 });
+            }),
+            ("bad transform", |i, f| {
+                let base = QRef { ty: BUILTINS + 4, quals: 0 };
+                i.types[f + 3] = TyRec::Dep(DepTy::Transform { kind: 250, base, result: None });
+            }),
+            ("forward reference", |i, f| {
+                let later = QRef { ty: BUILTINS + 1 + f as u32 + 5, quals: 0 };
+                i.types[f + 4] = TyRec::Dep(DepTy::MemPtr { pointee: later, class: later });
+            }),
+            ("deduced function template", |i, f| {
+                i.types[f + 6] = TyRec::Dep(DepTy::Deduced { template: 13, deduced: None });
+            }),
+            ("deduced record out of range", |i, f| {
+                i.types[f + 6] = TyRec::Dep(DepTy::Deduced { template: 999, deduced: None });
+            }),
+        ];
+        for (what, f) in corrupt {
+            let (mut img, first) = dep_sample();
+            f(&mut img, first as usize);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+}

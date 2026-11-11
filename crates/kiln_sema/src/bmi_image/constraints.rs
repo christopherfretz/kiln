@@ -233,3 +233,45 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::template_sample;
+    use super::super::{decode, encode};
+    use super::*;
+
+    /// `template_sample` (parameter record 10, pattern 12, template 13)
+    /// with a type-constraint, a requires-clause and a trailing
+    /// requires-clause, each a sample expression.
+    fn cons_sample() -> Image {
+        let mut img = template_sample();
+        img.cons.recs = vec![
+            ConsRec { kind: K_PARM, decl: 10, expr: 0 },
+            ConsRec { kind: K_HEAD, decl: 13, expr: 1 },
+            ConsRec { kind: K_TRAILING, decl: 12, expr: 2 },
+        ];
+        img
+    }
+
+    /// spec/modules.md §11.11 "Constraints" (WP-1284; [temp.constr.decl]):
+    /// constraints round-trip; one on a record of the wrong kind, naming
+    /// an expression the image does not have, or given twice is an error.
+    #[test]
+    fn constraint_records() {
+        let img = cons_sample();
+        assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 5] = [
+            ("head on a function", |i| i.cons.recs[1].decl = 12),
+            ("trailing on a template", |i| i.cons.recs[2].decl = 13),
+            ("concept expression on a template", |i| i.cons.recs[1].kind = K_CONCEPT),
+            ("expression out of range", |i| i.cons.recs[0].expr = 9999),
+            ("twice", |i| i.cons.recs.push(i.cons.recs[0])),
+        ];
+        for (what, f) in corrupt {
+            let mut img = cons_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+}

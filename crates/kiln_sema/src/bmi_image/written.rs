@@ -162,3 +162,48 @@ impl Sema<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::template_sample;
+    use super::super::{BUILTINS, decode, encode};
+    use super::*;
+
+    /// `template_sample` (its parameter `T` is type `t`) with the written
+    /// locations of `T` and of `T::x::`.
+    fn written_sample() -> Image {
+        let t = QRef { ty: BUILTINS + 1 + 3, quals: 0 };
+        let mut img = template_sample();
+        img.written = vec![
+            WrittenRec { key: Key::Ty(t), locs: vec![318] },
+            WrittenRec {
+                key: Key::Nns(vec![NnsRec::Ty(t, false), NnsRec::Ident(0)]),
+                locs: vec![320, 330],
+            },
+        ];
+        img
+    }
+
+    /// spec/modules.md §11.11 "Dependent types" (WP-1284;
+    /// spec/sema-templates.md §5.8): written locations round-trip; a key
+    /// naming a type or a parameter name the image does not have is an
+    /// error.
+    #[test]
+    fn written_locations() {
+        let img = written_sample();
+        assert_eq!(decode(&encode(&img)), Ok(img));
+        type Corrupt = (&'static str, fn(&mut Image));
+        let corrupt: [Corrupt; 3] = [
+            ("type out of range", |i| i.written[0].key = Key::Ty(QRef { ty: 9999, quals: 0 })),
+            ("identifier out of range", |i| i.written[1].key = Key::Nns(vec![NnsRec::Ident(99)])),
+            ("type step out of range", |i| {
+                i.written[1].key = Key::Nns(vec![NnsRec::Ty(QRef { ty: 9999, quals: 0 }, false)]);
+            }),
+        ];
+        for (what, f) in corrupt {
+            let mut img = written_sample();
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+}
