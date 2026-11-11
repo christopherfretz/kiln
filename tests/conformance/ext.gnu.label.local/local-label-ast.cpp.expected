@@ -1,0 +1,19 @@
+TranslationUnitDecl
+`-FunctionDecl f 'void (int)'
+  |-ParmVarDecl used x 'int'
+  `-CompoundStmt
+    `-CompoundStmt
+      |-DeclStmt
+      | |-LabelDecl used a
+      | `-LabelDecl used b
+      |-IfStmt
+      | |-ImplicitCastExpr 'bool' <IntegralToBoolean>
+      | | `-ImplicitCastExpr 'int' <LValueToRValue>
+      | |   `-DeclRefExpr 'int' lvalue ParmVar 'x' 'int'
+      | `-GotoStmt 'a'
+      |-LabelStmt 'a'
+      | `-DeclStmt
+      |   `-VarDecl p 'void *' cinit
+      |     `-AddrLabelExpr 'void *' b
+      `-LabelStmt 'b'
+        `-NullStmt

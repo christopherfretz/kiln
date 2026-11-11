@@ -141,6 +141,7 @@ keywords! {
     Attribute = "__attribute__" | "__attribute";
     Declspec = "__declspec";
     Extension = "__extension__";
+    Label = "__label__";
     Complex = "_Complex" | "__complex__" | "__complex";
     Real = "__real__" | "__real";
     Imag = "__imag__" | "__imag";

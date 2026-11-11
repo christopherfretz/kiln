@@ -34,6 +34,10 @@ pub enum OptLevel {
     Size,
 }
 
+/// The predefines line standing for one precompiled `-include` or
+/// header ([`PredefConfig::pch_lines`]): a comment, so it does nothing.
+pub const PCH_LINE: &str = "// -include-pch\n";
+
 /// The flag-dependent part of the predefines.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug)]
@@ -56,6 +60,10 @@ pub struct PredefConfig {
     /// line's macros, in the `<command line>` section (clang
     /// `AddImplicitInclude`), so they are found from the working directory.
     pub implicit_includes: Vec<String>,
+    /// `-include-pch` with its record installed (WP-1036): one
+    /// [`PCH_LINE`] for each precompiled `-include` and the header, before
+    /// the `-include`s, so that every later line is where replay has it.
+    pub pch_lines: u32,
     /// `-fexceptions` (C++ default on).
     pub exceptions: bool,
     /// `-frtti` (C++ default on).
@@ -155,6 +163,7 @@ impl PredefConfig {
             no_inline: false,
             gnu89_inline: None,
             implicit_includes: Vec::new(),
+            pch_lines: 0,
             exceptions: cplusplus,
             rtti: cplusplus,
             char8_t: None,
@@ -447,6 +456,9 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
     }
     for (n, v) in &driver {
         let _ = writeln!(out, "#define {n} {v}");
+    }
+    for _ in 0..cfg.pch_lines {
+        out.push_str(PCH_LINE);
     }
     for f in &cfg.implicit_includes {
         out.push_str("#include \"");

@@ -574,10 +574,6 @@ pub static UNLOWERED_BUILTINS: &str = "__builtin_ia32_aesdec128kl_u8 __builtin_i
     __builtin_neon_vqshruns_n_s32 __builtin_neon_vqsubb_s8 __builtin_neon_vqsubb_u8 \
     __builtin_neon_vqsubd_s64 __builtin_neon_vqsubd_u64 __builtin_neon_vqsubh_s16 \
     __builtin_neon_vqsubh_u16 __builtin_neon_vqsubs_s32 __builtin_neon_vqsubs_u32 \
-    __builtin_neon_vqtbl2_v __builtin_neon_vqtbl2q_v __builtin_neon_vqtbl3_v \
-    __builtin_neon_vqtbl3q_v __builtin_neon_vqtbl4_v __builtin_neon_vqtbl4q_v \
-    __builtin_neon_vqtbx1_v __builtin_neon_vqtbx1q_v __builtin_neon_vqtbx2_v \
-    __builtin_neon_vqtbx2q_v __builtin_neon_vqtbx3_v __builtin_neon_vqtbx3q_v \
     __builtin_neon_vraddhn_v __builtin_neon_vrbit_v __builtin_neon_vrbitq_v \
     __builtin_neon_vrecped_f64 __builtin_neon_vrecpes_f32 __builtin_neon_vrecpsd_f64 \
     __builtin_neon_vrecpss_f32 __builtin_neon_vrecpxd_f64 __builtin_neon_vrecpxs_f32 \
@@ -597,8 +593,7 @@ pub static UNLOWERED_BUILTINS: &str = "__builtin_ia32_aesdec128kl_u8 __builtin_i
     __builtin_neon_vst1q_x2_v __builtin_neon_vst1q_x3_v __builtin_neon_vst1q_x4_v \
     __builtin_neon_vst2_lane_v __builtin_neon_vst2q_lane_v __builtin_neon_vst3_lane_v \
     __builtin_neon_vst3q_lane_v __builtin_neon_vsubd_s64 __builtin_neon_vsubd_u64 \
-    __builtin_neon_vsubhn_v __builtin_neon_vtbl3_v __builtin_neon_vtbl4_v __builtin_neon_vtbx1_v \
-    __builtin_neon_vtbx2_v __builtin_neon_vtbx3_v __builtin_neon_vtstd_s64 \
+    __builtin_neon_vsubhn_v __builtin_neon_vtstd_s64 \
     __builtin_neon_vtstd_u64 __builtin_neon_vuqadd_v __builtin_neon_vuqaddb_s8 \
     __builtin_neon_vuqaddd_s64 __builtin_neon_vuqaddh_s16 __builtin_neon_vuqaddq_v \
     __builtin_neon_vuqadds_s32";
@@ -761,9 +756,26 @@ impl Cg<'_> {
                 return Ok(BuiltinCall::Emitted(None));
             }
             // An argument that did not fold (the fold prepass made the call
-            // 1 or 0 when it could evaluate it) is not a constant, as at
-            // clang -O0; it is not evaluated.
-            id::CONSTANT_P => V::C(self.m.const_int(LTy::I32, 0)),
+            // 1 or 0 when it could evaluate it): clang
+            // `BI__builtin_constant_p` leaves an integral, enumeration or
+            // real floating value without possible side effects to the
+            // optimizer, `zext(llvm.is.constant(x))` (true once inlining
+            // makes it a constant, GCC's documented behaviour), and is 0
+            // for anything else, the operand not evaluated (WP-1288).
+            id::CONSTANT_P => {
+                let ty = ast.exprs.get(a0).ty();
+                let t = &ast.types;
+                let numeric = t.is_integral(ty) || t.as_enum(ty).is_some() || t.is_floating(ty);
+                if !numeric || self.may_have_side_effects(a0) {
+                    V::C(self.m.const_int(LTy::I32, 0))
+                } else {
+                    let v = self.emit_scalar(a0)?;
+                    let vt = self.f.fir.ty(&self.m, v);
+                    let f = kiln_llvm::intrinsics::is_constant(&mut self.m, vt);
+                    let r = self.intrinsic_call(f, vec![v]);
+                    self.cast(CastOp::ZExt, r, LTy::I32)
+                }
+            }
             // WP-419: the operand's GCC type class, the operand not
             // evaluated (clang folds the call whatever the operand).
             id::CLASSIFY_TYPE => {
@@ -1030,6 +1042,21 @@ impl Cg<'_> {
             id::READCYCLECOUNTER => {
                 let f = kiln_llvm::intrinsics::readcyclecounter(&mut self.m);
                 self.intrinsic_call(f, vec![])
+            }
+            // clang `BI__builtin_extract_return_addr` / `_frob_`: the
+            // target's `decodeReturnAddress` / `encodeReturnAddress`, the
+            // identity on AArch64 and x86-64 (WP-1288).
+            id::EXTRACT_RETURN_ADDR | id::FROB_RETURN_ADDR => self.emit_scalar(a0)?,
+            // clang `BI__builtin___clear_cache`: `llvm.clear_cache(p, q)`.
+            id::CLEAR_CACHE => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin___clear_cache without two arguments");
+                };
+                let p = self.emit_scalar(a0)?;
+                let q = self.emit_scalar(a1)?;
+                let f = kiln_llvm::intrinsics::clear_cache(&mut self.m);
+                self.intrinsic_call(f, vec![p, q]);
+                return Ok(BuiltinCall::Emitted(None));
             }
             // clang `BI__builtin_return_address`: `llvm.returnaddress(i32 N)`.
             id::RETURN_ADDRESS => {

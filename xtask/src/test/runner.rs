@@ -24,6 +24,8 @@ use kiln_abi::dump_blocks::{record_layout_blocks, vtable_blocks};
 mod gcc;
 #[path = "oracle_retry.rs"]
 mod oracle_retry;
+#[path = "pch_diff.rs"]
+mod pch_diff;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
@@ -89,6 +91,9 @@ pub struct Config {
     /// `--bmi-image`: kiln's two-step module builds and their importers
     /// also pass `-fkiln-bmi-image`.
     pub bmi_image: bool,
+    /// `--pch-diff`: the PCH differential (`spec/harness.md` "PCH
+    /// differential"); `None` outside it.
+    pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
 }
 
 /// The debug-info sweep's configuration.
@@ -189,6 +194,8 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         mem_limit: cfg.mem_limit,
         advisory: None,
         gcc_compared: false,
+        pch_flags: Vec::new(),
+        pch_src: None,
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -221,6 +228,12 @@ struct Test<'a> {
     advisory: Option<String>,
     /// Set when the GCC oracle gave a verdict ([`TestResult::gcc_compared`]).
     gcc_compared: bool,
+    /// The PCH differential's `-include-pch` flags, which the compiler
+    /// under test's test-file compiles get while they are set.
+    pch_flags: Vec<std::ffi::OsString>,
+    /// The PCH differential's copy of the test file, which the compiler
+    /// under test compiles in its place while it is set.
+    pch_src: Option<PathBuf>,
 }
 
 impl Test<'_> {
@@ -260,6 +273,9 @@ impl Test<'_> {
         }
         if self.cfg.bmi_kind.is_some() && spec.modules.is_empty() {
             return Some("no `module:` lines (`--bmi-kind`)".to_owned());
+        }
+        if self.cfg.pch_diff.is_some() {
+            return pch_diff::pch_diff_skip(spec, source, self.case);
         }
         None
     }
@@ -436,6 +452,9 @@ impl Test<'_> {
         if let Some(sweep) = &self.cfg.debug_sweep {
             return self.debug_sweep(&spec, sweep.dwarfdump.as_deref());
         }
+        if let Some(mode) = self.cfg.pch_diff {
+            return self.pch_diff(&spec, &source, mode);
+        }
         let outcome = match spec.expect {
             Expect::CompileOk => self.compile_ok(&spec),
             Expect::CompileFail => self.compile_fail(&spec),
@@ -589,7 +608,15 @@ impl Test<'_> {
         if spec.pch.is_some() {
             c.arg("-include-pch").arg(self.pch_file(program));
         }
-        c.arg(&self.case.name);
+        match &self.pch_src {
+            Some(src) if program == self.cfg.compiler => {
+                c.args(&self.pch_flags);
+                c.arg("-iquote").arg(self.test_dir()).arg(src);
+            }
+            _ => {
+                c.arg(&self.case.name);
+            }
+        }
         if let Some(o) = out {
             c.arg("-o").arg(o);
         }
@@ -688,14 +715,18 @@ impl Test<'_> {
 
     /// Separate compilation of the module units (spec/modules.md §11.7):
     /// `run` tests with `module:`, `unit:` or `header-unit:` lines, and
-    /// `two-step`; under `--bmi-kind`, every test with `module:` lines.
+    /// `two-step`; under `--bmi-kind` and `--pch-diff`, every test with
+    /// `module:` lines (kiln's in-process build of a unit reads the
+    /// importer's `-include-pch`, as it reads its `-include`s, and a PCH
+    /// before `module;` is an error; spec/harness.md "PCH differential").
     fn two_step(&self, spec: &TestSpec) -> bool {
         spec.two_step
             || (spec.expect == Expect::Run
                 && (!spec.modules.is_empty()
                     || !spec.units.is_empty()
                     || !spec.header_units.is_empty()))
-            || (self.cfg.bmi_kind.is_some() && !spec.modules.is_empty())
+            || ((self.cfg.bmi_kind.is_some() || self.cfg.pch_diff.is_some())
+                && !spec.modules.is_empty())
     }
 
     /// The `-fmodule-file=<name>=<file>` flags of the first `n` `module:`

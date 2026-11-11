@@ -58,6 +58,8 @@ pub struct Config {
     /// a test builds under it (spec/libcxx.md "Commands").
     pub tmp: PathBuf,
     pub keep: bool,
+    /// `--pch-diff` ([`pch_prefix`]); never in clang mode.
+    pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
 }
 
 /// An extracted libc++ package tree (spec/libcxx.md "Toolchain"): its
@@ -358,6 +360,9 @@ pub struct TestResult {
     /// line)`, so an audit can spot a wrong-reason failure (spec/libcxx.md
     /// ".compile.fail.cpp").
     pub first_error: Option<String>,
+    /// Under `--pch-diff`, the path the test's PCH was read by (`image (N
+    /// records)`, `replay: <why>`, `replay`); `None` without a PCH.
+    pub pch_path: Option<String>,
 }
 
 /// One test to run: its path, the lit.local.cfg files above it (outermost
@@ -831,6 +836,7 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         max_rss_kb: None,
         compile_rss_kb: None,
         first_error: None,
+        pch_path: None,
     };
     if let Some(reason) = env_unsupported(&job.rel, &cfg.tmp, cfg.libcxx_version, cfg.mem) {
         r.outcome = Outcome::Unsupported(reason);
@@ -886,7 +892,21 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
         let script = Script { lines: &d.run, modules: &d.module_dependencies, cfg_subst: &subst };
         execute_script(cfg, &job.path, &scratch, &script, &flags, run, &mut r);
     } else {
-        execute(cfg, &job.path, &scratch, compile_fail_kind(kind, &text), &flags, run, &mut r);
+        let kind = compile_fail_kind(kind, &text);
+        let pch = match cfg.pch_diff {
+            Some(mode) if d.module_dependencies.is_empty() => {
+                pch_prefix(cfg, mode, kind, &job.path, &text, &scratch, &flags, &mut r)
+            }
+            _ => Prefix::Plain,
+        };
+        match pch {
+            Prefix::Pch(copy, mut with) => {
+                with.extend(flags);
+                execute(cfg, &copy, &scratch, kind, &with, run, &mut r);
+            }
+            Prefix::Plain => execute(cfg, &job.path, &scratch, kind, &flags, run, &mut r),
+            Prefix::Failed => {}
+        }
     }
     // XFAIL turns PASS into XPASS and FAIL into XFAIL; it never hides a
     // KILLED, a TIMEOUT or a compiler crash.
@@ -899,6 +919,95 @@ pub fn run_test(cfg: &Config, job: &Job<'_>) -> TestResult {
     }
     cleanup(cfg, &scratch);
     r
+}
+
+/// `--pch-diff` (spec/libcxx.md "PCH differential"): for a test of a
+/// pass kind (`.pass.cpp`, `.compile.pass.cpp`, `.link.pass.cpp`) that
+/// opens with `#include`s and selects no `-include` or `-x`, builds
+/// `pchdiff.pch` of them in `scratch` (the test's flags, the producer's
+/// and `-iquote` of its directory) and returns the copy to compile
+/// instead, its `#include` lines emptied, and the consumer's flags
+/// ([`Prefix`]).
+#[allow(clippy::too_many_arguments)]
+fn pch_prefix(
+    cfg: &Config,
+    mode: crate::util::pch_diff::PchDiff,
+    kind: Kind,
+    src: &Path,
+    text: &str,
+    scratch: &Path,
+    flags: &[String],
+    r: &mut TestResult,
+) -> Prefix {
+    use crate::util::pch_diff;
+    let selects = |f: &String| f.starts_with("-include") || f.starts_with("-x");
+    if !matches!(kind, Kind::Pass | Kind::CompilePass | Kind::LinkPass) || flags.iter().any(selects)
+    {
+        return Prefix::Plain;
+    }
+    let includes = pch_diff::leading_includes(text);
+    if includes.is_empty() {
+        return Prefix::Plain;
+    }
+    let dir = src.parent().unwrap_or(Path::new("."));
+    let (header, pch) = (scratch.join("pchdiff.h"), scratch.join("pchdiff.pch"));
+    let copy_dir = scratch.join("src");
+    let copy = copy_dir.join(src.file_name().unwrap_or_default());
+    let written = std::fs::write(&header, pch_diff::header_text(&includes))
+        .and_then(|()| std::fs::create_dir_all(&copy_dir))
+        .and_then(|()| std::fs::write(&copy, pch_diff::without_includes(text, &includes)));
+    if let Err(e) = written {
+        r.outcome = Outcome::Error(format!("cannot write the PCH differential's files: {e}"));
+        return Prefix::Failed;
+    }
+    let iquote = ["-iquote".to_owned(), dir.display().to_string()];
+    let mut c = Command::new(&cfg.kiln);
+    crate::util::isolate_caches(&mut c);
+    c.args(cfg.base_compile_flags()).args(flags).args(&iquote).args(pch_diff::PRODUCER_FLAGS);
+    c.args(["-x", "c++-header"]).arg(&header).arg("-o").arg(&pch);
+    c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
+    c.current_dir(scratch).env("TMPDIR", test_tmpdir(cfg, scratch));
+    let args: Vec<_> = c.get_args().map(std::ffi::OsStr::to_os_string).collect();
+    let limit = cfg.mem.map(|m| m.plus(process::kiln_stack_reservation_mib(&args)));
+    let m = match process::run_measured(
+        &c,
+        &cfg.probe,
+        &scratch.join("rss.txt"),
+        cfg.compile_timeout,
+        limit,
+    ) {
+        Ok(m) => m,
+        Err(e) => {
+            r.outcome = Outcome::Error(format!("cannot run the PCH build: {e}"));
+            return Prefix::Failed;
+        }
+    };
+    r.wall += m.wall;
+    r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
+    let verdict = judge(Stage::Compile, &m, false);
+    if !record(Stage::Compile, verdict, true, cfg.compile_timeout, r) {
+        r.detail = format!("the PCH of the leading #includes does not build\n{}", r.detail);
+        return Prefix::Failed;
+    }
+    r.pch_path = Some(match mode {
+        pch_diff::PchDiff::Replay => mode.as_str().to_owned(),
+        _ => pch_diff::path_note(&String::from_utf8_lossy(&m.stderr))
+            .unwrap_or_else(|| "no declaration image".to_owned()),
+    });
+    let mut with = vec!["-include-pch".to_owned(), pch.display().to_string()];
+    with.push(mode.consumer_flag().to_owned());
+    with.extend(iquote);
+    Prefix::Pch(copy, with)
+}
+
+/// What [`pch_prefix`] made of a test.
+enum Prefix {
+    /// Run as usual.
+    Plain,
+    /// Compile this copy with these flags first.
+    Pch(PathBuf, Vec<String>),
+    /// The PCH did not build: the test's compile failure, recorded.
+    Failed,
 }
 
 /// A `.compile.fail.cpp` test with clang-verify directives is run as a
@@ -1402,6 +1511,7 @@ mod tests {
             scratch: "/s".into(),
             tmp: "/tmp".into(),
             keep: false,
+            pch_diff: None,
         };
         let kiln = cfg.base_compile_flags().join(" ");
         assert!(kiln.contains("-resource-dir /res") && kiln.contains("-fclang-compat=22"));
@@ -1771,6 +1881,7 @@ mod tests {
             scratch: base.join("s"),
             tmp: base.join("tmp"),
             keep: false,
+            pch_diff: None,
         };
         let scratch = base.join("s");
         std::fs::create_dir_all(&scratch).unwrap();
@@ -1785,6 +1896,7 @@ mod tests {
             max_rss_kb: None,
             compile_rss_kb: None,
             first_error: None,
+            pch_path: None,
         };
         if lines.is_empty() {
             execute(&cfg, &src, &scratch, kind, &[], run, &mut r);
@@ -1828,6 +1940,7 @@ mod tests {
             scratch: base.join("s"),
             tmp: base.join("t"),
             keep: false,
+            pch_diff: None,
         };
         let args = |name: &str, text: &str| {
             let path = base.join(name);
