@@ -89,7 +89,8 @@ impl Writer<'_, '_, '_> {
         let kind = match ast.decls.get(d).kind() {
             DeclKind::FunctionTemplate => 0,
             DeclKind::ClassTemplate => 1,
-            _ => 2,
+            DeclKind::TypeAliasTemplate => 2,
+            _ => 3,
         };
         let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
         if redecl(d) || redecl(pattern) {
@@ -133,15 +134,14 @@ impl Writer<'_, '_, '_> {
         })
     }
 
-    /// Whether alias declaration `d` is the pattern of an alias template
-    /// (WP-1279), carried as a dependent alias record before its
-    /// template record.
-    pub(super) fn alias_pattern(&self, d: DeclId) -> bool {
+    /// Whether `d` is the pattern of a template of kind `kind` (WP-1279:
+    /// an alias template's alias declaration, a variable template's
+    /// variable), carried as a dependent record before its template
+    /// record.
+    pub(super) fn pattern_of(&self, d: DeclId, kind: DeclKind) -> bool {
         let ast = &self.s.ast;
         matches!(ast.templ_link(d).get(), Some((TemplLinkKind::Pattern, _)))
-            && ast
-                .described_template(d)
-                .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::TypeAliasTemplate)
+            && ast.described_template(d).is_some_and(|t| ast.decls.get(t).kind() == kind)
     }
 
     /// Patches non-type parameter record `rec`'s default argument to

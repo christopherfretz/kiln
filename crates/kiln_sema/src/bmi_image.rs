@@ -2245,7 +2245,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // S4b: or a class template at namespace scope, its
                 // pattern the class record just before it.
                 let p = *pattern as usize;
-                let ok = *kind <= 2
+                let ok = *kind <= 3
                     && *depth == 0
                     && d.flags & DEP == 0
                     && scope(d.ctx)
@@ -2258,6 +2258,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             (0, Payload::Function { kind: 0, .. })
                                 | (1, Payload::Record { .. })
                                 | (2, Payload::Typedef { alias: true, .. })
+                                | (3, Payload::Var { .. })
                         ) && r.flags & DEP != 0
                             && r.name == d.name
                             && r.ctx == d.ctx
@@ -2928,7 +2929,7 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::Typedef | DeclKind::TypeAlias => {
                 let td = *ast.decls.typedef(d).ok_or("a malformed typedef")?;
-                if !td.templ.is_none() && !self.alias_pattern(d) {
+                if !td.templ.is_none() && !self.pattern_of(d, DeclKind::TypeAliasTemplate) {
                     return Err("a template");
                 }
                 Payload::Typedef {
@@ -2957,9 +2958,10 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::AccessSpec => Payload::Access,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
-            DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::TypeAliasTemplate => {
-                self.template(d)?
-            }
+            DeclKind::FunctionTemplate
+            | DeclKind::ClassTemplate
+            | DeclKind::TypeAliasTemplate
+            | DeclKind::VarTemplate => self.template(d)?,
             _ => return Err("a declaration the image does not carry yet"),
         })
     }
@@ -3832,6 +3834,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::FunctionTemplate
         | K::ClassTemplate
         | K::TypeAliasTemplate
+        | K::VarTemplate
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm
         | K::NamespaceAlias
@@ -3843,7 +3846,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::Friend => Err("a friend declaration"),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
-        | K::VarTemplate
         | K::Concept
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
@@ -4156,7 +4158,11 @@ impl Sema<'_, '_> {
                 Payload::Var { ty, spec, init, eval } => {
                     let vty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = var_spec(*spec).unwrap_or_default();
+                    if patterns.contains(&(i as u32)) {
+                        self.ast.templates.pattern_next = true;
+                    }
                     let v = self.builder().var(h, vty, spec, prev);
+                    self.ast.templates.pattern_next = false;
                     inits.push((v, *init, *eval));
                     v
                 }
@@ -4283,6 +4289,7 @@ impl Sema<'_, '_> {
                     let k = match kind {
                         1 => DeclKind::ClassTemplate,
                         2 => DeclKind::TypeAliasTemplate,
+                        3 => DeclKind::VarTemplate,
                         _ => DeclKind::FunctionTemplate,
                     };
                     let t = self.builder().template_decl(k, pat, list, None);

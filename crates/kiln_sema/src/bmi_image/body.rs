@@ -1942,7 +1942,7 @@ impl Writer<'_, '_, '_> {
     pub(super) fn var_payload(&mut self, d: DeclId, rec: u32) -> W<Payload> {
         let ast = &self.s.ast;
         let vd = *ast.decls.var(d).ok_or("a malformed variable")?;
-        if !vd.templ.is_none() {
+        if !vd.templ.is_none() && !self.pattern_of(d, DeclKind::VarTemplate) {
             return Err("a template");
         }
         let bits = vd.spec.bits();
