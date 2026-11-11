@@ -1056,6 +1056,9 @@ impl Sema<'_, '_> {
                     err.diag(self, e)
                 };
                 self.emit(d);
+                if let Some(x) = err.recovered {
+                    return x;
+                }
                 let loc = self.eloc(e);
                 self.recover(ty, &[e], loc)
             }
@@ -3810,13 +3813,18 @@ impl Sema<'_, '_> {
             Err(err) => {
                 // An `_Atomic` target is checked as in C, at the operator
                 // (clang `DiagnoseAssignmentResult`).
-                let d = if self.ast.types.as_atomic(to).is_some() {
+                let d = if self.ast.types.as_atomic(to).is_some()
+                    || conv::c_assign::is_c_assign_diag(err.id)
+                {
                     err.diag_at(self, loc)
                 } else {
                     err.diag(self, r)
                 };
                 self.emit(d);
-                return self.recover_err(&[l, r], loc);
+                match err.recovered {
+                    Some(x) => x,
+                    None => return self.recover_err(&[l, r], loc),
+                }
             }
         };
         // clang `CheckAssignmentOperands`' lifetime check (spec/sema-class.md §5.6).
@@ -5561,6 +5569,19 @@ impl Sema<'_, '_> {
                 }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
+                    // C17 6.5.2.2p7: the argument is converted as if by
+                    // assignment; clang notes the parameter.
+                    Err(err) if conv::c_assign::is_c_assign_diag(err.id) => {
+                        let mut d = err.diag_at(self, self.begin_loc(a));
+                        if let Some(&p) = pdecls.get(i) {
+                            d = d.with_note(self.param_decl_note(p));
+                        }
+                        self.emit(d);
+                        match err.recovered {
+                            Some(x) => conv_args.push(x),
+                            None => return None,
+                        }
+                    }
                     Err(err) => {
                         // clang reports an ambiguous or deleted
                         // user-defined conversion of the selected

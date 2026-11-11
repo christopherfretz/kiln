@@ -178,6 +178,13 @@ pub trait TypeNames {
     fn clang_compat(&self) -> u32 {
         19
     }
+
+    /// `Some(c23)` when the names print a C translation unit (clang's C
+    /// `PrintingPolicy`: [`PrintOptions::c_policy`], a prototype without
+    /// parameters prints `(void)`, and C23 spells `bool`).
+    fn c_lang(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// A [`TypeNames`] without an AST: declarations print as `decl#N`,
@@ -349,7 +356,7 @@ pub fn write_declarator(
         empty_ph: true,
         scope,
         suppress_tag: opts.suppress_tag,
-        c_policy: opts.c_policy,
+        c_policy: opts.c_policy || names.c_lang().is_some(),
         split_closers: opts.split_closers,
         no_parens: opts.no_parens,
         inside_cc_attr: false,
@@ -375,7 +382,7 @@ pub fn write_nns(ctx: &TypeContext, names: &dyn TypeNames, n: NnsId, out: &mut S
         empty_ph: true,
         scope: false,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -431,7 +438,7 @@ pub fn write_nns_resolved(
         empty_ph: true,
         scope: true,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -502,7 +509,7 @@ fn arg_list_canonical(
         empty_ph: true,
         scope: true,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers,
         no_parens: false,
         inside_cc_attr: false,
@@ -563,7 +570,7 @@ fn arg_list_with_scope(
         empty_ph: true,
         scope,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -666,7 +673,7 @@ fn arg_list_prefix_with_scope(
         empty_ph: true,
         scope,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -697,7 +704,7 @@ pub fn write_template_arg(
         empty_ph: true,
         scope: false,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -729,7 +736,7 @@ pub fn write_template_name(
         empty_ph: true,
         scope: false,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -797,7 +804,7 @@ fn print_diag_desugared(ctx: &TypeContext, names: &dyn TypeNames, q: QualType) -
         empty_ph: true,
         scope: true,
         suppress_tag: false,
-        c_policy: false,
+        c_policy: names.c_lang().is_some(),
         split_closers: false,
         no_parens: false,
         inside_cc_attr: false,
@@ -1390,6 +1397,8 @@ impl Printer<'_> {
             }
             TypeView::Builtin(b) => {
                 let name = match b {
+                    // C23 6.4.1: `bool` is a keyword (clang's `Policy.Bool`).
+                    BuiltinType::Bool if self.names.c_lang() == Some(true) => "bool",
                     BuiltinType::Bool if self.c_policy => "_Bool",
                     BuiltinType::NullPtr if self.c_policy => "nullptr_t",
                     _ => b.name(),
@@ -1583,7 +1592,14 @@ impl Printer<'_> {
                 if let Some(n) = nns {
                     self.nns(n);
                 }
+                // clang's `ElaboratedTypePolicyRAII`: the named tag does not
+                // repeat the keyword ([`PrintOptions::c_policy`]).
+                let c_policy = self.c_policy;
+                if keyword != TagKeyword::None {
+                    self.c_policy = false;
+                }
                 self.with_scope(false, |p| p.before(named));
+                self.c_policy = c_policy;
             }
             TypeView::QualifiedArray { quals, base } => {
                 // Unreachable through `split`; print transparently.
@@ -1926,6 +1942,10 @@ impl Printer<'_> {
         self.empty_ph = false;
         self.push("(");
         let params = ctx.params(&proto);
+        // clang `printFunctionProtoAfter`: in C an empty prototype is `(void)`.
+        if params.is_empty() && !proto.variadic() && self.names.c_lang().is_some() {
+            self.push("void");
+        }
         for (i, &p) in params.iter().enumerate() {
             if i > 0 {
                 self.push(", ");

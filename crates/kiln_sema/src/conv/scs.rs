@@ -426,7 +426,10 @@ fn standard_conversion_non_atomic(
             || (is_nullptr_t(s, cur) && ctx.is_direct()))
     {
         (SecondStep::BooleanConversion, to)
-    } else if is_integral_or_unscoped_enum(s, cur) && types.is_integral(to) {
+    } else if is_integral_or_unscoped_enum(s, cur)
+        && (types.is_integral(to) || (s.is_c() && types.as_enum(to).is_some()))
+    {
+        // C17 6.5.16.1p1: in C an enumeration is an integer type.
         (SecondStep::IntegralConversion, to)
     } else if types.as_complex(cur).is_some() && types.as_complex(to).is_some() {
         (SecondStep::ComplexConversion, to)
@@ -434,7 +437,8 @@ fn standard_conversion_non_atomic(
         (SecondStep::ComplexReal, to)
     } else if is_floating_conversion(s, cur, to) {
         (SecondStep::FloatingConversion, to)
-    } else if (types.is_floating(cur) && types.is_integral(to))
+    } else if (types.is_floating(cur)
+        && (types.is_integral(to) || (s.is_c() && types.as_enum(to).is_some())))
         || (is_integral_or_unscoped_enum(s, cur) && types.is_floating(to))
     {
         (SecondStep::FloatingIntegral, to)
