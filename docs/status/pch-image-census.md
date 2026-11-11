@@ -326,3 +326,62 @@ Reading:
 - Not done in this slice and unchanged: member templates (640 / 423),
   friends (180 / 231), polymorphic class templates (45 / 44), implicit
   special members needing overload resolution (45 / 82).
+
+## WP-1284: constraints, concepts, dependent names, deduction guides (2026-11-11)
+
+Debug build of the WP-1284 branch with WP-1283 merged (`IMAGE_VERSION`
+16), same two purviews and commands. "Before" is the WP-1283 "before"
+(neither slice); "WP-1284 alone" is the branch before the merge.
+
+```
+allstd, before:        26898 top-level declarations, 17680 carried, 9218 not  (17.6 s, 114 MiB)
+allstd, WP-1284 alone: 26765 top-level declarations, 18599 carried, 8166 not  (17.4 s, 115 MiB)
+allstd, after:         26765 top-level declarations, 19044 carried, 7721 not  (18.2 s, 118 MiB)
+stdcxx, before:        25559 top-level declarations, 17292 carried, 8267 not  (15.6 s,  98 MiB)
+stdcxx, WP-1284 alone: 25333 top-level declarations, 18105 carried, 7228 not  (15.5 s, 101 MiB)
+stdcxx, after:         25333 top-level declarations, 18381 carried, 6952 not  (16.7 s, 100 MiB)
+```
+
++919 / +813 carried for WP-1284 alone, +1037 / +846 over WP-1283's
+"after". The top-level totals drop by 133 / 226 because implicit
+deduction guides (formed again by the importer) and requires-expression
+bodies (carried with their expression) are no longer counted as
+declarations. The slice carries concepts, type-constraints,
+requires-clauses (template heads and trailing), requires-expressions,
+dependent types (`DepTy`: dependent names, template specializations,
+transforms, member pointers, vectors, deduced placeholders), the
+`Identifier` qualifier step, `DependentScopeDeclRefExpr`, the
+`template` keyword in dependent names, written locations of dependent
+names, and explicit deduction guides (spec/modules.md §11.11
+"Constraints", "Dependent types and names", "Deduction guides"). Rows
+that changed by 20 or more in either purview, before to after (both
+slices):
+
+| allstd | stdcxx | first reason |
+|---|---|---|
+| 465 → 0 | 367 → 0 | a constrained template parameter |
+| 449 → 111 | 474 → 209 | a template (concepts, guides) |
+| 181 → 9 | 174 → 30 | a template expression |
+| 116 → 0 | 177 → 1 | a declaration the image does not carry yet |
+| 18 → 0 | 53 → 0 | an implicit declaration that is not a special member (guides) |
+| 16 → 0 | 9 → 0 | a requires-expression or concept |
+| 380 → 142 | 622 → 254 | a type the image does not carry |
+| 160 → 326 | 135 → 286 | a template argument the image does not carry |
+| 92 → 191 | 86 → 253 | a member function template |
+| 28 → 42 | 22 → 45 | a constrained template |
+| 889 → 891 | 657 → 622 | cascade: an alias template outside the image |
+
+Reading:
+
+- The largest remaining root is "a template argument the image does
+  not carry": an expression as a non-type template argument
+  (`integral_constant.h:38`, `_BoolConstant`), which also roots most of
+  the alias-template cascade. Expression-bearing types (`decltype`,
+  `noexcept(expr)`, dependent array and vector sizes) are the same gap.
+  Neither is in this slice.
+- "a member function template" and "a constrained template" grew
+  because declarations that used to stop at a constraint or a
+  dependent type now reach them; a reference to a constrained template
+  from a carried body still falls back (spec/modules.md "Constraints").
+- Member templates (674 / 446) and friends (181 / 231) are unchanged in
+  kind.

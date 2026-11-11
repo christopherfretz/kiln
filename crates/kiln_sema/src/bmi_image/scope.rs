@@ -331,12 +331,6 @@ pub(super) fn decode_scopes(r: &mut Rd) -> Res<Scopes> {
     Ok(s)
 }
 
-/// Whether record `i` is an unnamed class or enumeration that a typedef
-/// names for linkage purposes.
-pub(super) fn anon_tag(img: &Image, i: u32) -> bool {
-    img.scopes.anon_typedefs.iter().any(|&(t, _)| t == i)
-}
-
 pub(super) fn validate_scopes(img: &Image) -> Res<()> {
     let s = &img.scopes;
     let rec = |r: u32| img.decls.get(r as usize);

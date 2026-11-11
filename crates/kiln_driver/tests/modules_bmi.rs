@@ -1795,14 +1795,14 @@ fn kind2_declaration_image_fallback() {
              export inline int h() { A<int> a; return a.f(); }\n",
             "an implicit member of a class template specialization",
         ),
-        ("export module f;\nexport template <class T> concept C = true;\n", "a template"),
         (
             "export module f;\nexport template <class... B> struct S : B... {};\n",
             "a pack expansion",
         ),
         (
-            "export module f;\nexport template <class T> requires (sizeof(T) > 1) T id(T t) { return t; }\n",
-            "a constrained template",
+            "export module f;\nexport template <class T> requires (sizeof(T) > 1) struct A {};\n\
+             export inline int g() { return sizeof(A<long>); }\n",
+            "a specialization of a constrained template",
         ),
         (
             "export module f;\nexport struct S { template <class T> T m(T t) { return t; } };\n",
@@ -1817,10 +1817,6 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport template <class T> T d(T t);\n\
              export template <class T> T d(T t) { return t; }\n",
             "a redeclared template",
-        ),
-        (
-            "export module f;\nexport template <class T> int h(T t) { return T::v(); }\n",
-            "a template expression",
         ),
         (
             "export module f;\nexport struct B { int f() { return 1; } };\n\
@@ -2049,4 +2045,114 @@ fn kind2_image_census() {
     assert!(a == b, "the census leaves the module file unchanged");
     let o = kiln(&d, &["-fkiln-bmi-image-census", "-fsyntax-only", "p.cpp"]);
     assert_eq!((o.code, o.stderr.as_str()), (0, "image census: not a module unit\n"));
+}
+
+const IMGC: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-constraints.cppm");
+const IMGC_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-constraints-run.cpp");
+const IMGC_ERR: &str =
+    include_str!("../../../tests/conformance/module.interface/image-constraints-errors.cpp");
+const IMGD: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-deptypes.cppm");
+const IMGD_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-deptypes-run.cpp");
+const IMGD_ERR: &str =
+    include_str!("../../../tests/conformance/module.interface/image-deptypes-errors.cpp");
+
+/// Builds module `name` from `src` with a declaration image, then checks
+/// that with the unit's source blanked `run` still links and prints
+/// `stdout`, that its IR is the replay's, and that `err`'s diagnostics
+/// are the replay's; returns them.
+fn image_round_trip(
+    dir: &str,
+    name: &str,
+    src: &str,
+    run: &str,
+    err: &str,
+    stdout: &str,
+) -> String {
+    let d = scratch(dir);
+    std::fs::write(d.join("m.cppm"), src).unwrap();
+    std::fs::write(d.join("u.cpp"), run).unwrap();
+    std::fs::write(d.join("err.cpp"), err).unwrap();
+    let std = "-std=c++20";
+    let o = kiln(&d, &[std, "-v", "-fkiln-bmi-image", "--precompile", "m.cppm", "-o", "a.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &[std, "-c", "a.pcm", "-o", "a.o"]);
+    blank_source(&d, "a.pcm", "blank.pcm");
+
+    let mf = format!("-fmodule-file={name}=blank.pcm");
+    let notes = image_notes(&d, &[std, &mf, "u.cpp", "a.o", "-o", "u"]);
+    assert_eq!(notes, [format!("note: imported '{name}' from its declaration image")]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), stdout);
+
+    let mf = format!("-fmodule-file={name}=m.pcm");
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "a.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[std, flag, &mf, "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mf = format!("-fmodule-file={name}=a.pcm");
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[std, flag, "-fsyntax-only", &mf, "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+    errs.swap_remove(0)
+}
+
+/// WP-1284 (§11.11 "Constraints"): concepts, constrained templates and
+/// requires-expressions come from the image. With the unit's source
+/// blanked an importer still checks satisfaction and runs them, its IR
+/// is the replay's, and an unsatisfied constraint is explained with the
+/// replay's notes, in the module ([temp.constr.constr]).
+#[test]
+fn kind2_declaration_image_constraints() {
+    let errs = image_round_trip(
+        "image-cons",
+        "imgc",
+        IMGC,
+        IMGC_RUN,
+        IMGC_ERR,
+        "1 2 3 4 2 5 6 7 1 17 0 0 8 1 1 1\n",
+    );
+    for want in [
+        "m.cppm:6:11: note: because 'Three' does not satisfy 'Small'",
+        "m.cppm:3:36: note: because 'sizeof(Three) <= 2' (3 <= 2) evaluated to false",
+        "m.cppm:12:7: note: candidate function not viable: constraints not satisfied",
+    ] {
+        assert!(errs.contains(want), "{want}: {errs}");
+    }
+}
+
+/// WP-1284 (§11.11 "Dependent types", "Deduction guides"): dependent
+/// types and names, member pointers, vectors and class template argument
+/// deduction (implicit guides re-formed, explicit ones carried) come from
+/// the image. An error inside an instantiated pattern sits at the written
+/// component of the dependent name, as after a replay ([temp.dep]).
+#[test]
+fn kind2_declaration_image_dependent_types() {
+    let errs = image_round_trip(
+        "image-dep",
+        "imgd",
+        IMGD,
+        IMGD_RUN,
+        IMGD_ERR,
+        "0 1 5 3 4 5 6 1 7 5 | 7 1 3 8 1 5 8\n",
+    );
+    for want in [
+        "m.cppm:15:51: error: no member named 'inner' in 'B'",
+        "m.cppm:14:53: error: no member named 'value' in 'C'",
+        "note: implicit deduction guide declared as 'template <class T> Wrap(T *p) -> id::Wrap<T>'",
+    ] {
+        assert!(errs.contains(want), "{want}: {errs}");
+    }
 }

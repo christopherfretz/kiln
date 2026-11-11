@@ -2,7 +2,7 @@
 // braceless, "C" and "C++"), literal exception specifications, inline and unnamed namespaces, reserved names
 // in the namespace std, which a new-expression before it has sema declare,
 // builtin functions sema declares at their first use, and unnamed types
-// a typedef names for linkage purposes.
+// (one a typedef names for linkage purposes, or none).
 export module imgs;
 
 export extern "C" int imgs_c_add(int a, int b) { return a + b; }
@@ -62,6 +62,15 @@ export typedef struct {
 export int imgs_pod_sum(imgs_pod p) { return p.a + p.b; }
 export typedef enum { imgs_red = 3, imgs_blue } imgs_color;
 export int imgs_hue(imgs_color c) { return c * 2; }
+// [dcl.enum]/2, [class.pre]/1: unnamed types no typedef names (WP-1284;
+// glibc's <fenv.h> declares its FE_* constants so). The enumeration is
+// not exported: clang 19 does not make an exported unnamed enumeration's
+// enumerators visible to importers either.
+enum { imgs_anon_e = 11 };
+export struct {
+  int z;
+} imgs_anon_v = {12};
+export int imgs_anon() { return imgs_anon_e + imgs_anon_v.z; }
 
 export namespace std {
 inline namespace __imgs {
