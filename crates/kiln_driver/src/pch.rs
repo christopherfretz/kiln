@@ -9,6 +9,10 @@
 //! checks exist so builds that rely on clang rejecting a stale or
 //! mismatched PCH see the same errors. In 1.0 a PCH buys correctness and
 //! build-system compatibility, not speed.
+//!
+//! With `-fkiln-pch-image` (WP-1280) the record also carries, after its
+//! `end` line, the header's preprocessor state (spec/modules.md §11.13;
+//! `crate::pch_image`), framed by an `image <len>\t<sum>` line.
 
 use std::path::{Path, PathBuf};
 

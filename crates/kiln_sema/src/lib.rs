@@ -164,12 +164,12 @@ pub use declspec::{
 pub use empty_body::EmptyBodyStmt;
 pub use expansion::{ExpansionHead, ExpansionInit};
 pub use gnu::{OffsetofComponent, StmtExprScope};
-pub use pragma_state::{PragmaState, fp_bits, fp_from_bits};
 pub use implicit_fallthrough::AttrMacro;
 pub use init::{Designator, InitItem, InitList, InitValue, Initializer};
 pub use kiln_oven::profile::Level as ProfileLevel;
 pub use kiln_oven::{Budget, EvalContext, EvalFailure, EvalKind, Oven};
 pub use never_constant::BuiltinQuery;
+pub use pragma_state::{PragmaState, fp_bits, fp_from_bits};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
 pub use template_id_typo::TemplateIdTypo;

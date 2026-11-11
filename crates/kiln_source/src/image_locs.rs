@@ -107,7 +107,7 @@ impl LocTable {
     /// predefined buffers (`<built-in>`, `<command line>`), as in-memory
     /// files with their text inline, and in files with `#line`
     /// directives, whose presumed lines the records do not keep (the
-    /// preprocessor-state record, spec/modules.md §11.12: a macro defined
+    /// preprocessor-state record, spec/modules.md §11.13: a macro defined
     /// on the command line or by an `-include`d header still has a
     /// definition location).
     pub fn with_predefined(sm: &SourceManager, main: FileId) -> W<LocTable> {
@@ -248,8 +248,7 @@ impl LocTable {
             return Ok(i);
         }
         let name = sm.file_name(file);
-        if name.is_empty()
-            || !self.predefined && name.starts_with('<') && name != "<scratch space>"
+        if name.is_empty() || !self.predefined && name.starts_with('<') && name != "<scratch space>"
         {
             return Err("a location in a predefined buffer (<built-in>, <command line>)");
         }

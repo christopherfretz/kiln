@@ -1,5 +1,5 @@
-//! The preprocessor-state record (spec/modules.md §11.12, spec/pp.md
-//! §13): the macro table, include guards, `#pragma once` files,
+//! The preprocessor-state record (spec/modules.md §11.13, spec/pp.md "Preprocessor-state
+//! record"): the macro table, include guards, `#pragma once` files,
 //! `push_macro` stacks, poisoned identifiers, the diagnostic pragma
 //! state and `__COUNTER__` at the end of a header, as a module-file
 //! section ([`crate::bmi::SECTION_PP`]).
@@ -34,7 +34,7 @@ use crate::tok::{PpFlags, PpTok};
 pub const VERSION: u32 = 1;
 
 /// Sema's pragma state at the end of the header, carried by the record
-/// for the importer's Sema (spec/modules.md §11.12 "Sema pragma
+/// for the importer's Sema (spec/modules.md §11.13 "Sema pragma
 /// state"); the driver fills it from the parse.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemaPragmas {
@@ -97,7 +97,7 @@ pub struct PpState {
 /// Where a preprocessor takes a [`Baseline`], installs a record or
 /// takes a checkpoint: at "points" of the predefines buffer, point `k`
 /// being its `k`-th `#include` (from 0) as it begins, or the end of the
-/// buffer (spec/pp.md §13).
+/// buffer (spec/pp.md "Preprocessor-state record").
 #[derive(Debug, Default)]
 pub struct StateHooks {
     /// Take the baseline at point 0.
@@ -115,7 +115,7 @@ pub struct StateHooks {
 }
 
 impl Preprocessor<'_, '_> {
-    /// Installs `hooks` (spec/pp.md §13); call before reading the first
+    /// Installs `hooks` (spec/pp.md "Preprocessor-state record"); call before reading the first
     /// token.
     pub fn set_state_hooks(&mut self, hooks: StateHooks) {
         self.state_hooks = Some(Box::new(hooks));
@@ -249,7 +249,7 @@ impl Preprocessor<'_, '_> {
     }
 
     /// Makes `st` this preprocessor's state, as if the header it was
-    /// taken after had been read at `at` (spec/pp.md §13).
+    /// taken after had been read at `at` (spec/pp.md "Preprocessor-state record").
     pub fn install_state(&mut self, st: &PpState, at: Loc) {
         for d in &st.macros {
             self.macros.map.insert(d.name, d.clone());
@@ -293,7 +293,7 @@ impl Preprocessor<'_, '_> {
     }
 
     /// The round trip of a header unit's exported macros through the
-    /// record (spec/modules.md §11.12 "Header units"): encoded with the
+    /// record (spec/modules.md §11.13 "Header units"): encoded with the
     /// unit's file `unit` as the main file, decoded and materialized.
     /// `None` when any step fails (the caller keeps `defs`).
     pub(crate) fn unit_round_trip(
@@ -306,7 +306,8 @@ impl Preprocessor<'_, '_> {
         let rec = PpRecord::decode(&bytes).ok()?;
         let mut back = rec.materialize(self.sm, self.interner).ok()?;
         // The encoding sorts by name; the export order is by location.
-        let pos: HashMap<Symbol, usize> = defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
+        let pos: HashMap<Symbol, usize> =
+            defs.iter().enumerate().map(|(i, d)| (d.name, i)).collect();
         back.macros.sort_by_key(|d| pos.get(&d.name).copied().unwrap_or(usize::MAX));
         (back.macros.len() == defs.len()).then_some(back.macros)
     }
@@ -366,9 +367,10 @@ fn kind_code(k: TokKind, name: &mut impl FnMut(Symbol) -> u32) -> W<(u8, u32)> {
         TokKind::StringLit(e) => (T_STRING, enc_code(e)),
         TokKind::RawStringLit(e) => (T_RAW_STRING, enc_code(e)),
         TokKind::HeaderName => (T_HEADER_NAME, 0),
-        TokKind::Punct(p) => {
-            (T_PUNCT, Punct::ALL.iter().position(|&q| q == p).ok_or("an unknown punctuator")? as u32)
-        }
+        TokKind::Punct(p) => (
+            T_PUNCT,
+            Punct::ALL.iter().position(|&q| q == p).ok_or("an unknown punctuator")? as u32,
+        ),
         TokKind::Other(c) => (T_OTHER, u32::from(c)),
         TokKind::Unknown => (T_UNKNOWN, 0),
         TokKind::Comment => (T_COMMENT, 0),
@@ -729,7 +731,9 @@ impl PpRecord {
                         let (lo, hi) = (r.u32()?, r.u32()?);
                         let ok = match tag {
                             T_IDENT => name_ok(payload),
-                            T_CHAR | T_STRING | T_RAW_STRING => (payload as usize) < ENCODINGS.len(),
+                            T_CHAR | T_STRING | T_RAW_STRING => {
+                                (payload as usize) < ENCODINGS.len()
+                            }
                             T_PUNCT => (payload as usize) < Punct::ALL.len(),
                             T_OTHER => char::from_u32(payload).is_some(),
                             T_NUMBER | T_HEADER_NAME | T_UNKNOWN | T_COMMENT => payload == 0,
@@ -1131,8 +1135,10 @@ impl PpState {
             v.push(format!("undef {}", name(u)));
         }
         for (n, stack) in &self.pushed {
-            let items: Vec<String> =
-                stack.iter().map(|d| d.as_ref().map_or_else(|| "none".to_owned(), |d| def(d))).collect();
+            let items: Vec<String> = stack
+                .iter()
+                .map(|d| d.as_ref().map_or_else(|| "none".to_owned(), |d| def(d)))
+                .collect();
             v.push(format!("push {}: [{}]", name(*n), items.join(" | ")));
         }
         for &(n, s) in &self.poisoned {

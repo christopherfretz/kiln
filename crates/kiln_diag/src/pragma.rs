@@ -216,7 +216,12 @@ impl Pragmas {
             for &(id, severity, f) in st {
                 over.insert(
                     id,
-                    Mapping { severity, user: f & 1 != 0, no_werror: f & 2 != 0, no_fatal: f & 4 != 0 },
+                    Mapping {
+                        severity,
+                        user: f & 1 != 0,
+                        no_werror: f & 2 != 0,
+                        no_fatal: f & 4 != 0,
+                    },
                 );
                 if severity != Severity::Ignored {
                     self.enabled[id as usize] = true;
