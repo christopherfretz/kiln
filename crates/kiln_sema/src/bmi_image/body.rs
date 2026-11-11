@@ -1107,6 +1107,9 @@ pub(super) enum Root {
     FieldInit(u32, ExprId),
     /// Constructor record, ctor-initializer position, initializer.
     CtorInit(u32, u32, ExprId),
+    /// WP-1278: declaration record, attribute record, argument slot
+    /// (`a`, `b`), the argument.
+    Attr(u32, u32, u8, ExprId),
 }
 
 /// The writer's body state.
@@ -1831,7 +1834,8 @@ impl Writer<'_, '_, '_> {
                 | Root::Init(rec, _)
                 | Root::FieldWidth(rec, _)
                 | Root::FieldInit(rec, _)
-                | Root::CtorInit(rec, _, _) => rec,
+                | Root::CtorInit(rec, _, _)
+                | Root::Attr(rec, _, _, _) => rec,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
             if let Some(&d) = inv.get(&rec) {
@@ -1894,6 +1898,15 @@ impl Writer<'_, '_, '_> {
                         &mut self.img.decls[rec as usize].payload
                     {
                         inits[k as usize].init = i;
+                    }
+                }
+                Root::Attr(_, k, slot, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    let r = &mut self.img.attrs.recs[k as usize];
+                    if slot == 0 {
+                        r.a = i;
+                    } else {
+                        r.b = i;
                     }
                 }
             }

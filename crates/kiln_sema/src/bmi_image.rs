@@ -41,6 +41,7 @@ use kiln_source::{FileId, Loc};
 use crate::Sema;
 use crate::modules::Directive;
 
+mod attrs;
 mod body;
 mod locs;
 mod spec;
@@ -517,6 +518,8 @@ struct Image {
     types: Vec<TyRec>,
     decls: Vec<DeclRec>,
     bodies: Bodies,
+    /// WP-1278: the declarations' attributes and builtin identity.
+    attrs: attrs::Attrs,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -579,7 +582,7 @@ const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
 /// The fallback reason of a declaration with attributes (the census
 /// names them).
-const ATTRIBUTED: &str = "a declaration with attributes";
+const ATTRIBUTED: &str = attrs::UNCARRIED;
 
 /// `FieldData.flags` carried: `mutable`, the initializer style, a
 /// default member initializer (`[[no_unique_address]]` is an attribute).
@@ -1091,6 +1094,7 @@ fn encode(img: &Image) -> Vec<u8> {
         w.u32(d);
     }
     body::encode_bodies(&mut w, &img.bodies);
+    attrs::encode_attrs(&mut w, &img.attrs);
     w.0
 }
 
@@ -1647,6 +1651,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
         lookup.push((r.u32()?, r.u32()?, r.u32()?));
     }
     img.bodies = body::decode_bodies(&mut r)?;
+    img.attrs = attrs::decode_attrs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2319,6 +2324,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
     }
     let _ = nd;
+    attrs::validate_attrs(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2717,6 +2723,10 @@ impl Writer<'_, '_, '_> {
             // Every shadow is implicit; the reader's builder marks it.
             extra &= !DeclFlags::IMPLICIT.bits();
         }
+        if extra & DeclFlags::HAS_ATTRS.bits() != 0 && self.attrs_carried(d) {
+            // Carried by `attr_recs` (WP-1278).
+            extra &= !DeclFlags::HAS_ATTRS.bits();
+        }
         if extra != 0 {
             return Err(if extra & DeclFlags::INVALID.bits() != 0 {
                 "an invalid declaration"
@@ -3072,9 +3082,6 @@ impl Writer<'_, '_, '_> {
         }
         if fn_spec(bits) != Some(spec) {
             return Err("a coroutine, contract-checked or implicitly defaulted function");
-        }
-        if ast.decls.builtin_id(d).is_some() || ast.decls.lib_builtin(d).is_some() {
-            return Err("a builtin or library function");
         }
         if s.inh_ctor_base.contains_key(&d) {
             return Err("an inherited constructor");
@@ -3622,7 +3629,9 @@ impl Writer<'_, '_, '_> {
             attrs = ast
                 .lists
                 .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(d))
-                .map(|a| crate::decl_attrs::attr_name(ast.attrs.get(a)).unwrap_or("(unnamed)"))
+                .map(|a| ast.attrs.get(a))
+                .filter(|a| !attrs::carried(a, ast.symbols().len()))
+                .map(|a| crate::decl_attrs::attr_name(a).unwrap_or("(unnamed)"))
                 .collect();
             attrs.sort_unstable();
             attrs.dedup();
@@ -3804,6 +3813,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
+        let attrs = self.attr_recs(d, i)?;
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         self.img.decls.push(DeclRec {
             flags: h.flags,
@@ -3817,6 +3827,7 @@ impl Writer<'_, '_, '_> {
             payload,
         });
         self.recs.insert(d, i);
+        self.attr_commit(i, attrs);
         if let Some(k) = self.using_key(d) {
             self.usings.insert(k, i);
         }
@@ -4090,6 +4101,7 @@ impl Sema<'_, '_> {
                 _ => None,
             })
             .collect();
+        let mut attr_exprs = attrs::AttrExprs::new();
         let saved_depth = self.ast.templates.dependent_depth;
         for (i, r) in img.decls.iter().enumerate() {
             // A dependent record (template parameter, pattern, local of a
@@ -4348,6 +4360,7 @@ impl Sema<'_, '_> {
             if !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }) {
                 image_flags(self, d, r.flags);
             }
+            self.image_attrs(img, i as u32, d, main, &mut attr_exprs);
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
         }
@@ -4360,6 +4373,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        self.image_attr_exprs(&attr_exprs, &built);
         for (f, width, init) in fields {
             if width != NONE {
                 let _ = self.ast.decls.set_field_bit_width(f, built.expr(width));
