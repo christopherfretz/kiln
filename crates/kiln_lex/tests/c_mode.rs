@@ -23,7 +23,7 @@ fn spell(text: &str, o: LexOptions) -> String {
 #[test]
 fn lex_c_punctuators() {
     let o = c(CStd::C23, false);
-    assert_eq!(spell("a.*b p->*q x<=>y", o.clone()), "a . * b p -> * q x <= > y");
+    assert_eq!(spell("a.*b p->*q x<=>y", o), "a . * b p -> * q x <= > y");
     assert_eq!(spell("gnu::x", o), "gnu :: x");
     assert_eq!(spell("gnu::x", c(CStd::C89, false)), "gnu :: x");
 }
@@ -72,7 +72,7 @@ fn lex_c99_hex_float() {
 fn lex_c89_line_comments() {
     let pp = LexOptions { preprocessed_output: true, ..c(CStd::C89, false) };
     assert_eq!(spell("a //**/ b\nc", c(CStd::C89, false)), "a c");
-    assert_eq!(spell("a //**/ b\nc", pp.clone()), "a / b c");
+    assert_eq!(spell("a //**/ b\nc", pp), "a / b c");
     assert_eq!(spell("a // b\n", pp), "a / / b");
     let gnu = LexOptions { preprocessed_output: true, ..c(CStd::C89, true) };
     assert_eq!(spell("a // b\nc", gnu), "a c");

@@ -2,7 +2,7 @@
 //! §1; C89 3.1.1, C99/C11/C17/C23 6.4.1) agrees with clang 19's
 //! `__is_identifier` in C, which the preprocessor answers from the
 //! generated table (`ClangFeatures::with_c`, itself checked against
-//! `clang-19 -x c` in kiln_pp's features_c test).
+//! `clang-19 -x c` by the `kiln_pp` test `features_c`).
 
 use kiln_lex::{CStd, Interner, Std};
 use kiln_parse::keywords::{C23_KEYWORDS, CXX_ONLY_KEYWORDS, CXX20_KEYWORDS, Keywords};
