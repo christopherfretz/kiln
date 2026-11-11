@@ -268,6 +268,7 @@ impl Job<'_> {
         let a = self.args;
         let mut o = PpOptions::new(self.std.lex);
         o.c = self.std.c;
+        o.gnu = self.std.gnu;
         o.trigraphs = a.trigraphs.unwrap_or(
             !(self.std.gnu || self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx17),
         );

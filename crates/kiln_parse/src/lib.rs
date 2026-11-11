@@ -381,6 +381,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.cfg_max_elems = opts.cfg_max_elems;
     s.permissive = opts.permissive;
     s.ast.contract_semantic = opts.contract_semantic;
+    s.ast.lang_c = opts.c.is_some();
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;

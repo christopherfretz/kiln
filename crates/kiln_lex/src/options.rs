@@ -50,6 +50,9 @@ pub struct LexOptions {
     pub std: Std,
     /// The C standard when the input is C; `None` (the default) is C++.
     pub c: Option<CStd>,
+    /// A GNU dialect (`-std=gnuNN`). Only C reads it: raw string literals
+    /// are a GNU extension there from gnu99 on (clang 19).
+    pub gnu: bool,
     /// Translate trigraphs in phase 1 ([lex.trigraph], removed in C++17).
     /// Default: `false` (clang's default for C++17 and later); when off,
     /// trigraphs outside comments are diagnosed with
@@ -74,6 +77,7 @@ impl LexOptions {
         LexOptions {
             std,
             c: None,
+            gnu: false,
             trigraphs: false,
             dollar_in_identifiers: true,
             keep_comments: false,

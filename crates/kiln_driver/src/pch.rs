@@ -846,7 +846,7 @@ fn produce_one(
     });
     let r = {
         let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
-        syntax_only(&check_args, tc, std, lang, &input.path, stdin, diag_opts, io)
+        syntax_only(&check_args, tc, std, &input.path, stdin, diag_opts, io)
     };
     let errors = write_pch(args, tc, input, std, r, &out, diag_opts, io);
     if let Some(mut t) = trace.take() {

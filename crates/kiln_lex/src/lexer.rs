@@ -7,7 +7,7 @@ use std::ops::Range;
 use kiln_source::{FileId, Loc, Replacement, SourceManager, Span};
 
 use crate::diag::{LexDiag, LexDiagKind};
-use crate::options::{LexMode, LexOptions, Std};
+use crate::options::{CStd, LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
 use crate::unicode::{
@@ -351,6 +351,16 @@ impl<'a> Lexer<'a> {
 
     fn std_at_least(&self, std: Std) -> bool {
         self.opts.std >= std
+    }
+
+    /// C++ (not C): the C++-only tokens and literal forms.
+    fn cxx(&self) -> bool {
+        self.opts.c.is_none()
+    }
+
+    /// C at `std` or later.
+    fn c_at_least(&self, std: CStd) -> bool {
+        self.opts.c.is_some_and(|c| c >= std)
     }
 
     fn take_line_flags(&mut self) -> TokFlags {
@@ -1064,8 +1074,10 @@ impl<'a> Lexer<'a> {
             _ => return (kind, p, flags),
         };
         let cxx11 = self.std_at_least(Std::Cxx11);
+        // Raw strings: C++11, or a GNU C mode from gnu99 (clang 19).
+        let raw_ok = if self.cxx() { cxx11 } else { self.opts.gnu && self.c_at_least(CStd::C99) };
         match self.src.decode(p) {
-            (Some('"'), s) if raw && cxx11 => self.lex_raw_string(start, p, s, enc),
+            (Some('"'), s) if raw && raw_ok => self.lex_raw_string(start, p, s, enc),
             (Some('"'), s) if !raw && (cxx11 || enc == Encoding::Wide) => {
                 self.lex_quoted(start, p + s, '"', enc)
             }
@@ -1098,7 +1110,9 @@ impl<'a> Lexer<'a> {
                 '+' | '-' => match prev {
                     'e' | 'E' => true,
                     'p' | 'P' => {
-                        self.std_at_least(Std::Cxx17) || self.looks_like_hex_float(start, p)
+                        self.std_at_least(Std::Cxx17)
+                            || self.c_at_least(CStd::C99)
+                            || self.looks_like_hex_float(start, p)
                     }
                     _ => false,
                 },
@@ -1272,7 +1286,8 @@ impl<'a> Lexer<'a> {
     /// [`Self::is_std_string_suffix`]; otherwise
     /// the literal ends and `ReservedUdSuffix` is recorded.
     fn lex_ud_suffix(&mut self, p: usize, is_string: bool) -> (usize, TokFlags) {
-        if !self.std_at_least(Std::Cxx11) {
+        // C has no ud-suffixes.
+        if !self.std_at_least(Std::Cxx11) || !self.cxx() {
             return (p, TokFlags::empty());
         }
         let (c, s) = self.src.decode(p);
@@ -1418,12 +1433,14 @@ impl<'a> Lexer<'a> {
                 one(P::Question)
             }
             ('.', Some('0'..='9')) => self.lex_number(start, '.', p1),
-            ('.', Some('*')) => two(P::PeriodStar),
+            ('.', Some('*')) if self.cxx() => two(P::PeriodStar),
             ('.', Some('.')) => match self.src.decode(p2) {
                 (Some('.'), s3) => (TokKind::Punct(P::Ellipsis), p2 + s3, none),
                 _ => one(P::Period),
             },
             ('.', _) => one(P::Period),
+            // `::` is a token in every C mode too (C23 6.4.6; clang lexes it
+            // before C23 for `[[gnu::x]]`).
             (':', Some(':')) => two(P::ColonColon),
             (':', Some('>')) => digraph(P::RSquare, p2),
             (':', Some(']')) if cxx26 => two(P::SpliceClose),
@@ -1434,7 +1451,7 @@ impl<'a> Lexer<'a> {
             ('-', Some('-')) => two(P::MinusMinus),
             ('-', Some('=')) => two(P::MinusEqual),
             ('-', Some('>')) => match self.src.decode(p2) {
-                (Some('*'), s3) => (TokKind::Punct(P::ArrowStar), p2 + s3, none),
+                (Some('*'), s3) if self.cxx() => (TokKind::Punct(P::ArrowStar), p2 + s3, none),
                 _ => two(P::Arrow),
             },
             ('-', _) => one(P::Minus),
@@ -1476,7 +1493,7 @@ impl<'a> Lexer<'a> {
                 (Some('>'), s3) if self.std_at_least(Std::Cxx20) => {
                     (TokKind::Punct(P::Spaceship), p2 + s3, none)
                 }
-                (Some('>'), s3) => {
+                (Some('>'), s3) if self.cxx() => {
                     self.diag(LexDiagKind::SpaceshipCompat, start, p2 + s3);
                     two(P::LessEqual)
                 }
@@ -1484,7 +1501,7 @@ impl<'a> Lexer<'a> {
             },
             ('<', Some(':')) => {
                 // [lex.pptoken]/3.2: `<::` not followed by `:` or `>` is `<` `::`.
-                if self.std_at_least(Std::Cxx11) {
+                if self.std_at_least(Std::Cxx11) && self.cxx() {
                     let (c3, s3) = self.src.decode(p2);
                     if c3 == Some(':') && !matches!(self.src.decode(p2 + s3).0, Some(':' | '>')) {
                         return one(P::Less);
