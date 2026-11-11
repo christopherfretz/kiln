@@ -311,7 +311,7 @@ def write_diag_tables(paths):
          "/// enclosing marks, general categories Mn and Me.",
          category_ranges(gc, lambda c: c in ("Mn", "Me"))),
         ("DOUBLE_WIDTH", "Double-width code points (`charWidth` 2):\n"
-         "/// East_Asian_Width F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and\n"
+         "/// `East_Asian_Width` F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and\n"
          "/// U+4DC0..U+4DFF as LLVM's table has them.",
          merge(wide + EXTRA_DOUBLE_WIDTH)),
     ]

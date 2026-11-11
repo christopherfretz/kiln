@@ -1093,7 +1093,7 @@ pub(crate) static COMBINING: &[(u32, u32)] = &[
 ];
 
 /// Double-width code points (`charWidth` 2):
-/// East_Asian_Width F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and
+/// `East_Asian_Width` F or W, plus U+1F300..U+1F5FF, U+1F900..U+1F9FF and
 /// U+4DC0..U+4DFF as LLVM's table has them.
 pub(crate) static DOUBLE_WIDTH: &[(u32, u32)] = &[
     (0x1100, 0x115F),

@@ -110,6 +110,7 @@ fn ucn_name(range: &str) -> &str {
 /// `LiteralSupport.cpp`). Shared by the `#if` evaluator and the parser
 /// (`spec/pp.md`, `spec/parse.md` §2); `tok` may be a macro or scratch
 /// token. Kinds kiln has no id for are dropped.
+#[allow(clippy::too_many_lines, reason = "one arm per kind, as clang's LiteralSupport")]
 pub fn literal_diags(
     sm: &SourceManager,
     tok: &Token,
