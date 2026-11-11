@@ -1398,7 +1398,24 @@ fn frontend(
         diag_opts,
         stderr: io.stderr.clone(),
     };
-    let (ir, _, deps) = CodegenJob(job).run();
+    let checked = crate::pch_check::codegen(
+        args,
+        &crate::pch_check::Input {
+            tc,
+            std,
+            path: &input.path,
+            stdin_text: job.stdin_text.clone(),
+            diag_opts,
+            stderr: &io.stderr,
+        },
+    );
+    let (ir, deps) = match checked {
+        Some(r) => r,
+        None => {
+            let (ir, _, deps) = CodegenJob(job).run();
+            (ir, deps)
+        }
+    };
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
     {

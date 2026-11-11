@@ -765,6 +765,33 @@ pub struct PchArgs {
     /// The `-include-pch` file's preprocessor-state record, for
     /// `-fkiln-pch-image=check`/`load` (set by `crate::pch`).
     pub image_use: Option<PchImageUse>,
+    /// `-fkiln-pch-image=check` for a compile whose PCH has a declaration
+    /// image: what a `load` consumer compiles with, run next to the
+    /// replay and compared with it (WP-1036; set by `crate::pch`).
+    pub check_load: Option<Box<PchCheckLoad>>,
+}
+
+/// The arguments a `load` consumer differs in from replay's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PchCheckLoad {
+    /// The `-include`s left after the PCH's.
+    pub includes: Vec<String>,
+    /// The record installed and the declaration image built.
+    pub image_use: PchImageUse,
+}
+
+impl Args {
+    /// The `load` consumer's arguments of a `-fkiln-pch-image=check`
+    /// compile (spec/driver.md "Precompiled headers").
+    #[must_use]
+    pub fn pch_load_variant(&self) -> Option<Args> {
+        let c = self.pch.check_load.as_deref()?;
+        let mut a = self.clone();
+        a.includes.clone_from(&c.includes);
+        a.pch.image_use = Some(c.image_use.clone());
+        a.pch.check_load = None;
+        Some(a)
+    }
 }
 
 /// `-fkiln-pch-image`'s mode (spec/driver.md "Precompiled headers").
@@ -778,7 +805,8 @@ pub enum PchImage {
     /// §11.13) next to the fingerprint.
     Write,
     /// As `Write`; the consumer replays the header and compares the
-    /// state replay reached with the record's.
+    /// state replay reached with the record's; a compile also builds the
+    /// declaration image and compares the two (WP-1036).
     Check,
     /// As `Write`; the consumer installs the record and builds the
     /// declaration image instead of replaying the header (`-E`/`-M`
