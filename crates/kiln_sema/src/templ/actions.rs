@@ -2083,6 +2083,15 @@ impl Sema<'_, '_> {
         {
             return self.build_decl_ref(b, loc);
         }
+        // C89 3.3.2.2: a call of an undeclared identifier declares
+        // `extern int f();` (clang `ImplicitlyDefineFunction`).
+        if self.is_c()
+            && !self.c_at_least(kiln_lex::CStd::C23)
+            && let Some(sym) = name.as_ident()
+        {
+            let f = self.c_implicit_function_decl(sym, loc);
+            return self.build_decl_ref(f, loc);
+        }
         self.builder().unresolved_lookup(name, &[], true, None, None, loc)
     }
 

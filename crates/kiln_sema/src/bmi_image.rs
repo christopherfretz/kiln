@@ -44,7 +44,9 @@ use crate::modules::Directive;
 
 mod attrs;
 mod body;
+mod classtempl;
 mod constraints;
+mod declocs;
 mod deptypes;
 mod locs;
 mod requires;
@@ -58,7 +60,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 14;
+pub(crate) const IMAGE_VERSION: u32 = 15;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -556,6 +558,10 @@ struct Image {
     attrs: attrs::Attrs,
     /// WP-1278: inline namespaces and linkage specifications.
     scopes: scope::Scopes,
+    /// WP-1283: explicit and partial class template specializations.
+    cspecs: classtempl::ClassSpecs,
+    /// WP-1283: declarator locations of dependent declarations.
+    declocs: declocs::DeclLocs,
     /// WP-1284: constraints and concepts' constraint-expressions.
     cons: constraints::Constraints,
     /// WP-1284: requires-expression bodies.
@@ -1149,7 +1155,7 @@ fn encode(img: &Image) -> Vec<u8> {
         .decls
         .iter()
         .enumerate()
-        .filter(|(_, d)| d.name != NONE && !unlisted(img, d))
+        .filter(|(i, d)| d.name != NONE && !unlisted(img, *i, d))
         .map(|(i, d)| (d.ctx, d.name, i as u32))
         .collect();
     lookup.sort_unstable();
@@ -1162,6 +1168,8 @@ fn encode(img: &Image) -> Vec<u8> {
     body::encode_bodies(&mut w, &img.bodies);
     attrs::encode_attrs(&mut w, &img.attrs);
     scope::encode_scopes(&mut w, &img.scopes);
+    classtempl::encode_class_specs(&mut w, &img.cspecs);
+    declocs::encode_decl_locs(&mut w, &img.declocs);
     constraints::encode_constraints(&mut w, &img.cons);
     requires::encode_requires(&mut w, &img.reqs);
     written::encode_written(&mut w, &img.written);
@@ -1740,6 +1748,8 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.bodies = body::decode_bodies(&mut r)?;
     img.attrs = attrs::decode_attrs(&mut r)?;
     img.scopes = scope::decode_scopes(&mut r)?;
+    img.cspecs = classtempl::decode_class_specs(&mut r)?;
+    img.declocs = declocs::decode_decl_locs(&mut r)?;
     img.cons = constraints::decode_constraints(&mut r)?;
     img.reqs = requires::decode_requires(&mut r)?;
     img.written = written::decode_written(&mut r)?;
@@ -1792,11 +1802,13 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
         )
 }
 
-/// Whether record `d` stays out of the lookup table: a local, a template
-/// parameter, or a pattern (its template is looked up in its place).
-fn unlisted(img: &Image, d: &DeclRec) -> bool {
+/// Whether record `d` (index `i`) stays out of the lookup table: a
+/// local, a template parameter, a pattern (its template is looked up in
+/// its place) or a specialization (WP-1283).
+fn unlisted(img: &Image, i: usize, d: &DeclRec) -> bool {
     body::is_local(img, d)
         || d.flags & DEP != 0
+        || classtempl::explicit_of(img, i as u32).is_some()
         // Found through their shadows (S6).
         || matches!(d.payload, Payload::Using { .. } | Payload::UsingEnum { .. })
 }
@@ -1881,6 +1893,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
+                    // A partial specialization's injected-class-name (WP-1283).
+                    || matches!(t, TyRec::Injected(_) | TyRec::Subst { .. })
+                        && classtempl::partial_of(img, d).is_some()
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -1914,7 +1929,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 && u.ty > BUILTINS
                 && matches!(img.types.get((u.ty - BUILTINS - 1) as usize),
                     Some(TyRec::Record(r)) if matches!(img.decls.get(*r as usize).map(|x| &x.payload),
-                        Some(Payload::Spec { template: st, .. }) if st == template));
+                        Some(Payload::Spec { template: st, .. }) if st == template)
+                        || classtempl::explicit_of(img, *r) == Some(*template));
             if !ok {
                 return bad("bad specialization type");
             }
@@ -1943,6 +1959,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let mut claimed = vec![false; nd];
     // S4b: per class template pattern, its parameter count.
     let mut tmpl_params: FxHashMap<usize, usize> = FxHashMap::default();
+    classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
+    declocs::validate_decl_locs(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -1989,7 +2007,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             match img.decls[template as usize].payload {
                                 Payload::Template { kind: 1, pattern: p, .. } => kind_of(*pattern)
                                     .is_some_and(|m| {
-                                        m.ctx == p
+                                        (m.ctx == p
+                                            || classtempl::partial_of(img, m.ctx) == Some(template))
                                             && m.lexical == NONE
                                             && matches!(
                                                 m.payload,
@@ -2460,7 +2479,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         return bad("a dependent declaration outside a template");
     }
     // The lookup table: exactly the named listed records, sorted.
-    let named = img.decls.iter().filter(|d| d.name != NONE && !unlisted(img, d)).count();
+    let named = img
+        .decls
+        .iter()
+        .enumerate()
+        .filter(|(i, d)| d.name != NONE && !unlisted(img, *i, d))
+        .count();
     if lookup.len() != named || lookup.windows(2).any(|w| w[0] >= w[1]) {
         return bad("bad lookup table");
     }
@@ -2918,7 +2942,10 @@ impl Writer<'_, '_, '_> {
         let parm = matches!(n.kind(), DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm);
         if n.has(DeclFlags::DEPENDENT_CTX)
             && !parm
-            && !matches!(self.s.ast.templ_link(d).get(), Some((TemplLinkKind::Pattern, _)))
+            && !matches!(
+                self.s.ast.templ_link(d).get(),
+                Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _))
+            )
             && !self.dep_member(d)
         {
             return Err(self.in_template_reason(d));
@@ -3365,8 +3392,9 @@ impl Writer<'_, '_, '_> {
                 if ast
                     .described_template(ast.first(d))
                     .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::ClassTemplate) => {}
-            Some((TemplLinkKind::Specialization, _)) => {
-                return Err("an explicit or partial specialization");
+            // WP-1283: listed with its template and arguments.
+            Some((TemplLinkKind::Specialization | TemplLinkKind::PartialSpecialization, _)) => {
+                self.class_spec_entry(d, i)?;
             }
             _ => return Err("a member template or a template in a template"),
         }
@@ -3611,6 +3639,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.anon_typedefs()?;
+        self.decl_locs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -3650,6 +3679,7 @@ impl Writer<'_, '_, '_> {
         self.recs.retain(|_, v| *v < n);
         self.usings.retain(|_, v| *v < n);
         self.tmemo.retain(|_, v| *v < t);
+        self.img.cspecs.truncate(n);
     }
 
     /// The top-level declaration `d` belongs to: the outermost enclosing
@@ -3818,6 +3848,11 @@ impl Writer<'_, '_, '_> {
         }
         if n.kind() == DeclKind::StaticAssert {
             // Checked when the module was compiled; nothing to import.
+            // In a template, each instantiation checks it again: not
+            // carried yet (WP-1283).
+            if n.has(DeclFlags::DEPENDENT_CTX) {
+                return Err("a static assertion in a template");
+            }
             return Ok(());
         }
         if n.kind() == DeclKind::RequiresExprBody {
@@ -4166,6 +4201,8 @@ impl Sema<'_, '_> {
                 }
             }
             body::body_locs(&img, &mut offs);
+            classtempl::class_spec_locs(&img, &mut offs);
+            declocs::decl_loc_offsets(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -4391,7 +4428,13 @@ impl Sema<'_, '_> {
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
-                    let c = self.builder().record(h, tag, prev);
+                    let c = if classtempl::partial_of(img, i as u32).is_some()
+                        || classtempl::explicit_of(img, i as u32).is_some()
+                    {
+                        self.image_class_spec(img, &mut tys, &ids, main, i as u32, h, tag)
+                    } else {
+                        self.builder().record(h, tag, prev)
+                    };
                     self.ast.templates.pattern_next = false;
                     if let Some(df) = def {
                         let _ = self.builder().begin_record_definition(c);
@@ -4543,6 +4586,7 @@ impl Sema<'_, '_> {
             self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
         }
         self.image_virtuals(img, &ids);
+        self.image_decl_locs(img, &ids, |o| main.get(o));
         let reqs = self.image_requires(img, &mut tys, &ids, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
@@ -4923,6 +4967,10 @@ impl Sema<'_, '_> {
                 self.ast.types.template_specialization(name, list, under, alias)
             }
             TyRec::Injected(t) => match ids.get(*t as usize) {
+                // A partial specialization's (WP-1283).
+                Some(&p) if self.ast.partial_spec_info(p).is_some() => {
+                    self.partial_injected_type(p).unwrap_or(QualType::INT)
+                }
                 Some(&t) => self.injected_type_of(t).unwrap_or(QualType::INT),
                 None => QualType::INT,
             },
@@ -5185,6 +5233,8 @@ mod tests {
             },
             attrs: attrs::Attrs::default(),
             scopes: scope::Scopes::default(),
+            cspecs: classtempl::ClassSpecs::default(),
+            declocs: declocs::DeclLocs::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

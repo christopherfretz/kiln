@@ -818,6 +818,7 @@ impl Substituter<'_, '_, '_> {
                 ref_qual: info.ref_qual(),
                 trailing,
                 ambiguous: false,
+                no_proto: false,
             });
         }
         let fs = self.sema.ast.decls.function(d).map(|x| x.spec);

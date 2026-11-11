@@ -1056,6 +1056,9 @@ impl Sema<'_, '_> {
                     err.diag(self, e)
                 };
                 self.emit(d);
+                if let Some(x) = err.recovered {
+                    return x;
+                }
                 let loc = self.eloc(e);
                 self.recover(ty, &[e], loc)
             }
@@ -2442,7 +2445,9 @@ impl Sema<'_, '_> {
         } else if n.kind() == DeclKind::EnumConstant
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
-            t
+            self.c_enumerator_type(d, declared, t)
+        } else if n.kind() == DeclKind::EnumConstant && self.is_c() {
+            self.c_enumerator_type(d, declared, declared)
         } else if n.kind() == DeclKind::NonTypeTemplateParm
             && self.placeholder_keyword(declared).is_some()
         {
@@ -3141,7 +3146,8 @@ impl Sema<'_, '_> {
             }
             UnaryOp::LNot => match conv::contextually_convert_to_bool(self, e) {
                 Ok(x) => {
-                    self.builder().unary(op, x, QualType::BOOL, loc, ExprFlags::CANNOT_OVERFLOW)
+                    let ty = self.truth_ty();
+                    self.builder().unary(op, x, ty, loc, ExprFlags::CANNOT_OVERFLOW)
                 }
                 Err(_) => bad(self, e),
             },
@@ -3324,7 +3330,7 @@ impl Sema<'_, '_> {
         let atomic = self.ast.types.as_atomic(operand_t);
         let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
-        if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
+        if self.ast.types.builtin(t) == Some(BuiltinType::Bool) && !self.is_c() {
             // clang: decrementing is always an error; incrementing is a
             // DefaultError extension (`-Wno-increment-bool` accepts it).
             if !inc {
@@ -3335,7 +3341,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_increment_bool, loc);
             self.emit(msg);
         }
-        if self.ast.types.as_enum(t).is_some() {
+        // C17 6.5.2.4p1, 6.5.3.1p1: any real or pointer type, `_Bool` and
+        // enumerations included.
+        if self.ast.types.as_enum(t).is_some() && !self.is_c() {
             let msg = self
                 .diag(DiagId::sema_incdec_enum, loc)
                 .arg(if inc { "0" } else { "1" })
@@ -3351,7 +3359,9 @@ impl Sema<'_, '_> {
             // clang 19 `ext_increment_complex`: every complex type.
             let msg = self.diag(DiagId::sema_increment_complex, loc).arg(op.spelling());
             self.emit(msg);
-        } else if !self.ast.types.is_arithmetic(t) {
+        } else if !self.ast.types.is_arithmetic(t)
+            && (!self.is_c() || self.ast.types.as_enum(t).is_none())
+        {
             let msg = self
                 .diag(DiagId::sema_incdec_invalid, loc)
                 .arg(if inc { "0" } else { "1" })
@@ -3365,8 +3375,12 @@ impl Sema<'_, '_> {
         self.check_volatile_inc_dec(inc, operand_t, loc);
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
-        let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
+        let c = self.is_c();
+        let ty = if op.is_postfix() || atomic.is_some() || c { conv::strip_cv(self, t) } else { t };
         let r = self.builder().unary(op, e, ty, loc, flags);
+        if c && !op.is_postfix() {
+            self.ast.exprs.set_c_prefix_incdec_prvalue(r);
+        }
         self.mark_bitfield_if(r, e);
         r
     }
@@ -3552,7 +3566,9 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(v) = self.fold_rvalue_int(r) else { return };
-        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
+        // In C only an operand other than 0 or 1 is diagnosed.
+        if (self.is_c()
+            || self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
             || self.diags.sm().is_macro_loc(self.eloc(r)))
             && (v == 0 || v == 1)
         {
@@ -3602,6 +3618,12 @@ impl Sema<'_, '_> {
         res
     }
 
+    /// The type of a comparison, `!`, `&&` or `||`: `bool` in C++, `int`
+    /// in C (C17 6.5.3.3p5, 6.5.8p6, 6.5.9p3, 6.5.13p3, 6.5.14p3).
+    pub(crate) fn truth_ty(&self) -> QualType {
+        if self.is_c() { QualType::INT } else { QualType::BOOL }
+    }
+
     /// The built-in `&&` / `||` ([expr.log.and], [expr.log.or]).
     fn logical_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
@@ -3617,7 +3639,8 @@ impl Sema<'_, '_> {
         };
         let Ok(l2) = conv_op(self, l) else { return self.invalid_operands(l, r, loc) };
         let Ok(r2) = conv_op(self, r) else { return self.invalid_operands(l, r, loc) };
-        self.builder().binary(op, l2, r2, QualType::BOOL, loc)
+        let ty = self.truth_ty();
+        self.builder().binary(op, l2, r2, ty, loc)
     }
 
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
@@ -3810,13 +3833,18 @@ impl Sema<'_, '_> {
             Err(err) => {
                 // An `_Atomic` target is checked as in C, at the operator
                 // (clang `DiagnoseAssignmentResult`).
-                let d = if self.ast.types.as_atomic(to).is_some() {
+                let d = if self.ast.types.as_atomic(to).is_some()
+                    || conv::c_assign::is_c_assign_diag(err.id)
+                {
                     err.diag_at(self, loc)
                 } else {
                     err.diag(self, r)
                 };
                 self.emit(d);
-                return self.recover_err(&[l, r], loc);
+                match err.recovered {
+                    Some(x) => x,
+                    None => return self.recover_err(&[l, r], loc),
+                }
             }
         };
         // clang `CheckAssignmentOperands`' lifetime check (spec/sema-class.md §5.6).
@@ -4257,7 +4285,8 @@ impl Sema<'_, '_> {
                 && self.is_meta_info(rt)
                 && matches!(op, BinaryOp::EQ | BinaryOp::NE)
             {
-                return self.builder().binary(op, l2, r2, QualType::BOOL, loc);
+                let ty = self.truth_ty();
+                return self.builder().binary(op, l2, r2, ty, loc);
             }
             return self.invalid_operands(l, r, loc);
         }
@@ -4287,7 +4316,8 @@ impl Sema<'_, '_> {
                 }
             }
             if let Some((l3, r3, _)) = self.composite_pointer(l2, r2) {
-                return self.builder().binary(op, l3, r3, QualType::BOOL, loc);
+                let ty = self.truth_ty();
+                return self.builder().binary(op, l3, r3, ty, loc);
             }
             let int_like = |s: &Self, t: QualType| s.is_integral_or_enum(t);
             let id = if (ptr_like(self, lt) && int_like(self, rt))
@@ -4319,7 +4349,8 @@ impl Sema<'_, '_> {
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Comparison) {
             Ok((l3, r3, _)) => {
                 self.report_arith_warning(loc);
-                self.builder().binary(op, l3, r3, QualType::BOOL, loc)
+                let ty = self.truth_ty();
+                self.builder().binary(op, l3, r3, ty, loc)
             }
             Err(err) => self.conv_failed(&err, l, r, loc),
         }
@@ -5314,6 +5345,40 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
+        // clang `warn_call_wrong_number_of_arguments`: a call of a function
+        // without a prototype whose definition has another parameter count.
+        if proto.info().no_proto()
+            && let Some(d) = named
+            && let Some(def) = self
+                .ast
+                .redecls_of(d)
+                .find(|&r| self.ast.decls.function(r).is_some_and(|f| f.body.is_some()))
+            && let Some(f) = self.ast.decls.function(def)
+            && self.ast.lists.len(f.params) != args.len()
+        {
+            let many = args.len() > self.ast.lists.len(f.params);
+            let msg = self
+                .diag(DiagId::sema_c_knr_wrong_arg_count, rparen)
+                .arg(u8::from(many))
+                .arg(self.decl_name(d))
+                .range(self.expr_range(callee));
+            self.emit(msg);
+        }
+        // clang `warn_strict_uses_without_prototype`, at the `(`: not for
+        // an implicitly declared function, nor through a K&R definition's
+        // type (clang takes its prototype).
+        if proto.info().no_proto()
+            && !args.is_empty()
+            && self.ast.types.params(&proto).is_empty()
+            && !named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::IMPLICIT))
+        {
+            let name = named.map(|d| self.decl_name(d)).unwrap_or_default();
+            let msg = self
+                .diag(DiagId::sema_c_call_without_prototype, loc)
+                .arg(u8::from(named.is_some()))
+                .arg(name);
+            self.emit(msg);
+        }
         // A builtin is not overloadable, and its diagnostics name no
         // declaration (clang's `ConvertArgumentsForCall`).
         let adl_single = self.ovl.adl_single.take();
@@ -5404,7 +5469,12 @@ impl Sema<'_, '_> {
         loc: Loc,
         rparen: Loc,
     ) -> Option<Vec<ExprId>> {
-        let params: Vec<QualType> = self.ast.types.params(proto).to_vec();
+        let mut params: Vec<QualType> = self.ast.types.params(proto).to_vec();
+        // C17 6.5.2.2p6: a call through a K&R definition's type converts
+        // the arguments it has; the count is only warned about.
+        if proto.info().no_proto() {
+            params.truncate(args.len());
+        }
         let variadic = proto.info().variadic();
         let n = params.len();
         let have = args.len();
@@ -5505,7 +5575,11 @@ impl Sema<'_, '_> {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
+                // C17 6.5.2.2p7: a C structure argument is converted as if
+                // by assignment ([`conv::c_assign::convert`]), a plain copy
+                // with no constructor.
                 if self.ast.types.as_record(to).is_some()
+                    && !self.is_c()
                     && !self.is_err_expr(a)
                     && !self.expr_is_type_dependent(a)
                 {
@@ -5561,6 +5635,19 @@ impl Sema<'_, '_> {
                 }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
                     Ok(x) => conv_args.push(x),
+                    // C17 6.5.2.2p7: the argument is converted as if by
+                    // assignment; clang notes the parameter.
+                    Err(err) if conv::c_assign::is_c_assign_diag(err.id) => {
+                        let mut d = err.diag_at(self, self.begin_loc(a));
+                        if let Some(&p) = pdecls.get(i) {
+                            d = d.with_note(self.param_decl_note(p));
+                        }
+                        self.emit(d);
+                        match err.recovered {
+                            Some(x) => conv_args.push(x),
+                            None => return None,
+                        }
+                    }
                     Err(err) => {
                         // clang reports an ambiguous or deleted
                         // user-defined conversion of the selected

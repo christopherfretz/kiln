@@ -784,7 +784,7 @@ impl<'a> Cg<'a> {
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
-                    if ast.modules.active && ast.decls.get(d).kind() == DeclKind::CXXRecord {
+                    if ast.modules.active {
                         self.emit_module_class_defs(d, 0)?;
                     }
                 }
@@ -944,10 +944,19 @@ impl<'a> Cg<'a> {
         if depth > 256
             || n.has(DeclFlags::INVALID)
             || n.has(DeclFlags::DEPENDENT_CTX)
-            || ast.templ_link(d).get().is_some()
             || ast.definition(d) != Some(d)
         {
             return Ok(());
+        }
+        // An explicit specialization's members are ordinary definitions
+        // ([temp.expl.spec]/5), an instantiation's are not.
+        match ast.templ_link(d).get() {
+            None => {}
+            Some((TemplLinkKind::Specialization, _))
+                if ast
+                    .spec_info(d)
+                    .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization) => {}
+            Some(_) => return Ok(()),
         }
         let members: Vec<DeclId> = ast.decls.members(d).collect();
         for m in members {
@@ -968,7 +977,9 @@ impl<'a> Cg<'a> {
                         self.emit_global_fn(f)?;
                     }
                 }
-                DeclKind::CXXRecord => self.emit_module_class_defs(m, depth + 1)?,
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_module_class_defs(m, depth + 1)?;
+                }
                 _ => {}
             }
         }
@@ -1289,6 +1300,12 @@ impl<'a> Cg<'a> {
 
     pub fn fn_is_inline(&self, d: DeclId) -> bool {
         let ast = self.ast;
+        // C: an inline function is discardable only when internal or an
+        // inline definition; an external one is a strong definition.
+        if self.opts.c.is_some() {
+            return self.c_inline_specified(d)
+                && (self.fn_internal(d) || self.c_inline_definition_only(ast.first(d)));
+        }
         self.is_implicit_instantiation(d)
             || ast.redecls_of(d).any(|r| {
                 ast.decls.function(r).is_some_and(|f| {
@@ -1358,6 +1375,52 @@ impl<'a> Cg<'a> {
     fn defined_elsewhere(&self, first: DeclId) -> bool {
         self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
             || self.is_gnu_inline_fn(first)
+            || self.c_inline_definition_only(first)
+    }
+
+    /// C: some declaration of function `d` is `inline`.
+    fn c_inline_specified(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_inline()))
+    }
+
+    /// C: function `first`, with external linkage, has an inline
+    /// definition that is not externally visible, so another translation
+    /// unit provides the symbol (clang
+    /// `FunctionDecl::isInlineDefinitionExternallyVisible` false;
+    /// spec/landed/sema-conv/WP-1276.md "inline"). C99 ([6.7.4]/7): every
+    /// file-scope declaration is `inline` and none `extern`. GNU89
+    /// (`-fgnu89-inline`, before C99, or `gnu_inline`): the definition is
+    /// `extern inline` and no declaration is `inline` without `extern`.
+    fn c_inline_definition_only(&self, first: DeclId) -> bool {
+        let ast = self.ast;
+        if self.opts.c.is_none() || self.fn_internal(first) || !self.c_inline_specified(first) {
+            return false;
+        }
+        let spec = |r: DeclId| ast.decls.function(r).map(|f| f.spec);
+        let ext = |s: kiln_ast::decl::FnSpec| s.storage() == kiln_ast::decl::FnStorage::Extern;
+        let gnu =
+            self.opts.gnu89_inline || self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE);
+        if gnu {
+            let def = ast
+                .redecls_of(first)
+                .find(|&r| ast.decls.function(r).is_some_and(|f| f.body.is_some()));
+            let Some(def_spec) = def.and_then(spec) else { return false };
+            if !(def_spec.is_inline() && ext(def_spec)) {
+                return false;
+            }
+            return !ast
+                .redecls_of(first)
+                .any(|r| spec(r).is_some_and(|s| s.is_inline() && !ext(s)));
+        }
+        let file_scope = |r: DeclId| {
+            ast.decls
+                .lexical_ctx(r)
+                .is_some_and(|c| ast.decls.get(c).kind() == DeclKind::TranslationUnit)
+        };
+        !ast.redecls_of(first)
+            .filter(|&r| file_scope(r))
+            .any(|r| spec(r).is_some_and(|s| !s.is_inline() || ext(s)))
     }
 
     /// clang `basicGVALinkageForFunction`'s GNU inline rule: in C++ an
@@ -1369,7 +1432,8 @@ impl<'a> Cg<'a> {
     /// library, provides the symbol (spec/codegen.md "GNU inline
     /// functions").
     fn is_gnu_inline_fn(&self, first: DeclId) -> bool {
-        self.ast.decls.function(first).is_some()
+        self.opts.c.is_none()
+            && self.ast.decls.function(first).is_some()
             && self.has_fn_attr(first, kiln_ast::attr::AttrKind::GNU_INLINE)
             && !self.fn_internal(first)
     }
@@ -1904,12 +1968,24 @@ impl<'a> Cg<'a> {
     /// The lowered signature of function type `fty` with an implicit
     /// object parameter of type `this*` when `this` is set.
     pub fn sig_this(&mut self, fty: QualType, extern_c: bool, this: Option<DeclId>) -> Sig {
+        let variadic = self.ast.types.proto(fty).expect("function prototype").variadic();
+        self.sig_this_va(fty, extern_c, this, variadic)
+    }
+
+    /// [`Cg::sig_this`], variadic as `variadic` says (a C definition
+    /// without a prototype is not).
+    pub(crate) fn sig_this_va(
+        &mut self,
+        fty: QualType,
+        extern_c: bool,
+        this: Option<DeclId>,
+        variadic: bool,
+    ) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
         let params: Vec<QualType> = ast.types.params(&p).to_vec();
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
-        let variadic = p.variadic();
         let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
         let info =
             self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);
@@ -2021,15 +2097,21 @@ impl<'a> Cg<'a> {
     ) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
-        let params: Vec<QualType> = ast.types.params(&p).to_vec();
+        // clang `arrangeFreeFunctionCall`: a call through a C function
+        // type without a prototype requires every (promoted) argument, so
+        // the call's IR type is not variadic.
+        let no_proto = p.info().no_proto();
+        let params: Vec<QualType> =
+            if no_proto { args.to_vec() } else { ast.types.params(&p).to_vec() };
         let ret = p.ret();
         let mut all = params.clone();
         all.extend_from_slice(&args[params.len().min(args.len())..]);
         let t = this.is_some();
-        let (cc, no_csr, va) = (p.info().cc(), p.info().no_caller_saved_regs(), p.variadic());
+        let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
+        let va = p.variadic() && !no_proto;
         let info = self.classify(ret, &all, params.len(), !extern_c, t, cc, va);
         let decl_info = self.classify(ret, &params, params.len(), !extern_c, t, cc, va);
-        let fn_ty = self.fn_type(&decl_info, t, p.variadic());
+        let fn_ty = self.fn_type(&decl_info, t, va);
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr }
     }
@@ -3132,9 +3214,17 @@ impl<'a> Cg<'a> {
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
         let section = self.decl_section(d);
+        // C `-fcommon`: only tentative definitions, no section or TLS
+        // (clang `isVarDeclStrongDefinition`).
+        let common = self.opts.common
+            && self.opts.c.is_some()
+            && section.is_none()
+            && ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
+            && ast.redecls_of(d).all(|r| ast.decls.var(r).is_some_and(|v| v.init.is_none()))
+            && !self.var_is_tls(d);
         let sanitizer = self.global_sanitizer(d, g, needs_init);
         let gv = self.m.global_mut(g);
-        gv.is_constant = constant;
+        gv.is_constant = constant && !common;
         gv.align = Some(align);
         gv.visibility = vis;
         gv.section = section;
@@ -3157,6 +3247,9 @@ impl<'a> Cg<'a> {
             gv.linkage = Linkage::WeakOdr;
             gv.dso_local = true;
             gv.comdat = comdat;
+        } else if common {
+            gv.linkage = Linkage::Common;
+            gv.dso_local = true;
         } else {
             gv.linkage = Linkage::External;
             gv.dso_local = true;

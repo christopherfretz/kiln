@@ -986,6 +986,11 @@ impl Parser<'_, '_> {
                     self.s.error(DiagId::parse_c99_complex, loc);
                     ds.set_complex(loc)
                 }
+                // C `auto` is a storage class (C89 3.5.1); C23 also deduces
+                // with it when no type-specifier follows (C23 6.7.10).
+                Kw::Auto if self.s.is_c() && !self.c23_auto_deduces() => {
+                    ds.set_storage(StorageSpec::Auto, loc)
+                }
                 Kw::Auto => ds.set_base(TypeSpecKind::Auto, None, loc),
                 Kw::GnuAutoType => {
                     // clang `ext_auto_type` (`-Wgnu-auto-type`).
@@ -1685,6 +1690,29 @@ impl Parser<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> bool {
+        // C89 3.5.2 implicit `int` (`register r`, `static x = 4`): with no
+        // type-specifier yet, a name followed by what may follow a
+        // declarator-id is the declarator-id (clang's `ParseImplicitInt`,
+        // `isValidAfterIdentifierInDeclarator`).
+        if self.s.is_c()
+            && !self.s.c_at_least(kiln_lex::CStd::C23)
+            && !ds.has_type_specifier()
+            && matches!(
+                Self::punct_of(self.tok_at(end)),
+                Some(
+                    Punct::LSquare
+                        | Punct::LParen
+                        | Punct::RParen
+                        | Punct::Semi
+                        | Punct::Comma
+                        | Punct::Equal
+                        | Punct::LBrace
+                        | Punct::Colon
+                )
+            )
+        {
+            return false;
+        }
         if !self.unknown_type_follows(end, ctx) {
             return false;
         }
@@ -1699,6 +1727,14 @@ impl Parser<'_, '_> {
             } else {
                 ty
             };
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
+        if let Some(ty) = self.s.c_tag_without_keyword(name, loc) {
+            self.bump();
             if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
                 ds.invalid = true;
                 self.spec_error(&e, loc);
@@ -2057,7 +2093,8 @@ impl Parser<'_, '_> {
         let mut attrs = Vec::new();
         self.parse_attributes(&mut attrs);
         while keyword != TagKeyword::Enum && self.at_kw(Kw::Nullable) {
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             attrs.push(self.s.act_on_class_nullable(loc));
             self.parse_attributes(&mut attrs);
         }
@@ -2171,7 +2208,11 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_unqualified_id);
             ds.invalid = true;
         }
-        let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
+        // clang `ParseEnumSpecifier`: a `:` after the name in a type-name
+        // is not an enum-base (`_Generic(a, enum E: 1)`).
+        let base_allowed = !(self.s.is_c() && ctx == DeclaratorContext::TypeName);
+        let fixed =
+            if keyword == TagKeyword::Enum && base_allowed { self.parse_enum_base() } else { None };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
             && !qual_failed
@@ -2559,7 +2600,8 @@ impl Parser<'_, '_> {
         }
         let first = self.bump().span.lo;
         while self.pos() < i {
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             let d = self.s.diag(DiagId::parse_duplicate_class_virt_specifier, loc).arg("final");
             self.emit(d);
         }
@@ -2591,7 +2633,8 @@ impl Parser<'_, '_> {
                 }
                 break;
             };
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             let mut attrs = Vec::new();
             self.parse_attributes(&mut attrs);
             let mut init = None;
@@ -2792,7 +2835,8 @@ impl Parser<'_, '_> {
                 Some(Kw::Volatile) => (Quals::VOLATILE, "volatile"),
                 Some(Kw::Restrict) => (Quals::RESTRICT, "restrict"),
                 Some(k) if nullability_kw(k).is_some() => {
-                    let loc = self.bump().span.lo;
+                    let loc = self.loc();
+                    self.bump();
                     if let Some(kind) = nullability_kw(k) {
                         nulls.push(NullSpec { kind, loc });
                     }
@@ -2804,7 +2848,8 @@ impl Parser<'_, '_> {
                 }
                 _ => return (q, nulls),
             };
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             if q.contains(add) {
                 let d = self.s.diag(DiagId::parse_duplicate_decl_spec, loc).arg(sp);
                 self.emit(d);
@@ -2863,7 +2908,8 @@ impl Parser<'_, '_> {
             if self.at_kw(Kw::Restrict) {
                 self.bump();
             } else if let Some(kind) = self.kw().and_then(nullability_kw) {
-                let loc = self.bump().span.lo;
+                let loc = self.loc();
+                self.bump();
                 nulls.push(NullSpec { kind, loc });
             } else if self.at_attr() {
                 self.skip_attributes();
@@ -3210,7 +3256,8 @@ impl Parser<'_, '_> {
                 closed = false;
                 break;
             };
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             let mut attrs = Vec::new();
             if self.at_cxx11_attr() {
                 self.parse_attributes(&mut attrs);
@@ -3332,6 +3379,14 @@ impl Parser<'_, '_> {
         let delayable = d.ctx == DeclaratorContext::Member && d.chunks.is_empty();
         let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
+        // C17 6.7.6.3p14: before C23 empty parentheses declare a function
+        // without a prototype.
+        let pre_c23 = self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23);
+        let no_proto = pre_c23 && self.at(Punct::RParen);
+        if pre_c23 && d.chunks.is_empty() && d.name.is_some() && self.at_knr_identifier_list() {
+            self.parse_knr_identifier_list(d, open, ambiguous);
+            return;
+        }
         self.s.act_on_start_prototype();
         let (params, variadic) = self.parse_param_clause(d, delay_args, DeclSite::Plain);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
@@ -3348,7 +3403,175 @@ impl Parser<'_, '_> {
             ref_qual,
             trailing,
             ambiguous,
+            no_proto,
         });
+    }
+
+    /// C before C23: an identifier that names no type, followed by `,` or
+    /// `)`, starts a K&R identifier list (clang
+    /// `isFunctionDeclaratorIdentifierList`; C17 6.7.6.3p11).
+    /// At C `auto`: true if it is C23 type deduction (`auto x = 1;`), the
+    /// next token not starting a type-specifier (`auto int x;`).
+    fn c23_auto_deduces(&self) -> bool {
+        let next = self.pos() + 1;
+        self.s.c_at_least(kiln_lex::CStd::C23)
+            && !self.kw_of(self.tok_at(next)).is_some_and(is_type_specifier_kw)
+            && !self.names_type_at(next)
+    }
+
+    /// C17 6.9.1p6: a K&R definition's declaration list, before its body
+    /// (clang warns the definition has no prototype).
+    fn parse_knr_definition_params(&mut self, d: &mut Declarator) {
+        if d.knr_idents.as_ref().is_some_and(|i| !i.is_empty())
+            && (self.at_knr_declaration_list() || self.at(Punct::LBrace))
+        {
+            self.parse_knr_param_declarations(d);
+            let m = self.s.diag(DiagId::sema_c_non_prototype_definition, d.name_loc());
+            self.emit(m);
+        }
+    }
+
+    /// C17 6.7.6.3p3: an identifier list in a declaration that is not a
+    /// definition (clang `err_ident_list_in_fn_declaration`).
+    fn knr_ident_list_outside_definition(&mut self, d: &Declarator) {
+        if let Some(&(_, l)) = d.knr_idents.as_ref().and_then(|i| i.first()) {
+            self.s.error(DiagId::sema_c_ident_list_in_fn_declaration, l);
+        }
+    }
+
+    fn at_knr_identifier_list(&self) -> bool {
+        self.ident().is_some()
+            && self.kw_of(self.tok()).is_none()
+            && !self.names_type_at(self.pos())
+            && matches!(Self::punct_of(self.peek(1)), Some(Punct::Comma | Punct::RParen))
+    }
+
+    /// The identifier list of a K&R function declarator after its `(`
+    /// (clang `ParseFunctionDeclaratorIdentifierList`): a function type
+    /// without a prototype whose parameters the definition's declaration
+    /// list types ([`Parser::parse_knr_param_declarations`]).
+    fn parse_knr_identifier_list(&mut self, d: &mut Declarator, open: Loc, ambiguous: bool) {
+        let mut ids: Vec<(Symbol, Loc)> = Vec::new();
+        while let Some(name) = self.ident() {
+            let loc = self.loc();
+            self.bump();
+            if ids.iter().any(|&(n, _)| n == name) {
+                let m = self
+                    .s
+                    .diag(DiagId::sema_param_redefinition, loc)
+                    .arg(self.s.ast.symbols().as_str(name).to_owned());
+                self.emit(m);
+            } else {
+                ids.push((name, loc));
+            }
+            if self.eat(Punct::Comma).is_none() {
+                break;
+            }
+        }
+        let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
+        let (exc, quals, ref_qual, trailing) = self.parse_function_qualifiers(d, false);
+        d.chunks.push(Chunk::Function {
+            params: Vec::new(),
+            variadic: false,
+            loc: open,
+            rparen,
+            exc,
+            quals,
+            ref_qual,
+            trailing,
+            ambiguous,
+            no_proto: true,
+        });
+        d.knr_idents = Some(ids);
+    }
+
+    /// The declaration list of a K&R function definition, up to its `{`
+    /// (C17 6.9.1p6; clang `ParseKNRParamDeclarations` and
+    /// `ActOnFinishKNRParamDeclarations`): each declarator names an
+    /// identifier of the list, once; an undeclared one is an `int`. The
+    /// parameters, in list order, replace the function chunk's.
+    pub(crate) fn parse_knr_param_declarations(&mut self, d: &mut Declarator) {
+        let Some(ids) = d.knr_idents.clone() else { return };
+        let mut decl: Vec<Option<(DeclSpec, Declarator)>> = vec![None; ids.len()];
+        while !self.at(Punct::LBrace) && !self.at_eof() {
+            let start = self.loc();
+            let ds = self.parse_decl_specifiers(DeclaratorContext::Prototype);
+            if ds.is_empty() {
+                self.error_here(DiagId::parse_expected_semi_declaration);
+                self.skip_until(&[Punct::LBrace], false, true);
+                break;
+            }
+            loop {
+                let mut pd = Declarator::new(DeclaratorContext::Prototype, start);
+                self.parse_declarator_in_group(&ds, &mut pd);
+                if let Some((n, l)) = pd.name {
+                    match ids.iter().position(|&(m, _)| m == n) {
+                        None => {
+                            let m = self
+                                .s
+                                .diag(DiagId::sema_c_knr_param_missing, l)
+                                .arg(self.s.ast.symbols().as_str(n).to_owned());
+                            self.emit(m);
+                        }
+                        Some(i) => {
+                            if let Some((_, prev)) = &decl[i] {
+                                let m =
+                                    self.s
+                                        .diag(DiagId::sema_param_redefinition, l)
+                                        .arg(self.s.ast.symbols().as_str(n).to_owned())
+                                        .with_note(self.s.diag(
+                                            DiagId::note_previous_declaration,
+                                            prev.name_loc(),
+                                        ));
+                                self.emit(m);
+                            } else {
+                                decl[i] = Some((ds.clone(), pd));
+                            }
+                        }
+                    }
+                }
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+            }
+            if self.eat(Punct::Semi).is_none() {
+                self.error_here(DiagId::parse_expected_semi_declaration);
+                self.skip_until(&[Punct::Semi, Punct::LBrace], false, true);
+                let _ = self.eat(Punct::Semi);
+            }
+        }
+        // clang reports the undeclared ones last to first.
+        if self.s.c_at_least(kiln_lex::CStd::C99) {
+            for (i, &(n, l)) in ids.iter().enumerate().rev() {
+                if decl[i].is_none() {
+                    let m = self
+                        .s
+                        .diag(DiagId::sema_c_knr_param_not_declared, l)
+                        .arg(self.s.ast.symbols().as_str(n).to_owned());
+                    self.emit(m);
+                }
+            }
+        }
+        self.s.act_on_start_prototype();
+        let mut params = Vec::with_capacity(ids.len());
+        for (slot, &(n, l)) in decl.into_iter().zip(&ids) {
+            let (ds, pd) = slot.unwrap_or_else(|| {
+                let mut ds = DeclSpec::default();
+                let _ = ds.set_base(TypeSpecKind::Int, None, l);
+                let mut pd = Declarator::new(DeclaratorContext::Prototype, l);
+                pd.name = Some((n, l));
+                (ds, pd)
+            });
+            let mut p = self.param_declarator(&ds, &pd, true);
+            self.s.act_on_prototype_param(&mut p);
+            p.range = (pd.loc, pd.name_loc());
+            params.push(p);
+        }
+        self.s.act_on_end_prototype();
+        let params = self.s.act_on_param_list(params);
+        if let Some(Chunk::Function { params: ps, .. }) = d.chunks.first_mut() {
+            *ps = params;
+        }
     }
 
     /// The parameter-declaration-clause of a function declarator
@@ -4260,6 +4483,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "clang's ParseDeclGroup in its order")]
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
@@ -4316,6 +4540,9 @@ impl Parser<'_, '_> {
             // an initializer (clang's order of checks:
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
+                if allow_fn_def {
+                    self.parse_knr_definition_params(&mut d);
+                }
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
                     self.parse_function_definition_after_declarator(
@@ -4332,6 +4559,7 @@ impl Parser<'_, '_> {
                     return decls;
                 }
             }
+            self.knr_ident_list_outside_definition(&d);
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
             // and takes no initializer (`u1 &a, &b;` reports `a` only).
@@ -4531,7 +4759,8 @@ impl Parser<'_, '_> {
             } else {
                 return;
             };
-            let loc = self.bump().span.lo;
+            let loc = self.loc();
+            self.bump();
             let diag = self.s.diag(DiagId::parse_virt_specifier_outside_class, loc).arg(sp);
             self.emit(diag);
         }
@@ -4560,6 +4789,15 @@ impl Parser<'_, '_> {
 
     /// True at the start of a function-body or `= default` / `= delete`
     /// after a function declarator ([dcl.fct.def.general]/1).
+    /// A decl-specifier after a K&R declarator: its declaration list
+    /// (clang `isStartOfFunctionDefinition`).
+    fn at_knr_declaration_list(&self) -> bool {
+        match self.kw_of(self.tok()) {
+            Some(k) => is_decl_specifier_kw(k),
+            None => self.names_type_at(self.pos()),
+        }
+    }
+
     fn at_function_definition_start(&self) -> bool {
         match Self::punct_of(self.tok()) {
             Some(Punct::LBrace | Punct::Colon) => true,

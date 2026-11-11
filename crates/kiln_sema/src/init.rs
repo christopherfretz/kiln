@@ -997,6 +997,7 @@ impl Sema<'_, '_> {
             return e;
         }
         let class_src = self.ast.types.as_record(ety).is_some()
+            && !self.is_c()
             && !self.ast.types.is_reference(ty)
             && !self.expr_is_type_dependent(e)
             && !self.ast.types.is_dependent(ty);
@@ -1010,6 +1011,9 @@ impl Sema<'_, '_> {
             Err(err) => {
                 let d = self.init_failure_diag(&err, at, e);
                 self.emit(d);
+                if let Some(x) = err.recovered {
+                    return x;
+                }
                 let loc = self.ast.exprs.get(e).loc();
                 self.recover(ty, &[e], loc)
             }
@@ -1136,7 +1140,9 @@ impl Sema<'_, '_> {
     /// the initializer (`Args[0]->getSourceRange()`).
     fn init_failure_diag(&self, err: &conv::ConvError, at: Loc, e: ExprId) -> Diag {
         let d = err.diag_at(self, at);
-        if matches!(
+        if let Some(r) = err.range.filter(|_| conv::c_assign::is_c_assign_diag(err.id)) {
+            d.range(r)
+        } else if matches!(
             err.id,
             DiagId::sema_init_conversion_failed | DiagId::sema_reference_bind_failed
         ) {

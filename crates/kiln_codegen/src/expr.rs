@@ -153,7 +153,8 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 self.cast(CastOp::SExt, c, t)
             }
-            None if self.ast.types.is_sizeless(q) => {
+            // A sizeless predicate, or C's `int` comparison (C17 6.5.8p6).
+            None if self.ast.types.is_sizeless(q) || !self.is_bool(q) => {
                 let t = self.lty(q);
                 self.zext_or_same(c, t)
             }
@@ -1389,7 +1390,8 @@ impl Cg<'_> {
                 if self.is_complex(ast.exprs.get(l).ty())
                     || self.is_complex(ast.exprs.get(r).ty()) =>
             {
-                self.cx_compare(e)?
+                let c = self.cx_compare(e)?;
+                self.vec_cmp_result(c, ast.exprs.get(e).ty())
             }
             BinaryOp::EQ | BinaryOp::NE if self.is_mp(ast.exprs.get(l).ty()) => {
                 let lv = self.emit_scalar(l)?;
@@ -2774,7 +2776,12 @@ impl Cg<'_> {
         if !needs_init {
             return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, tb: Tb::Type });
         }
-        if n.kind() == ExprKind::MaterializeTemporaryExpr && !static_tmp {
+        // A C compound literal's object lives until its block ends (C17
+        // 6.5.2.5p5), not the full-expression: no lifetime markers, as
+        // clang's `EmitCompoundLiteralLValue`.
+        let c_literal = self.opts.c.is_some()
+            && ast.exprs.get(self.skip_parens(s)).kind() == ExprKind::CompoundLiteralExpr;
+        if n.kind() == ExprKind::MaterializeTemporaryExpr && !static_tmp && !c_literal {
             self.temporary_lifetime(e, s, tmp);
         }
         if self.is_aggregate(sq) {

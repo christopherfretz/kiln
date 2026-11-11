@@ -603,7 +603,23 @@ impl Cg<'_> {
             let info = sig.info.args[si].clone();
             si += 1;
             let loc = Some(ast.decls.get(p).loc());
-            vals.push(self.prolog_arg(&info.kind, pq, &mut arg_no, loc)?);
+            // C17 6.9.1p10: a K&R parameter arrives as its promoted type
+            // and is narrowed to its declared one (clang
+            // `emitArgumentDemotion`).
+            let sq = sig.params.get(i).copied().unwrap_or(pq);
+            let demote = self.opts.c.is_some()
+                && ast.types.canonical(sq).without_quals()
+                    != ast.types.canonical(pq).without_quals();
+            let pv = self.prolog_arg(&info.kind, if demote { sq } else { pq }, &mut arg_no, loc)?;
+            vals.push(match pv {
+                ParamVal::Direct(v) if demote => {
+                    let op =
+                        if ast.types.is_floating(pq) { CastOp::FPTrunc } else { CastOp::Trunc };
+                    let t = self.lty(pq);
+                    ParamVal::Direct(self.cast(op, v, t))
+                }
+                pv => pv,
+            });
             if let Some(&(_, t, _)) = object_sizes.iter().find(|o| o.0 == i) {
                 let info = sig.info.args[si].clone();
                 si += 1;
@@ -780,8 +796,11 @@ impl Cg<'_> {
 
         // GenerateCode: falling off the end of a value-returning function
         // is `llvm.trap` + `unreachable` at -O0 and `unreachable` alone
-        // above it.
+        // above it, in C++ only: in C it is undefined only if the caller
+        // uses the value (C17 6.9.1p12), so the return block returns the
+        // uninitialized return slot.
         if !is_main
+            && self.opts.c.is_none()
             && thunk.is_none()
             && ast.closure_thunk(d).is_none()
             && self.f.ret_kind != RetKind::Void

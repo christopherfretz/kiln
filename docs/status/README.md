@@ -56,6 +56,12 @@ Open-source projects and platforms:
   (`.github/workflows/sweep.yml`): libc++ 22 and ten projects against the
   clang 19 control, with x86_64-only triage.
 
+C mode:
+
+- `c-mode.md`: `kiln` on C code (WP-1282): the C OSS rows against clang 19,
+  gcc.c-torture at gnu23 and gnu17 (`cargo xtask gcc-torture --report`),
+  and the failure clusters ranked for wave 2.
+
 Performance:
 
 - `perf.md`: `cargo xtask bench` against clang 19 (generated; do not edit

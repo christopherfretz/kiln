@@ -47,6 +47,30 @@ impl FuncInfo {
         self.0 & Self::VARIADIC != 0
     }
 
+    /// True for a C function type without a prototype (C17 6.7.6.3p14:
+    /// `int f()` before C23; clang `FunctionNoProtoType`). Encoded as the
+    /// otherwise unused ref-qualifier value 3, so it never coexists with a
+    /// ref-qualifier; such a type is also variadic with no parameters, so
+    /// a call applies the default argument promotions and the IR type is
+    /// `ret (...)`.
+    #[inline]
+    pub const fn no_proto(self) -> bool {
+        (self.0 >> Self::REF_SHIFT) & 3 == 3
+    }
+
+    /// With the no-prototype marker set (and the variadic bit, see
+    /// [`FuncInfo::no_proto`]) or cleared.
+    #[must_use]
+    pub const fn with_no_proto(self, v: bool) -> FuncInfo {
+        if v {
+            FuncInfo(self.0 | (3 << Self::REF_SHIFT) | Self::VARIADIC)
+        } else if self.no_proto() {
+            FuncInfo(self.0 & !(3 << Self::REF_SHIFT))
+        } else {
+            self
+        }
+    }
+
     /// The method's ref-qualifier.
     #[inline]
     pub const fn ref_qual(self) -> RefQual {

@@ -959,6 +959,15 @@ impl Sema<'_, '_> {
         let at = self.next_path_loc(&cx.path, 0, l);
         let n = *self.ast.exprs.get(l);
         let is_mte = n.kind() == ExprKind::MaterializeTemporaryExpr;
+        // A C compound literal is no temporary: it lives until its block
+        // ends (C17 6.5.2.5p5).
+        if is_mte
+            && self.is_c()
+            && self.ast.exprs.get(self.ignore_parens(self.ast.exprs.operand(l))).kind()
+                == ExprKind::CompoundLiteralExpr
+        {
+            return false;
+        }
         let mut gsl_temp = false;
         let mut local_owner = false;
         if cx.only_gsl() {

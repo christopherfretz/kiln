@@ -829,6 +829,100 @@ fn kind2_declaration_image_packs() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+const IMGCS: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-cspec.cppm");
+const IMGCS_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-class-spec-run.cpp");
+
+/// WP-1283 (§11.11 "Templates as patterns"): explicit and partial class
+/// template specializations come from the image. With the unit's source
+/// blanked, an importer still matches and instantiates them, its IR is
+/// the replay's, and an error inside an imported partial
+/// specialization's pattern is diagnosed exactly as after a replay, at
+/// the array declarator's `[` in the module.
+#[test]
+fn kind2_declaration_image_class_specs() {
+    let d = scratch("image-class-specs");
+    std::fs::write(d.join("c.cppm"), IMGCS).unwrap();
+    std::fs::write(d.join("u.cpp"), IMGCS_RUN).unwrap();
+    std::fs::write(
+        d.join("err.cpp"),
+        "import imgcs;\ncs::E<void *> e;\ncs::B<void> b;\ncs::B<int> c;\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "c.cppm", "-o", "c.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    ok(&d, &["-c", "c.pcm", "-o", "c.o"]);
+    blank_source(&d, "c.pcm", "blank.pcm");
+
+    let notes = image_notes(&d, &["-fmodule-file=imgcs=blank.pcm", "u.cpp", "c.o", "-o", "u"]);
+    assert_eq!(notes, ["note: imported 'imgcs' from its declaration image"]);
+    let out = Command::new(d.join("u")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "9 40 5 3 2 0 8\n");
+
+    let mut irs = Vec::new();
+    for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "c.pcm")] {
+        std::fs::copy(d.join(pcm), d.join("m.pcm")).unwrap();
+        ok(&d, &[flag, "-fmodule-file=imgcs=m.pcm", "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+        irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+    }
+    assert!(irs[0] == irs[1], "IR differs between the image and the replay");
+
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgcs=c.pcm", "err.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(
+        errs[0].contains("c.cppm:30:41: error: array has incomplete element type"),
+        "{}",
+        errs[0]
+    );
+    assert!(errs[0].contains("in instantiation of template class 'cs::E<void *>'"), "{}", errs[0]);
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
+/// WP-1283: a static assertion in a class template is checked again by
+/// each instantiation; the image does not carry it yet, so the unit is
+/// written without one and an importer still rejects a failing
+/// instantiation (the image once dropped the assertion silently).
+#[test]
+fn kind2_declaration_image_static_assert_in_template() {
+    let d = scratch("image-static-assert");
+    std::fs::write(
+        d.join("s.cppm"),
+        "export module imgsa;\nexport namespace sa {\n\
+         template <class T> struct P { static_assert(sizeof(T) > 1, \"P needs a wide T\"); };\n\
+         template <class T> struct E { };\n\
+         template <class T> struct E<T *> { static_assert(sizeof(T) > 1, \"E needs a wide T\"); int x; };\n\
+         }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        "import imgsa;\nsa::P<short> a;\nsa::P<char> p;\nsa::E<char *> e;\nsa::E<long *> b;\n",
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "s.cppm", "-o", "s.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("(no declaration image: a static assertion in a template"),
+        "{}",
+        o.stderr
+    );
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgsa=s.pcm", "u.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(errs[0].contains("s.cppm:3:45: error: static assertion failed"), "{}", errs[0]);
+    assert!(errs[0].contains("E needs a wide T"), "{}", errs[0]);
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
 const IMGA: &str =
     include_str!("../../../tests/conformance/module.interface/Inputs/img-alias.cppm");
 const IMGA_RUN: &str =
@@ -1666,8 +1760,13 @@ fn kind2_declaration_image_fallback() {
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; };\n\
-             template <> struct B<int> { int w; };\n",
-            "an explicit or partial specialization",
+             template struct B<int>;\n",
+            "an explicit instantiation",
+        ),
+        (
+            "export module f;\nexport template <class T> struct B {};\n\
+             template <class T> struct B<T *>;\ntemplate <class T> struct B<T *> { T v; };\n",
+            "a redeclared partial specialization",
         ),
         (
             "export module f;\nexport template <class T = int> struct B;\n\
@@ -1684,7 +1783,7 @@ fn kind2_declaration_image_fallback() {
         ),
         (
             "export module f;\nexport template <int N> struct B { static constexpr int v = N; };\n\
-             export inline int g() { return B<2>::v; }\n",
+             export inline int g() { return B<1 + 1>::v; }\n",
             "a template argument the image does not carry",
         ),
         (

@@ -317,8 +317,10 @@ pub fn type_char_literal(
     s: &Sema<'_, '_>,
     lit: &CharLiteral<'_>,
 ) -> Result<(QualType, u32), LiteralError> {
-    let _ = s;
     let ty = match lit.ty {
+        // C 6.4.4.4p10: an integer character constant has type `int`
+        // (its value is the `char`'s, sign-extended as the lexer does).
+        CharType::Char | CharType::Int if s.is_c() => QualType::INT,
         CharType::Char => QualType::CHAR,
         CharType::Int => QualType::INT,
         CharType::WChar => QualType::WCHAR,
@@ -326,8 +328,26 @@ pub fn type_char_literal(
         CharType::Char16 => QualType::CHAR16,
         CharType::Char32 => QualType::CHAR32,
     };
+    let ty = c_char_type(s, ty);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "bit pattern")]
     Ok((ty, lit.value as u32))
+}
+
+/// C has no `wchar_t`, `char8_t`, `char16_t` or `char32_t` builtin: they
+/// are the target's integer types (clang's `getFromTargetType` for
+/// `WideCharTy`/`Char16Ty`/`Char32Ty`; C23 6.4.4.5: `u8` is `unsigned
+/// char`). Identity in C++.
+pub(crate) fn c_char_type(s: &Sema<'_, '_>, q: QualType) -> QualType {
+    if !s.is_c() {
+        return q;
+    }
+    match q {
+        QualType::WCHAR if s.target.wchar_signed => QualType::INT,
+        QualType::WCHAR | QualType::CHAR32 => QualType::UINT,
+        QualType::CHAR16 => QualType::USHORT,
+        QualType::CHAR8 => QualType::UCHAR,
+        _ => q,
+    }
 }
 
 /// The element type of a string literal of `encoding` ([lex.string]/6):
@@ -350,6 +370,11 @@ pub fn string_literal_elem(char8: bool, encoding: Encoding) -> QualType {
 /// including the terminating NUL ([lex.string]/10): `const charT[units]`.
 pub fn string_literal_type(s: &mut Sema<'_, '_>, encoding: Encoding, units: u64) -> QualType {
     let elem = string_literal_elem(s.char8(), encoding);
+    // C 6.4.5p6: the array elements are not const (`char[N]`).
+    if s.is_c() {
+        let elem = c_char_type(s, elem);
+        return s.ast.types.constant_array(elem, units, None);
+    }
     let t = &mut s.ast.types;
     let c = t.qualify(elem, Quals::CONST);
     t.constant_array(c, units, None)
