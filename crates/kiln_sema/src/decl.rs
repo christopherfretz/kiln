@@ -2944,6 +2944,7 @@ impl Sema<'_, '_> {
         {
             return Some(p);
         }
+        let ns = self.ast.first(ns);
         self.local_externs.iter().rev().find(|&&(n, s, _)| n == ns && s == name).map(|x| x.2)
     }
 
@@ -3011,6 +3012,7 @@ impl Sema<'_, '_> {
                 return Some(p);
             }
         }
+        let ns = self.ast.first(ns);
         let locals: Vec<DeclId> = self
             .local_externs
             .iter()
@@ -3159,6 +3161,7 @@ impl Sema<'_, '_> {
             && !self.in_template()
             && let Some(ns) = self.enclosing_namespace()
         {
+            let ns = self.ast.first(ns);
             self.local_externs.push((ns, name, d));
         }
     }
@@ -6589,7 +6592,10 @@ impl Sema<'_, '_> {
                     .decls
                     .iter()
                     .any(|&d| matches!(self.kind_of(d), DeclKind::Var | DeclKind::Function))
-                    || self.local_externs.iter().any(|&(n, s, _)| n == ns && s == name)
+                    || {
+                        let ns = self.ast.first(ns);
+                        self.local_externs.iter().any(|&(n, s, _)| n == ns && s == name)
+                    }
             })
         };
         let msg = if outer_linkage {
@@ -6712,6 +6718,46 @@ impl Sema<'_, '_> {
             .unwrap_or(p)
     }
 
+    /// A namespace-scope variable `n` declared at `at` with `storage`
+    /// over `p` of a compatible type, ahead of the redefinition check
+    /// (clang `MergeVarDecl`): `static` after a declaration with external
+    /// linkage ([dcl.stc]/4, `extern int v; static int v;`, also when `p`
+    /// is a block-scope `extern`, [basic.link]/6), or neither `static`
+    /// nor `extern` after a first declaration that is `static`
+    /// ([basic.link]/3). Whether one was reported (the declaration is
+    /// invalid and not merged).
+    fn diagnose_var_storage_redecl(
+        &mut self,
+        p: DeclId,
+        storage: VarStorage,
+        n: &str,
+        at: Loc,
+    ) -> bool {
+        let first_static = || {
+            self.ast
+                .decls
+                .var(self.ast.first(p))
+                .is_some_and(|v| v.spec.storage() == VarStorage::Static)
+        };
+        // A block-scope `extern` that redeclares nothing has external
+        // linkage ([basic.link]/6).
+        let first = self.ast.first(p);
+        let local_first =
+            self.ast.decls.get(first).ctx().is_some_and(|c| self.kind_of(c).is_function());
+        let external = || local_first || self.has_external_linkage(p);
+        let id = if storage == VarStorage::Static && external() {
+            DiagId::sema_static_non_static
+        } else if !matches!(storage, VarStorage::Extern | VarStorage::Static) && first_static() {
+            DiagId::sema_non_static_static
+        } else {
+            return false;
+        };
+        let msg = self.diag(id, at).arg(n);
+        let msg = self.note_prev(msg, p, self.is_var_definition(p));
+        self.emit(msg);
+        true
+    }
+
     /// A variable `n` redeclared at `at` over `p` of a compatible type:
     /// a second definition (`ext`: the new declaration is `extern`,
     /// `prev_def`: `p` is a definition; [basic.def.odr]/1) or a different
@@ -6808,18 +6854,22 @@ impl Sema<'_, '_> {
                     let prev_def = (self.is_var_definition(p) && !self.c_tentative(p))
                         || self.own_alias_attr(p).is_some();
                     let n = sym_str(self, name);
-                    self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
                     // C ([6.9.2]/2): without its initializer the new
                     // declaration is tentative; a redefinition is found
                     // when one is added (`c_init_redefines`).
                     let tentative = self.is_c() && !self.in_local_scope();
-                    if self.diagnose_var_redecl_conflict(
-                        p,
-                        &n,
-                        d.name_loc(),
-                        ext || tentative,
-                        prev_def,
-                    ) {
+                    let conflict =
+                        self.diagnose_var_storage_redecl(p, spec.storage(), &n, d.name_loc()) || {
+                            self.check_tls_redecl(p, spec.tls(), prev_def, d.name_loc(), &n);
+                            self.diagnose_var_redecl_conflict(
+                                p,
+                                &n,
+                                d.name_loc(),
+                                ext || tentative,
+                                prev_def,
+                            )
+                        };
+                    if conflict {
                         redefined = true;
                     } else {
                         prev_ok = Some(p);

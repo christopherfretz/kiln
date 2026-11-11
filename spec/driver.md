@@ -1952,14 +1952,13 @@ only whole, and every doubt replays the header.
   declaration of the consumer depends on, also means no image:
   - `a #pragma weak naming an undeclared identifier`: the pragma makes
     the consumer's definition weak.
-  - `a block-scope extern or function declaration`: a block-scope
-    `extern` or function declaration in a header body, when the header
-    does not also declare the entity at namespace scope. The consumer's
-    namespace-scope declaration would redeclare it ([basic.link]/6).
-    The namespace-scope declaration is matched by name, namespace and
-    (for a function) type. An example is libstdc++'s `std::terminate`
-    in `std::__terminate` once `<exception>` is included.
-  The census does not report this sema state.
+  The census does not report this sema state. A block-scope `extern`
+  or function declaration in a header body (libstdc++'s `terminate()`
+  in `std::__terminate`) is carried (WP-1293): the image writes it as
+  a local record of its function, in declaration order and linked to
+  its previous declaration, and lists Sema's `local_externs` in order,
+  so the consumer's namespace-scope declarations redeclare it
+  ([basic.link]/6) as replay's do (spec/modules.md §11.11).
 - **Producer `-v` note.** With `-v`, the producer says which path a
   `load` consumer will take: `note: precompiled header 'p.pch':
   consumers use its declaration image (N records)`, or `...: consumers

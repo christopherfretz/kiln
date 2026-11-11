@@ -19,13 +19,11 @@
 //! a malformed image found here is a hard error, never a partial build.
 
 use kiln_ast::DeclId;
-use kiln_ast::decl::DeclKind;
 use kiln_source::{FileId, Loc};
 
 use super::locs::{FileRec, Locs, validate};
 use super::{Census, Image, ImageCensus, ModuleImage, NONE, Writer, decode, encode, gated_names};
 use crate::Sema;
-use crate::lookup::LookupKind;
 
 /// A decoded and checked precompiled-header image, ready to be built.
 #[derive(Debug)]
@@ -83,34 +81,13 @@ impl Sema<'_, '_> {
     /// Sema state the header leaves behind that the image does not carry
     /// and a later declaration of the consumer depends on: a `#pragma
     /// weak` naming nothing declared yet (it makes the consumer's
-    /// definition weak), and a block-scope `extern` or function
-    /// declaration in the header's bodies whose entity the header does
-    /// not also declare at namespace scope (the consumer's
-    /// namespace-scope declaration redeclares it, [basic.link]/6, found
-    /// only through [`Sema::local_externs`]; one the header redeclares
-    /// is found by ordinary lookup, as libstdc++'s `std::terminate` in
-    /// `std::__terminate` is once `<exception>` is included). The image
-    /// of such a header would differ from replay, so it is not written.
+    /// definition weak). The image of such a header would differ from
+    /// replay, so it is not written. The header's block-scope `extern`
+    /// and function declarations ([`Sema::local_externs`]) are carried
+    /// (WP-1293, `localexterns.rs`).
     fn pch_uncarried_state(&self) -> Option<&'static str> {
         if !self.weak_pending.is_empty() {
             return Some("a #pragma weak naming an undeclared identifier");
-        }
-        // The namespace-scope declaration is matched by namespace (any
-        // block of it), name and, for a function, type, not by its
-        // redeclaration chain: kiln links a block-scope declaration only
-        // to a later declaration in the same namespace block.
-        let redeclared = |&(ns, name, d): &(DeclId, _, DeclId)| {
-            let (ns1, local) = (self.ast.first(ns), self.ast.decls.get(d));
-            self.lookup_in(ns, name, LookupKind::Ordinary).decls.iter().any(|&x| {
-                let n = self.ast.decls.get(x);
-                x != d
-                    && n.kind() == local.kind()
-                    && n.ctx().is_some_and(|c| self.ast.first(c) == ns1)
-                    && (n.kind() == DeclKind::Var || n.ty() == local.ty())
-            })
-        };
-        if !self.local_externs.iter().all(redeclared) {
-            return Some("a block-scope extern or function declaration");
         }
         None
     }

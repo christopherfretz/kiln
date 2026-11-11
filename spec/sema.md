@@ -557,8 +557,15 @@ translation unit that fails costs about what it costs clang:
   declaration retyped, a redeclaration group's latest moved).
 - **Block-scope `extern` declarations** are recorded in `local_externs`.
   A later namespace-scope declaration of the same name redeclares them,
-  per [basic.link]/6 and clang's local extern decls. A declaration in a
-  function template pattern is not recorded: only its instantiations
+  per [basic.link]/6 and clang's local extern decls. The key is the
+  namespace's first block, so a declaration in any later block of the
+  same namespace matches (`namespace s { void t() { int k(int); } }
+  namespace s { void k(int); }` is an overload on the return type, an
+  error); an inline namespace is a namespace of its own, so neither a
+  block-scope declaration in it and a later one in its enclosing
+  namespace nor the reverse link, as in clang. Test:
+  tests/conformance/basic.link/local-extern-namespace-blocks.cpp
+  (WP-1293). A declaration in a function template pattern is not recorded: only its instantiations
   redeclare the entity ([temp.spec.general]/2), so the pattern's `extern
   T e;` is never the previous declaration of `extern int e;` in
   `f<int>`, and a namespace-scope declaration after the pattern does not
@@ -908,6 +915,20 @@ Redeclaration and linkage rules:
   `a` in the block, invalid and with linkage (`dropped_qualified_locals`),
   as clang does. Test:
   tests/conformance/basic.scope.block/redeclaration-merge.cpp (WP-235).
+- **Namespace-scope variable redeclarations** (clang's `MergeVarDecl`;
+  [dcl.stc]/4, [basic.link]/3, [basic.link]/6): after the type check and
+  before the `thread_local` and redefinition checks, a `static`
+  declaration after one with external linkage (a block-scope `extern`
+  that redeclared nothing included: `inline int g() { extern int v;
+  return v; } static int v;`) is `static declaration of 'x' follows
+  non-static declaration`, and a declaration that is neither `static`
+  nor `extern` after a first declaration that is `static` is
+  `non-static declaration of 'x' follows static declaration`. The new
+  declaration is invalid and not merged; the note is at the declaration
+  found (`previous definition` when it is one). An earlier declaration
+  with internal linkage otherwise (an unnamed namespace, a namespace
+  scope `const`) is checked for redefinition only. Test:
+  tests/conformance/dcl.stc/static-after-non-static-var.cpp (WP-1293).
 - **Exception specifications** ([except.spec]/5): function types that
   differ only in their exception specification are not "different
   types". A new declaration that writes a specification incompatible

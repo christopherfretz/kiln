@@ -2984,7 +2984,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 16` since WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 18` since WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -3018,6 +3018,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
                                      (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
            cons reqs                 WP-1284 ("Constraints")
            written                   WP-1284 ("Dependent types and names")
+           lexterns:u32 u32*         WP-1293: block-scope declaration
+                                     records, in `local_externs` order
 cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
            params:u32 u32*) args:u32 carg*      ascending by rec
 carg    := 0 qref | 1 qref value:i128   a type, a value
@@ -3239,7 +3241,15 @@ record's kind byte is the index):
 - local declarations: variables (including `static` locals and
   range-`for` variables), labels and lifetime-extended temporaries
   (`const int& r = 4;`). A local is a declaration record whose context
-  is a function record; it is not in the lookup table.
+  is a function record; it is not in the lookup table. In a PCH, a
+  block-scope `extern` variable or function declaration (WP-1293) is a
+  local `Var` or `Function` record (kind 0, no body) written in
+  declaration order, not on first use, and its `prev` may name an
+  earlier record at namespace or block scope, so a later namespace-scope
+  declaration of the header links to it ([basic.link]/6). `lexterns`
+  lists them in Sema's `local_externs` order; the reader pushes each
+  with its enclosing namespace, so the consumer's declarations find
+  them as replay's do.
 
 Records are in post order, so every operand and sub-statement has a
 lower index. The one edge from an expression to a statement, a GNU
@@ -3426,7 +3436,12 @@ and builds the records before the unit's first token, in the global
 module (owner byte 0, the unit's own), so the unit may redeclare,
 define, specialize and instantiate them. `install_pragma_state` sets
 the header's Sema pragma stacks from the record (§11.13). The section
-layout is the module image's, so IMAGE_VERSION is unchanged.
+layout is the module image's; `lexterns` (WP-1293) is empty in a module
+image. The consumer also records the header's namespace-scope functions
+and variables with C language linkage in its "extern C context"
+(`Sema::extern_c`, [dcl.link]/6-7) as replay does, so its own C-linkage
+declarations in other namespaces redeclare or conflict with them
+(WP-1293).
 
 #### Part 2a coverage and follow-ups
 
