@@ -96,6 +96,9 @@ pub struct PpOptions {
     /// `-C`: keep comments in the output (they reach [`crate::Preprocessor::next`]
     /// as `TokKind::Comment` tokens, except inside directives).
     pub keep_comments: bool,
+    /// The output is preprocessed text (`-E`, `-M`): strict C89 lexes `//`
+    /// as two `/` tokens there ([`LexOptions::preprocessed_output`]).
+    pub preprocessed_output: bool,
     /// `-CC`: implies `-C`, and also keeps comments inside macro
     /// arguments. (Comments in `#define` bodies are not retained yet:
     /// clang keeps them, rewriting `//` comments as `/* */`.)
@@ -165,6 +168,7 @@ impl PpOptions {
             trigraphs: false,
             dollar_in_identifiers: true,
             keep_comments: false,
+            preprocessed_output: false,
             keep_macro_comments: false,
             predefines: String::new(),
             defines: Vec::new(),
@@ -194,6 +198,7 @@ impl PpOptions {
         o.dollar_in_identifiers = self.dollar_in_identifiers;
         o.keep_comments = self.keep_comments || self.keep_macro_comments;
         o.reflection = self.reflection;
+        o.preprocessed_output = self.preprocessed_output;
         o
     }
 

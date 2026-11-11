@@ -18,11 +18,12 @@ pub struct TestCase {
     pub is_header: bool,
 }
 
-/// The default test roots that exist under `root`. `tests/debuginfo`
+/// The default test roots that exist under `root` (`tests/c` is the C
+/// corpus, WP-1275). `tests/debuginfo`
 /// needs gdb and lldb-19: without them its tests are SKIPs (ERRORs under
 /// `KILN_REQUIRE_DEBUGGERS=1`), so it is a default root everywhere.
 pub fn default_roots(root: &Path) -> Vec<PathBuf> {
-    ["tests/conformance", "tests/debuginfo", "tests/differential", "tests/stress"]
+    ["tests/c", "tests/conformance", "tests/debuginfo", "tests/differential", "tests/stress"]
         .iter()
         .map(|d| root.join(d))
         .filter(|p| p.is_dir())

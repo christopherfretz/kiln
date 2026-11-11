@@ -69,6 +69,10 @@ pub struct LexOptions {
     /// (C++26 only). Default: `false`; like clang and GCC 16, the tokens
     /// exist only in reflection mode, so `^^` is otherwise `^` `^`.
     pub reflection: bool,
+    /// The tokens are for preprocessed output (`-E`). Only strict C89
+    /// reads it: there `//` starts no comment in preprocessed output
+    /// (clang 19; spec/lex.md "C mode"). Default: `false`.
+    pub preprocessed_output: bool,
 }
 
 impl LexOptions {
@@ -82,6 +86,7 @@ impl LexOptions {
             dollar_in_identifiers: true,
             keep_comments: false,
             reflection: false,
+            preprocessed_output: false,
         }
     }
 }

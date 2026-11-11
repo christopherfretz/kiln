@@ -10,16 +10,24 @@
 //! deltas on clang 19's. Lookups are binary searches in sorted static
 //! arrays; nothing is allocated per query. See `spec/pp.md` §"Feature
 //! queries" and §"clang compatibility level" for the normative description.
+//!
+//! In C ([`ClangFeatures::with_c`]) the answers are those of the C++
+//! standard the C standard lexes as, with the deltas of
+//! `features_c_table.rs` (`scripts/gen-features-c.sh`, from `clang-19 -x c`
+//! and `clang-22 -x c`) applied last (spec/pp.md §"Feature queries in C").
 
 use std::cmp::Ordering;
 
-use kiln_lex::Std;
+use kiln_lex::{CStd, Std};
 
 use crate::builtin::{FeatureQueries, TargetQuery};
 use crate::options::ClangCompat;
 
 #[path = "features_table.rs"]
 mod table;
+
+#[path = "features_c_table.rs"]
+mod c_table;
 
 pub use table::FeatureFlag;
 
@@ -34,6 +42,10 @@ struct Overlay(FeatureFlag, Kind, &'static str, u32, u16);
 /// (query, key, value, configuration mask).
 struct Delta(Kind, &'static str, u32, u16);
 
+/// A C answer that replaces the C++ one: (query, key, value, C
+/// configuration mask, bit `target * 10 + std * 2 + gnu`).
+struct CDelta(Kind, &'static str, u32, u32);
+
 /// The query a table answers. Declaration order is the overlay sort order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
@@ -45,6 +57,8 @@ enum Kind {
     DeclspecAttribute,
     CppAttribute,
     Keyword,
+    /// `__has_c_attribute` (C deltas only).
+    CAttribute,
 }
 
 /// The targets the tables were generated for, in configuration-bit order.
@@ -181,6 +195,8 @@ pub struct ClangFeatures {
     /// `LangOptions::NoBuiltinFuncs`): each library builtin among them
     /// answers 0, as `-fno-builtin` answers all of them (WP-808).
     no_builtin_fns: Vec<String>,
+    /// The C configuration bit (`target * 10 + std * 2 + gnu`), 0 in C++.
+    c_bit: u32,
 }
 
 /// Target builtins whose `__has_builtin` answer depends on the enabled
@@ -234,6 +250,7 @@ impl ClangFeatures {
             compat: ClangCompat::default(),
             target_builtins: None,
             no_builtin_fns: Vec::new(),
+            c_bit: 0,
         })
     }
 
@@ -249,6 +266,22 @@ impl ClangFeatures {
     #[must_use]
     pub fn with_compat(mut self, compat: ClangCompat) -> ClangFeatures {
         self.compat = compat;
+        self
+    }
+
+    /// These answers in C standard `c` (`gnu`: the GNU dialect): the
+    /// answers of the C++ standard these were made for (the one `c` lexes
+    /// as, spec/driver.md "Language mode") with clang's C deltas applied.
+    #[must_use]
+    pub fn with_c(mut self, c: CStd, gnu: bool) -> ClangFeatures {
+        let std = match c {
+            CStd::C89 => 0,
+            CStd::C99 => 1,
+            CStd::C11 => 2,
+            CStd::C17 => 3,
+            CStd::C23 => 4,
+        };
+        self.c_bit = 1 << (u32::from(self.triple.target) * 10 + std * 2 + u32::from(gnu));
         self
     }
 
@@ -362,6 +395,15 @@ impl ClangFeatures {
             v = self.overlay(table::OVERLAYS, f, kind, key, v);
             if clang22 {
                 v = self.overlay(table::COMPAT22_OVERLAYS, f, kind, key, v);
+            }
+        }
+        if self.c_bit != 0 {
+            let deltas = if clang22 { c_table::C22 } else { c_table::C19 };
+            let lo = deltas.partition_point(|d| (d.0, d.1) < (kind, key));
+            for d in deltas[lo..].iter().take_while(|d| d.0 == kind && d.1 == key) {
+                if d.3 & self.c_bit != 0 {
+                    v = d.2;
+                }
             }
         }
         v
@@ -520,6 +562,23 @@ impl FeatureQueries for ClangFeatures {
                 let name = if matches!(s, "gnu" | "clang") { strip_dunder(name) } else { name };
                 let key = format!("{s}::{name}");
                 self.lookup(Kind::CppAttribute, table::CPP_ATTRIBUTE, &key)
+            }
+        }
+    }
+
+    fn has_c_attribute(&self, scope: Option<&str>, name: &str) -> u32 {
+        // clang `normalizeAttrScopeName` / `normalizeAttrName`, as for
+        // `__has_cpp_attribute`.
+        let scope = scope.map(|s| match s {
+            "__gnu__" => "gnu",
+            "_Clang" => "clang",
+            s => s,
+        });
+        match scope {
+            None => self.lookup(Kind::CAttribute, &[], strip_dunder(name)),
+            Some(s) => {
+                let name = if matches!(s, "gnu" | "clang") { strip_dunder(name) } else { name };
+                self.lookup(Kind::CAttribute, &[], &format!("{s}::{name}"))
             }
         }
     }
