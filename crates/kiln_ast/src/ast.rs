@@ -616,6 +616,20 @@ impl Ast {
         Ok(())
     }
 
+    /// Makes `d` its entity's definition in place of an earlier one (a C
+    /// GNU89 `extern inline` definition that a later definition
+    /// replaces; clang `canRedefineFunction`).
+    ///
+    /// # Panics
+    /// If `d` is not redeclarable.
+    pub fn replace_definition(&mut self, d: DeclId) {
+        let r = self.decls.redecl(d).expect("replace_definition on a non-redeclarable decl");
+        if let Some(old) = self.redecls.replace_definition(r.group, d) {
+            self.decls.unmark_definition(old);
+        }
+        self.decls.mark_definition(d);
+    }
+
     // -- contexts and lookup (§4.3) ------------------------------------
 
     /// True for contexts whose names are visible in the enclosing context

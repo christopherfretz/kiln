@@ -452,10 +452,12 @@ impl Checker<'_, '_, '_> {
         let out_diag = (local && ast.needs_destruction(ty)).then_some(DiagId::note_exits_dtor);
         if let Some(init) = v.init
             && local
+            && !sema.is_c()
             && !self.contains_errors(init)
         {
             // [stmt.dcl]/3: bypassing a declaration with an initializer
-            // is ill-formed, unless it is default-initialization by a
+            // is ill-formed (C++ only: C forbids only a jump into the
+            // scope of a variably modified type, C23 6.8.7.2p1), unless it is default-initialization by a
             // trivial default constructor of a class with a trivial
             // destructor (a non-POD such class is only a C++98 error).
             in_diag = Some(DiagId::note_protected_by_variable_init);

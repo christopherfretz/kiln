@@ -55,6 +55,12 @@ impl Sema<'_, '_> {
         matches!(self.decl_linkage(d, 0), Linkage::External | Linkage::Module)
     }
 
+    /// Whether `d` has internal linkage (clang `getFormalLinkage() ==
+    /// Internal`).
+    pub(crate) fn has_internal_linkage(&self, d: DeclId) -> bool {
+        self.decl_linkage(d, 0) == Linkage::Internal
+    }
+
     /// [basic.link]/3-4 for declaration `d` (a variable, function, class,
     /// enumeration or template; anything else has none).
     fn decl_linkage(&self, d: DeclId, depth: usize) -> Linkage {

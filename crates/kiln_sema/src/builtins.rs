@@ -625,6 +625,29 @@ impl Sema<'_, '_> {
     /// at `loc`, at file scope; warned about (off by default) in C89, an
     /// error by default from C99.
     pub(crate) fn c_implicit_function_decl(&mut self, name: Symbol, loc: Loc) -> DeclId {
+        let fi = FuncInfo::new().with_no_proto(true);
+        let ty = self.ast.types.function(QualType::INT, &[], fi, ExcSpec::None);
+        // clang `findLocallyScopedExternCDecl`: a declaration of the
+        // name in another block; one whose type is not compatible with
+        // `int()` is used as is (C89 footnote 38: undefined behaviour).
+        let ns = self.ast.tu;
+        let prev = self.local_externs.iter().rev().find(|&&(n, s, _)| n == ns && s == name);
+        let prev = prev.map(|x| x.2);
+        if let Some(p) = prev {
+            let pty = self.ast.decls.get(p).ty();
+            let compatible = self.kind_of(p) == DeclKind::Function
+                && pty.is_some_and(|t| conv::c_assign::compatible(self, t, ty));
+            if !compatible {
+                let c89 = !self.c_at_least(kiln_lex::CStd::C99);
+                let n = format!("'{}'", self.ast.symbols().as_str(name));
+                let note =
+                    self.diag(DiagId::note_previous_declaration, self.ast.decls.get(p).loc());
+                let msg = self.diag(DiagId::sema_use_out_of_scope_declaration, loc);
+                self.emit(msg.arg(n).arg(u8::from(c89)).with_note(note));
+                self.register_local(name, p);
+                return p;
+            }
+        }
         let id = if self.c_at_least(kiln_lex::CStd::C99) {
             DiagId::sema_c_implicit_function_decl_c99
         } else {
@@ -632,10 +655,19 @@ impl Sema<'_, '_> {
         };
         let msg = self.diag(id, loc).arg(self.ast.symbols().as_str(name).to_owned());
         self.emit(msg);
-        let fi = FuncInfo::new().with_no_proto(true);
-        let ty = self.ast.types.function(QualType::INT, &[], fi, ExcSpec::None);
-        let h = DeclHead::new(self.ast.tu, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
         let spec = FnSpec::new().with_storage(FnStorage::Extern);
+        // C89 3.1.2.1: the implicit declaration has block scope (clang
+        // `ImplicitlyDefineFunction` pushes it on the block scope); like
+        // a block-scope `extern` declaration it redeclares an earlier one
+        // in another block, and a later file-scope one redeclares it.
+        if self.in_local_scope() {
+            let h = DeclHead::new(self.ctx, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
+            let f = self.builder().function(h, DeclKind::Function, ty, spec, prev);
+            self.register_local(name, f);
+            self.note_local_extern(name, f);
+            return f;
+        }
+        let h = DeclHead::new(self.ast.tu, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
         self.builder().function(h, DeclKind::Function, ty, spec, None)
     }
 

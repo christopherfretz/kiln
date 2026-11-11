@@ -2183,11 +2183,16 @@ impl Parser<'_, '_> {
         named: bool,
         ctx: DeclaratorContext,
     ) -> bool {
+        // C declares a tag anywhere a type specifier may appear: a cast,
+        // `sizeof`, `_Generic` (C17 6.7.2.3p6; clang `ActOnTag` checks
+        // `CPlusPlus`). One in a parameter list is Sema's `-Wvisibility`
+        // (`c_warn_tag_in_param_list`, C17 6.2.1p4).
+        if self.s.is_c() {
+            return false;
+        }
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
         let mut invalid = false;
-        // C defines a tag anywhere a type name appears (C17 6.7.2.3p6): a
-        // cast, `sizeof`, `_Generic` (clang `ActOnTag` checks `CPlusPlus`).
-        if type_spec && !self.s.is_c() {
+        if type_spec {
             self.s.diag_type_defined_in(d, TagDefinedIn::TypeSpecifier, false);
             invalid = true;
         }
@@ -2196,17 +2201,8 @@ impl Parser<'_, '_> {
             invalid = true;
         }
         if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
-            if self.s.is_c() {
-                // C17 6.2.1p4: a tag in a parameter list has prototype
-                // scope; clang warns (`-Wvisibility`). WP-1285.
-                let ty = self.s.elaborated_tag_type(d, keyword);
-                let loc = self.s.ast.decls.get(d).loc();
-                let msg = self.s.diag(DiagId::sema_c_param_tag_not_visible, loc);
-                self.emit(msg.arg(self.s.ty_arg(ty)));
-            } else {
-                self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
-                invalid = true;
-            }
+            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+            invalid = true;
         }
         if invalid {
             ds.invalid = true;
@@ -3722,6 +3718,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one step per parameter-declaration part")]
     pub(crate) fn parse_param_clause(
         &mut self,
         d: &mut Declarator,
@@ -3735,7 +3732,8 @@ impl Parser<'_, '_> {
             if self.at(Punct::RParen) || self.at_eof() {
                 break;
             }
-            if self.eat(Punct::Ellipsis).is_some() {
+            if let Some(l) = self.eat(Punct::Ellipsis) {
+                self.c_check_ellipsis_first(params.is_empty(), l);
                 variadic = true;
                 break;
             }
@@ -4081,6 +4079,12 @@ impl Parser<'_, '_> {
         d: &mut Declarator,
         delayable: bool,
     ) -> (ExcSpec, Quals, RefQual, Option<(QualType, Loc)>) {
+        // C has none of them (clang `ParseFunctionDeclarator` parses them
+        // only in C++): a `const` after a K&R declarator starts its
+        // declaration list (C17 6.9.1p6).
+        if self.s.is_c() {
+            return (ExcSpec::default(), Quals::NONE, RefQual::None, None);
+        }
         let mut exc = None;
         let mut quals = Quals::NONE;
         let mut ref_qual = RefQual::None;
@@ -5174,6 +5178,14 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// C17 6.7.6/1: a parameter-type-list names a parameter before the
+    /// `...` at `l`; C23 allows `(...)` (clang `err_ellipsis_first_param`).
+    fn c_check_ellipsis_first(&mut self, first: bool, l: Loc) {
+        if first && self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23) {
+            self.s.error(DiagId::parse_ellipsis_first_param, l);
+        }
+    }
+
     /// The C99 designators of one initializer (`.name`, `[index]`, GNU
     /// `[first ... last]`), appended to `designator`. On an error the list
     /// is skipped through its `}` and `Err` returned.
@@ -5222,11 +5234,21 @@ impl Parser<'_, '_> {
 
     /// [`Self::parse_init_list`], with whether the designations were
     /// valid instead of dropping the list.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the designator forms and the list recovery in one loop"
+    )]
     fn parse_init_list_checked(&mut self) -> Result<(InitList, bool), ()> {
         if !self.stack_ok() {
             return Err(());
         }
         let lbrace = self.bump().span.lo;
+        // C23 6.7.10p1: `{}` is an initializer from C23 on (clang
+        // `ext_c_empty_initializer`, in `ParseBraceInitializer`).
+        if self.s.is_c() && self.at(Punct::RBrace) && !self.s.c_at_least(kiln_lex::CStd::C23) {
+            let d = self.s.diag(DiagId::parse_c_empty_initializer, lbrace);
+            self.emit(d);
+        }
         let mut items = Vec::new();
         let mut valid = true;
         while !self.at(Punct::RBrace) && !self.at_eof() {

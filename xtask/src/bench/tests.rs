@@ -59,6 +59,8 @@ fn parses_the_command_line() {
     assert_eq!(o.paths, [PathBuf::from("bench/oven")]);
 
     assert_eq!(parse_args(args(&["-h"])).unwrap(), None);
+    let o = parse_args(args(&["--label", "wp/1292@abc123", "bench/pch"])).unwrap().unwrap();
+    assert_eq!(o.label.as_deref(), Some("wp/1292@abc123"));
     for bad in [
         &["--runs", "0"][..],
         &["--runs=x"],
@@ -70,6 +72,8 @@ fn parses_the_command_line() {
         &["--compiler"],
         &["--jobs", "2"],
         &["--mem-limit", "lots"],
+        &["--label", ""],
+        &["--label=a b"],
     ] {
         assert!(parse_args(args(bad)).is_err(), "{bad:?}");
     }

@@ -2268,6 +2268,12 @@ impl DeclArena {
         n.misc = n.misc.with_field(15, 1, 1);
     }
 
+    /// Clears `d`'s definition mark ([`crate::Ast::replace_definition`]).
+    pub(crate) fn unmark_definition(&mut self, d: DeclId) {
+        let n = &mut self.nodes[d.index() as usize];
+        n.misc = n.misc.with_field(15, 1, 0);
+    }
+
     /// The builtin id of `d` if it is an implicit builtin function
     /// declaration ([`builtin`], §5.3).
     pub fn builtin_id(&self, d: DeclId) -> Option<u32> {

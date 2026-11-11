@@ -784,7 +784,13 @@ measured the same way when named, and `--scaling <shape>` checks their
 growth from N to 4N (4N/N above 4.6x on wall or RSS fails; a growing
 `peak_arena` fails on the shapes whose evaluations do not depend on N);
 both are off-queue, because a ratio of wall times needs a quiet host. The
-contract is `spec/bench.md`.
+`pch` group (`cargo xtask bench bench/pch`, selected only when named, about
+3 minutes) measures kiln's precompiled headers against clang 19's on four
+header sets: no PCH, PCH build, PCH load and forced replay. It reports the
+path kiln's consumer took and judges kiln on memory only against
+`bench/baselines/pch.json`. `--record` regenerates the numbers in
+`docs/status/pch.md`. It runs by hand after a PCH change and before a
+release, not in CI. The contract is `spec/bench.md`.
 
 ## Release candidates
 
