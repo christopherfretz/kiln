@@ -2378,8 +2378,8 @@ WP-1283, below), non-dependent references
 with written template arguments (`size<int>`, `sq<3>`: "a template
 argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
-dependent array bounds, pack expansions in base specifiers, and
-friends.
+and dependent array bounds (pack expansions in base specifiers and
+friends of classes are carried since WP-1292, below).
 
 **Class template specializations (WP-1283).** `bmi_image/classtempl.rs`
 carries a unit's explicit and partial class template specializations
@@ -2477,6 +2477,58 @@ templates, at any depth, and their out-of-line definitions.
 Tests: `image-member-template-run.cpp`, `image-member-template-errors.cpp`
 and `kind2_declaration_image_member_templates` (an error inside an
 imported member template's pattern is reported as after a replay).
+
+**Polymorphic class templates and pack bases (WP-1292).** A class
+template's pattern with virtual functions, overriders, `final`, pure
+virtual functions, virtual destructors and virtual bases is carried as a non-template
+class's is ("Classes (S3)"): the pattern's `FnSpec` bits and definition
+bits are the pattern's, and an instantiation computes its overridden
+functions, key function and vtable as after a replay (the pattern's own
+overridden sets are empty, as sema leaves them). A base-specifier's
+flag byte has bit 0 `virtual` and bit 1 pack expansion
+([temp.variadic]/5.2): a pack base `Ts...` carries its pattern `Ts`
+as its type, only in a dependent class, where the validator checks it
+as any dependent base. Test: `image-poly-template-run.cpp`.
+
+**Friends (WP-1292).** `bmi_image/friend.rs` carries the friend
+declarations ([class.friend]) of classes that are not templates:
+
+- the befriended function, or the class an elaborated `friend struct
+  H;` introduces, is an ordinary record before its `Friend` record,
+  with context its namespace, lexical context the class, and its
+  `FriendKind` in bits 2 and 3 of the owner byte (1 declared, 2
+  undeclared). The reader sets `misc.friend()` from them, so its
+  builder enters a hidden friend (`Undeclared`) with `ADL_ONLY` as
+  sema's does ([namespace.memdef]/3, [basic.lookup.argdep]/4); a friend
+  redeclaring an earlier function is `Declared` and its `prev` is that
+  function;
+- the `Friend` record (payload code 25) is a member of the class with
+  no name: either `target`, an earlier befriended function record
+  lexically in the class, or a type reference and `owned`, the
+  befriended undefined class record or none (`friend class Other;`
+  naming an existing class);
+- the class definition's friend list, written after its bases, is the
+  record indices of the first declarations sema listed at `}`
+  (spec/sema-class.md §2.4); the reader sets it before
+  `complete_record_definition`. A list entry outside the image is "a
+  friend outside the image".
+
+The validator checks that a `Friend` record is in a defined class that
+is not dependent and names an earlier befriended record of that class,
+that a record with friend bits is a function or undefined class in a
+namespace whose lexical context is the open class, and that friend
+list entries are earlier function or class records without adjacent
+duplicates. Still falling back: friends in class templates (the
+befriended function is dependent: "a declaration in a template" or "a
+friend declaration in a class template"), friend templates ("a friend
+template") and befriended member functions ("a friend member
+function"). Tests: `image-friend-run.cpp`, `image-friend-errors.cpp`,
+`kind2_declaration_image_polymorphic_templates_and_friends`.
+
+**Context reasons (WP-1292).** A record whose semantic context is not
+in the image is "a member of a class outside the image" when the
+context is a class (a cascade of the class's own reason) and "a
+declaration in an unsupported context" otherwise.
 
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
@@ -3207,12 +3259,10 @@ function record inside its class ("bad key function"), that overridden
 functions are first declarations of member functions (or implicit
 destructor or assignment operator records) other than the function
 itself and only a first declaration lists any ("bad overridden
-functions"), and that a base's `virtual` byte is 0 or 1.
+functions"), and that a base's flag byte is 0 to 3 (bit 0 `virtual`,
+bit 1 a pack expansion, WP-1292).
 
-A class falls back (with its `-v` reason) when it is a polymorphic
-class template or one with virtual bases ("a polymorphic class
-template", "a virtual function in a class template": S4 does not carry
-them yet), declares a destroying `operator delete` ("a destroying
+A class falls back (with its `-v` reason) when it declares a destroying `operator delete` ("a destroying
 operator delete"), redeclares a virtual function with other overridden
 functions than its first declaration's, overrides a function outside
 the image ("an override of a function outside the image"; S6), has a
@@ -3223,7 +3273,9 @@ implicit special members that sema declared eagerly to resolve
 overloads ("a class whose implicit special members need overload
 resolution": a member or base with a non-trivial or ambiguous special
 member, unless the class is polymorphic or has virtual bases, which
-declares them eagerly anyway; WP-1121), declares a friend (WP-1072/WP-1097), a
+declares them eagerly anyway; WP-1121), declares a friend template or
+befriends a member function or is a class template with friends
+(friends of other classes are carried since WP-1292), a
 class-specific allocation function, a defaulted comparison or an
 out-of-line defaulted function, a `[[no_unique_address]]` field, any
 other side data sema keeps in its member maps ("a declaration with
@@ -3288,7 +3340,9 @@ classes and templates). The follow-ups, in priority order:
    non-template classes (WP-1065), polymorphic ones with virtual
    functions, key functions and virtual bases since WP-1120**, see
    "Classes (S3)". Its follow-ups: `dynamic_cast`/`typeid` in bodies
-   and polymorphic class templates (S4), friends (WP-1072/WP-1097), anonymous unions and structs,
+   (polymorphic class templates and friends of classes are carried
+   since WP-1292; friend templates and friends in class templates are
+   not), anonymous unions and structs,
    classes whose implicit members need overload resolution, inherited
    constructors, defaulted comparisons and out-of-line defaulted
    functions, class-specific allocation functions,

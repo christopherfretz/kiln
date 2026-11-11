@@ -940,6 +940,53 @@ fn kind2_declaration_image_member_templates() {
     assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
 }
 
+/// WP-1292 (§11.11 "Polymorphic class templates and pack bases",
+/// "Friends"): with the unit's source blanked, an importer still
+/// instantiates polymorphic class templates and pack-expansion bases,
+/// finds hidden friends by argument-dependent lookup and lets befriended
+/// classes read private members, and its IR is the replay's.
+#[test]
+fn kind2_declaration_image_polymorphic_templates_and_friends() {
+    for (name, module, user, stdout) in [
+        (
+            "imgpoly",
+            include_str!("../../../tests/conformance/module.interface/Inputs/img-polytempl.cppm"),
+            include_str!("../../../tests/conformance/module.interface/image-poly-template-run.cpp"),
+            "9 4 11 13 17 2 3\n",
+        ),
+        (
+            "imgfr",
+            include_str!("../../../tests/conformance/module.interface/Inputs/img-friend.cppm"),
+            include_str!("../../../tests/conformance/module.interface/image-friend-run.cpp"),
+            "1 0 12 105 6 5 0\n",
+        ),
+    ] {
+        let d = scratch(&format!("image-{name}"));
+        std::fs::write(d.join("m.cppm"), module).unwrap();
+        std::fs::write(d.join("u.cpp"), user).unwrap();
+        let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "m.cppm", "-o", "m.pcm"]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+        ok(&d, &["-c", "m.pcm", "-o", "m.o"]);
+        blank_source(&d, "m.pcm", "blank.pcm");
+
+        let file = format!("-fmodule-file={name}=blank.pcm");
+        let notes = image_notes(&d, &[&file, "u.cpp", "m.o", "-o", "u"]);
+        assert_eq!(notes, [format!("note: imported '{name}' from its declaration image")]);
+        let out = Command::new(d.join("u")).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), stdout);
+
+        let mut irs = Vec::new();
+        for (flag, pcm) in [("-fkiln-bmi-image", "blank.pcm"), ("-fno-kiln-bmi-image", "m.pcm")] {
+            std::fs::copy(d.join(pcm), d.join("x.pcm")).unwrap();
+            let file = format!("-fmodule-file={name}=x.pcm");
+            ok(&d, &[flag, &file, "-S", "-emit-llvm", "u.cpp", "-o", "u.ll"]);
+            irs.push(std::fs::read_to_string(d.join("u.ll")).unwrap());
+        }
+        assert!(irs[0] == irs[1], "{name}: IR differs between the image and the replay");
+    }
+}
+
 /// WP-1283: a static assertion in a class template is checked again by
 /// each instantiation; the image does not carry it yet, so the unit is
 /// written without one and an importer still rejects a failing
