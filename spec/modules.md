@@ -2372,12 +2372,79 @@ rest. Still falling back after the third slice: concepts, constrained
 parameters and templates, requires-clauses and requires-expressions,
 template template parameters, member templates and templates in
 templates, redeclared templates (and inherited defaults), deduction
-guides, explicit and partial specializations, non-dependent references
+guides, explicit and partial specializations (carried since WP-1283,
+below), non-dependent references
 with written template arguments (`size<int>`, `sq<3>`: "a template
 argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
 dependent array bounds, pack expansions in base specifiers, and
 friends.
+
+**Class template specializations (WP-1283).** `bmi_image/classtempl.rs`
+carries a unit's explicit and partial class template specializations
+([temp.expl.spec], [temp.spec.partial]). Each one is an ordinary
+`Record` record with the template's name and context, listed in a
+section after the scopes (record, template record, an optional
+template-head, arguments), ascending by record. Neither is in the
+lookup table: lookup finds the template.
+
+- *Partial specializations* carry their template-head (the parameter
+  records, which precede the record, and the `template`, `<` and `>`
+  locations) and their converted arguments, which are types, values,
+  or the head's non-type parameters (alone or expanded). The reader
+  builds each with `class_partial_spec`, the builder the parser uses,
+  so matching ([temp.spec.partial.match]) and partial ordering see the
+  same partial specializations in the same order as after a replay.
+  The injected-class-name of a partial specialization is a type record
+  (tag `Injected` naming the partial's record).
+- *Explicit specializations* carry their arguments as written; the
+  reader finds or makes the specialization through `get_class_spec`,
+  as a use in source does, and declares it explicit there (what
+  `act_on_explicit_class_spec` does after its checks). One declared
+  and never defined (`template <> struct B<void>;`) stays incomplete.
+- A specialization may be declared in a reopened namespace or by a
+  qualified name (`template <class T> struct N::A<T, 1>`): its lexical
+  context is a namespace record before it (or the translation unit,
+  `LEX_TU`), and its head's parameters are in that context.
+- A written argument that is a `bool` or integer literal of the
+  parameter's type is carried as its converted value (`integral_constant<bool,
+  true>`): the two print and compare identically.
+
+Still falling back: explicit instantiations ("an explicit
+instantiation"), a partial specialization declared before it is defined
+("a redeclared partial specialization"), partial specializations in a
+class or of a member template ("a member template or a template in a
+template"), constrained ones ("a constrained template", WP-1284),
+arguments that are dependent expressions ("a partial specialization
+argument the image does not carry"), and variable template
+specializations ("a template"). The rest of WP-1283's scope also still
+falls back, unchanged: member templates and templates in templates
+(the validator requires a template's parameters and the template itself
+to be in a namespace scope at depth 0), redeclared templates and their
+inherited defaults, pack expansions in base specifiers, polymorphic
+class templates, friends, and classes whose implicit special members
+need overload resolution.
+
+*Static assertions in templates.* A `static_assert` in a class template
+(or a partial specialization) is checked again by each instantiation
+([temp.inst]/3). The image does not carry it yet, and the writer refuses
+it ("a static assertion in a template") rather than drop it: before
+WP-1283 the image silently left it out, and an importer accepted
+ill-formed instantiations (`kind2_declaration_image_static_assert_in_template`).
+A non-dependent `static_assert` was checked when the module was
+compiled and is still not carried.
+
+*Declarator locations.* Sema keeps, beside each declaration of
+dependent type, where its first type-specifier, its outermost
+`&`/`&&` and its innermost `*`/`[` were written (`type_spec_locs`,
+`ref_locs`, `inner_chunk_locs`); an instantiation that forms an invalid
+type is diagnosed there (`T arr[2]` with `T = void`, at the `[`). The
+`declocs` section (`bmi_image/declocs.rs`, after the specializations)
+lists them as (record, kind, location) triples, ascending, for every
+carried record, so an imported pattern's instantiation reports what
+replay reports. Before WP-1283 they were missing and such errors
+pointed at the declaration's type-specifier. A function parameter's
+entries are not carried yet (parameters are not records).
 
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
@@ -2737,7 +2804,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 14` since WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 15` since WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2766,6 +2833,14 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            stmts:u32 offset:u32*stmts blob_len:u32 stmt*
            attrs                     WP-1278 ("Attributes")
            scopes                    WP-1278 ("Scopes and reserved names")
+           cspecs:u32 cspec*         WP-1283 ("Class template specializations")
+           declocs:u32 (rec:u32 kind:u8 loc:u32)*   WP-1283, ascending
+                                     (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
+cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
+           params:u32 u32*) args:u32 carg*      ascending by rec
+carg    := 0 qref | 1 qref value:i128   a type, a value
+         | 2 parm:u32                   a head parameter record
+         | 3 n:u32 carg*                a pack (top level only)
 const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
