@@ -11,7 +11,13 @@
 #   configure      extra configure flags, a list
 #   build_targets  optional list of make targets (default: all)
 #   test           shell command run in the build dir under `timeout 1800`
-#   c_compiler     the C compiler (kiln is C++-only), default clang-19
+#   c              optional (WP-1277): "clang" (default) or "kiln". "clang"
+#                  runs `c_compiler` on the C TUs in both builds, unlogged;
+#                  "kiln" runs scripts/oss/kiln-cc (the logging C wrapper) in
+#                  both: the kiln driver beside kiln++ in the kiln build,
+#                  `c_compiler` in the control. Not for a staged row.
+#   c_compiler     the control's C compiler (and both builds' when c =
+#                  "clang"), default clang-19
 #   wave           1, 2, 3 or 4 (docs/ROADMAP.md M8)
 #   sweep          optional (WP-1265): true puts the project in the x86_64
 #                  sweep's oss matrix (.github/workflows/sweep.yml job
@@ -72,6 +78,16 @@ c_compiler = "clang-19"
 wave = 1
 verified = true
 notes = "WP-1148. The selftest.sh modules fixture (scripts/oss/fixtures/modules) as a harness row: an interface unit, an interface partition, an implementation unit and an importer through FILE_SET CXX_MODULES, plus, with --stdlib libc++, `import std;` through CXX_MODULE_STD (CMake builds libc++'s std.cppm and std.compat.cppm with the compiler under test). docs/status/oss/cmake_modules.md."
+
+[c_demo]
+local = "fixtures/cdemo"
+build = "cmake"
+cxx_std = 17
+c = "kiln"
+test = "test \"$(./capp)\" = 'c 26' && test \"$(./cxxapp)\" = 'c++ 26' && echo 'capp, cxxapp ok'"
+wave = 1
+verified = true
+notes = "WP-1277. The selftest.sh C fixture (scripts/oss/fixtures/cdemo) as a harness row: a C library, a C program and a C++ program over it, with c = \"kiln\", so report.json counts C and C++ TUs apart (tus_by_lang)."
 
 [nlohmann_json]
 url = "https://github.com/nlohmann/json"

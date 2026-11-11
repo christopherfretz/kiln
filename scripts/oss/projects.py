@@ -62,6 +62,13 @@ def load(path=TOML):
         p.setdefault("configure", [])
         p.setdefault("build_targets", [])
         p.setdefault("c_compiler", "clang-19")
+        # Who compiles the C TUs (WP-1277): "clang" (the default) gives them
+        # to `c_compiler` directly in both builds, unlogged; "kiln" routes
+        # them through kiln-cc, which runs the kiln driver in the kiln build
+        # and `c_compiler` in the control, and logs them with `lang`.
+        p.setdefault("c", "clang")
+        if p["c"] not in ("kiln", "clang"):
+            raise SystemExit(f"{path}: [{name}] c must be \"kiln\" or \"clang\"")
         p.setdefault("control_cxx", "clang++-19")
         p.setdefault("verified", False)
         p.setdefault("submodules", False)
@@ -97,6 +104,8 @@ def load(path=TOML):
         s = p["stage_of"]
         if s and (s == name or s not in data or data[s]["build"] != "cmake" or data[s]["stage_of"]):
             raise SystemExit(f"{path}: [{name}] stage_of must name another cmake project that is not itself staged")
+        if s and p["c"] == "kiln":
+            raise SystemExit(f"{path}: [{name}] a staged row builds C with its stage's compiler: c = \"kiln\" does not apply")
     # Rows sharing a checkout (the Boost superproject, WP-787) must agree on
     # what is cloned.
     first = {}
@@ -139,6 +148,13 @@ def summarize(records):
     for r in tus:
         by_kind[r.get("kind", "other")] = by_kind.get(r.get("kind", "other"), 0) + 1
     peak = max(tus, key=lambda r: r.get("max_rss_kb", 0), default=None)
+    # Per-language TU counts (WP-1277). A record from before `lang` existed
+    # is a kiln-cxx record: C++.
+    by_lang = {}
+    for r in tus:
+        b = by_lang.setdefault(r.get("lang") or "c++", {"total": 0, "ok": 0, "failed": 0})
+        b["total"] += 1
+        b["ok" if r.get("kind") == "ok" else "failed"] += 1
     return {
         "tus": {
             "total": len(tus),
@@ -146,6 +162,7 @@ def summarize(records):
             "failed": len(tus) - by_kind.get("ok", 0),
             "by_kind": dict(sorted(by_kind.items())),
         },
+        "tus_by_lang": dict(sorted(by_lang.items())),
         "links": {
             "total": len(links),
             "ok": sum(1 for r in links if r.get("kind") == "ok"),
@@ -266,6 +283,8 @@ def cmd_report_json(a):
         "url": p["url"],
         "tag": p["tag"],
         "cxx_std": p["cxx_std"],
+        "c": p["c"],
+        "c_compiler_path": a.c_compiler_path,
         "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "configure_rc": a.configure_rc,
         "build_rc": a.build_rc,
@@ -295,6 +314,7 @@ def main():
     r.add_argument("--project", required=True)
     r.add_argument("--compiler", required=True)
     r.add_argument("--compiler-path", required=True)
+    r.add_argument("--c-compiler-path", help="the real C compiler (behind kiln-cc when c = \"kiln\")")
     r.add_argument("--stdlib", choices=("libstdc++", "libc++"), default="libstdc++")
     r.add_argument("--build-dir", required=True)
     r.add_argument("--configure-rc", type=int, required=True)
@@ -316,7 +336,7 @@ def main():
             sys.exit(f"projects.py: unknown project '{a.project}' (see {TOML})")
         p = data[a.project]
         q = shlex.quote
-        for k in ("url", "tag", "build", "cxx_std", "test", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb", "stage_of", "stage_cxx", "stage_cc", "sha256"):
+        for k in ("url", "tag", "build", "cxx_std", "test", "c", "c_compiler", "control_cxx", "source_subdir", "checkout", "test_timeout", "vmem_kb", "stage_of", "stage_cxx", "stage_cc", "sha256"):
             print(f"P_{k.upper()}={q(str(p[k]))}")
         print(f"P_SUBMODULES={'1' if p['submodules'] else ''}")
         print(f"P_ARCHIVE={'1' if p['archive'] else ''}")
