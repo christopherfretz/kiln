@@ -45,6 +45,7 @@ Reorder = "reorder" [ReorderCtor, ReorderInitList];
 Shadow = "shadow" [ShadowFieldInConstructorModified];
 ShadowAll = "shadow-all" [Shadow, ShadowFieldInConstructor, ShadowUncapturedLocal, ShadowField];
 ShadowFieldInConstructor = "shadow-field-in-constructor" [ShadowFieldInConstructorModified];
+StrictPrototypes = "strict-prototypes" [DeprecatedNonPrototype];
 TautologicalCompare = "tautological-compare" [TautologicalConstantCompare, TautologicalPointerCompare, TautologicalUndefinedCompare];
 UnevaluatedExpression = "unevaluated-expression" [PotentiallyEvaluatedExpression];
 Uninitialized = "uninitialized" [SometimesUninitialized, StaticSelfInit, UninitializedConstReference];

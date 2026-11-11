@@ -2070,15 +2070,21 @@ impl<'a> Cg<'a> {
     ) -> Sig {
         let ast = self.ast;
         let p = *ast.types.proto(fty).expect("function prototype");
-        let params: Vec<QualType> = ast.types.params(&p).to_vec();
+        // clang `arrangeFreeFunctionCall`: a call through a C function
+        // type without a prototype requires every (promoted) argument, so
+        // the call's IR type is not variadic.
+        let no_proto = p.info().no_proto();
+        let params: Vec<QualType> =
+            if no_proto { args.to_vec() } else { ast.types.params(&p).to_vec() };
         let ret = p.ret();
         let mut all = params.clone();
         all.extend_from_slice(&args[params.len().min(args.len())..]);
         let t = this.is_some();
-        let (cc, no_csr, va) = (p.info().cc(), p.info().no_caller_saved_regs(), p.variadic());
+        let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
+        let va = p.variadic() && !no_proto;
         let info = self.classify(ret, &all, params.len(), !extern_c, t, cc, va);
         let decl_info = self.classify(ret, &params, params.len(), !extern_c, t, cc, va);
-        let fn_ty = self.fn_type(&decl_info, t, p.variadic());
+        let fn_ty = self.fn_type(&decl_info, t, va);
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr }
     }

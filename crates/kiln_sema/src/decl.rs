@@ -1618,13 +1618,14 @@ impl Sema<'_, '_> {
                     };
                 }
                 Chunk::Function {
-                    params, variadic, loc, exc, quals, ref_qual, trailing, ..
+                    params, variadic, loc, exc, quals, ref_qual, trailing, no_proto, ..
                 } => {
                     prev_ref = false;
                     let mut info = FuncInfo::new()
                         .with_variadic(*variadic)
                         .with_this_quals(*quals)
-                        .with_ref_qual(*ref_qual);
+                        .with_ref_qual(*ref_qual)
+                        .with_no_proto(*no_proto);
                     if let Some((ret, _)) = *trailing {
                         // [dcl.fct]/2: the declared return type is `auto`.
                         if !self.is_plain_auto(ty) {
@@ -5004,9 +5005,14 @@ impl Sema<'_, '_> {
                 } else {
                     ty
                 };
+                let c_compat = self.is_c() && self.c_no_proto_compatible(p, pty, ty, d.name_loc());
+                if c_compat && self.ast.types.proto(ty).is_some_and(|x| x.info().no_proto()) {
+                    // C17 6.2.7p3: the composite is the prototype.
+                    ty = pty;
+                }
                 if missing_err {
                     invalid_redecl = true;
-                } else if self.same_type_and_exc(pty, cmp)
+                } else if (c_compat || self.same_type_and_exc(pty, cmp))
                     && list_equiv != crate::except::ExcEquiv::Mismatch
                 {
                     prev_ok = Some(p);
@@ -6198,6 +6204,48 @@ impl Sema<'_, '_> {
 
     /// C ([6.9.2]/2): a file-scope object declaration without an
     /// initializer and without `extern` is a tentative definition.
+    /// C17 6.7.6.3p15: a function type without a prototype (`int f()`)
+    /// and a prototype are compatible when the return types are and no
+    /// parameter type changes under the default argument promotions (and
+    /// the prototype has no `...`). False unless exactly one of `pty` (the
+    /// type of the previous declaration `p`) and `ty` (the new one, named
+    /// at `loc`) lacks a prototype. clang `warn_non_prototype_changes_behavior`:
+    /// the one without a prototype means `(void)` in C23, which conflicts
+    /// with a prototype that has parameters; that is warned either way.
+    pub(crate) fn c_no_proto_compatible(
+        &mut self,
+        p: DeclId,
+        pty: QualType,
+        ty: QualType,
+        loc: Loc,
+    ) -> bool {
+        let (Some(a), Some(b)) = (self.ast.types.proto(pty).copied(), self.ast.types.proto(ty).copied())
+        else {
+            return false;
+        };
+        if a.info().no_proto() == b.info().no_proto() {
+            return false;
+        }
+        let proto = if a.info().no_proto() { b } else { a };
+        let params = self.ast.types.params(&proto).to_vec();
+        if !params.is_empty() || proto.info().variadic() {
+            let ploc = self.ast.decls.get(p).loc();
+            let def = self.templ.fn_def_next;
+            let pdef = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+            let (at, other, later, other_def) =
+                if a.info().no_proto() { (ploc, loc, 1, def) } else { (loc, ploc, 0, pdef) };
+            let msg = self
+                .diag(DiagId::sema_c_non_prototype_conflict, at)
+                .arg(later)
+                .arg(u8::from(other_def))
+                .with_note(self.diag(DiagId::sema_c_conflicting_prototype_note, other));
+            self.emit(msg);
+        }
+        self.ast.types.same_type(a.ret(), b.ret())
+            && !proto.info().variadic()
+            && params.iter().all(|&t| self.va_arg_promotion(t).is_none())
+    }
+
     pub(crate) fn c_tentative(&self, v: DeclId) -> bool {
         self.is_c()
             && self.ast.decls.var(v).is_some_and(|x| {

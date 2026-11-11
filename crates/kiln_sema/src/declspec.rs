@@ -702,6 +702,9 @@ pub enum Chunk {
         /// declaration ([dcl.ambig.res]/1, clang's
         /// `hasAmbiguousFunctionDeclarator`; `-Wvexing-parse`).
         ambiguous: bool,
+        /// C before C23: `()` or a K&R identifier list, a function
+        /// declarator without a prototype (C17 6.7.6.3p14).
+        no_proto: bool,
     },
 }
 

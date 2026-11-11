@@ -1946,13 +1946,15 @@ impl Printer<'_> {
         if params.is_empty() && !proto.variadic() && self.names.c_lang().is_some() {
             self.push("void");
         }
+        // clang `printFunctionNoProtoAfter`: `()`.
+        let no_proto = proto.info().no_proto();
         for (i, &p) in params.iter().enumerate() {
             if i > 0 {
                 self.push(", ");
             }
             self.print(p, "");
         }
-        if proto.variadic() {
+        if proto.variadic() && !no_proto {
             if !params.is_empty() {
                 self.push(", ");
             }

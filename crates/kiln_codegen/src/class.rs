@@ -66,6 +66,14 @@ impl Cg<'_> {
         let Some(fty) = ast.decls.get(first).ty() else {
             return err(Some(ast.decls.get(first).loc()), "function without a type");
         };
+        // C17 6.2.7p4: a later prototype is the composite type of a
+        // function first declared without one (sema gives each later
+        // redeclaration the composite).
+        let fty = if ast.types.proto(fty).is_some_and(|p| p.info().no_proto()) {
+            ast.decls.get(ast.latest(first)).ty().unwrap_or(fty)
+        } else {
+            fty
+        };
         let this = self.this_class_of(first);
         let extern_c = mangle::is_extern_c(ast, first);
         let sig = self.sig_this(fty, extern_c, this);

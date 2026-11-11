@@ -5346,6 +5346,19 @@ impl Sema<'_, '_> {
             self.unsupported("calls through this function type", loc);
             return self.recover_err(&kids, loc);
         };
+        // clang `warn_strict_uses_without_prototype`, at the `(`: not for
+        // an implicitly declared function.
+        if proto.info().no_proto()
+            && !args.is_empty()
+            && !named.is_some_and(|d| self.ast.decls.get(d).has(DeclFlags::IMPLICIT))
+        {
+            let name = named.map(|d| self.decl_name(d)).unwrap_or_default();
+            let msg = self
+                .diag(DiagId::sema_c_call_without_prototype, loc)
+                .arg(u8::from(named.is_some()))
+                .arg(name);
+            self.emit(msg);
+        }
         // A builtin is not overloadable, and its diagnostics name no
         // declaration (clang's `ConvertArgumentsForCall`).
         let adl_single = self.ovl.adl_single.take();

@@ -151,6 +151,7 @@ impl Parser<'_, '_> {
             ref_qual: kiln_ast::types::RefQual::None,
             trailing,
             ambiguous: false,
+            no_proto: false,
         });
         if !self.at(Punct::LBrace) {
             self.error_here(DiagId::parse_expected_lambda_body);

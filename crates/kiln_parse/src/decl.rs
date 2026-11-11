@@ -3347,6 +3347,10 @@ impl Parser<'_, '_> {
         let delayable = d.ctx == DeclaratorContext::Member && d.chunks.is_empty();
         let delay_args = delayable && self.late_fn.delay_args;
         let open = self.bump().span.lo;
+        // C17 6.7.6.3p14: before C23 empty parentheses declare a function
+        // without a prototype.
+        let no_proto =
+            self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23) && self.at(Punct::RParen);
         self.s.act_on_start_prototype();
         let (params, variadic) = self.parse_param_clause(d, delay_args, DeclSite::Plain);
         let rparen = self.expect_closing(Punct::RParen, Punct::LParen, open);
@@ -3363,6 +3367,7 @@ impl Parser<'_, '_> {
             ref_qual,
             trailing,
             ambiguous,
+            no_proto,
         });
     }
 
