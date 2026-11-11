@@ -186,6 +186,13 @@ for the census and the corpus, `harness` for the libc++ gate.
   replayed: a type 305, a member function template 157, a template
   argument 104, a specialization outside the image 6, a declaration in
   a template 3.
+- **After merging WP-1284 (#617):** the corpus still compares 147,
+  all equal, 25 by the image; the first replay reason is now a template
+  argument (59) ahead of a type (27). The M3 gate under `--pch-diff
+  check` is unchanged (636 pass + 6 unsupported, all 575 replayed);
+  its reasons are a template argument 341, a member function template
+  157, a type 68, a specialization outside the image 6 and a
+  declaration in a template 3.
 - The module directories and `cpp.include` pass under `--bmi-image`,
   `--bmi-kind 1` and `--bmi-kind 2` (75 of 75 each).
 
