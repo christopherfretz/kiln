@@ -557,8 +557,7 @@ impl Sema<'_, '_> {
             Some(c)
                 if this_ty.is_none() && self.kind_of(c) == kiln_ast::decl::DeclKind::Namespace =>
             {
-                let ctx = self.constrained_function(entity).unwrap_or(c);
-                self.in_inst_context(ctx, run)
+                self.in_inst_context(self.constrained_function(entity).unwrap_or(c), run)
             }
             _ => run(self),
         };
