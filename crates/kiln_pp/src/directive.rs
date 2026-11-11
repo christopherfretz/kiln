@@ -11,7 +11,7 @@ use kiln_source::{FileId, SourceManager, Span};
 use crate::builtin::OPERATOR_NAMES;
 use crate::callbacks::FileChange;
 use crate::cond::{IfContext, IfEvaluator, StubIfEvaluator, stub_value};
-use crate::include::{EmbedRequest, IncludeKind, IncludeRequest};
+use crate::include::{EmbedRequest, IncludeKind, IncludeRequest, ResolvedInclude};
 use crate::macros::MacroDef;
 use crate::preprocessor::{Cond, Frame, Marker, Preprocessor};
 use crate::tok::{PpFlags, PpTok};
@@ -1215,6 +1215,42 @@ impl Preprocessor<'_, '_> {
         (self.sm.file_name(f) != "<built-in>").then_some(f)
     }
 
+    /// Records GCC 16.1's spelling of the included file `r`
+    /// (`-fkiln-source-path-style=gcc`, spec/reflection.md §3.9), as libcpp
+    /// builds it: an absolute header name as written; a header found in a
+    /// search directory by the directory as given joined with the name
+    /// (`r.path`, the same join); one found relative to its includer by the
+    /// includer's GCC spelling up to its last `/` followed by the name
+    /// (`inc//a.h` includes `"../b.h"` as `inc//../b.h`). A header found in
+    /// a system directory may be canonicalized
+    /// ([`SourceManager::set_gcc_file_name`]); so may one found relative to
+    /// its includer when that directory is a system one: libcpp makes it a
+    /// system directory when the includer is a system header at the first
+    /// `#include` looked up relative to that directory (`cur_sys`: found in
+    /// a system directory, included from a system header, or after
+    /// `#pragma GCC system_header`), and caches the answer by the
+    /// directory's spelling. `r.path` must stay the search directory as
+    /// given joined with the name: GCC keeps a doubled trailing slash
+    /// (`-I inc//` gives `inc//a.h`).
+    fn record_gcc_file_name(&mut self, req: &IncludeRequest, r: &ResolvedInclude, cur_sys: bool) {
+        let name = req.name.as_str();
+        let relative = !name.starts_with('/') && r.lookup_index.is_none();
+        let (path, system_dir) = match req.includer {
+            Some(f) if relative && !req.angled => {
+                let inc = self.sm.gcc_file_name(f);
+                let dir = inc.rfind('/').map_or("", |i| &inc[..=i]);
+                let sys = *self.gcc_dirs.entry(dir.into()).or_insert(cur_sys);
+                (format!("{dir}{name}"), sys)
+            }
+            _ if name.starts_with('/') => (name.to_owned(), false),
+            _ => match &r.path {
+                Some(p) => (p.clone(), r.system),
+                None => return,
+            },
+        };
+        self.sm.set_gcc_file_name(r.file, &path, system_dir);
+    }
+
     /// Where `#include_next` / `__has_include_next` continue the search
     /// (clang `getIncludeNextStart`).
     fn include_next_start(&mut self, at: Span) -> Option<u32> {
@@ -1311,6 +1347,9 @@ impl Preprocessor<'_, '_> {
             self.cur_file_ref().map_or((false, false), |f| (f.system, f.extern_c));
         let extern_c = r.extern_c || cur_c;
         let system = r.system || cur_sys || extern_c;
+        if self.sm.source_path_style() == kiln_source::SourcePathStyle::Gcc {
+            self.record_gcc_file_name(&req, &r, cur_sys);
+        }
         // clang `IncludeLimitReached`: after the depth limit was hit (an
         // include cycle), a file already entered is not entered again.
         if self.include_limit_reached && self.entered.contains(&r.file) {

@@ -123,6 +123,21 @@ File kinds (clang `SrcMgr::CharacteristicKind`, WP-063):
 - kiln_pp marks: the start of an inclusion range entered as a system
   header, the `system_header` token of `#pragma GCC system_header`, and
   the line after a line marker (flags 3 / `3 4`, or neither: `User`).
+
+Source path style (`-fkiln-source-path-style=`, spec/driver.md; WP-636,
+WP-1262):
+- `set_source_path_style(SourcePathStyle)` (first call wins; default
+  `Clang`) / `source_path_style()`.
+- `set_gcc_file_name(file, path, system_dir)`: kiln_pp records, under
+  `Gcc`, the path GCC 16.1's header search built for an included file
+  (spec/reflection.md §3.9); with `system_dir` the file's `realpath` is
+  kept instead when it is strictly shorter (libcpp `maybe_shorter_path`).
+  The first record of a file wins. `gcc_file_name(file)` is the record,
+  else `file_name(file)`.
+- `presumed_file_name(&PresumedLoc, Loc)`: the spelling of the
+  source-location builtins and `source_location_of`: `p.file_name` under
+  `Clang`; under `Gcc` the `gcc_file_name` of a file reached through
+  `#include` whose presumed name is not a `#line` one, else `p.file_name`.
   `#line` keeps the kind. kiln_diag suppresses warnings located in system
   headers (spec/diag.md §5.4).
 
@@ -267,6 +282,9 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
   nested expansions.
 - Inclusion ranges alias their buffer (offsets, lines, presumed lines,
   text) and report their include location, also for macro locations.
+- The gcc source path style: recorded spelling, canonicalized only for a
+  system directory and only when shorter, first record wins, `#line`
+  names and the main file kept.
 
 ## Open questions
 1. **`#line` state per inclusion.** Inclusion ranges (WP-056) give

@@ -318,6 +318,11 @@ pub struct Preprocessor<'a, 'd> {
     pub(crate) poisoned: SymMap<Span>,
     pub(crate) pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     pub(crate) entered: HashSet<FileId>,
+    /// `-fkiln-source-path-style=gcc`: whether each directory a header was
+    /// looked up relative to its includer in is a system one, by its GCC
+    /// spelling (libcpp `make_cpp_dir`'s `dir_hash`: the first lookup in a
+    /// directory fixes it; `directive.rs` `record_gcc_file_name`).
+    pub(crate) gcc_dirs: HashMap<Box<str>, bool>,
     pub(crate) include_depth: u32,
     /// An `#include` hit the depth limit (clang
     /// `HasReachedMaxIncludeDepth`): from then on a file already entered
@@ -431,6 +436,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             poisoned: SymMap::default(),
             pushed: SymMap::default(),
             entered: HashSet::new(),
+            gcc_dirs: HashMap::new(),
             include_depth: 0,
             include_limit_reached: false,
             unit_first_hash: None,

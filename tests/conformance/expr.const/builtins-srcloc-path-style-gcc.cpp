@@ -1,11 +1,13 @@
 // [support.srcloc.cons]: under -fkiln-source-path-style=gcc (spec/driver.md)
 // __builtin_FILE(), __builtin_FILE_NAME() and source_location::current()
 // (also as a default argument called from the header, [dcl.fct.default]/9)
-// spell a header found through `-I <dir>//Inputs/../Inputs/./` as GCC 16.1
-// does: the absolute path with empty and `.` components dropped and `dir/..`
-// folded through a real directory. __FILE__ keeps clang's spelling, and the
-// main file is kept as written.
-//@ args: -fkiln-source-path-style=gcc -I %{test_dir}//Inputs/../Inputs/./
+// spell a header found through the system directory
+// `-isystem <dir>//Inputs/../Inputs/./` as GCC 16.1 does: its realpath, which
+// is shorter (-fcanonical-system-headers, GCC's default; a header found
+// through -I keeps the -I spelling, meta.reflection.names/
+// source-location-of-include-path.cpp). __FILE__ keeps clang's spelling, and
+// the main file is kept as written.
+//@ args: -fkiln-source-path-style=gcc -isystem %{test_dir}//Inputs/../Inputs/./
 //@ skip(clang): -fkiln-source-path-style= is a kiln option
 //@ expect: compile-ok
 //@ strict-diags

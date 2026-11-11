@@ -2872,7 +2872,7 @@ impl Sema<'_, '_> {
     /// `location` builds the `__impl` object too.
     fn record_source_loc(&mut self, e: ExprId, loc: Loc, ctx: DeclId, location: bool) {
         // The file as `-fkiln-source-path-style=` spells it (clang's as
-        // written by default, GCC 16.1's simplified absolute path under
+        // written by default, GCC 16.1's search-built path under
         // `gcc`; spec/reflection.md §3.9), then `-fmacro-prefix-map=`
         // applies (clang `SourceLocExpr::EvaluateInContext`).
         let sm = self.diags.sm();
@@ -2992,7 +2992,7 @@ impl Sema<'_, '_> {
             self.srcloc.impl_decl = Some(d);
         }
         // The file as `-fkiln-source-path-style=` spells it (clang's as
-        // written by default, GCC 16.1's simplified absolute path under
+        // written by default, GCC 16.1's search-built path under
         // `gcc`; spec/reflection.md §3.9), then `-fmacro-prefix-map=`
         // applies (clang `SourceLocExpr::EvaluateInContext`).
         let sm = self.diags.sm();

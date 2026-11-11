@@ -316,6 +316,10 @@ pub struct SourceManager {
     macro_prefix_map: OnceLock<PrefixMap>,
     /// `-fkiln-source-path-style=` ([`Self::set_source_path_style`]).
     source_path_style: OnceLock<SourcePathStyle>,
+    /// GCC 16.1's spelling of each included file, recorded by the
+    /// preprocessor under [`SourcePathStyle::Gcc`]
+    /// ([`Self::set_gcc_file_name`]).
+    gcc_names: Mutex<HashMap<FileId, Box<str>>>,
 }
 
 /// How the source-location builtins (`__builtin_FILE()`,
@@ -328,7 +332,8 @@ pub enum SourcePathStyle {
     /// clang's: the presumed name as written (`SourceLocExpr::EvaluateInContext`).
     #[default]
     Clang,
-    /// GCC 16.1's: an included file's absolute path simplified.
+    /// GCC 16.1's: an included file named as GCC's search built its
+    /// path, canonicalized when found through a system directory.
     Gcc,
 }
 
@@ -425,6 +430,7 @@ impl SourceManager {
             guarded: Mutex::new(HashMap::new()),
             macro_prefix_map: OnceLock::new(),
             source_path_style: OnceLock::new(),
+            gcc_names: Mutex::new(HashMap::new()),
         }
     }
 
@@ -468,6 +474,38 @@ impl SourceManager {
         self.source_path_style.get().copied().unwrap_or_default()
     }
 
+    /// Records GCC 16.1's spelling of the included `file` (spec/reflection.md
+    /// §3.9): `path`, the name GCC's header search built (libcpp
+    /// `append_file_to_dir`: the directory as given, a `/` unless it ends
+    /// in one, the header name), and, when `system_dir` (the directory
+    /// it was found in is a system one: libcpp `dir->sysp`), its
+    /// `realpath` instead when that is shorter (libcpp
+    /// `maybe_shorter_path`, `-fcanonical-system-headers`, on by default).
+    /// Only the first spelling of a file is kept, as its
+    /// [`file_name`](Self::file_name) is.
+    pub fn set_gcc_file_name(&self, file: FileId, path: &str, system_dir: bool) {
+        let mut names = lock(&self.gcc_names);
+        if names.contains_key(&file) {
+            return;
+        }
+        let real = system_dir
+            .then(|| fs::canonicalize(path).ok())
+            .flatten()
+            .and_then(|p| p.to_str().map(str::to_owned))
+            .filter(|p| p.len() < path.len());
+        names.insert(file, real.map_or_else(|| path.into(), String::into_boxed_str));
+    }
+
+    /// The spelling [`Self::set_gcc_file_name`] recorded for `file`, else
+    /// its [`file_name`](Self::file_name) (the main file, a buffer the
+    /// preprocessor did not include).
+    pub fn gcc_file_name(&self, file: FileId) -> String {
+        match lock(&self.gcc_names).get(&file) {
+            Some(n) => n.to_string(),
+            None => self.file_name(file).to_owned(),
+        }
+    }
+
     /// The file name of `p` (at `loc`) as the source-location builtins
     /// and `std::meta::source_location_of` spell it, before
     /// [`Self::remap_macro_path`], under the [`Self::source_path_style`]:
@@ -475,17 +513,16 @@ impl SourceManager {
     /// - [`SourcePathStyle::Clang`]: `p.file_name` as written (clang
     ///   `SourceLocExpr::EvaluateInContext`), as `__FILE__`.
     /// - [`SourcePathStyle::Gcc`]: as GCC 16.1 spells it (spec/reflection.md
-    ///   §3.9): a buffer reached through `#include` whose absolute path has
-    ///   its empty and `.` components dropped and `dir/..` folded when `dir`
-    ///   is a real directory, not a symbolic link (`//opt/inc//a/./b.h` is
-    ///   `/opt/inc/a/b.h`). The main file, a `#line` name and a relative
-    ///   path are kept as written, as GCC keeps them.
+    ///   §3.9): a buffer reached through `#include` by its
+    ///   [`gcc_file_name`](Self::gcc_file_name) (`-I //p/inc/./` gives
+    ///   `//p/inc/./x.h`, `-I inc//` gives `inc//x.h`, `-isystem //p/inc`
+    ///   gives `/p/inc/x.h`). The main file and a `#line` name are kept as
+    ///   written.
     pub fn presumed_file_name(&self, p: &PresumedLoc<'_>, loc: Loc) -> String {
-        let simplify = self.source_path_style() == SourcePathStyle::Gcc
-            && p.file_name.starts_with('/')
+        let gcc = self.source_path_style() == SourcePathStyle::Gcc
             && p.file_name == self.file_name(p.file)
             && self.include_loc(loc).is_valid();
-        if simplify { simplify_absolute_path(p.file_name) } else { p.file_name.to_owned() }
+        if gcc { self.gcc_file_name(p.file) } else { p.file_name.to_owned() }
     }
 
     // ----- buffers -------------------------------------------------------
@@ -1248,28 +1285,3 @@ const _: fn() = || {
 // Expansion entries dominate the manager's memory in deep expansions
 // (one per macro-argument run per substitution): keep them at 24 bytes.
 const _: () = assert!(size_of::<Entry>() == 24);
-
-/// `path` (absolute) with empty and `.` components dropped and `dir/..`
-/// folded where `dir` names a real directory that is not a symbolic link
-/// (folding through a link would change the file named, so GCC keeps it).
-fn simplify_absolute_path(path: &str) -> String {
-    let mut out: Vec<&str> = Vec::new();
-    let mut kept_dotdot = false;
-    for c in path.split('/') {
-        match c {
-            "" | "." => {}
-            ".." if !kept_dotdot && !out.is_empty() => {
-                let dir = format!("/{}", out.join("/"));
-                let real_dir = fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir());
-                if real_dir {
-                    out.pop();
-                } else {
-                    kept_dotdot = true;
-                    out.push(c);
-                }
-            }
-            _ => out.push(c),
-        }
-    }
-    format!("/{}", out.join("/"))
-}

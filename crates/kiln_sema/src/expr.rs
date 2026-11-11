@@ -2526,7 +2526,6 @@ impl Sema<'_, '_> {
                 DeclKind::Var | DeclKind::ParmVar => self.pending_odr.push(e),
                 _ => {}
             }
-            self.note_consteval_only_ref(e, d);
         } else if matches!(n.kind(), DeclKind::Function | DeclKind::CXXMethod) {
             let at = self.eloc(e);
             self.exc_spec_needed(d, at);
@@ -2535,6 +2534,14 @@ impl Sema<'_, '_> {
             && matches!(n.kind(), DeclKind::Var | DeclKind::ParmVar | DeclKind::Binding)
         {
             self.note_potential_capture(e, d);
+        }
+        // A consteval-only leaf, also in a template definition: it is
+        // then recorded with the pattern and checked in each
+        // instantiation and expansion ([`Sema::note_inst_consteval_only`];
+        // WP-1263: `m == b` of two `constexpr info` variables in a
+        // `template for` body was accepted at run time).
+        if self.unevaluated == 0 {
+            self.note_consteval_only_ref(e, d);
         }
         e
     }
