@@ -26,7 +26,7 @@ pub use diag::{LexDiag, LexDiagKind, LexSeverity};
 pub use dump::{dump, dump_source, dump_token};
 pub use kiln_source::symbol::{Interner, Symbol};
 pub use lexer::Lexer;
-pub use options::{CStd, LexMode, LexOptions, Std};
+pub use options::{LexMode, LexOptions, Std};
 pub use spelling::{clean, source_offset, spelling};
 pub use token::{Encoding, Punct, TokFlags, TokKind, Token};
 pub use unicode::{NameMatch, is_identifier, lookup_char_name};

@@ -318,8 +318,6 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
-    /// TEMPORARY WP-1276 stub of WP-1275's C mode (reverted at merge).
-    pub c: Option<kiln_lex::CStd>,
     /// The clang major `-fclang-compat` names (19 or 22; default 22, as the driver): the
     /// few spellings that differ between the two releases follow it, e.g.
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
@@ -1274,16 +1272,6 @@ pub struct Sema<'a, 'sm> {
 }
 
 impl<'a, 'sm> Sema<'a, 'sm> {
-    /// TEMPORARY WP-1276 stub: the language is C.
-    pub fn is_c(&self) -> bool {
-        self.c.is_some()
-    }
-
-    /// TEMPORARY WP-1276 stub: C at least `v`.
-    pub fn c_at_least(&self, v: kiln_lex::CStd) -> bool {
-        self.c.is_some_and(|c| c >= v)
-    }
-
     /// A `Sema` over `ast` reporting to `diags`, for the target whose
     /// builtin types are `target` (the layout target is picked from its
     /// `long double` format, [`target::target_for_types`]).
@@ -1338,7 +1326,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             expansion_element_init: false,
             gnu: false,
-            c: None,
             clang_compat: 22,
             cf_protection_branch: false,
             sve: false,

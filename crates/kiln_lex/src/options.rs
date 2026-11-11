@@ -21,21 +21,6 @@ pub enum Std {
     Cxx26,
 }
 
-/// TEMPORARY WP-1276 stub of WP-1275's C standard (reverted at merge).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub enum CStd {
-    /// C89.
-    C89,
-    /// C99.
-    C99,
-    /// C11.
-    C11,
-    /// C17.
-    C17,
-    /// C23.
-    C23,
-}
-
 /// Options fixed for the lifetime of a [`crate::Lexer`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]

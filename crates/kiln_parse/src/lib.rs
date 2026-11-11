@@ -355,15 +355,6 @@ pub fn parse_preprocessed<'a, 'sm>(
     s.coro_aligned_allocation = opts.coro_aligned_allocation;
     s.lax_vector_conversions = opts.lax_vector_conversions;
     s.gnu = opts.gnu;
-    // TEMPORARY WP-1276 stub (reverted before merging WP-1275's plumbing).
-    s.c = match std::env::var("KILN_WP1276_C").as_deref() {
-        Ok("c89") => Some(kiln_lex::CStd::C89),
-        Ok("c99") => Some(kiln_lex::CStd::C99),
-        Ok("c11") => Some(kiln_lex::CStd::C11),
-        Ok("c17") => Some(kiln_lex::CStd::C17),
-        Ok("c23") => Some(kiln_lex::CStd::C23),
-        _ => None,
-    };
     s.clang_compat = opts.clang_compat;
     s.cf_protection_branch = opts.cf_protection_branch;
     s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
