@@ -4,7 +4,7 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 1 0
-//@ xfail(kiln): WP-1282 follow-up, "comparison of distinct pointer types" for a function pointer against (void *)0
+//@ strict-diags
 #include <stdio.h>
 typedef int (*kfn)(int);
 static int id(int x) { return x; }

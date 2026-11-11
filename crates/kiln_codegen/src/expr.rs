@@ -3411,8 +3411,10 @@ impl Cg<'_> {
         let (base, idx) = if swapped { (r, l) } else { (l, r) };
         let pre = if swapped { Some(self.emit_scalar(idx)?) } else { None };
         let iq = ast.exprs.get(idx).ty();
-        let mut esz = self.size_align(q).0;
-        let mut ety = self.mty(q);
+        // GNU C `void *` subscript (WP-1285): the element is a byte, as in
+        // the arithmetic (clang `EmitArraySubscriptExpr` uses `i8`).
+        let (mut esz, mut ety) =
+            if ast.types.is_void(q) { (1, LTy::I8) } else { (self.size_align(q).0, self.mty(q)) };
         // clang `getTBAAInfoForSubobject`: an element of an array lvalue
         // starts a new access path.
         let mut tb = Tb::Type;

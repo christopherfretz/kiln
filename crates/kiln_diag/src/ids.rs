@@ -249,4 +249,5 @@ impl DiagId {
 // The tail block (spec/diag.md §2.4): rows here compile, but `cargo xtask
 // diag-split --check` (run by `cargo xtask ci`) fails until `cargo xtask
 // diag-split` has moved them into their area file under `src/ids/`.
-diag_id_table! {}
+diag_id_table! {
+}
