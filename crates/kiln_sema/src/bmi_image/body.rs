@@ -218,6 +218,13 @@ pub(super) enum F {
     /// `GenT` a type-name control ([`QRef`], location: three words).
     Gen,
     GenT,
+    /// A requires-expression's body (WP-1284): a record of the image's
+    /// requires-expression bodies (requires.rs).
+    RB,
+    /// A requires-expression's requirements (WP-1284): its body (as in
+    /// [`F::RB`]), the count, then each requirement, its kind and
+    /// operands ([`super::requires::req_words`]).
+    Reqs,
 }
 
 /// The words of a `_Generic` control in an [`F::Gen`] / [`F::GenT`] token.
@@ -296,7 +303,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 55] = {
+pub(super) const EXPR_KINDS: [ExprKind; 56] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -362,6 +369,8 @@ pub(super) const EXPR_KINDS: [ExprKind; 55] = {
         X::UnresolvedLookupExpr,
         // WP-1284: a dependent concept-id, unchecked.
         X::ConceptSpecializationExpr,
+        // WP-1284: a dependent requires-expression (requires.rs).
+        X::RequiresExpr,
     ]
 };
 
@@ -445,6 +454,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CXXFoldExpr => [f(F::OE), f(F::OE)],
         X::UnresolvedLookupExpr => [f(F::Name), f(F::DL(Dc::Lookup))],
         X::ConceptSpecializationExpr => [f(F::D(Dc::Concept)), f(F::TA)],
+        X::RequiresExpr => [f(F::RB), f(F::Reqs)],
         _ => [Z, Z],
     }
 }
@@ -566,6 +576,14 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
                 0 => 1,
                 n => 1 + 3 * (n - 1),
             },
+            F::Reqs => {
+                let n = *words.get(p + 1)? as usize;
+                let mut q = p + 2;
+                for _ in 0..n {
+                    q = q.checked_add(super::requires::req_words(*words.get(q)?)?)?;
+                }
+                q - p
+            }
             F::Nns => {
                 let n = *words.get(p)? as usize;
                 let mut q = p + 1;
@@ -822,6 +840,11 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == NONE {
         return false;
     }
+    if w & PARAM != 0 && w & super::requires::REQP != 0 {
+        // A requires-expression parameter (WP-1284).
+        return matches!(dc, Dc::Value | Dc::Pack)
+            && ((w & !(PARAM | super::requires::REQP)) as usize) < img.reqs.nparams;
+    }
     if w & PARAM != 0 {
         return matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams;
     }
@@ -976,8 +999,12 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             F::TA => w[1..].chunks(3).all(|a| match a[0] {
                 0 => a[2] <= 7 && qref_ok(QRef { ty: a[1], quals: a[2] as u8 }),
                 1 => (a[1] as usize) < e_lim && a[2] <= 1,
+                // A return-type requirement's invented parameter.
+                2 => super::requires::invented_ok(img, a[1], a[2]),
                 _ => false,
             }),
+            F::RB => (w[0] as usize) < img.reqs.recs.len(),
+            F::Reqs => super::requires::reqs_ok(img, w, e_lim, qref_ok),
             F::Gen | F::GenT => {
                 let q =
                     |ty: u32, quals: u32| quals <= 7 && qref_ok(QRef { ty, quals: quals as u8 });
@@ -1084,6 +1111,9 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         {
             return bad("bad temporary");
         }
+        if k == ExprKind::RequiresExpr && toks[0].1[0] != toks[1].1[0] {
+            return bad("bad requires-expression");
+        }
         // A `_Generic`'s selected expression is one of its associations'.
         if k == ExprKind::GenericSelectionExpr {
             let (f, w) = toks[0];
@@ -1147,6 +1177,7 @@ pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
                     out.push(w[gen_ctrl_words(f)]);
                     out.extend(gen_assocs(f, w).map(|a| a[2]));
                 }
+                F::Reqs => super::requires::reqs_locs(w, out),
                 _ => {}
             }
         }
@@ -1160,6 +1191,7 @@ pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
             }
         }
     }
+    super::requires::requires_locs(img, out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,6 +1235,8 @@ pub(super) struct BodyState {
     /// Field ctor-initializers to resolve once every record exists:
     /// (constructor record, initializer position, field).
     pub(super) init_fields: Vec<(u32, u32, DeclId)>,
+    /// Requires-expression bodies (WP-1284).
+    pub(super) req: super::requires::ReqState,
     emap: FxHashMap<ExprId, u32>,
     smap: FxHashMap<StmtId, u32>,
     cmap: FxHashMap<ConstValueId, u32>,
@@ -1231,6 +1265,9 @@ enum Fv {
     TA(Option<kiln_ast::ArgListId>),
     /// A `_Generic`'s raw operand list; true for a type-name control.
     Gen(ListId, bool),
+    /// A requires-expression's body and its requirements record.
+    RB(DeclId),
+    Reqs(u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1246,7 +1283,7 @@ struct Frame {
     next: usize,
 }
 
-const OUTSIDE: &str = "a body referring to a declaration outside the image";
+pub(super) const OUTSIDE: &str = "a body referring to a declaration outside the image";
 
 impl Writer<'_, '_, '_> {
     /// Whether a function's body is carried as statements (an importer
@@ -1283,6 +1320,8 @@ impl Writer<'_, '_, '_> {
             F::Name => Fv::Name(DeclName::from_raw(raw).ok_or(BAD)?),
             F::TA => Fv::TA(kiln_ast::ArgListId::from_raw(raw)),
             F::Gen | F::GenT => Fv::Gen(ListId::from_raw(raw).ok_or(BAD)?, f == F::GenT),
+            F::RB => Fv::RB(DeclId::from_raw(raw).ok_or(BAD)?),
+            F::Reqs => Fv::Reqs(raw),
         })
     }
 
@@ -1392,6 +1431,9 @@ impl Writer<'_, '_, '_> {
                     && (n.aux() != 0 || self.s.inst.concepts.expr_sat.contains_key(&e))
                 {
                     return Err("a checked concept-id");
+                }
+                if k == ExprKind::RequiresExpr {
+                    self.requires_ok(e)?;
                 }
                 if !expr_aux_ok(k, n.aux()) {
                     return Err("an expression the image does not carry");
@@ -1509,6 +1551,7 @@ impl Writer<'_, '_, '_> {
                     let assocs = w.get(2..).unwrap_or(&[]).chunks_exact(3);
                     v.extend(assocs.filter_map(|c| ExprId::from_raw(c[2])).map(Node::E));
                 }
+                Fv::Reqs(i) => v.extend(self.reqs_kids(i).into_iter().map(Node::E)),
                 _ => {}
             }
         }
@@ -1675,6 +1718,8 @@ impl Writer<'_, '_, '_> {
                 }
             }
             Fv::Gen(l, is_ty) => self.generic_words(l, is_ty, out)?,
+            Fv::RB(d) => out.push(self.req_body(d)?),
+            Fv::Reqs(i) => self.reqs_words(i, out)?,
             Fv::AL(l) => {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32);
@@ -1688,6 +1733,11 @@ impl Writer<'_, '_, '_> {
             }
         }
         Ok(())
+    }
+
+    /// The record of written expression `e`.
+    pub(super) fn expr_word(&self, e: ExprId) -> W<u32> {
+        self.bs.emap.get(&e).copied().ok_or("a malformed body")
     }
 
     /// A `_Generic`'s operand list `l` as an [`F::Gen`] / [`F::GenT`]
@@ -1734,8 +1784,12 @@ impl Writer<'_, '_, '_> {
         for a in args {
             match a.view() {
                 ArgView::Type(q) => {
-                    let q = self.qref(q)?;
-                    out.extend([0, q.ty, u32::from(q.quals)]);
+                    if let Some((rb, k)) = self.invented_arg(q)? {
+                        out.extend([2, rb, k]);
+                    } else {
+                        let q = self.qref(q)?;
+                        out.extend([0, q.ty, u32::from(q.quals)]);
+                    }
                 }
                 ArgView::Expr { expr, profile } => {
                     let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
@@ -1836,13 +1890,15 @@ impl Writer<'_, '_, '_> {
 
     /// The declaration word of `d` as class `dc`; a local declaration
     /// gets its record on first use.
-    fn dref(&mut self, d: DeclId, dc: Dc) -> W<u32> {
+    pub(super) fn dref(&mut self, d: DeclId, dc: Dc) -> W<u32> {
         let w = if let Some(&r) = self.recs.get(&d) {
             r
         } else if let Some(&p) = self.bs.params.get(&d) {
             PARAM | p
         } else if d == self.s.ast.tu {
             LEX_TU
+        } else if let Some(body) = self.req_param_body(d) {
+            self.req_param(d, body)?
         } else if self.local(d) {
             self.local_rec(d)?
         } else if let Some(r) = self.spec_rec(d)? {
@@ -2140,6 +2196,8 @@ pub(super) struct Built {
     ebase: u32,
     sbase: u32,
     pub(super) consts: Vec<ConstValueId>,
+    /// The requires-expression bodies (WP-1284).
+    pub(super) reqs: super::requires::ReqsBuilt,
 }
 
 impl Built {
@@ -2162,6 +2220,7 @@ impl Sema<'_, '_> {
         tys: &mut Vec<QualType>,
         ids: &[DeclId],
         params: &[DeclId],
+        reqs: super::requires::ReqsBuilt,
         main: &super::Locs,
     ) -> Built {
         let b = &img.bodies;
@@ -2203,6 +2262,7 @@ impl Sema<'_, '_> {
             ebase: self.ast.exprs.len() as u32 + 1,
             sbase: self.ast.stmts.len() as u32 + 1,
             consts,
+            reqs,
         };
         // Values of every token, as the AST slot would hold them.
         let mut vals: Vec<u32> = Vec::new();
@@ -2311,6 +2371,8 @@ impl Sema<'_, '_> {
             }
             let d = if w == LEX_TU {
                 Some(s.ast.tu)
+            } else if w & PARAM != 0 && w & super::requires::REQP != 0 {
+                built.reqs.params.get((w & !(PARAM | super::requires::REQP)) as usize).copied()
             } else if w & PARAM != 0 {
                 params.get((w & !PARAM) as usize).copied()
             } else {
@@ -2370,6 +2432,8 @@ impl Sema<'_, '_> {
                     args.push(if a[0] == 0 {
                         let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: a[2] as u8 });
                         kiln_ast::types::TemplateArg::ty(q)
+                    } else if a[0] == 2 {
+                        kiln_ast::types::TemplateArg::ty(built.reqs.invented(a[1], a[2]))
                     } else {
                         let e = ExprId::from_raw(built.ebase + a[1])
                             .unwrap_or_else(|| unreachable!("validated operand"));
@@ -2380,6 +2444,8 @@ impl Sema<'_, '_> {
                 self.ast.types.arg_list(&args).raw()
             }
             F::Loc => main.get(w[0]).to_raw(),
+            F::RB => RawId::raw_opt(built.reqs.body(w[0])),
+            F::Reqs => self.image_reqs(img, tys, ids, built, main, w),
             // The AST's raw list ([`AstBuilder::generic_selection`]):
             // control, its location, then (type, location, expression)
             // per association.

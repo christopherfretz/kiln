@@ -46,6 +46,7 @@ mod attrs;
 mod body;
 mod constraints;
 mod locs;
+mod requires;
 mod scope;
 mod spec;
 mod templ;
@@ -544,6 +545,8 @@ struct Image {
     scopes: scope::Scopes,
     /// WP-1284: constraints and concepts' constraint-expressions.
     cons: constraints::Constraints,
+    /// WP-1284: requires-expression bodies.
+    reqs: requires::ReqBodies,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1143,6 +1146,7 @@ fn encode(img: &Image) -> Vec<u8> {
     attrs::encode_attrs(&mut w, &img.attrs);
     scope::encode_scopes(&mut w, &img.scopes);
     constraints::encode_constraints(&mut w, &img.cons);
+    requires::encode_requires(&mut w, &img.reqs);
     w.0
 }
 
@@ -1716,6 +1720,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.attrs = attrs::decode_attrs(&mut r)?;
     img.scopes = scope::decode_scopes(&mut r)?;
     img.cons = constraints::decode_constraints(&mut r)?;
+    img.reqs = requires::decode_requires(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2422,6 +2427,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     attrs::validate_attrs(img)?;
     scope::validate_scopes(img)?;
     constraints::validate_constraints(img)?;
+    requires::validate_requires(img, &|q| qref_ok(q, nt))?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -3735,6 +3741,12 @@ impl Writer<'_, '_, '_> {
             // Checked when the module was compiled; nothing to import.
             return Ok(());
         }
+        if n.kind() == DeclKind::RequiresExprBody {
+            // Carried by the requires-expression that names it, with its
+            // parameters and invented parameters (bmi_image/requires.rs).
+            let _ = st.skipped.insert(d);
+            return Ok(());
+        }
         if ast.spec_info(d).is_some_and(|(_, si)| {
             matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
         }) {
@@ -4439,7 +4451,8 @@ impl Sema<'_, '_> {
             self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
         }
         self.image_virtuals(img, &ids);
-        let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        let reqs = self.image_requires(img, &mut tys, &ids, main);
+        let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);
@@ -5064,6 +5077,7 @@ mod tests {
             attrs: attrs::Attrs::default(),
             scopes: scope::Scopes::default(),
             cons: constraints::Constraints::default(),
+            reqs: requires::ReqBodies::default(),
         }
     }
 

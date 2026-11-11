@@ -521,6 +521,11 @@ impl TemplateTables {
         self.requires.get(i as usize)
     }
 
+    /// The number of requires-expression records.
+    pub fn requires_len(&self) -> u32 {
+        self.requires.len() as u32
+    }
+
     /// Specialization record `i` (a [`TemplLink::Specialization`] index).
     pub fn spec(&self, i: u32) -> Option<&SpecInfo> {
         self.specs.get(i as usize)
@@ -2382,6 +2387,25 @@ impl AstBuilder<'_> {
         e
     }
 
+    /// A requires-expression record (body `body`, its parameters and
+    /// requirements); its index, a `RequiresExpr`'s `b`. The declaration
+    /// image builds the record of an imported expression with it.
+    pub fn requires_record(
+        &mut self,
+        body: DeclId,
+        params: &[DeclId],
+        reqs: &[Requirement],
+    ) -> u32 {
+        let t = &mut self.ast.templates;
+        let first = t.requirements.len() as u32;
+        t.requirements.extend_from_slice(reqs);
+        let params = self.ast.lists.push(params);
+        let t = &mut self.ast.templates;
+        let i = t.requires.len() as u32;
+        t.requires.push(RequiresData { body, params, first, len: reqs.len() as u32 });
+        i
+    }
+
     /// A requires-expression ([expr.prim.req]): a `bool` prvalue,
     /// value-dependent when a requirement is.
     pub fn requires_expr(
@@ -2415,13 +2439,7 @@ impl AstBuilder<'_> {
             dep |= !d.is_none();
             unexpanded |= d.contains(ExprDeps::UNEXPANDED_PACK);
         }
-        let t = &mut self.ast.templates;
-        let first = t.requirements.len() as u32;
-        t.requirements.extend_from_slice(reqs);
-        let params = self.ast.lists.push(params);
-        let t = &mut self.ast.templates;
-        let i = t.requires.len() as u32;
-        t.requires.push(RequiresData { body, params, first, len: reqs.len() as u32 });
+        let i = self.requires_record(body, params, reqs);
         let mut deps = if dep { ExprDeps::VALUE_INST } else { ExprDeps::NONE };
         if unexpanded {
             deps |= ExprDeps::UNEXPANDED_PACK;
