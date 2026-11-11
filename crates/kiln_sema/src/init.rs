@@ -2538,13 +2538,19 @@ impl Sema<'_, '_> {
             // §5.8: a flexible array member's initializer (clang
             // `CheckFlexibleArrayInit`).
             if cur >= nb && self.is_flexible_array_type(ety) {
-                if !self.check_flexible_array_init(fields[cur - nb], item) {
-                    *pos = items.len();
-                    return self.recover(ty, &[], lbrace);
+                match self.check_flexible_array_init(fields[cur - nb], item) {
+                    None => {
+                        *pos = items.len();
+                        return self.recover(ty, &[], lbrace);
+                    }
+                    Some(false) => {
+                        *pos += 1;
+                        cur += 1;
+                        continue;
+                    }
+                    // Initialized below as an array of unknown bound.
+                    Some(true) => {}
                 }
-                *pos += 1;
-                cur += 1;
-                continue;
             }
             let dtor_at = self.item_begin(item);
             let top_designated = dtors && k.is_some();

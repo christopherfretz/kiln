@@ -157,10 +157,11 @@ impl Sema<'_, '_> {
     /// leaves the member without elements, as does a member with no
     /// initializer. A non-empty one is an error unless it initializes a
     /// variable with static or thread storage duration directly (not a
-    /// nested subobject), where it is the same extension, but kiln does
-    /// not lay out such a variable yet (an "unsupported" error). Returns
-    /// false on an error.
-    pub(crate) fn check_flexible_array_init(&mut self, f: DeclId, item: &InitItem) -> bool {
+    /// nested subobject), where it is the same extension: the member is
+    /// then initialized as an array of unknown bound, its elements laid
+    /// out past the object (WP-1286). `None` on an error, else whether
+    /// the member has elements to initialize.
+    pub(crate) fn check_flexible_array_init(&mut self, f: DeclId, item: &InitItem) -> Option<bool> {
         let floc = self.ast.decls.get(f).loc();
         let note = self.diag(DiagId::note_flexible_array_member, floc).arg(self.decl_name(f));
         let (at, empty) = match &item.value {
@@ -173,16 +174,15 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_flexible_array_init_ext, at).with_note(note);
             self.emit(msg);
             if !empty {
-                self.unsupported("initialization of a flexible array member with elements", at);
-                return false;
+                return Some(true);
             }
             // clang `CheckArrayType`: the member is then a zero-length
             // array.
             self.error(DiagId::sema_zero_length_array, at);
-            return true;
+            return Some(false);
         }
         let msg = self.diag(DiagId::sema_flexible_array_init, at).with_note(note);
         self.emit(msg);
-        false
+        None
     }
 }

@@ -5,7 +5,6 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 3 abc
-//@ xfail(kiln): WP-1282 follow-up, "initializer-string for char array is too long" when only the null does not fit
 #include <stdio.h>
 static char s[3] = "abc";
 int main(void) {
