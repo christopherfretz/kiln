@@ -5797,7 +5797,7 @@ pub mod builtin {
     // ---- WP-1288 (gcc.c-torture).
     /// `void *__builtin_extract_return_addr(void *)` (GCC, clang
     /// `NoThrow`): the return address from a `__builtin_return_address`
-    /// value; the identity on AArch64 and x86-64 (clang's default
+    /// value; the identity on `AArch64` and x86-64 (clang's default
     /// `decodeReturnAddress`). Never a constant.
     pub const EXTRACT_RETURN_ADDR: u32 = 2444;
     /// `void *__builtin_frob_return_addr(void *)`: the inverse of

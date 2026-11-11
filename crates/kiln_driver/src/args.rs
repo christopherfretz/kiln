@@ -1158,8 +1158,17 @@ impl Args {
                 let (flag, value) =
                     v.split_once('=').map_or((v.as_str(), None), |(f, x)| (f, Some(x)));
                 match (flag, value) {
-                    ("--noexecstack" | "-L" | "--fatal-warnings" | "--no-warn" | "-W", None)
-                    | ("-force_cpusubtype_ALL" | "--allow-experimental-crel" | "--no-crel", None)
+                    (
+                        "--noexecstack"
+                        | "-L"
+                        | "--fatal-warnings"
+                        | "--no-warn"
+                        | "-W"
+                        | "-force_cpusubtype_ALL"
+                        | "--allow-experimental-crel"
+                        | "--no-crel",
+                        None,
+                    )
                     | ("-march" | "-mcpu" | "-mfpu", Some(_))
                     | ("-mrelax-relocations", Some("yes" | "no")) => {}
                     ("-I", None) => take_value = true,

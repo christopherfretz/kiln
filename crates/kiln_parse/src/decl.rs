@@ -5051,6 +5051,52 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// The C99 designators of one initializer (`.name`, `[index]`, GNU
+    /// `[first ... last]`), appended to `designator`. On an error the list
+    /// is skipped through its `}` and `Err` returned.
+    fn parse_designators(&mut self, designator: &mut Vec<Designator>) -> Result<(), ()> {
+        loop {
+            if self.at(Punct::Period) {
+                self.bump();
+                let Some(n) = self.ident() else {
+                    self.error_here(DiagId::parse_expected_unqualified_id);
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                let l = self.bump().span.lo;
+                designator.push(Designator::Field(n, l));
+            } else if self.at(Punct::LSquare)
+                && (!designator.is_empty() || self.array_designator_start())
+            {
+                let l = self.bump().span.lo;
+                let Some(e) = self.parse_constant_expr() else {
+                    self.skip_until(&[Punct::RBrace], false, true);
+                    return Err(());
+                };
+                // A GNU array range designator `[first ... last]`.
+                let range = if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
+                    let d = self.s.diag(DiagId::sema_gnu_array_range, ellipsis);
+                    self.emit(d);
+                    let Some(last) = self.parse_constant_expr() else {
+                        self.skip_until(&[Punct::RBrace], false, true);
+                        return Err(());
+                    };
+                    Some((last, ellipsis))
+                } else {
+                    None
+                };
+                self.expect_closing(Punct::RSquare, Punct::LSquare, l);
+                designator.push(match range {
+                    Some((last, ellipsis)) => Designator::Range(e, last, l, ellipsis),
+                    None => Designator::Index(e, l),
+                });
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// [`Self::parse_init_list`], with whether the designations were
     /// valid instead of dropping the list.
     fn parse_init_list_checked(&mut self) -> Result<(InitList, bool), ()> {
@@ -5078,44 +5124,8 @@ impl Parser<'_, '_> {
                 self.emit(d);
                 designator.push(Designator::Field(n, name.lo));
             }
-            while !old_style {
-                if self.at(Punct::Period) {
-                    self.bump();
-                    let Some(n) = self.ident() else {
-                        self.error_here(DiagId::parse_expected_unqualified_id);
-                        self.skip_until(&[Punct::RBrace], false, true);
-                        return Err(());
-                    };
-                    let l = self.bump().span.lo;
-                    designator.push(Designator::Field(n, l));
-                } else if self.at(Punct::LSquare)
-                    && (!designator.is_empty() || self.array_designator_start())
-                {
-                    let l = self.bump().span.lo;
-                    let Some(e) = self.parse_constant_expr() else {
-                        self.skip_until(&[Punct::RBrace], false, true);
-                        return Err(());
-                    };
-                    // A GNU array range designator `[first ... last]`.
-                    let range = if let Some(ellipsis) = self.eat(Punct::Ellipsis) {
-                        let d = self.s.diag(DiagId::sema_gnu_array_range, ellipsis);
-                        self.emit(d);
-                        let Some(last) = self.parse_constant_expr() else {
-                            self.skip_until(&[Punct::RBrace], false, true);
-                            return Err(());
-                        };
-                        Some((last, ellipsis))
-                    } else {
-                        None
-                    };
-                    self.expect_closing(Punct::RSquare, Punct::LSquare, l);
-                    designator.push(match range {
-                        Some((last, ellipsis)) => Designator::Range(e, last, l, ellipsis),
-                        None => Designator::Index(e, l),
-                    });
-                } else {
-                    break;
-                }
+            if !old_style {
+                self.parse_designators(&mut designator)?;
             }
             if !designator.is_empty() && !self.s.act_on_designation(&designator) {
                 valid = false;
