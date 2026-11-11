@@ -98,7 +98,7 @@ impl Writer<'_, '_, '_> {
 
     /// The record of template `t` (any declaration of it), a carried
     /// template of kind `kind`.
-    fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
+    pub(super) fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
         let t = self.s.ast.first(t);
         match self.recs.get(&t) {
             Some(&r)

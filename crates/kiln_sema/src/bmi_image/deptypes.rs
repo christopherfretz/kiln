@@ -11,7 +11,9 @@
 //! - a type-trait transform `__remove_cv(T)` & co. ([meta.trans]): its
 //!   kind, its operand and its result once the operand is not dependent;
 //! - `T C::*` ([dcl.mptr]);
-//! - a GNU or ext vector of a constant element count.
+//! - a GNU or ext vector of a constant element count;
+//! - the placeholder of a deduced class template type `C x(args)`
+//!   ([dcl.type.class.deduct]), with its deduced type once deduced.
 //!
 //! A qualifier step naming a dependent identifier (`T::x::`,
 //! [`NnsRec::Ident`]) is carried by name; the importer forms the same
@@ -20,10 +22,12 @@
 //! array of a value-dependent bound) still fall back: the importer builds
 //! types before bodies.
 
-use kiln_ast::types::{Nns, TagKeyword, TemplateArg, TypeView, UnaryTransformKind, VectorKind};
+use kiln_ast::types::{
+    Nns, TagKeyword, TemplateArg, TemplateName, TypeView, UnaryTransformKind, VectorKind,
+};
 use kiln_ast::{DeclId, QualType};
 
-use super::{ArgRec, Image, NnsRec, QRef, Rd, Res, TyRec, W, Wr, Writer, bad};
+use super::{ArgRec, Image, NnsRec, Payload, QRef, Rd, Res, TyRec, W, Wr, Writer, bad};
 use crate::Sema;
 
 /// A type of this module.
@@ -40,6 +44,9 @@ pub(super) enum DepTy {
     MemPtr { pointee: QRef, class: QRef },
     /// A vector of `count` elements of kind `kind`.
     Vector { elem: QRef, count: u32, kind: u8 },
+    /// A deduced class template type: the class template's record and
+    /// the deduced type.
+    Deduced { template: u32, deduced: Option<QRef> },
 }
 
 const T_NAME: u8 = 0;
@@ -47,6 +54,7 @@ const T_TMPL: u8 = 1;
 const T_TRANSFORM: u8 = 2;
 const T_MEMPTR: u8 = 3;
 const T_VECTOR: u8 = 4;
+const T_DEDUCED: u8 = 5;
 
 impl Writer<'_, '_, '_> {
     /// The record of type view `v`, `None` when this module does not
@@ -73,6 +81,13 @@ impl Writer<'_, '_, '_> {
             },
             TypeView::Vector { elem, count, kind } => {
                 DepTy::Vector { elem: self.qref(elem)?, count, kind: kind as u8 }
+            }
+            TypeView::DeducedTemplateSpecialization { name, deduced } => {
+                let TemplateName::Template(td) = self.s.ast.types.template_name_view(name) else {
+                    return Err("a deduced template named through a qualifier or parameter");
+                };
+                let template = self.template_rec(td, 1)?;
+                DepTy::Deduced { template, deduced: deduced.map(|q| self.qref(q)).transpose()? }
             }
             _ => return Ok(None),
         })))
@@ -118,6 +133,12 @@ pub(super) fn encode_dep(w: &mut Wr, d: &DepTy) {
             w.u32(*count);
             w.u8(*kind);
         }
+        DepTy::Deduced { template, deduced } => {
+            w.u8(T_DEDUCED);
+            w.u32(*template);
+            w.u32(deduced.map_or(0, |q| q.ty));
+            w.u8(deduced.map_or(0, |q| q.quals));
+        }
     }
 }
 
@@ -148,12 +169,7 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
                 return bad("bad type transform");
             }
             let base = r.q()?;
-            let result = match r.q()? {
-                QRef { ty: 0, quals: 0 } => None,
-                QRef { ty: 0, .. } => return bad("bad type reference"),
-                q => Some(q),
-            };
-            DepTy::Transform { kind, base, result }
+            DepTy::Transform { kind, base, result: opt_q(r)? }
         }
         T_MEMPTR => DepTy::MemPtr { pointee: r.q()?, class: r.q()? },
         T_VECTOR => {
@@ -165,7 +181,17 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
             }
             DepTy::Vector { elem, count, kind }
         }
+        T_DEDUCED => DepTy::Deduced { template: r.u32()?, deduced: opt_q(r)? },
         _ => return bad("bad dependent type"),
+    })
+}
+
+/// An optional type reference: type 0 is none.
+fn opt_q(r: &mut Rd<'_>) -> Res<Option<QRef>> {
+    Ok(match r.q()? {
+        QRef { ty: 0, quals: 0 } => None,
+        QRef { ty: 0, .. } => return bad("bad type reference"),
+        q => Some(q),
     })
 }
 
@@ -190,6 +216,10 @@ pub(super) fn dep_refs(d: &DepTy) -> (Vec<QRef>, Vec<u32>) {
         DepTy::Transform { base, result, .. } => qs.extend(std::iter::once(*base).chain(*result)),
         DepTy::MemPtr { pointee, class } => qs.extend([*pointee, *class]),
         DepTy::Vector { elem, .. } => qs.push(*elem),
+        DepTy::Deduced { template, deduced } => {
+            ds.push(*template);
+            qs.extend(*deduced);
+        }
     }
     (qs, ds)
 }
@@ -202,6 +232,10 @@ pub(super) fn dep_ok(img: &Image, d: &DepTy, nd: usize) -> bool {
         DepTy::Name { steps, name, .. } | DepTy::Tmpl { steps, name, .. } => {
             name_ok(*name) && super::steps_ok(img, steps, nd)
         }
+        DepTy::Deduced { template, .. } => matches!(
+            img.decls.get(*template as usize).map(|r| &r.payload),
+            Some(Payload::Template { kind: 1, .. })
+        ),
         DepTy::Transform { .. } | DepTy::MemPtr { .. } | DepTy::Vector { .. } => true,
     }
 }
@@ -217,7 +251,8 @@ impl Sema<'_, '_> {
         qt: &mut dyn FnMut(&mut Self, QRef) -> QualType,
     ) -> QualType {
         let kw = |k: u8| super::tag_keyword(k).unwrap_or(TagKeyword::Typename);
-        let name = |s: &Self, n: u32| s.intern(img.pnames.get(n as usize).map_or("", String::as_str));
+        let name =
+            |s: &Self, n: u32| s.intern(img.pnames.get(n as usize).map_or("", String::as_str));
         match d {
             DepTy::Name { kw: k, steps, name: n } => {
                 let q = self.image_dep_nns(img, steps, ids, qt);
@@ -253,6 +288,12 @@ impl Sema<'_, '_> {
             DepTy::Vector { elem, count, kind } => {
                 let e = qt(self, *elem);
                 self.ast.types.vector(e, *count, VectorKind::from_u8(*kind))
+            }
+            DepTy::Deduced { template, deduced } => {
+                let deduced = deduced.map(|q| qt(self, q));
+                let t = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
+                let name = self.ast.types.template_name_of(t);
+                self.ast.types.deduced_template_specialization(name, deduced)
             }
         }
     }

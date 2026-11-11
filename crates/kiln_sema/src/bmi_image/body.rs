@@ -2528,8 +2528,9 @@ impl Sema<'_, '_> {
                         },
                         4 => Nns::Identifier {
                             prefix: cur,
-                            name: self
-                                .intern(img.pnames.get(w[p + 1] as usize).map_or("", String::as_str)),
+                            name: self.intern(
+                                img.pnames.get(w[p + 1] as usize).map_or("", String::as_str),
+                            ),
                         },
                         _ => Nns::Type {
                             prefix: cur,

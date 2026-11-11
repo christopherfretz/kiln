@@ -26,7 +26,10 @@ use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::fx::FxHashMap;
 
 use super::body::{Built, Dc, OUTSIDE};
-use super::{DECL_FLAGS, DEP, DeclHead, DeclName, Image, LEX_TU, NONE, ParamRec, QRef, Rd, Res, W, Wr, Writer, bad};
+use super::{
+    DECL_FLAGS, DEP, DeclHead, DeclName, Image, LEX_TU, NONE, ParamRec, QRef, Rd, Res, W, Wr,
+    Writer, bad,
+};
 use crate::Sema;
 
 /// A requires-expression parameter in a declaration field:
@@ -174,9 +177,7 @@ impl Writer<'_, '_, '_> {
     fn requires_index(&mut self, body: DeclId) -> W<u32> {
         let t = &self.s.ast.templates;
         let map = self.bs.req.index.get_or_insert_with(|| {
-            (0..t.requires_len())
-                .filter_map(|i| t.requires_data(i).map(|r| (r.body, i)))
-                .collect()
+            (0..t.requires_len()).filter_map(|i| t.requires_data(i).map(|r| (r.body, i))).collect()
         });
         map.get(&body).copied().ok_or("a malformed requires-expression")
     }
@@ -342,7 +343,6 @@ pub(super) fn validate_requires(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> 
             let pack = if p.flags & DEP != 0 { ParamData::PACK } else { 0 };
             if (p.name != NONE && p.name as usize >= img.pnames.len())
                 || p.flags & !(DECL_FLAGS | DEP) != 0
-
                 || p.pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0
                 || !qref_ok(p.ty)
             {
@@ -409,7 +409,8 @@ impl Sema<'_, '_> {
         let mut out = ReqsBuilt::default();
         let invented = DeclName::ident(self.intern(INVENTED));
         for b in &img.reqs.recs {
-            let ctx = if b.ctx == LEX_TU { Some(self.ast.tu) } else { ids.get(b.ctx as usize).copied() };
+            let ctx =
+                if b.ctx == LEX_TU { Some(self.ast.tu) } else { ids.get(b.ctx as usize).copied() };
             let Some(ctx) = ctx else {
                 out.bodies.push(ReqBuilt::default());
                 continue;
@@ -486,7 +487,12 @@ impl Sema<'_, '_> {
 
 /// Checks an [`F::Reqs`](super::body::F::Reqs) token (`e_lim` bounds its
 /// operands).
-pub(super) fn reqs_ok(img: &Image, w: &[u32], e_lim: usize, qref_ok: &dyn Fn(QRef) -> bool) -> bool {
+pub(super) fn reqs_ok(
+    img: &Image,
+    w: &[u32],
+    e_lim: usize,
+    qref_ok: &dyn Fn(QRef) -> bool,
+) -> bool {
     let e = |x: u32| (x as usize) < e_lim;
     (w[0] as usize) < img.reqs.recs.len()
         && reqs(w).all(|r| match r[0] {

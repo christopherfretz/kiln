@@ -51,6 +51,7 @@ mod requires;
 mod scope;
 mod spec;
 mod templ;
+mod written;
 
 use body::{Bodies, BodyState, Root};
 pub(crate) use locs::Locs;
@@ -71,11 +72,13 @@ const LEX_TU: u32 = u32::MAX - 1;
 const BUILTINS: u32 = BuiltinType::ALL.len() as u32;
 /// Special-name words in a record's name field: the constructors and the
 /// destructor of the enclosing class, a conversion function (to its
-/// return type), `operator@` (`N_OP + op`). The importer recomputes the
+/// return type), a deduction guide (of the class template its return
+/// type names), `operator@` (`N_OP + op`). The importer recomputes the
 /// name.
 const N_CTOR: u32 = 0xFFFF_FF00;
 const N_DTOR: u32 = 0xFFFF_FF01;
 const N_CONV: u32 = 0xFFFF_FF02;
+const N_GUIDE: u32 = 0xFFFF_FF03;
 const N_OP: u32 = 0xFFFF_FE00;
 
 /// What the writer hands the driver.
@@ -333,13 +336,16 @@ struct InitRec {
 }
 
 /// `Function.kind`: the declaration kind of a function record.
-const FN_KINDS: [DeclKind; 5] = [
+const FN_KINDS: [DeclKind; 6] = [
     DeclKind::Function,
     DeclKind::CXXMethod,
     DeclKind::CXXConstructor,
     DeclKind::CXXDestructor,
     DeclKind::CXXConversion,
+    DeclKind::CXXDeductionGuide,
 ];
+/// The `Function.kind` of a deduction guide (namespace scope only).
+const FN_GUIDE: u8 = 5;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Payload {
@@ -554,6 +560,8 @@ struct Image {
     cons: constraints::Constraints,
     /// WP-1284: requires-expression bodies.
     reqs: requires::ReqBodies,
+    /// WP-1284: where the carried dependent names were written.
+    written: Vec<written::WrittenRec>,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1156,6 +1164,7 @@ fn encode(img: &Image) -> Vec<u8> {
     scope::encode_scopes(&mut w, &img.scopes);
     constraints::encode_constraints(&mut w, &img.cons);
     requires::encode_requires(&mut w, &img.reqs);
+    written::encode_written(&mut w, &img.written);
     w.0
 }
 
@@ -1733,6 +1742,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.scopes = scope::decode_scopes(&mut r)?;
     img.cons = constraints::decode_constraints(&mut r)?;
     img.reqs = requires::decode_requires(&mut r)?;
+    img.written = written::decode_written(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -1811,6 +1821,20 @@ fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
     })
 }
 
+/// The class template (its first declaration) deduction guide type
+/// `fty` returns a specialization of, as written: `C<args>` directly.
+fn guided_template(ast: &kiln_ast::Ast, fty: Option<QualType>) -> Option<DeclId> {
+    let TypeView::Function(p) = ast.types.view(fty?.ty()) else { return None };
+    let TypeView::TemplateSpecialization { name, alias: false, .. } = ast.types.view(p.ret().ty())
+    else {
+        return None;
+    };
+    match ast.types.template_name_view(name) {
+        kiln_ast::types::TemplateName::Template(t) => Some(ast.first(t)),
+        _ => None,
+    }
+}
+
 /// The structural checks of [`decode`].
 #[allow(clippy::too_many_lines)] // one arm per record or type kind, kept together with the format
 fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
@@ -1850,7 +1874,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         )
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
                         | (
-                            TyRec::Injected(_) | TyRec::Tst { .. },
+                            TyRec::Injected(_) | TyRec::Tst { .. } | TyRec::Dep(_),
                             Payload::Template { kind: 1, .. }
                         )
                         | (TyRec::Tst { under: Some(_), .. }, Payload::Template { kind: 2, .. })
@@ -2153,6 +2177,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
                 N_CONV => *kind == 4,
+                N_GUIDE => *kind == FN_GUIDE,
                 n if (N_OP..N_CTOR).contains(&n) => {
                     *kind < 2
                         && u8::try_from(n - N_OP)
@@ -2172,7 +2197,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         match &d.payload {
             Payload::Function { kind, ty, spec, params, inits, overrides, .. } => {
-                if *kind as usize >= FN_KINDS.len() || (*kind == 0) == in_class {
+                if *kind as usize >= FN_KINDS.len() || matches!(*kind, 0 | FN_GUIDE) == in_class {
                     return bad("bad function kind");
                 }
                 // A first declaration's overridden functions: other
@@ -2331,18 +2356,18 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     && (concept
                         || (*kind == 0 || p + 1 == i)
                             && kind_of(*pattern).is_some_and(|r| {
-                        matches!(
-                            (*kind, &r.payload),
-                            (0, Payload::Function { kind: 0, .. })
-                                | (1, Payload::Record { .. })
-                                | (2, Payload::Typedef { alias: true, .. })
-                                | (3, Payload::Var { .. })
-                        ) && r.flags & DEP != 0
-                            && r.name == d.name
-                            && r.ctx == d.ctx
-                            && r.owner == d.owner
-                            && r.lexical == NONE
-                            && r.prev == NONE
+                                matches!(
+                                    (*kind, &r.payload),
+                                    (0, Payload::Function { kind: 0 | FN_GUIDE, .. })
+                                        | (1, Payload::Record { .. })
+                                        | (2, Payload::Typedef { alias: true, .. })
+                                        | (3, Payload::Var { .. })
+                                ) && r.flags & DEP != 0
+                                    && r.name == d.name
+                                    && r.ctx == d.ctx
+                                    && r.owner == d.owner
+                                    && r.lexical == NONE
+                                    && r.prev == NONE
                             })
                             && !claimed[p])
                     && (!concept || (*pattern == NONE && ident(d.name)));
@@ -2449,6 +2474,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     scope::validate_scopes(img)?;
     constraints::validate_constraints(img)?;
     requires::validate_requires(img, &|q| qref_ok(q, nt))?;
+    written::validate_written(img, &|q| qref_ok(q, nt))?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2844,6 +2870,21 @@ impl Writer<'_, '_, '_> {
                 }
                 N_CONV
             }
+            V::DeductionGuide(t) => {
+                // The importer names the guide (and its template) after
+                // the class template its return type names
+                // ([temp.deduct.guide]/3).
+                let g = match n.kind() {
+                    DeclKind::CXXDeductionGuide => Some(d),
+                    DeclKind::FunctionTemplate => ast.template_info(d).and_then(|i| i.pattern),
+                    _ => None,
+                };
+                let fty = g.and_then(|g| ast.decls.get(g).ty());
+                if guided_template(ast, fty) != Some(ast.first(t)) {
+                    return Err("a deduction guide whose return type is sugared");
+                }
+                N_GUIDE
+            }
             _ => return Err("a declaration not named by an identifier"),
         })
     }
@@ -2968,7 +3009,8 @@ impl Writer<'_, '_, '_> {
             | DeclKind::CXXMethod
             | DeclKind::CXXConstructor
             | DeclKind::CXXDestructor
-            | DeclKind::CXXConversion => self.function(d, i)?,
+            | DeclKind::CXXConversion
+            | DeclKind::CXXDeductionGuide => self.function(d, i)?,
             DeclKind::Var => self.var_payload(d, i)?,
             DeclKind::Enum => {
                 let ed = *ast.decls.enumeration(d).ok_or("a malformed enumeration")?;
@@ -3101,7 +3143,7 @@ impl Writer<'_, '_, '_> {
         // carried, as dependent records, for importers to instantiate.
         let pattern = match fd.templ.get() {
             None => self.dep_member(d),
-            Some((TemplLinkKind::Pattern, _)) if kind == 0 => true,
+            Some((TemplLinkKind::Pattern, _)) if matches!(kind, 0 | 5) => true,
             Some((TemplLinkKind::Pattern, _)) => return Err("a member function template"),
             Some(_) => return Err("a template specialization"),
         };
@@ -3580,7 +3622,9 @@ impl Writer<'_, '_, '_> {
                 x.target = r;
             }
         }
-        self.walk_roots()
+        self.walk_roots()?;
+        self.written_section();
+        Ok(())
     }
 
     fn marks(&self) -> Marks {
@@ -3723,6 +3767,18 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
+    /// Whether `d` is an implicit deduction guide or its template.
+    fn implicit_guide(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        let guide = |x: DeclId| {
+            let n = ast.decls.get(x);
+            n.kind() == DeclKind::CXXDeductionGuide && n.has(DeclFlags::IMPLICIT)
+        };
+        guide(d)
+            || (ast.decls.get(d).kind() == DeclKind::FunctionTemplate
+                && ast.template_info(d).and_then(|i| i.pattern).is_some_and(guide))
+    }
+
     /// One declaration of the purview, in id order ([`Writer::collect`]).
     #[allow(clippy::too_many_lines)] // the purview's declaration kinds, with the class nesting
     fn one(&mut self, d: DeclId, st: &mut Pass) -> W<()> {
@@ -3767,6 +3823,14 @@ impl Writer<'_, '_, '_> {
         if n.kind() == DeclKind::RequiresExprBody {
             // Carried by the requires-expression that names it, with its
             // parameters and invented parameters (bmi_image/requires.rs).
+            let _ = st.skipped.insert(d);
+            return Ok(());
+        }
+        if n.has(DeclFlags::IMPLICIT) && self.implicit_guide(d) {
+            // An implicit deduction guide: formed again by the importer
+            // at its first class template argument deduction
+            // ([over.match.class.deduct]/1); it joins no member list or
+            // lookup table.
             let _ = st.skipped.insert(d);
             return Ok(());
         }
@@ -3940,6 +4004,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXConstructor
         | K::CXXDestructor
         | K::CXXConversion
+        | K::CXXDeductionGuide
         | K::FunctionTemplate
         | K::ClassTemplate
         | K::TypeAliasTemplate
@@ -3959,7 +4024,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
         | K::FriendTemplate
-        | K::CXXDeductionGuide
         | K::TemplateTemplateParm => Err("a template"),
         K::ConstructorUsingShadow => Err("an inheriting constructor"),
         K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
@@ -4236,7 +4300,11 @@ impl Sema<'_, '_> {
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
-                    let f = self.builder().function(h, kind, fty, spec, prev);
+                    let f = if kind == DeclKind::CXXDeductionGuide {
+                        self.builder().deduction_guide(h, fty, spec)
+                    } else {
+                        self.builder().function(h, kind, fty, spec, prev)
+                    };
                     self.ast.templates.pattern_next = false;
                     if !ci.is_empty() {
                         ctors.push((f, i));
@@ -4411,18 +4479,18 @@ impl Sema<'_, '_> {
                         self.ast.templates.dependent_depth = saved_depth;
                         c
                     } else {
-                    let pat = ids[*pattern as usize];
-                    let k = match kind {
-                        1 => DeclKind::ClassTemplate,
-                        2 => DeclKind::TypeAliasTemplate,
-                        3 => DeclKind::VarTemplate,
-                        _ => DeclKind::FunctionTemplate,
-                    };
-                    let t = self.builder().template_decl(k, pat, list, None);
-                    if *using != NONE {
-                        let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
-                    }
-                    t
+                        let pat = ids[*pattern as usize];
+                        let k = match kind {
+                            1 => DeclKind::ClassTemplate,
+                            2 => DeclKind::TypeAliasTemplate,
+                            3 => DeclKind::VarTemplate,
+                            _ => DeclKind::FunctionTemplate,
+                        };
+                        let t = self.builder().template_decl(k, pat, list, None);
+                        if *using != NONE {
+                            let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
+                        }
+                        t
                     }
                 }
                 Payload::Spec { .. } => {
@@ -4439,8 +4507,9 @@ impl Sema<'_, '_> {
                     {
                         h.name = DeclName::operator(op);
                     }
-                    let nns =
-                        self.image_nns(img, steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
+                    let nns = self.image_nns(img, steps, &ids, &mut |s, q| {
+                        s.image_ty(img, &mut tys, &ids, q)
+                    });
                     self.builder().using_decl(h, nns)
                 }
                 Payload::Shadow { target } => {
@@ -4478,6 +4547,7 @@ impl Sema<'_, '_> {
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
+        self.image_written(img, &mut tys, &ids, main);
         self.image_nttp_defaults(&nttp_defaults, &built);
         for (f, width, init) in fields {
             if width != NONE {
@@ -4622,6 +4692,10 @@ impl Sema<'_, '_> {
                 Some(self.ast.names.constructor(class()?))
             }
             N_DTOR if kind == DeclKind::CXXDestructor => Some(self.ast.names.destructor(class()?)),
+            N_GUIDE if kind == DeclKind::CXXDeductionGuide => {
+                let t = guided_template(&self.ast, Some(fty))?;
+                Some(self.ast.names.deduction_guide(t))
+            }
             N_CONV if kind == DeclKind::CXXConversion => {
                 let ret = match self.ast.types.view(fty.ty()) {
                     TypeView::Function(p) => p.ret(),
@@ -5113,6 +5187,7 @@ mod tests {
             scopes: scope::Scopes::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
+            written: Vec::new(),
         }
     }
 
