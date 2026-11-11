@@ -720,6 +720,7 @@ pub struct Args {
 /// The precompiled-header options (WP-1023, spec/driver.md "Precompiled
 /// headers"), and the state the PCH consumer gives a compile.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 pub struct PchArgs {
     /// The last `-include-pch <file>` (clang uses the last one too).
     pub include: Option<String>,

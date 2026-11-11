@@ -41,7 +41,7 @@ pub(crate) fn start(
     }
     match PpRecord::decode(&u.bytes).and_then(|r| r.materialize(sm, interner)) {
         Ok(st) => {
-            pp.set_state_hooks(StateHooks { install: Some((0, st)), ..StateHooks::default() })
+            pp.set_state_hooks(StateHooks { install: Some((0, st)), ..StateHooks::default() });
         }
         Err(why) => {
             Diag::new(DiagId::drv_pch_image_load, Span::INVALID).arg(&u.pch).arg(why).emit(engine);

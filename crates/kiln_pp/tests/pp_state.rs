@@ -15,11 +15,12 @@ use kiln_pp::{
     RealFs, SearchDirSpec, SearchList, print_macros, print_preprocessed,
 };
 use kiln_source::SourceManager;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 fn opts(predefines: &str) -> PpOptions {
     let mut o = PpOptions::new(Std::Cxx26);
-    o.predefines = predefines.to_owned();
+    predefines.clone_into(&mut o.predefines);
     o.reproducible_time = Some(("Jan  1 2000".to_owned(), "00:00:00".to_owned()));
     o
 }
@@ -233,12 +234,12 @@ fn torture_corpus() {
     let mut inputs: Vec<String> = std::fs::read_dir(dir.join("Inputs"))
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".h"))
+        .filter(|n| Path::new(n).extension().is_some_and(|x| x == "h"))
         .collect();
     inputs.sort();
     let mut rest = String::from("kiln_rest_begins\n");
     for i in &inputs {
-        rest.push_str(&format!("#include \"Inputs/{i}\"\n"));
+        let _ = writeln!(rest, "#include \"Inputs/{i}\"");
     }
     rest.push_str("__COUNTER__ __LINE__ __INCLUDE_LEVEL__\n");
     let mut tests: Vec<PathBuf> = std::fs::read_dir(&dir)

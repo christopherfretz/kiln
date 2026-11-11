@@ -25,6 +25,7 @@ use crate::preprocessor::{Frame, Marker, Preprocessor};
 
 /// Where module interfaces are found (spec/modules.md §2, §11).
 #[derive(Clone, Debug, Default)]
+#[allow(clippy::struct_excessive_bools, reason = "independent command-line switches")]
 pub struct ModuleOptions {
     /// `-fmodule-file=<name>=<path>`: the source or module file of module
     /// `<name>` (`M:P` for a partition).

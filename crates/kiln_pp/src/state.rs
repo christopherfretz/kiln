@@ -391,7 +391,7 @@ struct Enc<'s> {
     def_ix: HashMap<*const MacroDef, u32>,
 }
 
-impl<'s> Enc<'s> {
+impl Enc<'_> {
     fn name(&mut self, s: Symbol) -> u32 {
         if let Some(&i) = self.name_ix.get(&s) {
             return i;
@@ -473,6 +473,10 @@ impl PpState {
     ///
     /// # Errors
     /// The reason the state cannot be recorded.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the layout field by field, in order (spec/modules.md §11.13)"
+    )]
     pub fn encode(&self, sm: &SourceManager, interner: &Interner, main: FileId) -> W<Vec<u8>> {
         let mut e = Enc {
             sm,
@@ -679,6 +683,11 @@ impl PpRecord {
     ///
     /// # Errors
     /// What is malformed.
+    #[allow(
+        clippy::too_many_lines,
+        clippy::many_single_char_names,
+        reason = "the layout field by field, in order (spec/modules.md §11.13)"
+    )]
     pub fn decode(bytes: &[u8]) -> W<PpRecord> {
         let mut r = Reader(bytes);
         if r.u32()? != VERSION {
@@ -947,6 +956,10 @@ impl PpRecord {
     /// # Errors
     /// A file that is missing or no longer holds the recorded text, or
     /// location space running out.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the layout field by field, in order (spec/modules.md §11.13)"
+    )]
     pub fn materialize(&self, sm: &SourceManager, interner: &Interner) -> W<PpState> {
         let mut ids = Vec::with_capacity(self.files.len());
         for f in &self.files {
@@ -1109,7 +1122,7 @@ impl PpState {
         };
         let def = |d: &MacroDef| -> String {
             if let Some(b) = d.builtin {
-                return format!("builtin {:?}", b);
+                return format!("builtin {b:?}");
             }
             let mut s = name(d.name).to_owned();
             if d.function_like {
