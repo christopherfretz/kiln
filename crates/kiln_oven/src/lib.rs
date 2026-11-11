@@ -598,6 +598,31 @@ pub struct Oven {
     /// A fold may leave allocations undeallocated
     /// ([`Oven::set_fold_leaks`]).
     pub(crate) fold_leaks: bool,
+    /// The fold is a C static initializer's, which clang evaluates in a
+    /// constant context ([`Oven::set_fold_c_static`]).
+    pub(crate) fold_c_static: bool,
+    /// The displacement (`Op::AddrInt`) of each address an integer object
+    /// holds by space and absolute byte, when not 0
+    /// ([`crate::kbc::addr_int_disp`]; read by the freeze). Cleared by
+    /// [`Oven::set_fold_c_static`].
+    pub(crate) addr_int_disps: FxHashMap<(mem::Sp, u64), i64>,
+    /// The addresses C static initializers compute that a pointer's
+    /// encoding cannot hold, as a base pointer (0: an integer) and a
+    /// byte displacement: `(void *)-1`, `(char *)f + 1`, `a + 128` past
+    /// `a`'s end (C23 6.6p9, clang's `inttoptr` and `gep i8`). A pointer
+    /// to one is [`mem::synth_ptr`]; only [`Oven::set_fold_c_static`]
+    /// makes them.
+    pub(crate) synth: std::cell::RefCell<Vec<(u64, i64)>>,
+    /// The label address differences C static initializers compute
+    /// (`&&a - &&b`), as the two `AddrLabelExpr`s; an integer holds one as
+    /// the address [`mem::label_diff_ptr`] (`addr_int::LABEL_DIFF`).
+    pub(crate) label_diffs: Vec<(ExprId, ExprId)>,
+    /// The integer objects of the current C static initializer's fold
+    /// that hold such a difference, by space and absolute byte, with
+    /// its displacement: their bytes stay uninitialized (so the fold
+    /// cannot read them) and the freeze relocates them. Cleared by
+    /// [`Oven::set_fold_c_static`].
+    pub(crate) label_diff_cells: FxHashMap<(mem::Sp, u64), (u32, i64)>,
     /// String literal objects of evaluated `StringLiteral` exprs, one per
     /// expression ([lex.string]/9: distinct evaluations need not share).
     pub(crate) lit_exprs: FxHashMap<ExprId, u32>,
@@ -703,6 +728,11 @@ impl Oven {
             fold_float_ub: false,
             addr_int: false,
             fold_leaks: false,
+            fold_c_static: false,
+            addr_int_disps: FxHashMap::default(),
+            synth: std::cell::RefCell::default(),
+            label_diffs: Vec::new(),
+            label_diff_cells: FxHashMap::default(),
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
             lets: FxHashMap::default(),
@@ -744,7 +774,8 @@ impl Oven {
     /// the IEEE result, as clang's codegen folds an initializer or operand
     /// (`ConstantEmitter`: such a result is undefined behaviour the
     /// folding evaluation modes keep evaluating past). A call that did is
-    /// never memoized. Codegen sets it; sema never does.
+    /// never memoized. Codegen sets it; sema sets it only for the C check
+    /// that a static initializer is constant (which reads success alone).
     pub fn set_fold_float_ub(&mut self, on: bool) {
         self.fold_float_ub = on;
     }
@@ -771,9 +802,31 @@ impl Oven {
     /// coverage `ConditionFoldsToBool`; WP-1108). The allocations are
     /// reclaimed with the context, as any other. A constant expression
     /// ([expr.const]/5.20) and every evaluation sema runs keep the leak
-    /// check. Codegen sets it; sema never does.
+    /// check. Codegen sets it; sema sets it only for the C check that a
+    /// static initializer is constant (which reads success alone).
     pub fn set_fold_leaks(&mut self, on: bool) {
         self.fold_leaks = on;
+    }
+
+    /// Marks the folds that follow as a C static initializer's. Every C
+    /// file-scope or `static` variable's initializer must be a constant
+    /// expression (C23 6.7.11p4), and clang evaluates it in a constant
+    /// context (`VarDecl::hasConstantInitialization` is always true in C),
+    /// so `__builtin_constant_p` of a non-constant argument there folds
+    /// to 0 instead of failing the lax fold (GCC agrees). Codegen sets it
+    /// around a C translation unit's initializer folds and sema around
+    /// its C static-initializer check; C++ never sets it.
+    pub fn set_fold_c_static(&mut self, on: bool) {
+        self.fold_c_static = on;
+        // Per-object state of the previous fold's addresses an integer
+        // holds; a later fold must not read it back.
+        if !self.label_diff_cells.is_empty() {
+            self.label_diff_cells.clear();
+        }
+        if !self.addr_int_disps.is_empty() {
+            self.addr_int_disps.clear();
+        }
+        self.label_diffs.clear();
     }
 
     /// Sets how many call frames a failure's backtrace shows

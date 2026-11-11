@@ -122,12 +122,13 @@ impl SemaBridge for Bridge<'_> {
 
 /// Folds every candidate expression of the translation unit.
 pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds {
-    let (cands, inits, imm, statics, dtors, ps_args, arr_lists) = {
+    let (cands, inits, c_static, imm, statics, dtors, ps_args, arr_lists) = {
         let mut c = Collect {
             ast,
             compat: oven.clang_compat(),
             out: Vec::new(),
             inits: FxHashMap::default(),
+            c_static: FxHashSet::default(),
             imm: Vec::new(),
             defaults: FxHashSet::default(),
             statics: Vec::new(),
@@ -137,7 +138,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             cover: None,
         };
         c.tu();
-        (c.out, c.inits, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists)
+        (c.out, c.inits, c.c_static, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists)
     };
     let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
     let mut folds = Folds::default();
@@ -160,6 +161,9 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         // is a trial fold (`__builtin_is_constant_evaluated()` is false),
         // lax as clang's `EvaluateAsRValue`: a `const double` or
         // `const _Atomic(int)` variable reads as its value.
+        // A C static's initializer is evaluated in a constant context
+        // (clang: every C variable `hasConstantInitialization`).
+        oven.set_fold_c_static(c_static.contains(&e));
         let v = match inits.get(&e) {
             // A `constexpr` variable sema already evaluated keeps that value
             // (clang `VarDecl::evaluateValue` is cached and
@@ -194,6 +198,7 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
             },
             None => oven.fold_rvalue(&mut b, e),
         };
+        oven.set_fold_c_static(false);
         // A value holding the address of an automatic variable (a
         // `constexpr` reference to a local, P2686R5) has no constant
         // form: like clang's `ConstantEmitter`, which cannot emit it,
@@ -388,6 +393,10 @@ struct Collect<'a> {
     /// storage, `constexpr`, or usable in constant expressions as a
     /// `const` non-volatile integral or enumeration).
     inits: FxHashMap<ExprId, DeclId>,
+    /// The initializers of a C translation unit's static-storage
+    /// variables, folded in a constant context
+    /// ([`Oven::set_fold_c_static`]).
+    c_static: FxHashSet<ExprId>,
     /// Immediate invocations inside default arguments, with the use
     /// they are evaluated in ([`Folds::imm`]).
     imm: Vec<(ExprId, Option<ExprId>)>,
@@ -512,6 +521,9 @@ impl Collect<'_> {
         }
         if constant_init {
             self.inits.insert(init, d);
+        }
+        if is_static && ast.lang_c {
+            self.c_static.insert(init);
         }
         // The folded value replaces the whole initializer when the
         // variable is static or an automatic aggregate clang emits as a

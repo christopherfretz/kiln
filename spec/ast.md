@@ -770,7 +770,9 @@ enum Scalar<'a> {                       // `ty` is the canonical, cv-unqualified
 }
 enum PtrBase { Decl(DeclId), Function(DeclId), Temporary(DeclId),
                StringLit { lit: StringLitId, origin: ExprId },
-               Const(ConstValueId), TypeInfo(QualType) }
+               Const(ConstValueId), TypeInfo(QualType),
+               Label { label: DeclId, origin: ExprId }, Absolute,
+               LabelDiff { plus: ExprId, minus: ExprId, size: u8 } }
 enum FloatKind { Half, BFloat16, Single, Double, X87Extended, Quad }
 struct ByteImage<'a> { ty: QualType, bytes: &'a [u8], relocs: &'a [Reloc],
                        padding: &'a [ByteRange], unions: &'a [UnionMember] }
@@ -790,7 +792,15 @@ struct UnionMember { at: u32, field: DeclId }       // active member of the unio
 - **Pointers** are `(base, byte offset)`, as in the Oven's memory model
   (spec/oven.md). Identity is `(type, base, offset)`. The designator path
   is not stored: printing recovers it from the type and offset (§9.3).
-  - `Function` bases require offset 0.
+  - `Function` bases carry offset 0 except in a C address constant
+    (`(char *)f + 1`, C23 6.6p9, WP-1304).
+  - A `LabelDiff` base is the difference of two label addresses as an
+    integer, `&&plus - &&minus` plus `offset` (GNU C, clang's
+    `AddrLabelDiff`; WP-1304): only a `Pointer` of integer type carries
+    it, only a C static initializer's fold makes one, and its relocation
+    is `size` bytes wide (1, 2, 4 or 8; code 8 + log2 `size`), the only
+    relocation narrower than a pointer. Images (PCH, modules) refuse it,
+    as `Absolute`.
   - A `Const(id)` base must already be in the store. It names a subobject
     of another frozen value (an object with static storage and no
     declaration of its own).

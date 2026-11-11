@@ -13,8 +13,8 @@ use kiln_source::Loc;
 
 use crate::compile::{GKind, GState, RetKind, is_local_var};
 use crate::failure::{EvalFailure, FailKind, Note};
-use crate::kbc::ADDR_INT_TAG;
-use crate::mem::{Origin, Ptr, UNBACKED, flags, fn_ptr};
+use crate::kbc::{addr_int_disp, is_addr_int};
+use crate::mem::{Origin, Ptr, UNBACKED, flags, fn_ptr, synth_idx};
 use crate::ty::{OTy, TyKind};
 use crate::vm::{Counters, value_len};
 use crate::{Oven, SemaBridge};
@@ -106,8 +106,15 @@ pub(crate) fn var_info(ast: &Ast, d: DeclId) -> VarInfo {
     // through its initializer (clang `handleLValueToRValueConversion`
     // evaluates the literal's initializer; a non-`const` one is not
     // constant; WP-466).
+    // In C a literal of scalar, vector or class type is read the same
+    // way whatever its qualifiers (C23 6.5.2.5p5: its initializer is
+    // constant, and only a static initializer names it; `struct X x =
+    // (struct X){1, 2};`, `v4si a[] = {(v4si){1, 2, 3, 4}};`), as clang
+    // folds it; a non-`const` array literal's element stays unread there
+    // too (`((int[]){1, 2})[1]`).
     if ast.decls.compound_literal_of(d).is_some() {
-        info.usable = q.is_const() && !q.is_volatile();
+        let c_scalar = ast.lang_c && !ast.types.is_array(c);
+        info.usable = (q.is_const() || c_scalar) && !q.is_volatile();
     }
     // [expr.const]/10.9: a volatile object is never read, even through a
     // glvalue whose type drops the qualifier (`const_cast`), so a volatile
@@ -625,8 +632,8 @@ impl Oven {
         Ok(match info.kind {
             TyKind::Bool => Scalar::Bool { ty: info.q, value: v != 0 },
             // An address an integer holds (`cce::ADDR_INT`).
-            TyKind::Int { width, .. } if width <= 64 && v >> 64 == ADDR_INT_TAG >> 64 => {
-                self.ptr_of(b, info.q, ty, v as u64, None, loc)?
+            TyKind::Int { width, signed } if width <= 64 && is_addr_int(v) => {
+                self.addr_int_of(b, info.q, ty, (width, signed), v as u64, addr_int_disp(v), loc)?
             }
             TyKind::Int { width, signed } => {
                 let w = u32::from(width);
@@ -794,6 +801,10 @@ impl Oven {
         p: Ptr,
         loc: Loc,
     ) -> Result<Scalar<'static>, Freeze> {
+        if let Some(k) = synth_idx(p.encode()) {
+            let (base, d) = self.synth.borrow()[k as usize];
+            return self.synth_of(b, q, pointee, base, d, loc);
+        }
         if p.slot == 0 {
             let offset = u64::from(p.off);
             let past = false;
@@ -810,6 +821,42 @@ impl Oven {
         };
         let raw = Ptr { generation: a.generation, ..p }.encode();
         self.ptr_of(b, q, pointee, raw, None, loc)
+    }
+
+    /// [`Self::nowhere_of`] of an [`Oven::synth`] entry: `base`'s
+    /// address (an integer's for 0) displaced by `d` bytes.
+    #[cold]
+    fn synth_of(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        q: QualType,
+        pointee: OTy,
+        base: u64,
+        d: i64,
+        loc: Loc,
+    ) -> Result<Scalar<'static>, Freeze> {
+        let sc = if base == 0 {
+            Scalar::Null { ty: q, kind: NullKind::Pointer }
+        } else {
+            self.ptr_of(b, q, pointee, base, None, loc)?
+        };
+        Ok(match sc {
+            Scalar::Pointer { ty, base, offset, .. } => Scalar::Pointer {
+                ty,
+                base,
+                offset: offset.wrapping_add(d.cast_unsigned()),
+                designated: None,
+                past: false,
+            },
+            Scalar::Null { ty, .. } => Scalar::Pointer {
+                ty,
+                base: PtrBase::Absolute,
+                offset: d.cast_unsigned(),
+                designated: None,
+                past: false,
+            },
+            _ => return Err(Freeze::Fault(FailKind::NotConstant)),
+        })
     }
 
     fn ptr_of(
@@ -1092,6 +1139,60 @@ impl Oven {
         kiln_ast::types::print_type(&ast.types, ast, q, kiln_ast::types::PrintOptions::SUGARED)
     }
 
+    /// The constant an integer holding the address `raw` displaced by `disp`
+    /// bytes (`Op::AddrInt`) freezes to: the address with its byte offset
+    /// moved, as clang's `ptrtoint (gep i8 base, off)` (C23 6.6p9).
+    #[cold]
+    #[allow(clippy::too_many_arguments)]
+    fn addr_int_of(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        q: QualType,
+        t: OTy,
+        (width, signed): (u8, bool),
+        raw: u64,
+        disp: i64,
+        loc: Loc,
+    ) -> Result<Scalar<'static>, Freeze> {
+        if let Some(k) = crate::mem::label_diff_idx(raw) {
+            return Ok(self.label_diff_of(q, t, k, disp));
+        }
+        let sc = self.ptr_of(b, q, t, raw, None, loc)?;
+        if disp == 0 {
+            return Ok(sc);
+        }
+        Ok(match sc {
+            Scalar::Pointer { ty, base, offset, .. } => Scalar::Pointer {
+                ty,
+                base,
+                offset: offset.wrapping_add(disp.cast_unsigned()),
+                designated: None,
+                past: false,
+            },
+            Scalar::Null { .. } => {
+                let w = u32::from(width);
+                let m = disp.cast_unsigned() as u128 & ((1u128 << w) - 1);
+                Scalar::Int { ty: q, signed, bits: IntBits::from_u128(w, m) }
+            }
+            _ => return Err(Freeze::Fault(FailKind::NotConstant)),
+        })
+    }
+
+    /// The constant of type `q` of label address difference `k`
+    /// ([`Oven::label_diffs`]) displaced by `disp`.
+    #[cold]
+    fn label_diff_of(&self, q: QualType, t: OTy, k: u32, disp: i64) -> Scalar<'static> {
+        let (plus, minus) = self.label_diffs[k as usize];
+        let size = self.types.size(t) as u8;
+        Scalar::Pointer {
+            ty: q,
+            base: PtrBase::LabelDiff { plus, minus, size },
+            offset: disp.cast_unsigned(),
+            designated: None,
+            past: false,
+        }
+    }
+
     /// Copies the object of type `t` at `raw` into the image at byte `at`.
     /// [`Self::walk`] of an integer holding an address
     /// (`Op::InitStore` of `cce::ADDR_INT`): the address, relocated. Any
@@ -1118,7 +1219,9 @@ impl Oven {
             return Err(Freeze::Fault(FailKind::NotConstant));
         }
         let raw = sp.read(abs, info.size) as u64;
-        let sc = self.ptr_of(b, info.q, t, raw, None, loc)?;
+        let disp = self.addr_int_disps.get(&(st, abs)).copied().unwrap_or(0);
+        let TyKind::Int { width, signed } = info.kind else { unreachable!() };
+        let sc = self.addr_int_of(b, info.q, t, (width, signed), raw, disp, loc)?;
         let id = b.consts().push_scalar(sc).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
         s.relocs.push(Reloc { at: at as u32, value: id });
         s.cover[at..at + info.size as usize].fill(1);
@@ -1148,6 +1251,18 @@ impl Oven {
         match info.kind {
             TyKind::Bool | TyKind::Int { .. } | TyKind::WideInt { .. } | TyKind::Float(_) => {
                 let len = value_len(info.size, info.kind);
+                if !self.label_diff_cells.is_empty()
+                    && let Some(&(k, disp)) = self.label_diff_cells.get(&(st, abs))
+                {
+                    let sc = self.label_diff_of(info.q, t, k, disp);
+                    let id = b
+                        .consts()
+                        .push_scalar(sc)
+                        .map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
+                    s.relocs.push(Reloc { at: at as u32, value: id });
+                    s.cover[at..at + len as usize].fill(1);
+                    return Ok(());
+                }
                 let sp = self.mem.space(st);
                 if !sp.is_init(abs, len) {
                     return Err(self.uninit(b, field, t, loc));
@@ -1860,6 +1975,15 @@ impl Oven {
                 self.mem.stat.write(base + at, 8, v);
                 continue;
             }
+            if let Some(Scalar::Pointer { base: PtrBase::LabelDiff { .. }, .. }) =
+                b.consts().scalar(r.value)
+            {
+                // A label address difference has no value an evaluation
+                // may read (`Oven::label_diff_cells`).
+                let n = value_len(self.types.size(ty), self.types.kind(ty));
+                self.mem.stat.set_init(base + at, n, false);
+                continue;
+            }
             let v = self.thaw_ptr(b, r.value, ty, top);
             self.put_thawed_ptr(base + at, v);
         }
@@ -1906,6 +2030,10 @@ impl Oven {
             Some(Scalar::Int { bits, .. }) => (bits.to_u128().unwrap_or(0), false),
             Some(Scalar::Bool { value, .. }) => (u128::from(value), false),
             Some(Scalar::Float { bits, .. }) => (bits, false),
+            Some(Scalar::Pointer { base: PtrBase::LabelDiff { .. }, .. }) => {
+                self.mem.stat.set_init(base, len, false);
+                return;
+            }
             Some(Scalar::Pointer { .. }) => (0, true),
             Some(Scalar::MemberPtr { .. }) => (self.mp_thaw(b, cv), false),
             Some(Scalar::Reflection { id, .. }) => (u128::from(id.bits()), false),
@@ -2013,6 +2141,8 @@ impl Oven {
             PtrBase::Label { origin, .. } => self.label_addr(b, origin),
             // An integer cast to a pointer points at nothing again
             // (`mem::NOWHERE`, frame slot 0, the integer its offset).
+            // Never thawed as a pointer (`thaw_scalar`); points at nothing.
+            PtrBase::LabelDiff { .. } => return crate::mem::NOWHERE,
             PtrBase::Absolute => {
                 let off = u32::try_from(offset).unwrap_or(u32::MAX);
                 return Ptr::with_off(crate::mem::NOWHERE, u64::from(off), false);

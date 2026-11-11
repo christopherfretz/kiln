@@ -336,6 +336,15 @@ ops! {
     // `cce::PTR_TO_INT`: `dst` = the integer of such a pointer (any other
     // pointer fails).
     Cce = 3,
+    // [dst, x, k, kind]: a C static initializer's integer arithmetic on
+    // an address an integer holds (`kind` `addr_int::CAST`, `ADD`, `SUB`:
+    // `dst` = `x`, `x + k`, `x - k` at the integer type of aux
+    // `int_aux`). An address `x` (`cce::ADDR_INT`) keeps its object and
+    // moves its displacement ([`addr_int_pack`]); any other `x` is the
+    // ordinary `ICast` / `IAdd` / `ISub` of the type. `LABEL_DIFF`: `dst`
+    // = the difference of label addresses `x` and `k`, held as an address
+    // (only in a C static initializer's fold; elsewhere it fails).
+    AddrInt = 4,
     // [dst, expr]: the address a GNU `&&label` (`AddrLabelExpr` `expr`)
     // evaluates to (`Oven::label_addr`; spec/oven.md "Label addresses")
     LabelAddr = 2,
@@ -434,6 +443,40 @@ pub(crate) mod cce {
 /// Bits 64.. of an integer register holding an address ([`cce::ADDR_INT`]):
 /// never those of a canonical integer of 64 bits or fewer.
 pub(crate) const ADDR_INT_TAG: u128 = 1 << 64;
+
+/// The kinds of `Op::AddrInt`.
+pub(crate) mod addr_int {
+    pub const CAST: u32 = 0;
+    pub const ADD: u32 = 1;
+    pub const SUB: u32 = 2;
+    /// `x - k` of two label addresses (`&&a - &&b`): an address
+    /// difference an integer holds ([`crate::mem::label_diff_ptr`]).
+    pub const LABEL_DIFF: u32 = 3;
+}
+
+/// Whether integer register value `v` holds an address
+/// ([`cce::ADDR_INT`]): bit 64 set and bit 65 clear, which no canonical
+/// integer of 64 bits or fewer has (bits 64.. all zero or all one).
+#[inline]
+pub(crate) fn is_addr_int(v: u128) -> bool {
+    (v >> 64) & 3 == 1
+}
+
+/// The byte displacement an address an integer holds carries past its
+/// pointer (`Op::AddrInt` arithmetic): bits 66.., signed.
+#[inline]
+pub(crate) fn addr_int_disp(v: u128) -> i64 {
+    (v.cast_signed() >> 66) as i64
+}
+
+/// The register value of the address `raw` displaced by `disp` bytes, as
+/// an integer holds it; `None` when `disp` needs more than 62 bits.
+pub(crate) fn addr_int_pack(raw: u64, disp: i64) -> Option<u128> {
+    let lim = 1i64 << 61;
+    (-lim..lim)
+        .contains(&disp)
+        .then(|| u128::from(raw) | ADDR_INT_TAG | (i128::from(disp) << 66).cast_unsigned())
+}
 
 /// `Op::Throw` operand: the exception object has no destructor to run.
 pub(crate) const NO_DTOR: u32 = u32::MAX;

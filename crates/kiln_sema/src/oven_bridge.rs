@@ -468,10 +468,21 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         if !self.eval_stack_ok(e) {
             return false;
         }
+        // The same lax fold codegen runs for the initializer
+        // (`kiln_codegen` `fold::prepass`): floating results that are NaN
+        // or infinite stay IEEE values (C23 6.6p5, 6.7.11p4: a static's
+        // floating initializer is evaluated as at translation time) and
+        // leaks are not checked.
         self.with_oven(None, |oven, b| {
             oven.set_fold_addr_int(true);
+            oven.set_fold_float_ub(true);
+            oven.set_fold_leaks(true);
+            oven.set_fold_c_static(true);
             let v = oven.fold_rvalue(b, e);
+            oven.set_fold_c_static(false);
             oven.set_fold_addr_int(false);
+            oven.set_fold_float_ub(false);
+            oven.set_fold_leaks(false);
             v.is_some()
         })
     }

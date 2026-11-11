@@ -5,7 +5,6 @@
 // its declaration (6.8.7.2p1) still sees the value.
 //@ args: -w
 //@ expect: run
-//@ xfail(kiln): WP-1301 follow-up, a label-address difference in a static initializer does not fold, so the static is initialized dynamically under a __cxa_guard that a C link cannot resolve and a jump skips (gcc.c-torture execute/pr70460.c)
 //@ stdout: 3 4
 int printf(const char *, ...);
 int c;

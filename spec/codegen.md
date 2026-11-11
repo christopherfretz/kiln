@@ -3224,7 +3224,9 @@ Mirrors clang's CGDeclCXX ([basic.start.static], [basic.start.dynamic],
   integer type, emitted as `ptrtoint (ptr @g to i64)` (with a GEP for
   an offset), also as an integer member of an aggregate
   (`member_ptr_reloc`), and `PtrBase::Absolute` is an integer constant
-  or `inttoptr`.
+  or `inttoptr`. A label address difference (`PtrBase::LabelDiff`,
+  WP-1304) is `sub (ptrtoint (blockaddress), ptrtoint (blockaddress))`,
+  `trunc`ated to a narrower integer, in a member of any integer width.
 - **Lifetime-extended temporaries.** A temporary bound to a reference
   with static storage becomes `_ZGR<var>_` (`let_global`): constant when
   the Oven folded it (the fold bridge now records

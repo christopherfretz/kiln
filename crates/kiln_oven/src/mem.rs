@@ -56,6 +56,14 @@ pub(crate) const STATIC_BIT: u32 = 1 << 21;
 /// Marks a heap slot (frame slots are below it).
 pub(crate) const HEAP_BIT: u32 = 1 << 20;
 pub(crate) const FN_SLOT: u32 = (1 << 22) - 1;
+/// The static slot of a pointer that points at nothing whose offset
+/// indexes [`crate::Oven::synth`]: an address a C static initializer
+/// computes that the encoding cannot hold (WP-1304).
+pub(crate) const SYNTH_SLOT: u32 = FN_SLOT - 1;
+/// The static slot of a pointer that points at nothing whose offset
+/// indexes [`crate::Oven::label_diffs`]: the difference of two label
+/// addresses a C static initializer computes (`&&a - &&b`, WP-1304).
+pub(crate) const LABEL_DIFF_SLOT: u32 = FN_SLOT - 2;
 /// [`Alloc::base`] of a static allocation that holds no bytes
 /// ([`Memory::alloc_unbacked`]).
 pub(crate) const UNBACKED: u32 = u32::MAX;
@@ -171,7 +179,7 @@ impl UKey {
 }
 
 /// One of the three byte spaces.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Sp {
     Frame,
     Heap,
@@ -182,6 +190,30 @@ pub(crate) enum Sp {
 #[inline]
 fn vkey(sp: Sp, g: u64) -> u64 {
     (sp as u64) << 62 | g
+}
+
+/// The pointer to [`crate::Oven::synth`] entry `idx` ([`SYNTH_SLOT`]).
+pub(crate) fn synth_ptr(idx: u32) -> u64 {
+    NOWHERE | Ptr { slot: SYNTH_SLOT, generation: 0, past: false, off: idx }.encode()
+}
+
+/// The [`crate::Oven::synth`] index `p` holds, if it is such a pointer.
+pub(crate) fn synth_idx(p: u64) -> Option<u32> {
+    let d = Ptr::decode(p);
+    (Ptr::is_nowhere(p) && d.slot == SYNTH_SLOT).then_some(d.off)
+}
+
+/// The pointer to [`crate::Oven::label_diffs`] entry `idx`
+/// ([`LABEL_DIFF_SLOT`]).
+pub(crate) fn label_diff_ptr(idx: u32) -> u64 {
+    NOWHERE | Ptr { slot: LABEL_DIFF_SLOT, generation: 0, past: false, off: idx }.encode()
+}
+
+/// The [`crate::Oven::label_diffs`] index `p` holds, if it is such a
+/// pointer.
+pub(crate) fn label_diff_idx(p: u64) -> Option<u32> {
+    let d = Ptr::decode(p);
+    (Ptr::is_nowhere(p) && d.slot == LABEL_DIFF_SLOT).then_some(d.off)
 }
 
 pub(crate) fn fn_ptr(func: u32) -> u64 {
@@ -1307,7 +1339,7 @@ impl Memory {
     /// The allocation now in static slot `slot`, whatever its generation
     /// (for a pointer that points at nothing, [`NOWHERE`]).
     pub fn static_in_slot(&self, slot: u32) -> Option<&Alloc> {
-        if slot & STATIC_BIT == 0 || slot == FN_SLOT {
+        if slot & STATIC_BIT == 0 || slot >= LABEL_DIFF_SLOT {
             return None;
         }
         self.statics.get((slot & !STATIC_BIT) as usize)

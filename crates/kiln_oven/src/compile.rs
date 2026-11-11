@@ -20,7 +20,7 @@ use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use crate::failure::Note;
-use crate::kbc::{Op, ak, cce, cmp, int_aux, ptr_add_aux};
+use crate::kbc::{Op, addr_int, ak, cce, cmp, int_aux, ptr_add_aux};
 use crate::mem::{Origin, flags, fn_ptr};
 use crate::ty::{OTy, Scal, TyKind, eval_int};
 use crate::{Oven, SemaBridge};
@@ -510,6 +510,7 @@ impl Oven {
             c.addr_int_target(e);
             c.rv_into(e, r);
             c.addr_int_at = None;
+            c.addr_int_ops.clear();
             c.emit(Op::Ret, 1, &[r]);
             RetKind::Scalar(ty)
         };
@@ -1186,6 +1187,10 @@ pub(crate) struct Compiler<'a> {
     /// codegen lets keep addresses ([`Oven::set_fold_addr_int`]) gives it
     /// the operand's address (`cce::ADDR_INT`).
     addr_int_at: Option<ExprId>,
+    /// The integer additions, subtractions and conversions between
+    /// [`Compiler::addr_int_at`]'s cast and the whole value, in C
+    /// (`Op::AddrInt`: they displace the address, C23 6.6p9).
+    addr_int_ops: FxHashSet<ExprId>,
 }
 
 /// A list whose elements record construction steps: it initializes entry
@@ -1244,6 +1249,7 @@ impl<'a> Compiler<'a> {
             ctor_steps: Vec::new(),
             elem_track: None,
             addr_int_at: None,
+            addr_int_ops: FxHashSet::default(),
         }
     }
 
@@ -1515,11 +1521,16 @@ impl<'a> Compiler<'a> {
             return false;
         }
         let at = self.begin(op);
-        self.trap_loc(
-            at,
-            "array-to-pointer decay of array member without known bound is not supported"
-                .to_owned(),
-        );
+        let msg = "array-to-pointer decay of array member without known bound is not supported";
+        if ast.lang_c {
+            // clang's note is a CCEDiag, which C's initializer evaluation
+            // ignores (`&config.searchconfig[0]`, WP-1304): fails outside
+            // a fold, a fold decays.
+            let t = self.trap_index(at, msg.to_owned());
+            self.emit_loc(Op::Cce, cce::CHECK, &[0, 0, t], at);
+            return false;
+        }
+        self.trap_loc(at, msg.to_owned());
         true
     }
 
@@ -4056,6 +4067,9 @@ impl Compiler<'_> {
     }
 
     fn binary(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        if self.addr_int_ops.remove(&e) {
+            return self.addr_int_op(e, dst, ty);
+        }
         let op = self.ast().exprs.binary_op(e);
         let [a, b] = self.ast().exprs.operands(e);
         match op {
@@ -4464,6 +4478,9 @@ impl Compiler<'_> {
     }
 
     fn cast(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        if self.addr_int_ops.remove(&e) {
+            return self.addr_int_op(e, dst, ty);
+        }
         let op = self.ast().exprs.operand(e);
         if self.is_wide_expr(op) && self.o.types.wide(ty).is_none() {
             return self.wide_to_scalar(e, dst, ty);
@@ -4708,13 +4725,19 @@ impl Compiler<'_> {
     /// (C23 6.6p9 and clang: an address constant cast to an integer is
     /// an initializer's constant only so, spec/oven.md "Pointers that
     /// point at nothing"). Whether it did.
+    ///
+    /// In C the cast may also sit under integer additions and
+    /// subtractions of it (the left operand of a subtraction) and
+    /// conversions, all as wide as the pointer, as clang folds
+    /// `(unsigned long)&x - 0x10 - 1` to `ptrtoint (gep i8 @x, -17)`
+    /// ([`Compiler::addr_int_ops`]).
     fn addr_int_target(&mut self, e: ExprId) -> bool {
         let e = skip_parens(self.ast(), e);
         let ast = self.ast();
         if !ast.exprs.get(e).kind().is_cast()
             || ast.exprs.cast_kind(e) != CastKind::PointerToIntegral
         {
-            return false;
+            return self.ast().lang_c && self.addr_int_inner(e, None);
         }
         let op = ast.exprs.operand(e);
         let (to, from) = (self.ety(e), self.ety(op));
@@ -4723,6 +4746,104 @@ impl Compiler<'_> {
         }
         self.addr_int_at = Some(e);
         true
+    }
+
+    /// [`Self::addr_int_target`] under an integer operation `e` (parens
+    /// skipped) of size `size` (that of its parent, if any): records the
+    /// operations on the way to the cast.
+    #[cold]
+    fn addr_int_inner(&mut self, e: ExprId, size: Option<u64>) -> bool {
+        let ty = self.ety(e);
+        let sz = self.o.types.size(ty);
+        // A label address difference `&&a - &&b` may also be narrowed
+        // (clang: an `AddrLabelDiff` converts to an integer no wider;
+        // clang 22 to one of 32 bits or more).
+        if self.label_diff(e).is_some() {
+            let min = if self.o.clang_compat >= 22 { 4 } else { 1 };
+            if size.is_some_and(|s| s > sz || s < min) {
+                return false;
+            }
+            self.addr_int_ops.insert(e);
+            return true;
+        }
+        if size.is_some_and(|s| s != sz) || !matches!(self.kind(ty), TyKind::Int { .. }) {
+            return false;
+        }
+        let ast = self.ast();
+        let k = ast.exprs.get(e).kind();
+        let found = if k.is_cast() {
+            match ast.exprs.cast_kind(e) {
+                CastKind::PointerToIntegral => {
+                    let op = ast.exprs.operand(e);
+                    let from = self.ety(op);
+                    let hit = self.o.types.size(from) == sz;
+                    if hit {
+                        self.addr_int_at = Some(e);
+                    }
+                    return hit;
+                }
+                CastKind::IntegralCast | CastKind::NoOp => {
+                    let op = skip_parens(ast, ast.exprs.operand(e));
+                    self.addr_int_inner(op, Some(sz))
+                }
+                _ => false,
+            }
+        } else if k == ExprKind::BinaryOperator
+            && matches!(ast.exprs.binary_op(e), BinaryOp::Add | BinaryOp::Sub)
+        {
+            let add = ast.exprs.binary_op(e) == BinaryOp::Add;
+            let [a, b] = ast.exprs.operands(e);
+            let (a, b) = (skip_parens(ast, a), skip_parens(ast, b));
+            self.addr_int_inner(a, Some(sz)) || (add && self.addr_int_inner(b, Some(sz)))
+        } else {
+            false
+        };
+        if found {
+            self.addr_int_ops.insert(e);
+        }
+        found
+    }
+
+    /// The operands of `e` if it is a GNU label address difference
+    /// `&&a - &&b` (parens skipped).
+    fn label_diff(&self, e: ExprId) -> Option<[ExprId; 2]> {
+        let ast = self.ast();
+        if ast.exprs.get(e).kind() != ExprKind::BinaryOperator
+            || ast.exprs.binary_op(e) != BinaryOp::Sub
+        {
+            return None;
+        }
+        let [a, b] = ast.exprs.operands(e).map(|x| skip_parens(ast, x));
+        let label = |x: ExprId| ast.exprs.get(x).kind() == ExprKind::AddrLabelExpr;
+        (label(a) && label(b)).then_some([a, b])
+    }
+
+    /// `Op::AddrInt` for [`Self::addr_int_inner`]'s operation `e`.
+    #[cold]
+    fn addr_int_op(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+        let aux = int_aux(w as u8, s);
+        if let Some([a, b]) = self.label_diff(e) {
+            let (ra, rb) = (self.rv(a), self.rv(b));
+            self.emit_at(Op::AddrInt, aux, &[dst, ra, rb, addr_int::LABEL_DIFF], e);
+            return;
+        }
+        let ast = self.ast();
+        if ast.exprs.get(e).kind().is_cast() {
+            let op = ast.exprs.operand(e);
+            let x = self.rv(op);
+            self.emit_at(Op::AddrInt, aux, &[dst, x, x, addr_int::CAST], e);
+            return;
+        }
+        let sub = ast.exprs.binary_op(e) == BinaryOp::Sub;
+        let [a, b] = ast.exprs.operands(e);
+        // The address is the left operand unless only the right one is.
+        let pa = skip_parens(ast, a);
+        let swap = !self.addr_int_ops.contains(&pa) && self.addr_int_at != Some(pa);
+        let (ra, rb) = (self.rv(a), self.rv(b));
+        let (x, k) = if swap { (rb, ra) } else { (ra, rb) };
+        let kind = if sub { addr_int::SUB } else { addr_int::ADD };
+        self.emit_at(Op::AddrInt, aux, &[dst, x, k, kind], e);
     }
 
     fn cce_check(&mut self, e: ExprId, msg: &str) {
@@ -5736,6 +5857,7 @@ impl Compiler<'_> {
             let addr = self.addr_int_target(e);
             let r = self.rv(e);
             self.addr_int_at = None;
+            self.addr_int_ops.clear();
             let aux = u32::from(addr);
             self.emit_at(Op::InitStore, aux, &[p, r, ty.0], e);
             return;

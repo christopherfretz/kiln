@@ -346,12 +346,17 @@ fn every_scalar_kind_roundtrips() {
         PtrBase::StringLit { lit: StringLitId::new(1), origin: ExprId::new(10) },
         PtrBase::Const(c),
         PtrBase::TypeInfo(ty(INT)),
+        PtrBase::LabelDiff { plus: ExprId::new(3), minus: ExprId::new(5), size: 2 },
     ] {
         let id = roundtrip(
             &mut st,
             Scalar::Pointer { ty: ty(INT_PTR), base, offset: 0, designated: None, past: false },
         );
         assert_eq!(st.kind(id), ValueKind::Pointer);
+        // A label address difference relocates as wide as its integer,
+        // every other pointer as a pointer (WP-1304).
+        let w = if matches!(base, PtrBase::LabelDiff { .. }) { 2 } else { 8 };
+        assert_eq!(st.reloc_width(id), Some(w), "{base:?}");
         if !matches!(base, PtrBase::Function(_)) {
             roundtrip(
                 &mut st,
@@ -740,16 +745,6 @@ fn malformed_scalars_are_rejected() {
     };
     bad(&mut st, Scalar::Float { ty: ty(DOUBLE), kind: FloatKind::Half, bits: 1 << 16 });
     bad(&mut st, Scalar::Float { ty: ty(DOUBLE), kind: FloatKind::X87Extended, bits: 1 << 80 });
-    bad(
-        &mut st,
-        Scalar::Pointer {
-            ty: ty(FN_PTR),
-            base: PtrBase::Function(DeclId::new(4)),
-            offset: 1,
-            designated: None,
-            past: false,
-        },
-    );
     bad(
         &mut st,
         Scalar::Pointer {

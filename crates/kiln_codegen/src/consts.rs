@@ -197,15 +197,50 @@ impl Cg<'_> {
                 if self.m.types.int_width(t).is_some() {
                     return Ok(self.m.const_int(t, i128::from(offset)));
                 }
-                let i = self.m.const_int(LTy::I64, i128::from(offset));
+                let i = self.m.const_int(LTy::I64, i128::from(offset.cast_signed()));
                 self.m.const_cast(kiln_llvm::CastOp::IntToPtr, i, t).map_err(|e| ir_err(&e))
+            }
+            // A label address difference (GNU C, C23 6.6p9): clang's
+            // `trunc (sub (ptrtoint (blockaddress), ptrtoint
+            // (blockaddress)))` of an `AddrLabelDiff`.
+            Scalar::Pointer { base: PtrBase::LabelDiff { plus, minus, .. }, offset, .. } => {
+                let Some(w) = self.m.types.int_width(t) else {
+                    return err(None, "label address difference of non-integer type");
+                };
+                let mut side = |e: ExprId| -> R<Value> {
+                    let at = self.loc_of(e);
+                    let a = self.addr_of_label(self.ast.exprs.addr_label(e), at)?;
+                    self.m
+                        .const_cast(kiln_llvm::CastOp::PtrToInt, a, LTy::I64)
+                        .map_err(|e| ir_err(&e))
+                };
+                let (a, b) = (side(plus)?, side(minus)?);
+                let sub = kiln_llvm::BinOp::Sub;
+                let flags = kiln_llvm::Flags::NONE;
+                let mut d = self.m.const_binop(sub, flags, a, b).map_err(|e| ir_err(&e))?;
+                if offset != 0 {
+                    let k = self.m.const_int(LTy::I64, i128::from(offset.cast_signed()));
+                    d = self
+                        .m
+                        .const_binop(kiln_llvm::BinOp::Add, flags, d, k)
+                        .map_err(|e| ir_err(&e))?;
+                }
+                // No constant `sext` in LLVM 19; a wider integer is
+                // not folded (the Oven makes one only up to 64 bits).
+                match w {
+                    64 => Ok(d),
+                    ..64 => {
+                        self.m.const_cast(kiln_llvm::CastOp::Trunc, d, t).map_err(|e| ir_err(&e))
+                    }
+                    _ => err(None, "label address difference wider than 64 bits"),
+                }
             }
             Scalar::Pointer { base, offset, .. } => {
                 let b = self.ptr_base(base)?;
                 let p = if offset == 0 {
                     b
                 } else {
-                    let off = self.m.const_int(LTy::I64, i128::from(offset));
+                    let off = self.m.const_int(LTy::I64, i128::from(offset.cast_signed()));
                     self.m
                         .const_gep(LTy::I8, b, &[off], GepFlags::NONE, None)
                         .map_err(|e| ir_err(&e))?
@@ -241,6 +276,7 @@ impl Cg<'_> {
                 self.addr_of_label(label, at)
             }
             PtrBase::Absolute => Ok(self.m.const_null(LTy::PTR)),
+            PtrBase::LabelDiff { .. } => err(None, "label address difference as a pointer"),
         }
     }
 
@@ -749,12 +785,23 @@ impl Cg<'_> {
     /// (data) or `{ i64, i64 }` (function) storage, whose bytes are 0; a
     /// null data member pointer is `-1` (Itanium). So is an address an
     /// integer member holds (a `Pointer` of integer type: `ptrtoint`, C23
-    /// 6.6p9, spec/codegen.md "Static initialization").
+    /// 6.6p9, spec/codegen.md "Static initialization"), and a label
+    /// address difference an integer of any width holds.
     fn member_ptr_reloc(&mut self, img: &Img, off: u64, it: &IrType, t: LTy) -> R<Option<Value>> {
-        if !matches!(it, IrType::Int(64) | IrType::Struct(..)) {
+        if !matches!(it, IrType::Int(..) | IrType::Struct(..)) {
             return Ok(None);
         }
         let Some(r) = img.reloc(off) else { return Ok(None) };
+        // A label address difference an integer of any width holds.
+        if let ConstValue::Scalar(s @ Scalar::Pointer { base: PtrBase::LabelDiff { .. }, .. }) =
+            self.ast.consts.get(r)
+            && matches!(it, IrType::Int(..))
+        {
+            return self.scalar_const(s, t).map(Some);
+        }
+        if !matches!(it, IrType::Int(64) | IrType::Struct(..)) {
+            return Ok(None);
+        }
         match self.ast.consts.get(r) {
             ConstValue::Scalar(
                 s @ (Scalar::MemberPtr { .. }

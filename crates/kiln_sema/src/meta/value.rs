@@ -166,7 +166,7 @@ impl Sema<'_, '_> {
                     PtrBase::StringLit { .. } => return Some("a string literal"),
                     PtrBase::Temporary(_) => return Some("a temporary object"),
                     PtrBase::TypeInfo(_) => return Some("a 'typeid' result"),
-                    PtrBase::Label { .. } => return Some("a label"),
+                    PtrBase::Label { .. } | PtrBase::LabelDiff { .. } => return Some("a label"),
                     PtrBase::Absolute => return Some("an integer cast to a pointer"),
                     PtrBase::Decl(_) | PtrBase::Function(_) | PtrBase::Const(_) => {}
                 },

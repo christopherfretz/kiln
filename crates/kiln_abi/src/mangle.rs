@@ -675,6 +675,7 @@ impl<'a> Vis<'a> {
                 PtrBase::StringLit { .. }
                 | PtrBase::Const(_)
                 | PtrBase::Label { .. }
+                | PtrBase::LabelDiff { .. }
                 | PtrBase::Absolute => false,
             },
             ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => {

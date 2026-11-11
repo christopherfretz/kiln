@@ -14,8 +14,11 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{ADDR_INT_TAG, Op, ak, cce, cmp, new_aux, ptr_add_aux};
-use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
+use crate::kbc::{
+    ADDR_INT_TAG, Op, addr_int, addr_int_disp, addr_int_pack, ak, cce, cmp, is_addr_int, new_aux,
+    ptr_add_aux,
+};
+use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags, synth_idx};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
 use crate::{Oven, SemaBridge};
@@ -1064,6 +1067,16 @@ impl Oven {
                         // reports the dereferenced null pointer; aux 2 (the
                         // `*` itself, at clang 22) fails here.
                         match aux {
+                            // A C static initializer's fold goes on past
+                            // the member of a null pointer with its offset
+                            // (clang's `CCEDiag` and invalid designator:
+                            // the classic `(size_t)&((T *)0)->m`), a
+                            // pointer that points at nothing.
+                            0 if self.fold_c_static => {
+                                self.run.impure += 1;
+                                let off = arg!(2) as u64;
+                                reg!(0) = if off == 0 { 0 } else { u128::from(NOWHERE | off) };
+                            }
                             0 => fail!(Fault::NullField),
                             2 => fail!(Fault::NullDeref),
                             _ => reg!(0) = 0,
@@ -1099,8 +1112,8 @@ impl Oven {
                     let v = reg!(1);
                     let (k, init) =
                         if op == Op::InitStore { (ak::INIT, true) } else { (aux, false) };
-                    let r = if op == Op::InitStore && v >> 64 == ADDR_INT_TAG >> 64 && aux != 0 {
-                        self.store_addr_int(raw, ty, v as u64)
+                    let r = if op == Op::InitStore && is_addr_int(v) && aux != 0 {
+                        self.store_addr_int(raw, ty, v)
                     } else {
                         self.store(raw, ty, v, k, init)
                     };
@@ -1336,6 +1349,7 @@ impl Oven {
                 | Op::LabelAddr
                 | Op::VoidCast
                 | Op::Cce
+                | Op::AddrInt
                 | Op::TryEnter
                 | Op::Throw
                 | Op::Unwind
@@ -1951,8 +1965,14 @@ impl Oven {
                     // clang `EvaluateBuiltinConstantP` outside a
                     // constant context: a lax fold (`EvaluateAsInt`)
                     // of a non-constant argument fails rather than
-                    // folding to 0.
-                    Ok(false) if aux & 2 != 0 && self.run.lax && !self.run.const_context => {
+                    // folding to 0; a C static initializer's fold is a
+                    // constant context ([`crate::Oven::set_fold_c_static`]).
+                    Ok(false)
+                        if aux & 2 != 0
+                            && self.run.lax
+                            && !self.run.const_context
+                            && !self.fold_c_static =>
+                    {
                         fail!(Fault::Invalid)
                     }
                     Ok(c) => reg!(0) = u128::from(c),
@@ -2029,6 +2049,13 @@ impl Oven {
                     None => fail!(Fault::Trap(arg!(2) as u32)),
                 }
                 pc += 4;
+            }
+            Op::AddrInt => {
+                match self.addr_int_op(pc, aux, arg!(3) as u32, reg!(1), reg!(2)) {
+                    Ok(v) => reg!(0) = v,
+                    Err(f) => fail!(f),
+                }
+                pc += 5;
             }
             Op::TryEnter => {
                 let depth = self.stack.len() as u32;
@@ -2563,16 +2590,48 @@ impl Oven {
         }
         let (start, n, cur, array) = match self.extent_of(raw, elem) {
             Ok(x) => x,
-            Err(_) if Ptr::is_nowhere(raw) => return self.nowhere_add(raw, i, elem),
+            Err(_) if Ptr::is_nowhere(raw) || self.fold_c_static && Ptr::decode(raw).is_fn() => {
+                return self.nowhere_add(raw, i, elem);
+            }
             Err(f) => return Err(f),
         };
         let new = i128::from(cur).wrapping_add(i);
         if new < 0 || new > i128::from(n) {
+            if self.fold_c_static && Ptr::decode(raw).is_static() {
+                let es = i128::from(self.types.size(elem).max(1));
+                let off = i128::from(start) + new * es;
+                return self.c_static_addr(Ptr::with_off(raw, 0, false) | NOWHERE, off);
+            }
             return Err(Fault::ArrayIndex { idx: new, n, array });
         }
         let es = self.types.size(elem).max(1);
         let new = new as u64;
         Ok(Ptr::with_off(raw, start + new * es, new == n))
+    }
+
+    /// The pointer a C static initializer's address constant `base`
+    /// displaced by `off` bytes is (C23 6.6p9; clang's `gep i8`, in or
+    /// out of `base`'s object): in the encoding when the offset fits, an
+    /// [`Oven::synth`] entry when not. `base` points at nothing (or is a
+    /// function, or 0 for an integer) and is read only through the
+    /// freeze, so the result is never an access.
+    #[cold]
+    fn c_static_addr(&self, base: u64, off: i128) -> Result<u64, Fault> {
+        if !self.fold_c_static {
+            return Err(Fault::NullArith);
+        }
+        let d = Ptr::decode(base);
+        if !d.is_fn()
+            && base != 0
+            && let Ok(o) = u32::try_from(off)
+        {
+            return Ok(Ptr::with_off(base, u64::from(o), false));
+        }
+        let off = i64::try_from(off).map_err(|_| Fault::NullArith)?;
+        let mut synth = self.synth.borrow_mut();
+        let idx = u32::try_from(synth.len()).map_err(|_| Fault::NullArith)?;
+        synth.push((base, off));
+        Ok(crate::mem::synth_ptr(idx))
     }
 
     pub(crate) fn ptr_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
@@ -2587,13 +2646,34 @@ impl Oven {
             return Err(Fault::PtrArith { p, q, pointee: elem });
         }
         let Ok((sp, _, ip, _)) = self.extent_of(p, elem) else {
-            return self.nowhere_sub(p, q, elem).unwrap_or(Err(Fault::PtrSub));
+            return self.nowhere_sub(p, q, elem).unwrap_or_else(|| self.c_static_sub(p, q, elem));
         };
-        let (sq, _, iq, _) = self.extent_of(q, elem).map_err(|_| Fault::PtrSub)?;
+        let Ok((sq, _, iq, _)) = self.extent_of(q, elem) else {
+            return self.c_static_sub(p, q, elem);
+        };
         if sp != sq {
-            return Err(Fault::PtrSub);
+            return self.c_static_sub(p, q, elem);
         }
         Ok(ip as i64 - iq as i64)
+    }
+
+    /// [`Oven::ptr_sub`] of two pointers into one complete object that are
+    /// not elements of one array: an error, except in a C static
+    /// initializer's fold ([`crate::Oven::set_fold_c_static`]), where
+    /// clang only notes it (`CCEDiag`) and takes the difference of their
+    /// byte offsets in the element size, as GCC does (`s.f - &s.b`,
+    /// `(void *)&v.p[0] - (void *)&v`; C23 6.6p9 GNU).
+    #[cold]
+    fn c_static_sub(&self, p: u64, q: u64, elem: OTy) -> Result<i64, Fault> {
+        if !self.fold_c_static || Ptr::alloc_key(p) != Ptr::alloc_key(q) {
+            return Err(Fault::PtrSub);
+        }
+        let es = i64::from(self.types.size(elem).max(1) as u32);
+        let at = |r: u64| {
+            let x = Ptr::decode(r);
+            i64::from(x.off)
+        };
+        Ok((at(p) - at(q)) / es)
     }
 
     /// Whether function `f`, called through a function pointer a fold
@@ -2637,8 +2717,18 @@ impl Oven {
             cce::INT_TO_PTR => match u32::try_from(v.cast_signed()) {
                 Ok(0) => Some(0),
                 Ok(n) => Some(u128::from(NOWHERE | u64::from(n))),
-                Err(_) => None,
+                Err(_) => self.c_static_addr(0, v.cast_signed()).ok().map(u128::from),
             },
+            cce::PTR_TO_INT | cce::ADDR_INT if synth_idx(raw).is_some() => {
+                let (base, d) = self.synth.borrow()[synth_idx(raw)? as usize];
+                if base == 0 {
+                    Some(u128::from(d.cast_unsigned()))
+                } else if aux == cce::ADDR_INT && self.addr_int {
+                    addr_int_pack(base, d)
+                } else {
+                    None
+                }
+            }
             cce::PTR_TO_INT | cce::ADDR_INT => {
                 let p = Ptr::decode(raw);
                 if raw == 0 || (Ptr::is_nowhere(raw) && p.slot == 0 && !p.past) {
@@ -2654,11 +2744,97 @@ impl Oven {
         }
     }
 
+    /// `Op::AddrInt` `kind` of `x` and `k` at the integer type of `aux`
+    /// (`int_aux`): an address `x` ([`cce::ADDR_INT`]) moves its
+    /// displacement modulo 2^64, as clang's `ptrtoint` arithmetic
+    /// (`(unsigned long)&_text - 0x10000000L - 1`, a GNU C address
+    /// constant); any other `x` takes the ordinary conversion or
+    /// arithmetic. The result is not memoized.
+    #[cold]
+    fn addr_int_op(
+        &mut self,
+        pc: usize,
+        aux: u32,
+        kind: u32,
+        x: u128,
+        k: u128,
+    ) -> Result<u128, Fault> {
+        let (width, signed) = (aux & 0xFF, aux >> 8 & 1 != 0);
+        if kind == addr_int::LABEL_DIFF {
+            return self.label_diff(x as u64, k as u64);
+        }
+        if is_addr_int(x) {
+            self.run.impure += 1;
+            let d = addr_int_disp(x);
+            let d = match kind {
+                addr_int::ADD => d.wrapping_add(k as i64),
+                addr_int::SUB => d.wrapping_sub(k as i64),
+                _ => d,
+            };
+            return addr_int_pack(x as u64, d).ok_or(Fault::Invalid);
+        }
+        let op = match kind {
+            addr_int::ADD => Op::IAdd,
+            addr_int::SUB => Op::ISub,
+            _ => return Ok(canon(x, width, signed)),
+        };
+        match arith::int_bin(op, width, signed, x, k, 0, false) {
+            Ok(v) => Ok(v),
+            Err(err) => match self.wrap_overflow(pc, err, op, aux, x, k) {
+                Some(v) => Ok(v),
+                None => Err(Fault::Int { err, op, a: x, b: k, aux }),
+            },
+        }
+    }
+
+    /// `addr_int::LABEL_DIFF` of label addresses `p` and `q`: in a C
+    /// static initializer's fold, the address [`crate::mem::label_diff_ptr`]
+    /// as an integer holds it (clang's `AddrLabelDiff`, a GNU C address
+    /// constant); elsewhere two label addresses are no elements of one
+    /// array ([expr.add]/5).
+    #[cold]
+    fn label_diff(&mut self, p: u64, q: u64) -> Result<u128, Fault> {
+        let origin = |o: &Oven, r: u64| {
+            let d = Ptr::decode(r);
+            match o.alloc_any(d).map(|a| a.origin) {
+                Some(Origin::Label(e)) if d.off == 0 => Some(e),
+                _ => None,
+            }
+        };
+        let (Some(a), Some(b)) = (origin(self, p), origin(self, q)) else {
+            return Err(Fault::PtrSub);
+        };
+        if !self.fold_c_static {
+            return Err(Fault::PtrSub);
+        }
+        self.run.impure += 1;
+        let idx = u32::try_from(self.label_diffs.len()).map_err(|_| Fault::PtrSub)?;
+        self.label_diffs.push((a, b));
+        addr_int_pack(crate::mem::label_diff_ptr(idx), 0).ok_or(Fault::PtrSub)
+    }
+
     /// [`Oven::ptr_add`] of a pointer that points at nothing (clang: an
     /// invalid designator only moves the offset).
     #[cold]
     fn nowhere_add(&self, raw: u64, i: i128, elem: OTy) -> Result<u64, Fault> {
         let es = i128::from(self.types.size(elem).max(1));
+        if self.fold_c_static {
+            // A C static initializer's address arithmetic past what the
+            // encoding holds (`c_static_addr`).
+            if let Some(k) = synth_idx(raw) {
+                let (base, d) = self.synth.borrow()[k as usize];
+                return self.c_static_addr(base, i128::from(d) + i * es);
+            }
+            let p = Ptr::decode(raw);
+            if p.is_fn() {
+                return self.c_static_addr(raw, i * es);
+            }
+            let off = i128::from(p.off) + i * es;
+            if u32::try_from(off).is_err() {
+                let base = if p.slot == 0 { 0 } else { Ptr::with_off(raw, 0, false) };
+                return self.c_static_addr(base, off);
+            }
+        }
         let off = i128::from(Ptr::decode(raw).off) + i * es;
         match u32::try_from(off) {
             Ok(off) => Ok(Ptr::with_off(raw, u64::from(off), false)),
@@ -3468,12 +3644,24 @@ impl Oven {
     /// ([`cce::ADDR_INT`]): the pointer, marked as one, so that an integer
     /// load of it fails and a freeze reads it back as the address.
     #[cold]
-    fn store_addr_int(&mut self, raw: u64, ty: OTy, addr: u64) -> Result<(), Fault> {
-        self.store(raw, ty, u128::from(addr), ak::INIT, true)?;
+    fn store_addr_int(&mut self, raw: u64, ty: OTy, v: u128) -> Result<(), Fault> {
         let len = self.types.size(ty);
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
+        if let Some(k) = crate::mem::label_diff_idx(v as u64) {
+            // A label address difference: the object stays unreadable,
+            // the freeze relocates it (`Oven::label_diff_cells`).
+            let (st, abs, _) = self.mem.check(raw, len, true).map_err(fault)?;
+            self.mem.space_mut(st).set_init(abs, len, false);
+            self.label_diff_cells.insert((st, abs), (k, addr_int_disp(v)));
+            return Ok(());
+        }
+        self.store(raw, ty, u128::from(v as u64), ak::INIT, true)?;
         let (st, abs, _) = self.mem.check(raw, len, true).map_err(fault)?;
         self.mem.space_mut(st).set_ptr_mark(abs, len, 1);
+        match addr_int_disp(v) {
+            0 => self.addr_int_disps.remove(&(st, abs)),
+            d => self.addr_int_disps.insert((st, abs), d),
+        };
         Ok(())
     }
 
