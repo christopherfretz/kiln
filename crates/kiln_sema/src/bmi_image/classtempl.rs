@@ -115,9 +115,11 @@ impl Writer<'_, '_, '_> {
         for &a in ast.types.args(list) {
             match a.view() {
                 ArgView::Type(q) => out.push(q),
-                ArgView::Pack(l) => out.extend(ast.types.args(l).iter().filter_map(|x| {
-                    if let ArgView::Type(q) = x.view() { Some(q) } else { None }
-                })),
+                ArgView::Pack(l) => {
+                    out.extend(ast.types.args(l).iter().filter_map(|x| {
+                        if let ArgView::Type(q) = x.view() { Some(q) } else { None }
+                    }))
+                }
                 _ => {}
             }
         }
@@ -222,7 +224,11 @@ impl Writer<'_, '_, '_> {
     /// is; an expression that is a `bool` or `int` literal of its
     /// converted value's type, as that value (`converted`), which prints
     /// the same; `None` for any other expression.
-    pub(super) fn written_arg(&self, a: TemplateArg, converted: Option<TemplateArg>) -> Option<TemplateArg> {
+    pub(super) fn written_arg(
+        &self,
+        a: TemplateArg,
+        converted: Option<TemplateArg>,
+    ) -> Option<TemplateArg> {
         let ArgView::Expr { expr, .. } = a.view() else { return Some(a) };
         let c = converted?;
         let ArgView::Value { ty, .. } = c.view() else { return None };
@@ -239,7 +245,11 @@ impl Writer<'_, '_, '_> {
     /// The arguments of class template specialization type `X<args>`
     /// whose specialization is `spec` (`None` while dependent), each as
     /// [`Self::written_arg`] carries it.
-    pub(super) fn tst_args(&mut self, args: kiln_ast::ArgListId, spec: Option<DeclId>) -> W<Vec<ArgRec>> {
+    pub(super) fn tst_args(
+        &mut self,
+        args: kiln_ast::ArgListId,
+        spec: Option<DeclId>,
+    ) -> W<Vec<ArgRec>> {
         let ast = &self.s.ast;
         let written: Vec<TemplateArg> = ast.types.args(args).to_vec();
         let converted: Vec<TemplateArg> = match spec.and_then(|d| ast.spec_info(ast.first(d))) {
@@ -407,7 +417,8 @@ pub(super) fn validate_class_specs(
         return bad("bad class template specialization");
     }
     for c in s {
-        let (Some(r), Some(t)) = (img.decls.get(c.rec as usize), img.decls.get(c.template as usize))
+        let (Some(r), Some(t)) =
+            (img.decls.get(c.rec as usize), img.decls.get(c.template as usize))
         else {
             return bad("bad class template specialization");
         };
@@ -443,11 +454,7 @@ pub(super) fn validate_class_specs(
         let scope = match r.lexical {
             NONE => r.ctx,
             LEX_TU => NONE,
-            l if l < c.rec
-                && matches!(img.decls[l as usize].payload, Payload::Namespace) =>
-            {
-                l
-            }
+            l if l < c.rec && matches!(img.decls[l as usize].payload, Payload::Namespace) => l,
             _ => return bad("bad class template specialization"),
         };
         for (k, &p) in h.params.iter().enumerate() {

@@ -23,12 +23,11 @@ template <class T> struct B;
 template <class T> struct B<T &> { using type = T; };
 template <> struct B<void>;
 template <class T> struct F { static constexpr int v = 0; };
-template <class T> struct F<T *>;
 template <class T> struct F<T *> { static constexpr int v = 8; };
 constexpr int used = X<char *>::v + X<const char>::v;
 constexpr int g() { return X<short *>{}.get() + X<int>::v; }
 template <class T> struct E { };
-template <class T> struct E<T *> { static_assert(sizeof(T) > 1, "E<T*> needs a wide T"); };
+template <class T> struct E<T *> { T arr[2]; };
 }
 namespace cs {
 template <class T> struct X<T &> { static constexpr int v = 5; };

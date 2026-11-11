@@ -45,6 +45,7 @@ use crate::modules::Directive;
 mod attrs;
 mod body;
 mod classtempl;
+mod declocs;
 mod locs;
 mod scope;
 mod spec;
@@ -544,6 +545,8 @@ struct Image {
     scopes: scope::Scopes,
     /// WP-1283: explicit and partial class template specializations.
     cspecs: classtempl::ClassSpecs,
+    /// WP-1283: declarator locations of dependent declarations.
+    declocs: declocs::DeclLocs,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1143,6 +1146,7 @@ fn encode(img: &Image) -> Vec<u8> {
     attrs::encode_attrs(&mut w, &img.attrs);
     scope::encode_scopes(&mut w, &img.scopes);
     classtempl::encode_class_specs(&mut w, &img.cspecs);
+    declocs::encode_decl_locs(&mut w, &img.declocs);
     w.0
 }
 
@@ -1716,6 +1720,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.attrs = attrs::decode_attrs(&mut r)?;
     img.scopes = scope::decode_scopes(&mut r)?;
     img.cspecs = classtempl::decode_class_specs(&mut r)?;
+    img.declocs = declocs::decode_decl_locs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -1900,6 +1905,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     // S4b: per class template pattern, its parameter count.
     let mut tmpl_params: FxHashMap<usize, usize> = FxHashMap::default();
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
+    declocs::validate_decl_locs(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -1946,8 +1952,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                 Payload::Template { kind: 1, pattern: p, .. } => kind_of(*pattern)
                                     .is_some_and(|m| {
                                         (m.ctx == p
-                                            || classtempl::partial_of(img, m.ctx)
-                                                == Some(template))
+                                            || classtempl::partial_of(img, m.ctx) == Some(template))
                                             && m.lexical == NONE
                                             && matches!(
                                                 m.payload,
@@ -2411,8 +2416,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         return bad("a dependent declaration outside a template");
     }
     // The lookup table: exactly the named listed records, sorted.
-    let named =
-        img.decls.iter().enumerate().filter(|(i, d)| d.name != NONE && !unlisted(img, *i, d)).count();
+    let named = img
+        .decls
+        .iter()
+        .enumerate()
+        .filter(|(i, d)| d.name != NONE && !unlisted(img, *i, d))
+        .count();
     if lookup.len() != named || lookup.windows(2).any(|w| w[0] >= w[1]) {
         return bad("bad lookup table");
     }
@@ -3545,6 +3554,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.anon_typedefs()?;
+        self.decl_locs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -3739,6 +3749,11 @@ impl Writer<'_, '_, '_> {
         }
         if n.kind() == DeclKind::StaticAssert {
             // Checked when the module was compiled; nothing to import.
+            // In a template, each instantiation checks it again: not
+            // carried yet (WP-1283).
+            if n.has(DeclFlags::DEPENDENT_CTX) {
+                return Err("a static assertion in a template");
+            }
             return Ok(());
         }
         if ast.spec_info(d).is_some_and(|(_, si)| {
@@ -4072,6 +4087,7 @@ impl Sema<'_, '_> {
             }
             body::body_locs(&img, &mut offs);
             classtempl::class_spec_locs(&img, &mut offs);
+            declocs::decl_loc_offsets(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -4441,6 +4457,7 @@ impl Sema<'_, '_> {
             self.builder().complete_record_definition(c, DefinitionBits::from_bits(bits));
         }
         self.image_virtuals(img, &ids);
+        self.image_decl_locs(img, &ids, |o| main.get(o));
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);

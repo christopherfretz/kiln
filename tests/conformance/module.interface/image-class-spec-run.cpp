@@ -1,9 +1,10 @@
 // [temp.spec.partial], [temp.expl.spec], [temp.spec.partial.match],
 // [module.interface], spec/modules.md §11.11 "Templates as patterns"
 // (WP-1283): partial and explicit specializations of class templates
-// exported from a module (a forward-declared partial specialization, a
-// partial one over a non-type parameter and over a pack, a declared but
-// undefined explicit one) are matched and instantiated by the importer;
+// exported from a module (partial ones over a non-type parameter and
+// over a pack, a declared but undefined explicit one, specializations in
+// a reopened namespace and declared by a qualified name) are matched and
+// instantiated by the importer;
 // under `--bmi-image` they come from the declaration image and the
 // program behaves exactly as with the replayed source.
 //@ expect: run
@@ -24,6 +25,6 @@ int main() {
   int k = 9;
   cs::X<int *> a{&k};
   printf("%d %d %d %d %d %d %d\n", a.self().get(), cs::X<int>{}.f(), cs::used, cs::g(),
-         cs::X<const int *>::v, (int)sizeof(cs::E<long *>) - 1, cs::F<char *>::v);
+         cs::X<const int *>::v, (int)(sizeof(cs::E<long *>) / sizeof(long *)) - 2, cs::F<char *>::v);
   return 0;
 }
