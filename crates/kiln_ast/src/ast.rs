@@ -824,6 +824,13 @@ impl Ast {
             && !self.any_redecl_has(d, crate::attr::AttrKind::GCC_STRUCT)
     }
 
+    /// Whether some declaration of C variable `d` carries GNU `common`
+    /// (kept by sema in C only): its tentative definition then has
+    /// common linkage even under `-fno-common`.
+    pub fn has_common_attr(&self, d: DeclId) -> bool {
+        self.any_redecl_has(d, crate::attr::AttrKind::COMMON)
+    }
+
     /// Whether some declaration of `d` carries `attr`.
     fn any_redecl_has(&self, d: DeclId, attr: crate::attr::AttrKind) -> bool {
         self.redecls_of(d).any(|r| {

@@ -3214,9 +3214,10 @@ impl<'a> Cg<'a> {
         let vis = if internal { Visibility::Default } else { self.decl_visibility(d, true) };
         let weak_attr = !internal && ast.is_weak_decl(d);
         let section = self.decl_section(d);
-        // C `-fcommon`: only tentative definitions, no section or TLS
-        // (clang `isVarDeclStrongDefinition`).
-        let common = self.opts.common
+        // C `-fcommon` or a GNU `common` attribute on some declaration:
+        // only tentative definitions, no section or TLS (clang
+        // `isVarDeclStrongDefinition`).
+        let common = (self.opts.common || ast.has_common_attr(d))
             && self.opts.c.is_some()
             && section.is_none()
             && ast.decls.var(d).is_some_and(|v| v.spec.storage() == VarStorage::None)
