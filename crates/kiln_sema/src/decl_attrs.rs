@@ -420,6 +420,9 @@ impl Sema<'_, '_> {
             if node.kind == AttrKind::INDETERMINATE {
                 return self.check_indeterminate_subject(d, kind, node);
             }
+            if node.kind == AttrKind::TRANSPARENT_UNION && self.is_c() {
+                return self.c_transparent_union_attr(d, kind, a, node);
+            }
             if node.kind.is_class_b() {
                 return self.check_class_b_attr(d, kind, a, node);
             }
@@ -529,7 +532,8 @@ impl Sema<'_, '_> {
             }
             // clang `TransparentUnion` is C-only: ignored in C++ (a
             // class-head one also gets the delayed check,
-            // `Sema::transparent_union_head`).
+            // `Sema::transparent_union_head`); C keeps it
+            // (`Sema::c_transparent_union_attr`).
             AttrKind::TRANSPARENT_UNION => {
                 let shown = self.attr_shown(&node, "transparent_union");
                 let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(shown);

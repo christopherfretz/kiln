@@ -2,7 +2,6 @@
 // is evaluated at run time; VLA parameters, [*] in a prototype, and
 // static/qualifiers inside the brackets of an array parameter.
 //@ expect: run
-//@ xfail(kiln): WP-1276 follow-up, variable length arrays are not implemented in C (sema "not supported yet"; [*] and static in array parameter brackets are not parsed in C)
 //@ stdout: 40 12 5 15
 int printf(const char *, ...);
 int total(int n, int m, int a[n][m]);

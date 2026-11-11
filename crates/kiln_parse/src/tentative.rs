@@ -254,6 +254,7 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::NullUnspecified
                 | Kw::NullableResult
                 | Kw::Complex
+                | Kw::Imaginary
                 | Kw::Alignas
                 | Kw::Attribute
                 // `__auto_type(x)` is never an expression (clang: "expected
@@ -294,7 +295,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
                 | Kw::Float32x
                 | Kw::Float64x
                 | Kw::Bf16
-                | Kw::Fp16 => self.after_simple_type(self.i + 1, braced),
+                | Kw::Fp16
+                | Kw::Decimal32
+                | Kw::Decimal64
+                | Kw::Decimal128 => self.after_simple_type(self.i + 1, braced),
                 // [dcl.type.auto.deduct]: `auto(x)` and `auto{x}` are
                 // expressions in C++23.
                 Kw::Auto => match self.punct_at(self.i + 1) {

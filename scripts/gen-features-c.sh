@@ -13,8 +13,14 @@
 #
 # Configurations: bit `target * 10 + std * 2 + gnu` of a mask, targets
 # aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu, stds c89 c99 c11 c17
-# c23, gnu 0 (cNN) or 1 (gnuNN). No other flags are probed: under a flag the
-# C++ overlays apply before the C deltas (spec/pp.md).
+# c23, gnu 0 (cNN) or 1 (gnuNN). Under a flag kiln applies the C++ overlays,
+# then these deltas, then the flag's C deltas (spec/pp.md): each flag of
+# FLAGS below is probed in all 20 configurations, and every answer of
+# `clang-NN -x c <flag>` that differs from that prediction (`clang++-NN
+# <flag>` with the base C deltas applied) is a row of C19_FLAGS/C22_FLAGS.
+# The flags are those that change a C answer: -fblocks, -fno-exceptions,
+# -fmodules, -fms-extensions and -fsanitize=address|thread|memory|undefined
+# (-fno-blocks is the default; it only undoes -fblocks).
 #
 # Candidates: every key of features_table.rs (the names either clang
 # answers nonzero for in some C++ configuration), the operands of every
@@ -22,7 +28,7 @@
 # strings of each clang's libclang-cpp (the names it answers 0 for in C++),
 # the C-only keywords and the standard C attributes, and every
 # `__has_cpp_attribute` key as a `__has_c_attribute` candidate. Idempotent;
-# runtime about a minute.
+# runtime about three minutes.
 #
 # Usage: scripts/gen-features-c.sh   (clang-19, clang++-19, clang-22,
 #        clang++-22 on PATH, or CLANG19/CLANGXX19/CLANG22/CLANGXX22)
@@ -47,7 +53,7 @@ for c in "$CLANG19" "$CLANG22"; do
 done
 
 python3 - "$OUT" "$CXX_TABLE" "$CLANG19" "$CLANGXX19" "$CLANG22" "$CLANGXX22" "${HEADER_DIRS[@]}" <<'PY'
-import os, re, subprocess, sys
+import os, re, subprocess, sys, tempfile
 
 out_path, cxx_table = sys.argv[1:3]
 ORACLES = [(sys.argv[3], sys.argv[4]), (sys.argv[5], sys.argv[6])]
@@ -62,6 +68,13 @@ VERSIONS = [version(o[0]) for o in ORACLES]
 TARGETS = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"]
 CSTDS = ["c89", "c99", "c11", "c17", "c23"]
 CXXSTDS = ["c++98", "c++98", "c++11", "c++11", "c++17"]
+# (FeatureFlag variant, clang option), in FeatureFlag declaration order.
+FLAGS = [("NoExceptions", "-fno-exceptions"), ("Modules", "-fmodules"), ("Blocks", "-fblocks"),
+         ("MsExtensions", "-fms-extensions"), ("SanitizeAddress", "-fsanitize=address"),
+         ("SanitizeThread", "-fsanitize=thread"), ("SanitizeMemory", "-fsanitize=memory"),
+         ("SanitizeUndefined", "-fsanitize=undefined")]
+# -fmodules may touch a module cache: give it a private one.
+MODCACHE = tempfile.TemporaryDirectory(prefix="gen-features-c-")
 
 # Kind order is the Rust `Kind` declaration order (the table sort order).
 KINDS = [
@@ -153,10 +166,12 @@ def normal(kind, key):
     return True
 qs = sorted((k, key) for k in cands for key in cands[k] if normal(k, key))
 
-def probe(cc, lang, t, std):
+def probe(cc, lang, t, std, flag=None):
     src = "".join("L%d %s\n" % (i, TMPL[k].format(key)) for i, (k, key) in enumerate(qs))
+    extra = [flag, "-fmodules-cache-path=" + MODCACHE.name] if flag == "-fmodules" else \
+        ([flag] if flag else [])
     args = [cc, "--target=" + t, "-std=" + std, "-E", "-P", "-undef", "-ferror-limit=0",
-            "-fno-color-diagnostics", "-x", lang, "-"]
+            "-fno-color-diagnostics"] + extra + ["-x", lang, "-"]
     r = subprocess.run(args, input=src, capture_output=True, text=True)
     bad = set(int(m) for m in re.findall(r"^<stdin>:(\d+):", r.stderr, re.M))
     got = {}
@@ -166,6 +181,8 @@ def probe(cc, lang, t, std):
             v = p[1].rstrip("L")
             if v.isdigit():
                 got[int(p[0][1:])] = int(v)
+    if not got:
+        sys.exit("gen-features-c: probe failed: %s\n%s" % (" ".join(args), r.stderr[:2000]))
     res = {}
     for i, q in enumerate(qs):
         v = None if (i + 1) in bad else got.get(i)
@@ -174,33 +191,62 @@ def probe(cc, lang, t, std):
         res[q] = v
     return res
 
-tables = []
-for o, (cc, cxx) in enumerate(ORACLES):
-    deltas = {}
+def configs():
     for t, triple in enumerate(TARGETS):
         for s in range(len(CSTDS)):
             for gnu in (0, 1):
                 cstd = ("gnu" + CSTDS[s][1:]) if gnu else CSTDS[s]
                 xstd = CXXSTDS[s].replace("c++", "gnu++") if gnu else CXXSTDS[s]
-                c = probe(cc, "c", triple, cstd)
-                x = probe(cxx, "c++", triple, xstd)
-                bit = 1 << (t * 10 + s * 2 + gnu)
-                for q in qs:
-                    cv = c[q]
-                    if cv is None:
-                        continue
-                    xv = 0 if q[0] == "CAttribute" else x[q]
-                    if xv is None:
-                        xv = 0
-                    if cv != xv:
-                        deltas.setdefault(q, {}).setdefault(cv, 0)
-                        deltas[q][cv] |= bit
+                yield triple, cstd, xstd, 1 << (t * 10 + s * 2 + gnu)
+
+def add(deltas, q, v, bit):
+    deltas.setdefault(q, {}).setdefault(v, 0)
+    deltas[q][v] |= bit
+
+tables, flag_tables = [], []
+for o, (cc, cxx) in enumerate(ORACLES):
+    deltas = {}
+    base = {}  # bit -> {query: C answer the base deltas give}
+    for triple, cstd, xstd, bit in configs():
+        c = probe(cc, "c", triple, cstd)
+        x = probe(cxx, "c++", triple, xstd)
+        base[bit] = {}
+        for q in qs:
+            cv = c[q]
+            if cv is None:
+                continue
+            xv = 0 if q[0] == "CAttribute" else x[q]
+            if xv is None:
+                xv = 0
+            if cv != xv:
+                add(deltas, q, cv, bit)
+                base[bit][q] = cv
     rows = []
     for (k, key), byv in deltas.items():
         for v, mask in byv.items():
             rows.append((ORDER[k], key, v, mask, k))
     rows.sort()
     tables.append(rows)
+    # Under each flag: kiln predicts the C++ answer under the flag with the
+    # base C deltas applied; every C answer that differs is a flag delta.
+    frows = []
+    for fi, (fname, opt) in enumerate(FLAGS):
+        fd = {}
+        for triple, cstd, xstd, bit in configs():
+            c = probe(cc, "c", triple, cstd, opt)
+            x = probe(cxx, "c++", triple, xstd, opt)
+            for q in qs:
+                cv = c[q]
+                if cv is None:
+                    continue
+                xv = 0 if q[0] == "CAttribute" else (x[q] or 0)
+                if cv != base[bit].get(q, xv):
+                    add(fd, q, cv, bit)
+        for (k, key), byv in fd.items():
+            for v, mask in byv.items():
+                frows.append((fi, ORDER[k], key, v, mask, k, fname))
+    frows.sort()
+    flag_tables.append(frows)
 
 def rs(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -213,8 +259,9 @@ out.append("// @generated by scripts/gen-features-c.sh from clang %s and clang %
            % (VERSIONS[0], VERSIONS[1]))
 out.append("//\n// C-mode deltas on the C++ answers (spec/pp.md \"Feature queries in C\"):\n"
            "// configuration bit `target * 10 + std * 2 + gnu`, targets aarch64, x86_64; stds c89\n"
-           "// c99 c11 c17 c23. Sorted by (kind, key); masks of one key are disjoint.\n\n")
-out.append("use super::{CDelta, Kind};\n\n")
+           "// c99 c11 c17 c23. C19/C22 are sorted by (kind, key), the\n"
+           "// _FLAGS tables by (flag, kind, key); masks of one key are disjoint.\n\n")
+out.append("use super::{CDelta, CFlagDelta, FeatureFlag, Kind};\n\n")
 for name, o in (("C19", 0), ("C22", 1)):
     out.append("/// `clang-%s -x c` answers that differ from `clang++-%s`'s.\n"
                % (VERSIONS[o].split(".")[0], VERSIONS[o].split(".")[0]))
@@ -222,7 +269,17 @@ for name, o in (("C19", 0), ("C22", 1)):
     for _, key, v, mask, k in tables[o]:
         out.append("    CDelta(Kind::%s, %s, %s, 0x%05x),\n" % (k, rs(key), num(v), mask))
     out.append("];\n\n")
+for name, o in (("C19_FLAGS", 0), ("C22_FLAGS", 1)):
+    out.append("/// `clang-%s -x c <flag>` answers that differ from kiln's prediction under\n"
+               "/// the flag (the C++ overlays, then `%s`).\n"
+               % (VERSIONS[o].split(".")[0], name[:3]))
+    out.append("pub(super) static %s: &[CFlagDelta] = &[\n" % name)
+    for _, _, key, v, mask, k, fname in flag_tables[o]:
+        out.append("    CFlagDelta(FeatureFlag::%s, Kind::%s, %s, %s, 0x%05x),\n"
+                   % (fname, k, rs(key), num(v), mask))
+    out.append("];\n\n")
 text = "".join(out).rstrip("\n") + "\n"
 open(out_path, "w").write(text)
-print("gen-features-c: %d + %d deltas, %d candidates" % (len(tables[0]), len(tables[1]), len(qs)))
+print("gen-features-c: %d + %d deltas, %d + %d flag deltas, %d candidates"
+      % (len(tables[0]), len(tables[1]), len(flag_tables[0]), len(flag_tables[1]), len(qs)))
 PY

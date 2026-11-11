@@ -6,7 +6,8 @@
 //! -undef` (and, at `ClangCompat::Clang22`, `clang-22`), in every C
 //! standard (strict and GNU) on both targets, and the answers must be
 //! identical; every `__has_cpp_attribute` key is also asked of
-//! `__has_c_attribute`. A clang that is not installed is skipped.
+//! `__has_c_attribute`. The same holds under each flag the generator
+//! probes (WP-1290). A clang that is not installed is skipped.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -26,6 +27,17 @@ const ORACLES: [(&str, ClangCompat); 2] =
 const TABLES: [&str; 2] =
     [include_str!("../src/features_table.rs"), include_str!("../src/features_c_table.rs")];
 const TRIPLES: [&str; 2] = ["aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"];
+/// The flags `scripts/gen-features-c.sh` probes (`C19_FLAGS`/`C22_FLAGS`).
+const FLAGS: [&str; 8] = [
+    "-fno-exceptions",
+    "-fmodules",
+    "-fblocks",
+    "-fms-extensions",
+    "-fsanitize=address",
+    "-fsanitize=thread",
+    "-fsanitize=memory",
+    "-fsanitize=undefined",
+];
 const ACLE: [&str; 8] = ["__dmb", "__dsb", "__isb", "__sev", "__sevl", "__wfe", "__wfi", "__yield"];
 /// (C standard, clang spelling, the C++ standard it lexes as).
 const CSTDS: [(CStd, &str, Std); 5] = [
@@ -110,8 +122,15 @@ fn values(text: &str) -> BTreeMap<usize, String> {
     m
 }
 
-fn clang(cc: &str, src: &str, triple: &str, std: &str) -> Option<String> {
-    let mut child = Command::new(cc)
+fn clang(cc: &str, src: &str, triple: &str, std: &str, flag: Option<&str>) -> Option<String> {
+    let mut cmd = Command::new(cc);
+    if let Some(f) = flag {
+        cmd.arg(f);
+        if f == "-fmodules" {
+            cmd.arg(format!("-fmodules-cache-path={}/wp1290-mc", env!("CARGO_TARGET_TMPDIR")));
+        }
+    }
+    let mut child = cmd
         .args(["-x", "c", "-E", "-P", "-undef", "-nostdinc", "-ferror-limit=0"])
         .arg(format!("-std={std}"))
         .arg(format!("--target={triple}"))
@@ -158,6 +177,19 @@ fn kiln(
 
 #[test]
 fn c_answers_match_clang_in_every_configuration() {
+    check(None);
+}
+
+/// Under each probed flag: the C++ overlays, the C deltas, then the flag's
+/// C deltas (WP-1290).
+#[test]
+fn c_answers_match_clang_under_flags() {
+    for f in FLAGS {
+        check(Some(f));
+    }
+}
+
+fn check(flag: Option<&str>) {
     let qs = queries();
     assert!(qs.len() > 3000, "only {} queries", qs.len());
     let src = source(&qs);
@@ -170,9 +202,12 @@ fn c_answers_match_clang_in_every_configuration() {
             for (c, spelling, lex) in CSTDS {
                 for gnu in [false, true] {
                     let std = format!("{}{spelling}", if gnu { "gnu" } else { "c" });
-                    let Some(want) = clang(cc, &src, triple, &std) else { return };
-                    let args: &[&str] = if gnu { &["-std=gnu++"] } else { &[] };
-                    let f = ClangFeatures::from_args(triple, lex, args)
+                    let Some(want) = clang(cc, &src, triple, &std, flag) else { return };
+                    let mut args: Vec<&str> = flag.into_iter().collect();
+                    if gnu {
+                        args.push("-std=gnu++");
+                    }
+                    let f = ClangFeatures::from_args(triple, lex, &args)
                         .expect("supported triple")
                         .with_compat(compat)
                         .with_c(c, gnu);
@@ -185,7 +220,8 @@ fn c_answers_match_clang_in_every_configuration() {
                             && ACLE.iter().any(|n| *q == format!("__has_builtin({n})"));
                         if w.get(&i) != g.get(&i) && !acle {
                             bad.push(format!(
-                                "{cc} {triple} {std}: {q}: clang {:?}, kiln {:?}",
+                                "{cc} {triple} {std} {}: {q}: clang {:?}, kiln {:?}",
+                                flag.unwrap_or(""),
                                 w.get(&i),
                                 g.get(&i)
                             ));

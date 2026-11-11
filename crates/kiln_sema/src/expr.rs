@@ -33,6 +33,7 @@ use crate::overload::oper::{OperForm, OperResult};
 use crate::type_diff::DiffArgs as _;
 use crate::vector_ops::VecParts;
 
+mod c_ops;
 mod ref_cast;
 
 /// The spelling of an explicit type conversion ([expr.cast],
@@ -3170,6 +3171,9 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return self.recover_err(&[e], loc);
                 };
+                if self.ast.types.is_void(p) && self.is_c() {
+                    return self.c_void_deref(x, p, loc);
+                }
                 if self.ast.types.is_void(p) {
                     let msg =
                         self.diag(DiagId::sema_indirection_incomplete, loc).arg(self.ty_arg(pt));
@@ -3391,20 +3395,27 @@ impl Sema<'_, '_> {
     /// (a GNU extension only in C: `sema_arith_void_pointer`).
     fn check_pointer_arith(&mut self, pt: QualType, loc: Loc) -> bool {
         let Some(p) = self.pointee_sugared(pt) else { return true };
+        // C: the GNU extension, element size 1 (WP-1285).
+        let c = self.is_c();
         if self.ast.types.is_void(p) {
-            let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("0");
+            let id = if c {
+                DiagId::sema_arith_void_pointer
+            } else {
+                DiagId::sema_arith_void_pointer_cxx
+            };
+            let msg = self.diag(id, loc).arg("0");
             self.emit(msg);
-            return false;
+            return c;
         }
         if self.ast.types.is_function(p) {
-            let msg = self
-                .diag(DiagId::sema_arith_function_pointer_cxx, loc)
-                .arg("0")
-                .arg(self.ty_arg(p))
-                .arg("0")
-                .arg("");
+            let id = if c {
+                DiagId::sema_arith_function_pointer
+            } else {
+                DiagId::sema_arith_function_pointer_cxx
+            };
+            let msg = self.diag(id, loc).arg("0").arg(self.ty_arg(p)).arg("0").arg("");
             self.emit(msg);
-            return false;
+            return c;
         }
         if self.ast.types.is_sizeless(p) {
             // clang `err_typecheck_arithmetic_incomplete_or_sizeless_type`.
@@ -3440,9 +3451,15 @@ impl Sema<'_, '_> {
         let (av, bv) = (t.is_void(a), t.is_void(b));
         if av || bv {
             let Some(one) = pick(av, bv) else {
-                let msg = self.diag(DiagId::sema_arith_void_pointer_cxx, loc).arg("1");
+                let c = self.is_c();
+                let id = if c {
+                    DiagId::sema_arith_void_pointer
+                } else {
+                    DiagId::sema_arith_void_pointer_cxx
+                };
+                let msg = self.diag(id, loc).arg("1");
                 self.emit(msg);
-                return false;
+                return c;
             };
             return self.check_pointer_arith(one, loc);
         }
@@ -3450,14 +3467,20 @@ impl Sema<'_, '_> {
         if af || bf {
             let Some(one) = pick(af, bf) else {
                 let differ = !self.ast.types.same_unqualified(lt, rt);
+                let c = self.is_c();
+                let id = if c {
+                    DiagId::sema_arith_function_pointer
+                } else {
+                    DiagId::sema_arith_function_pointer_cxx
+                };
                 let msg = self
-                    .diag(DiagId::sema_arith_function_pointer_cxx, loc)
+                    .diag(id, loc)
                     .arg("1")
                     .arg(self.ty_arg(a))
                     .arg(if differ { "1" } else { "0" })
                     .arg(self.ty_arg(b));
                 self.emit(msg);
-                return false;
+                return c;
             };
             return self.check_pointer_arith(one, loc);
         }
@@ -3613,6 +3636,10 @@ impl Sema<'_, '_> {
         // discarded-value expression ([expr.comma]/1).
         let l = self.ignored_value_conversions(l);
         let l = self.materialize_discarded(l);
+        // C 6.5.17p2: the result is the right operand's value, so it
+        // undergoes array/function-to-pointer and lvalue conversion
+        // (clang `DefaultFunctionArrayLvalueConversion`; WP-1285).
+        let r = if self.is_c() { conv::decay(self, r) } else { r };
         let ty = self.ety(r);
         let res = self.builder().binary(BinaryOp::Comma, l, r, ty, loc);
         self.mark_bitfield_if(res, r);
@@ -3949,9 +3976,12 @@ impl Sema<'_, '_> {
         // left type, but not to an unscoped enumeration ([conv.prom]/3
         // promoted it), so `e += 1` is ill-formed (clang's
         // `CheckAssignmentOperands` with the computation result type).
+        // In C the result converts as by assignment, to an enumeration or
+        // from a complex type too (C17 6.5.16.2p3, 6.5.16.1p1).
         let real_from_complex =
             self.ast.types.as_complex(res_ty).is_some() && self.ast.types.as_complex(lt).is_none();
-        if (real_from_complex || conv::is_unscoped_enum(self, lt))
+        if !self.is_c()
+            && (real_from_complex || conv::is_unscoped_enum(self, lt))
             && !self.ast.types.same_unqualified(res_ty, conv::strip_cv(self, lt))
         {
             let msg = self.diag(DiagId::sema_assign_incompatible, loc).diff_args(self, lt, res_ty);
@@ -4047,25 +4077,6 @@ impl Sema<'_, '_> {
         if self.is_nullptr_type(lt) && self.is_nullptr_type(rt) {
             return Some((l, r, lt));
         }
-        // C17 6.5.9p2, 6.3.2.3p3: a function pointer compares with a null
-        // pointer constant, `(void *)0` included, which converts to the
-        // function pointer's type (clang `CheckCompareOperands`, a
-        // `BitCast`); there is no composite type with `void *`.
-        if self.is_c() && lp && rp {
-            let fn_ptr = |s: &Self, t: QualType| {
-                s.ast.types.pointee(t).is_some_and(|p| s.ast.types.is_function(p))
-            };
-            if fn_ptr(self, lt) && conv::c_assign::null_pointer_constant(self, r).is_some() {
-                let r2 =
-                    conv::raw_cast(self, CastKind::BitCast, r, lt, ValueCategory::PRValue, None);
-                return Some((l, r2, lt));
-            }
-            if fn_ptr(self, rt) && conv::c_assign::null_pointer_constant(self, l).is_some() {
-                let l2 =
-                    conv::raw_cast(self, CastKind::BitCast, l, rt, ValueCategory::PRValue, None);
-                return Some((l2, r, rt));
-            }
-        }
         if ptr(self, lt) && (rnull || self.is_nullptr_type(rt)) {
             let r2 = conv::implicit_convert(self, r, lt, ConvCtx::Comparison).ok()?;
             return Some((l, r2, lt));
@@ -4086,6 +4097,13 @@ impl Sema<'_, '_> {
             return None;
         }
         if self.ast.types.same_type(lt, rt) {
+            return Some((l, r, lt));
+        }
+        // C17 6.5.8p2, 6.5.9p2: pointers to compatible types (6.2.7). Two
+        // pointers to variable length arrays are never the same type --
+        // each VLA type is its own node -- but are compatible whenever
+        // their elements are, as `int (*)[n]` and `int (*)[m]` are.
+        if self.is_c() && lp && rp && conv::c_assign::compatible(self, lt, rt) {
             return Some((l, r, lt));
         }
         if conv::standard_conversion(self, r, lt, ConvCtx::Comparison).is_some() {
@@ -4310,6 +4328,11 @@ impl Sema<'_, '_> {
             }
             return self.invalid_operands(l, r, loc);
         }
+        if self.is_c()
+            && let Some(res) = self.c_pointer_comparison(op, (l, r), (l2, r2), loc)
+        {
+            return res;
+        }
         let ptr_like = |s: &Self, t: QualType| s.ast.types.is_pointer(t) || s.is_nullptr_type(t);
         if ptr_like(self, lt) || ptr_like(self, rt) {
             if !matches!(op, BinaryOp::EQ | BinaryOp::NE) {
@@ -4507,6 +4530,11 @@ impl Sema<'_, '_> {
             || self.expr_is_type_dependent(f)
         {
             return self.builder().dependent_conditional(c2, t, f, loc);
+        }
+        if self.is_c()
+            && let Some(res) = self.c_conditional(CondOps { c, c2, t, f, loc })
+        {
+            return res;
         }
         let (tt, ft) = (self.ety(t), self.ety(f));
         if self.ast.types.is_void(tt) || self.ast.types.is_void(ft) {
@@ -5060,11 +5088,19 @@ impl Sema<'_, '_> {
             self.emit(msg);
             return self.recover_err(&[b, i], loc);
         }
+        if self.is_c() && self.ast.types.is_void(elem) {
+            // C: the GNU `void *` subscript (clang `ext_gnu_subscript_void_type`).
+            self.error(DiagId::sema_c_subscript_void_pointer, loc);
+            return self.builder().subscript(b, i, elem, loc);
+        }
         if !self.require_complete(elem, loc) {
             // clang `err_subscript_incomplete_or_sizeless_type`.
             let msg = self.diag(DiagId::sema_subscript_incomplete_type, loc).arg(self.ty_arg(elem));
             self.emit(self.incomplete_note(msg, elem));
             return self.recover_err(&[b, i], loc);
+        }
+        if self.is_c() {
+            return self.builder().c_subscript(b, i, elem, loc);
         }
         self.builder().subscript(b, i, elem, loc)
     }
@@ -6310,7 +6346,21 @@ impl Sema<'_, '_> {
         let t = if size_like { self.non_reference(ty) } else { ty };
         // [expr.sizeof]/1, [expr.alignof]/1: in C++ a function type is an
         // error and `void` is an incomplete type; clang's GNU extensions
-        // for both are C-only ("hard errors for SFINAE").
+        // for both are C-only ("hard errors for SFINAE"; clang
+        // `CheckExtensionTraitOperandType`, size and alignment 1).
+        if self.is_c()
+            && matches!(kind, TraitKind::SizeOf | TraitKind::AlignOf | TraitKind::PreferredAlignOf)
+            && (self.ast.types.is_function(t) || self.ast.types.is_void(t))
+        {
+            let id = if self.ast.types.is_void(t) {
+                DiagId::sema_sizeof_void
+            } else {
+                DiagId::sema_sizeof_function
+            };
+            let msg = self.diag(id, loc).arg(name);
+            self.emit(Self::with_range(msg, range));
+            return true;
+        }
         if self.ast.types.is_function(t) {
             let msg = self.diag(DiagId::sema_sizeof_function_expr, loc).arg(name);
             self.emit(Self::with_range(msg, range));
@@ -6459,8 +6509,9 @@ impl Sema<'_, '_> {
         let ty = self.ety(e);
         // [expr.sizeof]/1: in C++ an expression of function type is an
         // error, not the GNU extension the type form gets (a dependent
-        // one when it is substituted).
-        if self.ast.types.is_function(ty) && !self.is_dependent_type(ty) {
+        // one when it is substituted). C gives it the type form's GNU
+        // extension (clang `CheckUnaryExprOrTypeTraitOperand`).
+        if !self.is_c() && self.ast.types.is_function(ty) && !self.is_dependent_type(ty) {
             let msg = self.diag(DiagId::sema_sizeof_function_expr, self.eloc(e));
             self.emit(msg.arg(Self::trait_name(kind)));
             return self.recover_err(&[e], loc);
@@ -6946,6 +6997,13 @@ impl Sema<'_, '_> {
             && let Some(c) = self.static_mp_upcast(style, x, to, loc, rparen)
         {
             return c;
+        }
+        // C: a pointer to or from an integer (C17 6.5.4, WP-1285).
+        if style == CastStyle::CStyle
+            && self.is_c()
+            && let Some(r) = self.c_pointer_int_cast(x, e, to, loc, rparen)
+        {
+            return r;
         }
         // reinterpret_cast ([expr.reinterpret.cast]).
         if style.allows_reinterpret() {

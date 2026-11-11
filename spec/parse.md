@@ -131,9 +131,25 @@ after the C++ table in `Parser::new`), which is clang `-x c`'s (C89
 `crates/kiln_parse/tests/c_keywords.rs` checks the table against the
 preprocessor's `__is_identifier` answers in every C standard, which
 `kiln_pp`'s `features_c` test checks against `clang-19 -x c` (spec/pp.md
-"Feature queries in C"). Not yet: `_Imaginary` and `_Decimal32/64/128`
-(keywords in clang C, identifiers in kiln); `__builtin_types_compatible_p`
-(a clang C keyword; its semantics are WP-1276's). Tests: `tests/c/lex/`.
+"Feature queries in C").
+
+WP-1290 completes the table:
+- `_Imaginary` and `_Decimal32/64/128` are type specifiers in every
+  language mode, as in clang. `_Imaginary` folds into the complex slot
+  and Sema reports "imaginary types are not supported" (the type stays
+  real); `_DecimalN` is "GNU decimal type extension not supported" (the
+  declarator is invalid), after any complex error.
+- Before the standard that has them, `_Bool`/`_Imaginary` are "is a C99
+  extension", and `_Static_assert`, `_Alignas`, `_Alignof`, `_Atomic`,
+  `_Thread_local`, `_Noreturn` and `_Generic` are "is a C11 extension"
+  (`-pedantic`; in C++ as before).
+- Only clang's `KEYALL` traits (`__is_destructible`,
+  `__is_nothrow_destructible`, `__is_bitwise_cloneable`; `keywords::C_TYPE_TRAITS`)
+  stay keywords in C, plus the C-only `__builtin_types_compatible_p` (an
+  identifier in C++; spec/sema-templates.md §9.1). The other traits and
+  the type transforms are identifiers.
+
+Tests: `tests/c/lex/`, `tests/c/parse/`, `tests/c/expr/builtin-types-compatible*.c`.
 
 ## 2. Token source (`tokens.rs`, `pragma.rs`)
 
@@ -964,9 +980,19 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     expression and do not count as a type specifier (`int`-defaulting is
     unchanged); the statement disambiguator treats them as
     decl-specifiers and as ptr-operator qualifiers. Their meaning is in
-    spec/sema.md §4.1.1. Not parsed: block pointers `^` (no `-fblocks`)
-    and qualifiers inside a parameter's array brackets (`int a[_Nonnull]`,
-    like the C99 `int a[const]`, is "expected expression").
+    spec/sema.md §4.1.1. Not parsed: block pointers `^` (no `-fblocks`).
+- **Array bracket qualifiers** (`parse_bracket_quals`, C17 6.7.6.2p1,
+  WP-1287; clang `ParseBracketDeclarator`): after `[`, an optional
+  `static`, cv/`restrict`/`_Atomic` qualifiers and nullability, and
+  `static` again after the qualifiers, then `*` (when the `]` follows)
+  or the bound. On a parameter's outermost array they are recorded on
+  the declarator (`array_param_quals`, `array_stars`) for sema's
+  adjustment (spec/sema.md §1.0.1); in C++ they are "... is a C99
+  feature" errors, on an inner array "... non-outermost array type
+  derivation", `static` without a bound or with `*` is its own error,
+  and `[*]` outside a prototype is "star modifier used outside of
+  function prototype". A nullability qualifier applies to the array
+  and moves to the decayed pointer.
 - **Exception specifications** (`parse_exception_spec`, after the
   function parameters, [except.spec]/1): at most one per declarator.
   - `noexcept` is `ExcSpec::BasicNoexcept`.
@@ -1422,7 +1448,10 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     `is_cxx_type_id_at(pos + 1, InParens)` says the parentheses hold a
     type-id. `( type-id ) { ... }` is a compound literal instead
     (`act_on_compound_literal`), followed by postfix operators as in
-    clang's `ParseCompoundLiteralExpression`.
+    clang's `ParseCompoundLiteralExpression`; after `sizeof` or
+    `alignof` too, where it is the operand expression
+    (`trait_type_or_literal`; `sizeof (struct S){ 0 }.m`), but not after
+    GNU `typeof`, whose `( type-id )` may precede a function body.
   - When that type-id was *ambiguous* (the second flag: the abstract
     declarator could also be an expression, `(T())`, `(T(*)())`), the
     tokens after the matching `)` decide ([dcl.ambig.res]/2,

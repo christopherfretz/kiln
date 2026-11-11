@@ -42,6 +42,7 @@ pub fn is_c_assign_diag(id: DiagId) -> bool {
             | DiagId::sema_c_assign_incompatible
             | DiagId::sema_c_assign_incompatible_function_pointer
             | DiagId::sema_c_assign_incompatible_pointer
+            | DiagId::sema_c_assign_incompatible_pointer_default_error
             | DiagId::sema_c_assign_int_to_pointer
             | DiagId::sema_c_assign_pointer_sign
             | DiagId::sema_c_assign_pointer_to_int
@@ -76,6 +77,38 @@ fn compatible_at(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> bool
         return false;
     }
     compatible_unqual(s, a.without_quals(), b.without_quals(), depth - 1)
+}
+
+/// GNU `__builtin_types_compatible_p(a, b)` (clang `BTT_TypeCompatible`):
+/// C17 6.2.7 compatibility with the top-level qualifiers of `a` and `b`,
+/// and of their (nested) array element types, ignored (clang
+/// `getUnqualifiedArrayType`, as GCC does).
+pub(crate) fn compatible_unqualified(s: &Sema<'_, '_>, a: QualType, b: QualType) -> bool {
+    unqualified_at(s, a, b, DEPTH)
+}
+
+fn unqualified_at(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> bool {
+    let types = &s.ast.types;
+    let (a, b) = (types.canonical(a).without_quals(), types.canonical(b).without_quals());
+    let array_size = |q: QualType| match types.canonical_view(q) {
+        TypeView::ConstantArray(c) => Some(Some(c.size)),
+        TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => Some(None),
+        _ => None,
+    };
+    match (array_size(a), array_size(b)) {
+        (Some(sa), Some(sb)) if depth > 0 => {
+            if let (Some(x), Some(y)) = (sa, sb)
+                && x != y
+            {
+                return false;
+            }
+            match (types.element(a), types.element(b)) {
+                (Some(x), Some(y)) => unqualified_at(s, x, y, depth - 1),
+                _ => false,
+            }
+        }
+        _ => compatible_at(s, a, b, depth),
+    }
 }
 
 /// The integer type an enumeration is compatible with (C17 6.7.2.2p4).
@@ -211,7 +244,7 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
 
 /// Whether `e` is an integer constant expression in C's sense (C17 6.6p6):
 /// no object is read (an enumeration constant is not an object).
-fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
+pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
     let mut stack = vec![e];
     let mut seen = 0u32;
     while let Some(x) = stack.pop() {
@@ -455,6 +488,12 @@ pub(crate) fn convert(
                 super::raw_cast(s, CastKind::LValueToRValue, e, u, ValueCategory::PRValue, None);
             return Some(Ok(x));
         }
+        if to_rec
+            && ctx == ConvCtx::Argument
+            && let Some(x) = s.transparent_union_argument(e, to)
+        {
+            return Some(Ok(x));
+        }
         let err = error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some("0"));
         return Some(Err(err));
     }
@@ -511,7 +550,14 @@ pub(crate) fn convert(
                 }
                 PtrCheck::Incompatible => {
                     let h = fix_hint(s, e, from, to);
-                    (DiagId::sema_c_assign_incompatible_pointer, Some(h))
+                    // clang 22 makes `-Wincompatible-pointer-types` an
+                    // error by default; clang 19 warns (WP-1285).
+                    let id = if s.clang_compat >= 22 {
+                        DiagId::sema_c_assign_incompatible_pointer_default_error
+                    } else {
+                        DiagId::sema_c_assign_incompatible_pointer
+                    };
+                    (id, Some(h))
                 }
             };
             let mut err = error(s, id, e, from, to, act, hint);
@@ -543,6 +589,44 @@ pub(crate) fn convert(
         }
         let h = fix_hint(s, e, from, to);
         return Some(Err(error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some(h))));
+    }
+    None
+}
+
+/// One member of a transparent union parameter
+/// ([`Sema::transparent_union_argument`], clang
+/// `CheckTransparentUnionArgumentConstraints`): `e` converted to member
+/// type `fty` when that is a compatible assignment, else `None` (with no
+/// diagnostic). A pointer member also takes any `void *` and a null
+/// pointer constant.
+pub(crate) fn argument_member(s: &mut Sema<'_, '_>, e: ExprId, fty: QualType) -> Option<ExprId> {
+    let from = ty(s, e);
+    let from_d = decayed_type(s, e);
+    let types = &s.ast.types;
+    let arith = |q: QualType| types.is_arithmetic(q) || types.as_enum(q).is_some();
+    if types.is_pointer(fty) {
+        if types.is_pointer(from_d) {
+            let to_c = types.canonical(fty);
+            let from_c = types.canonical(from_d);
+            let void = types.pointee(from_c).is_some_and(|p| types.is_void(p));
+            if !void && check_pointers(s, to_c, from_c) != PtrCheck::Compatible {
+                return None;
+            }
+            let x = decay(s, e);
+            return Some(cast_to(s, CastKind::BitCast, x, fty, None));
+        }
+        null_pointer_constant(s, e)?;
+        let x = decay(s, e);
+        return Some(cast_to(s, CastKind::NullToPointer, x, fty, None));
+    }
+    if types.as_record(fty).is_some() {
+        return match convert(s, e, fty, ConvCtx::Argument) {
+            Some(Ok(x)) => Some(x),
+            _ => None,
+        };
+    }
+    if arith(fty) && arith(from_d) && s.vector_parts(from).is_none() {
+        return super::implicit_convert(s, e, fty, ConvCtx::Argument).ok();
     }
     None
 }

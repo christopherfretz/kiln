@@ -5,7 +5,6 @@
 //@ expect: compile-ok
 //@ std: c++20
 //@ strict-diags
-//@ xfail(kiln): WP-789 follow-up, ignoring "-Wvla" by pragma does not silence -Wvla-cxx-extension (seen building folly::coro, AsyncUDPSocket.cpp)
 int f(int n) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wvla"

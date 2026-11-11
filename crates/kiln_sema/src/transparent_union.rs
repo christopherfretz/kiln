@@ -12,10 +12,17 @@
 //! never looks at it), but the calling convention passes such a union by
 //! value as its first field (clang `useFirstFieldIfTransparentUnion`,
 //! `kiln_abi::call`).
+//!
+//! In C (WP-1287) the attribute is clang's `handleTransparentUnionAttr`
+//! everywhere: kept on a union definition (written after the class-key,
+//! after the closing brace, or on a typedef of a complete union, glibc's
+//! `__SOCKADDR_ARG`) whose fields qualify, and an argument passed to a
+//! parameter of such a union converts to the first member it is
+//! assignment-compatible with ([`Sema::transparent_union_argument`]).
 
-use kiln_ast::attr::AttrKind;
-use kiln_ast::decl::{DeclKind, TagKind};
-use kiln_ast::{AttrId, DeclId};
+use kiln_ast::attr::{AttrKind, AttrNode};
+use kiln_ast::decl::{DeclKind, DefinitionBits, TagKind};
+use kiln_ast::{AttrId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 
 use crate::Sema;
@@ -50,10 +57,12 @@ impl Sema<'_, '_> {
         for a in found {
             let node = *self.ast.attrs.get(a);
             let shown = self.attr_shown(&node, "transparent_union");
-            let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(&shown);
-            self.emit(msg);
-            if enum_ {
-                continue;
+            if !self.is_c() {
+                let msg = self.diag(DiagId::parse_attribute_ignored, node.loc).arg(&shown);
+                self.emit(msg);
+                if enum_ {
+                    continue;
+                }
             }
             if !union {
                 let msg = self
@@ -87,6 +96,97 @@ impl Sema<'_, '_> {
         if !self.transparent_union_fields_ok(r, a) {
             self.builder().remove_attr(r, a);
         }
+    }
+
+    /// A `transparent_union` among the declaration attributes of `d` in C
+    /// (clang `handleTransparentUnionAttr`): on a union being defined (its
+    /// trailing attributes) it is kept for [`Sema::check_transparent_union`]
+    /// at the closing brace; on a typedef of a complete union whose fields
+    /// qualify it moves to the union; anything else drops it with a
+    /// warning. True keeps it on `d`.
+    pub(crate) fn c_transparent_union_attr(
+        &mut self,
+        d: DeclId,
+        kind: DeclKind,
+        a: AttrId,
+        node: AttrNode,
+    ) -> bool {
+        let is_union =
+            |s: &Self, r: DeclId| s.ast.decls.record(r).is_some_and(|x| x.tag == TagKind::Union);
+        let typedef = matches!(kind, DeclKind::Typedef | DeclKind::TypeAlias);
+        let rec = if typedef {
+            self.ast
+                .decls
+                .typedef(d)
+                .and_then(|t| self.ast.types.as_record(t.underlying))
+                .filter(|&r| is_union(self, r))
+        } else {
+            (kind == DeclKind::CXXRecord && is_union(self, d)).then_some(d)
+        };
+        let Some(rec) = rec else {
+            let shown = self.attr_shown(&node, "transparent_union");
+            let msg = self
+                .diag(DiagId::sema_attribute_wrong_decl_type, node.loc)
+                .arg(format!("'{shown}'"))
+                .arg("unions");
+            self.emit(msg);
+            return false;
+        };
+        if !typedef {
+            return true;
+        }
+        let def = self.ast.definition(rec).filter(|&x| {
+            self.ast.decls.record(x).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE))
+        });
+        let Some(def) = def else {
+            let msg = self.diag(DiagId::sema_transparent_union_not_definition, node.loc);
+            self.emit(msg);
+            return false;
+        };
+        if self.transparent_union_fields_ok(def, a) {
+            self.builder().append_attrs(def, &[a]);
+        }
+        false
+    }
+
+    /// The union type of parameter type `to` when it kept
+    /// `transparent_union` (C only).
+    fn transparent_union_of(&self, to: QualType) -> Option<DeclId> {
+        let r = self.ast.types.as_record(to)?;
+        let def = self.ast.definition(r)?;
+        self.ast
+            .lists
+            .iter::<AttrId>(self.ast.attrs.of_decl(def))
+            .any(|a| self.ast.attrs.get(a).kind == AttrKind::TRANSPARENT_UNION)
+            .then_some(def)
+    }
+
+    /// clang `CheckTransparentUnionArgumentConstraints`: argument `e`
+    /// passed to a parameter of transparent union type `to` (after the
+    /// plain assignment check failed) initializes the first member that
+    /// takes it: a pointer member a `void *` or a null pointer constant,
+    /// any member a value compatible with it by assignment without a
+    /// diagnostic. The result is the union prvalue (clang
+    /// `ConstructTransparentUnion`); `None` when no member takes it.
+    pub(crate) fn transparent_union_argument(&mut self, e: ExprId, to: QualType) -> Option<ExprId> {
+        let def = self.transparent_union_of(to)?;
+        let fields: Vec<DeclId> = self
+            .ast
+            .decls
+            .members(def)
+            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
+            .collect();
+        for f in fields {
+            let Some(fty) = self.ast.decls.get(f).ty() else { continue };
+            let Some(x) = crate::conv::c_assign::argument_member(self, e, fty) else {
+                continue;
+            };
+            let loc = self.ast.exprs.get(e).loc();
+            let end = self.expr_end_loc(e);
+            let u = crate::conv::strip_cv(self, to);
+            return Some(self.builder().init_list(u, &[x], None, Some(f), loc, end));
+        }
+        None
     }
 
     fn transparent_union_fields_ok(&mut self, r: DeclId, a: AttrId) -> bool {

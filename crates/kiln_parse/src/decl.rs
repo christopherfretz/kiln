@@ -58,7 +58,11 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float64x
             | Kw::Bf16
             | Kw::Fp16
+            | Kw::Decimal32
+            | Kw::Decimal64
+            | Kw::Decimal128
             | Kw::Complex
+            | Kw::Imaginary
             | Kw::Auto
             | Kw::GnuAutoType
             | Kw::Const
@@ -682,12 +686,36 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// clang `ext_c99_feature` / `ext_c11_feature` on the current token
+    /// when it is the reserved spelling of a keyword C99 (`_Bool`,
+    /// `_Imaginary`) or C11 (`_Static_assert`, `_Alignas`, `_Alignof`,
+    /// `_Atomic`, `_Thread_local`) added, and the language is older C or
+    /// C++ (spec/parse.md §1.4).
+    pub(crate) fn c_keyword_extension(&mut self) {
+        let t = self.tok();
+        let sp = self.spelling_of(&t);
+        let id = match sp.as_str() {
+            "_Bool" | "_Imaginary" if !self.s.c_at_least(kiln_lex::CStd::C99) => {
+                DiagId::parse_c99_feature
+            }
+            "_Static_assert" | "_Alignas" | "_Alignof" | "_Atomic" | "_Thread_local"
+                if !self.s.c_at_least(kiln_lex::CStd::C11) =>
+            {
+                DiagId::parse_c11_feature
+            }
+            _ => return,
+        };
+        let d = self.s.diag(id, t.span.lo).arg(sp);
+        self.emit(d);
+    }
+
     /// `static_assert ( constant-expression [, static_assert-message] ) ;`
     /// ([dcl.pre]/10). The message is an unevaluated string literal when
     /// every token up to the `)` is a string literal without a
     /// ud-suffix, else a constant-expression (P2741; clang 22's
     /// lookahead, a C++26 extension before C++26).
     pub(crate) fn parse_static_assert(&mut self) -> Option<DeclId> {
+        self.c_keyword_extension();
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else {
             self.skip_to_semi();
@@ -884,6 +912,7 @@ impl Parser<'_, '_> {
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
                 Kw::ThreadLocal => {
+                    self.c_keyword_extension();
                     let sp = self.spelling_of(&self.tok());
                     let r = set_flag(&mut ds.thread_local, loc, "thread_local");
                     if r.is_ok() {
@@ -912,8 +941,11 @@ impl Parser<'_, '_> {
                 }
                 Kw::Friend => set_flag(&mut ds.friend, loc, "friend"),
                 Kw::Noreturn => {
-                    let d = self.s.diag(DiagId::parse_c11_noreturn, loc);
-                    self.emit(d);
+                    // clang `ext_c11_feature`: not in C11 and later.
+                    if !self.s.c_at_least(kiln_lex::CStd::C11) {
+                        let d = self.s.diag(DiagId::parse_c11_noreturn, loc);
+                        self.emit(d);
+                    }
                     set_flag(&mut ds.noreturn, loc, "_Noreturn")
                 }
                 Kw::Explicit => {
@@ -938,7 +970,10 @@ impl Parser<'_, '_> {
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
                 Kw::Unsigned => ds.set_sign(Sign::Unsigned, loc),
                 Kw::Void => ds.set_base(TypeSpecKind::Void, None, loc),
-                Kw::Bool => ds.set_base(TypeSpecKind::Bool, None, loc),
+                Kw::Bool => {
+                    self.c_keyword_extension();
+                    ds.set_base(TypeSpecKind::Bool, None, loc)
+                }
                 Kw::Char => ds.set_base(TypeSpecKind::Char, None, loc),
                 Kw::WChar => ds.set_base(TypeSpecKind::WChar, None, loc),
                 Kw::Char8 => ds.set_base(TypeSpecKind::Char8, None, loc),
@@ -982,10 +1017,24 @@ impl Parser<'_, '_> {
                 Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
-                    // clang `ext_c99_feature` on the keyword.
-                    self.s.error(DiagId::parse_c99_complex, loc);
+                    // clang `ext_c99_feature` on the keyword, before C99.
+                    if !self.s.c_at_least(kiln_lex::CStd::C99) {
+                        self.s.error(DiagId::parse_c99_complex, loc);
+                    }
                     ds.set_complex(loc)
                 }
+                // C99 6.7.2: `_Imaginary` is a keyword in every language
+                // (clang `KEYALL`), which clang does not implement
+                // (spec/parse.md §1.4).
+                Kw::Imaginary => {
+                    self.c_keyword_extension();
+                    ds.set_imaginary(loc)
+                }
+                // ISO/IEC TS 18661-2 / C23 6.7.2 decimal floating types:
+                // keywords everywhere, rejected by sema as clang does.
+                Kw::Decimal32 => ds.set_base(TypeSpecKind::Decimal32, None, loc),
+                Kw::Decimal64 => ds.set_base(TypeSpecKind::Decimal64, None, loc),
+                Kw::Decimal128 => ds.set_base(TypeSpecKind::Decimal128, None, loc),
                 // C `auto` is a storage class (C89 3.5.1); C23 also deduces
                 // with it when no type-specifier follows (C23 6.7.10).
                 Kw::Auto if self.s.is_c() && !self.c23_auto_deduces() => {
@@ -1006,6 +1055,7 @@ impl Parser<'_, '_> {
                     continue;
                 }
                 Kw::Atomic => {
+                    self.c_keyword_extension();
                     self.parse_atomic_specifier_into(&mut ds, loc);
                     continue;
                 }
@@ -1327,7 +1377,7 @@ impl Parser<'_, '_> {
     /// error.
     pub(crate) fn parse_typeof_specifier(&mut self, unqual: bool) -> Option<QualType> {
         let loc = self.bump().span.lo;
-        match self.parse_trait_operand()? {
+        match self.parse_trait_operand(false)? {
             crate::expr::TraitOperand::Type(ty, _) => Some(self.s.act_on_typeof_type(ty, unqual)),
             crate::expr::TraitOperand::Expr(e) => self.s.act_on_typeof_expr(e?, loc, unqual),
         }
@@ -2126,8 +2176,10 @@ impl Parser<'_, '_> {
         named: bool,
         ctx: DeclaratorContext,
     ) -> bool {
-        // C11 6.7.2.3, 6.2.1/4: C declares a tag anywhere a type specifier
-        // may appear; one in a parameter list is Sema's `-Wvisibility`.
+        // C declares a tag anywhere a type specifier may appear: a cast,
+        // `sizeof`, `_Generic` (C17 6.7.2.3p6; clang `ActOnTag` checks
+        // `CPlusPlus`). One in a parameter list is Sema's `-Wvisibility`
+        // (`c_warn_tag_in_param_list`, C17 6.2.1p4).
         if self.s.is_c() {
             return false;
         }
@@ -2159,6 +2211,8 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        // C defines a tag in any type name or parameter type (C17
+        // 6.7.2.3p6, 6.2.1p4).
         if self.s.is_c() {
             return;
         }
@@ -2187,6 +2241,8 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
     fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        // C17 6.9.1: a function's result type may define a tag (clang
+        // `GetFullTypeForDeclarator` checks `CPlusPlus`).
         if self.s.is_c() {
             return;
         }
@@ -2434,7 +2490,9 @@ impl Parser<'_, '_> {
         let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
         let use_ = if can_define
             && (self.at(Punct::LBrace)
-                || (is_class && self.at(Punct::Colon))
+                // C has no base clause: `_Generic(e, struct S: 1)` names
+                // `S` (clang `ParseClassSpecifier` checks `CPlusPlus`).
+                || (is_class && self.at(Punct::Colon) && !self.s.is_c())
                 || final_loc.is_some())
         {
             TagUse::Definition
@@ -2870,38 +2928,75 @@ impl Parser<'_, '_> {
     }
 
     /// C99's `static` and type-qualifier-list in an array declarator's
-    /// brackets (clang `ParseBracketDeclarator`): both are errors in C++
-    /// ("... is a C99 feature" on a parameter's outermost array, else
-    /// "... outside of function prototype", which invalidates the
-    /// declarator), at the `[`. A nullability qualifier there is
-    /// a clang extension: it applies to the array, which only the
-    /// parameter's outermost one may carry (it moves to the decayed
-    /// pointer; spec/sema.md §4.1.1).
+    /// brackets, and the `[*]` of a variable length array of unspecified
+    /// size (clang `ParseBracketDeclarator`, with the checks of
+    /// `GetFullTypeForDeclarator`, all at the `[`; C17 6.7.6.2p1, p4):
+    /// - `static` needs a bound ("may not be used without an array
+    ///   size", at the `static`, which is dropped);
+    /// - outside a parameter declaration they are "... outside of
+    ///   function prototype" (in C++ that invalidates the declarator; C
+    ///   drops them, as clang);
+    /// - inside one but not on the outermost array derivation (an array,
+    ///   pointer or reference chunk is closer to the name) they are
+    ///   "... non-outermost array type derivation" and dropped;
+    /// - on the outermost one they are an error in C++ ("... is a C99
+    ///   feature"); in C they are recorded on the declarator
+    ///   (`Declarator::array_param_quals`), for the adjusted pointer;
+    /// - `[*]` outside a prototype is "star modifier used outside of
+    ///   function prototype" and makes an array of unknown bound; inside
+    ///   one it is recorded (`Declarator::array_stars`).
+    ///
+    /// A nullability qualifier there is a clang extension: it applies to
+    /// the array, which only the parameter's outermost one may carry (it
+    /// moves to the decayed pointer; spec/sema.md §4.1.1).
     fn parse_bracket_quals(&mut self, d: &mut Declarator, open: Loc) {
-        let mut stat = self.at_kw(Kw::Static);
-        if stat {
-            self.bump();
-        }
+        let mut static_at = self.at_kw(Kw::Static).then(|| self.bump().span.lo);
         let (quals, nulls) = self.parse_ptr_quals();
-        if !stat && !quals.is_empty() && self.at_kw(Kw::Static) {
-            self.bump();
-            stat = true;
+        if static_at.is_none() && !quals.is_empty() && self.at_kw(Kw::Static) {
+            static_at = Some(self.bump().span.lo);
         }
         let i = d.chunks.len();
         d.nullability.extend(nulls.into_iter().map(|n| (i, n)));
-        if !stat && quals.is_empty() {
+        let proto = d.ctx == DeclaratorContext::Prototype;
+        // clang `hasOuterPointerLikeChunk`: chunk 0 is the outermost
+        // derivation; a function chunk outside is invalid anyway.
+        let outer = d.chunks.iter().any(|c| !matches!(c, Chunk::Function { .. }));
+        let star = self.at(Punct::Star) && Self::punct_of(self.peek(1)) == Some(Punct::RSquare);
+        if star {
+            let at = self.bump().span.lo;
+            if let Some(l) = static_at.take() {
+                self.emit(self.s.diag(DiagId::parse_unspecified_vla_size_with_static, l));
+            }
+            if proto {
+                d.array_stars.push((i, at));
+            } else {
+                self.emit(self.s.diag(DiagId::parse_array_star_outside_prototype, open));
+            }
+        } else if self.at(Punct::RSquare)
+            && let Some(l) = static_at.take()
+        {
+            self.emit(self.s.diag(DiagId::parse_unspecified_size_with_static, l));
+        }
+        if static_at.is_none() && quals.is_empty() {
             return;
         }
-        let param = d.ctx == DeclaratorContext::Prototype && i == 0;
-        let id = match (param, stat) {
-            (true, _) => DiagId::parse_c99_array_usage_cxx,
-            (false, true) => DiagId::parse_array_static_outside_prototype,
-            (false, false) => DiagId::parse_array_qual_outside_prototype,
+        let c = self.s.is_c();
+        let id = match (proto, outer, static_at.is_some()) {
+            (false, _, true) => DiagId::parse_array_static_outside_prototype,
+            (false, _, false) => DiagId::parse_array_qual_outside_prototype,
+            (true, true, true) => DiagId::parse_array_static_not_outermost,
+            (true, true, false) => DiagId::parse_array_qual_not_outermost,
+            (true, false, _) if c => {
+                d.array_param_quals = quals;
+                d.array_param_static = static_at.map(|_| open);
+                return;
+            }
+            (true, false, _) => DiagId::parse_c99_array_usage_cxx,
         };
         let mut diag = self.s.diag(id, open);
-        if param {
-            diag = diag.arg(u8::from(stat));
-        } else {
+        if id == DiagId::parse_c99_array_usage_cxx {
+            diag = diag.arg(u8::from(static_at.is_some()));
+        } else if !proto && !c {
             d.invalid = true;
         }
         self.emit(diag);

@@ -4,6 +4,7 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 1 0
+//@ strict-diags
 #include <stdio.h>
 typedef int (*kfn)(int);
 static int id(int x) { return x; }

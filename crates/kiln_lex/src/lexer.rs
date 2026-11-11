@@ -11,8 +11,8 @@ use crate::options::{CStd, LexMode, LexOptions, Std};
 use crate::phase::{Src, is_hws};
 use crate::token::{Encoding, Punct, TokFlags, TokKind, Token};
 use crate::unicode::{
-    NameMatch, ascii_ident_end, is_ascii_ident_continue, is_nfc, is_unicode_whitespace,
-    is_xid_continue, is_xid_start, lookup_char_name,
+    IdTables, NameMatch, ascii_ident_end, c99_incompat, is_ascii_ident_continue, is_nfc,
+    is_unicode_whitespace, is_xid_continue, is_xid_start, lookup_char_name,
 };
 use kiln_source::symbol::Interner;
 
@@ -100,6 +100,10 @@ pub struct Lexer<'a> {
     /// Spans of the comments lexed since the last
     /// [`take_comments`](Lexer::take_comments), when recording is on.
     comments: Option<Vec<Span>>,
+    /// Strict C89 only: a `//` comment has been lexed in this buffer, so
+    /// `//` is a comment from here on (clang's per-lexer `LineComment`,
+    /// set by the first one, which `ext_line_comment` reports).
+    c89_line_comments: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -163,6 +167,7 @@ impl<'a> Lexer<'a> {
             diags: Vec::new(),
             scratch: String::new(),
             comments: None,
+            c89_line_comments: false,
         }
     }
 
@@ -246,7 +251,8 @@ impl<'a> Lexer<'a> {
     /// literal and a line splice. So the rest of the line qualifies unless
     /// it holds a `/*` with no `*/` after it on the line (or one that a
     /// `/*/` could reopen), an `R"`, a `\` as its last non-blank byte, or
-    /// (with trigraphs) a `??/`. Lexing on from there gives the same
+    /// (with trigraphs) a `??/`, or, compiling strict C89 before the
+    /// file's first line comment, a `//`. Lexing on from there gives the same
     /// following tokens as lexing the skipped ones would have; no
     /// diagnostics are recorded and nothing is interned for the skipped
     /// bytes.
@@ -260,6 +266,19 @@ impl<'a> Lexer<'a> {
         let Some(rest) = self.src.bytes.get(from..) else {
             return false;
         };
+        // Strict C89 compiling: the file's first `//` comment changes how
+        // later `//*` lex, and clang's raw lexer sees it in a skipped group
+        // too, so a line that may hold it is lexed.
+        if self.opts.c == Some(CStd::C89)
+            && !self.opts.gnu
+            && !self.c89_line_comments
+            && !self.opts.preprocessed_output
+        {
+            let eol = rest.iter().position(|&c| c == b'\n' || c == b'\r').unwrap_or(rest.len());
+            if rest[..eol].windows(2).any(|w| w == b"//") {
+                return false;
+            }
+        }
         let at = |k: usize| rest.get(k).copied();
         let trigraphs = self.opts.trigraphs;
         // `R"` or `??/` at `k`: both can matter even inside what looks
@@ -361,6 +380,42 @@ impl<'a> Lexer<'a> {
     /// C at `std` or later.
     fn c_at_least(&self, std: CStd) -> bool {
         self.opts.c.is_some_and(|c| c >= std)
+    }
+
+    /// The identifier-character tables of the language (C++ and C23:
+    /// XID; C11/C17: C11 Annex D; C99 and C89: C99 Annex D).
+    fn id_tables(&self) -> IdTables {
+        match self.opts.c {
+            None | Some(CStd::C23) => IdTables::Xid,
+            Some(CStd::C11 | CStd::C17) => IdTables::C11,
+            Some(CStd::C89 | CStd::C99) => IdTables::C99,
+        }
+    }
+
+    /// C89 (and gnu89): `\u`/`\U` are not universal-character-names.
+    fn no_ucns(&self) -> bool {
+        self.opts.c == Some(CStd::C89)
+    }
+
+    /// Outside a directive and `-E`, where clang diagnoses (or drops) a
+    /// non-ASCII character that cannot appear where it is.
+    fn loud_ids(&self) -> bool {
+        !self.in_directive && !self.opts.preprocessed_output
+    }
+
+    /// The mathematical-notation extension warning, then `-Wc99-compat`,
+    /// for the accepted identifier character `c` at `[lo, hi)` (clang
+    /// `diagnoseExtensionInIdentifier`, `maybeDiagnoseIDCharCompat`).
+    fn c99_compat(&mut self, c: char, first: bool, lo: usize, hi: usize) {
+        if c.is_ascii() {
+            return;
+        }
+        if self.id_tables().math_extension(c, first) {
+            self.diag(LexDiagKind::MathematicalNotation { ch: c }, lo, hi);
+        }
+        if let Some(start) = c99_incompat(c, first) {
+            self.diag(LexDiagKind::C99CompatUnicodeId { start }, lo, hi);
+        }
     }
 
     fn take_line_flags(&mut self) -> TokFlags {
@@ -502,6 +557,49 @@ impl<'a> Lexer<'a> {
         Token { kind: TokKind::Eof, span: Span::empty(self.loc(end)), flags }
     }
 
+    /// The non-ASCII arm of [`skip_whitespace`](Self::skip_whitespace):
+    /// skips one character at `pos` if it is whitespace or dropped with an
+    /// error, else returns `false` (a token starts there).
+    fn skip_non_ascii_space(&mut self) -> bool {
+        let (c, s) = self.src.decode(self.pos);
+        match c {
+            Some(c) if is_unicode_whitespace(c) && !self.opts.preprocessed_output => {
+                self.diag(LexDiagKind::UnicodeWhitespace { ch: c }, self.pos, self.pos + s);
+                self.leading_space = true;
+                self.pos += s;
+            }
+            // Invalid UTF-8 outside a literal or comment is
+            // dropped with an error (clang); a directive keeps
+            // it as an unknown token.
+            Some('\u{FFFD}') if !self.in_directive && self.is_replacement(self.pos) => {
+                self.diag(LexDiagKind::InvalidUtf8, self.pos, self.pos + s);
+                self.pos += s;
+            }
+            // A character that cannot start an identifier is
+            // dropped with an error outside a directive and
+            // `-E` (clang `LexUnicodeIdentifierStart`); the
+            // next token loses its line-start and leading-space
+            // flags, as in clang.
+            Some(c)
+                if self.loud_ids()
+                    && !is_unicode_whitespace(c)
+                    && !self.id_tables().allowed_initially(c) =>
+            {
+                let kind = if self.id_tables().allowed(c) {
+                    LexDiagKind::CharNotAllowedInIdentifier { ch: c, at_start: true }
+                } else {
+                    LexDiagKind::InvalidChar { ch: c }
+                };
+                self.diag(kind, self.pos, self.pos + s);
+                self.at_line_start = false;
+                self.leading_space = false;
+                self.pos += s;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Skips whitespace, newlines and comments. Returns a token if one is
     /// produced on the way (`Eod`, or a kept `Comment`).
     fn skip_whitespace(&mut self) -> Option<Token> {
@@ -560,6 +658,18 @@ impl<'a> Lexer<'a> {
                     }
                     let q = self.src.skip_splices(self.pos);
                     if q == self.pos {
+                        // A UCN naming whitespace is whitespace, except
+                        // in `-E` (clang `CheckUnicodeWhitespace`).
+                        if b == b'\\'
+                            && !self.opts.preprocessed_output
+                            && let Ucn::Valid { ch, end, .. } = self.scan_ucn(self.pos)
+                            && is_unicode_whitespace(ch)
+                        {
+                            self.diag(LexDiagKind::UnicodeWhitespace { ch }, self.pos, end);
+                            self.leading_space = true;
+                            self.pos = end;
+                            continue;
+                        }
                         return None;
                     }
                     let (c, s) = self.src.decode(q);
@@ -579,25 +689,8 @@ impl<'a> Lexer<'a> {
                     self.pos = q;
                 }
                 0x80.. => {
-                    let (c, s) = self.src.decode(self.pos);
-                    match c {
-                        Some(c) if is_unicode_whitespace(c) => {
-                            self.diag(
-                                LexDiagKind::UnicodeWhitespace { ch: c },
-                                self.pos,
-                                self.pos + s,
-                            );
-                            self.leading_space = true;
-                            self.pos += s;
-                        }
-                        // Invalid UTF-8 outside a literal or comment is
-                        // dropped with an error (clang); a directive keeps
-                        // it as an unknown token.
-                        Some('\u{FFFD}') if !self.in_directive && self.is_replacement(self.pos) => {
-                            self.diag(LexDiagKind::InvalidUtf8, self.pos, self.pos + s);
-                            self.pos += s;
-                        }
-                        _ => return None,
+                    if !self.skip_non_ascii_space() {
+                        return None;
                     }
                 }
                 _ => return None,
@@ -605,19 +698,31 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Lexes a `//` comment starting at `self.pos` ([lex.comment]). The
-    /// newline ending it is not consumed.
     /// Whether the `//` at `self.pos` starts a comment. Always, except in
-    /// strict C89, which has no line comments (C89 3.1.9): there clang 19
-    /// and 22 lex `//` as a comment when compiling (even `a //**/ b`,
-    /// which C89 reads as `a / b`) and as two `/` in preprocessed output
-    /// (spec/lex.md "C mode").
+    /// strict C89, which has no line comments (C89 3.1.9). There clang 19
+    /// and 22 (`Lexer::LexTokenInternal`) lex `//` as two `/` in
+    /// preprocessed output, skipped groups included. When compiling,
+    /// `//` is a comment unless `*` follows it (`a //**/ b` is C89's
+    /// `a / b`), and every `//` is one after the buffer's first line
+    /// comment (spec/lex.md "C mode").
     fn c89_line_comment(&self) -> bool {
-        self.opts.c != Some(CStd::C89) || self.opts.gnu || !self.opts.preprocessed_output
+        if self.opts.c != Some(CStd::C89) || self.opts.gnu || self.c89_line_comments {
+            return true;
+        }
+        let (_, s1) = self.src.decode(self.pos + 1);
+        !self.opts.preprocessed_output && self.src.decode(self.pos + 1 + s1).0 != Some('*')
     }
 
+    /// Lexes a `//` comment starting at `self.pos` ([lex.comment]). The
+    /// newline ending it is not consumed.
     fn line_comment(&mut self) -> Option<Token> {
         let start = self.pos;
+        if self.opts.c == Some(CStd::C89) && !self.opts.gnu && !self.c89_line_comments {
+            // clang `ext_line_comment`, once per buffer (the preprocessor
+            // drops it in a skipped group, as clang's raw lexer does).
+            self.c89_line_comments = true;
+            self.diag(LexDiagKind::C89LineComment, start, start + 2);
+        }
         let (_, s1) = self.src.decode(start + 1);
         let body = start + 1 + s1;
         let bytes = self.src.bytes;
@@ -770,22 +875,27 @@ impl<'a> Lexer<'a> {
             // Invalid UTF-8 in a directive: an unknown token, no
             // diagnostic (clang).
             (TokKind::Other(c), p1, TokFlags::empty())
-        } else if is_xid_start(c) {
+        } else if self.id_tables().allowed_initially(c) {
+            if self.loud_ids() {
+                self.c99_compat(c, true, start, p1);
+            }
             self.lex_identifier(start, c, p1, false)
-        } else if is_xid_continue(c) {
-            // [lex.pptoken]/2: not XID_Start, so it cannot begin an
-            // identifier; it is a lone (ill-formed) "other" pp-token.
-            self.diag(LexDiagKind::CharNotAllowedInIdentifier { ch: c }, start, p1);
-            (TokKind::Other(c), p1, TokFlags::empty())
         } else {
-            self.diag(LexDiagKind::InvalidChar { ch: c }, start, p1);
+            // [lex.pptoken]/2: a lone (ill-formed) "other" pp-token. Only
+            // a directive or `-E` gets here: elsewhere `skip_whitespace`
+            // dropped the character with its error.
             (TokKind::Other(c), p1, TokFlags::empty())
         }
     }
 
     fn lex_backslash(&mut self, start: usize, p1: usize) -> (TokKind, usize, TokFlags) {
         match self.scan_ucn(start) {
-            Ucn::NotOne => (TokKind::Other('\\'), p1, TokFlags::empty()),
+            Ucn::NotOne => {
+                if self.no_ucns() && matches!(self.src.decode(p1).0, Some('u' | 'U')) {
+                    self.diag(LexDiagKind::UcnNotValidInC89, start, p1);
+                }
+                (TokKind::Other('\\'), p1, TokFlags::empty())
+            }
             Ucn::Malformed(kind) => {
                 self.diag(kind, start, p1);
                 (TokKind::Other('\\'), p1, TokFlags::empty())
@@ -795,19 +905,19 @@ impl<'a> Lexer<'a> {
                 (TokKind::Unknown, end, TokFlags::empty())
             }
             Ucn::Valid { ch, end, ext } => {
-                let ident_start =
-                    is_xid_start(ch) || (ch == '$' && self.opts.dollar_in_identifiers);
-                if !ident_start && !is_xid_continue(ch) {
-                    self.diag(LexDiagKind::UcnInvalidCodePoint { cp: u32::from(ch) }, start, end);
-                    return (TokKind::Unknown, end, TokFlags::empty());
-                }
                 if let Some(ext) = ext {
                     self.diag(ext, start, end);
                 }
-                if !ident_start {
-                    // [lex.pptoken]/2: a lone ill-formed pp-token.
-                    self.diag(LexDiagKind::CharNotAllowedInIdentifier { ch }, start, end);
-                    return (TokKind::Unknown, end, TokFlags::HAS_UCN);
+                let dollar = ch == '$' && self.opts.dollar_in_identifiers;
+                if !dollar && (ch.is_ascii() || !self.id_tables().allowed_initially(ch)) {
+                    // [lex.pptoken]/2: a lone ill-formed pp-token, which
+                    // the parser diagnoses (clang: `tok::unknown`, no
+                    // lexer diagnostic, for a UCN that cannot start an
+                    // identifier).
+                    return (TokKind::Unknown, end, TokFlags::empty());
+                }
+                if self.loud_ids() {
+                    self.c99_compat(ch, true, start, end);
                 }
                 self.lex_identifier(start, ch, end, true)
             }
@@ -880,26 +990,38 @@ impl<'a> Lexer<'a> {
                 } else if c == '\\' {
                     match self.scan_ucn(p) {
                         Ucn::Valid { ch, end, ext } => {
-                            if is_xid_continue(ch) || (ch == '$' && self.opts.dollar_in_identifiers)
-                            {
-                                info.dollar |= ch == '$';
+                            let dollar = ch == '$' && self.opts.dollar_in_identifiers;
+                            if dollar || (!ch.is_ascii() && self.id_tables().allowed(ch)) {
+                                info.dollar |= dollar;
                                 info.non_ascii |= !ch.is_ascii();
                                 if let Some(ext) = ext {
                                     self.diag(ext, p, end);
                                 }
+                                self.c99_compat(ch, false, p, end);
                                 if let Some(o) = out.as_deref_mut() {
                                     o.push(ch);
                                 }
-                            } else if is_unicode_whitespace(ch) {
+                            } else if ch.is_ascii() || is_unicode_whitespace(ch) {
                                 return p;
                             } else {
-                                self.diag(
-                                    LexDiagKind::UcnInvalidCodePoint { cp: u32::from(ch) },
-                                    p,
-                                    end,
-                                );
+                                // Kept in the identifier for recovery
+                                // (clang `tryConsumeIdentifierUCN`).
+                                if let Some(ext) = ext {
+                                    self.diag(ext, p, end);
+                                }
+                                if self.loud_ids() {
+                                    self.diag(
+                                        LexDiagKind::CharNotAllowedInIdentifier {
+                                            ch,
+                                            at_start: false,
+                                        },
+                                        p,
+                                        end,
+                                    );
+                                }
+                                info.non_ascii = true;
                                 if let Some(o) = out.as_deref_mut() {
-                                    push_decoded(self.src, o, p, end);
+                                    o.push(ch);
                                 }
                             }
                             info.has_ucn = true;
@@ -920,13 +1042,22 @@ impl<'a> Lexer<'a> {
                 } else {
                     return p;
                 }
-            } else if is_xid_continue(c) {
+            } else if self.id_tables().allowed(c) {
                 info.non_ascii = true;
+                self.c99_compat(c, false, p, p + s);
             } else if is_unicode_whitespace(c) || (c == '\u{FFFD}' && self.is_replacement(p)) {
                 // Invalid UTF-8 ends the identifier (clang).
                 return p;
             } else {
-                self.diag(LexDiagKind::CharNotAllowedInIdentifier { ch: c }, p, p + s);
+                // Kept for recovery (clang `tryConsumeIdentifierUTF8Char`).
+                info.non_ascii = true;
+                if self.loud_ids() {
+                    self.diag(
+                        LexDiagKind::CharNotAllowedInIdentifier { ch: c, at_start: false },
+                        p,
+                        p + s,
+                    );
+                }
             }
             if let Some(o) = out.as_deref_mut() {
                 o.push(c);
@@ -944,6 +1075,9 @@ impl<'a> Lexer<'a> {
         let Some(kind @ ('u' | 'U' | 'N')) = c1 else {
             return Ucn::NotOne;
         };
+        if kind != 'N' && self.no_ucns() {
+            return Ucn::NotOne;
+        }
         q += s1;
         let (c2, s2) = self.src.decode(q);
         let modern = self.std_at_least(Std::Cxx23);
@@ -1140,7 +1274,8 @@ impl<'a> Lexer<'a> {
                 }
                 '\\' => {
                     if let Ucn::Valid { ch, end, ext } = self.scan_ucn(p)
-                        && is_xid_continue(ch)
+                        && !ch.is_ascii()
+                        && self.id_tables().allowed(ch)
                     {
                         if let Some(ext) = ext {
                             self.diag(ext, p, end);
@@ -1152,7 +1287,7 @@ impl<'a> Lexer<'a> {
                     }
                     false
                 }
-                c => !c.is_ascii() && is_xid_continue(c),
+                c => !c.is_ascii() && self.id_tables().allowed(c),
             };
             if !ok {
                 break;
