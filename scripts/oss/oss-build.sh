@@ -257,7 +257,11 @@ case "$P_BUILD" in
       --buildtype=release -Dcpp_std="c++$P_CXX_STD" "${P_CONFIGURE[@]}" > "$BUILD/configure.log" 2>&1
     CONF_RC=$? ;;
   make)
-    CONF_RC=0 ;;
+    # A copy of the source tree per build (WP-1277): an in-source Makefile
+    # would otherwise let the kiln and clang builds share objects.
+    mkdir -p "$BUILD/make" && find "$BUILD/make" -mindepth 1 -delete
+    tar -C "$SRCDIR" --exclude=.git -cf - . | tar -C "$BUILD/make" -xf -
+    CONF_RC=$? ;;
   autotools)
     # Out of source, from the tarball's generated configure (WP-920).
     mkdir -p "$BUILD/autotools" && find "$BUILD/autotools" -mindepth 1 -delete
@@ -283,8 +287,8 @@ if [ "$CONF_RC" = 0 ]; then
       nice -n 10 meson compile -C "$BUILD/meson" -j "$JOBS" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
       BUILD_RC=$? ;;
     make)
-      # In-source: the project's own Makefile, told which compilers to use.
-      nice -n 10 make -k "${JFLAG[@]}" -C "$SRCDIR" CXX="$WRAP" CC="$P_C_COMPILER" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      # The project's own Makefile in the copy, told which compilers to use.
+      nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD/make" CXX="$WRAP" CC="$P_C_COMPILER" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
       BUILD_RC=$? ;;
     autotools)
       nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD/autotools" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
@@ -297,7 +301,7 @@ if [ "$CONF_RC" = 0 ]; then
   fi
   if [ -n "$RUN_TEST" ]; then
     export KILN_OSS_PHASE=test
-    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"; [ "$P_BUILD" = autotools ] && tdir="$BUILD/autotools"
+    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$BUILD/make"; [ "$P_BUILD" = autotools ] && tdir="$BUILD/autotools"
     # Test scratch is per build tree: suites that default to a fixed path
     # under /tmp (leveldb's /tmp/leveldbtest-<uid>) must not collide when the
     # kiln and clang builds, or two checkouts, run their tests at once.
