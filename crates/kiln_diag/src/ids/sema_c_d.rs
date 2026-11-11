@@ -60,6 +60,8 @@ sema_c_subscript_void_pointer = Extension [GnuPointerArith] (0) "subscript of a 
 sema_c_tag_without_keyword = Error (2) "must use '{0}' tag to refer to type '{1}'";
 sema_c_void_pointer_to_enum_cast = Warning [VoidPointerToEnumCast] (2) "cast to smaller integer type {1} from {0}";
 sema_c_void_pointer_to_int_cast = Warning [VoidPointerToIntCast] (2) "cast to smaller integer type {1} from {0}";
+// C 6.5.3.2p4 (WP-1285): `*p` of a `void *` is a `void` expression in C
+sema_c_void_ptr_dereference = ExtWarn [VoidPtrDereference] (1) "ISO C does not allow indirection on operand of type {0}";
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
 sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";

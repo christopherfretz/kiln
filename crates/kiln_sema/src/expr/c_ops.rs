@@ -9,7 +9,7 @@
 //!
 //! Every entry point is called only when `Sema::is_c()`.
 
-use kiln_ast::expr::{BinaryOp, CastKind};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, UnaryOp};
 use kiln_ast::types::TypeView;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
@@ -340,6 +340,18 @@ impl Sema<'_, '_> {
         let t3 = conv::cast_to(self, CastKind::BitCast, t, ty, None);
         let f3 = conv::cast_to(self, CastKind::BitCast, f, ty, None);
         (t3, f3, ty)
+    }
+
+    /// C 6.5.3.2p4: `*p` of a `void *` (any qualifiers) is an expression of
+    /// type `void`, which may only be discarded or be an operand of `?:`,
+    /// `,` or a cast to `void`; clang accepts it with an on-by-default
+    /// `-Wvoid-ptr-dereference` extension warning where C++ rejects it
+    /// (clang `CheckIndirectionOperand`; WP-1285).
+    pub(super) fn c_void_deref(&mut self, x: ExprId, pointee: QualType, loc: Loc) -> ExprId {
+        let pt = self.ety(x);
+        let msg = self.diag(DiagId::sema_c_void_ptr_dereference, loc).arg(self.ty_arg(pt));
+        self.emit(msg.range(self.expr_range(x)));
+        self.builder().unary(UnaryOp::Deref, x, pointee, loc, ExprFlags::CANNOT_OVERFLOW)
     }
 
     /// The composite type of compatible types `a` and `b` (C17 6.2.7p3),

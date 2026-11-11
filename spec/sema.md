@@ -8773,6 +8773,10 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   any `enum` warns "declaration of 'T' will not be visible outside of
   this function" (`-Wvisibility`, on by default), an unnamed `struct` or
   `union` is silent (`tests/c/decl/param-tag-visibility.c`).
+- **`void` indirection** (C17 6.5.3.2p4, DR 106). `*p` of a pointer to
+  (qualified) `void` is a `void` expression: an on-by-default
+  `-Wvoid-ptr-dereference` extension warning, not C++'s error
+  (`tests/c/expr/void-pointer-dereference.c`).
 - **Comma operator** (C17 6.5.17p2). The right operand takes the
   array/function-to-pointer and lvalue conversions (`conv::decay`), so
   the result is a prvalue: `sizeof (0, f)` is a pointer's size.

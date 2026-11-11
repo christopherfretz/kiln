@@ -198,4 +198,5 @@ VecElemSize = "vec-elem-size" [];
 Visibility = "visibility" [];
 VlaCxxExtension = "vla-cxx-extension" [];
 VoidPointerToEnumCast = "void-pointer-to-enum-cast" [];
+VoidPtrDereference = "void-ptr-dereference" [];
 ZeroLengthArray = "zero-length-array" [];

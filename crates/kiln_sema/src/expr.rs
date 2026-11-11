@@ -3170,6 +3170,9 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return self.recover_err(&[e], loc);
                 };
+                if self.ast.types.is_void(p) && self.is_c() {
+                    return self.c_void_deref(x, p, loc);
+                }
                 if self.ast.types.is_void(p) {
                     let msg =
                         self.diag(DiagId::sema_indirection_incomplete, loc).arg(self.ty_arg(pt));
