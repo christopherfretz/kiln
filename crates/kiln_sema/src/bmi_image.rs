@@ -2981,6 +2981,11 @@ impl Writer<'_, '_, '_> {
                 N_CONV
             }
             V::DeductionGuide(t) => {
+                // A guide is carried at namespace scope only; a member
+                // guide (of a member class template) is WP-1300's.
+                if n.ctx().is_some_and(|c| ast.decls.record(c).is_some()) {
+                    return Err("a member deduction guide");
+                }
                 // The importer names the guide (and its template) after
                 // the class template its return type names
                 // ([temp.deduct.guide]/3).

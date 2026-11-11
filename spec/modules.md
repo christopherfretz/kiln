@@ -2939,8 +2939,10 @@ guide is a `Function` record of kind 5 named by the special name word
 `0xFFFF_FF03`, at namespace scope, alone or as a function template's
 pattern; the importer builds it with `deduction_guide`, naming the
 class template its return type specializes. A guide whose return type
-is not written as `C<args>` (an alias or a qualifier), a member guide,
-and one with an `explicit(expr)` specifier fall back.
+is not written as `C<args>` (an alias or a qualifier), a member guide
+("a member deduction guide": since WP-1292 carries member class
+templates, the writer refuses it by name rather than leaving it to the
+validator), and one with an `explicit(expr)` specifier fall back.
 
 ```
 cons    := n:u32 (kind:u8 decl:u32 expr:u32)*

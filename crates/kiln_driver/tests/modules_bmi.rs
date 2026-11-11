@@ -1907,6 +1907,11 @@ fn kind2_declaration_image_fallback() {
             "a friend member function",
         ),
         (
+            "export module f;\nexport struct O {\n  template <class T> struct I { I(T) {} };\n  \
+             template <class T> I(T*) -> I<T>;\n};\n",
+            "a member deduction guide",
+        ),
+        (
             "export module f;\nexport template <class T> requires (sizeof(T) > 1) struct A {};\n\
              export inline int g() { return sizeof(A<long>); }\n",
             "a specialization of a constrained template",
