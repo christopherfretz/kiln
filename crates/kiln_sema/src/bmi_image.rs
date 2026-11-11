@@ -2072,6 +2072,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
             // An unnamed namespace has no name.
             Payload::Field { .. } | Payload::Namespace => d.name == NONE || ident(d.name),
+            // An unnamed class or enumeration a typedef names (WP-1278).
+            Payload::Record { .. } | Payload::Enum { .. } if d.name == NONE => {
+                scope::anon_tag(img, i as u32)
+            }
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
@@ -3064,9 +3068,6 @@ impl Writer<'_, '_, '_> {
         if c.inheriting_ctor.contains(d) || c.inherited_ctor.contains(d) {
             return Err("an inherited constructor");
         }
-        if c.typedef_for_anon.contains(d) {
-            return Err("a typedef naming an unnamed class");
-        }
         if c.delete_message.contains(d)
             || c.explicit_expr.contains(d)
             || c.record_pack.contains(d)
@@ -3561,6 +3562,7 @@ impl Writer<'_, '_, '_> {
                 df.key = r;
             }
         }
+        self.anon_typedefs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -4420,6 +4422,7 @@ impl Sema<'_, '_> {
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
+            self.image_anon_typedef(img, i as u32, &ids);
         }
         self.ast.templates.dependent_depth = saved_depth;
         if let Some((e, computed)) = open.take() {

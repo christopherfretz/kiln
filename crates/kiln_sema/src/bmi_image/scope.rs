@@ -30,6 +30,12 @@
 //! importer finds the builtin it has declared already or declares it
 //! (as its lookup of the name would), so bodies that call it call the
 //! importer's.
+//!
+//! An unnamed class or enumeration that a typedef names for linkage
+//! purposes ([dcl.typedef]/9, `typedef struct { } T;`) is listed in
+//! [`Scopes::anon_typedefs`] with the typedef; the importer links them
+//! (`typedef_for_anon`) as soon as it builds the typedef, so linkage and
+//! mangling see the typedef name.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, LinkageLang, NamespaceData, ScopeData, builtin};
 use kiln_ast::names::DeclName;
@@ -71,6 +77,9 @@ pub(super) struct Scopes {
     links: Vec<LinkRec>,
     /// Builtin function records, ascending.
     builtins: Vec<BuiltinStub>,
+    /// (unnamed class or enumeration, the typedef naming it for linkage
+    /// purposes) records, ascending by typedef.
+    anon_typedefs: Vec<(u32, u32)>,
 }
 
 /// `d` is an implicit `extern "C"` linkage specification at global
@@ -232,6 +241,27 @@ impl Writer<'_, '_, '_> {
         Ok(true)
     }
 
+    /// Lists the carried unnamed classes and enumerations that a typedef
+    /// names for linkage purposes; the typedef must be carried too.
+    pub(super) fn anon_typedefs(&mut self) -> W<()> {
+        let mut pairs = Vec::new();
+        let mut missing = Vec::new();
+        for (tag, &td) in self.s.ast.decls.cold.typedef_for_anon.iter() {
+            let Some(&t) = self.recs.get(&tag) else { continue };
+            match self.recs.get(&td) {
+                Some(&r) => pairs.push((t, r)),
+                None => missing.push(t),
+            }
+        }
+        missing.sort_unstable();
+        for t in missing {
+            self.miss(t, "a class named for linkage by a typedef outside the image")?;
+        }
+        pairs.sort_unstable_by_key(|&(_, td)| td);
+        self.img.scopes.anon_typedefs = pairs;
+        Ok(())
+    }
+
     /// An implicit declaration the importer declares again itself: the
     /// using-directive that follows an unnamed namespace.
     pub(super) fn implicit_scope_decl(&self, d: DeclId) -> bool {
@@ -261,6 +291,11 @@ pub(super) fn encode_scopes(w: &mut Wr, s: &Scopes) {
         w.u32(b.id);
         w.str(&b.name);
     }
+    w.len(s.anon_typedefs.len());
+    for &(t, td) in &s.anon_typedefs {
+        w.u32(t);
+        w.u32(td);
+    }
 }
 
 pub(super) fn decode_scopes(r: &mut Rd) -> Res<Scopes> {
@@ -288,7 +323,18 @@ pub(super) fn decode_scopes(r: &mut Rd) -> Res<Scopes> {
         let (rec, id) = (r.u32()?, r.u32()?);
         s.builtins.push(BuiltinStub { rec, id, name: r.str()? });
     }
+    let n = r.count(8)?;
+    s.anon_typedefs = Vec::with_capacity(n);
+    for _ in 0..n {
+        s.anon_typedefs.push((r.u32()?, r.u32()?));
+    }
     Ok(s)
+}
+
+/// Whether record `i` is an unnamed class or enumeration that a typedef
+/// names for linkage purposes.
+pub(super) fn anon_tag(img: &Image, i: u32) -> bool {
+    img.scopes.anon_typedefs.iter().any(|&(t, _)| t == i)
 }
 
 pub(super) fn validate_scopes(img: &Image) -> Res<()> {
@@ -322,6 +368,17 @@ pub(super) fn validate_scopes(img: &Image) -> Res<()> {
     {
         return bad("a bad builtin function record");
     }
+    let tag = |t: u32| {
+        matches!(rec(t), Some(d) if d.name == NONE
+            && matches!(d.payload, Payload::Record { .. } | Payload::Enum { .. }))
+    };
+    let typedef =
+        |r: u32| matches!(rec(r), Some(d) if matches!(d.payload, Payload::Typedef { .. }));
+    if !s.anon_typedefs.windows(2).all(|w| w[0].1 < w[1].1)
+        || !s.anon_typedefs.iter().all(|&(t, td)| t < td && tag(t) && typedef(td))
+    {
+        return bad("a bad typedef naming an unnamed class");
+    }
     Ok(())
 }
 
@@ -347,6 +404,16 @@ impl Sema<'_, '_> {
                 && self.ast.decls.builtin_id(p) == Some(b.id)
         });
         found.or_else(|| self.lazily_create_builtin(sym, Loc::INVALID)).unwrap_or(tu)
+    }
+
+    /// Links typedef record `i`, just built, to the unnamed class or
+    /// enumeration it names for linkage purposes, if any.
+    pub(super) fn image_anon_typedef(&mut self, img: &Image, i: u32, ids: &[DeclId]) {
+        let list = &img.scopes.anon_typedefs;
+        if let Ok(k) = list.binary_search_by_key(&i, |&(_, td)| td) {
+            let (t, td) = (ids[list[k].0 as usize], ids[i as usize]);
+            let _ = self.ast.decls.set_typedef_for_anon(t, td);
+        }
     }
 
     /// Builds namespace record `i` (header `h`, previous `prev`).

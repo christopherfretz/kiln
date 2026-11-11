@@ -1,7 +1,8 @@
 // The module of image-scopes-run.cpp: linkage specifications (braced,
 // braceless, "C" and "C++"), literal exception specifications, inline and unnamed namespaces, reserved names
 // in the namespace std, which a new-expression before it has sema declare,
-// and builtin functions sema declares at their first use.
+// builtin functions sema declares at their first use, and unnamed types
+// a typedef names for linkage purposes.
 export module imgs;
 
 export extern "C" int imgs_c_add(int a, int b) { return a + b; }
@@ -53,6 +54,14 @@ export int heap_val() {
 export constexpr unsigned long imgs_len(const char *s) { return __builtin_strlen(s); }
 export inline int imgs_clz(unsigned x) { return __builtin_clz(x); }
 export int imgs_abs(int x) { return __builtin_abs(x); }
+
+// [dcl.typedef]/9: the functions' mangled names use the typedef names.
+export typedef struct {
+  int a, b;
+} imgs_pod;
+export int imgs_pod_sum(imgs_pod p) { return p.a + p.b; }
+export typedef enum { imgs_red = 3, imgs_blue } imgs_color;
+export int imgs_hue(imgs_color c) { return c * 2; }
 
 export namespace std {
 inline namespace __imgs {
