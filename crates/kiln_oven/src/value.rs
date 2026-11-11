@@ -13,6 +13,7 @@ use kiln_source::Loc;
 
 use crate::compile::{GKind, GState, RetKind, is_local_var};
 use crate::failure::{EvalFailure, FailKind, Note};
+use crate::kbc::ADDR_INT_TAG;
 use crate::mem::{Origin, Ptr, UNBACKED, flags, fn_ptr};
 use crate::ty::{OTy, TyKind};
 use crate::vm::{Counters, value_len};
@@ -623,6 +624,10 @@ impl Oven {
         let info = *self.types.info(ty);
         Ok(match info.kind {
             TyKind::Bool => Scalar::Bool { ty: info.q, value: v != 0 },
+            // An address an integer holds (`cce::ADDR_INT`).
+            TyKind::Int { width, .. } if width <= 64 && v >> 64 == ADDR_INT_TAG >> 64 => {
+                self.ptr_of(b, info.q, ty, v as u64, None, loc)?
+            }
             TyKind::Int { width, signed } => {
                 let w = u32::from(width);
                 let m = if w >= 128 { v } else { v & ((1u128 << w) - 1) };
@@ -1082,6 +1087,38 @@ impl Oven {
     }
 
     /// Copies the object of type `t` at `raw` into the image at byte `at`.
+    /// [`Self::walk`] of an integer holding an address
+    /// (`Op::InitStore` of `cce::ADDR_INT`): the address, relocated. Any
+    /// other integer bytes marked as a pointer's (a part of one) have no
+    /// constant form.
+    #[cold]
+    #[allow(clippy::too_many_arguments)]
+    fn walk_addr_int(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        s: &mut Scratch,
+        t: OTy,
+        st: crate::mem::Sp,
+        abs: u64,
+        at: usize,
+        loc: Loc,
+    ) -> Result<(), Freeze> {
+        let info = *self.types.info(t);
+        let sp = self.mem.space(st);
+        let whole = matches!(info.kind, TyKind::Int { width: 64, .. })
+            && abs % crate::mem::GRAN == 0
+            && sp.ptr_mark(abs) == 1;
+        if !whole {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        }
+        let raw = sp.read(abs, info.size) as u64;
+        let sc = self.ptr_of(b, info.q, t, raw, None, loc)?;
+        let id = b.consts().push_scalar(sc).map_err(|_| Freeze::Fault(FailKind::NotConstant))?;
+        s.relocs.push(Reloc { at: at as u32, value: id });
+        s.cover[at..at + info.size as usize].fill(1);
+        Ok(())
+    }
+
     fn walk(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -1108,6 +1145,9 @@ impl Oven {
                 let sp = self.mem.space(st);
                 if !sp.is_init(abs, len) {
                     return Err(self.uninit(b, field, t, loc));
+                }
+                if sp.any_ptr(abs, len) {
+                    return self.walk_addr_int(b, s, t, st, abs, at, loc);
                 }
                 let (a0, a1) = (abs as usize, (abs + len) as usize);
                 s.bytes[at..at + len as usize].copy_from_slice(&sp.bytes[a0..a1]);
@@ -1158,7 +1198,7 @@ impl Oven {
                 if matches!(e.kind, TyKind::Int { .. } | TyKind::Bool) {
                     let len = e.size * n;
                     let sp = self.mem.space(st);
-                    if sp.is_init(abs, len) {
+                    if sp.is_init(abs, len) && !sp.any_ptr(abs, len) {
                         let (a0, a1) = (abs as usize, (abs + len) as usize);
                         s.bytes[at..at + len as usize].copy_from_slice(&sp.bytes[a0..a1]);
                         s.cover[at..at + len as usize].fill(1);

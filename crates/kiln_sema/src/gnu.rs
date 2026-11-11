@@ -747,6 +747,48 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// C23 6.7.11p4 (clang `CheckForConstantInitializer` of a variable
+    /// in C): the initializer of an object with static or thread storage
+    /// duration consists of constant expressions; the first element (an
+    /// init list's, recursively) that does not fold is reported. C never
+    /// initializes such an object dynamically (spec/codegen.md "Static
+    /// initialization").
+    pub(crate) fn check_c_static_init(&mut self, v: DeclId) {
+        if !self.is_c() || !self.has_global_storage(v) {
+            return;
+        }
+        let vn = *self.ast.decls.get(v);
+        let Some(data) = self.ast.decls.var(v) else { return };
+        // `__thread`'s initializer: `check_static_tls`; a C23 `constexpr`
+        // object's: `check_constexpr_init`.
+        if vn.has(kiln_ast::decl::DeclFlags::INVALID)
+            || data.spec.tls() == kiln_ast::decl::TlsKind::Static
+            || data.spec.is_constexpr()
+        {
+            return;
+        }
+        let Some(init) = data.init else { return };
+        if self.has_errors_in(init) {
+            return;
+        }
+        if let Some(at) = self.c_static_culprit(init) {
+            self.error(DiagId::sema_init_element_not_constant, at);
+        }
+    }
+
+    /// [`Self::constant_init_culprit`] of a C static initializer.
+    fn c_static_culprit(&mut self, e: ExprId) -> Option<Loc> {
+        match self.ast.exprs.get(e).kind() {
+            ExprKind::InitListExpr => {
+                let elems: Vec<ExprId> =
+                    self.ast.lists.iter(self.ast.exprs.init_list_inits(e)).collect();
+                elems.into_iter().find_map(|x| self.c_static_culprit(x))
+            }
+            ExprKind::ImplicitValueInitExpr => None,
+            _ => (!self.folds_as_static_init(e)).then(|| self.element_culprit_loc(e)),
+        }
+    }
+
     /// The location of the first element of `e` that is not a constant
     /// (an init list's elements recursively, else `e` itself).
     fn constant_init_culprit(&mut self, e: ExprId) -> Option<Loc> {

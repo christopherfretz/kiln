@@ -507,7 +507,9 @@ impl Oven {
             RetKind::Scalar(ty)
         } else {
             let r = c.reg();
+            c.addr_int_target(e);
             c.rv_into(e, r);
+            c.addr_int_at = None;
             c.emit(Op::Ret, 1, &[r]);
             RetKind::Scalar(ty)
         };
@@ -1179,6 +1181,11 @@ pub(crate) struct Compiler<'a> {
     /// The list initializing a constructor's member (or an element of
     /// it) that records element steps ([`Oven::ctor_steps`]).
     elem_track: Option<ElemTrack>,
+    /// The pointer-to-integer cast whose value is stored or returned
+    /// directly (an initializer's or a fold's whole value): a fold that
+    /// codegen lets keep addresses ([`Oven::set_fold_addr_int`]) gives it
+    /// the operand's address (`cce::ADDR_INT`).
+    addr_int_at: Option<ExprId>,
 }
 
 /// A list whose elements record construction steps: it initializes entry
@@ -1236,6 +1243,7 @@ impl<'a> Compiler<'a> {
             skip_effects: Vec::new(),
             ctor_steps: Vec::new(),
             elem_track: None,
+            addr_int_at: None,
         }
     }
 
@@ -4660,6 +4668,8 @@ impl Compiler<'_> {
                 let r = self.rv(op);
                 let aux = if ck == CastKind::IntegralToPointer {
                     cce::INT_TO_PTR
+                } else if self.addr_int_at.take() == Some(e) {
+                    cce::ADDR_INT
                 } else {
                     cce::PTR_TO_INT
                 };
@@ -4693,6 +4703,28 @@ impl Compiler<'_> {
     }
 
     /// `Op::Cce` `CHECK` with note `msg` at `e`: fails outside a fold.
+    /// Notes in [`Compiler::addr_int_at`] the pointer-to-integer cast `e`
+    /// is, under parentheses, when the integer is as wide as the pointer
+    /// (C23 6.6p9 and clang: an address constant cast to an integer is
+    /// an initializer's constant only so, spec/oven.md "Pointers that
+    /// point at nothing"). Whether it did.
+    fn addr_int_target(&mut self, e: ExprId) -> bool {
+        let e = skip_parens(self.ast(), e);
+        let ast = self.ast();
+        if !ast.exprs.get(e).kind().is_cast()
+            || ast.exprs.cast_kind(e) != CastKind::PointerToIntegral
+        {
+            return false;
+        }
+        let op = ast.exprs.operand(e);
+        let (to, from) = (self.ety(e), self.ety(op));
+        if self.o.types.size(to) != self.o.types.size(from) {
+            return false;
+        }
+        self.addr_int_at = Some(e);
+        true
+    }
+
     fn cce_check(&mut self, e: ExprId, msg: &str) {
         let loc = self.b.ast().exprs.get(e).loc();
         let t = self.trap_index(loc, msg.to_owned());
@@ -5701,8 +5733,11 @@ impl Compiler<'_> {
             return;
         }
         if !self.o.types.is_aggregate(ty) {
+            let addr = self.addr_int_target(e);
             let r = self.rv(e);
-            self.emit_at(Op::InitStore, 0, &[p, r, ty.0], e);
+            self.addr_int_at = None;
+            let aux = u32::from(addr);
+            self.emit_at(Op::InitStore, aux, &[p, r, ty.0], e);
             return;
         }
         match n.kind() {

@@ -421,7 +421,19 @@ pub(crate) mod cce {
     pub const PTR: u32 = 1;
     pub const INT_TO_PTR: u32 = 2;
     pub const PTR_TO_INT: u32 = 3;
+    /// `PTR_TO_INT` of an initializer's whole value: when codegen lets a
+    /// fold keep addresses ([`crate::Oven::set_fold_addr_int`]), the
+    /// address of a static object or a function, tagged
+    /// [`super::ADDR_INT_TAG`] in bits 64.. of the integer register. The
+    /// value goes straight to `Op::Ret` or to `Op::InitStore` aux
+    /// `ADDR_INT`, which stores it as a pointer (an integer load of it
+    /// fails: no arithmetic ever sees the tag).
+    pub const ADDR_INT: u32 = 4;
 }
+
+/// Bits 64.. of an integer register holding an address ([`cce::ADDR_INT`]):
+/// never those of a canonical integer of 64 bits or fewer.
+pub(crate) const ADDR_INT_TAG: u128 = 1 << 64;
 
 /// `Op::Throw` operand: the exception object has no destructor to run.
 pub(crate) const NO_DTOR: u32 = u32::MAX;

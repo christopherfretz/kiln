@@ -2108,6 +2108,11 @@ impl Sema<'_, '_> {
     }
 
     fn check_narrowing_impl(&mut self, e: ExprId, to: QualType, entity: QualType) {
+        // C has no narrowing rule (C23 6.7.11p11: each element converts as
+        // by assignment).
+        if self.is_c() {
+            return;
+        }
         let from = self.ast.exprs.get(e).ty();
         if self.is_error_type(from) || self.is_error_type(to) {
             return;

@@ -14,7 +14,7 @@ use crate::arith::{self, FloatErr, IntErr, canon};
 use crate::compile::{FState, GState, float_of};
 use crate::complex;
 use crate::failure::{EvalFailure, FailKind};
-use crate::kbc::{Op, ak, cce, cmp, new_aux, ptr_add_aux};
+use crate::kbc::{ADDR_INT_TAG, Op, ak, cce, cmp, new_aux, ptr_add_aux};
 use crate::mem::{Alloc, DynKind, MemFault, NOWHERE, Origin, Ptr, Sp, TrialMode, flags};
 use crate::memo::{MAX_ARGS, MemoKey, MemoVal};
 use crate::ty::{Hop, OTy, TyKind, Walk, alt_members};
@@ -1099,7 +1099,12 @@ impl Oven {
                     let v = reg!(1);
                     let (k, init) =
                         if op == Op::InitStore { (ak::INIT, true) } else { (aux, false) };
-                    if let Err(f) = self.store(raw, ty, v, k, init) {
+                    let r = if op == Op::InitStore && v >> 64 == ADDR_INT_TAG >> 64 && aux != 0 {
+                        self.store_addr_int(raw, ty, v as u64)
+                    } else {
+                        self.store(raw, ty, v, k, init)
+                    };
+                    if let Err(f) = r {
                         fail!(f);
                     }
                     pc += 4;
@@ -2634,10 +2639,16 @@ impl Oven {
                 Ok(n) => Some(u128::from(NOWHERE | u64::from(n))),
                 Err(_) => None,
             },
-            cce::PTR_TO_INT => {
+            cce::PTR_TO_INT | cce::ADDR_INT => {
                 let p = Ptr::decode(raw);
-                (raw == 0 || (Ptr::is_nowhere(raw) && p.slot == 0 && !p.past))
-                    .then_some(u128::from(p.off))
+                if raw == 0 || (Ptr::is_nowhere(raw) && p.slot == 0 && !p.past) {
+                    return Some(u128::from(p.off));
+                }
+                // The address of a static object (or a function), for
+                // codegen to emit as `ptrtoint` (C23 6.6p9).
+                let addr = p.is_fn() || p.is_static();
+                (aux == cce::ADDR_INT && self.addr_int && addr)
+                    .then_some(u128::from(raw) | ADDR_INT_TAG)
             }
             _ => Some(v),
         }
@@ -3450,6 +3461,19 @@ impl Oven {
         sp.write(abs, len, v);
         sp.set_init(abs, len, true);
         sp.set_ptr_mark(abs, len, mark);
+        Ok(())
+    }
+
+    /// `Op::InitStore` aux 1 of an address an integer holds
+    /// ([`cce::ADDR_INT`]): the pointer, marked as one, so that an integer
+    /// load of it fails and a freeze reads it back as the address.
+    #[cold]
+    fn store_addr_int(&mut self, raw: u64, ty: OTy, addr: u64) -> Result<(), Fault> {
+        self.store(raw, ty, u128::from(addr), ak::INIT, true)?;
+        let len = u64::from(self.types.size(ty));
+        let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
+        let (st, abs, _) = self.mem.check(raw, len, true).map_err(fault)?;
+        self.mem.space_mut(st).set_ptr_mark(abs, len, 1);
         Ok(())
     }
 
