@@ -21,10 +21,10 @@ use super::compare::{self, ThresholdOverrides, Thresholds, Verdict};
 use super::entry::{self, BenchSpec, Entry, Mode};
 use super::record::{self, CompilerRun, Outcome, RunRecord};
 use super::stats::round_to;
-use super::{Ctx, Layout, Options, Report, Reports, RUN_TIMEOUT, Subject};
+use super::{Ctx, Layout, Options, RUN_TIMEOUT, Report, Reports, Subject};
+use crate::util::CompilerKind;
 use crate::util::json::Json;
 use crate::util::process::{self, RssProbe, Shown};
-use crate::util::CompilerKind;
 
 /// The group directory under the bench root, the entry id prefix and the
 /// baseline file's name.
@@ -450,7 +450,8 @@ fn run_in(
     let mut entries = Vec::new();
     let mut infos: BTreeMap<&'static str, CaseInfo> = BTreeMap::new();
     let mut check_failures = Vec::new();
-    let total = CASES.iter().map(|c| Variant::ALL.iter().filter(|v| selected(opts, c, **v)).count());
+    let total =
+        CASES.iter().map(|c| Variant::ALL.iter().filter(|v| selected(opts, c, **v)).count());
     let total: usize = total.sum();
     let mut n = 0;
     for case in CASES {
@@ -461,7 +462,10 @@ fn run_in(
         }
         let hash = source_hash(root, case)?;
         let mut info = CaseInfo { load_avg_1m: super::load_avg_1m(), ..CaseInfo::default() };
-        let files = [Files::of(&cx.layout.scratch, case, test), Files::of(&cx.layout.scratch, case, oracle)];
+        let files = [
+            Files::of(&cx.layout.scratch, case, test),
+            Files::of(&cx.layout.scratch, case, oracle),
+        ];
         let mut built = [false, false];
         for v in &chosen {
             n += 1;
@@ -562,7 +566,8 @@ fn run_in(
             ("cases", Json::obj(infos.iter().map(|(k, v)| (*k, v.to_json())))),
         ]),
     ));
-    report.results_file = super::write_results_json(&cx.layout.results, &stamp, &Json::Obj(fields))?;
+    report.results_file =
+        super::write_results_json(&cx.layout.results, &stamp, &Json::Obj(fields))?;
     println!("\nresults: {}", super::shown_path(root, &report.results_file));
 
     if opts.record {
@@ -572,9 +577,7 @@ fn run_in(
             println!("--label: the baselines are not recorded (a labelled run is not main's)");
         }
         if opts.filter.is_some() {
-            println!(
-                "--filter: docs/status/pch.md is not rewritten (its region holds every case)"
-            );
+            println!("--filter: docs/status/pch.md is not rewritten (its region holds every case)");
         } else {
             let page = cx.layout.perf_md.with_file_name("pch.md");
             let shown = super::shown_path(root, &page);
@@ -787,6 +790,7 @@ pub fn markers(label: &str) -> (String, String) {
 /// markers). A missing region goes after the last region of the page, or at
 /// its end when it has none.
 pub fn splice(page: &str, label: &str, region: &str) -> String {
+    const ANY_END: &str = ": end -->";
     let (begin, end) = markers(label);
     let begin_key = begin.split(':').next().unwrap_or(&begin).to_owned() + ":";
     if let Some(b) = page.find(&begin_key)
@@ -796,7 +800,6 @@ pub fn splice(page: &str, label: &str, region: &str) -> String {
         let tail = page[e..].strip_prefix('\n').unwrap_or(&page[e..]);
         return format!("{}{region}{tail}", &page[..b]);
     }
-    const ANY_END: &str = ": end -->";
     let last = page.match_indices("<!-- xtask bench pch ").filter_map(|(at, _)| {
         let rest = &page[at..];
         let line_end = rest.find('\n').unwrap_or(rest.len());
@@ -819,7 +822,8 @@ fn secs(m: Option<&record::Measurement>) -> String {
 
 #[allow(clippy::cast_precision_loss)]
 fn mib(m: Option<&record::Measurement>) -> String {
-    m.and_then(|m| m.max_rss_kb).map_or_else(|| "-".to_owned(), |k| format!("{:.0}", k as f64 / 1024.0))
+    m.and_then(|m| m.max_rss_kb)
+        .map_or_else(|| "-".to_owned(), |k| format!("{:.0}", k as f64 / 1024.0))
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -828,7 +832,9 @@ fn size(b: Option<u64>) -> String {
 }
 
 fn ratio(t: Option<f64>, o: Option<f64>) -> String {
-    t.zip(o).and_then(|(t, o)| compare::ratio(t, o)).map_or_else(|| "-".to_owned(), |r| format!("{r:.2}x"))
+    t.zip(o)
+        .and_then(|(t, o)| compare::ratio(t, o))
+        .map_or_else(|| "-".to_owned(), |r| format!("{r:.2}x"))
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -866,7 +872,9 @@ pub fn command_line(compiler: &str, case: &Case, v: Variant, kiln: bool) -> Stri
 #[allow(clippy::too_many_lines)]
 pub fn render_region(cx: &RegionContext<'_>) -> String {
     let (begin, end) = markers(cx.label);
-    let oracle_name = Path::new(cx.oracle.0).file_name().map_or(cx.oracle.0, |n| n.to_str().unwrap_or(cx.oracle.0));
+    let oracle_name = Path::new(cx.oracle.0)
+        .file_name()
+        .map_or(cx.oracle.0, |n| n.to_str().unwrap_or(cx.oracle.0));
     let mut s = String::new();
     let _ = writeln!(s, "{begin}");
     let _ = writeln!(s, "## Measured: {}\n", cx.label);
@@ -904,7 +912,8 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
         .map(|(n, l)| format!("{n} {l:.1}"))
         .collect();
     if !loads.is_empty() {
-        let _ = writeln!(s, "- Load average (1 min) at the start of each case: {}.", loads.join(", "));
+        let _ =
+            writeln!(s, "- Load average (1 min) at the start of each case: {}.", loads.join(", "));
     }
     for case in CASES {
         let Some(info) = cx.infos.get(case.name) else { continue };
@@ -934,7 +943,10 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
             size(info.pch_bytes[0]),
             size(info.pch_bytes[1])
         );
-        let _ = writeln!(s, "| | kiln s | kiln MiB | clang s | clang MiB | time kiln/clang | memory kiln/clang |");
+        let _ = writeln!(
+            s,
+            "| | kiln s | kiln MiB | clang s | clang MiB | time kiln/clang | memory kiln/clang |"
+        );
         let _ = writeln!(s, "|---|---:|---:|---:|---:|---:|---:|");
         let get = |run, v| measured(run, case, v);
         for v in Variant::SHOWN {
@@ -979,7 +991,10 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
             buys(cx.test_run),
             buys(cx.oracle_run)
         );
-        let _ = writeln!(s, "\n<details><summary>Command lines (from the repo root, `T=$(mktemp -d)`)</summary>\n");
+        let _ = writeln!(
+            s,
+            "\n<details><summary>Command lines (from the repo root, `T=$(mktemp -d)`)</summary>\n"
+        );
         let _ = writeln!(s, "```sh");
         for v in Variant::SHOWN {
             let _ = writeln!(s, "{}", command_line("kiln++", case, v, true));
@@ -1059,7 +1074,10 @@ mod tests {
             Some("consumers replay the header: a type the image does not carry")
         );
         let replayed = "note: precompiled header 'p.pch' is replayed: it has no declaration image";
-        assert_eq!(image_note(replayed).as_deref(), Some("is replayed: it has no declaration image"));
+        assert_eq!(
+            image_note(replayed).as_deref(),
+            Some("is replayed: it has no declaration image")
+        );
         assert_eq!(path_of(image_note(replayed).as_deref()), "replay");
         let image = "note: precompiled header 'p.pch': declaration image (162 records)";
         assert_eq!(path_of(image_note(image).as_deref()), "image");

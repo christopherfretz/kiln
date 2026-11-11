@@ -1358,7 +1358,11 @@ fn write_results(dir: &Path, stamp: &str, rec: &RunRecord) -> Result<PathBuf, St
 }
 
 /// [`write_results`] of a record with extra keys (the pch group's `pch`).
-fn write_results_json(dir: &Path, stamp: &str, rec: &crate::util::json::Json) -> Result<PathBuf, String> {
+fn write_results_json(
+    dir: &Path,
+    stamp: &str,
+    rec: &crate::util::json::Json,
+) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let text = rec.to_pretty();
     for n in 0.. {
