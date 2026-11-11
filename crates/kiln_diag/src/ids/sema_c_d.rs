@@ -258,6 +258,7 @@ sema_dangling_variable = Warning [Dangling] (2) "temporary {0:whose address is u
 sema_dangling_variable_implicit = Warning [Dangling] (1) "temporary {0:whose address is used as value of|implicitly bound to} local {0:variable|reference} will be destroyed at the end of the full-expression";
 sema_dangling_variable_member = Warning [Dangling] (2) "temporary {0:whose address is used as value of|bound to} {0:|reference }member of local variable {1} will be destroyed at the end of the full-expression";
 sema_dangling_variable_member_implicit = Warning [Dangling] (1) "temporary {0:whose address is used as value of|implicitly bound to} {0:|reference }member of local variable will be destroyed at the end of the full-expression";
+sema_decimal_unsupported = Error (0) "GNU decimal type extension not supported";
 sema_decl_attribute_on_stmt = Error (1) "'{0}' attribute cannot be applied to a statement";
 sema_decl_negative_array_size = Error (1) "'{0}' declared as an array with a negative size";
 sema_decl_shadow = WarningOff [Shadow] (2) "declaration shadows a {0:structured binding|local variable|variable in {1}|static data member of {1}|field of {1}|typedef in {1}|type alias in {1}}";

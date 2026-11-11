@@ -17,16 +17,41 @@ fn lex_name_utf8_xid() {
     assert_eq!(kinds("été\n"), "identifier");
 }
 
-/// [lex.name]/1: a non-XID_Start character cannot begin an identifier;
-/// it is a lone ill-formed pp-token ([lex.pptoken]/2).
+/// [lex.name]/1: a non-XID_Start character cannot begin an identifier.
+/// Spelled in UTF-8 it is dropped with an error (clang); as a UCN it is a
+/// lone ill-formed pp-token ([lex.pptoken]/2) the parser diagnoses.
 #[test]
 fn lex_name_xid_continue_at_start() {
-    let l = lex("\u{0300}x\n");
-    assert_eq!(l.spellings, ["\u{0300}", "x"]);
-    assert_eq!(l.diags[0].0, D::CharNotAllowedInIdentifier { ch: '\u{0300}' });
+    let l = lex("\u{0300}x \u{20AC}y\n");
+    assert_eq!(l.spellings, ["x", "y"]);
+    let d: Vec<_> = l.diags.iter().map(|d| d.0).collect();
+    assert_eq!(
+        d,
+        [
+            D::CharNotAllowedInIdentifier { ch: '\u{0300}', at_start: true },
+            D::InvalidChar { ch: '\u{20AC}' }
+        ]
+    );
     let l = lex("\\u0300y\n");
     assert_eq!(l.spellings, ["\\u0300", "y"]);
+    assert_eq!(l.diags.len(), 0, "{:?}", l.diags);
     assert_eq!(kinds("\\u0300y\n"), "unknown identifier");
+}
+
+/// [lex.name]/1: a non-XID character inside an identifier is kept, with an
+/// error, whether spelled in UTF-8 or as a UCN (clang's recovery).
+#[test]
+fn lex_name_invalid_continue_kept() {
+    let l = lex("a\u{20AC}b c\\u20ACd\n");
+    assert_eq!(l.idents, ["a\u{20AC}b", "c\u{20AC}d"]);
+    let d: Vec<_> = l.diags.iter().map(|d| d.0).collect();
+    assert_eq!(
+        d,
+        [
+            D::CharNotAllowedInIdentifier { ch: '\u{20AC}', at_start: false },
+            D::CharNotAllowedInIdentifier { ch: '\u{20AC}', at_start: false }
+        ]
+    );
 }
 
 /// [lex.universal.char]: UCNs in identifiers name the same identifier as
@@ -149,4 +174,21 @@ fn lex_name_not_nfc_maybe() {
     assert_eq!(diag_kinds("\u{E9}\u{301}\n", cxx26()), []);
     // Via a UCN too.
     assert_eq!(diag_kinds("a\\u0301\n", cxx26()), [D::IdentifierNotNfc]);
+}
+
+/// clang 19's mathematical notation profile (UAX #31 `Math_Start` /
+/// `Math_Continue`, `ext_mathematical_notation`) in C++ identifiers.
+#[test]
+fn lex_name_math_notation_extension() {
+    let l = lex("\u{2202}x\u{2070} y\u{2081} \\u2207\n");
+    assert_eq!(l.idents, ["\u{2202}x\u{2070}", "y\u{2081}", "\u{2207}"]);
+    let d: Vec<_> = l.diags.iter().map(|d| d.0).collect();
+    // Each is also `-Wc99-compat` (off by default), as in clang.
+    let m = |c: char| [D::MathematicalNotation { ch: c }, D::C99CompatUnicodeId { start: false }];
+    assert_eq!(d, [m('\u{2202}'), m('\u{2070}'), m('\u{2081}'), m('\u{2207}')].concat());
+    // A Math_Continue character cannot start an identifier.
+    assert_eq!(
+        diag_kinds("\u{2070}x\n", cxx26()),
+        [D::CharNotAllowedInIdentifier { ch: '\u{2070}', at_start: true }]
+    );
 }

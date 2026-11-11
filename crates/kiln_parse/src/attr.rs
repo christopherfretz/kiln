@@ -918,6 +918,7 @@ impl Parser<'_, '_> {
 
     /// `alignas ( type-id )` / `alignas ( constant-expression )` ([dcl.align]).
     fn parse_alignas(&mut self, out: &mut Vec<AttrId>) {
+        self.c_keyword_extension();
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else { return };
         let begin = self.tok().span.lo;

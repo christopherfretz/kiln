@@ -131,9 +131,25 @@ after the C++ table in `Parser::new`), which is clang `-x c`'s (C89
 `crates/kiln_parse/tests/c_keywords.rs` checks the table against the
 preprocessor's `__is_identifier` answers in every C standard, which
 `kiln_pp`'s `features_c` test checks against `clang-19 -x c` (spec/pp.md
-"Feature queries in C"). Not yet: `_Imaginary` and `_Decimal32/64/128`
-(keywords in clang C, identifiers in kiln); `__builtin_types_compatible_p`
-(a clang C keyword; its semantics are WP-1276's). Tests: `tests/c/lex/`.
+"Feature queries in C").
+
+WP-1290 completes the table:
+- `_Imaginary` and `_Decimal32/64/128` are type specifiers in every
+  language mode, as in clang. `_Imaginary` folds into the complex slot
+  and Sema reports "imaginary types are not supported" (the type stays
+  real); `_DecimalN` is "GNU decimal type extension not supported" (the
+  declarator is invalid), after any complex error.
+- Before the standard that has them, `_Bool`/`_Imaginary` are "is a C99
+  extension", and `_Static_assert`, `_Alignas`, `_Alignof`, `_Atomic`,
+  `_Thread_local`, `_Noreturn` and `_Generic` are "is a C11 extension"
+  (`-pedantic`; in C++ as before).
+- Only clang's `KEYALL` traits (`__is_destructible`,
+  `__is_nothrow_destructible`, `__is_bitwise_cloneable`; `keywords::C_TYPE_TRAITS`)
+  stay keywords in C, plus the C-only `__builtin_types_compatible_p` (an
+  identifier in C++; spec/sema-templates.md §9.1). The other traits and
+  the type transforms are identifiers.
+
+Tests: `tests/c/lex/`, `tests/c/parse/`, `tests/c/expr/builtin-types-compatible*.c`.
 
 ## 2. Token source (`tokens.rs`, `pragma.rs`)
 

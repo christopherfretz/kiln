@@ -311,6 +311,19 @@ following respects ([cpp.cond]/13):
   not a valid binary operator in a preprocessor subexpression" (or
   "expected end of line in preprocessor expression"); the value is kept,
   as in clang.
+- **Ranges (WP-1290).** Each value carries clang's `PPValue` range: a
+  token's span; a unary operator's from the operator to the end of its
+  operand; a parenthesized expression's from `(` to `)`; `defined X`'s
+  from `defined` to `X`, and `defined ( X )`'s to the end of the token
+  after the `)` (as clang, which has already lexed it); a binary or `?:`
+  expression's from its first operand to its last. Division or remainder
+  by zero, overflow, "converted to positive", the comma extension,
+  expected `:` and `:` without `?` underline both operands; unary minus
+  overflow underlines the whole negation; missing `)` underlines the
+  parenthesized operand; "not a valid binary operator" underlines the
+  value before the token. A bare identifier followed by `(` is instead
+  "function-like macro 'x' is not defined" at the identifier
+  (`true`/`false` count as identifiers here, as in clang).
 - **`eval_value`** evaluates `#embed`/`__has_embed` parameters with the
   same grammar, stopping at the `)` that closes the parameter, and
   returns the value as `i64` (a `uintmax_t` value above `i64::MAX` reads
@@ -581,13 +594,19 @@ operands of each `__has_*` query in the glibc and clang headers, the
 identifier-like strings of each clang's `libclang-cpp` (the C-only
 names clang answers 0 for in C++), the C keywords and the C23
 attributes, and every `__has_cpp_attribute` key as a
-`__has_c_attribute` key. Only the 20 base configurations are probed:
-under a flag the C++ overlays apply before the C deltas.
+`__has_c_attribute` key. Under a set flag the flag's C deltas
+(`C19_FLAGS`/`C22_FLAGS`, `CFlagDelta(flag, kind, key, value, mask)`)
+apply last, in flag order: the generator probes `-fblocks`,
+`-fno-exceptions`, `-fmodules`, `-fms-extensions` and
+`-fsanitize=address|thread|memory|undefined` (one at a time) in all 20
+configurations, and each answer of `clang-NN -x c <flag>` that differs
+from the prediction (`clang++-NN <flag>` at the mapped standard with the
+base C deltas applied) is a flag delta. Other flags get the C++ overlays
+then the base C deltas, unprobed; flags are assumed independent.
 `crates/kiln_pp/tests/features_c.rs` queries every key of both tables in
-all 20 configurations against `clang-19 -x c` and, at 22, `clang-22 -x
-c` (a missing clang is skipped); the only allowed differences are the
-ACLE header builtins at 22 (above). Not probed: answers under flags in
-C.
+all 20 configurations, and under each probed flag, against `clang-19 -x
+c` and, at 22, `clang-22 -x c` (a missing clang is skipped); the only
+allowed differences are the ACLE header builtins at 22 (above).
 
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 

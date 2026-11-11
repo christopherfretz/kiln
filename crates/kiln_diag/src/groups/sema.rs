@@ -77,6 +77,7 @@ FrameAddress = "frame-address" [];
 FriendEnum = "friend-enum" [];
 GccCompat = "gcc-compat" [];
 GnuAlignofExpression = "gnu-alignof-expression" [];
+GnuComplexInteger = "gnu-complex-integer" [];
 GnuDesignator = "gnu-designator" [];
 GnuEmptyStruct = "gnu-empty-struct" [];
 GnuFlexibleArrayInitializer = "gnu-flexible-array-initializer" [];
