@@ -43,6 +43,7 @@ pp_expected_rparen_in_expr = Error (0) "expected ')' in preprocessor expression"
 pp_expected_string_literal = Error (1) "expected string literal in {0}";
 pp_expected_value_in_expr = Error (0) "expected value in expression";
 pp_expr_bad_token_binop = Error (0) "token is not a valid binary operator in a preprocessor subexpression";
+pp_expr_bad_token_lparen = Error (1) "function-like macro '{0}' is not defined";
 pp_expr_overflow = Warning (0) "integer overflow in preprocessor expression";
 pp_expr_unsupported = Error (0) "kiln: this #if expression needs the full evaluator (WP-015)";
 pp_feature_check_malformed = Error (0) "builtin feature check macro requires a parenthesized identifier";

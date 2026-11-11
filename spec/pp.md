@@ -311,6 +311,19 @@ following respects ([cpp.cond]/13):
   not a valid binary operator in a preprocessor subexpression" (or
   "expected end of line in preprocessor expression"); the value is kept,
   as in clang.
+- **Ranges (WP-1290).** Each value carries clang's `PPValue` range: a
+  token's span; a unary operator's from the operator to the end of its
+  operand; a parenthesized expression's from `(` to `)`; `defined X`'s
+  from `defined` to `X`, and `defined ( X )`'s to the end of the token
+  after the `)` (as clang, which has already lexed it); a binary or `?:`
+  expression's from its first operand to its last. Division or remainder
+  by zero, overflow, "converted to positive", the comma extension,
+  expected `:` and `:` without `?` underline both operands; unary minus
+  overflow underlines the whole negation; missing `)` underlines the
+  parenthesized operand; "not a valid binary operator" underlines the
+  value before the token. A bare identifier followed by `(` is instead
+  "function-like macro 'x' is not defined" at the identifier
+  (`true`/`false` count as identifiers here, as in clang).
 - **`eval_value`** evaluates `#embed`/`__has_embed` parameters with the
   same grammar, stopping at the `)` that closes the parameter, and
   returns the value as `i64` (a `uintmax_t` value above `i64::MAX` reads

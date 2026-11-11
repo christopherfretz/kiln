@@ -1330,6 +1330,129 @@ fn unevaluated_string_escape_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, UNEVAL_ESCAPE_GOLDEN));
 }
 
+/// C99 6.10.1 (WP-1290): an `#if` operator's diagnostics underline its
+/// operands (clang `PPValue` ranges: a parenthesized operand includes the
+/// parentheses, a unary operator its operand, `defined(X)` runs to the
+/// token after the `)`), `x(` with `x` undefined is a call of an
+/// undefined function-like macro; and in C a call of an undeclared
+/// function is reported at its name, while an undeclared identifier is
+/// underlined at clang 22 only (as in C++).
+const C_RANGES_SOURCE: &str = r#"#define F(x) x
+#define H (1 + 2)
+#if (F(1) + 2
+#endif
+#if H / (2 - 2)
+#endif
+#if 1 ? 2 : x(3)
+#endif
+#if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+#endif
+#if 9223372036854775807 + 1 1
+#endif
+#if 1 ? 2
+#endif
+int main(void) {
+  foo(1);
+  return bar + qux(2);
+}
+"#;
+
+/// `clang-22 -x c -std=c99 -fsyntax-only` on `C_RANGES_SOURCE`.
+const C_RANGES_GOLDEN_22: &str = r#"<stdin>:3:14: error: expected ')' in preprocessor expression
+    3 | #if (F(1) + 2
+      |      ~~~~~~~~^
+<stdin>:3:5: note: to match this '('
+    3 | #if (F(1) + 2
+      |     ^
+<stdin>:5:7: error: division by zero in preprocessor expression
+    5 | #if H / (2 - 2)
+      |     ~ ^ ~~~~~~~
+<stdin>:7:13: error: function-like macro 'x' is not defined
+    7 | #if 1 ? 2 : x(3)
+      |             ^
+<stdin>:9:9: warning: left side of operator converted from negative value to unsigned: -1 to 18446744073709551615
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |      ~~ ^ ~~
+<stdin>:9:37: warning: integer overflow in preprocessor expression
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^ ~
+<stdin>:9:54: error: division by zero in preprocessor expression
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |                                           ~~~~~~~~~~~^ ~
+<stdin>:11:29: error: token is not a valid binary operator in a preprocessor subexpression
+   11 | #if 9223372036854775807 + 1 1
+      |                           ~ ^
+<stdin>:13:10: error: expected ':'
+   13 | #if 1 ? 2
+      |     ~   ~^
+<stdin>:13:7: note: to match this '?'
+   13 | #if 1 ? 2
+      |       ^
+<stdin>:16:3: error: call to undeclared function 'foo'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   16 |   foo(1);
+      |   ^
+<stdin>:17:10: error: use of undeclared identifier 'bar'
+   17 |   return bar + qux(2);
+      |          ^~~
+<stdin>:17:16: error: call to undeclared function 'qux'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   17 |   return bar + qux(2);
+      |                ^
+2 warnings and 9 errors generated.
+"#;
+
+/// `clang-19 -x c -std=c99 -fsyntax-only` on `C_RANGES_SOURCE`: clang 19
+/// reports the undeclared identifier last (its `TypoExpr`), unranged.
+const C_RANGES_GOLDEN_19: &str = r#"<stdin>:3:14: error: expected ')' in preprocessor expression
+    3 | #if (F(1) + 2
+      |      ~~~~~~~~^
+<stdin>:3:5: note: to match this '('
+    3 | #if (F(1) + 2
+      |     ^
+<stdin>:5:7: error: division by zero in preprocessor expression
+    5 | #if H / (2 - 2)
+      |     ~ ^ ~~~~~~~
+<stdin>:7:13: error: function-like macro 'x' is not defined
+    7 | #if 1 ? 2 : x(3)
+      |             ^
+<stdin>:9:9: warning: left side of operator converted from negative value to unsigned: -1 to 18446744073709551615
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |      ~~ ^ ~~
+<stdin>:9:37: warning: integer overflow in preprocessor expression
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ^ ~
+<stdin>:9:54: error: division by zero in preprocessor expression
+    9 | #if (-1 < 0u) + 9223372036854775807 + 1 + defined(H) / 0
+      |                                           ~~~~~~~~~~~^ ~
+<stdin>:11:29: error: token is not a valid binary operator in a preprocessor subexpression
+   11 | #if 9223372036854775807 + 1 1
+      |                           ~ ^
+<stdin>:13:10: error: expected ':'
+   13 | #if 1 ? 2
+      |     ~   ~^
+<stdin>:13:7: note: to match this '?'
+   13 | #if 1 ? 2
+      |       ^
+<stdin>:16:3: error: call to undeclared function 'foo'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   16 |   foo(1);
+      |   ^
+<stdin>:17:16: error: call to undeclared function 'qux'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   17 |   return bar + qux(2);
+      |                ^
+<stdin>:17:10: error: use of undeclared identifier 'bar'
+   17 |   return bar + qux(2);
+      |          ^
+2 warnings and 9 errors generated.
+"#;
+
+#[test]
+fn c_if_expression_and_undeclared_ranges_like_clang() {
+    let args = ["-x", "c", "-std=c99", "-fsyntax-only", "-"];
+    let o = kiln(&args, C_RANGES_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, C_RANGES_GOLDEN_22));
+    let o = kiln(&[&["-fclang-compat=19"], &args[..]].concat(), C_RANGES_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, C_RANGES_GOLDEN_19));
+}
+
 /// [dcl.init.ref]/5: a reference binding that drops qualifiers underlines
 /// the initializer, as clang streams its source range into
 /// `err_reference_bind_drops_quals` (WP-818).
