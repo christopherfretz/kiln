@@ -124,8 +124,8 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
 `scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)
 against `--compiler clang`, re-measured by WP-1295 on 2026-11-11 with the
 harness build of wp/1295 at `e54b84796` (origin/main `c60f69910` merged,
-WP-1286 included; sqlite at `38398d21b`, before that merge, and again at
-the handback head, below). "TUs" are the build-phase TUs of the report
+WP-1286 included; sqlite at `38398d21b`, before that merge, and again
+green at `0c146af36`). "TUs" are the build-phase TUs of the report
 (`tus`, C and the C++ test drivers); "probes" counts configure-phase
 compiles and how many fail.
 
