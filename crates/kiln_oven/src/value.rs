@@ -770,6 +770,37 @@ impl Oven {
         named.then(|| self.types.info(t).q)
     }
 
+    /// The frozen value of a pointer that points at nothing
+    /// (`mem::NOWHERE`): the result of a cast only a fold performs
+    /// (`Op::Cce`), as clang's lvalue with an invalid designator, which its
+    /// `ConstantEmitter` emits as the base's address plus the offset (C23
+    /// 6.6p9: an address constant may be formed with casts). An integer
+    /// cast to a pointer (frame slot 0) is [`PtrBase::Absolute`]; a pointer
+    /// into a static object keeps that object (the allocation now in its
+    /// slot: static slots are not reused within an evaluation) and its
+    /// offset, with the cast's type. Anything else has no constant
+    /// address. spec/oven.md "Pointers that point at nothing".
+    #[cold]
+    fn nowhere_of(
+        &mut self,
+        b: &mut dyn SemaBridge,
+        q: QualType,
+        pointee: OTy,
+        p: Ptr,
+        loc: Loc,
+    ) -> Result<Scalar<'static>, Freeze> {
+        if p.slot == 0 {
+            let offset = u64::from(p.off);
+            let past = false;
+            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Absolute, offset, designated: None, past });
+        }
+        let Some(a) = self.mem.static_in_slot(p.slot).filter(|a| a.live) else {
+            return Err(Freeze::Fault(FailKind::NotConstant));
+        };
+        let raw = Ptr { generation: a.generation, ..p }.encode();
+        self.ptr_of(b, q, pointee, raw, None, loc)
+    }
+
     fn ptr_of(
         &mut self,
         b: &mut dyn SemaBridge,
@@ -783,6 +814,9 @@ impl Oven {
             return Ok(Scalar::Null { ty: q, kind: NullKind::Pointer });
         }
         let p = Ptr::decode(raw);
+        if Ptr::is_nowhere(raw) && !p.is_fn() {
+            return self.nowhere_of(b, q, pointee, p, loc);
+        }
         if p.is_fn() {
             return match self.funcs.get(p.off as usize).and_then(|f| f.decl) {
                 Some(d) => {
@@ -1931,6 +1965,12 @@ impl Oven {
             // compares equal to a fresh one.
             PtrBase::TypeInfo(q) => self.type_info(q, pointee.unwrap_or(ty)),
             PtrBase::Label { origin, .. } => self.label_addr(b, origin),
+            // An integer cast to a pointer points at nothing again
+            // (`mem::NOWHERE`, frame slot 0, the integer its offset).
+            PtrBase::Absolute => {
+                let off = u32::try_from(offset).unwrap_or(u32::MAX);
+                return Ptr::with_off(crate::mem::NOWHERE, u64::from(off), false);
+            }
         };
         let rp = Ptr::decode(root);
         let Some(a) = self.alloc_any(rp).copied() else { return root };

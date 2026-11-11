@@ -672,7 +672,10 @@ impl<'a> Vis<'a> {
                     .lifetime_extended(t)
                     .is_none_or(|l| !is_internal_symbol(ast, l.extending)),
                 PtrBase::TypeInfo(t) => self.ty(t),
-                PtrBase::StringLit { .. } | PtrBase::Const(_) | PtrBase::Label { .. } => false,
+                PtrBase::StringLit { .. }
+                | PtrBase::Const(_)
+                | PtrBase::Label { .. }
+                | PtrBase::Absolute => false,
             },
             ConstValue::Scalar(Scalar::MemberPtr { member, .. }) => {
                 !is_internal_symbol(ast, member)

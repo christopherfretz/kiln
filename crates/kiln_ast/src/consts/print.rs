@@ -537,6 +537,12 @@ impl Printer<'_> {
                     let _ = write!(out, "+{offset}");
                 }
             }
+            // clang prints an lvalue without a base as its offset cast
+            // to the pointer type: `(void *)16`.
+            PtrBase::Absolute => {
+                self.lost();
+                let _ = write!(out, "{offset}");
+            }
             // clang prints an `AddrLabelExpr` base as the expression.
             PtrBase::Label { label, .. } => {
                 self.lost();

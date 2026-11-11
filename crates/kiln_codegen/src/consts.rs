@@ -191,13 +191,34 @@ impl Cg<'_> {
             Scalar::MemberPtr { member, kind, derived, path, .. } => {
                 self.mp_value(member, kind, derived, path, t)
             }
+            // An integer cast to a pointer: clang's `inttoptr` of the
+            // integer (`ConstantLValueEmitter` of an lvalue without a base).
+            Scalar::Pointer { base: PtrBase::Absolute, offset, .. } => {
+                if self.m.types.int_width(t).is_some() {
+                    return Ok(self.m.const_int(t, i128::from(offset)));
+                }
+                let i = self.m.const_int(LTy::I64, i128::from(offset));
+                self.m.const_cast(kiln_llvm::CastOp::IntToPtr, i, t).map_err(|e| ir_err(&e))
+            }
             Scalar::Pointer { base, offset, .. } => {
                 let b = self.ptr_base(base)?;
-                if offset == 0 {
-                    return Ok(b);
+                let p = if offset == 0 {
+                    b
+                } else {
+                    let off = self.m.const_int(LTy::I64, i128::from(offset));
+                    self.m
+                        .const_gep(LTy::I8, b, &[off], GepFlags::NONE, None)
+                        .map_err(|e| ir_err(&e))?
+                };
+                // An address converted to an integer (C23 6.6p10, clang's
+                // lvalue of integer type, WP-1295): `ptrtoint`.
+                if self.m.types.int_width(t).is_some() {
+                    return self
+                        .m
+                        .const_cast(kiln_llvm::CastOp::PtrToInt, p, t)
+                        .map_err(|e| ir_err(&e));
                 }
-                let off = self.m.const_int(LTy::I64, i128::from(offset));
-                self.m.const_gep(LTy::I8, b, &[off], GepFlags::NONE, None).map_err(|e| ir_err(&e))
+                Ok(p)
             }
             Scalar::Reflection { .. } => err(None, "reflection values cannot be emitted"),
         }
@@ -219,6 +240,7 @@ impl Cg<'_> {
                 let at = self.loc_of(origin);
                 self.addr_of_label(label, at)
             }
+            PtrBase::Absolute => Ok(self.m.const_null(LTy::PTR)),
         }
     }
 
