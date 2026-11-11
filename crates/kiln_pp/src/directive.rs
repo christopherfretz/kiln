@@ -1310,6 +1310,9 @@ impl Preprocessor<'_, '_> {
 
     fn do_include(&mut self, name: PpTok, d: Dir) {
         crate::profile::time!(t_include_ns);
+        if self.state_hooks.is_some() && self.in_predefines() {
+            self.state_point(name.tok.span.lo);
+        }
         let (dir, kind) = match d {
             Dir::IncludeNext => ("include_next", IncludeKind::IncludeNext),
             Dir::Import => ("import", IncludeKind::Import),

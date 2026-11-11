@@ -16,7 +16,7 @@ use crate::ids::DiagId;
 use crate::json::JsonSink;
 use crate::options::{DiagOptions, Format};
 use crate::policy::{Policy, Severity};
-use crate::pragma::Pragmas;
+use crate::pragma::{PragmaSnapshot, Pragmas};
 use crate::text::TextSink;
 
 /// Where emitted diagnostics go. Sinks are called under the engine's lock,
@@ -179,6 +179,19 @@ impl<'sm> DiagEngine<'sm> {
         let at = self.sm.expansion_loc(at);
         let flavor = if remark { Flavor::Remark } else { Flavor::WarningOrError };
         self.update_pragmas(|p| p.set(&self.policy, at, flavor, group, sev))
+    }
+
+    /// The `#pragma clang diagnostic` state in effect now and the `push`
+    /// stack (a preprocessor-state record, spec/modules.md §11.12).
+    pub fn pragma_snapshot(&self) -> PragmaSnapshot {
+        self.pragmas.read().unwrap_or_else(PoisonError::into_inner).snapshot()
+    }
+
+    /// Installs a [`pragma_snapshot`](Self::pragma_snapshot): its current
+    /// state takes effect at `at`, its stack is pushed.
+    pub fn pragma_install(&self, at: Loc, snap: &PragmaSnapshot) {
+        let at = self.sm.expansion_loc(at);
+        self.update_pragmas(|p| p.install(at, snap));
     }
 
     /// The preprocessor left an included file, resuming its includer at
