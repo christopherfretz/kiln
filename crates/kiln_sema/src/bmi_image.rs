@@ -45,14 +45,18 @@ use crate::modules::Directive;
 mod attrs;
 mod body;
 mod classtempl;
+mod constraints;
 mod declocs;
+mod deptypes;
 mod localexterns;
 mod locs;
 mod pch;
 pub use pch::PchDecls;
+mod requires;
 mod scope;
 mod spec;
 mod templ;
+mod written;
 
 use body::{Bodies, BodyState, Root};
 pub(crate) use locs::Locs;
@@ -73,11 +77,13 @@ const LEX_TU: u32 = u32::MAX - 1;
 const BUILTINS: u32 = BuiltinType::ALL.len() as u32;
 /// Special-name words in a record's name field: the constructors and the
 /// destructor of the enclosing class, a conversion function (to its
-/// return type), `operator@` (`N_OP + op`). The importer recomputes the
+/// return type), a deduction guide (of the class template its return
+/// type names), `operator@` (`N_OP + op`). The importer recomputes the
 /// name.
 const N_CTOR: u32 = 0xFFFF_FF00;
 const N_DTOR: u32 = 0xFFFF_FF01;
 const N_CONV: u32 = 0xFFFF_FF02;
+const N_GUIDE: u32 = 0xFFFF_FF03;
 const N_OP: u32 = 0xFFFF_FE00;
 
 /// What the writer hands the driver.
@@ -233,6 +239,9 @@ enum TyRec {
     /// keyword (`decltype(auto)`), bit 1 deduced as the dependent type (a
     /// placeholder in a pattern).
     Auto(u8),
+    /// A dependent name, transform, member pointer or vector type
+    /// (WP-1284, [`deptypes`]).
+    Dep(deptypes::DepTy),
 }
 
 /// A template argument (S4b): a type, or an integral or `bool` value of
@@ -262,6 +271,9 @@ enum NnsRec {
     Ty(QRef, bool),
     /// A namespace alias record (S6).
     Alias(u32),
+    /// A dependent identifier `name::` (an index into the parameter
+    /// names; WP-1284, [`deptypes`]).
+    Ident(u32),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -329,13 +341,16 @@ struct InitRec {
 }
 
 /// `Function.kind`: the declaration kind of a function record.
-const FN_KINDS: [DeclKind; 5] = [
+const FN_KINDS: [DeclKind; 6] = [
     DeclKind::Function,
     DeclKind::CXXMethod,
     DeclKind::CXXConstructor,
     DeclKind::CXXDestructor,
     DeclKind::CXXConversion,
+    DeclKind::CXXDeductionGuide,
 ];
+/// The `Function.kind` of a deduction guide (namespace scope only).
+const FN_GUIDE: u8 = 5;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Payload {
@@ -550,6 +565,12 @@ struct Image {
     cspecs: classtempl::ClassSpecs,
     /// WP-1283: declarator locations of dependent declarations.
     declocs: declocs::DeclLocs,
+    /// WP-1284: constraints and concepts' constraint-expressions.
+    cons: constraints::Constraints,
+    /// WP-1284: requires-expression bodies.
+    reqs: requires::ReqBodies,
+    /// WP-1284: where the carried dependent names were written.
+    written: Vec<written::WrittenRec>,
     /// WP-1293: block-scope declarations, in `local_externs` order.
     lexterns: localexterns::LocalExterns,
 }
@@ -835,6 +856,7 @@ impl Wr {
                     self.u8(u8::from(*t));
                 }
                 NnsRec::Alias(d) => (self.u8(3), self.u32(*d)).1,
+                NnsRec::Ident(n) => (self.u8(4), self.u32(*n)).1,
             }
         }
     }
@@ -1103,6 +1125,7 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Injected(d) => (w.u8(17), w.u32(*d)).1,
             TyRec::Pack(q) => (w.u8(19), w.q(*q)).1,
             TyRec::Auto(k) => (w.u8(20), w.u8(*k)).1,
+            TyRec::Dep(d) => (w.u8(21), deptypes::encode_dep(&mut w, d)).1,
             TyRec::Subst { repl, assoc, index, pack } => {
                 w.u8(18);
                 w.q(*repl);
@@ -1152,6 +1175,9 @@ fn encode(img: &Image) -> Vec<u8> {
     scope::encode_scopes(&mut w, &img.scopes);
     classtempl::encode_class_specs(&mut w, &img.cspecs);
     declocs::encode_decl_locs(&mut w, &img.declocs);
+    constraints::encode_constraints(&mut w, &img.cons);
+    requires::encode_requires(&mut w, &img.reqs);
+    written::encode_written(&mut w, &img.written);
     localexterns::encode_local_externs(&mut w, &img.lexterns);
     w.0
 }
@@ -1257,6 +1283,7 @@ impl<'a> Rd<'a> {
                     }
                 }
                 3 => NnsRec::Alias(self.u32()?),
+                4 => NnsRec::Ident(self.u32()?),
                 _ => return bad("bad qualifier step"),
             });
         }
@@ -1444,7 +1471,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             let (mut qs, mut ds) = (vec![*q], Vec::new());
             for st in steps {
                 match st {
-                    NnsRec::Global => {}
+                    NnsRec::Global | NnsRec::Ident(_) => {}
                     NnsRec::Ns(d) | NnsRec::Alias(d) => ds.push(*d),
                     NnsRec::Ty(q, _) => qs.push(*q),
                 }
@@ -1467,6 +1494,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) | TyRec::Auto(_) => (Vec::new(), Vec::new()),
+        TyRec::Dep(d) => deptypes::dep_refs(d),
     }
 }
 
@@ -1679,6 +1707,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 k @ 0..=3 => TyRec::Auto(k),
                 _ => return bad("bad placeholder type"),
             },
+            21 => TyRec::Dep(deptypes::decode_dep(&mut r)?),
             18 => {
                 let repl = r.q()?;
                 let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
@@ -1727,6 +1756,9 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.scopes = scope::decode_scopes(&mut r)?;
     img.cspecs = classtempl::decode_class_specs(&mut r)?;
     img.declocs = declocs::decode_decl_locs(&mut r)?;
+    img.cons = constraints::decode_constraints(&mut r)?;
+    img.reqs = requires::decode_requires(&mut r)?;
+    img.written = written::decode_written(&mut r)?;
     img.lexterns = localexterns::decode_local_externs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
@@ -1793,6 +1825,7 @@ fn unlisted(img: &Image, i: usize, d: &DeclRec) -> bool {
 fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
     steps.iter().all(|s| match *s {
         NnsRec::Global | NnsRec::Ty(..) => true,
+        NnsRec::Ident(n) => (n as usize) < img.pnames.len(),
         NnsRec::Ns(x) => {
             (x as usize) < below
                 && matches!(img.decls.get(x as usize).map(|r| &r.payload), Some(Payload::Namespace))
@@ -1805,6 +1838,20 @@ fn steps_ok(img: &Image, steps: &[NnsRec], below: usize) -> bool {
                 )
         }
     })
+}
+
+/// The class template (its first declaration) deduction guide type
+/// `fty` returns a specialization of, as written: `C<args>` directly.
+fn guided_template(ast: &kiln_ast::Ast, fty: Option<QualType>) -> Option<DeclId> {
+    let TypeView::Function(p) = ast.types.view(fty?.ty()) else { return None };
+    let TypeView::TemplateSpecialization { name, alias: false, .. } = ast.types.view(p.ret().ty())
+    else {
+        return None;
+    };
+    match ast.types.template_name_view(name) {
+        kiln_ast::types::TemplateName::Template(t) => Some(ast.first(t)),
+        _ => None,
+    }
 }
 
 /// The structural checks of [`decode`].
@@ -1840,10 +1887,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     (TyRec::Enum(_), Payload::Enum { .. })
                         | (TyRec::Typedef(_), Payload::Typedef { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
-                        | (TyRec::ElabQ(..), Payload::Namespace | Payload::NsAlias { .. })
+                        | (
+                            TyRec::ElabQ(..) | TyRec::Dep(_),
+                            Payload::Namespace | Payload::NsAlias { .. }
+                        )
                         | (TyRec::Ttp(_), Payload::Ttp { .. })
                         | (
-                            TyRec::Injected(_) | TyRec::Tst { .. },
+                            TyRec::Injected(_) | TyRec::Tst { .. } | TyRec::Dep(_),
                             Payload::Template { kind: 1, .. }
                         )
                         | (TyRec::Tst { under: Some(_), .. }, Payload::Template { kind: 2, .. })
@@ -1863,6 +1913,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             && !steps_ok(img, steps, nd)
         {
             return bad("bad qualifier step");
+        }
+        if let TyRec::Dep(d) = t
+            && !deptypes::dep_ok(img, d, nd)
+        {
+            return bad("bad dependent type");
         }
         if let TyRec::Func { info, .. } = t
             && FuncInfo::from_bits(*info).bits() != *info
@@ -1938,7 +1993,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 Payload::Spec { template, complete, args } => {
                     kind_of(*template).is_some_and(|t| match &t.payload {
                         Payload::Template { kind, params, .. } => {
-                            (*kind == 1 || !*complete)
+                            *kind < constraints::CONCEPT_KIND
+                                && (*kind == 1 || !*complete)
                                 && params.len() == args.len()
                                 && params.iter().zip(args).all(|(&p, a)| {
                                     match (&img.decls[p as usize].payload, a) {
@@ -2150,15 +2206,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
             // An unnamed namespace has no name.
             Payload::Field { .. } | Payload::Namespace => d.name == NONE || ident(d.name),
-            // An unnamed class or unscoped enumeration ([class.pre]/1,
-            // [dcl.enum]/2), named for linkage by a typedef (WP-1278) or
-            // not at all (WP-1293: `enum { FE_INEXACT = ... };`).
-            Payload::Record { .. } if d.name == NONE => true,
-            Payload::Enum { scoped, .. } if d.name == NONE => *scoped == 0,
+            // An unnamed class or enumeration: one a typedef names
+            // (WP-1278) or none ([dcl.enum]/2, [class.pre]/1; WP-1284).
+            Payload::Record { .. } | Payload::Enum { .. } if d.name == NONE => true,
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
                 N_CONV => *kind == 4,
+                N_GUIDE => *kind == FN_GUIDE,
                 n if (N_OP..N_CTOR).contains(&n) => {
                     *kind < 2
                         && u8::try_from(n - N_OP)
@@ -2178,7 +2233,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         match &d.payload {
             Payload::Function { kind, ty, spec, params, inits, overrides, .. } => {
-                if *kind as usize >= FN_KINDS.len() || (*kind == 0) == in_class {
+                if *kind as usize >= FN_KINDS.len() || matches!(*kind, 0 | FN_GUIDE) == in_class {
                     return bad("bad function kind");
                 }
                 // A first declaration's overridden functions: other
@@ -2326,32 +2381,38 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // S4b: or a class template at namespace scope, its
                 // pattern the class record just before it.
                 let p = *pattern as usize;
-                let ok = *kind <= 3
+                // WP-1284: a concept, at namespace scope, has no pattern.
+                let concept = *kind == constraints::CONCEPT_KIND;
+                let ok = (*kind <= 3 || concept)
                     && *depth == 0
                     && d.flags & DEP == 0
                     && scope(d.ctx)
                     && d.lexical == NONE
                     && d.prev == NONE
-                    && (*kind == 0 || p + 1 == i)
-                    && kind_of(*pattern).is_some_and(|r| {
-                        matches!(
-                            (*kind, &r.payload),
-                            (0, Payload::Function { kind: 0, .. })
-                                | (1, Payload::Record { .. })
-                                | (2, Payload::Typedef { alias: true, .. })
-                                | (3, Payload::Var { .. })
-                        ) && r.flags & DEP != 0
-                            && r.name == d.name
-                            && r.ctx == d.ctx
-                            && r.owner == d.owner
-                            && r.lexical == NONE
-                            && r.prev == NONE
-                    })
-                    && !claimed[p];
+                    && (concept
+                        || (*kind == 0 || p + 1 == i)
+                            && kind_of(*pattern).is_some_and(|r| {
+                                matches!(
+                                    (*kind, &r.payload),
+                                    (0, Payload::Function { kind: 0 | FN_GUIDE, .. })
+                                        | (1, Payload::Record { .. })
+                                        | (2, Payload::Typedef { alias: true, .. })
+                                        | (3, Payload::Var { .. })
+                                ) && r.flags & DEP != 0
+                                    && r.name == d.name
+                                    && r.ctx == d.ctx
+                                    && r.owner == d.owner
+                                    && r.lexical == NONE
+                                    && r.prev == NONE
+                            })
+                            && !claimed[p])
+                    && (!concept || (*pattern == NONE && ident(d.name)));
                 if !ok || params.len() > usize::from(u16::MAX) {
                     return bad("bad template");
                 }
-                claimed[p] = true;
+                if !concept {
+                    claimed[p] = true;
+                }
                 if *kind == 1 {
                     tmpl_params.insert(p, params.len());
                 }
@@ -2452,6 +2513,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let _ = nd;
     attrs::validate_attrs(img)?;
     scope::validate_scopes(img)?;
+    constraints::validate_constraints(img)?;
+    requires::validate_requires(img, &|q| qref_ok(q, nt))?;
+    written::validate_written(img, &|q| qref_ok(q, nt))?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2609,8 +2673,9 @@ impl Writer<'_, '_, '_> {
                 Nns::Global => None,
                 Nns::Namespace { prefix, .. }
                 | Nns::Type { prefix, .. }
-                | Nns::NamespaceAlias { prefix, .. } => prefix,
-                _ => return Err("a qualifier naming a dependent name or splice"),
+                | Nns::NamespaceAlias { prefix, .. }
+                | Nns::Identifier { prefix, .. } => prefix,
+                Nns::Splice(_) => return Err("a qualifier naming a splice"),
             };
             chain.push(v);
         }
@@ -2639,7 +2704,8 @@ impl Writer<'_, '_, '_> {
                     }
                     _ => return Err("a qualifier naming a namespace alias outside the image"),
                 },
-                _ => return Err("a malformed qualifier"),
+                Nns::Identifier { name, .. } => NnsRec::Ident(self.sym_ix(name)),
+                Nns::Splice(_) => return Err("a malformed qualifier"),
             });
         }
         Ok(steps)
@@ -2722,7 +2788,7 @@ impl Writer<'_, '_, '_> {
                 }
                 TyRec::QArray(quals.bits(), self.qref(QualType::unqual(base))?)
             }
-            _ => return Err("a type the image does not carry"),
+            v => self.dep_ty(v)?.ok_or("a type the image does not carry")?,
         };
         let i = BUILTINS + 1 + self.img.types.len() as u32;
         self.img.types.push(rec);
@@ -2846,6 +2912,21 @@ impl Writer<'_, '_, '_> {
                     return Err("a conversion function declared through a typedef");
                 }
                 N_CONV
+            }
+            V::DeductionGuide(t) => {
+                // The importer names the guide (and its template) after
+                // the class template its return type names
+                // ([temp.deduct.guide]/3).
+                let g = match n.kind() {
+                    DeclKind::CXXDeductionGuide => Some(d),
+                    DeclKind::FunctionTemplate => ast.template_info(d).and_then(|i| i.pattern),
+                    _ => None,
+                };
+                let fty = g.and_then(|g| ast.decls.get(g).ty());
+                if guided_template(ast, fty) != Some(ast.first(t)) {
+                    return Err("a deduction guide whose return type is sugared");
+                }
+                N_GUIDE
             }
             _ => return Err("a declaration not named by an identifier"),
         })
@@ -2974,7 +3055,8 @@ impl Writer<'_, '_, '_> {
             | DeclKind::CXXMethod
             | DeclKind::CXXConstructor
             | DeclKind::CXXDestructor
-            | DeclKind::CXXConversion => self.function(d, i)?,
+            | DeclKind::CXXConversion
+            | DeclKind::CXXDeductionGuide => self.function(d, i)?,
             DeclKind::Var => self.var_payload(d, i)?,
             DeclKind::Enum => {
                 let ed = *ast.decls.enumeration(d).ok_or("a malformed enumeration")?;
@@ -3057,7 +3139,8 @@ impl Writer<'_, '_, '_> {
             DeclKind::FunctionTemplate
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
-            | DeclKind::VarTemplate => self.template(d)?,
+            | DeclKind::VarTemplate
+            | DeclKind::Concept => self.template(d)?,
             _ => return Err("a declaration the image does not carry yet"),
         })
     }
@@ -3106,7 +3189,7 @@ impl Writer<'_, '_, '_> {
         // carried, as dependent records, for importers to instantiate.
         let pattern = match fd.templ.get() {
             None => self.dep_member(d),
-            Some((TemplLinkKind::Pattern, _)) if kind == 0 => true,
+            Some((TemplLinkKind::Pattern, _)) if matches!(kind, 0 | 5) => true,
             Some((TemplLinkKind::Pattern, _)) => return Err("a member function template"),
             Some(_) => return Err("a template specialization"),
         };
@@ -3566,7 +3649,9 @@ impl Writer<'_, '_, '_> {
                 x.target = r;
             }
         }
-        self.walk_roots()
+        self.walk_roots()?;
+        self.written_section();
+        Ok(())
     }
 
     /// The module unit's name, keyword and preamble words of the image.
@@ -3747,6 +3832,18 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
+    /// Whether `d` is an implicit deduction guide or its template.
+    fn implicit_guide(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        let guide = |x: DeclId| {
+            let n = ast.decls.get(x);
+            n.kind() == DeclKind::CXXDeductionGuide && n.has(DeclFlags::IMPLICIT)
+        };
+        guide(d)
+            || (ast.decls.get(d).kind() == DeclKind::FunctionTemplate
+                && ast.template_info(d).and_then(|i| i.pattern).is_some_and(guide))
+    }
+
     /// One declaration of the purview, in id order ([`Writer::collect`]).
     #[allow(clippy::too_many_lines)] // the purview's declaration kinds, with the class nesting
     fn one(&mut self, d: DeclId, st: &mut Pass) -> W<()> {
@@ -3797,6 +3894,20 @@ impl Writer<'_, '_, '_> {
             if n.has(DeclFlags::DEPENDENT_CTX) {
                 return Err("a static assertion in a template");
             }
+            return Ok(());
+        }
+        if n.kind() == DeclKind::RequiresExprBody {
+            // Carried by the requires-expression that names it, with its
+            // parameters and invented parameters (bmi_image/requires.rs).
+            let _ = st.skipped.insert(d);
+            return Ok(());
+        }
+        if n.has(DeclFlags::IMPLICIT) && self.implicit_guide(d) {
+            // An implicit deduction guide: formed again by the importer
+            // at its first class template argument deduction
+            // ([over.match.class.deduct]/1); it joins no member list or
+            // lookup table.
+            let _ = st.skipped.insert(d);
             return Ok(());
         }
         if ast.spec_info(d).is_some_and(|(_, si)| {
@@ -3901,6 +4012,7 @@ impl Writer<'_, '_, '_> {
         }
         let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
         let attrs = self.attr_recs(d, i)?;
+        let cons = self.constraint_roots(d)?;
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         self.img.decls.push(DeclRec {
             flags: h.flags,
@@ -3915,6 +4027,7 @@ impl Writer<'_, '_, '_> {
         });
         self.recs.insert(d, i);
         self.attr_commit(i, attrs);
+        self.constraint_commit(i, cons);
         if let Some(k) = self.using_key(d) {
             self.usings.insert(k, i);
         }
@@ -3968,10 +4081,12 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXConstructor
         | K::CXXDestructor
         | K::CXXConversion
+        | K::CXXDeductionGuide
         | K::FunctionTemplate
         | K::ClassTemplate
         | K::TypeAliasTemplate
         | K::VarTemplate
+        | K::Concept
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm
         | K::NamespaceAlias
@@ -3983,11 +4098,9 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::Friend => Err("a friend declaration"),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
-        | K::Concept
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
         | K::FriendTemplate
-        | K::CXXDeductionGuide
         | K::TemplateTemplateParm => Err("a template"),
         K::ConstructorUsingShadow => Err("an inheriting constructor"),
         K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
@@ -4268,7 +4381,11 @@ impl Sema<'_, '_> {
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
-                    let f = self.builder().function(h, kind, fty, spec, prev);
+                    let f = if kind == DeclKind::CXXDeductionGuide {
+                        self.builder().deduction_guide(h, fty, spec)
+                    } else {
+                        self.builder().function(h, kind, fty, spec, prev)
+                    };
                     self.ast.templates.pattern_next = false;
                     if *deferred && kind == DeclKind::CXXDestructor && prev.is_none() {
                         // Written without one ([except.spec]/8): a
@@ -4446,18 +4563,27 @@ impl Sema<'_, '_> {
                     let ps: Vec<DeclId> = params.iter().map(|&p| ids[p as usize]).collect();
                     let (t, l, rr) = (lo(self, *tloc), lo(self, *langle), lo(self, *rangle));
                     let list = self.builder().template_param_list(t, l, rr, *depth, &ps, None);
-                    let pat = ids[*pattern as usize];
-                    let k = match kind {
-                        1 => DeclKind::ClassTemplate,
-                        2 => DeclKind::TypeAliasTemplate,
-                        3 => DeclKind::VarTemplate,
-                        _ => DeclKind::FunctionTemplate,
-                    };
-                    let t = self.builder().template_decl(k, pat, list, None);
-                    if *using != NONE {
-                        let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
+                    if *kind == constraints::CONCEPT_KIND {
+                        // Declared as the parser does, inside its head;
+                        // the constraint-expression comes with the bodies.
+                        self.ast.templates.dependent_depth = saved_depth + 1;
+                        let c = self.builder().concept_deferred(h, list);
+                        self.ast.templates.dependent_depth = saved_depth;
+                        c
+                    } else {
+                        let pat = ids[*pattern as usize];
+                        let k = match kind {
+                            1 => DeclKind::ClassTemplate,
+                            2 => DeclKind::TypeAliasTemplate,
+                            3 => DeclKind::VarTemplate,
+                            _ => DeclKind::FunctionTemplate,
+                        };
+                        let t = self.builder().template_decl(k, pat, list, None);
+                        if *using != NONE {
+                            let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
+                        }
+                        t
                     }
-                    t
                 }
                 Payload::Spec { .. } => {
                     let loc = lo(self, r.loc);
@@ -4473,8 +4599,9 @@ impl Sema<'_, '_> {
                     {
                         h.name = DeclName::operator(op);
                     }
-                    let nns =
-                        self.image_nns(steps, &ids, &mut |s, q| s.image_ty(img, &mut tys, &ids, q));
+                    let nns = self.image_nns(img, steps, &ids, &mut |s, q| {
+                        s.image_ty(img, &mut tys, &ids, q)
+                    });
                     self.builder().using_decl(h, nns)
                 }
                 Payload::Shadow { target } => {
@@ -4511,8 +4638,11 @@ impl Sema<'_, '_> {
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
         self.image_extern_c(img, &ids);
-        let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
+        let reqs = self.image_requires(img, &mut tys, &ids, main);
+        let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
+        self.image_constraints(img, &ids, &built);
+        self.image_written(img, &mut tys, &ids, main);
         self.image_nttp_defaults(&nttp_defaults, &built);
         for (f, width, init) in fields {
             if width != NONE {
@@ -4657,6 +4787,10 @@ impl Sema<'_, '_> {
                 Some(self.ast.names.constructor(class()?))
             }
             N_DTOR if kind == DeclKind::CXXDestructor => Some(self.ast.names.destructor(class()?)),
+            N_GUIDE if kind == DeclKind::CXXDeductionGuide => {
+                let t = guided_template(&self.ast, Some(fty))?;
+                Some(self.ast.names.deduction_guide(t))
+            }
             N_CONV if kind == DeclKind::CXXConversion => {
                 let ret = match self.ast.types.view(fty.ty()) {
                     TypeView::Function(p) => p.ret(),
@@ -4701,7 +4835,7 @@ impl Sema<'_, '_> {
         } else {
             let j = (q.ty - BUILTINS - 1) as usize;
             while tys.len() <= j {
-                let t = self.image_build_ty(&img.types[tys.len()], tys, ids);
+                let t = self.image_build_ty(img, &img.types[tys.len()], tys, ids);
                 tys.push(t);
             }
             tys[j]
@@ -4749,6 +4883,7 @@ impl Sema<'_, '_> {
     /// type step's type.
     fn image_nns(
         &mut self,
+        img: &Image,
         steps: &[NnsRec],
         ids: &[DeclId],
         ty: &mut dyn FnMut(&mut Self, QRef) -> QualType,
@@ -4773,6 +4908,10 @@ impl Sema<'_, '_> {
                     },
                     None => Nns::Global,
                 },
+                NnsRec::Ident(i) => Nns::Identifier {
+                    prefix: cur,
+                    name: self.intern(img.pnames.get(i as usize).map_or("", String::as_str)),
+                },
             };
             cur = Some(self.ast.types.nns(n));
         }
@@ -4795,7 +4934,13 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn image_build_ty(&mut self, t: &TyRec, tys: &[QualType], ids: &[DeclId]) -> QualType {
+    fn image_build_ty(
+        &mut self,
+        img: &Image,
+        t: &TyRec,
+        tys: &[QualType],
+        ids: &[DeclId],
+    ) -> QualType {
         let qt = |s: &mut Self, q: QRef| -> QualType {
             let base = if q.ty <= BUILTINS {
                 BuiltinType::from_index(q.ty).map_or(QualType::INT, BuiltinType::qual_type)
@@ -4838,7 +4983,7 @@ impl Sema<'_, '_> {
                 self.ast.types.elaborated(k, None, q)
             }
             TyRec::ElabQ(k, steps, q) => {
-                let cur = self.image_nns(steps, ids, &mut |s, q| qt(s, q));
+                let cur = self.image_nns(img, steps, ids, &mut |s, q| qt(s, q));
                 let q = qt(self, *q);
                 let k = tag_keyword(*k).unwrap_or_default();
                 self.ast.types.elaborated(k, cur, q)
@@ -4895,6 +5040,7 @@ impl Sema<'_, '_> {
                 let pack = pack.checked_sub(1);
                 self.ast.types.subst_template_type_parm(r, a, *index, pack)
             }
+            TyRec::Dep(d) => self.image_dep_ty(img, d, ids, &mut |s, q| qt(s, q)),
         }
     }
 }
@@ -5140,6 +5286,9 @@ mod tests {
             scopes: scope::Scopes::default(),
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
+            cons: constraints::Constraints::default(),
+            reqs: requires::ReqBodies::default(),
+            written: Vec::new(),
             lexterns: localexterns::LocalExterns::default(),
         }
     }
@@ -5538,7 +5687,7 @@ mod tests {
     /// Stage S4: `sample` plus `namespace ns { template <class T, int N>
     /// T tf(T x); }`: the two parameter records, the pattern (dependent,
     /// unlisted) and the template record claiming them.
-    fn template_sample() -> Image {
+    pub(super) fn template_sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let mut img = sample();
         let name = img.names.len() as u32;
@@ -5680,6 +5829,31 @@ mod tests {
         }
     }
 
+    /// spec/modules.md §11.11 "Deduction guides" (WP-1284): an explicit
+    /// guide is a function record of kind `FN_GUIDE` named `N_GUIDE`, at
+    /// namespace scope, as a template's pattern or alone; any other
+    /// pairing of the name and the kind is an error.
+    #[test]
+    fn guide_records() {
+        fn set_fn(i: &mut Image, name: u32, k: u8) {
+            i.decls[12].name = name;
+            i.decls[13].name = name;
+            if let Payload::Function { kind, .. } = &mut i.decls[12].payload {
+                *kind = k;
+            }
+        }
+        let mut img = template_sample();
+        set_fn(&mut img, N_GUIDE, FN_GUIDE);
+        assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+        for (what, name, kind) in
+            [("named guide", 0, FN_GUIDE), ("guide name", N_GUIDE, 0), ("ctor", N_GUIDE, 2)]
+        {
+            let mut img = template_sample();
+            set_fn(&mut img, name, kind);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
     /// Stage S4b: `template_sample` plus `namespace ns { template <class
     /// T = int> struct Box { T v; T w; }; Box<int> bx; }` and a use of the
     /// specialization's `v`: the pattern, the class template record
@@ -5687,7 +5861,7 @@ mod tests {
     /// and the specialization, injected-class-name and substituted
     /// parameter types.
     #[allow(clippy::too_many_lines)] // one sample image, its records in format order
-    fn class_template_sample() -> Image {
+    pub(super) fn class_template_sample() -> Image {
         let q = |ty| QRef { ty, quals: 0 };
         let int = BuiltinType::Int as u32;
         let mut img = template_sample();
@@ -5846,9 +6020,9 @@ mod tests {
                 let n = i.bodies.exprs.len();
                 i.bodies.exprs[n - 1].cold = 0;
             }),
-            ("dependent member template keyword", |i| {
+            ("dependent member flags out of range", |i| {
                 let n = i.bodies.exprs.len();
-                i.bodies.exprs[n - 1].aux = 2;
+                i.bodies.exprs[n - 1].aux = 4;
             }),
             ("construction argument out of range", |i| {
                 let n = i.bodies.exprs.len();

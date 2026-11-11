@@ -68,7 +68,7 @@ impl Writer<'_, '_, '_> {
     }
 
     /// The image arguments of argument list `list`.
-    fn arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
+    pub(super) fn arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
         let args: Vec<TemplateArg> = self.s.ast.types.args(list).to_vec();
         let mut out = Vec::with_capacity(args.len());
         for a in args {
@@ -156,6 +156,11 @@ impl Writer<'_, '_, '_> {
             return Err("a specialization of a partial specialization");
         }
         let template = self.template_rec(si.template, u8::from(class))?;
+        // The importer names it while it builds the records, before their
+        // constraints are in (WP-1284).
+        if self.constrained_template(si.template) {
+            return Err("a specialization of a constrained template");
+        }
         let args = self.arg_recs(si.args)?;
         let complete =
             class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
