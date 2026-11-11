@@ -821,7 +821,14 @@ impl Parser<'_, '_> {
             }
             if self.at_attr() || self.at_kw(Kw::Declspec) {
                 let lead = self.pos() == lead_end;
-                let cxx11 = self.at_cxx11_attr() || self.at_kw(Kw::Alignas);
+                // clang `ParseDeclarationSpecifiers`: `_Alignas`, and C23
+                // `alignas`, is a declaration specifier (C17 6.7.5), so it
+                // may follow a type specifier (`unsigned short _Alignas(16)
+                // x;`); C++'s `alignas` is an attribute-specifier.
+                let spec_alignas = self.at_kw(Kw::Alignas)
+                    && (self.spelling_of(&self.tok()) == "_Alignas"
+                        || self.s.c_at_least(kiln_lex::CStd::C23));
+                let cxx11 = !spec_alignas && (self.at_cxx11_attr() || self.at_kw(Kw::Alignas));
                 let mut attrs = Vec::new();
                 self.parse_attributes(&mut attrs);
                 if lead {
