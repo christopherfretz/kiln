@@ -773,3 +773,26 @@ regressions), differential, libc++ pass-rate not lower than the previous RC,
 bench within thresholds, and the x86_64 sweep (`.github/workflows/sweep.yml`,
 "x86_64 sweep" above) on the RC commit shows no x86_64-only failure. The
 supervisor agent signs off in `docs/status/`.
+
+### Patch releases
+
+A patch release (`X.Y.Z`, `Z > 0`) is cut from a maintenance branch, not
+from `main`:
+
+1. `release/X.Y` branches from the last tag of that line (`vX.Y.0`, or
+   the previous patch tag) and stays on the remote.
+2. Each fix is a commit on that branch with its test. A fix that is
+   already on `main` is cherry-picked (`git cherry-pick -x`); a fix that
+   is new goes onto the branch first.
+3. The branch has no pull request, so both halves of the merge gate are
+   run on it by hand: `cargo xtask ci` and
+   `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only`.
+4. The release gate above runs on the branch head, and its results go
+   into `docs/status/release-X.Y.Z.md`. The tag `vX.Y.Z` is made on the
+   branch.
+5. After the tag the branch is merged forward into `main` through one
+   pull request (a merge commit; in a conflict over the version or the
+   CHANGELOG's unreleased section `main`'s side is kept and the patch
+   release's CHANGELOG section is inserted). The tag is then an ancestor
+   of `main`, so the next minor release contains every released fix, and
+   no commit on `main` is rewritten.
