@@ -2,8 +2,8 @@
 // with external linkage shall not contain a reference to an identifier
 // with internal linkage. clang `-Wstatic-in-inline` (C only), pedantic
 // when the use is in the main file; the "use 'static'" note only when
-// the function has no storage class written. A `static inline` function
-// and a block-scope `static` object (no linkage) are fine.
+// the function has no storage class written; `static inline` functions and block-scope statics are fine (clang 22 rewords it as a C2y extension).
+//@ requires: clang<22
 //@ expect: compile-ok
 //@ strict-diags
 //@ args: -Wstatic-in-inline

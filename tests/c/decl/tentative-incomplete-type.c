@@ -2,8 +2,8 @@
 // of an array of unknown size becomes a definition of a one-element array
 // at the end of the translation unit (-Wtentative-definition-array); one
 // of an incomplete struct type that is never completed is an error, and an
-// internal-linkage one of incomplete non-array type is a constraint
-// violation clang warns about (p3).
+// internal-linkage one of incomplete non-array type is a warned constraint violation (p3; clang 22 drops it).
+//@ requires: clang<22
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 16:17 warning "tentative definition of variable with internal linkage has incomplete non-array type 'struct S'"
