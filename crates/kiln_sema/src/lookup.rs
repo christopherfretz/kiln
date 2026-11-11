@@ -38,6 +38,10 @@ pub enum LookupKind {
     /// templates; namespaces and non-types are skipped (the class-name of
     /// a base-specifier, [class.derived.general]/2).
     Type,
+    /// A namespace-name ([basic.lookup.udir]): namespaces and namespace
+    /// aliases only, so a type or function of the same name in an inner
+    /// scope does not stop the lookup.
+    Namespace,
 }
 
 /// The result of a lookup.
@@ -166,6 +170,7 @@ impl Sema<'_, '_> {
                             | DeclKind::TemplateTemplateParm
                     )
             }
+            LookupKind::Namespace => matches!(k, DeclKind::Namespace | DeclKind::NamespaceAlias),
         }
     }
 
@@ -410,7 +415,7 @@ impl Sema<'_, '_> {
                 let found = self.filter(v, kind);
                 return (!found.is_empty()).then_some(found);
             }
-            LookupKind::Nested | LookupKind::Type => s
+            LookupKind::Nested | LookupKind::Type | LookupKind::Namespace => s
                 .locals
                 .iter()
                 .rev()
@@ -913,7 +918,7 @@ impl Sema<'_, '_> {
         let mut own = self.filter(self.ast.lookup_local(def, name).iter_ordinary(), kind);
         if own.is_empty()
             && self.ast.decls.get(def).name() == name
-            && !matches!(kind, LookupKind::All)
+            && !matches!(kind, LookupKind::All | LookupKind::Namespace)
         {
             // The injected-class-name ([class.pre]/2).
             own.decls.push(def);
