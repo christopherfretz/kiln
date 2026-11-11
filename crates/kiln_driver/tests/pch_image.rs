@@ -217,8 +217,6 @@ fn stale_header_rejected() {
         o.stderr
     );
     assert_eq!(o.stdout, "");
-    std::fs::write(d.join("s.cpp"), "G\n").unwrap();
-    let load = ["-fkiln-pch-image=load", "-include-pch", "h.pch", "-E", "s.cpp"];
     for mode in ["-E", "-fsyntax-only"] {
         std::fs::write(d.join("s.cpp"), "int s = G;\n").unwrap();
         let load = ["-fkiln-pch-image=load", "-include-pch", "h.pch", mode, "s.cpp"];

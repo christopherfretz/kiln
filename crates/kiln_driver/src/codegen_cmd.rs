@@ -1419,12 +1419,11 @@ fn frontend(
             stderr: &io.stderr,
         },
     );
-    let (ir, deps) = match checked {
-        Some(r) => r,
-        None => {
-            let (ir, _, deps) = CodegenJob(job).run();
-            (ir, deps)
-        }
+    let (ir, deps) = if let Some(r) = checked {
+        r
+    } else {
+        let (ir, _, deps) = CodegenJob(job).run();
+        (ir, deps)
     };
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)

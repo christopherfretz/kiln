@@ -111,8 +111,10 @@ pub(crate) fn syntax_only(args: &Args, input: &Input<'_>) -> Option<JobResult> {
     let _ = input.stderr.clone().write_all(rtext.as_bytes());
     let diff = decls.err().or_else(|| diags(&ltext, &rtext)).or_else(|| {
         (lr.output != r.output).then(|| {
-            first_difference(&lr.output, &r.output)
-                .map_or_else(|| "the output differs".to_owned(), |d| format!("the output differs at {d}"))
+            first_difference(&lr.output, &r.output).map_or_else(
+                || "the output differs".to_owned(),
+                |d| format!("the output differs at {d}"),
+            )
         })
     });
     if let Some(d) = diff {
@@ -222,15 +224,17 @@ fn first_difference(load: &str, replay: &str) -> Option<String> {
             None => s.to_owned(),
         }
     };
-    let (mut l, mut r) = (load.lines(), replay.lines());
-    let mut n = 1;
+    let (mut image, mut replayed) = (load.lines(), replay.lines());
+    let mut line = 1;
     loop {
-        match (l.next(), r.next()) {
-            (Some(a), Some(b)) if a == b => n += 1,
-            (None, None) => return Some(format!("line {n}: line endings")),
-            (a, b) => {
-                let show = |x: Option<&str>| x.map_or_else(|| "end of text".to_owned(), |x| format!("'{}'", cut(x)));
-                return Some(format!("line {n}: {} (image) vs {} (replay)", show(a), show(b)));
+        match (image.next(), replayed.next()) {
+            (Some(x), Some(y)) if x == y => line += 1,
+            (None, None) => return Some(format!("line {line}: line endings")),
+            (x, y) => {
+                let show = |t: Option<&str>| {
+                    t.map_or_else(|| "end of text".to_owned(), |t| format!("'{}'", cut(t)))
+                };
+                return Some(format!("line {line}: {} (image) vs {} (replay)", show(x), show(y)));
             }
         }
     }
@@ -256,6 +260,9 @@ mod tests {
     #[test]
     fn decl_nodes() {
         let dump = "TranslationUnitDecl\n|-EnumDecl E\n| `-EnumConstantDecl A 'E'\n|   `-ConstantExpr 'int' value=5\n`-StaticAssertDecl\n";
-        assert_eq!(decl_lines(dump), "0 TranslationUnitDecl\n1 EnumDecl E\n2 EnumConstantDecl A 'E'\n");
+        assert_eq!(
+            decl_lines(dump),
+            "0 TranslationUnitDecl\n1 EnumDecl E\n2 EnumConstantDecl A 'E'\n"
+        );
     }
 }

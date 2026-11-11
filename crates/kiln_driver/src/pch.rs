@@ -388,6 +388,10 @@ fn cwd() -> PathBuf {
 /// header replayed as `-include`s and its input files seeded into the
 /// dependency output. `Ok(None)` without `-include-pch`; `Err(())` after
 /// reporting a rejected PCH (the compile stops, as clang's does).
+// One decision per path (`-E`/`-M`, the image, replay), in the order
+// the record and the image are checked: split, each part would take
+// the same dozen locals.
+#[allow(clippy::too_many_lines)]
 pub(crate) fn consumer(
     args: &Args,
     tc: &Toolchain,
@@ -519,14 +523,8 @@ pub(crate) fn consumer(
                 decls: None,
                 lines: 0,
             };
-            let input = crate::pch_check::Input {
-                tc,
-                std,
-                path: "-",
-                stdin_text: None,
-                diag_opts,
-                stderr,
-            };
+            let input =
+                crate::pch_check::Input { tc, std, path: "-", stdin_text: None, diag_opts, stderr };
             let ok = crate::pch_check::preprocess_record(args, &input, includes, record);
             finish(e);
             return if ok { Ok(Some(out)) } else { Err(()) };
@@ -617,14 +615,10 @@ pub(crate) fn consumer(
 }
 
 /// The buffer name replay's `-include <spelled>` gives the header: found
-/// from the predefines, so in the working directory (kiln_pp's
+/// from the predefines, so in the working directory (`kiln_pp`'s
 /// resolver, `HeaderSearch::LookupFile`).
 fn replay_name(spelled: &str) -> String {
-    if spelled.starts_with('/') {
-        spelled.to_owned()
-    } else {
-        kiln_pp::join_path(".", spelled)
-    }
+    if spelled.starts_with('/') { spelled.to_owned() } else { kiln_pp::join_path(".", spelled) }
 }
 
 /// The name of `f` when its text is no longer the one recorded.

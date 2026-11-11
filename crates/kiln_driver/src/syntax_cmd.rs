@@ -245,8 +245,7 @@ impl SyntaxJob<'_> {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
         let produced = main_id.map(|m| (m, &tu.pragmas, tu.pch_image.as_ref()));
-        result.pch_decls =
-            tu.pch_image.as_ref().map(|d| d.fallback.map_or(Ok(d.decls), Err));
+        result.pch_decls = tu.pch_image.as_ref().map(|d| d.fallback.map_or(Ok(d.decls), Err));
         result.pch_image = crate::pch_image::finish(a, &mut pp, sm, interner, engine, produced);
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes

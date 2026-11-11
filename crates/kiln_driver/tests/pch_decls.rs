@@ -225,6 +225,39 @@ fn uncarried_header_is_replayed() {
     same(&d, "l.pch", &["-S", "-emit-llvm"], "l.cpp");
 }
 
+/// Sema state the image does not carry and the consumer depends on (a
+/// pending `#pragma weak`, a block-scope `extern` a later definition
+/// redeclares) means no image: an image consumer made `f` strong and
+/// `v` a second, undefined global.
+#[test]
+fn uncarried_sema_state_is_replayed() {
+    let d = scratch("sema-state");
+    for (name, header, tu, why, want) in [
+        (
+            "w",
+            "#pragma weak f\nextern \"C\" int g(int);\n",
+            "extern \"C\" int f() { return g(1); }\n",
+            "a #pragma weak naming an undeclared identifier",
+            "define weak dso_local i32 @f(",
+        ),
+        (
+            "x",
+            "inline int g() { extern int v; return v; }\n",
+            "int v = 4;\nint h() { return g() + v; }\n",
+            "a block-scope extern or function declaration",
+            "@v = dso_local global i32 4",
+        ),
+    ] {
+        let note = produce(&d, name, header);
+        assert!(note.contains(&format!("consumers replay the header: {why}")), "{note}");
+        let tu_file = format!("{name}.cpp");
+        std::fs::write(d.join(&tu_file), tu).unwrap();
+        let ir = same(&d, &format!("{name}.pch"), &["-S", "-emit-llvm"], &tu_file);
+        assert!(ir.stdout.contains(want), "{want}\n{}", ir.stdout);
+        assert!(!ir.stdout.contains("@v.1"), "{}", ir.stdout);
+    }
+}
+
 /// `check` builds the image and replays, and finds them equal.
 #[test]
 fn check_runs_both() {

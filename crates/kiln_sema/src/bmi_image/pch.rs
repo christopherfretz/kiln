@@ -78,6 +78,23 @@ impl Writer<'_, '_, '_> {
 }
 
 impl Sema<'_, '_> {
+    /// Sema state the header leaves behind that the image does not carry
+    /// and a later declaration of the consumer depends on: a `#pragma
+    /// weak` naming nothing declared yet (it makes the consumer's
+    /// definition weak), and block-scope `extern` or function
+    /// declarations in the header's bodies (a later namespace-scope
+    /// declaration redeclares them, [basic.link]/6). The image of such
+    /// a header would differ from replay, so it is not written.
+    fn pch_uncarried_state(&self) -> Option<&'static str> {
+        if !self.weak_pending.is_empty() {
+            return Some("a #pragma weak naming an undeclared identifier");
+        }
+        if !self.local_externs.is_empty() {
+            return Some("a block-scope extern or function declaration");
+        }
+        None
+    }
+
     /// The declaration image of the precompiled header whose main file is
     /// `main` (`-emit-pch`; spec/driver.md "Precompiled headers"): the
     /// section bytes, or why the header has none.
@@ -86,6 +103,9 @@ impl Sema<'_, '_> {
         let none = |why| ModuleImage { bytes: Vec::new(), decls: 0, fallback: Some(why) };
         if self.ast.lang_c {
             return none("a C header");
+        }
+        if let Some(why) = self.pch_uncarried_state() {
+            return none(why);
         }
         let mut w = match Writer::new(self, main, false) {
             Ok(w) => w,
@@ -110,8 +130,10 @@ impl Sema<'_, '_> {
     /// header's top-level declarations ([`Sema::image_census`]).
     #[must_use]
     pub fn pch_image_census(&self, main: FileId) -> ImageCensus {
-        let mut out =
-            ImageCensus { module: self.diags.sm().file_name(main).to_owned(), ..Default::default() };
+        let mut out = ImageCensus {
+            module: self.diags.sm().file_name(main).to_owned(),
+            ..Default::default()
+        };
         let mut w = match Writer::new(self, main, true) {
             Ok(w) => w,
             Err(why) => {

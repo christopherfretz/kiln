@@ -3722,7 +3722,7 @@ impl Writer<'_, '_, '_> {
             // Imported, or replayed for an import of the preamble.
             return Ok(());
         }
-        if !o.purview && !(self.pch && self.pch_own(d)) {
+        if !(o.purview || self.pch && self.pch_own(d)) {
             // Predefined declarations have no location in a real
             // file; anything else is a global module fragment.
             let real = sm

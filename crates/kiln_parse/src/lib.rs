@@ -354,6 +354,43 @@ pub fn parse_tu<'sm>(
     parse_preprocessed(pp, Arc::clone(interner), diags, target, opts, limits).0
 }
 
+/// Sets `s`'s language and option state from `opts`.
+fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
+    s.exceptions = opts.exceptions;
+    s.rtti = opts.rtti;
+    s.reflection = opts.reflection;
+    s.coro_aligned_allocation = opts.coro_aligned_allocation;
+    s.lax_vector_conversions = opts.lax_vector_conversions;
+    s.gnu = opts.gnu;
+    s.c = opts.c;
+    s.clang_compat = opts.clang_compat;
+    s.cf_protection_branch = opts.cf_protection_branch;
+    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
+    s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.no_builtin = opts.no_builtin;
+    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.freestanding = opts.freestanding;
+    s.sized_deallocation = opts.sized_deallocation;
+    s.char8 = opts.char8;
+    s.lib_builtin_name = kiln_pp::is_library_builtin;
+    s.clang_constexpr_builtin = clang_constexpr_builtin;
+    s.math_errno = opts.math_errno;
+    s.sve = opts.sve;
+    s.sve_vector_bits = opts.sve_vector_bits;
+    s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
+    s.cfg_dump = opts.cfg_dump;
+    s.cfg_stats = opts.cfg_stats;
+    s.cfg_max_elems = opts.cfg_max_elems;
+    s.permissive = opts.permissive;
+    s.ast.contract_semantic = opts.contract_semantic;
+    s.ast.lang_c = opts.c.is_some();
+    s.full_deduction = opts.full_deduction;
+    s.full_redecl_scan = opts.full_redecl_scan;
+    s.range_lifetime_extension = opts.std >= Std::Cxx23;
+    s.inst.limits = opts.inst_limits;
+    s.inst.report.format = opts.inst_report;
+}
+
 /// Parses and analyses the translation unit `pp` produces (its main file
 /// entered), reporting to `diags` and evaluating constant expressions
 /// under `limits`. `interner` must be the preprocessor's. Returns the
@@ -392,39 +429,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     if limits.profile != ProfileLevel::Off {
         s.set_constexpr_profile(limits.profile);
     }
-    s.exceptions = opts.exceptions;
-    s.rtti = opts.rtti;
-    s.reflection = opts.reflection;
-    s.coro_aligned_allocation = opts.coro_aligned_allocation;
-    s.lax_vector_conversions = opts.lax_vector_conversions;
-    s.gnu = opts.gnu;
-    s.c = opts.c;
-    s.clang_compat = opts.clang_compat;
-    s.cf_protection_branch = opts.cf_protection_branch;
-    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
-    s.gnu_lib_builtins = opts.gnu_lib_builtins;
-    s.no_builtin = opts.no_builtin;
-    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
-    s.freestanding = opts.freestanding;
-    s.sized_deallocation = opts.sized_deallocation;
-    s.char8 = opts.char8;
-    s.lib_builtin_name = kiln_pp::is_library_builtin;
-    s.clang_constexpr_builtin = clang_constexpr_builtin;
-    s.math_errno = opts.math_errno;
-    s.sve = opts.sve;
-    s.sve_vector_bits = opts.sve_vector_bits;
-    s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
-    s.cfg_dump = opts.cfg_dump;
-    s.cfg_stats = opts.cfg_stats;
-    s.cfg_max_elems = opts.cfg_max_elems;
-    s.permissive = opts.permissive;
-    s.ast.contract_semantic = opts.contract_semantic;
-    s.ast.lang_c = opts.c.is_some();
-    s.full_deduction = opts.full_deduction;
-    s.full_redecl_scan = opts.full_redecl_scan;
-    s.range_lifetime_extension = opts.std >= Std::Cxx23;
-    s.inst.limits = opts.inst_limits;
-    s.inst.report.format = opts.inst_report;
+    configure(&mut s, opts);
     if opts.record_image {
         s.record_module_image();
     }
