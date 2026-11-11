@@ -1448,11 +1448,25 @@ impl Sema<'_, '_> {
     /// when not viable.
     pub(crate) fn placement_arg_match(&self, a: ExprId, p: QualType) -> Option<bool> {
         let t = &self.ast.types;
-        let at = conv::strip_cv(self, self.ast.exprs.get(a).ty());
-        let p = if t.is_reference(p) { t.pointee(p).unwrap_or(p) } else { p };
-        let p = conv::strip_cv(self, p);
+        let a_ty = self.ast.exprs.get(a).ty();
+        let at = conv::strip_cv(self, a_ty);
+        let referee = t.is_reference(p).then(|| t.pointee(p)).flatten();
+        let p = conv::strip_cv(self, referee.unwrap_or(p));
         if t.same_type(at, p) {
             return Some(true);
+        }
+        let record = |q: QualType| t.as_record(t.canonical(q).without_quals());
+        // [dcl.init.ref]/5: a reference to a base class binds to an object
+        // of a class derived from it (a placement `operator new(size_t,
+        // Allocator&)` called with an allocator derived from `Allocator`).
+        if let Some(r) = referee
+            && let (Some(d), Some(b)) = (record(at), record(p))
+            && self.ast.first(d) != self.ast.first(b)
+            && conv::is_derived_from(self, d, b)
+        {
+            let (aq, rq) = (t.effective_quals(a_ty), t.effective_quals(r));
+            return (aq.is_const() <= rq.is_const() && aq.is_volatile() <= rq.is_volatile())
+                .then_some(false);
         }
         let arith = |q: QualType| {
             t.is_arithmetic(q) || t.as_enum(q).is_some_and(|en| !self.is_scoped_enum(en))
@@ -1481,7 +1495,6 @@ impl Sema<'_, '_> {
             // pointer to its base (clang's `Decl::operator new(size_t,
             // const ASTContext &, DeclContext *)` called with an
             // `ObjCContainerDecl *`).
-            let record = |q: QualType| t.as_record(t.canonical(q).without_quals());
             if let (Some(d), Some(b)) = (record(src), record(pp))
                 && self.ast.first(d) != self.ast.first(b)
                 && conv::is_derived_from(self, d, b)
