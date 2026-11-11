@@ -856,6 +856,20 @@ fn param_dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams
 }
 
+/// The declaration a chain of shadow records from `w` ends in; `None`
+/// when the chain does not point strictly backwards.
+fn shadow_end(img: &Image, w: u32) -> Option<u32> {
+    let mut at = w;
+    while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) = img.decls.get(at as usize)
+    {
+        if *target >= at {
+            return None;
+        }
+        at = *target;
+    }
+    Some(at)
+}
+
 /// Whether declaration word `w` names something of class `dc`.
 pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == LEX_TU {
@@ -881,16 +895,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     // S6: a declaration found through a using-declaration's shadow (of
     // a shadow ...): the declaration it ends in.
     if dc == Dc::Found && matches!(d.payload, Payload::Shadow { .. }) {
-        let mut at = w;
-        while let Some(DeclRec { payload: Payload::Shadow { target }, .. }) =
-            img.decls.get(at as usize)
-        {
-            if *target >= at {
-                return false;
-            }
-            at = *target;
-        }
-        return dc_ok(img, nparams, at, Dc::Found);
+        return shadow_end(img, w).is_some_and(|at| dc_ok(img, nparams, at, Dc::Found));
     }
     // A specialization or member reference (S4b) names what its pattern
     // declares: a function template's pattern function, a class
@@ -944,7 +949,11 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
             matches!(d.payload, Payload::Function { kind: 3, .. } | Payload::Implicit { kind: 5 })
         }
         Dc::Var => matches!(d.payload, Payload::Var { .. }),
-        Dc::Local => matches!(d.payload, Payload::Var { .. }) && is_local(img, d),
+        // A block-scope function declaration's statement (WP-1293).
+        Dc::Local => {
+            matches!(d.payload, Payload::Var { .. } | Payload::Function { kind: 0, .. })
+                && is_local(img, d)
+        }
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
         Dc::Param | Dc::Concept => false,
@@ -1962,12 +1971,20 @@ impl Writer<'_, '_, '_> {
         Ok(w)
     }
 
-    /// A record for local variable or label `d`.
-    fn local_rec(&mut self, d: DeclId) -> W<u32> {
+    /// A record for local variable or label `d`, or (in a precompiled
+    /// header) block-scope function or `extern` declaration `d`
+    /// ([`Writer::local_extern_rec`]).
+    pub(super) fn local_rec(&mut self, d: DeclId) -> W<u32> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let kind = n.kind();
-        if !matches!(kind, DeclKind::Var | DeclKind::Label | DeclKind::LifetimeExtendedTemporary) {
+        let local_fn = kind == DeclKind::Function && self.carries_local_extern(d);
+        if !local_fn
+            && !matches!(
+                kind,
+                DeclKind::Var | DeclKind::Label | DeclKind::LifetimeExtendedTemporary
+            )
+        {
             return Err("a local declaration the image does not carry");
         }
         let ctx = n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(OUTSIDE)?;
@@ -1992,9 +2009,11 @@ impl Writer<'_, '_, '_> {
         {
             return Err("a local extern or placeholder declaration");
         }
-        if ast.decls.redecl(d).and_then(|r| r.prev).is_some() {
-            return Err("a local redeclaration");
-        }
+        let prev = match ast.decls.redecl(d).and_then(|r| r.prev) {
+            None => NONE,
+            Some(p) if self.carries_local_extern(d) => self.local_extern_prev(p)?,
+            Some(_) => return Err("a local redeclaration"),
+        };
         let name = match n.name() {
             x if x == DeclName::EMPTY => NONE,
             x => {
@@ -2024,6 +2043,7 @@ impl Writer<'_, '_, '_> {
                 let extending = self.recs.get(&ld.extending).copied().ok_or(OUTSIDE)?;
                 Payload::Let { ty: self.qref(ty)?, extending, index: ld.mangling_index }
             }
+            DeclKind::Function => self.function(d, i)?,
             _ => self.var_payload(d, i)?,
         };
         if self.img.decls.len() != i as usize {
@@ -2037,7 +2057,7 @@ impl Writer<'_, '_, '_> {
             ctx,
             lexical,
             loc,
-            prev: NONE,
+            prev,
             payload,
         });
         self.recs.insert(d, i);

@@ -549,7 +549,7 @@ Each header was built alone as a PCH under `-fkiln-pch-image -v`, and
 the producer note was recorded. The headers that are carried were then
 joined into one PCH.
 
-- **libc++ 19 (106 headers): 8 carried.**
+- **libc++ 19 (106 headers): 8 carried** (9 after WP-1293, below).
   - The set is `<cassert>`, `<cerrno>`, `<cfloat>`, `<ciso646>`,
     `<climits>`, `<cstdbool>`, `<cstdint>` and `<version>`.
   - Their union is carried: one image of 162 records.
@@ -573,15 +573,12 @@ joined into one PCH.
     0.03 s for `-O0 -c` (52 MB). clang 19 PCH takes 0.01 s at 85 MB.
     The set is too small for the image to show a gain.
 - **libstdc++ 14 (109 headers): 0 carried.**
-  - 73 headers are refused for `a block-scope extern or function
-    declaration`. `<bits/c++config.h>` defines `std::__terminate()`,
-    which declares `void terminate()` in its body. A consumer's
-    `namespace std { void terminate() noexcept; }` would redeclare it
-    ([basic.link]/6). The image does not carry that link, so these
-    headers are refused unless the header also declares
-    `std::terminate` at namespace scope, as `<exception>` does.
-  - The other 36 headers are refused for `a type the image does not
-    carry`.
+  - Before WP-1293, 73 headers were refused for `a block-scope extern
+    or function declaration`: `std::__terminate()` in
+    `<bits/c++config.h>` declares `void terminate()` in its body, which
+    a later `namespace std { void terminate() noexcept; }` redeclares
+    ([basic.link]/6). WP-1293 carries that link (see below); all 109
+    are now refused for `a type the image does not carry`.
 
 Re-run with a small loop: for each header `h`, write `#include <h>` to a
 file `f.h` and run
@@ -606,19 +603,60 @@ From `cargo xtask test --pch-diff load -v` and `cargo xtask libcxx
   - 575 tests had a PCH-able prefix and every one replayed, because
     every libc++ header in a prefix is refused (see the census).
 
+## WP-1293: block-scope declarations (2026-11-11)
+
+The image now carries block-scope `extern` and function declarations
+as local records, listed in `local_externs` order, and a consumer
+links its own namespace-scope redeclarations to them as replay does
+([basic.link]/6). A PCH consumer also re-records the header's C-linkage
+entities ([dcl.link]/6-7). The producer's state check now refuses only
+a pending `#pragma weak`. kiln at the WP-1293 branch, `debug` profile
+for the census and the corpus, `harness` for the libc++ gate.
+
+- **libstdc++ 14 (109 headers):** all 109 pass the state check (73 were
+  refused there before). None is carried yet: each is first refused for `a type the
+  image does not carry`.
+- **`<bits/stdc++.h>`:** the first remaining replay reason is `a type
+  the image does not carry`, for `typedef decltype(nullptr)
+  nullptr_t;` (`<bits/c++config.h>`:314). The census
+  (`-fkiln-bmi-image-census`) counts 26733 top-level declarations,
+  18247 carried. Its largest reasons are cascades from templates
+  (767 specializations, 746 alias templates), 738 types, 652
+  cascades from a type declared outside the image and 606 templates.
+- **libc++ 19 (the 105 headers of `/usr/include/c++/v1`):** 9 carried,
+  `<cfenv>` added. Their union is one image of 222 records. `<cfenv>`'s
+  "internal image inconsistency" was the validator rejecting an
+  unnamed unscoped enumeration with no typedef name
+  (`enum { FE_INEXACT = ... };` in `<fenv.h>`); it is valid
+  ([dcl.enum]/2) and now validates.
+- **Corpus `--pch-diff check`** (conformance PCH and module
+  directories, `tests/differential`, `tests/header-guard`): 147
+  compared, all equal, 25 took the image (was 17 of 141). Replay
+  reasons: a type 65, a template argument 22, a member function
+  template 13, a specialization outside the image 7, an attribute 4, a
+  class member outside its class 4, a default template argument 2,
+  side data 2, and one each for a type declared outside the image, an
+  adjusted parameter and a member template.
+- **libc++ M3 gate under `--pch-diff check`:** 636 pass + 6
+  unsupported, as without a PCH (199 s). 575 tests had a PCH and all
+  replayed: a type 305, a member function template 157, a template
+  argument 104, a specialization outside the image 6, a declaration in
+  a template 3.
+- **After merging WP-1284 (#617):** the corpus still compares 147,
+  all equal, 25 by the image; the first replay reason is now a template
+  argument (59) ahead of a type (27). The M3 gate under `--pch-diff
+  check` is unchanged (636 pass + 6 unsupported, all 575 replayed);
+  its reasons are a template argument 341, a member function template
+  157, a type 68, a specialization outside the image 6 and a
+  declaration in a template 3.
+- The module directories and `cpp.include` pass under `--bmi-image`,
+  `--bmi-kind 1` and `--bmi-kind 2` (75 of 75 each).
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers
    (WP-1283/1284).
-2. **The block-scope declaration link.** This is needed for libstdc++.
-   One fix is for the image to carry block-scope `extern`/function
-   declarations in `local_externs` order. The other is to stop refusing
-   them once namespace-scope matching is by namespace, not by namespace
-   block.
-   - A related pre-existing gap: kiln links a block-scope declaration
-     only to a later redeclaration in the same namespace block.
-     `namespace s { inline void t() { int k(); } } namespace s { void
-     k(); }` is accepted, and clang rejects it.
+2. **The block-scope declaration link.** Done by WP-1293 (below).
 3. **Make it the default.** The image becomes the default
    (`-fkiln-pch-image` on the producer, `load` on the consumer) once
    (1) is green under `--pch-diff check`.

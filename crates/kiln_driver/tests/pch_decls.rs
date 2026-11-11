@@ -245,60 +245,58 @@ inline int anon_sum() { return FE_A + FE_B + anon_v.z; }
 }
 
 /// Sema state the image does not carry and the consumer depends on (a
-/// pending `#pragma weak`, a block-scope `extern` a later definition
-/// redeclares) means no image: an image consumer made `f` strong and
-/// `v` a second, undefined global.
+/// pending `#pragma weak`) means no image: an image consumer made `f`
+/// strong.
 #[test]
 fn uncarried_sema_state_is_replayed() {
     let d = scratch("sema-state");
-    for (name, header, tu, why, want) in [
-        (
-            "w",
-            "#pragma weak f\nextern \"C\" int g(int);\n",
-            "extern \"C\" int f() { return g(1); }\n",
-            "a #pragma weak naming an undeclared identifier",
-            "define weak dso_local i32 @f(",
-        ),
-        (
-            "x",
-            "inline int g() { extern int v; return v; }\n",
-            "int v = 4;\nint h() { return g() + v; }\n",
-            "a block-scope extern or function declaration",
-            "@v = dso_local global i32 4",
-        ),
-    ] {
-        let note = produce(&d, name, header);
-        assert!(note.contains(&format!("consumers replay the header: {why}")), "{note}");
-        let tu_file = format!("{name}.cpp");
-        std::fs::write(d.join(&tu_file), tu).unwrap();
-        let ir = same(&d, &format!("{name}.pch"), &["-S", "-emit-llvm"], &tu_file);
-        assert!(ir.stdout.contains(want), "{want}\n{}", ir.stdout);
-        assert!(!ir.stdout.contains("@v.1"), "{}", ir.stdout);
-    }
+    let note = produce(&d, "w", "#pragma weak f\nextern \"C\" int g(int);\n");
+    let why = "a #pragma weak naming an undeclared identifier";
+    assert!(note.contains(&format!("consumers replay the header: {why}")), "{note}");
+    std::fs::write(d.join("w.cpp"), "extern \"C\" int f() { return g(1); }\n").unwrap();
+    let ir = same(&d, "w.pch", &["-S", "-emit-llvm"], "w.cpp");
+    assert!(ir.stdout.contains("define weak dso_local i32 @f("), "{}", ir.stdout);
 }
 
-/// A block-scope `extern` or function declaration the header also
-/// declares at namespace scope (libstdc++'s `std::terminate` in
-/// `std::__terminate`) is not refused for the sema state: the
-/// consumer's redeclaration finds the namespace-scope one. (The image
-/// writer refuses the chain itself today, a redeclaration of a
-/// block-scope declaration it does not carry; either way the consumer
-/// matches replay.)
+/// A block-scope `extern` or function declaration in the header
+/// ([basic.link]/6) is carried with its link (WP-1293): the unit's
+/// namespace-scope declarations redeclare it as replay's do, in another
+/// block of its namespace (an inline one too), and the header's own
+/// later namespace-scope declaration stays one entity with it. Before, an image consumer made `v` a second, undefined
+/// global.
 #[test]
-fn redeclared_local_extern_is_not_sema_state() {
+fn local_externs_take_the_image() {
     let d = scratch("local-extern");
-    let header = "inline int g() { extern int v; return v; }\nextern int v;\n\
-                  namespace n { inline void t() { void k(); k(); } }\nnamespace n { void k(); }\n";
+    let header = "inline int g() { extern int v; return v; }\n\
+                  namespace n { inline void t() { void k(); k(); } }\nnamespace n { void k(); }\n\
+                  namespace n { inline namespace i { inline long u() { extern long w; return w; } } }\n\
+                  inline int h() { int f(int = 2); return f(); }\n";
     let note = produce(&d, "y", header);
-    assert!(!note.contains("a block-scope extern"), "{note}");
-    let tu = "int v = 4;\nvoid n::k() {}\nint main() { n::t(); return g() + v; }\n";
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "int v = 4;\nvoid n::k() {}\nnamespace n { inline namespace i { long w = 5; } }\nint f(int a) { return a; }\n\
+              int main() { n::t(); return g() + v + int(n::u()) + h(); }\n";
     std::fs::write(d.join("y.cpp"), tu).unwrap();
     let ir = same(&d, "y.pch", &["-S", "-emit-llvm"], "y.cpp");
-    assert!(ir.stdout.contains("@v = dso_local global i32 4"), "{}", ir.stdout);
-    assert!(!ir.stdout.contains("@v.1") && !ir.stdout.contains("@_ZN1n1kEv.1"), "{}", ir.stdout);
+    for want in ["@v = dso_local global i32 4", "@_ZN1n1i1wE = dso_local global i64 5"] {
+        assert!(ir.stdout.contains(want), "{want}\n{}", ir.stdout);
+    }
+    for bad in ["@v.1", "@_ZN1n1kEv.1", "@_ZN1n1i1wE.1", "@_Z1fi.1"] {
+        assert!(!ir.stdout.contains(bad), "{bad}\n{}", ir.stdout);
+    }
     let check = ["-fkiln-pch-image=check", "-include-pch", "y.pch", "-S", "-emit-llvm"];
     let o = ok(&d, &[&check[..], &["y.cpp", "-o", "-"]].concat());
     assert_eq!(o.stderr, "");
+    // A conflicting redeclaration is diagnosed as replay diagnoses it.
+    let bad = "static int v;\nnamespace n { int k(); }\nlong f(int);\n";
+    std::fs::write(d.join("z.cpp"), bad).unwrap();
+    let o = same(&d, "y.pch", &["-fsyntax-only"], "z.cpp");
+    assert_ne!(o.code, 0);
+    for want in [
+        "static declaration of 'v' follows non-static declaration",
+        "functions that differ only in their return type cannot be overloaded",
+    ] {
+        assert!(o.stderr.contains(want), "{want}\n{}", o.stderr);
+    }
 }
 
 /// `check` builds the image and replays, and finds them equal.
