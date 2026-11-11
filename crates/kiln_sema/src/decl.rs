@@ -10968,9 +10968,7 @@ impl Sema<'_, '_> {
     /// or a type that is complete and not dependent.
     pub fn lookahead_sizeof_name(&self, name: Symbol) -> Option<i128> {
         let ty = match self.classify_name(name, None) {
-            NameClass::Value(d)
-                if matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar) =>
-            {
+            NameClass::Value(d) if matches!(self.kind_of(d), DeclKind::Var | DeclKind::ParmVar) => {
                 self.ast.decls.get(d).ty()?
             }
             NameClass::Type(_, d) => self.ast.decls.get(d).ty()?,
