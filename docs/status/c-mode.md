@@ -297,8 +297,8 @@ Plus, from the OSS rows:
   supported yet") is 22/22, the compound-literal cluster ("cannot take
   the address of an rvalue", "expression is not assignable") 26/26.
   c-ares (`scripts/oss/oss-build.sh c_ares --compiler kiln`) configures
-  (the probes no longer cascade) and 71 of 91 C TUs compile, up from
-  2; the remaining 20 stop only on a function pointer compared with
+  (the probes no longer cascade) and 73 of 91 C TUs compile, up from
+  2; the remaining 18 stop only on a function pointer compared with
   `NULL` (WP-1285). With wp/1285 merged on top, c-ares is green:
   configure, build, and 2/2 tests.
 
