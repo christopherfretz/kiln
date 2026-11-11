@@ -165,6 +165,7 @@ impl SyntaxJob<'_> {
         })
     }
 
+    #[allow(clippy::too_many_lines, reason = "the job's phases, in order")]
     fn parse<'sm>(
         &self,
         sm: &'sm SourceManager,
@@ -240,6 +241,8 @@ impl SyntaxJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
+        let produced = main_id.map(|m| (m, &tu.pragmas));
+        result.pch_image = crate::pch_image::finish(a, &mut pp, sm, interner, engine, produced);
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes
             // on to the end (its diagnostics suppressed), so every comment

@@ -380,6 +380,10 @@ pub struct Preprocessor<'a, 'd> {
     /// identifiers that reached the parser at global namespace scope, for
     /// the image gate (spec/modules.md §11.11, "ODR merging").
     pub(crate) name_gate: Option<Box<crate::name_gate::NameGate>>,
+    /// The main file's predefines buffer (`<built-in>`).
+    pub(crate) predef_file: Option<FileId>,
+    /// The preprocessor-state record's hooks (spec/pp.md §13).
+    pub(crate) state_hooks: Option<Box<crate::state::StateHooks>>,
 }
 
 impl std::fmt::Debug for Preprocessor<'_, '_> {
@@ -462,6 +466,8 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             modules: None,
             module_lines: false,
             name_gate: None,
+            predef_file: None,
+            state_hooks: None,
         };
         pp.modules = pp.opts.modules.clone().map(|o| Box::new(crate::modules::ModState::new(o)));
         if pp.modules.as_ref().is_some_and(|m| m.opts.image) {
@@ -563,6 +569,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         }
         if let Ok(b) = self.sm.add_virtual("<built-in>", text) {
             self.push_file(b, None, None, None, false, false);
+            self.predef_file = Some(b);
             if let Some(m) = &mut self.modules {
                 m.builtin_file = Some(b);
             }
@@ -1111,6 +1118,9 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             let _ = t;
             return true;
         }
+        if self.state_hooks.is_some() && self.in_predefines() {
+            self.state_point(t.span.lo);
+        }
         let Some(Frame::File(mut f)) = self.frames.pop() else { unreachable!("top is a file") };
         if f.traced {
             kiln_source::trace::source_end();
@@ -1118,7 +1128,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         let exited = f.file;
         let imaged = image.is_some();
         if let Some(save) = f.unit.take() {
-            self.end_unit(save, image);
+            self.end_unit(exited, save, image);
         }
         if conds.is_empty()
             && !imaged

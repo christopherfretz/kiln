@@ -37,6 +37,16 @@ impl PpFlags {
     pub(crate) fn insert(&mut self, f: PpFlags) {
         self.0 |= f.0;
     }
+
+    /// The flag bits (the preprocessor-state record stores them).
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// The flags of `bits`, if every bit is a known flag.
+    pub(crate) const fn from_bits(bits: u8) -> Option<PpFlags> {
+        if bits & !31 == 0 { Some(PpFlags(bits)) } else { None }
+    }
 }
 
 /// A token with preprocessor flags.
