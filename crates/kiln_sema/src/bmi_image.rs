@@ -53,7 +53,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 12;
+pub(crate) const IMAGE_VERSION: u32 = 13;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
