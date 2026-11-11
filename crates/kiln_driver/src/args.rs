@@ -780,9 +780,10 @@ pub enum PchImage {
     /// As `Write`; the consumer replays the header and compares the
     /// state replay reached with the record's.
     Check,
-    /// As `Write`; `-E`/`-M` install the record instead of replaying the
-    /// header (a compile checks, as `Check`: the declarations still come
-    /// from replay until WP-1036).
+    /// As `Write`; the consumer installs the record and builds the
+    /// declaration image instead of replaying the header (`-E`/`-M`
+    /// install the record only), or replays it when the image is
+    /// missing, refused or stale (WP-1036).
     Load,
 }
 
@@ -798,7 +799,29 @@ pub struct PchImageUse {
     /// The state point replay reaches the end of the header at: the
     /// producer's `-include`s, then the header.
     pub checkpoint: u32,
+    /// A compile's declaration image (WP-1036), built in place of the
+    /// header with the record installed.
+    pub decls: Option<PchDeclsUse>,
+    /// With `install`: the precompiled `-include`s and header, which the
+    /// predefines keep a line for each of ([`kiln_pp::PCH_LINE`]).
+    pub lines: u32,
 }
+
+/// A decoded PCH declaration image, shared by the jobs (equal when it
+/// is the same one), and the name replay gives the header.
+#[derive(Clone, Debug)]
+pub struct PchDeclsUse {
+    pub image: std::sync::Arc<kiln_sema::PchDecls>,
+    pub header: String,
+}
+
+impl PartialEq for PchDeclsUse {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.image, &other.image) && self.header == other.header
+    }
+}
+
+impl Eq for PchDeclsUse {}
 
 /// Where the last `-include-pch` sits against the probed `-include`s
 /// (WP-1037; clang's frontend uses the last `-include-pch` it sees).

@@ -3111,7 +3111,10 @@ impl Writer<'_, '_, '_> {
         let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
             return Err("a function declared through a typedef");
         };
-        let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d));
+        // A destructor written without one keeps its implicit
+        // specification deferred even once computed (WP-1036).
+        let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d))
+            || (first && s.implicit_exc_dtors.contains(&d));
         let ty = if deferred {
             // The exception specification names the function itself:
             // build the type without it (the importer defers it again).
@@ -4209,6 +4212,11 @@ impl Sema<'_, '_> {
                     }
                     let f = self.builder().function(h, kind, fty, spec, prev);
                     self.ast.templates.pattern_next = false;
+                    if *deferred && kind == DeclKind::CXXDestructor && prev.is_none() {
+                        // Written without one ([except.spec]/8): a
+                        // redeclaration may omit it too (WP-1036).
+                        self.implicit_exc_dtors.insert(f);
+                    }
                     if !ci.is_empty() {
                         ctors.push((f, i));
                     }

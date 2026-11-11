@@ -66,7 +66,7 @@ pub use modules::{
     has_module_lines,
 };
 pub use options::{ClangCompat, MetaHint, MetaHintLib, PpOptions};
-pub use predef::{ArmTarget, CmdMacro, OptLevel, PicModel, PredefConfig, build_predefines};
+pub use predef::{ArmTarget, CmdMacro, OptLevel, PCH_LINE, PicModel, PredefConfig, build_predefines};
 pub use preprocessor::{Marker, PpItem, Preprocessor};
 pub use print::{PrintOptions, print_macros, print_preprocessed};
 pub use resolver::{HeaderSearch, SearchEvent, SearchObserver};

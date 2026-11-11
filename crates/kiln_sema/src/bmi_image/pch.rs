@@ -19,7 +19,7 @@
 //! a malformed image found here is a hard error, never a partial build.
 
 use kiln_ast::DeclId;
-use kiln_source::FileId;
+use kiln_source::{FileId, Loc};
 
 use super::locs::{FileRec, Locs, validate};
 use super::{Census, Image, ImageCensus, ModuleImage, NONE, Writer, decode, encode, gated_names};
@@ -92,7 +92,7 @@ impl Sema<'_, '_> {
             Err(why) => return none(why),
         };
         w.pch = true;
-        w.img.main = self.diags.sm().file_name(main).to_owned();
+        (w.img.kw, w.img.name_loc) = (NONE, NONE);
         if let Err(why) = w.collect() {
             return none(why);
         }
@@ -110,7 +110,8 @@ impl Sema<'_, '_> {
     /// header's top-level declarations ([`Sema::image_census`]).
     #[must_use]
     pub fn pch_image_census(&self, main: FileId) -> ImageCensus {
-        let mut out = ImageCensus::default();
+        let mut out =
+            ImageCensus { module: self.diags.sm().file_name(main).to_owned(), ..Default::default() };
         let mut w = match Writer::new(self, main, true) {
             Ok(w) => w,
             Err(why) => {
@@ -137,12 +138,18 @@ impl Sema<'_, '_> {
 
     /// Builds the precompiled header's declarations into the translation
     /// unit, whose source manager holds the image's file table as `files`
-    /// ([`PchDecls::files`], same order). Call before the unit's first
-    /// declaration.
+    /// ([`PchDecls::files`], same order), the header entered from `root`
+    /// (the predefines line replay includes it from). Call before the
+    /// unit's first declaration.
     ///
     /// # Errors
     /// Why the image cannot be built here (nothing is built then).
-    pub fn load_pch_image(&mut self, p: &PchDecls, files: &[FileId]) -> Result<(), String> {
+    pub fn load_pch_image(
+        &mut self,
+        p: &PchDecls,
+        files: &[FileId],
+        root: Loc,
+    ) -> Result<(), String> {
         let img = &p.img;
         let bad = |why: &str| Err(format!("declaration image: {why}"));
         let err = |why: &str| format!("declaration image: {why}");
@@ -156,7 +163,7 @@ impl Sema<'_, '_> {
         if !img.decls.iter().all(|d| off_ok(d.loc)) {
             return bad("an offset past the end of the header's source");
         }
-        let m = Locs::build(self.diags.sm(), &img.files, &img.slocs, &p.bases, files)
+        let m = Locs::build_rooted(self.diags.sm(), &img.files, &img.slocs, &p.bases, files, root)
             .map_err(err)?;
         self.build_image(img, &m);
         Ok(())

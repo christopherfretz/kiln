@@ -314,6 +314,7 @@ impl CodegenJob<'_> {
         let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
         let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        let pch = crate::pch_image::sema_load(a, &pp, sm, engine).ok()?;
         let popts = ParseOptions {
             exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
             rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
@@ -342,6 +343,7 @@ impl CodegenJob<'_> {
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
+            pch,
             ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();

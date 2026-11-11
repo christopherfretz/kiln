@@ -154,6 +154,8 @@ pub struct PchLoad {
     pub path: String,
     pub decls: Arc<kiln_sema::PchDecls>,
     pub files: Vec<FileId>,
+    /// The predefines line replay includes the header from.
+    pub root: Loc,
     pub pragmas: kiln_sema::PragmaState,
 }
 
@@ -436,7 +438,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let main_id = pp.main_file();
     if let Some(l) = &opts.pch {
         s.install_pragma_state(&l.pragmas);
-        if let Err(why) = s.load_pch_image(&l.decls, &l.files) {
+        if let Err(why) = s.load_pch_image(&l.decls, &l.files, l.root) {
             kiln_diag::Diag::new(kiln_diag::DiagId::drv_pch_corrupt, kiln_source::Span::INVALID)
                 .arg(format!("{why} in kiln PCH '{}'", l.path))
                 .emit(diags);

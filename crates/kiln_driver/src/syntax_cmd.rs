@@ -203,6 +203,7 @@ impl SyntaxJob<'_> {
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
         let writes_kind2 = a.bmi_kind != Some(1) && job.module_output_path().is_some();
+        let Ok(pch) = crate::pch_image::sema_load(a, &pp, sm, engine) else { return };
         let popts = ParseOptions {
             exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
             rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
@@ -231,6 +232,8 @@ impl SyntaxJob<'_> {
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
+            record_pch: a.pch.producing && a.pch.image != crate::args::PchImage::Off,
+            pch,
             ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();
@@ -241,7 +244,9 @@ impl SyntaxJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
-        let produced = main_id.map(|m| (m, &tu.pragmas));
+        let produced = main_id.map(|m| (m, &tu.pragmas, tu.pch_image.as_ref()));
+        result.pch_decls =
+            tu.pch_image.as_ref().map(|d| d.fallback.map_or(Ok(d.decls), Err));
         result.pch_image = crate::pch_image::finish(a, &mut pp, sm, interner, engine, produced);
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes
