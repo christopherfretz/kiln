@@ -180,7 +180,11 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
                 // vectors and initializer lists (spec/codegen.md "Static
                 // initialization").
                 None if is_scalar(b.ast, var) || is_init_list(b.ast, e) => {
+                    // An address cast to an integer stays one
+                    // (`static intptr_t i = (intptr_t)&g;`, C23 6.6p9).
+                    oven.set_fold_addr_int(true);
                     let v = oven.fold_rvalue(&mut b, e);
+                    oven.set_fold_addr_int(false);
                     if v.is_some() {
                         refolded.insert(e);
                     }

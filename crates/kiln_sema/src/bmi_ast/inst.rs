@@ -549,6 +549,9 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
                 let r = self.temporary(t, d);
                 self.or_why(r, "a pointer to a temporary whose declaration has no key")?;
             }
+            // Only a fold of a static initializer forms one, which no
+            // replayed evaluation needs.
+            PtrBase::Absolute => self.or_why(None, "an integer cast to a pointer")?,
         }
         Some(())
     }

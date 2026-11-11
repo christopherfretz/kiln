@@ -283,6 +283,14 @@ pub enum PtrBase {
         /// The `AddrLabelExpr` whose evaluation produced the address.
         origin: ExprId,
     },
+    /// No object: an integer converted to a pointer (`(void *)16`, C23
+    /// 6.6p9's address constant "cast to pointer type" of an integer
+    /// constant; [expr.reinterpret.cast]/5), whose value is the pointer's
+    /// `offset`. clang's lvalue without a base. Only a fold produces one
+    /// (a constant expression may not perform the cast, [expr.const]/5.15),
+    /// for a static initializer (spec/oven.md "Pointers that point at
+    /// nothing").
+    Absolute,
 }
 
 impl PtrBase {
@@ -295,6 +303,7 @@ impl PtrBase {
             PtrBase::Const(_) => 4,
             PtrBase::TypeInfo(_) => 5,
             PtrBase::Label { .. } => 6,
+            PtrBase::Absolute => 7,
         }
     }
 
@@ -307,6 +316,7 @@ impl PtrBase {
             PtrBase::StringLit { lit, .. } => lit.index(),
             PtrBase::Const(c) => c.index(),
             PtrBase::TypeInfo(t) => t.to_raw(),
+            PtrBase::Absolute => 0,
         }
     }
 
@@ -342,6 +352,7 @@ impl PtrBase {
             // 3 was the retired string-literal base (now `Const`).
             4 => PtrBase::Const(ConstValueId::try_new(raw)?),
             5 => PtrBase::TypeInfo(QualType::from_raw(raw)?),
+            7 => PtrBase::Absolute,
             _ => return None,
         })
     }

@@ -592,6 +592,9 @@ pub struct Oven {
     /// Floating arithmetic that yields a NaN or divides by zero goes on
     /// with the `APFloat` result ([`Oven::set_fold_float_ub`]).
     pub(crate) fold_float_ub: bool,
+    /// A fold's pointer-to-integer cast of an initializer's whole value
+    /// keeps the address ([`Oven::set_fold_addr_int`]).
+    pub(crate) addr_int: bool,
     /// A fold may leave allocations undeallocated
     /// ([`Oven::set_fold_leaks`]).
     pub(crate) fold_leaks: bool,
@@ -698,6 +701,7 @@ impl Oven {
             provisional: Vec::new(),
             provisional_objs: FxHashMap::default(),
             fold_float_ub: false,
+            addr_int: false,
             fold_leaks: false,
             lit_exprs: FxHashMap::default(),
             thawed: FxHashMap::default(),
@@ -743,6 +747,20 @@ impl Oven {
     /// never memoized. Codegen sets it; sema never does.
     pub fn set_fold_float_ub(&mut self, on: bool) {
         self.fold_float_ub = on;
+    }
+
+    /// Lets a fold outside a constant context ([`Oven::fold_rvalue`])
+    /// of a variable's initializer keep the address a pointer-to-integer
+    /// cast of the whole value (or of a scalar member's) converts, as
+    /// clang's `ConstantEmitter` does (`static intptr_t i = (intptr_t)&g;`,
+    /// C23 6.6p9): the integer freezes as a [`kiln_ast::consts::Scalar::Pointer`]
+    /// of integer type, which codegen emits as `ptrtoint`. Codegen sets it
+    /// around its initializer folds; sema sets it only for the C check that
+    /// a static initializer is constant, which reads success and never the
+    /// value, so no integer constant expression sema reads holds an address
+    /// (spec/oven.md "Address constants").
+    pub fn set_fold_addr_int(&mut self, on: bool) {
+        self.addr_int = on;
     }
 
     /// Lets a fold outside a constant context ([`Oven::fold_rvalue`])

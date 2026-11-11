@@ -7045,6 +7045,7 @@ impl Sema<'_, '_> {
         self.act_on_init_inner(v, init);
         self.check_cleanup_deduced(v);
         self.check_static_tls(v, paren);
+        self.check_c_static_init(v);
         let constinit_ok = self.check_constinit(v);
         self.report_deferred_immediates(v, constinit_ok);
         self.unify_var_section(v);

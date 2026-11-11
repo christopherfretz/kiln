@@ -2227,6 +2227,46 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   (*)())&f;` folds `p(1)` to a direct call): `VarDecl::evaluateValue`
   re-evaluates any variable without constant initialization in
   `EM_ConstantFold`.
+- *Address constants* (WP-1295; C23 6.6p9, [basic.start.static]/2
+  where clang's `ConstantEmitter` folds): a static's initializer that
+  is an address constant only through casts is static data, never a
+  guarded dynamic initializer. **Design choice:** the Oven, not a
+  structural constant emitter in codegen, folds these. Clang's emitter
+  is its evaluator's `LValue`/`APValue` (base plus offset) read
+  non-manifestly, and aggregates, member initializers and
+  address-plus-offset already go through the Oven's freezing; a second
+  emitter in codegen would duplicate the evaluator for one shape and
+  drift from it. The cost is two cold paths and no per-value state.
+  Freezing a nowhere pointer (`value.rs` `nowhere_of`, reached only
+  when the generation is `mem::NOWHERE`) recovers the pointee: a slot
+  that is a static's storage gets its live generation back and freezes
+  to `PtrBase::Decl` plus the byte offset, so `(char *)&arr[3]`,
+  `(T *)&x + 1` and `(void *)fn` are relocations; slot 0 (an
+  integer-to-pointer cast) freezes to `PtrBase::Absolute` (raw 0),
+  which codegen emits as an integer constant or `inttoptr`. A pointer
+  into a temporary or the heap still fails. A pointer-to-integer
+  conversion keeps the address only at a *direct position*, the whole
+  value of a variable's initializer or a scalar member's `InitStore`
+  (`static intptr_t i = (intptr_t)&g;`, `struct { uintptr_t u; } s =
+  {(uintptr_t)&g};`), only while `Oven::set_fold_addr_int` is on, and
+  only for a pointer to a static or a function of the integer's width:
+  `Cce` aux `kbc::cce::ADDR_INT` yields the raw pointer tagged with
+  `kbc::ADDR_INT_TAG` (bit 64, never a canonical integer register), and
+  `InitStore` with aux 1 stores it into memory as a pointer (pointer
+  mark 1) of integer type, which freezes as a `Scalar::Pointer` of
+  integer type (`walk_addr_int`). Any other use of the integer, such
+  as arithmetic or a load as an integer, faults on the mark, so no
+  integer the program computes with holds an address and the hot path
+  is unchanged. Codegen turns the switch on around its lax
+  variable-initializer refold; sema turns it on only for the C static
+  initializer check, which reads success alone. Not folded (C error,
+  clang accepts; follow-ups): integer arithmetic on such an address
+  (`(intptr_t)&g + 4`), a narrower or same-width integral conversion
+  around it, and an integer address that does not fit 32 bits
+  (`(void *)-1`): `c/run/static-address-constant-forms.c`,
+  `codegen/ptr_cast_static_init.cpp`,
+  `conformance/expr.const.cast/reinterpret-address-not-constant.cpp`
+  (a constant initializer still rejects every such cast).
   A conditional whose condition (through parentheses and casts) is a
   `__builtin_constant_p` call is a fold in every evaluation, a constant
   initializer's included (clang `VisitConditionalOperator`'s

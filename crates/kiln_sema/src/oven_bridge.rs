@@ -457,6 +457,25 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         })
     }
 
+    /// Whether `e`, an element of a C static initializer, folds as
+    /// clang's `Expr::isConstantInitializer` evaluates it (lax, as
+    /// [`Sema::fold_rvalue`]), an address cast to an integer kept as one
+    /// ([`Oven::set_fold_addr_int`]; only whether it folds is read).
+    pub(crate) fn folds_as_static_init(&mut self, e: ExprId) -> bool {
+        if self.early_immediate_value(e).is_some() {
+            return true;
+        }
+        if !self.eval_stack_ok(e) {
+            return false;
+        }
+        self.with_oven(None, |oven, b| {
+            oven.set_fold_addr_int(true);
+            let v = oven.fold_rvalue(b, e);
+            oven.set_fold_addr_int(false);
+            v.is_some()
+        })
+    }
+
     /// [`Sema::fold_rvalue`] without its time-trace event: for a fold
     /// that is part of a traced evaluation (clang `EvaluateForOverflow`'s
     /// walk, `EvaluateAsInt`).
