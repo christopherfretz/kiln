@@ -1306,12 +1306,6 @@ impl Sema<'_, '_> {
         if !(t.is_integral(pty) && (t.is_integral(cty) || t.as_enum(cty).is_some())) {
             return Ok(None);
         }
-        // C23 6.8.5.3p5: a C case constant is converted to the promoted
-        // condition type with no narrowing rule (`case 0xca093fa0:` on an
-        // `int`).
-        if self.is_c() {
-            return Ok(None);
-        }
         Ok(self.fold_int(c).filter(|&raw| !self.int_fits(pty, raw)))
     }
 
