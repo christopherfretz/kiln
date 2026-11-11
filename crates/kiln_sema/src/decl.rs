@@ -260,6 +260,20 @@ impl Sema<'_, '_> {
             TypeSpecKind::Float64x => QualType::FLOAT64X,
             TypeSpecKind::BFloat16 => QualType::BFLOAT16,
             TypeSpecKind::Fp16 => QualType::HALF,
+            // clang `ConvertDeclSpecToType`: `err_decimal_unsupported` at
+            // the keyword, and the declarator is invalid.
+            TypeSpecKind::Decimal32 | TypeSpecKind::Decimal64 | TypeSpecKind::Decimal128 => {
+                // `DeclSpec::Finish` rejects the `_Complex` first.
+                if let Some(cloc) = ds.complex
+                    && !ds.invalid
+                {
+                    let msg =
+                        self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(ds.base.spelling());
+                    self.emit(msg);
+                }
+                self.error(DiagId::sema_decimal_unsupported, ds.base_loc.unwrap_or(loc));
+                return QualType::ERROR;
+            }
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
             TypeSpecKind::DecltypeAuto if !ds.cv.is_empty() => {
@@ -290,6 +304,16 @@ impl Sema<'_, '_> {
             },
         };
         let base = match ds.complex {
+            // C99 6.2.5p11 `_Imaginary`: clang checks it as `_Complex`
+            // (an invalid one is dropped silently), then reports it at
+            // the keyword and goes on with the real type.
+            Some(cloc) if ds.imaginary => {
+                let c = self.complex_of_declspec(ds, base, cloc);
+                if c != base {
+                    self.error(DiagId::sema_imaginary_not_supported, cloc);
+                }
+                base
+            }
             Some(cloc) => self.complex_of_declspec(ds, base, cloc),
             None => base,
         };
@@ -444,6 +468,10 @@ impl Sema<'_, '_> {
                 let name = match ds.base {
                     TypeSpecKind::Named => "type-name",
                     TypeSpecKind::Fp16 => "half",
+                    // clang's printing policy: `bool` is a keyword in C23.
+                    TypeSpecKind::Bool if self.is_c() && !self.c_at_least(kiln_lex::CStd::C23) => {
+                        "_Bool"
+                    }
                     b => b.spelling(),
                 };
                 let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(name);
@@ -452,6 +480,15 @@ impl Sema<'_, '_> {
             // clang drops the `_Complex` (`TSC_unspecified`) and goes on
             // with the base type.
             return base;
+        }
+        // clang `DeclSpec::Finish`: `ext_integer_complex` in C, at the
+        // type specifier (none for an implied `int`).
+        let int_like = matches!(ds.base, TypeSpecKind::Int | TypeSpecKind::Char)
+            || (ds.base == TypeSpecKind::None
+                && (ds.sign != Sign::None || ds.width != Width::None));
+        if int_like && self.is_c() {
+            let at = if ds.base == TypeSpecKind::None { None } else { ds.base_loc };
+            self.error(DiagId::sema_integer_complex, at.unwrap_or(Loc::INVALID));
         }
         self.ast.types.complex(base)
     }

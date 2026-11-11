@@ -776,6 +776,9 @@ impl Parser<'_, '_> {
     /// [expr.alignof]; `__datasizeof` is clang's size without tail padding).
     fn parse_sizeof_alignof(&mut self, kind: TraitKind) -> PExpr {
         let spelling = (kind == TraitKind::AlignOf).then(|| self.spelling_of(&self.tok()));
+        if kind == TraitKind::AlignOf {
+            self.c_keyword_extension();
+        }
         let loc = self.bump().span.lo;
         if kind == TraitKind::SizeOf && self.at(Punct::Ellipsis) {
             return self.parse_sizeof_pack(loc);
@@ -1125,8 +1128,10 @@ impl Parser<'_, '_> {
     /// parsed unevaluated; the associations are not.
     fn parse_generic_selection(&mut self) -> PExpr {
         let loc = self.bump().span.lo;
-        let d = self.s.diag(DiagId::parse_c11_generic, loc);
-        self.emit(d);
+        if !self.s.c_at_least(kiln_lex::CStd::C11) {
+            let d = self.s.diag(DiagId::parse_c11_generic, loc);
+            self.emit(d);
+        }
         let Some(open) = self.eat(Punct::LParen) else {
             let d = self
                 .s

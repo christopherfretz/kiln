@@ -142,6 +142,10 @@ keywords! {
     Declspec = "__declspec";
     Extension = "__extension__";
     Complex = "_Complex" | "__complex__" | "__complex";
+    Imaginary = "_Imaginary";
+    Decimal32 = "_Decimal32";
+    Decimal64 = "_Decimal64";
+    Decimal128 = "_Decimal128";
     Real = "__real__" | "__real";
     Imag = "__imag__" | "__imag";
     BuiltinOffsetof = "__builtin_offsetof";
@@ -233,7 +237,10 @@ impl Keywords {
             }
         }
         for &t in TypeTrait::all() {
-            if compat >= 22 && t == TypeTrait::IsReferenceable {
+            // `__builtin_types_compatible_p` is C only (clang `KEYNOCXX`):
+            // `Keywords::for_c` adds it.
+            if (compat >= 22 && t == TypeTrait::IsReferenceable) || t == TypeTrait::TypesCompatible
+            {
                 continue;
             }
             slot(&mut table, interner.intern(t.spelling())).builtin = Some(BuiltinKw::Trait(t));
@@ -278,12 +285,26 @@ impl Keywords {
     /// identifiers; `_Bool` is a keyword, `restrict` from C99, `inline`
     /// from C99 (gnu89 too); `asm` only in gnu modes; the
     /// [`C23_KEYWORDS`] and `typeof`/`typeof_unqual` only from C23
-    /// (`typeof` in every gnu mode).
+    /// (`typeof` in every gnu mode). Of the builtin traits only the
+    /// [`C_TYPE_TRAITS`] and `__builtin_types_compatible_p` remain; the
+    /// transforms are identifiers.
     pub fn for_c(&mut self, interner: &Interner, c: kiln_lex::CStd, gnu: bool) {
         use kiln_lex::CStd;
         for k in CXX_ONLY_KEYWORDS {
             self.remove(interner, k);
         }
+        for e in &mut self.table {
+            if matches!(e.builtin, Some(BuiltinKw::Trait(t)) if !C_TYPE_TRAITS.contains(&t))
+                || matches!(e.builtin, Some(BuiltinKw::Transform(_)))
+            {
+                e.builtin = None;
+            }
+        }
+        let i = interner.intern(TypeTrait::TypesCompatible.spelling()).index() as usize;
+        if self.table.len() <= i {
+            self.table.resize(i + 1, Entry::default());
+        }
+        self.table[i].builtin = Some(BuiltinKw::Trait(TypeTrait::TypesCompatible));
         self.add(interner, "_Bool", Kw::Bool);
         if c >= CStd::C99 {
             self.add(interner, "restrict", Kw::Restrict);
@@ -315,6 +336,12 @@ impl Keywords {
         self.table.get(sym.index() as usize).and_then(|e| e.kw)
     }
 }
+
+/// The builtin traits that are keywords in C too (clang `KEYALL` in
+/// TokenKinds.def; the others are `KEYCXX`). `__builtin_types_compatible_p`
+/// is C only (`KEYNOCXX`).
+pub const C_TYPE_TRAITS: [TypeTrait; 3] =
+    [TypeTrait::IsDestructible, TypeTrait::IsNothrowDestructible, TypeTrait::IsBitwiseCloneable];
 
 /// The keywords new in C++20 other than `char8_t`: before C++20 they are
 /// ordinary identifiers (clang's `CXX20_KEYWORD` and `COROUTINES_KEYWORD`

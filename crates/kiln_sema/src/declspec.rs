@@ -120,6 +120,13 @@ pub enum TypeSpecKind {
     BFloat16,
     /// `__fp16` (ARM half: arithmetic promotes it to `float`).
     Fp16,
+    /// `_Decimal32` (C23 6.7.2; clang rejects the decimal floating
+    /// types, "GNU decimal type extension not supported").
+    Decimal32,
+    /// `_Decimal64`.
+    Decimal64,
+    /// `_Decimal128`.
+    Decimal128,
     /// `auto` (a placeholder deduced from the initializer, [dcl.spec.auto]).
     Auto,
     /// `decltype(auto)` ([dcl.type.auto.deduct]/5).
@@ -165,6 +172,9 @@ impl TypeSpecKind {
             TypeSpecKind::Float64x => "_Float64x",
             TypeSpecKind::BFloat16 => "__bf16",
             TypeSpecKind::Fp16 => "__fp16",
+            TypeSpecKind::Decimal32 => "_Decimal32",
+            TypeSpecKind::Decimal64 => "_Decimal64",
+            TypeSpecKind::Decimal128 => "_Decimal128",
             TypeSpecKind::Auto => "auto",
             TypeSpecKind::DecltypeAuto => "decltype(auto)",
             TypeSpecKind::GnuAutoType => "__auto_type",
@@ -233,8 +243,14 @@ pub struct DeclSpec {
     /// The clang nullability qualifiers (`_Nonnull`, ...) written among
     /// the decl-specifiers, in order (spec/sema.md §4.1.1).
     pub nullability: Vec<NullSpec>,
-    /// The GNU `_Complex` specifier written at.
+    /// The GNU `_Complex` specifier written at (or `_Imaginary`, when
+    /// `imaginary` is set: clang's one `TypeSpecComplex` slot).
     pub complex: Option<Loc>,
+    /// The `complex` slot holds C99 `_Imaginary` (clang `TSC_imaginary`).
+    pub imaginary: bool,
+    /// Where the base type-specifier (`ds.base`) was written (clang's
+    /// `TSTLoc`).
+    pub base_loc: Option<Loc>,
     /// `short`/`long`.
     pub width: Width,
     /// `signed`/`unsigned`.
@@ -375,10 +391,33 @@ impl DeclSpec {
     /// # Errors
     /// `_Complex _Complex`.
     pub fn set_complex(&mut self, loc: Loc) -> Result<(), SpecError> {
+        self.set_complex_slot(false, loc)
+    }
+
+    /// Records C99 `_Imaginary` (clang `SetTypeSpecComplex(TSC_imaginary)`).
+    ///
+    /// # Errors
+    /// A second `_Imaginary` or `_Complex`.
+    pub fn set_imaginary(&mut self, loc: Loc) -> Result<(), SpecError> {
+        self.set_complex_slot(true, loc)
+    }
+
+    /// clang's `TypeSpecComplex` slot, named `complex` / `imaginary` in
+    /// its diagnostics (`DeclSpec::getSpecifierName(TSC)`); the first
+    /// specifier written stays.
+    fn set_complex_slot(&mut self, imaginary: bool, loc: Loc) -> Result<(), SpecError> {
         self.note_type(loc);
-        if self.complex.replace(loc).is_some() {
-            return Err(SpecError::new(DiagId::parse_duplicate_decl_spec, &["_Complex"]));
+        if self.complex.is_some() {
+            let prev = if self.imaginary { "imaginary" } else { "complex" };
+            let id = if self.imaginary == imaginary {
+                DiagId::parse_duplicate_decl_spec
+            } else {
+                DiagId::parse_invalid_decl_spec_combination
+            };
+            return Err(SpecError::new(id, &[prev]));
         }
+        self.complex = Some(loc);
+        self.imaginary = imaginary;
         Ok(())
     }
 
@@ -471,6 +510,7 @@ impl DeclSpec {
             ));
         }
         self.base = b;
+        self.base_loc = Some(loc);
         self.named = named;
         self.check_base_width(true)?;
         self.check_base_sign(true)
