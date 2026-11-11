@@ -100,12 +100,22 @@ pub struct Tool {
     pub env: Vec<(String, String)>,
     /// `--version`'s first line.
     pub version: String,
+    /// Arguments put before every command line (kiln's
+    /// `-fclang-compat=<clang oracle major>`, [`Tool::lead_with`]).
+    lead: Vec<String>,
     /// Flag unit -> accepted, filled by [`Tool::accepts`].
     probed: Mutex<BTreeMap<String, bool>>,
     /// Whether the bare probe compiles at all (when it does not, no flag
     /// is dropped: there is nothing to compare against).
     baseline: bool,
     scratch: PathBuf,
+}
+
+/// The major version in a `clang --version` line (`Debian clang version
+/// 19.1.7 (3+b1)` -> 19).
+pub fn clang_major(version: &str) -> Option<u32> {
+    let rest = version.split("clang version ").nth(1)?;
+    rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
 const PROBE_TU: &str = "int main(void) { return 0; }\n";
@@ -130,8 +140,16 @@ impl Tool {
         std::fs::create_dir_all(&scratch)
             .and_then(|()| std::fs::write(scratch.join("probe.c"), PROBE_TU))
             .map_err(|e| format!("cannot write {}: {e}", scratch.display()))?;
-        let mut t =
-            Self { role, path, env, version, probed: Mutex::default(), baseline: true, scratch };
+        let mut t = Self {
+            role,
+            path,
+            env,
+            version,
+            lead: Vec::new(),
+            probed: Mutex::default(),
+            baseline: true,
+            scratch,
+        };
         t.baseline = t.probe(&[]);
         Ok(t)
     }
@@ -139,8 +157,20 @@ impl Tool {
     /// A command running this compiler with its environment.
     pub fn command(&self) -> Command {
         let mut c = Command::new(&self.path);
-        c.envs(self.env.iter().map(|(k, x)| (k, x)));
+        c.envs(self.env.iter().map(|(k, x)| (k, x))).args(&self.lead);
         c
+    }
+
+    /// Puts `arg` before every later command line and notes it after the
+    /// version in the report header.
+    pub fn lead_with(&mut self, arg: String) {
+        self.version = format!("{} ({arg})", self.version);
+        self.lead.push(arg);
+    }
+
+    /// The major version of a clang tool ([`clang_major`]).
+    pub fn clang_major(&self) -> Option<u32> {
+        clang_major(&self.version)
     }
 
     fn probe(&self, unit: &[String]) -> bool {
@@ -342,6 +372,13 @@ pub fn flag_units(flags: &[String]) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clang_major_versions() {
+        assert_eq!(clang_major("Debian clang version 19.1.7 (3+b1)"), Some(19));
+        assert_eq!(clang_major("clang version 22.0.0git"), Some(22));
+        assert_eq!(clang_major("gcc (GCC) 16.1.0"), None);
+    }
 
     #[test]
     fn units_pair_value_flags() {

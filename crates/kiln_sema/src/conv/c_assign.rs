@@ -42,6 +42,7 @@ pub fn is_c_assign_diag(id: DiagId) -> bool {
             | DiagId::sema_c_assign_incompatible
             | DiagId::sema_c_assign_incompatible_function_pointer
             | DiagId::sema_c_assign_incompatible_pointer
+            | DiagId::sema_c_assign_incompatible_pointer_default_error
             | DiagId::sema_c_assign_int_to_pointer
             | DiagId::sema_c_assign_pointer_sign
             | DiagId::sema_c_assign_pointer_to_int
@@ -211,7 +212,7 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
 
 /// Whether `e` is an integer constant expression in C's sense (C17 6.6p6):
 /// no object is read (an enumeration constant is not an object).
-fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
+pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
     let mut stack = vec![e];
     let mut seen = 0u32;
     while let Some(x) = stack.pop() {
@@ -256,7 +257,7 @@ fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
 /// `nullptr`. `Some(true)` for a literal `0` (clang's `NPCK_ZeroLiteral`),
 /// `Some(false)` for another zero expression, which warns
 /// `-Wnon-literal-null-conversion`.
-fn null_pointer_constant(s: &mut Sema<'_, '_>, e: ExprId) -> Option<bool> {
+pub(crate) fn null_pointer_constant(s: &mut Sema<'_, '_>, e: ExprId) -> Option<bool> {
     if s.ast.types.builtin(ty(s, e)) == Some(BuiltinType::NullPtr) {
         return Some(true);
     }
@@ -517,7 +518,14 @@ pub(crate) fn convert(
                 }
                 PtrCheck::Incompatible => {
                     let h = fix_hint(s, e, from, to);
-                    (DiagId::sema_c_assign_incompatible_pointer, Some(h))
+                    // clang 22 makes `-Wincompatible-pointer-types` an
+                    // error by default; clang 19 warns (WP-1285).
+                    let id = if s.clang_compat >= 22 {
+                        DiagId::sema_c_assign_incompatible_pointer_default_error
+                    } else {
+                        DiagId::sema_c_assign_incompatible_pointer
+                    };
+                    (id, Some(h))
                 }
             };
             let mut err = error(s, id, e, from, to, act, hint);

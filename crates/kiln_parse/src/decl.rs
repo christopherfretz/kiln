@@ -2128,7 +2128,9 @@ impl Parser<'_, '_> {
     ) -> bool {
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
         let mut invalid = false;
-        if type_spec {
+        // C defines a tag anywhere a type name appears (C17 6.7.2.3p6): a
+        // cast, `sizeof`, `_Generic` (clang `ActOnTag` checks `CPlusPlus`).
+        if type_spec && !self.s.is_c() {
             self.s.diag_type_defined_in(d, TagDefinedIn::TypeSpecifier, false);
             invalid = true;
         }
@@ -2137,8 +2139,17 @@ impl Parser<'_, '_> {
             invalid = true;
         }
         if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
-            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
-            invalid = true;
+            if self.s.is_c() {
+                // C17 6.2.1p4: a tag in a parameter list has prototype
+                // scope; clang warns (`-Wvisibility`). WP-1285.
+                let ty = self.s.elaborated_tag_type(d, keyword);
+                let loc = self.s.ast.decls.get(d).loc();
+                let msg = self.s.diag(DiagId::sema_c_param_tag_not_visible, loc);
+                self.emit(msg.arg(self.s.ty_arg(ty)));
+            } else {
+                self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+                invalid = true;
+            }
         }
         if invalid {
             ds.invalid = true;
@@ -2154,6 +2165,11 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        // C defines a tag in any type name or parameter type (C17
+        // 6.7.2.3p6, 6.2.1p4).
+        if self.s.is_c() {
+            return;
+        }
         let rule = match (Self::tag_site(ds, ctx), ctx) {
             (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
             (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
@@ -2179,6 +2195,11 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
     fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        // C17 6.9.1: a function's result type may define a tag (clang
+        // `GetFullTypeForDeclarator` checks `CPlusPlus`).
+        if self.s.is_c() {
+            return;
+        }
         let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
         for c in &d.chunks {
             if matches!(c, Chunk::Function { .. }) {
@@ -2423,7 +2444,9 @@ impl Parser<'_, '_> {
         let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
         let use_ = if can_define
             && (self.at(Punct::LBrace)
-                || (is_class && self.at(Punct::Colon))
+                // C has no base clause: `_Generic(e, struct S: 1)` names
+                // `S` (clang `ParseClassSpecifier` checks `CPlusPlus`).
+                || (is_class && self.at(Punct::Colon) && !self.s.is_c())
                 || final_loc.is_some())
         {
             TagUse::Definition

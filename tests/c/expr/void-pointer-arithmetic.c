@@ -5,7 +5,7 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 3 4
-//@ xfail(kiln): WP-1282 follow-up, "arithmetic on pointers to void" rejected in C (GNU extension)
+//@ strict-diags
 #include <stdio.h>
 int main(void) {
   static char buf[8];
