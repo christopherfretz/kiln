@@ -1359,6 +1359,26 @@ impl AstBuilder<'_> {
         }
     }
 
+    /// Sets template parameter list `l`'s requires-clause ([temp.pre]/9;
+    /// the declaration image's importer builds the clause after the
+    /// list, spec/modules.md §11.11 "Constraints").
+    pub fn set_param_list_requires(&mut self, l: TemplateParamListId, e: ExprId) {
+        if let Some(p) = self.ast.templates.param_lists.get_mut(l.index() as usize) {
+            p.requires = Some(e);
+        }
+    }
+
+    /// Sets concept `d`'s constraint-expression ([temp.concept]/1; the
+    /// declaration image's importer, after [`Self::concept_deferred`]).
+    pub fn set_concept_constraint(&mut self, d: DeclId, e: ExprId) {
+        let n = self.ast.decls.get(d);
+        if n.kind() == DeclKind::Concept
+            && let Some(i) = self.ast.templates.infos.get_mut(n.data() as usize)
+        {
+            i.constraint = Some(e);
+        }
+    }
+
     /// Sets template parameter `d`'s default argument.
     ///
     /// # Errors
@@ -1508,13 +1528,29 @@ impl AstBuilder<'_> {
 
     /// A concept ([temp.concept]): `template<params> concept C = e;`.
     pub fn concept(&mut self, h: DeclHead, params: TemplateParamListId, e: ExprId) -> DeclId {
+        self.concept_with(h, params, Some(e))
+    }
+
+    /// A concept whose constraint-expression is set later
+    /// ([`Self::set_concept_constraint`]; the declaration image's
+    /// importer builds expressions after declarations).
+    pub fn concept_deferred(&mut self, h: DeclHead, params: TemplateParamListId) -> DeclId {
+        self.concept_with(h, params, None)
+    }
+
+    fn concept_with(
+        &mut self,
+        h: DeclHead,
+        params: TemplateParamListId,
+        e: Option<ExprId>,
+    ) -> DeclId {
         let i = self.ast.templates.infos.len() as u32;
         let d = self.ast.decls.next_id();
         self.ast.templates.infos.push(TemplateInfo {
             decl: d,
             params,
             pattern: None,
-            constraint: Some(e),
+            constraint: e,
         });
         let depth = self.ast.templates.dependent_depth;
         self.ast.templates.dependent_depth = depth.saturating_sub(1);
