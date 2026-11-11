@@ -33,6 +33,8 @@ Releases:
 - `release-1.0.md`: the 1.0 release candidate's measurements, one
   section per measurement with the command that fills each row, and the
   release-archive gate (WP-1202).
+- `release-1.0.1.md`: the 1.0.1 release gate, run with the commands of
+  `release-1.0.md` against its 1.0.0 results.
 
 Standard libraries:
 

@@ -51,8 +51,13 @@ is [WP-243](BACKLOG.md) and is not part of 1.0.
 - **`std::meta::reflect_constant`, `reflect_constant_array` and
   `define_static_array` of a reflection of a constexpr member function
   of a class template specialization** do not instantiate that member's
-  definition; GCC 16.1 does. Found by the reference workload; planned
-  for 1.0.1 (WP-1252).
+  definition. GCC 16.1 instantiates it when the reflection comes from
+  `members_of`, but not for the equal `^^C<2>::f`. The standard
+  instantiates nothing here (the value is an `info`, and no expression
+  names the function), so kiln keeps its behavior; a member whose body is
+  ill-formed for the specialization stays uninstantiated. Found by the
+  reference workload; decided in 1.0.1
+  ([WP-1252](../spec/landed/reflection/WP-1252.md)).
 
 ## Uninitialized variables at C++26
 

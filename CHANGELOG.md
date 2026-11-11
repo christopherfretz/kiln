@@ -6,6 +6,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
+## [1.0.1] - 2026-11-11
+
+A bug-fix release. Nothing in it changes what [docs/STABILITY.md](docs/STABILITY.md)
+promises.
+
+### Fixed
+
+- Reflection mangling (the ABI note in
+  [docs/STABILITY.md](docs/STABILITY.md#covered-stable-within-a-major-version)): two
+  different dependent reflected template-ids could get the same symbol
+  (`^^AT<T>` and `^^TT<T*>`, and `^^F<T,int>` and `^^F<T,long>` in gcc
+  mode). They no longer collide (WP-1250). GCC 16.1's spelling is used
+  wherever it cannot collide. Three of its spellings lose information,
+  and GCC itself fails to assemble the resulting overload pairs: a
+  dependent function template-id without its arguments, a qualified
+  variable template-id without its qualifier, and an alias template-id
+  whose aliased type does not pin down the alias's arguments. kiln keeps
+  its own spelling in those three cases, so the names differ from GCC's
+  there; spec/abi.md §8.14 lists them. A reflected alias whose parameter
+  appears only in a non-deduced context now gets GCC's `ta` form when
+  its argument is dependent, so it links with g++-16 (WP-1260). A value-dependent reflection is no longer evaluated before
+  instantiation (WP-1260).
+- A consteval-only reference in a template is checked again in each
+  instantiation. A dependent initializer such as
+  `constexpr bool b = m == members[0];` in a `template for` body is no
+  longer rejected (WP-1263, P3032R2).
+- A failed `consteval` block in a lambda body leaves the lambda valid
+  (WP-1257). A failed `static_assert` in a lambda body no longer stops
+  evaluation, so a second refusal is reported too (WP-1247).
+- Diagnostics:
+  - When a reflection query triggers an instantiation error, the
+    diagnostic names the consteval call frames (WP-1248). Those frames
+    still show under copy elision and nesting, and spec names keep their
+    template arguments (WP-1258).
+  - Text the program provides (an uncaught exception's `what()`,
+    attribute messages, reflected names) is escaped as clang escapes it
+    (WP-1259).
+  - An uncaught exception's `what()` keeps the characters read before a
+    fault, and its length cap does not split a UTF-8 sequence (WP-1251).
+  - An invalid escape in an unevaluated string (a `static_assert`
+    message, `[[deprecated]]`, `[[nodiscard]]`, `extern "…"`, asm) no
+    longer causes follow-on errors. The construct is dropped, as in
+    clang 22. Escape diagnostics quote the whole escape and use clang 22's
+    source ranges (WP-1268).
+  - Column widths and the escaping of unprintable characters use LLVM
+    22's Unicode 15.1 tables, so an unassigned code point is shown as
+    `<U+XXXX>` as clang shows it (WP-1268).
+- Invalid UTF-8 in an ordinary string or character literal is the
+  `-Winvalid-source-encoding` warning, not an error, as in clang
+  (WP-1267).
+- Under `-fkiln-source-path-style=gcc`, header paths are spelled as
+  g++-16 spells them (the `-I` directory exactly as given, `"../x.h"`
+  relative to the includer). This is the name that `source_location` and
+  `std::meta::source_location_of` report (WP-1262).
+- C++20 modules: the experimental declaration image
+  (`-fkiln-bmi-image`) now covers imports, partitions and
+  using-declarations (WP-1068).
+
+### Testing and tooling (not user-visible)
+
+- The harness can run GCC 16.1 as the compiler under test
+  (`--compiler $KILN_GCC`). It runs clean over the reflection and
+  contracts tests (WP-1249), and every harness command maps its flags for
+  GCC (WP-1261, WP-1266). Test compiles pass `-fno-crash-diagnostics`
+  (WP-1264).
+- The clang oracle retries once when a compile dies on a signal
+  (WP-1254).
+- The sweep workflow's `oss` job fails when it produces no report
+  (WP-1241). It runs as one `oss-matrix` job over the `sweep = true` rows
+  of `projects.toml` (WP-1265).
+- `release.yml` uploads the dist archives from the workspace, and can be
+  started by hand as a dry run (WP-1253).
+- Spec notes with pinning tests: `type_of(reflect_constant(^^int))`
+  (WP-1255), and `reflect_constant` of a function reflection's value,
+  which instantiates nothing (WP-1252).
+
 ## [1.0.0] - 2026-11-10
 
 The first release. This section summarises what kiln 1.0 does. Measured
@@ -128,4 +204,5 @@ with no tagged releases. The history is in the git log, the milestones
 in [docs/ROADMAP.md](docs/ROADMAP.md), and each work package's record in
 [docs/BACKLOG.md](docs/BACKLOG.md) and `spec/landed/`.
 
-[1.0.0]: https://github.com/christopherfretz/kiln/releases
+[1.0.1]: https://github.com/christopherfretz/kiln/releases/tag/v1.0.1
+[1.0.0]: https://github.com/christopherfretz/kiln/releases/tag/v1.0.0
