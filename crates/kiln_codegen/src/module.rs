@@ -806,6 +806,11 @@ impl<'a> Cg<'a> {
         if ast.weakref_target(d).is_some() {
             return Ok(());
         }
+        // A C GNU89 `extern inline` body a later definition replaced
+        // (clang `canRedefineFunction`, WP-1286).
+        if ast.lang_c && ast.definition(d).is_some_and(|x| x != d) {
+            return Ok(());
+        }
         if fd.spec.is_immediate() {
             return Ok(());
         }
@@ -1025,6 +1030,20 @@ impl<'a> Cg<'a> {
         }
         if matches!(v.templ.get(), Some((TemplLinkKind::Pattern, _))) {
             return Ok(());
+        }
+        // C tentative definitions (C23 6.9.2p2): the definition with an
+        // initializer, else the last tentative one, defines the object;
+        // Sema completed that one's type (clang `EmitTentativeDefinition`
+        // of `getActingDefinition`, WP-1286).
+        if ast.lang_c && v.init.is_none() {
+            let init =
+                ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|x| x.init.is_some()));
+            let last = ast.redecls_of(d).find(|&r| {
+                ast.decls.var(r).is_some_and(|x| x.spec.storage() != VarStorage::Extern)
+            });
+            if init || last != Some(d) {
+                return Ok(());
+            }
         }
         let first = ast.first(d);
         // [temp.explicit]/14: an explicit instantiation declaration

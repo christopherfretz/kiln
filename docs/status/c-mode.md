@@ -35,6 +35,54 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
   2. an ICE on the GNU `a ?: b` with a logical condition, not covered by
      wp/1276.
 
+## WP-1286 re-measure (wp/1286, 2026-11-11)
+
+- gcc.c-torture, gnu23, `-O0,-O2`, kiln on main `92fc1f18e` against
+  wp/1286 `052e337a6` (before the merge of WP-1288):
+  - pass 6480 to 6646 of 7572 (clang-19: 6887); compile-reject 1035 to
+    867; crash 19 to 21; wrong 36 to 36; timeout 2 to 2. No case regresses;
+  - the 2 new crashes are compile/pr33382.c at both options: it used to be
+    rejected at its flexible array initializer, and now reaches the GNU
+    `?:` ICE that WP-1288 fixes.
+- The kiln failures that clang-19 passes, by cluster:
+
+| cluster | before | after | example |
+|---|---|---|---|
+| C++ narrowing in brace initializers and case labels | 58 | 0 | compile/20000326-1.c |
+| exact-fit string initializers | 12 | 0 | execute/20010924-1.c |
+| goto past an initializer | 12 | 0 | compile/irreducible-loop.c |
+| redefinition | 12 | 2 | compile/pr46866.c (`transparent_union`, `tests/c/decl/transparent-union-redeclaration.c`, xfail) |
+| tentative arrays | 8 | 0 | |
+| array init from a string or compound literal | 8 | 0 | |
+| `void main` | 8 | 0 | |
+| flexible array member initialization | 8 | 0 | |
+| incomplete type at a tentative definition | 6 | 0 | |
+| qualified anonymous bit-fields and members | 4 | 0 | |
+| forward-referenced enums | 4 | 0 | |
+| other | 287 | 259 | |
+| total | 427 | 261 | |
+
+- sqlite 3.54.1 (`--compiler kiln`, harness build of `052e337a6`):
+  configure ok. Both C TUs now compile: shell.c's narrowing initializers
+  are gone, and sqlite3.c takes 32 s at 0.74 GB peak RSS. The `sqlite3` link
+  fails on 3 block-scope statics whose initializers contain pointer casts
+  (`trimFunc`, `sqlite3Initialize`, `sqlite3RegisterJsonFunctions`). Those
+  casts do not fold, so the statics are initialized under a `__cxa_guard`
+  that a C link cannot resolve. Repro:
+  `tests/c/run/static-local-address-constant-cast.c` (xfail). The
+  workload was not run.
+- After the measurement (not re-measured):
+  - K&R definitions whose declaration list starts with `const` now compile:
+    compile/20040309-1.c, compile/980825-1.c and execute/930513-2.c.
+    C parses no function qualifiers.
+  - pr34334 (a file-scope anonymous union) compiles after the merge of
+    main.
+  - zstd's last failing C TUs failed on a function pointer compared with
+    `(void *)0` ("comparison of distinct pointer types"), not on a
+    declaration. WP-1285's `c_pointer_comparison` accepts it. On the
+    merged tree, zstd v1.5.7 (`--compiler kiln`) builds (rc 0), and its
+    tests pass (rc 0).
+
 ## WP-1288 re-measure (wp/1288, 2026-11-11)
 
 - gcc.c-torture, gnu23, `-O0,-O2`, kiln on main `92fc1f18e` (WP-1276

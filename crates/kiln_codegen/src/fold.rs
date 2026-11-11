@@ -299,6 +299,29 @@ fn array_lists(
 /// is the initialization's value only if the variable really is
 /// constant-initialized (`int y = std::is_constant_evaluated();` is 0 at
 /// run time), so the folder decides that itself.
+/// GNU: the initializer of the flexible array member that the list
+/// `init` of a static object gives elements (WP-1286). The Oven builds
+/// the object without them; they are folded on their own and
+/// `Cg::record_elems` appends them past the object.
+pub(crate) fn flexible_elements_init(ast: &Ast, init: ExprId) -> Option<ExprId> {
+    if ast.exprs.get(init).kind() != ExprKind::InitListExpr {
+        return None;
+    }
+    let r = ast.types.as_record(ast.exprs.get(init).ty())?;
+    let last = ast
+        .decls
+        .members(ast.definition(r)?)
+        .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
+        .last()?;
+    let lt = ast.decls.get(last).ty()?;
+    let x = *crate::expr::agg_init_parts(ast, init).0.last()?;
+    let sized = matches!(
+        ast.types.canonical_view(ast.exprs.get(x).ty()),
+        TypeView::ConstantArray(c) if c.size > 0
+    );
+    (matches!(ast.types.canonical_view(lt), TypeView::IncompleteArray(_)) && sized).then_some(x)
+}
+
 fn sema_value(ast: &Ast, d: DeclId) -> Option<ConstValueId> {
     let v = ast.decls.var(d)?;
     match v.eval.state() {
@@ -479,6 +502,9 @@ impl Collect<'_> {
             };
         if fold {
             self.out.push(init);
+            if let Some(x) = flexible_elements_init(ast, init) {
+                self.out.push(x);
+            }
         }
         if constant_init {
             self.inits.insert(init, d);

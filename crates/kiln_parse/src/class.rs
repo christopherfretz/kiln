@@ -1547,6 +1547,11 @@ impl Parser<'_, '_> {
             return;
         }
         let mut ds = self.parse_decl_specifiers(DeclaratorContext::Member);
+        // C23 6.7.2.1p1: a member takes a specifier-qualifier-list, no
+        // storage class (clang `ParseStructDeclaration`).
+        if self.s.is_c() {
+            self.reject_type_name_storage(&mut ds);
+        }
         if let Some(fl) = ds.friend
             && (self.at(Punct::Ellipsis) || self.at(Punct::Comma))
         {

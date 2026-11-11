@@ -5,7 +5,6 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 5
-//@ xfail(kiln): WP-1282 follow-up, "cannot jump from this goto statement to its label" applied to C
 #include <stdio.h>
 static int f(int n) {
   if (n)

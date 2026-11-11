@@ -241,7 +241,7 @@ impl Sema<'_, '_> {
 
     /// clang `isMainFileLoc`: `loc` (its expansion) is in the main file,
     /// not in an included one.
-    fn in_main_file(&self, loc: kiln_source::Loc) -> bool {
+    pub(crate) fn in_main_file(&self, loc: kiln_source::Loc) -> bool {
         let sm = self.diags.sm();
         let e = sm.expansion_loc(loc);
         e.is_valid() && e.is_file() && !sm.include_loc(e).is_valid()

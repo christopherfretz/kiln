@@ -5,7 +5,6 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 1 2
-//@ xfail(kiln): WP-1282 follow-up, "case value evaluates to N, which cannot be narrowed" applied to C case labels
 #include <stdio.h>
 static int pick(int op) {
   switch (op) {

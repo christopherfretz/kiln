@@ -72,6 +72,13 @@ impl RedeclTable {
         Ok(())
     }
 
+    /// Makes `d` the definition of `g` in place of an earlier one,
+    /// returning that one (a C GNU89 `extern inline` definition a later
+    /// definition replaces; clang `canRedefineFunction`).
+    pub fn replace_definition(&mut self, g: RedeclGroupId, d: DeclId) -> Option<DeclId> {
+        self.groups[g.index() as usize].definition.replace(d)
+    }
+
     /// The number of groups.
     pub fn len(&self) -> usize {
         self.groups.len() - 1
