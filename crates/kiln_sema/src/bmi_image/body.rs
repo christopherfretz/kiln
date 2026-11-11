@@ -303,7 +303,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 56] = {
+pub(super) const EXPR_KINDS: [ExprKind; 57] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -371,6 +371,9 @@ pub(super) const EXPR_KINDS: [ExprKind; 56] = {
         X::ConceptSpecializationExpr,
         // WP-1284: a dependent requires-expression (requires.rs).
         X::RequiresExpr,
+        // WP-1284: `T::name` / `T::template name<args>`, looked up at the
+        // instantiation ([temp.dep.expr]/3).
+        X::DependentScopeDeclRefExpr,
     ]
 };
 
@@ -423,6 +426,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
         X::CXXUnresolvedConstructExpr => [f(F::EL), Z],
         X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
+        X::DependentScopeDeclRefExpr => [f(F::Nns), f(F::Name)],
         // `b` is the selected association's expression, NONE while the
         // selection is result-dependent (checked to be an association's).
         X::GenericSelectionExpr if flag4 => [f(F::GenT), f(F::OE)],
@@ -590,7 +594,7 @@ fn tokens<'w>(fields: &[F], words: &'w [u32]) -> Option<Vec<(F, &'w [u32])>> {
                 for _ in 0..n {
                     q += match *words.get(q)? {
                         0 => 1,
-                        1 | 3 => 2,
+                        1 | 3 | 4 => 2,
                         2 => 4,
                         _ => return None,
                     };
@@ -1035,6 +1039,8 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                             .decls
                             .get(w[p + 1] as usize)
                             .is_some_and(|d| matches!(d.payload, Payload::NsAlias { .. })),
+                        // WP-1284: a dependent identifier.
+                        4 => (w[p + 1] as usize) < img.pnames.len(),
                         _ => {
                             w[p + 3] <= 1
                                 && w[p + 2] <= 7
@@ -1044,7 +1050,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     if !ok {
                         return false;
                     }
-                    p += [1, 2, 4, 2][w[p] as usize];
+                    p += [1, 2, 4, 2, 2][w[p] as usize];
                 }
                 true
             }
@@ -1113,6 +1119,10 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         }
         if k == ExprKind::RequiresExpr && toks[0].1[0] != toks[1].1[0] {
             return bad("bad requires-expression");
+        }
+        // A dependent-scope name always has its qualifier.
+        if k == ExprKind::DependentScopeDeclRefExpr && toks[0].1[0] == 0 {
+            return bad("bad dependent-scope name");
         }
         // A `_Generic`'s selected expression is one of its associations'.
         if k == ExprKind::GenericSelectionExpr {
@@ -1814,8 +1824,9 @@ impl Writer<'_, '_, '_> {
                 Nns::Global => None,
                 Nns::Namespace { prefix, .. }
                 | Nns::Type { prefix, .. }
-                | Nns::NamespaceAlias { prefix, .. } => prefix,
-                _ => return Err("a qualifier naming a dependent name or splice"),
+                | Nns::NamespaceAlias { prefix, .. }
+                | Nns::Identifier { prefix, .. } => prefix,
+                Nns::Splice(_) => return Err("a qualifier naming a splice"),
             };
             chain.push(v);
         }
@@ -1845,7 +1856,12 @@ impl Writer<'_, '_, '_> {
                         .ok_or("a qualifier naming a namespace alias outside the image")?;
                     out.extend([3, w]);
                 }
-                _ => return Err("a malformed qualifier"),
+                // WP-1284: `T::x::`, looked up at the instantiation.
+                Nns::Identifier { name, .. } => {
+                    let s = self.s.ast.symbols().as_str(name).to_owned();
+                    out.extend([4, Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s)]);
+                }
+                Nns::Splice(_) => return Err("a malformed qualifier"),
             }
         }
         Ok(())
@@ -2159,7 +2175,6 @@ fn expr_reason(k: ExprKind) -> &'static str {
         X::CXXReflectExpr | X::CXXSpliceExpr => "a reflection or splice",
         X::UnresolvedLookupExpr
         | X::UnresolvedMemberExpr
-        | X::DependentScopeDeclRefExpr
         | X::CXXDependentScopeMemberExpr
         | X::SubstNonTypeTemplateParmExpr
         | X::SubstNonTypeTemplateParmPackExpr
@@ -2511,6 +2526,11 @@ impl Sema<'_, '_> {
                             },
                             None => Nns::Global,
                         },
+                        4 => Nns::Identifier {
+                            prefix: cur,
+                            name: self
+                                .intern(img.pnames.get(w[p + 1] as usize).map_or("", String::as_str)),
+                        },
                         _ => Nns::Type {
                             prefix: cur,
                             ty: self.image_ty(
@@ -2522,7 +2542,7 @@ impl Sema<'_, '_> {
                             template_kw: w[p + 3] != 0,
                         },
                     };
-                    p += [1, 2, 4, 2][(w[p] as usize).min(3)];
+                    p += [1, 2, 4, 2, 2][(w[p] as usize).min(4)];
                     cur = Some(self.ast.types.nns(n));
                 }
                 RawId::raw_opt(cur)
