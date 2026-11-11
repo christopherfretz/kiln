@@ -2378,6 +2378,10 @@ argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
 dependent array bounds, pack expansions in base specifiers, and
 friends.
+WP-1284 carries concepts, constraints, requires-expressions, dependent
+names and types, `DependentScopeDeclRefExpr` and deduction guides (see
+"Constraints", "Dependent types and names" and "Deduction guides"
+below).
 
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
@@ -2714,6 +2718,88 @@ scopes  := inline:u32 u32*           ascending records
            anon:u32 (tag:u32 typedef:u32)*   ascending by typedef
 ```
 
+**Constraints (WP-1284).** `bmi_image/constraints.rs` and
+`bmi_image/requires.rs` carry constrained templates, concepts and
+requires-expressions as patterns ([temp.constr], [expr.prim.req]):
+
+- a concept is a `Template` record of kind 4 with no pattern. Every
+  constraint is a body expression listed in the `cons` section with
+  the record it belongs to and its kind: 0 a template parameter's
+  immediately-declared constraint ([temp.param]/4), 1 a template head's
+  requires-clause, 2 a function's trailing requires-clause, 3 a
+  concept's constraint-expression. Each record has at most one of each
+  kind, a kind-1 one is on a template, a kind-2 one on a function, and
+  every concept has its kind 3. The importer patches them in after the
+  bodies, as the parser attaches them;
+- a specialization reference to a constrained template (or to a class
+  template with a constrained member) falls back with "a specialization
+  of a constrained template": the importer would check its constraints
+  while it builds the records, before they are in. So does a concept
+  merged with another unit's, and a type-constraint naming a concept
+  template parameter;
+- satisfaction is never carried. A concept-id the unit checked falls
+  back; a dependent one is carried unchecked and checked by the
+  importer's instantiations exactly as after a replay, with the same
+  notes in the module;
+- a dependent requires-expression is a body expression whose body is a
+  record of the `reqs` section (its context, location, flags,
+  parameters and the invented `expr-type` parameters of its
+  return-type requirements, [expr.prim.req.compound]/1). The importer
+  declares them before it builds the bodies. A non-dependent one (the
+  unit evaluated it) and one whose access checks wait for an
+  instantiation fall back.
+
+**Dependent types and names (WP-1284).** `bmi_image/deptypes.rs`
+carries the dependent types a pattern names as type tag 21: a
+dependent name (`typename T::type`, `T::inner::type`), a dependent
+template specialization (`T::template rebind<U>`), a type-trait
+transform (`__remove_cv(T)`), a member pointer whose class or pointee
+is dependent, a vector of dependent element type, and a deduced class
+template placeholder ([dcl.type.class.deduct]: the type of a variable
+written `Wrap w(x)`, with its deduced type once known). A qualifier may
+have a dependent-identifier step (`T::inner::`, step 4). The importer
+builds each with the type context's constructors, so canonical types
+are the replay's. A placeholder whose template is named through a
+qualifier or a parameter, and an expression-bearing type (`decltype`,
+`noexcept(expr)`, a dependent array bound or vector size, an
+expression template argument), fall back.
+
+*Written locations.* A dependent type or qualifier component has no
+location of its own; the parser records where each was written
+(`templ.written_locs`, spec/sema-templates.md §5.8) and substitution
+reports a failure there. The `written` section carries the entries
+whose key the image carries (a type of the type table, a qualifier all
+of whose components are carried), so an error substituting an
+imported pattern has the replay's position and caret.
+
+**Deduction guides (WP-1284).** The implicit guides
+([over.match.class.deduct]/1) are not carried: the importer forms them
+on first use from the class template's constructors, as after a
+replay, so a deduction's candidates and notes are the same. An explicit
+guide is a `Function` record of kind 5 named by the special name word
+`0xFFFF_FF03`, at namespace scope, alone or as a function template's
+pattern; the importer builds it with `deduction_guide`, naming the
+class template its return type specializes. A guide whose return type
+is not written as `C<args>` (an alias or a qualifier), a member guide,
+and one with an `explicit(expr)` specifier fall back.
+
+```
+cons    := n:u32 (kind:u8 decl:u32 expr:u32)*
+reqs    := n:u32 (ctx:u32 loc:u32 flags:u8
+                  np:u32 (name:u32 loc:u32 ty:qref pflags:u16 flags:u8)*
+                  ni:u32 (depth:u16 loc:u32)*)*
+written := n:u32 (key wn:u32 loc:u32*)*   by first location
+key     := 0 qref | 1 n:u32 step*
+type    += 21 dep                    WP-1284
+dep     := 0 keyword:u8 n:u32 step* name:u32          dependent name
+         | 1 keyword:u8 n:u32 step* name:u32 n:u32 targ*
+         | 2 kind:u8 base:qref result:qref            transform
+         | 3 pointee:qref class:qref                  member pointer
+         | 4 elem:qref count:u32 kind:u8              vector
+         | 5 template:u32 deduced:qref                deduced placeholder
+step    += 4 name:u32                dependent identifier
+```
+
 **Fallback census (WP-1070).** `-fkiln-bmi-image-census` (hidden, with
 `--precompile` or `-fmodule-output`) builds the image a second time in
 census mode and prints on stderr, after the compile's diagnostics, how
@@ -2766,6 +2852,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            stmts:u32 offset:u32*stmts blob_len:u32 stmt*
            attrs                     WP-1278 ("Attributes")
            scopes                    WP-1278 ("Scopes and reserved names")
+           cons reqs                 WP-1284 ("Constraints")
+           written                   WP-1284 ("Dependent types and names")
 const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
