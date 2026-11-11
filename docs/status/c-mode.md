@@ -7,9 +7,10 @@ were measured:
 - **main**: kiln at `5a58f96ab` (wp/1282, which is origin/main `cc2f76a8f`
   plus the measurement fixes below). It has the WP-1275 C front end
   (language bit, lexing, linkage) but none of the WP-1276 C semantics.
-- **wp/1276**: the in-flight WP-1276 branch at `80e415482` (conversions,
-  tentative definitions, the tag namespace, K&R and implicit int, and more),
-  built read-only into a private target dir. It shows what is left once
+- **wp/1276**: the in-flight WP-1276 branch (conversions, tentative
+  definitions, the tag namespace, K&R and implicit int, and more), built
+  read-only into a private target dir: the OSS rows at `80e415482`, the
+  torture run and every repro at `dd6ba3cf7`. It shows what is left once
   WP-1276 lands; that remainder is the wave-2 list.
 
 The oracles are clang-19 (`clang-19 -x c`, the control for every OSS row) and
@@ -19,9 +20,8 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
 ## Summary
 
 - C mode on main compiles roughly 71% of gcc.c-torture cases at gnu23
-  (clang-19: 91%). With wp/1276 that rises to 84%, but the "wrong" class grows
-  from 67 to 118 cases because tests that used to be rejected now compile and
-  hit the falloff miscompile (cluster 1 below).
+  (clang-19: 91%). With wp/1276 that rises to 86%, and the "wrong" class
+  falls from 67 to 36 cases, 34 of which clang-19 gets wrong too.
 - No C OSS row builds on main. With wp/1276, zlib is fully green (37/37 TUs,
   6/6 tests) and sqlite3.c compiles; lua, zstd and c-ares each stop on a
   single construct that WP-1276 does not cover (comparing a function pointer
@@ -30,12 +30,10 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
   flip re-landed).
 - Miscompiles and crashes, ranked first in every list below:
   1. falling off the end of a non-void C function traps or is unreachable
-     (C allows it if the caller does not use the value);
-  2. an ICE on the GNU `a ?: b` with a logical condition;
-  3. a wp/1276-only regression: a compound literal that reads its own
-     assignment target (`*s = (struct S){ s->b, s->a, ... }`) is built in
-     place (execute/20071202-1.c aborts). It passes on main, so there is no
-     xfail; it was reported to WP-1276.
+     on main (C allows it if the caller does not use the value). wp/1276
+     covers it at `dd6ba3cf7`;
+  2. an ICE on the GNU `a ?: b` with a logical condition, not covered by
+     wp/1276.
 
 ## C OSS rows
 
@@ -117,7 +115,9 @@ locally and is **not** re-landed:
 
 `cargo xtask gcc-torture --suite execute,ieee,builtins,compile --opt -O0,-O2`
 at the default `-std=gnu23` and again with `--std gnu17`, 3813 tests and 7572
-cases. The generated regions at the end of this page hold the full tables.
+cases. The generated regions at the end of this page hold the full tables. The
+wp/1276 row is the same command with `--compiler <wp/1276 build>/kiln
+--oracles none --tsv <file>`.
 
 ### Pass rate by class (cases of 7572)
 
@@ -125,7 +125,7 @@ cases. The generated regions at the end of this page hold the full tables.
 |---|---:|---:|---:|---:|---:|
 | kiln main, gnu23 | 5355 (70.7%) | 2125 | 20 | 67 | 5 |
 | kiln main, gnu17 | 5353 (70.7%) | 2127 | 20 | 67 | 5 |
-| kiln wp/1276, gnu23 | 6388 (84.4%) | 1039 | 19 | 118 | 8 |
+| kiln wp/1276 `dd6ba3cf7`, gnu23 | 6480 (85.6%) | 1035 | 19 | 36 | 2 |
 | clang-19, gnu23 | 6887 (91.0%) | 648 | 0 | 37 | 0 |
 | clang-19, gnu17 (WP-1277 baseline) | 7057 (93.2%) | 478 | 0 | 37 | 0 |
 | GCC 16.1, gnu23 | 7572 | 0 | 0 | 0 | 0 |
@@ -146,19 +146,20 @@ clang fails in 21 cases, all of them clang's own wrong or reject results.
 Wrong results come first: each is a miscompile.
 
 1. **Falling off the end of a non-void function** (36 of the 37 wrong cases
-   where clang passes; 86 with wp/1276, because K&R and implicit-int tests
-   now compile). C (6.9.2p12) makes it undefined only if the caller uses the
+   where clang passes). C (6.9.2p12) makes it undefined only if the caller uses the
    value; kiln emits the C++ trap at -O0 (SIGTRAP) and `unreachable` at -O2
    (wrong exit, SIGSEGV or a run timeout: 20010122-1, pr47925, pr65956).
-   Example: execute/20000717-1.c. Not covered by wp/1276.
-   Repro: `tests/c/stmt/fall-off-non-void-run.c`.
+   Example: execute/20000717-1.c. Covered by wp/1276 at `dd6ba3cf7` (36 of
+   the 37 pass; the other is bcp-1.c -O2, item 2). Repro:
+   `tests/c/stmt/fall-off-non-void-run.c`, which passes on that build.
 2. execute/bcp-1.c -O2: `__builtin_constant_p` of a parameter of an inlined
    function folds to 0 in the front end, where clang emits `llvm.is.constant`
    and lets the optimizer decide. The result is legal, so this is a note, not
    a miscompile. execute/builtin-constant.c -O2 is the same issue under
    wp/1276.
-3. wp/1276 only: execute/20071202-1.c, a compound literal assigned over the
-   object it reads (see the summary).
+3. A wp/1276 regression at `80e415482` (execute/20071202-1.c, a compound
+   literal assigned over the object it reads, and two others) was reported
+   and is fixed at `dd6ba3cf7`, which has no regression against main.
 
 Crashes:
 
@@ -175,27 +176,26 @@ Crashes:
 
 Timeouts: compile/limits-structnest.c (deeply nested structs; clang rejects it
 on its bracket-nesting limit, GCC compiles it) and the three -O2 falloff run
-timeouts above.
+timeouts above (they pass on wp/1276 at `dd6ba3cf7`).
 
 ### Failure clusters, ranked
 
 Cases where kiln main fails at gnu23 and clang-19 passes, grouped by kiln's
 first diagnostic. "wp/1276" gives how many of those cases pass at
-`80e415482`: yes means at least 90%, partial means some, no means none.
-"now wrong" counts the cases that compile under wp/1276 but run wrong (the
-falloff miscompile).
+`dd6ba3cf7`: yes means at least 90%, partial means some, no means none.
+"now wrong" counts the cases that compile under wp/1276 but run wrong.
 
 | cases | construct | kiln's first diagnostic | example | wp/1276 |
 |---:|---|---|---|---|
-| 502 | K&R definitions (`f(a, b) int a;`: identifier-list parameters parsed as type names); 10 are GNU `__label__` | unknown type name '…' | compile/20000326-2.c | partial (418/502; 32 now wrong) |
-| 157 | implicit int | a type specifier is required for all declarations | compile/900313-1.c | partial (122/157; 12 now wrong) |
-| 114 | call through an old-style (unprototyped) declaration | no matching function for call to '…' | compile/20030518-1.c | yes (107/114) |
+| 502 | K&R definitions (`f(a, b) int a;`: identifier-list parameters parsed as type names); 10 are GNU `__label__` | unknown type name '…' | compile/20000326-2.c | partial (452/502) |
+| 157 | implicit int | a type specifier is required for all declarations | compile/900313-1.c | partial (135/157) |
+| 114 | call through an old-style (unprototyped) declaration | no matching function for call to '…' | compile/20030518-1.c | yes (109/114; 1 now wrong) |
 | 76 | `void *` and pointer assignment conversions | incompatible pointer types assigning to '…' from '…' | compile/20070529-2.c | partial (68/76) |
 | 72 | `register` storage class | ISO C++17 does not allow 'register' storage class specifier | compile/20010112-1.c | yes (68/72) |
 | 61 | pointer conversions in initializers (lvalue) | cannot initialize a variable of type '…' with an lvalue of type '…' | compile/20030904-1.c | yes (59/61) |
 | 55 | pointer conversions in initializers (rvalue) | cannot initialize a variable of type '…' with an rvalue of type '…' | compile/20040121-1.c | yes (51/55) |
 | 46 | implicit function declarations, GNU builtins | use of undeclared identifier '…' | compile/20000224-1.c | partial (24/46) |
-| 37 | falling off a non-void function (miscompile) | wrong result (SIGTRAP at -O0) | execute/20000717-1.c | no |
+| 37 | falling off a non-void function (miscompile) | wrong result (SIGTRAP at -O0) | execute/20000717-1.c | yes (36/37) |
 | 26 | pointer cast to a narrower integer | cast from pointer to smaller type '…' loses information | compile/20000105-2.c | no |
 | 26 | C++ narrowing applied to C brace init (non-constant) | non-constant-expression cannot be narrowed … in initializer list | compile/icfmatch.c | no |
 | 26 | arithmetic on `void *` (GNU) | arithmetic on pointers to void / on a pointer to void | compile/20021108-1.c | no |
@@ -225,9 +225,11 @@ variable-length struct fields ("fields must have a constant size").
 
 ### Wave-2 input: what wp/1276 leaves (gnu23, clang-19 passes)
 
-528 cases of 7572 remain, in ranked order:
+435 cases of 7572 remain at `dd6ba3cf7`, in ranked order. The falloff
+miscompile is gone; the two cases left in the wrong class are the
+`__builtin_constant_p` note (bcp-1.c and builtin-constant.c at -O2).
 
-1. 86 wrong: falloff miscompile (48 tests).
+1. 18 crash: the `?:` ICE.
 2. 74 pointer-to-narrow-integer casts (37 tests).
 3. 54 C++ narrowing in C brace initializers and case labels (non-constant 26,
    constant 26, case labels 2; sqlite shell.c too).
@@ -236,16 +238,15 @@ variable-length struct fields ("fields must have a constant size").
    `__builtin_setjmp`/`longjmp`, `__builtin_exit`, `__builtin_mul_overflow_p`,
    `__builtin_shuffle`, implicit `memcmp` and `strlen`).
 6. 22 VLAs and 20 compound-literal lvalues (both in WP-1276's stated scope,
-   and not yet passing at 80e415482).
-7. 18 crash: the `?:` ICE.
-8. 12 each:
+   and not yet passing at `dd6ba3cf7`).
+7. 12 each:
    - redefinition;
    - unknown type name (10 are GNU `__label__` local labels);
    - goto past an initializer;
    - comparison of distinct pointer types (`pr106537-1.c`, and the lua and
      zstd function pointer against `NULL` case);
    - exact-fit string initializers.
-9. 8 or fewer each:
+8. 8 or fewer each:
    - tentative arrays;
    - array init from a string;
    - `void main`;
@@ -265,7 +266,8 @@ Plus, from the OSS rows:
 
 ### Xfail repros (`xfail(kiln): WP-1282 follow-up, …`, all pass under clang-19)
 
-- `tests/c/stmt/fall-off-non-void-run.c`: falloff miscompile.
+- `tests/c/stmt/fall-off-non-void-run.c`: falloff miscompile (passes on
+  wp/1276 at `dd6ba3cf7`; drop the xfail when WP-1276 lands).
 - `tests/c/expr/gnu-binary-conditional-logical.c`: the `?:` ICE (C).
 - `tests/conformance/expr.cond/gnu-binary-conditional-logical-run.cpp`: the
   `?:` ICE (C++).
