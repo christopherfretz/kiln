@@ -45,7 +45,7 @@ value joined (`-Ifoo`, `-std=c++20`, `--target=x`) or as the next argument
 (`-I foo`, `-target x`). `-std`, `--sysroot`, `-resource-dir`, and
 `-target`/`--target` also accept `=`. A lone `-` and any argument not
 starting with `-` are inputs. Linker inputs (`-l<lib>`, `-Wl,<args>`,
-`-Xlinker <arg>`) count as inputs for `no input files`, as clang's: with
+`-Xlinker <arg>`, `-rpath <dir>`) count as inputs for `no input files`, as clang's: with
 nothing else, `kiln++ -Wl,--version` runs the link step alone (the
 linker prints its version; Meson's linker probe, WP-920), and `-c
 -Wl,--version` warns `'linker' input unused`.
@@ -128,7 +128,8 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
 | `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
-| `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs |
+| `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-rpath <dir>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs (`-rpath` takes a separate value only, as clang's; WP-1288) |
+| `-Wa,<a>[,<b>...]`, `-Xassembler <a>` | assembler options (WP-1288). kiln has no assembler step (`llc` writes the object, and marks the stack non-executable with `.note.GNU-stack` already), so the values are checked against what clang's integrated assembler accepts on Linux and otherwise have no effect: `--noexecstack`, `-L`, `--fatal-warnings`, `--no-warn`, `-W`, `-I<dir>` / `-I <dir>`, `-gdwarf-*`, `-force_cpusubtype_ALL`, `--allow-experimental-crel`, `--no-crel`, `-march=`/`-mcpu=`/`-mfpu=<v>`, `-mrelax-relocations=yes\|no`. `--compress-debug-sections[=none\|zlib\|zstd]` (also `-compress-...`) acts as `-gz[=...]` when there is no `-gz` (an unknown type is `invalid value '<t>' in '<v>'`). Any other value is `unsupported argument '<v>' to option '-Wa,'` (or `'-Xassembler'`), as in clang, and is checked only when a source is assembled (`-c` or a link); `-E`, `-fsyntax-only`, `-S` and `-emit-llvm` ignore them. Without a source to assemble, `-Wa,` is `argument unused during compilation: '-Wa,...'`, and `-Xassembler <a>` too under `-c` (clang's link job claims it silently). Not accepted, unlike clang: `--crel`, `--defsym`, `--version` |
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
@@ -1429,7 +1430,7 @@ the current directory (standard input is `-`). `-o -` is standard output.
 - **Unused inputs.** In a compile-only phase, linker inputs and link
   options are unused, warned in command-line order with clang's wording
   (`-Wunused-command-line-argument`): `<x>: 'linker' input unused` for
-  linker inputs, `-l`, `-Wl,` and `-Xlinker <arg>`; `argument unused during compilation:
+  linker inputs, `-l`, `-Wl,`, `-Xlinker <arg>` and `-rpath <dir>`; `argument unused during compilation:
   '<o>'` for `-L`, `-fuse-ld=`, `-shared`, `-rdynamic`, `-pie`, `-no-pie`.
   `-static` and `-nostdlib` are silent, as in clang. `-Qunused-arguments`
   (anywhere on the command line) silences all of them, as in clang

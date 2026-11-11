@@ -648,6 +648,13 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       `__builtin_frame_address(n)` `call ptr @llvm.frameaddress.p0(i32 n)`,
       `__builtin_return_address(n)` `call ptr @llvm.returnaddress(i32 n)`
       (WP-432, `builtins_return_address.cpp`).
+      `__builtin_extract_return_addr(p)` and `__builtin_frob_return_addr(p)`
+      are `p` (AArch64 and x86-64 Linux encode nothing),
+      `__builtin___clear_cache(b, e)` is `call void @llvm.clear_cache(ptr b,
+      ptr e)`, and `__builtin_constant_p(x)` that the frontend could not
+      fold is `zext (call i1 @llvm.is.constant.<ty>(x))` for an integer,
+      enumeration or floating operand without side effects, else `0`
+      (clang `CGBuiltin`; spec/landed/codegen/WP-1288.md).
       `__builtin_readcyclecounter()` is `call i64 @llvm.readcyclecounter()`
       on every target (WP-1057, `builtin_readcyclecounter{,-19}.cpp`).
       `__builtin_thread_pointer()` is `call ptr @llvm.thread.pointer()`,
@@ -4457,7 +4464,10 @@ No lowering changed; the new forms reach codegen as existing AST.
   `vsha256su{0,1}q_u32` as one call of the non-overloaded
   `llvm.aarch64.crypto.*` intrinsic of that name on `<16 x i8>`,
   `<4 x i32>` and `i32` operands, the AES type code dropped: WP-811,
-  `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`). The
+  `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`; the table lookups
+  `vtbl1`..`vtbl4`, `vtbx1`..`vtbx4`, `vqtbl1`..`vqtbl4` and
+  `vqtbx1`..`vqtbx4`: spec/landed/codegen/WP-1288.md "NEON table
+  lookups"). The
   AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
