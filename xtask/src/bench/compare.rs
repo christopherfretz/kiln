@@ -69,7 +69,7 @@ pub enum Verdict {
     /// Better than the baseline beyond a threshold; consider `--record`.
     Improved,
     /// Worse beyond a threshold. Fails the run (unless `--record`).
-    Regressed { time: bool, mem: bool, steps: bool, bytes: bool, inst: bool },
+    Regressed { time: bool, mem: bool, steps: bool, bytes: bool, inst: bool, acct: bool },
     /// Not comparable: the baseline was taken under different conditions
     /// (the reason says which). Reported, never fails.
     Advisory(String),
@@ -81,13 +81,14 @@ impl Verdict {
             Self::New => "new".into(),
             Self::Ok => "ok".into(),
             Self::Improved => "improved".into(),
-            Self::Regressed { time, mem, steps, bytes, inst } => {
+            Self::Regressed { time, mem, steps, bytes, inst, acct } => {
                 let what: Vec<&str> = [
                     (time, "time"),
                     (mem, "mem"),
                     (steps, "steps"),
                     (bytes, "bytes"),
                     (inst, "inst"),
+                    (acct, "accounted"),
                 ]
                 .into_iter()
                 .filter_map(|(on, name)| on.then_some(name))
@@ -98,6 +99,10 @@ impl Verdict {
         }
     }
 }
+
+/// The allowed growth of kiln's accounted memory, percent (2%, approved by
+/// the operator; no noise allowance, since the figure is deterministic).
+pub const ACCT_PCT: f64 = 2.0;
 
 /// Percentage change from `base` to `cur`.
 pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
@@ -124,6 +129,10 @@ pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
 ///   regress (improve) when `inst.count` grows (shrinks) at all — it is
 ///   exact, whatever the thresholds — or `inst.bytes` by more than
 ///   `bytes_pct`. They are judged only when both sides have them.
+/// - kiln's accounted memory (`accounted.reserved`, the memory report's
+///   total; spec/bench.md "The pch group") regresses (improves) when it
+///   grows (shrinks) by more than [`ACCT_PCT`], whatever the thresholds:
+///   it is deterministic. It is judged only when both sides have it.
 /// - Improvements never fail; they suggest re-recording.
 pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdict {
     let Some(base) = base else { return Verdict::New };
@@ -189,15 +198,26 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
         }
         _ => (false, false),
     };
-    if time_worse || mem_worse || steps_worse || bytes_worse || inst_worse {
+    let (acct_worse, acct_better) = match (b.accounted, cur.accounted) {
+        (Some(ba), Some(ca)) => beyond(ba.reserved, ca.reserved, ACCT_PCT),
+        _ => (false, false),
+    };
+    if time_worse || mem_worse || steps_worse || bytes_worse || inst_worse || acct_worse {
         Verdict::Regressed {
             time: time_worse,
             mem: mem_worse,
             steps: steps_worse,
             bytes: bytes_worse,
             inst: inst_worse,
+            acct: acct_worse,
         }
-    } else if time_better || mem_better || steps_better || bytes_better || inst_better {
+    } else if time_better
+        || mem_better
+        || steps_better
+        || bytes_better
+        || inst_better
+        || acct_better
+    {
         Verdict::Improved
     } else {
         Verdict::Ok
@@ -387,7 +407,7 @@ mod tests {
         Thresholds { time_pct: 5.0, mem_pct: 2.0, steps_pct: 0.0, bytes_pct: 2.0 };
 
     fn reg(time: bool, mem: bool) -> Verdict {
-        Verdict::Regressed { time, mem, steps: false, bytes: false, inst: false }
+        Verdict::Regressed { time, mem, steps: false, bytes: false, inst: false, acct: false }
     }
 
     #[test]
@@ -448,13 +468,26 @@ mod tests {
         // Steps are exact by default: one more step regresses, one fewer improves.
         assert_eq!(
             judge(Some(&b), &m(Some(counters(1001, 10_000, 5000))), T),
-            Verdict::Regressed { time: false, mem: false, steps: true, bytes: false, inst: false }
+            Verdict::Regressed {
+                time: false,
+                mem: false,
+                steps: true,
+                bytes: false,
+                inst: false,
+                acct: false
+            }
         );
         assert_eq!(judge(Some(&b), &m(Some(counters(999, 10_000, 5000))), T), Verdict::Improved);
         // Bytes and peak bytes share the 2% threshold.
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_200, 5100))), T), Verdict::Ok);
-        let bytes =
-            Verdict::Regressed { time: false, mem: false, steps: false, bytes: true, inst: false };
+        let bytes = Verdict::Regressed {
+            time: false,
+            mem: false,
+            steps: false,
+            bytes: true,
+            inst: false,
+            acct: false,
+        };
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_201, 5000))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 10_000, 5101))), T), bytes);
         assert_eq!(judge(Some(&b), &m(Some(counters(1000, 9_000, 5000))), T), Verdict::Improved);
@@ -472,8 +505,14 @@ mod tests {
         let loose = Thresholds { steps_pct: 10.0, bytes_pct: 50.0, ..T };
         assert_eq!(judge(Some(&b), &m(Some(counters(1100, 15_000, 7500))), loose), Verdict::Ok);
         assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
-        let v =
-            Verdict::Regressed { time: true, mem: false, steps: true, bytes: true, inst: false };
+        let v = Verdict::Regressed {
+            time: true,
+            mem: false,
+            steps: true,
+            bytes: true,
+            inst: false,
+            acct: false,
+        };
         assert_eq!(v.label(), "REGRESSED (time, steps, bytes)");
     }
 
@@ -487,8 +526,14 @@ mod tests {
             m.inst = i.map(|(count, bytes)| InstCounters { count, nodes: 5, bytes });
             m
         };
-        let inst =
-            Verdict::Regressed { time: false, mem: false, steps: false, bytes: false, inst: true };
+        let inst = Verdict::Regressed {
+            time: false,
+            mem: false,
+            steps: false,
+            bytes: false,
+            inst: true,
+            acct: false,
+        };
         let b = base(m(Some((1025, 10_000))));
         assert_eq!(judge(Some(&b), &m(Some((1025, 10_000))), T), Verdict::Ok);
         assert_eq!(judge(Some(&b), &m(Some((1026, 10_000))), T), inst);
@@ -504,6 +549,39 @@ mod tests {
         assert_eq!(judge(Some(&base(m(None))), &m(Some((1, 1))), T), Verdict::Ok);
         assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
         assert_eq!(inst.label(), "REGRESSED (inst)");
+    }
+
+    /// `accounted.reserved` regresses beyond [`ACCT_PCT`] whatever the
+    /// thresholds; `live` is not judged (spec/bench.md "The pch group").
+    #[test]
+    fn accounted_memory() {
+        use super::super::record::Accounted;
+        let m = |a: Option<(u64, u64)>| {
+            let mut m = with(1000.0, 980.0, Some(100_000));
+            m.accounted = a.map(|(live, reserved)| Accounted { live, reserved });
+            m
+        };
+        let acct = Verdict::Regressed {
+            time: false,
+            mem: false,
+            steps: false,
+            bytes: false,
+            inst: false,
+            acct: true,
+        };
+        let b = base(m(Some((5_000, 10_000))));
+        assert_eq!(judge(Some(&b), &m(Some((5_000, 10_000))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((5_000, 10_200))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((5_000, 10_201))), T), acct);
+        assert_eq!(judge(Some(&b), &m(Some((9_000, 10_000))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(Some((5_000, 9_799))), T), Verdict::Improved);
+        // `--threshold-mem` governs RSS only.
+        let loose = Thresholds { mem_pct: 50.0, bytes_pct: 50.0, ..T };
+        assert_eq!(judge(Some(&b), &m(Some((5_000, 10_201))), loose), acct);
+        // A baseline from before the metric, or a side without it: not judged.
+        assert_eq!(judge(Some(&base(m(None))), &m(Some((1, 1_000_000))), T), Verdict::Ok);
+        assert_eq!(judge(Some(&b), &m(None), T), Verdict::Ok);
+        assert_eq!(acct.label(), "REGRESSED (accounted)");
     }
 
     #[test]

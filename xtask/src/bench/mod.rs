@@ -75,8 +75,8 @@ options:
                            the time and memory ratios
   --filter <substr>        only entries whose id (<group>/<name>) contains <substr>
   --label <name>           bench/pch only: write docs/status/pch.md region <name>
-                           with --record (default `main`; a labelled run records
-                           no baselines)
+                           with --record (default `main`, which only --record without
+                           --label writes; a labelled run records no baselines)
   --runs <N>               runs per entry (default: 5; the fastest and slowest are
                            dropped when N >= 3)
   --threshold-time <PCT>   allowed wall-clock regression in percent (default: 5)
@@ -185,6 +185,14 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 let ok = |c: char| c.is_ascii_alphanumeric() || "-_.+/@".contains(c);
                 if v.is_empty() || !v.chars().all(ok) {
                     return Err(format!("bad --label `{v}` (letters, digits and -_.+/@)"));
+                }
+                if v == pch::DEFAULT_LABEL {
+                    // `--label` records no baselines, so `--label main` would
+                    // write main's region with numbers main's baselines lack.
+                    return Err(format!(
+                        "--label `{v}`: the `{v}` region is written by --record without \
+                         --label, which records the baselines too"
+                    ));
                 }
                 o.label = Some(v);
             }
@@ -1297,6 +1305,7 @@ fn sample(
         oven,
         oven_missing: Vec::new(),
         inst,
+        accounted: None,
         samples_wall_ms: walls.iter().map(|&x| round_to(x, 3)).collect(),
         samples_rss_kb: rss,
         compiler: s.path.display().to_string(),

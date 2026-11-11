@@ -1663,8 +1663,14 @@ store Oven state, is a follow-up; it would share the module-file format
   `-o` with more than one output is clang's `cannot specify -o when
   generating multiple output files`. `-fsyntax-only`, `-E` and `-M`/`-MM`
   treat a header as an ordinary input, and produce nothing. A header is
-  its own main file, so `#pragma once` in it gets no warning. C headers
-  are recorded; `-x c-header` PCH is not built yet (WP-1275 follow-up).
+  its own main file, so `#pragma once` in it gets no warning. A C header
+  (`-x c-header`, or `.h` under `kiln`) is built like a C++ one, and a C
+  consumer (`-x c`) takes it by `-include-pch` or by the `-include`
+  probe. It is always replayed: the producer writes the record with no
+  declaration image (the producer's `-v` with `-fkiln-pch-image`:
+  `consumers replay the header: a C header`; the consumer's with
+  `-fkiln-pch-image=load`: `is replayed: it has no declaration image`;
+  bench/pch case `c`, spec/bench.md "The pch group").
 - **`-include-pch <file>`.** This is separate-only, as in clang:
   `-include-pchX` is `-include` with the value `-pchX`. It is also
   accepted as `-Xclang -include-pch -Xclang <file>`. The last driver

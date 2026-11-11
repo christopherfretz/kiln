@@ -73,6 +73,11 @@ pub struct Measurement {
     /// identical in every run (`self_us` is not kept). Only `frontend`
     /// entries measured with kiln have it.
     pub inst: Option<InstCounters>,
+    /// kiln's accounted memory, from one extra unmeasured run with
+    /// `-fkiln-memory-report` (spec/bench.md "The pch group"; only the pch
+    /// group's `none` variants have it). A baseline without it is not
+    /// judged on it.
+    pub accounted: Option<Accounted>,
     /// Per-run samples, in run order. Results keep them; baselines do not.
     pub samples_wall_ms: Vec<f64>,
     pub samples_rss_kb: Vec<u64>,
@@ -131,6 +136,56 @@ impl InstCounters {
     }
 }
 
+/// The total line of kiln's memory report (`-fkiln-memory-report`,
+/// spec/driver.md): the bytes kiln's own tables hold (`live`) and have
+/// allocated (`reserved`) when the report is taken. It does not depend on
+/// the host's load or allocator, unlike peak RSS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accounted {
+    pub live: u64,
+    /// Judged: the capacity of tables that only grow, so a high-water mark.
+    pub reserved: u64,
+}
+
+impl Accounted {
+    /// The last `memory: total live=N reserved=N` line of `stderr`, which
+    /// may hold diagnostics and the report's rows too.
+    pub fn parse_report(stderr: &str) -> Result<Self, String> {
+        let total = stderr
+            .lines()
+            .rev()
+            .find_map(|l| l.trim().strip_prefix("memory: total "))
+            .ok_or("no `memory: total` line on stderr")?;
+        let (mut live, mut reserved) = (None, None);
+        for w in total.split_whitespace() {
+            let (k, v) = w.split_once('=').ok_or_else(|| format!("malformed `{w}`"))?;
+            let n = v.parse::<u64>().map_err(|_| format!("`{k}={v}` is not a byte count"))?;
+            match k {
+                "live" => live = Some(n),
+                "reserved" => reserved = Some(n),
+                _ => {}
+            }
+        }
+        match (live, reserved) {
+            (Some(live), Some(reserved)) => Ok(Self { live, reserved }),
+            _ => Err(format!("`memory: total {total}` lacks live= or reserved=")),
+        }
+    }
+
+    fn to_json(self) -> Json {
+        Json::obj([("live", num_u(self.live)), ("reserved", num_u(self.reserved))])
+    }
+
+    fn from_json(j: &Json) -> Result<Self, String> {
+        let n = |k: &str| -> Result<u64, String> {
+            field(j, k)?
+                .as_u64()
+                .ok_or_else(|| format!("`accounted.{k}` must be a non-negative integer"))
+        };
+        Ok(Self { live: n("live")?, reserved: n("reserved")? })
+    }
+}
+
 #[allow(clippy::cast_precision_loss)]
 fn num_u(n: u64) -> Json {
     Json::Num(n as f64)
@@ -155,6 +210,9 @@ impl Measurement {
         }
         if let Some(i) = self.inst {
             p.push(("inst", i.to_json()));
+        }
+        if let Some(a) = self.accounted {
+            p.push(("accounted", a.to_json()));
         }
         if samples {
             p.push((
@@ -190,6 +248,8 @@ impl Measurement {
         };
         // Optional: baselines recorded before WP-086 have none.
         let inst = j.get("inst").map(InstCounters::from_json).transpose()?;
+        // Optional: baselines recorded before WP-1303 have none.
+        let accounted = j.get("accounted").map(Accounted::from_json).transpose()?;
         let nums = |k: &str| -> Result<Vec<&Json>, String> {
             Ok(match j.get(k) {
                 None => Vec::new(),
@@ -215,6 +275,7 @@ impl Measurement {
             oven,
             oven_missing,
             inst,
+            accounted,
             samples_wall_ms: nums("samples_wall_ms")?
                 .into_iter()
                 .map(|x| x.as_f64().ok_or("`samples_wall_ms` must hold numbers"))
@@ -536,6 +597,7 @@ pub(super) mod tests {
             oven: None,
             oven_missing: Vec::new(),
             inst: None,
+            accounted: None,
             samples_wall_ms: vec![median * 1.1, median, median * 0.98],
             samples_rss_kb: rss.into_iter().collect(),
             compiler: compiler.into(),
@@ -581,6 +643,7 @@ pub(super) mod tests {
             evaluations: 6,
         });
         kiln.inst = Some(InstCounters { count: 10, nodes: 20, bytes: 30 });
+        kiln.accounted = Some(Accounted { live: 40, reserved: 50 });
         entries.insert("oven/kiln".to_owned(), Outcome::Measured(kiln));
         let r = RunRecord {
             timestamp: "2026-10-28T123456".into(),
@@ -635,6 +698,42 @@ pub(super) mod tests {
             "{k}"
         );
         assert_eq!(text.matches("\"inst\":").count(), 1, "{text}");
+        // Then the accounted memory, only where there is some.
+        assert!(
+            k.contains("        \"accounted\": {\n          \"live\": 40,\n          \"reserved\": 50\n        }"),
+            "{k}"
+        );
+        assert_eq!(text.matches("\"accounted\":").count(), 1, "{text}");
+    }
+
+    /// The total line of `-fkiln-memory-report` among its rows and other
+    /// stderr output (spec/driver.md, spec/bench.md "The pch group").
+    #[test]
+    fn memory_report_total() {
+        let stderr = "t.cpp:1:1: warning: w\n\
+            memory: types.nodes count=3 live=24 reserved=64\n\
+            memory: total live=159680 reserved=232554\n";
+        let a = Accounted::parse_report(stderr).unwrap();
+        assert_eq!(a, Accounted { live: 159_680, reserved: 232_554 });
+        assert!(Accounted::parse_report("error: x\n").unwrap_err().contains("no `memory: total`"));
+        let neg = "memory: total live=-1 reserved=2";
+        assert!(Accounted::parse_report(neg).unwrap_err().contains("not a byte count"));
+        let half = "memory: total live=1";
+        assert!(Accounted::parse_report(half).unwrap_err().contains("lacks"));
+        assert!(Accounted::parse_report("memory: total live").unwrap_err().contains("malformed"));
+    }
+
+    /// A baseline recorded before WP-1303 has no `accounted`: it loads, as
+    /// `None`, and is written back without the key.
+    #[test]
+    fn accounted_is_optional() {
+        let m = sample("kiln", 9.0, Some(1000));
+        let text = m.to_json(false, None).to_pretty();
+        assert!(!text.contains("accounted"), "{text}");
+        assert_eq!(Measurement::from_json(&Json::parse(&text).unwrap()).unwrap().accounted, None);
+        let bad = text.replacen("\"runs\"", "\"accounted\": {\"live\": 1},\n  \"runs\"", 1);
+        let e = Measurement::from_json(&Json::parse(&bad).unwrap()).unwrap_err();
+        assert!(e.contains("reserved"), "{e}");
     }
 
     /// The totals row of `-fkiln-instantiation-report=json` among other
