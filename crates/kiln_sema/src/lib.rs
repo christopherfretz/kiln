@@ -544,8 +544,10 @@ pub struct Sema<'a, 'sm> {
     /// Enumerations whose definitions are being processed.
     pub(crate) enums: Vec<decl::EnumBuild>,
     /// Block-scope function and `extern` variable declarations, by
-    /// enclosing namespace and name: a later namespace-scope declaration
-    /// redeclares them ([basic.link]/6, clang's local extern decls).
+    /// enclosing namespace (its first block, so every block of the
+    /// namespace matches; an inline namespace is its own namespace, as in
+    /// clang) and name: a later namespace-scope declaration redeclares
+    /// them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
     /// Block-scope variables whose qualified declarator-id was rejected
     /// (`static T(::a);`, [`qualified_decl::QualifiedDecl::DropLocal`]):
