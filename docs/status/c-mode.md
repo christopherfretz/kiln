@@ -35,6 +35,39 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
   2. an ICE on the GNU `a ?: b` with a logical condition, not covered by
      wp/1276.
 
+## WP-1288 re-measure (wp/1288, 2026-11-11)
+
+- gcc.c-torture, gnu23, `-O0,-O2`, kiln on main `92fc1f18e` (WP-1276
+  landed) against wp/1288 (`58a4203a8`, before the `_Complex` asm fix):
+  - pass 6479 to 6534; compile-reject 1035 to 1000; crash 19 to 1; wrong 36
+    to 34; timeout 3 to 3. 55 cases flip to pass (35 reject, 18 crash, 2
+    wrong) and none regress;
+  - the last crash (compile/20000804-1.c -O0, a `_Complex` `+r` asm
+    operand) now gets clang's IR and clang's backend error;
+  - by suite after: execute -O0 1480, -O2 1470; ieee 65 and 66; builtins
+    32 and 27; compile 1697 and 1697.
+- Fixed: the GNU `?:` ICE, `__label__`, GNU array-range and `.f =`-less
+  designators, enumerators and tags in a C member list, K&R identifier
+  lists, `__builtin_{extract,frob}_return_addr`, `__builtin___clear_cache`,
+  NEON `vqtbl{2,3,4}`/`vqtbx`/`vtbl`/`vtbx`, `__builtin_constant_p` through
+  `llvm.is.constant`, `-rpath DIR`, `-Wa,` and `-Xassembler`
+  (spec/landed/{codegen,driver,sema}/WP-1288.md).
+- OSS rows (`--compiler kiln`, harness build of wp/1288):
+  - zlib v1.3.2: configure, build and tests ok; 37/37 C TUs, 8/8 links,
+    6/6 tests;
+  - zstd v1.5.7: configure ok, build fails, 0/3 tests; 48/74 C TUs. All
+    26 failures are a function pointer compared with `(void *)0`
+    (`zstd_compress_internal.h:1614` and the trace/alloc hooks;
+    `tests/c/expr/fnptr-null-pointer-compare.c`, xfail).
+    `-Wa,--noexecstack` is now accepted in its 78 commands. The ASM
+    compiler identification is still "unknown" (see Driver follow-ups).
+- grpc and simdjson stay `c = "clang"`:
+  - simdjson: 4/5 C TUs; `cJSON.c:182` is the same function pointer
+    against `(void *)0` compare;
+  - grpc: the `vqtbl2q` blocker is fixed, but c-ares's configure probes
+    still cascade on qualifiers inside a parameter's `[ ]`
+    (`tests/c/decl/array-param-qualifiers.c`, xfail, WP-1287).
+
 ## C OSS rows
 
 `scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)
@@ -293,14 +326,16 @@ Plus, from the OSS rows:
 - Fixed here: `xtask/src/gcc_tests/torture.rs`, `--report` keys its region by
   `--std`, so the gnu23 and gnu17 runs sit side by side in this page
   (spec/harness.md).
+- Fixed in WP-1288: `-rpath DIR` (sqlite configure), `-Wa,` and
+  `-Xassembler` (zstd's `-Wa,--noexecstack`), and `__builtin_constant_p`
+  through `llvm.is.constant` (bcp-1.c).
 - Open:
-  - `kiln` rejects `-rpath DIR` (sqlite configure);
-  - `-Wa,--noexecstack` is unknown (zstd drops it);
-  - CMake's ASM compiler identification flags (`-V`, `-qversion`, and the
-    rest) are not recognized;
+  - CMake's ASM compiler identification is "unknown": it looks for
+    "clang version" in `--version`, which kiln deliberately does not print
+    (docs/COMPATIBILITY.md). kiln-cc is still found as the assembler, so
+    no row depends on it today;
   - link errors print with a `clang++:` prefix ahead of kiln's own line;
   - `ld` cannot read the `-O2 -g` line table of some configure probes;
-  - `__builtin_constant_p` should lower to `llvm.is.constant` (bcp-1.c);
   - compile/limits-structnest.c times out;
   - compile/pr65680.c runs out of memory (see Crashes).
 
@@ -344,6 +379,12 @@ in the row's build dir, with the flags exactly as recorded in that row's
     -DSQLITE_ENABLE_RTREE -DSQLITE_ENABLE_SESSION -DSQLITE_HAVE_ZLIB=1
     -DSQLITE_THREADSAFE=1`;
   - kiln 31.8 s and 741152 KB; clang-19 28.6 s and 926572 KB.
+- simdjson v4.2.4's `yyjson.c` (WP-1288, harness build of wp/1288), from
+  a clang-19 configure of the row (`compile_commands.json`, replayed):
+  - command: `<cc> -DSIMDJSON_AVX512_ALLOWED=1 -DSIMDJSON_UTF8VALIDATION=1
+    -isystem <build>/_deps/yyjson-src/src -O3 -DNDEBUG -c
+    <build>/_deps/yyjson-src/src/yyjson.c` (best of 3);
+  - kiln 2.10 s and 92072 KB; clang-19 1.80 s and 140640 KB.
 
 ## gcc.c-torture at -std=gnu23 (generated)
 
