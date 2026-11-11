@@ -1563,7 +1563,8 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
 fn same_kind(a: &Payload, b: &Payload) -> bool {
     match (a, b) {
         (Payload::Function { kind: x, .. }, Payload::Function { kind: y, .. }) => x == y,
-        (Payload::Template { kind: x, .. }, Payload::Template { kind: y, .. }) => x == y,
+        // A redeclared template (WP-1292): the same kind of template.
+        (Payload::Template { kind: x, .. }, Payload::Template { kind: y, .. }) if x == y => true,
         (
             Payload::Field { .. }
             | Payload::Access
@@ -2908,10 +2909,10 @@ impl Writer<'_, '_, '_> {
         })
     }
 
-    /// Checks the header fields every record shares.
-    fn head(&mut self, d: DeclId) -> W<Head> {
-        let ast = &self.s.ast;
-        let n = ast.decls.get(d);
+    /// The flags of declaration `d` the image carries, or the fallback
+    /// reason for the first one it does not.
+    fn head_flags(&self, d: DeclId) -> W<()> {
+        let n = self.s.ast.decls.get(d);
         let mut extra = n.flags().bits() & !(DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits());
         if n.kind() == DeclKind::UsingShadow {
             // Every shadow is implicit; the reader's builder marks it.
@@ -2934,6 +2935,14 @@ impl Writer<'_, '_, '_> {
                 "a declaration with flags the image does not carry"
             });
         }
+        Ok(())
+    }
+
+    /// Checks the header fields every record shares.
+    fn head(&mut self, d: DeclId) -> W<Head> {
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        self.head_flags(d)?;
         let parm = matches!(n.kind(), DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm);
         if n.has(DeclFlags::DEPENDENT_CTX)
             && !parm
@@ -4036,9 +4045,9 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::UsingDirective
         | K::Using
         | K::UsingEnum
-        | K::UsingShadow => Ok(()),
+        | K::UsingShadow
+        | K::Friend => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
-        K::Friend => Ok(()),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
         | K::Concept
