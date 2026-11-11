@@ -264,10 +264,10 @@ declaration image") against clang's on fixed header sets
   - a table of every variant in page order (none, build, load, replay),
     with kiln and clang seconds and MiB and the kiln/clang time and memory
     ratios;
-  - the PCH load over no PCH time ratio for each compiler;
+  - the wall time of PCH load relative to no PCH, for each compiler;
   - the case's command lines.
-- **Cost.** About 4 minutes at 5 runs on the reference host, and about
-  1 minute at `--runs 1`. It is not part of `cargo xtask ci` and runs in
+- **Cost.** About 3 minutes at 5 runs on the shared aarch64 host, and about
+  40 seconds at `--runs 1`. It is not part of `cargo xtask ci` and runs in
   no CI workflow. Run it by hand when the PCH writer or consumer changes,
   and before a release:
 

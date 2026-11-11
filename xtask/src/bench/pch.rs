@@ -884,7 +884,7 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
     let _ = writeln!(
         s,
         "- Host {}. Each number is the median of {} runs: wall time in seconds, peak RSS in MiB \
-         (`{}`). The host is shared: wall times move about 1.4x with its load, so the \
+         (RSS source `{}`). The host is shared: wall times move about 1.4x with its load, so the \
          kiln-to-clang ratios, taken back to back, are the steadier figure; memory does not \
          move.",
         cx.host, cx.runs, cx.rss
@@ -918,7 +918,7 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
             }
             None => {}
         }
-        let _ = writeln!(s);
+        let _ = writeln!(s, "\n");
         let _ = writeln!(
             s,
             "PCH file: kiln {}, clang {}.\n",
@@ -966,7 +966,7 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
         };
         let _ = writeln!(
             s,
-            "\nPCH load over no PCH, wall time: kiln {}; clang {}.",
+            "\nWall time of PCH load relative to no PCH: kiln {}; clang {}.",
             buys(cx.test_run),
             buys(cx.oracle_run)
         );
