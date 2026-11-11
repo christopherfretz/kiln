@@ -58,7 +58,11 @@ pub(crate) fn is_type_specifier_kw(k: Kw) -> bool {
             | Kw::Float64x
             | Kw::Bf16
             | Kw::Fp16
+            | Kw::Decimal32
+            | Kw::Decimal64
+            | Kw::Decimal128
             | Kw::Complex
+            | Kw::Imaginary
             | Kw::Auto
             | Kw::GnuAutoType
             | Kw::Const
@@ -682,12 +686,36 @@ impl Parser<'_, '_> {
         }
     }
 
+    /// clang `ext_c99_feature` / `ext_c11_feature` on the current token
+    /// when it is the reserved spelling of a keyword C99 (`_Bool`,
+    /// `_Imaginary`) or C11 (`_Static_assert`, `_Alignas`, `_Alignof`,
+    /// `_Atomic`, `_Thread_local`) added, and the language is older C or
+    /// C++ (spec/parse.md §1.4).
+    pub(crate) fn c_keyword_extension(&mut self) {
+        let t = self.tok();
+        let sp = self.spelling_of(&t);
+        let id = match sp.as_str() {
+            "_Bool" | "_Imaginary" if !self.s.c_at_least(kiln_lex::CStd::C99) => {
+                DiagId::parse_c99_feature
+            }
+            "_Static_assert" | "_Alignas" | "_Alignof" | "_Atomic" | "_Thread_local"
+                if !self.s.c_at_least(kiln_lex::CStd::C11) =>
+            {
+                DiagId::parse_c11_feature
+            }
+            _ => return,
+        };
+        let d = self.s.diag(id, t.span.lo).arg(sp);
+        self.emit(d);
+    }
+
     /// `static_assert ( constant-expression [, static_assert-message] ) ;`
     /// ([dcl.pre]/10). The message is an unevaluated string literal when
     /// every token up to the `)` is a string literal without a
     /// ud-suffix, else a constant-expression (P2741; clang 22's
     /// lookahead, a C++26 extension before C++26).
     pub(crate) fn parse_static_assert(&mut self) -> Option<DeclId> {
+        self.c_keyword_extension();
         let loc = self.bump().span.lo;
         let Some(open) = self.expect(Punct::LParen) else {
             self.skip_to_semi();
@@ -884,6 +912,7 @@ impl Parser<'_, '_> {
                 Kw::Register => ds.set_storage(StorageSpec::Register, loc),
                 Kw::Mutable => ds.set_storage(StorageSpec::Mutable, loc),
                 Kw::ThreadLocal => {
+                    self.c_keyword_extension();
                     let sp = self.spelling_of(&self.tok());
                     let r = set_flag(&mut ds.thread_local, loc, "thread_local");
                     if r.is_ok() {
@@ -912,8 +941,11 @@ impl Parser<'_, '_> {
                 }
                 Kw::Friend => set_flag(&mut ds.friend, loc, "friend"),
                 Kw::Noreturn => {
-                    let d = self.s.diag(DiagId::parse_c11_noreturn, loc);
-                    self.emit(d);
+                    // clang `ext_c11_feature`: not in C11 and later.
+                    if !self.s.c_at_least(kiln_lex::CStd::C11) {
+                        let d = self.s.diag(DiagId::parse_c11_noreturn, loc);
+                        self.emit(d);
+                    }
                     set_flag(&mut ds.noreturn, loc, "_Noreturn")
                 }
                 Kw::Explicit => {
@@ -938,7 +970,10 @@ impl Parser<'_, '_> {
                 Kw::Signed => ds.set_sign(Sign::Signed, loc),
                 Kw::Unsigned => ds.set_sign(Sign::Unsigned, loc),
                 Kw::Void => ds.set_base(TypeSpecKind::Void, None, loc),
-                Kw::Bool => ds.set_base(TypeSpecKind::Bool, None, loc),
+                Kw::Bool => {
+                    self.c_keyword_extension();
+                    ds.set_base(TypeSpecKind::Bool, None, loc)
+                }
                 Kw::Char => ds.set_base(TypeSpecKind::Char, None, loc),
                 Kw::WChar => ds.set_base(TypeSpecKind::WChar, None, loc),
                 Kw::Char8 => ds.set_base(TypeSpecKind::Char8, None, loc),
@@ -982,10 +1017,24 @@ impl Parser<'_, '_> {
                 Kw::Bf16 => ds.set_base(TypeSpecKind::BFloat16, None, loc),
                 Kw::Fp16 => ds.set_base(TypeSpecKind::Fp16, None, loc),
                 Kw::Complex => {
-                    // clang `ext_c99_feature` on the keyword.
-                    self.s.error(DiagId::parse_c99_complex, loc);
+                    // clang `ext_c99_feature` on the keyword, before C99.
+                    if !self.s.c_at_least(kiln_lex::CStd::C99) {
+                        self.s.error(DiagId::parse_c99_complex, loc);
+                    }
                     ds.set_complex(loc)
                 }
+                // C99 6.7.2: `_Imaginary` is a keyword in every language
+                // (clang `KEYALL`), which clang does not implement
+                // (spec/parse.md §1.4).
+                Kw::Imaginary => {
+                    self.c_keyword_extension();
+                    ds.set_imaginary(loc)
+                }
+                // ISO/IEC TS 18661-2 / C23 6.7.2 decimal floating types:
+                // keywords everywhere, rejected by sema as clang does.
+                Kw::Decimal32 => ds.set_base(TypeSpecKind::Decimal32, None, loc),
+                Kw::Decimal64 => ds.set_base(TypeSpecKind::Decimal64, None, loc),
+                Kw::Decimal128 => ds.set_base(TypeSpecKind::Decimal128, None, loc),
                 // C `auto` is a storage class (C89 3.5.1); C23 also deduces
                 // with it when no type-specifier follows (C23 6.7.10).
                 Kw::Auto if self.s.is_c() && !self.c23_auto_deduces() => {
@@ -1006,6 +1055,7 @@ impl Parser<'_, '_> {
                     continue;
                 }
                 Kw::Atomic => {
+                    self.c_keyword_extension();
                     self.parse_atomic_specifier_into(&mut ds, loc);
                     continue;
                 }
@@ -2128,7 +2178,9 @@ impl Parser<'_, '_> {
     ) -> bool {
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
         let mut invalid = false;
-        if type_spec {
+        // C defines a tag anywhere a type name appears (C17 6.7.2.3p6): a
+        // cast, `sizeof`, `_Generic` (clang `ActOnTag` checks `CPlusPlus`).
+        if type_spec && !self.s.is_c() {
             self.s.diag_type_defined_in(d, TagDefinedIn::TypeSpecifier, false);
             invalid = true;
         }
@@ -2137,8 +2189,17 @@ impl Parser<'_, '_> {
             invalid = true;
         }
         if (named || keyword == TagKeyword::Enum) && !type_spec && self.s.in_prototype_scope() {
-            self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
-            invalid = true;
+            if self.s.is_c() {
+                // C17 6.2.1p4: a tag in a parameter list has prototype
+                // scope; clang warns (`-Wvisibility`). WP-1285.
+                let ty = self.s.elaborated_tag_type(d, keyword);
+                let loc = self.s.ast.decls.get(d).loc();
+                let msg = self.s.diag(DiagId::sema_c_param_tag_not_visible, loc);
+                self.emit(msg.arg(self.s.ty_arg(ty)));
+            } else {
+                self.s.diag_type_defined_in(d, TagDefinedIn::ParamType, true);
+                invalid = true;
+            }
         }
         if invalid {
             ds.invalid = true;
@@ -2154,6 +2215,11 @@ impl Parser<'_, '_> {
     /// parameter type (an unnamed class), a condition ([stmt.pre]/5), an
     /// alias template's type-id. The declarator is invalid.
     fn check_tag_defined_in(&mut self, ds: &mut DeclSpec, d: DeclId, ctx: DeclaratorContext) {
+        // C defines a tag in any type name or parameter type (C17
+        // 6.7.2.3p6, 6.2.1p4).
+        if self.s.is_c() {
+            return;
+        }
         let rule = match (Self::tag_site(ds, ctx), ctx) {
             (TagSite::TypeId, _) => TagDefinedIn::TypeSpecifier,
             (TagSite::AliasTemplate, _) => TagDefinedIn::AliasTemplate,
@@ -2179,6 +2245,11 @@ impl Parser<'_, '_> {
     /// decl-specifier-seq defines a valid tag (clang's
     /// `GetFullTypeForDeclarator`).
     fn check_tag_defined_in_result(&mut self, ds: &DeclSpec, d: &Declarator) {
+        // C17 6.9.1: a function's result type may define a tag (clang
+        // `GetFullTypeForDeclarator` checks `CPlusPlus`).
+        if self.s.is_c() {
+            return;
+        }
         let Some(t) = ds.tag.filter(|_| ds.tag_defined) else { return };
         for c in &d.chunks {
             if matches!(c, Chunk::Function { .. }) {
@@ -2423,7 +2494,9 @@ impl Parser<'_, '_> {
         let can_define = Self::tag_site(ds, ctx) != TagSite::NoDefinition;
         let use_ = if can_define
             && (self.at(Punct::LBrace)
-                || (is_class && self.at(Punct::Colon))
+                // C has no base clause: `_Generic(e, struct S: 1)` names
+                // `S` (clang `ParseClassSpecifier` checks `CPlusPlus`).
+                || (is_class && self.at(Punct::Colon) && !self.s.is_c())
                 || final_loc.is_some())
         {
             TagUse::Definition

@@ -100,11 +100,16 @@ fn lex_pptoken_other_char() {
     assert_eq!(dump_of("@\n"), "other '@' [StartOfLine]\n");
 }
 
-/// [lex.pptoken]/2: a stray non-ASCII character is ill-formed but a token.
+/// [lex.pptoken]/2: a stray non-ASCII character is ill-formed. Outside a
+/// directive and -E it is diagnosed and dropped (clang's recovery); under
+/// -E it is a silent "other" token.
 #[test]
 fn lex_pptoken_stray_non_ascii() {
     let l = lex("a \u{2603} b\n");
-    assert_eq!(l.spellings, ["a", "\u{2603}", "b"]);
+    assert_eq!(l.spellings, ["a", "b"]);
     assert_eq!(l.diags[0].0, D::InvalidChar { ch: '\u{2603}' });
     assert_eq!(diag_kinds("\u{2603}\n", cxx26()).len(), 1);
+    let e = lex_with("a \u{2603} b\n", LexOptions { preprocessed_output: true, ..cxx26() });
+    assert_eq!(e.spellings, ["a", "\u{2603}", "b"]);
+    assert!(e.diags.is_empty());
 }

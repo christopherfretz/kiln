@@ -27,10 +27,19 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
         K::InvalidChar { ch } => {
             Diag::new(DiagId::lex_invalid_char, span).arg(format!("{:04X}", u32::from(ch)))
         }
-        K::CharNotAllowedInIdentifier { ch } => {
+        K::CharNotAllowedInIdentifier { ch, at_start } => {
             Diag::new(DiagId::lex_char_not_allowed_in_identifier, span)
                 .arg(format!("{:04X}", u32::from(ch)))
+                .arg(u32::from(at_start))
         }
+        K::C99CompatUnicodeId { start } => {
+            Diag::new(DiagId::lex_c99_compat_unicode_id, span).arg(u32::from(start))
+        }
+        K::MathematicalNotation { ch } => {
+            Diag::new(DiagId::lex_mathematical_notation, span).arg(format!("{:04X}", u32::from(ch)))
+        }
+        K::UcnNotValidInC89 => Diag::new(DiagId::lex_ucn_not_valid_in_c89, span),
+        K::UcnNotValidInC89Literal => Diag::new(DiagId::lex_ucn_not_valid_in_c89_literal, span),
         K::UnicodeWhitespace { .. } => Diag::new(DiagId::lex_unicode_whitespace, span),
         K::NullCharacter => Diag::new(DiagId::lex_null_character, span),
         K::InvalidUtf8 => Diag::new(DiagId::lex_invalid_utf8, span),
@@ -45,6 +54,7 @@ pub(crate) fn lex_diag(sm: &SourceManager, d: &LexDiag) -> Option<Diag> {
             Diag::new(DiagId::lex_escaped_newline_block_comment_end, span)
         }
         K::MultiLineLineComment => Diag::new(DiagId::lex_multi_line_line_comment, span),
+        K::C89LineComment => Diag::new(DiagId::lex_line_comment, span),
         K::UnterminatedString => Diag::new(DiagId::lex_unterminated_string, span),
         K::UnterminatedChar => Diag::new(DiagId::lex_unterminated_char, span),
         K::UnterminatedRawString => {

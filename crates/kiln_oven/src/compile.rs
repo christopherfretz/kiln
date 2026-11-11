@@ -3825,7 +3825,7 @@ impl Compiler<'_> {
         }
         let t = self.ty(q);
         let v = match kind {
-            TraitKind::SizeOf => self.o.types.size(t),
+            TraitKind::SizeOf => self.o.types.sizeof_value(t),
             // clang's `getTypeInfoDataSizeInChars`: a class's `dsize` (its
             // size without the tail padding a derived class may reuse),
             // any other type's size.

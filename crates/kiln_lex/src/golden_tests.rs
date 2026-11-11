@@ -253,9 +253,11 @@ fn golden_lex_pptoken_munch_numbers_literals() {
             "wide_string_literal 'L\"w\"' [LeadingSpace]\n",
             "utf16_string_literal 'u\"\\u0041\"' [LeadingSpace]\n",
             "identifier 'a\\U0001F600b' [LeadingSpace] [UCN]\n",
-            "other '\u{300}' [LeadingSpace]\n",
+            // U+0300 cannot start an identifier: dropped (with an
+            // error) in UTF-8, a lone token as a UCN (clang 19 compiling;
+            // `-dump-tokens` keeps the UTF-8 one as `unknown`).
             "identifier 'x'\n",
-            "unknown '\\u0300' [LeadingSpace] [UCN]\n",
+            "unknown '\\u0300' [LeadingSpace]\n",
             "identifier 'y'\n",
             "identifier '\\u00e9t' [LeadingSpace] [UCN]\n",
             "identifier 'x' [StartOfLine] [LeadingSpace]\n",
@@ -293,7 +295,7 @@ fn golden_lex_pptoken_recovery() {
             "other '@' [StartOfLine]\n",
             "other '`' [LeadingSpace]\n",
             "other '\\' [LeadingSpace]\n",
-            "other '\u{2603}' [LeadingSpace]\n",
+            // U+2603 is dropped with "unexpected character".
             "identifier 'x' [LeadingSpace]\n",
             "identifier 'y' [LeadingSpace]\n",
             "unknown 'R\"abc\\n' [StartOfLine]\n",

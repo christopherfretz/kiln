@@ -909,6 +909,8 @@ u8_enum!(
         IsLvalueExpr = "__is_lvalue_expr",
         /// `__is_rvalue_expr` (`ExpressionTraitExpr`).
         IsRvalueExpr = "__is_rvalue_expr",
+        /// GNU `__builtin_types_compatible_p`, C only (C17 6.2.7).
+        TypesCompatible = "__builtin_types_compatible_p",
     }
 );
 

@@ -550,7 +550,13 @@ fn resolve_tools(opts: &Options, root: &Path, scratch: &Path) -> Result<Vec<Tool
         }
     }
     if opts.oracles.contains(&Role::Clang) {
-        tools.push(Tool::new(Role::Clang, opts.clang.clone(), Vec::new(), scratch)?);
+        let clang = Tool::new(Role::Clang, opts.clang.clone(), Vec::new(), scratch)?;
+        // kiln emulates the clang oracle's release, as `xtask test` does
+        // (spec/harness.md): clang 22 makes some C warnings errors.
+        if let Some(m) = clang.clang_major().filter(|m| crate::oracle::SUPPORTED.contains(m)) {
+            tools[0].lead_with(format!("-fclang-compat={m}"));
+        }
+        tools.push(clang);
     }
     Ok(tools)
 }

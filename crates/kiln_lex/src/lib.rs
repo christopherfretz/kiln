@@ -7,6 +7,8 @@
 //! contract this crate implements.
 #![forbid(unsafe_code)]
 
+#[allow(clippy::unreadable_literal, reason = "code point ranges")]
+mod c_ident_tables;
 mod diag;
 mod dump;
 #[cfg(test)]

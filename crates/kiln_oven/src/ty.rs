@@ -301,6 +301,13 @@ impl Types {
         self.infos[t.0 as usize].size
     }
 
+    /// What `sizeof` yields for `t`: its size, or 1 for `void` (GNU C,
+    /// which Sema accepts only in C; WP-1285). A function type is
+    /// already interned with size 1.
+    pub fn sizeof_value(&self, t: OTy) -> u64 {
+        if matches!(self.kind(t), TyKind::Void) { 1 } else { self.size(t) }
+    }
+
     /// The bytes a trivial copy of an object of type `t` writes: a
     /// class's `dsize`, without the tail padding a derived class may
     /// reuse ([class.copy.ctor]/14 copies the base subobject, not the
