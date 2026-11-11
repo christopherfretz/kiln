@@ -1925,6 +1925,14 @@ impl ExprArena {
         n.bits |= ExprFlags::ADL.0;
     }
 
+    /// Makes the prefix `++`/`--` `e` a prvalue: C17 6.5.3.1p2 defines
+    /// `++E` as `E += 1`, which is not an lvalue in C (6.5.16p3).
+    pub fn set_c_prefix_incdec_prvalue(&mut self, e: ExprId) {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(n.kind == ExprKind::UnaryOperator, "expected a unary operator, found {:?}", n.kind);
+        n.bits &= !3;
+    }
+
     /// Marks the `UnresolvedLookupExpr` `e` as using argument-dependent
     /// lookup: an unqualified template-id followed by `(`
     /// ([basic.lookup.argdep]/1, [temp.names]/3). Write-once.

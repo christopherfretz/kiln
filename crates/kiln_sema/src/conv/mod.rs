@@ -21,6 +21,7 @@
 mod apply;
 mod arith;
 pub(crate) mod bases;
+pub(crate) mod c_assign;
 pub(crate) mod narrow;
 mod qual;
 pub(crate) use qual::{
@@ -106,11 +107,26 @@ pub struct ConvError {
     /// A source range underlined with `~` (clang streams the
     /// initializer's range into the reference-binding diagnostics).
     pub range: Option<Span>,
+    /// The converted expression of a C constraint violation clang accepts
+    /// with a diagnostic (an incompatible pointer, `-Wint-conversion`):
+    /// the caller emits the diagnostic and keeps this value
+    /// ([`c_assign::convert`]).
+    pub recovered: Option<ExprId>,
+    /// clang's fix-it hints for a C constraint violation (`*`/`&`).
+    pub fixits: Vec<kiln_diag::FixIt>,
 }
 
 impl ConvError {
     pub(crate) fn new(id: DiagId, args: Vec<String>) -> ConvError {
-        ConvError { id, args, notes: Vec::new(), at: None, range: None }
+        ConvError {
+            id,
+            args,
+            notes: Vec::new(),
+            at: None,
+            range: None,
+            recovered: None,
+            fixits: Vec::new(),
+        }
     }
 
     /// The diagnostic, with its caret at `e`'s location.
@@ -130,6 +146,7 @@ impl ConvError {
             Some(r) => d.range(r),
             None => d,
         };
+        let d = self.fixits.iter().cloned().fold(d, kiln_diag::Diag::fixit);
         self.notes.iter().cloned().fold(d, kiln_diag::Diag::with_note)
     }
 }
@@ -1274,6 +1291,12 @@ pub fn implicit_convert(
     // constructor (`const D& d = f;` with `D(R (*)())`).
     if from == QualType::OVERLOAD && !s.overload_set_converts_to_class(e, to, IcsOptions::NONE) {
         return convert_overload_set(s, e, to, ctx);
+    }
+    // C17 6.5.16.1: the C assignment constraints (pointers, structures).
+    if s.is_c()
+        && let Some(r) = c_assign::convert(s, e, to, ctx)
+    {
+        return r;
     }
     if s.ast.types.is_reference(to) {
         let r = bind_reference(s, e, to, ctx)?;

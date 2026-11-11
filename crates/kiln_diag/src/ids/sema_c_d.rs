@@ -3,6 +3,31 @@
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
 sema_c99_flexible_array_member = Extension [C99Extensions] (0) "flexible array members are a C99 feature";
+// WP-1276: C assignment constraints (clang `DiagnoseAssignmentResult`; {2} is the action).
+sema_c_assign_discards_nested_qualifiers = ExtWarn [IncompatiblePointerTypesDiscardsQualifiers] (3) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} discards qualifiers in nested pointer types";
+sema_c_assign_discards_qualifiers = ExtWarn [IncompatiblePointerTypesDiscardsQualifiers] (3) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} discards qualifiers";
+sema_c_assign_incompatible = Error (4) "{2:assigning to {0} from incompatible type {1}|passing {0} to parameter of incompatible type {1}|returning {0} from a function with incompatible result type {1}|converting {0} to incompatible type {1}|initializing {0} with an expression of incompatible type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+sema_c_assign_incompatible_function_pointer = WarningError [IncompatibleFunctionPointerTypes] (4) "incompatible function pointer types {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+sema_c_assign_incompatible_pointer = ExtWarn [IncompatiblePointerTypes] (4) "incompatible pointer types {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+sema_c_assign_int_to_pointer = WarningError [IntConversion] (4) "incompatible integer to pointer conversion {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+sema_c_assign_pointer_sign = ExtWarn [PointerSign] (4) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} converts between pointers to integer types {3:with different sign|where one is of the unique plain 'char' type and the other is not}";
+sema_c_assign_pointer_to_int = WarningError [IntConversion] (4) "incompatible pointer to integer conversion {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
+// WP-1276: C functions without a prototype (clang `warn_strict_uses_without_prototype`, `warn_non_prototype_changes_behavior`, `note_conflicting_prototype`).
+sema_c_call_without_prototype = Warning [DeprecatedNonPrototype] (2) "passing arguments to {0:a function|'{1}'} without a prototype is deprecated in all versions of C and is not supported in C23";
+sema_c_conflicting_prototype_note = Note (0) "conflicting prototype is here";
+sema_c_ident_list_in_fn_declaration = Error (0) "a parameter list without types is only allowed in a function definition";
+sema_c_implicit_function_decl = WarningOff [ImplicitFunctionDeclaration] (1) "implicit declaration of function '{0}'";
+sema_c_implicit_function_decl_c99 = WarningError [ImplicitFunctionDeclaration] (1) "call to undeclared function '{0}'; ISO C99 and later do not support implicit function declarations";
+sema_c_implicit_int = WarningOff [ImplicitInt] (0) "type specifier missing, defaults to 'int'";
+sema_c_implicit_int_c99 = WarningError [ImplicitInt] (0) "type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int";
+sema_c_knr_param_missing = Error (1) "parameter named '{0}' is missing";
+sema_c_knr_param_not_declared = WarningError [ImplicitInt] (1) "parameter '{0}' was not declared, defaults to 'int'; ISO C99 and later do not support implicit int";
+sema_c_knr_wrong_arg_count = Warning (2) "too {0:few|many} arguments in call to '{1}'";
+sema_c_non_literal_null = Warning [NonLiteralNullConversion] (1) "expression which evaluates to zero treated as a null pointer constant of type {0}";
+sema_c_non_prototype_conflict = Warning [DeprecatedNonPrototype] (2) "a function declaration without a prototype is deprecated in all versions of C and is treated as a zero-parameter prototype in C23, conflicting with a {0:previous|subsequent} {1:declaration|definition}";
+sema_c_non_prototype_definition = Warning [DeprecatedNonPrototype] (0) "a function definition without a prototype is deprecated in all versions of C and is not supported in C23";
+sema_c_non_prototype_unsupported = Warning [DeprecatedNonPrototype] (0) "a function declaration without a prototype is deprecated in all versions of C and is not supported in C23";
+sema_c_tag_without_keyword = Error (2) "must use '{0}' tag to refer to type '{1}'";
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
 sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";

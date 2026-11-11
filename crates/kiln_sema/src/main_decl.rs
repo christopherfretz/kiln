@@ -63,7 +63,7 @@ impl Sema<'_, '_> {
             let w = self.diag(DiagId::sema_main_extern_c, loc);
             self.emit(w);
         }
-        if proto.info().variadic() {
+        if proto.info().variadic() && !proto.info().no_proto() {
             let w = self.diag(DiagId::sema_main_variadic, loc);
             self.emit(w);
         }

@@ -200,6 +200,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         stack_protector: f.stack_protector(),
         unwind_tables: f.unwind_tables(a.predef.freestanding.unwrap_or(false)),
         no_plt: f.no_plt,
+        common: f.common,
         static_destructors: f.static_destructors,
         wrapv: f.wrapv(),
         trapv: f.trapv,
@@ -359,6 +360,10 @@ impl CodegenJob<'_> {
             let mut opts = CodegenOptions {
                 source_filename: if job.path == "-" { "-".to_owned() } else { job.path.to_owned() },
                 c: job.std.c,
+                gnu89_inline: job
+                    .std
+                    .c
+                    .is_some_and(|c| a.predef.gnu89_inline.unwrap_or(c < kiln_lex::CStd::C99)),
                 exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
                 rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
                 ident: ident(),
