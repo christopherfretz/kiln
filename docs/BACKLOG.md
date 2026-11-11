@@ -1149,6 +1149,7 @@ the rows that must be MERGED first; rows with the same needs run in parallel.
 | WP-1068 | modules image S6: imports, re-exports and partitions (bmi_image.rs:1224) | WP-1048 | done (#556) |
 | WP-1069 | modules image S-lazy: lazy top-level lookup instead of eager build; needs mutable lookup path (kiln_parse modules.rs:121, bmi_image.rs:1383) | WP-1048 | open |
 | WP-1070 | modules image S7: locations in other files and macro expansions (bmi_image.rs:868); then flip -fkiln-bmi-image on once std is covered | WP-1048 | in progress |
+| WP-1278 | modules image: carry declaration attributes, reserved identifiers, linkage specs, inline/unnamed namespaces and the small non-template kinds (bmi_image/attrs.rs) | WP-1070 | in progress |
 | WP-1075 | rejects-valid: break/continue inside a statement-expression in a loop condition, for(;({break;1;});) (kiln_sema stmt.rs:1350, :1358) | WP-971 | done (#443) |
 | WP-1076 | hang: kiln times out (>20 s) on clang CodeGenCXX/mangle-ms-back-references-pr13207.cpp, CodeGenCXX/pr29160.cpp, Preprocessor/bigoutput.c | WP-971 | done (#447) |
 | WP-1071 | sema: relookup_member handles overload sets and using-declarations of a specialization member (kiln_sema templ/subst/mod.rs:971, today not yet implemented) | WP-1054 | done (#461) |
