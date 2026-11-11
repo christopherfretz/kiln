@@ -31,14 +31,8 @@ impl Writer<'_, '_, '_> {
         if p.params.is_some() {
             return Err("a template template parameter");
         }
-        if p.depth != 0 {
-            return Err("a member template or a template in a template");
-        }
-        // A default inherited from an earlier declaration belongs to a
-        // redeclared template, which the image does not carry.
-        if t.inherited_defaults.contains(d) {
-            return Err("a default template argument");
-        }
+        // A default inherited from an earlier declaration is rebuilt by
+        // the importer from the redeclared template's ([`Sema::image_inherited_defaults`]).
         let n = ast.decls.get(d);
         let default = t.defaults.get(d).map(TemplateArg::view);
         if n.kind() == DeclKind::NonTypeTemplateParm {
@@ -92,10 +86,6 @@ impl Writer<'_, '_, '_> {
             DeclKind::TypeAliasTemplate => 2,
             _ => 3,
         };
-        let redecl = |x: DeclId| ast.decls.redecl(x).is_some_and(|r| r.prev.is_some());
-        if redecl(d) || redecl(pattern) {
-            return Err("a redeclared template");
-        }
         if info.constraint.is_some() || ast.templates.trailing_requires.contains(pattern) {
             return Err("a constrained template");
         }
@@ -107,9 +97,6 @@ impl Writer<'_, '_, '_> {
         let list = *ast.templates.param_list(info.params);
         if list.requires.is_some() {
             return Err("a constrained template");
-        }
-        if list.depth != 0 {
-            return Err("a member template or a template in a template");
         }
         let mut params = Vec::new();
         for p in ast.lists.iter::<DeclId>(list.params) {
@@ -132,6 +119,18 @@ impl Writer<'_, '_, '_> {
             depth: list.depth,
             params,
         })
+    }
+
+    /// The previous declaration of template `d` (WP-1292): its pattern's
+    /// previous declaration's template, which `finish_template_pattern`
+    /// passes the new template as the declaration it replaces in lookup
+    /// (template declarations carry no redeclaration link of their own).
+    pub(super) fn template_prev(&self, d: DeclId) -> W<u32> {
+        let ast = &self.s.ast;
+        let pattern = ast.template_info(d).and_then(|i| i.pattern).ok_or("a malformed template")?;
+        let Some(p) = ast.prev(pattern) else { return Ok(NONE) };
+        let t = ast.described_template(p).ok_or("a redeclared template")?;
+        self.recs.get(&t).copied().ok_or("a redeclaration of an entity outside the image")
     }
 
     /// Whether `d` is the pattern of a template of kind `kind` (WP-1279:
@@ -206,6 +205,24 @@ impl Sema<'_, '_> {
             let e: ExprId = built.expr(e);
             let profile = profile.then(|| self.ast.profile_expr(e));
             let _ = self.builder().set_template_default(p, TemplateArg::expr(e, profile));
+        }
+    }
+
+    /// Rebuilds the default arguments redeclared templates `ts` (in
+    /// declaration order) inherit, once every default is set, as
+    /// `finish_template_pattern` records them ([temp.param]/12).
+    pub(super) fn image_inherited_defaults(&mut self, ts: &[DeclId]) {
+        for &t in ts {
+            let Some(info) = self.ast.template_info(t).copied() else { continue };
+            let Some(prev) = self.ast.decls.redecl(t).and_then(|r| r.prev) else { continue };
+            self.merge_template_defaults(t);
+            let old = self
+                .head_comparable_decl(prev)
+                .and_then(|p| self.ast.template_info(p))
+                .map(|i| i.params);
+            if let Some(old) = old {
+                self.record_inherited_defaults(info.params, old);
+            }
         }
     }
 }

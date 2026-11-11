@@ -47,6 +47,7 @@ mod body;
 mod classtempl;
 mod declocs;
 mod locs;
+mod membertempl;
 mod scope;
 mod spec;
 mod templ;
@@ -1513,6 +1514,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
 fn same_kind(a: &Payload, b: &Payload) -> bool {
     match (a, b) {
         (Payload::Function { kind: x, .. }, Payload::Function { kind: y, .. }) => x == y,
+        (Payload::Template { kind: x, .. }, Payload::Template { kind: y, .. }) => x == y,
         (
             Payload::Field { .. }
             | Payload::Access
@@ -1902,8 +1904,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     // template claimed it as its pattern or a parameter.
     let mut dependent: Vec<usize> = Vec::new();
     let mut claimed = vec![false; nd];
-    // S4b: per class template pattern, its parameter count.
-    let mut tmpl_params: FxHashMap<usize, usize> = FxHashMap::default();
+    // WP-1292: per pattern record, its template record.
+    let pats = membertempl::template_patterns(img);
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
     for (i, d) in img.decls.iter().enumerate() {
@@ -2024,29 +2026,24 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             if d.flags & DEP == 0 || !claimed[d.ctx as usize] {
                 return bad("a member of an unclaimed dependent class");
             }
-            claimed[i] = true;
-            if d.lexical != NONE {
+            // A member template's pattern and parameters are its
+            // template record's (WP-1292).
+            let own_tmpl = pats.get(&(i as u32)).map(|&t| &img.decls[t as usize].payload);
+            if own_tmpl.is_some() || matches!(d.payload, Payload::Ttp { .. } | Payload::Nttp { .. })
+            {
+                dependent.push(i);
+            } else {
+                claimed[i] = true;
+            }
+            if d.lexical != NONE && !matches!(d.payload, Payload::Template { .. }) {
                 // An out-of-line member definition claims the parameters
-                // of its own template-head, just before it.
-                let n = tmpl_params.get(&(d.ctx as usize)).copied().unwrap_or(usize::MAX);
-                if n == usize::MAX || n > i {
-                    return bad("an out-of-line member of a nested dependent class");
-                }
-                // The parameters belong to the definition's own scope.
-                let scope = if d.lexical == LEX_TU { NONE } else { d.lexical };
-                for (k, j) in (i - n..i).enumerate() {
-                    let ok = match img.decls[j].payload {
-                        Payload::Ttp { depth: 0, index, .. }
-                        | Payload::Nttp { depth: 0, index, .. } => {
-                            usize::from(index) == k && img.decls[j].ctx == scope
-                        }
-                        _ => false,
-                    };
-                    if !ok || claimed[j] {
-                        return bad("bad template parameter list");
-                    }
-                    claimed[j] = true;
-                }
+                // of the template-heads enclosing it, just before its own
+                // (its template record, after it, claims none).
+                let own = match own_tmpl {
+                    Some(Payload::Template { params, .. }) => params.len(),
+                    _ => 0,
+                };
+                membertempl::claim_outer_heads(img, &pats, i, own, &mut claimed)?;
             }
         } else if d.flags & DEP != 0 {
             // Only template parameters and patterns (claimed below).
@@ -2084,9 +2081,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
                 }
                 // A class template's record follows its pattern's record,
-                // inside the pattern's definition (S4b).
+                // inside the pattern's definition (S4b), in the pattern's
+                // context (a class too, WP-1292).
                 (Payload::Template { kind: 1, pattern, .. }, NONE) if top == Some(*pattern) => {
-                    stack.len() == 1 && scope(d.ctx)
+                    match stack.len() {
+                        1 => scope(d.ctx),
+                        n => stack[n - 2].0 == d.ctx as usize,
+                    }
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
@@ -2297,27 +2298,41 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
             }
             Payload::Ttp { .. } | Payload::Nttp { .. } => {
-                if d.flags & DEP == 0 || !scope(d.ctx) || d.lexical != NONE || d.prev != NONE {
+                // A member template's are in its class (WP-1292).
+                if d.flags & DEP == 0
+                    || !(scope(d.ctx) || in_class)
+                    || d.lexical != NONE
+                    || d.prev != NONE
+                {
                     return bad("bad template parameter");
                 }
             }
             Payload::Template { kind, pattern, depth, params, .. } => {
-                // S4 slice: a function template at namespace scope, its
-                // pattern the namespace-scope function just declared.
-                // S4b: or a class template at namespace scope, its
-                // pattern the class record just before it.
+                // S4: a function template, its pattern the function just
+                // declared; S4b: a class template, its pattern the class
+                // record just before it; WP-1279: alias and variable
+                // templates. WP-1292: in a class too (a member template,
+                // dependent inside a class template), its depth the
+                // template-heads enclosing it; a redeclaration (an
+                // out-of-line definition) names the template it
+                // redeclares, its pattern that template's pattern.
                 let p = *pattern as usize;
+                let lvl = membertempl::level(img, &pats, d.ctx);
+                let prev_pat = match kind_of(d.prev).map(|x| &x.payload) {
+                    _ if d.prev == NONE => Some(NONE),
+                    Some(Payload::Template { kind: k, pattern: pp, .. }) if k == kind => Some(*pp),
+                    _ => None,
+                };
                 let ok = *kind <= 3
-                    && *depth == 0
-                    && d.flags & DEP == 0
-                    && scope(d.ctx)
-                    && d.lexical == NONE
-                    && d.prev == NONE
+                    && lvl == Some(usize::from(*depth))
+                    && (d.flags & DEP != 0) == (*depth > 0)
+                    && (scope(d.ctx) || in_class)
+                    && prev_pat.is_some()
                     && (*kind == 0 || p + 1 == i)
                     && kind_of(*pattern).is_some_and(|r| {
                         matches!(
                             (*kind, &r.payload),
-                            (0, Payload::Function { kind: 0, .. })
+                            (0, Payload::Function { kind: 0 | 1 | 2 | 4, .. })
                                 | (1, Payload::Record { .. })
                                 | (2, Payload::Typedef { alias: true, .. })
                                 | (3, Payload::Var { .. })
@@ -2325,20 +2340,18 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             && r.name == d.name
                             && r.ctx == d.ctx
                             && r.owner == d.owner
-                            && r.lexical == NONE
-                            && r.prev == NONE
+                            && r.lexical == d.lexical
+                            && Some(r.prev) == prev_pat
                     })
                     && !claimed[p];
                 if !ok || params.len() > usize::from(u16::MAX) {
                     return bad("bad template");
                 }
                 claimed[p] = true;
-                if *kind == 1 {
-                    tmpl_params.insert(p, params.len());
-                }
+                let pscope = membertempl::param_scope(d.lexical, d.ctx);
                 for (k, &x) in params.iter().enumerate() {
                     let ok = kind_of(x).is_some_and(|r| {
-                        r.ctx == d.ctx
+                        r.ctx == pscope
                             && match r.payload {
                                 Payload::Ttp { depth: pd, index, .. }
                                 | Payload::Nttp { depth: pd, index, .. } => {
@@ -2348,6 +2361,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             }
                     });
                     if !ok || claimed[x as usize] {
+                        if std::env::var_os("KILN_IMG_DEBUG").is_some() { eprintln!("TMPDEBUG tpl {i} {d:?} pscope={pscope} x={x} {:?} claimed={}", img.decls[x as usize], claimed[x as usize]); for (j, r) in img.decls.iter().enumerate() { eprintln!("TMPDEBUG {j}: {r:?}"); } }
                         return bad("bad template parameter list");
                     }
                     claimed[x as usize] = true;
@@ -2905,6 +2919,16 @@ impl Writer<'_, '_, '_> {
             None if matches!(n.kind(), DeclKind::UsingShadow | DeclKind::NamespaceAlias) => {
                 self.using_prev(d)?
             }
+            None if matches!(
+                n.kind(),
+                DeclKind::FunctionTemplate
+                    | DeclKind::ClassTemplate
+                    | DeclKind::TypeAliasTemplate
+                    | DeclKind::VarTemplate
+            ) =>
+            {
+                self.template_prev(d)?
+            }
             None => NONE,
             Some(p) if self.implicit_prev(d, p) => NONE,
             Some(p) => self
@@ -3085,8 +3109,8 @@ impl Writer<'_, '_, '_> {
         // carried, as dependent records, for importers to instantiate.
         let pattern = match fd.templ.get() {
             None => self.dep_member(d),
-            Some((TemplLinkKind::Pattern, _)) if kind == 0 => true,
-            Some((TemplLinkKind::Pattern, _)) => return Err("a member function template"),
+            // A member function template's (WP-1292) too.
+            Some((TemplLinkKind::Pattern, _)) => true,
             Some(_) => return Err("a template specialization"),
         };
         // A pattern constructor's mem-initializers live in the template
@@ -3989,7 +4013,8 @@ impl Sema<'_, '_> {
         // The writer's own output must pass the reader's checks (a body
         // shape the schema and the AST disagree on is a fallback, never
         // a corrupt module file).
-        if decode(&bytes).is_err() {
+        if let Err(e) = decode(&bytes) {
+            if std::env::var_os("KILN_IMG_DEBUG").is_some() { eprintln!("TMPDEBUG image: {e:?}"); }
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
@@ -4142,6 +4167,7 @@ impl Sema<'_, '_> {
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
         let mut nttp_defaults: Vec<(DeclId, u32, bool)> = Vec::new();
+        let mut redecl_templates: Vec<DeclId> = Vec::new();
         // S4: the pattern records, built as the parser builds a pattern.
         let patterns: FxHashSet<u32> = img
             .decls
@@ -4157,7 +4183,12 @@ impl Sema<'_, '_> {
             // A dependent record (template parameter, pattern, local of a
             // pattern) is built inside a template parameter scope, so the
             // builder marks it (and a pattern's parameters) dependent.
-            self.ast.templates.dependent_depth = saved_depth + u32::from(r.flags & DEP != 0);
+            // A template record is built one scope out of its pattern's
+            // (`template_decl` steps out of the head): dependent inside
+            // an outer template (a member template, WP-1292).
+            self.ast.templates.dependent_depth = saved_depth
+                + u32::from(r.flags & DEP != 0)
+                + u32::from(matches!(r.payload, Payload::Template { .. }));
             if !matches!(r.payload, Payload::Enumerator { .. })
                 && let Some((e, computed)) = open.take()
             {
@@ -4402,7 +4433,10 @@ impl Sema<'_, '_> {
                         3 => DeclKind::VarTemplate,
                         _ => DeclKind::FunctionTemplate,
                     };
-                    let t = self.builder().template_decl(k, pat, list, None);
+                    let t = self.builder().template_decl(k, pat, list, prev);
+                    if prev.is_some() {
+                        redecl_templates.push(t);
+                    }
                     if *using != NONE {
                         let _ = self.templ.alias_using_loc.insert(pat, lo(self, *using));
                     }
@@ -4461,6 +4495,7 @@ impl Sema<'_, '_> {
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);
+        self.image_inherited_defaults(&redecl_templates);
         for (f, width, init) in fields {
             if width != NONE {
                 let _ = self.ast.decls.set_field_bit_width(f, built.expr(width));
