@@ -2445,7 +2445,9 @@ impl Sema<'_, '_> {
         } else if n.kind() == DeclKind::EnumConstant
             && let Some(t) = self.enumerator_pre_brace_type(d)
         {
-            t
+            self.c_enumerator_type(d, declared, t)
+        } else if n.kind() == DeclKind::EnumConstant && self.is_c() {
+            self.c_enumerator_type(d, declared, declared)
         } else if n.kind() == DeclKind::NonTypeTemplateParm
             && self.placeholder_keyword(declared).is_some()
         {
@@ -3144,7 +3146,8 @@ impl Sema<'_, '_> {
             }
             UnaryOp::LNot => match conv::contextually_convert_to_bool(self, e) {
                 Ok(x) => {
-                    self.builder().unary(op, x, QualType::BOOL, loc, ExprFlags::CANNOT_OVERFLOW)
+                    let ty = self.truth_ty();
+                    self.builder().unary(op, x, ty, loc, ExprFlags::CANNOT_OVERFLOW)
                 }
                 Err(_) => bad(self, e),
             },
@@ -3327,7 +3330,7 @@ impl Sema<'_, '_> {
         let atomic = self.ast.types.as_atomic(operand_t);
         let t = atomic.unwrap_or(operand_t);
         let inc = matches!(op, UnaryOp::PreInc | UnaryOp::PostInc);
-        if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
+        if self.ast.types.builtin(t) == Some(BuiltinType::Bool) && !self.is_c() {
             // clang: decrementing is always an error; incrementing is a
             // DefaultError extension (`-Wno-increment-bool` accepts it).
             if !inc {
@@ -3338,7 +3341,9 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_increment_bool, loc);
             self.emit(msg);
         }
-        if self.ast.types.as_enum(t).is_some() {
+        // C17 6.5.2.4p1, 6.5.3.1p1: any real or pointer type, `_Bool` and
+        // enumerations included.
+        if self.ast.types.as_enum(t).is_some() && !self.is_c() {
             let msg = self
                 .diag(DiagId::sema_incdec_enum, loc)
                 .arg(if inc { "0" } else { "1" })
@@ -3354,7 +3359,9 @@ impl Sema<'_, '_> {
             // clang 19 `ext_increment_complex`: every complex type.
             let msg = self.diag(DiagId::sema_increment_complex, loc).arg(op.spelling());
             self.emit(msg);
-        } else if !self.ast.types.is_arithmetic(t) {
+        } else if !self.ast.types.is_arithmetic(t)
+            && !(self.is_c() && self.ast.types.as_enum(t).is_some())
+        {
             let msg = self
                 .diag(DiagId::sema_incdec_invalid, loc)
                 .arg(if inc { "0" } else { "1" })
@@ -3368,8 +3375,13 @@ impl Sema<'_, '_> {
         self.check_volatile_inc_dec(inc, operand_t, loc);
         let flags =
             if self.narrower_than_int(t) { ExprFlags::CANNOT_OVERFLOW } else { ExprFlags::NONE };
-        let ty = if op.is_postfix() || atomic.is_some() { conv::strip_cv(self, t) } else { t };
+        let c = self.is_c();
+        let ty =
+            if op.is_postfix() || atomic.is_some() || c { conv::strip_cv(self, t) } else { t };
         let r = self.builder().unary(op, e, ty, loc, flags);
+        if c && !op.is_postfix() {
+            self.ast.exprs.set_c_prefix_incdec_prvalue(r);
+        }
         self.mark_bitfield_if(r, e);
         r
     }
@@ -3555,7 +3567,9 @@ impl Sema<'_, '_> {
             return;
         }
         let Some(v) = self.fold_rvalue_int(r) else { return };
-        if (self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
+        // In C only an operand other than 0 or 1 is diagnosed.
+        if (self.is_c()
+            || self.ast.types.builtin(rt) == Some(BuiltinType::Bool)
             || self.diags.sm().is_macro_loc(self.eloc(r)))
             && (v == 0 || v == 1)
         {
@@ -3605,6 +3619,12 @@ impl Sema<'_, '_> {
         res
     }
 
+    /// The type of a comparison, `!`, `&&` or `||`: `bool` in C++, `int`
+    /// in C (C17 6.5.3.3p5, 6.5.8p6, 6.5.9p3, 6.5.13p3, 6.5.14p3).
+    pub(crate) fn truth_ty(&self) -> QualType {
+        if self.is_c() { QualType::INT } else { QualType::BOOL }
+    }
+
     /// The built-in `&&` / `||` ([expr.log.and], [expr.log.or]).
     fn logical_binary(&mut self, op: BinaryOp, l: ExprId, r: ExprId, loc: Loc) -> ExprId {
         if !self.diagnose_enum_constant_in_bool_context(l, r, loc) {
@@ -3620,7 +3640,8 @@ impl Sema<'_, '_> {
         };
         let Ok(l2) = conv_op(self, l) else { return self.invalid_operands(l, r, loc) };
         let Ok(r2) = conv_op(self, r) else { return self.invalid_operands(l, r, loc) };
-        self.builder().binary(op, l2, r2, QualType::BOOL, loc)
+        let ty = self.truth_ty();
+        self.builder().binary(op, l2, r2, ty, loc)
     }
 
     /// The built-in binary operator `op` ([expr.mul] .. [expr.comma]).
@@ -4265,7 +4286,8 @@ impl Sema<'_, '_> {
                 && self.is_meta_info(rt)
                 && matches!(op, BinaryOp::EQ | BinaryOp::NE)
             {
-                return self.builder().binary(op, l2, r2, QualType::BOOL, loc);
+                let ty = self.truth_ty();
+                return self.builder().binary(op, l2, r2, ty, loc);
             }
             return self.invalid_operands(l, r, loc);
         }
@@ -4295,7 +4317,8 @@ impl Sema<'_, '_> {
                 }
             }
             if let Some((l3, r3, _)) = self.composite_pointer(l2, r2) {
-                return self.builder().binary(op, l3, r3, QualType::BOOL, loc);
+                let ty = self.truth_ty();
+                return self.builder().binary(op, l3, r3, ty, loc);
             }
             let int_like = |s: &Self, t: QualType| s.is_integral_or_enum(t);
             let id = if (ptr_like(self, lt) && int_like(self, rt))
@@ -4327,7 +4350,8 @@ impl Sema<'_, '_> {
         match conv::usual_arithmetic_conversions_kind(self, l, r, ArithConvKind::Comparison) {
             Ok((l3, r3, _)) => {
                 self.report_arith_warning(loc);
-                self.builder().binary(op, l3, r3, QualType::BOOL, loc)
+                let ty = self.truth_ty();
+                self.builder().binary(op, l3, r3, ty, loc)
             }
             Err(err) => self.conv_failed(&err, l, r, loc),
         }

@@ -2171,7 +2171,14 @@ impl Parser<'_, '_> {
             self.error_here(DiagId::parse_expected_unqualified_id);
             ds.invalid = true;
         }
-        let fixed = if keyword == TagKeyword::Enum { self.parse_enum_base() } else { None };
+        // clang `ParseEnumSpecifier`: a `:` after the name in a type-name
+        // is not an enum-base (`_Generic(a, enum E: 1)`).
+        let base_allowed = !(self.s.is_c() && ctx == DeclaratorContext::TypeName);
+        let fixed = if keyword == TagKeyword::Enum && base_allowed {
+            self.parse_enum_base()
+        } else {
+            None
+        };
         let is_class = keyword != TagKeyword::Enum;
         if is_class
             && !qual_failed

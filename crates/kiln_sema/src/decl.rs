@@ -9529,6 +9529,28 @@ impl Sema<'_, '_> {
         self.enums.iter().rev().find_map(|b| b.pre_types.iter().find(|x| x.0 == d).map(|x| x.1))
     }
 
+    /// The type of a use of enumerator `d` (of enumeration type `en`)
+    /// whose C++ type is `t`. C17 6.7.2.2p3: an enumeration constant is
+    /// an `int`; clang's `ActOnEnumBody` keeps that for a value `int`
+    /// represents in an enumeration without a fixed underlying type, and
+    /// otherwise gives the constant the underlying type.
+    pub(crate) fn c_enumerator_type(&self, d: DeclId, en: QualType, t: QualType) -> QualType {
+        if !self.is_c() {
+            return t;
+        }
+        let data = conv::rank::enum_data(self, en);
+        let fixed = data.is_some_and(|x| x.flags & EnumData::FIXED != 0);
+        let value = self.ast.decls.enumerator(d).and_then(|x| x.value);
+        let value = value.and_then(|v| self.const_int(v));
+        if !fixed && value.is_some_and(|v| i32::try_from(v).is_ok()) {
+            return QualType::INT;
+        }
+        match data.and_then(|x| x.int_type) {
+            Some(it) if self.ast.types.as_enum(t).is_some() => it,
+            _ => t,
+        }
+    }
+
     /// The value and the converted initializer of an enumerator whose
     /// initializer is `ie` ([dcl.enum]/5).
     fn enumerator_init(&mut self, build: &EnumBuild, ie: ExprId) -> (Option<i128>, Option<ExprId>) {

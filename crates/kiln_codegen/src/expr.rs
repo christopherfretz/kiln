@@ -153,7 +153,8 @@ impl Cg<'_> {
                 let t = self.lty(q);
                 self.cast(CastOp::SExt, c, t)
             }
-            None if self.ast.types.is_sizeless(q) => {
+            // A sizeless predicate, or C's `int` comparison (C17 6.5.8p6).
+            None if self.ast.types.is_sizeless(q) || !self.is_bool(q) => {
                 let t = self.lty(q);
                 self.zext_or_same(c, t)
             }
@@ -1389,7 +1390,8 @@ impl Cg<'_> {
                 if self.is_complex(ast.exprs.get(l).ty())
                     || self.is_complex(ast.exprs.get(r).ty()) =>
             {
-                self.cx_compare(e)?
+                let c = self.cx_compare(e)?;
+                self.vec_cmp_result(c, ast.exprs.get(e).ty())
             }
             BinaryOp::EQ | BinaryOp::NE if self.is_mp(ast.exprs.get(l).ty()) => {
                 let lv = self.emit_scalar(l)?;
