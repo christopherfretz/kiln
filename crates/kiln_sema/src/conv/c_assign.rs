@@ -256,7 +256,7 @@ fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
 /// `nullptr`. `Some(true)` for a literal `0` (clang's `NPCK_ZeroLiteral`),
 /// `Some(false)` for another zero expression, which warns
 /// `-Wnon-literal-null-conversion`.
-fn null_pointer_constant(s: &mut Sema<'_, '_>, e: ExprId) -> Option<bool> {
+pub(crate) fn null_pointer_constant(s: &mut Sema<'_, '_>, e: ExprId) -> Option<bool> {
     if s.ast.types.builtin(ty(s, e)) == Some(BuiltinType::NullPtr) {
         return Some(true);
     }

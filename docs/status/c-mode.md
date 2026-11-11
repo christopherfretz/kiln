@@ -77,6 +77,9 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
     C parses no function qualifiers.
   - pr34334 (a file-scope anonymous union) compiles after the merge of
     main.
+  - zstd's last failing C TUs failed on a function pointer compared with
+    `(void *)0` ("comparison of distinct pointer types"). That comparison
+    is now accepted.
 
 ## WP-1288 re-measure (wp/1288, 2026-11-11)
 

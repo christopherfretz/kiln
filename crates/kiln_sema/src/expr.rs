@@ -4047,6 +4047,25 @@ impl Sema<'_, '_> {
         if self.is_nullptr_type(lt) && self.is_nullptr_type(rt) {
             return Some((l, r, lt));
         }
+        // C17 6.5.9p2, 6.3.2.3p3: a function pointer compares with a null
+        // pointer constant, `(void *)0` included, which converts to the
+        // function pointer's type (clang `CheckCompareOperands`, a
+        // `BitCast`); there is no composite type with `void *`.
+        if self.is_c() && lp && rp {
+            let fn_ptr = |s: &Self, t: QualType| {
+                s.ast.types.pointee(t).is_some_and(|p| s.ast.types.is_function(p))
+            };
+            if fn_ptr(self, lt) && conv::c_assign::null_pointer_constant(self, r).is_some() {
+                let r2 =
+                    conv::raw_cast(self, CastKind::BitCast, r, lt, ValueCategory::PRValue, None);
+                return Some((l, r2, lt));
+            }
+            if fn_ptr(self, rt) && conv::c_assign::null_pointer_constant(self, l).is_some() {
+                let l2 =
+                    conv::raw_cast(self, CastKind::BitCast, l, rt, ValueCategory::PRValue, None);
+                return Some((l2, r, rt));
+            }
+        }
         if ptr(self, lt) && (rnull || self.is_nullptr_type(rt)) {
             let r2 = conv::implicit_convert(self, r, lt, ConvCtx::Comparison).ok()?;
             return Some((l, r2, lt));
