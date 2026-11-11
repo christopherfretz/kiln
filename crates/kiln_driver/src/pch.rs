@@ -17,7 +17,7 @@ use kiln_pp::CmdMacro;
 use kiln_pp::bmi;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, DepHeaders, IncludePchOrder, Input};
+use crate::args::{Action, Args, DepHeaders, IncludePchOrder, Input, PchImage, PchImageUse};
 use crate::codegen_cmd::{self, Phase};
 use crate::deps::DepList;
 use crate::toolchain::{LangStd, Toolchain};
@@ -85,6 +85,10 @@ pub(crate) struct Record {
     pub macros: Vec<(String, Option<String>)>,
     /// The files read, in dependency order.
     pub files: Vec<FileEntry>,
+    /// The preprocessor-state record (`-fkiln-pch-image`, WP-1280): a
+    /// module-file section block (spec/modules.md §11.13) after the
+    /// text, its length and checksum on the text's `image` line.
+    pub image: Option<Vec<u8>>,
 }
 
 /// Why a file is not a readable PCH record.
@@ -143,8 +147,8 @@ pub(crate) fn kiln_line(args: &Args) -> String {
 }
 
 impl Record {
-    /// The record's text.
-    pub(crate) fn write(&self) -> String {
+    /// The record: its text, then the image's bytes.
+    pub(crate) fn write(&self) -> Vec<u8> {
         use std::fmt::Write as _;
         let mut s = format!("{MAGIC} {FORMAT_VERSION}\n");
         let _ = writeln!(s, "kiln {}", esc(&self.kiln));
@@ -177,9 +181,14 @@ impl Record {
                 esc(&f.abs)
             );
         }
+        if let Some(img) = &self.image {
+            let _ = writeln!(s, "image {}\t{:016x}", img.len(), bmi::checksum(img));
+        }
         let sum = bmi::checksum(s.as_bytes());
         let _ = writeln!(s, "end {sum:016x}");
-        s
+        let mut out = s.into_bytes();
+        out.extend_from_slice(self.image.as_deref().unwrap_or_default());
+        out
     }
 
     /// Parses a record.
@@ -192,6 +201,14 @@ impl Record {
             return Err(ReadError::NotPch);
         }
         let corrupt = |what: &str| ReadError::Corrupt(what.to_owned());
+        // The text ends at its `end` line (no other line starts with
+        // `end `: the values are escaped); the image's bytes follow.
+        let text_len = bytes
+            .windows(5)
+            .position(|w| w == b"\nend ")
+            .and_then(|at| bytes[at + 1..].iter().position(|&b| b == b'\n').map(|n| at + 2 + n))
+            .unwrap_or(bytes.len());
+        let (bytes, tail) = bytes.split_at(text_len);
         let text = std::str::from_utf8(bytes).map_err(|_| corrupt("not UTF-8"))?;
         let first = text.lines().next().unwrap_or("");
         let ver: u32 = first[head.len()..].parse().map_err(|_| corrupt("bad format version"))?;
@@ -230,6 +247,14 @@ impl Record {
                 }
                 ("macro", 3) if f[0] == "D" => r.macros.push((u(1)?, Some(u(2)?))),
                 ("macro", 2) if f[0] == "U" => r.macros.push((u(1)?, None)),
+                ("image", 2) if r.image.is_none() => {
+                    let len: usize = f[0].parse().map_err(|_| bad())?;
+                    let sum = u64::from_str_radix(f[1], 16).map_err(|_| bad())?;
+                    if tail.len() != len || bmi::checksum(tail) != sum {
+                        return Err(corrupt("image checksum mismatch"));
+                    }
+                    r.image = Some(tail.to_vec());
+                }
                 ("file", 5) => r.files.push(FileEntry {
                     size: f[0].parse().map_err(|_| bad())?,
                     hash: u64::from_str_radix(f[1], 16).map_err(|_| bad())?,
@@ -242,6 +267,9 @@ impl Record {
         }
         if !seen_kiln || r.main.is_empty() {
             return Err(corrupt("missing fields"));
+        }
+        if r.image.is_none() && !tail.is_empty() {
+            return Err(corrupt("trailing bytes"));
         }
         Ok(r)
     }
@@ -414,23 +442,88 @@ pub(crate) fn consumer(
         }
     };
     let mut out = args.clone();
+    let image = image_section(args, pch, &rec, preprocess, &e);
     if preprocess {
+        if let Some(bytes) = image.clone()
+            && args.pch.image == PchImage::Load
+        {
+            // `-fkiln-pch-image=load`: the record stands in for the
+            // header, so the header must be the one it was built from.
+            if !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
+                finish(e);
+                return Err(());
+            }
+            out.includes =
+                args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
+            out.pch.image_use =
+                Some(PchImageUse { pch: pch.to_owned(), bytes, install: true, checkpoint: 0 });
+            out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+            finish(e);
+            return Ok(Some(out));
+        }
         // clang `-E` does not load the PCH: it preprocesses the header the
         // PCH was built from, then the `-include`s (no checks).
         out.includes = std::iter::once(resolve(&rec.main)).chain(args.includes.clone()).collect();
+        out.pch.image_use = image.map(|bytes| PchImageUse {
+            pch: pch.to_owned(),
+            bytes,
+            install: false,
+            checkpoint: 1,
+        });
+        finish(e);
         return Ok(Some(out));
     }
     if !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
         finish(e);
         return Err(());
     }
-    drop(e);
+    // A compile replays the producer's `-include`s, then the header.
+    let checkpoint = u32::try_from(rec.includes.len() + 1).unwrap_or(u32::MAX);
+    out.pch.image_use =
+        image.map(|bytes| PchImageUse { pch: pch.to_owned(), bytes, install: false, checkpoint });
+    finish(e);
     let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
     includes.push(resolve(&rec.main));
     includes.extend(args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned());
     out.includes = includes;
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
     Ok(Some(out))
+}
+
+/// The preprocessor-state record of `rec` (its `SECTION_PP` section)
+/// for `-fkiln-pch-image=check`/`load`, or `None` (with a warning when
+/// one was asked for but cannot be used: the header is then replayed
+/// unchecked).
+fn image_section(
+    args: &Args,
+    pch: &str,
+    rec: &Record,
+    preprocess: bool,
+    e: &kiln_diag::DiagEngine<'_>,
+) -> Option<std::sync::Arc<Vec<u8>>> {
+    if !matches!(args.pch.image, PchImage::Check | PchImage::Load) {
+        return None;
+    }
+    let unusable = |why: &str| {
+        Diag::new(DiagId::drv_pch_image_unusable, Span::INVALID).arg(pch).arg(why).emit(e);
+        None
+    };
+    let Some(img) = &rec.image else {
+        return unusable("it was built without -fkiln-pch-image");
+    };
+    if preprocess && args.pch.image == PchImage::Check && !rec.includes.is_empty() {
+        // `-E` replays only the header, not the producer's `-include`s
+        // the record covers.
+        return unusable("it was built with -include, which -E does not replay");
+    }
+    let sections = match bmi::read_sections(img) {
+        Ok(s) => s,
+        Err(err) => return unusable(&err.to_string()),
+    };
+    match sections.into_iter().find(|s| s.tag == bmi::SECTION_PP) {
+        Some(s) => Some(std::sync::Arc::new(s.bytes)),
+        None => unusable("it has no preprocessor-state section"),
+    }
 }
 
 /// The first file in the directory `dir`, by name, that is a kiln PCH
@@ -831,6 +924,7 @@ fn produce_one(
     check_args.deps.cdb_fragment = None;
     check_args.output = None;
     check_args.pch.header_main = args.is_header_input(input);
+    check_args.pch.producing = true;
     let stdin = None;
     let out = match &args.output {
         Some(o) if !link_follows => o.clone(),
@@ -875,6 +969,17 @@ fn write_pch(
     if r.errors > 0 {
         return r.errors;
     }
+    let image = match r.pch_image {
+        Some(Ok(bytes)) => Some(bytes),
+        Some(Err(why)) => {
+            let sm = SourceManager::new();
+            let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+            Diag::new(DiagId::drv_pch_image_not_written, Span::INVALID).arg(out).arg(why).emit(&e);
+            e.flush();
+            None
+        }
+        None => None,
+    };
     let Some(list) = r.dep_list else { return 0 };
     let list = list.borrow();
     let here = cwd();
@@ -902,9 +1007,10 @@ fn write_pch(
         target: tc.target.triple.to_owned(),
         macros: macros(args),
         files,
+        image,
     };
     let write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
-    if let Err(err) = bmi::write_file(Path::new(out), rec.write().as_bytes()) {
+    if let Err(err) = bmi::write_file(Path::new(out), &rec.write()) {
         let why = if err.kind() == std::io::ErrorKind::NotFound {
             "No such file or directory".to_owned()
         } else {
@@ -947,17 +1053,31 @@ mod tests {
                 spelled: "p\nh.hpp".into(),
                 abs: "/w d/p.hpp".into(),
             }],
+            image: None,
         }
     }
 
     /// The record round-trips, and damage is detected (WP-1023).
     #[test]
     fn record_round_trip() {
-        let r = sample();
-        let text = r.write();
-        assert_eq!(Record::parse(text.as_bytes()), Ok(r));
+        let mut r = sample();
+        let text = String::from_utf8(r.write()).unwrap();
+        assert_eq!(Record::parse(text.as_bytes()), Ok(r.clone()));
         let broken = text.replace("C++", "C+-");
         assert!(matches!(Record::parse(broken.as_bytes()), Err(ReadError::Corrupt(_))));
+        let mut trailing = text.clone().into_bytes();
+        trailing.push(0);
+        assert!(matches!(Record::parse(&trailing), Err(ReadError::Corrupt(_))));
+        // WP-1280: the image follows the text, any bytes, checksummed.
+        r.image = Some(vec![0, b'\n', 0xff, b'e', b'n', b'd', b' ', 7]);
+        let with = r.write();
+        assert_eq!(Record::parse(&with), Ok(r.clone()));
+        for i in 0..with.len() {
+            let mut b = with.clone();
+            b[i] ^= 0x41;
+            assert_ne!(Record::parse(&b), Ok(r.clone()), "byte {i}");
+        }
+        assert!(Record::parse(&with[..with.len() - 1]).is_err());
         assert_eq!(Record::parse(b"CPCH...."), Err(ReadError::Clang));
         assert_eq!(Record::parse(b"hello"), Err(ReadError::NotPch));
         assert_eq!(Record::parse(b"KILNPCH 2\n"), Err(ReadError::Newer));

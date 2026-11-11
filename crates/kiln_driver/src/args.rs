@@ -755,6 +755,48 @@ pub struct PchArgs {
     /// as clang's `-E` does (set by `crate::pch`, never by an option;
     /// WP-1153).
     pub unread: Vec<(kiln_diag::DiagId, Vec<String>)>,
+    /// The last of `-f[no-]kiln-pch-image[=write|check|load]` (WP-1280,
+    /// spec/driver.md "Precompiled headers").
+    pub image: PchImage,
+    /// The job precompiles its input (set by `crate::pch` on its
+    /// producer's copy of the arguments).
+    pub producing: bool,
+    /// The `-include-pch` file's preprocessor-state record, for
+    /// `-fkiln-pch-image=check`/`load` (set by `crate::pch`).
+    pub image_use: Option<PchImageUse>,
+}
+
+/// `-fkiln-pch-image`'s mode (spec/driver.md "Precompiled headers").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PchImage {
+    /// No record is written; a record in the `-include-pch` file is
+    /// ignored.
+    #[default]
+    Off,
+    /// `-emit-pch` writes the preprocessor-state record (spec/modules.md
+    /// §11.13) next to the fingerprint.
+    Write,
+    /// As `Write`; the consumer replays the header and compares the
+    /// state replay reached with the record's.
+    Check,
+    /// As `Write`; `-E`/`-M` install the record instead of replaying the
+    /// header (a compile checks, as `Check`: the declarations still come
+    /// from replay until WP-1036).
+    Load,
+}
+
+/// The record a consumer job checks against or installs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PchImageUse {
+    /// The PCH file, for diagnostics.
+    pub pch: String,
+    /// The record's bytes (the `SECTION_PP` section).
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    /// Install the record (`-E`/`-M` with `load`) rather than compare.
+    pub install: bool,
+    /// The state point replay reaches the end of the header at: the
+    /// producer's `-include`s, then the header.
+    pub checkpoint: u32,
 }
 
 /// Where the last `-include-pch` sits against the probed `-include`s
@@ -1280,6 +1322,10 @@ impl Args {
             "-fkiln-bmi-image" => self.bmi_image = true,
             "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fkiln-bmi-image-census" => self.bmi_image_census = true,
+            "-fkiln-pch-image" | "-fkiln-pch-image=write" => self.pch.image = PchImage::Write,
+            "-fkiln-pch-image=check" => self.pch.image = PchImage::Check,
+            "-fkiln-pch-image=load" => self.pch.image = PchImage::Load,
+            "-fno-kiln-pch-image" => self.pch.image = PchImage::Off,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }
@@ -1306,6 +1352,8 @@ impl Args {
                             v.to_owned(),
                         )),
                     }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-pch-image=") {
+                    self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
                 } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
                     match v {
                         "1" => self.bmi_kind = Some(1),
