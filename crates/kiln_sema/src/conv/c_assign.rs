@@ -421,6 +421,11 @@ pub(crate) fn convert(
     let act = action(ctx)?;
     let from = ty(s, e);
     let types = &s.ast.types;
+    // A reference parameter is a builtin's (`__builtin_va_start`'s
+    // `va_list &`): reference binding, not assignment.
+    if types.is_reference(to) {
+        return None;
+    }
     if types.as_atomic(to).is_some() || types.as_atomic(from).is_some() {
         return None;
     }

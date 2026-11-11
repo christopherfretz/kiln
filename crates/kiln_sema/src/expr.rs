@@ -5575,7 +5575,11 @@ impl Sema<'_, '_> {
             if i < n {
                 let pt = conv::strip_cv(self, params[i]);
                 let to = if self.ast.types.is_reference(params[i]) { params[i] } else { pt };
+                // C17 6.5.2.2p7: a C structure argument is converted as if
+                // by assignment ([`conv::c_assign::convert`]), a plain copy
+                // with no constructor.
                 if self.ast.types.as_record(to).is_some()
+                    && !self.is_c()
                     && !self.is_err_expr(a)
                     && !self.expr_is_type_dependent(a)
                 {
