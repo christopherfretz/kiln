@@ -1431,7 +1431,11 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
 - under `-g`, also types (basic, pointer/reference, arrays, enums,
   typedefs, classes with members, bases, methods, vtable holders and
   template parameters; class definitions homed as clang's
-  `-fno-standalone-debug` does), namespaces, global and static member
+  `-fno-standalone-debug` does; an explicit instantiation definition of
+  a class template specialization that is not a dynamic class completes
+  the specialization's type and keeps it in the unit's retained types,
+  clang's `completeTemplateDefinition`,
+  `explicit_instantiation_retained_type.cpp`), namespaces, global and static member
   variables (`DIGlobalVariableExpression`), parameters and locals
   (`#dbg_declare`), and lexical blocks;
 - statement and expression locations with clang's `EmitStopPoint`,
