@@ -666,6 +666,26 @@ behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
 and no job runs. C is preprocessed (`-E`, deviation 1); compiling it
 (`-fsyntax-only`, codegen) is "not implemented yet" (WP-243).
 
+### Language mode (WP-1275)
+
+The driver derives one language mode per input from its language and
+`-std=` (`LangStd`, `input_std`): `LangStd::c` is `Some(CStd)` for a C
+input and `None` for C++. Everything below the driver receives it from
+that one place: `PpOptions::c` (and through it `LexOptions::c`),
+`ParseOptions::c` (and through it `Sema::c`) and `CodegenOptions::c`.
+`kiln_lex::CStd` is ordered `C89 < C99 < C11 < C17 < C23`; the `gnu`
+dialects are the same `CStd` with `LangStd::gnu` set. `-std=` spellings:
+
+| `CStd` | spellings |
+|---|---|
+| `C89` | `c89`, `c90`, `iso9899:1990`, `gnu89`, `gnu90` |
+| `C99` | `c99`, `c9x`, `iso9899:1999`, `gnu99`, `gnu9x` |
+| `C11` | `c11`, `c1x`, `iso9899:2011`, `gnu11`, `gnu1x` |
+| `C17` | `c17`, `c18`, `iso9899:2017`, `iso9899:2018`, `gnu17`, `gnu18` |
+| `C23` | `c23`, `c2x`, `iso9899:2024`, `gnu23`, `gnu2x` |
+
+Without `-std=` a C input is `gnu17` (clang 19's default).
+
 ## Installation layout
 
 `cargo xtask dist` (spec/harness.md "Dist") packages kiln as a

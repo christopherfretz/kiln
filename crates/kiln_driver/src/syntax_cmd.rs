@@ -204,8 +204,6 @@ impl SyntaxJob<'_> {
         }
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let popts = ParseOptions {
-            std: job.std.lex,
-            gnu: job.std.gnu,
             exceptions: a.predef.exceptions.unwrap_or(true),
             rtti: a.predef.rtti.unwrap_or(true),
             inst_limits: a.templ.limits(),
@@ -234,7 +232,7 @@ impl SyntaxJob<'_> {
             record_image: a.bmi_image
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
-            ..ParseOptions::default()
+            ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();

@@ -318,6 +318,10 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
+    /// The C standard when the translation unit is C; `None` (the
+    /// default) is C++ (spec/sema.md "Language mode"). Query it with
+    /// [`Sema::is_c`] and [`Sema::c_at_least`].
+    pub c: Option<kiln_lex::CStd>,
     /// The clang major `-fclang-compat` names (19 or 22; default 22, as the driver): the
     /// few spellings that differ between the two releases follow it, e.g.
     /// a closure type in `__PRETTY_FUNCTION__` (spec/sema.md
@@ -1280,6 +1284,16 @@ impl<'a, 'sm> Sema<'a, 'sm> {
         Self::with_abi(ast, diags, abi, target)
     }
 
+    /// The translation unit is C ([`Sema::c`] is set).
+    pub fn is_c(&self) -> bool {
+        self.c.is_some()
+    }
+
+    /// The translation unit is C of standard `std` or later.
+    pub fn c_at_least(&self, std: kiln_lex::CStd) -> bool {
+        self.c.is_some_and(|c| c >= std)
+    }
+
     /// A `Sema` over `ast` reporting to `diags` for `abi`.
     pub fn for_target(ast: Ast, diags: &'a DiagEngine<'sm>, abi: Target) -> Self {
         let types = abi.types.clone();
@@ -1326,6 +1340,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             expansion_element_init: false,
             gnu: false,
+            c: None,
             clang_compat: 22,
             cf_protection_branch: false,
             sve: false,

@@ -267,6 +267,7 @@ impl Job<'_> {
     fn pp_options(&self, predefines: String) -> PpOptions {
         let a = self.args;
         let mut o = PpOptions::new(self.std.lex);
+        o.c = self.std.c;
         o.trigraphs = a.trigraphs.unwrap_or(
             !(self.std.gnu || self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx17),
         );
