@@ -26,6 +26,7 @@ pub mod activity;
 mod arena;
 pub mod fx;
 pub mod hash;
+pub mod image_locs;
 mod loc;
 mod manager;
 pub mod symbol;
