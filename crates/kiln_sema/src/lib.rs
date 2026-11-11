@@ -28,6 +28,7 @@ mod bitfield_constant;
 mod bmi_ast;
 mod bmi_image;
 mod builtins;
+mod c_decl;
 mod carries_dep_attr;
 mod cconv;
 pub mod cfg;
@@ -321,6 +322,10 @@ pub struct Sema<'a, 'sm> {
     /// A GNU dialect (`-std=gnu++NN`): some extension warnings are
     /// off by default (clang's `*_in_gnu_mode` diagnostics, WP-183).
     pub gnu: bool,
+    /// GNU89 inline semantics in C (`-fgnu89-inline`, or before C99):
+    /// an `extern inline` definition is inline-only and may be followed
+    /// by another definition (clang `canRedefineFunction`, WP-1286).
+    pub gnu89_inline: bool,
     /// The C standard when the translation unit is C; `None` (the
     /// default) is C++ (spec/sema.md "Language mode"). Query it with
     /// [`Sema::is_c`] and [`Sema::c_at_least`].
@@ -548,6 +553,10 @@ pub struct Sema<'a, 'sm> {
     /// enclosing namespace and name: a later namespace-scope declaration
     /// redeclares them ([basic.link]/6, clang's local extern decls).
     pub(crate) local_externs: Vec<(DeclId, kiln_source::symbol::Symbol, DeclId)>,
+    /// C: the tags declared in the parameter list of the function
+    /// declarator just parsed, in scope in its body if it is a definition
+    /// (C23 6.2.1p4, [`Sema::c_inject_param_tags`]).
+    pub(crate) c_param_tags: Vec<(kiln_source::symbol::Symbol, DeclId)>,
     /// Block-scope variables whose qualified declarator-id was rejected
     /// (`static T(::a);`, [`qualified_decl::QualifiedDecl::DropLocal`]):
     /// declared invalid in the block, standing for a namespace member, so
@@ -981,6 +990,9 @@ pub struct Sema<'a, 'sm> {
     /// Delegating constructors and their targets, checked for cycles at
     /// the end of the translation unit ([class.base.init]/6).
     pub(crate) delegating: Vec<(DeclId, DeclId, Loc)>,
+    /// C tentative definitions, completed at the end of the translation
+    /// unit (`c_decl`, C23 6.9.2p2; WP-1286).
+    pub(crate) c_tentatives: Vec<DeclId>,
     /// Functions and variables odr-used while undefined, as first
     /// declarations with their first such use, in use order (clang
     /// `UndefinedButUsed`), checked at the end of the translation unit
@@ -1343,6 +1355,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             range_lifetime_extension: false,
             expansion_element_init: false,
             gnu: false,
+            gnu89_inline: false,
             c: None,
             clang_compat: 22,
             cf_protection_branch: false,
@@ -1405,6 +1418,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             invalid_defining: kiln_source::fx::FxHashSet::default(),
             enums: Vec::new(),
             local_externs: Vec::new(),
+            c_param_tags: Vec::new(),
             dropped_qualified_locals: kiln_source::fx::FxHashSet::default(),
             vis_stack: Vec::new(),
             vis_namespaces: Vec::new(),
@@ -1509,6 +1523,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cand_scratch: Vec::new(),
             deduce_scratch: Vec::new(),
             delegating: Vec::new(),
+            c_tentatives: Vec::new(),
             undefined_used: Vec::new(),
             undefined_used_seen: kiln_source::fx::FxHashSet::default(),
             ctor_entity: None,

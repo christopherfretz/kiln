@@ -5,7 +5,6 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 44 7
-//@ xfail(kiln): WP-1282 follow-up, C++ narrowing check (-Wc++11-narrowing) applied to a C brace initializer
 #include <stdio.h>
 struct s { unsigned char c; short h; };
 int main(void) {
