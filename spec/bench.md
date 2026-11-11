@@ -20,7 +20,7 @@ cargo xtask bench [options] [paths...]
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
 | `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference), or `clang++-19` for the history of `docs/status/perf.md`. |
 | `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
-| `--label <name>` | `bench/pch` only: with `--record`, write region `<name>` of `docs/status/pch.md` and no baselines ("The pch group"). Default `main`. |
+| `--label <name>` | `bench/pch` only: with `--record`, write region `<name>` of `docs/status/pch.md` and no baselines ("The pch group"). Default `main`; `--label main` is a usage error, since only `--record` without `--label` writes that region (with the baselines). |
 | `--runs <N>` | Runs per entry, N >= 1. Default 5. |
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
 | `--threshold-mem <PCT>` | Allowed peak-RSS regression, percent, >= 0. Default 2. |
@@ -213,6 +213,16 @@ declaration image") against clang's on fixed header sets
 - **Measurement.** As any entry (`--runs`, default 5, median; the memory
   cap). No constexpr or instantiation reports are requested. The 1-minute
   load average is sampled at the start of the run and of each case.
+- **Accounted memory.** After kiln's measured runs of a `none` variant,
+  one more compile of the same command, unmeasured, adds
+  `-fkiln-memory-report` before the input (spec/driver.md). Its
+  `memory: total live=N reserved=N` line is recorded as `accounted`
+  (`live`, `reserved`). A missing or malformed line fails the entry. The
+  measured runs never carry the flag, so their time and RSS are as
+  before. The figure is kiln's own tables only: no allocator overhead,
+  no stacks, no LLVM. At `-O0 -c` it is taken after IR generation, so
+  it is a little larger than at `-fsyntax-only` (1-4% here). It does not
+  depend on the working directory.
 - **The path taken.** After its variants, each case runs kiln twice more,
   unmeasured:
   - the build with `-v`, to a separate PCH, for the producer's note
@@ -231,11 +241,36 @@ declaration image") against clang's on fixed header sets
 - **Judged.** kiln's entries are judged against `bench/baselines/pch.json`
   as in "Regression policy", but wall time is not judged unless
   `--threshold-time` is given. Memory is the signal, because wall time on
-  the shared host moves about 1.4x with its load. Its default threshold is
-  5% (`pch::MEM_PCT`), not 2%: two identical recordings differed by up to
-  2.5% (`gnu/build`, 86 MB). `--threshold-mem` overrides it. clang's
-  side is never judged or recorded; a failed clang compile still fails the
-  run. The printed ratio table covers the variants both compilers have.
+  the shared host moves about 1.4x with its load.
+  - Peak RSS, every variant: 5% (`pch::MEM_PCT`), not 2%. Identical
+    recordings differ by up to 2.5% (`gnu/build`, 86 MB). `--threshold-mem`
+    overrides it, and governs RSS only.
+  - Accounted memory, `none` variants only: `accounted.reserved` regresses
+    when it grows by more than 2% (`compare::ACCT_PCT`), whatever the
+    options. `reserved` is judged, not `live`: it is the capacity of
+    tables that only grow, so it is a high-water mark, while `live` is
+    what the tables hold when the report is taken. A baseline without
+    `accounted` is not judged on it, and the next `--record` adds it.
+  - Why the `none` variants get a second metric (WP-1303). They show that
+    the PCH machinery costs ordinary builds nothing, so a regression there
+    must not hide under 5%. RSS cannot be judged tighter: the medians of
+    five identical recordings moved 2-6% (`c/none-syntax` 6.4%,
+    `gnu/none-obj` 3.5%), and the minimum of the runs moved as much. The
+    accounted figure was byte-identical over 10 runs of each variant and
+    in two working directories. Transparent huge pages (`always` on this
+    host) are the suspected cause of the RSS noise, not proven.
+  - The blind spot this closes. The RSS figure is the largest process of
+    the compile. At `-O0 -c` that is `llc` for `mid` and `c` (58 MB and
+    55 MB, against kiln's own 56 MB and 15 MB at `-S -emit-llvm`), so a
+    kiln regression up to that size does not show in RSS there. The
+    accounted figure measures kiln alone.
+
+  The report line has `base acct` and `acct` (reserved bytes, MB, with
+  the change) and `judged`, the thresholds the row was judged at
+  (`rss 5%, acct 2%` or `rss 5%`); a regression of the accounted figure
+  is `REGRESSED (accounted)`. clang's side is never judged or recorded; a
+  failed clang compile still fails the run. The printed ratio table
+  covers the variants both compilers have.
 - **Recorded.**
   - The results file (`bench/results/<stamp>.json`) is the ordinary
     record with both compilers' runs, plus a `pch` key:
@@ -248,10 +283,14 @@ declaration image") against clang's on fixed header sets
   - `--record` writes kiln's baselines into `bench/baselines/pch.json`.
     It also rewrites the `main` region of `docs/status/pch.md`.
   - `--record --label <name>` rewrites only region `<name>` and records no
-    baselines. It is for a run with another kiln, for example a branch's
+    baselines. `<name>` cannot be `main` (exit 2): main's region and
+    main's baselines are written together. It is for a run with another kiln, for example a branch's
     build passed by `--compiler`. A label is letters, digits and `-_.+/@`.
   - With `--filter`, `--record` still writes the baselines but leaves the
     page alone, because a region holds every case.
+- **The accounted line.** Each case's section of the region ends its
+  table with kiln's accounted memory without a PCH, `-fsyntax-only` and
+  `-O0 -c`, in MiB.
 - **The page region.** It is the text between `<!-- xtask bench pch
   <label>: begin ... -->` and `<!-- xtask bench pch <label>: end -->`. The
   generator replaces it in place, or adds a new label after the last

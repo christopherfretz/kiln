@@ -154,6 +154,12 @@ impl Variant {
         matches!(self, Self::ReplaySyntax | Self::ReplayObj)
     }
 
+    /// Whether kiln's accounted memory is recorded and judged: the units
+    /// built without a PCH (spec/bench.md "The pch group").
+    pub fn accounted(self) -> bool {
+        matches!(self, Self::NoneSyntax | Self::NoneObj)
+    }
+
     fn consumes(self) -> bool {
         matches!(self, Self::LoadSyntax | Self::LoadObj | Self::ReplaySyntax | Self::ReplayObj)
     }
@@ -490,7 +496,10 @@ fn run_in(
                 let flags = a[..a.len() - 1].join(" ");
                 let none = Reports { constexpr: None, inst: false };
                 let cap = cap_for(cx, s, &a);
-                let outcome = super::sample(cx, &e, &spec, s, &cmd, cap, none, (flags, &hash));
+                let mut outcome = super::sample(cx, &e, &spec, s, &cmd, cap, none, (flags, &hash));
+                if kiln && v.accounted() {
+                    outcome = with_accounted(cx, s, &files[i], case, *v, outcome);
+                }
                 eprintln!(
                     "[{n:>w$}/{total}] {} {}: {}",
                     e.id,
@@ -619,6 +628,37 @@ fn run_in(
     Ok(report)
 }
 
+/// `outcome` with kiln's accounted memory, from one more, unmeasured
+/// compile with `-fkiln-memory-report`, so the measured runs stay as they
+/// are. A missing or malformed report fails the entry.
+fn with_accounted(
+    cx: &Ctx<'_>,
+    s: &Subject,
+    files: &Files,
+    case: &Case,
+    v: Variant,
+    outcome: Outcome,
+) -> Outcome {
+    let Outcome::Measured(mut m) = outcome else { return outcome };
+    let a = memory_report_args(case, v);
+    let cmd = files.command(s, &a, &cx.layout.root);
+    match run_once(cx, s, &cmd, &a).and_then(|e| record::Accounted::parse_report(&e)) {
+        Ok(acct) => {
+            m.accounted = Some(acct);
+            Outcome::Measured(m)
+        }
+        Err(why) => Outcome::Failed(format!("-fkiln-memory-report: {why}")),
+    }
+}
+
+/// kiln's arguments of `v` with `-fkiln-memory-report`, before the input
+/// (and its `-x c`).
+pub fn memory_report_args(case: &Case, v: Variant) -> Vec<String> {
+    let mut a = args(case, v, true);
+    a.insert(a.len() - 1 - usize::from(case.c) * 2, "-fkiln-memory-report".into());
+    a
+}
+
 /// The directives every entry of the group has: the variant's mode.
 fn spec_of(v: Variant) -> BenchSpec {
     BenchSpec {
@@ -633,9 +673,11 @@ fn spec_of(v: Variant) -> BenchSpec {
     }
 }
 
-/// The group's default peak-RSS threshold, percent. Two identical
-/// recordings of the group differed by up to 2.5% (`gnu/build`, 86 MB), so
-/// the corpus's 2% would flag noise; 5% still flags a 4 MB growth there.
+/// The group's default peak-RSS threshold, percent, for every variant.
+/// Identical recordings differ by up to 2.5% (`gnu/build`, 86 MB) and the
+/// medians of the `none` variants by up to 6.4% (`c/none-syntax`, 13 MB),
+/// so the corpus's 2% would flag noise. The `none` variants are also
+/// judged on kiln's accounted memory, at [`compare::ACCT_PCT`].
 pub const MEM_PCT: f64 = 5.0;
 
 /// The group's thresholds: memory at [`MEM_PCT`], wall time not judged
@@ -692,11 +734,33 @@ fn judge(
             let _ = writeln!(failures, "{} (oracle {}): {why}", e.id, oracle_run.kind);
         }
     }
-    for r in &mut rows {
+    for (r, e) in rows.iter_mut().zip(entries) {
         r.drain(9..17);
+        let (base_acct, acct) = accounted_cells(&files, e, test, &test_run.entries[&e.id]);
+        let v = variant_of(&e.id);
+        let judged = if v.accounted() {
+            format!("rss {}%, acct {}%", t.mem_pct, compare::ACCT_PCT)
+        } else {
+            format!("rss {}%", t.mem_pct)
+        };
+        let status = r.pop().unwrap_or_default();
+        r.extend([base_acct, acct, judged, status]);
     }
-    let header =
-        ["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
+    let header = [
+        "entry",
+        "mode",
+        "base ms",
+        "ms",
+        "time",
+        "spread",
+        "base MB",
+        "MB",
+        "mem",
+        "base acct",
+        "acct",
+        "judged",
+        "status",
+    ];
     println!();
     print!("{}", compare::render_table(&header, &rows));
     if !t.time_pct.is_finite() {
@@ -706,6 +770,34 @@ fn judge(
         println!("\nfailures:\n{}", super::indent(&failures));
     }
     Ok((report, files))
+}
+
+/// The baseline's and the measurement's accounted memory (reserved, MB, and
+/// the change), or `-`.
+fn accounted_cells(
+    files: &BTreeMap<String, record::BaselineFile>,
+    e: &Entry,
+    test: &Subject,
+    outcome: &Outcome,
+) -> (String, String) {
+    let base = files
+        .get(&e.group)
+        .and_then(|f| f.entries.get(&e.name))
+        .and_then(|k| k.get(test.kind()))
+        .and_then(|b| b.measurement.accounted);
+    let cur = outcome.measurement().and_then(|m| m.accounted);
+    #[allow(clippy::cast_precision_loss)]
+    let mb = |a: record::Accounted| format!("{:.2}", a.reserved as f64 / 1e6);
+    let cur_cell = match (base, cur) {
+        #[allow(clippy::cast_precision_loss)]
+        (Some(b), Some(c)) => match compare::delta_pct(b.reserved as f64, c.reserved as f64) {
+            Some(d) => format!("{} ({d:+.2}%)", mb(c)),
+            None => mb(c),
+        },
+        (_, Some(c)) => mb(c),
+        _ => "-".to_owned(),
+    };
+    (base.map_or_else(|| "-".to_owned(), mb), cur_cell)
 }
 
 fn variant_of(id: &str) -> Variant {
@@ -827,6 +919,11 @@ fn mib(m: Option<&record::Measurement>) -> String {
 }
 
 #[allow(clippy::cast_precision_loss)]
+fn acct_mib(a: record::Accounted) -> String {
+    format!("{:.2} MiB", a.reserved as f64 / f64::from(1u32 << 20))
+}
+
+#[allow(clippy::cast_precision_loss)]
 fn size(b: Option<u64>) -> String {
     b.map_or_else(|| "-".to_owned(), |b| format!("{:.2} MB", b as f64 / 1_048_576.0))
 }
@@ -902,8 +999,9 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
         s,
         "- Host {}. Each number is the median of {} runs: wall time in seconds, peak RSS in MiB \
          (RSS source `{}`). The host is shared: wall times move about 1.4x with its load, so the \
-         kiln-to-clang ratios, taken back to back, are the steadier figure; memory does not \
-         move.",
+         kiln-to-clang ratios, taken back to back, are the steadier figure. Peak RSS moves a \
+         few percent between identical runs; kiln's accounted memory (`-fkiln-memory-report`) \
+         does not.",
         cx.host, cx.runs, cx.rss
     );
     let loads: Vec<String> = CASES
@@ -975,6 +1073,16 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
                     ratio(rss(t), rss(o))
                 );
             }
+        }
+        let acct = |v| measured(cx.test_run, case, v).and_then(|m| m.accounted);
+        if let (Some(a), Some(b)) = (acct(Variant::NoneSyntax), acct(Variant::NoneObj)) {
+            let _ = writeln!(
+                s,
+                "\nkiln's accounted memory without a PCH (`-fkiln-memory-report`, reserved \
+                 bytes): {} (`-fsyntax-only`), {} (`-O0 -c`).",
+                acct_mib(a),
+                acct_mib(b)
+            );
         }
         // What the PCH buys each compiler: load over no PCH.
         let buys = |run: &CompilerRun| -> String {
@@ -1053,6 +1161,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Only the `none` variants are judged on accounted memory, from a
+    /// compile of the same kind with the report flag before the input.
+    #[test]
+    fn accounted_memory_of_the_none_variants() {
+        let judged: Vec<&str> =
+            Variant::ALL.into_iter().filter(|v| v.accounted()).map(Variant::name).collect();
+        assert_eq!(judged, ["none-syntax", "none-obj"]);
+        assert_eq!(
+            memory_report_args(&CASES[0], Variant::NoneObj).join(" "),
+            "-std=c++26 -include bench/pch/gnu.h -O0 -c -o <obj> -fkiln-memory-report \
+             bench/pch/gnu.cpp"
+        );
+        assert_eq!(
+            memory_report_args(&CASES[3], Variant::NoneSyntax).join(" "),
+            "-std=c17 -include bench/pch/c.h -fsyntax-only -fkiln-memory-report -x c bench/pch/c.c"
+        );
+        // `--threshold-mem` moves RSS, never the accounted threshold.
+        let o = ThresholdOverrides { mem_pct: Some(1.0), ..Default::default() };
+        assert!((thresholds(&o).mem_pct - 1.0).abs() < f64::EPSILON);
+        assert!((compare::ACCT_PCT - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]

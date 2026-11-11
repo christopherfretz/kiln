@@ -74,6 +74,7 @@ fn parses_the_command_line() {
         &["--mem-limit", "lots"],
         &["--label", ""],
         &["--label=a b"],
+        &["--label", "main", "--record", "bench/pch"],
     ] {
         assert!(parse_args(args(bad)).is_err(), "{bad:?}");
     }
