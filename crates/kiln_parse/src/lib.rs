@@ -135,6 +135,26 @@ pub struct ParseOptions {
     /// declaration ([`ParsedTu::image_census`], spec/modules.md §11.11
     /// "Fallback census").
     pub image_census: bool,
+    /// The main file is a header being precompiled (`-emit-pch` with
+    /// `-fkiln-pch-image`): record its declaration image
+    /// ([`ParsedTu::pch_image`], WP-1036). With [`Self::image_census`],
+    /// the census is the header's.
+    pub record_pch: bool,
+    /// A precompiled header's declarations, built into the unit before
+    /// its first token in place of replaying the header (WP-1036).
+    pub pch: Option<PchLoad>,
+}
+
+/// What [`ParseOptions::pch`] builds: the decoded image, the source
+/// manager's buffers for its file table (same order) and the header's
+/// sema pragma state.
+#[derive(Clone, Debug)]
+pub struct PchLoad {
+    /// The precompiled header's path (for the corrupt-file error).
+    pub path: String,
+    pub decls: Arc<kiln_sema::PchDecls>,
+    pub files: Vec<FileId>,
+    pub pragmas: kiln_sema::PragmaState,
 }
 
 impl Default for ParseOptions {
@@ -146,6 +166,8 @@ impl Default for ParseOptions {
             record_carried: false,
             record_image: false,
             image_census: false,
+            record_pch: false,
+            pch: None,
             exceptions: true,
             rtti: true,
             gnu: false,
@@ -260,6 +282,9 @@ pub struct ParsedTu {
     /// The fallback census, when [`ParseOptions::image_census`] and the
     /// main unit is a module unit.
     pub image_census: Option<kiln_sema::ImageCensus>,
+    /// The precompiled header's declaration image, when
+    /// [`ParseOptions::record_pch`] (WP-1036).
+    pub pch_image: Option<kiln_sema::ModuleImage>,
     /// Sema's pragma state at the end of the translation unit, for the
     /// preprocessor-state record of a PCH (spec/modules.md §11.13).
     pub pragmas: kiln_sema::PragmaState,
@@ -408,7 +433,16 @@ pub fn parse_preprocessed<'a, 'sm>(
     if let Some(c) = pp.take_main_carried() {
         s.install_carried_constants(&c.path, &c.bytes, Loc::INVALID);
     }
-    let main = pp.main_file().map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
+    let main_id = pp.main_file();
+    if let Some(l) = &opts.pch {
+        s.install_pragma_state(&l.pragmas);
+        if let Err(why) = s.load_pch_image(&l.decls, &l.files) {
+            kiln_diag::Diag::new(kiln_diag::DiagId::drv_pch_corrupt, kiln_source::Span::INVALID)
+                .arg(format!("{why} in kiln PCH '{}'", l.path))
+                .emit(diags);
+        }
+    }
+    let main = main_id.map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
@@ -424,7 +458,12 @@ pub fn parse_preprocessed<'a, 'sm>(
     let sema_memory = s.memory();
     let carried = s.take_carried_section();
     let image = s.take_module_image();
-    let image_census = if opts.image_census { s.image_census() } else { None };
+    let pch_image = main_id.filter(|_| opts.record_pch).map(|m| s.take_pch_image(m));
+    let image_census = match main_id {
+        Some(m) if opts.image_census && opts.record_pch => Some(s.pch_image_census(m)),
+        _ if opts.image_census => s.image_census(),
+        _ => None,
+    };
     let carried_hits = s.carried_hits();
     let pragmas = s.pragma_state();
     let (ast, oven) = s.into_parts();
@@ -438,6 +477,7 @@ pub fn parse_preprocessed<'a, 'sm>(
         carried_hits,
         image,
         image_census,
+        pch_image,
         pragmas,
     };
     (tu, src.into_preprocessor())
