@@ -801,6 +801,10 @@ impl IfContext for IfCx<'_, '_, '_> {
     fn char8(&self) -> bool {
         self.pp.opts.char8.unwrap_or(self.pp.opts.std >= Std::Cxx20)
     }
+
+    fn clang19_escapes(&self) -> bool {
+        self.pp.opts.clang19_escapes
+    }
 }
 
 impl Preprocessor<'_, '_> {

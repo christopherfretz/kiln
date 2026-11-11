@@ -27,6 +27,7 @@ mod policy;
 mod pragma;
 pub mod template;
 mod text;
+mod unicode_tables;
 pub mod verify;
 
 pub use columns::escape_diag_text;

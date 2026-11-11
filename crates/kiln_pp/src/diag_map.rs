@@ -125,6 +125,7 @@ fn bad_encoding(string: bool, error: bool, span: Span, start: Span) -> Diag {
 /// `LiteralSupport.cpp`). Shared by the `#if` evaluator and the parser
 /// (`spec/pp.md`, `spec/parse.md` §2); `tok` may be a macro or scratch
 /// token. Kinds kiln has no id for are dropped.
+#[allow(clippy::too_many_lines, reason = "one arm per kind, as clang's LiteralSupport")]
 pub fn literal_diags(
     sm: &SourceManager,
     tok: &Token,
@@ -179,27 +180,44 @@ pub fn literal_diags(
             K::FloatSuffixExtension => Diag::new(DiagId::lit_float_suffix_ext, at).arg(range),
             K::FloatSuffixGnu => Diag::new(DiagId::lit_float_suffix_gnu, start),
             K::IntegerTooLarge => Diag::new(DiagId::sema_int_literal_too_large, start),
-            K::UnknownEscape { ch } => Diag::new(DiagId::lit_unknown_escape, at).arg(ch),
-            K::NonstandardEscape { ch } => Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch),
-            K::EscapeNoDigits { esc } => Diag::new(DiagId::lit_escape_no_digits, at).arg(esc),
-            K::EscapeMissingBrace { esc } => {
-                Diag::new(DiagId::lit_escape_missing_brace, at).arg(esc)
+            K::UnknownEscape { ch } => {
+                Diag::new(DiagId::lit_unknown_escape, at).arg(ch).range(span)
             }
-            K::DelimitedEscapeEmpty => Diag::new(DiagId::lit_delimited_escape_empty, at),
-            K::DelimitedEscapeUnterminated => Diag::new(DiagId::pp_expected, at).arg("'}'"),
+            K::NonstandardEscape { ch } => {
+                Diag::new(DiagId::lit_nonstandard_escape, at).arg(ch).range(span)
+            }
+            K::EscapeNoDigits { esc } => {
+                Diag::new(DiagId::lit_escape_no_digits, at).arg(esc).range(span)
+            }
+            K::EscapeMissingBrace { esc } => {
+                Diag::new(DiagId::lit_escape_missing_brace, at).arg(esc).range(span)
+            }
+            K::DelimitedEscapeEmpty => {
+                Diag::new(DiagId::lit_delimited_escape_empty, at).range(span)
+            }
+            K::DelimitedEscapeUnterminated => {
+                Diag::new(DiagId::pp_expected, at).arg("'}'").range(span)
+            }
+            // clang's range runs from the backslash to the bad digit.
             K::DelimitedEscapeInvalidDigit { ch } => {
-                Diag::new(DiagId::lit_delimited_escape_invalid, backslash()).arg(ch)
+                let b = backslash();
+                Diag::new(DiagId::lit_delimited_escape_invalid, b)
+                    .arg(ch)
+                    .range(Span::new(b.lo, span.lo.max(b.lo)))
             }
             K::DelimitedEscapeExtension | K::UcnDelimitedExtension => {
                 Diag::new(DiagId::lex_delimited_escape_ext, at).arg(0)
             }
             K::UcnNamedExtension => Diag::new(DiagId::lex_delimited_escape_ext, at).arg(1),
-            K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at),
-            K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at),
-            K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at),
-            K::UcnUnknownName => Diag::new(DiagId::lex_ucn_unknown_name, at).arg(ucn_name(range)),
+            K::HexEscapeTooLarge => Diag::new(DiagId::lit_hex_escape_too_large, at).range(span),
+            K::OctalEscapeTooLarge => Diag::new(DiagId::lit_octal_escape_too_large, at).range(span),
+            K::UcnEscapeIncomplete => Diag::new(DiagId::lit_ucn_escape_incomplete, at).range(span),
+            K::UcnUnknownName => {
+                Diag::new(DiagId::lex_ucn_unknown_name, at).arg(ucn_name(range)).range(span)
+            }
             K::UcnNameLooseMatch { .. } => Diag::new(DiagId::lex_ucn_unknown_name, at)
                 .arg(ucn_name(range))
+                .range(span)
                 .with_note(Diag::new(DiagId::note_ucn_name_loose_match, at)),
             K::CharTooLarge => Diag::new(DiagId::lit_char_too_large, start),
             K::MultiCharLiteral => Diag::new(DiagId::lit_multichar, start),
@@ -213,7 +231,7 @@ pub fn literal_diags(
             K::UnevaluatedStringEscape { ch } => {
                 let esc =
                     if range.starts_with('\\') { range.to_owned() } else { format!("\\{ch}") };
-                Diag::new(DiagId::lit_unevaluated_escape, at).arg(esc)
+                Diag::new(DiagId::lit_unevaluated_escape, at).arg(esc).range(span)
             }
             K::UnevaluatedStringUdSuffix => Diag::new(DiagId::lit_unevaluated_udl, start),
             K::InvalidEncoding { string, error } => bad_encoding(string, error, span, start),

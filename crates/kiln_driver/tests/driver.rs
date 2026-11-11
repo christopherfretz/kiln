@@ -1260,6 +1260,78 @@ fn bit_width_and_static_assert_ranges_like_clang() {
     assert_eq!((o.code, o.stderr.as_str()), (1, BIT_WIDTH_GOLDEN));
 }
 
+/// [lex.string.uneval]/1: an invalid escape in an unevaluated string is
+/// underlined whole, from the backslash to the end of the escape (clang
+/// `ProcessCharEscape`), after the escape's own diagnostic; and display
+/// columns follow LLVM 22's width tables (a wide CJK character is 2
+/// columns, a combining mark 0, an unassigned code point prints as
+/// `<U+0378>`, 8 columns) (WP-1268).
+const UNEVAL_ESCAPE_SOURCE: &str = r#"static_assert(false, "a\x01b" "\101" "\o{7}");
+static_assert(false, "\777\og");
+[[deprecated("\x{41}\q")]] void f();
+const char *漢́ = "͸\q";
+static_assert(false, "\u00\x{}\u{4g}\N{abc");
+"#;
+
+/// clang 22's `-fsyntax-only` output for `UNEVAL_ESCAPE_SOURCE` (clang 19
+/// differs only in not reporting `\x{}` as an invalid unevaluated escape).
+const UNEVAL_ESCAPE_GOLDEN: &str = r#"<stdin>:1:24: error: invalid escape sequence '\x01b' in an unevaluated string literal
+    1 | static_assert(false, "a\x01b" "\101" "\o{7}");
+      |                        ^~~~~
+<stdin>:1:32: error: invalid escape sequence '\101' in an unevaluated string literal
+    1 | static_assert(false, "a\x01b" "\101" "\o{7}");
+      |                                ^~~~
+<stdin>:1:39: error: invalid escape sequence '\o{7}' in an unevaluated string literal
+    1 | static_assert(false, "a\x01b" "\101" "\o{7}");
+      |                                       ^~~~~
+<stdin>:2:23: error: octal escape sequence out of range
+    2 | static_assert(false, "\777\og");
+      |                       ^~~~
+<stdin>:2:23: error: invalid escape sequence '\777' in an unevaluated string literal
+    2 | static_assert(false, "\777\og");
+      |                       ^~~~
+<stdin>:2:27: error: expected '{' after '\o' escape sequence
+    2 | static_assert(false, "\777\og");
+      |                           ^~
+<stdin>:2:27: error: invalid escape sequence '\o' in an unevaluated string literal
+    2 | static_assert(false, "\777\og");
+      |                           ^~
+<stdin>:3:15: error: invalid escape sequence '\x{41}' in an unevaluated string literal
+    3 | [[deprecated("\x{41}\q")]] void f();
+      |               ^~~~~~
+<stdin>:3:21: warning: unknown escape sequence '\q' [-Wunknown-escape-sequence]
+    3 | [[deprecated("\x{41}\q")]] void f();
+      |                     ^~
+<stdin>:3:21: error: invalid escape sequence '\q' in an unevaluated string literal
+    3 | [[deprecated("\x{41}\q")]] void f();
+      |                     ^~
+<stdin>:4:24: warning: unknown escape sequence '\q' [-Wunknown-escape-sequence]
+    4 | const char *漢́ = "<U+0378>\q";
+      |                           ^~
+<stdin>:5:23: error: incomplete universal character name
+    5 | static_assert(false, "\u00\x{}\u{4g}\N{abc");
+      |                       ^~~~
+<stdin>:5:27: error: delimited escape sequence cannot be empty
+    5 | static_assert(false, "\u00\x{}\u{4g}\N{abc");
+      |                           ^~~
+<stdin>:5:27: error: invalid escape sequence '\x{}' in an unevaluated string literal
+    5 | static_assert(false, "\u00\x{}\u{4g}\N{abc");
+      |                           ^~~~
+<stdin>:5:31: error: invalid digit 'g' in escape sequence
+    5 | static_assert(false, "\u00\x{}\u{4g}\N{abc");
+      |                               ^~~~
+<stdin>:5:37: error: incomplete universal character name
+    5 | static_assert(false, "\u00\x{}\u{4g}\N{abc");
+      |                                     ^~~
+2 warnings and 14 errors generated.
+"#;
+
+#[test]
+fn unevaluated_string_escape_ranges_like_clang() {
+    let o = kiln(&["-std=c++26", "-fsyntax-only", "-"], UNEVAL_ESCAPE_SOURCE);
+    assert_eq!((o.code, o.stderr.as_str()), (1, UNEVAL_ESCAPE_GOLDEN));
+}
+
 /// [dcl.init.ref]/5: a reference binding that drops qualifiers underlines
 /// the initializer, as clang streams its source range into
 /// `err_reference_bind_drops_quals` (WP-818).

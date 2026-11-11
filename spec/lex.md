@@ -303,7 +303,7 @@ pub struct LiteralOptions { pub std: Std, pub params: EncodingParams } // new();
 pub struct LitDiag { pub kind: LexDiagKind, pub range: Range<u32> /* into the spelling */ }
 impl LitDiag { pub fn locate(&self, tok: &Token, text: &str, opts: &LexOptions) -> LexDiag; }
 pub enum CodeUnits { U8(Vec<u8>), U16(Vec<u16>), U32(Vec<u32>) } // len, is_empty, get, unit_bits, iter
-pub struct StringLiteral<'s> { encoding, raw, units: CodeUnits, ud_suffix: Option<&'s str>, diags, has_error }
+pub struct StringLiteral<'s> { encoding, raw, units: CodeUnits, ud_suffix: Option<&'s str>, diags, has_error, had_error }
 pub enum CharType { Char, Int, WChar, Char8, Char16, Char32 }
 pub struct CharLiteral<'s> { encoding, ty, chars: u32, value: i64, pp_value: i64, pp_unsigned: bool,
                              ud_suffix, diags, has_error }
@@ -391,7 +391,33 @@ variants are additions to a `#[non_exhaustive]` enum.
   each further bad sequence; a character literal gets one at its start.
   A raw string body is one fragment.
 - Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
-  unknown escape is an error (`UnevaluatedString*`).
+  unknown escape is an error (`UnevaluatedString*`). The escape error
+  follows the escape's own diagnostics (`OctalEscapeTooLarge`, a missing
+  `{` after `\o`, ...) and its range is the whole escape, backslash to
+  end (`'\x01b'`, `'\o{101}'`; clang 22 `ProcessCharEscape`). `\x` with
+  no hex digits is only `EscapeNoDigits`, with value 0, as in clang.
+  `has_error` says any error was reported; `had_error` is clang's
+  `StringLiteralParser::hadError`, which the soft errors (`\x` without
+  digits, an octal escape out of range, an unterminated `\x{` or `\o{`)
+  do not set (an unevaluated string still gets the hard escape error
+  after the last two). The parser
+  drops a construct whose unevaluated string `had_error`
+  (spec/sema.md §4.6, "Unevaluated strings with errors").
+- Escape diagnostic ranges (in every literal; clang 22 passes
+  `EscapeBegin, ThisTokBuf` to each escape diagnostic): the whole escape
+  from the backslash, except that an empty `\x{}`/`\o{}` stops before
+  the `}` (`\u{}` includes it), an invalid delimited digit runs from the
+  backslash up to the digit (`\x{4`), an unterminated `\N{` covers
+  `\N{`, and an unknown `\N{name}` covers the name. The driver golden
+  `unevaluated_string_escape_ranges_like_clang` pins them.
+- Empty delimited escapes (`\x{}`, `\o{}`): `DelimitedEscapeEmpty`. By
+  default (clang 22) the `}` is consumed, the escape has no value and,
+  in an unevaluated string, is also an invalid escape `'\x{}'`. With
+  `LiteralOptions::clang19_escapes` (the parser sets it under
+  `-fclang-compat=19`) the error is soft and leaves the `}` unconsumed
+  (value 0, then `}`; a character literal becomes multi-character), and
+  no unevaluated-escape error follows, as in clang 19. Tests:
+  `lex.string.uneval/empty-delimited-escape{,-19}.cpp`.
 - `-fno-char8_t` (WP-808; clang `LangOptions::Char8`, GCC `-fno-char8_t`):
   `LiteralOptions::char8` (`None`: C++20 and later; the driver's
   `-f[no-]char8_t`, the last one winning) decides whether a `u8`

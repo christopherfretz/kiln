@@ -143,6 +143,10 @@ pub struct PpOptions {
     /// Set by the driver at C++26: an angled `#include <meta>` that is
     /// not found gets a note naming the selected library (WP-1210).
     pub meta_hint: Option<MetaHint>,
+    /// `-fclang-compat=19`: decode `#if` character literals with clang
+    /// 19's escape rules (`LiteralOptions::clang19_escapes`; an empty
+    /// `\x{}` leaves its `}`, WP-1268).
+    pub clang19_escapes: bool,
 }
 
 impl PpOptions {
@@ -169,6 +173,7 @@ impl PpOptions {
             dump_includes: false,
             main_is_header: false,
             meta_hint: None,
+            clang19_escapes: false,
         }
     }
 

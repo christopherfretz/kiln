@@ -441,8 +441,12 @@ impl Parser<'_, '_> {
     fn parse_linkage_spec_with(&mut self, gnu: Vec<AttrId>) {
         let loc = self.bump().span.lo;
         let lang_tok = self.bump();
-        let lang = self.unevaluated_text(&lang_tok);
-        let ls = self.s.act_on_start_linkage_spec(&lang, loc, lang_tok.span.lo);
+        // An invalid language string ([lex.string.uneval]) makes no
+        // linkage specification; the declarations are parsed in the
+        // enclosing context (clang's `ParseLinkage`).
+        let ls = self
+            .unevaluated_text(&lang_tok)
+            .map(|lang| self.s.act_on_start_linkage_spec(&lang, loc, lang_tok.span.lo));
         if let Some(open) = self.eat(Punct::LBrace) {
             while !self.at(Punct::RBrace) && !self.at_eof() {
                 self.parse_external_declaration();
@@ -450,14 +454,18 @@ impl Parser<'_, '_> {
             self.take_fp_pragmas(FpAt::File);
             self.expect_closing(Punct::RBrace, Punct::LBrace, open);
         } else {
-            self.s.act_on_linkage_spec_braceless(ls);
+            if let Some(ls) = ls {
+                self.s.act_on_linkage_spec_braceless(ls);
+            }
             let outer = std::mem::replace(&mut self.lead_decl_attrs, gnu);
             self.parse_external_declaration();
             // A declaration without decl-specifiers (a namespace, a
             // template) does not take them.
             self.lead_decl_attrs = outer;
         }
-        self.s.act_on_finish_linkage_spec(ls);
+        if let Some(ls) = ls {
+            self.s.act_on_finish_linkage_spec(ls);
+        }
     }
 
     /// The rest of `namespace name = [qual] target;` after the `=`
@@ -711,13 +719,24 @@ impl Parser<'_, '_> {
                     self.emit(d);
                 }
                 msg = self.parse_constant_expr();
-                if msg.is_none() {
+                // An invalid message expression drops the declaration too
+                // (clang's `AssertMessage.isInvalid()`): no "static
+                // assertion failed" after the message's own error.
+                if msg.is_none_or(|m| self.s.contains_errors(m)) {
                     self.skip_until(&[Punct::RParen], false, true);
                     self.skip_to_semi();
                     return None;
                 }
             } else if self.at_string() {
+                // clang drops the declaration after an invalid
+                // unevaluated string ([lex.string.uneval]), so the
+                // assertion is not also reported as failed.
                 msg = self.parse_string_literal(true);
+                if msg.is_none() {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    self.skip_to_semi();
+                    return None;
+                }
             } else {
                 self.error_here(DiagId::parse_expected_string_literal);
                 self.skip_until(&[Punct::RParen], false, true);

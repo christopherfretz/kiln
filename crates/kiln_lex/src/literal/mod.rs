@@ -83,6 +83,11 @@ pub struct LiteralOptions {
     /// `char8_t` type ([lex.ccon]/3, P0482R6); `None` is the default, C++20
     /// and later.
     pub char8: Option<bool>,
+    /// `-fclang-compat=19`: clang 19's escape-sequence recovery. An empty
+    /// `\x{}` / `\o{}` leaves its `}` unconsumed (so `'\x{}'` is a
+    /// multicharacter literal) and is not then an invalid escape in an
+    /// unevaluated string; clang 22 consumes the `}` and reports both.
+    pub clang19_escapes: bool,
 }
 
 impl Default for LiteralOptions {
@@ -95,7 +100,7 @@ impl Default for LiteralOptions {
 impl LiteralOptions {
     /// Options for `std` and `params`.
     pub const fn new(std: Std, params: EncodingParams) -> Self {
-        LiteralOptions { std, params, char8: None }
+        LiteralOptions { std, params, char8: None, clang19_escapes: false }
     }
 
     /// Whether a UTF-8 literal has `char8_t` type: the `char8` field, else
@@ -361,6 +366,11 @@ pub struct StringLiteral<'s> {
     pub diags: Vec<LitDiag>,
     /// Whether any diagnostic is an error.
     pub has_error: bool,
+    /// clang's `StringLiteralParser::hadError`: an error other than the
+    /// "soft" ones clang reports without invalidating the literal (`\x`
+    /// with no digits, an unterminated `\x{`/`\o{`, a too-large plain
+    /// octal escape), whose recovery value is then used.
+    pub had_error: bool,
 }
 
 /// The type of a character literal ([lex.ccon]).
@@ -492,9 +502,14 @@ struct Escapes<'a> {
     s: &'a str,
     bits: u32,
     std: Std,
+    /// [`LiteralOptions::clang19_escapes`].
+    clang19: bool,
     /// Unevaluated string ([lex.string.uneval]): numeric escapes are
     /// errors.
     unevaluated: bool,
+    /// Set by an escape that clang 19 returns from before its
+    /// unevaluated-string check (an empty `\x{}` / `\o{}`).
+    skip_unevaluated: bool,
     diags: &'a mut Diags,
 }
 
@@ -529,11 +544,11 @@ impl Escapes<'_> {
         match c {
             'e' | 'E' | '(' | '{' | '[' | '%' => {
                 self.diags.push(LexDiagKind::NonstandardEscape { ch: c }, at, next);
+                self.unevaluated_check(at, c, next);
                 let v = if matches!(c, 'e' | 'E') { '\x1B' } else { c };
                 (Some(Item::Char(v)), next)
             }
             '0'..='7' => {
-                self.numeric_escape_check(at, c);
                 let mut v = 0u32;
                 let mut i = at + 1;
                 while i < at + 4
@@ -542,22 +557,27 @@ impl Escapes<'_> {
                     v = v * 8 + u32::from(self.s.as_bytes()[i] - b'0');
                     i += 1;
                 }
-                (Some(self.fit(v, false, false, at, i)), i)
+                let item = self.fit(v, false, false, at, i);
+                self.unevaluated_check(at, c, i);
+                (Some(item), i)
             }
             'o' => {
-                self.numeric_escape_check(at, c);
                 if self.char_at(next) != Some('{') {
                     self.diags.push(LexDiagKind::EscapeMissingBrace { esc: 'o' }, at, next);
+                    self.unevaluated_check(at, c, next);
                     return (None, next);
                 }
                 let (v, overflow, end) = self.delimited(at, next + 1, 8);
-                (v.map(|v| self.fit(v, overflow, false, at, end)), end)
+                let item = v.map(|v| self.fit(v, overflow, false, at, end));
+                self.unevaluated_check(at, c, end);
+                (item, end)
             }
             'x' => {
-                self.numeric_escape_check(at, c);
                 if self.char_at(next) == Some('{') {
                     let (v, overflow, end) = self.delimited(at, next + 1, 16);
-                    return (v.map(|v| self.fit(v, overflow, true, at, end)), end);
+                    let item = v.map(|v| self.fit(v, overflow, true, at, end));
+                    self.unevaluated_check(at, c, end);
+                    return (item, end);
                 }
                 let mut v = 0u32;
                 let mut overflow = false;
@@ -570,25 +590,31 @@ impl Escapes<'_> {
                     i += 1;
                 }
                 if i == next {
+                    // clang returns 0 before its unevaluated-string check.
                     self.diags.push_soft(LexDiagKind::EscapeNoDigits { esc: 'x' }, at, next);
-                    return (None, next);
+                    return (Some(Item::Unit(0)), next);
                 }
-                (Some(self.fit(v, overflow, true, at, i)), i)
+                let item = self.fit(v, overflow, true, at, i);
+                self.unevaluated_check(at, c, i);
+                (Some(item), i)
             }
             'u' | 'U' | 'N' => self.ucn(at, c, next),
             _ => {
                 self.diags.push(LexDiagKind::UnknownEscape { ch: c }, at, next);
-                if self.unevaluated {
-                    self.diags.push(LexDiagKind::UnevaluatedStringEscape { ch: c }, at, next);
-                }
+                self.unevaluated_check(at, c, next);
                 (Some(Item::Char(c)), next)
             }
         }
     }
 
-    fn numeric_escape_check(&mut self, at: usize, c: char) {
-        if self.unevaluated {
-            self.diags.push(LexDiagKind::UnevaluatedStringEscape { ch: c }, at, at + 2);
+    /// [lex.string.uneval]/1: in an unevaluated string only the simple
+    /// escape sequences and universal-character-names are valid. As
+    /// clang's `ProcessCharEscape`, the error follows the escape's own
+    /// diagnostics and covers the whole sequence `at..end` (`\x01b`,
+    /// `\101`, `\o{101}`, `\q`).
+    fn unevaluated_check(&mut self, at: usize, c: char, end: usize) {
+        if self.unevaluated && !self.skip_unevaluated {
+            self.diags.push(LexDiagKind::UnevaluatedStringEscape { ch: c }, at, end);
         }
     }
 
@@ -661,14 +687,19 @@ impl Escapes<'_> {
             return (None, false, i);
         }
         if digits == 0 {
-            if char_escape {
-                self.diags.push_soft(LexDiagKind::DelimitedEscapeEmpty, at, i);
-                // clang leaves the `}` of an empty `\x{}`/`\o{}` unconsumed,
-                // so it lexes as a further character (making `'\x{}'` a
-                // multicharacter literal); mirrored for identical counts.
-                return (None, false, i - 1);
+            // clang's range for an empty `\x{}`/`\o{}` stops before the
+            // `}`; for `\u{}` it includes it.
+            let hi = if char_escape { i - 1 } else { i };
+            if char_escape && self.clang19 {
+                self.diags.push_soft(LexDiagKind::DelimitedEscapeEmpty, at, hi);
+                // clang 19 leaves the `}` of an empty `\x{}`/`\o{}`
+                // unconsumed, so it lexes as a further character (making
+                // `'\x{}'` a multicharacter literal), and returns before
+                // its unevaluated-string check.
+                self.skip_unevaluated = true;
+                return (Some(0), false, i - 1);
             }
-            self.diags.push(LexDiagKind::DelimitedEscapeEmpty, at, i);
+            self.diags.push(LexDiagKind::DelimitedEscapeEmpty, at, hi);
             return (None, false, i);
         }
         if char_escape {
@@ -690,7 +721,8 @@ impl Escapes<'_> {
                 }
                 let start = next + 1;
                 let Some(close) = self.s[start..].find('}').map(|k| start + k) else {
-                    self.diags.push(LexDiagKind::UcnEscapeIncomplete, at, self.s.len());
+                    // clang's range is `\N{`.
+                    self.diags.push(LexDiagKind::UcnEscapeIncomplete, at, start);
                     return (None, self.s.len());
                 };
                 let end = close + 1;
@@ -771,7 +803,7 @@ fn for_each_item(
     body: &str,
     base: usize,
     bits: u32,
-    std: Std,
+    opts: LiteralOptions,
     unevaluated: bool,
     bad: Bad<'_>,
     diags: &mut Diags,
@@ -791,7 +823,15 @@ fn for_each_item(
         if body.as_bytes()[i] == b'\\' {
             // Escape offsets are relative to `body`; shift diagnostics.
             let first = diags.list.len();
-            let mut esc = Escapes { s: body, bits, std, unevaluated, diags };
+            let mut esc = Escapes {
+                s: body,
+                bits,
+                std: opts.std,
+                clang19: opts.clang19_escapes,
+                unevaluated,
+                skip_unevaluated: false,
+                diags,
+            };
             let (item, end) = esc.escape(i);
             shift(&mut diags.list[first..], base);
             let end = end.max(i + 1);
@@ -903,6 +943,7 @@ fn decode_string_impl<'s>(
             ud_suffix: None,
             diags: d.list,
             has_error: true,
+            had_error: true,
         };
     };
     let mut diags = Diags::default();
@@ -949,7 +990,7 @@ fn decode_string_impl<'s>(
             body,
             parts.body.start,
             bits,
-            opts.std,
+            opts,
             unevaluated,
             bad,
             &mut diags,
@@ -966,6 +1007,7 @@ fn decode_string_impl<'s>(
         units,
         ud_suffix: parts.ud_suffix,
         has_error: diags.error,
+        had_error: diags.sticky,
         diags: diags.list,
     }
 }
@@ -1013,37 +1055,28 @@ pub fn decode_char_from_source<'s>(
     let mut too_long = false;
     let body = &spelling[parts.body.clone()];
     let bad = Bad { seqs: invalid, error: enc != Encoding::Ordinary, string: false };
-    for_each_item(
-        body,
-        parts.body.start,
-        bits,
-        opts.std,
-        false,
-        bad,
-        &mut diags,
-        |item, range, d| {
-            chars += 1;
-            let unit = match item {
-                None => 0,
-                Some(Item::Unit(u)) => u,
-                Some(Item::Char(c)) => {
-                    let cp = u32::from(c);
-                    let fits = match bits {
-                        8 => cp < 0x80,
-                        16 => cp < 0x1_0000,
-                        _ => true,
-                    };
-                    if !fits {
-                        d.push(LexDiagKind::CharTooLarge, range.start, range.end);
-                    }
-                    cp
+    for_each_item(body, parts.body.start, bits, opts, false, bad, &mut diags, |item, range, d| {
+        chars += 1;
+        let unit = match item {
+            None => 0,
+            Some(Item::Unit(u)) => u,
+            Some(Item::Char(c)) => {
+                let cp = u32::from(c);
+                let fits = match bits {
+                    8 => cp < 0x80,
+                    16 => cp < 0x1_0000,
+                    _ => true,
+                };
+                if !fits {
+                    d.push(LexDiagKind::CharTooLarge, range.start, range.end);
                 }
-            };
-            last = unit;
-            too_long |= packed >> 24 != 0;
-            packed = (packed << 8) | (unit & 0xFF);
-        },
-    );
+                cp
+            }
+        };
+        last = unit;
+        too_long |= packed >> 24 != 0;
+        packed = (packed << 8) | (unit & 0xFF);
+    });
     let full = parts.body.start.saturating_sub(1)..parts.body.end + 1;
     if chars == 0 && body.is_empty() {
         diags.push(LexDiagKind::EmptyCharLiteral, full.start, full.end);

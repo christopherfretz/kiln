@@ -410,7 +410,8 @@ fn golden_lex_literals_values() {
         "3f128 => invalid InvalidDigit { ch: 'f', radix: 10 }\n",
         "12_km => int Some(12) IntSuffix { unsigned: false, size: None } sfx=Some(\"_km\")\n",
         "\"\\N{latin small letter a}\" => [61] sfx=None UcnNameLooseMatch { ch: 'a' }\n",
-        "'\\x{}' => Int 125 pp=125 DelimitedEscapeEmpty MultiCharLiteral\n",
+        // clang 22 consumes the `}` (clang 19: `Int 125`, MultiCharLiteral).
+        "'\\x{}' => Char 0 pp=0 DelimitedEscapeEmpty\n",
         "\"a\" => [61] sfx=None\n",
         "\"b\" => [62] sfx=None\n",
         "u\"c\" => [63] sfx=None\n",

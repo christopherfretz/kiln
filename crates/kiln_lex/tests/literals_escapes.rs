@@ -161,8 +161,8 @@ fn lex_string_raw_no_escapes() {
 
 /// [lex.ccon]/8 diagnostics in clang's order: once a literal has had a
 /// "hard" error, later too-large `\x`/`\o{}` escapes are not diagnosed;
-/// `\x` without digits, an empty `\x{}`/`\o{}` and a too-large plain octal
-/// escape do not count as hard errors.
+/// `\x` without digits and a too-large plain octal escape do not count as
+/// hard errors (nor, in clang 19, an empty `\x{}`/`\o{}`).
 #[test]
 fn lex_ccon_error_gating_matches_clang() {
     assert_eq!(diags(r#""\x100\x100""#), [D::HexEscapeTooLarge]);
@@ -172,11 +172,16 @@ fn lex_ccon_error_gating_matches_clang() {
     assert_eq!(diags(r#""\x\x100""#), [D::EscapeNoDigits { esc: 'x' }, D::HexEscapeTooLarge]);
     assert_eq!(diags(r#""\x{}\x{}""#), [D::DelimitedEscapeEmpty, D::DelimitedEscapeEmpty]);
     assert_eq!(diags(r#""\400\x100""#), [D::OctalEscapeTooLarge, D::HexEscapeTooLarge]);
-    // clang leaves the `}` of an empty `\x{}` as a character of its own.
+    // clang 22 consumes the `}` of an empty `\x{}`; clang 19 leaves it as
+    // a character of its own.
     let c = decode_char(r"'\x{}'", LiteralOptions::default());
     let kinds: Vec<D> = c.diags.iter().map(|d| d.kind).collect();
+    assert_eq!(kinds, [D::DelimitedEscapeEmpty]);
+    let c19 = LiteralOptions { clang19_escapes: true, ..LiteralOptions::default() };
+    let c = decode_char(r"'\x{}'", c19);
+    let kinds: Vec<D> = c.diags.iter().map(|d| d.kind).collect();
     assert_eq!(kinds, [D::DelimitedEscapeEmpty, D::MultiCharLiteral]);
-    let c = decode_char(r"L'\x{}'", LiteralOptions::default());
+    let c = decode_char(r"L'\x{}'", c19);
     let kinds: Vec<D> = c.diags.iter().map(|d| d.kind).collect();
     assert_eq!(kinds, [D::DelimitedEscapeEmpty, D::MultiCharNotAllowed]);
     // A failed escape still counts as a character of a char literal.

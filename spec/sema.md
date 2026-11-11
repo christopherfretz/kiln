@@ -3737,6 +3737,35 @@ instantiation unless stated.
     gcc`, `xfail(clang)`), `static-assert-message-unevaluated-reflection.cpp`
     (`oracle: gcc`), `p2741-static-assert-message-diags.cpp` (the
     opt-in check).
+- **Unevaluated strings with errors** ([lex.string.uneval]/1, WP-1268;
+  clang `ParseUnevaluatedStringLiteralExpression`): a string the lexer
+  marks `had_error` (an encoding prefix, a ud-suffix, a numeric,
+  conditional or unknown escape; spec/lex.md) gives the parser no string
+  (`Parser::parse_string_literal(true)` returns `None`), and the
+  construct that wanted it is dropped, so no diagnostic cascades from it:
+  - `static_assert(c, "...")`: no declaration (no "static assertion
+    failed"), the rest up to `;` skipped. The same for a C++26 message
+    expression with errors (`static_assert(false, undeclared)`, a
+    missing member, no viable call, no literal operator; P2741):
+    `Sema::contains_errors` on the message drops it;
+  - `[[deprecated("...")]]`, `[[nodiscard("...")]]`,
+    `__attribute__((deprecated("...")))` and the other attributes with
+    string arguments: the attribute is not attached (no deprecation or
+    nodiscard warning at uses);
+  - `= delete("...")`: the function is still deleted, without a message
+    (a call is "call to deleted function");
+  - `extern "\x43" ...`: no `LinkageSpecDecl` (`act_on_start_linkage_spec`
+    is not called); the declarations or braced body are parsed in the
+    enclosing context.
+  Soft errors (`\x` with no digits, value 0) keep the string, so its
+  assertion still fails (`a<U+0000>`). `asm("...")` strings are
+  ordinary string literals ([dcl.asm]) and accept every escape.
+  Tests: `lex.string.uneval/invalid-escape-no-cascade.cpp`,
+  `lex.string.uneval/invalid-escape-forms.cpp`,
+  `lex.string.uneval/empty-delimited-escape{,-19}.cpp`,
+  `dcl.pre/static-assert-invalid-message-no-cascade.cpp`,
+  `dcl.pre/static-assert-message-unassigned-code-point.cpp` (the message
+  text, spec/diag.md §6.2).
 
 ### 4.7 Exception specifications (`except.rs`)
 The parser calls these while parsing a function declarator, and stores

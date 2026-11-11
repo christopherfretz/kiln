@@ -1165,6 +1165,9 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
   lookahead); otherwise it is a constant-expression handed to Sema
   (P2741, [dcl.pre]/10), and before C++26 that is
   `parse_ext_static_assert_user_message` (`-Wc++26-extensions`).
+  A string message that has an error (an invalid escape, a prefix), or
+  a message expression that contains errors, drops the declaration
+  (spec/sema.md §4.6, "Unevaluated strings with errors").
 - **Varargs ellipsis without a comma** ([dcl.fct]/3,
   [depr.ellipsis.comma], C++26 P3176): in C++26, `(int...)` or
   `(int n...)` — a `...` that follows a parameter-declaration without a

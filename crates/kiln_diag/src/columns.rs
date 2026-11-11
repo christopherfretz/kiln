@@ -125,28 +125,24 @@ fn utf8_len(b: u8) -> usize {
     }
 }
 
-/// Approximation of `llvm::sys::unicode::isPrintable` (`spec/diag.md`
-/// deviation D5): control, format, line/paragraph separator,
-/// private-use and noncharacter code points are not printable.
-pub(crate) fn is_printable(c: char) -> bool {
+/// Whether a sorted, disjoint `(lo, hi)` range table holds `c`.
+fn in_table(table: &[(u32, u32)], c: char) -> bool {
     let c = u32::from(c);
-    !matches!(c,
-        0x00..=0x1F | 0x7F..=0x9F | 0xAD
-        | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x180E
-        | 0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x206F
-        | 0xD800..=0xF8FF | 0xFDD0..=0xFDEF | 0xFEFF | 0xFFF9..=0xFFFB | 0xFFFE | 0xFFFF
-        | 0x110BD | 0x1D173..=0x1D17A | 0xE0000..=0xE0FFF | 0xF0000..)
-        && c & 0xFFFE != 0xFFFE
+    let i = table.partition_point(|&(_, hi)| hi < c);
+    table.get(i).is_some_and(|&(lo, _)| lo <= c)
 }
 
-/// Approximation of `llvm::sys::unicode::isFormatting` (`spec/diag.md`
-/// deviation D5): the format characters (general category Cf).
+/// `llvm::sys::unicode::isPrintable` (LLVM 22, UCD 15.1.0): general
+/// categories L, M, N, P, S and Zs, plus U+00AD SOFT HYPHEN, which most
+/// terminals render. Unassigned code points are not printable.
+pub(crate) fn is_printable(c: char) -> bool {
+    c == '\u{AD}' || in_table(crate::unicode_tables::PRINTABLE, c)
+}
+
+/// `llvm::sys::unicode::isFormatting` (LLVM 22, UCD 15.1.0): the format
+/// characters, general category Cf.
 fn is_formatting(c: char) -> bool {
-    matches!(u32::from(c),
-        0xAD | 0x600..=0x605 | 0x61C | 0x6DD | 0x70F | 0x890..=0x891 | 0x8E2 | 0x180E
-        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
-        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
-        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+    in_table(crate::unicode_tables::FORMATTING, c)
 }
 
 /// Program-provided text (a `static_assert` message, an uncaught
@@ -183,42 +179,25 @@ pub fn escape_diag_text(bytes: &[u8]) -> String {
     out
 }
 
-/// Approximation of `llvm::sys::locale::columnWidth` for a printable
-/// string: combining marks are 0 columns, East Asian wide characters 2.
+/// `llvm::sys::locale::columnWidth` for a printable string (LLVM 22's
+/// `charWidth`, UCD 15.1.0): non-spacing and enclosing marks are 0
+/// columns, East Asian full-width and wide characters (and the pictograph
+/// blocks LLVM adds) 2, everything else 1. Callers pass printable text
+/// (non-printable characters are already `<U+XXXX>`), so LLVM's
+/// non-printable error result has no counterpart.
 pub(crate) fn column_width(s: &str) -> usize {
     s.chars().map(char_width).sum()
 }
 
 fn char_width(c: char) -> usize {
-    let c = u32::from(c);
-    match c {
-        0x300..=0x36F
-        | 0x483..=0x489
-        | 0x591..=0x5BD
-        | 0x610..=0x61A
-        | 0x64B..=0x65F
-        | 0x200B
-        | 0x1AB0..=0x1AFF
-        | 0x1DC0..=0x1DFF
-        | 0x20D0..=0x20FF
-        | 0xFE00..=0xFE0F
-        | 0xFE20..=0xFE2F
-        | 0xE0100..=0xE01EF => 0,
-        0x1100..=0x115F
-        | 0x2E80..=0x303E
-        | 0x3041..=0x33FF
-        | 0x3400..=0x4DBF
-        | 0x4E00..=0x9FFF
-        | 0xA000..=0xA4CF
-        | 0xAC00..=0xD7A3
-        | 0xF900..=0xFAFF
-        | 0xFE30..=0xFE4F
-        | 0xFF00..=0xFF60
-        | 0xFFE0..=0xFFE6
-        | 0x1F300..=0x1F64F
-        | 0x1F900..=0x1F9FF
-        | 0x20000..=0x3FFFD => 2,
-        _ => 1,
+    if c.is_ascii() {
+        1
+    } else if in_table(crate::unicode_tables::COMBINING, c) {
+        0
+    } else if in_table(crate::unicode_tables::DOUBLE_WIDTH, c) {
+        2
+    } else {
+        1
     }
 }
 
@@ -350,6 +329,40 @@ mod tests {
         assert_eq!(escape_diag_text("\u{E000}\u{FFFE}".as_bytes()), "<U+E000><U+FFFE>");
         assert_eq!(escape_diag_text(b"\xFF\xED\xBF\xBF\xC3"), "<FF><ED><BF><BF><C3>");
         assert_eq!(escape_diag_text(b"\xF4\x90\x80\x80"), "<F4><90><80><80>");
+    }
+
+    #[test]
+    fn unicode_tables_are_sorted_and_disjoint() {
+        use crate::unicode_tables::{COMBINING, DOUBLE_WIDTH, FORMATTING, PRINTABLE};
+        for t in [PRINTABLE, FORMATTING, COMBINING, DOUBLE_WIDTH] {
+            assert!(t.iter().all(|&(lo, hi)| lo <= hi));
+            assert!(t.windows(2).all(|w| w[0].1 + 1 < w[1].0));
+        }
+    }
+
+    #[test]
+    fn printable_as_llvm_22() {
+        // Unassigned (U+0378, U+1C89 is new in Unicode 16), control,
+        // separators, private use, surrogate-adjacent noncharacters.
+        for c in ['\u{378}', '\u{1C89}', '\u{85}', '\u{2028}', '\u{E000}', '\u{FFFE}', '\u{10FFFF}']
+        {
+            assert!(!is_printable(c), "{c:?}");
+        }
+        // Letters, marks, Zs, U+00AD, a Unicode 15.1 addition (U+2FFC).
+        for c in ['é', '\u{301}', '\u{3000}', '\u{AD}', '\u{2FFC}', '\u{1F600}', '\u{31350}'] {
+            assert!(is_printable(c), "{c:?}");
+        }
+        assert!(is_formatting('\u{200B}') && !is_printable('\u{200B}'));
+        assert!(is_formatting('\u{AD}') && is_printable('\u{AD}'));
+        assert_eq!(escape_diag_text("\u{378}é".as_bytes()), "<U+0378>é");
+    }
+
+    #[test]
+    fn widths_as_llvm_22() {
+        assert_eq!(column_width("a\u{301}"), 1);
+        assert_eq!(column_width("\u{4E00}\u{4DC0}\u{1F300}"), 6);
+        assert_eq!(column_width("\u{FF61}"), 1); // halfwidth
+        assert_eq!(column_width("\u{20000}\u{3FFFD}"), 4);
     }
 
     #[test]

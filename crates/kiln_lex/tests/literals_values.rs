@@ -83,6 +83,54 @@ fn lex_string_uneval() {
     );
 }
 
+/// [lex.string.uneval]/1: the invalid-escape error covers the whole
+/// escape sequence (clang's `ProcessCharEscape`), after the escape's own
+/// diagnostics; nonstandard escapes are invalid too; `\x` with no digits
+/// is only that error; universal-character-names are valid.
+#[test]
+fn lex_string_uneval_escape_ranges() {
+    let esc = |sp: &str| {
+        let s = decode_unevaluated_string(sp, X86);
+        s.diags
+            .iter()
+            .map(|d| (d.kind, sp[d.range.start as usize..d.range.end as usize].to_owned()))
+            .collect::<Vec<_>>()
+    };
+    let uneval = |ch, r: &str| (D::UnevaluatedStringEscape { ch }, r.to_owned());
+    assert_eq!(esc(r#""a\x01b""#), [uneval('x', r"\x01b")]);
+    assert_eq!(esc(r#""a\101b""#), [uneval('1', r"\101")]);
+    assert_eq!(esc(r#""a\0b""#), [uneval('0', r"\0")]);
+    assert_eq!(esc(r#""a\o{101}b""#), [uneval('o', r"\o{101}")]);
+    assert_eq!(esc(r#""a\x{41}b""#), [uneval('x', r"\x{41}")]);
+    assert_eq!(
+        esc(r#""\777""#),
+        [(D::OctalEscapeTooLarge, r"\777".to_owned()), uneval('7', r"\777")]
+    );
+    assert_eq!(
+        esc(r#""\e""#),
+        [(D::NonstandardEscape { ch: 'e' }, r"\e".to_owned()), uneval('e', r"\e")]
+    );
+    assert_eq!(
+        esc(r#""\og""#),
+        [(D::EscapeMissingBrace { esc: 'o' }, r"\o".to_owned()), uneval('o', r"\o")]
+    );
+    assert_eq!(
+        esc(r#""\x{}b""#),
+        [(D::DelimitedEscapeEmpty, r"\x{".to_owned()), uneval('x', r"\x{}")]
+    );
+    // Clang's ranges: an empty `\u{}` includes the `}`, an unterminated
+    // `\N{` is `\N{`, an unknown name is the name.
+    assert_eq!(esc(r#""\u{}""#), [(D::DelimitedEscapeEmpty, r"\u{}".to_owned())]);
+    assert_eq!(esc(r#""\N{abc""#), [(D::UcnEscapeIncomplete, r"\N{".to_owned())]);
+    assert_eq!(esc(r#""\N{LATIN}""#), [(D::UcnUnknownName, "LATIN".to_owned())]);
+    assert_eq!(esc(r#""\xg""#), [(D::EscapeNoDigits { esc: 'x' }, r"\x".to_owned())]);
+    assert_eq!(esc(r#""\u0041\U00000041\N{LATIN CAPITAL LETTER A}""#), []);
+    // clang 19 returns before the check for an empty `\x{}`.
+    let c19 = LiteralOptions { clang19_escapes: true, ..X86 };
+    let s = decode_unevaluated_string(r#""\x{}b""#, c19);
+    assert_eq!(kinds(&s.diags), [D::DelimitedEscapeEmpty]);
+}
+
 /// [lex.ccon]/2, /5: a single c-char: type and value; plain `char` is
 /// signed on x86-64 and unsigned on `AArch64` Linux.
 #[test]

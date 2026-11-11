@@ -39,6 +39,11 @@ pub trait IfContext {
     fn char8(&self) -> bool {
         self.std() >= Std::Cxx20
     }
+    /// Whether literals decode with clang 19's escape rules
+    /// ([`crate::PpOptions::clang19_escapes`]).
+    fn clang19_escapes(&self) -> bool {
+        false
+    }
 }
 
 /// Evaluates the controlling expression of `#if` / `#elif`.
