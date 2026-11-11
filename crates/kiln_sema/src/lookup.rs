@@ -143,6 +143,10 @@ impl Sema<'_, '_> {
 
     fn accept(&self, d: DeclId, kind: LookupKind) -> bool {
         let k = self.kind_of(d);
+        // C17 6.2.3p1: tags are a name space of their own.
+        if self.is_c() && is_tag_kind(k) && kind != LookupKind::Tag {
+            return false;
+        }
         match kind {
             LookupKind::Ordinary | LookupKind::All => true,
             LookupKind::Tag => is_tag_kind(k),

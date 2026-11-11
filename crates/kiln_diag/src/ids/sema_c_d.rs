@@ -13,6 +13,7 @@ sema_c_assign_int_to_pointer = WarningError [IntConversion] (4) "incompatible in
 sema_c_assign_pointer_sign = ExtWarn [PointerSign] (4) "{2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}} converts between pointers to integer types {3:with different sign|where one is of the unique plain 'char' type and the other is not}";
 sema_c_assign_pointer_to_int = WarningError [IntConversion] (4) "incompatible pointer to integer conversion {2:assigning to {0} from {1}|passing {0} to parameter of type {1}|returning {0} from a function with result type {1}|converting {0} to type {1}|initializing {0} with an expression of type {1}}{3:|; dereference with *|; take the address with &|; remove *|; remove &}";
 sema_c_non_literal_null = Warning [NonLiteralNullConversion] (1) "expression which evaluates to zero treated as a null pointer constant of type {0}";
+sema_c_tag_without_keyword = Error (2) "must use '{0}' tag to refer to type '{1}'";
 sema_call_deleted_ctor = Error (2) "call to deleted constructor of {0}{1}";
 sema_call_deleted_function = Error (2) "call to deleted function {0}{1}";
 sema_call_different_arg_types = Error (2) "arguments are of different types ({0} vs {1})";

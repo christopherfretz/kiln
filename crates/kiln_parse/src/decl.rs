@@ -1705,6 +1705,14 @@ impl Parser<'_, '_> {
             }
             return true;
         }
+        if let Some(ty) = self.s.c_tag_without_keyword(name, loc) {
+            self.bump();
+            if let Err(e) = ds.set_base(TypeSpecKind::Named, Some(ty), loc) {
+                ds.invalid = true;
+                self.spec_error(&e, loc);
+            }
+            return true;
+        }
         let text = self.s.ast.symbols().as_str(name).to_owned();
         let d = self.s.diag(DiagId::sema_unknown_typename, loc).arg(text);
         self.emit(d);

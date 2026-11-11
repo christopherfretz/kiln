@@ -8128,6 +8128,33 @@ impl Sema<'_, '_> {
     /// Inside the pattern (or a partial specialization) of a class
     /// template, `class X` naming its injected-class-name is `X<P...>`
     /// ([temp.local]/1), substituted with the class.
+    /// C ([6.2.3]): an undeclared ordinary identifier `S` naming a tag
+    /// in scope is "must use 'struct' tag to refer to type 'S'" (clang's
+    /// `Sema::isTagName` fallback, with the keyword fix-it); the result
+    /// is the tag type so the declaration still proceeds.
+    pub fn c_tag_without_keyword(&mut self, name: Symbol, loc: Loc) -> Option<QualType> {
+        if !self.is_c() {
+            return None;
+        }
+        let d = self.lookup_name(name, LookupKind::Tag).single()?;
+        let kw = match self.ast.decls.get(d).kind() {
+            DeclKind::Enum => "enum",
+            k if is_tag_kind(k) => {
+                self.ast.decls.record(d).map_or(TagKind::Struct, |r| r.tag).keyword()
+            }
+            _ => return None,
+        };
+        let text = self.ast.symbols().as_str(name).to_owned();
+        let diag = self
+            .diag(DiagId::sema_c_tag_without_keyword, loc)
+            .arg(kw)
+            .arg(text)
+            .fixit(FixIt::insert(loc, format!("{kw} ")));
+        self.emit(diag);
+        self.mark_type_referenced(d);
+        Some(self.elaborated_tag_type(d, TagKeyword::None))
+    }
+
     pub fn elaborated_tag_type(&mut self, d: DeclId, keyword: TagKeyword) -> QualType {
         let t = self.injected_tag_type(d).unwrap_or_else(|| self.tag_type(d));
         self.ast.types.elaborated(keyword, None, t)
@@ -8182,8 +8209,10 @@ impl Sema<'_, '_> {
     /// The scope a new tag declared by `struct S;`-style uses goes into
     /// ([basic.scope.pdecl]/7): the nearest enclosing namespace or block
     /// scope, skipping classes and prototypes for a mere reference.
-    fn tag_decl_context(&self, use_: TagUse) -> DeclId {
-        if use_ != TagUse::Reference {
+    /// C17 6.2.1p4 (clang `getNonFieldDeclScope`): in C a named tag
+    /// declared in a member list is declared in the enclosing scope.
+    fn tag_decl_context(&self, use_: TagUse, named: bool) -> DeclId {
+        if use_ != TagUse::Reference && !(self.is_c() && named) {
             return self.ctx;
         }
         let mut ctx = self.ctx;
@@ -8740,7 +8769,8 @@ impl Sema<'_, '_> {
                 self.module_check_export_member(q, &s, nloc);
             }
         }
-        let ctx = qualifier.unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_)));
+        let ctx = qualifier
+            .unwrap_or_else(|| self.tag_home(self.tag_decl_context(use_, name.is_some())));
         // The parameter hid the lookup: the tag the reference declares is
         // the home context's own, if it has one (clang's redeclaration
         // lookup in the injection scope).
@@ -8773,7 +8803,7 @@ impl Sema<'_, '_> {
         if redefined {
             h = h.flags(DeclFlags::INVALID);
         }
-        h.lexical = Some(if qualifier.is_some() { self.ctx } else { ctx });
+        h.lexical = Some(if qualifier.is_some() || self.is_c() { self.ctx } else { ctx });
         if conflict {
             h.misc = h.misc.with_friend(FriendKind::Undeclared);
             h.flags = h.flags.with(DeclFlags::INVALID);
