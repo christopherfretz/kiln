@@ -1016,7 +1016,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
 
     /// The explicit specialization of class template `d` named by the
     /// template-id whose arguments lie between `open` and `close`, when each
-    /// argument is a decimal literal or `sizeof(name)`. The lookahead does
+    /// argument is a decimal literal without a suffix or `sizeof(name)`
+    /// (any other literal form, octal included, gives `None`). The lookahead does
     /// not form the specialization, and its members may differ from the
     /// primary template's and the other specializations' (Boost.ScopeExit's
     /// `resolve<sizeof(args)>::cmp1<0>::cmp2`: `cmp1` is a member template
@@ -1030,7 +1031,7 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         while i < close {
             let t = self.tok_at(i);
             let (v, next) = if t.kind == TokKind::PpNumber {
-                (self.spelling_of(&t).parse::<i128>().ok()?, i + 1)
+                (decimal_literal(&self.spelling_of(&t))?, i + 1)
             } else if self.kw_of(t) == Some(Kw::Sizeof)
                 && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
                 && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen)
@@ -2125,6 +2126,16 @@ enum ScanStop {
     NoName,
     /// A qualifier component names no scope ([`Parser::not_a_scope_name`]).
     NotAScope,
+}
+
+/// The value of `spelling` when it is a decimal-literal with no suffix or
+/// digit separator ([lex.icon]): `0` or digits not starting with `0`.
+fn decimal_literal(spelling: &str) -> Option<i128> {
+    let octal = spelling.len() > 1 && spelling.starts_with('0');
+    if octal || !spelling.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    spelling.parse().ok()
 }
 
 /// A class or alias template specialization scans as a type.

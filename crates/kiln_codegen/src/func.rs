@@ -932,9 +932,6 @@ impl Cg<'_> {
         Ok(())
     }
 
-    /// Declares the complete-object structors still unresolved (used but
-    /// never defined in the translation unit), then lowers the bodies
-    /// that use placeholders.
     /// Queues the body `fir` of `f` (definition `d`) for
     /// [`Self::resolve_placeholders`]. `f` counts as defined meanwhile, so
     /// nothing emits its definition again.
@@ -943,6 +940,9 @@ impl Cg<'_> {
         self.pending.push((f, d, fir));
     }
 
+    /// Declares the complete-object structors still unresolved (used but
+    /// never defined in the translation unit), then lowers the bodies
+    /// that use placeholders.
     pub(crate) fn resolve_placeholders(&mut self) -> R<()> {
         let mut keys: Vec<((DeclId, mangle::Structor), u32)> =
             self.ph_of.iter().map(|(&k, &v)| (k, v)).collect();
