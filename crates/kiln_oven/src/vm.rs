@@ -3470,7 +3470,7 @@ impl Oven {
     #[cold]
     fn store_addr_int(&mut self, raw: u64, ty: OTy, addr: u64) -> Result<(), Fault> {
         self.store(raw, ty, u128::from(addr), ak::INIT, true)?;
-        let len = u64::from(self.types.size(ty));
+        let len = self.types.size(ty);
         let fault = |f| Fault::Mem { f, ak: ak::INIT, ty, p: raw };
         let (st, abs, _) = self.mem.check(raw, len, true).map_err(fault)?;
         self.mem.space_mut(st).set_ptr_mark(abs, len, 1);

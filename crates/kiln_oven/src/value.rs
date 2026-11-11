@@ -797,7 +797,13 @@ impl Oven {
         if p.slot == 0 {
             let offset = u64::from(p.off);
             let past = false;
-            return Ok(Scalar::Pointer { ty: q, base: PtrBase::Absolute, offset, designated: None, past });
+            return Ok(Scalar::Pointer {
+                ty: q,
+                base: PtrBase::Absolute,
+                offset,
+                designated: None,
+                past,
+            });
         }
         let Some(a) = self.mem.static_in_slot(p.slot).filter(|a| a.live) else {
             return Err(Freeze::Fault(FailKind::NotConstant));
@@ -1106,7 +1112,7 @@ impl Oven {
         let info = *self.types.info(t);
         let sp = self.mem.space(st);
         let whole = matches!(info.kind, TyKind::Int { width: 64, .. })
-            && abs % crate::mem::GRAN == 0
+            && abs.is_multiple_of(crate::mem::GRAN)
             && sp.ptr_mark(abs) == 1;
         if !whole {
             return Err(Freeze::Fault(FailKind::NotConstant));
