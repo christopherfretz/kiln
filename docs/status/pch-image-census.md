@@ -202,3 +202,62 @@ prints on stderr after the compile's diagnostics. The image itself, and
 the module file when the unit is valid, are the same with and without
 `-fkiln-bmi-image-census` (`kind2_image_census` in
 `crates/kiln_driver/tests/modules_bmi.rs`).
+
+## WP-1279: templates, S4 third slice (2026-11-11)
+
+Same setup and command as above, debug build of the WP-1279 branch;
+wall 14.7 s, peak RSS 104 MiB. The slice carries template parameter
+packs (and function parameter packs, pack expansions, `sizeof...`,
+folds), default arguments of non-type parameters, dependent `auto`
+return types, alias templates, variable templates and unresolved
+names in patterns (spec/modules.md §11.11 "Templates as patterns",
+"Third slice").
+
+image census for 'allstd': 25544 top-level declarations, **11565
+carried** (was 10938, +627), 13979 not
+
+Rows that changed (before, after; reasons new in this slice are the
+triage of "a declaration in a template" and the alias-template
+cascade):
+
+| before | after | first reason |
+|---:|---:|---|
+| 1595 | 0 | a declaration in a template |
+| 0 | 929 | cascade: a member of a class outside the image |
+| 70 | 736 | an explicit or partial specialization |
+| 0 | 652 | cascade: an alias template outside the image |
+| 584 | 0 | a template parameter pack |
+| 384 | 0 | a default template argument of a non-type parameter |
+| 353 | 0 | an alias template |
+| 673 | 439 | a template |
+| 414 | 589 | a member template or a template in a template |
+| 217 | 86 | a default template argument |
+| 0 | 99 | a template expression |
+| 859 | 919 | cascade: a type declared outside the image |
+| 38 | 71 | a type the image does not carry |
+| 199 | 229 | cascade: a specialization of a template outside the image |
+| 30 | 21 | a template parameter the image does not carry |
+| 384 | 390 | a constrained template parameter |
+| 0 | 2 | a requires-expression or concept |
+
+Reading:
+
+- "a declaration in a template" (1595) was mostly two things: partial
+  specializations (666 of it) and members of class templates the image
+  refused for another reason (929, now a cascade). The rest moved to
+  their own rows once the template itself was carried.
+- A row that grows is a declaration whose first refusal used to be a
+  pack, a non-type default or an alias template and is now the next
+  missing feature: member templates (+175), dependent unresolved names
+  of forms not carried yet (99), dependent types holding an expression
+  (+33).
+- "a template" (439 left) is now deduction-guide templates (211, e.g.
+  `valarray:947:1`), concepts (199, `__concepts/arithmetic.h:30:9`),
+  template template parameters (25) and 4 others.
+- Most of libc++'s templates are still refused first for their
+  attributes (`_LIBCPP_HIDE_FROM_ABI`, `_LIBCPP_TEMPLATE_VIS`: WP-1278)
+  or reserved names (the S5 name gate). To measure this slice with
+  attributes and reserved names counted as "first reason elsewhere"
+  (as the brief asks), a local, uncommitted build that skips those two
+  checks gives, over the 25335 declarations it then counts: 12116
+  carried at the base, 12966 carried with this slice (+850).

@@ -2294,6 +2294,91 @@ variable templates, unresolved-lookup expressions (a dependent call
 (`B<T>::x`, `t.T::f()`, `t.template get<int>()`), pseudo-destructor
 calls, and every construct the first slice lists.
 
+*Third slice (WP-1279): packs, defaults, alias and variable templates,
+unresolved names.* Carried since the third slice:
+
+- *Packs.* A template parameter record's flag byte has bit 1 for a
+  pack (a type parameter's byte keeps bit 0 for `typename`; a
+  non-type parameter's record gains a flag byte after its index, bit 0
+  a pack). A function parameter pack of a pattern is a parameter
+  record whose `ParamData::PACK` bit the validator accepts in a
+  `DEPENDENT_CTX` record only. A pack expansion type `Ts...` is type
+  tag 19, `pack(pattern:qref)` (one with a known expansion count falls
+  back); `sizeof...(Ts)` (`SizeOfPackExpr`, the pack's parameter
+  record, which must be a pack), `PackExpansionExpr` (its pattern) and
+  a fold `(0 + ... + f(xs))` (`CXXFoldExpr`: both optional operands,
+  the operator in aux as for a binary operator, the `...`
+  location as cold annotation 64) are appended to the kind table. An
+  unexpanded pack in an expression's `deps` byte is accepted.
+- *Placeholder types in patterns.* A dependent `auto` or
+  `decltype(auto)` (a return type deduced at instantiation) is type
+  tag 20, `auto(k:u8)`: bit 0 for `decltype(auto)`, bit 1 when the
+  placeholder was deduced to the dependent type. A constrained
+  placeholder, `__auto_type` and a deduced non-dependent placeholder
+  fall back.
+- *Default arguments of non-type parameters.* The non-type parameter
+  record's flag byte has bit 1 when the default carries a canonical
+  profile, followed by `default:u32`, an expression record (or none).
+  The expression is a body root of the parameter, written with the
+  bodies and patched into the record; the reader builds the parameter
+  without it and, once the bodies are built, gives it the expression
+  through `set_template_default`, recomputing the profile with
+  `profile_expr` when the bit says the writer's argument had one (as
+  `act_on_template_default` stores it). A default inherited from an
+  earlier declaration belongs to a redeclared template and falls back.
+- *Alias templates.* Template kind 2: the pattern is the dependent
+  alias record (a `Typedef` record with its alias bit) immediately
+  before the template record; the template record carries the `using`
+  location as a fifth location word (`using`, 0 for the other kinds),
+  so errors in an alias's substitution and "template is declared
+  here" point where replay puts them. A type naming an alias
+  specialization is type tag 16 whose template is a kind-2 record and
+  whose underlying type is the substituted pattern (an alias
+  specialization is no declaration, so there is no kind-18 record).
+- *Variable templates.* Template kind 3: the pattern is the dependent
+  variable record immediately before the template record, its
+  initializer an ordinary initializer root; the importer instantiates
+  it as after a replay.
+- *Named class specializations.* A specialization reference record
+  may name a class specialization of `SpecKind::Undeclared` (only
+  named, `using B = X<int>;`), which the importer names the same way.
+- *Unresolved names.* A dependent call or reference through an
+  unqualified, qualified or template-id name (`f(t)`, `iu::f(t)`,
+  `g<T>(t)`, `size<T>`, `a + b` resolved to a namespace-scope
+  operator function) is `UnresolvedLookupExpr`, appended to the kind
+  table: the name (a `pnames` index, or `N_OP + op` for an
+  operator-function-id), the candidate set found at definition time
+  ([temp.dep.candidate]; each candidate a function, function template
+  or variable template record, which the validator checks), and aux 1
+  when argument-dependent lookup applies. Cold annotation 128 carries,
+  for any expression, the written qualifier (`expr_nns`) and the
+  explicit template argument list (`expr_targs`): the qualifier as an
+  `Nns` field, the list as `0` for none or `1 + n` then three words per
+  argument, `0 qref quals` a type or `1 expr profile` an expression
+  record (with its profile bit); other argument kinds fall back with
+  "a template argument the image does not carry". Instantiation
+  redoes lookup exactly as after replay, so argument-dependent lookup
+  at the point of instantiation finds the importer's own functions.
+  A name whose candidates include a class member, or one sema keeps
+  extra state for (a using-shadow or naming class, `ule_found`; an
+  implicit member reference, `member_refs`), falls back with "a
+  template expression".
+
+The census separates the "a declaration in a template" reason: a
+partial specialization ("an explicit or partial specialization"), a
+member of a class the image does not carry ("a member of a class
+outside the image", a cascade of that class's own reason), and the
+rest. Still falling back after the third slice: concepts, constrained
+parameters and templates, requires-clauses and requires-expressions,
+template template parameters, member templates and templates in
+templates, redeclared templates (and inherited defaults), deduction
+guides, explicit and partial specializations, non-dependent references
+with written template arguments (`size<int>`, `sq<3>`: "a template
+argument list"), `DependentScopeDeclRefExpr` (`T::v`),
+`UnresolvedMemberExpr`, the `template` keyword in a dependent name,
+dependent array bounds, pack expansions in base specifiers, and
+friends.
+
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
 that re-exports (`export import`), and a module partition. It also
@@ -2929,8 +3014,8 @@ Falls back (each with its `-v` reason):
 - lambdas ("a lambda expression"; a closure is a local class): S3
   follow-up;
 - template expressions, requires-expressions and concepts: S4 (in a
-  function template's pattern, "a template expression" until the
-  unresolved-lookup kinds land, see "Templates as patterns");
+  pattern, the dependent kinds other than those the slices carry are
+  "a template expression", see "Templates as patterns");
 - `try` blocks and function-try-blocks, coroutines, expansion
   statements, `asm`, contract assertions, computed `goto`, and
   attributes with arguments (`[[assume(...)]]`): follow-ups under
@@ -3085,8 +3170,10 @@ classes and templates). The follow-ups, in priority order:
    lambdas;
 3. S4: templates as patterns. **First slice landed: namespace-scope
    function templates (WP-1066)**; **second slice landed:
-   specialization references and class templates (WP-1139)**, see
-   "Templates as patterns" and its follow-ups;
+   specialization references and class templates (WP-1139)**;
+   **third slice landed: packs, non-type defaults, alias and variable
+   templates, unresolved names (WP-1279)**, see "Templates as
+   patterns" and its follow-ups;
 4. S5: global module fragments with ODR merging (replacing the name
    gate);
 5. S6: imports, re-exports and partitions. **Landed (WP-1068)**, see
