@@ -151,6 +151,26 @@ compound literals) are WP-1276's.
   error only in C++); a tentative definition carrying it has common
   linkage even under `-fno-common` (`isVarDeclStrongDefinition`).
 
+#### 1.0.3 C static initializers (WP-1295, WP-1304)
+
+- C23 6.7.11p4 (clang `CheckForConstantInitializer`, `gnu.rs`
+  `check_c_static_init`): the initializer of a C object with static or
+  thread storage duration (not `__thread`, `check_static_tls`, nor C23
+  `constexpr`, `check_constexpr_init`) must be constant. Each element of
+  the initializer list, recursively (implicit value-initializations are
+  constant), is folded (`folds_as_static_init`) as codegen folds the
+  whole initializer: with `set_fold_addr_int`, `set_fold_float_ub`,
+  `set_fold_leaks` and `set_fold_c_static` on (spec/oven.md "Address
+  constants", "C static initializers", "Label addresses"). The first
+  element that does not fold is "initializer element is not a
+  compile-time constant", at `element_culprit_loc`. What folds is what
+  clang folds: IEEE floating results, `__builtin_constant_p` as 0,
+  compound literal values, address constants with offsets (also past
+  the object), address-as-integer arithmetic, pointer differences
+  within one object, offsetof's null-member form and label address
+  differences. Tests: `tests/c/run/static-init-*.c`,
+  `tests/c/decl/static-init-not-constant*.c`.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output

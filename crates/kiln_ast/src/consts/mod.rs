@@ -418,6 +418,9 @@ impl Pools {
         match n.kind() {
             kind::NULL if n.extra() == NullKind::MemberFunction as u32 => Some(2 * p),
             kind::MEMPTR if n.flags() & F_FUNCTION != 0 => Some(2 * p),
+            // A label address difference is as wide as its integer
+            // (`PtrBase::LabelDiff`'s code is 8 + log2 of its size).
+            kind::PTR if (8..=11).contains(&n.extra()) => Some(1 << (n.extra() - 8)),
             kind::PTR | kind::NULL | kind::MEMPTR => Some(p),
             kind::REFL => Some(8),
             _ => None,
@@ -533,10 +536,9 @@ impl Pools {
                     return Err(ConstError::Malformed("float bits wider than the format"));
                 }
             }
-            Scalar::Pointer { base, offset, .. } => match base {
-                PtrBase::Function(_) if offset != 0 => {
-                    return Err(ConstError::Malformed("function pointer with an offset"));
-                }
+            // A `Function` base may carry an offset: a C address constant
+            // `(char *)f + 1` (C23 6.6p9, WP-1304).
+            Scalar::Pointer { base, .. } => match base {
                 PtrBase::Const(c) if !self.contains(c) => {
                     return Err(ConstError::Malformed("PtrBase::Const id not in this store"));
                 }

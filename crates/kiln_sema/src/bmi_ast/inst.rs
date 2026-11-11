@@ -552,6 +552,7 @@ impl<F: FnMut(FileId) -> Option<u32>> KeyCx<'_, F> {
             // Only a fold of a static initializer forms one, which no
             // replayed evaluation needs.
             PtrBase::Absolute => self.or_why(None, "an integer cast to a pointer")?,
+            PtrBase::LabelDiff { .. } => self.or_why(None, "a label address difference")?,
         }
         Some(())
     }

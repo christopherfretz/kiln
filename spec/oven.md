@@ -2259,14 +2259,59 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   integer the program computes with holds an address and the hot path
   is unchanged. Codegen turns the switch on around its lax
   variable-initializer refold; sema turns it on only for the C static
-  initializer check, which reads success alone. Not folded (C error,
-  clang accepts; follow-ups): integer arithmetic on such an address
-  (`(intptr_t)&g + 4`), a narrower or same-width integral conversion
-  around it, and an integer address that does not fit 32 bits
-  (`(void *)-1`): `c/run/static-address-constant-forms.c`,
+  initializer check, which reads success alone.
+  `c/run/static-address-constant-forms.c`,
   `codegen/ptr_cast_static_init.cpp`,
   `conformance/expr.const.cast/reinterpret-address-not-constant.cpp`
   (a constant initializer still rejects every such cast).
+- *C static initializers* (WP-1304; C23 6.6p5-p10, 6.7.11p4): every C
+  file-scope or `static` variable's initializer is folded with
+  `Oven::set_fold_c_static` on, by codegen (`fold::prepass`, the
+  `Collect::c_static` set) and by sema's `check_c_static_init` (which
+  also turns on `set_fold_float_ub` and `set_fold_leaks`, as codegen's
+  fold has them). C++ never sets it. The flag folds what clang's
+  initializer evaluation folds, each on a cold path, so ordinary
+  evaluation is unchanged:
+  - floating division by zero and invalid operations give the IEEE
+    result (`fold_float_ub`): `1.0 / 0.0`, `0.0 / 0.0`, `HUGE_VAL`,
+    `NAN` (the C++ rejection, [expr.const]/10.7, is unchanged);
+  - `__builtin_constant_p` of a non-constant is 0 (a constant context,
+    clang `hasConstantInitialization`);
+  - a C compound literal of scalar, structure or vector type is read as
+    its initializer whatever its qualifiers (`value.rs` `var_info`); a
+    non-`const` array literal is not;
+  - the member of a null pointer goes on with its offset (`(size_t)&((T
+    *)0)->m`, `Op::NullField` aux 0), a pointer that points at nothing;
+  - the difference of two pointers into one complete object that are
+    not elements of one array is their byte-offset difference over the
+    element size (`vm.rs` `c_static_sub`: `s.f - &s.b`);
+  - a pointer-to-integer address may sit under integral conversions of
+    the same width and additions and subtractions of integers
+    (`compile.rs` `addr_int_inner` records them; `Op::AddrInt` with
+    `kbc::addr_int::{CAST, ADD, SUB}` moves the displacement, bits 66..
+    of the tagged register, and the freeze adds it to the offset:
+    `(unsigned long)&_text - 0x10000000L - 1` is `ptrtoint (gep i8
+    @_text, -0x10000001)`); a displacement stored to memory is kept in
+    `Oven::addr_int_disps` by space and byte;
+  - an address the pointer encoding cannot hold, an integer cast to a
+    pointer that does not fit 32 bits (`(void *)-1`), a function plus an
+    offset (`(char *)f + 1`) and a static's address past its end
+    (`data + 128`), is a *synthetic address*: a nowhere pointer of
+    `mem::SYNTH_SLOT` whose offset indexes `Oven::synth` (base pointer,
+    byte displacement), frozen as the base plus the offset
+    (`Function` bases may then carry an offset, spec/ast.md);
+  - an array member without a bound decays (`&c.sc[0]`): clang's note is
+    a CCEDiag, so the decay is a `Cce` check that only a fold passes;
+  - a label address difference (Label addresses, below).
+
+  Still not constant, as clang: a call, a read of a non-`const`
+  variable, an automatic object's address, an address cast to a
+  narrower integer, an address multiplied or subtracted from, two
+  objects' addresses subtracted, and at `-fclang-compat=19` a vector
+  lane read (`c/decl/static-init-not-constant{,-forms,-19,-22}.c`).
+  Tests: `c/run/static-init-{float-ieee,builtin-constant-p,
+  compound-literal-values,pointer-difference,address-integer-arith,
+  address-offset}.c`.
   A conditional whose condition (through parentheses and casts) is a
   `__builtin_constant_p` call is a fold in every evaluation, a constant
   initializer's included (clang `VisitConditionalOperator`'s
@@ -3937,6 +3982,27 @@ value, distinct per expression) is a constant `void *`.
   a template argument); thawing goes back through `label_addr(origin)`.
   Codegen lowers the frozen value to a `blockaddress` (spec/codegen.md
   §7t).
+- *Label address differences* (WP-1304, GNU C; clang's
+  `AddrLabelDiff`). In a C static initializer, `&&a - &&b` is a
+  constant. `compile.rs` `addr_int_inner` recognizes the subtraction
+  (`label_diff`) under the same integer operations as an address,
+  plus a narrowing conversion directly above it (to 32 bits or more
+  at `-fclang-compat=22`, any width at 19), and lowers it to
+  `Op::AddrInt` `addr_int::LABEL_DIFF`. Under `set_fold_c_static`
+  the VM records the two `AddrLabelExpr`s in `Oven::label_diffs` and
+  yields the address `mem::label_diff_ptr(idx)` (a nowhere pointer of
+  `LABEL_DIFF_SLOT`) tagged as an integer; elsewhere it fails as
+  `PtrSub`. Stored into an integer object, it leaves the bytes
+  uninitialized (no evaluation can read it) and records the object in
+  `Oven::label_diff_cells` (space, byte → index, displacement; cleared
+  by `set_fold_c_static`), which the freeze's `walk` relocates; as a
+  whole value it freezes directly. Either way it is a
+  `PtrBase::LabelDiff` of the integer's size, and thawing one leaves
+  the object uninitialized. Codegen emits `trunc (sub (ptrtoint
+  (blockaddress), ptrtoint (blockaddress)))` (`consts.rs`, also as an
+  aggregate member through `member_ptr_reloc`). Tests:
+  `c/run/static-local-label-difference{,-short-19}.c`,
+  `c/decl/static-init-not-constant-22.c`.
 - Evaluating `goto *p` is "subexpression not valid in a constant
   expression"; sema already rejects the statement in a constexpr body
   (spec/sema.md). Tests: `tests/conformance/stmt.goto/computed-goto-

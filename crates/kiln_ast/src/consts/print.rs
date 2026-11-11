@@ -552,6 +552,15 @@ impl Printer<'_> {
                     let _ = write!(out, " + {offset}");
                 }
             }
+            // Only codegen reads one (a C static initializer's), so
+            // the labels are not named.
+            PtrBase::LabelDiff { .. } => {
+                self.lost();
+                out.push_str("&&<label> - &&<label>");
+                if offset != 0 {
+                    let _ = write!(out, " + {offset}");
+                }
+            }
             PtrBase::Decl(d) | PtrBase::Temporary(d) => {
                 if matches!(base, PtrBase::Temporary(_)) {
                     self.lost();

@@ -291,6 +291,25 @@ pub enum PtrBase {
     /// for a static initializer (spec/oven.md "Pointers that point at
     /// nothing").
     Absolute,
+    /// The difference of two label addresses as an integer, `&&plus -
+    /// &&minus` (GNU labels as values in a C static initializer, C23
+    /// 6.6p9 GNU; clang's `AddrLabelDiff`), plus the pointer's `offset`.
+    /// Only the type of a `Scalar::Pointer` of integer type carries it;
+    /// codegen emits `sub (ptrtoint (blockaddress), ptrtoint
+    /// (blockaddress))`. Like [`PtrBase::Label`], each side is identified
+    /// by its `AddrLabelExpr`. Only a C static initializer's fold produces
+    /// one (spec/oven.md "Label addresses").
+    LabelDiff {
+        /// The `AddrLabelExpr` of the minuend.
+        plus: ExprId,
+        /// The `AddrLabelExpr` of the subtrahend.
+        minus: ExprId,
+        /// The integer's size in bytes (1, 2, 4 or 8): its relocation's
+        /// width in an aggregate image ([`ConstStore::reloc_width`]).
+        ///
+        /// [`ConstStore::reloc_width`]: super::ConstStore::reloc_width
+        size: u8,
+    },
 }
 
 impl PtrBase {
@@ -304,6 +323,8 @@ impl PtrBase {
             PtrBase::TypeInfo(_) => 5,
             PtrBase::Label { .. } => 6,
             PtrBase::Absolute => 7,
+            // 8 + log2 of the size (`reloc_width`).
+            PtrBase::LabelDiff { size, .. } => 8 + size.trailing_zeros(),
         }
     }
 
@@ -316,6 +337,7 @@ impl PtrBase {
             PtrBase::StringLit { lit, .. } => lit.index(),
             PtrBase::Const(c) => c.index(),
             PtrBase::TypeInfo(t) => t.to_raw(),
+            PtrBase::LabelDiff { plus, .. } => plus.index(),
             PtrBase::Absolute => 0,
         }
     }
@@ -326,6 +348,7 @@ impl PtrBase {
             PtrBase::StringLit { origin, .. } | PtrBase::Label { origin, .. } => {
                 Some(origin.index())
             }
+            PtrBase::LabelDiff { minus, .. } => Some(minus.index()),
             _ => None,
         }
     }
@@ -340,6 +363,11 @@ impl PtrBase {
             6 => {
                 Some(PtrBase::Label { label: DeclId::try_new(raw)?, origin: ExprId::try_new(aux)? })
             }
+            8..=11 => Some(PtrBase::LabelDiff {
+                plus: ExprId::try_new(raw)?,
+                minus: ExprId::try_new(aux)?,
+                size: 1 << (code - 8),
+            }),
             _ => Self::from_parts(code, raw),
         }
     }
