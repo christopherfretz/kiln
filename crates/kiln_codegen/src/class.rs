@@ -74,6 +74,34 @@ impl Cg<'_> {
         } else {
             fty
         };
+        self.decl_sig_of(first, fty)
+    }
+
+    /// [`Cg::decl_sig`] for the function `get_fn` creates on behalf of
+    /// declaration `d` (clang `GetOrCreateLLVMFunction` arranges the
+    /// `GlobalDecl` it is given): in C, a prototyped redeclaration's own
+    /// (composite) type, so the parameter attributes follow whichever
+    /// declaration first needs the function, a reference or the
+    /// definition. A transparent union parameter merged with a member's
+    /// type is that member (`noundef`) from there on (WP-1311).
+    pub(crate) fn decl_sig_at(&mut self, first: DeclId, d: DeclId) -> R<Sig> {
+        let ast = self.ast;
+        let proto = |t: QualType| ast.types.proto(t).is_some_and(|p| !p.info().no_proto());
+        if ast.lang_c
+            && d != first
+            && let (Some(ft), Some(dt)) = (ast.decls.get(first).ty(), ast.decls.get(d).ty())
+            && proto(ft)
+            && proto(dt)
+            && !ast.types.same_type(ft, dt)
+        {
+            return self.decl_sig_of(first, dt);
+        }
+        self.decl_sig(first)
+    }
+
+    /// [`Cg::decl_sig`] of function `first` with the function type `fty`.
+    fn decl_sig_of(&mut self, first: DeclId, fty: QualType) -> R<Sig> {
+        let ast = self.ast;
         let this = self.this_class_of(first);
         let extern_c = mangle::is_extern_c(ast, first);
         // C: a function defined without a prototype takes exactly its

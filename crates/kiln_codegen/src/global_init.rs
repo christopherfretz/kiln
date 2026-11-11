@@ -301,6 +301,10 @@ impl Cg<'_> {
         if self.gi.delayed.get(&first) == Some(&DONE) {
             return Ok(());
         }
+        // As for a C static local (`static_local_init`).
+        if ast.lang_c {
+            return err(Some(ast.decls.get(d).loc()), "C global initializer did not fold");
+        }
         let f = self.init_function("__cxx_global_var_init")?;
         // GenerateCXXGlobalVarDeclInitFunc.
         let saved = std::mem::replace(&mut self.f, Fx::empty());
@@ -522,6 +526,13 @@ impl Cg<'_> {
         let init = v.init.filter(|&i| !ast.is_trivial_default_construction(i));
         let perform = init.is_some_and(|e| self.folds.get(e).is_none());
         let dtor = !ast.types.is_reference(ty) && self.var_destructed_class(d, ty).is_some();
+        // C never initializes a static dynamically (C23 6.7.11p4): sema's
+        // `check_c_static_init` runs the same fold, so an initializer it
+        // accepted always folds here. A guard would be silent wrong code.
+        if ast.lang_c && (perform || dtor) {
+            let loc = Some(ast.decls.get(d).loc());
+            return err(loc, "C static local initializer did not fold");
+        }
         if perform || dtor { self.guarded_init(d, g, perform) } else { Ok(()) }
     }
 

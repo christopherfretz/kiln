@@ -6644,8 +6644,10 @@ impl Compiler<'_> {
                 .unwrap_or_default();
             let msg =
                 format!("non-constexpr function '{name}' cannot be used in a constant expression");
-            let t = self.trap_index(loc, msg);
-            self.emit_loc(Op::Cce, cce::CHECK, &[0, 0, t], loc);
+            if !self.b.is_c() {
+                let t = self.trap_index(loc, msg);
+                self.emit_loc(Op::Cce, cce::CHECK, &[0, 0, t], loc);
+            }
             if let Some(r) = self.builtin_call(e, bid, &args) {
                 return r;
             }

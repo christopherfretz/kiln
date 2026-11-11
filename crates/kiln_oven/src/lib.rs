@@ -278,6 +278,12 @@ pub trait SemaBridge {
         let _ = (f, oven);
         false
     }
+    /// Whether the translation unit is C (WP-1311: a C library builtin's
+    /// call is then evaluated without the C++11 "non-constexpr function"
+    /// note, clang `VisitBuiltinCallExpr`'s `CPlusPlus11` test).
+    fn is_c(&self) -> bool {
+        false
+    }
     /// Whether the translation unit is C++26 or later.
     fn cxx26(&self) -> bool {
         self.cxx_year() >= 2026

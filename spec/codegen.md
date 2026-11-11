@@ -182,7 +182,15 @@ mangled name already names a function of the same type is that function
 (clang `GetOrCreateLLVMFunction`): a runtime function codegen declared
 first (`__cxa_allocate_exception` for a `throw`) and a user's
 `extern "C"` redeclaration of it in another namespace ([dcl.link]/7)
-share one symbol, never a renamed `name.1` copy. Emission order still
+share one symbol, never a renamed `name.1` copy. In C the creating
+`get_fn` also fixes the parameter and return attributes, from the
+signature of the redeclaration it was called for (`decl_sig_at`; its
+own composite prototype, clang arranging the `GlobalDecl` it is given),
+and the definition keeps them (`c_sig_decl`, as for an alias): a
+definition whose transparent union parameter merged with a member type
+takes `noundef` unless a reference through the union-typed declaration
+created the function first (WP-1311; C++ uses the first declaration's
+signature). Emission order still
 matters, because it decides where declarations created inside a body
 land, the order in which comdats are created (at definition), and
 nounwind inference: clang's `TryMarkNoThrow` marks a definition

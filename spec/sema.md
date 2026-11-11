@@ -141,7 +141,19 @@ compound literals) are WP-1276's.
   the warning -Wincompatible-library-redeclaration with the note
   "'f' is a builtin with type T" at the implicit declaration, not
   "conflicting types"; it is a valid redeclaration with its own type.
-  Neither takes the non-prototype diagnostics.
+  Neither takes the non-prototype diagnostics. The implicit declaration
+  is then hidden from lookup (`unregister_name`), so the new
+  declaration is a separate, ordinary function and not the library
+  builtin: a call of it is emitted, never folded (WP-1311).
+- **A first declaration redeclares the library function** (clang
+  `LazilyCreateBuiltin` on redeclaration lookup, WP-1311,
+  `builtins.rs` `c_lib_function_redecl_prev`): a C file-scope,
+  non-`static`, non-`overloadable` first declaration of a predefined
+  library function's name (`unsigned long strlen();`) silently creates
+  the library declaration and redeclares it. A compatible one merges
+  (the composite type; a GNU `nothrow` on only one side is ignored,
+  since C has no exception specifications) and is the library builtin;
+  an incompatible one takes the rule above.
 - **GNU attributes on a later declarator** (clang `ParseDeclGroup`,
   `ParseStructDeclaration`; spec/parse.md): `int a, __attribute__((x)) b;`
   and the same in a member declaration, in C and C++.
@@ -168,8 +180,52 @@ compound literals) are WP-1276's.
   compound literal values, address constants with offsets (also past
   the object), address-as-integer arithmetic, pointer differences
   within one object, offsetof's null-member form and label address
-  differences. Tests: `tests/c/run/static-init-*.c`,
+  differences, and an out-of-range floating to integer conversion,
+  which takes `APFloat::convertToInteger`'s saturated value (NaN is 0;
+  clang `HandleFloatToIntCast`; the Oven saturates only under
+  `set_fold_c_static`, WP-1311). Codegen never initializes a C static
+  dynamically: a C static local or global whose initializer did not
+  fold is an internal error, never a guard variable or
+  `__cxx_global_var_init` (`global_init.rs`). Tests:
+  `tests/c/run/static-init-*.c`,
   `tests/c/decl/static-init-not-constant*.c`.
+
+#### 1.0.4 C mode correctness batch (WP-1311)
+
+- **Prototype-scope tags and enumerators** (C23 6.2.1p4): an
+  enumeration defined in a parameter list has prototype scope, and so
+  do its enumerators (`PrototypeFrame::enums`, `enumerators`;
+  `c_declare_proto_enumerator`). They do not leak to the enclosing
+  scope; a definition's parameter-scope enumerators are visible in its
+  body, as its tags are. Tests: `tests/c/decl/param-scope-enumerators*.c`.
+- **A failed redeclaration is not the entity** (clang marks it
+  invalid): in C, "static declaration follows non-static" leaves the
+  new function out of the redeclaration chain without a second
+  "redefinition" error, and a block-scope variable redefined with
+  another type is invalid and does not replace the first in scope
+  (`merge_local_var` reports the conflict). C++ is unchanged.
+- **Enumeration promotion** (C17 6.3.1.1p2, 6.7.2.2p4): an enumeration
+  without a negative enumerator is compatible with `unsigned int`, and
+  in C its promotion type is that unsigned type (clang
+  `computeBestEnumTypes`: `|| !CPlusPlus`), not the [conv.prom]/3
+  `int`. Enumerators keep type `int`. Test:
+  `tests/c/expr/enum-promotion-unsigned.c`.
+- **Library builtins in an integer constant expression**: a library
+  function clang's evaluator knows (`strlen`, `strcmp`, ...) folds in a
+  C ICE, with no "non-constexpr function" note (`SemaBridge::is_c`;
+  clang `VisitBuiltinCallExpr` tests `CPlusPlus11`). Test:
+  `tests/c/expr/library-builtin-ice.c`.
+- **No functional cast in C**: `T(x)`, `int(1)` and `typeof(T){...}`
+  outside a compound-literal parenthesis are "expected expression"
+  errors (`kiln_parse` `parse_name_primary`). Test:
+  `tests/c/expr/no-functional-cast.c`.
+- **C23 `va_start(ap, ...)`** (C23 7.16.1.4): a second argument that is
+  an integer constant expression of value 0 skips the last-parameter
+  check (clang `BuiltinVAStart`; <stdarg.h> passes `0`). Test:
+  `tests/c/c23/va-start-no-named-parameter.c`.
+- **`[[noreturn]]` on a later declaration** is valid in C; the
+  [dcl.attr.noreturn]/1 first-declaration error is C++'s only
+  (`check_noreturn_on_first_decl`, standard spelling only).
 
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or

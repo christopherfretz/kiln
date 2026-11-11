@@ -1952,7 +1952,18 @@ only whole, and every doubt replays the header.
   declaration of the consumer depends on, also means no image:
   - `a #pragma weak naming an undeclared identifier`: the pragma makes
     the consumer's definition weak.
-  The census does not report this sema state. A block-scope `extern`
+  The census does not report this sema state.
+  A C header gets no image at all (`a C header`,
+  `bmi_image/pch.rs`): a C PCH is always replayed. So the shared `[*]`
+  bound (`TypeContext::vla_star_bound`, C17 6.7.6.2p4), which makes
+  every `T[*]` one canonical type, is never persisted, and need not be
+  (WP-1311): a replay recomputes it, and no image path reaches a `[*]`
+  type, since the image also refuses a C++ function whose parameter has
+  an adjusted type (`a parameter with an adjusted type or a pack`),
+  which every `[*]` and VLA parameter has. An image that one day carries
+  either must write the bound as a marker that the consumer maps to its
+  own `vla_star_bound`, not as a literal `0`, or `T[*]` from the image
+  and from the consumer would be two types. A block-scope `extern`
   or function declaration in a header body (libstdc++'s `terminate()`
   in `std::__terminate`) is carried (WP-1293): the image writes it as
   a local record of its function, in declaration order and linked to

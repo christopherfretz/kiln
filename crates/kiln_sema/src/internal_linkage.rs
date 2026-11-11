@@ -6,7 +6,7 @@
 //! [`kiln_ast::Ast::has_internal_linkage_attr`]). The mangling follows
 //! from the linkage: an internal name at namespace scope takes `L`.
 
-use kiln_ast::attr::{AttrKind, AttrNode};
+use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::{AttrId, DeclId};
 use kiln_diag::DiagId;
@@ -121,6 +121,39 @@ impl Sema<'_, '_> {
             }
             i += 1;
         }
+    }
+
+    /// [dcl.attr.noreturn]/1: the first declaration of a function
+    /// specifies `[[noreturn]]` if any declaration does. clang
+    /// `MergeFunctionDecl` checks it in C++ only (a `CXX11NoReturnAttr`
+    /// on the new declaration, none on `prev`'s chain); C23's
+    /// `[[noreturn]]` and `_Noreturn` and the GNU spelling may appear on
+    /// any declaration (WP-1311). `prev` is the declaration immediately
+    /// before the one carrying `attrs` (clang's `Old`).
+    pub(crate) fn check_noreturn_on_first_decl(&mut self, prev: DeclId, attrs: &[AttrId]) {
+        if self.is_c() {
+            return;
+        }
+        let cxx11 = |s: &Self, a: AttrId| {
+            let n = s.ast.attrs.get(a);
+            n.kind == AttrKind::NORETURN && n.syntax == AttrSyntax::Cxx11 && !n.is_gnu_spelling()
+        };
+        let Some(&a) = attrs.iter().find(|&&a| cxx11(self, a)) else { return };
+        let on_prev = std::iter::successors(Some(prev), |&x| self.ast.prev(x)).any(|r| {
+            self.ast.lists.iter::<AttrId>(self.ast.attrs.of_decl(r)).any(|x| cxx11(self, x))
+        });
+        if on_prev {
+            return;
+        }
+        let node = *self.ast.attrs.get(a);
+        let name = format!("'{}'", self.attr_shown(&node, "noreturn"));
+        let prev_note =
+            self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+        let msg = self
+            .diag(DiagId::sema_attribute_missing_on_first_decl, node.loc)
+            .arg(name)
+            .with_note(prev_note);
+        self.emit(msg);
     }
 
     /// Diagnoses `internal_linkage` attribute `node` (shown as `name`)

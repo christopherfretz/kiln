@@ -120,6 +120,10 @@ pub(crate) struct Cg<'a> {
     pub m: Module,
     /// First declaration → function.
     pub fns: FxHashMap<DeclId, FuncId>,
+    /// The C redeclaration whose own type a function was created with
+    /// ([`Cg::decl_sig_at`]); its definition keeps those parameter
+    /// attributes (clang sets them once, in `GetOrCreateLLVMFunction`).
+    pub(crate) c_sig_decl: FxHashMap<FuncId, DeclId>,
     /// Function → its definition carries `nounwind`.
     pub nounwind: FxHashMap<FuncId, bool>,
     /// Functions declared for an `optnone` declaration: neither they nor
@@ -415,6 +419,7 @@ impl<'a> Cg<'a> {
                 m
             },
             fns: FxHashMap::default(),
+            c_sig_decl: FxHashMap::default(),
             nounwind: FxHashMap::default(),
             optnone_fns: FxHashSet::default(),
             nba_fns: FxHashMap::default(),
@@ -2631,7 +2636,7 @@ impl<'a> Cg<'a> {
         }
         let name = mangle::mangle_decl(ast, &mut self.anon, first);
         self.note_rep(&name, first);
-        let sig = self.decl_sig(first)?;
+        let sig = self.decl_sig_at(first, d)?;
         // An existing function of that name and type is this one: a
         // runtime function codegen declared first (`__cxa_allocate_exception`
         // from a `throw`), or a separately declared redeclaration of the
@@ -2677,6 +2682,9 @@ impl<'a> Cg<'a> {
             }
             _ => self.declare_fn(&name, first, &sig)?,
         };
+        if ast.lang_c && d != first && self.m.func(f).is_declaration() {
+            self.c_sig_decl.entry(f).or_insert(d);
+        }
         self.ann_note_fn(&name, first);
         self.fns.insert(first, f);
         if let Some(def) = self.deferred.remove(&first) {

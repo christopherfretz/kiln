@@ -2054,7 +2054,9 @@ impl Parser<'_, '_> {
                 Kw::ReinterpretCast => self.parse_named_cast(CastStyle::Reinterpret),
                 Kw::DynamicCast => self.parse_named_cast(CastStyle::Dynamic),
                 Kw::Operator => self.parse_operator_id_expression(loc),
-                _ if is_simple_type_kw(k) => self.parse_functional_cast(),
+                // C has no functional cast (C23 6.5.2): `int(1)` and
+                // `typeof(int){1}` are no expressions (clang).
+                _ if is_simple_type_kw(k) && !self.s.is_c() => self.parse_functional_cast(),
                 Kw::This => {
                     self.bump();
                     Some(self.s.act_on_this(loc))
@@ -2126,11 +2128,14 @@ impl Parser<'_, '_> {
             } else {
                 end
             };
+            // C has no functional cast: a typedef name never begins an
+            // expression (clang).
             if end == self.pos() + 1
-                && !matches!(
-                    Self::punct_of(self.tok_at(after)),
-                    Some(Punct::LParen | Punct::LBrace)
-                )
+                && (self.s.is_c()
+                    || !matches!(
+                        Self::punct_of(self.tok_at(after)),
+                        Some(Punct::LParen | Punct::LBrace)
+                    ))
             {
                 let text = self.s.ast.symbols().as_str(name).to_owned();
                 let d = self.s.diag(DiagId::sema_unexpected_typedef_ident, loc).arg(text);

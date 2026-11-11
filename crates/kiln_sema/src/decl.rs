@@ -159,6 +159,11 @@ pub struct PrototypeFrame {
     /// C: the named tags declared in the clause (C23 6.2.1p4,
     /// [`Sema::c_declare_proto_tag`]).
     pub(crate) tags: Vec<(Symbol, DeclId)>,
+    /// C: the enumerations defined in the clause, named or not, and the
+    /// enumerators they declare: like their tags these have prototype
+    /// scope (C23 6.2.1p4, [`Sema::c_declare_proto_enumerator`]).
+    pub(crate) enums: Vec<DeclId>,
+    pub(crate) enumerators: Vec<(Symbol, DeclId)>,
 }
 
 pub(crate) fn sym_str(s: &Sema<'_, '_>, sym: Symbol) -> String {
@@ -604,6 +609,8 @@ impl Sema<'_, '_> {
             params: Vec::new(),
             index: 0,
             tags: Vec::new(),
+            enums: Vec::new(),
+            enumerators: Vec::new(),
         });
     }
 
@@ -642,11 +649,10 @@ impl Sema<'_, '_> {
     /// parameter-declaration-clauses opened at scope depth `depth`
     /// ([basic.scope.param]).
     pub(crate) fn prototype_param_named(&self, depth: usize, name: Symbol) -> Option<DeclId> {
-        self.prototype_params
-            .iter()
-            .rev()
-            .filter(|f| f.depth == depth)
-            .find_map(|f| f.params.iter().rev().find(|e| e.0 == name).map(|e| e.1))
+        self.prototype_params.iter().rev().filter(|f| f.depth == depth).find_map(|f| {
+            let found = f.params.iter().rev().find(|e| e.0 == name);
+            found.or_else(|| f.enumerators.iter().rev().find(|e| e.0 == name)).map(|e| e.1)
+        })
     }
 
     /// The exception specification or trailing return type of a function
@@ -684,7 +690,8 @@ impl Sema<'_, '_> {
     /// The end of the declarator part a parameter-declaration-clause
     /// scopes (see [`Sema::act_on_start_prototype`]).
     pub fn act_on_end_prototype(&mut self) {
-        if let Some(f) = self.prototype_params.pop() {
+        if let Some(mut f) = self.prototype_params.pop() {
+            f.tags.append(&mut f.enumerators);
             self.c_end_proto_tags(f.tags);
         }
     }
@@ -1258,6 +1265,8 @@ impl Sema<'_, '_> {
             params: Vec::new(),
             index: params.len(),
             tags: Vec::new(),
+            enums: Vec::new(),
+            enumerators: Vec::new(),
         };
         for p in params {
             if let (Some((n, _)), Some(pd)) = (p.name, p.decl) {
@@ -4872,6 +4881,23 @@ impl Sema<'_, '_> {
             }
             p => p,
         };
+        // C: a library function's first declaration redeclares its
+        // implicit one (WP-1311, `c_lib_function_redecl_prev`); not a
+        // `static` or `overloadable` one, which is a function of its own.
+        let prev = match prev {
+            None if self.is_c()
+                && !invalid_decl
+                && !new_fn.is_static
+                && dname.as_ident().is_some()
+                && !d
+                    .attrs
+                    .iter()
+                    .any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE) =>
+            {
+                self.c_lib_function_redecl_prev(name, d.name_loc())
+            }
+            p => p,
+        };
         // [over.load]/2.3 (C++20), [basic.scope.scope]/3 (C++23).
         let prev = match prev {
             None if method && in_class && !friend && !invalid_decl && !explicit_object => {
@@ -5126,6 +5152,7 @@ impl Sema<'_, '_> {
                 // `CheckEquivalentExceptionSpecImpl`; ignored under
                 // `-fno-exceptions` before C++17).
                 let list_equiv = if !delayed
+                    && !self.is_c()
                     && (self.exceptions || self.std >= kiln_lex::Std::Cxx17)
                     && self.same_ignoring_exc_spec(pty, ty)
                 {
@@ -5143,6 +5170,16 @@ impl Sema<'_, '_> {
                 // [except.spec]/5: a redeclaration without a specification.
                 let mut missing_err = false;
                 if !delayed
+                    && (!self.same_type_and_exc(pty, ty)
+                        || list_equiv == crate::except::ExcEquiv::Missing)
+                    && self.written_exc_spec(ty) == ExcSpec::None
+                    && self.same_ignoring_exc_spec(pty, ty)
+                    && self.is_c()
+                {
+                    // C (WP-1311): a GNU `nothrow` is inherited, silently.
+                    let pexc = self.written_exc_spec(pty);
+                    ty = self.with_exc_spec(ty, pexc);
+                } else if !delayed
                     && (!self.same_type_and_exc(pty, ty)
                         || list_equiv == crate::except::ExcEquiv::Missing)
                     && self.written_exc_spec(ty) == ExcSpec::None
@@ -5171,6 +5208,9 @@ impl Sema<'_, '_> {
                 let c_comp = if self.is_c() {
                     self.c_no_proto_composite(p, pty, ty, d.name_loc(), implicit_lib)
                         .or_else(|| self.c_proto_composite(pty, ty))
+                        // C has no exception specifications: a GNU
+                        // `nothrow` on one declaration only (WP-1311).
+                        .or_else(|| self.same_ignoring_exc_spec(pty, ty).then_some(ty))
                 } else {
                     None
                 };
@@ -5197,6 +5237,13 @@ impl Sema<'_, '_> {
                             .arg(fname.clone());
                         let msg = self.note_prev(msg, p, false);
                         self.emit(msg);
+                        // C (clang `MergeFunctionDecl` fails): the
+                        // declaration is invalid, so no redefinition error
+                        // follows. C++ keeps the old path (follow-up).
+                        if self.is_c() {
+                            prev_ok = None;
+                            invalid_redecl = true;
+                        }
                     }
                     // [dcl.link]/6: the language linkage is the first
                     // declaration's (clang `err_different_language_linkage`).
@@ -5263,6 +5310,9 @@ impl Sema<'_, '_> {
                         _ => msg,
                     };
                     self.emit(msg);
+                    // The new declaration replaces the implicit one in
+                    // scope: a later call is no library call (WP-1311).
+                    self.builder().unregister_name(p);
                 } else {
                     let same_params = match (self.ast.types.proto(pty), self.ast.types.proto(ty)) {
                         (Some(a), Some(b)) => {
@@ -6584,6 +6634,7 @@ impl Sema<'_, '_> {
     /// (spec/sema.md §4.2; WP-235); an `extern` that also finds a
     /// declaration with linkage outside the block is a different kind of
     /// symbol. Only an `extern` redeclaring an `extern` is accepted.
+    /// True when the types conflict.
     fn merge_local_var(
         &mut self,
         p: DeclId,
@@ -6591,7 +6642,7 @@ impl Sema<'_, '_> {
         storage: VarStorage,
         loc: Loc,
         name: Symbol,
-    ) {
+    ) -> bool {
         let pn = *self.ast.decls.get(p);
         let pty = pn.ty().unwrap_or(QualType::ERROR);
         let old_storage = self.ast.decls.var(p).map(|x| x.spec.storage());
@@ -6644,10 +6695,11 @@ impl Sema<'_, '_> {
         } else if !new_extern {
             self.diag(DiagId::sema_redefinition, loc).arg(&n)
         } else {
-            return;
+            return false;
         };
         let msg = self.note_prev(msg, p, old_def);
         self.emit(msg);
+        !outer_linkage && !old_invalid && !compatible
     }
 
     /// `diagnose_ambiguous_qualified_var`, or, for an unqualified
@@ -6840,6 +6892,7 @@ impl Sema<'_, '_> {
         // (clang `setInvalidDecl`), so a later lookup that also finds the
         // earlier declaration names that one, not an ambiguous set.
         let mut redefined = false;
+        let mut c_hidden = false;
         let ext = spec.storage() == VarStorage::Extern || self.in_single_line_linkage();
         let (independent, local) = self.var_prev_local(spec, d, name);
         let mut prev = match local {
@@ -6920,8 +6973,14 @@ impl Sema<'_, '_> {
                 }
             } else if block && matches!(pn.kind(), DeclKind::Var | DeclKind::ParmVar) {
                 let new_invalid = ds.invalid || d.invalid || self.is_error_type(ty);
-                if !new_invalid {
-                    self.merge_local_var(p, ty, spec.storage(), d.name_loc(), name);
+                // C (clang): a redefinition with another type is invalid
+                // and leaves the earlier declaration the one in scope.
+                if !new_invalid
+                    && self.merge_local_var(p, ty, spec.storage(), d.name_loc(), name)
+                    && self.is_c()
+                {
+                    redefined = true;
+                    c_hidden = true;
                 }
             } else {
                 let msg = self
@@ -6966,7 +7025,9 @@ impl Sema<'_, '_> {
         if prev_ok.is_none() && !independent && spec.storage() != VarStorage::Extern {
             self.check_shadow(v, name);
         }
-        self.register_local(name, v);
+        if !c_hidden {
+            self.register_local(name, v);
+        }
         if spec.storage() == VarStorage::Extern {
             self.note_local_extern(name, v);
         }
@@ -9299,6 +9360,13 @@ impl Sema<'_, '_> {
         {
             self.c_declare_proto_tag(n, d);
         }
+        if proto_tag
+            && is_enum
+            && use_ == TagUse::Definition
+            && let Some(f) = self.prototype_params.last_mut()
+        {
+            f.enums.push(d);
+        }
         self.finish_member_class_spec(member_class_spec, d);
         if qualifier.is_none() {
             self.set_member_access(d);
@@ -10169,6 +10237,9 @@ impl Sema<'_, '_> {
         // Redeclaration ([basic.scope.scope]).
         let clash = if scoped {
             self.lookup_in(e, name, LookupKind::Ordinary).decls.first().copied()
+        } else if let Some(f) = self.c_proto_enum_frame(e) {
+            // C23 6.2.1p4: only the parameter list's own identifiers.
+            self.prototype_param_named(f.depth, name)
         } else {
             self.lookup_current_scope_outside_enum(name)
         };
@@ -10271,7 +10342,8 @@ impl Sema<'_, '_> {
             self.take_annotations(d, &mut attrs);
             let _ = self.builder().attach_attrs(d, &attrs);
         }
-        if !scoped && self.enumerator_is_local(e) {
+        let proto = self.c_declare_proto_enumerator(e, name, d);
+        if !proto && !scoped && self.enumerator_is_local(e) {
             self.push_local(name, d);
         }
         if let Some(b) = self.enums.last_mut() {
@@ -10289,7 +10361,8 @@ impl Sema<'_, '_> {
     /// `ActOnEnumBody`: the narrowest of `int`, `long`, `long long` when
     /// some value is negative, else of `unsigned int`, `unsigned long`,
     /// `unsigned long long`, promoting to the signed type of the same
-    /// width unless the values need every bit. A `packed` enumeration
+    /// width unless the values need every bit (in C++; C keeps the
+    /// unsigned type). A `packed` enumeration
     /// also considers `signed char` / `short` (`unsigned char` /
     /// `unsigned short`), promoting to `int` (clang
     /// `ASTContext::computeBestEnumTypes`).
@@ -10328,7 +10401,10 @@ impl Sema<'_, '_> {
         } else {
             let i = unsigned.iter().position(|&t| pos_bits <= width(t)).unwrap_or(2);
             let t = unsigned[i];
-            (t, if pos_bits == width(t) { t } else { signed[i] })
+            // C has no [conv.prom]/3: an enumeration's promotion is that of
+            // its compatible type (C23 6.3.1.1/2), which for an unsigned
+            // type of `int` rank or above is itself (clang: `|| !CPlusPlus`).
+            (t, if pos_bits == width(t) || self.is_c() { t } else { signed[i] })
         }
     }
 

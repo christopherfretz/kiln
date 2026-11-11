@@ -4216,6 +4216,34 @@ pub mod builtin {
         row(2143, "conj", "XdXd", N | C),
         row(2144, "conjf", "XfXf", N | C),
         row(2145, "conjl", "XLdXLd", N | C),
+        // WP-1311: the rest of clang's library builtins that C code calls
+        // undeclared (gcc.c-torture, the C OSS rows): no implicit
+        // attribute but `NoReturn` (`exit`, `_Exit`, `_exit`), so an
+        // implicit call gets the library type, not `int ()`. GNU only:
+        // `_exit`, `memccpy`, `strcasecmp`, `strncasecmp` (2163..=2166).
+        // Not here: the `setjmp` family and `vfork` (`ReturnsTwice`, and
+        // `jmp_buf` types). The ids are kiln-private.
+        row(2146, "exit", "vi", R),
+        row(2147, "_Exit", "vi", R),
+        row(2148, "free", "vv*", 0),
+        row(2149, "strcspn", "zcC*cC*", 0),
+        row(2150, "strerror", "c*i", 0),
+        row(2151, "strtod", "dcC*c**", 0),
+        row(2152, "strtof", "fcC*c**", 0),
+        row(2153, "strtold", "LdcC*c**", 0),
+        row(2154, "strtok", "c*c*cC*", 0),
+        row(2155, "strtol", "LicC*c**i", 0),
+        row(2156, "strtoll", "LLicC*c**i", 0),
+        row(2157, "strtoul", "ULicC*c**i", 0),
+        row(2158, "strtoull", "ULLicC*c**i", 0),
+        row(2159, "strxfrm", "zc*cC*z", 0),
+        row(2160, "fopen", "P*cC*cC*", 0),
+        row(2161, "fread", "zv*zzP*", 0),
+        row(2162, "fwrite", "zvC*zzP*", 0),
+        row(2163, "_exit", "vi", R),
+        row(2164, "memccpy", "v*v*vC*iz", 0),
+        row(2165, "strcasecmp", "icC*cC*", 0),
+        row(2166, "strncasecmp", "icC*cC*z", 0),
     ];
 
     /// The [`LIB`] row of the C library function spelled `name`.
@@ -4231,9 +4259,14 @@ pub mod builtin {
         let n = info.name;
         match n {
             "abs" | "labs" | "llabs" | "abort" | "malloc" | "calloc" | "realloc"
-            | "aligned_alloc" | "alloca" => "stdlib.h",
+            | "aligned_alloc" | "alloca" | "exit" | "_Exit" | "free" | "strtod" | "strtof"
+            | "strtold" | "strtol" | "strtoll" | "strtoul" | "strtoull" => "stdlib.h",
+            "_exit" => "unistd.h",
+            "fopen" | "fread" | "fwrite" => "stdio.h",
             "memalign" => "malloc.h",
-            "bcmp" | "bcopy" | "bzero" | "index" | "rindex" => "strings.h",
+            "bcmp" | "bcopy" | "bzero" | "index" | "rindex" | "strcasecmp" | "strncasecmp" => {
+                "strings.h"
+            }
             _ if n.ends_with("printf") || n.ends_with("scanf") => "stdio.h",
             _ if n.starts_with("mem") || n.starts_with("str") || n.starts_with("stp") => "string.h",
             _ if n.starts_with("wcs") || n.starts_with("wmem") => "wchar.h",
@@ -4312,10 +4345,12 @@ pub mod builtin {
     /// dialects only (clang `ALL_GNU_LANGUAGES`: `sincos`; WP-1055: the
     /// `GNULibBuiltin` string functions `bcmp`, `bcopy`, `bzero`, `index`,
     /// `rindex`, `stpcpy`, `stpncpy`, `strdup` and `strndup`; WP-1073:
-    /// `memalign`, `alloca`, `mempcpy` and `finite`).
+    /// `memalign`, `alloca`, `mempcpy` and `finite`; WP-1311: `_exit`,
+    /// `memccpy`, `strcasecmp` and `strncasecmp`).
     pub fn lib_gnu_only(id: u32) -> bool {
         (2057..=2059).contains(&id)
             || (2129..=2133).contains(&id)
+            || (2163..=2166).contains(&id)
             || matches!(id, 178 | 183 | 185 | 671 | 1015 | 1129 | 1132 | 1145 | 1175 | 2122)
     }
 
