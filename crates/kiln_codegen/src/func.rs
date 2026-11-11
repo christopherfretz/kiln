@@ -796,8 +796,11 @@ impl Cg<'_> {
 
         // GenerateCode: falling off the end of a value-returning function
         // is `llvm.trap` + `unreachable` at -O0 and `unreachable` alone
-        // above it.
+        // above it, in C++ only: in C it is undefined only if the caller
+        // uses the value (C17 6.9.1p12), so the return block returns the
+        // uninitialized return slot.
         if !is_main
+            && self.opts.c.is_none()
             && thunk.is_none()
             && ast.closure_thunk(d).is_none()
             && self.f.ret_kind != RetKind::Void

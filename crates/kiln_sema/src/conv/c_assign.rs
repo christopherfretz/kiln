@@ -343,7 +343,9 @@ fn fix_hint(s: &mut Sema<'_, '_>, e: ExprId, from: QualType, to: QualType) -> &'
 fn decayed_type(s: &mut Sema<'_, '_>, e: ExprId) -> QualType {
     let n = *s.ast.exprs.get(e);
     let t = n.ty();
-    if s.ast.types.is_array(t) && n.value_category().is_glvalue() {
+    if s.ast.types.is_array(t) {
+        // A prvalue array (a compound literal) decays too: [`decay`]
+        // materializes it (C17 6.3.2.1p3).
         array_decayed(s, t)
     } else if s.ast.types.is_function(t) {
         s.ast.types.pointer_to(t)
@@ -438,9 +440,15 @@ pub(crate) fn convert(
     if to_rec || from_rec {
         if to_rec && from_rec && compatible(s, from.without_quals(), to.without_quals()) {
             // C17 6.3.2.1p2: the structure's value (clang's
-            // `DefaultLvalueConversion` of a record in C).
+            // `DefaultLvalueConversion` of a record in C). An assigned
+            // prvalue is its own object first (a compound literal may read
+            // the target, C17 6.5.2.5p4), never built in place over it.
+            let mut e = e;
             if !s.ast.exprs.get(e).value_category().is_glvalue() {
-                return Some(Ok(e));
+                if !matches!(ctx, ConvCtx::Assignment) {
+                    return Some(Ok(e));
+                }
+                e = s.materialize_temporary(e, from, false);
             }
             let u = super::strip_cv(s, from);
             let x =

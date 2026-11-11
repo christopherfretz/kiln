@@ -2776,7 +2776,12 @@ impl Cg<'_> {
         if !needs_init {
             return Ok(LV { addr: tmp, q: sq, bf: None, vidx: None, tb: Tb::Type });
         }
-        if n.kind() == ExprKind::MaterializeTemporaryExpr && !static_tmp {
+        // A C compound literal's object lives until its block ends (C17
+        // 6.5.2.5p5), not the full-expression: no lifetime markers, as
+        // clang's `EmitCompoundLiteralLValue`.
+        let c_literal = self.opts.c.is_some()
+            && ast.exprs.get(self.skip_parens(s)).kind() == ExprKind::CompoundLiteralExpr;
+        if n.kind() == ExprKind::MaterializeTemporaryExpr && !static_tmp && !c_literal {
             self.temporary_lifetime(e, s, tmp);
         }
         if self.is_aggregate(sq) {
