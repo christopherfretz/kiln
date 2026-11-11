@@ -18,7 +18,7 @@
 #                  `c_compiler` in the control. Not for a staged row.
 #   c_compiler     the control's C compiler (and both builds' when c =
 #                  "clang"), default clang-19
-#   wave           1, 2, 3 or 4 (docs/ROADMAP.md M8)
+#   wave           1 to 4 (docs/ROADMAP.md M8), 5 for the C rows (WP-1277)
 #   sweep          optional (WP-1265): true puts the project in the x86_64
 #                  sweep's oss matrix (.github/workflows/sweep.yml job
 #                  oss-matrix, `projects.py list --sweep --json`)
@@ -817,3 +817,71 @@ c_compiler = "clang-19"
 wave = 1
 verified = true
 notes = "WP-920: the autotools smoke row (autoconf, libtool, automake's test harness), from the release tarball's generated configure."
+
+# ---------------------------------------------------------------- wave 5: C (WP-1277)
+# C projects for kiln's C mode (WP-243): every C TU goes through kiln-cc
+# (c = "kiln"); the control builds them with clang-19.
+
+[zlib]
+url = "https://github.com/madler/zlib"
+tag = "v1.3.2"
+build = "cmake"
+cxx_std = 17
+c = "kiln"
+configure = ["-DZLIB_BUILD_TESTING=ON"]
+test = "ctest --output-on-failure -E 'install|find_package|add_subdirectory' && for lvl in -1 -6 -9 -h -r -f; do test/minigzip $lvl -c < libz.a > \"$TMPDIR/z.gz\" && test/minigzip -d -c < \"$TMPDIR/z.gz\" | cmp - libz.a || exit 1; done && echo 'minigzip round trips ok'"
+wave = 5
+verified = true
+notes = "WP-1277. The shared and static example/example64 programs and infcover through ctest (the install, find_package and add_subdirectory tests reconfigure CMake sub-builds with the default compilers: excluded), then a minigzip compress/decompress round trip of libz.a at levels 1, 6, 9 and the Huffman-only, RLE and filtered strategies."
+
+[sqlite]
+url = "https://www.sqlite.org/2026/sqlite-autoconf-3540100.tar.gz"
+tag = "3.54.1"
+archive = true
+sha256 = "926ef8d3eab93fbf6e06011901273eec076b25594a4e1cdadd50c987f4f6d64e"
+build = "autotools"
+cxx_std = 17
+c = "kiln"
+configure = ["--all", "--disable-readline"]
+test = "./sqlite3 < @OSS@/shims/sqlite-workload.sql > workload.out 2>&1; rc=$?; diff -u @OSS@/shims/sqlite-workload.expected workload.out && [ $rc = 0 ] && echo 'sqlite workload ok'"
+wave = 5
+verified = true
+notes = "WP-1277. The amalgamation (sqlite3.c, about 270k lines in one TU) and the shell, with every optional extension (--all: FTS4/5, R*Tree, geopoly, session, dbpage, dbstat, carray). The full suite needs TCL; the test runs the shell over the deterministic workload scripts/oss/shims/sqlite-workload.sql and diffs it against sqlite-workload.expected (b-tree, indexes, joins, window functions, recursive CTEs, JSON, FTS5, R*Tree, triggers, upsert, generated columns, printf and float formatting, dates)."
+
+[lua]
+url = "https://github.com/lua/lua"
+tag = "v5.4.8"
+build = "make"
+cxx_std = 17
+c = "kiln"
+build_targets = ["CFLAGS=-Wall -O2 $(MYCFLAGS) -fno-stack-protector -fno-common", "MYCFLAGS=$(LOCAL) -std=c99 -DLUA_USE_LINUX", "MYLIBS=-ldl", "CWARNGCC=", "all"]
+test = "cd testes && ulimit -S -s 1100 && ../lua -e'_U=true' all.lua"
+wave = 5
+verified = true
+notes = "WP-1277. The development tree (flat sources plus testes/). The makefile's CFLAGS drop -march=native and readline (no headers here) and its GCC-only warnings. The test is upstream's all.lua with _U (the user-test mode: _soft and _port, no ltests.h internals and no testes/libs C modules)."
+
+[c_ares]
+url = "https://github.com/c-ares/c-ares"
+tag = "v1.34.9"
+build = "cmake"
+cxx_std = 17
+c = "kiln"
+configure = ["-DCARES_BUILD_TESTS=ON", "-DCARES_BUILD_TOOLS=ON"]
+deps = ["googletest"]
+test = "ctest --output-on-failure -E arestest && ./bin/arestest --gtest_filter='-*.Live*:*Container*'"
+wave = 5
+verified = true
+notes = "WP-1277. The library and tools are C; its GoogleTest suite (arestest, C++, against the installed googletest dep) drives a mock DNS server on localhost. The Live tests need the network: filtered out. aresfuzz and aresfuzzname replay the checked-in fuzz corpora through ctest."
+
+[zstd]
+url = "https://github.com/facebook/zstd"
+tag = "v1.5.7"
+build = "cmake"
+source_subdir = "build/cmake"
+cxx_std = 17
+c = "kiln"
+configure = ["-DZSTD_BUILD_TESTS=ON", "-DZSTD_FUZZER_FLAGS=-T60s", "-DZSTD_ZSTREAM_FLAGS=-T60s", "-DZSTD_FULLBENCH_FLAGS=-i1"]
+test = "ctest --output-on-failure -E playTests && b=$PWD && t=$(mktemp -d /tmp/kiln-oss-zstd.XXXXXX) && (cd \"$t\" && ZSTD_BIN=\"$b/programs/zstd\" DATAGEN_BIN=\"$b/tests/datagen\" sh @SRC@/tests/playTests.sh); rc=$?; rm -rf \"$t\"; [ $rc = 0 ] && echo 'playTests ok'"
+wave = 5
+verified = true
+notes = "WP-1277. Heavy macro and inline-function C (bit streams, Huffman and FSE tables, SIMD-free paths on aarch64; the x86_64 decoder's .S goes through kiln-cc as assembly). ctest runs fullbench, fuzzer and zstreamtest (60 s each); playTests.sh then runs the built zstd CLI from a /tmp directory (it checks file modes under umask 0000, which the workspace file system does not honour, so under ctest's tests/ cwd it fails for any compiler)."

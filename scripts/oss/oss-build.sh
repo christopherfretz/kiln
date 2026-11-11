@@ -130,7 +130,7 @@ if [ -n "$WHICH" ]; then
   if [ "$P_C" = kiln ]; then echo "CC=$P_C_COMPILER"; echo "CC_REAL=$CC_REAL"; else echo "CC=$CC_REAL"; fi
   exit 0
 fi
-echo "oss-build: $PROJECT $P_TAG with $CXX (from $how), $STDLIB; C ($P_C) with $CC_REAL"
+echo "oss-build: $PROJECT $P_TAG with $CXX (from $how), $STDLIB; C TUs (c = $P_C) with $CC_REAL"
 export KILN_OSS_CXX="$CXX"
 
 # Dependencies: built with this compiler, installed once, found by cmake.
@@ -168,6 +168,10 @@ SRC="$OSS/src/$P_CHECKOUT"
 [ -z "$P_LOCAL" ] || SRC="$HERE/$P_LOCAL"
 BUILD="$OSS/build/$PROJECT/$COMPILER$SFX${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
+# `@SRC@` in the test command is the project's source checkout (a suite
+# script run from elsewhere, WP-1277: zstd's playTests.sh runs under /tmp
+# because the workspace file system ignores umask).
+P_TEST="${P_TEST//@SRC@/$SRC}"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"
 # The wrapper's address-space cap: the project's `vmem_kb` (default
 # 3000000, at most 6000000) unless the caller set KILN_OSS_VMEM_KB.
