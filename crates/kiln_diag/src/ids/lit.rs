@@ -2,6 +2,10 @@
 // One row per line, sorted by name; a comment directly above a row
 // belongs to it. `cargo xtask diag-split` maintains this layout.
 
+lit_bad_char_encoding = Error (0) "illegal character encoding in character literal";
+lit_bad_char_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal character encoding in character literal";
+lit_bad_string_encoding = Error (0) "illegal character encoding in string literal";
+lit_bad_string_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal character encoding in string literal";
 lit_binary_ext = Extension [Cxx14BinaryLiteral] (0) "binary integer literals are a C++14 extension";
 lit_char_constant_too_long = Warning (0) "character constant too long for its type";
 lit_char_too_large = Error (0) "character too large for enclosing character literal type";

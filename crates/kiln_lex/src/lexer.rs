@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use kiln_source::{FileId, Loc, SourceManager, Span};
+use kiln_source::{FileId, Loc, Replacement, SourceManager, Span};
 
 use crate::diag::{LexDiag, LexDiagKind};
 use crate::options::{LexMode, LexOptions, Std};
@@ -76,6 +76,9 @@ pub struct Lexer<'a> {
     interner: &'a Interner,
     file: FileId,
     src: Src<'a>,
+    /// The U+FFFDs that replaced invalid UTF-8 when the file was loaded
+    /// (ascending; empty for a valid file).
+    bad: &'a [Replacement],
     pos: usize,
     base: Loc,
     opts: LexOptions,
@@ -145,6 +148,7 @@ impl<'a> Lexer<'a> {
             interner,
             file,
             src: Src::new(text, opts.trigraphs),
+            bad: &sm.load_report(file).replacements,
             pos,
             base,
             opts,
@@ -336,6 +340,13 @@ impl<'a> Lexer<'a> {
     fn diag(&mut self, kind: LexDiagKind, lo: usize, hi: usize) {
         let span = self.span(lo, hi);
         self.diags.push(LexDiag { kind, span });
+    }
+
+    /// Whether the U+FFFD at `p` replaced invalid UTF-8 at load time
+    /// (rather than being spelled in the source).
+    #[cold]
+    fn is_replacement(&self, p: usize) -> bool {
+        u32::try_from(p).is_ok_and(|p| self.bad.binary_search_by_key(&p, |r| r.offset).is_ok())
     }
 
     fn std_at_least(&self, std: Std) -> bool {
@@ -568,6 +579,13 @@ impl<'a> Lexer<'a> {
                             self.leading_space = true;
                             self.pos += s;
                         }
+                        // Invalid UTF-8 outside a literal or comment is
+                        // dropped with an error (clang); a directive keeps
+                        // it as an unknown token.
+                        Some('\u{FFFD}') if !self.in_directive && self.is_replacement(self.pos) => {
+                            self.diag(LexDiagKind::InvalidUtf8, self.pos, self.pos + s);
+                            self.pos += s;
+                        }
                         _ => return None,
                     }
                 }
@@ -728,7 +746,11 @@ impl<'a> Lexer<'a> {
     // ----- identifiers --------------------------------------------------
 
     fn lex_non_ascii(&mut self, start: usize, c: char, p1: usize) -> (TokKind, usize, TokFlags) {
-        if is_xid_start(c) {
+        if c == '\u{FFFD}' && self.is_replacement(start) {
+            // Invalid UTF-8 in a directive: an unknown token, no
+            // diagnostic (clang).
+            (TokKind::Other(c), p1, TokFlags::empty())
+        } else if is_xid_start(c) {
             self.lex_identifier(start, c, p1, false)
         } else if is_xid_continue(c) {
             // [lex.pptoken]/2: not XID_Start, so it cannot begin an
@@ -880,7 +902,8 @@ impl<'a> Lexer<'a> {
                 }
             } else if is_xid_continue(c) {
                 info.non_ascii = true;
-            } else if is_unicode_whitespace(c) {
+            } else if is_unicode_whitespace(c) || (c == '\u{FFFD}' && self.is_replacement(p)) {
+                // Invalid UTF-8 ends the identifier (clang).
                 return p;
             } else {
                 self.diag(LexDiagKind::CharNotAllowedInIdentifier { ch: c }, p, p + s);

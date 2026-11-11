@@ -2,8 +2,9 @@
 //! [lex.string.uneval], [lex.ext], and `#if` character values
 //! ([cpp.cond]/12). Values match clang 19 on the named targets.
 use kiln_lex::literal::{
-    CharType, CodeUnits, EncodingParams, LiteralOptions, decode_char, decode_string,
-    decode_unevaluated_string, encode_string,
+    CharType, CodeUnits, EncodingParams, InvalidUtf8, LiteralOptions, SourceBytes, decode_char,
+    decode_char_from_source, decode_string, decode_string_from_source, decode_unevaluated_string,
+    encode_string,
 };
 use kiln_lex::{Encoding, LexDiagKind as D, Std};
 
@@ -327,4 +328,86 @@ fn lex_string_diag_locate_through_splices() {
     // `\x100` is source bytes 6..11; `??/q` is 11..15.
     assert_eq!(at(&lit.diags[0]), (6, 11));
     assert_eq!(at(&lit.diags[1]), (11, 15));
+}
+
+/// The U+FFFDs of `sp` as replacements of the byte 0xE9 (a Latin-1 `é`
+/// in a file loaded as UTF-8).
+fn latin1(sp: &str) -> Vec<InvalidUtf8<'static>> {
+    sp.match_indices('\u{FFFD}')
+        .map(|(k, _)| InvalidUtf8 { offset: k as u32, bytes: b"\xE9" })
+        .collect()
+}
+
+fn from_source(sp: &str, concat_prefixed: bool) -> kiln_lex::literal::StringLiteral<'_> {
+    let bad = latin1(sp);
+    decode_string_from_source(sp, X86, false, SourceBytes { invalid: &bad, concat_prefixed })
+}
+
+/// [lex.charset]/1 with clang: invalid UTF-8 in an ordinary string keeps
+/// its source bytes with a warning per fragment (the text between
+/// escapes), each further invalid sequence an extra range.
+#[test]
+fn lex_string_invalid_utf8_ordinary() {
+    let s = from_source("\"caf\u{FFFD}\"", false);
+    assert_eq!(s.units, CodeUnits::U8(b"caf\xE9".to_vec()));
+    assert!(!s.has_error);
+    assert_eq!(kinds(&s.diags), [D::InvalidEncoding { string: true, error: false }]);
+    assert_eq!(s.diags[0].range, 4..7);
+    let s = from_source("\"\u{FFFD}\u{FFFD}\\n\u{FFFD}\"", false);
+    assert_eq!(s.units, CodeUnits::U8(b"\xE9\xE9\n\xE9".to_vec()));
+    let w = D::InvalidEncoding { string: true, error: false };
+    assert_eq!(kinds(&s.diags), [w, D::InvalidEncodingRange, w]);
+    let s = from_source("R\"(a\u{FFFD}\\n)\"", false);
+    assert_eq!(s.units, CodeUnits::U8(b"a\xE9\\n".to_vec()));
+    assert_eq!(kinds(&s.diags), [w]);
+    // A spelled U+FFFD (not in the list) is a character like any other.
+    assert_eq!(decode_string("\"\u{FFFD}\"", X86).units, CodeUnits::U8(vec![0xEF, 0xBF, 0xBD]));
+}
+
+/// In a prefixed literal, or an unprefixed piece of a prefixed
+/// concatenation, invalid UTF-8 is an error.
+#[test]
+fn lex_string_invalid_utf8_prefixed() {
+    let e = D::InvalidEncoding { string: true, error: true };
+    for sp in ["u8\"\u{FFFD}\"", "u\"\u{FFFD}\"", "U\"\u{FFFD}\"", "L\"\u{FFFD}\""] {
+        let s = from_source(sp, false);
+        assert!(s.has_error, "{sp}");
+        assert_eq!(kinds(&s.diags), [e], "{sp}");
+    }
+    let s = from_source("\"\u{FFFD}\"", true);
+    assert!(s.has_error);
+    assert_eq!(kinds(&s.diags), [e]);
+}
+
+/// An ordinary character literal holding invalid UTF-8 takes each source
+/// byte of the fragment as a c-char (clang); a prefixed one is an error.
+#[test]
+fn lex_ccon_invalid_utf8() {
+    let w = D::InvalidEncoding { string: false, error: false };
+    let c = decode_char_from_source("'\u{FFFD}'", X86, &latin1("'\u{FFFD}'"));
+    assert_eq!((c.ty, c.chars, c.value), (CharType::Char, 1, -23));
+    assert_eq!(kinds(&c.diags), [w]);
+    assert_eq!(c.diags[0].range, 0..0);
+    let sp = "'\u{e9}\u{FFFD}'";
+    let c = decode_char_from_source(sp, X86, &latin1(sp));
+    assert_eq!((c.ty, c.chars, c.value), (CharType::Int, 3, 0xC3_A9E9));
+    assert_eq!(kinds(&c.diags), [w, D::MultiCharLiteral]);
+    let sp = "u8'\u{FFFD}'";
+    let c = decode_char_from_source(sp, X86, &latin1(sp));
+    assert!(c.has_error);
+    assert_eq!(kinds(&c.diags), [D::InvalidEncoding { string: false, error: true }]);
+    let sp = "L'a\u{FFFD}'";
+    let c = decode_char_from_source(sp, X86, &latin1(sp));
+    assert_eq!(c.chars, 1);
+    assert_eq!(kinds(&c.diags), [D::InvalidEncoding { string: false, error: true }]);
+}
+
+/// [lex.string]/10: `\xff` fits a `char8_t` code unit (`\x100` does not).
+#[test]
+fn lex_string_u8_hex_ff() {
+    let s = decode_string("u8\"c\\xff\"", X86);
+    assert!(!s.has_error);
+    assert_eq!(s.units, CodeUnits::U8(vec![b'c', 0xFF]));
+    assert_eq!(decode_char("u8'\\xff'", X86).value, 0xFF);
+    assert_eq!(kinds(&decode_string("u8\"c\\x100\"", X86).diags), [D::HexEscapeTooLarge]);
 }

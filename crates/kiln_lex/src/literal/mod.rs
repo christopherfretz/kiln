@@ -29,11 +29,11 @@ pub use number::{
 use std::fmt::Write as _;
 use std::ops::Range;
 
-use kiln_source::Span;
+use kiln_source::{SourceManager, Span};
 
 use crate::diag::{LexDiag, LexDiagKind, LexSeverity};
 use crate::options::{LexOptions, Std};
-use crate::token::{Encoding, Token};
+use crate::token::{Encoding, TokFlags, Token};
 use crate::unicode::{NameMatch, lookup_char_name};
 
 /// Target properties that literal values depend on.
@@ -133,6 +133,115 @@ impl LitDiag {
         let lo = map(self.range.start);
         let hi = if self.range.end == self.range.start { lo } else { map(self.range.end) };
         LexDiag { kind: self.kind, span: Span::new(lo, hi) }
+    }
+}
+
+/// Source bytes of a literal that are not valid UTF-8: the file was
+/// decoded with each maximal invalid sequence replaced by U+FFFD
+/// (`kiln_source::LoadReport`), and this records which U+FFFDs of the
+/// spelling stand for such bytes, and which bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct InvalidUtf8<'a> {
+    /// Byte offset of the U+FFFD (3 bytes) in the literal's spelling.
+    pub offset: u32,
+    /// The source bytes it replaced.
+    pub bytes: &'a [u8],
+}
+
+/// The U+FFFDs of literal token `tok`'s `spelling` ([`crate::spelling`])
+/// that replaced invalid UTF-8 when its file was loaded. Empty (and
+/// cheap) for a spelling without U+FFFD. A token spelled in a scratch
+/// buffer (`#`, `##`) has none: its text was re-spelled.
+pub fn invalid_utf8<'s>(
+    sm: &'s SourceManager,
+    tok: &Token,
+    spelling: &str,
+    opts: &LexOptions,
+) -> Vec<InvalidUtf8<'s>> {
+    // U+FFFD is EF BF BD.
+    if !spelling.as_bytes().contains(&0xEF) {
+        return Vec::new();
+    }
+    invalid_utf8_slow(sm, tok, spelling, opts.trigraphs)
+}
+
+#[cold]
+fn invalid_utf8_slow<'s>(
+    sm: &'s SourceManager,
+    tok: &Token,
+    spelling: &str,
+    trigraphs: bool,
+) -> Vec<InvalidUtf8<'s>> {
+    let Some((file, start)) = sm.offset_of(sm.spelling_loc(tok.span.lo)) else {
+        return Vec::new();
+    };
+    let reps = &sm.load_report(file).replacements;
+    if reps.is_empty() {
+        return Vec::new();
+    }
+    let text = sm.span_text(tok.span).unwrap_or("");
+    let cleaned = tok.flags.contains(TokFlags::NEEDS_CLEANING);
+    let mut out = Vec::new();
+    for (k, _) in spelling.match_indices('\u{FFFD}') {
+        let off =
+            if cleaned { crate::spelling::source_offset(text, tok.kind, trigraphs, k) } else { k };
+        let Ok(off) = u32::try_from(off) else { break };
+        let at = start.saturating_add(off);
+        if let Ok(i) = reps.binary_search_by_key(&at, |r| r.offset) {
+            let offset = u32::try_from(k).unwrap_or(u32::MAX);
+            out.push(InvalidUtf8 { offset, bytes: &reps[i].bytes });
+        }
+    }
+    out
+}
+
+/// Where a literal's spelling came from, for the decoders that report
+/// invalid UTF-8 ([`decode_string_from_source`],
+/// [`decode_char_from_source`]).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+pub struct SourceBytes<'a> {
+    /// The spelling's U+FFFDs that replaced invalid UTF-8, ascending by
+    /// offset (empty for valid source).
+    pub invalid: &'a [InvalidUtf8<'a>],
+    /// The literal is part of a concatenation whose encoding is not
+    /// ordinary ([lex.string.concat]): invalid UTF-8 in an unprefixed
+    /// piece is then an error too, as in clang.
+    pub concat_prefixed: bool,
+}
+
+/// How a literal treats invalid UTF-8 in its source.
+#[derive(Clone, Copy)]
+struct Bad<'a> {
+    seqs: &'a [InvalidUtf8<'a>],
+    /// Not an ordinary literal: an error, and the value is not kept.
+    error: bool,
+    /// A string literal (else a character literal).
+    string: bool,
+}
+
+impl Bad<'_> {
+    /// The invalid sequences in spelling bytes `range`.
+    fn within(&self, range: Range<usize>) -> &[InvalidUtf8<'_>] {
+        let first = self.seqs.partition_point(|s| (s.offset as usize) < range.start);
+        let n = self.seqs[first..].iter().take_while(|s| (s.offset as usize) < range.end).count();
+        &self.seqs[first..first + n]
+    }
+
+    /// Diagnoses the invalid sequences `seqs` of one fragment (clang's
+    /// `CopyStringFragment` / `CharLiteralParser` loop): a string
+    /// literal's diagnostic is at the first, highlighting each; a
+    /// character literal's is at the token start.
+    fn diagnose(&self, seqs: &[InvalidUtf8<'_>], diags: &mut Diags) {
+        let kind = LexDiagKind::InvalidEncoding { string: self.string, error: self.error };
+        if !self.string {
+            diags.push(kind, 0, 0);
+            return;
+        }
+        for (k, q) in seqs.iter().enumerate() {
+            let lo = q.offset as usize;
+            let kind = if k == 0 { kind } else { LexDiagKind::InvalidEncodingRange };
+            diags.push(kind, lo, lo + '\u{FFFD}'.len_utf8());
+        }
     }
 }
 
@@ -317,7 +426,8 @@ enum Item {
     /// A character, to be encoded (source character, simple or unknown
     /// escape, universal-character-name).
     Char(char),
-    /// A code unit from a numeric escape, already truncated to the width.
+    /// A code unit from a numeric escape, already truncated to the width
+    /// (or a source byte of an ordinary literal holding invalid UTF-8).
     Unit(u32),
 }
 
@@ -688,17 +798,28 @@ impl Escapes<'_> {
 /// Runs `f` on each item of a non-raw body; an escape sequence dropped
 /// after an error is passed as `None` (clang still counts it as a
 /// character of a character literal).
+#[allow(clippy::too_many_arguments, reason = "internal walker shared by both decoders")]
 fn for_each_item(
     body: &str,
     base: usize,
     bits: u32,
     opts: LiteralOptions,
     unevaluated: bool,
+    bad: Bad<'_>,
     diags: &mut Diags,
     mut f: impl FnMut(Option<Item>, Range<usize>, &mut Diags),
 ) {
     let mut i = 0;
     while i < body.len() {
+        if !bad.seqs.is_empty() && body.as_bytes()[i] != b'\\' {
+            let end = body[i..].find('\\').map_or(body.len(), |k| i + k);
+            let seqs = bad.within(base + i..base + end);
+            if !seqs.is_empty() {
+                bad_fragment(&body[i..end], base + i, bad, seqs, diags, &mut f);
+                i = end;
+                continue;
+            }
+        }
         if body.as_bytes()[i] == b'\\' {
             // Escape offsets are relative to `body`; shift diagnostics.
             let first = diags.list.len();
@@ -724,6 +845,43 @@ fn for_each_item(
     }
 }
 
+/// One fragment (the text between escapes) of a literal holding invalid
+/// UTF-8 at `seqs`, starting at spelling offset `base`. An ordinary
+/// literal keeps the source bytes, each a c-char (clang copies the
+/// fragment bytewise); any other literal is in error and keeps the
+/// characters before the first invalid sequence.
+fn bad_fragment(
+    frag: &str,
+    base: usize,
+    bad: Bad<'_>,
+    seqs: &[InvalidUtf8<'_>],
+    diags: &mut Diags,
+    f: &mut impl FnMut(Option<Item>, Range<usize>, &mut Diags),
+) {
+    bad.diagnose(seqs, diags);
+    let mut next = seqs.iter().peekable();
+    for (k, c) in frag.char_indices() {
+        let at = base + k;
+        let range = at..at + c.len_utf8();
+        let seq = next.next_if(|q| q.offset as usize == at);
+        if bad.error {
+            if seq.is_some() {
+                return;
+            }
+            // Units, not characters: clang does not check their size.
+            f(Some(Item::Unit(u32::from(c))), range, diags);
+        } else if let Some(q) = seq {
+            for &b in q.bytes {
+                f(Some(Item::Unit(u32::from(b))), range.clone(), diags);
+            }
+        } else {
+            for &b in c.encode_utf8(&mut [0; 4]).as_bytes() {
+                f(Some(Item::Unit(u32::from(b))), range.clone(), diags);
+            }
+        }
+    }
+}
+
 fn shift(diags: &mut [LitDiag], base: usize) {
     let base = u32::try_from(base).unwrap_or(u32::MAX);
     for d in diags {
@@ -744,7 +902,21 @@ fn unterminated(spelling: &str, quote: u8) -> Diags {
 /// taken verbatim except that CR LF becomes LF (as clang does; phase 1
 /// already does this for a file read with LF line ends).
 pub fn decode_string(spelling: &str, opts: LiteralOptions) -> StringLiteral<'_> {
-    decode_string_impl(spelling, opts, false)
+    decode_string_impl(spelling, opts, false, SourceBytes::default())
+}
+
+/// [`decode_string`] or (if `unevaluated`) [`decode_unevaluated_string`]
+/// of a spelling that holds the invalid UTF-8 described by `src`
+/// ([lex.charset]/1, matching clang): in an ordinary literal it is
+/// accepted with a warning ([`LexDiagKind::InvalidEncoding`]) and the
+/// value holds the source bytes; in any other literal it is an error.
+pub fn decode_string_from_source<'s>(
+    spelling: &'s str,
+    opts: LiteralOptions,
+    unevaluated: bool,
+    src: SourceBytes<'_>,
+) -> StringLiteral<'s> {
+    decode_string_impl(spelling, opts, unevaluated, src)
 }
 
 /// Evaluates an unevaluated string ([lex.string.uneval]: `static_assert`,
@@ -753,14 +925,15 @@ pub fn decode_string(spelling: &str, opts: LiteralOptions) -> StringLiteral<'_> 
 /// sequences are errors (clang's `err_unevaluated_string_*`). The value
 /// is UTF-8.
 pub fn decode_unevaluated_string(spelling: &str, opts: LiteralOptions) -> StringLiteral<'_> {
-    decode_string_impl(spelling, opts, true)
+    decode_string_impl(spelling, opts, true, SourceBytes::default())
 }
 
-fn decode_string_impl(
-    spelling: &str,
+fn decode_string_impl<'s>(
+    spelling: &'s str,
     opts: LiteralOptions,
     unevaluated: bool,
-) -> StringLiteral<'_> {
+    src: SourceBytes<'_>,
+) -> StringLiteral<'s> {
     let Some(parts) = split(spelling, b'"') else {
         let d = unterminated(spelling, b'"');
         return StringLiteral {
@@ -788,7 +961,23 @@ fn decode_string_impl(
     let bits = unit_bits(encoding, opts.params);
     let mut units = CodeUnits::new(bits);
     let body = &spelling[parts.body.clone()];
-    if parts.raw {
+    let bad = Bad {
+        seqs: src.invalid,
+        error: encoding != Encoding::Ordinary || src.concat_prefixed,
+        string: true,
+    };
+    let raw_bad = if parts.raw { bad.within(parts.body.clone()) } else { &[] };
+    if !raw_bad.is_empty() {
+        // The body is one fragment; CR LF still becomes LF.
+        bad_fragment(body, parts.body.start, bad, raw_bad, &mut diags, &mut |item, r, _| {
+            if let Some(Item::Unit(u)) = item
+                && !(u == u32::from(b'\r')
+                    && body.as_bytes().get(r.end - parts.body.start) == Some(&b'\n'))
+            {
+                units.push_unit(u);
+            }
+        });
+    } else if parts.raw {
         let mut chars = body.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '\r' && chars.peek() == Some(&'\n') {
@@ -797,13 +986,20 @@ fn decode_string_impl(
             units.push_char(c);
         }
     } else {
-        for_each_item(body, parts.body.start, bits, opts, unevaluated, &mut diags, |item, _, _| {
-            match item {
+        for_each_item(
+            body,
+            parts.body.start,
+            bits,
+            opts,
+            unevaluated,
+            bad,
+            &mut diags,
+            |item, _, _| match item {
                 Some(Item::Char(c)) => units.push_char(c),
                 Some(Item::Unit(u)) => units.push_unit(u),
                 None => {}
-            }
-        });
+            },
+        );
     }
     StringLiteral {
         encoding: parts.encoding,
@@ -820,8 +1016,21 @@ fn decode_string_impl(
 /// clang: a c-char that needs more than one code unit is an error; an
 /// ordinary literal with several c-chars has type `int` and packs them 8
 /// bits each (warning); other encodings allow only one c-char.
-#[allow(clippy::too_many_lines, reason = "mirrors clang's CharLiteralParser")]
 pub fn decode_char(spelling: &str, opts: LiteralOptions) -> CharLiteral<'_> {
+    decode_char_from_source(spelling, opts, &[])
+}
+
+/// [`decode_char`] of a spelling holding the invalid UTF-8 `invalid`
+/// (see [`SourceBytes::invalid`]): in an ordinary literal it is accepted
+/// with a warning and each source byte of the text around it (up to the
+/// next escape) is a c-char, as in clang; in any other literal it is an
+/// error.
+#[allow(clippy::too_many_lines, reason = "mirrors clang's CharLiteralParser")]
+pub fn decode_char_from_source<'s>(
+    spelling: &'s str,
+    opts: LiteralOptions,
+    invalid: &[InvalidUtf8<'_>],
+) -> CharLiteral<'s> {
     let params = opts.params;
     let Some(parts) = split(spelling, b'\'') else {
         let d = unterminated(spelling, b'\'');
@@ -845,7 +1054,8 @@ pub fn decode_char(spelling: &str, opts: LiteralOptions) -> CharLiteral<'_> {
     let mut last = 0u32;
     let mut too_long = false;
     let body = &spelling[parts.body.clone()];
-    for_each_item(body, parts.body.start, bits, opts, false, &mut diags, |item, range, d| {
+    let bad = Bad { seqs: invalid, error: enc != Encoding::Ordinary, string: false };
+    for_each_item(body, parts.body.start, bits, opts, false, bad, &mut diags, |item, range, d| {
         chars += 1;
         let unit = match item {
             None => 0,
