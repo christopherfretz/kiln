@@ -208,6 +208,31 @@ impl Sema<'_, '_> {
         self.error(id, loc);
     }
 
+    /// `_Decimal32`/`64`/`128` (clang `ConvertDeclSpecToType`):
+    /// `err_decimal_unsupported` at the keyword, and the declarator is
+    /// invalid.
+    fn decimal_unsupported(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
+        // `DeclSpec::Finish` rejects the `_Complex` first.
+        if let Some(cloc) = ds.complex
+            && !ds.invalid
+        {
+            let msg = self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(ds.base.spelling());
+            self.emit(msg);
+        }
+        self.error(DiagId::sema_decimal_unsupported, ds.base_loc.unwrap_or(loc));
+        QualType::ERROR
+    }
+
+    /// C99 6.2.5p11 `_Imaginary`: clang checks it as `_Complex` (an
+    /// invalid one is dropped silently), then reports it at the keyword
+    /// and goes on with the real type.
+    fn imaginary_of_declspec(&mut self, ds: &DeclSpec, base: QualType, cloc: Loc) -> QualType {
+        if self.complex_of_declspec(ds, base, cloc) != base {
+            self.error(DiagId::sema_imaginary_not_supported, cloc);
+        }
+        base
+    }
+
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
@@ -260,19 +285,8 @@ impl Sema<'_, '_> {
             TypeSpecKind::Float64x => QualType::FLOAT64X,
             TypeSpecKind::BFloat16 => QualType::BFLOAT16,
             TypeSpecKind::Fp16 => QualType::HALF,
-            // clang `ConvertDeclSpecToType`: `err_decimal_unsupported` at
-            // the keyword, and the declarator is invalid.
             TypeSpecKind::Decimal32 | TypeSpecKind::Decimal64 | TypeSpecKind::Decimal128 => {
-                // `DeclSpec::Finish` rejects the `_Complex` first.
-                if let Some(cloc) = ds.complex
-                    && !ds.invalid
-                {
-                    let msg =
-                        self.diag(DiagId::sema_invalid_complex_spec, cloc).arg(ds.base.spelling());
-                    self.emit(msg);
-                }
-                self.error(DiagId::sema_decimal_unsupported, ds.base_loc.unwrap_or(loc));
-                return QualType::ERROR;
+                return self.decimal_unsupported(ds, loc);
             }
             // [dcl.type.auto.deduct]/4 (clang
             // `err_decltype_auto_cannot_be_combined`).
@@ -304,16 +318,7 @@ impl Sema<'_, '_> {
             },
         };
         let base = match ds.complex {
-            // C99 6.2.5p11 `_Imaginary`: clang checks it as `_Complex`
-            // (an invalid one is dropped silently), then reports it at
-            // the keyword and goes on with the real type.
-            Some(cloc) if ds.imaginary => {
-                let c = self.complex_of_declspec(ds, base, cloc);
-                if c != base {
-                    self.error(DiagId::sema_imaginary_not_supported, cloc);
-                }
-                base
-            }
+            Some(cloc) if ds.imaginary => self.imaginary_of_declspec(ds, base, cloc),
             Some(cloc) => self.complex_of_declspec(ds, base, cloc),
             None => base,
         };

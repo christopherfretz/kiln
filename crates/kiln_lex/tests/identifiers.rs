@@ -176,8 +176,8 @@ fn lex_name_not_nfc_maybe() {
     assert_eq!(diag_kinds("a\\u0301\n", cxx26()), [D::IdentifierNotNfc]);
 }
 
-/// clang 19's mathematical notation profile (UAX #31 Math_Start /
-/// Math_Continue, `ext_mathematical_notation`) in C++ identifiers.
+/// clang 19's mathematical notation profile (UAX #31 `Math_Start` /
+/// `Math_Continue`, `ext_mathematical_notation`) in C++ identifiers.
 #[test]
 fn lex_name_math_notation_extension() {
     let l = lex("\u{2202}x\u{2070} y\u{2081} \\u2207\n");

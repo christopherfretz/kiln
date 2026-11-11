@@ -1337,7 +1337,7 @@ fn unevaluated_string_escape_ranges_like_clang() {
 /// undefined function-like macro; and in C a call of an undeclared
 /// function is reported at its name, while an undeclared identifier is
 /// underlined at clang 22 only (as in C++).
-const C_RANGES_SOURCE: &str = r#"#define F(x) x
+const C_RANGES_SOURCE: &str = r"#define F(x) x
 #define H (1 + 2)
 #if (F(1) + 2
 #endif
@@ -1355,10 +1355,10 @@ int main(void) {
   foo(1);
   return bar + qux(2);
 }
-"#;
+";
 
 /// `clang-22 -x c -std=c99 -fsyntax-only` on `C_RANGES_SOURCE`.
-const C_RANGES_GOLDEN_22: &str = r#"<stdin>:3:14: error: expected ')' in preprocessor expression
+const C_RANGES_GOLDEN_22: &str = r"<stdin>:3:14: error: expected ')' in preprocessor expression
     3 | #if (F(1) + 2
       |      ~~~~~~~~^
 <stdin>:3:5: note: to match this '('
@@ -1398,11 +1398,11 @@ const C_RANGES_GOLDEN_22: &str = r#"<stdin>:3:14: error: expected ')' in preproc
    17 |   return bar + qux(2);
       |                ^
 2 warnings and 9 errors generated.
-"#;
+";
 
 /// `clang-19 -x c -std=c99 -fsyntax-only` on `C_RANGES_SOURCE`: clang 19
 /// reports the undeclared identifier last (its `TypoExpr`), unranged.
-const C_RANGES_GOLDEN_19: &str = r#"<stdin>:3:14: error: expected ')' in preprocessor expression
+const C_RANGES_GOLDEN_19: &str = r"<stdin>:3:14: error: expected ')' in preprocessor expression
     3 | #if (F(1) + 2
       |      ~~~~~~~~^
 <stdin>:3:5: note: to match this '('
@@ -1442,7 +1442,7 @@ const C_RANGES_GOLDEN_19: &str = r#"<stdin>:3:14: error: expected ')' in preproc
    17 |   return bar + qux(2);
       |          ^
 2 warnings and 9 errors generated.
-"#;
+";
 
 #[test]
 fn c_if_expression_and_undeclared_ranges_like_clang() {

@@ -557,6 +557,49 @@ impl<'a> Lexer<'a> {
         Token { kind: TokKind::Eof, span: Span::empty(self.loc(end)), flags }
     }
 
+    /// The non-ASCII arm of [`skip_whitespace`](Self::skip_whitespace):
+    /// skips one character at `pos` if it is whitespace or dropped with an
+    /// error, else returns `false` (a token starts there).
+    fn skip_non_ascii_space(&mut self) -> bool {
+        let (c, s) = self.src.decode(self.pos);
+        match c {
+            Some(c) if is_unicode_whitespace(c) && !self.opts.preprocessed_output => {
+                self.diag(LexDiagKind::UnicodeWhitespace { ch: c }, self.pos, self.pos + s);
+                self.leading_space = true;
+                self.pos += s;
+            }
+            // Invalid UTF-8 outside a literal or comment is
+            // dropped with an error (clang); a directive keeps
+            // it as an unknown token.
+            Some('\u{FFFD}') if !self.in_directive && self.is_replacement(self.pos) => {
+                self.diag(LexDiagKind::InvalidUtf8, self.pos, self.pos + s);
+                self.pos += s;
+            }
+            // A character that cannot start an identifier is
+            // dropped with an error outside a directive and
+            // `-E` (clang `LexUnicodeIdentifierStart`); the
+            // next token loses its line-start and leading-space
+            // flags, as in clang.
+            Some(c)
+                if self.loud_ids()
+                    && !is_unicode_whitespace(c)
+                    && !self.id_tables().allowed_initially(c) =>
+            {
+                let kind = if self.id_tables().allowed(c) {
+                    LexDiagKind::CharNotAllowedInIdentifier { ch: c, at_start: true }
+                } else {
+                    LexDiagKind::InvalidChar { ch: c }
+                };
+                self.diag(kind, self.pos, self.pos + s);
+                self.at_line_start = false;
+                self.leading_space = false;
+                self.pos += s;
+            }
+            _ => return false,
+        }
+        true
+    }
+
     /// Skips whitespace, newlines and comments. Returns a token if one is
     /// produced on the way (`Eod`, or a kept `Comment`).
     fn skip_whitespace(&mut self) -> Option<Token> {
@@ -646,45 +689,8 @@ impl<'a> Lexer<'a> {
                     self.pos = q;
                 }
                 0x80.. => {
-                    let (c, s) = self.src.decode(self.pos);
-                    match c {
-                        Some(c) if is_unicode_whitespace(c) && !self.opts.preprocessed_output => {
-                            self.diag(
-                                LexDiagKind::UnicodeWhitespace { ch: c },
-                                self.pos,
-                                self.pos + s,
-                            );
-                            self.leading_space = true;
-                            self.pos += s;
-                        }
-                        // Invalid UTF-8 outside a literal or comment is
-                        // dropped with an error (clang); a directive keeps
-                        // it as an unknown token.
-                        Some('\u{FFFD}') if !self.in_directive && self.is_replacement(self.pos) => {
-                            self.diag(LexDiagKind::InvalidUtf8, self.pos, self.pos + s);
-                            self.pos += s;
-                        }
-                        // A character that cannot start an identifier is
-                        // dropped with an error outside a directive and
-                        // `-E` (clang `LexUnicodeIdentifierStart`); the
-                        // next token loses its line-start and leading-space
-                        // flags, as in clang.
-                        Some(c)
-                            if self.loud_ids()
-                                && !is_unicode_whitespace(c)
-                                && !self.id_tables().allowed_initially(c) =>
-                        {
-                            let kind = if self.id_tables().allowed(c) {
-                                LexDiagKind::CharNotAllowedInIdentifier { ch: c, at_start: true }
-                            } else {
-                                LexDiagKind::InvalidChar { ch: c }
-                            };
-                            self.diag(kind, self.pos, self.pos + s);
-                            self.at_line_start = false;
-                            self.leading_space = false;
-                            self.pos += s;
-                        }
-                        _ => return None,
+                    if !self.skip_non_ascii_space() {
+                        return None;
                     }
                 }
                 _ => return None,
