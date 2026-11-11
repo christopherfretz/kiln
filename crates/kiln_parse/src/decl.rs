@@ -3153,9 +3153,17 @@ impl Parser<'_, '_> {
                 // initializer, the parentheses are a function declarator
                 // only if they could be a parameter clause. A member
                 // declarator has no direct-initializer (`direct_init` is
-                // unset), so there `(` always starts its parameters.
+                // unset), so there `(` always starts its parameters. C has
+                // no direct-initializer (clang `isCXXFunctionDeclarator`
+                // runs for C++ only): `struct S f(s1, n)` with `s1` a
+                // variable is a K&R identifier list.
                 let mut ambiguous = false;
-                if !abstract_ok && d.direct_init && !d.grouping && d.name.is_some() {
+                if !abstract_ok
+                    && d.direct_init
+                    && !d.grouping
+                    && d.name.is_some()
+                    && !self.s.is_c()
+                {
                     let (function, amb) = self.is_cxx_function_declarator(d.name.map(|n| n.0));
                     if !function {
                         break;
