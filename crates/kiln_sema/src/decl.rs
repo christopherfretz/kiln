@@ -10978,7 +10978,7 @@ impl Sema<'_, '_> {
             return None;
         }
         let (size, _) = target::size_align(&self.ast, ty, &self.abi)?;
-        i128::try_from(size).ok()
+        Some(i128::from(size))
     }
 
     /// The context a qualifier `q` given to [`Sema::classify_name`] is
