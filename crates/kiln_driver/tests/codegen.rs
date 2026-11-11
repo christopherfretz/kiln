@@ -177,7 +177,7 @@ fn driver_errors_and_warnings() {
 }
 
 /// One driver, two names (spec/driver.md "Driver modes"): `kiln` compiles
-/// `.c` as C (not implemented yet), `kiln++` as C++ with clang++'s
+/// `.c` as C (WP-1275), `kiln++` as C++ with clang++'s
 /// deprecation warning, and `--driver-mode=g++` makes `kiln` behave as
 /// `kiln++`. `--version` is the same under both names.
 #[test]
@@ -191,10 +191,12 @@ fn kiln_and_kilnpp() {
     assert!(first_line(&v).starts_with("kiln version "), "{}", text(&v.stdout));
     assert_eq!(first_line(&kiln_in(&d, &["--version"])), first_line(&v));
 
+    // `class` is an identifier in C only.
     std::fs::write(d.join("c.c"), "int f(void) { return 0; }\n").unwrap();
-    let o = kiln(&["-S", "-emit-llvm", "c.c"]);
-    assert_eq!(o.status.code(), Some(1));
-    assert_eq!(text(&o.stderr), "error: compiling C is not implemented yet\n");
+    std::fs::write(d.join("k.c"), "int class;\n").unwrap();
+    let o = kiln(&["-S", "-emit-llvm", "c.c", "k.c"]);
+    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), String::new()));
+    assert!(std::fs::read_to_string(d.join("k.ll")).unwrap().contains("@class = "));
     let warning = "treating 'c' input as 'c++' when in C++ mode, this behavior is deprecated \
                    [-Wdeprecated]\n";
     let o = kiln_in(&d, &["-S", "-emit-llvm", "c.c"]);
@@ -205,8 +207,10 @@ fn kiln_and_kilnpp() {
     assert!(std::fs::read_to_string(d.join("c.ll")).unwrap().contains("define"));
     let o = kiln(&["--driver-mode=g++", "-S", "-emit-llvm", "c.c", "-o", "-"]);
     assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), format!("kiln: warning: {warning}")));
-    let o = kiln_in(&d, &["-x", "c", "-S", "-emit-llvm", "c.c"]);
-    assert_eq!(text(&o.stderr), "error: compiling C is not implemented yet\n");
+    // An explicit `-x c` is C under either name (clang++ -x c).
+    let o = kiln_in(&d, &["-x", "c", "-S", "-emit-llvm", "k.c", "-o", "-"]);
+    assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), String::new()));
+    assert!(text(&o.stdout).contains("@class = "));
 }
 
 #[test]

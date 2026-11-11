@@ -203,10 +203,8 @@ impl SyntaxJob<'_> {
         }
         let writes_kind2 = a.bmi_kind != Some(1) && job.module_output_path().is_some();
         let popts = ParseOptions {
-            std: job.std.lex,
-            gnu: job.std.gnu,
-            exceptions: a.predef.exceptions.unwrap_or(true),
-            rtti: a.predef.rtti.unwrap_or(true),
+            exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+            rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),
@@ -232,7 +230,7 @@ impl SyntaxJob<'_> {
             record_carried: writes_kind2,
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
-            ..ParseOptions::default()
+            ..job.std.parse_options()
         };
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();

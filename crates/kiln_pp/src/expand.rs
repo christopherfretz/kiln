@@ -125,7 +125,13 @@ impl Preprocessor<'_, '_> {
 
     /// Defines the builtin macros (clang `RegisterBuiltinMacros`).
     pub(crate) fn define_builtins(&mut self) {
+        let c = self.opts.c.is_some();
         for &(n, b) in Builtin::ALL {
+            // clang registers `__has_cpp_attribute` in C++ only and
+            // `__has_c_attribute` in C only (spec/pp.md "Feature queries in C").
+            if (b == Builtin::HasCppAttribute && c) || (b == Builtin::HasCAttribute && !c) {
+                continue;
+            }
             let name = self.interner.intern(n);
             let def = MacroDef {
                 name,
@@ -1115,6 +1121,7 @@ impl Preprocessor<'_, '_> {
                     b,
                     Builtin::HasAttribute
                         | Builtin::HasCppAttribute
+                        | Builtin::HasCAttribute
                         | Builtin::HasDeclspecAttribute
                 );
                 match self.eval_feature_like(&t, b, expand) {
@@ -1255,7 +1262,7 @@ impl Preprocessor<'_, '_> {
                 next = n;
                 u32::from(v)
             }
-            Builtin::HasCppAttribute => {
+            Builtin::HasCppAttribute | Builtin::HasCAttribute => {
                 if let Some(first) = self.feature_ident(&tok) {
                     let colons = self.lex_unexpanded();
                     let (scope, attr) = if colons.is_punct(Punct::ColonColon) {
@@ -1266,10 +1273,15 @@ impl Preprocessor<'_, '_> {
                         (None, Some(first))
                     };
                     match attr {
-                        Some(a) => self.features.has_cpp_attribute(
-                            scope.map(|s| self.interner.as_str(s)),
-                            self.interner.as_str(a),
-                        ),
+                        Some(a) => {
+                            let scope = scope.map(|s| self.interner.as_str(s));
+                            let a = self.interner.as_str(a);
+                            if b == Builtin::HasCAttribute {
+                                self.features.has_c_attribute(scope, a)
+                            } else {
+                                self.features.has_cpp_attribute(scope, a)
+                            }
+                        }
                         None => 0,
                     }
                 } else {

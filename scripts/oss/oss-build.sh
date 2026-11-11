@@ -38,8 +38,9 @@
 # clone.
 #
 # Environment: KILN_OSS_CXX (the kiln++ to test; default
-# $CARGO_TARGET_DIR/harness/kiln++; ignored by a staged row), KILN_OSS_ROOT
-# (default <kiln>/.oss).
+# $CARGO_TARGET_DIR/harness/kiln++; ignored by a staged row), KILN_OSS_CC
+# (the kiln C driver for a `c = "kiln"` row; default `kiln` beside
+# KILN_OSS_CXX; WP-1277), KILN_OSS_ROOT (default <kiln>/.oss).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,8 +109,28 @@ else
   how='PATH'
 fi
 CXX="$(cd "$(dirname "$CXX")" && pwd)/$(basename "$CXX")"
-if [ -n "$WHICH" ]; then echo "CXX=$CXX"; echo "CC=$(command -v "$P_C_COMPILER")"; exit 0; fi
-echo "oss-build: $PROJECT $P_TAG with $CXX (from $how), $STDLIB"
+# C (WP-1277). `c = "clang"` (the default): both builds run `c_compiler`
+# directly and C TUs are not logged. `c = "kiln"`: both builds run kiln-cc,
+# which logs each C TU (`lang`) and runs $KILN_OSS_CC: in the kiln build the
+# kiln driver beside kiln++ (or $KILN_OSS_CC when set), in the control
+# `c_compiler` (clang-19).
+CC_REAL="$(command -v "$P_C_COMPILER" || echo "$P_C_COMPILER")"
+if [ "$P_C" = kiln ]; then
+  if [ "$COMPILER" = kiln ]; then
+    CC_REAL="${KILN_OSS_CC:-$(dirname "$CXX")/kiln}"
+    CC_REAL="$(command -v "$CC_REAL")" || { echo "oss-build: $PROJECT has c = \"kiln\" but there is no kiln driver beside $CXX: set KILN_OSS_CC" >&2; exit 2; }
+  else
+    [ -x "$CC_REAL" ] || { echo "oss-build: $P_C_COMPILER not on PATH" >&2; exit 2; }
+  fi
+  P_C_COMPILER="$HERE/kiln-cc"
+  export KILN_OSS_CC="$CC_REAL"
+fi
+if [ -n "$WHICH" ]; then
+  echo "CXX=$CXX"
+  if [ "$P_C" = kiln ]; then echo "CC=$P_C_COMPILER"; echo "CC_REAL=$CC_REAL"; else echo "CC=$CC_REAL"; fi
+  exit 0
+fi
+echo "oss-build: $PROJECT $P_TAG with $CXX (from $how), $STDLIB; C TUs (c = $P_C) with $CC_REAL"
 export KILN_OSS_CXX="$CXX"
 
 # Dependencies: built with this compiler, installed once, found by cmake.
@@ -147,6 +168,10 @@ SRC="$OSS/src/$P_CHECKOUT"
 [ -z "$P_LOCAL" ] || SRC="$HERE/$P_LOCAL"
 BUILD="$OSS/build/$PROJECT/$COMPILER$SFX${INSTALL:+-dep}"
 mkdir -p "$OSS/src" "$BUILD"
+# `@SRC@` in the test command is the project's source checkout (a suite
+# script run from elsewhere, WP-1277: zstd's playTests.sh runs under /tmp
+# because the workspace file system ignores umask).
+P_TEST="${P_TEST//@SRC@/$SRC}"
 export KILN_OSS_LOG="$BUILD/compile.jsonl"
 # The wrapper's address-space cap: the project's `vmem_kb` (default
 # 3000000, at most 6000000) unless the caller set KILN_OSS_VMEM_KB.
@@ -236,7 +261,11 @@ case "$P_BUILD" in
       --buildtype=release -Dcpp_std="c++$P_CXX_STD" "${P_CONFIGURE[@]}" > "$BUILD/configure.log" 2>&1
     CONF_RC=$? ;;
   make)
-    CONF_RC=0 ;;
+    # A copy of the source tree per build (WP-1277): an in-source Makefile
+    # would otherwise let the kiln and clang builds share objects.
+    mkdir -p "$BUILD/make" && find "$BUILD/make" -mindepth 1 -delete
+    tar -C "$SRCDIR" --exclude=.git -cf - . | tar -C "$BUILD/make" -xf -
+    CONF_RC=$? ;;
   autotools)
     # Out of source, from the tarball's generated configure (WP-920).
     mkdir -p "$BUILD/autotools" && find "$BUILD/autotools" -mindepth 1 -delete
@@ -262,8 +291,8 @@ if [ "$CONF_RC" = 0 ]; then
       nice -n 10 meson compile -C "$BUILD/meson" -j "$JOBS" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
       BUILD_RC=$? ;;
     make)
-      # In-source: the project's own Makefile, told which compilers to use.
-      nice -n 10 make -k "${JFLAG[@]}" -C "$SRCDIR" CXX="$WRAP" CC="$P_C_COMPILER" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
+      # The project's own Makefile in the copy, told which compilers to use.
+      nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD/make" CXX="$WRAP" CC="$P_C_COMPILER" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
       BUILD_RC=$? ;;
     autotools)
       nice -n 10 make -k "${JFLAG[@]}" -C "$BUILD/autotools" "${P_BUILD_TARGETS[@]}" > "$BUILD/build.log" 2>&1
@@ -276,7 +305,7 @@ if [ "$CONF_RC" = 0 ]; then
   fi
   if [ -n "$RUN_TEST" ]; then
     export KILN_OSS_PHASE=test
-    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$SRCDIR"; [ "$P_BUILD" = autotools ] && tdir="$BUILD/autotools"
+    tdir="$BUILD"; [ "$P_BUILD" = meson ] && tdir="$BUILD/meson"; [ "$P_BUILD" = make ] && tdir="$BUILD/make"; [ "$P_BUILD" = autotools ] && tdir="$BUILD/autotools"
     # Test scratch is per build tree: suites that default to a fixed path
     # under /tmp (leveldb's /tmp/leveldbtest-<uid>) must not collide when the
     # kiln and clang builds, or two checkouts, run their tests at once.
@@ -289,6 +318,6 @@ fi
 WALL=$(python3 -c "print($(date +%s.%N) - $T0)")
 
 python3 "$HERE/projects.py" report-json --project "$PROJECT" --compiler "$COMPILER" --stdlib "$STDLIB" \
-  --compiler-path "$CXX" --build-dir "$BUILD" --configure-rc "$CONF_RC" \
+  --compiler-path "$CXX" --c-compiler-path "$CC_REAL" --build-dir "$BUILD" --configure-rc "$CONF_RC" \
   ${BUILD_RC:+--build-rc "$BUILD_RC"} ${TEST_RC:+--test-rc "$TEST_RC"} --wall "$WALL"
 [ -z "$INSTALL" ] || [ "$BUILD_RC" = 0 ]

@@ -263,6 +263,48 @@ impl Keywords {
         }
     }
 
+    /// Makes `spelling` the keyword `kw`.
+    fn add(&mut self, interner: &Interner, spelling: &str, kw: Kw) {
+        let i = interner.intern(spelling).index() as usize;
+        if self.table.len() <= i {
+            self.table.resize(i + 1, Entry::default());
+        }
+        self.table[i].kw = Some(kw);
+    }
+
+    /// Turns the C++ table into the keyword set of C standard `c` (gnu
+    /// modes when `gnu`), as clang `-x c` has it ([C17 6.4.1], [C23
+    /// 6.4.1]; spec/parse.md §1): the [`CXX_ONLY_KEYWORDS`] are
+    /// identifiers; `_Bool` is a keyword, `restrict` from C99, `inline`
+    /// from C99 (gnu89 too); `asm` only in gnu modes; the
+    /// [`C23_KEYWORDS`] and `typeof`/`typeof_unqual` only from C23
+    /// (`typeof` in every gnu mode).
+    pub fn for_c(&mut self, interner: &Interner, c: kiln_lex::CStd, gnu: bool) {
+        use kiln_lex::CStd;
+        for k in CXX_ONLY_KEYWORDS {
+            self.remove(interner, k);
+        }
+        self.add(interner, "_Bool", Kw::Bool);
+        if c >= CStd::C99 {
+            self.add(interner, "restrict", Kw::Restrict);
+        }
+        if c == CStd::C89 && !gnu {
+            self.remove(interner, "inline");
+        }
+        if !gnu {
+            self.remove(interner, "asm");
+        }
+        if c >= CStd::C23 {
+            self.add(interner, "typeof", Kw::Typeof);
+            self.add(interner, "typeof_unqual", Kw::TypeofUnqual);
+            self.add(interner, "nullptr", Kw::Nullptr);
+        } else {
+            for k in C23_KEYWORDS {
+                self.remove(interner, k);
+            }
+        }
+    }
+
     /// The builtin trait or transform `sym` names, if any.
     pub fn builtin(&self, sym: Symbol) -> Option<BuiltinKw> {
         self.table.get(sym.index() as usize).and_then(|e| e.builtin)
@@ -279,6 +321,70 @@ impl Keywords {
 /// in TokenKinds.def, `KEYCXX20` / `KEYCOROUTINES`; spec/parse.md §1).
 pub const CXX20_KEYWORDS: [&str; 7] =
     ["concept", "consteval", "constinit", "co_await", "co_return", "co_yield", "requires"];
+
+/// The C++ keywords that are identifiers in every C mode (clang
+/// `KEYCXX`, `KEYCXX11`, `KEYCXX20`, `KEYCXX26`, `KEYMS|KEYBORLAND`
+/// keywords; checked against clang 19 `__is_identifier` with `-x c`).
+pub const CXX_ONLY_KEYWORDS: [&str; 44] = [
+    "catch",
+    "char8_t",
+    "char16_t",
+    "char32_t",
+    "class",
+    "co_await",
+    "co_return",
+    "co_yield",
+    "concept",
+    "const_cast",
+    "consteval",
+    "constinit",
+    "contract_assert",
+    "decltype",
+    "__decltype",
+    "delete",
+    "dynamic_cast",
+    "explicit",
+    "export",
+    "friend",
+    "mutable",
+    "namespace",
+    "new",
+    "noexcept",
+    "operator",
+    "private",
+    "protected",
+    "public",
+    "reinterpret_cast",
+    "requires",
+    "static_cast",
+    "template",
+    "this",
+    "throw",
+    "try",
+    "typeid",
+    "typename",
+    "using",
+    "virtual",
+    "wchar_t",
+    "__null",
+    "__datasizeof",
+    "__declspec",
+    "__builtin_source_location",
+];
+
+/// The keywords C23 adds over C17 (C23 6.4.1; before C23 they are
+/// identifiers, and `<stdbool.h>`/`<stdalign.h>`/... spell them as macros).
+pub const C23_KEYWORDS: [&str; 9] = [
+    "alignas",
+    "alignof",
+    "bool",
+    "constexpr",
+    "false",
+    "nullptr",
+    "static_assert",
+    "thread_local",
+    "true",
+];
 
 /// The alternative tokens ([lex.digraph]/2) other than the digraphs (which
 /// the lexer maps itself), with the punctuators they stand for.

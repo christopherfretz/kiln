@@ -97,7 +97,7 @@ elif [ $# -gt 0 ]; then
   echo "usage: selftest.sh [--cmake-modules]" >&2; exit 2
 fi
 
-for f in projects.py oss-report.py kiln-cxx stage-diff.py; do
+for f in projects.py oss-report.py kiln-cxx kiln-cc stage-diff.py; do
   check "py_compile $f" "python3 -c 'import py_compile,sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' '$HERE/$f' '$TMP/$f.pyc' >/dev/null 2>&1"
 done
 check "projects.toml loads" "python3 '$HERE/projects.py' list >/dev/null"
@@ -190,7 +190,7 @@ run_one() { # <label> <compiler or empty>
   local label="$1" cxx="$2" log="$TMP/$1.jsonl"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" KILN_OSS_PHASE=build "$HERE/kiln-cxx" -O1 hello.cpp -o "hello-$label" >/dev/null 2>&1)
   check "$label: hello builds and runs" "[ \"\$('$TMP/hello-$label')\" = hello ]"
-  check "$label: ok line" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"rc\"]==0 and r[\"source\"]==\"hello.cpp\" and r[\"output\"]==\"hello-$label\" and r[\"phase\"]==\"build\" and r[\"cwd\"]==\"$TMP\" and r[\"max_rss_kb\"]>0 and r[\"wall_s\"]>0 and r[\"cpu_s\"]>=0 and r[\"diag\"]==\"\" and r[\"v\"]==1'"
+  check "$label: ok line" "field '$log' 0 'r[\"kind\"]==\"ok\" and r[\"rc\"]==0 and r[\"source\"]==\"hello.cpp\" and r[\"output\"]==\"hello-$label\" and r[\"phase\"]==\"build\" and r[\"cwd\"]==\"$TMP\" and r[\"max_rss_kb\"]>0 and r[\"wall_s\"]>0 and r[\"cpu_s\"]>=0 and r[\"diag\"]==\"\" and r[\"v\"]==1 and r[\"lang\"]==\"c++\"'"
   (cd "$TMP" && KILN_OSS_CXX="$cxx" KILN_OSS_LOG="$log" "$HERE/kiln-cxx" -c bad.cpp -o bad.o 2>"$TMP/$label.err")
   check "$label: reject exits 1" "[ $? -eq 1 ]"
   check "$label: stderr passes through" "grep -q \"undeclared identifier 'x'\" '$TMP/$label.err'"
@@ -221,6 +221,53 @@ if [ -n "$KILN_CXX" ]; then
 else
   echo "SKIP kiln: no kiln++ (set KILN_OSS_CXX or build --profile harness)"
 fi
+# C (WP-1277): kiln-cc runs $KILN_OSS_CC (default clang-19) and logs the
+# same line with `lang` (c, or asm for a .S); it never adds -stdlib=.
+# kiln-cxx records `lang` c++, the language `-x` names when there is one.
+printf '#include <stdio.h>\nint main(void) { int *p = (void *)0; (void)p; puts("hello c"); return 0; }\n' > "$TMP/hello.c"
+printf '.globl kiln_selftest_f\nkiln_selftest_f:\n  ret\n' > "$TMP/f.S"
+printf 'int plain(void) { return 1; }\n' > "$TMP/plain.c"
+CL="$TMP/c.jsonl"
+(cd "$TMP" && KILN_OSS_LOG="$CL" KILN_OSS_PHASE=build KILN_OSS_STDLIB=libc++ "$HERE/kiln-cc" -O1 hello.c -o hello-c >/dev/null 2>&1)
+check "kiln-cc: hello.c builds and runs" "[ \"\$('$TMP/hello-c')\" = 'hello c' ]"
+check "kiln-cc: clang-19 by default, lang c, no -stdlib=" "field '$CL' 0 'r[\"argv\"][:2]==[\"clang-19\",\"-fno-crash-diagnostics\"] and r[\"lang\"]==\"c\" and r[\"source\"]==\"hello.c\" and r[\"kind\"]==\"ok\" and r[\"phase\"]==\"build\" and not any(a.startswith(\"-stdlib\") for a in r[\"argv\"])'"
+(cd "$TMP" && KILN_OSS_LOG="$CL" "$HERE/kiln-cc" -c f.S -o f.o >/dev/null 2>&1)
+check "kiln-cc: a .S is lang asm" "field '$CL' 1 'r[\"lang\"]==\"asm\" and r[\"source\"]==\"f.S\" and r[\"kind\"]==\"ok\"'"
+(cd "$TMP" && KILN_OSS_LOG="$CL" "$HERE/kiln-cc" -c plain.c -o plain.o >/dev/null 2>&1 && KILN_OSS_LOG="$CL" "$HERE/kiln-cc" -shared plain.o -o libplain.so >/dev/null 2>&1)
+check "kiln-cc: a link line is lang c" "field '$CL' 3 'r[\"source\"]==\"link\" and r[\"lang\"]==\"c\" and r[\"kind\"]==\"ok\"'"
+(cd "$TMP" && KILN_OSS_LOG="$CL" "$HERE/kiln-cxx" -x c++ -c plain.c -o plain-cxx.o >/dev/null 2>&1)
+check "kiln-cxx: -x c++ over a .c is lang c++" "field '$CL' 4 'r[\"lang\"]==\"c++\" and r[\"source\"]==\"plain.c\" and r[\"argv\"][0]==\"clang++-19\"'"
+(cd "$TMP" && KILN_OSS_CC=/nonexistent/kiln "$HERE/kiln-cc" -c plain.c -o x.o 2> "$TMP/cc.err")
+check "kiln-cc: a missing compiler exits 127 and says kiln-cc" "[ $? -eq 127 ] && grep -q '^kiln-cc: cannot run /nonexistent/kiln' '$TMP/cc.err'"
+# The `c` key: "clang" by default, "kiln" or "clang" only, never staged.
+ct() { printf '[a]\nurl="u"\ntag="t"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\n%s\n[b]\nurl="u"\ntag="t"\nbuild="cmake"\ncxx_std=20\ntest="true"\nwave=4\n%s\n' "$1" "$2" > "$TMP/ct.toml"; python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import projects; d = projects.load(sys.argv[2]); print(d['a']['c'], d['b']['c'])" "$HERE" "$TMP/ct.toml" 2>&1; }
+check "c defaults to clang; kiln is kept" "[ \"\$(ct '' 'c=\"kiln\"')\" = 'clang kiln' ]"
+check "a c other than kiln or clang is refused" "case \"\$(ct 'c=\"gcc\"' '')\" in *'c must be \"kiln\" or \"clang\"'*) true ;; *) false ;; esac"
+check "c = kiln on a staged row is refused" "case \"\$(ct '' 'c=\"kiln\"
+stage_of=\"a\"')\" in *'staged row builds C'*) true ;; *) false ;; esac"
+check "summarize: tus_by_lang counts each language's build TUs" "python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; r = [dict(phase=\"build\", source=\"a.c\", lang=\"c\", kind=\"ok\"), dict(phase=\"build\", source=\"b.c\", lang=\"c\", kind=\"reject\"), dict(phase=\"build\", source=\"c.cpp\", kind=\"ok\"), dict(phase=\"build\", source=\"link\", lang=\"c\", kind=\"ok\"), dict(phase=\"configure\", source=\"d.c\", lang=\"c\", kind=\"ok\")]; t = projects.summarize(r)[\"tus_by_lang\"]; sys.exit(t != {\"c\": {\"total\": 2, \"ok\": 1, \"failed\": 1}, \"c++\": {\"total\": 1, \"ok\": 1, \"failed\": 0}})' '$HERE'"
+# oss-build.sh's C compiler (--which): kiln-cc for a c = "kiln" row, over
+# KILN_OSS_CC or the kiln driver beside kiln++; c_compiler for the control.
+CLANGXX="$(command -v clang++-19)" CLANGC="$(command -v clang-19)"
+check "c = kiln: --which runs kiln-cc over KILN_OSS_CC" "[ \"\$(KILN_OSS_CXX='$CLANGXX' KILN_OSS_CC='$CLANGC' '$HERE/oss-build.sh' c_demo --which | tr '\n' ' ')\" = 'CXX=$CLANGXX CC=$HERE/kiln-cc CC_REAL=$CLANGC ' ]"
+mkdir -p "$TMP/kd" && ln -s "$CLANGXX" "$TMP/kd/kiln++" && ln -s "$CLANGC" "$TMP/kd/kiln"
+check "c = kiln: --which takes the kiln driver beside kiln++" "[ \"\$(env -u KILN_OSS_CC KILN_OSS_CXX='$TMP/kd/kiln++' '$HERE/oss-build.sh' c_demo --which | tr '\n' ' ')\" = 'CXX=$TMP/kd/kiln++ CC=$HERE/kiln-cc CC_REAL=$TMP/kd/kiln ' ]"
+check "c = kiln: --compiler clang runs kiln-cc over c_compiler" "[ \"\$('$HERE/oss-build.sh' c_demo --compiler clang --which | tr '\n' ' ')\" = 'CXX=$CLANGXX CC=$HERE/kiln-cc CC_REAL=$CLANGC ' ]"
+env -u KILN_OSS_CC KILN_OSS_CXX="$CLANGXX" "$HERE/oss-build.sh" c_demo --which > /dev/null 2> "$TMP/nokiln.err"
+check "c = kiln: no kiln driver exits 2 and says so" "[ $? -eq 2 ] && grep -q 'no kiln driver beside' '$TMP/nokiln.err'"
+check "c = clang: --which is c_compiler, unwrapped" "[ \"\$(KILN_OSS_CXX='$CLANGXX' '$HERE/oss-build.sh' fmt --which | tr '\n' ' ')\" = 'CXX=$CLANGXX CC=$CLANGC ' ]"
+# The c_demo row end to end, clang-19 on both sides (the kiln side through
+# KILN_OSS_CXX/KILN_OSS_CC): report.json counts C and C++ apart and
+# oss-report.py prints a row per language.
+CR="$TMP/croot"
+KILN_OSS_ROOT="$CR" KILN_OSS_CXX="$CLANGXX" KILN_OSS_CC="$CLANGC" "$HERE/oss-build.sh" c_demo --jobs 2 > "$TMP/cdemo-kiln.out" 2>&1
+KILN_OSS_ROOT="$CR" "$HERE/oss-build.sh" c_demo --compiler clang --jobs 2 > "$TMP/cdemo-clang.out" 2>&1
+for c in kiln clang; do
+  check "c_demo ($c side): built, tests ok, C and C++ TUs apart" "python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); sys.exit(not (r[\"build_rc\"] == 0 and r[\"test_rc\"] == 0 and r[\"c\"] == \"kiln\" and r[\"c_compiler_path\"] == sys.argv[2] and r[\"tus_by_lang\"] == {\"c\": {\"total\": 2, \"ok\": 2, \"failed\": 0}, \"c++\": {\"total\": 1, \"ok\": 1, \"failed\": 0}}))' '$CR/build/c_demo/$c/report.json' '$CLANGC'"
+done
+python3 "$HERE/oss-report.py" --root "$CR" c_demo > "$TMP/cdemo.md" 2>&1
+check "c_demo: oss-report.py rows per language" "grep -qxF '| C++ TUs ok / failed | 1 / 0 | 1 / 0 |' '$TMP/cdemo.md' && grep -qxF '| C TUs ok / failed | 2 / 0 | 2 / 0 |' '$TMP/cdemo.md'"
+
 # CMake target_precompile_headers (WP-1023): CMake's Clang PCH flags
 # (`-Xclang -emit-pch`, `-Xclang -include-pch`, `-Xclang -include`) over a
 # prefix header with no include guard, two TUs, built and run; the build is
@@ -279,6 +326,7 @@ check "version shim: clang's banner untouched" "! KILN_OSS_VERSION_SHIM=1 KILN_O
 # oss-report.py on the fixture: two clusters, the 3x reject first.
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" demo > "$TMP/report.md"
 check "report matches fixtures/demo.expected.md" "diff -u '$FIX/demo.expected.md' '$TMP/report.md'"
+check "a C++-only report (WP-1277) has no per-language rows" "! grep -q 'C TUs' '$TMP/report.md'"
 cp "$FIX/status.md" "$TMP/status.md"
 python3 "$HERE/oss-report.py" --root "$FIX/oss" --toml "$FIX/projects.toml" --update "$TMP/status.md" demo >/dev/null 2>&1
 check "--update rewrites the section" "grep -q 'Failure clusters (kiln): 2.' '$TMP/status.md' && ! grep -q 'stale text' '$TMP/status.md' && grep -q 'trailing text' '$TMP/status.md'"

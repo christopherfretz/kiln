@@ -11,8 +11,8 @@ It also covers the clang extensions that libc++ needs:
   `__has_cpp_attribute`, `__has_builtin`, `__has_constexpr_builtin`,
   `__has_feature`, `__has_extension`, `__has_attribute`,
   `__has_declspec_attribute`, `__has_warning`, `__has_embed`,
-  `__is_identifier` and `__is_target_*` (clang 19 does not define
-  `__has_c_attribute` in C++);
+  `__is_identifier` and `__is_target_*` (in C, `__has_c_attribute`
+  replaces `__has_cpp_attribute`: "C mode" below);
 - the directives `#include_next`, `#import`, `#warning`, `#ident` and GNU
   line markers;
 - the pragmas `#pragma once`, `#pragma clang|GCC ...`, `push_macro` and
@@ -543,6 +543,51 @@ rows (WP-393; the Oven folds them since WP-365), so the clang table
 alone decides their answer, 0 below 22 and 1 from 22.
 Tests: `tests/conformance/c.math/has-constexpr-builtin-p0533.cpp`,
 `has-constexpr-builtin-p0533-19.cpp`.
+
+### C mode (WP-1275)
+
+`PpOptions::c: Option<CStd>` (and `gnu`) preprocess C; `std` is the C++
+standard C lexes as (spec/lex.md "C mode"), which the preprocessor
+copies to `LexOptions` with `c`, `gnu` and `preprocessed_output` (set by
+the driver for `-E`, strict C89's `//` rule). In C:
+- **No operator names** (C23 6.4.6 has no `and`, `bitor`, …): `#define
+  and &&` is `<iso646.h>`'s definition, not an error, and `and` in `#if`
+  is an identifier (0).
+- **`true`/`false` in `#if`** are 1/0 from C23 only (C23 6.10.2/13);
+  before C23 they are identifiers, so 0.
+- **`u8'x'`** is unsigned in `#if` from C23 (an `unsigned char`, C23
+  6.4.4.5), like C++20's `char8_t`.
+- **Hooks**: clang registers `__has_cpp_attribute` in C++ only and
+  `__has_c_attribute` in C only (C23 6.10.2), so `defined(...)` and a use
+  follow that (`expand.rs`); `FeatureQueries::has_c_attribute`'s default
+  answers C23's standard attributes (C23 6.7.13.1).
+- **Predefines** are clang's C ones (`__STDC_VERSION__`, no `__cplusplus`
+  or `__cpp_*`; `tests/c/predefined/`, differential vs `clang-22 -x c -E`
+  at every C standard and gnu17/gnu89).
+
+#### Feature queries in C
+
+`ClangFeatures::with_c(c, gnu)` answers in C: the C++ answer of the
+standard `c` lexes as (base, flag overlays and, at 22, the clang 22
+deltas and overlays) and then the C deltas of
+`features_c_table.rs` (`C19`, or `C22` at `ClangCompat::Clang22`) whose
+configuration mask has bit `target * 10 + std * 2 + gnu` (targets
+aarch64 0, x86_64 1; stds c89 0 … c23 4). The driver installs it for
+every C input (`pp_cmd.rs`). `scripts/gen-features-c.sh` generates the
+table: every answer of `clang-19 -x c` (`clang-22 -x c`) that differs from
+`clang++-19` (`clang++-22`) at the mapped C++ standard (`gnuNN` against
+`gnu++NN`), over the candidates: every key of `features_table.rs`, the
+operands of each `__has_*` query in the glibc and clang headers, the
+identifier-like strings of each clang's `libclang-cpp` (the C-only
+names clang answers 0 for in C++), the C keywords and the C23
+attributes, and every `__has_cpp_attribute` key as a
+`__has_c_attribute` key. Only the 20 base configurations are probed:
+under a flag the C++ overlays apply before the C deltas.
+`crates/kiln_pp/tests/features_c.rs` queries every key of both tables in
+all 20 configurations against `clang-19 -x c` and, at 22, `clang-22 -x
+c` (a missing clang is skipped); the only allowed differences are the
+ACLE header builtins at 22 (above). Not probed: answers under flags in
+C.
 
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 

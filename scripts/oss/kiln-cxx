@@ -15,6 +15,11 @@ test, recorded as `phase`), KILN_OSS_VMEM_KB (default 3000000, the
 meson rows, WP-920: see version_shim). Every invocation gets
 `-fno-crash-diagnostics` first (WP-911), so a crashing compiler never writes
 a reproducer to $TMPDIR for each crashing TU of a build.
+
+`kiln-cc` (WP-1277) is this wrapper for C: `main(lang="c")` runs
+`$KILN_OSS_CC` (default clang-19) and never adds `-stdlib=`. Every record
+carries `lang`, the language of its primary source (`c++`, `c`, `asm`), or
+the wrapper's own language for a link or no-source line.
 """
 
 import fcntl
@@ -30,7 +35,20 @@ import time
 
 # Module interface units (.cppm and the other names CMake and the compilers
 # accept) are TUs too (WP-1148).
-SOURCE_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP", ".cppm", ".ccm", ".cxxm", ".c++m", ".ixx", ".mpp")
+CXX_EXT = (".cpp", ".cc", ".cxx", ".c++", ".cp", ".C", ".CPP", ".cppm", ".ccm", ".cxxm", ".c++m", ".ixx", ".mpp")
+# C and assembler TUs (WP-1277): CMake hands `.S` to the C compiler when a
+# project enables ASM and names no assembler. `.c` is C only through
+# kiln-cc: a C++ compile of a `.c` file (the C++ wrapper's `-x c++`) is
+# still recorded, under the language its `-x` names.
+C_EXT = (".c", ".i")
+ASM_EXT = (".S", ".s", ".sx")
+SOURCE_EXT = CXX_EXT + C_EXT + ASM_EXT
+# `-x <lang>` values, by the record's `lang`.
+X_LANG = {
+    "c++": "c++", "c++-header": "c++", "c++-cpp-output": "c++", "c++-module": "c++",
+    "c": "c", "c-header": "c", "cpp-output": "c",
+    "assembler": "asm", "assembler-with-cpp": "asm",
+}
 LINK_EXT = (".o", ".a", ".so", ".obj", ".lo")
 DIAG_RE = re.compile(
     r"error:|panicked|internal compiler error|fatal|undefined reference|multiple definition|memory allocation of|LLVM ERROR"
@@ -44,24 +62,56 @@ HEAD_CAP = 256 * 1024
 TAIL_CAP = 64 * 1024
 
 
-def primary_source(args):
-    """The first C++ source argument, else 'link' when there are linker
-    inputs (objects, archives, response files), else 'none'."""
+def primary_source(args, exts=CXX_EXT):
+    """The first source argument (an `exts` name, or any source name after
+    `-x <lang>`), else 'link' when there are linker inputs (objects,
+    archives, response files), else 'none'."""
+    return source_and_lang(args, exts)[0]
+
+
+def lang_of_ext(path):
+    if path.endswith(CXX_EXT):
+        return "c++"
+    if path.endswith(C_EXT):
+        return "c"
+    if path.endswith(ASM_EXT):
+        return "asm"
+    return None
+
+
+def source_and_lang(args, exts=CXX_EXT, default_lang="c++"):
+    """(primary source, its language). The language is the `-x` in force at
+    the source, else its extension's; a link or no-source line has the
+    wrapper's own language."""
     skip = False
-    for a in args:
+    xlang = None
+    for i, a in enumerate(args):
         if skip:
             skip = False
             continue
-        if a in ("-o", "-MF", "-MT", "-MQ", "-x", "-include", "-I", "-isystem", "-D", "-U"):
+        if a == "-x" and i + 1 < len(args):
+            v = args[i + 1]
+            xlang = None if v == "none" else X_LANG.get(v, v)
             skip = True
             continue
-        if not a.startswith("-") and a.endswith(SOURCE_EXT):
-            return a
+        if a.startswith("-x") and len(a) > 2:
+            v = a[2:]
+            xlang = None if v == "none" else X_LANG.get(v, v)
+            continue
+        if a in ("-o", "-MF", "-MT", "-MQ", "-include", "-I", "-isystem", "-D", "-U"):
+            skip = True
+            continue
+        if a.startswith("-") or a.startswith("@"):
+            continue
+        if xlang is not None and a.endswith(SOURCE_EXT):
+            return a, xlang
+        if a.endswith(exts):
+            return a, lang_of_ext(a)
     if any(a.endswith(LINK_EXT) or a.startswith("@") for a in args) and not any(
         a in ("-E", "-c", "-S", "-fsyntax-only") for a in args
     ):
-        return "link"
-    return "none"
+        return "link", default_lang
+    return "none", default_lang
 
 
 def output_of(args):
@@ -146,10 +196,15 @@ def version_shim(cxx):
     return 0
 
 
-def main():
+def main(lang="c++"):
     args = sys.argv[1:]
-    cxx = os.environ.get("KILN_OSS_CXX") or "clang++-19"
-    stdlib = os.environ.get("KILN_OSS_STDLIB") or "libstdc++"
+    me = "kiln-cc" if lang == "c" else "kiln-cxx"
+    if lang == "c":
+        cxx = os.environ.get("KILN_OSS_CC") or "clang-19"
+        stdlib = "libstdc++"  # C has no standard library choice to make
+    else:
+        cxx = os.environ.get("KILN_OSS_CXX") or "clang++-19"
+        stdlib = os.environ.get("KILN_OSS_STDLIB") or "libstdc++"
     if stdlib not in ("libstdc++", "libc++"):
         sys.stderr.write(f"kiln-cxx: KILN_OSS_STDLIB must be libstdc++ or libc++, not '{stdlib}'\n")
         return 2
@@ -175,7 +230,7 @@ def main():
     try:
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, preexec_fn=cap, start_new_session=True)
     except OSError as e:
-        sys.stderr.write(f"kiln-cxx: cannot run {cxx}: {e}\n")
+        sys.stderr.write(f"{me}: cannot run {cxx}: {e}\n")
         return 127
 
     timed_out = threading.Event()
@@ -224,7 +279,7 @@ def main():
 
     if log:
         text = head.decode("utf-8", "replace") + "\n" + tail.decode("utf-8", "replace")
-        source = primary_source(args)
+        source, src_lang = source_and_lang(args, SOURCE_EXT if lang == "c" else CXX_EXT, lang)
         diag = first_diag(text)
         if not diag and timed_out.is_set():
             diag = f"timed out after {limit_s:g} s"
@@ -239,6 +294,7 @@ def main():
             "cwd": os.getcwd(),
             "argv": cmd,
             "source": source,
+            "lang": src_lang,
             "output": output_of(args),
             "rc": rc,
             "wall_s": round(wall, 3),
