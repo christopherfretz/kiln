@@ -2134,10 +2134,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
             // An unnamed namespace has no name.
             Payload::Field { .. } | Payload::Namespace => d.name == NONE || ident(d.name),
-            // An unnamed class or enumeration a typedef names (WP-1278).
-            Payload::Record { .. } | Payload::Enum { .. } if d.name == NONE => {
-                scope::anon_tag(img, i as u32)
-            }
+            // An unnamed class or unscoped enumeration ([class.pre]/1,
+            // [dcl.enum]/2), named for linkage by a typedef (WP-1278) or
+            // not at all (WP-1293: `enum { FE_INEXACT = ... };`).
+            Payload::Record { .. } if d.name == NONE => true,
+            Payload::Enum { scoped, .. } if d.name == NONE => *scoped == 0,
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
