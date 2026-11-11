@@ -2790,7 +2790,7 @@ impl Writer<'_, '_, '_> {
             && !matches!(self.s.ast.templ_link(d).get(), Some((TemplLinkKind::Pattern, _)))
             && !self.dep_member(d)
         {
-            return Err("a declaration in a template");
+            return Err(self.in_template_reason(d));
         }
         if n.has(DeclFlags::HAS_LEXICAL_CTX)
             && self.dep_member(d)

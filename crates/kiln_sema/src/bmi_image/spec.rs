@@ -234,7 +234,9 @@ impl Writer<'_, '_, '_> {
                 if alias {
                     // An alias template specialization (WP-1279): its
                     // underlying type is the substituted pattern.
-                    let template = self.template_rec(td, 2).map_err(|_| "an alias template")?;
+                    let template = self
+                        .template_rec(td, 2)
+                        .map_err(|_| "an alias template outside the image")?;
                     let args = self.arg_recs(args)?;
                     let u = underlying.ok_or("an alias template")?;
                     return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));

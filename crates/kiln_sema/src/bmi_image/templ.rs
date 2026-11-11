@@ -144,6 +144,23 @@ impl Writer<'_, '_, '_> {
             && ast.described_template(d).is_some_and(|t| ast.decls.get(t).kind() == kind)
     }
 
+    /// Why declaration `d`, in a dependent context and neither a pattern
+    /// nor a member of a carried class pattern, is refused (WP-1279
+    /// census triage): a partial specialization; a member (or an
+    /// out-of-line member definition) of a class the image does not
+    /// carry, which is a cascade; or another declaration in a template.
+    pub(super) fn in_template_reason(&self, d: DeclId) -> &'static str {
+        let ast = &self.s.ast;
+        if matches!(ast.templ_link(d).get(), Some((TemplLinkKind::PartialSpecialization, _))) {
+            return "an explicit or partial specialization";
+        }
+        let ctx = ast.decls.get(d).ctx();
+        if ctx.is_some_and(|c| ast.decls.record(c).is_some() && !self.recs.contains_key(&c)) {
+            return "a member of a class outside the image";
+        }
+        "a declaration in a template"
+    }
+
     /// Patches non-type parameter record `rec`'s default argument to
     /// expression record `i` ([`Writer::walk_roots`]).
     pub(super) fn set_nttp_default(&mut self, rec: u32, i: u32) {
