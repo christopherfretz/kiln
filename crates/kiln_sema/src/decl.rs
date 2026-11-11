@@ -5927,8 +5927,10 @@ impl Sema<'_, '_> {
         field_invalid |= invalid || failed_spec || self.is_error_type(ty);
         // [class.bit]/1 (CWG2229): an unnamed bit-field is not
         // cv-qualified (clang `err_anon_bitfield_qualifiers`, at the
-        // field's location; the field is invalid).
+        // field's location; the field is invalid). C allows it (clang
+        // checks C++ only; WP-1286).
         if !field_invalid
+            && !self.is_c()
             && name.is_none()
             && d.bit_width.is_some()
             && self.ast.types.canonical(ty).quals().bits() != 0
@@ -9104,7 +9106,10 @@ impl Sema<'_, '_> {
         {
             return;
         }
-        self.emit(self.diag(DiagId::sema_forward_ref_enum, at));
+        // C: clang's pedantic `ext_forward_ref_enum` (WP-1286).
+        let id =
+            if self.is_c() { DiagId::sema_forward_ref_enum_c } else { DiagId::sema_forward_ref_enum };
+        self.emit(self.diag(id, at));
     }
 
     /// The declaration `act_on_tag` creates: an enumeration (`scoped`,

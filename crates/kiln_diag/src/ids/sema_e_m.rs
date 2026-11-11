@@ -123,6 +123,8 @@ sema_format_nonliteral_noargs = Warning [FormatSecurity] (0) "format string is n
 sema_format_star_type = Warning [Format] (3) "field {0:width|precision} should have type {1}, but argument has type {2}";
 sema_format_strftime_third_param = Error (0) "strftime format attribute requires 3rd parameter to be 0";
 sema_forward_ref_enum = Error (0) "ISO C++ forbids forward references to 'enum' types";
+// clang `ext_forward_ref_enum` (C; WP-1286).
+sema_forward_ref_enum_c = Extension (0) "ISO C forbids forward references to 'enum' types";
 sema_found_in_dependent_base = Error (1) "explicit qualification required to use member '{0}' from dependent base class";
 sema_found_later_in_class = Error (1) "member '{0}' used before its declaration";
 sema_fp_conversion_rank = ExtWarn [FloatConversionRank] (3) "ISO C++ does not allow converting to {0} from {1} with {2:greater|unordered} conversion rank";
