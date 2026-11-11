@@ -1839,7 +1839,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
                     // A partial specialization's injected-class-name (WP-1283).
-                    || matches!(t, TyRec::Injected(_)) && classtempl::partial_of(img, d).is_some()
+                    || matches!(t, TyRec::Injected(_) | TyRec::Subst { .. })
+                        && classtempl::partial_of(img, d).is_some()
             });
             if !ok {
                 return bad("bad declaration reference in a type");

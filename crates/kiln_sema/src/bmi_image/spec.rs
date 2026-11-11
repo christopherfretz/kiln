@@ -18,7 +18,7 @@ use super::{ArgRec, DECL_FLAGS, DeclRec, Image, NONE, Payload, TyRec, W, Writer}
 use crate::Sema;
 use crate::templ::args::ConvertedArgs;
 
-const ARG: &str = "a template argument the image does not carry";
+pub(super) const ARG: &str = "a template argument the image does not carry";
 
 impl Writer<'_, '_, '_> {
     /// Whether `d` is a member of a carried class template pattern, or of
@@ -259,7 +259,11 @@ impl Writer<'_, '_, '_> {
                     return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));
                 }
                 let template = self.template_rec(td, 1)?;
-                let args = self.arg_recs(args)?;
+                let spec = underlying.and_then(|u| match ast.types.view(u.ty()) {
+                    TypeView::Record(d) => Some(d),
+                    _ => None,
+                });
+                let args = self.tst_args(args, spec)?;
                 let under = match underlying {
                     None => None,
                     Some(u) => {
@@ -301,7 +305,11 @@ impl Writer<'_, '_, '_> {
             }
             TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
                 let assoc = self.recs.get(&self.s.ast.first(associated)).copied().ok_or(ARG)?;
-                if !matches!(self.img.decls[assoc as usize].payload, Payload::Template { .. }) {
+                // A template's parameter, or a carried partial
+                // specialization's (WP-1283).
+                if !matches!(self.img.decls[assoc as usize].payload, Payload::Template { .. })
+                    && super::classtempl::partial_of(&self.img, assoc).is_none()
+                {
                     return Err(ARG);
                 }
                 let pack = match pack_index {

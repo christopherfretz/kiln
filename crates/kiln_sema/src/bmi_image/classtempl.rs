@@ -23,15 +23,15 @@
 //! constrained or nested head, an argument other than a type, a value or
 //! a head parameter.
 
-use kiln_ast::decl::{DeclFlags, DeclKind, TagKind};
+use kiln_ast::decl::{DeclKind, TagKind};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::names::DeclName;
 use kiln_ast::templates::SpecKind;
-use kiln_ast::types::{ArgView, TemplateArg};
+use kiln_ast::types::{ArgView, BuiltinType, TemplateArg};
 use kiln_ast::{DeclHead, DeclId, QualType};
 
 use super::{
-    ArgRec, BUILTINS, DEP, Image, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad,
+    ArgRec, BUILTINS, DEP, Image, LEX_TU, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad,
 };
 use crate::Sema;
 
@@ -135,7 +135,9 @@ impl Writer<'_, '_, '_> {
             if list.depth != 0 || in_class {
                 return Err("a member template or a template in a template");
             }
-            if n.has(DeclFlags::HAS_LEXICAL_CTX) || self.s.templ.partial_def_loc.contains_key(&d) {
+            // Declared, then defined: the definition's template-head
+            // has parameters of its own, after the record.
+            if self.s.templ.partial_def_loc.contains_key(&d) {
                 return Err("a redeclared partial specialization");
             }
             if list.requires.is_some() {
@@ -205,15 +207,9 @@ impl Writer<'_, '_, '_> {
             }
             let mut out = Vec::with_capacity(written.len());
             for (k, a) in written.into_iter().enumerate() {
-                let a = match a.view() {
-                    ArgView::Type(_) | ArgView::Value { .. } => a,
-                    // `X<3>`: the converted value, which prints the same.
-                    ArgView::Expr { .. } if !packs => match converted.get(k) {
-                        Some(&c) if matches!(c.view(), ArgView::Value { .. }) => c,
-                        _ => return Err(EXPLICIT_ARG),
-                    },
-                    _ => return Err(EXPLICIT_ARG),
-                };
+                // `X<3>`: the converted value, which prints the same.
+                let c = if packs { None } else { converted.get(k).copied() };
+                let a = self.written_arg(a, c).ok_or(EXPLICIT_ARG)?;
                 out.push(CArg::Arg(self.arg_rec(a).map_err(|_| EXPLICIT_ARG)?));
             }
             ClassSpec { rec: i, template, head: None, args: out }
@@ -222,12 +218,50 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
+    /// Written argument `a` as the image carries it: a type or value as
+    /// is; an expression that is a `bool` or `int` literal of its
+    /// converted value's type, as that value (`converted`), which prints
+    /// the same; `None` for any other expression.
+    pub(super) fn written_arg(&self, a: TemplateArg, converted: Option<TemplateArg>) -> Option<TemplateArg> {
+        let ArgView::Expr { expr, .. } = a.view() else { return Some(a) };
+        let c = converted?;
+        let ArgView::Value { ty, .. } = c.view() else { return None };
+        let ast = &self.s.ast;
+        let e = ast.exprs.get(expr);
+        let literal = match (e.kind(), ast.types.builtin(ty)) {
+            (ExprKind::CXXBoolLiteralExpr, Some(BuiltinType::Bool)) => true,
+            (ExprKind::IntegerLiteral, Some(BuiltinType::Int)) => true,
+            _ => false,
+        };
+        (literal && e.ty() == ty && ty.quals_bits() == 0).then_some(c)
+    }
+
+    /// The arguments of class template specialization type `X<args>`
+    /// whose specialization is `spec` (`None` while dependent), each as
+    /// [`Self::written_arg`] carries it.
+    pub(super) fn tst_args(&mut self, args: kiln_ast::ArgListId, spec: Option<DeclId>) -> W<Vec<ArgRec>> {
+        let ast = &self.s.ast;
+        let written: Vec<TemplateArg> = ast.types.args(args).to_vec();
+        let converted: Vec<TemplateArg> = match spec.and_then(|d| ast.spec_info(ast.first(d))) {
+            Some((_, si)) => ast.types.args(si.args).to_vec(),
+            None => Vec::new(),
+        };
+        let packs = converted.iter().any(|a| matches!(a.view(), ArgView::Pack(_)));
+        let mut out = Vec::with_capacity(written.len());
+        for (k, a) in written.into_iter().enumerate() {
+            let c = if packs { None } else { converted.get(k).copied() };
+            let a = self.written_arg(a, c).ok_or(super::spec::ARG)?;
+            out.push(self.arg_rec(a)?);
+        }
+        Ok(out)
+    }
+
     /// Partial specialization argument `a`, with head parameters `decls`
     /// (records `params`).
     fn partial_arg(&mut self, a: TemplateArg, decls: &[DeclId], params: &[u32]) -> W<CArg> {
         let ast = &self.s.ast;
         let ArgView::Expr { expr, profile } = a.view() else {
-            return Ok(CArg::Arg(self.arg_rec(a).map_err(|_| PARTIAL_ARG)?));
+            return Ok(CArg::Arg(self.arg_rec(a)?));
         };
         let ex = &ast.exprs;
         let mut e = expr;
@@ -403,16 +437,24 @@ pub(super) fn validate_class_specs(
             }
             continue;
         };
-        // At namespace scope, its parameters in the same scope (as a
-        // primary template's).
-        if r.lexical != NONE {
-            return bad("bad class template specialization");
-        }
+        // At namespace scope, its parameters in the scope it is declared
+        // in (as a primary template's): a reopening of its template's
+        // namespace or an enclosing one.
+        let scope = match r.lexical {
+            NONE => r.ctx,
+            LEX_TU => NONE,
+            l if l < c.rec
+                && matches!(img.decls[l as usize].payload, Payload::Namespace) =>
+            {
+                l
+            }
+            _ => return bad("bad class template specialization"),
+        };
         for (k, &p) in h.params.iter().enumerate() {
             let ok = p < c.rec
                 && !claimed[p as usize]
                 && img.decls.get(p as usize).is_some_and(|x| {
-                    x.ctx == r.ctx
+                    x.ctx == scope
                         && match x.payload {
                             Payload::Ttp { depth: 0, index, .. }
                             | Payload::Nttp { depth: 0, index, .. } => usize::from(index) == k,
