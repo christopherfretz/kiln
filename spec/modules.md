@@ -2372,12 +2372,79 @@ rest. Still falling back after the third slice: concepts, constrained
 parameters and templates, requires-clauses and requires-expressions,
 template template parameters, member templates and templates in
 templates, redeclared templates (and inherited defaults), deduction
-guides, explicit and partial specializations, non-dependent references
+guides, explicit and partial specializations (carried since WP-1283,
+below), non-dependent references
 with written template arguments (`size<int>`, `sq<3>`: "a template
 argument list"), `DependentScopeDeclRefExpr` (`T::v`),
 `UnresolvedMemberExpr`, the `template` keyword in a dependent name,
 dependent array bounds, pack expansions in base specifiers, and
 friends.
+
+**Class template specializations (WP-1283).** `bmi_image/classtempl.rs`
+carries a unit's explicit and partial class template specializations
+([temp.expl.spec], [temp.spec.partial]). Each one is an ordinary
+`Record` record with the template's name and context, listed in a
+section after the scopes (record, template record, an optional
+template-head, arguments), ascending by record. Neither is in the
+lookup table: lookup finds the template.
+
+- *Partial specializations* carry their template-head (the parameter
+  records, which precede the record, and the `template`, `<` and `>`
+  locations) and their converted arguments, which are types, values,
+  or the head's non-type parameters (alone or expanded). The reader
+  builds each with `class_partial_spec`, the builder the parser uses,
+  so matching ([temp.spec.partial.match]) and partial ordering see the
+  same partial specializations in the same order as after a replay.
+  The injected-class-name of a partial specialization is a type record
+  (tag `Injected` naming the partial's record).
+- *Explicit specializations* carry their arguments as written; the
+  reader finds or makes the specialization through `get_class_spec`,
+  as a use in source does, and declares it explicit there (what
+  `act_on_explicit_class_spec` does after its checks). One declared
+  and never defined (`template <> struct B<void>;`) stays incomplete.
+- A specialization may be declared in a reopened namespace or by a
+  qualified name (`template <class T> struct N::A<T, 1>`): its lexical
+  context is a namespace record before it (or the translation unit,
+  `LEX_TU`), and its head's parameters are in that context.
+- A written argument that is a `bool` or integer literal of the
+  parameter's type is carried as its converted value (`integral_constant<bool,
+  true>`): the two print and compare identically.
+
+Still falling back: explicit instantiations ("an explicit
+instantiation"), a partial specialization declared before it is defined
+("a redeclared partial specialization"), partial specializations in a
+class or of a member template ("a member template or a template in a
+template"), constrained ones ("a constrained template", WP-1284),
+arguments that are dependent expressions ("a partial specialization
+argument the image does not carry"), and variable template
+specializations ("a template"). The rest of WP-1283's scope also still
+falls back, unchanged: member templates and templates in templates
+(the validator requires a template's parameters and the template itself
+to be in a namespace scope at depth 0), redeclared templates and their
+inherited defaults, pack expansions in base specifiers, polymorphic
+class templates, friends, and classes whose implicit special members
+need overload resolution.
+
+*Static assertions in templates.* A `static_assert` in a class template
+(or a partial specialization) is checked again by each instantiation
+([temp.inst]/3). The image does not carry it yet, and the writer refuses
+it ("a static assertion in a template") rather than drop it: before
+WP-1283 the image silently left it out, and an importer accepted
+ill-formed instantiations (`kind2_declaration_image_static_assert_in_template`).
+A non-dependent `static_assert` was checked when the module was
+compiled and is still not carried.
+
+*Declarator locations.* Sema keeps, beside each declaration of
+dependent type, where its first type-specifier, its outermost
+`&`/`&&` and its innermost `*`/`[` were written (`type_spec_locs`,
+`ref_locs`, `inner_chunk_locs`); an instantiation that forms an invalid
+type is diagnosed there (`T arr[2]` with `T = void`, at the `[`). The
+`declocs` section (`bmi_image/declocs.rs`, after the specializations)
+lists them as (record, kind, location) triples, ascending, for every
+carried record, so an imported pattern's instantiation reports what
+replay reports. Before WP-1283 they were missing and such errors
+pointed at the declaration's type-specifier. A function parameter's
+entries are not carried yet (parameters are not records).
 
 **Imports, partitions and using-declarations (S6, WP-1068).** S6
 lets three new shapes produce an image: a unit with imports, a unit
@@ -2737,7 +2804,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 14` since WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 15` since WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2766,6 +2833,14 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            stmts:u32 offset:u32*stmts blob_len:u32 stmt*
            attrs                     WP-1278 ("Attributes")
            scopes                    WP-1278 ("Scopes and reserved names")
+           cspecs:u32 cspec*         WP-1283 ("Class template specializations")
+           declocs:u32 (rec:u32 kind:u8 loc:u32)*   WP-1283, ascending
+                                     (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
+cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
+           params:u32 u32*) args:u32 carg*      ascending by rec
+carg    := 0 qref | 1 qref value:i128   a type, a value
+         | 2 parm:u32                   a head parameter record
+         | 3 n:u32 carg*                a pack (top level only)
 const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
@@ -3146,6 +3221,27 @@ is on and the gate passes. It then moves the section out of the capsule
 file is lexed. The unit's exported macros are none (a named module), so
 nothing else is lost.
 
+**Precompiled headers (WP-1036).** A PCH's declaration image
+(`bmi_image/pch.rs`; the driver side is spec/driver.md "The declaration
+image") is the same format with one difference: the module name is
+empty and the module keyword, name and preamble words are `NONE`. A
+module name is never empty, so neither reader accepts the other's
+image. The producer writes the header's declarations as if the header
+were the purview of a unit: every top-level declaration of the
+translation unit in a real file, owned by no module. Every function
+body is carried, not just the inline ones, because a consumer emits
+the header's definitions as textual inclusion does. The writer runs in
+`pch` mode. The first declaration it refuses means no image at all,
+never a partial one. `-fkiln-bmi-image-census` on the producer counts
+the header's reasons. The consumer (`Sema::load_pch_image`) decodes and
+checks the image when the driver chooses the path, before
+preprocessing. It loads the image's file table into the source manager
+and builds the records before the unit's first token, in the global
+module (owner byte 0, the unit's own), so the unit may redeclare,
+define, specialize and instantiate them. `install_pragma_state` sets
+the header's Sema pragma stacks from the record (§11.13). The section
+layout is the module image's, so IMAGE_VERSION is unchanged.
+
 #### Part 2a coverage and follow-ups
 
 2a's image covers modules made only of the node kinds above. Every other
@@ -3484,7 +3580,8 @@ PCH (spec/driver.md "Precompiled headers", `-fkiln-pch-image`), and
 header units' exported macros go through it. Loading it replaces
 reading the header for everything the preprocessor keeps; Sema's state
 (the declarations, and the pragma state below, which is carried but
-not yet installed) is WP-1036's.
+installed with the declaration image of a PCH, §11.11 "Precompiled
+headers") is WP-1036's.
 
 **What it holds.** The difference between the state where the header
 begins (the *baseline*: the predefines and the command line read, no
@@ -3515,7 +3612,8 @@ begins (the *baseline*: the predefines and the command line read, no
   loaded, so a diagnostic after it sees the header's mappings and
   `pop` returns to the state before.
 - **Sema pragma state** (the inventory; written by the producer from
-  `kiln_sema::PragmaState`, carried, not yet installed or compared):
+  `kiln_sema::PragmaState`, carried, and installed by a PCH's image
+  consumer, WP-1036; not compared by `check`):
   the `#pragma pack` value and push stack (label, value), `#pragma
   ms_struct`, the `#pragma GCC visibility` stack (default, hidden,
   protected, or an attribute push, with its location) and the FP pragma
@@ -3530,7 +3628,7 @@ begins (the *baseline*: the predefines and the command line read, no
     yet (spec/pp.md deviation 3);
   - every other pragma reaches Sema as tokens. Sema state other than
     the stacks above, such as a pending `#pragma weak`, is carried with
-    the declarations by WP-1036.
+    the declarations by WP-1036 only where the image carries it.
 
 **Compact tokens; no lexing on load.** A body token is its kind (a tag
 and a payload: the identifier's name index, the literal's encoding, the

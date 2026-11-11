@@ -154,7 +154,7 @@ use kiln_diag::{Diag, DiagEngine, DiagId};
 use kiln_source::{Loc, Span};
 
 pub use bmi_ast::CarriedSection as CarriedConstants;
-pub use bmi_image::{CensusRow, ImageCensus, ModuleImage};
+pub use bmi_image::{CensusRow, ImageCensus, ModuleImage, PchDecls};
 pub use class::{BaseSpecInfo, MemInitId, MemInitInfo};
 pub use contracts::{ContractDeclKind, ContractScope};
 pub use decl::{NameClass, TagDefinedIn, TagUse};

@@ -5671,6 +5671,10 @@ pub mod builtin {
         row(START_LIFETIME, "__builtin_start_lifetime", "v.", N | T),
         // WP-782.
         row(THREAD_POINTER, "__builtin_thread_pointer", "v*", N),
+        // WP-1288.
+        row(EXTRACT_RETURN_ADDR, "__builtin_extract_return_addr", "v*v*", N),
+        row(FROB_RETURN_ADDR, "__builtin_frob_return_addr", "v*v*", N),
+        row(CLEAR_CACHE, "__builtin___clear_cache", "vc*c*", N),
         // WP-1057.
         row(READCYCLECOUNTER, "__builtin_readcyclecounter", "ULLi", N),
         // WP-774.
@@ -5796,6 +5800,18 @@ pub mod builtin {
     /// `__builtin_alloca_with_align_uninitialized` (`v*zIz`; as
     /// [`ALLOCA_WITH_ALIGN`]).
     pub const ALLOCA_WITH_ALIGN_UNINITIALIZED: u32 = 2443;
+    // ---- WP-1288 (gcc.c-torture).
+    /// `void *__builtin_extract_return_addr(void *)` (GCC, clang
+    /// `NoThrow`): the return address from a `__builtin_return_address`
+    /// value; the identity on `AArch64` and x86-64 (clang's default
+    /// `decodeReturnAddress`). Never a constant.
+    pub const EXTRACT_RETURN_ADDR: u32 = 2444;
+    /// `void *__builtin_frob_return_addr(void *)`: the inverse of
+    /// [`EXTRACT_RETURN_ADDR`] (clang `encodeReturnAddress`), also the
+    /// identity here.
+    pub const FROB_RETURN_ADDR: u32 = 2445;
+    /// `void __builtin___clear_cache(char *, char *)`: `llvm.clear_cache`.
+    pub const CLEAR_CACHE: u32 = 2446;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[

@@ -137,6 +137,28 @@ pub struct ParseOptions {
     /// declaration ([`ParsedTu::image_census`], spec/modules.md §11.11
     /// "Fallback census").
     pub image_census: bool,
+    /// The main file is a header being precompiled (`-emit-pch` with
+    /// `-fkiln-pch-image`): record its declaration image
+    /// ([`ParsedTu::pch_image`], WP-1036). With [`Self::image_census`],
+    /// the census is the header's.
+    pub record_pch: bool,
+    /// A precompiled header's declarations, built into the unit before
+    /// its first token in place of replaying the header (WP-1036).
+    pub pch: Option<PchLoad>,
+}
+
+/// What [`ParseOptions::pch`] builds: the decoded image, the source
+/// manager's buffers for its file table (same order) and the header's
+/// sema pragma state.
+#[derive(Clone, Debug)]
+pub struct PchLoad {
+    /// The precompiled header's path (for the corrupt-file error).
+    pub path: String,
+    pub decls: Arc<kiln_sema::PchDecls>,
+    pub files: Vec<FileId>,
+    /// The predefines line replay includes the header from.
+    pub root: Loc,
+    pub pragmas: kiln_sema::PragmaState,
 }
 
 impl Default for ParseOptions {
@@ -148,6 +170,8 @@ impl Default for ParseOptions {
             record_carried: false,
             record_image: false,
             image_census: false,
+            record_pch: false,
+            pch: None,
             exceptions: true,
             rtti: true,
             gnu: false,
@@ -263,6 +287,9 @@ pub struct ParsedTu {
     /// The fallback census, when [`ParseOptions::image_census`] and the
     /// main unit is a module unit.
     pub image_census: Option<kiln_sema::ImageCensus>,
+    /// The precompiled header's declaration image, when
+    /// [`ParseOptions::record_pch`] (WP-1036).
+    pub pch_image: Option<kiln_sema::ModuleImage>,
     /// Sema's pragma state at the end of the translation unit, for the
     /// preprocessor-state record of a PCH (spec/modules.md §11.13).
     pub pragmas: kiln_sema::PragmaState,
@@ -330,6 +357,44 @@ pub fn parse_tu<'sm>(
     parse_preprocessed(pp, Arc::clone(interner), diags, target, opts, limits).0
 }
 
+/// Sets `s`'s language and option state from `opts`.
+fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
+    s.exceptions = opts.exceptions;
+    s.rtti = opts.rtti;
+    s.reflection = opts.reflection;
+    s.coro_aligned_allocation = opts.coro_aligned_allocation;
+    s.lax_vector_conversions = opts.lax_vector_conversions;
+    s.gnu = opts.gnu;
+    s.gnu89_inline = opts.gnu89_inline;
+    s.c = opts.c;
+    s.clang_compat = opts.clang_compat;
+    s.cf_protection_branch = opts.cf_protection_branch;
+    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
+    s.gnu_lib_builtins = opts.gnu_lib_builtins;
+    s.no_builtin = opts.no_builtin;
+    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
+    s.freestanding = opts.freestanding;
+    s.sized_deallocation = opts.sized_deallocation;
+    s.char8 = opts.char8;
+    s.lib_builtin_name = kiln_pp::is_library_builtin;
+    s.clang_constexpr_builtin = clang_constexpr_builtin;
+    s.math_errno = opts.math_errno;
+    s.sve = opts.sve;
+    s.sve_vector_bits = opts.sve_vector_bits;
+    s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
+    s.cfg_dump = opts.cfg_dump;
+    s.cfg_stats = opts.cfg_stats;
+    s.cfg_max_elems = opts.cfg_max_elems;
+    s.permissive = opts.permissive;
+    s.ast.contract_semantic = opts.contract_semantic;
+    s.ast.lang_c = opts.c.is_some();
+    s.full_deduction = opts.full_deduction;
+    s.full_redecl_scan = opts.full_redecl_scan;
+    s.range_lifetime_extension = opts.std >= Std::Cxx23;
+    s.inst.limits = opts.inst_limits;
+    s.inst.report.format = opts.inst_report;
+}
+
 /// Parses and analyses the translation unit `pp` produces (its main file
 /// entered), reporting to `diags` and evaluating constant expressions
 /// under `limits`. `interner` must be the preprocessor's. Returns the
@@ -368,40 +433,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     if limits.profile != ProfileLevel::Off {
         s.set_constexpr_profile(limits.profile);
     }
-    s.exceptions = opts.exceptions;
-    s.rtti = opts.rtti;
-    s.reflection = opts.reflection;
-    s.coro_aligned_allocation = opts.coro_aligned_allocation;
-    s.lax_vector_conversions = opts.lax_vector_conversions;
-    s.gnu = opts.gnu;
-    s.gnu89_inline = opts.gnu89_inline;
-    s.c = opts.c;
-    s.clang_compat = opts.clang_compat;
-    s.cf_protection_branch = opts.cf_protection_branch;
-    s.ast.types.dtst_first_spelling = opts.clang_compat < 22;
-    s.gnu_lib_builtins = opts.gnu_lib_builtins;
-    s.no_builtin = opts.no_builtin;
-    s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
-    s.freestanding = opts.freestanding;
-    s.sized_deallocation = opts.sized_deallocation;
-    s.char8 = opts.char8;
-    s.lib_builtin_name = kiln_pp::is_library_builtin;
-    s.clang_constexpr_builtin = clang_constexpr_builtin;
-    s.math_errno = opts.math_errno;
-    s.sve = opts.sve;
-    s.sve_vector_bits = opts.sve_vector_bits;
-    s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
-    s.cfg_dump = opts.cfg_dump;
-    s.cfg_stats = opts.cfg_stats;
-    s.cfg_max_elems = opts.cfg_max_elems;
-    s.permissive = opts.permissive;
-    s.ast.contract_semantic = opts.contract_semantic;
-    s.ast.lang_c = opts.c.is_some();
-    s.full_deduction = opts.full_deduction;
-    s.full_redecl_scan = opts.full_redecl_scan;
-    s.range_lifetime_extension = opts.std >= Std::Cxx23;
-    s.inst.limits = opts.inst_limits;
-    s.inst.report.format = opts.inst_report;
+    configure(&mut s, opts);
     if opts.record_image {
         s.record_module_image();
     }
@@ -412,7 +444,16 @@ pub fn parse_preprocessed<'a, 'sm>(
     if let Some(c) = pp.take_main_carried() {
         s.install_carried_constants(&c.path, &c.bytes, Loc::INVALID);
     }
-    let main = pp.main_file().map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
+    let main_id = pp.main_file();
+    if let Some(l) = &opts.pch {
+        s.install_pragma_state(&l.pragmas);
+        if let Err(why) = s.load_pch_image(&l.decls, &l.files, l.root) {
+            kiln_diag::Diag::new(kiln_diag::DiagId::drv_pch_corrupt, kiln_source::Span::INVALID)
+                .arg(format!("{why} in kiln PCH '{}'", l.path))
+                .emit(diags);
+        }
+    }
+    let main = main_id.map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
@@ -428,7 +469,12 @@ pub fn parse_preprocessed<'a, 'sm>(
     let sema_memory = s.memory();
     let carried = s.take_carried_section();
     let image = s.take_module_image();
-    let image_census = if opts.image_census { s.image_census() } else { None };
+    let pch_image = main_id.filter(|_| opts.record_pch).map(|m| s.take_pch_image(m));
+    let image_census = match main_id {
+        Some(m) if opts.image_census && opts.record_pch => Some(s.pch_image_census(m)),
+        _ if opts.image_census => s.image_census(),
+        _ => None,
+    };
     let carried_hits = s.carried_hits();
     let pragmas = s.pragma_state();
     let (ast, oven) = s.into_parts();
@@ -442,6 +488,7 @@ pub fn parse_preprocessed<'a, 'sm>(
         carried_hits,
         image,
         image_census,
+        pch_image,
         pragmas,
     };
     (tu, src.into_preprocessor())

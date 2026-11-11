@@ -55,6 +55,12 @@ options:
                       with -g; one that compiles without -g must compile with
                       it, to DWARF that llvm-dwarfdump --verify accepts; no
                       oracles, xfail ignored (spec/harness.md \"Debug-info sweep\")
+  --pch-diff <how>    PCH differential: kiln compiles each test that opens with
+                      #includes without a PCH and with -include-pch of a PCH of
+                      them, read by `load` (the declaration image, or its
+                      fallback), `replay` or `check`; the exit status,
+                      diagnostics, IR and run must agree; no oracles, xfail
+                      ignored (spec/harness.md \"PCH differential\")
   --external <dir>    run every .c/.cpp under <dir> (outside the repo) as
                       never-crash: counts only, nothing written (spec/harness.md)
   --filter <substr>   only tests whose path contains <substr>
@@ -176,6 +182,9 @@ pub struct Options {
     /// and reads the declaration image (`-fkiln-bmi-image`,
     /// spec/modules.md §11.11 "Part 2a").
     pub bmi_image: bool,
+    /// `--pch-diff load|replay|check`: the PCH differential
+    /// (`spec/harness.md` "PCH differential").
+    pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -213,6 +222,7 @@ impl Default for Options {
             debug_sweep: false,
             bmi_kind: None,
             bmi_image: false,
+            pch_diff: None,
             external: None,
             filter: None,
             shard: None,
@@ -250,6 +260,13 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--filter" => o.filter = Some(value("--filter")?),
             "--shard" => o.shard = Some(Shard::parse(&value("--shard")?)?),
             "--bmi-image" => o.bmi_image = true,
+            "--pch-diff" => {
+                let v = value("--pch-diff")?;
+                o.pch_diff = Some(
+                    crate::util::pch_diff::PchDiff::parse(&v)
+                        .ok_or_else(|| format!("bad --pch-diff `{v}` (load|replay|check)"))?,
+                );
+            }
             "--bmi-kind" => {
                 let v = value("--bmi-kind")?;
                 o.bmi_kind = Some(match v.as_str() {
@@ -464,8 +481,16 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     if opts.meta_header && opts.debug_sweep {
         return Err("--meta-header and --debug-sweep do not combine".into());
     }
+    if opts.pch_diff.is_some() {
+        if compiler_kind != CompilerKind::Kiln {
+            return Err("--pch-diff runs kiln only (the compiler is not kiln)".into());
+        }
+        if opts.meta_header || opts.debug_sweep || opts.bmi_kind.is_some() {
+            return Err("--pch-diff does not combine with another variant".into());
+        }
+    }
     let (oracle, oracle_kind, oracle_clang) =
-        if opts.no_oracle || opts.meta_header || opts.debug_sweep {
+        if opts.no_oracle || opts.meta_header || opts.debug_sweep || opts.pch_diff.is_some() {
             (None, CompilerKind::Other, None)
         } else {
             let oracle = opts.oracle.clone().unwrap_or_else(|| PathBuf::from(toolchain.clang()));
@@ -513,6 +538,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         }),
         bmi_kind: opts.bmi_kind,
         bmi_image: opts.bmi_image,
+        pch_diff: opts.pch_diff,
     };
     let jobs = opts
         .jobs

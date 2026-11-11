@@ -784,7 +784,7 @@ impl<'a> Cg<'a> {
                     if !ast.templates.is_moved_class_inst(ast.first(d)) {
                         self.emit_class_members(d)?;
                     }
-                    if ast.modules.active && ast.decls.get(d).kind() == DeclKind::CXXRecord {
+                    if ast.modules.active {
                         self.emit_module_class_defs(d, 0)?;
                     }
                 }
@@ -949,10 +949,19 @@ impl<'a> Cg<'a> {
         if depth > 256
             || n.has(DeclFlags::INVALID)
             || n.has(DeclFlags::DEPENDENT_CTX)
-            || ast.templ_link(d).get().is_some()
             || ast.definition(d) != Some(d)
         {
             return Ok(());
+        }
+        // An explicit specialization's members are ordinary definitions
+        // ([temp.expl.spec]/5), an instantiation's are not.
+        match ast.templ_link(d).get() {
+            None => {}
+            Some((TemplLinkKind::Specialization, _))
+                if ast
+                    .spec_info(d)
+                    .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization) => {}
+            Some(_) => return Ok(()),
         }
         let members: Vec<DeclId> = ast.decls.members(d).collect();
         for m in members {
@@ -973,7 +982,9 @@ impl<'a> Cg<'a> {
                         self.emit_global_fn(f)?;
                     }
                 }
-                DeclKind::CXXRecord => self.emit_module_class_defs(m, depth + 1)?,
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_module_class_defs(m, depth + 1)?;
+                }
                 _ => {}
             }
         }

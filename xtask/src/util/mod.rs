@@ -5,6 +5,7 @@
 pub mod header;
 pub mod json;
 pub mod oven_report;
+pub mod pch_diff;
 pub mod process;
 
 use std::path::{Path, PathBuf};

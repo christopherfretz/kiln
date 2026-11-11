@@ -138,7 +138,9 @@ impl Cg<'_> {
                 constraints.push(',');
             }
             let q = ast.exprs.get(o.expr).ty();
-            if info.allows_memory() {
+            // clang: a register output needs a scalar or aggregate
+            // evaluation kind; a `_Complex` one is indirect (WP-1288).
+            if info.allows_memory() || ast.types.as_complex(q).is_some() {
                 arg_tys.push(LTy::PTR);
                 elem_tys.push(Some(dest.addr.ty));
                 args.push(dest.addr.v);
@@ -450,6 +452,12 @@ impl Cg<'_> {
         }
     }
 
+    /// clang `hasScalarEvaluationKind`: neither an aggregate nor
+    /// `_Complex` (which goes by memory, or as an integer of its size).
+    fn asm_scalar(&self, q: QualType) -> bool {
+        !self.is_aggregate(q) && self.ast.types.as_complex(q).is_none()
+    }
+
     /// clang `EmitAsmInput`.
     fn asm_input(
         &mut self,
@@ -458,7 +466,7 @@ impl Cg<'_> {
         cs: &mut String,
     ) -> R<(V, Option<LTy>)> {
         let q = self.ast.exprs.get(e).ty();
-        let scalar = !self.is_aggregate(q);
+        let scalar = self.asm_scalar(q);
         if (info.allows_register() || !info.allows_memory()) && scalar && !self.is_glvalue(e) {
             return Ok((self.emit_scalar(e)?, None));
         }
@@ -479,7 +487,7 @@ impl Cg<'_> {
         cs: &mut String,
     ) -> (V, Option<LTy>) {
         if info.allows_register() || !info.allows_memory() {
-            if !self.is_aggregate(q) {
+            if self.asm_scalar(q) {
                 return (self.load_lv(lv), None);
             }
             let (size, _) = self.size_align(q);
