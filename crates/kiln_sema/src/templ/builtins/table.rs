@@ -114,6 +114,7 @@ pub fn arity(t: TypeTrait) -> Arity {
         | T::ReferenceBindsToTemporary
         | T::ReferenceConstructsFromTemporary
         | T::ReferenceConvertsFromTemporary
+        | T::TypesCompatible
         | T::ArrayExtent => Arity::Exact(2),
         T::IsConstructible | T::IsNothrowConstructible | T::IsTriviallyConstructible => {
             Arity::AtLeast(1)

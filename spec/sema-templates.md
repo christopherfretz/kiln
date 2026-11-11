@@ -6561,6 +6561,16 @@ a `TypeTraitExpr` of the aliased trait (`__is_same`, `__is_literal`),
 which diagnostics and dumps print (WP-171); `__is_convertible_to` is a
 trait of its own.
 
+In C (spec/parse.md §1.4) only `__is_destructible`,
+`__is_nothrow_destructible`, `__is_bitwise_cloneable` and the C-only
+`__builtin_types_compatible_p(T,U)` are keywords, and a trait's value has
+type `int` (clang `getLogicalOperationType`). `__builtin_types_compatible_p`
+is 1 iff the types with their top-level qualifiers removed are compatible
+(C17 6.2.7, `conv::c_assign::compatible_unqualified`): an array's element
+qualifiers are removed level by level and its known bounds must agree, an
+enum is compatible with its underlying type, the rest is the C
+assignment rules' compatibility. It is an integer constant expression.
+
 | Builtin | True iff | Query |
 |---|---|---|
 | `__is_same(T,U)` | the canonical types are equal (cv included) | `tc.canonical` |

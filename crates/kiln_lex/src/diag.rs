@@ -40,15 +40,37 @@ pub enum LexDiagKind {
         /// The character.
         ch: char,
     },
-    /// A non-ASCII character that is not allowed where it appears: inside
-    /// an identifier but not `XID_Continue` (kept in the identifier, as
-    /// clang does; `err_character_not_allowed_identifier`), or at the
-    /// start of a token, `XID_Continue` but not `XID_Start` (a lone
-    /// token; `err_character_not_allowed`).
+    /// A non-ASCII character that is not allowed where it appears
+    /// (`err_character_not_allowed_identifier`): inside an identifier but
+    /// not an identifier-continue character (kept in the identifier, as
+    /// clang does), or, spelled in UTF-8 at the start of a token, allowed
+    /// only after the first character (dropped). The tables are the
+    /// language's (spec/lex.md "C mode").
     CharNotAllowedInIdentifier {
         /// The character.
         ch: char,
+        /// At the start of an identifier ("not allowed at the start of").
+        at_start: bool,
     },
+    /// `-Wc99-compat` (`warn_c99_compat_unicode_id`): an identifier
+    /// character C99 Annex D does not allow (here, or initially).
+    C99CompatUnicodeId {
+        /// C99 allows it, but not as the first character.
+        start: bool,
+    },
+    /// A UAX #31 mathematical-notation-profile character in a C++ or
+    /// C23 identifier (`ext_mathematical_notation`), accepted as a
+    /// clang extension.
+    MathematicalNotation {
+        /// The character.
+        ch: char,
+    },
+    /// `\u`/`\U` in C89 (`warn_ucn_not_valid_in_c89`): no UCN; the `\`
+    /// is a lone token.
+    UcnNotValidInC89,
+    /// A universal character name in a C89 literal
+    /// (`warn_ucn_not_valid_in_c89_literal`): decoded anyway.
+    UcnNotValidInC89Literal,
     /// Non-ASCII whitespace treated as whitespace (`ext_unicode_whitespace`).
     UnicodeWhitespace {
         /// The character.
@@ -92,6 +114,8 @@ pub enum LexDiagKind {
     EscapedNewlineBlockCommentEnd,
     /// A `//` comment continued by a line splice (`ext_multi_line_line_comment`).
     MultiLineLineComment,
+    /// A `//` comment in strict C89 (`ext_line_comment`), once per buffer.
+    C89LineComment,
 
     // ----- literals (lexed to their end only; contents are WP-011) -----
     /// A string literal with no closing `"` on its line
@@ -359,6 +383,9 @@ impl LexDiagKind {
             | K::UcnIncomplete
             | K::UcnDelimitedEmpty
             | K::UcnDelimitedIncomplete
+            | K::UcnNotValidInC89
+            | K::UcnNotValidInC89Literal
+            | K::C99CompatUnicodeId { .. }
             | K::IdentifierNotNfc
             | K::SpaceshipCompat
             | K::UnknownEscape { .. }
@@ -368,6 +395,7 @@ impl LexDiagKind {
             | K::BackslashNewlineEof
             | K::NoNewlineAtEof
             | K::MultiLineLineComment
+            | K::C89LineComment
             | K::UcnDelimitedExtension
             | K::UcnNamedExtension
             | K::DollarInIdentifier
@@ -381,7 +409,8 @@ impl LexDiagKind {
             | K::FloatSuffixExtension
             | K::FloatSuffixGnu
             | K::InvalidEncoding { error: false, .. }
-            | K::InvalidEncodingRange => LexSeverity::Extension,
+            | K::InvalidEncodingRange
+            | K::MathematicalNotation { .. } => LexSeverity::Extension,
         }
     }
 }

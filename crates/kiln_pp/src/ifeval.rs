@@ -81,16 +81,41 @@ impl IfEvaluator for IfEval {
 }
 
 /// A preprocessor value: 64 bits, signed (`intmax_t`) or unsigned
-/// (`uintmax_t`).
+/// (`uintmax_t`), with clang's `PPValue` range and identifier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Val {
     v: u64,
     unsigned: bool,
+    /// The tokens the value was read from (`PPValue::getRange`): an
+    /// operand's range in the diagnostics on its operator.
+    span: Span,
+    /// The identifier, if the value is a bare one that evaluated to 0
+    /// (`PPValue::getIdentifier`): `x(` is then a call of an undefined
+    /// function-like macro.
+    ident: Option<Symbol>,
 }
 
 impl Val {
+    const fn new(v: u64, unsigned: bool) -> Self {
+        Val { v, unsigned, span: Span::INVALID, ident: None }
+    }
+
     const fn signed(v: u64) -> Self {
-        Val { v, unsigned: false }
+        Val::new(v, false)
+    }
+
+    /// The value read from `span`.
+    const fn at(mut self, span: Span) -> Self {
+        self.span = span;
+        self
+    }
+
+    /// The value with its range starting at `lo` (a unary operator) and
+    /// no identifier.
+    const fn from(mut self, lo: kiln_source::Loc) -> Self {
+        self.span.lo = lo;
+        self.ident = None;
+        self
     }
 
     const fn is_negative(self) -> bool {
@@ -258,26 +283,26 @@ impl<'c> Ev<'c> {
             Some(Punct::LParen) => self.paren(live),
             Some(Punct::Plus) => {
                 self.bump();
-                self.value(live)
+                Ok(self.value(live)?.from(tok.span.lo))
             }
             Some(Punct::Minus) => {
                 self.bump();
-                let mut v = self.value(live)?;
+                let mut v = self.value(live)?.from(tok.span.lo);
                 v.v = v.v.wrapping_neg();
                 if !v.unsigned && v.v == i64::MIN as u64 && live {
-                    self.cx.emit(Diag::new(DiagId::pp_expr_overflow, tok.span));
+                    self.cx.emit(Diag::new(DiagId::pp_expr_overflow, tok.span).range(v.span));
                 }
                 Ok(v)
             }
             Some(Punct::Tilde) => {
                 self.bump();
                 let v = self.value(live)?;
-                Ok(Val { v: !v.v, unsigned: v.unsigned })
+                Ok(Val::new(!v.v, v.unsigned).at(v.span).from(tok.span.lo))
             }
             Some(Punct::Exclaim) => {
                 self.bump();
                 let v = self.value(live)?;
-                Ok(Val::signed(u64::from(v.v == 0)))
+                Ok(Val::signed(u64::from(v.v == 0)).at(v.span).from(tok.span.lo))
             }
             _ => Err(self.error(DiagId::pp_invalid_token_in_if, tok.span)),
         }
@@ -292,8 +317,8 @@ impl<'c> Ev<'c> {
         // before it they are identifiers, so 0).
         if self.c.is_none_or(|c| c >= kiln_lex::CStd::C23) {
             match self.name(s) {
-                "true" => return Val::signed(1),
-                "false" => return Val::signed(0),
+                "true" => return Val { ident: Some(s), ..Val::signed(1).at(span) },
+                "false" => return Val { ident: Some(s), ..Val::signed(0).at(span) },
                 _ => {}
             }
         }
@@ -301,7 +326,7 @@ impl<'c> Ev<'c> {
             let name = self.cx.interner().as_str(s).to_owned();
             self.cx.emit(Diag::new(DiagId::pp_undef_identifier, span).arg(name));
         }
-        Val::signed(0)
+        Val { ident: Some(s), ..Val::signed(0).at(span) }
     }
 
     fn paren(&mut self, live: bool) -> R<Val> {
@@ -314,13 +339,15 @@ impl<'c> Ev<'c> {
                 let span = self.tok.span;
                 self.cx.emit(
                     Diag::new(DiagId::pp_expected_rparen_in_expr, span)
+                        .range(v.span)
                         .with_note(Diag::new(DiagId::note_matching, open).arg("'('")),
                 );
                 return Err(Abort);
             }
         }
+        let close = self.tok.span;
         self.bump();
-        Ok(v)
+        Ok(v.at(Span::new(open.lo, close.hi)).from(open.lo))
     }
 
     /// `EvaluateDefined` ([cpp.cond]/10).
@@ -345,7 +372,7 @@ impl<'c> Ev<'c> {
                 Diag::new(DiagId::pp_operator_macro_name, t.span).arg(spelled).arg(p.as_str()),
             );
         }
-        let v = Val::signed(u64::from(self.cx.is_defined(name)));
+        let v = Val::signed(u64::from(self.cx.is_defined(name))).at(Span::new(kw.lo, t.span.hi));
         if let Some(open) = open {
             let close = self.cx.next_unexpanded();
             if close.kind != TokKind::Punct(Punct::RParen) {
@@ -359,6 +386,8 @@ impl<'c> Ev<'c> {
             }
         }
         self.bump();
+        // clang ends the range of `defined(X)` at the token after the `)`.
+        let v = if open.is_some() { v.at(Span::new(kw.lo, self.tok.span.hi)) } else { v };
         if let Some(info) = self.cx.source_manager().expansion_info(kw.lo) {
             // clang `isFunctionMacroExpansion`: a warning for an object-like
             // macro (easily rewritten), an extension otherwise.
@@ -382,7 +411,7 @@ impl<'c> Ev<'c> {
             && let Some(v) = self.cx.source_manager().span_text(tok.span).and_then(plain_decimal)
         {
             self.bump();
-            return Ok(v);
+            return Ok(v.at(tok.span));
         }
         let spelling = self.cx.spelling(&tok);
         let n = classify_number(&spelling, self.std);
@@ -414,17 +443,17 @@ impl<'c> Ev<'c> {
             if live {
                 self.cx.emit(Diag::new(DiagId::sema_int_literal_too_large, tok.span));
             }
-            Val { v, unsigned: true }
+            Val::new(v, true)
         } else if !lit.suffix.unsigned && (v as i64) < 0 {
             if live && lit.radix == Radix::Decimal {
                 self.cx.emit(Diag::new(DiagId::sema_int_literal_implicitly_unsigned, tok.span));
             }
-            Val { v, unsigned: true }
+            Val::new(v, true)
         } else {
-            Val { v, unsigned: lit.suffix.unsigned }
+            Val::new(v, lit.suffix.unsigned)
         };
         self.bump();
-        Ok(val)
+        Ok(val.at(tok.span))
     }
 
     /// A character literal ([cpp.cond]/12, [lex.ccon]).
@@ -438,6 +467,7 @@ impl<'c> Ev<'c> {
             LiteralOptions {
                 char8: Some(self.char8),
                 clang19_escapes: self.cx.clang19_escapes(),
+                c: self.c,
                 ..LiteralOptions::new(self.std, self.params)
             },
             &invalid,
@@ -452,7 +482,7 @@ impl<'c> Ev<'c> {
             return Err(Abort);
         }
         self.bump();
-        Ok(Val { v: lit.pp_value as u64, unsigned: lit.pp_unsigned })
+        Ok(Val::new(lit.pp_value as u64, lit.pp_unsigned).at(tok.span))
     }
 
     /// Reports literal diagnostics with clang's wording and locations.
@@ -471,8 +501,7 @@ impl<'c> Ev<'c> {
     /// binary operators of precedence `min` and above, `lhs` already read.
     fn sub_expr(&mut self, mut lhs: Val, min: u8, live: bool) -> R<Val> {
         let Some(mut peek) = self.prec() else {
-            let span = self.tok.span;
-            return Err(self.error(DiagId::pp_expr_bad_token_binop, span));
+            return Err(self.unexpected_operator(lhs));
         };
         loop {
             if peek < min {
@@ -489,8 +518,7 @@ impl<'c> Ev<'c> {
             let mut rhs = self.value(rhs_live)?;
             let this = peek;
             let Some(p) = self.prec() else {
-                let span = self.tok.span;
-                return Err(self.error(DiagId::pp_expr_bad_token_binop, span));
+                return Err(self.unexpected_operator(rhs));
             };
             peek = p;
             let rhs_prec = if op == Punct::Question { PREC_COMMA } else { this + 1 };
@@ -500,6 +528,22 @@ impl<'c> Ev<'c> {
             }
             lhs = self.binary(op, op_span, lhs, rhs, this, live, &mut peek)?;
         }
+    }
+
+    /// clang `diagnoseUnexpectedOperator`: the current token follows `v`
+    /// but is no binary operator. `x(` with `x` a bare identifier calls an
+    /// undefined function-like macro.
+    fn unexpected_operator(&mut self, v: Val) -> Abort {
+        if let Some(s) = v.ident
+            && self.punct() == Some(Punct::LParen)
+        {
+            let name = self.name(s).to_owned();
+            self.cx.emit(Diag::new(DiagId::pp_expr_bad_token_lparen, v.span).arg(name));
+        } else {
+            let span = self.tok.span;
+            self.cx.emit(Diag::new(DiagId::pp_expr_bad_token_binop, span).range(v.span));
+        }
+        Abort
     }
 
     /// Applies the binary operator `op` (the body of clang's
@@ -537,7 +581,9 @@ impl<'c> Ev<'c> {
                         self.cx.emit(
                             Diag::new(DiagId::pp_convert_to_positive, op_span)
                                 .arg(side)
-                                .arg(format!("{} to {}", v.v as i64, v.v)),
+                                .arg(format!("{} to {}", v.v as i64, v.v))
+                                .range(lhs.span)
+                                .range(rhs.span),
                         );
                     }
                 }
@@ -561,20 +607,22 @@ impl<'c> Ev<'c> {
                     } else {
                         sl.wrapping_rem(sr) as u64
                     };
-                    Val { v, unsigned: lhs.unsigned }
+                    Val::new(v, lhs.unsigned)
                 } else if live {
                     self.cx.emit(
                         Diag::new(DiagId::pp_division_by_zero, op_span)
-                            .arg(i32::from(op == Punct::Percent)),
+                            .arg(i32::from(op == Punct::Percent))
+                            .range(lhs.span)
+                            .range(rhs.span),
                     );
                     return Err(Abort);
                 } else {
-                    Val { v: 0, unsigned: res_unsigned }
+                    Val::new(0, res_unsigned)
                 }
             }
             Punct::Star => {
                 if res_unsigned {
-                    Val { v: l.wrapping_mul(r), unsigned: true }
+                    Val::new(l.wrapping_mul(r), true)
                 } else {
                     let (v, o) = sl.overflowing_mul(sr);
                     overflow = o;
@@ -595,7 +643,7 @@ impl<'c> Ev<'c> {
                     }
                     l << r
                 };
-                Val { v, unsigned: lhs.unsigned }
+                Val::new(v, lhs.unsigned)
             }
             Punct::GreaterGreater => {
                 let mut amt = r;
@@ -604,12 +652,12 @@ impl<'c> Ev<'c> {
                     amt = 63;
                 }
                 let v = if lhs.unsigned { l >> amt } else { (sl >> amt) as u64 };
-                Val { v, unsigned: lhs.unsigned }
+                Val::new(v, lhs.unsigned)
             }
             Punct::Plus | Punct::Minus => {
                 if lhs.unsigned {
                     let v = if op == Punct::Plus { l.wrapping_add(r) } else { l.wrapping_sub(r) };
-                    Val { v, unsigned: true }
+                    Val::new(v, true)
                 } else {
                     let (v, o) = if op == Punct::Plus {
                         sl.overflowing_add(sr)
@@ -632,14 +680,16 @@ impl<'c> Ev<'c> {
             }
             Punct::EqualEqual => Val::signed(u64::from(l == r)),
             Punct::ExclaimEqual => Val::signed(u64::from(l != r)),
-            Punct::Amp => Val { v: l & r, unsigned: res_unsigned },
-            Punct::Caret => Val { v: l ^ r, unsigned: res_unsigned },
-            Punct::Pipe => Val { v: l | r, unsigned: res_unsigned },
+            Punct::Amp => Val::new(l & r, res_unsigned),
+            Punct::Caret => Val::new(l ^ r, res_unsigned),
+            Punct::Pipe => Val::new(l | r, res_unsigned),
             Punct::AmpAmp => Val::signed(u64::from(l != 0 && r != 0)),
             Punct::PipePipe => Val::signed(u64::from(l != 0 || r != 0)),
             Punct::Comma => {
                 // Always diagnosed in C++ (clang: `!C99 || ValueLive`).
-                self.cx.emit(Diag::new(DiagId::pp_comma_expr, op_span));
+                self.cx.emit(
+                    Diag::new(DiagId::pp_comma_expr, op_span).range(lhs.span).range(rhs.span),
+                );
                 rhs
             }
             Punct::Question => {
@@ -648,6 +698,8 @@ impl<'c> Ev<'c> {
                     self.cx.emit(
                         Diag::new(DiagId::pp_expected, span)
                             .arg("':'")
+                            .range(lhs.span)
+                            .range(rhs.span)
                             .with_note(Diag::new(DiagId::note_matching, op_span).arg("'?'")),
                     );
                     return Err(Abort);
@@ -658,15 +710,24 @@ impl<'c> Ev<'c> {
                 let e = self.sub_expr(e, this, else_live)?;
                 *peek = self.prec().unwrap_or(0);
                 let v = if l != 0 { rhs.v } else { e.v };
-                Val { v, unsigned: rhs.unsigned || e.unsigned }
+                rhs.span.hi = e.span.hi;
+                Val::new(v, rhs.unsigned || e.unsigned)
             }
-            Punct::Colon => return Err(self.error(DiagId::pp_colon_without_question, op_span)),
+            Punct::Colon => {
+                self.cx.emit(
+                    Diag::new(DiagId::pp_colon_without_question, op_span)
+                        .range(lhs.span)
+                        .range(rhs.span),
+                );
+                return Err(Abort);
+            }
             _ => unreachable!("precedence() admits only binary operators"),
         };
         if overflow && live {
-            self.cx.emit(Diag::new(DiagId::pp_expr_overflow, op_span));
+            self.cx
+                .emit(Diag::new(DiagId::pp_expr_overflow, op_span).range(lhs.span).range(rhs.span));
         }
-        Ok(res)
+        Ok(Val { span: Span::new(lhs.span.lo, rhs.span.hi), ident: None, ..res })
     }
 }
 
@@ -690,7 +751,7 @@ fn plain_decimal(text: &str) -> Option<Val> {
         }
     }
     let v = b[..digits].iter().fold(0u64, |v, &c| v * 10 + u64::from(c - b'0'));
-    Some(Val { v, unsigned })
+    Some(Val::new(v, unsigned))
 }
 
 /// Whether `d` is an error that clang's `CharLiteralParser` reports

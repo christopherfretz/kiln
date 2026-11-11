@@ -78,9 +78,11 @@ pub fn dump_of(text: &str) -> String {
     lex(text).dump
 }
 
-/// Just the diagnostic kinds.
+/// Just the diagnostic kinds, without the off-by-default `-Wc99-compat`
+/// ones (tested on their own in `c_mode.rs`).
 pub fn diag_kinds(text: &str, opts: LexOptions) -> Vec<LexDiagKind> {
-    lex_with(text, opts).diags.into_iter().map(|d| d.0).collect()
+    let d = lex_with(text, opts).diags.into_iter().map(|d| d.0);
+    d.filter(|d| !matches!(d, LexDiagKind::C99CompatUnicodeId { .. })).collect()
 }
 
 /// The token kinds' dump names, space separated.
