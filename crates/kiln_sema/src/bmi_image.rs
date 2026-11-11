@@ -83,6 +83,78 @@ pub struct ModuleImage {
     pub fallback: Option<&'static str>,
 }
 
+/// `-fkiln-bmi-image-census` (spec/modules.md §11.11 "Fallback
+/// census"): why the image cannot carry the unit's top-level
+/// declarations.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImageCensus {
+    /// The module's name.
+    pub module: String,
+    /// Top-level declarations the writer recorded or refused.
+    pub top_level: usize,
+    /// Per first fallback reason: the top-level declarations it stops,
+    /// and the presumed location of the first one, most frequent first.
+    pub rows: Vec<CensusRow>,
+    /// Why the writer could not start at all (no row is counted then).
+    pub unit: Option<&'static str>,
+    /// Per attribute name: the declarations of the attributed-declaration
+    /// row that carry it, most frequent first.
+    pub attrs: Vec<(String, usize)>,
+}
+
+/// One reason of an [`ImageCensus`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CensusRow {
+    /// The fallback reason; prefixed `cascade: ` when it names a
+    /// declaration a refused one made (an earlier row's).
+    pub reason: String,
+    /// Top-level declarations whose first fallback it is.
+    pub count: usize,
+    /// `file:line:col` of the first of them.
+    pub example: String,
+}
+
+/// The census writer's state.
+#[derive(Default)]
+struct Census {
+    /// Top-level declarations refused while recording: what they contain
+    /// and their templates are skipped.
+    dead: FxHashSet<DeclId>,
+    /// Top-level declarations with a counted reason.
+    failed: FxHashSet<DeclId>,
+    /// Every top-level declaration recorded or refused.
+    seen: FxHashSet<DeclId>,
+    /// Reason, count, example, in first-seen order.
+    rows: Vec<(String, usize, String)>,
+    by_reason: FxHashMap<String, usize>,
+    attrs: FxHashMap<&'static str, usize>,
+}
+
+/// The lengths [`Writer::rollback`] restores after a census failure.
+#[derive(Clone, Copy)]
+struct Marks {
+    decls: usize,
+    types: usize,
+    roots: usize,
+    overrides: usize,
+    keys: usize,
+    inits: usize,
+}
+
+/// [`Writer::collect`]'s state across declarations.
+#[derive(Default)]
+struct Pass {
+    open_enum: Option<u32>,
+    /// The open class definitions, innermost last.
+    open: Vec<u32>,
+    /// The implicitly declared special members, recorded after every
+    /// class closed.
+    implicit: Vec<(DeclId, u32, u8)>,
+    /// The implicit instantiations the unit made, and everything
+    /// declared in them (members of a class specialization).
+    skipped: FxHashSet<DeclId>,
+}
+
 // ---------------------------------------------------------------------------
 // The image model
 // ---------------------------------------------------------------------------
@@ -504,6 +576,10 @@ impl Payload {
 }
 
 const DECL_FLAGS: u8 = DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
+
+/// The fallback reason of a declaration with attributes (the census
+/// names them).
+const ATTRIBUTED: &str = "a declaration with attributes";
 
 /// `FieldData.flags` carried: `mutable`, the initializer style, a
 /// default member initializer (`[[no_unique_address]]` is an attribute).
@@ -2282,6 +2358,8 @@ struct Writer<'s, 'a, 'b> {
     /// S6: per lookup context, name and entity, the latest shadow or
     /// namespace alias record (what a redeclaration replaces in lookup).
     usings: FxHashMap<(DeclId, DeclName, DeclId), u32>,
+    /// `-fkiln-bmi-image-census`: record every refusal and go on.
+    census: Option<Census>,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -2599,8 +2677,11 @@ impl Writer<'_, '_, '_> {
             V::Empty => NONE,
             V::Identifier(sym) => {
                 let s = ast.symbols().as_str(sym).to_owned();
-                if reserved(&s) || s == "std" || s == "main" {
-                    return Err("a reserved or special name");
+                if reserved(&s) {
+                    return Err("a reserved identifier (`__x`, `_X`)");
+                }
+                if s == "std" || s == "main" {
+                    return Err("a declaration named `std` or `main`");
                 }
                 Self::name_ix(&mut self.names, &mut self.img.names, &s)
             }
@@ -2637,7 +2718,17 @@ impl Writer<'_, '_, '_> {
             extra &= !DeclFlags::IMPLICIT.bits();
         }
         if extra != 0 {
-            return Err("an implicit, invalid or attributed declaration");
+            return Err(if extra & DeclFlags::INVALID.bits() != 0 {
+                "an invalid declaration"
+            } else if extra & DeclFlags::IMPLICIT.bits() != 0 {
+                "an implicit declaration of a kind the image does not carry"
+            } else if extra & DeclFlags::INJECTED.bits() != 0 {
+                "a declaration injected by define_aggregate"
+            } else if extra & DeclFlags::HAS_ATTRS.bits() != 0 {
+                ATTRIBUTED
+            } else {
+                "a declaration with flags the image does not carry"
+            });
         }
         let parm = matches!(n.kind(), DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm);
         if n.has(DeclFlags::DEPENDENT_CTX)
@@ -3340,160 +3431,49 @@ impl Writer<'_, '_, '_> {
             return Err("no module declaration");
         }
         self.img.main = sm.file_name(self.main).to_owned();
-        let mut open_enum: Option<u32> = None;
-        // The open class definitions, innermost last; the implicitly
-        // declared special members, recorded after every class closed.
-        let mut open: Vec<u32> = Vec::new();
-        let mut implicit: Vec<(DeclId, u32, u8)> = Vec::new();
-        // The implicit instantiations the unit made, and everything
-        // declared in them (members of a class specialization).
-        let mut skipped: FxHashSet<DeclId> = FxHashSet::default();
+        let mut st = Pass::default();
         for d in ast.decls.ids() {
-            let n = ast.decls.get(d);
-            let in_skipped = |c: Option<DeclId>| c.is_some_and(|c| skipped.contains(&c));
-            if in_skipped(n.ctx())
-                || (n.has(DeclFlags::HAS_LEXICAL_CTX) && in_skipped(ast.decls.lexical_ctx(d)))
-            {
-                let _ = skipped.insert(d);
+            if self.census.as_ref().is_some_and(|c| !c.dead.is_empty()) && self.census_dead(d) {
                 continue;
             }
-            let o = mt.owner(d);
-            if o.unit != 0 {
-                // Imported, or replayed for an import of the preamble.
-                continue;
-            }
-            if !o.purview {
-                // Predefined declarations have no location in a real
-                // file; anything else is a global module fragment.
-                let real = sm
-                    .offset_of(sm.expansion_loc(n.loc()))
-                    .is_some_and(|(f, _)| !crate::bmi_ast::unstable_file(sm.file_name(f)));
-                if real && !n.has(DeclFlags::IMPLICIT) {
-                    return Err("a global module fragment");
-                }
-                continue;
-            }
-            if n.kind() == DeclKind::ParmVar || self.local(d) {
-                continue;
-            }
-            if n.kind() == DeclKind::TranslationUnit {
-                continue;
-            }
-            if n.kind() == DeclKind::StaticAssert {
-                // Checked when the module was compiled; nothing to import.
-                continue;
-            }
-            if ast.spec_info(d).is_some_and(|(_, si)| {
-                matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
-            }) {
-                // An implicit instantiation the unit made: an importer
-                // instantiates the carried template again on use (S4); a
-                // carried body or type naming one names it through a
-                // specialization reference (S4b).
-                let _ = skipped.insert(d);
-                continue;
-            }
-            if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
-                // An implicitly declared special member: the importer
-                // declares it again (spec/modules.md §11.11 "Classes").
-                if n.kind() == DeclKind::IndirectField {
-                    return Err("an anonymous union or struct member");
-                }
-                let k = s.special_kind_of(d).ok_or("an implicit declaration")?;
-                let implicit_default = ast
-                    .decls
-                    .function(d)
-                    .is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
-                let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
-                if class.is_some_and(|c| self.img.decls[c as usize].flags & DEP != 0) {
-                    return Err("an implicit member of a class template");
-                }
-                match class {
-                    Some(c)
-                        if implicit_default
-                            && n.flags().bits() & !DECL_FLAGS == DeclFlags::IMPLICIT.bits() =>
-                    {
-                        implicit.push((d, c, k as u8));
-                    }
-                    _ => return Err("an implicit declaration"),
-                }
-                continue;
-            }
-            kind_gate(n.kind())?;
-            self.cold_gate(d)?;
-            let at = self.loc(n.loc())?;
-            let main_at = locs::main_pos(sm, self.main, n.loc());
-            if self.img.preamble != NONE
-                && at != NONE
-                && main_at.is_none_or(|p| p < self.img.preamble)
-            {
-                // Before the preamble's end: the importer replays it.
-                return Err("a declaration before the module's last import");
-            }
-            let h = self.head(d)?;
-            // The specialization references its types name come first
-            // (S4b): `record` must not add records before its own.
-            self.prescan(d);
-            let i = self.img.decls.len() as u32;
-            let payload = self.record(d, i)?;
-            if self.img.decls.len() as u32 != i {
-                return Err("a specialization named while its user is recorded");
-            }
-            let tmpl_of_open = matches!(payload,
-                Payload::Template { kind: 1, pattern, .. } if open.last() == Some(&pattern));
-            match &payload {
-                Payload::Enumerator { .. } => {
-                    if open_enum != Some(h.ctx) {
-                        return Err("an enumerator outside its enumeration's definition");
+            let before = self.marks();
+            match self.one(d, &mut st) {
+                Ok(()) => {
+                    if self.census.is_some() && self.img.decls.len() > before.decls {
+                        let root = self.census_root(d);
+                        if let Some(c) = self.census.as_mut() {
+                            let _ = c.seen.insert(root);
+                        }
                     }
                 }
-                Payload::Enum { def: Some(_), .. } => open_enum = Some(i),
-                _ => open_enum = None,
-            }
-            if !matches!(payload, Payload::Enumerator { .. }) && !tmpl_of_open {
-                // Close the classes this declaration is not a member of.
-                while let Some(&top) = open.last() {
-                    if h.lexical == NONE && h.ctx == top {
-                        break;
+                Err(why) if self.census.is_some() => {
+                    self.rollback(before);
+                    let ns = self.s.ast.decls.get(d).kind() == DeclKind::Namespace;
+                    self.census_fail(d, why, !ns);
+                    if ns {
+                        // What the namespace holds is counted on its own:
+                        // a placeholder stands for it.
+                        let ctx = self.s.ast.decls.get(d).ctx();
+                        let ctx = ctx.and_then(|c| self.recs.get(&c).copied()).unwrap_or(NONE);
+                        let i = self.img.decls.len() as u32;
+                        self.img.decls.push(DeclRec {
+                            flags: 0,
+                            owner: 1,
+                            access: 0,
+                            name: NONE,
+                            ctx,
+                            lexical: NONE,
+                            loc: NONE,
+                            prev: NONE,
+                            payload: Payload::Namespace,
+                        });
+                        self.recs.insert(d, i);
                     }
-                    self.close_class(top);
-                    let _ = open.pop();
                 }
-                let class_ctx = h.ctx != NONE
-                    && matches!(self.img.decls[h.ctx as usize].payload, Payload::Record { .. });
-                if class_ctx && open.is_empty() && (h.lexical == NONE || h.prev == NONE) {
-                    return Err("a class member outside its class definition");
-                }
-                if h.ctx != NONE
-                    && !matches!(
-                        self.img.decls[h.ctx as usize].payload,
-                        Payload::Namespace | Payload::Export | Payload::Record { .. }
-                    )
-                {
-                    return Err("a declaration in an unsupported context");
-                }
-            }
-            let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
-            let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
-            self.img.decls.push(DeclRec {
-                flags: h.flags,
-                owner,
-                access: h.access,
-                name: h.name,
-                ctx: h.ctx,
-                lexical: h.lexical,
-                loc: h.loc,
-                prev: h.prev,
-                payload,
-            });
-            self.recs.insert(d, i);
-            if let Some(k) = self.using_key(d) {
-                self.usings.insert(k, i);
-            }
-            if class_def {
-                open.push(i);
+                Err(why) => return Err(why),
             }
         }
+        let Pass { mut open, implicit, .. } = st;
         while let Some(top) = open.pop() {
             self.close_class(top);
         }
@@ -3516,21 +3496,29 @@ impl Writer<'_, '_, '_> {
         for (i, list) in std::mem::take(&mut self.overrides) {
             let mut out = Vec::with_capacity(list.len());
             for o in list {
-                let r = self.recs.get(&o).ok_or("an override of a function outside the image")?;
-                out.push(*r);
+                match self.recs.get(&o) {
+                    Some(&r) => out.push(r),
+                    None => self.miss(i, "an override of a function outside the image")?,
+                }
             }
             if let Payload::Function { overrides, .. } = &mut self.img.decls[i as usize].payload {
                 *overrides = out;
             }
         }
         for (i, k) in std::mem::take(&mut self.keys) {
-            let r = *self.recs.get(&k).ok_or("a key function outside the image")?;
+            let Some(&r) = self.recs.get(&k) else {
+                self.miss(i, "a key function outside the image")?;
+                continue;
+            };
             if let Payload::Record { def: Some(df), .. } = &mut self.img.decls[i as usize].payload {
                 df.key = r;
             }
         }
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
-            let r = *self.recs.get(&f).ok_or("a ctor-initializer of a field outside the image")?;
+            let Some(&r) = self.recs.get(&f) else {
+                self.miss(i, "a ctor-initializer of a field outside the image")?;
+                continue;
+            };
             if let Payload::Function { inits, .. } = &mut self.img.decls[i as usize].payload
                 && let Some(x) = inits.get_mut(k as usize)
             {
@@ -3538,6 +3526,319 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.walk_roots()
+    }
+
+    fn marks(&self) -> Marks {
+        Marks {
+            decls: self.img.decls.len(),
+            types: self.img.types.len(),
+            roots: self.bs.roots.len(),
+            overrides: self.overrides.len(),
+            keys: self.keys.len(),
+            inits: self.bs.init_fields.len(),
+        }
+    }
+
+    /// The census writer drops what a refused declaration recorded.
+    fn rollback(&mut self, m: Marks) {
+        self.img.decls.truncate(m.decls);
+        self.img.types.truncate(m.types);
+        self.bs.roots.truncate(m.roots);
+        self.overrides.truncate(m.overrides);
+        self.keys.truncate(m.keys);
+        self.bs.init_fields.truncate(m.inits);
+        let (n, t) = (m.decls as u32, BUILTINS + 1 + m.types as u32);
+        self.recs.retain(|_, v| *v < n);
+        self.usings.retain(|_, v| *v < n);
+        self.tmemo.retain(|_, v| *v < t);
+    }
+
+    /// The top-level declaration `d` belongs to: the outermost enclosing
+    /// declaration below a namespace, an export block, a linkage
+    /// specification or the translation unit, seen as its template when
+    /// it is a template's pattern.
+    fn census_root(&self, d: DeclId) -> DeclId {
+        let ast = &self.s.ast;
+        let mut cur = d;
+        loop {
+            let n = ast.decls.get(cur);
+            let up = if n.has(DeclFlags::HAS_LEXICAL_CTX) {
+                ast.decls.lexical_ctx(cur)
+            } else {
+                n.ctx()
+            };
+            match up {
+                Some(p)
+                    if !matches!(
+                        ast.decls.get(p).kind(),
+                        DeclKind::TranslationUnit
+                            | DeclKind::Namespace
+                            | DeclKind::Export
+                            | DeclKind::LinkageSpec
+                    ) =>
+                {
+                    cur = p;
+                }
+                _ => break,
+            }
+        }
+        ast.described_template(cur).unwrap_or(cur)
+    }
+
+    /// `d` is in (or is) a top-level declaration the census refused.
+    fn census_dead(&self, d: DeclId) -> bool {
+        let Some(c) = &self.census else { return false };
+        let ast = &self.s.ast;
+        let mut cur = Some(d);
+        while let Some(x) = cur {
+            if c.dead.contains(&x) || ast.described_template(x).is_some_and(|t| c.dead.contains(&t))
+            {
+                return true;
+            }
+            let n = ast.decls.get(x);
+            cur =
+                if n.has(DeclFlags::HAS_LEXICAL_CTX) { ast.decls.lexical_ctx(x) } else { n.ctx() };
+        }
+        false
+    }
+
+    /// Counts `why` as the first fallback reason of `d`'s top-level
+    /// declaration; `kill` skips the rest of it.
+    fn census_fail(&mut self, d: DeclId, why: &'static str, kill: bool) {
+        let root = self.census_root(d);
+        let sm = self.s.diags.sm();
+        let ast = &self.s.ast;
+        let at = Some(ast.decls.get(d).loc())
+            .filter(|l| l.is_valid())
+            .unwrap_or_else(|| ast.decls.get(root).loc());
+        let mut attrs: Vec<&'static str> = Vec::new();
+        if why == ATTRIBUTED {
+            attrs = ast
+                .lists
+                .iter::<kiln_ast::AttrId>(ast.attrs.of_decl(d))
+                .map(|a| crate::decl_attrs::attr_name(ast.attrs.get(a)).unwrap_or("(unnamed)"))
+                .collect();
+            attrs.sort_unstable();
+            attrs.dedup();
+        }
+        let kind = format!("{why} ({:?})", ast.decls.get(d).kind());
+        let Some(c) = self.census.as_mut() else { return };
+        let cascade = !c.dead.is_empty() && why.contains("outside the image");
+        if kill {
+            let _ = c.dead.insert(root);
+        }
+        let _ = c.seen.insert(root);
+        if !c.failed.insert(root) {
+            return;
+        }
+        for a in attrs {
+            *c.attrs.entry(a).or_default() += 1;
+        }
+        let reason = match () {
+            () if cascade => format!("cascade: {why}"),
+            () if why.starts_with("an implicit declaration") => kind,
+            () => why.to_owned(),
+        };
+        if let Some(&i) = c.by_reason.get(&reason) {
+            c.rows[i].1 += 1;
+            return;
+        }
+        let example = sm.presumed_line_col(at).map_or_else(
+            || format!("{:?} '{}'", ast.decls.get(d).kind(), self.s.qualified_decl_name(d)),
+            |p| format!("{}:{}:{}", p.file_name, p.line, p.col),
+        );
+        c.by_reason.insert(reason.clone(), c.rows.len());
+        c.rows.push((reason, 1, example));
+    }
+
+    /// A fix-up of record `rec` names a declaration outside the image:
+    /// the census counts it, the writer falls back.
+    fn miss(&mut self, rec: u32, why: &'static str) -> W<()> {
+        if self.census.is_none() {
+            return Err(why);
+        }
+        if let Some(d) = self.recs.iter().find(|&(_, &v)| v == rec).map(|(&d, _)| d) {
+            self.census_fail(d, why, false);
+        }
+        Ok(())
+    }
+
+    /// One declaration of the purview, in id order ([`Writer::collect`]).
+    #[allow(clippy::too_many_lines)] // the purview's declaration kinds, with the class nesting
+    fn one(&mut self, d: DeclId, st: &mut Pass) -> W<()> {
+        let s = self.s;
+        let ast = &s.ast;
+        let mt = &ast.modules;
+        let sm = s.diags.sm();
+        let n = ast.decls.get(d);
+        let in_skipped = |c: Option<DeclId>| c.is_some_and(|c| st.skipped.contains(&c));
+        if in_skipped(n.ctx())
+            || (n.has(DeclFlags::HAS_LEXICAL_CTX) && in_skipped(ast.decls.lexical_ctx(d)))
+        {
+            let _ = st.skipped.insert(d);
+            return Ok(());
+        }
+        let o = mt.owner(d);
+        if o.unit != 0 {
+            // Imported, or replayed for an import of the preamble.
+            return Ok(());
+        }
+        if !o.purview {
+            // Predefined declarations have no location in a real
+            // file; anything else is a global module fragment.
+            let real = sm
+                .offset_of(sm.expansion_loc(n.loc()))
+                .is_some_and(|(f, _)| !crate::bmi_ast::unstable_file(sm.file_name(f)));
+            if real && !n.has(DeclFlags::IMPLICIT) {
+                return Err("a global module fragment");
+            }
+            return Ok(());
+        }
+        if n.kind() == DeclKind::ParmVar || self.local(d) {
+            return Ok(());
+        }
+        if n.kind() == DeclKind::TranslationUnit {
+            return Ok(());
+        }
+        if n.kind() == DeclKind::StaticAssert {
+            // Checked when the module was compiled; nothing to import.
+            return Ok(());
+        }
+        if ast.spec_info(d).is_some_and(|(_, si)| {
+            matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
+        }) {
+            // An implicit instantiation the unit made: an importer
+            // instantiates the carried template again on use (S4); a
+            // carried body or type naming one names it through a
+            // specialization reference (S4b).
+            let _ = st.skipped.insert(d);
+            return Ok(());
+        }
+        if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
+            // An implicitly declared special member: the importer
+            // declares it again (spec/modules.md §11.11 "Classes").
+            if n.kind() == DeclKind::IndirectField {
+                return Err("an anonymous union or struct member");
+            }
+            let k = s
+                .special_kind_of(d)
+                .ok_or("an implicit declaration that is not a special member")?;
+            let implicit_default =
+                ast.decls.function(d).is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
+            let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
+            if class.is_some_and(|c| self.img.decls[c as usize].flags & DEP != 0) {
+                return Err("an implicit member of a class template");
+            }
+            match class {
+                Some(c)
+                    if implicit_default
+                        && n.flags().bits() & !DECL_FLAGS == DeclFlags::IMPLICIT.bits() =>
+                {
+                    st.implicit.push((d, c, k as u8));
+                }
+                None => return Err("an implicit special member of a class outside the image"),
+                Some(_) => {
+                    return Err(
+                        "an implicit special member that is deleted, not defaulted, or flagged",
+                    );
+                }
+            }
+            return Ok(());
+        }
+        kind_gate(n.kind())?;
+        self.cold_gate(d)?;
+        let at = self.loc(n.loc())?;
+        let main_at = locs::main_pos(sm, self.main, n.loc());
+        if self.img.preamble != NONE && at != NONE && main_at.is_none_or(|p| p < self.img.preamble)
+        {
+            // Before the preamble's end: the importer replays it.
+            return Err("a declaration before the module's last import");
+        }
+        let h = self.head(d)?;
+        // The specialization references its types name come first
+        // (S4b): `record` must not add records before its own.
+        self.prescan(d);
+        let i = self.img.decls.len() as u32;
+        let payload = self.record(d, i)?;
+        if self.img.decls.len() as u32 != i {
+            return Err("a specialization named while its user is recorded");
+        }
+        let tmpl_of_open = matches!(payload,
+            Payload::Template { kind: 1, pattern, .. } if st.open.last() == Some(&pattern));
+        match &payload {
+            Payload::Enumerator { .. } => {
+                if st.open_enum != Some(h.ctx) {
+                    return Err("an enumerator outside its enumeration's definition");
+                }
+            }
+            Payload::Enum { def: Some(_), .. } => st.open_enum = Some(i),
+            _ => st.open_enum = None,
+        }
+        if !matches!(payload, Payload::Enumerator { .. }) && !tmpl_of_open {
+            // Close the classes this declaration is not a member of.
+            while let Some(&top) = st.open.last() {
+                if h.lexical == NONE && h.ctx == top {
+                    break;
+                }
+                self.close_class(top);
+                let _ = st.open.pop();
+            }
+            let class_ctx = h.ctx != NONE
+                && matches!(self.img.decls[h.ctx as usize].payload, Payload::Record { .. });
+            if class_ctx && st.open.is_empty() && (h.lexical == NONE || h.prev == NONE) {
+                return Err("a class member outside its class definition");
+            }
+            if h.ctx != NONE
+                && !matches!(
+                    self.img.decls[h.ctx as usize].payload,
+                    Payload::Namespace | Payload::Export | Payload::Record { .. }
+                )
+            {
+                return Err("a declaration in an unsupported context");
+            }
+        }
+        let class_def = matches!(payload, Payload::Record { def: Some(_), .. });
+        let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
+        self.img.decls.push(DeclRec {
+            flags: h.flags,
+            owner,
+            access: h.access,
+            name: h.name,
+            ctx: h.ctx,
+            lexical: h.lexical,
+            loc: h.loc,
+            prev: h.prev,
+            payload,
+        });
+        self.recs.insert(d, i);
+        if let Some(k) = self.using_key(d) {
+            self.usings.insert(k, i);
+        }
+        if class_def {
+            st.open.push(i);
+        }
+        Ok(())
+    }
+}
+
+impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
+    fn new(s: &'s Sema<'a, 'b>, main: FileId, census: bool) -> W<Self> {
+        let lt = LocTable::new(s.diags.sm(), main)?;
+        Ok(Writer {
+            s,
+            main,
+            lt: std::cell::RefCell::new(lt),
+            recs: FxHashMap::default(),
+            names: FxHashMap::default(),
+            pnames: FxHashMap::default(),
+            tmemo: FxHashMap::default(),
+            img: Image { preamble: NONE, ..Image::default() },
+            bs: BodyState::default(),
+            overrides: Vec::new(),
+            keys: Vec::new(),
+            usings: FxHashMap::default(),
+            census: census.then(Census::default),
+        })
     }
 }
 
@@ -3613,23 +3914,9 @@ impl Sema<'_, '_> {
         let Some((main, _)) = sm.offset_of(kw_loc) else {
             return none("a module declaration outside a file");
         };
-        let lt = match LocTable::new(sm, main) {
-            Ok(lt) => lt,
+        let mut w = match Writer::new(self, main, false) {
+            Ok(w) => w,
             Err(why) => return none(why),
-        };
-        let mut w = Writer {
-            s: self,
-            main,
-            lt: std::cell::RefCell::new(lt),
-            recs: FxHashMap::default(),
-            names: FxHashMap::default(),
-            pnames: FxHashMap::default(),
-            tmemo: FxHashMap::default(),
-            img: Image { preamble: NONE, ..Image::default() },
-            bs: BodyState::default(),
-            overrides: Vec::new(),
-            keys: Vec::new(),
-            usings: FxHashMap::default(),
         };
         if let Err(why) = w.collect() {
             return none(why);
@@ -3645,6 +3932,39 @@ impl Sema<'_, '_> {
             return none("an internal image inconsistency");
         }
         Some(ModuleImage { bytes, decls, fallback: None })
+    }
+
+    /// `-fkiln-bmi-image-census`: runs the writer over the main unit and
+    /// counts, per top-level declaration it cannot carry, the first
+    /// fallback reason (spec/modules.md §11.11 "Fallback census"). No
+    /// module file changes. `None` outside a module unit.
+    pub fn image_census(&mut self) -> Option<ImageCensus> {
+        let sm = self.diags.sm();
+        let (_, kw_loc, _) = self.module_main_frame()?;
+        let (main, _) = sm.offset_of(kw_loc)?;
+        let mut out = ImageCensus::default();
+        let mut w = match Writer::new(self, main, true) {
+            Ok(w) => w,
+            Err(why) => {
+                out.unit = Some(why);
+                return Some(out);
+            }
+        };
+        if let Err(why) = w.collect() {
+            out.unit = Some(why);
+        }
+        out.module.clone_from(&w.img.module);
+        let c = w.census.take().unwrap_or_default();
+        out.top_level = c.seen.len();
+        out.rows = c
+            .rows
+            .into_iter()
+            .map(|(reason, count, example)| CensusRow { reason, count, example })
+            .collect();
+        out.rows.sort_by(|a, b| b.count.cmp(&a.count));
+        out.attrs = c.attrs.into_iter().map(|(a, n)| (a.to_owned(), n)).collect();
+        out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Some(out)
     }
 
     /// Builds the unit just begun from the declaration image `bytes` of

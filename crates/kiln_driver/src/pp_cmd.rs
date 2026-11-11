@@ -696,6 +696,45 @@ impl Job<'_> {
         }
     }
 
+    /// `-fkiln-bmi-image-census`: the census table on stderr
+    /// (spec/modules.md §11.11 "Fallback census").
+    pub(crate) fn write_image_census(
+        &self,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        if !self.args.bmi_image_census {
+            return;
+        }
+        engine.flush();
+        let mut err = self.stderr.clone();
+        let Some(c) = census else {
+            let _ = writeln!(err, "image census: not a module unit");
+            return;
+        };
+        if let Some(why) = c.unit {
+            let _ = writeln!(err, "image census for '{}': no image: {why}", c.module);
+            return;
+        }
+        let refused: usize = c.rows.iter().map(|r| r.count).sum();
+        let _ = writeln!(
+            err,
+            "image census for '{}': {} top-level declarations, {} carried, {refused} not",
+            c.module,
+            c.top_level,
+            c.top_level - refused.min(c.top_level),
+        );
+        for r in &c.rows {
+            let _ = writeln!(err, "{:>7}  {}  (first: {})", r.count, r.reason, r.example);
+        }
+        if !c.attrs.is_empty() {
+            let _ = writeln!(err, "attributes of the attributed declarations:");
+            for (a, n) in &c.attrs {
+                let _ = writeln!(err, "{n:>7}  {a}");
+            }
+        }
+    }
+
     /// Writes the main unit's module file once `pp` has read it to its
     /// end without errors (spec/modules.md §11.2, §11.6). A unit that is
     /// not importable is `--precompile`'s error, or `-fmodule-output`'s

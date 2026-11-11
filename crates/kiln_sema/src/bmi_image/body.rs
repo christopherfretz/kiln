@@ -1811,7 +1811,41 @@ impl Writer<'_, '_, '_> {
 
     /// Walks every pending root and patches the records that point at it.
     pub(super) fn walk_roots(&mut self) -> W<()> {
+        // `-fkiln-bmi-image-census`: the record each root belongs to, and
+        // the top-level record whose roots are being walked (a local's
+        // roots follow its function's).
+        let mut owner: Option<DeclId> = None;
+        let inv: FxHashMap<u32, DeclId> = if self.census.is_some() {
+            self.recs.iter().map(|(&d, &i)| (i, d)).collect()
+        } else {
+            FxHashMap::default()
+        };
         while let Some(r) = self.bs.roots.pop() {
+            let rec = match r {
+                Root::Body(rec, _)
+                | Root::Init(rec, _)
+                | Root::FieldWidth(rec, _)
+                | Root::FieldInit(rec, _)
+                | Root::CtorInit(rec, _, _) => rec,
+                Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
+            };
+            if let Some(&d) = inv.get(&rec) {
+                owner = Some(d);
+            }
+            if let Err(why) = self.walk_root(r) {
+                match owner {
+                    Some(d) if self.census.is_some() => self.census_fail(d, why, false),
+                    _ if self.census.is_some() => {}
+                    _ => return Err(why),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Walks one pending root ([`Writer::walk_roots`]).
+    fn walk_root(&mut self, r: Root) -> W<()> {
+        {
             match r {
                 Root::Body(rec, s) => {
                     let i = self.walk(Node::S(s))?;

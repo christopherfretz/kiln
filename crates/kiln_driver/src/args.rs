@@ -612,6 +612,10 @@ pub struct Args {
     /// The hidden `-fkiln-bmi-image`: write (and use) the kind-2
     /// declaration image section (spec/modules.md §11.11 "Part 2a").
     pub bmi_image: bool,
+    /// The hidden `-fkiln-bmi-image-census`: count why the declaration
+    /// image cannot carry each top-level declaration of the main module
+    /// unit (spec/modules.md §11.11 "Fallback census").
+    pub bmi_image_census: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -1275,6 +1279,7 @@ impl Args {
             "-fkiln-memory-report" => self.memory_report = true,
             "-fkiln-bmi-image" => self.bmi_image = true,
             "-fno-kiln-bmi-image" => self.bmi_image = false,
+            "-fkiln-bmi-image-census" => self.bmi_image_census = true,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }

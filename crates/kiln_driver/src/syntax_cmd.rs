@@ -234,6 +234,7 @@ impl SyntaxJob<'_> {
             record_image: a.bmi_image
                 && a.bmi_kind != Some(1)
                 && job.module_output_path().is_some(),
+            image_census: a.bmi_image_census,
             ..ParseOptions::default()
         };
         let limits = a.constexpr.limits();
@@ -255,6 +256,7 @@ impl SyntaxJob<'_> {
         drop(pp);
         result.dep_list = deps;
         job.note_lazy_buffers(sm, engine);
+        job.write_image_census(tu.image_census.as_ref(), engine);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let mut err = job.stderr.clone();
         a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);
