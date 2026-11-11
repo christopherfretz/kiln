@@ -4,8 +4,8 @@
 // types and names from the declaration image are the ones against the
 // replayed source: substitution failures in a dependent return type,
 // errors inside an instantiated pattern (noted at the module's source),
-// and a failed class template argument deduction listing the module's
-// guides (pinned in crates/kiln_driver/tests/modules_bmi.rs).
+// and a failed CTAD listing the module's guides (clang 19 names it unqualified).
+//@ requires: clang>=22
 //@ expect: compile-fail
 //@ std: c++20
 //@ module: imgd=Inputs/img-deptypes.cppm
