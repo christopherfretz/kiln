@@ -135,6 +135,10 @@ impl Writer<'_, '_, '_> {
     /// specialization, before its class checks.
     pub(super) fn class_spec_entry(&mut self, d: DeclId, i: u32) -> W<()> {
         let ast = &self.s.ast;
+        // A variable template's specializations are listed the same way
+        // (WP-1307), with the variable's record.
+        let var = ast.decls.get(d).kind() != DeclKind::CXXRecord;
+        let tkind = if var { 3 } else { 1 };
         let entry = if let Some((_, p)) = ast.partial_spec_info(d) {
             let p = *p;
             let list = *ast.templates.param_list(p.params);
@@ -151,7 +155,7 @@ impl Writer<'_, '_, '_> {
             if list.requires.is_some() {
                 return Err("a constrained template");
             }
-            let template = self.template_rec(p.template, 1)?;
+            let template = self.template_rec(p.template, tkind)?;
             let mut params = Vec::new();
             let mut decls = Vec::new();
             for q in ast.lists.iter::<DeclId>(list.params) {
@@ -196,8 +200,15 @@ impl Writer<'_, '_, '_> {
             if si.from != d {
                 return Err("an explicit specialization or instantiation");
             }
-            let template = self.template_rec(si.template, 1)?;
-            let written = ast.templates.args_as_written(d).ok_or(MALFORMED)?;
+            let template = self.template_rec(si.template, tkind)?;
+            // A variable's arguments as written are not kept: the
+            // printed ones (the converted, less trailing defaults) stand
+            // for them, which convert and print the same.
+            let written = if var {
+                si.print_args
+            } else {
+                ast.templates.args_as_written(d).ok_or(MALFORMED)?
+            };
             let written: Vec<TemplateArg> = ast.types.args(written).to_vec();
             let converted: Vec<TemplateArg> = ast.types.args(si.args).to_vec();
             let packs = converted.iter().any(|a| matches!(a.view(), ArgView::Pack(_)));
@@ -436,11 +447,13 @@ pub(super) fn validate_class_specs(
         else {
             return bad("bad class template specialization");
         };
-        let Payload::Template { kind: 1, params: tparams, .. } = &t.payload else {
+        let Payload::Template { kind: tkind @ (1 | 3), params: tparams, .. } = &t.payload else {
             return bad("bad class template specialization");
         };
-        let ok = matches!(r.payload, Payload::Record { .. })
-            && c.template < c.rec
+        let ok = match tkind {
+            1 => matches!(r.payload, Payload::Record { .. }),
+            _ => matches!(r.payload, Payload::Var { .. }),
+        } && c.template < c.rec
             && r.name == t.name
             && r.ctx == t.ctx
             && r.prev == NONE
@@ -519,24 +532,9 @@ impl Sema<'_, '_> {
     ) -> DeclId {
         let Some(c) = img.cspecs.get(i) else { return self.builder().record(h, tag, None) };
         let tmpl = self.ast.first(ids[c.template as usize]);
-        let mut args = Vec::with_capacity(c.args.len());
-        for a in &c.args {
-            let x = match a {
-                CArg::Pack(v) => {
-                    let mut elems = Vec::with_capacity(v.len());
-                    for x in v {
-                        elems.push(self.image_carg(img, tys, ids, x));
-                    }
-                    TemplateArg::pack(self.ast.types.arg_list(&elems))
-                }
-                _ => self.image_carg(img, tys, ids, a),
-            };
-            args.push(x);
-        }
+        let args = self.image_spec_args(img, tys, ids, c);
         if let Some(head) = &c.head {
-            let ps: Vec<DeclId> = head.params.iter().map(|&p| ids[p as usize]).collect();
-            let (t, l, r) = (main.get(head.tloc), main.get(head.langle), main.get(head.rangle));
-            let list = self.builder().template_param_list(t, l, r, 0, &ps, None);
+            let list = self.image_partial_head(ids, main, head);
             let al = self.ast.types.arg_list(&args);
             return self.builder().class_partial_spec(h, tmpl, list, al, tag);
         }
@@ -568,6 +566,79 @@ impl Sema<'_, '_> {
             self.ast.decls.set_access(spec, h.misc.access());
         }
         spec
+    }
+
+    /// Builds variable specialization record `i` (header `h`, type `ty`,
+    /// specifiers `vspec`; WP-1307), as `act_on_var_spec_declarator`
+    /// does; `None` when the record is no listed specialization.
+    #[allow(clippy::too_many_arguments, reason = "the reader's tables and the record's head")]
+    pub(super) fn image_var_spec(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        main: &Locs,
+        i: u32,
+        h: DeclHead,
+        ty: QualType,
+        vspec: kiln_ast::decl::VarSpec,
+    ) -> Option<DeclId> {
+        let c = img.cspecs.get(i)?;
+        let tmpl = self.ast.first(ids[c.template as usize]);
+        let args = self.image_spec_args(img, tys, ids, c);
+        if let Some(head) = &c.head {
+            let list = self.image_partial_head(ids, main, head);
+            let al = self.ast.types.arg_list(&args);
+            return Some(self.builder().var_partial_spec(h, tmpl, list, al, ty, vspec));
+        }
+        let locs = vec![h.loc; args.len()];
+        let spec = self.find_or_create_var_spec(tmpl, &args, &locs, h.loc, ty, vspec).ok()?;
+        if let Some((k, _)) = self.ast.spec_info(spec) {
+            self.ast.templates.update_spec(k, |s| {
+                s.kind = SpecKind::ExplicitSpecialization;
+                s.from = spec;
+            });
+        }
+        let lexical = h.lexical.unwrap_or(h.ctx);
+        self.builder().declare_spec_in(spec, lexical, h.loc);
+        Some(spec)
+    }
+
+    /// The arguments of listed specialization `c`.
+    fn image_spec_args(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        c: &ClassSpec,
+    ) -> Vec<TemplateArg> {
+        let mut args = Vec::with_capacity(c.args.len());
+        for a in &c.args {
+            let x = match a {
+                CArg::Pack(v) => {
+                    let mut elems = Vec::with_capacity(v.len());
+                    for x in v {
+                        elems.push(self.image_carg(img, tys, ids, x));
+                    }
+                    TemplateArg::pack(self.ast.types.arg_list(&elems))
+                }
+                _ => self.image_carg(img, tys, ids, a),
+            };
+            args.push(x);
+        }
+        args
+    }
+
+    /// A partial specialization's template-head.
+    fn image_partial_head(
+        &mut self,
+        ids: &[DeclId],
+        main: &Locs,
+        head: &PartialHead,
+    ) -> kiln_ast::TemplateParamListId {
+        let ps: Vec<DeclId> = head.params.iter().map(|&p| ids[p as usize]).collect();
+        let (t, l, r) = (main.get(head.tloc), main.get(head.langle), main.get(head.rangle));
+        self.builder().template_param_list(t, l, r, 0, &ps, None)
     }
 
     fn image_carg(

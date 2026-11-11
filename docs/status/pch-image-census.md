@@ -503,3 +503,94 @@ with a small loop"):
   (53, WP-1300's non-type argument expressions among them), a type
   (16), "a template" (13; variable template specializations) and a
   specialization outside the image (7).
+
+## WP-1307: friend templates, explicit instantiations, variable template specializations, static assertions (2026-11-11)
+
+Debug build of the WP-1307 branch merged with main at WP-1304 (#627;
+WP-1300, #626, `IMAGE_VERSION` 20, included); same two purviews and
+commands as the WP-1283 section. "before" is the merged main's own
+binary (`2f9bf7eae`) on the same purviews, so the deltas are this
+slice's alone.
+
+```
+allstd, before: 26765 top-level declarations, 21191 carried, 5574 not
+allstd, after:  26761 top-level declarations, 21441 carried, 5320 not  (16.5 s, 125 MiB)
+stdcxx, before: 25333 top-level declarations, 20650 carried, 4683 not
+stdcxx, after:  25287 top-level declarations, 21083 carried, 4204 not  (15.8 s, 108 MiB)
+```
+
++250 / +433 carried (the top-level counts drop a little: explicit
+instantiations and the specializations they name are no longer
+counted as declarations of their own). The slice carries friend
+templates (the `__wrap_iter` shape, a friend class template as the
+template's first declaration) and friends declared in class templates,
+enumerators of enumerations with a typedef or `bool` underlying type,
+explicit instantiation declarations and definitions of class templates
+(a section of their own, rerun by the reader), partial and explicit
+specializations of variable templates, static assertions in class
+templates, out-of-line members of class template partial
+specializations, late-parsed default arguments, and specializations
+named before their template's definition (spec/modules.md §11.11).
+Rows of this slice (before → after; "—" is a row not listed):
+
+| allstd | stdcxx | first reason |
+|---|---|---|
+| 16 → — | 18 → — | a friend template |
+| 5 → — | 17 → — | a friend declaration in a class template |
+| 7 → — | 4 → — | an enumerator value the image does not carry |
+| 44 → — | 18 → — | an explicit instantiation |
+| 16 → — | 50 → — | an unsupported lexical context |
+| — → — | — → 38 | cascade: an explicit instantiation in a namespace outside the image |
+| 41 → 29 | 105 → 73 | an explicit specialization or instantiation |
+| 113 → 27 | 209 → 38 | a template (left: template template parameters) |
+| 88 → — | 106 → — | a static assertion in a template |
+| 119 → 32 | 110 → 32 | a parameter with an adjusted type or a pack |
+| 64 → 17 | 14 → 13 | an out-of-line member of a class nested in a template |
+| 148 → 197 | 148 → 206 | mem-initializers of a constructor in a class template |
+| 60 → 121 | — → — | an attribute the image does not carry yet |
+| 27 → 43 | 77 → 82 | a template expression |
+| 1083 → 1040 | 183 → 138 | cascade: a member of a class outside the image |
+| 522 → 467 | 288 → 213 | cascade: a body referring to a declaration outside the image |
+
+Rows that grow are declarations newly reached behind a carried one
+(their first reason was a cascade before).
+
+Reading:
+
+- `basic_string` (`string:752`, 800-odd member rows of "a member of a
+  class outside the image") no longer stops on its friend template: the
+  friend `basic_string` in `__wrap_iter` is carried. It now cascades
+  from `__wrap_iter` itself, refused for "mem-initializers of a
+  constructor in a class template" (`wrap_iter.h:46`), so the next root
+  is mem-initializers in class templates (the row grows as more class
+  templates are reached).
+- "a template" is now only template template parameters
+  (`common_reference.h:149`, `is_valid_expansion.h:21`).
+- stdcxx's 38 explicit instantiations (`extern template class
+  basic_ios<char>;`, `basic_ios.tcc:167`) are in `namespace std`
+  reopenings that have no record in the image when the directive is
+  written. Why the reopening has none is not established (a reopening
+  with the same `__visibility__` attribute and only an `extern
+  template` is carried in a reduced test); a follow-up
+  (`explinst.rs`, the `lexical` match).
+- "a template specialization" (20 / 156) is explicit instantiations of
+  function templates (`extern template ostream& __ostream_insert(...)`)
+  and explicit function specializations; not carried.
+- Uses of a variable template specialization in a non-dependent body
+  (`kind<char **>`), and function template calls with explicit
+  arguments, are "a template argument list" (15 / 89 declarations).
+
+Bench headers (`bench/pch/{gnu,mid,lcx}.h`, `-fkiln-pch-image -v`),
+first refusal, merged main → branch: `gnu` and `mid` "an invalid or
+attributed local declaration" → the same; `lcx` "a template" → "a
+template expression". All three still replay.
+
+`cargo xtask test --pch-diff check -v` over `cpp.include`, the
+`module.*` and `cpp.module` conformance directories,
+`tests/differential/pp` and `tests/header-guard/libcxx{,-c}`: 155
+compared, all equal, on both binaries; 36 took the image on both, 119
+replayed. The headers' first refusals move inward rather than flip:
+"a template" 13 → 0 (template template parameters only now), and the
+headers that passed it stop on "mem-initializers of a constructor in a
+class template" (3 → 9), "a declaration in a template" (30 → 34) or "a
+template expression" (16 → 19).

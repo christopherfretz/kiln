@@ -250,6 +250,15 @@ impl Sema<'_, '_> {
                 continue;
             };
             self.merge_template_defaults(t);
+            // A friend class template declared in a class template is
+            // compared with neither side (`finish_template_pattern`'s
+            // `dependent_friend`): its head is deeper (WP-1307).
+            let dependent_friend = self.ast.decls.get(t).kind() == DeclKind::ClassTemplate
+                && self.ast.decls.get(t).misc().friend() != kiln_ast::decl::FriendKind::None
+                && self.ast.templates.param_list(info.params).depth > 0;
+            if dependent_friend {
+                continue;
+            }
             let old = self
                 .head_comparable_decl(prev)
                 .and_then(|p| self.ast.template_info(p))

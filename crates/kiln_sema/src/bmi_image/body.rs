@@ -1005,6 +1005,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     return bad("bad field initializer");
                 }
             }
+            Payload::Assert { cond, msg } => {
+                if *cond as usize >= ne || (*msg != NONE && *msg as usize >= ne) {
+                    return bad("bad static assertion");
+                }
+            }
             Payload::Nttp { default, profile, .. } => {
                 if (*default != NONE && *default as usize >= ne) || (*default == NONE && *profile) {
                     return bad("bad default template argument");
@@ -1313,6 +1318,9 @@ pub(super) enum Root {
     TemplDefault(u32, ExprId),
     /// WP-1284: declaration record, constraint record, the constraint.
     Cons(u32, u32, ExprId),
+    /// WP-1307: static assertion record, slot (0 the condition, 1 the
+    /// message), the expression.
+    Assert(u32, u8, ExprId),
     /// WP-1300: function record, exception words, a `noexcept` operand
     /// naming the function's parameters ([`super::exprs::LateNx`]).
     Noexcept(u32, u8, ExprId),
@@ -2194,6 +2202,7 @@ impl Writer<'_, '_, '_> {
                 | Root::Attr(rec, _, _, _)
                 | Root::TemplDefault(rec, _)
                 | Root::Cons(rec, _, _)
+                | Root::Assert(rec, _, _)
                 | Root::Noexcept(rec, _, _) => rec,
                 Root::Default(p, _) => self.bs.param_pos.get(p as usize).map_or(NONE, |x| x.0),
             };
@@ -2272,6 +2281,13 @@ impl Writer<'_, '_, '_> {
                     let i = self.walk(Node::E(e))?;
                     self.set_nttp_default(rec, i);
                 }
+                Root::Assert(rec, slot, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Assert { cond, msg } = &mut self.img.decls[rec as usize].payload
+                    {
+                        *if slot == 0 { cond } else { msg } = i;
+                    }
+                }
                 Root::Noexcept(rec, exc, e) => {
                     let expr = self.walk(Node::E(e))?;
                     self.img.late_nx.push(super::exprs::LateNx { rec, exc, expr });
@@ -2290,7 +2306,18 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let vd = *ast.decls.var(d).ok_or("a malformed variable")?;
         if !vd.templ.is_none() && !self.pattern_of(d, DeclKind::VarTemplate) {
-            return Err("a template");
+            // WP-1307: an explicit or partial specialization is listed
+            // with its template and arguments.
+            match vd.templ.get() {
+                Some((
+                    kiln_ast::decl::TemplLinkKind::Specialization
+                    | kiln_ast::decl::TemplLinkKind::PartialSpecialization,
+                    _,
+                )) => {
+                    self.class_spec_entry(d, rec)?;
+                }
+                _ => return Err("a template"),
+            }
         }
         let bits = vd.spec.bits();
         if var_spec(bits) != Some(vd.spec) {

@@ -3014,6 +3014,14 @@ impl DeclArena {
         set_once(&mut self.field_mut(f).bit_width, width, "FieldData.bit_width", RawId::raw)
     }
 
+    /// Replaces the condition and message of a `static_assert` (a
+    /// module's declaration image builds them after the declaration,
+    /// which it gives a placeholder `true` condition until then,
+    /// spec/modules.md §11.11, WP-1307).
+    pub fn set_static_assert_exprs(&mut self, d: DeclId, cond: ExprId, message: Option<ExprId>) {
+        *self.static_assert_mut(d) = StaticAssertData { cond, message };
+    }
+
     /// `{` of an enumeration definition.
     pub fn begin_enum_definition(&mut self, e: DeclId) {
         let d = self.enumeration_mut(e);

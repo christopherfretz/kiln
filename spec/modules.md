@@ -2133,7 +2133,8 @@ exactly as if it had parsed it:
   replays): packs, default template arguments, template template
   parameters, constraints and requires-clauses, concepts, variable and
   alias templates, deduction guides, redeclared templates, explicit and
-  partial specializations, explicit instantiations, members of class
+  partial specializations, explicit instantiations (of class templates
+  carried since WP-1307), members of class
   templates and class templates themselves (first slice), and any
   pattern node or side table the schema does not carry (template
   argument lists in expressions, dependent member access, dependent
@@ -2273,7 +2274,14 @@ the run's context is the definition's lexical context (the namespace
 the definition is written in, or none at file scope), and the
 definition claims it (there is no template record: sema
 keeps no list for an out-of-line head, the body names the parameters
-directly, and substitution maps them by depth and index). Dependent
+directly, and substitution maps them by depth and index). Since
+WP-1307 the class may also be a partial specialization
+(`template<class R, class... A> R F<R(A...)>::call(A... a) const`);
+a member of a class nested in a template ("an out-of-line member of a
+class nested in a template") still falls back. A parameter whose
+late-parsed default argument ([class.mem]/7) was parsed is written as
+an ordinary one (without `DEFAULT_ARG_PENDING`, which instantiation
+drops too). Tests: `image-partial-member-run.cpp`. Dependent
 base specifiers (a type parameter, `B<T>`) are base records whose
 type is dependent; the validator accepts them in a dependent class
 only. The injected-class-name is not a record: lookup finds it through
@@ -2437,24 +2445,98 @@ lookup table: lookup finds the template.
   parameter's type is carried as its converted value (`integral_constant<bool,
   true>`): the two print and compare identically.
 
-Still falling back: explicit instantiations ("an explicit
-instantiation"), a partial specialization declared before it is defined
+**Explicit instantiations (WP-1307).** `extern template struct
+X<int>;` and `template struct X<int>;` of a carried class template's
+primary pattern, at namespace scope or by a qualified name, make no
+record: the writer skips the specialization and its instantiated
+members as it skips an implicit instantiation, and writes an entry in
+an image section of their own (the last, after the local externs): the
+template record, the arguments as written (`ArgRec`s), the
+template-name's location, the lexical scope (a namespace record, or
+`u32::MAX` for the translation unit) and a byte of owner bits (bit 0
+purview, bit 1 exported) with bit 2 set for a definition. A Spec
+reference to an explicitly instantiated class is written as an
+implicit one's (its importer-side kind comes from the rerun). The
+reader reruns each entry in order through `act_on_explicit_class_inst`
+(the parser's action), in its lexical scope and with the recorded
+owner, once every record and body is built and before the used
+specializations are marked used; the members a definition instantiates
+are then the replay's. Running at the end of the unit instead of at the
+directive changes nothing a valid unit observes ([temp.spec.partial.general]/1,
+[temp.expl.spec]/7, [temp.point]/7). The validator checks each entry
+names a class template record, a namespace record or `u32::MAX`, and
+valid argument types. Still falling back: attributes on the directive
+(the attributed reason), an instantiation of a partial specialization
+or member template ("an explicit instantiation of a partial
+specialization"), of a constrained template, with an argument the
+image does not carry ("an explicit instantiation argument the image
+does not carry"), in a class or other scope ("an explicit
+instantiation in an unsupported scope"; in a namespace that is itself
+not carried, the cascade "an explicit instantiation in a namespace
+outside the image"), and explicit instantiations of
+function and variable templates ("a template specialization").
+
+**Static assertions in class templates (WP-1307).** A
+`static_assert` in a class template, a member class of one or a
+partial specialization (dependent: `DEPENDENT_CTX`) is a member record
+(kind 26) in its class's member order; its condition and message are
+body expressions walked like a default member initializer. A
+non-dependent one makes no record (it was checked when the unit was
+compiled), and one in a function template's body is a local
+declaration ("a static assertion in a template" until local
+declarations of templates are carried). The validator requires the
+record in a class definition, dependent, in a dependent class, unnamed.
+The reader builds the declaration with a placeholder `true` condition
+and sets the expressions after the bodies: a specialization the unit
+completed, and so already checked, may be instantiated while the
+records are built. Tests: `image-static-assert-run.cpp`,
+`kind2_declaration_image_static_assert_in_template` (the importer's
+failing instantiations report what a replay reports).
+
+**Specializations named before the definition (WP-1307).** A Spec
+reference the unit completed is completed by the reader at its record
+only when the template's pattern is defined by then; one named before
+the definition (`template <class T> struct X; using XI = X<int>;`) is
+completed at the first member reference to it, or after the bodies, as
+a replay completes it at its first use after the definition. A member
+reference's pattern may be a member of any declaration of the
+template's chain. Test: `module.unit/alias-forward-template.cpp`.
+
+Still falling back: a partial specialization declared before it is defined
 ("a redeclared partial specialization"), partial specializations in a
 class or of a member template ("a member template or a template in a
 template"), constrained ones ("a constrained template", WP-1284),
 arguments that are dependent expressions ("a partial specialization
-argument the image does not carry"), and variable template
-specializations ("a template"). Member templates, templates in
-templates and redeclared templates are carried since WP-1292 (below).
+argument the image does not carry"), and explicit specializations
+whose template has a non-type parameter with a default argument ("an
+explicit specialization using a non-type default argument"). Member
+templates, templates in templates and redeclared templates are carried
+since WP-1292 (below).
+
+**Variable template specializations (WP-1307).** A partial or
+explicit specialization of a carried variable template is a `Var`
+record listed in the same specialization section, with a template
+record of kind 3: a partial one with its head and converted
+arguments, an explicit one with its printed arguments (sema keeps no
+written ones for a variable; the converted less the trailing defaults
+convert and print the same). The validator accepts a `Var` record for
+a kind-3 template where it accepts a `Record` for kind 1. The reader
+builds a partial one with `var_partial_spec` and an explicit one with
+`find_or_create_var_spec`, marked explicit and declared in its lexical
+scope, as `act_on_var_spec_declarator` does; its initializer follows
+as any variable's. Uses of a variable template specialization in a
+non-dependent body (`kind<char **>`) still fall back ("a template
+argument list"). Tests: `image-var-spec-run.cpp`,
+`image-var-spec-errors.cpp`.
 
 *Static assertions in templates.* A `static_assert` in a class template
 (or a partial specialization) is checked again by each instantiation
-([temp.inst]/3). The image does not carry it yet, and the writer refuses
-it ("a static assertion in a template") rather than drop it: before
-WP-1283 the image silently left it out, and an importer accepted
-ill-formed instantiations (`kind2_declaration_image_static_assert_in_template`).
-A non-dependent `static_assert` was checked when the module was
-compiled and is still not carried.
+([temp.inst]/3). Before WP-1283 the image silently left it out, and an
+importer accepted ill-formed instantiations; WP-1283 refused it ("a
+static assertion in a template"), and since WP-1307 it is carried
+("Static assertions in class templates" above). A non-dependent
+`static_assert` was checked when the module was compiled and is still
+not carried.
 
 *Declarator locations.* Sema keeps, beside each declaration of
 dependent type, where its first type-specifier, its outermost
@@ -2548,12 +2630,36 @@ is not dependent and names an earlier befriended record of that class,
 that a record with friend bits is a function or undefined class in a
 namespace whose lexical context is the open class, and that friend
 list entries are earlier function or class records without adjacent
-duplicates. Still falling back: friends in class templates (the
-befriended function is dependent: "a declaration in a template" or "a
-friend declaration in a class template"), friend templates ("a friend
-template") and befriended member functions ("a friend member
-function"). Tests: `image-friend-run.cpp`, `image-friend-errors.cpp`,
-`kind2_declaration_image_polymorphic_templates_and_friends`.
+duplicates.
+
+**Friend templates and friends of class templates (WP-1307).** A
+friend function template or class template (`template <class U>
+friend struct It;`, the `__wrap_iter` shape, where the friend is the
+template's first declaration) is a Template record with friend bits
+whose head and pattern carry the class as lexical context; its
+`Friend` record is dependent (`DEP`), as sema marks it, even in a
+non-template class. A friend in a class template (a hidden friend
+defined in the class, or a declaration of a namespace function or
+class) is carried when its befriended record's lexical class is a
+carried dependent class: the befriended record is dependent, owned by
+that class for the validator's dependent-record claims (its head
+depth is the class's level), and a friend function's body is a pattern
+body. The validator accepts a `Friend` record in any class
+definition, dependent exactly when its class is or it names a
+template, and Template records of kind 0 or 1 in friend lists. The
+reader skips inherited-default recording for a dependent friend class
+template as `finish_template_pattern` does. Still falling back:
+befriended member functions ("a friend member function"), friend
+specializations and friends that are members of class templates ("a
+friend specialization or member of a class template"), friends
+declared by a qualified name in a class template ("a friend declared
+by a qualified name"), and other friends of class templates ("a friend
+declaration in a class template"). Tests: `image-friend-run.cpp`,
+`image-friend-errors.cpp`, `image-friend-template-run.cpp`,
+`image-friend-template-errors.cpp`,
+`kind2_declaration_image_polymorphic_templates_friends_and_implicit_members`,
+`kind2_declaration_image_friend_templates_errors`; an xfail repro of a
+pre-existing attachment check, `module.unit/friend-template-instantiated-attachment.cpp`.
 
 **Context reasons (WP-1292).** A record whose semantic context is not
 in the image is "a member of a class outside the image" when the
@@ -3064,7 +3170,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 20` since WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 21` since WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -3185,7 +3291,7 @@ special member, 15 template type parameter, 16 non-type template
 parameter, 17 template (S4), 18 specialization reference and 19 member
 reference (S4b, WP-1139), and since S6 (WP-1068) 20 using-declaration,
 21 using-shadow, 22 using-directive, 23 namespace alias and 24
-using-enum. The flags byte may hold `DEPENDENT_CTX`
+using-enum, 25 friend (WP-1292) and 26 static assertion (WP-1307). The flags byte may hold `DEPENDENT_CTX`
 (64) on parameters and patterns of templates and on the members of a
 class template's pattern (S4). The payloads are:
 
@@ -3228,6 +3334,9 @@ class template's pattern (S4). The payloads are:
 - enumeration: scoped, the fixed underlying and promotion types (or 0),
   and when complete the computed ones;
 - enumerator: its type and the value (16 bytes, little-endian `i128`);
+  the type may be sugared (an enumeration whose fixed underlying type
+  is a typedef) and the value a `bool` (as 0 or 1), since WP-1307; a
+  qualified type falls back;
 - typedef and alias: the underlying type;
 - namespace and export: nothing;
 - class (S3): the `TagKind` byte, then 0 (a declaration) or 1 and the
@@ -3242,6 +3351,8 @@ class template's pattern (S4). The payloads are:
   width and the default member initializer (expression indices or
   `u32::MAX`);
 - access specifier (S3): nothing (its access is the header's);
+- static assertion (WP-1307): the condition and the message (expression
+  indices; the message `u32::MAX` when there is none);
 - implicit special member (S3): the `SpecialKind` (0 default
   constructor, 1 copy and 2 move constructor, 3 copy and 4 move
   assignment, 5 destructor); its context is a complete class that
@@ -3472,9 +3583,10 @@ functions than its first declaration's, overrides a function outside
 the image ("an override of a function outside the image"; S6), has a
 key function outside the image, inherits constructors or assignment operators, is an
 anonymous union or struct (or a member of one, or names one through a
-typedef), is a template or a closure type, is incomplete, declares a friend template or
-befriends a member function or is a class template with friends
-(friends of other classes are carried since WP-1292), a
+typedef), is a template or a closure type, is incomplete,
+befriends a member function or a specialization (friends of other
+classes are carried since WP-1292, friend templates and friends in class
+templates since WP-1307), a
 class-specific allocation function, a defaulted comparison or an
 out-of-line defaulted function, a `[[no_unique_address]]` field, any
 other side data sema keeps in its member maps ("a declaration with
@@ -3547,7 +3659,7 @@ classes and templates). The follow-ups, in priority order:
    (polymorphic class templates and friends of classes are carried
    since WP-1292, and so are classes whose implicit members need
    overload resolution; friend templates and friends in class templates
-   are not), anonymous unions and structs,
+   since WP-1307), anonymous unions and structs,
    inherited constructors, defaulted comparisons and out-of-line defaulted
    functions, class-specific allocation functions,
    `[[no_unique_address]]`, the member side maps (qualified member

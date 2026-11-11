@@ -849,7 +849,7 @@ impl Sema<'_, '_> {
     /// specialization's definition is instantiated, and (an explicit
     /// instantiation definition, [temp.explicit]/10) the definitions of
     /// its members.
-    fn act_on_explicit_class_inst(
+    pub(crate) fn act_on_explicit_class_inst(
         &mut self,
         tmpl: DeclId,
         args: &[TemplateArg],
