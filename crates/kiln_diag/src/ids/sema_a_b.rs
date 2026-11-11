@@ -96,6 +96,7 @@ sema_array_init_wide_string_into_char = Error (0) "initializing char array with 
 sema_array_not_modifiable = Error (1) "array type {0} is not assignable";
 sema_array_of_functions = Error (2) "'{0}' declared as array of functions of type {1}";
 sema_array_of_references = Error (2) "'{0}' declared as array of references of type {1}";
+sema_array_parameter_mismatch = WarningOff [ArrayParameter] (2) "argument '{0}' of type {1} with mismatched bound";
 // [expr.new]/6 (C++11 contextual conversion), [expr.delete]/2 (WP-374)
 sema_array_size_ambiguous_conversion = Error (1) "ambiguous conversion of array size expression of type {0} to an integral or enumeration type";
 sema_array_size_conversion = Extension [Cxx11Extensions] (3) "implicit conversion from array size expression of type {0} to {1:integral|enumeration} type {2} is a C++11 extension";
@@ -104,6 +105,7 @@ sema_array_size_incomplete_type = Error (1) "array size expression has incomplet
 sema_array_size_non_int = Error (1) "size of array has non-integer type {0}";
 sema_array_size_not_integral = Error (2) "array size expression must have integral or {0:unscoped |}enumeration type, not {1}";
 sema_array_sizeless_element = Error (1) "array has sizeless element type {0}";
+sema_array_star_in_function_definition = Error (0) "variable length array must be bound in function definition";
 sema_array_too_large = Error (1) "array is too large ({0} elements)";
 // [dcl.asm] GNU global register variables (WP-327)
 sema_asm_bad_register_type = Error (0) "unsupported type for named register variable";

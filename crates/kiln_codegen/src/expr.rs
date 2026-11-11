@@ -843,6 +843,11 @@ impl Cg<'_> {
         let s = ast.exprs.operand(e);
         let sq = ast.exprs.get(s).ty();
         let ck = ast.exprs.cast_kind(e);
+        // clang `EmitExplicitCastExprType`: a cast to a variably modified
+        // type (`(int (*)[n])p`) evaluates its bounds first.
+        if n.kind() == ExprKind::CStyleCastExpr {
+            self.emit_vla_bounds(q)?;
+        }
         Ok(Some(match ck {
             CastKind::LValueToRValue => return self.emit_load_cast(e, q, s),
             // clang `ScalarExprEmitter::VisitCastExpr`: a user-defined or

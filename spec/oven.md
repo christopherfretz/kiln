@@ -788,6 +788,15 @@ fault counts and trap ids unchanged.
   pointer arithmetic succeed and fails the access; kiln faults at the
   arithmetic for a nonzero index, where the cold note path
   (`indexes_vla`) reports it as a read whatever the access is.
+  A VLA type's size never reaches evaluation (WP-1287): any other
+  expression of variably modified type -- pointer arithmetic on a pointer
+  to a VLA (`p + 1`, `++p`, `p += 1`), a subscript or dereference yielding
+  a VLA -- throws `Invalid` at its location (a subscript's is its base's)
+  before anything reads the zero-size layout (`variably_modified` in
+  `compile.rs`). A name, a cast (its own rules apply) and a parenthesis
+  carry a pointer value and need no size, so `int (*p)[n] = nullptr;
+  p == nullptr` stays constant, as in clang
+  (`dcl.array/vla-size-never-constant.cpp`).
 - **Mutable members** (WP-183, [expr.const]/4, /5.9): a `mutable`
   subobject of an object usable in constant expressions is not usable, so
   a read of it (or of anything inside it) from an object whose lifetime

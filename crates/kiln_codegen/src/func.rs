@@ -729,6 +729,16 @@ impl Cg<'_> {
         if let Some(a) = vtt_addr {
             self.f.vtt = Some(self.load(LTy::PTR, a, 8, false));
         }
+        // clang `StartFunction`: the bounds of a variably modified
+        // parameter type as written (`int a[n][m]` evaluates `n` and `m`;
+        // C17 6.9.1p10), once the parameters are stored.
+        if !self.f.naked {
+            for &p in &param_decls {
+                let pq = ast.decls.get(p).ty().expect("param type");
+                let written = ast.decls.param(p).and_then(|x| x.original_ty).unwrap_or(pq);
+                self.emit_vla_bounds(written)?;
+            }
+        }
         let start = body.map_or(ast.decls.get(d).loc(), |b| self.di_stmt_begin(b));
         self.di_prologue_end(start, thunk.is_some());
 

@@ -145,6 +145,7 @@ mod vector;
 mod vector_ops;
 mod vexing;
 mod visibility;
+mod vla;
 
 use kiln_abi::Target;
 use kiln_ast::types::{PrintOptions, TargetTypes, print_type};

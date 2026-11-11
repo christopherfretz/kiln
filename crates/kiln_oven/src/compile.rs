@@ -1456,6 +1456,40 @@ impl<'a> Compiler<'a> {
     /// [expr.const]/10.22 (before C++26 and P3068, as clang 19):
     /// evaluating a throw-expression is not a core constant expression;
     /// the generic note at the `throw`.
+    /// A variably modified type never reaches evaluation (spec/oven.md,
+    /// "Variable length arrays"): its size is a run-time value, which the Oven has no way to
+    /// know -- it lays a variable length array out as an opaque, zero-size
+    /// type. So an expression of such a type traps with clang's generic
+    /// note, except the ones that only name or carry a pointer value (a
+    /// variable, a cast: its load, its decay, a null pointer conversion),
+    /// which need no size:
+    /// `int (*p)[n] = nullptr; p == nullptr` is constant, as in clang.
+    /// Pointer arithmetic, a dereference and a subscript trap. Returns
+    /// whether it trapped.
+    fn variably_modified(&mut self, e: ExprId) -> bool {
+        let ast = self.ast();
+        let n = ast.exprs.get(e);
+        if !ast.types.qflags(n.ty()).contains(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED) {
+            return false;
+        }
+        // A cast keeps its own rules (one to a pointer to a VLA from
+        // another pointer type is a reinterpret_cast).
+        let benign =
+            matches!(n.kind(), ExprKind::DeclRefExpr | ExprKind::ParenExpr) || n.kind().is_cast();
+        if benign {
+            return false;
+        }
+        // clang's note sits at the expression location (`+` of `p + 1`),
+        // which for a subscript is its base's (`ArraySubscriptExpr::
+        // getExprLoc`).
+        let mut at = e;
+        while ast.exprs.get(at).kind() == ExprKind::ArraySubscriptExpr {
+            at = skip_parens(ast, ast.exprs.operands(at)[0]);
+        }
+        self.throw_invalid(at);
+        true
+    }
+
     fn throw_invalid(&mut self, e: ExprId) {
         self.trap(e, "subexpression not valid in a constant expression");
     }
@@ -3478,7 +3512,7 @@ impl Compiler<'_> {
     }
 
     fn rv_inner(&mut self, e: ExprId, dst: u32) {
-        if self.wide_bit_int(e) {
+        if self.wide_bit_int(e) || self.variably_modified(e) {
             return;
         }
         let n = self.node(e);
@@ -3924,6 +3958,10 @@ impl Compiler<'_> {
     /// Increment/decrement of `place`; `out` receives the old value for a
     /// postfix operator, the new one for a prefix one.
     fn inc_dec(&mut self, place: Place, ty: OTy, op: UnaryOp, out: Option<u32>, e: ExprId) {
+        // `++p` as a statement is not reached through `rv_inner`.
+        if self.variably_modified(e) {
+            return;
+        }
         if self.o.types.wide(ty).is_some() {
             // A wide value is never read through `out` (the postfix form
             // is `wide_init`'s).
@@ -4290,6 +4328,10 @@ impl Compiler<'_> {
     /// One builtin binary operator `e` into `dst`; `ga` / `gb` hold its
     /// operands' values when a spine walk evaluated them already.
     fn binary_node(&mut self, e: ExprId, dst: u32, ty: OTy, ga: Option<u32>, gb: Option<u32>) {
+        // A spine node is not reached through `rv_inner`.
+        if self.variably_modified(e) {
+            return;
+        }
         let op = self.ast().exprs.binary_op(e);
         let [a, b] = self.ast().exprs.operands(e);
         let at = self.ety(a);
@@ -4837,6 +4879,9 @@ impl Compiler<'_> {
     }
 
     fn lv(&mut self, e: ExprId, acc: Access) -> Place {
+        if self.variably_modified(e) {
+            return Place::Mem(self.reg());
+        }
         let n = self.node(e);
         match n.kind() {
             ExprKind::ParenExpr => {
@@ -5428,6 +5473,9 @@ impl Compiler<'_> {
     }
 
     fn compound_assign(&mut self, e: ExprId) -> Place {
+        if self.variably_modified(e) {
+            return Place::Mem(self.reg());
+        }
         let ast = self.ast();
         let n = *ast.exprs.get(e);
         let x = *ast.exprs.compound_assign(e);

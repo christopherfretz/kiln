@@ -4068,6 +4068,13 @@ impl Sema<'_, '_> {
         if self.ast.types.same_type(lt, rt) {
             return Some((l, r, lt));
         }
+        // C17 6.5.8p2, 6.5.9p2: pointers to compatible types (6.2.7). Two
+        // pointers to variable length arrays are never the same type --
+        // each VLA type is its own node -- but are compatible whenever
+        // their elements are, as `int (*)[n]` and `int (*)[m]` are.
+        if self.is_c() && lp && rp && conv::c_assign::compatible(self, lt, rt) {
+            return Some((l, r, lt));
+        }
         if conv::standard_conversion(self, r, lt, ConvCtx::Comparison).is_some() {
             let r2 = conv::implicit_convert(self, r, lt, ConvCtx::Comparison).ok()?;
             return Some((l, r2, lt));

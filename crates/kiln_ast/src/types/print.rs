@@ -1791,9 +1791,13 @@ impl Printer<'_> {
                 self.after(e);
             }
             TypeView::VariableArray { elem, size } => {
-                self.push("[");
-                self.expr(size);
-                self.push("]");
+                if self.ctx.vla_star_bound == Some(size) {
+                    self.push("[*]");
+                } else {
+                    self.push("[");
+                    self.expr(size);
+                    self.push("]");
+                }
                 self.after(elem);
             }
             TypeView::DependentSizedArray { elem, size } => {

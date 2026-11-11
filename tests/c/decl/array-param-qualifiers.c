@@ -6,7 +6,6 @@
 //@ std: c17
 //@ expect: run
 //@ stdout: 9
-//@ xfail(kiln): WP-1282 follow-up, qualifiers and static inside a parameter's [ ] rejected as "a C99 feature, not permitted in C++"
 #include <stdio.h>
 static int sum(int n, const int a[restrict], int b[const 2], int c[static 2]) {
   b[0] = a[0];
