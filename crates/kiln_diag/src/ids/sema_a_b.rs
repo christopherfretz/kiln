@@ -87,8 +87,14 @@ sema_array_designator_non_array = Error (1) "array designator cannot initialize 
 sema_array_designator_too_large = Error (2) "array designator index ({0}) exceeds array bounds ({1})";
 sema_array_incomplete_type = Error (1) "array has incomplete element type {0}";
 // [dcl.init.string]/1: the literal kind must match the element type (WP-823)
+// clang `ext_array_init_copy` (C, GNU; WP-1286).
+sema_array_init_compound_literal_gnu = Extension [GnuCompoundLiteralInitializer] (2) "initialization of an array of type {0} from a compound literal of type {1} is a GNU extension";
+// clang `err_array_init_different_type` (C; WP-1286).
+sema_array_init_different_type = Error (2) "cannot initialize array of type {0} with array of type {1}";
 sema_array_init_incompat_wide_string = Error (0) "initializing wide char array with incompatible wide string literal";
 sema_array_init_narrow_string_into_wchar = Error (0) "initializing wide char array with non-wide string literal";
+// clang `err_array_init_non_constant_array` (C; WP-1286).
+sema_array_init_non_constant_array = Error (2) "cannot initialize array of type {0} with non-constant array of type {1}";
 sema_array_init_not_init_list = Error (1) "array initializer must be an initializer list{0:| or string literal| or wide string literal}";
 sema_array_init_plain_string_into_char8 = Error (0) "initializing 'char8_t' array with plain string literal";
 sema_array_init_utf8_string_into_char = Error (1) "initialization of char array with UTF-8 string literal is not permitted by {0:'-fchar8_t'|C++20}";

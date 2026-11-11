@@ -160,6 +160,9 @@ impl Sema<'_, '_> {
     pub(crate) fn string_init_compat(&self, elem: QualType, s: ExprId) -> StringInit {
         use kiln_ast::expr::StringKind as K;
         use kiln_ast::types::BuiltinType as B;
+        if self.is_c() {
+            return self.c_string_init_compat(elem, s);
+        }
         let c = self.ast.types.canonical(elem);
         let b = self.ast.types.builtin(c.without_quals());
         let char_like = matches!(b, Some(B::Char | B::SChar | B::UChar));
@@ -955,6 +958,11 @@ impl Sema<'_, '_> {
                     self.emit(msg);
                     return self.recover(ty, &[e], at);
                 }
+            }
+            if self.is_c()
+                && let Some(x) = self.c_array_init_from_compound_literal(ty, e, at)
+            {
+                return x;
             }
             // clang `isCharType` / `IsWideCharCompatible` (which
             // compares qualifiers too) pick the suggested literal; none
