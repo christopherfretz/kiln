@@ -34,6 +34,7 @@ use kiln_ast::types::Nns;
 use kiln_ast::{AttrId, ConstValueId, ExprId, ListId, NnsId, RawId, StmtId, StringLitId};
 use kiln_source::fx::FxHashSet;
 
+use super::constraints::CONCEPT_KIND;
 use super::{
     Access, ConstexprKind, DEP, DeclFlags, DeclId, DeclKind, DeclName, DeclRec, FnBody, FnSpec,
     FxHashMap, Image, LEX_TU, Loc, NONE, Payload, QRef, QualType, Rd, Res, Sema, W, Wr, Writer,
@@ -78,7 +79,7 @@ pub(super) struct ExprRec {
     pub(super) bits: u8,
     pub(super) aux: u8,
     /// Which cold annotations follow the slots ([`COLD_END`] ...).
-    pub(super) cold: u8,
+    pub(super) cold: u16,
     /// `ExprDeps` bits: type, value and instantiation dependence (S4: a
     /// pattern's body; 0 elsewhere).
     pub(super) deps: u8,
@@ -109,21 +110,26 @@ pub(super) struct Bodies {
 /// `expr_begin`, `member_op_loc`, `default_arg_rewritten`, a fold's
 /// `...` (sema's `fold_ellipsis`, WP-1279), a name's qualifier and
 /// template arguments (WP-1279), in this order after the slots.
-const COLD_END: u8 = 1;
-const COLD_WRITTEN: u8 = 2;
-const COLD_RHS: u8 = 4;
-const COLD_BEGIN: u8 = 8;
-const COLD_OP: u8 = 16;
+const COLD_END: u16 = 1;
+const COLD_WRITTEN: u16 = 2;
+const COLD_RHS: u16 = 4;
+const COLD_BEGIN: u16 = 8;
+const COLD_OP: u16 = 16;
 /// The lifetime-extended copy of a default argument (WP-1149) or default
 /// member initializer (WP-1177, spec/sema.md §7.6a): an expression field,
 /// so the copy is written before its use.
-const COLD_REWRITE: u8 = 32;
-const COLD_ELLIPSIS: u8 = 64;
+const COLD_REWRITE: u16 = 32;
+const COLD_ELLIPSIS: u16 = 64;
 /// A name's written qualifier and explicit template arguments (the
 /// templates' `expr_nns` / `expr_targs`, WP-1279): an [`F::Nns`] and an
-/// [`F::TA`]. Every bit of `cold` is now in use: a further annotation
-/// needs a wider field (and an `IMAGE_VERSION` bump).
-const COLD_LOOKUP: u8 = 128;
+/// [`F::TA`].
+const COLD_LOOKUP: u16 = 128;
+/// The `template` keyword of a dependent member or qualified name
+/// (`t.template get<3>()`, the templates' `template_kw`, WP-1284;
+/// [temp.names]/3): its location. The first bit of the wider field.
+const COLD_TEMPLATE_KW: u16 = 256;
+/// Every annotation bit.
+const COLD_ALL: u16 = 511;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -489,12 +495,13 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         | X::CXXReinterpretCastExpr => CastKind::from_u8(aux).is_some(),
         X::UnaryExprOrTypeTraitExpr => TraitKind::from_u8(aux).is_some(),
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
-        X::ConstantExpr => aux <= 3,
+        // The constant's result kind; `->` and the `template` keyword
+        // ([temp.names]/3, WP-1284).
+        X::ConstantExpr | X::CXXDependentScopeMemberExpr => aux <= 3,
         X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
         X::CXXThisExpr
         | X::ExprWithCleanups
         | X::CXXUnresolvedConstructExpr
-        | X::CXXDependentScopeMemberExpr
         | X::UnresolvedLookupExpr => aux <= 1,
         _ => aux == 0,
     }
@@ -532,7 +539,7 @@ fn stmt_aux_ok(k: StmtKind, aux: u16) -> bool {
 
 /// The fields of a record, in order: both slots, then the cold
 /// annotations named by `cold`.
-fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
+fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
     let mut v = Vec::new();
     for s in shape {
         match s {
@@ -551,6 +558,7 @@ fn layout(shape: [Slot; 2], cold: u8) -> Vec<F> {
         (COLD_ELLIPSIS, F::Loc),
         (COLD_LOOKUP, F::Nns),
         (COLD_LOOKUP, F::TA),
+        (COLD_TEMPLATE_KW, F::Loc),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -676,9 +684,11 @@ pub(super) fn encode_bodies(w: &mut Wr, b: &Bodies) {
         w.0.extend_from_slice(bytes);
     }
     arena(w, &b.exprs, |w, e| {
-        for x in [e.kind, e.bits, e.aux, e.cold, e.deps] {
+        for x in [e.kind, e.bits, e.aux] {
             w.u8(x);
         }
+        w.u16(e.cold);
+        w.u8(e.deps);
         w.q(e.ty);
         w.u32(e.loc);
         words(w, &e.words);
@@ -780,8 +790,8 @@ pub(super) fn decode_bodies(r: &mut Rd<'_>) -> Res<Bodies> {
         }
         b.strings.push((enc, bytes));
     }
-    b.exprs = decode_arena(r, 5 + 5 + 4 + 4, |r| {
-        let (kind, bits, aux, cold, deps) = (r.u8()?, r.u8()?, r.u8()?, r.u8()?, r.u8()?);
+    b.exprs = decode_arena(r, 6 + 5 + 4 + 4, |r| {
+        let (kind, bits, aux, cold, deps) = (r.u8()?, r.u8()?, r.u8()?, r.u16()?, r.u8()?);
         let (ty, loc) = (r.q()?, r.u32()?);
         Ok(ExprRec { kind, bits, aux, cold, deps, ty, loc, words: decode_words(r)? })
     })?;
@@ -836,6 +846,16 @@ pub(super) fn param_count(img: &Image) -> usize {
         .sum()
 }
 
+/// [`dc_ok`] for a parameter word: a function parameter, or (WP-1284)
+/// a requires-expression parameter.
+fn param_dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
+    if w & super::requires::REQP != 0 {
+        return matches!(dc, Dc::Value | Dc::Pack)
+            && ((w & !(PARAM | super::requires::REQP)) as usize) < img.reqs.nparams;
+    }
+    matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams
+}
+
 /// Whether declaration word `w` names something of class `dc`.
 pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == LEX_TU {
@@ -844,20 +864,12 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == NONE {
         return false;
     }
-    if w & PARAM != 0 && w & super::requires::REQP != 0 {
-        // A requires-expression parameter (WP-1284).
-        return matches!(dc, Dc::Value | Dc::Pack)
-            && ((w & !(PARAM | super::requires::REQP)) as usize) < img.reqs.nparams;
-    }
     if w & PARAM != 0 {
-        return matches!(dc, Dc::Value | Dc::Param | Dc::Pack) && ((w & !PARAM) as usize) < nparams;
+        return param_dc_ok(img, nparams, w, dc);
     }
     let Some(d) = img.decls.get(w as usize) else { return false };
     if dc == Dc::Concept {
-        return matches!(
-            d.payload,
-            Payload::Template { kind: super::constraints::CONCEPT_KIND, .. }
-        );
+        return matches!(d.payload, Payload::Template { kind: CONCEPT_KIND, .. });
     }
     if dc == Dc::Lookup {
         return matches!(d.payload, Payload::Template { kind: 0 | 3, .. })
@@ -1091,6 +1103,7 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
         if e.bits & 3 == 3
             || (e.bits >> 2) & 3 == 3
             || !expr_aux_ok(k, e.aux)
+            || e.cold & !COLD_ALL != 0
             || (e.cold & COLD_REWRITE != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
@@ -1423,8 +1436,54 @@ impl Writer<'_, '_, '_> {
         Ok(v)
     }
 
+    /// The cold annotations of expression `e` (its mask; the fields go
+    /// to `v`, in mask order).
+    fn cold_fields(&self, e: ExprId, v: &mut Vec<Fv>) -> u16 {
+        let ast = &self.s.ast;
+        let (c, t) = (&ast.exprs.cold, &ast.templates);
+        let mut cold = 0u16;
+        if let Some(&l) = c.end_loc.get(e) {
+            cold |= COLD_END;
+            v.push(Fv::Loc(l));
+        }
+        if let Some(&q) = c.cast_written.get(e) {
+            cold |= COLD_WRITTEN;
+            v.push(Fv::Qt(q));
+        }
+        if let Some(&l) = c.trait_rhs_loc.get(e) {
+            cold |= COLD_RHS;
+            v.push(Fv::Loc(l));
+        }
+        if let Some(&l) = t.expr_begin.get(e) {
+            cold |= COLD_BEGIN;
+            v.push(Fv::Loc(l));
+        }
+        if let Some(&l) = t.member_op_loc.get(e) {
+            cold |= COLD_OP;
+            v.push(Fv::Loc(l));
+        }
+        if let Some(r) = ast.exprs.default_arg_rewritten(e) {
+            cold |= COLD_REWRITE;
+            v.push(Fv::E(Some(r)));
+        }
+        if let Some(&l) = self.s.templ.fold_ellipsis.get(&e) {
+            cold |= COLD_ELLIPSIS;
+            v.push(Fv::Loc(l));
+        }
+        let (nns, targs) = (t.expr_nns.get(e).copied(), t.expr_targs.get(e).copied());
+        if nns.is_some() || targs.is_some() {
+            cold |= COLD_LOOKUP;
+            v.extend([Fv::Nns(nns), Fv::TA(targs)]);
+        }
+        if let Some(&l) = t.template_kw.get(e) {
+            cold |= COLD_TEMPLATE_KW;
+            v.push(Fv::Loc(l));
+        }
+        cold
+    }
+
     /// Header and fields of a node (no translation yet).
-    fn fields(&self, node: Node) -> W<(u8, u8, u16, u8, Vec<Fv>)> {
+    fn fields(&self, node: Node) -> W<(u8, u8, u16, u16, Vec<Fv>)> {
         let ast = &self.s.ast;
         match node {
             Node::E(e) => {
@@ -1471,44 +1530,10 @@ impl Writer<'_, '_, '_> {
                     || t.size_of_pack_origin.contains(e)
                     || t.pseudo_dtor_name.contains(e)
                     || t.pseudo_dtor_first.contains(e)
-                    || t.template_kw.contains(e)
                 {
                     return Err("an expression annotation the image does not carry");
                 }
-                let mut cold = 0u8;
-                if let Some(&l) = c.end_loc.get(e) {
-                    cold |= COLD_END;
-                    v.push(Fv::Loc(l));
-                }
-                if let Some(&q) = c.cast_written.get(e) {
-                    cold |= COLD_WRITTEN;
-                    v.push(Fv::Qt(q));
-                }
-                if let Some(&l) = c.trait_rhs_loc.get(e) {
-                    cold |= COLD_RHS;
-                    v.push(Fv::Loc(l));
-                }
-                if let Some(&l) = t.expr_begin.get(e) {
-                    cold |= COLD_BEGIN;
-                    v.push(Fv::Loc(l));
-                }
-                if let Some(&l) = t.member_op_loc.get(e) {
-                    cold |= COLD_OP;
-                    v.push(Fv::Loc(l));
-                }
-                if let Some(r) = ast.exprs.default_arg_rewritten(e) {
-                    cold |= COLD_REWRITE;
-                    v.push(Fv::E(Some(r)));
-                }
-                if let Some(&l) = self.s.templ.fold_ellipsis.get(&e) {
-                    cold |= COLD_ELLIPSIS;
-                    v.push(Fv::Loc(l));
-                }
-                let (nns, targs) = (t.expr_nns.get(e).copied(), t.expr_targs.get(e).copied());
-                if nns.is_some() || targs.is_some() {
-                    cold |= COLD_LOOKUP;
-                    v.extend([Fv::Nns(nns), Fv::TA(targs)]);
-                }
+                let cold = self.cold_fields(e, &mut v);
                 if k == ExprKind::UnresolvedLookupExpr {
                     self.lookup_ok(e)?;
                 }
@@ -2346,6 +2371,9 @@ impl Sema<'_, '_> {
                 if let Some(t) = targs {
                     let _ = self.ast.templates.expr_targs.insert(id, t);
                 }
+            }
+            if e.cold & COLD_TEMPLATE_KW != 0 {
+                let _ = self.ast.templates.template_kw.insert(id, Loc::from_raw(next()));
             }
         }
         for (i, s) in b.stmts.iter().enumerate() {

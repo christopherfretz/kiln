@@ -22,4 +22,5 @@ template <class T> struct Agg { T a; T b; };
 template <class T> Agg(T, T) -> Agg<long>;
 template <class T> int deduce(T x) { Wrap w(x); return sizeof(w.v); }
 inline int ctad() { int i = 5; Wrap w(&i); return w.v; }
+template <class T> int tget(T t) { return T::template get<3>() + t.template get<1>(); }
 }

@@ -190,9 +190,9 @@ pub(super) fn validate_constraints(img: &Image) -> Res<()> {
             return bad("bad constraint record");
         };
         let ok = match (r.kind, &d.payload) {
-            (K_PARM, Payload::Ttp { .. } | Payload::Nttp { .. }) => true,
+            (K_PARM, Payload::Ttp { .. } | Payload::Nttp { .. })
+            | (K_TRAILING, Payload::Function { .. }) => true,
             (K_HEAD, Payload::Template { kind, .. }) => *kind < CONCEPT_KIND,
-            (K_TRAILING, Payload::Function { .. }) => true,
             (K_CONCEPT, Payload::Template { kind, .. }) => *kind == CONCEPT_KIND,
             _ => false,
         };
@@ -258,9 +258,9 @@ mod tests {
     /// an expression the image does not have, or given twice is an error.
     #[test]
     fn constraint_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
         let img = cons_sample();
         assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
-        type Corrupt = (&'static str, fn(&mut Image));
         let corrupt: [Corrupt; 5] = [
             ("head on a function", |i| i.cons.recs[1].decl = 12),
             ("trailing on a template", |i| i.cons.recs[2].decl = 13),

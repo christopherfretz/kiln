@@ -60,7 +60,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 15;
+pub(crate) const IMAGE_VERSION: u32 = 16;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -5968,9 +5968,9 @@ mod tests {
                 let n = i.bodies.exprs.len();
                 i.bodies.exprs[n - 1].cold = 0;
             }),
-            ("dependent member template keyword", |i| {
+            ("dependent member flags out of range", |i| {
                 let n = i.bodies.exprs.len();
-                i.bodies.exprs[n - 1].aux = 2;
+                i.bodies.exprs[n - 1].aux = 4;
             }),
             ("construction argument out of range", |i| {
                 let n = i.bodies.exprs.len();

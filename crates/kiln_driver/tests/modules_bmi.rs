@@ -2146,7 +2146,7 @@ fn kind2_declaration_image_dependent_types() {
         IMGD,
         IMGD_RUN,
         IMGD_ERR,
-        "0 1 5 3 4 5 6 1 7 5 | 7 1 3 8 1 5\n",
+        "0 1 5 3 4 5 6 1 7 5 | 7 1 3 8 1 5 8\n",
     );
     for want in [
         "m.cppm:15:51: error: no member named 'inner' in 'B'",

@@ -190,9 +190,9 @@ mod tests {
     /// error.
     #[test]
     fn written_locations() {
+        type Corrupt = (&'static str, fn(&mut Image));
         let img = written_sample();
         assert_eq!(decode(&encode(&img)), Ok(img));
-        type Corrupt = (&'static str, fn(&mut Image));
         let corrupt: [Corrupt; 3] = [
             ("type out of range", |i| i.written[0].key = Key::Ty(QRef { ty: 9999, quals: 0 })),
             ("identifier out of range", |i| i.written[1].key = Key::Nns(vec![NnsRec::Ident(99)])),

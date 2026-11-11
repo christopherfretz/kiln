@@ -2356,7 +2356,12 @@ unresolved names.* Carried since the third slice:
   `Nns` field, the list as `0` for none or `1 + n` then three words per
   argument, `0 qref quals` a type or `1 expr profile` an expression
   record (with its profile bit); other argument kinds fall back with
-  "a template argument the image does not carry". Instantiation
+  "a template argument the image does not carry". Cold annotation 256
+  (WP-1284) is the location of the `template` keyword in a qualified
+  dependent name (`T::template get<3>`, the templates' `template_kw`,
+  [temp.names]/3); in a dependent member access (`t.template get<1>`)
+  the keyword is `CXXDependentScopeMemberExpr` aux bit 2 (bit 1 is
+  `->`), and the decoder rejects any other aux bit. Instantiation
   redoes lookup exactly as after replay, so argument-dependent lookup
   at the point of instantiation finds the importer's own functions.
   A name whose candidates include a class member, or one sema keeps
@@ -2890,7 +2895,7 @@ unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 15` since WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 16` since WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -2933,7 +2938,7 @@ const   := 0 qref signed:u8 width:u32 u64*   integer (ceil(width/64) words)
          | 1 qref value:u8                   bool
          | 2 qref kind:u8 bits:u128          floating
          | 3 qref kind:u8                    null pointer / member
-expr    := kind:u8 bits:u8 aux:u8 cold:u8 deps:u8 ty:qref loc:u32
+expr    := kind:u8 bits:u8 aux:u8 cold:u16 deps:u8 ty:qref loc:u32
            n:u32 word*n          deps: ExprDeps bits (S4; 1 type,
                                      2 value, 4 instantiation)
 stmt    := kind:u8 aux:u16 loc:u32 n:u32 word*n
@@ -3100,8 +3105,9 @@ expression index and a location, or with bits 16, the type-name form,
 a `qref` and its location). A declaration reference is a record index,
 `0x8000_0000 | i` for the image's i-th parameter (counting the
 parameters of the function records in order), or `u32::MAX - 1` for the
-translation unit. The expression record's `cold` byte says which cold
-annotations follow the slots: 1 end location, 2 written type, 4
+translation unit. The expression record's `cold` mask (a byte until
+WP-1284 widened it to `u16`) says which cold annotations follow the
+slots: 1 end location, 2 written type, 4
 operator location, 8 begin location, 16 member-access operator
 location (S4b), 32 the copy of a default argument or default member
 initializer rebuilt for a lifetime-extending use (an expression index,

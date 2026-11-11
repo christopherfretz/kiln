@@ -3,13 +3,14 @@
 // [module.interface], spec/modules.md §11.11 "Dependent types"
 // (WP-1284): dependent names (`typename T::x`, `T::inner::x`, `T::v`),
 // type-trait transforms, member pointers, vectors and deduction guides
-// (explicit, and implicit ones formed again by the importer) exported
+// (explicit, and implicit ones formed again by the importer) and the
+// `template` keyword in dependent names ([temp.names]/3) exported
 // from a module; under `--bmi-image` they come from the declaration
 // image and the program behaves exactly as with the replayed source.
 //@ expect: run
 //@ std: c++20
 //@ module: imgd=Inputs/img-deptypes.cppm
-//@ stdout: 0 1 5 3 4 5 6 1 7 5 | 7 1 3 8 1 5
+//@ stdout: 0 1 5 3 4 5 6 1 7 5 | 7 1 3 8 1 5 8
 import imgd;
 extern "C" int printf(const char *, ...);
 struct A {
@@ -17,6 +18,7 @@ struct A {
   struct inner { static constexpr int size = 2; };
   static constexpr int count = 5;
 };
+struct G { template <int N> static int get() { return N * 2; } };
 static_assert(id::val<A>() && id::sz<A>() == 7);
 int main() {
   id::box<int> b;
@@ -31,6 +33,7 @@ int main() {
   id::Wrap c("x");
   id::Wrap d(3);
   id::Agg a{1, 2};
-  printf("%d %d %d %d %d %d\n", w.v, c.v, d.v, (int)sizeof(a.a), id::deduce('c'), id::ctad());
+  printf("%d %d %d %d %d %d %d\n", w.v, c.v, d.v, (int)sizeof(a.a), id::deduce('c'), id::ctad(),
+         id::tget(G{}));
   return 0;
 }
