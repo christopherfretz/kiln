@@ -104,6 +104,73 @@ cargo xtask dist                   # release archives, as published, from this c
 The archive layout is in [spec/driver.md](spec/driver.md) under
 "Installation layout".
 
+### Profile-guided build
+
+```sh
+cargo xtask build --pgo            # target/release/kiln++, profile-guided
+cargo xtask dist --pgo             # the release archives, profile-guided
+```
+
+`--pgo` builds kiln instrumented, has it compile a fixed training corpus
+from `bench/`, merges the profile with `llvm-profdata` and builds again
+with it. It takes about three times as long as a plain build and gives a
+faster binary with the same memory use (see
+[docs/status/perf.md](docs/status/perf.md), "PGO build").
+`llvm-profdata` must be the same LLVM major as rustc's (22 for Rust
+1.95). It is found in the LLVM that kiln uses, or `--llvm-dir=<dir>`
+names one, or it comes from rustup's `llvm-tools` component. Without
+`--pgo` nothing changes. The contract is in
+[spec/harness.md](spec/harness.md) under "PGO build".
+
+**For packagers.** If your own build runs `cargo build --release`, run
+the pre-step first, then build as usual with the profile in the
+rustflags:
+
+```sh
+cargo xtask pgo-profile --out "$PWD/kiln.profdata"   # instrumented build, training, merge
+RUSTFLAGS="$RUSTFLAGS -Cprofile-use=$PWD/kiln.profdata" cargo build --release
+```
+
+Give the pre-step the same `RUSTFLAGS` (or `CARGO_ENCODED_RUSTFLAGS` /
+`CARGO_BUILD_RUSTFLAGS`) as the final build. It drops any
+`-Cprofile-use` it finds there. Use the same rustc, source tree,
+`--target` argument (pass `--target` to `pgo-profile` if the final build
+passes one) and `--features`. If any of these differ, some or all
+functions do not match the profile. rustc does not fail on that, it just
+builds without the profile. To check that the profile applied, add
+`-Cllvm-args=-pgo-warn-missing-function` to the final build's flags.
+rustc then warns once for each function without profile data. With a
+matching profile the only warnings are for functions in
+`build_script_build`, which the training never runs. A mismatched
+profile warns for nearly every function of kiln's crates. The `-Cprofile-use` path must be
+absolute. The final build can use any target directory.
+
+The steps never use the network. The pre-step builds `xtask`, so the
+vendored crates must include its dependencies (`signal-hook`,
+`signal-hook-registry`, `libc`, `errno`, all in `Cargo.lock`). It also
+needs the LLVM installation (with `llvm-profdata`, `clang++` and the
+libc++ headers) and the system libstdc++. GCC 16.1 (`KILN_GCC`) is
+optional. Without it, five reflection cases are left out of the training
+with a warning. To build the instrumented binary another way, `cargo
+xtask pgo-train --compiler <kiln++> --profile-dir <dir>` runs the
+training alone and prints the `llvm-profdata merge` command.
+
+Here is a `debian/rules` sketch. It has not been tried with a Debian
+Rust helper. `KILN_RUSTFLAGS` and `--target` stand for whatever your
+helper's `cargo build` really uses, which its verbose output shows. A
+helper that adds `--target` or `-C debuginfo` to its own build has to
+get the same from the pre-step:
+
+```make
+include /usr/share/rustc/architecture.mk      # DEB_HOST_RUST_TYPE
+PROFDATA := $(CURDIR)/debian/kiln.profdata
+
+override_dh_auto_build:
+	RUSTFLAGS="$(KILN_RUSTFLAGS)" cargo xtask pgo-profile \
+	    --target $(DEB_HOST_RUST_TYPE) --out $(PROFDATA)
+	RUSTFLAGS="$(KILN_RUSTFLAGS) -Cprofile-use=$(PROFDATA)" dh_auto_build
+```
+
 ## Status
 
 kiln is at version 1.0.1; what changed is in

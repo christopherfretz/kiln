@@ -20,6 +20,16 @@ Planned as 1.1.0.
   linkage (unmangled names, `fn.var` static locals), so C and C++ objects
   link together. C-only semantics are still in progress
   ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode)) (WP-1275).
+- Profile-guided build of kiln itself: `cargo xtask build --pgo` and
+  `cargo xtask dist --pgo` build instrumented, train on a fixed corpus
+  from `bench/`, merge with `llvm-profdata` (rustc's LLVM major, found in
+  kiln's LLVM or rustup's `llvm-tools`) and rebuild with the profile. That
+  is about three times the build time, for a faster compiler with the
+  same memory use. `cargo xtask pgo-profile --out <file>` is the pre-step
+  alone, for a packaging system that runs its own `cargo build --release`
+  with `-Cprofile-use=<file>`. `cargo xtask pgo-train` is the training
+  alone. Nothing changes without the switch (README.md "Profile-guided
+  build", WP-1308).
 
 ## [1.0.1] - 2026-11-11
 

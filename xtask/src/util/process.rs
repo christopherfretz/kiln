@@ -344,8 +344,19 @@ fn spawn_reader(child: &mut Child, stdout: bool) -> thread::JoinHandle<Vec<u8>> 
 /// the calling thread waits for the signal thread to finish returning the
 /// jobserver tokens and end the process, instead of racing it to `exit`.
 pub fn run_step(cmd: &mut Command, tee: bool) -> io::Result<(ExitStatus, String)> {
+    run_step_hiding(cmd, tee, None)
+}
+
+/// [`run_step`] with `tee`, except that stderr lines containing `hide` are
+/// captured but not copied to ours (the PGO final build's per-function
+/// warnings, which only their count is shown of).
+pub fn run_step_hiding(
+    cmd: &mut Command,
+    tee: bool,
+    hide: Option<&str>,
+) -> io::Result<(ExitStatus, String)> {
     let table = crate::jobs::signals_caught().then_some(&LIVE);
-    let r = run_step_in(table, cmd, tee);
+    let r = run_step_in(table, cmd, tee, hide);
     if table.is_some_and(|t| t.lock().shutdown) {
         loop {
             thread::park();
@@ -358,6 +369,7 @@ fn run_step_in(
     table: Option<&LiveChildren>,
     cmd: &mut Command,
     tee: bool,
+    hide: Option<&str>,
 ) -> io::Result<(ExitStatus, String)> {
     cmd.stdin(Stdio::null());
     if tee {
@@ -378,13 +390,21 @@ fn run_step_in(
     if let Some(pipe) = child.stderr.take() {
         let mut reader = io::BufReader::new(pipe);
         let mut chunk = Vec::new();
+        let mut prev_hidden = false;
         let mut out = io::stderr();
         loop {
             chunk.clear();
             match io::BufRead::read_until(&mut reader, b'\n', &mut chunk) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    let _ = out.write_all(&chunk);
+                    // A hidden line takes the blank line after it along.
+                    let text = String::from_utf8_lossy(&chunk);
+                    let hidden = hide.is_some_and(|h| text.contains(h))
+                        || (prev_hidden && text.trim().is_empty());
+                    prev_hidden = hidden;
+                    if !hidden {
+                        let _ = out.write_all(&chunk);
+                    }
                     captured.extend_from_slice(&chunk);
                 }
             }
@@ -854,7 +874,7 @@ mod tests {
             "-c",
             &format!("{script}; : > '{}'; while :; do sleep 0.05; done", ready.display()),
         ]);
-        let step = thread::spawn(move || run_step_in(Some(table), &mut c, true).unwrap());
+        let step = thread::spawn(move || run_step_in(Some(table), &mut c, true, None).unwrap());
         let t = Instant::now();
         while !(ready.exists() && table.lock().pids.len() == 1) {
             assert!(t.elapsed() < Duration::from_secs(10), "the step never got ready");
@@ -906,10 +926,15 @@ mod tests {
     fn run_step_without_table() {
         let mut c = Command::new("sh");
         c.args(["-c", "echo e >&2; exit 3"]);
-        let (status, stderr) = run_step_in(None, &mut c, true).unwrap();
+        let (status, stderr) = run_step_in(None, &mut c, true, None).unwrap();
         assert_eq!((status.code(), stderr.as_str()), (Some(3), "e\n"));
-        let (status, stderr) = run_step_in(None, &mut Command::new("true"), false).unwrap();
+        let (status, stderr) = run_step_in(None, &mut Command::new("true"), false, None).unwrap();
         assert!(status.success() && stderr.is_empty());
+        // Hidden lines are still captured.
+        let mut c = Command::new("sh");
+        c.args(["-c", "echo a >&2; echo 'warning: x hide me' >&2; echo >&2; echo b >&2"]);
+        let (_, stderr) = run_step_in(None, &mut c, true, Some("hide me")).unwrap();
+        assert_eq!(stderr, "a\nwarning: x hide me\n\nb\n");
     }
 
     #[test]

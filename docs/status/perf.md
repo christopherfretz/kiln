@@ -248,3 +248,68 @@ clang 22 and GCC runs, from their own kiln measurements):
 | `reflect/s7` | syntax | 509.9 | FAIL | - | 43.3 | - | - | FAIL | 0.19x / 0.09x |
 | `reflect/s8` | syntax | 713.6 | FAIL | - | 68.8 | - | - | FAIL | 0.72x / 0.24x |
 | `reflect/s9` | emit-llvm | 46.9 | FAIL | - | 17.9 | - | - | FAIL | 0.34x / 0.38x |
+
+## PGO build
+
+The profile-guided build of kiln (WP-1308; spec/harness.md "PGO build")
+against the plain release build of the same commit, on the held-out set
+that the training never sees. Measured by hand. Neither run used
+`--record`, so the tables above and `bench/baselines/` are unchanged.
+
+- Binaries: `cargo build --release -p kiln_driver` (plain, 121 MB) and
+  `cargo xtask build --pgo` (128 MB), both from `167618a0d` plus this
+  WP's xtask changes, rustc 1.95.0 (LLVM 22.1.2), profile merged with
+  `/usr/lib/llvm-22/bin/llvm-profdata` 22.1.8 from the 44 training cases.
+- Command: `cargo xtask bench --compiler <pgo kiln++> --compare-with
+  <plain kiln++> $(cargo xtask pgo-train --list | awk '$1=="held-out"{print $2}')`,
+  19 entries, 5 runs each, both compilers per entry in turn. The ratios
+  are PGO/plain of the bench's medians. Results file
+  `bench/results/2026-11-11T155238.json`.
+- Host: aarch64, 24 CPUs, shared with three other implementers, load
+  average 12.3 to 13.4 during the run. x86_64 was not measured.
+- Correctness: `cargo xtask test --compiler <kiln++>` on the whole
+  corpus gave the same counts for both binaries: 6612 passed, 0 failed,
+  28 xfail, 116 skipped of 6756.
+
+| Entry | Mode | plain ms | PGO ms | time | plain MB | PGO MB | memory |
+|---|---|--:|--:|--:|--:|--:|--:|
+| `frontend/format-like-g` | emit-llvm | 1050.7 | 935.1 | 0.89x | 90.2 | 90.4 | 1.00x |
+| `frontend/registration-wide-obj` | obj | 8506.7 | 7964.8 | 0.94x | 240.2 | 240.3 | 1.00x |
+| `frontend/templates` | syntax | 343.1 | 275.3 | 0.80x | 47.7 | 49.2 | 1.03x |
+| `frontend/templates-wide-g` | emit-llvm | 585.2 | 494.2 | 0.84x | 124.4 | 123.3 | 0.99x |
+| `frontend/templates_deep` | syntax | 84.3 | 89.4 | 1.06x | 42.9 | 43.3 | 1.01x |
+| `frontend/templates_wide` | syntax | 378.1 | 259.2 | 0.69x | 75.6 | 74.4 | 0.98x |
+| `oven/sort` | syntax | 217.9 | 203.1 | 0.93x | 26.6 | 27.2 | 1.02x |
+| `oven/sort-nohdr` | syntax | 40.0 | 39.6 | 0.99x | 12.3 | 11.6 | 0.95x |
+| `oven/string` | syntax | 230.0 | 221.8 | 0.96x | 26.9 | 27.5 | 1.02x |
+| `oven/table` | syntax | 144.1 | 122.4 | 0.85x | 21.1 | 21.7 | 1.03x |
+| `oven/table-nohdr` | syntax | 71.9 | 74.3 | 1.03x | 12.4 | 11.6 | 0.94x |
+| `overload/arrow-chain` | syntax | 539.3 | 453.0 | 0.84x | 81.2 | 81.0 | 1.00x |
+| `overload/calls` | syntax | 702.4 | 615.1 | 0.88x | 17.4 | 16.5 | 0.95x |
+| `overload/ctors` | syntax | 573.5 | 446.7 | 0.78x | 15.9 | 15.2 | 0.96x |
+| `overload/less-10k` | syntax | 1805.9 | 1555.8 | 0.86x | 21.3 | 21.2 | 1.00x |
+| `reflect/s10` | emit-llvm | 66.8 | 56.9 | 0.85x | 17.5 | 16.0 | 0.92x |
+| `reflect/s6` | syntax | 402.2 | 366.1 | 0.91x | 31.5 | 32.3 | 1.03x |
+| `reflect/s7` | syntax | 656.4 | 555.2 | 0.85x | 42.0 | 43.4 | 1.03x |
+| `reflect/s8` | syntax | 1058.3 | 779.3 | 0.74x | 68.7 | 68.7 | 1.00x |
+
+Geometric mean: time 0.87x, memory 0.99x over 19 entries. The memory
+column moves by under 1.5 MB either way, which is run-to-run noise. The
+entries under 100 ms (`templates_deep`, the `-nohdr` cases, `s10`) are
+within noise. The `obj` and `emit-llvm` times include `opt` and `llc`,
+so kiln's own gain there is larger than the ratio shows.
+
+The packager's shape was checked too. `cargo xtask pgo-profile` ran with
+`RUSTFLAGS="-Cdebuginfo=2 --remap-path-prefix=<checkout>=/build/kiln"`,
+then a stock `cargo build --release -p kiln_driver` ran with those flags
+plus `-Cprofile-use`, in a different target directory. 0 of kiln's
+functions were without profile data (541 build-script functions were).
+On four held-out entries it measured format-like-g 0.86x,
+templates_wide 0.70x, overload/calls 0.86x and reflect/s8 1.00x
+(geomean 0.85x, memory 0.98x, load 13.5). The s8 ratio differs from the
+table's 0.74x on a noisy box.
+
+Cost: the instrumented build took 1m19s, the training 29 s and the final
+build 1m55s, against 1m46s for a plain release build at the same load.
+The pre-step in the packager's shape took 285 s, because the new flags
+rebuilt the instrumented tree from scratch.

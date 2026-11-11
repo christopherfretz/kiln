@@ -30,6 +30,7 @@ You need:
 cargo build                 # target/debug/kiln and kiln++
 cargo build --release
 cargo xtask dist --check    # the release archives, smoke-tested
+cargo xtask build --pgo     # profile-guided release build, ~3x the build time (README.md)
 ```
 
 ## Test

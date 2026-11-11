@@ -16,6 +16,7 @@ mod stats;
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -376,6 +377,72 @@ fn external_run(
     Ok(!summary.failed())
 }
 
+/// How one training compile of `cargo xtask pgo-train` ended.
+pub struct Trained {
+    /// The entry id, `<group>/<name>`.
+    pub id: String,
+    /// The wall time of the compile, or why it failed.
+    pub result: Result<Duration, String>,
+}
+
+/// The PGO training run (`cargo xtask pgo-train`, spec/harness.md "PGO
+/// build"): each entry of `inputs` compiled once by `compiler` with the
+/// command the measurement uses ([`prepare`], so the training sees exactly
+/// what `cargo xtask bench` runs) and `env` added to the compiler's
+/// environment. Nothing is recorded or judged. `Err` is an infrastructure
+/// problem; a compile that fails is a [`Trained`] with an `Err` result.
+pub fn train(
+    root: &Path,
+    target: &Path,
+    compiler: &Path,
+    inputs: &[PathBuf],
+    env: &[(OsString, OsString)],
+    verbose: bool,
+) -> Result<Vec<Trained>, String> {
+    let layout = Layout::standard(root, target, None);
+    let entries = entry::discover(&layout.root, &layout.bench, inputs, None)?;
+    let subject = Subject::new(compiler)?;
+    std::fs::create_dir_all(&layout.scratch)
+        .map_err(|e| format!("cannot create {}: {e}", layout.scratch.display()))?;
+    let cx = Ctx {
+        layout: &layout,
+        probe: RssProbe::detect(&layout.scratch),
+        host: Host::current(),
+        runs: 1,
+        mem_limit: process::MemLimit::from_mib(Options::default().mem_limit_mib),
+        verbose,
+        slice: SliceCompiles::new(),
+        slice_listed: 0,
+    };
+    let rss_file = layout.scratch.join("rss.txt");
+    let mut out = Vec::with_capacity(entries.len());
+    for (i, e) in entries.iter().enumerate() {
+        let result = resolve_entry(&cx, e).and_then(|(resolved, _, spec)| {
+            let e = resolved.as_ref().unwrap_or(e);
+            let spec = spec?;
+            let p = prepare(&cx, e, &spec, &subject, env)?;
+            let m = process::run_measured(&p.cmd, &cx.probe, &rss_file, RUN_TIMEOUT, p.cap)
+                .map_err(|err| format!("cannot run {}: {err}", compiler.display()))?;
+            let o = m.as_output();
+            if o.success() { Ok(m.wall) } else { Err(describe_failure(&o, p.cap)) }
+        });
+        eprintln!(
+            "[{:>w$}/{}] {}: {}",
+            i + 1,
+            entries.len(),
+            e.id,
+            match &result {
+                Ok(d) => format!("ok ({:.2}s)", d.as_secs_f64()),
+                Err(why) => format!("FAILED: {why}"),
+            },
+            w = entries.len().to_string().len()
+        );
+        out.push(Trained { id: e.id.clone(), result });
+    }
+    let _ = std::fs::remove_dir_all(&layout.scratch);
+    Ok(out)
+}
+
 /// Shared state of one invocation.
 struct Ctx<'a> {
     layout: &'a Layout,
@@ -639,34 +706,16 @@ fn measure_all(
     let mut specs = Specs::new();
     let mut loads = slice::Loads::default();
     for (i, e) in entries.iter().enumerate() {
-        let source =
-            std::fs::read(&e.path).map_err(|err| format!("{}: {err}", e.path.display()))?;
         let in_slice = slice::is_slice(&e.id);
-        let spec = if in_slice {
+        let (resolved, hash, spec) = if in_slice {
+            let source =
+                std::fs::read(&e.path).map_err(|err| format!("{}: {err}", e.path.display()))?;
             loads.0.extend(load_avg_1m());
-            Ok(slice::spec())
+            (None, entry::source_hash(&source), Ok(slice::spec()))
         } else {
-            entry::parse_spec(&String::from_utf8_lossy(&source)).map_err(|errs| {
-                errs.iter().map(|d| format!("{}: {d}", e.arg)).collect::<Vec<_>>().join("\n")
-            })
+            resolve_entry(cx, e)?
         };
-        let mut hash = entry::source_hash(&source);
-        // A `generate:` entry measures its generated source, written into the
-        // run's scratch; its hash covers both texts (spec/bench.md
-        // "Generated entries").
-        let generated;
-        let (e, spec) = match spec {
-            Ok(s) => match s.generate.as_ref().map(|g| write_generated(cx, e, g, &source)) {
-                Some(Ok((g, h))) => {
-                    generated = g;
-                    hash = h;
-                    (&generated, Ok(s))
-                }
-                Some(Err(why)) => (e, Err(why)),
-                None => (e, Ok(s)),
-            },
-            Err(why) => (e, Err(why)),
-        };
+        let e = resolved.as_ref().unwrap_or(e);
         let progress = format!(
             "[{:>w$}/{}] {}",
             i + 1,
@@ -692,6 +741,30 @@ fn measure_all(
         }
     }
     Ok((test_run, oracle_run, specs, loads))
+}
+
+/// Reads entry `e`'s directives. A `generate:` entry is measured on its
+/// generated source, written into the run's scratch, and its hash covers
+/// both texts (spec/bench.md "Generated entries"): the entry to compile
+/// instead of `e` (`None`: `e` itself), the source hash and the spec (`Err`:
+/// why the entry cannot be compiled). `Err` of the whole is an unreadable
+/// file.
+type Resolved = (Option<Entry>, String, Result<BenchSpec, String>);
+
+fn resolve_entry(cx: &Ctx<'_>, e: &Entry) -> Result<Resolved, String> {
+    let source = std::fs::read(&e.path).map_err(|err| format!("{}: {err}", e.path.display()))?;
+    let hash = entry::source_hash(&source);
+    let spec = entry::parse_spec(&String::from_utf8_lossy(&source)).map_err(|errs| {
+        errs.iter().map(|d| format!("{}: {d}", e.arg)).collect::<Vec<_>>().join("\n")
+    });
+    Ok(match spec {
+        Ok(s) => match s.generate.as_ref().map(|g| write_generated(cx, e, g, &source)) {
+            Some(Ok((g, h))) => (Some(g), h, Ok(s)),
+            Some(Err(why)) => (None, hash, Err(why)),
+            None => (None, hash, Ok(s)),
+        },
+        Err(why) => (None, hash, Err(why)),
+    })
 }
 
 /// Writes a `generate:` entry's source to `<scratch>/generated/<id>.cpp` and
@@ -1025,15 +1098,45 @@ fn subject_flags(kind: CompilerKind, e: &Entry, spec: &BenchSpec) -> Vec<String>
 }
 
 fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -> Outcome {
+    let p = match prepare(cx, e, spec, s, &[]) {
+        Ok(p) => p,
+        Err(why) => return Outcome::Failed(why),
+    };
+    let counters = Reports { constexpr: p.report.as_deref(), inst: p.inst_report };
+    sample(cx, e, spec, s, &p.cmd, p.cap, counters, (p.flags.join(" "), hash))
+}
+
+/// The measured command of an entry, as [`prepare`] builds it.
+struct Prepared {
+    cmd: Command,
+    /// The recorded flags (the counter-report flags are not among them).
+    flags: Vec<String>,
+    /// The address-space cap of the measured command.
+    cap: Option<process::MemLimit>,
+    /// kiln's constexpr report file, when the command writes one.
+    report: Option<PathBuf>,
+    /// Whether the command prints kiln's instantiation totals.
+    inst_report: bool,
+}
+
+/// Builds the command that measures entry `e` with compiler `s`, with
+/// `env` added to the compiler's environment: the one place that turns an
+/// entry's directives into a command line, shared by the measurement and
+/// the PGO training (`train`). A `mode: run` entry's program is built here
+/// (with `env`), and the command is the program.
+fn prepare(
+    cx: &Ctx<'_>,
+    e: &Entry,
+    spec: &BenchSpec,
+    s: &Subject,
+    env: &[(OsString, OsString)],
+) -> Result<Prepared, String> {
     let flags = subject_flags(s.id.kind, e, spec);
     let run = spec.mode == entry::Mode::Run;
     let mut cmd = Command::new(&s.path);
-    cmd.args(&flags);
+    cmd.args(&flags).envs(env.iter().map(|(k, v)| (k, v)));
     if run {
-        match build_program(cx, e, s, cmd) {
-            Ok(c) => cmd = c,
-            Err(why) => return Outcome::Failed(why),
-        }
+        cmd = build_program(cx, e, s, cmd)?;
     }
     // kiln reports its constexpr counters; the flag is not part of the
     // recorded `flags`, so it never makes a baseline advisory.
@@ -1041,7 +1144,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         && !matches!(spec.mode, entry::Mode::Pp | entry::Mode::Run))
     .then(|| cx.layout.scratch.join("constexpr-report.jsonl"));
     if let Some(r) = &report {
-        let mut flag = std::ffi::OsString::from(oven_report::FLAG);
+        let mut flag = OsString::from(oven_report::FLAG);
         flag.push(r);
         cmd.arg(flag);
     }
@@ -1066,8 +1169,7 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
             l
         }
     });
-    let counters = Reports { constexpr: report.as_deref(), inst: inst_report };
-    sample(cx, e, spec, s, &cmd, cap, counters, (flags.join(" "), hash))
+    Ok(Prepared { cmd, flags, cap, report, inst_report })
 }
 
 /// Which counter reports a measured command writes.
