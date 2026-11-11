@@ -869,6 +869,15 @@ impl<'a> Cg<'a> {
         // each definition to `HandleTopLevelDecl`).
         let explicit = self.class_explicit_inst_kind(ast.first(d))
             == Some(SpecKind::ExplicitInstantiationDefinition);
+        // clang `EmitTopLevelDecl(ClassTemplateSpecialization)`: only the
+        // specialization named by the explicit instantiation, not its
+        // member classes.
+        if ast
+            .spec_info(ast.first(d))
+            .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDefinition)
+        {
+            self.di_complete_template_definition(d);
+        }
         if explicit && self.is_dynamic(d) && self.vtable_explicit_inst_kind(ast.first(d)).is_some()
         {
             self.explicit_vtables.push(ast.first(d));
