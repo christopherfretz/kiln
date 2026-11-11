@@ -9070,8 +9070,11 @@ impl Sema<'_, '_> {
         }
         // C: a GNU extension clang accepts, pedantic only (C17 6.7.2.3p3
         // requires the content before an incomplete enumeration is named).
-        let id =
-            if self.is_c() { DiagId::sema_c_forward_ref_enum } else { DiagId::sema_forward_ref_enum };
+        let id = if self.is_c() {
+            DiagId::sema_c_forward_ref_enum
+        } else {
+            DiagId::sema_forward_ref_enum
+        };
         self.emit(self.diag(id, at));
     }
 

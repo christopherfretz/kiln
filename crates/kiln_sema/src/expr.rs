@@ -3394,7 +3394,11 @@ impl Sema<'_, '_> {
         // C: the GNU extension, element size 1 (WP-1285).
         let c = self.is_c();
         if self.ast.types.is_void(p) {
-            let id = if c { DiagId::sema_arith_void_pointer } else { DiagId::sema_arith_void_pointer_cxx };
+            let id = if c {
+                DiagId::sema_arith_void_pointer
+            } else {
+                DiagId::sema_arith_void_pointer_cxx
+            };
             let msg = self.diag(id, loc).arg("0");
             self.emit(msg);
             return c;
@@ -3444,8 +3448,11 @@ impl Sema<'_, '_> {
         if av || bv {
             let Some(one) = pick(av, bv) else {
                 let c = self.is_c();
-                let id =
-                    if c { DiagId::sema_arith_void_pointer } else { DiagId::sema_arith_void_pointer_cxx };
+                let id = if c {
+                    DiagId::sema_arith_void_pointer
+                } else {
+                    DiagId::sema_arith_void_pointer_cxx
+                };
                 let msg = self.diag(id, loc).arg("1");
                 self.emit(msg);
                 return c;

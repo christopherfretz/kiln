@@ -27,11 +27,7 @@ impl Sema<'_, '_> {
     /// `ConvertTypeToDiagnosticString` gives no `aka` to a type already
     /// printed in the same diagnostic.
     fn second_ty_arg(&self, first: QualType, second: QualType) -> String {
-        if first == second {
-            format!("'{}'", self.ty_str(second))
-        } else {
-            self.ty_arg(second)
-        }
+        if first == second { format!("'{}'", self.ty_str(second)) } else { self.ty_arg(second) }
     }
 
     /// A C-style cast between a pointer and a non-pointer scalar (clang
@@ -56,8 +52,9 @@ impl Sema<'_, '_> {
             return None;
         }
         let pw = u32::try_from(self.abi.pointer_size * 8).unwrap_or(64);
-        let floating =
-            |s: &Self, q: QualType| s.ast.types.is_floating(q) || s.ast.types.as_complex(q).is_some();
+        let floating = |s: &Self, q: QualType| {
+            s.ast.types.is_floating(q) || s.ast.types.as_complex(q).is_some()
+        };
         if tp {
             if floating(self, from) {
                 let at = self.begin_loc(e);
@@ -219,8 +216,12 @@ impl Sema<'_, '_> {
         // conversions (`b ? s1 : s2` is `int`).
         if self.is_arith_operand(tt0) && self.is_arith_operand(ft0) {
             return Some(
-                match conv::usual_arithmetic_conversions_kind(self, t, f, ArithConvKind::Conditional)
-                {
+                match conv::usual_arithmetic_conversions_kind(
+                    self,
+                    t,
+                    f,
+                    ArithConvKind::Conditional,
+                ) {
                     Ok((t2, f2, ty)) => {
                         self.report_arith_warning(loc);
                         let t2 = self.real_to_complex(t2, ty);
