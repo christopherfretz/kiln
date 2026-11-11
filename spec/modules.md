@@ -2836,6 +2836,8 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            cspecs:u32 cspec*         WP-1283 ("Class template specializations")
            declocs:u32 (rec:u32 kind:u8 loc:u32)*   WP-1283, ascending
                                      (kind 0 type-spec, 1 `&`, 2 `*`/`[`)
+           lexterns:u32 u32*         WP-1293: block-scope declaration
+                                     records, in `local_externs` order
 cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
            params:u32 u32*) args:u32 carg*      ascending by rec
 carg    := 0 qref | 1 qref value:i128   a type, a value
@@ -3056,7 +3058,15 @@ record's kind byte is the index):
 - local declarations: variables (including `static` locals and
   range-`for` variables), labels and lifetime-extended temporaries
   (`const int& r = 4;`). A local is a declaration record whose context
-  is a function record; it is not in the lookup table.
+  is a function record; it is not in the lookup table. In a PCH, a
+  block-scope `extern` variable or function declaration (WP-1293) is a
+  local `Var` or `Function` record (kind 0, no body) written in
+  declaration order, not on first use, and its `prev` may name an
+  earlier record at namespace or block scope, so a later namespace-scope
+  declaration of the header links to it ([basic.link]/6). `lexterns`
+  lists them in Sema's `local_externs` order; the reader pushes each
+  with its enclosing namespace, so the consumer's declarations find
+  them as replay's do.
 
 Records are in post order, so every operand and sub-statement has a
 lower index. The one edge from an expression to a statement, a GNU
@@ -3240,7 +3250,8 @@ and builds the records before the unit's first token, in the global
 module (owner byte 0, the unit's own), so the unit may redeclare,
 define, specialize and instantiate them. `install_pragma_state` sets
 the header's Sema pragma stacks from the record (§11.13). The section
-layout is the module image's, so IMAGE_VERSION is unchanged.
+layout is the module image's; `lexterns` (WP-1293) is empty in a module
+image.
 
 #### Part 2a coverage and follow-ups
 

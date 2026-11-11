@@ -46,6 +46,7 @@ mod attrs;
 mod body;
 mod classtempl;
 mod declocs;
+mod localexterns;
 mod locs;
 mod pch;
 pub use pch::PchDecls;
@@ -549,6 +550,8 @@ struct Image {
     cspecs: classtempl::ClassSpecs,
     /// WP-1283: declarator locations of dependent declarations.
     declocs: declocs::DeclLocs,
+    /// WP-1293: block-scope declarations, in `local_externs` order.
+    lexterns: localexterns::LocalExterns,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1149,6 +1152,7 @@ fn encode(img: &Image) -> Vec<u8> {
     scope::encode_scopes(&mut w, &img.scopes);
     classtempl::encode_class_specs(&mut w, &img.cspecs);
     declocs::encode_decl_locs(&mut w, &img.declocs);
+    localexterns::encode_local_externs(&mut w, &img.lexterns);
     w.0
 }
 
@@ -1723,6 +1727,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.scopes = scope::decode_scopes(&mut r)?;
     img.cspecs = classtempl::decode_class_specs(&mut r)?;
     img.declocs = declocs::decode_decl_locs(&mut r)?;
+    img.lexterns = localexterns::decode_local_externs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -1908,6 +1913,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let mut tmpl_params: FxHashMap<usize, usize> = FxHashMap::default();
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
+    localexterns::validate_local_externs(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -1985,7 +1991,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 || d.owner > 3
                 || d.access != 0
                 || d.lexical != NONE
-                || d.prev != NONE
+                // A block-scope function or `extern` declaration may
+                // redeclare an earlier one (WP-1293).
+                || (d.prev != NONE
+                    && !(matches!(d.payload, Payload::Var { .. } | Payload::Function { .. })
+                        && kind_of(d.prev).is_some_and(|p| same_kind(&p.payload, &d.payload))))
                 || (d.name != NONE && d.name as usize >= img.pnames.len())
             {
                 return bad("bad local declaration");
@@ -1993,6 +2003,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             open_enum = None;
             match &d.payload {
                 Payload::Label => {}
+                // A block-scope function declaration (WP-1293).
+                Payload::Function { .. } => {
+                    if !localexterns::local_fn_ok(img, i, &qref_at) {
+                        return bad("bad local function");
+                    }
+                }
                 Payload::Var { ty, spec, .. } => {
                     if !qref_at(*ty, i) || var_spec(*spec).is_none() {
                         return bad("bad local variable");
@@ -3538,6 +3554,7 @@ impl Writer<'_, '_, '_> {
         }
         self.anon_typedefs()?;
         self.decl_locs()?;
+        self.local_externs()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -3764,8 +3781,11 @@ impl Writer<'_, '_, '_> {
             }
             return Ok(());
         }
-        if n.kind() == DeclKind::ParmVar || self.local(d) {
+        if n.kind() == DeclKind::ParmVar {
             return Ok(());
+        }
+        if self.local(d) {
+            return self.local_in_order(d);
         }
         if n.kind() == DeclKind::TranslationUnit {
             return Ok(());
@@ -4489,6 +4509,7 @@ impl Sema<'_, '_> {
         }
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
+        self.image_local_externs(img, &ids);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_nttp_defaults(&nttp_defaults, &built);
@@ -5118,6 +5139,7 @@ mod tests {
             scopes: scope::Scopes::default(),
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
+            lexterns: localexterns::LocalExterns::default(),
         }
     }
 
