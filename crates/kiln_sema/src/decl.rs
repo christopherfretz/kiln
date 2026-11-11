@@ -4694,6 +4694,26 @@ impl Sema<'_, '_> {
             }
             p => p,
         };
+        // C ([6.7]/4, [6.2.7]/2): no overloading; a function of the name in
+        // the scope is redeclared, and an incompatible type conflicts
+        // (clang `MergeFunctionDecl`), unless both are `overloadable`.
+        let prev = match prev {
+            None if self.is_c() && !method && dname.as_ident().is_some() => {
+                // A block-scope declaration has linkage ([6.2.2]/4): the
+                // visible function is redeclared.
+                let cands = if self.in_local_scope() {
+                    self.lookup_name(name, LookupKind::Ordinary).decls
+                } else {
+                    self.prev_candidates_dn(dname, None)
+                };
+                let p = cands.into_iter().rev().find(|&x| {
+                    self.kind_of(x) == DeclKind::Function && !self.ast.is_overloadable(x)
+                });
+                extern_c_redecl |= p.is_some();
+                p
+            }
+            p => p,
+        };
         // [over.load]/2.3 (C++20), [basic.scope.scope]/3 (C++23).
         let prev = match prev {
             None if method && in_class && !friend && !invalid_decl && !explicit_object => {
@@ -5067,9 +5087,9 @@ impl Sema<'_, '_> {
                     let both_c = self.clang_compat >= 22
                         && kiln_abi::mangle::is_extern_c(&self.ast, p)
                         && self.ctx_is_extern_c(self.context());
-                    let msg = if same_params && !both_c {
+                    let msg = if same_params && !both_c && !self.is_c() {
                         self.diag(DiagId::sema_ovl_diff_return_type, d.name_loc())
-                    } else if extern_c_redecl || both_c {
+                    } else if extern_c_redecl || both_c || self.is_c() {
                         invalid_redecl = true;
                         self.diag(DiagId::sema_conflicting_types, d.name_loc()).arg(fname.clone())
                     } else {
