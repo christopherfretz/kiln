@@ -630,11 +630,20 @@ fn spec_of(v: Variant) -> BenchSpec {
     }
 }
 
-/// The group's thresholds: memory as everywhere, wall time not judged
+/// The group's default peak-RSS threshold, percent. Two identical
+/// recordings of the group differed by up to 2.5% (`gnu/build`, 86 MB), so
+/// the corpus's 2% would flag noise; 5% still flags a 4 MB growth there.
+pub const MEM_PCT: f64 = 5.0;
+
+/// The group's thresholds: memory at [`MEM_PCT`], wall time not judged
 /// unless `--threshold-time` asks for it (the shared host moves it ~1.4x).
 pub fn thresholds(opts: &ThresholdOverrides) -> Thresholds {
-    let advisory_time = ThresholdOverrides { time_pct: Some(f64::INFINITY), ..Default::default() };
-    Thresholds::default().with(&advisory_time).with(opts)
+    let group = ThresholdOverrides {
+        time_pct: Some(f64::INFINITY),
+        mem_pct: Some(MEM_PCT),
+        ..Default::default()
+    };
+    Thresholds::default().with(&group).with(opts)
 }
 
 /// Judges kiln's measurements against `pch.json` and prints the table.
@@ -1062,7 +1071,7 @@ mod tests {
     fn time_is_advisory_unless_asked() {
         let t = thresholds(&ThresholdOverrides::default());
         assert!(t.time_pct.is_infinite());
-        assert!((t.mem_pct - 2.0).abs() < f64::EPSILON);
+        assert!((t.mem_pct - MEM_PCT).abs() < f64::EPSILON);
         let o = ThresholdOverrides { time_pct: Some(10.0), ..Default::default() };
         assert!((thresholds(&o).time_pct - 10.0).abs() < f64::EPSILON);
 
@@ -1073,6 +1082,8 @@ mod tests {
         };
         let slow = record::tests::sample("kiln", 300.0, Some(1000));
         assert_eq!(compare::judge(Some(&base), &slow, t), Verdict::Ok);
+        let noise = record::tests::sample("kiln", 100.0, Some(1030));
+        assert_eq!(compare::judge(Some(&base), &noise, t), Verdict::Ok);
         let big = record::tests::sample("kiln", 100.0, Some(1100));
         assert!(matches!(
             compare::judge(Some(&base), &big, t),

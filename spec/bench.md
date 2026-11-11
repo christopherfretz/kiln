@@ -230,8 +230,10 @@ declaration image") against clang's on fixed header sets
   `--pch-diff` (spec/harness.md "PCH differential").
 - **Judged.** kiln's entries are judged against `bench/baselines/pch.json`
   as in "Regression policy", but wall time is not judged unless
-  `--threshold-time` is given. Memory (default 2%) is the signal, because
-  wall time on the shared host moves about 1.4x with its load. clang's
+  `--threshold-time` is given. Memory is the signal, because wall time on
+  the shared host moves about 1.4x with its load. Its default threshold is
+  5% (`pch::MEM_PCT`), not 2%: two identical recordings differed by up to
+  2.5% (`gnu/build`, 86 MB). `--threshold-mem` overrides it. clang's
   side is never judged or recorded; a failed clang compile still fails the
   run. The printed ratio table covers the variants both compilers have.
 - **Recorded.**
@@ -774,7 +776,7 @@ Nothing from `<dir>` is written; `-v` adds the failing cases' paths.
 - `xtask/src/bench/pch.rs`: the command lines of every case and variant
   (never `/dev/null`, every output a placeholder), the case files present,
   the `-v` notes and the path they give, wall time not judged unless asked
-  (a 3x slower run passes, 10% more memory regresses), regions replaced in
+  (a 3x slower run passes, 3% more memory passes, 10% more regresses), regions replaced in
   place and added after the last one, the hand-reproduction lines,
   explicit selection (a file under `bench/pch` refused), and the whole
   bench root skipping the group.
