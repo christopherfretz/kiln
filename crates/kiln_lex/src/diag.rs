@@ -56,6 +56,10 @@ pub enum LexDiagKind {
     },
     /// A NUL byte in the source, ignored as whitespace (`null_in_file`).
     NullCharacter,
+    /// Bytes that are not valid UTF-8 (a load-time U+FFFD replacement)
+    /// outside a comment, literal or directive: dropped, as clang does
+    /// (`err_invalid_utf8`).
+    InvalidUtf8,
 
     // ----- phases 1-2 -----
     /// Whitespace between `\` and the newline of a line splice
@@ -211,6 +215,22 @@ pub enum LexDiagKind {
     /// More than one c-char in a `L`, `u8`, `u` or `U` character literal
     /// (`err_multichar_character_literal`).
     MultiCharNotAllowed,
+    /// Source bytes that are not valid UTF-8 in a literal (see
+    /// [`crate::literal::InvalidUtf8`]): `warn_bad_string_encoding` /
+    /// `warn_bad_character_encoding` in an ordinary literal, the `err_`
+    /// forms otherwise. A string literal's range is the first invalid
+    /// sequence of the fragment (the text between escapes); a character
+    /// literal's is empty, at the token start.
+    InvalidEncoding {
+        /// A string literal (else a character literal).
+        string: bool,
+        /// An error: the literal's encoding is not ordinary.
+        error: bool,
+    },
+    /// A further invalid sequence in the same fragment as the preceding
+    /// [`LexDiagKind::InvalidEncoding`]: an extra highlighted range of that
+    /// diagnostic, not a diagnostic of its own.
+    InvalidEncodingRange,
     /// An encoding prefix on an unevaluated string
     /// (`err_unevaluated_string_prefix`).
     UnevaluatedStringPrefix,
@@ -314,6 +334,8 @@ impl LexDiagKind {
             | K::OctalEscapeTooLarge
             | K::UcnEscapeIncomplete
             | K::UcnNameLooseMatch { .. }
+            | K::InvalidUtf8
+            | K::InvalidEncoding { error: true, .. }
             | K::CharTooLarge
             | K::MultiCharNotAllowed
             | K::UnevaluatedStringPrefix
@@ -357,7 +379,9 @@ impl LexDiagKind {
             | K::HexFloatExtension
             | K::SizeSuffixExtension
             | K::FloatSuffixExtension
-            | K::FloatSuffixGnu => LexSeverity::Extension,
+            | K::FloatSuffixGnu
+            | K::InvalidEncoding { error: false, .. }
+            | K::InvalidEncodingRange => LexSeverity::Extension,
         }
     }
 }

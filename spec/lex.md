@@ -79,6 +79,16 @@ not NFC_QC=Yes (full normalization); recording a diagnostic. `spelling()` borrow
 ## Behavior
 ### Phases 1–2 ([lex.phases]/1.1–1.2)
 - Input is UTF-8 (kiln_source guarantees it). A BOM at offset 0 is skipped.
+- Invalid UTF-8 (WP-1267; clang 19 and 22 agree). kiln_source replaces
+  each maximal invalid sequence with U+FFFD and lists it in
+  `load_report(file).replacements`; the lexer and the literal decoders
+  look a U+FFFD up there (a binary search, only on the cold path; a
+  U+FFFD spelled in valid UTF-8 is an ordinary character). In a comment
+  or a skipped group it is accepted silently. Elsewhere outside a literal
+  it records `InvalidUtf8` (`lex_invalid_utf8`, "source file is not valid
+  UTF-8", Error) and is dropped, as whitespace: it ends an identifier. In a
+  directive it is an `Other` token with no diagnostic (clang: an unknown
+  token). Inside a literal it is the decoders' job (Literals, below).
 - Lines end in `\n`, `\r\n` or lone `\r` (kiln_source's rule).
 - Trigraphs are translated only with `trigraphs: true` (pre-C++17 mode):
   `TrigraphConverted`. With them off, a trigraph inside a literal or a
@@ -300,6 +310,13 @@ pub struct CharLiteral<'s> { encoding, ty, chars: u32, value: i64, pp_value: i64
 pub fn decode_string(spelling: &str, LiteralOptions) -> StringLiteral;           // normal + raw
 pub fn decode_unevaluated_string(spelling: &str, LiteralOptions) -> StringLiteral; // [lex.string.uneval]
 pub fn decode_char(spelling: &str, LiteralOptions) -> CharLiteral;
+pub struct InvalidUtf8<'a> { pub offset: u32 /* U+FFFD in the spelling */, pub bytes: &'a [u8] }
+pub fn invalid_utf8<'s>(&'s SourceManager, &Token, spelling: &str, &LexOptions) -> Vec<InvalidUtf8<'s>>;
+//   fast exit when the spelling has no 0xEF byte
+pub struct SourceBytes<'a> { pub invalid: &'a [InvalidUtf8<'a>], pub concat_prefixed: bool } // Default
+pub fn decode_string_from_source<'s>(spelling: &'s str, LiteralOptions, unevaluated: bool, SourceBytes) -> StringLiteral<'s>;
+pub fn decode_char_from_source<'s>(spelling: &'s str, LiteralOptions, &[InvalidUtf8]) -> CharLiteral<'s>;
+//   decode_string / decode_unevaluated_string / decode_char = these with no invalid bytes
 pub fn encode_string(&CodeUnits, Encoding) -> String; // a literal spelling with that value (round-trip)
 pub fn classify_number(spelling: &str, Std) -> Number;
 pub struct Number<'s> { class: NumberClass<'s>, diags, has_error }
@@ -358,6 +375,21 @@ variants are additions to a `#[non_exhaustive]` enum.
   suffixes"). Diagnostics follow clang's
   `NumericLiteralParser` (`InvalidDigit`, `InvalidSuffix`,
   `ExponentNoDigits`, `HexFloatNoExponent`, …).
+- Invalid UTF-8 in the source (WP-1267, clang `CopyStringFragment` /
+  `CharLiteralParser`): in an ordinary literal, not part of a concatenation
+  with a prefixed piece, the source bytes are kept unchanged as code units
+  (a character literal takes each byte as a c-char, so `'a<E9>'` is a
+  multi-character constant) and `InvalidEncoding { error: false }` records
+  the `-Winvalid-source-encoding` warning (`lit_bad_string_encoding_warn` /
+  `lit_bad_char_encoding_warn`, ExtWarn, on by default, "illegal character
+  encoding in string|character literal"). Otherwise (`u8`, `u`, `U`, `L`,
+  or an ordinary piece of a prefixed concatenation) it is an error
+  (`lit_bad_string_encoding` / `lit_bad_char_encoding`); the string keeps
+  the code points before the first bad byte of the fragment, the character
+  the c-chars before it. A string gets one diagnostic per fragment between
+  escapes, at the first bad byte, with an `InvalidEncodingRange` range for
+  each further bad sequence; a character literal gets one at its start.
+  A raw string body is one fragment.
 - Unevaluated strings: an encoding prefix, a ud-suffix, or a numeric /
   unknown escape is an error (`UnevaluatedString*`).
 - `-fno-char8_t` (WP-808; clang `LangOptions::Char8`, GCC `-fno-char8_t`):

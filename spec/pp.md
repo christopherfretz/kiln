@@ -1122,10 +1122,12 @@ it through kiln_diag's fatal handling; the core itself carries on.
   expansion range of the `__LINE__` token. This is the expansion location
   for a direct use. For a use in a macro argument, it is the line of the
   invocation's closing `)` (clang behaviour).
-- **Invalid UTF-8.** pp reports a `load_report(FileId)` replacement
-  through kiln_diag (`lex_invalid_utf8`) when a token it lexes outside a
-  skipped group covers it (`FileFrame::bad_utf8`, `lex_raw_from`); one in
-  a comment or whitespace is accepted, as clang (whose `-Winvalid-utf8`
-  is off by default; WP-803, `lex.phases/invalid-utf8-in-comment-run.cpp`).
-  Not yet: clang's `-Winvalid-source-encoding` warning for a string
-  literal (kiln's replacement makes it an error).
+- **Invalid UTF-8.** The lexer reports a `load_report(FileId)`
+  replacement outside a comment or literal (`lex_invalid_utf8`; dropped
+  with the rest of the lexer's diagnostics in a skipped group), and the
+  literal decoders report one inside a literal: the `-Winvalid-source-encoding`
+  warning in an ordinary literal, an error in a prefixed one (spec/lex.md,
+  WP-1267). One in a comment or whitespace is accepted, as clang (whose
+  `-Winvalid-utf8` is off by default; WP-803,
+  `lex.phases/invalid-utf8-in-comment-run.cpp`). `#if` character literals
+  go through `decode_char_from_source`.
