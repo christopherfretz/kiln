@@ -422,6 +422,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     let lit_opts = LiteralOptions {
         char8: opts.char8,
         clang19_escapes: opts.clang_compat < 22,
+        c: opts.c,
         ..LiteralOptions::new(opts.std, encoding_params(&target))
     };
     let mut s = Sema::for_target(ast, diags, target);

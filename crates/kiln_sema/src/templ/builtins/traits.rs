@@ -1,8 +1,8 @@
 //! The type-trait predicates (spec/sema-templates.md §9.1, §9.4):
 //! `__is_*` / `__has_*` (`TypeTraitExpr`), `__array_rank` /
 //! `__array_extent` (`ArrayTypeTraitExpr`) and `__is_lvalue_expr` /
-//! `__is_rvalue_expr` (`ExpressionTraitExpr`). Each is a `bool` (or
-//! `size_t`) prvalue over unevaluated operands; a dependent operand
+//! `__is_rvalue_expr` (`ExpressionTraitExpr`). Each is a `bool` (`int`
+//! in C, clang `getLogicalOperationType`; or `size_t`) prvalue over unevaluated operands; a dependent operand
 //! gives a value-dependent node that substitution rebuilds through
 //! [`Sema::build_type_trait`]. The evaluators follow clang 19's
 //! `EvaluateUnaryTypeTrait` / `EvaluateBinaryTypeTrait`, including its
@@ -121,11 +121,11 @@ impl Sema<'_, '_> {
         if tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(TypeFlags::CONTAINS_ERROR))
             || tys.contains(&QualType::ERROR)
         {
-            return self.recover(QualType::BOOL, &[], loc);
+            return self.recover(self.truth_ty(), &[], loc);
         }
         let has_pack = tys.iter().any(|&q| self.is_pack_expansion_type(q));
         if !has_pack && !self.check_trait_arity(t, tys.len(), loc) {
-            return self.recover(QualType::BOOL, &[], loc);
+            return self.recover(self.truth_ty(), &[], loc);
         }
         let rhs_loc = (tys.len() == 2).then(|| args[1].1);
         // Only a dependent type defers the trait (clang `BuildTypeTrait`
@@ -137,20 +137,14 @@ impl Sema<'_, '_> {
         let dependent =
             has_pack || tys.iter().any(|&q| self.ast.types.flags(q.ty()).intersects(dep));
         if dependent {
-            return self.builder().type_trait_expr(
-                t,
-                &tys,
-                rhs_loc,
-                false,
-                QualType::BOOL,
-                loc,
-                rparen,
-            );
+            let ty = self.truth_ty();
+            return self.builder().type_trait_expr(t, &tys, rhs_loc, false, ty, loc, rparen);
         }
         let Some(value) = self.eval_type_trait(t, args, loc, rparen) else {
-            return self.recover(QualType::BOOL, &[], loc);
+            return self.recover(self.truth_ty(), &[], loc);
         };
-        self.builder().type_trait_expr(t, &tys, rhs_loc, value, QualType::BOOL, loc, rparen)
+        let ty = self.truth_ty();
+        self.builder().type_trait_expr(t, &tys, rhs_loc, value, ty, loc, rparen)
     }
 
     /// Evaluates the non-dependent trait `t` on `args` (written at `loc`
@@ -281,7 +275,8 @@ impl Sema<'_, '_> {
                 vc == ValueCategory::PRValue
             }
         };
-        self.builder().expression_trait_expr(t, e, value, QualType::BOOL, loc, rparen)
+        let ty = self.truth_ty();
+        self.builder().expression_trait_expr(t, e, value, ty, loc, rparen)
     }
 
     pub(crate) fn expr_has_error(&self, e: ExprId) -> bool {
@@ -437,6 +432,7 @@ impl Sema<'_, '_> {
     fn eval_binary_trait(&mut self, t: TypeTrait, a: QualType, b: QualType, rhs_loc: Loc) -> bool {
         match t {
             TypeTrait::IsSame | TypeTrait::IsSameAs => self.ast.types.same_type(a, b),
+            TypeTrait::TypesCompatible => crate::conv::c_assign::compatible_unqualified(self, a, b),
             TypeTrait::IsVirtualBaseOf => self.is_virtual_base_of(a, b, rhs_loc),
             TypeTrait::IsBaseOf => {
                 let (Some(base), Some(derived)) =

@@ -79,6 +79,38 @@ fn compatible_at(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> bool
     compatible_unqual(s, a.without_quals(), b.without_quals(), depth - 1)
 }
 
+/// GNU `__builtin_types_compatible_p(a, b)` (clang `BTT_TypeCompatible`):
+/// C17 6.2.7 compatibility with the top-level qualifiers of `a` and `b`,
+/// and of their (nested) array element types, ignored (clang
+/// `getUnqualifiedArrayType`, as GCC does).
+pub(crate) fn compatible_unqualified(s: &Sema<'_, '_>, a: QualType, b: QualType) -> bool {
+    unqualified_at(s, a, b, DEPTH)
+}
+
+fn unqualified_at(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> bool {
+    let types = &s.ast.types;
+    let (a, b) = (types.canonical(a).without_quals(), types.canonical(b).without_quals());
+    let array_size = |q: QualType| match types.canonical_view(q) {
+        TypeView::ConstantArray(c) => Some(Some(c.size)),
+        TypeView::IncompleteArray(_) | TypeView::VariableArray { .. } => Some(None),
+        _ => None,
+    };
+    match (array_size(a), array_size(b)) {
+        (Some(sa), Some(sb)) if depth > 0 => {
+            if let (Some(x), Some(y)) = (sa, sb)
+                && x != y
+            {
+                return false;
+            }
+            match (types.element(a), types.element(b)) {
+                (Some(x), Some(y)) => unqualified_at(s, x, y, depth - 1),
+                _ => false,
+            }
+        }
+        _ => compatible_at(s, a, b, depth),
+    }
+}
+
 /// The integer type an enumeration is compatible with (C17 6.7.2.2p4).
 fn enum_int(s: &Sema<'_, '_>, q: QualType) -> Option<QualType> {
     let t = super::rank::enum_data(s, q)?.int_type?;
