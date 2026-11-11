@@ -423,7 +423,8 @@ impl Sema<'_, '_> {
                 Some(Op::Exprs) => (0, 0),
                 _ => (r.a, r.b),
             };
-            let id = self.ast.attrs.push(AttrNode { kind, syntax, flags: r.flags, loc, a: x, b: y });
+            let id =
+                self.ast.attrs.push(AttrNode { kind, syntax, flags: r.flags, loc, a: x, b: y });
             if op_of(kind) == Some(Op::Exprs) && (r.a != NONE || r.b != NONE) {
                 pending.push((id, r.a, r.b));
             }

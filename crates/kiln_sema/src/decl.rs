@@ -10053,7 +10053,7 @@ impl Sema<'_, '_> {
         self.using_directive(ns, loc, DeclFlags::empty())
     }
 
-    fn using_directive(&mut self, ns: DeclId, loc: Loc, flags: DeclFlags) -> DeclId {
+    pub(crate) fn using_directive(&mut self, ns: DeclId, loc: Loc, flags: DeclFlags) -> DeclId {
         let nominated = self.ast.first(ns);
         let d = self.ast.decls.push(
             kiln_ast::decl::NewDecl {

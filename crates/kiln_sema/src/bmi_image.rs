@@ -44,6 +44,7 @@ use crate::modules::Directive;
 mod attrs;
 mod body;
 mod locs;
+mod scope;
 mod spec;
 
 use body::{Bodies, BodyState, Root};
@@ -520,6 +521,8 @@ struct Image {
     bodies: Bodies,
     /// WP-1278: the declarations' attributes and builtin identity.
     attrs: attrs::Attrs,
+    /// WP-1278: inline namespaces and linkage specifications.
+    scopes: scope::Scopes,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1095,6 +1098,7 @@ fn encode(img: &Image) -> Vec<u8> {
     }
     body::encode_bodies(&mut w, &img.bodies);
     attrs::encode_attrs(&mut w, &img.attrs);
+    scope::encode_scopes(&mut w, &img.scopes);
     w.0
 }
 
@@ -1652,6 +1656,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     }
     img.bodies = body::decode_bodies(&mut r)?;
     img.attrs = attrs::decode_attrs(&mut r)?;
+    img.scopes = scope::decode_scopes(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2042,7 +2047,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Ttp { .. } | Payload::Nttp { .. } => {
                 d.name == NONE || (d.name as usize) < img.pnames.len()
             }
-            Payload::Field { .. } => d.name == NONE || ident(d.name),
+            // An unnamed namespace has no name.
+            Payload::Field { .. } | Payload::Namespace => d.name == NONE || ident(d.name),
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
@@ -2325,6 +2331,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     }
     let _ = nd;
     attrs::validate_attrs(img)?;
+    scope::validate_scopes(img)?;
     body::validate_bodies(img, &|q| qref_ok(q, nt))
 }
 
@@ -2683,12 +2690,7 @@ impl Writer<'_, '_, '_> {
             V::Empty => NONE,
             V::Identifier(sym) => {
                 let s = ast.symbols().as_str(sym).to_owned();
-                if reserved(&s) {
-                    return Err("a reserved identifier (`__x`, `_X`)");
-                }
-                if s == "std" || s == "main" {
-                    return Err("a declaration named `std` or `main`");
-                }
+                self.check_name(d, &s)?;
                 Self::name_ix(&mut self.names, &mut self.img.names, &s)
             }
             V::Operator(op) => N_OP + u32::from(op as u8),
@@ -2787,6 +2789,7 @@ impl Writer<'_, '_, '_> {
                 self.using_prev(d)?
             }
             None => NONE,
+            Some(p) if self.implicit_prev(d, p) => NONE,
             Some(p) => self
                 .recs
                 .get(&p)
@@ -2819,12 +2822,11 @@ impl Writer<'_, '_, '_> {
         Ok(match n.kind() {
             DeclKind::Namespace => {
                 let nd = ast.decls.namespace(d).ok_or("a malformed namespace")?;
-                if nd.flags != 0 {
-                    return Err("an inline or unnamed namespace");
-                }
+                self.namespace_flags(i, u32::from(nd.flags))?;
                 Payload::Namespace
             }
             DeclKind::Export => Payload::Export,
+            DeclKind::LinkageSpec => self.linkage_record(d, i)?,
             DeclKind::Using
             | DeclKind::UsingShadow
             | DeclKind::UsingDirective
@@ -3729,6 +3731,10 @@ impl Writer<'_, '_, '_> {
             let _ = st.skipped.insert(d);
             return Ok(());
         }
+        if n.has(DeclFlags::IMPLICIT) && self.implicit_scope_decl(d) {
+            // Declared again by the importer with its unnamed namespace.
+            return Ok(());
+        }
         if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
             // An implicitly declared special member: the importer
             // declares it again (spec/modules.md §11.11 "Classes").
@@ -3866,6 +3872,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
     match k {
         K::Namespace
         | K::Export
+        | K::LinkageSpec
         | K::Function
         | K::Var
         | K::Enum
@@ -3904,7 +3911,6 @@ fn kind_gate(k: DeclKind) -> W<()> {
         K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
             Err("a dependent using-declaration")
         }
-        K::LinkageSpec => Err("a linkage specification"),
         _ => Err("a declaration the image does not carry yet"),
     }
 }
@@ -4148,10 +4154,13 @@ impl Sema<'_, '_> {
                 LEX_TU => Some(self.ast.tu),
                 x => at(x),
             };
-            let prev = at(r.prev);
+            let mut prev = at(r.prev);
+            if prev.is_none() && matches!(r.payload, Payload::Enum { .. }) {
+                prev = self.image_enum_prev(&h);
+            }
             let d = match &r.payload {
-                Payload::Namespace => self.builder().namespace(h, false, prev),
-                Payload::Export => self.builder().export_decl(ctx, h.loc),
+                Payload::Namespace => self.image_namespace(img, i as u32, h, prev),
+                Payload::Export => self.image_scope(img, i as u32, ctx, h),
                 Payload::Function { kind, ty, spec, deferred, params, body, inits: ci, .. } => {
                     let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = fn_spec(*spec).unwrap_or_default();
