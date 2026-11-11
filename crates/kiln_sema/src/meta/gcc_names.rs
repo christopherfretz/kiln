@@ -637,7 +637,7 @@ impl<'s, 'a, 'b> Pp<'s, 'a, 'b> {
     }
 
     /// A nested-name-specifier of a dependent name, GCC-style: a type in
-    /// full (`bsl::enable_if<bsl::is_integral<T>::value, To>::`), a
+    /// full (`std::enable_if<std::is_integral<T>::value, To>::`), a
     /// namespace by its scope.
     fn nns(&mut self, n: kiln_ast::NnsId, flags: u32) {
         use kiln_ast::types::Nns;
