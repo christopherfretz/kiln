@@ -2275,8 +2275,6 @@ impl Sema<'_, '_> {
         }
     }
 
-    /// Main-file offset `o` as a location ([`NONE`]: none).
-
     /// The two slot values from the token values; also how many tokens
     /// the slots used (the rest are cold annotations).
     fn image_slots(&mut self, shape: [Slot; 2], vals: &[u32], _n: Node) -> (u32, u32, usize) {

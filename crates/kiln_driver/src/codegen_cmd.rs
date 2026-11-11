@@ -473,8 +473,7 @@ impl CodegenJob<'_> {
             }
         }
         // After IR generation too: it can evaluate more constants.
-        job.note_lazy_buffers(sm, engine);
-        job.write_image_census(tu.image_census.as_ref(), engine);
+        job.write_image_reports(sm, tu.image_census.as_ref(), engine);
         a.constexpr.write_report(&tu.oven, sm, engine);
         let mut err = job.stderr.clone();
         a.constexpr.write_profile(&tu.oven, &tu.ast, sm, main_id, engine, &mut err);

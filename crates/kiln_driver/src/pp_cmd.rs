@@ -696,6 +696,17 @@ impl Job<'_> {
         }
     }
 
+    /// After a compile: the `-v` notes on lazy buffers, then the census.
+    pub(crate) fn write_image_reports(
+        &self,
+        sm: &SourceManager,
+        census: Option<&kiln_sema::ImageCensus>,
+        engine: &DiagEngine<'_>,
+    ) {
+        self.note_lazy_buffers(sm, engine);
+        self.write_image_census(census, engine);
+    }
+
     /// `-fkiln-bmi-image-census`: the census table on stderr
     /// (spec/modules.md §11.11 "Fallback census").
     pub(crate) fn write_image_census(

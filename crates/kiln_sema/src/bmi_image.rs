@@ -3967,7 +3967,7 @@ impl Sema<'_, '_> {
             .into_iter()
             .map(|(reason, count, example)| CensusRow { reason, count, example })
             .collect();
-        out.rows.sort_by(|a, b| b.count.cmp(&a.count));
+        out.rows.sort_by_key(|r| std::cmp::Reverse(r.count));
         out.attrs = c.attrs.into_iter().map(|(a, n)| (a.to_owned(), n)).collect();
         out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Some(out)

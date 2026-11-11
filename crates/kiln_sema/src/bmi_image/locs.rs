@@ -327,13 +327,13 @@ pub(super) fn validate(files: &[FileRec], slocs: &[SlocRec]) -> Result<Vec<u32>,
                 }
             }
             SlocRec::Macro { spelling, len, exp, name } => {
-                check_exp(&bases, &lens, *spelling, *len, exp, &ok)?;
+                check_exp(&bases, &lens, *spelling, *len, *exp, &ok)?;
                 if !name.iter().all(|&o| ok(o)) {
                     return Err("a macro name location out of range");
                 }
             }
             SlocRec::Arg { spelling, len, exp } => {
-                check_exp(&bases, &lens, *spelling, *len, exp, &ok)?;
+                check_exp(&bases, &lens, *spelling, *len, *exp, &ok)?;
             }
         }
         bases.push(next as u32);
@@ -350,7 +350,7 @@ fn check_exp(
     lens: &dyn Fn(usize) -> u32,
     spelling: u32,
     len: u32,
-    exp: &[u32; 2],
+    exp: [u32; 2],
     ok: &dyn Fn(u32) -> bool,
 ) -> Result<(), &'static str> {
     if !ok(spelling) || !exp.iter().all(|&o| ok(o)) {
@@ -406,11 +406,11 @@ impl Locs {
                 SlocRec::Macro { spelling, len, exp, name } => {
                     let kind =
                         ExpansionKind::Macro { name: Span::new(m.get(name[0]), m.get(name[1])) };
-                    sm.add_expansion(m.get(*spelling), *len, m.span(exp), kind)
+                    sm.add_expansion(m.get(*spelling), *len, m.span(*exp), kind)
                         .map_err(|_| "no location space")?
                 }
                 SlocRec::Arg { spelling, len, exp } => sm
-                    .add_expansion(m.get(*spelling), *len, m.span(exp), ExpansionKind::MacroArg)
+                    .add_expansion(m.get(*spelling), *len, m.span(*exp), ExpansionKind::MacroArg)
                     .map_err(|_| "no location space")?,
             };
             m.runs.push((bases[k], len, base));
@@ -418,7 +418,7 @@ impl Locs {
         Ok(m)
     }
 
-    fn span(&self, e: &[u32; 2]) -> Span {
+    fn span(&self, e: [u32; 2]) -> Span {
         Span::new(self.get(e[0]), self.get(e[1]))
     }
 
