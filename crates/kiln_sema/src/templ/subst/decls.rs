@@ -2054,5 +2054,6 @@ fn subst_param_info(
         chunk_loc: Loc::INVALID,
         decl: Some(decl),
         explicit_object,
+        array_static: false,
     }
 }

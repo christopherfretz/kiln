@@ -1454,6 +1454,10 @@ impl ParamData {
     /// (in-class member functions, [class.mem]/7); `default_arg` is set
     /// when parsing finishes.
     pub const DEFAULT_ARG_PENDING: u16 = 4;
+    /// C: the outermost array derivation of the declared type has
+    /// `static` (`int a[static 4]`, C17 6.7.6.3p7; clang's
+    /// `ArraySizeModifier::Static` on the original type).
+    pub const STATIC_ARRAY: u16 = 8;
     /// The bits of `flags` holding the function-scope depth.
     pub const SCOPE_DEPTH_MASK: u16 = 0xff00;
 
@@ -3096,6 +3100,14 @@ impl DeclArena {
     /// or function type), when it differs from its declared type.
     pub fn set_param_original_ty(&mut self, p: DeclId, ty: QualType) {
         self.param_mut(p).original_ty = Some(ty);
+    }
+
+    /// Marks a parameter declared with `[static N]`
+    /// ([`ParamData::STATIC_ARRAY`]) when `on`.
+    pub fn set_param_static_array(&mut self, p: DeclId, on: bool) {
+        if on {
+            self.param_mut(p).flags |= ParamData::STATIC_ARRAY;
+        }
     }
 
     /// Marks a parameter's default argument as pending late parsing

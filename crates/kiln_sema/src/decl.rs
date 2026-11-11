@@ -1424,6 +1424,25 @@ impl Sema<'_, '_> {
         self.ast.types.function(p.ret(), &params, info, exc)
     }
 
+    /// C before C23 (clang `GetFullTypeForDeclarator`,
+    /// `warn_strict_prototypes`, -Wstrict-prototypes): every function
+    /// declarator `()` without a prototype, at its `(`. A K&R identifier
+    /// list gets -Wdeprecated-non-prototype instead. WP-1312.
+    fn c_warn_strict_prototypes(&mut self, d: &Declarator) {
+        if !self.is_c() {
+            return;
+        }
+        let knr = d.knr_idents.as_ref().is_some_and(|i| !i.is_empty());
+        for (i, chunk) in d.chunks.iter().enumerate() {
+            if let Chunk::Function { params, variadic: false, loc, no_proto: true, .. } = chunk
+                && params.is_empty()
+                && !(knr && i == 0)
+            {
+                self.emit(self.diag(DiagId::sema_c_strict_prototypes, *loc));
+            }
+        }
+    }
+
     /// The type of `d` given the decl-specifier type `base`
     /// ([dcl.meaning], [dcl.ptr], [dcl.ref], [dcl.array], [dcl.fct]).
     pub fn type_for_declarator(&mut self, base: QualType, d: &Declarator) -> QualType {
@@ -1448,6 +1467,7 @@ impl Sema<'_, '_> {
         if d.ctx == DeclaratorContext::TypeName && d.site != DeclSite::New {
             self.warn_redundant_parens(None, d);
         }
+        self.c_warn_strict_prototypes(d);
         // Decl-specifier nullability qualifiers that belong to a chunk.
         let (base, moved) = self.declarator_nullability(base, spec_loc, d);
         // [dcl.type.class.deduct]/2.
@@ -2266,6 +2286,7 @@ impl Sema<'_, '_> {
             chunk_loc: if d.ellipsis.is_none() { Self::inner_chunk_loc(d) } else { Loc::INVALID },
             decl: None,
             explicit_object: d.explicit_object,
+            array_static: d.array_param_static.is_some() && self.ast.types.is_array(declared),
         }
     }
 
@@ -5235,7 +5256,9 @@ impl Sema<'_, '_> {
                         let msg = self
                             .diag(DiagId::sema_static_non_static, d.name_loc())
                             .arg(fname.clone());
-                        let msg = self.note_prev(msg, p, false);
+                        // WP-1312: clang `getNoteDiagForInvalidRedeclaration`.
+                        let def = self.ast.decls.function(p).is_some_and(|f| f.body.is_some());
+                        let msg = self.note_prev(msg, p, def);
                         self.emit(msg);
                         // C (clang `MergeFunctionDecl` fails): the
                         // declaration is invalid, so no redefinition error
@@ -5726,6 +5749,7 @@ impl Sema<'_, '_> {
                 chunk_loc: Loc::INVALID,
                 decl: None,
                 explicit_object: None,
+                array_static: false,
             })
             .collect()
     }
@@ -5776,6 +5800,7 @@ impl Sema<'_, '_> {
             if let Some(o) = p.original_ty {
                 self.ast.decls.set_param_original_ty(pd, o);
             }
+            self.ast.decls.set_param_static_array(pd, p.array_static);
             if p.range.0.is_valid() && p.range.0 != p.loc {
                 let _ = self.ast.decls.cold.begin_loc.insert(pd, p.range.0);
                 if p.type_loc.is_valid()
@@ -10161,8 +10186,16 @@ impl Sema<'_, '_> {
         let t = &self.ast.types;
         let ok_ty = t.is_integral(ity)
             || t.as_enum(ity).is_some_and(|en| !self.is_scoped_enum(en) || en == e);
-        if !ok_ty && !self.is_error_type(ity) {
-            self.error(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+        if !ok_ty && !self.is_error_type(ity) && self.is_c() {
+            // C: clang `VerifyIntegerConstantExpression`'s
+            // `err_ice_not_integral`, at the value's first token (WP-1312).
+            let d = self
+                .diag(DiagId::sema_ice_not_integral_c, self.begin_loc(ie))
+                .arg(self.ty_arg(ity));
+            self.emit(d);
+        } else if !ok_ty && !self.is_error_type(ity) {
+            let d = self.not_ice_diag(DiagId::sema_expr_not_ice, self.ast.exprs.get(ie).loc());
+            self.emit(d);
         } else if !self.is_error_type(ity) {
             let mut c = conv::lvalue_to_rvalue(self, ie);
             let mut narrowed = None;
@@ -13127,7 +13160,7 @@ impl Sema<'_, '_> {
             Some(self.builder().constant_expr(c, Some(cv)))
         } else if let Err(mut f) = r {
             let at = Self::fold_lone_invalid(&mut f, loc);
-            let d = self.diag(DiagId::sema_expr_not_ice, at);
+            let d = self.not_ice_diag(DiagId::sema_expr_not_ice, at);
             let d = Self::with_failure_notes(d, f);
             self.emit(d);
             None

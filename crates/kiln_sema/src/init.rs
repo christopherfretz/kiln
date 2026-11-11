@@ -1782,8 +1782,9 @@ impl Sema<'_, '_> {
                 return self.init_from_expr(ty, *x, ConvCtx::Initialization, l.lbrace);
             }
             if self.ast.types.as_record(ty).is_some() && !self.require_complete(ty, l.lbrace) {
+                // clang reports it at the variable (WP-1312).
                 let msg = self
-                    .diag(DiagId::sema_typecheck_decl_incomplete_type, l.lbrace)
+                    .diag(DiagId::sema_typecheck_decl_incomplete_type, entity.unwrap_or(l.lbrace))
                     .arg(self.ty_arg(ty));
                 self.emit(self.incomplete_note(msg, ty));
                 return self.recover(ty, &[], l.lbrace);

@@ -787,7 +787,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
                 let ds = f.lx.take_diagnostics();
                 if !self.quiet_lex {
                     for d in &ds {
-                        if let Some(diag) = crate::diag_map::lex_diag(self.sm, d) {
+                        if let Some(diag) = crate::diag_map::lex_diag(self.sm, d, &self.lex_opts) {
                             self.emit(diag);
                         }
                     }

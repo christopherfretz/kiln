@@ -73,6 +73,11 @@ pub struct LexOptions {
     /// reads it: there `//` starts no comment in preprocessed output
     /// (clang 19; spec/lex.md "C mode"). Default: `false`.
     pub preprocessed_output: bool,
+    /// `-fclang-compat=19`: the lexer's diagnostics take clang 19's
+    /// wording and locations where clang 22 changed them (WP-1312: the
+    /// delimited-escape extension warning). Only the diagnostic mapping
+    /// reads it. Default: `false` (clang 22).
+    pub clang19: bool,
 }
 
 impl LexOptions {
@@ -87,6 +92,7 @@ impl LexOptions {
             keep_comments: false,
             reflection: false,
             preprocessed_output: false,
+            clang19: false,
         }
     }
 }

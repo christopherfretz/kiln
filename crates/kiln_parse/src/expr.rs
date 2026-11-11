@@ -317,7 +317,9 @@ impl Parser<'_, '_> {
             let mut colon = None;
             if op.is_none() {
                 if let Some(c) = self.eat(Punct::Colon) {
-                    // GNU `a ?: b`.
+                    // GNU `a ?: b` (clang `ext_gnu_conditional_expr`, at
+                    // the `:`; WP-1312).
+                    self.emit(self.s.diag(DiagId::parse_gnu_conditional_expr, c));
                     let rhs = self.parse_assignment_expr()?;
                     lhs = self.s.act_on_binary_conditional(lhs, rhs, op_loc, c);
                     continue;
@@ -489,11 +491,16 @@ impl Parser<'_, '_> {
                 _ => None,
             };
             if let Some(op) = op {
+                // clang `IsAfterAmp`: `*` directly after a unary `&`.
+                let after_amp = op == UnaryOp::Deref && self.addr_operand_at == Some(self.pos());
                 self.bump();
                 if op == UnaryOp::AddrOf {
                     self.addr_operand_at = Some(self.pos());
                 }
                 let e = self.parse_cast_expr()?;
+                if after_amp {
+                    return Some(self.s.act_on_deref_after_amp(e, loc));
+                }
                 return Some(self.s.act_on_unary(op, e, loc));
             }
             if p == Punct::AmpAmp {
@@ -1256,7 +1263,10 @@ impl Parser<'_, '_> {
             self.emit(d);
             return None;
         };
-        let Some(ty) = self.parse_type_id() else {
+        let saved = self.offsetof_at.replace(loc);
+        let ty = self.parse_type_id();
+        self.offsetof_at = saved;
+        let Some(ty) = ty else {
             self.skip_until(&[Punct::RParen], true, true);
             return None;
         };

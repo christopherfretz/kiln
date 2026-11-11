@@ -146,6 +146,25 @@ impl Parser<'_, '_> {
         drop(phase);
     }
 
+    /// C17 6.9p1: a C translation unit holds at least one external
+    /// declaration (clang `ParseFirstTopLevelDecl`,
+    /// `ext_empty_translation_unit`, at the end of file; not with a
+    /// precompiled header, clang's external AST source). WP-1312.
+    pub fn warn_if_empty_c_translation_unit(&mut self) {
+        if self.s.is_c() && self.at_eof() {
+            // clang's end-of-file token sits on a final newline.
+            let mut at = self.loc();
+            if at.is_file() && at.to_raw() > 0 {
+                let prev = Loc::from_raw(at.to_raw() - 1);
+                if self.sm.span_text(Span::new(prev, at)).is_some_and(|t| t == "\n" || t == "\r") {
+                    at = prev;
+                }
+            }
+            let d = self.s.diag(DiagId::parse_empty_translation_unit, at);
+            self.emit(d);
+        }
+    }
+
     /// A declaration at namespace scope ([dcl.pre] declaration).
     pub fn parse_external_declaration(&mut self) {
         if self.mods.is_some() {
@@ -2188,6 +2207,10 @@ impl Parser<'_, '_> {
         // `CPlusPlus`). One in a parameter list is Sema's `-Wvisibility`
         // (`c_warn_tag_in_param_list`, C17 6.2.1p4).
         if self.s.is_c() {
+            // Every tag defined in `__builtin_offsetof`'s type-id.
+            if let Some(at) = self.offsetof_at {
+                self.s.c_type_defined_in_offsetof(d, at);
+            }
             return false;
         }
         let type_spec = Self::tag_site(ds, ctx) == TagSite::TypeSpecifier;
@@ -4631,7 +4654,7 @@ impl Parser<'_, '_> {
             return decls;
         }
         if ds.is_empty() && !self.at_declarator_without_specifiers(ctx) {
-            self.error_here(DiagId::parse_expected_unqualified_id);
+            self.error_here(self.expected_declarator_name_id());
             self.skip_to_semi();
             return decls;
         }
@@ -4664,7 +4687,7 @@ impl Parser<'_, '_> {
             }
             if !d.has_name() {
                 if !d.invalid {
-                    self.error_here(DiagId::parse_expected_unqualified_id);
+                    self.error_here(self.expected_declarator_name_id());
                 }
                 // clang's `SkipMalformedDecl`: a braced group ends the
                 // declaration (`extern "C++" { ... }` at block scope).
@@ -5183,6 +5206,17 @@ impl Parser<'_, '_> {
     fn c_check_ellipsis_first(&mut self, first: bool, l: Loc) {
         if first && self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23) {
             self.s.error(DiagId::parse_ellipsis_first_param, l);
+        }
+    }
+
+    /// The missing declarator name's error (clang
+    /// `ParseDirectDeclarator`): "expected identifier or '('" in C
+    /// (`err_expected_either`; WP-1312), "expected unqualified-id" in C++.
+    fn expected_declarator_name_id(&self) -> DiagId {
+        if self.s.is_c() {
+            DiagId::parse_expected_ident_or_lparen
+        } else {
+            DiagId::parse_expected_unqualified_id
         }
     }
 

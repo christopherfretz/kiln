@@ -490,7 +490,9 @@ impl<'c> Ev<'c> {
         if diags.is_empty() {
             return;
         }
-        let opts = LexOptions::new(self.std);
+        let mut opts = LexOptions::new(self.std);
+        opts.c = self.c;
+        opts.clang19 = self.cx.clang19_escapes();
         let sm = self.cx.source_manager();
         for d in crate::diag_map::literal_diags(sm, tok, spelling, diags, enc, &opts) {
             self.cx.emit(d);

@@ -72,7 +72,7 @@ impl Sema<'_, '_> {
     /// best viable function, or `None` after diagnosing.
     /// "use of undeclared identifier 'f'" for the callee `name` at `loc`
     /// that no lookup found; clang 22 adds the range of its (first) token.
-    fn diagnose_undeclared_call_name(&mut self, name: DeclName, loc: Loc) {
+    pub(crate) fn diagnose_undeclared_call_name(&mut self, name: DeclName, loc: Loc) {
         let mut msg = self.diag(Self::undeclared_use_id(name), loc).arg(self.decl_name_str(name));
         if self.clang_compat >= 22 {
             let end = self.token_end(loc).unwrap_or(loc);

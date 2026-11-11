@@ -166,7 +166,7 @@ impl Preprocessor<'_, '_> {
         loop {
             let mut t = lx.next();
             for d in lx.take_diagnostics() {
-                if let Some(diag) = crate::diag_map::lex_diag(self.sm, &d) {
+                if let Some(diag) = crate::diag_map::lex_diag(self.sm, &d, &self.lex_opts) {
                     self.emit(diag);
                 }
             }

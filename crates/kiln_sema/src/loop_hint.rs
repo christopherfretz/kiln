@@ -74,7 +74,7 @@ impl Sema<'_, '_> {
             }
             Err(mut f) => {
                 let at = Self::fold_lone_invalid(&mut f, loc);
-                let d = self.diag(DiagId::sema_expr_not_ice, at);
+                let d = self.not_ice_diag(DiagId::sema_expr_not_ice, at);
                 let d = Self::with_failure_notes(d, f);
                 self.emit(d);
                 None

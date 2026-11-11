@@ -494,6 +494,12 @@ impl Sema<'_, '_> {
     /// The location of the last token of `e` (clang's `getEndLoc`; see
     /// [`kiln_ast::Ast::end_loc`]).
     pub(crate) fn expr_end_loc(&self, e: ExprId) -> Loc {
+        // A compound literal ends at its `}` (clang
+        // `CompoundLiteralExpr::getEndLoc`). Kept to diagnostics here:
+        // `Ast::end_loc` also feeds coverage regions.
+        if self.ast.exprs.get(e).kind() == ExprKind::CompoundLiteralExpr {
+            return self.ast.end_loc(self.ast.exprs.compound_literal_init(e));
+        }
         self.ast.end_loc(e)
     }
 
@@ -3026,6 +3032,17 @@ impl Sema<'_, '_> {
 
     /// A prefix unary operator, or postfix `++`/`--` ([expr.unary.op],
     /// [expr.pre.incr], [expr.post.incr]).
+    /// `*e` written directly after a unary `&` (`&*p`; clang passes
+    /// `IsAfterAmp`): as [`Sema::act_on_unary`], without C's
+    /// `-Wvoid-ptr-dereference` from C99 (6.5.3.2p3: neither operator
+    /// is evaluated).
+    pub fn act_on_deref_after_amp(&mut self, e: ExprId, loc: Loc) -> ExprId {
+        let saved = std::mem::replace(&mut self.deref_after_amp, true);
+        let r = self.act_on_unary(UnaryOp::Deref, e, loc);
+        self.deref_after_amp = saved;
+        r
+    }
+
     pub fn act_on_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
         if self.is_err_expr(e) {
             return self.recover_err(&[e], loc);
@@ -3299,6 +3316,17 @@ impl Sema<'_, '_> {
             return self.recover_err(&[e], loc);
         };
         self.check_address_of_packed_member(e);
+        // C: an lvalue of type `void` (clang `ext_typecheck_addrof_void`);
+        // from C99 `&*p` is `p` (6.5.3.2p3; WP-1312).
+        if self.is_c() && self.ast.types.is_void(t) {
+            let x = self.ignore_parens(e);
+            let deref = self.ast.exprs.get(x).kind() == ExprKind::UnaryOperator
+                && self.ast.exprs.unary_op(x) == UnaryOp::Deref;
+            if !deref || !self.c_at_least(kiln_lex::CStd::C99) {
+                let msg = self.diag(DiagId::sema_c_addrof_void, loc).range(self.expr_range(e));
+                self.emit(msg);
+            }
+        }
         let ty = self.ast.types.pointer_to(t);
         self.builder().unary(UnaryOp::AddrOf, e, ty, loc, ExprFlags::CANNOT_OVERFLOW)
     }
@@ -5690,7 +5718,15 @@ impl Sema<'_, '_> {
                     self.rerun_template_id_resolution(a, to);
                 }
                 match conv::implicit_convert(self, a, to, ConvCtx::Argument) {
-                    Ok(x) => conv_args.push(x),
+                    Ok(x) => {
+                        if self.is_c()
+                            && let Some(&p) = pdecls.get(i)
+                        {
+                            let at = self.begin_loc(callee);
+                            self.c_check_static_array_arg(at, p, x);
+                        }
+                        conv_args.push(x);
+                    }
                     // C17 6.5.2.2p7: the argument is converted as if by
                     // assignment; clang notes the parameter.
                     Err(err) if conv::c_assign::is_c_assign_diag(err.id) => {
@@ -6519,8 +6555,58 @@ impl Sema<'_, '_> {
         if !self.check_trait_operand(kind, ty, self.expr_loc(e), Some(self.expr_range(e))) {
             return self.recover_err(&[e], loc);
         }
+        if kind == TraitKind::SizeOf {
+            self.warn_sizeof_array_decay(e);
+        }
         let st = self.size_type();
         self.builder().trait_of_expr(kind, e, st, loc)
+    }
+
+    /// clang `CheckUnaryExprOrTypeTraitOperand`'s `sizeof` warnings
+    /// (WP-1312): a (parenthesized) array parameter, which is a pointer
+    /// (`-Wsizeof-array-argument`, noting the parameter), and an operand
+    /// of a binary operator whose array operand decays to the result's
+    /// type (`-Wsizeof-array-decay`, at the operator).
+    fn warn_sizeof_array_decay(&mut self, e: ExprId) {
+        let x = self.ignore_parens(e);
+        let n = *self.ast.exprs.get(x);
+        if n.kind() == ExprKind::DeclRefExpr {
+            let p = self.ast.exprs.decl(x);
+            if self.kind_of(p) == DeclKind::ParmVar
+                && self.ast.types.is_pointer(n.ty())
+                && let Some(o) = self.ast.decls.param(p).and_then(|d| d.original_ty)
+                && self.ast.types.is_array(o)
+            {
+                let msg = self
+                    .diag(DiagId::sema_sizeof_array_param, self.expr_loc(e))
+                    .arg(self.ty_arg(n.ty()))
+                    .arg(self.ty_arg(o))
+                    .range(self.expr_range(e));
+                let note = self.diag(DiagId::note_declared_at, self.ast.decls.get(p).loc());
+                self.emit(msg.with_note(note));
+            }
+            return;
+        }
+        if n.kind() != ExprKind::BinaryOperator {
+            return;
+        }
+        let ops = self.ast.exprs.operands(x);
+        let (l, r) = (ops[0], ops[1]);
+        for side in [l, r] {
+            let s = *self.ast.exprs.get(side);
+            if s.kind() == ExprKind::ImplicitCastExpr
+                && self.ast.exprs.cast_kind(side) == CastKind::ArrayToPointerDecay
+                && self.ast.types.same_type(s.ty(), n.ty())
+            {
+                let from = self.ety(self.ast.exprs.operand(side));
+                let msg = self
+                    .diag(DiagId::sema_sizeof_array_decay, n.loc())
+                    .arg(self.ty_arg(s.ty()))
+                    .arg(self.ty_arg(from))
+                    .range(self.expr_range(side));
+                self.emit(msg);
+            }
+        }
     }
 
     /// Whether `e` is a (parenthesized) non-dependent `DeclRefExpr` of
