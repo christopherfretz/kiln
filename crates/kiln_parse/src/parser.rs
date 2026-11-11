@@ -1051,6 +1051,31 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         self.s.explicit_spec_for_int_args(d, &vals)
     }
 
+    /// What `class` names once followed by the template argument list
+    /// between `open` and `close`, and whether it is a class template with
+    /// non-dependent arguments ([`Parser::nondependent_template_qualifier`];
+    /// never when the list was `split`). Such a template-id names the
+    /// explicit specialization its arguments select, when the lookahead can
+    /// tell ([`Parser::lookahead_explicit_spec`]).
+    fn class_with_args(
+        &self,
+        class: NameClass,
+        split: bool,
+        open: usize,
+        close: usize,
+    ) -> (bool, NameClass) {
+        let nondep = !split && self.nondependent_template_qualifier(class, open, close);
+        let spec = match class {
+            NameClass::TypeTemplate(d) if nondep => self.lookahead_explicit_spec(d, open, close),
+            _ => None,
+        };
+        let with_args = match spec {
+            Some(s) => NameClass::Type(QualType::DEPENDENT, s),
+            None => type_if_args(class),
+        };
+        (nondep, with_args)
+    }
+
     /// [`Parser::scan_name_walk`] from token `i`, the first component
     /// after a `::` whose scope `scope` is already known.
     fn scan_name_walk_in(
@@ -1130,18 +1155,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         dep_tid = true;
                     }
                 }
-                let nondep = !split && self.nondependent_template_qualifier(class, end, close);
-                nondep_class |= nondep;
-                let spec = match class {
-                    NameClass::TypeTemplate(d) if nondep => {
-                        self.lookahead_explicit_spec(d, end, close)
-                    }
-                    _ => None,
-                };
-                class = match spec {
-                    Some(s) => NameClass::Type(QualType::DEPENDENT, s),
-                    None => type_if_args(class),
-                };
+                let (nondep, with_args) = self.class_with_args(class, split, end, close);
+                (nondep_class, class) = (nondep_class | nondep, with_args);
                 if split {
                     return Ok((close, true, class, name, qual));
                 }
