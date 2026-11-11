@@ -70,7 +70,7 @@ pub(super) struct ReqBodyRec {
     /// Its context: a declaration record or [`LEX_TU`].
     ctx: u32,
     loc: u32,
-    /// [`DEP`] inside a template (its parameters' too).
+    /// [`DEP`] inside a template (its parameters carry their own).
     flags: u8,
     params: Vec<ParamRec>,
     /// The invented `expr-type` parameters: depth and location.
@@ -138,7 +138,7 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.decls.get(body);
         if n.kind() != DeclKind::RequiresExprBody || n.flags().bits() & !DEP != 0 {
-            return Err("a malformed requires-expression");
+            return Err("a requires-expression body with flags the image does not carry");
         }
         let flags = n.flags().bits() & DEP;
         let rqd = *ast.templates.requires_data(rq).ok_or("a malformed requires-expression")?;
@@ -146,9 +146,8 @@ impl Writer<'_, '_, '_> {
         for &p in &params {
             let pd = ast.decls.param(p).ok_or("a malformed requires-expression")?;
             let pn = ast.decls.get(p);
-            if pd.default_arg.is_some() || pn.ctx() != Some(body) || pn.flags().bits() & DEP != flags
-            {
-                return Err("a malformed requires-expression");
+            if pd.default_arg.is_some() || pn.ctx() != Some(body) {
+                return Err("a requires-expression parameter the image does not carry");
             }
         }
         let loc = self.loc(n.loc())?;
@@ -207,8 +206,11 @@ impl Writer<'_, '_, '_> {
         {
             return Err("a requires-expression the image does not carry");
         }
-        let loc = self.loc(n.loc())?;
+        let (loc, flags) = (self.loc(n.loc())?, n.flags().bits());
         let rb = self.req_body(body)?;
+        if flags != self.img.reqs.recs[rb as usize].flags {
+            return Err("a requires-expression the image does not carry");
+        }
         let inv = &mut self.img.reqs.recs[rb as usize].invented;
         let k = inv.len() as u32;
         inv.push((info.depth, loc));
@@ -340,7 +342,7 @@ pub(super) fn validate_requires(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> 
             let pack = if p.flags & DEP != 0 { ParamData::PACK } else { 0 };
             if (p.name != NONE && p.name as usize >= img.pnames.len())
                 || p.flags & !(DECL_FLAGS | DEP) != 0
-                || p.flags & DEP != b.flags
+
                 || p.pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0
                 || !qref_ok(p.ty)
             {
@@ -426,10 +428,12 @@ impl Sema<'_, '_> {
                         .map_or(DeclName::EMPTY, |n| DeclName::ident(self.intern(n)))
                 };
                 let index = u16::try_from(k).unwrap_or(u16::MAX);
+                self.ast.templates.dependent_depth = saved_depth + u32::from(p.flags & DEP != 0);
                 let pd = self.builder().param(body, pname, main.get(p.loc), pty, index, p.pflags);
                 super::image_flags(self, pd, p.flags);
                 ps.push(pd);
             }
+            self.ast.templates.dependent_depth = saved_depth + u32::from(b.flags != 0);
             let mut inv = Vec::with_capacity(b.invented.len());
             for &(depth, loc) in &b.invented {
                 let h = DeclHead::new(body, invented, main.get(loc));
