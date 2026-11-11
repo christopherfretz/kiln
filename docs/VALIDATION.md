@@ -17,6 +17,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Goldens | alongside the above, `*.expected` | AST dumps, diagnostics, IR shapes (FileCheck-style) |
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
 | Accepts-invalid | clang's own C++ negative tests (`clang/test/{CXX,SemaCXX}` of llvmorg-22.1.8, `-verify` files; `scripts/fetch-clang-tests.sh`), driven by `cargo xtask clang-neg` (`spec/clang-neg.md`); informational, not part of `ci`; status in `docs/status/accepts-invalid.md` | kiln rejects what clang rejects: no file where clang expects an error passes silently through kiln (accept vs reject only, no wording) |
+| GCC C torture | GCC 16.1's `gcc.c-torture` (`execute`, `execute/ieee`, `execute/builtins`, `compile`; `scripts/fetch-gcc-tests.sh`, gitignored `.oss/gcc-tests`, never vendored), driven by `cargo xtask gcc-torture` (spec/harness.md "GCC testsuites"); informational, not part of `ci`; status in `docs/status/c-mode.md` | kiln's C mode compiles and runs GCC's C tests at `-O0` and `-O2` as GCC 16.1 and clang-19 do; each case is pass, compile-reject, crash, wrong or timeout beside the oracles' result |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
@@ -45,7 +46,7 @@ lane runs the CMake C++20 modules end-to-end
 `cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
-`cargo xtask libcxx`, `libstdcxx`, `clang-neg` and `features`.
+`cargo xtask libcxx`, `libstdcxx`, `clang-neg`, `gcc-torture` and `features`.
 
 **OSS builds** (ROADMAP M8). `scripts/oss/oss-build.sh <project>
 [--compiler kiln|clang]` clones a project of `scripts/oss/projects.toml`
@@ -314,6 +315,25 @@ files, missed-error clusters, skips) into `docs/status/accepts-invalid.md`,
 which also carries the hand-written triage and its xfail repros. The unit
 tests use inline text, so `ci` needs no checkout. The contract is
 `spec/clang-neg.md`.
+
+`cargo xtask gcc-torture` measures kiln's C mode on GCC's own C tests,
+also outside `ci` (WP-1277). It reads `gcc.c-torture` from a sparse
+checkout of the GCC 16.1 release (`scripts/fetch-gcc-tests.sh`, gitignored
+`.oss/gcc-tests`; GPL, never vendored), honours the tests' DejaGnu
+metadata (`dg-do`, `dg-options`, `dg-additional-options`, `dg-skip-if`,
+`dg-require-effective-target`, the xfail forms, `dg-timeout-factor`) and
+the `.x` files of the c-torture-execute suites, and compiles, links and
+runs each test at each option set (default `-O0` and `-O2`, `-std=gnu23`)
+through kiln, GCC 16.1 and clang-19. Each compiler's result per case is
+pass, compile-reject, crash, wrong (the program aborted), timeout or
+accept-invalid; flags a compiler rejects are dropped for it and listed.
+It writes a per-case TSV beside the oracles' results and a summary
+(classes, pass rates by suite and option set, kiln against the oracles,
+failure clusters ranked by count, skips); `--report` splices the summary
+into `docs/status/c-mode.md`, which carries the hand-written triage and
+the `tests/c/` xfail repros. The pieces are suite-independent, so a
+g++.dg runner reuses them. The exit status is non-zero only for a tool
+error. The contract is spec/harness.md "GCC testsuites".
 
 `cargo xtask features` is outside `ci` as well. It checks the language
 feature table, `docs/STANDARD_SUPPORT.md`, which has one section per standard

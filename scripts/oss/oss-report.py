@@ -128,6 +128,27 @@ def cell_tus(rep, key):
     return f"{t.get('ok', 0)} / {t.get('failed', 0)}"
 
 
+LANG_NAMES = {"c++": "C++", "c": "C", "asm": "asm"}
+
+
+def langs_of(*reps):
+    """The TU languages of the reports (WP-1277), when any is not C++: a
+    report without `tus_by_lang`, or with C++ only, adds no rows."""
+    got = set()
+    for rep in reps:
+        got.update(((rep or {}).get("tus_by_lang") or {}).keys())
+    if not got - {"c++"}:
+        return []
+    return sorted(got, key=lambda l: (l != "c++", l))
+
+
+def cell_lang(rep, lang):
+    if rep is None:
+        return "-"
+    t = (rep.get("tus_by_lang") or {}).get(lang) or {}
+    return f"{t.get('ok', 0)} / {t.get('failed', 0)}"
+
+
 def cell_tests(rep):
     if rep is None or rep.get("test_rc") is None:
         return "-"
@@ -174,6 +195,8 @@ def render(name, data, base, stdlib="libstdc++", missing=(), tag="?"):
     lines.append(f"| configure | {cell_rc(kr, 'configure_rc')} | {cell_rc(cr, 'configure_rc')} |")
     lines.append(f"| build | {cell_rc(kr, 'build_rc')} | {cell_rc(cr, 'build_rc')} |")
     lines.append(f"| TUs ok / failed | {cell_tus(kr, 'tus')} | {cell_tus(cr, 'tus')} |")
+    for lang in langs_of(kr, cr):
+        lines.append(f"| {LANG_NAMES.get(lang, lang)} TUs ok / failed | {cell_lang(kr, lang)} | {cell_lang(cr, lang)} |")
     lines.append(f"| links ok / failed | {cell_tus(kr, 'links')} | {cell_tus(cr, 'links')} |")
     lines.append(f"| tests passed / total | {cell_tests(kr)} | {cell_tests(cr)} |")
     lines.append(f"| wall | {cell_wall(kr)} | {cell_wall(cr)} |")
@@ -190,6 +213,9 @@ def render(name, data, base, stdlib="libstdc++", missing=(), tag="?"):
         for i, (sig, rs, also) in enumerate(cs, 1):
             r = rs[0]
             note = f"; {also} also fail{'s' if also == 1 else ''} with clang" if also else ""
+            langs = sorted({x.get("lang") or "c++" for x in rs})
+            if langs != ["c++"]:
+                note += "; " + ", ".join(LANG_NAMES.get(l, l) for l in langs)
             lines.append(f"{i}. **{len(rs)}x** `{sig}`{note}")
             lines.append(f"   - e.g. `{rel(r.get('source') or '', base)}`: `{rel(r.get('diag', ''), base)}`")
             lines.append(f"   - repro: `{repro(r, base)}`")

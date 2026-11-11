@@ -14,6 +14,7 @@ mod dist;
 mod doclinks;
 mod entity_lint;
 mod features;
+mod gcc_tests;
 mod gen_pp;
 mod gen_reflect;
 mod jobs;
@@ -50,6 +51,10 @@ commands:
   clang-neg   run clang's own C++ `-verify` tests through kiln and measure what kiln
               wrongly accepts (docs/status/accepts-invalid.md); informational, not part
               of ci (`cargo xtask clang-neg --help`; contract in spec/clang-neg.md)
+  gcc-torture run GCC 16.1's C torture tests (gcc.c-torture execute, ieee, builtins,
+              compile) through kiln at -O0/-O2, beside GCC 16.1 and clang-19, and write a
+              per-case TSV and a summary; informational, not part of ci (`cargo xtask
+              gcc-torture --help`; spec/harness.md \"GCC testsuites\")
   libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
               report per-header status (docs/status/libstdcxx.md); informational, not
               part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
@@ -87,6 +92,7 @@ fn main() -> ExitCode {
         Some("bench") => bench::main(args),
         Some("clang-ast") => clang_ast::main(args),
         Some("clang-neg") => clang_neg::main(args),
+        Some("gcc-torture") => gcc_tests::torture::main(args),
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("gen-reflect") => gen_reflect::main(args),
