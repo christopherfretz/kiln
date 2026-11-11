@@ -1074,7 +1074,7 @@ a step that cannot be spawned is retried twice, 2 s apart, before it is
 **Why `gnu23`.** GCC 16 defaults to `-std=gnu23` and its own torture runs
 pass no `-std`, so the default keeps GCC's view of the tests. clang-19
 rejects old-style (K&R) definitions and more implicit-int forms under C23
-than under `gnu17` (on aarch64, clang-19 passes 6792 of 7572 cases at
+than under `gnu17` (on aarch64, clang-19 passes about 6800 of 7572 cases at
 `gnu23` and 7057 at `gnu17`); those cases show as "kiln fails, clang
 fails too" and say nothing about kiln-only gaps. `--std gnu17` measures
 the older dialect.
