@@ -147,10 +147,21 @@ impl Writer<'_, '_, '_> {
         let si = *si;
         // A class specialization only named (`using B = X<int>;`, WP-1279)
         // is `Undeclared`: the importer names it the same way.
-        if !matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared) {
+        let class = ast.decls.get(d).kind() == DeclKind::CXXRecord;
+        // An explicitly instantiated class (WP-1307) is named as an
+        // implicit one: the importer's explicit instantiation runs after
+        // the records (`explinst.rs`).
+        let explicit_inst = class
+            && matches!(
+                si.kind,
+                SpecKind::ExplicitInstantiationDeclaration
+                    | SpecKind::ExplicitInstantiationDefinition
+            );
+        if !explicit_inst
+            && !matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
+        {
             return Err("an explicit specialization or instantiation");
         }
-        let class = ast.decls.get(d).kind() == DeclKind::CXXRecord;
         if !class && ast.decls.function(d).is_none() {
             return Err("a variable template specialization");
         }
@@ -225,7 +236,16 @@ impl Writer<'_, '_, '_> {
         let pattern = match ast.templ_link(d).get() {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
                 let m = ast.templates.member_spec(i).ok_or("a malformed member")?;
-                if m.kind != SpecKind::ImplicitInstantiation {
+                // A member of an explicitly instantiated class has the
+                // class's kind, which the importer's explicit
+                // instantiation gives it again (WP-1307).
+                let class_kind = ast.spec_info(ast.first(class)).map(|(_, s)| s.kind);
+                let of_explicit_inst = matches!(
+                    m.kind,
+                    SpecKind::ExplicitInstantiationDeclaration
+                        | SpecKind::ExplicitInstantiationDefinition
+                ) && class_kind == Some(m.kind);
+                if m.kind != SpecKind::ImplicitInstantiation && !of_explicit_inst {
                     return Err("an explicitly specialized member");
                 }
                 m.instantiated_from
@@ -406,16 +426,40 @@ impl Sema<'_, '_> {
             self.get_function_spec(tmpl, &ConvertedArgs { sugared, canonical }, loc).ok()?
         };
         if *complete {
-            let ty = self.ast.decls.get(spec).ty()?;
-            let _ = self.require_complete(ty, loc);
+            self.image_complete_spec(spec, loc, false);
         }
         Some(spec)
+    }
+
+    /// Completes class specialization `spec`, which the unit completed.
+    /// A specialization named before its template's definition (`using
+    /// XI = X<int>;` after `template<class T> struct X;`, WP-1307) has
+    /// its record before the definition's: it is completed when a member
+    /// reference or the end of the image needs it (`late`), as a replay
+    /// completes it at its first use after the definition.
+    fn image_complete_spec(&mut self, spec: DeclId, loc: Loc, late: bool) {
+        if self.ast.decls.record(spec).is_none_or(|r| r.defn.contains(DefinitionBits::COMPLETE)) {
+            return;
+        }
+        if !late && let Some((_, si)) = self.ast.spec_info(spec) {
+            let tmpl = self.inst_template(si.template);
+            if self.pattern_of(tmpl).and_then(|p| self.ast.definition(p)).is_none() {
+                return;
+            }
+        }
+        if let Some(ty) = self.ast.decls.get(spec).ty() {
+            let _ = self.require_complete(ty, loc);
+        }
     }
 
     /// Resolves a member reference.
     pub(super) fn image_member(&mut self, ids: &[DeclId], r: &DeclRec) -> DeclId {
         let Payload::Member { spec, pattern } = r.payload else { return self.ast.tu };
         let s = self.ast.first(ids[spec as usize]);
+        if s != self.ast.tu {
+            let loc = self.ast.decls.get(s).loc();
+            self.image_complete_spec(s, loc, true);
+        }
         self.ast.templates.find_member(s, ids[pattern as usize]).unwrap_or(self.ast.tu)
     }
 
@@ -460,6 +504,9 @@ impl Sema<'_, '_> {
                 continue;
             }
             let loc = main.get(r.loc);
+            if let Payload::Spec { complete: true, .. } = r.payload {
+                self.image_complete_spec(d, loc, true);
+            }
             if matches!(r.payload, Payload::Spec { .. }) {
                 self.image_spec_member_inits(d, loc);
             }

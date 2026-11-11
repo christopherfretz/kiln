@@ -48,6 +48,7 @@ mod classtempl;
 mod constraints;
 mod declocs;
 mod deptypes;
+mod explinst;
 mod exprs;
 mod friend;
 mod localexterns;
@@ -67,7 +68,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 20;
+pub(crate) const IMAGE_VERSION: u32 = 21;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -379,6 +380,12 @@ const FN_GUIDE: u8 = 5;
 enum Payload {
     Namespace,
     Export,
+    /// A `static_assert` in a class template (WP-1307): the condition
+    /// and message expressions (or [`NONE`]), patched by `walk_roots`.
+    Assert {
+        cond: u32,
+        msg: u32,
+    },
     Function {
         /// Index into [`FN_KINDS`].
         kind: u8,
@@ -605,6 +612,8 @@ struct Image {
     written: Vec<written::WrittenRec>,
     /// WP-1293: block-scope declarations, in `local_externs` order.
     lexterns: localexterns::LocalExterns,
+    /// WP-1307: explicit instantiations of class templates.
+    explinsts: explinst::ExplInsts,
     /// WP-1300: the expressions types and template arguments hold, one
     /// section each ([`exprs`]).
     texprs: Vec<Bodies>,
@@ -638,6 +647,7 @@ const K_USING_DIR: u8 = 22;
 const K_NS_ALIAS: u8 = 23;
 const K_USING_ENUM: u8 = 24;
 const K_FRIEND: u8 = 25;
+const K_ASSERT: u8 = 26;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -667,6 +677,7 @@ impl Payload {
             Payload::NsAlias { .. } => K_NS_ALIAS,
             Payload::UsingEnum { .. } => K_USING_ENUM,
             Payload::Friend { .. } => K_FRIEND,
+            Payload::Assert { .. } => K_ASSERT,
         }
     }
 }
@@ -928,6 +939,10 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
     }
     match &d.payload {
         Payload::Namespace | Payload::Export | Payload::Label | Payload::Access => {}
+        Payload::Assert { cond, msg } => {
+            w.u32(*cond);
+            w.u32(*msg);
+        }
         Payload::Function { kind, ty, spec, deferred, params, body, inits, overrides } => {
             w.u8(*kind);
             w.q(*ty);
@@ -1243,6 +1258,7 @@ fn encode(img: &Image) -> Vec<u8> {
     requires::encode_requires(&mut w, &img.reqs);
     written::encode_written(&mut w, &img.written);
     localexterns::encode_local_externs(&mut w, &img.lexterns);
+    explinst::encode_explicit_insts(&mut w, &img.explinsts);
     exprs::encode_texprs(&mut w, &img.texprs, &img.late_nx);
     w.0
 }
@@ -1476,6 +1492,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_FIELD => Payload::Field { ty: r.q()?, flags: r.u32()?, width: r.u32()?, init: r.u32()? },
         K_ACCESS => Payload::Access,
+        K_ASSERT => Payload::Assert { cond: r.u32()?, msg: r.u32()? },
         K_IMPLICIT => Payload::Implicit { kind: r.u8()? },
         K_TTP => {
             let (depth, index) = (r.u16()?, r.u16()?);
@@ -1592,6 +1609,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Export
         | Payload::Label
         | Payload::Access
+        | Payload::Assert { .. }
         | Payload::Implicit { .. }
         | Payload::Template { .. }
         | Payload::Member { .. }
@@ -1853,6 +1871,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.reqs = requires::decode_requires(&mut r)?;
     img.written = written::decode_written(&mut r)?;
     img.lexterns = localexterns::decode_local_externs(&mut r)?;
+    img.explinsts = explinst::decode_explicit_insts(&mut r)?;
     (img.texprs, img.late_nx) = exprs::decode_texprs(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
@@ -2077,6 +2096,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     classtempl::validate_class_specs(img, &qref_at, &mut claimed)?;
     declocs::validate_decl_locs(img)?;
     localexterns::validate_local_externs(img)?;
+    explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2123,7 +2143,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             match img.decls[template as usize].payload {
                                 Payload::Template { kind: 1, pattern: p, .. } => kind_of(*pattern)
                                     .is_some_and(|m| {
+                                        // A member of the definition of a
+                                        // template declared before it
+                                        // (WP-1307): the same entity.
                                         (m.ctx == p
+                                            || chain.get(m.ctx as usize) == chain.get(p as usize)
                                             || classtempl::partial_of(img, m.ctx) == Some(template))
                                             && m.lexical == NONE
                                             && matches!(
@@ -2200,10 +2224,20 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         // A member of a class template's pattern (S4b) is claimed by its
         // class, which must be claimed itself.
-        let dep_class = kind_of(d.ctx)
+        // A befriended declaration of a class template's pattern is
+        // claimed by the class that declared it, its lexical context
+        // (WP-1307).
+        // (A class an elaborated `friend struct Q;` introduced there is
+        // not dependent, and is nobody's.)
+        let befriended = friend::kind_bits(d) != 0
+            && d.flags & DEP != 0
+            && d.lexical != NONE
+            && d.lexical != LEX_TU;
+        let owner_class = if befriended { d.lexical } else { d.ctx };
+        let dep_class = kind_of(owner_class)
             .is_some_and(|c| c.flags & DEP != 0 && matches!(c.payload, Payload::Record { .. }));
         if dep_class {
-            if d.flags & DEP == 0 || !claimed[d.ctx as usize] {
+            if d.flags & DEP == 0 || !claimed[owner_class as usize] {
                 return bad("a member of an unclaimed dependent class");
             }
             // A member template's pattern and parameters are its
@@ -2215,7 +2249,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             } else {
                 claimed[i] = true;
             }
-            if d.lexical != NONE && !matches!(d.payload, Payload::Template { .. }) {
+            if d.lexical != NONE && !befriended && !matches!(d.payload, Payload::Template { .. }) {
                 // An out-of-line member definition claims the parameters
                 // of the template-heads enclosing it, just before its own
                 // (its template record, after it, claims none).
@@ -2225,8 +2259,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 };
                 membertempl::claim_outer_heads(img, &pats, i, own, &mut claimed)?;
             }
-        } else if d.flags & DEP != 0 {
-            // Only template parameters and patterns (claimed below).
+        } else if d.flags & DEP != 0 && !friend::names_template(img, d) {
+            // Only template parameters and patterns (claimed below); the
+            // `Friend` record of a friend template is checked by
+            // `validate_friend` (WP-1307).
             dependent.push(i);
         }
         let scope = |x: u32| {
@@ -2277,7 +2313,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
             };
-            if !ok || (matches!(d.payload, Payload::Field { .. } | Payload::Access) && !in_class) {
+            let member_only = matches!(
+                d.payload,
+                Payload::Field { .. } | Payload::Access | Payload::Assert { .. }
+            );
+            if !ok || (member_only && !in_class) {
                 return bad("bad declaration context");
             }
         }
@@ -2301,6 +2341,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         let name_ok = match &d.payload {
             Payload::Export
             | Payload::Access
+            | Payload::Assert { .. }
             | Payload::Implicit { .. }
             | Payload::UsingDir { .. }
             | Payload::Friend { .. } => d.name == NONE,
@@ -2431,7 +2472,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
             }
             Payload::Enumerator { ty, .. } => {
-                if ty.ty > BUILTINS || ty.quals != 0 {
+                if ty.quals != 0 {
                     return bad("bad enumerator type");
                 }
             }
@@ -2511,7 +2552,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 let p = *pattern as usize;
                 // WP-1284: a concept, at namespace scope, has no pattern.
                 let concept = *kind == constraints::CONCEPT_KIND;
-                let lvl = membertempl::level(img, &pats, d.ctx);
+                let lvl = membertempl::level(img, &pats, friend::head_ctx(d));
                 let prev_pat = match kind_of(d.prev).map(|x| &x.payload) {
                     _ if d.prev == NONE => Some(NONE),
                     Some(Payload::Template { kind: k, pattern: pp, .. }) if k == kind => Some(*pp),
@@ -2630,6 +2671,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             | Payload::Let { .. }
             | Payload::Spec { .. }
             | Payload::Member { .. } => {}
+            // In a dependent class only (WP-1307).
+            Payload::Assert { .. } => {
+                if d.flags & DEP == 0 || kind_of(d.ctx).is_none_or(|c| c.flags & DEP == 0) {
+                    return bad("bad static assertion");
+                }
+            }
         }
     }
     if dependent.iter().any(|&i| !claimed[i]) {
@@ -3130,12 +3177,16 @@ impl Writer<'_, '_, '_> {
                 Some((TemplLinkKind::Pattern | TemplLinkKind::PartialSpecialization, _))
             )
             && !self.dep_member(d)
+            && !self.template_friend_decl(d)
+            && self.dep_friend_class(d).is_none()
         {
             return Err(self.in_template_reason(d));
         }
         if n.has(DeclFlags::HAS_LEXICAL_CTX)
             && self.dep_member(d)
             && n.ctx().and_then(|c| ast.described_template(ast.first(c))).is_none()
+            // A member of a partial specialization (WP-1307).
+            && n.ctx().and_then(|c| ast.partial_spec_info(ast.first(c))).is_none()
         {
             return Err("an out-of-line member of a class nested in a template");
         }
@@ -3270,17 +3321,24 @@ impl Writer<'_, '_, '_> {
                     return Err("an enumerator whose type is not its enumeration");
                 }
                 let v = ec.value.ok_or("an enumerator without a value")?;
-                let Some(Scalar::Int { ty, signed, bits }) = ast.consts.scalar(v) else {
-                    return Err("an enumerator value the image does not carry");
+                // The value's type is the underlying type as written, a
+                // typedef (`uint8_t`) or `bool` included (WP-1307); the
+                // importer's `int_const` makes the same scalar of it.
+                let (ty, value) = match ast.consts.scalar(v) {
+                    Some(Scalar::Int { ty, signed, bits }) => (
+                        ty,
+                        if signed {
+                            bits.to_i128()
+                        } else {
+                            bits.to_u128().and_then(|u| i128::try_from(u).ok())
+                        },
+                    ),
+                    Some(Scalar::Bool { ty, value }) => (ty, Some(i128::from(value))),
+                    _ => return Err("an enumerator value the image does not carry"),
                 };
-                let value = if signed {
-                    bits.to_i128()
-                } else {
-                    bits.to_u128().and_then(|u| i128::try_from(u).ok())
-                }
-                .ok_or("an enumerator value the image does not carry")?;
+                let value = value.ok_or("an enumerator value the image does not carry")?;
                 let q = self.qref(ty)?;
-                if q.ty > BUILTINS || q.quals != 0 {
+                if q.quals != 0 {
                     return Err("an enumerator value the image does not carry");
                 }
                 Payload::Enumerator { ty: q, value }
@@ -3315,6 +3373,16 @@ impl Writer<'_, '_, '_> {
                 Payload::Field { ty, flags: fd.flags, width: NONE, init: NONE }
             }
             DeclKind::AccessSpec => Payload::Access,
+            DeclKind::StaticAssert => {
+                // Patched by `walk_roots`; checked again by each
+                // instantiation of the class (WP-1307).
+                let sa = *ast.decls.static_assert(d).ok_or("a malformed static assertion")?;
+                self.bs.roots.push(Root::Assert(i, 0, sa.cond));
+                if let Some(m) = sa.message {
+                    self.bs.roots.push(Root::Assert(i, 1, m));
+                }
+                Payload::Assert { cond: NONE, msg: NONE }
+            }
             DeclKind::Friend => self.friend_record(d)?,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
             DeclKind::FunctionTemplate
@@ -3366,7 +3434,9 @@ impl Writer<'_, '_, '_> {
         // The pattern of a function template (S4): its body is always
         // carried, as dependent records, for importers to instantiate.
         let pattern = match fd.templ.get() {
-            None => self.dep_member(d),
+            // A friend function a class template's pattern declares is
+            // instantiated with it (WP-1307).
+            None => self.dep_member(d) || self.dep_friend_class(d).is_some(),
             // A member function template's (WP-1292) and a deduction
             // guide's (WP-1284) too.
             Some((TemplLinkKind::Pattern, _)) => true,
@@ -3658,7 +3728,15 @@ impl Writer<'_, '_, '_> {
         let n = ast.decls.get(p);
         // A function parameter pack (WP-1279) only in a pattern.
         let pack = if n.has(DeclFlags::DEPENDENT_CTX) { ParamData::PACK } else { 0 };
-        if pd.original_ty.is_some() || pd.flags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
+        // A late-parsed default argument ([class.mem]/7) that parsing
+        // finished is an ordinary one (WP-1307); instantiation drops the
+        // bit too.
+        let pflags = if pd.default_arg.is_some() {
+            pd.flags & !ParamData::DEFAULT_ARG_PENDING
+        } else {
+            pd.flags
+        };
+        if pd.original_ty.is_some() || pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
             return Err("a parameter with an adjusted type or a pack");
         }
         if let Some(e) = pd.default_arg {
@@ -3683,7 +3761,7 @@ impl Writer<'_, '_, '_> {
             name,
             loc,
             ty,
-            pflags: pd.flags,
+            pflags,
             flags: n.flags().bits() & (DECL_FLAGS | DEP),
             default: NONE,
         })
@@ -4064,12 +4142,18 @@ impl Writer<'_, '_, '_> {
         }
         if n.kind() == DeclKind::StaticAssert {
             // Checked when the module was compiled; nothing to import.
-            // In a template, each instantiation checks it again: not
-            // carried yet (WP-1283).
+            // In a class template, each instantiation checks it again:
+            // carried as a member (WP-1307). In a function template it
+            // is a local declaration.
             if n.has(DeclFlags::DEPENDENT_CTX) {
-                return Err("a static assertion in a template");
+                let in_class =
+                    n.ctx().is_some_and(|c| ast.decls.get(c).kind() == DeclKind::CXXRecord);
+                if !in_class {
+                    return Err("a static assertion in a template");
+                }
+            } else {
+                return Ok(());
             }
-            return Ok(());
         }
         if n.kind() == DeclKind::RequiresExprBody {
             // Carried by the requires-expression that names it, with its
@@ -4084,6 +4168,13 @@ impl Writer<'_, '_, '_> {
             // lookup table.
             let _ = st.skipped.insert(d);
             return Ok(());
+        }
+        if self.is_explicit_class_inst(d) {
+            // An explicit instantiation (WP-1307): run again by the
+            // importer after its bodies (`explinst.rs`); its members are
+            // the instantiation's.
+            let _ = st.skipped.insert(d);
+            return self.explicit_class_inst(d);
         }
         if ast.spec_info(d).is_some_and(|(_, si)| {
             matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
@@ -4272,7 +4363,8 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::Using
         | K::UsingEnum
         | K::UsingShadow
-        | K::Friend => Ok(()),
+        | K::Friend
+        | K::StaticAssert => Ok(()),
         K::IndirectField => Err("an anonymous union or struct member"),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
@@ -4424,6 +4516,7 @@ impl Sema<'_, '_> {
             exprs::texpr_locs(&img, &mut offs);
             classtempl::class_spec_locs(&img, &mut offs);
             declocs::decl_loc_offsets(&img, &mut offs);
+            explinst::explicit_inst_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -4483,6 +4576,8 @@ impl Sema<'_, '_> {
         // defaulted and implicit members to define again once used.
         let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
+        // Static assertions in class templates, completed after the bodies.
+        let mut asserts: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
         let mut nttp_defaults: Vec<(DeclId, u32, bool)> = Vec::new();
@@ -4629,7 +4724,12 @@ impl Sema<'_, '_> {
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
-                    let v = self.builder().var(h, vty, spec, prev);
+                    let v = match self
+                        .image_var_spec(img, &mut tys, &ids, main, i as u32, h, vty, spec)
+                    {
+                        Some(v) => v,
+                        None => self.builder().var(h, vty, spec, prev),
+                    };
                     self.ast.templates.pattern_next = false;
                     inits.push((v, *init, *eval));
                     v
@@ -4716,6 +4816,15 @@ impl Sema<'_, '_> {
                 Payload::Access => {
                     let a = access_of(r.access);
                     self.builder().access_spec(ctx, a, h.loc)
+                }
+                Payload::Assert { cond, msg } => {
+                    // A placeholder until the bodies are built: a
+                    // specialization the unit completed (and so passed the
+                    // assertion) may be instantiated before then.
+                    let t = self.builder().bool_literal(QualType::BOOL, true, h.loc);
+                    let d = self.builder().static_assert(ctx, h.loc, t, None);
+                    asserts.push((d, *cond, *msg));
+                    d
                 }
                 Payload::Friend { target, ty, owned } => {
                     let t = match ty {
@@ -4866,6 +4975,10 @@ impl Sema<'_, '_> {
         self.image_nttp_defaults(&nttp_defaults, &built);
         self.image_late_nx(img, &ids, &built);
         self.image_inherited_defaults(&redecl_templates);
+        for (d, cond, msg) in asserts {
+            let message = (msg != NONE).then(|| built.expr(msg));
+            self.ast.decls.set_static_assert_exprs(d, built.expr(cond), message);
+        }
         for (f, width, init) in fields {
             if width != NONE {
                 let _ = self.ast.decls.set_field_bit_width(f, built.expr(width));
@@ -4944,6 +5057,7 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        self.image_explicit_insts(img, &mut tys, &ids, main);
         self.image_mark_specs(img, &ids, main);
         // Defaulted and implicit special members the module used are
         // defined again (spec/modules.md §11.11 "Classes").
@@ -5511,6 +5625,7 @@ mod tests {
             scopes: scope::Scopes::default(),
             cspecs: classtempl::ClassSpecs::default(),
             declocs: declocs::DeclLocs::default(),
+            explinsts: explinst::ExplInsts::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

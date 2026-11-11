@@ -965,6 +965,69 @@ fn kind2_declaration_image_polymorphic_templates_friends_and_implicit_members() 
             include_str!("../../../tests/conformance/module.interface/image-friend-run.cpp"),
             "1 0 12 105 6 5 0\n",
         ),
+        // WP-1307: friend templates and friends of class templates.
+        (
+            "imgft",
+            include_str!(
+                "../../../tests/conformance/module.interface/Inputs/img-friend-template.cppm"
+            ),
+            include_str!(
+                "../../../tests/conformance/module.interface/image-friend-template-run.cpp"
+            ),
+            "6 18 105 9 | 1 97 0 0 5 9 15\n",
+        ),
+        // WP-1307: enumerator values of typedef and `bool` types.
+        (
+            "imgev",
+            include_str!("../../../tests/conformance/module.interface/Inputs/img-enum-values.cppm"),
+            include_str!("../../../tests/conformance/module.interface/image-enum-values-run.cpp"),
+            "1 255 -300 7 3 256 1\n",
+        ),
+        // WP-1307: explicit instantiation declarations and definitions.
+        (
+            "imgei",
+            include_str!(
+                "../../../tests/conformance/module.interface/Inputs/img-explicit-inst.cppm"
+            ),
+            include_str!("../../../tests/conformance/module.interface/image-explicit-inst-run.cpp"),
+            "4 5 400 500 12 97 15 2\n",
+        ),
+        // WP-1307: static assertions in class templates.
+        (
+            "imgsat",
+            include_str!(
+                "../../../tests/conformance/module.interface/Inputs/img-static-assert.cppm"
+            ),
+            include_str!("../../../tests/conformance/module.interface/image-static-assert-run.cpp"),
+            "7 5 2\n",
+        ),
+        // WP-1307: variable template partial and explicit specializations.
+        (
+            "imgvs",
+            include_str!("../../../tests/conformance/module.interface/Inputs/img-var-spec.cppm"),
+            include_str!("../../../tests/conformance/module.interface/image-var-spec-run.cpp"),
+            "7 1 1 2\n",
+        ),
+        // WP-1307: out-of-line members of a partial specialization.
+        (
+            "imgop",
+            include_str!(
+                "../../../tests/conformance/module.interface/Inputs/img-partial-member.cppm"
+            ),
+            include_str!(
+                "../../../tests/conformance/module.interface/image-partial-member-run.cpp"
+            ),
+            "10 5 2\n",
+        ),
+        // WP-1307: a specialization named before its template's definition.
+        (
+            "aft",
+            include_str!(
+                "../../../tests/conformance/module.unit/Inputs/alias-forward-template.cppm"
+            ),
+            include_str!("../../../tests/conformance/module.unit/alias-forward-template.cpp"),
+            "",
+        ),
         (
             "imgim",
             include_str!("../../../tests/conformance/module.interface/Inputs/img-implicit.cppm"),
@@ -1000,10 +1063,44 @@ fn kind2_declaration_image_polymorphic_templates_friends_and_implicit_members() 
     }
 }
 
-/// WP-1283: a static assertion in a class template is checked again by
-/// each instantiation; the image does not carry it yet, so the unit is
-/// written without one and an importer still rejects a failing
-/// instantiation (the image once dropped the assertion silently).
+/// WP-1307 (§11.11 "Friends"): the unit of friend templates and friends
+/// of class templates is written with an image, and an importer's
+/// access and lookup errors against it (private members named outside
+/// the friends, hidden friends named by qualified names) are the
+/// replay's.
+#[test]
+fn kind2_declaration_image_friend_templates_errors() {
+    let d = scratch("image-friend-templates-errors");
+    std::fs::write(
+        d.join("m.cppm"),
+        include_str!("../../../tests/conformance/module.interface/Inputs/img-friend-template.cppm"),
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("u.cpp"),
+        include_str!(
+            "../../../tests/conformance/module.interface/image-friend-template-errors.cpp"
+        ),
+    )
+    .unwrap();
+    let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "m.cppm", "-o", "m.pcm"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
+    let mut errs = Vec::new();
+    for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
+        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgft=m.pcm", "u.cpp"]);
+        assert_eq!(e.code, 1, "{}", e.stderr);
+        errs.push(e.stderr);
+    }
+    assert!(errs[0].contains("no member named 'peek' in namespace 'ft'"), "{}", errs[0]);
+    assert!(errs[0].contains("'p' is a private member of '"), "{}", errs[0]);
+    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+}
+
+/// WP-1283, WP-1307: a static assertion in a class template is checked
+/// again by each instantiation; the image carries it as a member, and an
+/// importer rejects a failing instantiation exactly as after a replay
+/// (the image once dropped the assertion silently).
 #[test]
 fn kind2_declaration_image_static_assert_in_template() {
     let d = scratch("image-static-assert");
@@ -1023,20 +1120,24 @@ fn kind2_declaration_image_static_assert_in_template() {
     .unwrap();
     let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "s.cppm", "-o", "s.pcm"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert!(
-        o.stderr.contains("(no declaration image: a static assertion in a template"),
-        "{}",
-        o.stderr
-    );
+    assert!(o.stderr.contains("with a declaration image of "), "{}", o.stderr);
     let mut errs = Vec::new();
     for flag in ["-fkiln-bmi-image", "-fno-kiln-bmi-image"] {
-        let e = kiln(&d, &[flag, "-fsyntax-only", "-fmodule-file=imgsa=s.pcm", "u.cpp"]);
+        let e = kiln(&d, &[flag, "-v", "-fsyntax-only", "-fmodule-file=imgsa=s.pcm", "u.cpp"]);
         assert_eq!(e.code, 1, "{}", e.stderr);
         errs.push(e.stderr);
     }
     assert!(errs[0].contains("s.cppm:3:45: error: static assertion failed"), "{}", errs[0]);
     assert!(errs[0].contains("E needs a wide T"), "{}", errs[0]);
-    assert_eq!(errs[0], errs[1], "diagnostics differ between the image and the replay");
+    assert!(errs[0].contains("note: imported 'imgsa' from its declaration image"), "{}", errs[0]);
+    let diags = |s: &str| -> Vec<String> {
+        s.lines().filter(|l| !l.starts_with("note: ")).map(String::from).collect()
+    };
+    assert_eq!(
+        diags(&errs[0]),
+        diags(&errs[1]),
+        "diagnostics differ between the image and the replay"
+    );
 }
 
 const IMGA: &str =
@@ -1855,12 +1956,8 @@ fn kind2_declaration_image_fallback() {
             "a file with #line directives or line markers",
         ),
         (
-            "export module f;\nexport template <class T> struct S { friend int g(S) { return 1; } };\n",
-            "a declaration in a template",
-        ),
-        (
-            "export module f;\nexport struct S { int x; template <class T> friend int g(T, S s) { return s.x; } };\nexport constexpr int k = 1;\n",
-            "a friend template",
+            "export module f;\ntemplate <class T> int h(T) { return 1; }\nexport template <class T> struct S { friend int h<>(S); };\nexport int k = h(S<int>{});\n",
+            "a friend specialization or member of a class template",
         ),
         (
             "export module f;\nexport struct S { union { int a; float b; }; };\nexport constexpr int k = 1;\n",
@@ -1872,8 +1969,8 @@ fn kind2_declaration_image_fallback() {
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; };\n\
-             template struct B<int>;\n",
-            "an explicit instantiation",
+             template <class T> struct B<T *> { T v; };\ntemplate struct B<int *>;\n",
+            "an explicit instantiation of a partial specialization",
         ),
         (
             "export module f;\nexport template <class T> struct B {};\n\

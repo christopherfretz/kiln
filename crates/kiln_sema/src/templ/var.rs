@@ -60,7 +60,7 @@ impl Sema<'_, '_> {
     /// The specialization of variable template `tmpl` for `written`,
     /// created `Undeclared` with type `ty` and specifiers `vspec` if new
     /// (an explicit specialization's declaration).
-    fn find_or_create_var_spec(
+    pub(crate) fn find_or_create_var_spec(
         &mut self,
         tmpl: DeclId,
         written: &[TemplateArg],
