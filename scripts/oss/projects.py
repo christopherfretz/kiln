@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Helpers for the OSS build harness (spec/landed/harness/WP-666.md).
 
-  projects.py list [--wave N]            project names, one per line
+  projects.py list [--wave N] [--sweep] [--json]
+                                         project names, one per line (--sweep:
+                                         the x86_64 sweep's, WP-1265; --json: one
+                                         JSON array on one line)
   projects.py shell <project>            the project's table as bash assignments
   projects.py report-json <args...>      write report.json for one build dir
 """
@@ -76,6 +79,9 @@ def load(path=TOML):
         p.setdefault("sha256", "")
         p.setdefault("modules", False)
         p.setdefault("local", "")
+        p.setdefault("sweep", False)
+        if not isinstance(p["sweep"], bool):
+            raise SystemExit(f"{path}: [{name}] sweep must be true or false")
         if p["archive"] and not SHA256_RE.match(p["sha256"]):
             raise SystemExit(f"{path}: [{name}] archive = true needs the tarball's sha256")
         if not (isinstance(p["vmem_kb"], int) and 0 < p["vmem_kb"] <= VMEM_MAX_KB):
@@ -281,6 +287,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     l = sub.add_parser("list")
     l.add_argument("--wave", type=int)
+    l.add_argument("--sweep", action="store_true", help="only the rows with sweep = true (WP-1265)")
+    l.add_argument("--json", action="store_true", help="print one JSON array instead of one name per line")
     s = sub.add_parser("shell")
     s.add_argument("project")
     r = sub.add_parser("report-json")
@@ -296,8 +304,11 @@ def main():
     a = ap.parse_args()
 
     if a.cmd == "list":
-        for name, p in load().items():
-            if a.wave is None or p["wave"] == a.wave:
+        names = [n for n, p in load().items() if (a.wave is None or p["wave"] == a.wave) and (p["sweep"] or not a.sweep)]
+        if a.json:
+            print(json.dumps(names))
+        else:
+            for name in names:
                 print(name)
     elif a.cmd == "shell":
         data = load()

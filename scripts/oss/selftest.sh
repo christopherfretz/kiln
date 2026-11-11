@@ -101,6 +101,10 @@ for f in projects.py oss-report.py kiln-cxx stage-diff.py; do
   check "py_compile $f" "python3 -c 'import py_compile,sys; py_compile.compile(sys.argv[1], cfile=sys.argv[2], doraise=True)' '$HERE/$f' '$TMP/$f.pyc' >/dev/null 2>&1"
 done
 check "projects.toml loads" "python3 '$HERE/projects.py' list >/dev/null"
+# The sweep's oss matrix (WP-1265): `list --sweep --json` is one JSON array
+# on one line, the sweep = true rows in toml order; sweep must be a bool.
+check "list --sweep --json: the sweep rows as one JSON line" "python3 '$HERE/projects.py' list --sweep --json > '$TMP/sweep.json' && [ \"\$(wc -l < '$TMP/sweep.json')\" -eq 1 ] && python3 -c 'import json, sys; sys.path.insert(0, sys.argv[1]); import projects; got = json.load(open(sys.argv[2])); want = [n for n, p in projects.load().items() if p[\"sweep\"]]; sys.exit(not (got and got == want))' '$HERE' '$TMP/sweep.json'"
+check "a non-bool sweep is refused" "printf '[a]\nurl=\"u\"\ntag=\"t\"\nbuild=\"cmake\"\ncxx_std=20\ntest=\"true\"\nwave=4\nsweep=\"yes\"\n' > '$TMP/sw.toml'; case \"\$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import projects; projects.load(sys.argv[2])' '$HERE' '$TMP/sw.toml' 2>&1)\" in *'sweep must be true or false'*) true ;; *) false ;; esac"
 check "oss-build.sh parses" "bash -n '$HERE/oss-build.sh'"
 # `checkout`: defaults to the project name; rows sharing one must agree on
 # url/tag/submodules (WP-787).

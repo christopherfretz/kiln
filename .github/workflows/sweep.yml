@@ -9,6 +9,7 @@ name: sweep
 #   libcxx K/N     the libc++ 22.1.8 suite (`std` + `libcxx`, 9247 tests),
 #                  `cargo xtask libcxx --shard K/N`, one results file each
 #   libcxx-summary merges the shards (scripts/libcxx-results.py)
+#   oss-matrix     the oss jobs' project and compiler lists, as JSON
 #   oss <p> <c>    scripts/oss/oss-build.sh <p> with kiln, and the clang 19
 #                  control on the same runner (a failure under both is the
 #                  project's or the runner's, not kiln's)
@@ -139,13 +140,41 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: libcxx-summary, path: libcxx-summary.md }
 
-  # One job per project and compiler. The OSS trees live on the runner's
-  # /mnt (the larger temporary disk), mounted into the container. The
-  # project list is docs/status/x86_64-sweep.md's; each row's own test
-  # command and limits come from scripts/oss/projects.toml.
+  # The oss matrix's two lists, the one place they are spelled (WP-1265):
+  # the projects are scripts/oss/projects.toml's `sweep = true` rows, the
+  # compilers kiln and the clang 19 control on a push, or on a dispatch
+  # with `control`, else kiln alone. The oss jobs' matrix and the oss
+  # summary's --expect both read these outputs.
+  oss-matrix:
+    name: oss matrix
+    if: ${{ github.event_name == 'push' || inputs.oss }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      projects: ${{ steps.lists.outputs.projects }}
+      compilers: ${{ steps.lists.outputs.compilers }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: scripts/oss }
+      - id: lists
+        name: projects.py list --sweep --json
+        env:
+          CONTROL: ${{ github.event_name == 'push' || inputs.control }}
+        run: |
+          projects="$(python3 scripts/oss/projects.py list --sweep --json)"
+          case "$projects" in '['*'"'*']') ;; *) echo "::error::no sweep projects: $projects"; exit 1 ;; esac
+          if [ "$CONTROL" = true ]; then compilers='["kiln", "clang"]'; else compilers='["kiln"]'; fi
+          echo "projects=$projects" >> "$GITHUB_OUTPUT"
+          echo "compilers=$compilers" >> "$GITHUB_OUTPUT"
+          echo "projects: $projects"; echo "compilers: $compilers"
+
+  # One job per project and compiler of oss-matrix. The OSS trees live on
+  # the runner's /mnt (the larger temporary disk), mounted into the
+  # container. Each row's own test command and limits come from
+  # scripts/oss/projects.toml.
   oss:
     name: oss ${{ matrix.project }} ${{ matrix.compiler }}
-    needs: [build]
+    needs: [build, oss-matrix]
     if: ${{ github.event_name == 'push' || inputs.oss }}
     runs-on: ubuntu-24.04
     container:
@@ -155,8 +184,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [fmt, nlohmann_json, abseil, llvm_project, duckdb, grpc, bitcoin_core, cmake_app, opencv, daw_json_link]
-        compiler: ${{ fromJSON((github.event_name == 'push' || inputs.control) && '["kiln", "clang"]' || '["kiln"]') }}
+        project: ${{ fromJSON(needs.oss-matrix.outputs.projects) }}
+        compiler: ${{ fromJSON(needs.oss-matrix.outputs.compilers) }}
     env:
       KILN_OSS_ROOT: /mnt/oss
       KILN_OSS_CXX: /opt/kiln/bin/kiln++
@@ -218,7 +247,7 @@ jobs:
 
   oss-summary:
     name: oss summary
-    needs: [oss]
+    needs: [oss-matrix, oss]
     if: ${{ !cancelled() && needs.oss.result != 'skipped' }}
     runs-on: ubuntu-24.04
     steps:
@@ -228,14 +257,14 @@ jobs:
       # Every project and compiler of the oss matrix is expected to have a
       # report (WP-1241): oss-report.py --expect lists each pair without
       # one as "no report (infrastructure)" instead of leaving it out. The
-      # two lists repeat the matrix's (ci_tests::sweep_never_gates keeps
-      # them equal): a job that timed out or was never scheduled uploads
-      # no artifact at all, so the artifact names cannot say what is
-      # missing.
+      # two lists are oss-matrix's outputs, the ones the matrix expands
+      # (WP-1265; ci_tests::sweep_never_gates checks both read them): a
+      # job that timed out or was never scheduled uploads no artifact at
+      # all, so the artifact names cannot say what is missing.
       - name: oss-report.py
         env:
-          OSS_PROJECTS: fmt nlohmann_json abseil llvm_project duckdb grpc bitcoin_core cmake_app opencv daw_json_link
-          OSS_COMPILERS: ${{ join(fromJSON((github.event_name == 'push' || inputs.control) && '["kiln", "clang"]' || '["kiln"]'), ',') }}
+          OSS_PROJECTS: ${{ join(fromJSON(needs.oss-matrix.outputs.projects), ' ') }}
+          OSS_COMPILERS: ${{ join(fromJSON(needs.oss-matrix.outputs.compilers), ',') }}
         run: |
           for d in raw/oss-*; do
             [ -f "$d/report.json" ] || continue
