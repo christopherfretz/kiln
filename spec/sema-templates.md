@@ -6363,7 +6363,24 @@ whose head the notes name. It evaluates:
   constrained entity's declaration (its semantic `DeclContext`, via
   `in_inst_context`), not where satisfaction is checked: an unqualified
   name in a concept is looked up from the concept's namespace even when
-  the concept-id is checked inside another one.
+  the concept-id is checked inside another one. A function's
+  constraints (a function template's: its pattern's) are checked from
+  the function itself, as clang's `CheckFunctionConstraints` does
+  (`constrained_function`): its access as a member or friend applies, so
+  a hidden friend's requires-clause may name a private member
+  (`over.match.viable/p3-friend-constraint-access.cpp`). The function
+  is the current context only: it adds no lookup scope, it is not the
+  specialization being checked, and with concrete arguments it is not a
+  dependent context: a source-location builtin, or a default argument
+  that evaluates one, built by that substitution is not
+  instantiation-dependent (`SrcLocCache::satisfying`) and names the
+  pattern without a template-argument suffix (`int f(T)`, clang 22;
+  clang 19 names the specialization). In a requires-expression's
+  requirements the source-location context is the requires-expression's
+  body, which is no function, as when it is parsed (clang
+  `TransformRequiresExpr`): the function name is empty
+  (`Sema::srcloc_ctx`; tests `temp.constr.atomic/p3-srcloc-default-arg-*`,
+  WP-1325).
 
 The result is stored:
 

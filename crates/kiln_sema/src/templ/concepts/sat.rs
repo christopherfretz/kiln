@@ -356,9 +356,13 @@ impl Sema<'_, '_> {
         // when `swappable<T>` is checked from inside namespace std. A
         // function's are checked from the function itself
         // ([`Sema::constrained_function`]).
-        let ctx = self
-            .constrained_function(entity)
-            .unwrap_or_else(|| self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu));
+        let func = self.constrained_function(entity);
+        let ctx = func.unwrap_or_else(|| self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu));
+        // With concrete arguments that substitution is final: the
+        // function is no dependent context for the source-location
+        // builtins in it ([`Sema::srcloc_ctx`]).
+        let final_fn = func.filter(|_| !self.levels_dependent(levels));
+        let srcloc = std::mem::replace(&mut self.srcloc.satisfying, final_fn.map(|f| (f, None)));
         // Satisfaction checks access also while an explicit
         // specialization's candidates are deduced (clang 22, §6.9).
         let suppress = self.inst.suppress_access.replace(false);
@@ -374,6 +378,7 @@ impl Sema<'_, '_> {
             (ok, records)
         });
         self.inst.suppress_access.set(suppress);
+        self.srcloc.satisfying = srcloc;
         self.pop_inst_frame();
         if ok {
             records.clear();
