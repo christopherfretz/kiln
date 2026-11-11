@@ -1496,8 +1496,18 @@ impl Oven {
             Op::FToI => {
                 let kind = float_of(aux);
                 let a = reg!(1);
-                match arith::float_to_int(kind, a, aux >> 4 & 0xFF, aux >> 12 & 1 != 0) {
+                let (width, signed) = (aux >> 4 & 0xFF, aux >> 12 & 1 != 0);
+                match arith::float_to_int(kind, a, width, signed) {
                     Ok(v) => reg!(0) = v,
+                    // A C static initializer's fold goes on past the
+                    // undefined conversion with `APFloat`'s saturated value
+                    // (clang `HandleFloatToIntCast` -> `HandleOverflow`,
+                    // `noteUndefinedBehavior` in a folding mode; WP-1311).
+                    // C++ keeps the fault (follow-up: clang folds there too).
+                    Err(FloatErr::Range) if self.fold_float_ub && self.fold_c_static => {
+                        reg!(0) = arith::float_to_int_saturated(kind, a, width, signed);
+                        self.run.impure += 1;
+                    }
                     Err(FloatErr::Range) => fail!(Fault::FloatRange { kind, bits: a }),
                     Err(e) => fail!(Fault::Float(e)),
                 }

@@ -406,6 +406,11 @@ impl Sema<'_, '_> {
         self.check_ctor_dtor_attrs(d, attrs);
         self.check_cleanup_attrs(d, attrs);
         self.check_internal_linkage_attrs(d, attrs);
+        if self.kind_of(d).is_function()
+            && let Some(prev) = self.ast.prev(d)
+        {
+            self.check_noreturn_on_first_decl(prev, attrs);
+        }
         self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);
         self.check_weak_attrs(d, attrs);

@@ -436,6 +436,25 @@ Plus, from the OSS rows:
   fold, WP-1295) and execute/pr70460.c (a label-address difference in a
   static initializer does not fold; xfail
   tests/c/run/static-local-label-difference.c).
+- **WP-1311** (C correctness batch from the 1.1.0 follow-up rows): fixed
+  prototype-scope enumerators leaking to file scope; failed
+  redeclarations staying in scope; the implicit library table
+  (`exit`, `free`, `strto*`, `fopen`/`fread`/`fwrite`, `strcasecmp`, ...);
+  library builtins after a compatible or incompatible first declaration
+  (folded only when compatible; they now also fold in an ICE); functional
+  casts accepted in C; enumeration promotion (`unsigned int`, not `int`,
+  wrong code on comparisons); out-of-range float to integer conversions
+  in static initializers (rejected, now clang's saturated value), with a
+  dynamic C initializer made an internal error instead of a `_ZGV` guard;
+  the spurious C23 `va_start` -Wvarargs; `noundef` on a merged
+  `transparent_union` definition. The [dcl.attr.noreturn]/1 error is
+  C++-only (now diagnosed there); `-Wvla-cxx-extension` was already not
+  emitted in C. gcc.c-torture (all four suites, -O0 and -O2, gnu23, with
+  the gcc and clang-19 oracles): 6912/7572 at base `876dfe167` and at
+  head, no case changing status; two compile-reject cases that call
+  `exit` without a header now carry clang's "undeclared library function"
+  wording. (With `--oracles none` kiln runs at compat 22, where 16 more
+  results are compile-rejects: 6896/7572, also unchanged.)
 
 ## Driver and harness follow-ups (not C semantics)
 

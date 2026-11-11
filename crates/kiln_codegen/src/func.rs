@@ -933,7 +933,15 @@ impl Cg<'_> {
             }
             _ => None,
         };
-        let attr_sig = alias_sig.as_ref().unwrap_or(&sig);
+        // Likewise a C function created for a redeclaration of another
+        // type keeps that declaration's parameter attributes (WP-1311).
+        let c_sig = match self.c_sig_decl.get(&f) {
+            Some(&cd) if thunk.is_none() && structor.is_none() => {
+                self.decl_sig_at(first, cd).ok().filter(|s| s.fn_ty == sig.fn_ty)
+            }
+            _ => None,
+        };
+        let attr_sig = alias_sig.as_ref().or(c_sig.as_ref()).unwrap_or(&sig);
         let (mut ret, mut params) = self.sig_attrs(attr_sig, attr_sig.params.len(), !self.f.naked);
         if thunk.is_some() {
             (ret, params) = self.thunk_attrs(&sig, ret, params);

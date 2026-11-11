@@ -396,6 +396,24 @@ pub(crate) fn int_to_float(kind: FloatKind, v: u128, signed: bool) -> u128 {
     }
 }
 
+/// The value `APFloat::convertToInteger` gives an out-of-range float to
+/// integer conversion of `a` (clang folds on with it past the undefined
+/// behaviour): 0 for a NaN, else the bound of `width`/`signed` on the
+/// value's side.
+pub(crate) fn float_to_int_saturated(kind: FloatKind, a: u128, width: u32, signed: bool) -> u128 {
+    if is_nan(kind, a) {
+        return 0;
+    }
+    let neg = a & softfloat::sign_bit(kind) != 0;
+    let ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+    match (signed, neg) {
+        (true, false) => ones >> 1,
+        (true, true) => canon(1u128 << (width.min(128) - 1), width, true),
+        (false, false) => ones,
+        (false, true) => 0,
+    }
+}
+
 /// Truncates a float to an integer of `width`/`signed`
 /// ([conv.fpint]/1: out of range is undefined).
 pub(crate) fn float_to_int(

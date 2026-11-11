@@ -37,6 +37,9 @@ impl SemaBridge for Bridge<'_, '_, '_> {
         Some(self.sema.diags.sm())
     }
 
+    fn is_c(&self) -> bool {
+        self.sema.is_c()
+    }
     fn cxx_year(&self) -> u32 {
         use kiln_lex::Std;
         match self.sema.std {

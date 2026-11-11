@@ -688,6 +688,22 @@ impl Sema<'_, '_> {
         name: Symbol,
         loc: Loc,
     ) -> Option<DeclId> {
+        self.c_lib_function_decl(name, loc, true)
+    }
+
+    /// WP-1311 (clang `LookupName` for a redeclaration in C, which
+    /// `LazilyCreateBuiltin`s a library function): the implicit
+    /// declaration of the [`builtin::LIB`] function `name` that a C
+    /// declaration of the name at `loc`, finding no other, redeclares,
+    /// without a diagnostic. `MergeFunctionDecl` then gives a compatible
+    /// declaration the composite type and keeps it the library function
+    /// (`unsigned long strlen();` is `strlen`); an incompatible one only
+    /// warns and is a new, ordinary function.
+    pub(crate) fn c_lib_function_redecl_prev(&mut self, name: Symbol, loc: Loc) -> Option<DeclId> {
+        self.c_lib_function_decl(name, loc, false)
+    }
+
+    fn c_lib_function_decl(&mut self, name: Symbol, loc: Loc, warn: bool) -> Option<DeclId> {
         if self.no_builtin {
             return None;
         }
@@ -714,13 +730,15 @@ impl Sema<'_, '_> {
         } else {
             DiagId::sema_implicit_lib_function_decl
         };
-        let tyarg = self.ty_arg(ty);
-        let msg = self.diag(id, loc).arg(info.name).arg(tyarg);
-        let note = self
-            .diag(DiagId::note_include_header_or_declare, loc)
-            .arg(builtin::lib_header(&info))
-            .arg(info.name);
-        self.emit(msg.with_note(note));
+        if warn {
+            let tyarg = self.ty_arg(ty);
+            let msg = self.diag(id, loc).arg(info.name).arg(tyarg);
+            let note = self
+                .diag(DiagId::note_include_header_or_declare, loc)
+                .arg(builtin::lib_header(&info))
+                .arg(info.name);
+            self.emit(msg.with_note(note));
+        }
         let h = DeclHead::new(self.ast.tu, DeclName::ident(name), loc).flags(DeclFlags::IMPLICIT);
         let spec = FnSpec::new().with_storage(FnStorage::Extern);
         let f = self.builder().function(h, DeclKind::Function, ty, spec, None);
@@ -2275,6 +2293,17 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_va_start_fixed_function, at);
             self.emit(msg);
             return None;
+        }
+        // C23 7.16.1.4: `va_start(ap, ...)` needs no parameter name, and
+        // <stdarg.h> passes `0`; clang `BuiltinVAStart` skips the check for
+        // a second argument that is an integer constant expression of
+        // value 0 in C23 (WP-1311).
+        if self.is_c()
+            && self.c_at_least(kiln_lex::CStd::C23)
+            && self.ast.types.is_integral(self.ast.exprs.get(args[1]).ty())
+            && self.fold_int(args[1]) == Some(0)
+        {
+            return Some((vec![ap, args[1]], QualType::VOID));
         }
         let last =
             self.ast.decls.function(f).and_then(|x| self.ast.lists.iter::<DeclId>(x.params).last());

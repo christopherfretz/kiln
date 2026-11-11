@@ -89,6 +89,27 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// The innermost open parameter list, if the enumeration `e` is one
+    /// defined in it (C).
+    pub(crate) fn c_proto_enum_frame(&self, e: DeclId) -> Option<&crate::decl::PrototypeFrame> {
+        self.prototype_params.last().filter(|f| self.is_c() && f.enums.contains(&e))
+    }
+
+    /// C23 6.2.1p4: the enumerator `d` named `n` of the enumeration `e`
+    /// defined in the innermost open parameter list has prototype scope,
+    /// like the tag: hidden from the enclosing scope, found by the rest of
+    /// the parameter list and, in a definition, by the body. True if so.
+    pub(crate) fn c_declare_proto_enumerator(&mut self, e: DeclId, n: Symbol, d: DeclId) -> bool {
+        if self.c_proto_enum_frame(e).is_none() {
+            return false;
+        }
+        self.builder().unregister_name(d);
+        if let Some(f) = self.prototype_params.last_mut() {
+            f.enumerators.push((n, d));
+        }
+        true
+    }
+
     /// The outermost parameter list just closed declared `tags`: kept for
     /// the function body, if the declarator is a definition (clang
     /// `ActOnStartOfFunctionDef` re-adds the `DeclsInPrototype`).
