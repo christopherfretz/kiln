@@ -79,7 +79,9 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
     main.
   - zstd's last failing C TUs failed on a function pointer compared with
     `(void *)0` ("comparison of distinct pointer types"), not on a
-    declaration. WP-1285's `c_pointer_comparison` accepts it.
+    declaration. WP-1285's `c_pointer_comparison` accepts it. On the
+    merged tree, zstd v1.5.7 (`--compiler kiln`) builds (rc 0), and its
+    tests pass (rc 0).
 
 ## WP-1288 re-measure (wp/1288, 2026-11-11)
 
