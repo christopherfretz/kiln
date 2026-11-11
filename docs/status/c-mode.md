@@ -411,6 +411,15 @@ Plus, from the OSS rows:
   2; the remaining 18 stop only on a function pointer compared with
   `NULL` (WP-1285). With wp/1285 merged on top, c-ares is green:
   configure, build, and 2/2 tests.
+- **WP-1301** (implicit library functions, `transparent_union`
+  redeclarations, GNU attributes on a later declarator, `common`,
+  `_Alignas`): gcc.c-torture (all four suites, -O0 and -O2, gnu23) goes
+  from 6742/7572 at `72eb906b1` to 6910/7572 (clang-19: 6887), no
+  regressions. Every case clang-19 passes now passes except
+  compile/init-1.c (a cast in a file-scope compound literal does not
+  fold, WP-1295) and execute/pr70460.c (a label-address difference in a
+  static initializer does not fold; xfail
+  tests/c/run/static-local-label-difference.c).
 
 ## Driver and harness follow-ups (not C semantics)
 
@@ -488,23 +497,22 @@ Written by `cargo xtask gcc-torture --report docs/status/c-mode.md` on wp/1285 (
 
 GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarch64-unknown-linux-gnu`.
 
-- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `e3089e246`
+- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `09414553d`
 - command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --profile harness`
 - kiln: kiln version 1.0.1 (C++26 frontend, LLVM IR backend) (-fclang-compat=19)
 - gcc: gcc (GCC) 16.1.0
 - clang: Debian clang version 19.1.7 (3+b1)
 - option sets: -O0, -O2; -std=gnu23 first
 - limits: 2048 MiB address space per step (plus kiln's stack reservation); compile/link timeout 120 s, run timeout 10 s; -j 4
-- 3813 tests, 7572 cases run, 27 skip rows; wall 1822 s
+- 3813 tests, 7572 cases run, 27 skip rows; wall 1215 s
 
 ### Results by class (cases)
 
 | class | kiln | gcc | clang |
 |---|---:|---:|---:|
-| pass | 6628 | 7572 | 6887 |
-| compile-reject | 885 | 0 | 648 |
-| crash | 21 | 0 | 0 |
-| wrong | 36 | 0 | 37 |
+| pass | 6910 | 7572 | 6887 |
+| compile-reject | 626 | 0 | 648 |
+| wrong | 34 | 0 | 37 |
 | timeout | 2 | 0 | 0 |
 | total | 7572 | 7572 | 7572 |
 
@@ -512,88 +520,67 @@ GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarc
 
 | suite | opt | cases | kiln | gcc | clang |
 |---|---|---:|---:|---:|---:|
-| execute | -O0 | 1677 | 1491 | 1677 | 1540 |
-| execute | -O2 | 1677 | 1479 | 1677 | 1529 |
-| ieee | -O0 | 69 | 65 | 69 | 64 |
-| ieee | -O2 | 69 | 66 | 69 | 65 |
+| execute | -O0 | 1677 | 1541 | 1677 | 1540 |
+| execute | -O2 | 1677 | 1531 | 1677 | 1529 |
+| ieee | -O0 | 69 | 67 | 69 | 64 |
+| ieee | -O2 | 69 | 68 | 69 | 65 |
 | builtins | -O0 | 59 | 35 | 59 | 35 |
 | builtins | -O2 | 59 | 30 | 59 | 28 |
-| compile | -O0 | 1981 | 1730 | 1981 | 1813 |
-| compile | -O2 | 1981 | 1732 | 1981 | 1813 |
+| compile | -O0 | 1981 | 1819 | 1981 | 1813 |
+| compile | -O2 | 1981 | 1819 | 1981 | 1813 |
 
 ### kiln against the oracles (cases)
 
-- kiln fails, every oracle passes: 287
+- kiln fails, every oracle passes: 4
 - kiln fails, gcc fails too: 0
 - kiln passes, gcc fails: 0
-- kiln fails, clang fails too: 657
-- kiln passes, clang fails: 28
+- kiln fails, clang fails too: 658
+- kiln passes, clang fails: 27
 - kiln failures GCC's testsuite marks xfail: 0
 
-### kiln failure clusters (71 clusters, top 60)
+### kiln failure clusters (39 clusters, top 60)
 
 | cases | cluster | examples |
 |---:|---|---|
-| 200 | compile-reject: error: unknown type name '…' | compile/20000326-2.c -O0, compile/20000326-2.c -O2, compile/20000420-1.c -O0 |
-| 198 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20000224-1.c -O0 |
-| 64 | compile-reject: error: function definition is not allowed here | compile/20010226-1.c -O0, compile/20010226-1.c -O2, compile/20020309-1.c -O0 |
+| 170 | compile-reject: error: unknown type name '…' | compile/20000420-1.c -O0, compile/20000420-1.c -O2, compile/20010102-1.c -O0 |
+| 148 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20010320-1.c -O0 |
+| 96 | compile-reject: error: function definition is not allowed here | compile/20010226-1.c -O0, compile/20010226-1.c -O2, compile/20020309-1.c -O0 |
 | 60 | compile-reject: error: a type specifier is required for all declarations | compile/20080704-1.c -O0, compile/20080704-1.c -O2, compile/20101216-1.c -O0 |
-| 36 | compile-reject: error: fields must have a constant size: '…' extension will never be supported | compile/20010605-1.c -O0, compile/20010605-1.c -O2, compile/20020210-1.c -O0 |
-| 34 | compile-reject: error: variable length arrays are not supported yet | compile/20010202-1.c -O0, compile/20010202-1.c -O2, compile/20030716-1.c -O0 |
-| 33 | wrong: signal: N (SIGABRT) | execute/20010122-1.c -O2, execute/20031003-1.c -O0, execute/20230630-2.c -O0 |
-| 30 | compile-reject: error: non-constant-expression cannot be narrowed from type '…' to '…' in initializer list [-Wc++N-narrowing] | compile/icfmatch.c -O0, compile/icfmatch.c -O2, compile/labels-3.c -O0 |
-| 20 | compile-reject: error: cannot take the address of an rvalue of type '…' | compile/compound-literal-2.c -O0, compile/compound-literal-2.c -O2, compile/compound-literal-3.c -O0 |
-| 18 | crash: internal compiler error: phi operand %N is defined | compile/pc44485.c -O0, compile/pc44485.c -O2, compile/pr111414-1.c -O0 |
-| 14 | compile-reject: error: constant expression evaluates to N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr69989-2.c -O0, compile/pr69989-2.c -O2, execute/20100416-1.c -O0 |
+| 38 | compile-reject: error: fields must have a constant size: '…' extension will never be supported | compile/20010605-1.c -O0, compile/20010605-1.c -O2, compile/20020210-1.c -O0 |
+| 31 | wrong: signal: N (SIGABRT) | execute/20010122-1.c -O2, execute/20031003-1.c -O0, execute/20230630-2.c -O0 |
+| 16 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/dse.c -O0, compile/dse.c -O2, compile/pr19121.c -O0 |
 | 14 | compile-reject: error: indirect goto in function with no address-of-label expressions | compile/920502-1.c -O0, compile/920502-1.c -O2, compile/920826-1.c -O0 |
-| 12 | compile-reject: error: cannot jump from this goto statement to its label | compile/irreducible-loop.c -O0, compile/irreducible-loop.c -O2, compile/pr69740-1.c -O0 |
-| 12 | compile-reject: error: constant expression evaluates to -N which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/pr45059.c -O0, compile/pr45059.c -O2, compile/pr60502.c -O0 |
-| 12 | compile-reject: error: initializer-string for char array is too long, array size is N but initializer has size N (including the null terminating character) | execute/20010924-1.c -O0, execute/20010924-1.c -O2, execute/memchr-1.c -O0 |
-| 12 | compile-reject: error: redefinition of '…' | compile/20000120-2.c -O0, compile/20000120-2.c -O2, compile/20011119-1.c -O0 |
-| 10 | compile-reject: error: definition of variable with array type needs an explicit size or an initializer | compile/920624-1.c -O0, compile/920624-1.c -O2, compile/921203-1.c -O0 |
-| 10 | compile-reject: error: initialization of a flexible array member with elements is not supported yet | compile/pr33382.c -O0, compile/pr33382.c -O2, compile/pr36154.c -O0 |
-| 8 | compile-reject: error: '…' must return '…' | compile/BUG12.c -O0, compile/BUG12.c -O2, compile/dic.c -O0 |
-| 8 | compile-reject: error: array initializer must be an initializer list | compile/930927-1.c -O0, compile/930927-1.c -O2, compile/pr48517.c -O0 |
-| 8 | compile-reject: error: variable has incomplete type '…' | compile/pr85401.c -O0, compile/pr85401.c -O2, compile/pr96998.c -O0 |
-| 6 | compile-reject: error: cannot jump from this indirect goto statement to one of its possible targets | compile/pr17913.c -O0, compile/pr17913.c -O2, execute/20071210-1.c -O0 |
-| 6 | compile-reject: error: non-member function cannot have '…' qualifier | compile/20040309-1.c -O0, compile/20040309-1.c -O2, compile/980825-1.c -O0 |
+| 6 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-de… | compile/pr100576.c -O0, compile/pr100576.c -O2, compile/pr36154.c -O0 |
+| 6 | compile-reject: error: expected parameter declarator | compile/s.c -O0, compile/s.c -O2, compile/structs.c -O0 |
 | 6 | compile-reject: error: non-void function '…' should return a value | compile/20020418-1.c -O0, compile/20020418-1.c -O2, compile/20020927-1.c -O0 |
-| 6 | compile-reject: link: undefined reference to `… | execute/941202-1.c -O0, execute/941202-1.c -O2, execute/builtins/abs-2.c -O2 |
-| 4 | compile-reject: error: anonymous bit-field cannot have qualifiers | compile/pr43191.c -O0, compile/pr43191.c -O2, compile/pr98199.c -O0 |
+| 6 | compile-reject: link: undefined reference to `… | execute/builtins/abs-2.c -O2, execute/builtins/uabs-2.c -O2, execute/ieee/fp-cmp-7.c -O0 |
 | 4 | compile-reject: error: call to undeclared function '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/udivmod4.c -O0, compile/udivmod4.c -O2, execute/20010605-2.c -O0 |
-| 4 | compile-reject: error: cannot take the address of an rvalue of type '…' (aka '…') | compile/920501-11.c -O0, compile/920501-11.c -O2, execute/20071029-1.c -O0 |
-| 4 | compile-reject: error: expression is not assignable | compile/compound-literal-1.c -O0, compile/compound-literal-1.c -O2, compile/struct-non-lval-1.c -O0 |
 | 4 | compile-reject: error: illegal storage class on function | compile/20011023-1.c -O0, compile/20011023-1.c -O2, compile/nested-3.c -O0 |
+| 4 | compile-reject: error: incompatible pointer to integer conversion initializing '…' with an expression of type '…' [-Wint-conversion] | compile/920501-11.c -O0, compile/920501-11.c -O2, compile/pr96796.c -O0 |
 | 4 | compile-reject: error: second parameter of '…' (argument array) must be of type '…' | compile/call.c -O0, compile/call.c -O2, compile/pr22269.c -O0 |
-| 4 | compile-reject: error: static declaration of '…' follows non-static declaration | compile/20021120-1.c -O0, compile/20021120-1.c -O2, compile/20021120-2.c -O0 |
 | 4 | compile-reject: error: void function '…' should not return a value | compile/20180605-1.c -O0, compile/20180605-1.c -O2, compile/920817-1.c -O0 |
 | 3 | wrong: exit N | execute/20031003-1.c -O2, execute/921202-1.c -O2, execute/pr79286.c -O2 |
-| 2 | compile-reject: error: '…' attribute cannot be applied to types | execute/pr68532.c -O0, execute/pr68532.c -O2 |
-| 2 | compile-reject: error: '…' attribute is not supported in C++ | compile/pr43288.c -O0, compile/pr43288.c -O2 |
 | 2 | compile-reject: error: address of vector element requested | execute/pr108292.c -O0, execute/pr108292.c -O2 |
-| 2 | compile-reject: error: anonymous unions at namespace or global scope must be declared '…' | compile/pr34334.c -O0, compile/pr34334.c -O2 |
 | 2 | compile-reject: error: array is too large (N elements) | execute/991014-1.c -O0, execute/991014-1.c -O2 |
+| 2 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declar… | compile/pr33133.c -O0, compile/pr33133.c -O2 |
 | 2 | compile-reject: error: cannot combine with previous '…' declaration specifier | compile/20010903-2.c -O0, compile/20010903-2.c -O2 |
 | 2 | compile-reject: error: cannot decrement value of type '…' (vector of N '…' values) | execute/pr123753.c -O0, execute/pr123753.c -O2 |
-| 2 | compile-reject: error: case value evaluates to N, which cannot be narrowed to type '…' [-Wc++N-narrowing] | compile/20000326-1.c -O0, compile/20000326-1.c -O2 |
-| 2 | compile-reject: error: conflicting types for '…' | compile/pr46866.c -O0, compile/pr46866.c -O2 |
-| 2 | compile-reject: error: constant expression evaluates to -N which cannot be narrowed to type '…' (aka '…') [-Wc++N-narrowing] | compile/pr44687.c -O0, compile/pr44687.c -O2 |
-| 2 | compile-reject: error: constant expression evaluates to N which cannot be narrowed to type '…' (aka '…') [-Wc++N-narrowing] | execute/simd-4.c -O0, execute/simd-4.c -O2 |
-| 2 | compile-reject: error: expected '…' | compile/20010124-1.c -O0, compile/20010124-1.c -O2 |
-| 2 | compile-reject: error: expected '…' after top level declarator | compile/990203-1.c -O0, compile/990203-1.c -O2 |
-| 2 | compile-reject: error: expected '…' for function-style cast or type construction | execute/builtin-types-compatible-p.c -O0, execute/builtin-types-compatible-p.c -O2 |
-| 2 | compile-reject: error: expected unqualified-id | compile/20010714-1.c -O0, compile/20010714-1.c -O2 |
+| 2 | compile-reject: error: cannot jump from this indirect goto statement to one of its possible targets | compile/pr17913.c -O0, compile/pr17913.c -O2 |
 | 2 | compile-reject: error: first parameter of '…' (argument count) must be of type '…' | compile/v.c -O0, compile/v.c -O2 |
 | 2 | compile-reject: error: incompatible function pointer types initializing '…' with an expression of type '…' [-Wincompatible-function-pointer-types] | compile/pr43635.c -O0, compile/pr43635.c -O2 |
 | 2 | compile-reject: error: incompatible integer to pointer conversion assigning to '…' from '…' [-Wint-conversion] | compile/930529-1.c -O0, compile/930529-1.c -O2 |
 | 2 | compile-reject: error: incompatible integer to pointer conversion passing '…' to parameter of type '…'; take the address with & [-Wint-conversion] | compile/cmpsi386.c -O0, compile/cmpsi386.c -O2 |
 | 2 | compile-reject: error: incompatible pointer to integer conversion initializing '…' (aka '…') with an expression of type '…' (aka '…'); dereference with * [-Wint-conversion] | compile/920501-23.c -O0, compile/920501-23.c -O2 |
-| 2 | compile-reject: error: incompatible pointer to integer conversion initializing '…' with an expression of type '…' [-Wint-conversion] | compile/pr96796.c -O0, compile/pr96796.c -O2 |
 | 2 | compile-reject: error: incompatible pointer to integer conversion initializing '…' with an expression of type '…'; dereference with * [-Wint-conversion] | compile/920501-8.c -O0, compile/920501-8.c -O2 |
 | 2 | compile-reject: error: incompatible pointer to integer conversion returning '…' from a function with result type '…' [-Wint-conversion] | compile/920701-1.c -O0, compile/920701-1.c -O2 |
-| 2 | compile-reject: error: indirection not permitted on operand of type '…' | compile/20000701-1.c -O0, compile/20000701-1.c -O2 |
 | 2 | compile-reject: error: initialization of flexible array member is not allowed | execute/pr28865.c -O0, execute/pr28865.c -O2 |
 | 2 | compile-reject: error: initializer element is not a compile-time constant | compile/init-1.c -O0, compile/init-1.c -O2 |
+| 2 | compile-reject: error: inline asm not supported yet: don'… | compile/20000804-1.c -O0, compile/20000804-1.c -O2 |
+| 2 | compile-reject: error: invalid token at start of a preprocessor expression | compile/950919-1.c -O0, compile/950919-1.c -O2 |
+| 2 | compile-reject: error: parameter '…' was not declared, defaults to '…'; ISO CN and later do not support implicit int [-Wimplicit-int] | compile/pr51694.c -O0, compile/pr51694.c -O2 |
+| 2 | compile-reject: error: unrecognized instruction mnemonic | compile/920520-1.c -O0, compile/920520-1.c -O2 |
+| 2 | compile-reject: error: unrecognized instruction mnemonic, did you mean: b, bfm, bif, udf, wfe, wfi? | compile/920521-1.c -O0, compile/920521-1.c -O2 |
+| 2 | timeout: compile timeout | compile/limits-structnest.c -O0, compile/limits-structnest.c -O2 |
 
 ### Skips (rows; `*` rows cover every option set)
 
