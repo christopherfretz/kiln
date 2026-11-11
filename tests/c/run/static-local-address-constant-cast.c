@@ -5,7 +5,6 @@
 // when control reaches it, so a jump past its declaration (6.8.7.2p1)
 // still sees the value, and no guard variable or C++ runtime is needed.
 //@ expect: run
-//@ xfail(kiln): WP-1286 follow-up, an initializer with a pointer cast (object to object pointer, integer to pointer, pointer to integer) does not fold (the Oven's cast leaves a pointer that points at nothing), so the static is initialized dynamically on first pass under a __cxa_guard, which a jump skips and a C link cannot resolve (sqlite3.c trimFunc, sqlite3Initialize)
 //@ stdout: 32 5 1 1 1
 int printf(const char *, ...);
 typedef unsigned char u8;
