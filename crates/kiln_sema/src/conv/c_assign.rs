@@ -87,15 +87,15 @@ fn enum_int(s: &Sema<'_, '_>, q: QualType) -> Option<QualType> {
 fn compatible_unqual(s: &Sema<'_, '_>, a: QualType, b: QualType, depth: u32) -> bool {
     let types = &s.ast.types;
     match (types.canonical_view(a), types.canonical_view(b)) {
-        (TypeView::Pointer(x), TypeView::Pointer(y)) => compatible_at(s, x, y, depth),
+        (TypeView::Pointer(x), TypeView::Pointer(y))
+        | (TypeView::Complex(x), TypeView::Complex(y))
+        | (TypeView::Atomic(x), TypeView::Atomic(y)) => compatible_at(s, x, y, depth),
         (TypeView::Enum(_), TypeView::Builtin(_) | TypeView::BitInt { .. }) => {
             enum_int(s, a) == Some(b)
         }
         (TypeView::Builtin(_) | TypeView::BitInt { .. }, TypeView::Enum(_)) => {
             enum_int(s, b) == Some(a)
         }
-        (TypeView::Complex(x), TypeView::Complex(y)) => compatible_at(s, x, y, depth),
-        (TypeView::Atomic(x), TypeView::Atomic(y)) => compatible_at(s, x, y, depth),
         (
             TypeView::ConstantArray(_)
             | TypeView::IncompleteArray(_)
@@ -221,10 +221,6 @@ fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
         }
         let n = s.ast.exprs.get(x);
         match n.kind() {
-            ExprKind::IntegerLiteral
-            | ExprKind::CharacterLiteral
-            | ExprKind::FloatingLiteral
-            | ExprKind::CXXBoolLiteralExpr => {}
             ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::OffsetOfExpr => continue,
             ExprKind::DeclRefExpr => {
                 if s.kind_of(s.ast.exprs.decl(x)) != DeclKind::EnumConstant {
@@ -236,7 +232,11 @@ fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
                     return false;
                 }
             }
-            ExprKind::ParenExpr
+            ExprKind::IntegerLiteral
+            | ExprKind::CharacterLiteral
+            | ExprKind::FloatingLiteral
+            | ExprKind::CXXBoolLiteralExpr
+            | ExprKind::ParenExpr
             | ExprKind::ImplicitCastExpr
             | ExprKind::CStyleCastExpr
             | ExprKind::BinaryOperator
@@ -412,6 +412,7 @@ fn insertion_fixits(s: &Sema<'_, '_>, e: ExprId, op: &str) -> Vec<kiln_diag::Fix
 /// a pointer target, a pointer source of integer target, and a structure
 /// or union on either side. `None` leaves the conversion to the standard
 /// conversion path (arithmetic conversions).
+#[allow(clippy::too_many_lines, reason = "clang's CheckAssignmentConstraints cases in its order")]
 pub(crate) fn convert(
     s: &mut Sema<'_, '_>,
     e: ExprId,

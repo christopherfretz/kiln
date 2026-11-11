@@ -557,6 +557,20 @@ fn apply_std_keyed(m: &mut BTreeMap<String, String>, reflection: bool) {
     }
 }
 
+/// C `-f[no-]gnu89-inline`: `__GNUC_GNU_INLINE__` in place of
+/// `__GNUC_STDC_INLINE__`, or back.
+fn apply_gnu89_inline(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
+    if let Some(gnu) = cfg.gnu89_inline.filter(|_| !cfg.cplusplus) {
+        let (on, off) = if gnu {
+            ("__GNUC_GNU_INLINE__", "__GNUC_STDC_INLINE__")
+        } else {
+            ("__GNUC_STDC_INLINE__", "__GNUC_GNU_INLINE__")
+        };
+        m.remove(off);
+        set(m, on, "1");
+    }
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -574,15 +588,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         Some(false) => set(m, "__CHAR_UNSIGNED__", "1"),
         None => {}
     }
-    if let Some(gnu) = cfg.gnu89_inline.filter(|_| !cfg.cplusplus) {
-        let (on, off) = if gnu {
-            ("__GNUC_GNU_INLINE__", "__GNUC_STDC_INLINE__")
-        } else {
-            ("__GNUC_STDC_INLINE__", "__GNUC_GNU_INLINE__")
-        };
-        m.remove(off);
-        set(m, on, "1");
-    }
+    apply_gnu89_inline(m, cfg);
     match cfg.opt {
         OptLevel::None => {}
         OptLevel::Speed | OptLevel::Size => {

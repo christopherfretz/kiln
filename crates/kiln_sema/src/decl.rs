@@ -167,7 +167,7 @@ impl Sema<'_, '_> {
     /// invalid: always, except under C89/C99/C11/C17 implicit `int`
     /// (C89 3.5.2), where the declaration is a valid `int` one.
     pub(crate) fn untyped_invalid(&self, ds: &DeclSpec) -> bool {
-        !ds.has_type_specifier() && !(self.is_c() && !self.c_at_least(kiln_lex::CStd::C23))
+        !ds.has_type_specifier() && (!self.is_c() || self.c_at_least(kiln_lex::CStd::C23))
     }
 
     // -- types ----------------------------------------------------------------
@@ -194,6 +194,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// A declaration without a type specifier: C89 3.5.2 implicit `int`
+    /// (a constraint violation from C99, clang 19: an error by default;
+    /// gone in C23), otherwise "a type specifier is required".
+    fn missing_type_specifier(&mut self, loc: Loc) {
+        let id = if !self.is_c() || self.c_at_least(kiln_lex::CStd::C23) {
+            DiagId::parse_missing_type_specifier
+        } else if self.c_at_least(kiln_lex::CStd::C99) {
+            DiagId::sema_c_implicit_int_c99
+        } else {
+            DiagId::sema_c_implicit_int
+        };
+        self.error(id, loc);
+    }
+
     pub fn type_from_declspec_at(&mut self, ds: &DeclSpec, loc: Loc) -> QualType {
         let unsigned = ds.sign == Sign::Unsigned;
         let base = match ds.base {
@@ -205,18 +219,8 @@ impl Sema<'_, '_> {
                 QualType::DOUBLE
             }
             TypeSpecKind::None if !ds.has_type_specifier() => {
-                // C89 3.5.2: implicit `int`; a constraint violation from
-                // C99 (clang 19: an error by default), gone in C23.
-                if ds.invalid {
-                } else if self.is_c() && !self.c_at_least(kiln_lex::CStd::C23) {
-                    let id = if self.c_at_least(kiln_lex::CStd::C99) {
-                        DiagId::sema_c_implicit_int_c99
-                    } else {
-                        DiagId::sema_c_implicit_int
-                    };
-                    self.error(id, loc);
-                } else {
-                    self.error(DiagId::parse_missing_type_specifier, loc);
+                if !ds.invalid {
+                    self.missing_type_specifier(loc);
                 }
                 QualType::INT
             }

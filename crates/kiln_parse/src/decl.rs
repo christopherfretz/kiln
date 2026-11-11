@@ -3419,6 +3419,26 @@ impl Parser<'_, '_> {
             && !self.names_type_at(next)
     }
 
+    /// C17 6.9.1p6: a K&R definition's declaration list, before its body
+    /// (clang warns the definition has no prototype).
+    fn parse_knr_definition_params(&mut self, d: &mut Declarator) {
+        if d.knr_idents.as_ref().is_some_and(|i| !i.is_empty())
+            && (self.at_knr_declaration_list() || self.at(Punct::LBrace))
+        {
+            self.parse_knr_param_declarations(d);
+            let m = self.s.diag(DiagId::sema_c_non_prototype_definition, d.name_loc());
+            self.emit(m);
+        }
+    }
+
+    /// C17 6.7.6.3p3: an identifier list in a declaration that is not a
+    /// definition (clang `err_ident_list_in_fn_declaration`).
+    fn knr_ident_list_outside_definition(&mut self, d: &Declarator) {
+        if let Some(&(_, l)) = d.knr_idents.as_ref().and_then(|i| i.first()) {
+            self.s.error(DiagId::sema_c_ident_list_in_fn_declaration, l);
+        }
+    }
+
     fn at_knr_identifier_list(&self) -> bool {
         self.ident().is_some()
             && self.kw_of(self.tok()).is_none()
@@ -4463,6 +4483,7 @@ impl Parser<'_, '_> {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "clang's ParseDeclGroup in its order")]
     fn parse_simple_declaration_delayed(
         &mut self,
         ctx: DeclaratorContext,
@@ -4519,14 +4540,8 @@ impl Parser<'_, '_> {
             // an initializer (clang's order of checks:
             // `isDeclarationAfterDeclarator`, `isStartOfFunctionDefinition`).
             if declarators == 0 && d.is_function_declarator() && d.asm_label.is_none() {
-                // C17 6.9.1p6: a K&R definition's declaration list.
-                if allow_fn_def
-                    && d.knr_idents.as_ref().is_some_and(|i| !i.is_empty())
-                    && (self.at_knr_declaration_list() || self.at(Punct::LBrace))
-                {
-                    self.parse_knr_param_declarations(&mut d);
-                    let m = self.s.diag(DiagId::sema_c_non_prototype_definition, d.name_loc());
-                    self.emit(m);
+                if allow_fn_def {
+                    self.parse_knr_definition_params(&mut d);
                 }
                 if allow_fn_def && self.at_function_definition_start() {
                     self.explicit_inst_with_definition(tmpl_kind, &d, true);
@@ -4544,10 +4559,7 @@ impl Parser<'_, '_> {
                     return decls;
                 }
             }
-            // C17 6.7.6.3p3 (clang `err_ident_list_in_fn_declaration`).
-            if let Some(&(_, l)) = d.knr_idents.as_ref().and_then(|i| i.first()) {
-                self.s.error(DiagId::sema_c_ident_list_in_fn_declaration, l);
-            }
+            self.knr_ident_list_outside_definition(&d);
             // clang's `ParseDeclGroup`: a later declarator of a
             // decl-specifier that named no type is parsed, not declared,
             // and takes no initializer (`u1 &a, &b;` reports `a` only).

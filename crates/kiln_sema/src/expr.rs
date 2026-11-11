@@ -3360,7 +3360,7 @@ impl Sema<'_, '_> {
             let msg = self.diag(DiagId::sema_increment_complex, loc).arg(op.spelling());
             self.emit(msg);
         } else if !self.ast.types.is_arithmetic(t)
-            && !(self.is_c() && self.ast.types.as_enum(t).is_some())
+            && (!self.is_c() || self.ast.types.as_enum(t).is_none())
         {
             let msg = self
                 .diag(DiagId::sema_incdec_invalid, loc)
