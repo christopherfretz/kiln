@@ -1820,6 +1820,11 @@ impl Writer<'_, '_, '_> {
         } else {
             FxHashMap::default()
         };
+        if self.census.is_some() {
+            // The census's examples are the first in source order (the
+            // census writes no image, so the walk order is free).
+            self.bs.roots.reverse();
+        }
         while let Some(r) = self.bs.roots.pop() {
             let rec = match r {
                 Root::Body(rec, _)

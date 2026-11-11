@@ -3441,7 +3441,13 @@ impl Writer<'_, '_, '_> {
                 Ok(()) => {
                     if self.census.is_some() && self.img.decls.len() > before.decls {
                         let root = self.census_root(d);
-                        if let Some(c) = self.census.as_mut() {
+                        // A carried scope is not counted itself; what it
+                        // holds is.
+                        let scope = matches!(
+                            self.s.ast.decls.get(root).kind(),
+                            DeclKind::Export | DeclKind::LinkageSpec | DeclKind::Namespace
+                        );
+                        if let Some(c) = self.census.as_mut().filter(|_| !scope) {
                             let _ = c.seen.insert(root);
                         }
                     }
