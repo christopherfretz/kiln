@@ -2894,6 +2894,106 @@ vector type. Tests: `pch-body-forms-*.cpp`, `image-body-forms-run.cpp`,
 `constants_atomic_and_placeholder_types_are_carried`,
 `specialization_default_argument_is_refused`.
 
+**Forms carried by WP-1344 (specializations).** The writer's additions
+are `bmi_image/constrspec.rs`, `specinit.rs`, `selfbase.rs` and
+`builtintempl.rs`, plus `spec.rs`, `classtempl.rs`, `explinst.rs` and
+`body.rs`. Census reasons that named one cause for several forms are
+split by form (`<reason>: <form>`), so what remains says what it is.
+
+- *Packs in a specialization's arguments* ([temp.arg.general]/9).
+  A `Spec` record's converted argument list may hold
+  `ArgRec::Pack(n)` (argument tag 5, u32 n): the next n arguments are
+  the pack's elements, flat, only at the top level of the list
+  (`_List<unsigned char, unsigned short, ...>`). The validator checks
+  each element against the pack parameter's kind. The reader passes a
+  class template's elements flat as written arguments to
+  `get_class_spec` and a function template's as one
+  `TemplateArg::pack`.
+- *Values of enumeration type* ([temp.arg.nontype]). An
+  `ArgRec::Value` (in a `Spec` record, an explicit specialization or
+  an explicit instantiation) may have an enumeration type record as
+  well as an unqualified builtin integral type (`mtx<multi>`,
+  `rf<fmt::map, T>`).
+- *Explicit specialization arguments as written*
+  ([temp.expl.spec]). An explicit specialization's argument that is
+  not a converted integer (`get<0>` for a `size_t` parameter,
+  `gcd<0, 0>` for `long` ones) is an expression section: class
+  specialization argument tag 6 (u32 section, u8 profile 0 or 1), also
+  inside a partial specialization's pack. The validator requires its
+  section's records and types before the specialization's record; the
+  reader builds the section while it builds the record (its types
+  first, as a section cannot be built while another is) and
+  `get_class_spec` converts it again.
+- *Non-type parameter pack expansions in a partial specialization's
+  arguments* (`__static_max<_I0, _I1, _In...>`): the same tag 6, a
+  section holding the `PackExpansionExpr`.
+- *Specializations of constrained templates* ([temp.names]/8). A
+  specialization of a template whose constraints are its own (a
+  requires-clause on its head, type-constraints on its parameters) is
+  carried: the unit made it, so it satisfied them, and the reader's
+  `get_class_spec` finds the same specialization before the
+  constraints are patched in. A specialization the unit completed
+  stays refused when its template has a constrained partial
+  specialization or a constrained member (a trailing requires-clause,
+  a member template's constrained head), at any depth of the pattern:
+  the reader would complete it before those constraints exist
+  ("a specialization of a constrained template: completed, with a
+  constrained partial specialization" / "... with a constrained
+  member").
+- *Member typedefs of specializations*. A type naming a member
+  typedef of a carried specialization is `TyRec::Typedef` of the
+  member's `Member` record (whose pattern payload may be a `Typedef`),
+  and a base naming one is checked as the specialization's
+  (`__make_unsigned_selector`'s `using __type = ...` through a base).
+- *Static data member initializers of class template patterns*
+  ([class.static.data]/4). The in-class initializer of a static data
+  member of a carried pattern is an expression section when one holds
+  it: bit 31 (`INIT_SECT`) of the `Var` record's `spec` word, `init`
+  then the section. The reader builds it with the record, so a
+  specialization the reader completes while it builds the records
+  (`template <class T, bool = (A<T>::n > 2)> struct B;` named in a
+  completed class) sees the value. This fixes a pre-existing
+  divergence (the default argument was converted without the
+  initializer).
+- *Self-referential pattern bases* (`__common_reference_impl`,
+  `template <class T> struct chain : chain<T *> {};`). A class
+  template's record is just after its pattern's, so a pattern base
+  naming the template names a later record: the pattern's `RecDef`
+  then has bit 63 (`BASES_AFTER`, above the `DefinitionBits`), the
+  validator checks its bases as if they were record `i + 1`'s (that
+  record must be the template, its pattern `i`), and the reader gives
+  the class its bases right after it builds the template, before any
+  member.
+- *Builtin templates* (`__make_integer_seq`, `__type_pack_element`).
+  Every unit declares both, so a dependent specialization names the
+  importer's: an `Implicit` record of kind 8 or 9 (unnamed, at global
+  scope, no flags or owner), named by a `TyRec::Tst` with no
+  underlying type and its arguments as written. A non-dependent one
+  stays refused ("a builtin template's specialization that is not
+  dependent").
+- *Exception specifications naming specializations*. The writer's
+  `prescan` also writes a function's whole type, so a specialization
+  its `noexcept` expression names is recorded before the function's
+  record (`noexcept(noexcept(std::declval<const _Swap&>()(...)))`).
+- *Order*: the specialization reference records a body's walk names
+  are written in source order (they were last-first), as replay
+  instantiates them.
+
+Tests: `pack_arguments_are_carried`,
+`member_typedefs_of_partial_specializations_are_carried`,
+`specializations_of_constrained_templates_are_carried`,
+`explicit_specialization_value_arguments_are_carried`,
+`self_referential_pattern_bases_are_carried`,
+`static_member_initializers_read_during_completion`,
+`partial_specialization_pack_arguments_are_carried`,
+`exception_specifications_naming_specializations_are_carried`,
+`builtin_template_specializations_are_carried` (kiln_driver
+`pch_decls`: census without refusals, image equals replay under
+`check`, the program runs); `kind2_declaration_image_fallback`
+(modules_bmi: a completed specialization with a constrained member is
+refused); `self_bases_and_builtin_templates_round_trip`,
+`rejects_corrupt_self_bases_and_builtin_templates` (kiln_sema).
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3619,7 +3719,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 26` since WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 27` since WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

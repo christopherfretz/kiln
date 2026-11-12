@@ -1241,8 +1241,10 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     return bad("bad binding expression");
                 }
             }
-            Payload::Var { init, eval, .. } => {
-                if *init != NONE && *init as usize >= ne {
+            Payload::Var { init, eval, spec, .. } => {
+                // A section initializer is checked with its record
+                // (specinit.rs).
+                if spec & super::specinit::INIT_SECT == 0 && *init != NONE && *init as usize >= ne {
                     return bad("bad variable initializer");
                 }
                 if *eval != NONE && *eval != NOT_CONST && *eval as usize >= b.consts.len() {
@@ -2314,7 +2316,11 @@ impl Writer<'_, '_, '_> {
                         _ => return Err("a malformed body"),
                     }
                 }
-                _ => return Err("a template argument the image does not carry"),
+                _ => {
+                    return Err(
+                        "a template argument the image does not carry: an explicit argument of a name in a body",
+                    );
+                }
             }
         }
         Ok(())
@@ -2705,11 +2711,11 @@ impl Writer<'_, '_, '_> {
         } else {
             FxHashMap::default()
         };
-        if self.census.is_some() {
-            // The census's examples are the first in source order (the
-            // census writes no image, so the walk order is free).
-            self.bs.roots.reverse();
-        }
+        // In source order: the census's examples are the first, and the
+        // specialization references a body names first are written (so
+        // instantiated by the importer) in the order replay made them
+        // (WP-1344).
+        self.bs.roots.reverse();
         while let Some(r) = self.bs.roots.pop() {
             let rec = match r {
                 Root::Body(rec, _)
@@ -2872,6 +2878,11 @@ impl Writer<'_, '_, '_> {
             VarEvalState::Evaluating => return Err("a variable under evaluation"),
         };
         if let Some(e) = vd.init {
+            // WP-1344: a pattern's static data member's, as a section.
+            if let Some(i) = self.static_init_section(d, e) {
+                let spec = bits | super::specinit::INIT_SECT;
+                return Ok(Payload::Var { ty, spec, init: i, eval });
+            }
             self.bs.roots.push(Root::Init(rec, e));
         }
         Ok(Payload::Var { ty, spec: bits, init: NONE, eval })

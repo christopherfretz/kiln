@@ -1062,3 +1062,89 @@ template), a specialization's parameter 13 / 7, an expression in a type
 naming a parameter 1 / 3, a designated initializer 1 / 1. "A template
 expression (a name found through a using-declaration)" is gone with
 WP-1342.
+
+## WP-1344: PCH image wave 7c, specializations (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 108 libstdc++), before (base `8a11c2952`)
+and after. Reasons are declarations / headers.
+
+```
+lcx.h, before: 26762 top-level declarations, 23837 carried, 2925 not
+lcx.h, after:  26762 top-level declarations, 24484 carried, 2278 not
+gnu.h, before: 26396 top-level declarations, 24296 carried, 2100 not
+gnu.h, after:  26396 top-level declarations, 24614 carried, 1782 not
+```
+
+Headers through the image: libc++ 28 of 106 before, 30 after;
+libstdc++ 31 of 108 before, 34 after. First refusal of `lcx.h`: "an
+expression the image does not carry yet" (`__type_traits/extent.h:25`),
+of `gnu.h`: "a dependent using-declaration"
+(`ext/numeric_traits.h:54`), both other buckets', before and after.
+Per libstdc++ header, the first refusal "a template argument the image
+does not carry" (58 headers, `type_traits:1878`) went; its successors
+"a specialization of a template outside the image" (57,
+`type_traits:3943`, a pattern deriving from its own template) and "a
+specialization named while its user is recorded" (30, `concepts:240`)
+went too. Per libc++ header, the first refusals of this bucket left
+are "a specialization of a template outside the image" (9,
+`__fwd/string.h:29`) and "a type declared outside the image" (6,
+`__compare/synth_three_way.h:28`).
+
+Reasons of this bucket (lcx before → after, gnu before → after):
+
+- a template argument the image does not carry: 43/68 → split; "an
+  explicit argument of a name in a body" 2/61 (body walk,
+  `is_valid_expansion.h:27`), "a substituted parameter of an
+  uncarried template" 0/2; gnu 46/77 → 2/50 and 11/28
+  (`optional:508`). Packs and enumeration values are carried.
+- a specialization of a constrained template: 66/36 → "completed,
+  with a constrained partial specialization" 30/28 and "completed,
+  with a constrained member" 5/8; gnu 10/38 → 8/12 and 5/30.
+- a partial specialization argument the image does not carry: 2/52 →
+  1/51 (`segmented_iterator.h:72`, a non-parameter expression); gnu
+  7/30 → 0.
+- an explicit specialization argument the image does not carry: 29/65
+  → 8/34 (`string_view:885`); gnu 8/58 → 1/31 (`text_encoding:671`).
+- a specialization of a template outside the image: 0/13 → 0/9; gnu
+  0/57 → 0 (cascades 178/62 lcx, 56/32 gnu, rooted in the forms
+  below).
+- a type declared outside the image: 0/12 → 0/6; gnu 0/6 → 0/6.
+- a specialization named while its user is recorded: 5/6 → 5/6; gnu
+  1/69 → 1/2.
+- a specialization of a partial specialization: 9/15 → 16/15; gnu 4/6
+  → 8/15 (exposed by templates now carried).
+- unchanged: a template specialization 20/35 (gnu 156/37), an explicit
+  specialization or instantiation 31/34 (gnu 75/28), an explicitly
+  specialized member 4/26, a redeclared partial specialization 2/21
+  (gnu 3/63), a variable template specialization 15/2 (gnu 21/57),
+  "cascade: a template parameter outside the image" 14/52 (gnu 3/51).
+
+Pre-existing divergence fixed: a static data member's in-class
+initializer was missing when the importer completed a specialization
+while it built the records (`static_member_initializers_read_during_completion`).
+
+What remains, by headers freed:
+
+1. An explicit specialization declared, then defined with a base
+   naming a later template (`__fwd/string.h:29` `char_traits<char8_t>`,
+   defined at `__string/char_traits.h:262`): its record is at the
+   declaration, so the definition's base names a later record (9 lcx
+   headers; reproduced on the base).
+2. The lambda `__synth_three_way` (`__compare/synth_three_way.h:28`,
+   a closure type: "an implicit declaration that is not a special
+   member") and SVE types (`bits/math-vector.h:166`): 6 + 6 headers,
+   other buckets' roots.
+3. A redeclared partial specialization (`bits/stl_pair.h:1175`, 63 gnu
+   headers; `bitset:607`): declared, then defined with a head of its own.
+4. Variable template specializations (`numbers:124`, 57 gnu headers):
+   the importer would instantiate the initializer before the bodies.
+5. Function template explicit specializations, "a template
+   specialization" (`bits/ostream_insert.h:79`, `sort.h:891`).
+6. Explicit instantiations and specializations of members
+   (`__fwd/string.h:48`, `bits/locale_facets.h:1507`, `__locale:1422`).
+7. Completed specializations of templates with constrained partial
+   specializations or members (`__atomic/aliases.h:28`,
+   `bits/stl_bvector.h:760`): the reader must complete them after the
+   constraints.

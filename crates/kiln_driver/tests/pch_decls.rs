@@ -769,6 +769,233 @@ int main() { return det::alt(-2) + det::holder<long>::go(-3) + det::wrapped(1) =
     image_agrees("wp1342d", header, tu);
 }
 
+/// [`image_agrees`], and the census of `header` refuses nothing.
+fn image_carries(name: &str, header: &str, tu: &str) {
+    let d = scratch(&format!("{name}-census"));
+    std::fs::write(d.join("a.h"), header).unwrap();
+    let args = ["-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+    let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
+    assert!(!o.stderr.contains("refused: "), "{}", o.stderr);
+    image_agrees(name, header, tu);
+}
+
+/// WP-1344: a pack in a specialization's argument list (`_List<unsigned
+/// char, ...>` in `<type_traits>`).
+#[test]
+fn pack_arguments_are_carried() {
+    let header = "\
+template <class...> struct L {};
+template <class T, class... U> struct L<T, U...> : L<U...> { static constexpr int n = sizeof(T); };
+template <int N, class T, bool = (N <= T::n)> struct sel;
+template <int N, class U, class... Us> struct sel<N, L<U, Us...>, true> { using type = U; };
+template <int N, class U, class... Us> struct sel<N, L<U, Us...>, false> : sel<N, L<Us...>> {};
+template <class T> struct pick {
+  using Ls = L<unsigned char, unsigned short, unsigned int, unsigned long>;
+  using type = typename sel<sizeof(T), Ls>::type;
+};
+";
+    let tu = "\
+int main() { pick<int>::type x = 3; return sizeof(x) == 4 ? 0 : 1; }
+";
+    image_carries("wp1344a", header, tu);
+}
+
+/// WP-1344: a member typedef of a completed specialization of a partial
+/// specialization named through a base (`__make_unsigned_selector`'s shape).
+#[test]
+fn member_typedefs_of_partial_specializations_are_carried() {
+    let header = "\
+typedef unsigned long sz;
+template <class Q, class U> struct cv { using type = U; };
+class base {
+protected:
+  template <class...> struct L {};
+  template <class T, class... U> struct L<T, U...> : L<U...> { static constexpr sz n = sizeof(T); };
+  template <sz N, class T, bool = (N <= T::n)> struct sel;
+  template <sz N, class U, class... Us> struct sel<N, L<U, Us...>, true> { using type = U; };
+  template <sz N, class U, class... Us> struct sel<N, L<U, Us...>, false> : sel<N, L<Us...>> {};
+};
+template <class T, bool I = false, bool E = true> class pick;
+template <class T> class pick<T, false, true> : base {
+  using Ls = L<unsigned char, unsigned short, unsigned int, unsigned long>;
+  using ut = typename sel<sizeof(T), Ls>::type;
+public:
+  using type = typename cv<T, ut>::type;
+};
+template <class T> struct mk { using type = T; };
+template <> struct mk<wchar_t> { using type = typename pick<wchar_t, false, true>::type; };
+";
+    let tu = "\
+int main() { mk<wchar_t>::type x = 3; return sizeof(x) == sizeof(wchar_t) ? 0 : 1; }
+";
+    image_carries("wp1344b", header, tu);
+}
+
+/// WP-1344: specializations of constrained templates whose constraints
+/// are the template's own (a requires-clause, a type-constraint), left
+/// incomplete or completed.
+#[test]
+fn specializations_of_constrained_templates_are_carried() {
+    let header = "\
+template <class T> concept small = sizeof(T) <= 4;
+template <class T> requires small<T> struct box { T v; int get() const { return int(v); } };
+template <small T> struct cell { T v; };
+template <class T> struct opt { T v; int f() const requires small<T> { return 1; } int f() const { return 2; } };
+template <class T> struct pp { static constexpr int k = 0; };
+template <class T> requires (sizeof(T) == 2) struct pp<T*> { static constexpr int k = 2; };
+using bi = box<int>;
+inline int use(bi b) { return b.get(); }
+inline cell<short> cs{4};
+using oi = opt<char>;
+using ppi = pp<short*>;
+template <class T> T twice(T t) requires small<T> { return t + t; }
+inline int tw() { return twice(3); }
+";
+    let tu = "\
+int main() {
+  bi b{5}; oi o{}; static_assert(pp<short*>::k == 2 && pp<long*>::k == 0);
+  return use(b) - 5 + cs.v - 4 + o.f() - 1 + tw() - 6 + box<char>{1}.get() - 1;
+}
+";
+    image_carries("wp1344c", header, tu);
+}
+
+/// WP-1344: explicit and partial specializations whose arguments are
+/// expressions (`get<0>` with a `size_t` parameter) or enumerators (scoped
+/// and unscoped).
+#[test]
+fn explicit_specialization_value_arguments_are_carried() {
+    let header = "\
+typedef unsigned long sz;
+template <sz I> struct get;
+template <> struct get<0> { static int f() { return 10; } };
+template <> struct get<1> { static int f() { return 20; } };
+template <long A, long B> struct gcd { static const long value = 7; };
+template <> struct gcd<0, 0> { static const long value = 1; };
+enum pol { single, multi };
+template <pol P> struct mtx { static constexpr int k = 1; };
+template <> struct mtx<multi> { static constexpr int k = 2; };
+enum class fmt { seq, map };
+template <fmt F, class T> struct rf { static constexpr int v = 0; };
+template <class T> struct rf<fmt::map, T> { static constexpr int v = sizeof(T); };
+inline int k1 = mtx<multi>::k + rf<fmt::map, short>::v;
+";
+    let tu = "\
+int main() {
+  static_assert(gcd<0, 0>::value == 1 && gcd<1, 2>::value == 7 && rf<fmt::seq, int>::v == 0);
+  return get<0>::f() + get<1>::f() - 30 + mtx<single>::k + k1 - 5;
+}
+";
+    image_carries("wp1344d", header, tu);
+}
+
+/// WP-1344: a class template pattern whose base names its own template
+/// (`__common_reference_impl` in `<type_traits>`).
+#[test]
+fn self_referential_pattern_bases_are_carried() {
+    let header = "\
+template <class A, class B, int N = 1, class = void>
+struct impl : impl<A, B, N + 1> {};
+template <class A, class B> struct impl<A, B, 3, void> { using type = int; };
+template <class A, class B> struct impl<A, B, 2, decltype(void(sizeof(A) == 4))> { using type = A; };
+template <class T> struct chain : chain<T*> {};
+template <class T> struct chain<T***> { static constexpr int depth = 3; };
+";
+    let tu = "\
+int main() { impl<int, char>::type x = 2; return x + chain<int>::depth - 5; }
+";
+    image_carries("wp1344e", header, tu);
+}
+
+/// WP-1344: a static data member's in-class initializer the importer
+/// needs while it builds the records (a default template argument of a
+/// member of a completed specialization).
+#[test]
+fn static_member_initializers_read_during_completion() {
+    let header = "\
+template <class T> struct A { static constexpr int n = sizeof(T); };
+template <class T, bool = (A<T>::n > 2)> struct B { static constexpr int v = 1; };
+template <class T> struct B<T, false> { static constexpr int v = 2; };
+template <class T> struct C { using t = B<T>; int x; };
+inline int c = sizeof(C<int>);
+inline int d = sizeof(C<char>);
+";
+    let tu = "\
+int main() { return C<int>::t::v + C<char>::t::v == 3 ? 0 : 1; }
+";
+    image_carries("wp1344f", header, tu);
+}
+
+/// WP-1344: a non-type parameter pack's expansion in a partial
+/// specialization's arguments (`__static_max<_I0, _I1, _In...>` in
+/// `<__type_traits/aligned_union.h>`), and a pattern's static member
+/// initializer naming a specialization with expression arguments.
+#[test]
+fn partial_specialization_pack_arguments_are_carried() {
+    let header = "\
+typedef unsigned long sz;
+template <sz... I> struct smax;
+template <sz I0> struct smax<I0> { static const sz value = I0; };
+template <sz I0, sz I1, sz... In> struct smax<I0, I1, In...> {
+  static const sz value = I0 >= I1 ? smax<I0, In...>::value : smax<I1, In...>::value;
+};
+template <sz L, class T0, class... Ts> struct au {
+  static const sz len = smax<L, sizeof(T0), sizeof(Ts)...>::value;
+};
+template <int... N> struct seq {};
+template <class S, int K> struct add;
+template <int... N, int K> struct add<seq<N...>, K> { using type = seq<N..., K>; };
+";
+    let tu = "\
+int main() { add<seq<1, 2>, 3>::type s; (void)s; return au<2, char, int, short>::len == 4 ? 0 : 1; }
+";
+    image_carries("wp1344g", header, tu);
+}
+
+/// WP-1344: a member function template whose exception specification
+/// names a function template specialization (`std::ranges::swap`'s
+/// `noexcept(noexcept(std::declval<const _Swap&>()(...)))`).
+#[test]
+fn exception_specifications_naming_specializations_are_carried() {
+    let header = "\
+template <class T> T &&dv() noexcept;
+struct sw {
+  template <class T> constexpr void operator()(T &a, T &b) const noexcept(noexcept(dv<const sw &>()(a, b))) { T t = a; a = b; b = t; }
+  template <class T, unsigned long N>
+  constexpr void operator()(T (&a)[N], T (&b)[N]) const noexcept(noexcept(dv<const sw &>()(*a, *b))) {
+    for (unsigned long n = 0; n < N; ++n) (*this)(a[n], b[n]);
+  }
+};
+inline constexpr sw swp{};
+";
+    let tu = "\
+int main() { int a[2] = {1, 2}, b[2] = {3, 4}; swp(a, b); int x = 1, y = 2; swp(x, y); return a[0] == 3 && x == 2 ? 0 : 1; }
+";
+    image_carries("wp1344h", header, tu);
+}
+
+/// WP-1344: dependent specializations of `__make_integer_seq` and
+/// `__type_pack_element` (`<__utility/integer_sequence.h>`,
+/// `<bits/utility.h>`).
+#[test]
+fn builtin_template_specializations_are_carried() {
+    let header = "\
+typedef unsigned long sz;
+template <class T, T... V> struct iseq { static constexpr sz n = sizeof...(V); };
+template <sz... I> struct idx {};
+template <class T, T N> using make_seq = __make_integer_seq<iseq, T, N>;
+template <sz N> struct mk {
+  template <class, sz... I> using tup = idx<I...>;
+  using type = __make_integer_seq<tup, sz, N>;
+};
+template <sz I, class... T> struct nth { using type = __type_pack_element<I, T...>; };
+";
+    let tu = "\
+int main() { mk<3>::type t; (void)t; nth<1, char, int>::type x = 2; return make_seq<int, 4>::n == 4 && x == 2 ? 0 : 1; }
+";
+    image_carries("wp1344i", header, tu);
+}
+
 /// Block-scope `static_assert` declarations, typedefs and alias
 /// declarations (`declval`'s and `__call_is_nt`'s shapes in `<type_traits>`)
 /// are carried (WP-1320).

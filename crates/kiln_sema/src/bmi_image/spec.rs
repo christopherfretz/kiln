@@ -19,6 +19,16 @@ use crate::Sema;
 use crate::templ::args::ConvertedArgs;
 
 pub(super) const ARG: &str = "a template argument the image does not carry";
+// The forms of `ARG`, named for the census (WP-1344).
+const ARG_VALUE: &str =
+    "a template argument the image does not carry: a value that is not an integer";
+const ARG_VALUE_TY: &str =
+    "a template argument the image does not carry: a value of a type that is not builtin";
+const ARG_PACK: &str = "a template argument the image does not carry: a pack in an argument list";
+pub(super) const ARG_EXPR: &str = "a template argument the image does not carry: an expression";
+const ARG_SPEC: &str =
+    "a template argument the image does not carry: a class that is no specialization";
+const ARG_SUBST: &str = "a template argument the image does not carry: a substituted parameter of an uncarried template";
 
 impl Writer<'_, '_, '_> {
     /// Whether `d` is a member of a carried class template pattern, or of
@@ -34,6 +44,14 @@ impl Writer<'_, '_, '_> {
             })
     }
 
+    /// Whether `d` is a member of a class template specialization.
+    fn spec_member(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        ast.decls.get(d).ctx().is_some_and(|c| {
+            ast.decls.get(c).kind() == DeclKind::CXXRecord && ast.spec_info(ast.first(c)).is_some()
+        })
+    }
+
     /// Writes the specialization references the types of `d` name
     /// before `d`'s own record (errors are left for `record` to report).
     pub(super) fn prescan(&mut self, d: DeclId) {
@@ -45,6 +63,9 @@ impl Writer<'_, '_, '_> {
                 TypeView::Function(p) => {
                     qs.push(p.ret());
                     qs.extend_from_slice(ast.types.params(&p));
+                    // WP-1344: and its exception specification's
+                    // expression (`noexcept(noexcept(declval<T>()))`).
+                    qs.push(q);
                 }
                 _ => qs.push(q),
             }
@@ -69,12 +90,22 @@ impl Writer<'_, '_, '_> {
         }
     }
 
-    /// The image arguments of argument list `list`.
-    pub(super) fn arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
+    /// The image arguments of a specialization's converted argument list
+    /// `list`: an argument pack as [`ArgRec::Pack`] followed by its
+    /// elements (WP-1344, `_List<unsigned char, ...>`).
+    pub(super) fn spec_arg_recs(&mut self, list: kiln_ast::ArgListId) -> W<Vec<ArgRec>> {
         let args: Vec<TemplateArg> = self.s.ast.types.args(list).to_vec();
         let mut out = Vec::with_capacity(args.len());
         for a in args {
-            out.push(self.arg_rec(a)?);
+            if let ArgView::Pack(l) = a.view() {
+                let elems: Vec<TemplateArg> = self.s.ast.types.args(l).to_vec();
+                out.push(ArgRec::Pack(u32::try_from(elems.len()).map_err(|_| ARG)?));
+                for x in elems {
+                    out.push(self.arg_rec(x)?);
+                }
+            } else {
+                out.push(self.arg_rec(a)?);
+            }
         }
         Ok(out)
     }
@@ -109,11 +140,12 @@ impl Writer<'_, '_, '_> {
                     }
                     .ok_or(ARG)?,
                     Some(Scalar::Bool { value, .. }) => i128::from(value),
-                    _ => return Err(ARG),
+                    _ => return Err(ARG_VALUE),
                 };
                 let q = self.qref(ty)?;
-                if q.ty > super::BUILTINS || q.quals != 0 {
-                    return Err(ARG);
+                // An enumeration's value too (WP-1344).
+                if !value_ty_ok(&self.img, q) {
+                    return Err(ARG_VALUE_TY);
                 }
                 ArgRec::Value(q, v)
             }
@@ -126,6 +158,8 @@ impl Writer<'_, '_, '_> {
                 };
                 self.tname_arg(name, k)?
             }
+            ArgView::Pack(_) => return Err(ARG_PACK),
+            ArgView::Expr { .. } => return Err(ARG_EXPR),
             _ => return Err(ARG),
         })
     }
@@ -134,6 +168,11 @@ impl Writer<'_, '_, '_> {
     /// template of kind `kind`.
     pub(super) fn template_rec(&self, t: DeclId, kind: u8) -> W<u32> {
         let t = self.s.ast.first(t);
+        if kind == 1
+            && let Some(r) = self.fwd_template(t)
+        {
+            return Ok(r);
+        }
         match self.recs.get(&t) {
             Some(&r)
                 if matches!(self.img.decls[r as usize].payload,
@@ -194,14 +233,15 @@ impl Writer<'_, '_, '_> {
             return Err("a specialization of a partial specialization");
         }
         let template = self.template_rec(si.template, u8::from(class))?;
-        // The importer names it while it builds the records, before their
-        // constraints are in (WP-1284).
-        if self.constrained_template(si.template) {
-            return Err("a specialization of a constrained template");
-        }
-        let args = self.arg_recs(si.args)?;
         let complete =
             class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+        // The importer names it while it builds the records, before their
+        // constraints are in (WP-1284); WP-1344 carries what that cannot
+        // change ([`super::constrspec`]).
+        if let Some(why) = self.constrained_spec_why(si.template, complete) {
+            return Err(why);
+        }
+        let args = self.spec_arg_recs(si.args)?;
         // The importer instantiates a complete one while it reads the
         // records, before the pattern's bit-field widths and default
         // member initializers come with the bodies: the specialization
@@ -378,6 +418,14 @@ impl Writer<'_, '_, '_> {
                     let u = underlying.ok_or("an alias template")?;
                     return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));
                 }
+                // A dependent builtin template's (WP-1344).
+                if let Some(template) = self.builtin_template_rec(td)? {
+                    if underlying.is_some() || alias {
+                        return Err("a builtin template's specialization that is not dependent");
+                    }
+                    let args = self.written_arg_recs(args)?;
+                    return Ok(Some(TyRec::Tst { template, args, under: None }));
+                }
                 let template = self.template_rec(td, 1)?;
                 let spec = underlying.and_then(|u| match ast.types.view(u.ty()) {
                     TypeView::Record(d) => Some(d),
@@ -410,20 +458,30 @@ impl Writer<'_, '_, '_> {
                 }
             }
             TypeView::Record(d) if ast.spec_info(ast.first(d)).is_some() => {
-                let Some(r) = self.spec_rec(d)? else { return Err(ARG) };
+                let Some(r) = self.spec_rec(d)? else { return Err(ARG_SPEC) };
                 match self.s.ast.decls.get(self.s.ast.first(d)).ty() {
                     Some(q) if q.ty() == t && q.quals_bits() == 0 => TyRec::Record(r),
                     _ => return Err("a type the image does not carry"),
                 }
             }
+            // A member typedef of a class specialization (WP-1344).
+            TypeView::Typedef { decl, .. }
+                if !self.recs.contains_key(&decl) && self.spec_member(decl) =>
+            {
+                match self.member_rec(decl)? {
+                    Some(r) => TyRec::Typedef(r),
+                    None => return Err("a type declared outside the image"),
+                }
+            }
             TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
-                let assoc = self.recs.get(&self.s.ast.first(associated)).copied().ok_or(ARG)?;
+                let assoc =
+                    self.recs.get(&self.s.ast.first(associated)).copied().ok_or(ARG_SUBST)?;
                 // A template's parameter, or a carried partial
                 // specialization's (WP-1283).
                 if !matches!(self.img.decls[assoc as usize].payload, Payload::Template { .. })
                     && super::classtempl::partial_of(&self.img, assoc).is_none()
                 {
-                    return Err(ARG);
+                    return Err(ARG_SUBST);
                 }
                 let pack = match pack_index {
                     None => 0,
@@ -435,6 +493,68 @@ impl Writer<'_, '_, '_> {
             _ => return Ok(None),
         }))
     }
+}
+
+/// Whether `q` is the type of a value argument: an unqualified builtin
+/// or (WP-1344) enumeration type.
+pub(super) fn value_ty_ok(img: &Image, q: super::QRef) -> bool {
+    q.quals == 0
+        && (q.ty <= super::BUILTINS
+            || matches!(
+                q.ty.checked_sub(super::BUILTINS + 1).and_then(|k| img.types.get(k as usize)),
+                Some(TyRec::Enum(_))
+            ))
+}
+
+/// Whether specialization reference `spec` is one the importer
+/// completes, so that a member typedef of it may name a base class.
+pub(super) fn member_typedef_base(img: &Image, spec: u32) -> bool {
+    matches!(
+        img.decls.get(spec as usize).map(|r| &r.payload),
+        Some(Payload::Spec { complete: true, .. })
+    )
+}
+
+/// Whether specialization reference arguments `args` (record `at`) fit
+/// template parameters `params`: one argument per parameter, a pack
+/// parameter's an [`ArgRec::Pack`] followed by its elements (WP-1344).
+pub(super) fn spec_args_ok(
+    img: &Image,
+    params: &[u32],
+    args: &[ArgRec],
+    at: usize,
+    qref_at: &dyn Fn(super::QRef, usize) -> bool,
+) -> bool {
+    let one = |p: &Payload, a: &ArgRec| match (p, a) {
+        (Payload::Ttp { .. }, ArgRec::Type(q)) => qref_at(*q, at),
+        (Payload::Tttp(_), ArgRec::Template(d, 0)) => {
+            (*d as usize) < at && super::tttp::tname_rec(img, *d)
+        }
+        (Payload::Nttp { .. }, ArgRec::Value(q, _)) => value_ty_ok(img, *q),
+        _ => false,
+    };
+    let mut k = 0;
+    for &p in params {
+        let Some(pr) = img.decls.get(p as usize) else { return false };
+        let pack = match &pr.payload {
+            Payload::Ttp { pack, .. } | Payload::Nttp { pack, .. } => *pack,
+            Payload::Tttp(t) => t.pack,
+            _ => return false,
+        };
+        match args.get(k) {
+            Some(ArgRec::Pack(n)) if pack => {
+                let n = *n as usize;
+                let Some(elems) = args.get(k + 1..k + 1 + n) else { return false };
+                if !elems.iter().all(|a| one(&pr.payload, a)) {
+                    return false;
+                }
+                k += 1 + n;
+            }
+            Some(a) if one(&pr.payload, a) => k += 1,
+            _ => return false,
+        }
+    }
+    k == args.len()
 }
 
 /// The importer's side.
@@ -449,7 +569,7 @@ impl Sema<'_, '_> {
             }
             ArgRec::Expr(i, p) => self.image_expr_arg(i, p),
             // Built by `image_targ`, which has the records.
-            ArgRec::Template(..) | ArgRec::DepTemplate(..) => TemplateArg::NULL,
+            ArgRec::Template(..) | ArgRec::DepTemplate(..) | ArgRec::Pack(_) => TemplateArg::NULL,
         }
     }
 
@@ -470,10 +590,30 @@ impl Sema<'_, '_> {
             return None;
         };
         let tmpl = self.ast.first(*ids.get(*template as usize)?);
+        // A pack's elements (WP-1344): written one by one for a class
+        // template, which converts them again, as one pack for a
+        // function template's converted list.
         let mut list = Vec::with_capacity(args.len());
-        for a in args {
-            let ty = self.image_ty(img, tys, ids, a.q());
-            list.push(self.image_targ(ids, ty, a));
+        let mut k = 0;
+        while k < args.len() {
+            if let ArgRec::Pack(n) = args[k] {
+                let elems = args.get(k + 1..k + 1 + n as usize)?;
+                let mut v = Vec::with_capacity(elems.len());
+                for a in elems {
+                    let ty = self.image_ty(img, tys, ids, a.q());
+                    v.push(self.image_targ(ids, ty, a));
+                }
+                if kind == 1 {
+                    list.extend(v);
+                } else {
+                    list.push(TemplateArg::pack(self.ast.types.arg_list(&v)));
+                }
+                k += 1 + n as usize;
+                continue;
+            }
+            let ty = self.image_ty(img, tys, ids, args[k].q());
+            list.push(self.image_targ(ids, ty, &args[k]));
+            k += 1;
         }
         let spec = if kind == 1 {
             let locs = vec![loc; list.len()];

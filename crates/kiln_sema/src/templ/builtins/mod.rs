@@ -10,4 +10,6 @@ mod traits;
 mod transforms;
 
 pub(crate) use builtin_templates::declare_builtin_templates;
+// WP-1344: the image names them by kind.
+pub(crate) use builtin_templates::{MAKE_INTEGER_SEQ, TYPE_PACK_ELEMENT};
 pub(crate) use traits::{LibFailure, TraitFailure, TraitState};

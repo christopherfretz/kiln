@@ -30,9 +30,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, BuiltinType, TemplateArg};
 use kiln_ast::{DeclHead, DeclId, QualType};
 
-use super::{
-    ArgRec, BUILTINS, DEP, Image, LEX_TU, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad,
-};
+use super::{ArgRec, DEP, Image, LEX_TU, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 
 /// A specialization's argument.
@@ -105,6 +103,7 @@ pub(super) fn explicit_of(img: &Image, rec: u32) -> Option<u32> {
 }
 
 const PARTIAL_ARG: &str = "a partial specialization argument the image does not carry";
+const PARTIAL_ARG_EXPR: &str = "a partial specialization argument the image does not carry: an expression a section cannot hold";
 
 impl Writer<'_, '_, '_> {
     /// The types the arguments of specialization `d` name, for
@@ -220,8 +219,17 @@ impl Writer<'_, '_, '_> {
             for (k, a) in written.into_iter().enumerate() {
                 // `X<3>`: the converted value, which prints the same.
                 let c = if packs { None } else { converted.get(k).copied() };
-                let a = self.written_arg(a, c).ok_or(EXPLICIT_ARG)?;
-                out.push(CArg::Arg(self.arg_rec(a).map_err(|_| EXPLICIT_ARG)?));
+                let rec = match (self.written_arg(a, c), a.view()) {
+                    (Some(a), _) => self.arg_rec(a).map_err(|_| EXPLICIT_ARG)?,
+                    // WP-1344: any other expression as written, which the
+                    // importer's `get_class_spec` converts again.
+                    (None, ArgView::Expr { expr, profile }) => ArgRec::Expr(
+                        self.texpr(expr).map_err(|_| EXPLICIT_ARG_EXPR)?,
+                        profile.is_some(),
+                    ),
+                    (None, _) => return Err(EXPLICIT_ARG),
+                };
+                out.push(CArg::Arg(rec));
             }
             ClassSpec { rec: i, template, head: None, args: out }
         };
@@ -356,7 +364,7 @@ impl Writer<'_, '_, '_> {
                 (None, ArgView::Expr { expr, profile }) => {
                     ArgRec::Expr(self.texpr(expr)?, profile.is_some())
                 }
-                (None, _) => return Err(super::spec::ARG),
+                (None, _) => return Err(super::spec::ARG_EXPR),
             });
         }
         Ok(out)
@@ -384,12 +392,14 @@ impl Writer<'_, '_, '_> {
         // As `template_param_arg` names it, with the parameter's type (a
         // pack is not carried yet).
         let pty = ast.decls.get(p).ty();
-        if ast.decls.get(p).kind() != DeclKind::NonTypeTemplateParm
-            || pack
-            || expanded
-            || pty != Some(ex.get(e).ty())
-        {
+        if ast.decls.get(p).kind() != DeclKind::NonTypeTemplateParm {
             return Err(PARTIAL_ARG);
+        }
+        if pack || expanded || pty != Some(ex.get(e).ty()) {
+            // WP-1344: a parameter pack's expansion (`_In...`) or a
+            // converted parameter, as written: an expression section.
+            let i = self.texpr(expr).map_err(|_| PARTIAL_ARG_EXPR)?;
+            return Ok(CArg::Arg(ArgRec::Expr(i, true)));
         }
         Ok(CArg::Parm(params[k]))
     }
@@ -397,6 +407,7 @@ impl Writer<'_, '_, '_> {
 
 const MALFORMED: &str = "a malformed specialization";
 const EXPLICIT_ARG: &str = "an explicit specialization argument the image does not carry";
+const EXPLICIT_ARG_EXPR: &str = "an explicit specialization argument the image does not carry: an expression a section cannot hold";
 
 fn encode_arg(w: &mut Wr, a: &CArg) {
     match a {
@@ -413,8 +424,15 @@ fn encode_arg(w: &mut Wr, a: &CArg) {
             w.u8(2);
             w.u32(*p);
         }
-        // Never written: no specialization argument is an expression.
-        CArg::Arg(ArgRec::Expr(..)) => w.u8(u8::MAX),
+        // An explicit specialization's argument as written (WP-1344):
+        // its expression section and whether it has a profile.
+        CArg::Arg(ArgRec::Expr(e, p)) => {
+            w.u8(6);
+            w.u32(*e);
+            w.u8(u8::from(*p));
+        }
+        // Never written: a flat pack marker.
+        CArg::Arg(ArgRec::Pack(_)) => w.u8(u8::MAX),
         // A template (WP-1342).
         CArg::Arg(ArgRec::Template(d, k)) => {
             w.u8(4);
@@ -444,6 +462,13 @@ fn decode_arg(r: &mut Rd, top: bool) -> Res<CArg> {
         2 => CArg::Parm(r.u32()?),
         4 => CArg::Arg(ArgRec::Template(r.u32()?, r.u32()?)),
         5 => CArg::Arg(ArgRec::DepTemplate(r.u32()?, r.u32()?)),
+        6 => {
+            let e = r.u32()?;
+            match r.u8()? {
+                p @ 0..=1 => CArg::Arg(ArgRec::Expr(e, p != 0)),
+                _ => return bad("bad specialization argument"),
+            }
+        }
         3 if top => {
             let n = r.count(5)?;
             let mut v = Vec::with_capacity(n);
@@ -553,7 +578,7 @@ pub(super) fn validate_class_specs(
         let at = c.rec as usize;
         let arg_ok = |a: &CArg, params: &[u32]| match a {
             CArg::Arg(ArgRec::Type(q)) => qref_at(*q, at),
-            CArg::Arg(ArgRec::Value(q, _)) => q.ty <= BUILTINS && q.quals == 0,
+            CArg::Arg(ArgRec::Value(q, _)) => super::spec::value_ty_ok(img, *q),
             CArg::Parm(p) => params.contains(p),
             CArg::Arg(ArgRec::Template(d, _)) => {
                 (*d as usize) < at && super::tttp::tname_rec(img, *d)
@@ -561,10 +586,19 @@ pub(super) fn validate_class_specs(
             CArg::Arg(ArgRec::DepTemplate(t, _)) => {
                 qref_at(QRef { ty: *t, quals: 0 }, at) && super::tttp::dep_tname_ty(img, *t)
             }
-            CArg::Pack(_) | CArg::Arg(ArgRec::Expr(..)) => false,
+            CArg::Pack(_) | CArg::Arg(ArgRec::Expr(..) | ArgRec::Pack(_)) => false,
+        };
+        // An explicit specialization's expression argument (WP-1344): a
+        // section whose records and types are all before the record.
+        let expr_ok = |a: &CArg| match a {
+            CArg::Arg(ArgRec::Expr(e, _)) => img.texprs.get(*e as usize).is_some_and(|b| {
+                super::body::section_decl_bound(b) <= at
+                    && super::body::validate_section(img, b, 0, &|q| qref_at(q, at), true).is_ok()
+            }),
+            _ => arg_ok(a, &[]),
         };
         let Some(h) = &c.head else {
-            if !c.args.iter().all(|a| arg_ok(a, &[])) {
+            if !c.args.iter().all(expr_ok) {
                 return bad("bad class template specialization");
             }
             continue;
@@ -601,8 +635,8 @@ pub(super) fn validate_class_specs(
         let params: Vec<u32> = h.params.iter().copied().filter(nttp).collect();
         let ok = c.args.len() == tparams.len()
             && c.args.iter().all(|a| match a {
-                CArg::Pack(v) => v.iter().all(|x| arg_ok(x, &params)),
-                _ => arg_ok(a, &params),
+                CArg::Pack(v) => v.iter().all(|x| arg_ok(x, &params) || expr_ok(x)),
+                _ => arg_ok(a, &params) || expr_ok(a),
             });
         if !ok {
             return bad("bad class template specialization");
@@ -752,6 +786,12 @@ impl Sema<'_, '_> {
         a: &CArg,
     ) -> TemplateArg {
         match a {
+            // An explicit specialization's expression argument (WP-1344):
+            // its section, built now.
+            CArg::Arg(ArgRec::Expr(i, p)) => {
+                let _ = self.image_record_section(img, tys, ids, *i);
+                self.image_expr_arg(*i, *p)
+            }
             CArg::Arg(x) => {
                 let ty = self.image_ty(img, tys, ids, x.q());
                 self.image_targ(ids, ty, x)

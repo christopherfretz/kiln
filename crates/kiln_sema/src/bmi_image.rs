@@ -46,8 +46,10 @@ mod aggconsts;
 mod attrs;
 mod bindings;
 mod body;
+mod builtintempl;
 mod classtempl;
 mod constraints;
+mod constrspec;
 mod declocs;
 mod defcmp;
 mod deptypes;
@@ -63,7 +65,9 @@ pub use pch::PchDecls;
 mod protoparams;
 mod requires;
 mod scope;
+mod selfbase;
 mod spec;
+mod specinit;
 mod templ;
 mod tttp;
 mod written;
@@ -74,7 +78,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 26;
+pub(crate) const IMAGE_VERSION: u32 = 27;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -317,6 +321,10 @@ enum ArgRec {
     /// type `nns::template name<>` that carries it, and the pack word as
     /// for [`ArgRec::Template`].
     DepTemplate(u32, u32),
+    /// An argument pack of a specialization reference's converted
+    /// arguments (WP-1344, [`spec`]): the next `n` arguments are its
+    /// elements. Only at the top level of a `Payload::Spec` list.
+    Pack(u32),
 }
 
 impl ArgRec {
@@ -325,7 +333,7 @@ impl ArgRec {
     fn q(self) -> QRef {
         match self {
             ArgRec::Type(q) | ArgRec::Value(q, _) => q,
-            ArgRec::Expr(..) | ArgRec::Template(..) => exprs::EXPR_ARG_TY,
+            ArgRec::Expr(..) | ArgRec::Template(..) | ArgRec::Pack(_) => exprs::EXPR_ARG_TY,
             ArgRec::DepTemplate(ty, _) => QRef { ty, quals: 0 },
         }
     }
@@ -893,7 +901,7 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
         // A handler's exception variable (WP-1343).
         .with_exception_var(bit(11))
         .with_cxx_for_range(bit(12));
-    (spec.bits() == bits).then_some(spec)
+    (spec.bits() == bits & !specinit::INIT_SECT).then_some(spec)
 }
 
 fn tag_keyword(k: u8) -> Option<TagKeyword> {
@@ -987,6 +995,10 @@ impl Wr {
                     self.u8(4);
                     self.u32(t);
                     self.u32(k);
+                }
+                ArgRec::Pack(n) => {
+                    self.u8(5);
+                    self.u32(n);
                 }
             }
         }
@@ -1492,7 +1504,7 @@ impl<'a> Rd<'a> {
         Ok(QRef { ty, quals })
     }
     fn args(&mut self) -> Res<Vec<ArgRec>> {
-        let n = self.count(6)?;
+        let n = self.count(5)?;
         let mut v = Vec::with_capacity(n);
         for _ in 0..n {
             v.push(match self.u8()? {
@@ -1507,6 +1519,7 @@ impl<'a> Rd<'a> {
                 }
                 3 => ArgRec::Template(self.u32()?, self.u32()?),
                 4 => ArgRec::DepTemplate(self.u32()?, self.u32()?),
+                5 => ArgRec::Pack(self.u32()?),
                 _ => return bad("bad template argument"),
             });
         }
@@ -2125,6 +2138,10 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
             | TyRec::Tst { under: Some(q), .. } => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
                 Payload::Typedef { underlying, .. } => underlying.ty,
+                // A completed specialization's member typedef (WP-1344).
+                Payload::Member { spec, .. } => {
+                    return spec::member_typedef_base(img, spec).then_some(*d);
+                }
                 _ => return None,
             },
             TyRec::Record(d) => {
@@ -2249,7 +2266,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 matches!(
                     (t, &r.payload),
                     (TyRec::Enum(_), Payload::Enum { .. })
-                        | (TyRec::Typedef(_), Payload::Typedef { .. })
+                        // Or a specialization's member typedef (WP-1344).
+                        | (TyRec::Typedef(_), Payload::Typedef { .. } | Payload::Member { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
                         | (
                             TyRec::ElabQ(..) | TyRec::Dep(_),
@@ -2268,6 +2286,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         )
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
+                    // A dependent builtin template specialization (WP-1344).
+                    (TyRec::Tst { under: None, .. }, Payload::Implicit { kind })
+                        if builtintempl::is_kind(*kind))
+                    || matches!((t, &r.payload),
                     (TyRec::Placeholder { .. }, Payload::Template { kind, .. })
                         if *kind == constraints::CONCEPT_KIND)
                     || matches!((t, &r.payload),
@@ -2386,19 +2408,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         Payload::Template { kind, params, .. } => {
                             *kind < constraints::CONCEPT_KIND
                                 && (*kind == 1 || !*complete)
-                                && params.len() == args.len()
-                                && params.iter().zip(args).all(|(&p, a)| {
-                                    match (&img.decls[p as usize].payload, a) {
-                                        (Payload::Ttp { .. }, ArgRec::Type(q)) => qref_at(*q, i),
-                                        (Payload::Tttp(_), ArgRec::Template(d, 0)) => {
-                                            (*d as usize) < i && tttp::tname_rec(img, *d)
-                                        }
-                                        (Payload::Nttp { .. }, ArgRec::Value(q, _)) => {
-                                            q.ty <= BUILTINS && q.quals == 0
-                                        }
-                                        _ => false,
-                                    }
-                                })
+                                && spec::spec_args_ok(img, params, args, i, &qref_at)
                         }
                         _ => false,
                     })
@@ -2421,6 +2431,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                                 Payload::Function { .. }
                                                     | Payload::Var { .. }
                                                     | Payload::Field { .. }
+                                                    // A member typedef (WP-1344).
+                                                    | Payload::Typedef { .. }
                                             )
                                     }),
                                 _ => false,
@@ -2603,6 +2615,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 (Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }, _) => {
                     d.ctx == NONE && d.lexical == NONE
                 }
+                // A builtin template's stub (WP-1344).
+                (Payload::Implicit { kind }, _) if builtintempl::is_kind(*kind) => {
+                    d.ctx == NONE && d.lexical == NONE
+                }
                 (Payload::Implicit { .. }, _) => {
                     top.is_none() && closed(d.ctx) && d.lexical == NONE
                 }
@@ -2709,7 +2725,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if !name_ok {
             return bad("bad declaration name");
         }
-        if decl_refs(d).into_iter().any(|q| !qref_at(q, i)) {
+        let refs_at = selfbase::bases_at(i, &d.payload);
+        if decl_refs(d).into_iter().any(|q| !qref_at(q, refs_at)) {
             return bad("bad type reference");
         }
         match &d.payload {
@@ -2785,6 +2802,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 if var_spec(*spec).is_none() {
                     return bad("bad variable specifiers");
                 }
+                specinit::validate_init_section(img, i, &d.payload, &qref_at)?;
             }
             Payload::Enum { scoped, def, .. } => {
                 if u32::from(*scoped) & !(EnumData::SCOPED | EnumData::SCOPED_STRUCT) != 0 {
@@ -2810,7 +2828,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 if let Some(df) = def {
                     let parent_end = stack.last().map_or(nd, |&(_, e)| e);
                     let end = df.end as usize;
-                    if end <= i || end > parent_end || df.bits & !DEF_BITS != 0 {
+                    if end <= i
+                        || end > parent_end
+                        || df.bits & !(DEF_BITS | selfbase::BASES_AFTER) != 0
+                        || !selfbase::bases_after_ok(img, i, df)
+                    {
                         return bad("bad class definition");
                     }
                     // The key function: a member function declared in the
@@ -2850,6 +2872,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND } => {
                 if d.prev != NONE {
                     return bad("bad builtin function record");
+                }
+            }
+            Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
+                if d.prev != NONE || d.flags != 0 || d.owner != 0 {
+                    return bad("bad builtin template record");
                 }
             }
             Payload::Implicit { kind } => {
@@ -3084,6 +3111,9 @@ struct Writer<'s, 'a, 'b> {
     /// WP-1320: the implicit instantiations by point of instantiation
     /// ([`classtempl`]).
     poi: std::cell::OnceCell<FxHashMap<Loc, Vec<DeclId>>>,
+    /// WP-1344: the class template whose pattern's bases are being
+    /// written, and the record it will have ([`selfbase`]).
+    fwd_tmpl: Option<(DeclId, u32)>,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -4106,18 +4136,39 @@ impl Writer<'_, '_, '_> {
             return Err("a class with properties the image does not carry yet");
         }
         let list: Vec<u32> = ast.lists.get(rd.bases).to_vec();
-        let mut bases = Vec::with_capacity(list.len());
-        for (pos, g) in list.into_iter().enumerate() {
-            let bs = *ast.decls.base_spec(g);
-            let _ = self.bs.bspec.insert(g, (i, pos as u32));
-            bases.push(BaseRec {
-                ty: self.qref(bs.ty)?,
-                loc: self.loc(bs.loc)?,
-                access: bs.access as u8,
-                virt: bs.is_virtual,
-                pack: bs.pack_expansion,
-            });
-        }
+        let write_bases = |w: &mut Self| -> W<Vec<BaseRec>> {
+            let ast = &w.s.ast;
+            let mut bases = Vec::with_capacity(list.len());
+            for (pos, &g) in list.iter().enumerate() {
+                let bs = *ast.decls.base_spec(g);
+                let _ = w.bs.bspec.insert(g, (i, pos as u32));
+                bases.push(BaseRec {
+                    ty: w.qref(bs.ty)?,
+                    loc: w.loc(bs.loc)?,
+                    access: bs.access as u8,
+                    virt: bs.is_virtual,
+                    pack: bs.pack_expansion,
+                });
+            }
+            Ok(bases)
+        };
+        // WP-1344: a class template pattern's bases may name its template
+        // ([`selfbase`]).
+        let pattern_of = match rd.templ.get() {
+            Some((TemplLinkKind::Pattern, _)) if ast.first(d) == d => ast.described_template(d),
+            _ => None,
+        };
+        let mut bits = bits;
+        let bases = match pattern_of {
+            Some(t) => {
+                let (b, named) = self.with_fwd_template(t, i, write_bases);
+                if named {
+                    bits |= selfbase::BASES_AFTER;
+                }
+                b?
+            }
+            None => write_bases(self)?,
+        };
         Ok(Payload::Record {
             tag,
             def: Some(RecDef { bits, end: NONE, key: NONE, bases, friends: Vec::new() }),
@@ -4770,6 +4821,7 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             census: census.then(Census::default),
             pch: false,
             poi: std::cell::OnceCell::new(),
+            fwd_tmpl: None,
         })
     }
 }
@@ -5024,6 +5076,8 @@ impl Sema<'_, '_> {
         // width or initializer; constructors with ctor-initializers;
         // defaulted and implicit members to define again once used.
         let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
+        // WP-1344: a pattern whose bases wait for its template.
+        let mut self_bases: Option<(DeclId, usize)> = None;
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut enum_inits: Vec<(DeclId, u32)> = Vec::new();
         // WP-1343: (binding, decomposition, holding variable, expression)
@@ -5182,9 +5236,9 @@ impl Sema<'_, '_> {
                     }
                     f
                 }
-                Payload::Var { ty, spec, init, eval } => {
+                Payload::Var { ty, spec: spec_bits, init, eval } => {
                     let vty = self.image_ty(img, &mut tys, &ids, *ty);
-                    let spec = var_spec(*spec).unwrap_or_default();
+                    let spec = var_spec(*spec_bits).unwrap_or_default();
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
@@ -5195,7 +5249,12 @@ impl Sema<'_, '_> {
                         None => self.builder().var(h, vty, spec, prev),
                     };
                     self.ast.templates.pattern_next = false;
-                    inits.push((v, *init, *eval));
+                    if *spec_bits & specinit::INIT_SECT != 0 {
+                        self.image_init_section(img, &mut tys, &ids, v, *init);
+                        inits.push((v, NONE, *eval));
+                    } else {
+                        inits.push((v, *init, *eval));
+                    }
                     v
                 }
                 Payload::Label => self.image_label(ctx, name, h.loc),
@@ -5262,7 +5321,13 @@ impl Sema<'_, '_> {
                         self.builder().record(h, tag, prev)
                     };
                     self.ast.templates.pattern_next = false;
-                    if let Some(df) = def {
+                    if let Some(df) = def
+                        && df.bits & selfbase::BASES_AFTER != 0
+                    {
+                        let _ = self.builder().begin_record_definition(c);
+                        self_bases = Some((c, i));
+                        classes.push((c, df.end as usize, df.bits & !selfbase::BASES_AFTER, i));
+                    } else if let Some(df) = def {
                         let _ = self.builder().begin_record_definition(c);
                         let bases: Vec<kiln_ast::decl::BaseSpec> = df
                             .bases
@@ -5319,6 +5384,9 @@ impl Sema<'_, '_> {
                 }
                 Payload::Implicit { kind: scope::GLOBAL_OP_KIND } => {
                     self.image_global_op(img, i as u32)
+                }
+                Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
+                    self.image_builtin_template(*kind)
                 }
                 Payload::Implicit { kind } => {
                     let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
@@ -5425,7 +5493,7 @@ impl Sema<'_, '_> {
             let builtin = matches!(
                 r.payload,
                 Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }
-            );
+            ) || matches!(r.payload, Payload::Implicit { kind } if builtintempl::is_kind(kind));
             if !builtin
                 && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. })
                 && !pats.contains_key(&(i as u32))
@@ -5437,6 +5505,9 @@ impl Sema<'_, '_> {
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
+            if let Some((c, p)) = self_bases.take_if(|&mut (_, p)| p + 1 == i) {
+                self.image_deferred_bases(img, &mut tys, &ids, &|o| main.get(o), c, p);
+            }
             self.image_anon_typedef(img, i as u32, &ids);
         }
         self.ast.templates.dependent_depth = saved_depth;
