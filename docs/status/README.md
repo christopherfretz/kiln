@@ -37,6 +37,8 @@ Releases:
   `release-1.0.md` against its 1.0.0 results.
 - `release-1.0.2.md`: the 1.0.2 release gate, run with the same commands
   against the 1.0.1 results.
+- `release-1.1.0.md`: the 1.1.0 release gate (C mode): the same commands
+  against the 1.0.2 results, plus the C projects and gcc.c-torture.
 
 Standard libraries:
 
