@@ -3304,6 +3304,127 @@ Tests: `qualified_template_names_are_carried`,
 (kiln_sema); corpus `cpp.include/pch-decl-followups-{run,errors}.cpp`
 and `module.interface/image-decl-followups-run.cpp`.
 
+**Forms carried by WP-1350 (lambdas, local classes, template forms).**
+New tags and kinds come from the end of each enumeration.
+- *Lazy tags.* A closure type ([expr.prim.lambda.closure]) and a class
+  or enumeration whose context is a function ([class.local], [dcl.enum])
+  are *lazy tags*: like a local variable, a lazy tag gets records only
+  when something carried names it (its type, a member, its
+  lambda-expression, its declaration statement). Then the tag and
+  everything declared in it are written at once, in declaration order,
+  as a namespace-scope class is: its members and nested classes, a
+  generic call operator's template and the invented template parameters
+  of its `auto` parameters (sema's context for them is the enclosing
+  function; the image's is the closure record), and the implicit members
+  sema declared (`Pass.implicit`). A lazy tag's record is a class or enum
+  record whose context is the function record. Its overriders, key
+  functions and member initializers are patched as a namespace-scope
+  class's are, and its declaration locations are merged into the
+  location table. While one tag is being written, a tag named by it falls back:
+  a tag is never written inside another.
+- *Closure records.* A closure type is a class definition with
+  `DefinitionBits::LAMBDA` (and `LAMBDA_CAPTURES` when it captures). The
+  call operator, the conversion function to pointer to function
+  ([expr.prim.lambda.closure]) and the static invoker are ordinary
+  member records; the conversion and invoker keep `IMPLICIT` in their
+  record flags, which is how the importer tells them apart from written
+  members (`closure_thunk` / `closure_invoker`). A capture's member is
+  an unnamed field record, exempt from the anonymous-member rules.
+- *The lambdas section.* After WP-1353's `dedup` section (itself after
+  `fsuses`): a count, then
+  per lambda the words `closure`, `call_op` (a generic lambda's: its
+  template's pattern; `NONE` for none), `default_loc`, `lbracket`,
+  `rbracket`, `number`, `context`; the bytes `default` (0 none, 1 `=`,
+  2 `&`) and `flags` (bit 0 a parameter clause was written, bit 1 a
+  trailing return type, bit 2 `mutable`, bit 3 the capture initializers
+  are set); the captures (count, then per capture the bytes `kind`
+  (0 `this`, 1 `*this`, 2 by copy, 3 by reference) and `flags` (bit 0
+  implicit, bit 1 an init-capture) and the words `var` (a declaration
+  word, `NONE` for `this`), `field`, `loc`, `ellipsis`); the unexpanded
+  packs the body names (declaration words); the capture initializers
+  (body expressions).
+- *Lambda-expressions.* `LambdaExpr` is expression kind 69. Its slot is
+  `F::LB`, a lambda record's index, and its operands are the capture
+  initializers. The importer builds every closure and lambda record
+  before the bodies (`image_lambdas`), sets the initializers with the
+  expression, and sets the call operator's body after the function
+  bodies (`image_lambda_bodies`). `F::LB` is refused in a type's
+  expression section.
+- *How closures are numbered.* A closure type's identity is the
+  replay's: the image carries the `LambdaMangling` number and context
+  sema gave it, verbatim, so the `Ul…E[n]_` mangled names agree on both
+  sides ([basic.def.odr]). A context that is a variable recorded
+  after the closure (a namespace-scope initializer's lambda, written
+  while the variable's type is prescanned) is patched once that
+  variable's record exists. A closure without a number (`$_N`) gets its
+  name when it is first mangled, as in replay. The importer does not
+  restore `ManglingState.numbers`: every carried closure has its number,
+  and a unit's own lambdas number in their own contexts.
+- *Designated initializers* ([dcl.init.aggr]). `DesignatedInitExpr`
+  (template patterns only) is expression kind 70, slot the initializer;
+  its designators are cold bit 32768 `COLD_DESIG` (`F::Desig`: a
+  count, then each `.name`'s name index and location). A pattern's
+  semantic `InitListExpr` carries its written form (`syntactic_list`,
+  which instantiation rebuilds from) in the `COLD_REWRITE` slot. An array
+  or range designator (an extension) is refused.
+- *Vectors.* A vector type of a value-dependent element count
+  (`ext_vector_type(N)`, `vector_size(N * sizeof(T))`) is expression
+  type tag 3 `DepVector` (element, expression section, `VectorKind`
+  byte, canonical flag), like `DepArray`. `__builtin_convertvector` is
+  expression kind 71 (slot the operand; its `)` is the end location).
+- *Resugared typedefs.* A typedef type naming typedef record `d` with
+  an underlying type other than `d`'s own (a member typedef named in a
+  member alias template, its underlying type substituted again:
+  libc++'s `unique_ptr::pointer` in `_EnableIfMoveConvertible`) is type
+  tag 27 `TypedefAs` (the record, the underlying type).
+- *A specialization's parameter.* A default argument use on a call of a
+  function template specialization names the specialization's parameter,
+  which has no record. The declaration word `PARAM | SPECP | spec << 8 |
+  i` (`SPECP` = `0x2000_0000`, `spec` a function `Spec` record below
+  `2^21`, `i` below 256) names its `i`-th parameter (`Dc::Param` only).
+  The importer declares the specializations before their patterns'
+  default arguments exist, so once the defaults are set it defers each
+  specialization's defaults again as substitution does (`lazy_defaults`,
+  [temp.inst]/12). It then instantiates the ones a body uses, as the
+  replay's calls did (`image_spec_defaults`).
+
+Still refused in this bucket:
+- *A closure or local class named before its context is recorded.* A
+  lambda in a requires-expression (its context is the requires body,
+  which has no record) and a local class named by its function's deduced
+  return type (named while the function's type is prescanned, before
+  the function's record exists).
+- *An expression in a type naming a parameter or local declaration.* A
+  requires-expression in a type (`std_function.h`'s `__function_guide_t`,
+  `requires (_Fn& __f) { ... }` as a template argument). A type's
+  expression sections are built while the records are imported, before
+  the requires-expression bodies, which declare its parameters.
+- A lambda-expression or local class in a type's expression section
+  (`decltype([]{})`), and a local class used before its definition.
+- An array or range designator, and a member function of a local class
+  in an imported module's inline function (the replay has the same
+  gap: neither side emits it; xfail
+  `module.interface/local-class-members-link-run.cpp`).
+
+Two gaps outside the bucket, first reached once libstdc++'s `<compare>`
+was carried, are closed with it: a dependent base named through a
+qualifier (`: std::X<T, U>`, an `ElabQ` record over a dependent `Tst`)
+passes the reader's base check (the writer already wrote it, and the
+reader rejected its own writer's output as "an internal image
+inconsistency"). The comparison category check (`cmp_category_type`)
+folds a category value from its initializer when the image left it
+unevaluated (an aggregate value is not carried). Before that fix, every
+built-in `<=>` in a consumer of the image failed with "the type does not
+have the expected form".
+
+Tests: `crates/kiln_driver/tests/pch_decls.rs`, `modules_bmi.rs`
+(`kind2_declaration_image_lambdas`,
+`kind2_declaration_image_designators_and_spec_defaults`) and the corpus
+pairs `cpp.include/pch-lambda-forms-{run,errors}.cpp`,
+`cpp.include/pch-wp1350-forms-{run,errors}.cpp`,
+`module.interface/image-lambda-forms-run.cpp`,
+`module.interface/image-wp1350-forms-run.cpp`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -4029,7 +4150,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 30` since WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 31` since WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

@@ -1401,3 +1401,91 @@ What remains, by headers freed:
 5. A plain CRTP base naming a class not declared before (`struct B :
    A<B> {};`) is refused "a type declared outside the image" at `B`
    (found here; another bucket's; `ranges` declares `_Drop` first).
+
+## WP-1350: PCH image wave 8b, lambdas, local classes and template forms (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 109 libstdc++), before (main after WP-1345,
+#649), on main with WP-1352 and WP-1353 ("main", their censuses above)
+and on this WP merged with them and WP-1355 ("after"). Reasons are
+declarations / headers, before → after.
+
+```
+lcx.h, before: 26704 top-level declarations, 25687 carried, 1017 not
+lcx.h, main:   26702 top-level declarations, 26015 carried,  687 not
+lcx.h, after:  26693 top-level declarations, 26112 carried,  581 not
+gnu.h, before: 26396 top-level declarations, 25475 carried,  921 not
+gnu.h, main:   26396 top-level declarations, 25695 carried,  701 not
+gnu.h, after:  26396 top-level declarations, 25778 carried,  618 not
+```
+
+Headers through the image: libc++ 35 of 106 before, 35 main, 37 after;
+libstdc++ 35 of 109 before, 36 main, 39 after (`<compare>`, `<utility>`
+and `<typeindex>` among them). Against main: lcx +97 carried, gnu +83.
+First refusal of `lcx.h` after: "a partial specialization argument the
+image does not carry" (`__iterator/segmented_iterator.h:72:8`, another
+bucket's, the first refusal of 38 libc++ headers; main's, the
+`__synth_three_way` lambda at `__compare/synth_three_way.h:28:45`, is
+carried). Of `gnu.h`: "a body referring to a declaration outside the
+image" (`bits/stl_iterator.h:2396:7`, unchanged from main, the first
+refusal of 40 libstdc++ headers). No header's first refusal is this
+bucket's any more ("a lambda expression" was 1 libc++ and 2 libstdc++
+headers' before). One libc++ header, `<numeric>`, is now refused as "an
+internal image inconsistency": a body's local alias typed after a
+requires-expression parameter's type (surfaced on the merged tree, no
+WP-1350 form in its reduction; ignored test
+`pch_decls.rs::local_alias_after_requires_parameter_type`).
+
+Reasons of this bucket:
+
+- a lambda expression: 58/56 → 0; gnu 48/69 → 0. What is left of it is
+  "a closure or local class named before its context is recorded":
+  1/16 (`optional:565`, a lambda in a requires-expression).
+- a local class or enumeration: 7/49 → 0; gnu 19/65 → 0.
+- a local declaration the image does not carry: 1/2 → 0
+  (`__filesystem/directory_entry.h:227`).
+- an expression the image does not carry yet (a designated initializer):
+  4/15 → 0; gnu 1/1 → 0.
+- a type the image does not carry (`unique_ptr.h:220`, the default
+  template argument resugared through a typedef): 3/40 → 0.
+- the dependent vector type and `__builtin_convertvector`
+  (`simd_utils.h:93`): gone from the `<format>`, `<generator>`,
+  `<algorithm>` and `<memory>` headers' refusals; mangled as replayed
+  and as clang (`Dv <expr> _ <elem>`, WP-1355's expression origin).
+- the block-scope extern with an attribute (`memory_resource.h:133`): 0
+  before and after.
+- a local declaration the image does not carry (a specialization's
+  parameter): gnu 24/37 → 10/35. The function template
+  specializations' (`basic_string.h:4524`, `fs_path.h:1170`,
+  `specfun.h:265`) are carried (`basic_string.h:4524`'s
+  `__to_wstring_numeric` now stops at "a specialization of a partial
+  specialization", another bucket's); what is left is a member of a class
+  template specialization's (`basic_string.h:4695..4717`,
+  `operator""s` constructing `basic_string<char>{__str, __len}`).
+- an expression in a type naming a parameter or local declaration:
+  unchanged, 11/34 (`__system_error/error_category.h:50`, not analyzed)
+  and gnu 7/5 (`std_function.h:716`, `deque:631`, a requires-expression
+  in a type: refused, spec/modules.md §11.11).
+
+Two gaps outside the bucket, first reached once `<compare>` was carried,
+were closed with it: the reader rejected the writer's own dependent base
+named through a qualifier ("an internal image inconsistency" for
+`<compare>`, `<utility>`, `<typeindex>`), and the comparison category
+check failed on an imported out-of-line category value (every built-in
+`<=>` in a consumer: "the type does not have the expected form").
+
+What remains, by headers freed (merged tree):
+
+1. A member of a class template specialization's parameter in a default
+   argument (gnu `basic_string.h:4695`, 10/35): the `SPECP` word over a
+   `Payload::Member` record (`bmi_image/specparam.rs`).
+2. A lambda in a requires-expression and a local class named by a
+   deduced return type (`optional:565`, 1/16).
+3. A requires-expression in a type (`std_function.h:716`, `deque:631`,
+   7/5): the type's expression sections would have to be built after
+   the requires bodies.
+4. Array and range designators; a lambda or local class in a type's
+   expression section (`decltype([]{})`).
+5. Not this bucket's: the local alias after a requires-parameter type
+   (`<numeric>`, see above).

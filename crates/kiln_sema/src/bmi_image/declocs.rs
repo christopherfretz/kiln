@@ -47,6 +47,30 @@ impl Writer<'_, '_, '_> {
         self.img.declocs.entries = out;
         Ok(())
     }
+
+    /// Adds the side locations of records `recs`, written after
+    /// [`Writer::decl_locs`] ran (WP-1350: closure types and local
+    /// classes, written when a body names them).
+    pub(super) fn more_decl_locs(&mut self, recs: &[(u32, DeclId)]) -> W<()> {
+        let s = self.s;
+        let mut out = std::mem::take(&mut self.img.declocs.entries);
+        for &(i, d) in recs {
+            for (k, m) in
+                [(TYPE_SPEC, &s.type_spec_locs), (REF, &s.ref_locs), (CHUNK, &s.inner_chunk_locs)]
+            {
+                let Some(&l) = m.get(&d) else { continue };
+                match self.loc(l) {
+                    Ok(o) => out.push((i, k, o)),
+                    Err(_) => self.miss(i, "a declarator location the image does not carry")?,
+                }
+            }
+        }
+        // A tag written while `collect` ran is listed already.
+        out.sort_by_key(|&(i, k, _)| (i, k));
+        out.dedup_by_key(|e| (e.0, e.1));
+        self.img.declocs.entries = out;
+        Ok(())
+    }
 }
 
 pub(super) fn encode_decl_locs(w: &mut Wr, s: &DeclLocs) {

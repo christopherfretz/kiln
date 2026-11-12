@@ -48,7 +48,11 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         match n.kind() {
-            DeclKind::Field if n.has(DeclFlags::IMPLICIT) && n.name() == DeclName::EMPTY => {
+            DeclKind::Field
+                if n.has(DeclFlags::IMPLICIT)
+                    && n.name() == DeclName::EMPTY
+                    && !self.capture_field(d) =>
+            {
                 let rec = n.ty().and_then(|t| ast.types.as_record(t)).ok_or(ANON)?;
                 let r = *self.recs.get(&rec).ok_or(ANON)?;
                 if !anon_class(&self.img, r) || self.img.decls[r as usize].ctx != self.ctx_rec(d)? {

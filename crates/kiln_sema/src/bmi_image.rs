@@ -63,6 +63,7 @@ mod explinst;
 mod exprs;
 mod fnspec;
 mod friend;
+mod lambdas;
 mod latedef;
 mod localexterns;
 mod locs;
@@ -79,6 +80,7 @@ mod scope;
 mod selfbase;
 mod spec;
 mod specinit;
+mod specparam;
 mod templ;
 mod tttp;
 mod varspec;
@@ -90,7 +92,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 30;
+pub(crate) const IMAGE_VERSION: u32 = 31;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -314,6 +316,9 @@ enum TyRec {
     },
     /// WP-1343: `_Atomic(T)` (C11, a GNU extension in C++).
     Atomic(QRef),
+    /// WP-1350: typedef record `d` named with another underlying type
+    /// (`pointer` in a member alias template, substituted again).
+    TypedefAs(u32, QRef),
 }
 
 /// A [`TyRec::Placeholder`] deduced as the dependent type.
@@ -753,6 +758,8 @@ struct Image {
     fsuses: fnspec::FnSpecUses,
     /// WP-1353: a precompiled header's cross-unit deduplication keys.
     dedup: dedup::Dedup,
+    /// WP-1350: lambda-expressions' side records ([`lambdas`]).
+    lambdas: lambdas::Lambdas,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1435,6 +1442,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 w.args(args);
             }
             TyRec::Atomic(q) => (w.u8(26), w.q(*q)).1,
+            TyRec::TypedefAs(d, q) => (w.u8(27), w.u32(*d), w.q(*q)).2,
             TyRec::CanonTtp(depth, index, pack) => {
                 w.u8(24);
                 w.u32(*depth);
@@ -1502,6 +1510,7 @@ fn encode(img: &Image) -> Vec<u8> {
     varspec::encode_fn_expl_decls(&mut w, &img.fexpl);
     fnspec::encode_fn_spec_uses(&mut w, &img.fsuses);
     dedup::encode_dedup(&mut w, &img.dedup);
+    lambdas::encode_lambdas(&mut w, &img.lambdas);
     w.0
 }
 
@@ -1878,6 +1887,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             (args.iter().map(|a| a.q()).chain(*under).collect(), vec![*template])
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
+        TyRec::TypedefAs(d, q) => (vec![*q], vec![*d]),
         TyRec::Sugar(_) | TyRec::Auto(_) | TyRec::CanonTtp(..) => (Vec::new(), Vec::new()),
         TyRec::Placeholder { deduced, concept, args, .. } => (
             args.iter().map(|a| a.q()).chain(deduced.filter(|&q| q != DEDUCED_DEP)).collect(),
@@ -2140,6 +2150,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 TyRec::Placeholder { k, deduced, concept, args }
             }
             26 => TyRec::Atomic(r.q()?),
+            27 => TyRec::TypedefAs(r.u32()?, r.q()?),
             24 => {
                 let (depth, index) = (r.u32()?, r.u32()?);
                 match r.u8()? {
@@ -2207,6 +2218,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.fexpl = varspec::decode_fn_expl_decls(&mut r)?;
     img.fsuses = fnspec::decode_fn_spec_uses(&mut r)?;
     img.dedup = dedup::decode_dedup(&mut r)?;
+    img.lambdas = lambdas::decode_lambdas(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2225,6 +2237,7 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
             TyRec::Elab(_, q)
             | TyRec::ElabQ(_, _, q)
             | TyRec::Paren(q)
+            | TyRec::TypedefAs(_, q)
             | TyRec::Tst { under: Some(q), .. }
             | TyRec::Dep(deptypes::DepTy::QualTst { tst: q, .. }) => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
@@ -2269,11 +2282,15 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
                 | TyRec::Ex(exprs::ExTy::Decltype { dep: true, .. }),
             ) => return true,
             // And `typename nns::template X<args>` (WP-1353: `_Or<...>`'s
-            // substituted pattern).
+            // substituted pattern); `std::X<T>` too, the qualifier is only
+            // sugar (WP-1350).
             Some(
                 TyRec::Tst { under: Some(u), .. }
                 | TyRec::Dep(deptypes::DepTy::QualTst { tst: u, .. })
-                | TyRec::ElabQ(_, _, u),
+                | TyRec::Elab(_, u)
+                | TyRec::ElabQ(_, _, u)
+                | TyRec::Paren(u)
+                | TyRec::TypedefAs(_, u),
             ) => q = *u,
             // `typename X<T>::type` (WP-1320: `is_signed`'s base).
             Some(TyRec::Dep(deptypes::DepTy::Name { .. } | deptypes::DepTy::Tmpl { .. })) => {
@@ -2369,7 +2386,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         Payload::Enum { .. } | Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND }
                     )
                         // Or a specialization's member typedef (WP-1344).
-                        | (TyRec::Typedef(_), Payload::Typedef { .. } | Payload::Member { .. })
+                        | (
+                            TyRec::Typedef(_) | TyRec::TypedefAs(..),
+                            Payload::Typedef { .. } | Payload::Member { .. }
+                        )
                         | (TyRec::Record(_), Payload::Record { .. })
                         | (
                             TyRec::ElabQ(..) | TyRec::Dep(_),
@@ -2490,6 +2510,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     varspec::validate_fn_expl_decls(img)?;
     fnspec::validate_fn_spec_uses(img)?;
     dedup::validate_dedup(img)?;
+    lambdas::validate_lambdas(img, body::param_count(img))?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2562,7 +2583,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         }
         // A local declaration (a body's variable or label): its context
         // is an earlier function record; it is never looked up by name.
-        if let Some(f) = kind_of(d.ctx).filter(|c| matches!(c.payload, Payload::Function { .. })) {
+        // A local class or enumeration (WP-1350) is checked as a class
+        // at namespace scope, its name a `pnames` entry.
+        let local_tag = matches!(d.payload, Payload::Record { .. } | Payload::Enum { .. })
+            && kind_of(d.ctx).is_some_and(|c| matches!(c.payload, Payload::Function { .. }));
+        if let Some(f) = kind_of(d.ctx)
+            .filter(|c| matches!(c.payload, Payload::Function { .. }))
+            .filter(|_| !local_tag)
+        {
             // A local of a template's pattern is dependent, like it.
             if d.flags & !(body::LOCAL_FLAGS | DEP) != 0
                 || (d.flags & DEP) != (f.flags & DEP)
@@ -2645,6 +2673,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         // An invented template parameter is implicit (WP-1345).
         let invented = match d.payload {
             Payload::Ttp { .. } => DeclFlags::IMPLICIT.bits(),
+            // A closure type, its conversion function and static invoker
+            // (WP-1350).
+            _ if lambdas::implicit_ok(img, i as u32) => DeclFlags::IMPLICIT.bits(),
             _ => 0,
         };
         if d.flags & !(DECL_FLAGS | DEP | invented) != 0
@@ -2696,6 +2727,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 };
                 membertempl::claim_outer_heads(img, &pats, i, own, &mut claimed)?;
             }
+        } else if (local_tag || lambdas::closure_def(img, i as u32)) && d.flags & DEP != 0 {
+            // A closure type or local class of a template's pattern
+            // (WP-1350): its function or initializer claims it.
+            claimed[i] = true;
         } else if d.flags & DEP != 0 && !friend::names_template(img, d) {
             // Only template parameters and patterns (claimed below); the
             // `Friend` record of a friend template is checked by
@@ -2739,8 +2774,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 (Payload::Implicit { kind }, _) if builtintempl::is_kind(*kind) => {
                     d.ctx == NONE && d.lexical == NONE
                 }
+                // A closure type's, written when something in an open
+                // class (a static data member's initializer) named it
+                // (WP-1350).
                 (Payload::Implicit { .. }, _) => {
-                    top.is_none()
+                    (top.is_none() || lambdas::closure_def(img, d.ctx))
                         && (closed(d.ctx) || members::complete_spec(img, d.ctx))
                         && d.lexical == NONE
                 }
@@ -2769,6 +2807,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // A namespace reopened while the class sema completed
                 // from its first declaration is open (WP-1314).
                 (Payload::Namespace, NONE) if top.is_some() && d.prev != NONE && scope(d.ctx) => {
+                    true
+                }
+                (_, NONE) if local_tag => top.is_none_or(|t| d.ctx == t),
+                // A default member initializer's closure type, written when
+                // the initializer is, after its class closed (WP-1350).
+                (Payload::Record { .. }, NONE)
+                    if top.is_none() && lambdas::closure_def(img, i as u32) && closed(d.ctx) =>
+                {
                     true
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
@@ -2850,6 +2896,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // An unnamed class or enumeration: one a typedef names
             // (WP-1278) or none ([dcl.enum]/2, [class.pre]/1; WP-1284).
             Payload::Record { .. } | Payload::Enum { .. } if d.name == NONE => true,
+            _ if local_tag => (d.name as usize) < img.pnames.len(),
             Payload::Function { kind, .. } => match d.name {
                 N_CTOR => *kind == 2,
                 N_DTOR => *kind == 3,
@@ -2991,7 +3038,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     };
                     if end <= i
                         || end > parent_end
-                        || df.bits & !(DEF_BITS | selfbase::BASES_AFTER | anon_bit | inh) != 0
+                        || df.bits
+                            & !(DEF_BITS
+                                | selfbase::BASES_AFTER
+                                | anon_bit
+                                | inh
+                                | lambdas::CLOSURE_BITS)
+                            != 0
                         || !selfbase::bases_after_ok(img, i, df)
                     {
                         return bad("bad class definition");
@@ -3104,7 +3157,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                     | (1, Payload::Record { .. })
                                     | (2, Payload::Typedef { alias: true, .. })
                                     | (3, Payload::Var { .. })
-                            ) && r.flags & DEP != 0
+                            ) && (r.flags & DEP != 0
+                                // A generic lambda's conversion function
+                                // or invoker template's pattern, which
+                                // sema declares outside the template
+                                // scope (WP-1350).
+                                || (r.flags & DeclFlags::IMPLICIT.bits() != 0
+                                    && lambdas::implicit_ok(img, *pattern)))
                                 && r.name == d.name
                                 && r.ctx == d.ctx
                                 && r.owner == d.owner
@@ -3120,6 +3179,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     claimed[p] = true;
                 }
                 let pscope = membertempl::param_scope(d.lexical, d.ctx);
+                // A generic lambda's conversion function and invoker
+                // templates share its call operator's template-head
+                // (WP-1350).
+                let thunk = !concept
+                    && img.decls[p].flags & DeclFlags::IMPLICIT.bits() != 0
+                    && lambdas::implicit_ok(img, *pattern);
                 for (k, &x) in params.iter().enumerate() {
                     let ok = kind_of(x).is_some_and(|r| {
                         r.ctx == pscope
@@ -3132,7 +3197,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                 _ => false,
                             }
                     });
-                    if !ok || claimed[x as usize] {
+                    if !ok || (claimed[x as usize] && !thunk) {
                         return bad("bad template parameter list");
                     }
                     claimed[x as usize] = true;
@@ -3409,6 +3474,18 @@ impl Writer<'_, '_, '_> {
         Ok(QRef { ty, quals })
     }
 
+    /// Whether `t` names typedef `d` with an underlying type other than
+    /// `d`'s own (WP-1350: a member typedef named in a member alias
+    /// template, its underlying type substituted again).
+    fn resugared(&self, d: DeclId, t: TypeId) -> bool {
+        let types = &self.s.ast.types;
+        self.s.ast.decls.get(d).ty().is_some_and(|q| {
+            q.ty() != t
+                && q.quals_bits() == 0
+                && matches!(types.view(q.ty()), TypeView::Typedef { decl, .. } if decl == d)
+        })
+    }
+
     /// The record of `d` naming type `t` (its own type, unqualified).
     fn type_decl(&self, d: DeclId, t: TypeId) -> W<u32> {
         let r = self.recs.get(&d).copied().ok_or("a type declared outside the image")?;
@@ -3534,11 +3611,21 @@ impl Writer<'_, '_, '_> {
                 let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
                 TyRec::Func { ret, params, info, exc, nx: NONE }
             }
-            TypeView::Enum(d) => TyRec::Enum(match self.align_val_t_stub(d) {
-                Some(r) => r,
-                None => self.type_decl(d, t)?,
-            }),
-            TypeView::Record(d) => TyRec::Record(self.type_decl(self.s.ast.first(d), t)?),
+            TypeView::Enum(d) => {
+                if let Some(r) = self.align_val_t_stub(d) {
+                    TyRec::Enum(r)
+                } else {
+                    // WP-1350: a local enumeration, written on use.
+                    self.lazy_type(d)?;
+                    TyRec::Enum(self.type_decl(d, t)?)
+                }
+            }
+            TypeView::Record(d) => {
+                let d = self.s.ast.first(d);
+                // WP-1350: a closure type or local class, written on use.
+                self.lazy_type(d)?;
+                TyRec::Record(self.type_decl(d, t)?)
+            }
             TypeView::TemplateTypeParm(d) => TyRec::Ttp(self.type_decl(d, t)?),
             TypeView::PackExpansion { pattern, num_expansions: None } => {
                 TyRec::Pack(self.qref(pattern)?)
@@ -3582,6 +3669,10 @@ impl Writer<'_, '_, '_> {
                 let sugar = self.s.image_sugar();
                 let k = sugar.iter().position(|q| q.is_some_and(|q| q.ty() == t)).unwrap_or(0);
                 TyRec::Sugar(k as u8)
+            }
+            TypeView::Typedef { decl, underlying } if self.resugared(decl, t) => {
+                let r = *self.recs.get(&decl).ok_or("a type declared outside the image")?;
+                TyRec::TypedefAs(r, self.qref(underlying)?)
             }
             TypeView::Typedef { decl, .. } => TyRec::Typedef(self.type_decl(decl, t)?),
             TypeView::QualifiedArray { quals, base } => {
@@ -3830,6 +3921,11 @@ impl Writer<'_, '_, '_> {
             // ([dcl.fct]/22), carried in the record's flags (WP-1345).
             extra &= !DeclFlags::IMPLICIT.bits();
         }
+        if self.in_lazy_write(d) && self.lazy_implicit(d) {
+            // A closure type and its conversion function and static
+            // invoker, carried in the record's flags (WP-1350).
+            extra &= !DeclFlags::IMPLICIT.bits();
+        }
         if extra & DeclFlags::HAS_ATTRS.bits() != 0 && self.attrs_carried(d) {
             // Carried by `attr_recs` (WP-1278).
             extra &= !DeclFlags::HAS_ATTRS.bits();
@@ -3870,6 +3966,7 @@ impl Writer<'_, '_, '_> {
             && !self.dep_member(d)
             && !self.template_friend_decl(d)
             && self.dep_friend_class(d).is_none()
+            && !self.in_lazy_write(d)
         {
             return Err(self.in_template_reason(d));
         }
@@ -3889,6 +3986,9 @@ impl Writer<'_, '_, '_> {
         }
         let access = m.access() as u8;
         let ctx = match n.ctx() {
+            // A generic lambda's template parameter: declared in the
+            // lambda's scope, recorded in its closure type (WP-1350).
+            Some(_) if self.lazy_head(d) => self.writing_rec()?,
             Some(c) if c == ast.tu => NONE,
             Some(c) => match self.class_rec(c) {
                 Some(r) => r,
@@ -3935,12 +4035,7 @@ impl Writer<'_, '_, '_> {
                 .copied()
                 .ok_or("a redeclaration of an entity outside the image")?,
         };
-        let invented = if n.kind() == DeclKind::TemplateTypeParm {
-            n.flags().bits() & DeclFlags::IMPLICIT.bits()
-        } else {
-            0
-        };
-        let flags = n.flags().bits() & (DECL_FLAGS | DEP) | invented;
+        let flags = n.flags().bits() & (DECL_FLAGS | DEP) | self.invented_bits(d);
         let name = if parm {
             // Not a declared name of the unit: not gated, like a
             // function parameter's.
@@ -3952,6 +4047,8 @@ impl Writer<'_, '_, '_> {
                     Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s)
                 }
             }
+        } else if let Some(x) = self.local_tag_name(d)? {
+            x
         } else {
             self.name_word(d)?
         };
@@ -4067,7 +4164,7 @@ impl Writer<'_, '_, '_> {
                 if fd.flags & !FIELD_FLAGS != 0 {
                     return Err("a field with [[no_unique_address]]");
                 }
-                if n.name() == DeclName::EMPTY && fd.bit_width.is_none() {
+                if n.name() == DeclName::EMPTY && fd.bit_width.is_none() && !self.capture_field(d) {
                     return Err("an anonymous union or struct member");
                 }
                 // Patched by `walk_roots`.
@@ -4404,7 +4501,7 @@ impl Writer<'_, '_, '_> {
     fn class(&mut self, d: DeclId, i: u32) -> W<Payload> {
         let ast = &self.s.ast;
         let rd = ast.decls.record(d).ok_or("a malformed class")?;
-        if rd.lambda.is_some() {
+        if rd.lambda.is_some() && !self.in_lazy_write(d) {
             return Err("a closure type");
         }
         match rd.templ.get() {
@@ -4455,7 +4552,10 @@ impl Writer<'_, '_, '_> {
         // (WP-1292).
         let bits = b.without(DefinitionBits::COMPLETE).bits();
         // An anonymous class keeps its bit (WP-1345, `anon.rs`).
-        if bits & !(DEF_BITS | anon::ANON_BIT | DefinitionBits::HAS_INHERITED_CTOR.bits()) != 0 {
+        let closure = if rd.lambda.is_some() { lambdas::CLOSURE_BITS } else { 0 };
+        if bits & !(DEF_BITS | anon::ANON_BIT | DefinitionBits::HAS_INHERITED_CTOR.bits() | closure)
+            != 0
+        {
             return Err("a class with properties the image does not carry yet");
         }
         let list: Vec<u32> = ast.lists.get(rd.bases).to_vec();
@@ -4701,6 +4801,7 @@ impl Writer<'_, '_, '_> {
             }
         }
         self.walk_roots()?;
+        self.lambda_contexts()?;
         self.written_section();
         Ok(())
     }
@@ -4776,6 +4877,7 @@ impl Writer<'_, '_, '_> {
         let k = self.img.explinsts_len() as u32;
         self.img.attrs.insts.retain(|r| r.decl < k);
         self.img.defcmps.truncate(n);
+        self.lam_rollback();
     }
 
     /// The top-level declaration `d` belongs to: the outermost enclosing
@@ -4944,7 +5046,12 @@ impl Writer<'_, '_, '_> {
         if n.kind() == DeclKind::ParmVar {
             return Ok(());
         }
-        if self.local(d) {
+        if self.lazy_skip(d) {
+            // WP-1350: written with its closure type or local class when
+            // something carried names it (`lambdas.rs`).
+            return Ok(());
+        }
+        if self.local(d) && !self.in_lazy_write(d) {
             return self.local_in_order(d);
         }
         if n.kind() == DeclKind::TranslationUnit {
@@ -5005,6 +5112,7 @@ impl Writer<'_, '_, '_> {
             return Ok(());
         }
         if n.has(DeclFlags::IMPLICIT)
+            && !(self.in_lazy_write(d) && self.lazy_implicit(d))
             && !matches!(
                 n.kind(),
                 DeclKind::UsingShadow
@@ -5112,13 +5220,18 @@ impl Writer<'_, '_, '_> {
             let outer_partial = h.lexical != NONE
                 && n.kind() == DeclKind::CXXRecord
                 && (self.s.ast.partial_spec_info(d).is_some() || self.outer_explicit_spec(d));
+            // A lazy tag (WP-1350) is no member of the class or function
+            // it is declared in.
+            let tag = self.bs.lam.writing.last() == Some(&d);
             if class_ctx
+                && !tag
                 && st.open.is_empty()
                 && (h.lexical == NONE || (h.prev == NONE && !outer_partial))
             {
                 return Err("a class member outside its class definition");
             }
             if h.ctx != NONE
+                && !tag
                 && !matches!(
                     self.img.decls[h.ctx as usize].payload,
                     Payload::Namespace | Payload::Export | Payload::Record { .. }
@@ -5382,6 +5495,7 @@ impl Sema<'_, '_> {
             patinit::pattern_init_locs(&img, &mut offs);
             defcmp::defaulted_cmp_locs(&img, &mut offs);
             latedef::late_head_locs(&img, &mut offs);
+            lambdas::lambda_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -5701,6 +5815,12 @@ impl Sema<'_, '_> {
                         || classtempl::explicit_of(img, i as u32).is_some()
                     {
                         self.image_class_spec(img, &mut tys, &ids, main, i as u32, h, tag)
+                    } else if def
+                        .as_ref()
+                        .is_some_and(|df| df.bits & DefinitionBits::LAMBDA.bits() != 0)
+                    {
+                        // WP-1350: a closure type (lambdas.rs).
+                        self.image_closure(h, r.flags & DEP != 0)
                     } else {
                         self.builder().record(h, tag, prev)
                     };
@@ -5943,6 +6063,9 @@ impl Sema<'_, '_> {
             let last = QRef { ty: BUILTINS + 1 + n as u32, quals: 0 };
             let _ = self.image_ty(img, &mut tys, &ids, last);
         }
+        // WP-1350: the lambdas' captures, before the bodies that name
+        // them (lambdas.rs).
+        self.image_lambdas(img, &ids, &params_all, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
@@ -6008,6 +6131,7 @@ impl Sema<'_, '_> {
         for (f, s) in fbodies {
             let _ = self.builder().set_body(f, built.stmt(s));
         }
+        self.image_lambda_bodies(img, &ids);
         // A virtual destructor defined in the module: the `operator
         // delete` its deleting destructor calls ([class.dtor]/16), as
         // sema finds it at the definition (WP-1120).
@@ -6042,6 +6166,7 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        self.image_spec_defaults(img, &ids, main);
         self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
         self.image_mark_specs(img, &ids, main);
@@ -6410,6 +6535,13 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 self.ast.types.atomic(q)
             }
+            TyRec::TypedefAs(d, q) => {
+                let q = qt(self, *q);
+                match ids.get(*d as usize) {
+                    Some(&x) => QualType::unqual(self.ast.types.typedef_type(x, q)),
+                    None => QualType::ERROR,
+                }
+            }
             TyRec::Subst { repl, assoc, index, pack } => {
                 let r = qt(self, *repl);
                 let a = ids.get(*assoc as usize).copied().unwrap_or(self.ast.tu);
@@ -6673,6 +6805,7 @@ mod tests {
             fexpl: varspec::FnExplDecls::default(),
             fsuses: fnspec::FnSpecUses::default(),
             dedup: dedup::Dedup::default(),
+            lambdas: lambdas::Lambdas::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
