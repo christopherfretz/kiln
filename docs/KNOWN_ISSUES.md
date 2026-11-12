@@ -71,13 +71,6 @@ current figure. What is not done yet:
   - `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`,
     `-Wfortify-source` and `-Warray-bounds` on a constant out-of-range
     index are not emitted, in C and C++.
-- **Rejected, where clang accepts:**
-  - More than the declared number of array initializers
-    (`int a[2] = { 1, 2, 3 };`) is the error "excess elements in array
-    initializer", where clang warns ([WP-1318](BACKLOG.md)).
-- **Accepted, where clang rejects** ([WP-1318](BACKLOG.md)):
-  `extern "C"` in a C file, `&` of a `?:` whose operands are `*p` with
-  `p` a `void *`, and `sizeof(+a)` with `a` an array.
 - **C++ syntax in a C file** (references, `template`, `namespace`,
   `::`, `class`, lambdas) is rejected, but with the C++ parser's errors
   and recovery, not clang's (`tests/c/cxx-only/cxx-syntax-rejected.c`).
