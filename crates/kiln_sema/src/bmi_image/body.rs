@@ -54,10 +54,44 @@ pub(super) const NOT_CONST: u32 = u32::MAX - 1;
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(super) enum ConstRec {
-    Int { ty: QRef, signed: bool, width: u32, words: Vec<u64> },
-    Bool { ty: QRef, value: bool },
-    Float { ty: QRef, kind: u8, bits: u128 },
-    Null { ty: QRef, kind: u8 },
+    Int {
+        ty: QRef,
+        signed: bool,
+        width: u32,
+        words: Vec<u64>,
+    },
+    Bool {
+        ty: QRef,
+        value: bool,
+    },
+    Float {
+        ty: QRef,
+        kind: u8,
+        bits: u128,
+    },
+    Null {
+        ty: QRef,
+        kind: u8,
+    },
+    /// WP-1343: a non-null pointer or reference ([`super::aggconsts`]).
+    Ptr {
+        ty: QRef,
+        base: super::aggconsts::PtrRec,
+        offset: u64,
+        designated: Option<QRef>,
+        past: bool,
+    },
+    /// WP-1343: a class, array or union value: its bytes, its
+    /// pointer-like subobjects (offset, earlier constant), its padding
+    /// (offset, length) and its active union members (offset, field
+    /// record).
+    Agg {
+        ty: QRef,
+        bytes: Vec<u8>,
+        relocs: Vec<(u32, u32)>,
+        padding: Vec<(u32, u32)>,
+        unions: Vec<(u32, u32)>,
+    },
 }
 
 impl ConstRec {
@@ -66,7 +100,9 @@ impl ConstRec {
             ConstRec::Int { ty, .. }
             | ConstRec::Bool { ty, .. }
             | ConstRec::Float { ty, .. }
-            | ConstRec::Null { ty, .. } => *ty,
+            | ConstRec::Null { ty, .. }
+            | ConstRec::Ptr { ty, .. }
+            | ConstRec::Agg { ty, .. } => *ty,
         }
     }
 }
@@ -141,8 +177,22 @@ const COLD_NAMING: u16 = 1024;
 /// names): an [`F::DL`] of [`Dc::Lookup`] as long as the name's, only on
 /// `UnresolvedLookupExpr`.
 const COLD_FOUND: u16 = 2048;
+/// A member access's name as written (the `member_extra` of a
+/// `MemberExpr`, WP-1343: `p->Base::f`, `x.template get<0>`, the using
+/// shadow found): an [`F::Nns`], an [`F::OD`] of [`Dc::Found`] and an
+/// [`F::TA`], the fields of [`Side::DeclRef`].
+const COLD_MEMBER: u16 = 4096;
+/// An array type trait's dimension operand and value (`array_trait`,
+/// WP-1343: `__array_rank(T)`, `__array_extent(T, I)`): an [`F::OE`]
+/// and the value's low and high words, only on `ArrayTypeTraitExpr`.
+const COLD_ARRAY: u16 = 8192;
+/// The parameter pack of the `sizeof...` an integer literal was
+/// substituted from (the templates' `size_of_pack_origin`, WP-1343; it
+/// mangles as `sZ`): an [`F::D`] of [`Dc::Pack`], only on
+/// `IntegerLiteral`.
+const COLD_PACK: u16 = 16384;
 /// Every annotation bit.
-const COLD_ALL: u16 = 4095;
+const COLD_ALL: u16 = 32767;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -314,7 +364,8 @@ fn side_fields(s: Side) -> &'static [F] {
     match s {
         Side::Arms => &[E, E],
         Side::CompoundAssign => &[E, Qt, Qt],
-        Side::InitList => &[OE, Loc],
+        // WP-1343: the union member a braced list initializes.
+        Side::InitList => &[OE, Loc, OD(Dc::Field)],
         // WP-1320: and the explicit template arguments (`declval<T>()`).
         Side::DeclRef => &[Nns, OD(Dc::Found), F::TA],
         Side::If => &[OS, OD(Dc::Var), OE, OS, OS],
@@ -328,7 +379,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 62] = {
+pub(super) const EXPR_KINDS: [ExprKind; 69] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -410,11 +461,25 @@ pub(super) const EXPR_KINDS: [ExprKind; 62] = {
         X::ParenListExpr,
         X::CXXPseudoDestructorExpr,
         X::CXXNewExpr,
+        // WP-1343: a comparison rewritten to `==` / `<=>` (its semantic
+        // form and the operands as written), `delete`, `typeid`,
+        // `dynamic_cast`.
+        X::CXXRewrittenBinaryOperator,
+        X::CXXDeleteExpr,
+        X::CXXTypeidExpr,
+        X::CXXDynamicCastExpr,
+        // `__builtin_bit_cast`, a cast; a GNU `__atomic_*` / `__c11_*`
+        // operation (its operands, the operation in `aux`).
+        X::BuiltinBitCastExpr,
+        X::AtomicExpr,
+        // `__array_rank` / `__array_extent` (the dimension and value are
+        // [`COLD_ARRAY`]).
+        X::ArrayTypeTraitExpr,
     ]
 };
 
 /// The statement kinds the image carries (append only).
-pub(super) const STMT_KINDS: [StmtKind; 18] = {
+pub(super) const STMT_KINDS: [StmtKind; 20] = {
     use StmtKind as K;
     [
         K::CompoundStmt,
@@ -435,6 +500,9 @@ pub(super) const STMT_KINDS: [StmtKind; 18] = {
         K::LabelStmt,
         K::GotoStmt,
         K::AttributedStmt,
+        // WP-1343: a try block and its handlers ([except.pre]).
+        K::CXXTryStmt,
+        K::CXXCatchStmt,
     ]
 };
 
@@ -459,8 +527,12 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::CompoundAssignOperator => [f(F::E), Sd(Side::CompoundAssign)],
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],
         X::ParenExpr => [f(F::E), f(F::Loc)],
-        X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
-        X::CXXUnresolvedConstructExpr | X::ParenListExpr => [f(F::EL), Z],
+        X::CallExpr
+        | X::CXXOperatorCallExpr
+        | X::CXXMemberCallExpr
+        | X::CXXRewrittenBinaryOperator => [f(F::E), f(F::EL)],
+        X::CXXDeleteExpr => [f(F::E), f(F::OD(Dc::Value))],
+        X::CXXUnresolvedConstructExpr | X::ParenListExpr | X::AtomicExpr => [f(F::EL), Z],
         X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
         X::DependentScopeDeclRefExpr => [f(F::Nns), f(F::Name)],
         // `b` is the selected association's expression, NONE while the
@@ -472,12 +544,16 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         | X::CXXFunctionalCastExpr
         | X::CXXStaticCastExpr
         | X::CXXConstCastExpr
-        | X::CXXReinterpretCastExpr => [f(F::E), f(F::Path)],
+        | X::CXXReinterpretCastExpr
+        | X::CXXDynamicCastExpr
+        | X::BuiltinBitCastExpr => [f(F::E), f(F::Path)],
+        X::ArrayTypeTraitExpr => [f(F::Qt), Z],
         X::InitListExpr => [f(F::EL), Sd(Side::InitList)],
-        X::UnaryExprOrTypeTraitExpr if flag4 => [f(F::Qt), Z],
+        X::UnaryExprOrTypeTraitExpr | X::CXXTypeidExpr if flag4 => [f(F::Qt), Z],
         X::UnaryOperator
         | X::ExprWithCleanups
         | X::UnaryExprOrTypeTraitExpr
+        | X::CXXTypeidExpr
         | X::PackExpansionExpr => [f(F::E), Z],
         X::TypeTraitExpr => [f(F::QL), f(F::Bool)],
         X::CXXNoexceptExpr => [f(F::E), f(F::Bool)],
@@ -519,9 +595,10 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::PredefinedExpr => usize::from(aux) < kiln_ast::expr::PredefinedKind::ALL.len(),
         X::SourceLocExpr => usize::from(aux) < kiln_ast::expr::SourceLocKind::ALL.len(),
         X::UnaryOperator => UnaryOp::from_u8(aux).is_some(),
-        X::BinaryOperator | X::CompoundAssignOperator | X::CXXFoldExpr => {
-            BinaryOp::from_u8(aux).is_some()
-        }
+        X::BinaryOperator
+        | X::CompoundAssignOperator
+        | X::CXXFoldExpr
+        | X::CXXRewrittenBinaryOperator => BinaryOp::from_u8(aux).is_some(),
         X::ChooseExpr => aux <= 2,
         X::CXXOperatorCallExpr => OverloadedOperator::from_u8(aux).is_some(),
         X::ImplicitCastExpr
@@ -529,18 +606,30 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         | X::CXXFunctionalCastExpr
         | X::CXXStaticCastExpr
         | X::CXXConstCastExpr
-        | X::CXXReinterpretCastExpr => CastKind::from_u8(aux).is_some(),
+        | X::CXXReinterpretCastExpr
+        | X::CXXDynamicCastExpr
+        | X::BuiltinBitCastExpr => CastKind::from_u8(aux).is_some(),
+        X::AtomicExpr => kiln_ast::decl::builtin::atomic::form(u32::from(aux)).is_some(),
+        X::ArrayTypeTraitExpr => TypeTrait::all()
+            .iter()
+            .any(|&t| t as u8 == aux && matches!(t, TypeTrait::ArrayRank | TypeTrait::ArrayExtent)),
         X::UnaryExprOrTypeTraitExpr => TraitKind::from_u8(aux).is_some(),
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
         // The constant's result kind; `->` and the `template` keyword
         // ([temp.names]/3, WP-1284).
-        X::ConstantExpr | X::CXXDependentScopeMemberExpr | X::CXXPseudoDestructorExpr => aux <= 3,
+        // A delete-expression's: sized and aligned deallocation.
+        X::ConstantExpr
+        | X::CXXDependentScopeMemberExpr
+        | X::CXXPseudoDestructorExpr
+        | X::CXXDeleteExpr => aux <= 3,
         X::CXXNewExpr => NewInitStyle::from_u8(aux).is_some(),
         X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
         X::CXXThisExpr
         | X::ExprWithCleanups
         | X::CXXUnresolvedConstructExpr
-        | X::UnresolvedLookupExpr => aux <= 1,
+        | X::UnresolvedLookupExpr
+        // A typeid's: a potentially-evaluated operand.
+        | X::CXXTypeidExpr => aux <= 1,
         _ => aux == 0,
     }
 }
@@ -564,6 +653,9 @@ fn stmt_shape(k: StmtKind) -> [Slot; 2] {
         K::LabelStmt => [f(F::D(Dc::Label)), f(F::S)],
         K::GotoStmt => [f(F::D(Dc::Label)), Z],
         K::AttributedStmt => [f(F::AL), f(F::S)],
+        K::CXXTryStmt => [f(F::S), f(F::SL)],
+        // The exception declaration's variable (none for `catch (...)`).
+        K::CXXCatchStmt => [f(F::OD(Dc::Var)), f(F::S)],
         _ => [Z, Z],
     }
 }
@@ -602,6 +694,13 @@ fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
         (COLD_SRCLOC, F::Bool),
         (COLD_NAMING, F::OD(Dc::Ctx)),
         (COLD_FOUND, F::DL(Dc::Lookup)),
+        (COLD_MEMBER, F::Nns),
+        (COLD_MEMBER, F::OD(Dc::Found)),
+        (COLD_MEMBER, F::TA),
+        (COLD_ARRAY, F::OE),
+        (COLD_ARRAY, F::Raw),
+        (COLD_ARRAY, F::Raw),
+        (COLD_PACK, F::D(Dc::Pack)),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -692,6 +791,7 @@ fn encode_const(w: &mut Wr, c: &ConstRec) {
             w.q(*ty);
             w.u8(*kind);
         }
+        ConstRec::Ptr { .. } | ConstRec::Agg { .. } => super::aggconsts::encode(w, c),
     }
 }
 
@@ -818,6 +918,9 @@ pub(super) fn decode_bodies(r: &mut Rd<'_>) -> Res<Bodies> {
                 }
                 ConstRec::Null { ty, kind }
             }
+            super::aggconsts::TAG_PTR | super::aggconsts::TAG_AGG => {
+                super::aggconsts::decode(r, tag, ty)?
+            }
             _ => return bad("unknown constant kind"),
         });
     }
@@ -878,6 +981,60 @@ pub(super) fn is_local(img: &Image, d: &DeclRec) -> bool {
             .is_some_and(|c| matches!(c.payload, Payload::Function { .. }))
 }
 
+/// Whether local record `d` (index `i`) of the using family is sound
+/// (WP-1343): a using-declaration's qualifier names earlier records; a
+/// shadow's target is an earlier namespace-scope declaration of its name
+/// (or a shadow of one); a directive nominates an earlier namespace's
+/// first declaration.
+pub(super) fn local_using_ok(img: &Image, i: usize, d: &DeclRec) -> bool {
+    let before = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
+    // A local's name is a `pnames` entry, a namespace-scope one's a
+    // `names` entry.
+    let same_name = |d: &DeclRec, t: &DeclRec| {
+        img.pnames
+            .get(d.name as usize)
+            .is_some_and(|n| img.names.get(t.name as usize).is_some_and(|m| m == n))
+    };
+    match &d.payload {
+        Payload::Using { steps } => d.name != NONE && super::steps_ok(img, steps, i),
+        Payload::Shadow { target } => before(*target).is_some_and(|t| {
+            t.flags & DEP == 0
+                && !is_local(img, t)
+                && same_name(d, t)
+                && matches!(
+                    t.payload,
+                    Payload::Function { kind: 0, .. }
+                        | Payload::Var { .. }
+                        | Payload::Enum { .. }
+                        | Payload::Enumerator { .. }
+                        | Payload::Typedef { .. }
+                        | Payload::Record { .. }
+                        | Payload::Template { .. }
+                        | Payload::Shadow { .. }
+                )
+        }),
+        Payload::UsingDir { ns } => {
+            d.name == NONE
+                && before(*ns)
+                    .is_some_and(|n| matches!(n.payload, Payload::Namespace) && n.prev == NONE)
+        }
+        Payload::NsAlias { target } => {
+            d.name != NONE
+                && before(*target).is_some_and(|t| {
+                    !is_local(img, t)
+                        && matches!(t.payload, Payload::Namespace | Payload::NsAlias { .. })
+                })
+        }
+        // The enumeration's name, as at namespace scope.
+        Payload::UsingEnum { e } => before(*e).is_some_and(|t| {
+            !is_local(img, t)
+                && same_name(d, t)
+                && matches!(t.payload, Payload::Enum { def: Some(_), .. })
+        }),
+        _ => false,
+    }
+}
+
 /// The number of parameters in the image.
 pub(super) fn param_count(img: &Image) -> usize {
     img.decls
@@ -914,6 +1071,7 @@ fn shadow_end(img: &Image, w: u32) -> Option<u32> {
 }
 
 /// Whether declaration word `w` names something of class `dc`.
+#[allow(clippy::too_many_lines)] // one arm per declaration class
 pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == LEX_TU {
         return dc == Dc::Ctx;
@@ -969,6 +1127,8 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                     | Payload::Enumerator { .. }
                     | Payload::Implicit { .. }
                     | Payload::Nttp { .. }
+                    // A local structured binding (WP-1343).
+                    | Payload::Binding { .. }
             )
         }
         Dc::Member => {
@@ -1000,6 +1160,14 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                     | Payload::Function { kind: 0, .. }
                     | Payload::Assert { .. }
                     | Payload::Typedef { .. }
+                    // WP-1343: a block-scope using-declaration or
+                    // using-directive.
+                    | Payload::Using { .. }
+                    | Payload::Shadow { .. }
+                    | Payload::UsingDir { .. }
+                    | Payload::UsingEnum { .. }
+                    | Payload::NsAlias { .. }
+                    | Payload::Binding { .. }
             ) && is_local(img, d)
         }
         Dc::Label => matches!(d.payload, Payload::Label),
@@ -1068,6 +1236,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     return bad("bad default template argument");
                 }
             }
+            Payload::Binding { expr, .. } => {
+                if *expr != NONE && *expr as usize >= ne {
+                    return bad("bad binding expression");
+                }
+            }
             Payload::Var { init, eval, .. } => {
                 if *init != NONE && *init as usize >= ne {
                     return bad("bad variable initializer");
@@ -1098,13 +1271,15 @@ pub(super) fn validate_section(
     if texpr && (ne == 0 || ns != 0) {
         return bad("bad expression section");
     }
+    // Since WP-1343 a section may name a function or requires-expression
+    // parameter (its record bound is its function's, or every record's).
     let dok = |w: u32, dc: Dc| {
-        (!texpr
-            || ((w == LEX_TU || w & PARAM == 0) && !matches!(dc, Dc::Local | Dc::Label | Dc::Let)))
-            && dc_ok(img, nparams, w, dc)
+        (!texpr || !matches!(dc, Dc::Local | Dc::Label | Dc::Let)) && dc_ok(img, nparams, w, dc)
     };
-    for c in &b.consts {
-        if !qref_ok(c.ty()) {
+    for (k, c) in b.consts.iter().enumerate() {
+        if !qref_ok(c.ty())
+            || !super::aggconsts::validate(img, nparams, &b.consts, k, texpr, qref_ok)
+        {
             return bad("bad constant type");
         }
     }
@@ -1247,6 +1422,9 @@ pub(super) fn validate_section(
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
             || (e.cold & (COLD_NAMING | COLD_FOUND) != 0 && k != ExprKind::UnresolvedLookupExpr)
             || (e.cold & COLD_FOUND != 0 && e.cold & COLD_NAMING == 0)
+            || (e.cold & COLD_MEMBER != 0 && k != ExprKind::MemberExpr)
+            || (e.cold & COLD_ARRAY != 0 && k != ExprKind::ArrayTypeTraitExpr)
+            || (e.cold & COLD_PACK != 0 && k != ExprKind::IntegerLiteral)
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
             return bad("bad expression bits");
@@ -1303,18 +1481,54 @@ pub(super) fn body_locs(img: &Image, out: &mut Vec<u32>) {
 pub(super) fn section_decl_bound(b: &Bodies) -> usize {
     let rec = |w: u32| if w == NONE || w == LEX_TU || w & PARAM != 0 { 0 } else { w as usize + 1 };
     let mut hi = 0usize;
+    section_decl_words(b, &mut |w| hi = hi.max(rec(w)));
+    hi
+}
+
+/// The highest function parameter and requires-expression parameter a
+/// section names (WP-1343), if any.
+pub(super) fn section_max_params(b: &Bodies) -> (Option<u32>, Option<u32>) {
+    let (mut hi, mut req) = (None, None);
+    section_decl_words(b, &mut |w| {
+        if w == NONE || w == LEX_TU || w & PARAM == 0 {
+        } else if w & super::requires::REQP == 0 {
+            hi = hi.max(Some(w & !PARAM));
+        } else {
+            req = req.max(Some(w & !(PARAM | super::requires::REQP)));
+        }
+    });
+    (hi, req)
+}
+
+/// The function record of each parameter of the image, in parameter
+/// order (WP-1343: a section naming a parameter is built once its
+/// function's parameters are, at that function's record).
+pub(super) fn param_owners(img: &Image) -> Vec<u32> {
+    let mut v = Vec::new();
+    for (i, d) in img.decls.iter().enumerate() {
+        if let Payload::Function { params, .. } = &d.payload {
+            v.extend(std::iter::repeat_n(i as u32, params.len()));
+        }
+    }
+    v
+}
+
+/// Every declaration word a validated section's expressions hold.
+fn section_decl_words(b: &Bodies, out: &mut dyn FnMut(u32)) {
     for e in &b.exprs {
         let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
         for (f, w) in tokens(&layout(expr_shape(k, e.bits), e.cold), &e.words).unwrap_or_default() {
             match f {
-                F::D(_) | F::OD(_) => hi = hi.max(rec(w[0])),
-                F::DL(_) => hi = w[1..].iter().fold(hi, |h, &x| h.max(rec(x))),
-                F::Path => hi = w[1..].chunks(2).fold(hi, |h, p| h.max(rec(p[0]))),
+                F::D(_) | F::OD(_) => out(w[0]),
+                F::DL(_) => w[1..].iter().for_each(|&x| out(x)),
+                F::Path => w[1..].chunks(2).for_each(|p| out(p[0])),
                 F::Nns => {
                     let mut p = 1;
                     while let Some(&k) = w.get(p) {
-                        if matches!(k, 1 | 3) {
-                            hi = hi.max(w.get(p + 1).map_or(0, |&x| rec(x)));
+                        if matches!(k, 1 | 3)
+                            && let Some(&x) = w.get(p + 1)
+                        {
+                            out(x);
                         }
                         p += [1, 2, 4, 2, 2].get(k as usize).copied().unwrap_or(w.len());
                     }
@@ -1323,7 +1537,6 @@ pub(super) fn section_decl_bound(b: &Bodies) -> usize {
             }
         }
     }
-    hi
 }
 
 /// Every main-file offset one body section holds.
@@ -1365,6 +1578,8 @@ pub(super) enum Root {
     Body(u32, StmtId),
     /// Variable record, initializer.
     Init(u32, ExprId),
+    /// Structured binding record, binding expression (WP-1343).
+    Binding(u32, ExprId),
     /// Global parameter index, default argument.
     Default(u32, ExprId),
     /// Field record, bit-field width.
@@ -1532,10 +1747,7 @@ impl Writer<'_, '_, '_> {
             }
             (Side::InitList, Some(e), _) => {
                 let InitListExtra { array_filler, union_field, rbrace } = *ex.init_list(e);
-                if union_field.is_some() {
-                    return Err("a union initializer");
-                }
-                vec![Fv::E(array_filler), Fv::Loc(rbrace)]
+                vec![Fv::E(array_filler), Fv::Loc(rbrace), Fv::D(union_field, Dc::Field)]
             }
             (Side::DeclRef, Some(e), _) => match (raw, ex.decl_ref_extra(e)) {
                 (0, _) | (_, None) => {
@@ -1676,6 +1888,24 @@ impl Writer<'_, '_, '_> {
                 v.push(Fv::Found(e));
             }
         }
+        if ast.exprs.get(e).kind() == ExprKind::MemberExpr
+            && let Some(&x) = c.member_extra.get(e)
+        {
+            cold |= COLD_MEMBER;
+            v.extend([
+                Fv::Nns(x.qualifier),
+                Fv::D(x.found_decl, Dc::Found),
+                Fv::TA(x.template_args),
+            ]);
+        }
+        if let Some(&x) = c.array_trait.get(e) {
+            cold |= COLD_ARRAY;
+            v.extend([Fv::E(x.dim), Fv::Raw(x.value as u32), Fv::Raw((x.value >> 32) as u32)]);
+        }
+        if let Some(&p) = t.size_of_pack_origin.get(e) {
+            cold |= COLD_PACK;
+            v.push(Fv::D(Some(p), Dc::Pack));
+        }
         cold
     }
 
@@ -1716,10 +1946,10 @@ impl Writer<'_, '_, '_> {
                 }
                 let c = &ast.exprs.cold;
                 let t = &ast.templates;
-                if c.member_extra.contains(e)
+                if (c.member_extra.contains(e) && k != ExprKind::MemberExpr)
                     || c.designators.contains(e)
                     || c.syntactic_list.contains(e)
-                    || c.array_trait.contains(e)
+                    || (c.array_trait.contains(e) && k != ExprKind::ArrayTypeTraitExpr)
                     // A builtin call's own values, and a default argument
                     // or member initializer use's, are computed again
                     // (WP-1310).
@@ -1733,7 +1963,7 @@ impl Writer<'_, '_, '_> {
                     || c.union_field.contains(e)
                     || c.offsetof_pattern.contains(e)
                     || c.splice_args.contains(e)
-                    || t.size_of_pack_origin.contains(e)
+                    || (t.size_of_pack_origin.contains(e) && k != ExprKind::IntegerLiteral)
                     || t.pseudo_dtor_name.contains(e)
                     || t.pseudo_dtor_first.contains(e)
                 {
@@ -1900,7 +2130,7 @@ impl Writer<'_, '_, '_> {
             }),
             Fv::Cv(c) => out.push(match c {
                 None => NONE,
-                Some(c) => self.cnst(c)?.ok_or("a constant the image does not carry")?,
+                Some(c) => self.cnst_full(c)?.ok_or("a constant the image does not carry")?,
             }),
             Fv::Str(s) => out.push(self.string(s)),
             Fv::Name(n) => {
@@ -1994,19 +2224,20 @@ impl Writer<'_, '_, '_> {
         }
         let bodies = std::mem::take(&mut self.img.bodies);
         let bs = &mut self.bs;
+        // The parameters stay visible (WP-1343): a section may name those
+        // numbered so far, which the importer creates before the type of
+        // their function.
         let saved = (
             std::mem::take(&mut bs.emap),
             std::mem::take(&mut bs.smap),
             std::mem::take(&mut bs.cmap),
             std::mem::take(&mut bs.strmap),
-            std::mem::take(&mut bs.params),
-            std::mem::take(&mut bs.param_pos),
         );
         bs.texpr += 1;
         let r = self.walk(Node::E(e));
         let bs = &mut self.bs;
         bs.texpr -= 1;
-        (bs.emap, bs.smap, bs.cmap, bs.strmap, bs.params, bs.param_pos) = saved;
+        (bs.emap, bs.smap, bs.cmap, bs.strmap) = saved;
         let b = std::mem::replace(&mut self.img.bodies, bodies);
         let i = r?;
         if !b.stmts.is_empty() || i as usize + 1 != b.exprs.len() {
@@ -2182,6 +2413,20 @@ impl Writer<'_, '_, '_> {
         Ok(Some(i))
     }
 
+    /// [`Self::cnst`], or a pointer or aggregate constant (WP-1343,
+    /// [`super::aggconsts`]): a body's, whose record may name
+    /// declarations; a variable's value stays recomputed instead.
+    pub(super) fn cnst_full(&mut self, c: ConstValueId) -> W<Option<u32>> {
+        if let Some(i) = self.cnst(c)? {
+            return Ok(Some(i));
+        }
+        let Some(rec) = self.agg_const(c)? else { return Ok(None) };
+        let i = self.img.bodies.consts.len() as u32;
+        self.img.bodies.consts.push(rec);
+        self.bs.cmap.insert(c, i);
+        Ok(Some(i))
+    }
+
     /// The declaration word of `d` as class `dc`; a local declaration
     /// gets its record on first use.
     pub(super) fn dref(&mut self, d: DeclId, dc: Dc) -> W<u32> {
@@ -2191,6 +2436,10 @@ impl Writer<'_, '_, '_> {
             PARAM | p
         } else if d == self.s.ast.tu {
             LEX_TU
+        } else if let Some(&p) = self.bs.req.params.get(&d) {
+            // A requires-expression parameter its body declared (WP-1343:
+            // a type in a requirement may name it).
+            PARAM | super::requires::REQP | p
         } else if self.bs.texpr > 0 && (self.req_param_body(d).is_some() || self.local(d)) {
             return Err(TEXPR_LOCAL);
         } else if let Some(body) = self.req_param_body(d) {
@@ -2223,6 +2472,7 @@ impl Writer<'_, '_, '_> {
     /// A record for local variable or label `d`, or (in a precompiled
     /// header) block-scope function or `extern` declaration `d`
     /// ([`Writer::local_extern_rec`]).
+    #[allow(clippy::too_many_lines)] // one branch per local kind
     pub(super) fn local_rec(&mut self, d: DeclId) -> W<u32> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
@@ -2237,10 +2487,25 @@ impl Writer<'_, '_, '_> {
                     | DeclKind::StaticAssert
                     | DeclKind::Typedef
                     | DeclKind::TypeAlias
+                    | DeclKind::Using
+                    | DeclKind::UsingShadow
+                    | DeclKind::UsingDirective
+                    | DeclKind::UsingEnum
+                    | DeclKind::NamespaceAlias
+                    | DeclKind::Binding
             )
         {
             return Err(local_reason(kind));
         }
+        if kind == DeclKind::Binding {
+            // Its decomposition variable first, which records every
+            // binding of it, this one too (WP-1343).
+            let v = ast.decls.binding_decomp(d).ok_or("a malformed structured binding")?;
+            self.dref(v, Dc::Var)?;
+            return self.recs.get(&d).copied().ok_or("a malformed structured binding");
+        }
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
         let ctx = n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(OUTSIDE)?;
         if !matches!(self.img.decls[ctx as usize].payload, Payload::Function { .. }) {
             return Err("a local declaration in a nested scope the image does not carry");
@@ -2324,6 +2589,71 @@ impl Writer<'_, '_, '_> {
         });
         self.recs.insert(d, i);
         self.attr_commit(i, attrs);
+        if kind == DeclKind::Var
+            && let Some(l) = self.s.ast.decls.decomp_bindings(d)
+        {
+            let bs: Vec<DeclId> = self.s.ast.lists.iter::<DeclId>(l).collect();
+            for b in bs {
+                self.binding_rec(b, i)?;
+            }
+        }
+        Ok(i)
+    }
+
+    /// The record of structured binding `b` of decomposition variable
+    /// record `v` (WP-1343): after its holding variable's.
+    fn binding_rec(&mut self, b: DeclId, v: u32) -> W<u32> {
+        // A pack (P1061R10) or one of its elements (implicit).
+        if self.s.binding_packs.contains(&b)
+            || self.s.binding_pack_elems.contains_key(&b)
+            || self.s.ast.decls.get(b).has(DeclFlags::IMPLICIT)
+        {
+            return Err("a structured binding pack");
+        }
+        let holding = match self.s.ast.decls.binding_var(b) {
+            Some(h) => self.dref(h, Dc::Var)?,
+            None => NONE,
+        };
+        let ty = match self.s.ast.decls.get(b).ty() {
+            Some(t) => Some(self.qref(t)?),
+            None => None,
+        };
+        let ast = &self.s.ast;
+        let n = ast.decls.get(b);
+        let allowed = LOCAL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits();
+        if n.flags().bits() & !allowed != 0 {
+            return Err("a local declaration with flags the image does not carry");
+        }
+        if n.has(DeclFlags::HAS_LEXICAL_CTX) && ast.decls.lexical_ctx(b) != n.ctx() {
+            return Err("a local declaration with a lexical context");
+        }
+        if n.misc().name_independent() {
+            return Err("a local extern or placeholder declaration");
+        }
+        let s = self.ident(n.name()).ok_or("a local declaration not named by an identifier")?;
+        let name = Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s);
+        let loc = self.loc(n.loc())?;
+        let flags = n.flags().bits() & (LOCAL_FLAGS | DEP);
+        let o = ast.modules.owner(b);
+        let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
+        let ctx = self.img.decls[v as usize].ctx;
+        let expr = ast.decls.binding_expr(b);
+        let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
+        self.img.decls.push(DeclRec {
+            flags,
+            owner,
+            access: 0,
+            name,
+            ctx,
+            lexical: NONE,
+            loc,
+            prev: NONE,
+            payload: Payload::Binding { ty, decomp: v, holding, expr: NONE },
+        });
+        self.recs.insert(b, i);
+        if let Some(e) = expr {
+            self.bs.roots.push(Root::Binding(i, e));
+        }
         Ok(i)
     }
 
@@ -2349,7 +2679,17 @@ impl Writer<'_, '_, '_> {
             DeclKind::Function => self.function(d, i),
             // A block-scope `static_assert` or alias (WP-1320: `declval`'s
             // and `__call_is_nt`'s in <type_traits>), as at namespace scope.
-            DeclKind::StaticAssert | DeclKind::Typedef | DeclKind::TypeAlias => self.record(d, i),
+            // WP-1343: a block-scope using-declaration (its shadows are
+            // recorded where a name refers to them) or using-directive,
+            // as at namespace scope (S6).
+            DeclKind::StaticAssert
+            | DeclKind::Typedef
+            | DeclKind::TypeAlias
+            | DeclKind::Using
+            | DeclKind::UsingShadow
+            | DeclKind::UsingDirective
+            | DeclKind::UsingEnum
+            | DeclKind::NamespaceAlias => self.record(d, i),
             _ => self.var_payload(d, i),
         }
     }
@@ -2374,6 +2714,7 @@ impl Writer<'_, '_, '_> {
             let rec = match r {
                 Root::Body(rec, _)
                 | Root::Init(rec, _)
+                | Root::Binding(rec, _)
                 | Root::FieldWidth(rec, _)
                 | Root::FieldInit(rec, _)
                 | Root::CtorInit(rec, _, _)
@@ -2416,6 +2757,13 @@ impl Writer<'_, '_, '_> {
                     let i = self.walk(Node::E(e))?;
                     if let Payload::Var { init, .. } = &mut self.img.decls[rec as usize].payload {
                         *init = i;
+                    }
+                }
+                Root::Binding(rec, e) => {
+                    let i = self.walk(Node::E(e))?;
+                    if let Payload::Binding { expr, .. } = &mut self.img.decls[rec as usize].payload
+                    {
+                        *expr = i;
                     }
                 }
                 Root::Default(p, e) => {
@@ -2543,6 +2891,12 @@ fn local_reason(k: DeclKind) -> &'static str {
             "a local using-declaration or using-directive"
         }
         DeclKind::Binding => "a local structured binding",
+        // A default argument use of a function template
+        // specialization's parameter (`f<char>()`): the specialization's
+        // parameters have no record (WP-1343 remaining).
+        DeclKind::ParmVar => {
+            "a local declaration the image does not carry (a specialization's parameter)"
+        }
         _ => "a local declaration the image does not carry",
     }
 }
@@ -2566,6 +2920,9 @@ fn expr_reason(k: ExprKind) -> &'static str {
         }
         X::PackIndexingExpr => "a template expression (pack indexing)",
         X::CXXExpansionSelectExpr => "a template expression (an expansion statement's element)",
+        X::DesignatedInitExpr => {
+            "an expression the image does not carry yet (a designated initializer)"
+        }
         _ => "an expression the image does not carry yet",
     }
 }
@@ -2629,7 +2986,7 @@ impl Sema<'_, '_> {
         // Values of every token, as the AST slot would hold them.
         let mut vals: Vec<u32> = Vec::new();
         for (i, e) in b.exprs.iter().enumerate() {
-            self.image_expr_rec(img, tys, ids, params, &built, &strs, main, e, i, &mut vals);
+            self.image_expr_rec(img, tys, ids, &[], &built, &strs, main, e, i, &mut vals);
         }
         for (i, s) in b.stmts.iter().enumerate() {
             let k = STMT_KINDS[usize::from(s.kind)];
@@ -2670,10 +3027,18 @@ impl Sema<'_, '_> {
                 ConstRec::Null { kind, .. } => {
                     null_kind(*kind).map(|kind| Scalar::Null { ty, kind })
                 }
+                ConstRec::Ptr { .. } | ConstRec::Agg { .. } => None,
             };
             // A value the pools reject (checked, never trusted) becomes 0.
             let id = match s.map(|s| self.ast.consts.push_scalar(s)) {
                 Some(Ok(id)) => id,
+                None if matches!(c, ConstRec::Ptr { .. } | ConstRec::Agg { .. }) => {
+                    let mut q = |s: &mut Self, t: QRef| s.image_ty(img, tys, ids, t);
+                    match self.image_agg_const(c, ty, &consts, ids, &mut q) {
+                        Some(id) => id,
+                        None => self.int_const(ty, 0),
+                    }
+                }
                 _ => self.int_const(ty, 0),
             };
             consts.push(id);
@@ -2695,7 +3060,7 @@ impl Sema<'_, '_> {
     }
 
     /// Builds expression record `e`, the `i`-th of its section.
-    #[allow(clippy::too_many_arguments)] // the importer's tables
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // the importer's tables, one read per cold annotation
     fn image_expr_rec(
         &mut self,
         img: &Image,
@@ -2797,11 +3162,32 @@ impl Sema<'_, '_> {
             };
             self.ovl.ule_found.insert(id, crate::overload::UleFound { found, naming });
         }
+        if e.cold & COLD_MEMBER != 0 {
+            let qualifier = NnsId::from_raw(next());
+            let found_decl = DeclId::from_raw(next());
+            let template_args = kiln_ast::ArgListId::from_raw(next());
+            if qualifier.is_some() || found_decl.is_some() || template_args.is_some() {
+                let x = DeclRefExtra { qualifier, template_args, found_decl };
+                let _ = self.ast.exprs.cold.member_extra.insert(id, x);
+            }
+        }
+        if e.cold & COLD_ARRAY != 0 {
+            let dim = ExprId::from_raw(next());
+            let value = u64::from(next()) | (u64::from(next()) << 32);
+            let x = kiln_ast::expr::ArrayTraitExtra { dim, value };
+            let _ = self.ast.exprs.cold.array_trait.insert(id, x);
+        }
+        if e.cold & COLD_PACK != 0
+            && let Some(p) = DeclId::from_raw(next())
+        {
+            let _ = self.ast.templates.size_of_pack_origin.insert(id, p);
+        }
     }
 
     /// Builds expression section `b` of a type or a template argument
-    /// (WP-1300, [`super::exprs`]): no statements, parameters or
-    /// requires-expressions; returns its root, the last expression.
+    /// (WP-1300, [`super::exprs`]): no statements or requires-expressions;
+    /// a parameter is one built so far (WP-1343); returns its root, the
+    /// last expression.
     pub(super) fn image_texpr_section(
         &mut self,
         img: &Image,
@@ -2846,9 +3232,12 @@ impl Sema<'_, '_> {
             let d = if w == LEX_TU {
                 Some(s.ast.tu)
             } else if w & PARAM != 0 && w & super::requires::REQP != 0 {
-                built.reqs.params.get((w & !(PARAM | super::requires::REQP)) as usize).copied()
+                let g = (w & !(PARAM | super::requires::REQP)) as usize;
+                built.reqs.params.get(g).or_else(|| s.image_texprs.req_params.get(g)).copied()
             } else if w & PARAM != 0 {
-                params.get((w & !PARAM) as usize).copied()
+                // A section's parameter (WP-1343): one built so far.
+                let g = (w & !PARAM) as usize;
+                params.get(g).or_else(|| s.image_texprs.params.get(g)).copied()
             } else {
                 ids.get(w as usize).copied()
             };
@@ -3067,7 +3456,7 @@ impl Sema<'_, '_> {
                             }),
                             Side::InitList => ex.push_init_list(InitListExtra {
                                 array_filler: e(v[0]),
-                                union_field: None,
+                                union_field: d(v[2]),
                                 rbrace: Loc::from_raw(v[1]),
                             }),
                             Side::DeclRef => {

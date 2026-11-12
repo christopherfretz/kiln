@@ -968,3 +968,97 @@ template" (66 / 36 lcx, 10 / 38 gnu; `system_error:167`,
 `ranges:8828`), the pack-argument specialization at `type_traits:1878`,
 "a partial specialization argument the image does not carry"
 (`aligned_union.h:32`).
+
+## WP-1343: PCH image wave 7b, function bodies (2026-11-12)
+
+Debug build of the WP-1343 branch alone (base main `bdf052a17`; merged
+with main `85283b496`, then with WP-1342's `5cb758519` below,
+before IMAGE_VERSION 26 in the last commit). The
+families are the 106 headers `bench/pch/lcx.h` includes (libc++) and the
+109 headers `bench/pch/gnu.h` pulls in (libstdc++), each built alone as
+a PCH with `-fkiln-pch-image -fkiln-bmi-image-census=all -v`, plus the
+two bench headers whole.
+
+```
+lcx.h, before: 26762 top-level declarations, 23832 carried, 2930 not
+lcx.h, after:  26762 top-level declarations, 24035 carried, 2727 not
+gnu.h, before: 26396 top-level declarations, 23756 carried, 2640 not
+gnu.h, after:  26396 top-level declarations, 24000 carried, 2396 not
+```
+
++203 carried in `lcx.h`, +244 in `gnu.h`. Headers through the image:
+28 of 106 (libc++) and 31 of 109 (libstdc++), before and after. No
+header flipped: every replayed header still has a sibling bucket's
+reason (WP-1342, WP-1344, WP-1345). `lcx.h` stops at "a constrained
+template" and `gnu.h` at "a dependent using-declaration", before and
+after. First refusals of the replayed headers after: libc++, a
+constrained template 45, a specialization of a template outside the
+image 9, a template 7, a type declared outside the image 6, 2 or fewer
+for the rest ("an expression in a type naming a parameter or local
+declaration" was first in 6 before, none now); libstdc++, a member
+template or a template in a template 58, a dependent using-declaration
+10, a type declared outside the image 6, a function declared through a
+typedef 4 (unchanged).
+
+This WP's reasons, as declarations in the bench header / headers they
+appear in, before and after ("-": absent; examples under
+`/usr/include/c++/v1/` and `.../include/c++/14/`):
+
+| reason | lcx before | lcx after | gnu before | gnu after | example |
+|---|---:|---:|---:|---:|---|
+| an expression in a type naming a parameter or local declaration | 126 / 68 | 1 / 4 | 73 / 61 | 1 / 3 | deque:631:25, bits/std_function.h:716:11 |
+| an expression the image does not carry yet | 15 / 66 | - | 16 / 71 | - | __type_traits/extent.h:25:29 |
+| ... (a designated initializer) | - | 0 / 2 | - | 1 / 1 | __thread/formatter.h:71:35, generator:267:2 |
+| an expression annotation the image does not carry | 8 / 58 | - | 28 / 38 | - | __iterator/iterator_traits.h:451:8 |
+| a type the image does not carry | 5 / 58 | 2 / 40 | - | - | __memory/unique_ptr.h:220:19, __algorithm/simd_utils.h:93:7 |
+| a local using-declaration or using-directive | 35 / 54 | - | 45 / 62 | - | bit:201:5 |
+| a local class or enumeration | 6 / 49 | 6 / 49 | 10 / 55 | 12 / 65 | __functional/hash.h:244:32, compare:870:2 |
+| a lambda expression | 39 / 43 | 37 / 46 | 29 / 68 | 31 / 68 | optional:565:9, compare:575:7 |
+| a new or delete expression | 9 / 39 | - | 17 / 27 | - | __memory/shared_ptr.h:384:8 |
+| a try block | 54 / 37 | - | 73 / 53 | - | bits/stl_tempbuf.h:266:9 |
+| a typeid or dynamic_cast expression | 9 / 32 | - | 9 / 35 | - | any:177:35 |
+| a union initializer | 2 / 7 | - | 7 / 17 | - | ext/concurrence.h:119:23 |
+| a local structured binding | 1 / 2 | - | 1 / 23 | - | format:307:5 |
+| a local declaration the image does not carry | - | - | 6 / 65 | - | compare:701:2 |
+| ... (a specialization's parameter) | - | - | - | 13 / 7 | bits/specfun.h:265:3 |
+| a constant the image does not carry | - | - | 6 / 65 | - | compare:357:3 |
+
+A count that rose (lambdas, local classes) is a declaration whose first
+reason used to be another of this list (a try block, a local using) and
+is now the lambda or local class further on in the same body. Left in
+this bucket: lambda expressions and local classes and enumerations
+(closure and local class records, whose context is a function, and the
+lambda's captures); a designated initializer; a default argument used
+on a call of a function template specialization (`f<char>()` names the
+specialization's parameter, which has no record: `bits/fs_path.h:1170`,
+`bits/specfun.h:265`); a dependent vector type
+(`__algorithm/simd_utils.h:93`); the type at `__memory/unique_ptr.h:220`
+(a default template argument's type, possibly WP-1342's); a
+requires-expression in a type naming a parameter
+(`bits/std_function.h:716`, `deque:631`), which stays refused.
+
+### Merged with WP-1342
+
+The same census on the tree with WP-1342 (`5cb758519`) merged in:
+
+```
+lcx.h: 26762 top-level declarations, 24042 carried, 2720 not
+gnu.h: 26396 top-level declarations, 24553 carried, 1843 not
+```
+
+Headers through the image: 29 of 106 (libc++) and 31 of 109
+(libstdc++). `lcx.h` now stops at "a template argument the image does
+not carry" and `gnu.h` still at "a dependent using-declaration". This
+WP's reasons (declarations / headers): libc++, a lambda expression 39 /
+46, a local class or enumeration 6 / 49, a type the image does not
+carry 3 / 40 (`__memory/unique_ptr.h:220` and `:422`, still refused
+after WP-1342, and `__algorithm/simd_utils.h:93`), an expression in a
+type naming a parameter 1 / 4, a designated initializer 0 / 2;
+libstdc++, a lambda expression 33 / 68, a local class or enumeration 12
+/ 65, a local declaration the image does not carry 1 / 47 (new: an
+attributed block-scope `extern` function in a class template member,
+`bits/memory_resource.h:133`, reached now that WP-1342 carries the
+template), a specialization's parameter 13 / 7, an expression in a type
+naming a parameter 1 / 3, a designated initializer 1 / 1. "A template
+expression (a name found through a using-declaration)" is gone with
+WP-1342.

@@ -941,3 +941,143 @@ fn damaged_image_is_an_error() {
     assert_eq!(o.code, 1, "{}", o.stderr);
     assert!(o.stderr.contains("malformed or corrupted precompiled file"), "{}", o.stderr);
 }
+
+/// WP-1343: `header` is carried whole by the image (in C++26), and
+/// `tu` compiles the same through it as through the replay, and
+/// `check` agrees.
+fn carried_1343(name: &str, header: &str, tu: &str) {
+    let d = scratch(name);
+    std::fs::write(d.join("a.h"), header).unwrap();
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    let std = "-std=c++26";
+    let o = ok(&d, &[std, "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let o = ok(
+        &d,
+        &[std, "-v", "-fkiln-pch-image=load", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"],
+    );
+    assert!(o.stderr.contains("': declaration image ("), "{}", o.stderr);
+    let ir = ["-S", "-emit-llvm", "-O0", "a.cpp", "-o", "-"];
+    let replay = ok(&d, &[&[std, "-include-pch", "a.pch"][..], &ir].concat());
+    let image =
+        ok(&d, &[&[std, "-fkiln-pch-image=load", "-include-pch", "a.pch"][..], &ir].concat());
+    assert_eq!(replay.stderr, image.stderr);
+    assert_eq!(replay.stdout, image.stdout);
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = [std, "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+}
+
+/// WP-1343: rewritten comparisons, delete-expressions, `typeid`,
+/// `dynamic_cast`, `__builtin_bit_cast`, atomic builtins, array type
+/// traits and qualified member names in bodies are carried.
+#[test]
+fn body_expression_forms_are_carried() {
+    let header = "\
+namespace std { class type_info { public: virtual ~type_info(); const char* name() const noexcept; }; }
+struct P { int a; constexpr bool operator==(const P&) const = default; };
+constexpr bool ne(P x, P y) { return x != y; }
+struct B { virtual ~B() {} int b = 1; };
+struct D : B { int d = 2; };
+inline int dc(B* p) { D* q = dynamic_cast<D*>(p); return q ? q->d : -1; }
+inline bool same(B& r) { return &typeid(r) == &typeid(D) && &typeid(int) != &typeid(long); }
+inline void del(int* p, int* a) { delete p; delete[] a; }
+inline float bc(unsigned u) { return __builtin_bit_cast(float, u); }
+inline int at(int* p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST) + __atomic_fetch_add(p, 1, __ATOMIC_RELAXED); }
+inline int ext() { return int(__array_extent(int[3][4], 1)) + int(__array_rank(int[2][2])); }
+struct Base { int m() const { return 5; } };
+struct Der : Base { int m() const { return Base::m() + this->Base::m(); } };
+";
+    let tu = "int main() { D d; int v = 4; del(new int(1), new int[2]);
+  return ne(P{1}, P{2}) && dc(&d) == 2 && same(d) && bc(0x3f800000u) == 1.0f && at(&v) == 8
+    && ext() == 6 && Der{}.m() == 10 ? 0 : 1; }\n";
+    carried_1343("wp1343e", header, tu);
+}
+
+/// WP-1343: try blocks, and block-scope using-declarations,
+/// using-directives, using-enum-declarations and namespace aliases.
+#[test]
+fn try_blocks_and_local_usings_are_carried() {
+    let header = "\
+namespace lib { inline int f(int x) { return x + 1; } inline namespace v1 { inline int g() { return 7; } } }
+inline int lu() { using lib::f; using namespace lib; return f(1) + g(); }
+inline int tr(int x) { try { if (x) throw x; return 0; } catch (int e) { return e; } catch (...) { return -2; } }
+enum class Col { red, green };
+inline int ue(Col c) { using enum Col; namespace L = lib; return c == green ? L::f(0) : 0; }
+";
+    let tu = "int main() { return lu() == 9 && tr(3) == 3 && ue(Col::green) == 1 ? 0 : 1; }\n";
+    carried_1343("wp1343t", header, tu);
+}
+
+/// WP-1343: block-scope structured bindings (of a class and by
+/// reference to an array, and in a template's instantiation) and union
+/// initializers.
+#[test]
+fn structured_bindings_and_union_inits_are_carried() {
+    let header = "\
+union U { int i; float f; };
+inline int un() { U u{5}; return u.i; }
+struct Pt { int x, y; };
+inline int sb() { Pt p{3, 4}; auto [a, b] = p; int arr[2] = {5, 6}; auto& [c, d] = arr; return a * b + c + d; }
+template <class T> int tsb(T t) { auto [u, v] = t; return u - v; }
+inline int usb() { return tsb(Pt{9, 2}); }
+";
+    let tu = "int main() { auto [p, q] = Pt{1, 2}; return un() == 5 && sb() == 23 && usb() == 7 && p + q == 3 ? 0 : 1; }\n";
+    carried_1343("wp1343b", header, tu);
+}
+
+/// WP-1343: pointer and class constants in bodies (an immediate
+/// invocation's result), `_Atomic` types and a constrained placeholder.
+#[test]
+fn constants_atomic_and_placeholder_types_are_carried() {
+    let header = "\
+struct Pt { int x, y; };
+consteval Pt mk() { return {1, 2}; }
+inline int ag() { return mk().x + mk().y; }
+inline constexpr int gv = 4;
+consteval const int* gp() { return &gv; }
+inline int pc() { return *gp(); }
+inline int atm() { _Atomic(int) a = 3; return a; }
+template <class T> concept Any = true;
+inline Any auto cr() { return 3; }
+inline decltype(auto) dr(int& r) { return (r); }
+";
+    let tu = "int main() { int k = 1; dr(k) = 2; return ag() == 3 && pc() == 4 && atm() == 3 && cr() == 3 && k == 2 ? 0 : 1; }\n";
+    carried_1343("wp1343c", header, tu);
+}
+
+/// WP-1343 remaining: a default argument used on a call of a function
+/// template specialization names the specialization's parameter, which
+/// has no record (`bits/fs_path.h`'s `string<char>()`); the header is
+/// replayed, with the reason.
+#[test]
+fn specialization_default_argument_is_refused() {
+    let d = scratch("wp1343p");
+    let header = "\
+template <class T> T sq(T x, T k = T(2)) { return x * k; }
+inline int use() { return sq<int>(3); }
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("a specialization's parameter"), "{note}");
+}
+
+/// Reduced from `cpp.include/pch-body-forms-errors.cpp` under `--pch-diff
+/// check` (found by WP-1343, not fixed; pre-existing: the 1.1.0 release
+/// candidate reproduces it under `-fkiln-pch-image=check` with
+/// `-fsyntax-only` or `-S -emit-llvm`, at every `-std`): a header's
+/// polymorphic class with a derived class, in a unit that never names
+/// either, has the base destructor's exception specification evaluated
+/// by the replay (`'void () noexcept'`) and still unevaluated from the
+/// image. The fix resolves the implicit `noexcept` the derived class's
+/// completion needs ([except.spec]/8) while the importer builds it.
+#[test]
+#[ignore = "pre-existing (1.1.0): image leaves a base destructor's noexcept unevaluated"]
+fn virtual_dtor_noexcept_matches_replay() {
+    let d = scratch("wp1343v");
+    produce(&d, "a", "struct B { virtual ~B() {} };\nstruct D : B { int d = 2; };\n");
+    std::fs::write(d.join("a.cpp"), "int main() { return 0; }\n").unwrap();
+    let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    assert_eq!(ok(&d, &check).stderr, "");
+}
