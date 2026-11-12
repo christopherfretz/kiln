@@ -1295,6 +1295,7 @@ Pre-existing bug found (not image-related, xfail
 importer's explicit instantiation definition of a function template
 specialization that the imported module declared `extern template` is
 not emitted (kiln_codegen module.rs `is_imported_named_unit_decl`).
+Fixed by WP-1354 (spec/modules.md §7 "Explicit instantiations").
 
 What remains, by headers freed (merged tree):
 

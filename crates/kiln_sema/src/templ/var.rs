@@ -737,6 +737,35 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// A static data member's explicit instantiation after its explicit
+    /// instantiation definition: [temp.spec.general]/5 (at most one
+    /// definition) and [temp.explicit] (no declaration after the
+    /// definition; clang `CheckSpecializationInstantiationRedecl`).
+    fn diag_explicit_inst_after_definition(
+        &mut self,
+        d: &Declarator,
+        declaration: bool,
+        prev: Loc,
+        name_loc: Loc,
+    ) {
+        let (id, note) = if declaration {
+            (
+                DiagId::sema_explicit_inst_declaration_after_definition,
+                DiagId::note_explicit_instantiation_definition_here,
+            )
+        } else {
+            (DiagId::sema_explicit_inst_duplicate, DiagId::note_previous_explicit_instantiation)
+        };
+        let note = self.diag(note, prev);
+        let mut e = self.diag(id, name_loc);
+        if !declaration {
+            let name = d.name.map_or(String::new(), |(n, _)| crate::decl::sym_str(self, n));
+            e = e.arg(name);
+        }
+        let e = e.with_note(note);
+        self.emit(e);
+    }
+
     /// `[extern] template T v<args>;` or `[extern] template T
     /// C<args>::m;` ([temp.explicit]/3): an explicit instantiation of a
     /// variable template specialization or of a static data member of a
@@ -788,6 +817,7 @@ impl Sema<'_, '_> {
             // the bound its initializer gives ([dcl.array]/3; clang
             // `InstantiateVariableDefinition` first; WP-907).
             if effect && !declaration {
+                self.module_note_explicit_inst_def(v);
                 self.instantiate_var_spec_init(v, name_loc);
             }
             if !self.check_explicit_var_inst_type(sid.template, v, declared) || !effect {
@@ -836,7 +866,14 @@ impl Sema<'_, '_> {
         let m = self.ast.first(m);
         if let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) {
             match info.kind {
-                SpecKind::ExplicitSpecialization | SpecKind::ExplicitInstantiationDefinition => {
+                SpecKind::ExplicitSpecialization => return,
+                SpecKind::ExplicitInstantiationDefinition => {
+                    self.diag_explicit_inst_after_definition(
+                        d,
+                        declaration,
+                        info.point_of_instantiation,
+                        name_loc,
+                    );
                     return;
                 }
                 SpecKind::ExplicitInstantiationDeclaration if declaration => return,
@@ -846,6 +883,9 @@ impl Sema<'_, '_> {
                 x.kind = kind;
                 x.point_of_instantiation = name_loc;
             });
+            if !declaration {
+                self.module_note_explicit_inst_def(m);
+            }
         }
         if declaration {
             return;

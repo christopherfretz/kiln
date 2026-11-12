@@ -1043,6 +1043,14 @@ impl Ast {
     /// `None` when implicit, an explicit specialization, or excluded from
     /// explicit instantiation (itself or a member class on the way).
     pub fn governing_explicit_inst_kind(&self, d: DeclId) -> Option<SpecKind> {
+        self.governing_explicit_inst(d).map(|(_, k)| k)
+    }
+
+    /// [`Self::governing_explicit_inst_kind`] with the declaration whose
+    /// kind it is: `d`'s first declaration, or the enclosing class
+    /// specialization (or member class) whose explicit instantiation
+    /// covers it.
+    pub fn governing_explicit_inst(&self, d: DeclId) -> Option<(DeclId, SpecKind)> {
         let first = self.first(d);
         let explicit = |k: SpecKind| match k {
             SpecKind::ExplicitInstantiationDeclaration
@@ -1050,10 +1058,11 @@ impl Ast {
             SpecKind::ExplicitSpecialization => Some(None),
             _ => None,
         };
+        let with = |x: DeclId, k: Option<SpecKind>| k.map(|k| (x, k));
         match self.templ_link(first).get() {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
                 if let Some(k) = self.templates.member_spec(i).and_then(|m| explicit(m.kind)) {
-                    return k;
+                    return with(first, k);
                 }
                 if self.excluded_from_explicit_instantiation(first) {
                     return None;
@@ -1076,17 +1085,17 @@ impl Ast {
                     // member template of an explicitly instantiated class
                     // is not instantiated by it ([temp.explicit]/10; WP-812).
                     if let Some((_, s)) = self.spec_info(c) {
-                        return explicit(s.kind).flatten();
+                        return with(self.first(c), explicit(s.kind).flatten());
                     }
                     if let Some(k) = self.member_spec_info(c).and_then(|(_, m)| explicit(m.kind)) {
-                        return k;
+                        return with(self.first(c), k);
                     }
                     ctx = self.decls.get(c).ctx();
                 }
                 None
             }
             Some((TemplLinkKind::Specialization, _)) => {
-                self.spec_info(first).and_then(|(_, s)| explicit(s.kind)).flatten()
+                with(first, self.spec_info(first).and_then(|(_, s)| explicit(s.kind)).flatten())
             }
             _ => None,
         }

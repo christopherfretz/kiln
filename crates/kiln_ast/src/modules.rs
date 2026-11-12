@@ -3,6 +3,8 @@
 //! by sema, read by lookup, the mangler and codegen. A BMI (part B) would
 //! serialise this table with the AST.
 
+use kiln_source::fx::FxHashMap;
+
 use crate::ids::DeclId;
 
 /// The kind of a translation unit or imported unit ([module.unit]).
@@ -79,6 +81,13 @@ pub struct ModuleTable {
     /// `(new declaration, previous declaration)` redeclaration links made
     /// while active, for sema's [basic.link]/11 check (drained by it).
     pub links: Vec<(DeclId, DeclId)>,
+    /// The unit whose text holds the explicit instantiation definition of
+    /// each specialization or member (its first declaration) explicitly
+    /// instantiated while active ([temp.explicit]/10; spec/modules.md §7
+    /// "Explicit instantiations"). Only this compilation's own runs are
+    /// listed: a definition a module file carries in its records is the
+    /// module's.
+    explicit_defs: FxHashMap<DeclId, u16>,
 }
 
 impl ModuleTable {
@@ -125,13 +134,33 @@ impl ModuleTable {
     /// purview or its global module fragment: a non-inline definition
     /// belongs to that unit's object file (spec/modules.md §7).
     pub fn is_imported_named_unit_decl(&self, d: DeclId) -> bool {
-        let o = self.owner(d);
-        o.unit != 0 && self.units.get(usize::from(o.unit)).is_some_and(|u| u.kind.is_named())
+        self.is_imported_named_unit(self.owner(d).unit)
+    }
+
+    /// Records that unit `unit` holds the explicit instantiation
+    /// definition of `first` (no-op while inactive).
+    pub fn note_explicit_inst_def(&mut self, first: DeclId, unit: u16) {
+        if self.active {
+            self.explicit_defs.insert(first, unit);
+        }
+    }
+
+    /// The unit holding the explicit instantiation definition of `first`,
+    /// as recorded by [`Self::note_explicit_inst_def`].
+    pub fn explicit_inst_def_unit(&self, first: DeclId) -> Option<u16> {
+        self.explicit_defs.get(&first).copied()
+    }
+
+    /// True if unit `unit` is an imported named-module unit (its object
+    /// file, not this one, defines what it owns; spec/modules.md §7).
+    pub fn is_imported_named_unit(&self, unit: u16) -> bool {
+        unit != 0 && self.units.get(usize::from(unit)).is_some_and(|u| u.kind.is_named())
     }
 
     /// Heap bytes.
     pub fn heap_bytes(&self) -> usize {
         self.points.capacity() * size_of::<(u32, Owner)>()
+            + self.explicit_defs.capacity() * size_of::<(DeclId, u16)>()
             + self.units.iter().map(|u| u.merged.capacity() * 8).sum::<usize>()
     }
 }

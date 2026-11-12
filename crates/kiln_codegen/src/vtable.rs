@@ -503,6 +503,26 @@ impl Cg<'_> {
             }
         }
         for c in std::mem::take(&mut self.explicit_vtables) {
+            // An imported unit's explicit instantiation definition: clang
+            // defines the vtable from the module file's used-vtable
+            // records, after the translation unit's deferred definitions
+            // ([`Self::emit_imported_explicit_vtables`]).
+            if self.explicit_def_imported(c) == Some(true) {
+                self.imported_explicit_vtables.push(c);
+                continue;
+            }
+            self.emit_vtable_def(c)?;
+        }
+        Ok(())
+    }
+
+    /// The vtables (`weak_odr`, as in the module unit) of the classes an
+    /// imported named-module unit explicitly instantiates by a
+    /// definition, after every deferred definition, so that the virtual
+    /// functions they declare follow clang 22's order (spec/modules.md §7
+    /// "Explicit instantiations").
+    pub(crate) fn emit_imported_explicit_vtables(&mut self) -> R<()> {
+        for c in std::mem::take(&mut self.imported_explicit_vtables) {
             self.emit_vtable_def(c)?;
         }
         Ok(())

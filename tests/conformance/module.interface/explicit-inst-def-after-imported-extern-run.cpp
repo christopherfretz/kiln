@@ -5,7 +5,6 @@
 //@ expect: run
 //@ std: c++26
 //@ module: xidef=Inputs/extern-inst-then-def.cppm
-//@ xfail(kiln): WP-1352 follow-up, codegen skips the definition because the specialization is owned by the imported unit (is_imported_named_unit_decl, kiln_codegen module.rs)
 import xidef;
 
 template double twice<double>(double);
