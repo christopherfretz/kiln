@@ -1309,6 +1309,248 @@ fn virtual_dtor_noexcept_matches_replay() {
     assert_eq!(ok(&d, &check).stderr, "");
 }
 
+/// WP-1352 (spec/modules.md §11.11 "Forms carried by WP-1352"): an
+/// explicit specialization declared, then defined after other
+/// declarations, with a base naming a template declared in between, an
+/// out-of-line member, a friend and a member named by a later
+/// declaration (`char_traits<char8_t>` in libc++'s `<__fwd/string.h>`,
+/// [temp.expl.spec]/7).
+#[test]
+fn declared_then_defined_explicit_specializations_are_carried() {
+    let header = "\
+namespace n {
+template <class T> struct tr;
+template <> struct tr<char>;
+template <> struct tr<short>;
+template <class C, class I, I E> struct base {
+  using int_type = I;
+  static constexpr int_type eof() { return E; }
+  static int size() { return sizeof(C); }
+};
+}
+namespace n {
+template <> struct tr<char> : base<char, int, -1> {
+  static int twice(int);
+  friend int peek(tr) { return 7; }
+};
+inline int tr<char>::twice(int x) { return 2 * x; }
+template <> class tr<short> { public: int v = 4; };
+inline int use() { return tr<char>::twice(tr<char>::size()) + tr<short>().v; }
+}
+";
+    let tu = "\
+int main() { return n::use() == 6 && n::tr<char>::eof() == -1 && peek(n::tr<char>()) == 7 ? 0 : 1; }
+";
+    image_carries("wp1352a", header, tu);
+}
+
+/// WP-1352: a partial specialization declared, then defined with a
+/// template-head of its own (`tuple_element<I, tuple<T...>>` in
+/// libstdc++'s `<bits/stl_pair.h>`, `hash<bitset<N>>` in libc++'s
+/// `<bitset>`; [temp.spec.partial]/1): the definition's members name its
+/// own parameters, and a redefinition in the unit points at it.
+#[test]
+fn redeclared_partial_specializations_are_carried() {
+    let header = "\
+typedef unsigned long sz;
+template <class... T> struct tup;
+template <sz I, class T> struct elem;
+template <sz I, class... Ts> struct elem<I, tup<Ts...>>;
+template <class T> struct hsh;
+template <sz N> struct bits;
+template <sz N> struct hsh<bits<N>>;
+template <class A, class B> struct pr {};
+template <class A, class B> struct elem<0, pr<A, B>> { using type = A; };
+template <class... Ts> struct tup { static constexpr int n = sizeof...(Ts); };
+template <sz J, class... Us> struct elem<J, tup<Us...>> { using type = int; static constexpr sz k = J; };
+template <sz N> struct bits { int v = N; };
+template <sz M> struct hsh<bits<M>> { int operator()(bits<M> b) const { return b.v + M; } };
+";
+    let tu = "\
+int main() {
+  elem<1, tup<char, long>>::type x = 2;
+  return x + hsh<bits<3>>()(bits<3>()) - 8 + (int)elem<4, tup<>>::k - 4;
+}
+";
+    image_carries("wp1352b", header, tu);
+    let d = scratch("wp1352b-redef");
+    let note = produce(&d, "a", header);
+    assert!(note.contains("declaration image"), "{note}");
+    let tu = "template <sz M> struct hsh<bits<M>> {};\nint main() {}\n";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "a.cpp");
+    assert!(o.stderr.contains("a.h:13:24: note: previous definition is here"), "{}", o.stderr);
+}
+
+/// WP-1352: implicit specializations of variable templates (`e_v<double>`
+/// in libstdc++'s `<numbers>`, [temp.inst]/7): reference records written
+/// where the unit made them, so the importer makes them in the same
+/// place; their initializers come with the bodies.
+#[test]
+fn variable_template_specializations_are_carried() {
+    let header = "\
+namespace n {
+template <class T> using fp = T;
+template <class T> inline constexpr T e_v = fp<T>(2.5);
+template <> inline constexpr float e_v<float> = 1.5f;
+template <class T> constexpr T sq_v = e_v<T> * e_v<T>;
+inline constexpr double e = e_v<double>;
+inline constexpr long sq = sq_v<long>;
+static_assert(e_v<int> == 2);
+template <class T> T g_v = T(3);
+template <class T> constexpr T twice() { return e_v<T> * 2; }
+inline int use() { return g_v<int> + int(e) + int(twice<double>()); }
+}
+";
+    let tu = "\
+static_assert(n::e == 2.5 && n::sq == 4 && n::e_v<float> == 1.5f && n::e_v<long> == 2);
+int main() { return n::use() == 10 && n::sq_v<double> == 6.25 ? 0 : 1; }
+";
+    image_carries("wp1352c", header, tu);
+}
+
+/// WP-1352: a template named as an explicit argument in an expression a
+/// type holds (`decltype(__sfinae_test_impl<_Templ, _Args...>(0))` in
+/// libc++'s `<__type_traits/is_valid_expansion.h>`): the type is built
+/// after the template's record. The losing candidate's specialization is
+/// made where replay makes it too, from its reference record.
+#[test]
+fn template_arguments_in_type_expressions_are_carried() {
+    let header = "\
+struct yes { static constexpr bool value = true; };
+struct no { static constexpr bool value = false; };
+template <template <class...> class T, class... A, class = T<A...>> yes probe(int) { return {}; }
+template <template <class...> class, class...> no probe(...) { return {}; }
+template <template <class...> class T, class... A>
+using valid = decltype(probe<T, A...>(0));
+template <class X> using ptr = X *;
+inline bool use() { return valid<ptr, int>::value && !valid<ptr, int, int>::value; }
+inline yes (*addr())(int) { return &probe<ptr, int>; }
+";
+    let tu = "\
+template <class X> using cst = const X;
+int main() { return use() && addr() && valid<cst, int>::value && !valid<cst>::value ? 0 : 1; }
+";
+    image_carries("wp1352d", header, tu);
+}
+
+/// WP-1352: explicit instantiation declarations of function template
+/// specializations (`extern template ostream& __ostream_insert(...)` in
+/// libstdc++'s `<bits/ostream_insert.h>`, [temp.explicit]/11): reference
+/// records listed as such, so a use in the unit does not instantiate the
+/// definition, and an explicit specialization after one is diagnosed as
+/// after a replay.
+#[test]
+fn explicit_function_instantiation_declarations_are_carried() {
+    let header = "\
+namespace n {
+template <class C> struct os { C c; };
+template <class C> os<C> &insert(os<C> &o, const C *s, long k) { o.c = s[k]; return o; }
+extern template os<char> &insert(os<char> &, const char *, long);
+template <class T> T twice(T t) { return t + t; }
+extern template int twice<int>(int);
+inline int use() { os<char> o{}; return insert(o, \"ab\", 1).c + twice(2); }
+}
+";
+    let tu = "\
+template int n::twice<int>(int);
+template n::os<char> &n::insert(n::os<char> &, const char *, long);
+int main() { return n::use() == 'b' + 4 && n::twice(3L) == 6 ? 0 : 1; }
+";
+    image_carries("wp1352e", header, tu);
+    let d = scratch("wp1352e-redef");
+    let note = produce(&d, "a", header);
+    assert!(note.contains("declaration image"), "{note}");
+    std::fs::write(d.join("b.cpp"), "namespace n { template <> int twice<int>(int); }\n").unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
+    let want = "explicit specialization of 'twice<int>' after instantiation";
+    assert!(o.stderr.contains(want), "{}", o.stderr);
+}
+
+/// WP-1352: explicit specializations of function templates
+/// (`template <> double __do_strtod<double>(...)` in libc++'s `<locale>`,
+/// [temp.expl.spec]): the written declaration is a function record listed
+/// with its template and converted arguments; the unit's uses of the
+/// specialization are marked after the bodies. A redefinition points at
+/// the header's.
+#[test]
+fn explicit_function_specializations_are_carried() {
+    let header = "\
+namespace n {
+template <class T> T conv(const char *s, char **e);
+template <> float conv<float>(const char *s, char **e);
+template <> inline double conv<double>(const char *s, char **e) { return s[0] - '0' + 0.5; }
+template <class T> T pick(T a) { return a; }
+template <> inline int pick(int a) { return a + 1; }
+template <> constexpr long pick<long>(long a) { return a * 2; }
+inline double use() { return conv<double>(\"3\", nullptr) + pick(1) + pick(2L); }
+}
+";
+    let tu = "\
+template <> float n::conv<float>(const char *s, char **) { return 1.5f; }
+static_assert(n::pick(5L) == 10);
+int main() { return n::use() == 3.5 + 2 + 4 && n::conv<float>(\"\", nullptr) == 1.5f && n::pick('a') == 'a' ? 0 : 1; }
+";
+    image_carries("wp1352f", header, tu);
+    let d = scratch("wp1352f-redef");
+    let note = produce(&d, "a", header);
+    assert!(note.contains("declaration image"), "{note}");
+    let redef = "namespace n {\n\
+template <> inline double conv<double>(const char *, char **) { return 0; }\n}\n";
+    std::fs::write(d.join("b.cpp"), redef).unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
+    assert!(o.stderr.contains("a.h:4:27: note: previous definition is here"), "{}", o.stderr);
+}
+
+/// WP-1352: explicit instantiation declarations of single members of a
+/// class template specialization (`extern template basic_string<char>::
+/// basic_string(const basic_string &)` in libc++'s `<string>`,
+/// [temp.explicit]/3): member reference records with the directive's
+/// location, listed as such whether the header uses the member or not;
+/// a use in the unit does not instantiate the definition, and an explicit
+/// specialization after one is diagnosed at the directive.
+#[test]
+fn explicit_member_instantiation_declarations_are_carried() {
+    let header = "\
+namespace n {
+template <class T> struct S {
+  S() : v(0) {}
+  S(const S &o) : v(o.v + 1) {}
+  int get() const { return v + 1; }
+  int other() const { return v + 2; }
+  int v;
+};
+extern template S<int>::S(const S &);
+extern template int S<int>::get() const;
+extern template int S<int>::other() const;
+inline int use(const S<int> &s) { S<int> t(s); return t.get(); }
+}
+";
+    let tu = "\
+template n::S<int>::S(const n::S<int> &);
+template int n::S<int>::get() const;
+template int n::S<int>::other() const;
+int main() { n::S<int> s; return n::use(s) + s.other() == 4 ? 0 : 1; }
+";
+    image_carries("wp1352g", header, tu);
+    let d = scratch("wp1352g-spec");
+    let note = produce(&d, "a", header);
+    assert!(note.contains("declaration image"), "{note}");
+    let spec = "namespace n { template <> int S<int>::other() const { return 0; } }\n";
+    std::fs::write(d.join("b.cpp"), spec).unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
+    assert!(
+        o.stderr.contains("explicit specialization of 'other' after instantiation"),
+        "{}",
+        o.stderr
+    );
+    assert!(
+        o.stderr.contains("a.h:11:29: note: explicit instantiation first required here"),
+        "{}",
+        o.stderr
+    );
+}
+
 /// WP-1345: dependent using-declarations in class templates
 /// ([namespace.udecl]/1: `using B<T>::name;`, `using typename
 /// B<T>::type;`, an operator) are carried, and each instantiation

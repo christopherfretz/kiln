@@ -67,6 +67,18 @@ pub(super) struct ClassSpec {
     args: Vec<CArg>,
 }
 
+impl ClassSpec {
+    /// An explicit specialization's entry (WP-1352, [`super::fnspec`]).
+    pub(super) fn explicit(rec: u32, template: u32, args: Vec<CArg>) -> Self {
+        ClassSpec { rec, template, head: None, args }
+    }
+
+    /// The template's record.
+    pub(super) fn template_rec(&self) -> u32 {
+        self.template
+    }
+}
+
 /// The specialization section, ascending by record.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub(super) struct ClassSpecs {
@@ -81,6 +93,25 @@ impl ClassSpecs {
     /// Drops the entries of records from `n` on (a census rollback).
     pub(super) fn truncate(&mut self, n: u32) {
         self.specs.retain(|c| c.rec < n);
+    }
+
+    /// Lists an explicit specialization of a function template
+    /// (WP-1352, [`super::fnspec`]).
+    pub(super) fn push_fn(&mut self, c: ClassSpec) {
+        self.specs.push(c);
+    }
+
+    /// The entry of record `rec` (WP-1352, [`super::fnspec`]).
+    pub(super) fn get_fn(&self, rec: u32) -> Option<&ClassSpec> {
+        self.get(rec)
+    }
+
+    /// Lists record `rec` as an explicit specialization of `template`
+    /// with type arguments `args` (WP-1352's tests).
+    #[cfg(test)]
+    pub(super) fn push_explicit(&mut self, rec: u32, template: u32, args: &[QRef]) {
+        let args = args.iter().map(|&q| CArg::Arg(ArgRec::Type(q))).collect();
+        self.specs.push(ClassSpec { rec, template, head: None, args });
     }
 }
 
@@ -150,8 +181,10 @@ impl Writer<'_, '_, '_> {
             }
             // Declared, then defined: the definition's template-head
             // has parameters of its own, after the record.
-            if self.s.templ.partial_def_loc.contains_key(&d) {
-                return Err("a redeclared partial specialization");
+            // WP-1352: carried when its definition is a record of its own
+            // (`latedef`).
+            if let Some(why) = self.redeclared_partial_why(d) {
+                return Err(why);
             }
             // A requires-clause is carried by `constraint_roots`
             // (WP-1342).
@@ -559,11 +592,19 @@ pub(super) fn validate_class_specs(
         else {
             return bad("bad class template specialization");
         };
-        let Payload::Template { kind: tkind @ (1 | 3), params: tparams, depth, .. } = &t.payload
+        let Payload::Template { kind: tkind @ (0 | 1 | 3), params: tparams, depth, .. } =
+            &t.payload
         else {
             return bad("bad class template specialization");
         };
+        // A function template's explicit specialization (WP-1352): its
+        // converted arguments, one per parameter, no pack.
         let ok = match tkind {
+            0 => {
+                matches!(r.payload, Payload::Function { .. })
+                    && c.head.is_none()
+                    && c.args.len() == tparams.len()
+            }
             1 => matches!(r.payload, Payload::Record { .. }),
             _ => matches!(r.payload, Payload::Var { .. }),
         } && c.template < c.rec
@@ -736,7 +777,7 @@ impl Sema<'_, '_> {
     }
 
     /// The arguments of listed specialization `c`.
-    fn image_spec_args(
+    pub(super) fn image_spec_args(
         &mut self,
         img: &Image,
         tys: &mut Vec<QualType>,

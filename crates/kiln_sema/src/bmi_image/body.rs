@@ -1096,7 +1096,8 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         return matches!(d.payload, Payload::Template { kind: 0 | 3, .. })
             || dc_ok(img, nparams, w, Dc::Found);
     }
-    if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0, .. }) {
+    // A variable template is found for its specialization (WP-1352).
+    if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0 | 3, .. }) {
         return true;
     }
     // S6: a declaration found through a using-declaration's shadow (of
@@ -1353,12 +1354,8 @@ pub(super) fn validate_section(
                 // A return-type requirement's invented parameter.
                 2 => !texpr && super::requires::invented_ok(img, a[1], a[2]),
                 // A template (WP-1342).
-                3 => !texpr && super::tttp::tname_rec(img, a[1]),
-                4 => {
-                    !texpr
-                        && qref_ok(QRef { ty: a[1], quals: 0 })
-                        && super::tttp::dep_tname_ty(img, a[1])
-                }
+                3 => super::tttp::tname_rec(img, a[1]),
+                4 => qref_ok(QRef { ty: a[1], quals: 0 }) && super::tttp::dep_tname_ty(img, a[1]),
                 _ => false,
             }),
             F::RB => !texpr && (w[0] as usize) < img.reqs.recs.len(),
@@ -1550,6 +1547,9 @@ fn section_decl_words(b: &Bodies, out: &mut dyn FnMut(u32)) {
                 F::D(_) | F::OD(_) => out(w[0]),
                 F::DL(_) => w[1..].iter().for_each(|&x| out(x)),
                 F::Path => w[1..].chunks(2).for_each(|p| out(p[0])),
+                // An explicit template argument naming a template's record
+                // (WP-1352).
+                F::TA => w[1..].chunks(3).filter(|a| a[0] == 3).for_each(|a| out(a[1])),
                 F::Nns => {
                     let mut p = 1;
                     while let Some(&k) = w.get(p) {
@@ -2344,9 +2344,10 @@ impl Writer<'_, '_, '_> {
                     let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
                     out.extend([1, e, u32::from(profile.is_some())]);
                 }
-                // A template (WP-1342), not in an expression section
-                // (built before the records it names).
-                ArgView::Template(_) | ArgView::TemplateExpansion { .. } if self.bs.texpr == 0 => {
+                // A template (WP-1342); in an expression section too
+                // (WP-1352: its type is built after the record it names,
+                // [`section_decl_bound`]).
+                ArgView::Template(_) | ArgView::TemplateExpansion { .. } => {
                     match self.arg_rec(a)? {
                         super::ArgRec::Template(r, k) => out.extend([3, r, k]),
                         super::ArgRec::DepTemplate(t, k) => out.extend([4, t, k]),

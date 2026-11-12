@@ -726,7 +726,7 @@ fn kind2_declaration_image_templates() {
     .unwrap();
     let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "t.cppm", "-o", "t.pcm"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert!(o.stderr.contains("with a declaration image of 43 declarations"), "{}", o.stderr);
+    assert!(o.stderr.contains("with a declaration image of 44 declarations"), "{}", o.stderr);
     ok(&d, &["-c", "t.pcm", "-o", "t.o"]);
     blank_source(&d, "t.pcm", "blank.pcm");
 
@@ -1969,11 +1969,6 @@ fn kind2_declaration_image_fallback() {
             "an explicit instantiation of a partial specialization",
         ),
         (
-            "export module f;\nexport template <class T> struct B {};\n\
-             template <class T> struct B<T *>;\ntemplate <class T> struct B<T *> { T v; };\n",
-            "a redeclared partial specialization",
-        ),
-        (
             "export module f;\nexport template <template <class T> requires true class TT> struct W {};\n",
             "a template template parameter with a requires-clause",
         ),
@@ -1998,11 +1993,6 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport template <int N> struct F { int a : N; int b = 4; };\n\
              export inline int g() { F<3> x{}; x.a = 7; return x.a + x.b; }\n",
             "a specialization of a class template with a bit-field or a default member initializer",
-        ),
-        (
-            "export module f;\nexport template <class T> T e(T t) { return t; }\n\
-             template <> int e<int>(int t) { return t + 1; }\n",
-            "a template specialization",
         ),
         (
             "export module f;\nexport struct B { int f() { return 1; } };\n\
@@ -2364,4 +2354,42 @@ fn kind2_declaration_image_pattern_inits() {
     ] {
         assert!(errs.contains(want), "{want}: {errs}");
     }
+}
+
+/// WP-1352 (§11.11 "Forms carried by WP-1352"): an explicit
+/// specialization declared, then defined after a later template; a
+/// partial specialization declared, then defined with a template-head of
+/// its own; implicit variable template specializations. With the unit's
+/// source blanked an importer runs them, its IR is the replay's, and a
+/// redefinition points at the module's definition.
+#[test]
+fn kind2_declaration_image_wp1352_forms() {
+    let src = "\
+export module w;
+export template <class T> struct tr;
+template <> struct tr<char>;
+export template <class T, int E> struct base { static constexpr int eof() { return E; } };
+template <> struct tr<char> : base<char, -1> { static int twice(int x) { return 2 * x; } };
+export template <class T> struct hs;
+template <class T> struct hs<T *>;
+template <class U> struct hs<U *> { static constexpr int n = sizeof(U); };
+export template <class T> inline constexpr T e_v = T(2.5);
+export inline constexpr double e = e_v<double>;
+export template <class T> constexpr T sq_v = e_v<T> * e_v<T>;
+export inline constexpr long sq = sq_v<long>;
+export template <class T> T inc(T t) { return t; }
+template <> int inc<int>(int t) { return t + 1; }
+export template <class T> T dbl(T t) { return t + t; }
+";
+    let run = "\
+import w;
+#include <stdio.h>
+int main() {
+  printf(\"%d %d %d %g %ld %g %d %d %ld\\n\", tr<char>::twice(3), tr<char>::eof(), hs<int *>::n, e,
+         sq, sq_v<double>, inc(4), dbl(5), dbl(6L));
+}
+";
+    let err = "import w;\ntemplate <class U> struct hs<U *> {};\nint x = e_v<int> + nope;\n";
+    let errs = image_round_trip("image-wp1352", "w", src, run, err, "6 -1 4 2.5 4 6.25 5 10 12\n");
+    assert!(errs.contains("m.cppm:8:27: note: previous definition is here"), "{errs}");
 }

@@ -107,7 +107,15 @@ impl Writer<'_, '_, '_> {
             false
         };
         let m = (d.index() + 1..=first.index()).map(DeclId::new).find(|&x| inside(x))?;
-        (m.index() > d.index() + 1).then_some(m)
+        // Named before it was declared: what was made in between comes
+        // first in the source. A specialization declared, then defined
+        // later (`template <> struct ch<char>;`) is where its declaration
+        // is, with its definition a record of its own (WP-1352,
+        // [`super::latedef`]).
+        let next = ast.decls.get(DeclId::new(d.index() + 1)).loc();
+        let sm = self.s.diags.sm();
+        let named_first = crate::implicit_fallthrough::before_in_tu(sm, next, n.loc());
+        (m.index() > d.index() + 1 && named_first).then_some(m)
     }
 
     /// The record of implicit member `d` of specialization `class`.

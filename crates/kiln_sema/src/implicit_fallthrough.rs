@@ -505,7 +505,7 @@ impl Sema<'_, '_> {
 /// chains at their nearest common file. A location in a buffer outside
 /// the main file's include tree (the predefines, the command line)
 /// precedes everything.
-fn before_in_tu(sm: &SourceManager, a: Loc, b: Loc) -> bool {
+pub(crate) fn before_in_tu(sm: &SourceManager, a: Loc, b: Loc) -> bool {
     let chain = |l: Loc| {
         let mut v = Vec::new();
         let mut l = sm.expansion_loc(l);

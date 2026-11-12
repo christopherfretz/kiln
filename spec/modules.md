@@ -3097,6 +3097,103 @@ member. Tests: `crates/kiln_driver/tests/pch_decls.rs` and the corpus
 pairs `cpp.include/pch-decl-forms-run.cpp`,
 `module.interface/image-decl-forms-run.cpp`.
 
+**Forms carried by WP-1352.** The writer's additions are
+`bmi_image/latedef.rs`, `varspec.rs` and `fnspec.rs`, plus `spec.rs`,
+`classtempl.rs` and `body.rs`. Four side sections follow `defcmps`, in
+this order: `lheads`, `fexpl`, `fsuses` (the `cspecs` section gains
+function entries).
+
+- *Specializations declared, then defined* ([temp.expl.spec]/7,
+  [temp.spec.partial]/1). Sema has one declaration for
+  `template <> struct ch<char>;` and its later definition, so the walk
+  meets it where it was declared, before the records its definition
+  names. The listed record (`cspecs`) is then a declaration only; the
+  definition is a second `Record` record with a definition and `prev`
+  the listed record, written when the walk reaches the definition's
+  first member. The validator requires the same name, the listed record
+  without a definition, and a definition. A redeclared partial
+  specialization (`tuple_element<I, tuple<T...>>`, `hash<bitset<N>>`)
+  is the same, its definition's own template-head in `lheads`: `u32 n`,
+  then per entry `u32 rec, tloc, langle, rangle`, `u32 k`, k parameter
+  records (written just before `rec`, claimed by it). An explicit
+  specialization's definition has no entry. The reader defines the
+  specialization it made for the listed record, as the parser does.
+  A specialization a declaration named before it was declared (what
+  sema made in between comes first in the source) is WP-1345's
+  instead: visited just before its first member, no late record.
+- *Variable template specializations* ([temp.inst]/7). An implicit
+  specialization of a carried variable template (`e_v<double>`) is a
+  `Spec` record of template kind 3, never complete, its converted
+  arguments as a class template's (packs flat). The reader declares it
+  with `get_var_spec`; the initializer comes with the bodies and is
+  instantiated in `image_mark_specs`, a constant one at once. A body's
+  `DeclRefExpr` naming it names that record (`dc_ok` accepts template
+  kind 3). Still refused ("a variable template specialization"): a
+  template with partial specializations or constraints (the reader
+  would match or check them before they are in) and a placeholder
+  type.
+- *Declaration order*. Implicit variable and function template
+  specializations at namespace scope are written where the walk meets
+  them (`var_spec_at`), so the importer makes them in replay's order
+  (a namespace's member list, a template's specialization list, losing
+  overload candidates included). One the image cannot name is left to
+  its users, as before.
+- *Template arguments in type expressions*. A type expression section
+  may hold template arguments of kinds 3 and 4 (a carried template, a
+  dependent template name; `is_valid_expansion<_Templ, ...>`,
+  `tuple:2933`), each naming its record.
+- *Explicit instantiation declarations of function templates*
+  ([temp.explicit]/11, `extern template ostream& __ostream_insert(...)`).
+  The specialization is a `Spec` record of template kind 0 at its place
+  in the walk, listed in `fexpl`: `u32 n`, n ascending record numbers.
+  The reader sets its kind and point of instantiation (the record's
+  location) as `act_on_explicit_function_inst` does. An explicit
+  instantiation definition stays refused ("a template specialization:
+  an explicit instantiation definition").
+- *Explicit instantiation declarations of single members*
+  ([temp.explicit]/3, `extern template basic_string<char>::basic_string(
+  const basic_string &)`). There is no declaration for the directive:
+  the walk writes the `Member` record of every member function so
+  instantiated (used or not), its `loc` the directive's, listed in
+  `fexpl`. The reader updates the member's `MemberSpecInfo` as
+  `act_on_explicit_member_inst` does. A definition stays refused.
+- *Explicit specializations of function templates*
+  ([temp.expl.spec], `template <> double __do_strtod<double>(...)`).
+  The writer makes no record for the specialization sema made by
+  deduction; the written declaration is a `Function` record with no
+  `prev`, listed in `cspecs` as a template kind 0 entry (no head,
+  converted arguments, one per parameter, no pack). Bodies naming the
+  specialization name that record. `fsuses` keeps what the unit's uses
+  set on the specialization: `u32 n`, then per entry `u32 rec, u8
+  bits` (bit 0 `USED`, bit 1 `REFERENCED`, nonzero), ascending, rec a
+  listed function entry. The reader finds or makes the specialization
+  with `get_function_spec`, marks it explicit, builds the record as its
+  redeclaration (`function_spec_redecl`) and, after the bodies, applies
+  `fsuses`. Still refused: one declared more than once, one with a pack
+  argument, one not at namespace scope ("a template specialization:
+  ...").
+- *Substituted parameters of uncarried templates*. A
+  `SubstTemplateTypeParm` whose template has no record (a variable or
+  function template specialization's, an uncarried alias's) with an
+  unqualified replacement is written as the replacement, which is how
+  it prints (`optional:508`).
+
+Tests: `declared_then_defined_explicit_specializations_are_carried`,
+`redeclared_partial_specializations_are_carried`,
+`variable_template_specializations_are_carried`,
+`template_arguments_in_type_expressions_are_carried`,
+`explicit_function_instantiation_declarations_are_carried`,
+`explicit_function_specializations_are_carried`,
+`explicit_member_instantiation_declarations_are_carried` (kiln_driver
+`pch_decls`: census without refusals, image equals replay under
+`check`, the program runs, diagnostics after the header as after a
+replay); `kind2_declaration_image_wp1352_forms` (modules_bmi);
+`late_definitions_round_trip`, `rejects_corrupt_late_definitions`,
+`function_specializations_round_trip`,
+`rejects_corrupt_function_specializations` (kiln_sema); corpus
+`cpp.include/pch-declared-specializations-{run,errors}.cpp` and
+`module.interface/image-declared-specializations-run.cpp`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3822,7 +3919,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 28` since WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 29` since WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

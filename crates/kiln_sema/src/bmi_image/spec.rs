@@ -78,6 +78,7 @@ impl Writer<'_, '_, '_> {
         }
         if let Some(r) = ast.decls.record(d)
             && ast.definition(d) == Some(d)
+            && self.late_split(d).is_none()
         {
             qs.extend(ast.lists.get(r.bases).iter().map(|&g| ast.decls.base_spec(g).ty));
         }
@@ -201,24 +202,36 @@ impl Writer<'_, '_, '_> {
         // An explicitly instantiated class (WP-1307) is named as an
         // implicit one: the importer's explicit instantiation runs after
         // the records (`explinst.rs`).
-        let explicit_inst = class
-            && matches!(
-                si.kind,
-                SpecKind::ExplicitInstantiationDeclaration
-                    | SpecKind::ExplicitInstantiationDefinition
-            );
+        let explicit_inst = matches!(
+            si.kind,
+            SpecKind::ExplicitInstantiationDeclaration | SpecKind::ExplicitInstantiationDefinition
+        ) && (class || self.fn_explicit_inst(d, &si)?);
         // An explicit specialization named before its definition, which
         // is recorded later (WP-1345): named as the replay's use named it,
         // never instantiated.
         let deferred = class && self.deferred.contains(&d);
+        // An explicit specialization the image does not carry has its
+        // own reason (WP-1352): this is a cascade of it.
+        if si.kind == SpecKind::ExplicitSpecialization && !deferred {
+            return Err(if class {
+                "a type declared outside the image"
+            } else {
+                super::body::OUTSIDE
+            });
+        }
         if !explicit_inst
             && !deferred
             && !matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
         {
             return Err("an explicit specialization or instantiation");
         }
-        if !class && ast.decls.function(d).is_none() {
-            return Err("a variable template specialization");
+        // A variable template's (WP-1352, [`super::varspec`]).
+        let var = !class && ast.decls.var(d).is_some();
+        if !class && !var && ast.decls.function(d).is_none() {
+            return Err(super::varspec::VAR_SPEC);
+        }
+        if var && let Some(why) = self.var_spec_why(&si) {
+            return Err(why);
         }
         // Instantiated (or to be) from the primary template's own
         // pattern, or from a carried partial specialization whose
@@ -237,7 +250,7 @@ impl Writer<'_, '_, '_> {
         if !deferred && !from_partial && (si.from_args.is_some() || !from_template) {
             return Err("a specialization of a partial specialization");
         }
-        let template = self.template_rec(si.template, u8::from(class))?;
+        let template = self.template_rec(si.template, if var { 3 } else { u8::from(class) })?;
         let complete = class
             && !deferred
             && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
@@ -282,6 +295,9 @@ impl Writer<'_, '_, '_> {
         if complete {
             self.complete_specs.push((d, i));
         }
+        if explicit_inst && !class {
+            self.img.fexpl.recs.push(i);
+        }
         Ok(Some(i))
     }
 
@@ -293,6 +309,9 @@ impl Writer<'_, '_, '_> {
         let class = ast.decls.get(d).ctx().ok_or("a malformed member")?;
         // Templatable members carry a link; fields and the like sit in
         // the sparse map, under a class specialization.
+        // WP-1352: an explicit instantiation declaration of the member
+        // alone (`extern template C<int>::C(const C &);`), its directive.
+        let mut member_inst = None;
         let pattern = match ast.templ_link(d).get() {
             Some((TemplLinkKind::MemberOfSpecialization, i)) => {
                 let m = ast.templates.member_spec(i).ok_or("a malformed member")?;
@@ -305,7 +324,13 @@ impl Writer<'_, '_, '_> {
                     SpecKind::ExplicitInstantiationDeclaration
                         | SpecKind::ExplicitInstantiationDefinition
                 ) && class_kind == Some(m.kind);
-                if m.kind != SpecKind::ImplicitInstantiation && !of_explicit_inst {
+                if !of_explicit_inst {
+                    member_inst = self.member_inst_loc(d, m)?;
+                }
+                if m.kind != SpecKind::ImplicitInstantiation
+                    && !of_explicit_inst
+                    && member_inst.is_none()
+                {
                     return Err("an explicitly specialized member");
                 }
                 m.instantiated_from
@@ -349,11 +374,14 @@ impl Writer<'_, '_, '_> {
             name: NONE,
             ctx: NONE,
             lexical: NONE,
-            loc: NONE,
+            loc: member_inst.unwrap_or(NONE),
             prev: NONE,
             payload: Payload::Member { spec, pattern: pat },
         });
         self.recs.insert(d, i);
+        if member_inst.is_some() {
+            self.img.fexpl.recs.push(i);
+        }
         Ok(Some(i))
     }
 
@@ -614,7 +642,7 @@ impl Sema<'_, '_> {
                     let ty = self.image_ty(img, tys, ids, a.q());
                     v.push(self.image_targ(ids, ty, a));
                 }
-                if kind == 1 {
+                if kind == 1 || kind == 3 {
                     list.extend(v);
                 } else {
                     list.push(TemplateArg::pack(self.ast.types.arg_list(&v)));
@@ -629,6 +657,8 @@ impl Sema<'_, '_> {
         let spec = if kind == 1 {
             let locs = vec![loc; list.len()];
             self.get_class_spec(tmpl, &list, &locs, loc).ok()?
+        } else if kind == 3 {
+            self.image_var_template_spec(tmpl, &list, loc)?
         } else {
             let sugared = self.ast.types.arg_list(&list);
             let canonical = self.ast.types.canonical_args(sugared);
