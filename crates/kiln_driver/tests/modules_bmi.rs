@@ -1994,11 +1994,8 @@ fn kind2_declaration_image_fallback() {
              export inline int g() { F<3> x{}; x.a = 7; return x.a + x.b; }\n",
             "a specialization of a class template with a bit-field or a default member initializer",
         ),
-        (
-            "export module f;\nexport struct B { int f() { return 1; } };\n\
-             export struct D : B { using B::f; };\n",
-            "a using-declaration in a class",
-        ),
+        // WP-1353: `using B::f;` in a class is carried now
+        // (class_using_declarations_are_carried, pch_decls).
         (
             "export module f;\nexport struct B { B(int) {} };\nexport struct D : B { using B::B; };\n",
             "an inherited constructor or assignment operator",
@@ -2392,4 +2389,45 @@ int main() {
     let err = "import w;\ntemplate <class U> struct hs<U *> {};\nint x = e_v<int> + nope;\n";
     let errs = image_round_trip("image-wp1352", "w", src, run, err, "6 -1 4 2.5 4 6.25 5 10 12\n");
     assert!(errs.contains("m.cppm:8:27: note: previous definition is here"), "{errs}");
+}
+
+/// WP-1353, spec/modules.md §11.11 "Forms carried by WP-1353": class
+/// templates named through a qualifier in dependent types (an alias, a
+/// base class, a concept, a member) and a deprecated explicit
+/// instantiation declaration. With the unit's source blanked an importer
+/// runs them, its IR is the replay's, and a constraint built through the
+/// qualifier is still checked.
+#[test]
+fn kind2_declaration_image_wp1353_forms() {
+    let src = "\
+export module w;
+struct no { static constexpr bool value = false; };
+template <bool> struct pick;
+template <> struct pick<true> {
+  template <class R, class F, class... Rest>
+  using result = typename pick<!bool(F::value) && sizeof...(Rest) != 0>::template result<F, Rest...>;
+};
+template <> struct pick<false> { template <class R, class...> using result = R; };
+template <class... A> using any = typename pick<sizeof...(A) != 0>::template result<no, A...>;
+template <class T> struct is_ptr { static constexpr bool value = false; };
+template <class T> struct is_ptr<T *> { static constexpr bool value = true; };
+export template <class T> struct ptr_or : any<is_ptr<T>, is_ptr<T *>> {};
+export template <class T> concept ptrish = any<is_ptr<T>>::value;
+struct holder { template <class T> struct box { T v; }; };
+export template <class T> struct wrap { typename holder::template box<T> b; };
+export template <class T> struct old { T v; int get() const { return int(v); } };
+extern template struct __attribute__((__deprecated__)) old<char>;
+";
+    let run = "\
+import w;
+#include <stdio.h>
+int main() {
+  wrap<int> x{{3}};
+  old<int> o{4};
+  printf(\"%d %d %d %d\\n\", ptr_or<int>::value, ptrish<int *>, x.b.v, o.get());
+}
+";
+    let err = "import w;\nstatic_assert(ptrish<int>);\n";
+    let errs = image_round_trip("image-wp1353", "w", src, run, err, "1 1 3 4\n");
+    assert!(errs.contains("static assertion failed"), "{errs}");
 }

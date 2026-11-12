@@ -45,7 +45,7 @@ impl Writer<'_, '_, '_> {
     }
 
     /// Whether `d` is a member of a class template specialization.
-    fn spec_member(&self, d: DeclId) -> bool {
+    pub(super) fn spec_member(&self, d: DeclId) -> bool {
         let ast = &self.s.ast;
         ast.decls.get(d).ctx().is_some_and(|c| {
             ast.decls.get(c).kind() == DeclKind::CXXRecord && ast.spec_info(ast.first(c)).is_some()
@@ -55,6 +55,7 @@ impl Writer<'_, '_, '_> {
     /// Writes the specialization references the types of `d` name
     /// before `d`'s own record (errors are left for `record` to report).
     pub(super) fn prescan(&mut self, d: DeclId) {
+        self.prescan_class_shadow(d);
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let mut qs: Vec<QualType> = Vec::new();
@@ -426,6 +427,53 @@ impl Writer<'_, '_, '_> {
         }
     }
 
+    /// `X<args>` naming template `td` directly: an alias template's, a
+    /// dependent builtin template's or a class template's specialization
+    /// (the body of [`Self::template_ty`] before WP-1353 wrapped it).
+    fn plain_tst(
+        &mut self,
+        td: DeclId,
+        args: kiln_ast::ArgListId,
+        underlying: Option<QualType>,
+        alias: bool,
+    ) -> W<TyRec> {
+        let ast = &self.s.ast;
+        if alias {
+            // An alias template specialization (WP-1279): its
+            // underlying type is the substituted pattern.
+            let template =
+                self.template_rec(td, 2).map_err(|_| "an alias template outside the image")?;
+            let args = self.written_arg_recs(args)?;
+            let u = underlying.ok_or("an alias template")?;
+            return Ok(TyRec::Tst { template, args, under: Some(self.qref(u)?) });
+        }
+        // A dependent builtin template's (WP-1344).
+        if let Some(template) = self.builtin_template_rec(td)? {
+            if underlying.is_some() || alias {
+                return Err("a builtin template's specialization that is not dependent");
+            }
+            let args = self.written_arg_recs(args)?;
+            return Ok(TyRec::Tst { template, args, under: None });
+        }
+        let template = self.template_rec(td, 1)?;
+        let spec = underlying.and_then(|u| match ast.types.view(u.ty()) {
+            TypeView::Record(d) => Some(d),
+            _ => None,
+        });
+        let args = self.tst_args(args, spec)?;
+        let under = match underlying {
+            None => None,
+            Some(u) => {
+                let q = self.qref(u)?;
+                if let Some(why) = self.tst_under_form(q, template) {
+                    return Err(why);
+                }
+                Some(q)
+            }
+        };
+        Ok(TyRec::Tst { template, args, under })
+    }
+
     /// A class template type (S4b): `X<args>` naming a carried class
     /// template, or the injected-class-name of its pattern; `None` for
     /// any other type.
@@ -444,44 +492,28 @@ impl Writer<'_, '_, '_> {
                     let args = self.written_arg_recs(args)?;
                     return Ok(Some(TyRec::Tst { template, args, under: None }));
                 }
-                let TemplateName::Template(td) = ast.types.template_name_view(name) else {
-                    return Err("a template named through a qualifier or parameter");
-                };
-                if alias {
-                    // An alias template specialization (WP-1279): its
-                    // underlying type is the substituted pattern.
-                    let template = self
-                        .template_rec(td, 2)
-                        .map_err(|_| "an alias template outside the image")?;
-                    let args = self.written_arg_recs(args)?;
-                    let u = underlying.ok_or("an alias template")?;
-                    return Ok(Some(TyRec::Tst { template, args, under: Some(self.qref(u)?) }));
-                }
-                // A dependent builtin template's (WP-1344).
-                if let Some(template) = self.builtin_template_rec(td)? {
-                    if underlying.is_some() || alias {
-                        return Err("a builtin template's specialization that is not dependent");
+                let td = match ast.types.template_name_view(name) {
+                    TemplateName::Template(td) => td,
+                    // `nns::[template] X<args>` (WP-1353): the unqualified
+                    // specialization, wrapped in its qualifier.
+                    TemplateName::Qualified { nns, template_kw, underlying: inner } => {
+                        let TemplateName::Template(td) = ast.types.template_name_view(inner) else {
+                            return Err(tname_form(ast.types.template_name_view(inner)));
+                        };
+                        let steps = self.nns_steps(nns)?;
+                        let rec = self.plain_tst(td, args, underlying, alias)?;
+                        let tst = super::BUILTINS + 1 + self.img.types.len() as u32;
+                        self.img.types.push(rec);
+                        let tst = super::QRef { ty: tst, quals: 0 };
+                        return Ok(Some(TyRec::Dep(super::deptypes::DepTy::QualTst {
+                            kw: template_kw,
+                            steps,
+                            tst,
+                        })));
                     }
-                    let args = self.written_arg_recs(args)?;
-                    return Ok(Some(TyRec::Tst { template, args, under: None }));
-                }
-                let template = self.template_rec(td, 1)?;
-                let spec = underlying.and_then(|u| match ast.types.view(u.ty()) {
-                    TypeView::Record(d) => Some(d),
-                    _ => None,
-                });
-                let args = self.tst_args(args, spec)?;
-                let under = match underlying {
-                    None => None,
-                    Some(u) => {
-                        let q = self.qref(u)?;
-                        if let Some(why) = self.tst_under_form(q, template) {
-                            return Err(why);
-                        }
-                        Some(q)
-                    }
+                    n => return Err(tname_form(n)),
                 };
-                TyRec::Tst { template, args, under }
+                self.plain_tst(td, args, underlying, alias)?
             }
             TypeView::InjectedClassName { pattern, .. } => {
                 let p = ast.first(pattern);
@@ -773,5 +805,31 @@ impl Sema<'_, '_> {
                 self.ast.decls.set_flags(d, DeclFlags::REFERENCED);
             }
         }
+    }
+}
+
+/// The census form of a specialization type's template name that is not
+/// a template named directly (WP-1353 splits the old reason "a template
+/// named through a qualifier or parameter").
+fn tname_form(n: TemplateName) -> &'static str {
+    match n {
+        TemplateName::Qualified { .. } => "a template named through a qualifier",
+        TemplateName::DependentIdentifier { .. } | TemplateName::DependentOperator { .. } => {
+            "a template named through a dependent qualifier"
+        }
+        TemplateName::TemplateTemplateParm { .. } => {
+            "a template named through a template template parameter"
+        }
+        TemplateName::CanonTemplateTemplateParm { .. } => {
+            "a template named through a canonical template template parameter"
+        }
+        TemplateName::SubstTemplateTemplateParm { .. } => {
+            "a template named through a substituted template template parameter"
+        }
+        TemplateName::SubstTemplateTemplateParmPack { .. } => {
+            "a template named through a substituted template template parameter pack"
+        }
+        TemplateName::Using { .. } => "a template named through a using-declaration",
+        _ => "a template named through a qualifier or parameter",
     }
 }

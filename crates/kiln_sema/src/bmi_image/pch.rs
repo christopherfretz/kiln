@@ -113,6 +113,9 @@ impl Sema<'_, '_> {
         if let Err(why) = w.collect() {
             return none(why);
         }
+        if let Some(notes) = &self.bmi.pch_ext_decls {
+            w.dedup_section(notes);
+        }
         (w.img.files, w.img.slocs) = w.lt.into_inner().finish();
         w.img.gated = gated_names(&w.img);
         let decls = w.img.decls.len();

@@ -62,7 +62,60 @@ impl Parser<'_, '_> {
         if self.mods.is_none() {
             self.mods = Some(Box::default());
             self.s.module_activate();
+            self.pch_image_keys();
         }
+    }
+
+    /// Records the keys of the precompiled header's declarations that
+    /// sema loaded from its image, as parsing them in this unit would
+    /// have (WP-1353).
+    fn pch_image_keys(&mut self) {
+        let keys = self.s.take_pch_dedup();
+        if keys.is_empty() {
+            return;
+        }
+        let unit = self.s.module_current_unit();
+        for x in keys {
+            let (Some(key), Some(end)) = (self.module_key(x.start), self.module_key(x.end)) else {
+                continue;
+            };
+            let rec = Rec { end, ntoks: x.ntoks, lo: x.lo, hi: x.hi, unit };
+            if let Some(m) = &mut self.mods {
+                m.records.entry(key).or_default().push(rec);
+            }
+        }
+    }
+
+    /// At a namespace-scope declaration's start in a precompiled header's
+    /// producer: its first token's index and location, and the next
+    /// declaration (WP-1353).
+    pub(crate) fn pch_key_start(&mut self) -> Option<(usize, Loc, DeclId)> {
+        if !self.s.records_pch_decl_keys() || self.at_eof() || self.in_replay() {
+            return None;
+        }
+        let t = self.tok();
+        if t.kind == TokKind::Punct(Punct::Semi) {
+            return None;
+        }
+        Some((self.token_index(), t.span.lo, self.s.ast.decls.next_id()))
+    }
+
+    /// After it: notes the declaration for the image's keys.
+    pub(crate) fn pch_key_end(&mut self, start: Option<(usize, Loc, DeclId)>) {
+        let Some((pos0, at, first)) = start else { return };
+        let pos = self.token_index();
+        if self.in_replay() || pos <= pos0 {
+            return;
+        }
+        let Ok(ntoks) = u32::try_from(pos - pos0) else { return };
+        let end = self.tok_at(pos - 1).span.lo;
+        self.s.pch_note_external_decl(kiln_sema::ExtDecl {
+            start: at,
+            end,
+            ntoks,
+            lo: first.index(),
+            hi: self.s.ast.decls.next_id().index(),
+        });
     }
 
     /// Queues a module event for the next declaration start.

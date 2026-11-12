@@ -152,7 +152,7 @@ impl Sema<'_, '_> {
     /// (`dependent`) or is not argument-dependent, over its declarations
     /// oldest first (clang merges a redeclaration's onto the previous
     /// ones), each with the declaration it is written on.
-    fn diagnose_if_attrs(&self, f: DeclId, dependent: bool) -> Vec<(DeclId, AttrNode)> {
+    pub(crate) fn diagnose_if_attrs(&self, f: DeclId, dependent: bool) -> Vec<(DeclId, AttrNode)> {
         let decls: Vec<DeclId> = self.ast.redecls_of(f).take(4096).collect();
         let mut out = Vec::new();
         for &d in decls.iter().rev() {

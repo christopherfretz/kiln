@@ -177,6 +177,12 @@ pub(crate) struct BmiState {
     /// The main unit's declaration image is wanted
     /// ([`Sema::record_module_image`], spec/modules.md §11.11 "Part 2a").
     pub(crate) record_image: bool,
+    /// WP-1353: the producer's namespace-scope declarations, for a
+    /// precompiled header's deduplication keys (`Some` when recorded).
+    pub(crate) pch_ext_decls: Option<Vec<crate::bmi_image::ExtDecl>>,
+    /// WP-1353: the keys of the precompiled header the consumer loaded
+    /// from its image, until the parser takes them.
+    pub(crate) pch_dedup: Vec<crate::bmi_image::ExtDecl>,
 }
 
 impl std::fmt::Debug for BmiState {
@@ -186,7 +192,7 @@ impl std::fmt::Debug for BmiState {
             .field("tables", &self.tables.iter().map(|t| (t.unit, t.map.len())).collect::<Vec<_>>())
             .field("hits", &self.hits)
             .field("record_image", &self.record_image)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

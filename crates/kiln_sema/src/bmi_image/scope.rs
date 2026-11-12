@@ -64,6 +64,12 @@ pub(super) const BUILTIN_KIND: u8 = 6;
 /// WP-1320).
 pub(super) const GLOBAL_OP_KIND: u8 = 7;
 
+/// The `Implicit` record kind of the implicitly declared
+/// `std::align_val_t` ([new.syn], [basic.stc.dynamic.general]/2; WP-1353),
+/// which a type names when no declaration of the program precedes the
+/// first new-expression or allocation function declaration.
+pub(super) const ALIGN_VAL_T_KIND: u8 = 10;
+
 /// An implicit global allocation or deallocation function: `Implicit`
 /// record `rec`, the `index`th implicit `operator op` sema declares
 /// (`declare_global_new_delete`, in declaration order).
@@ -204,13 +210,16 @@ impl Writer<'_, '_, '_> {
                 && n.ctx() == Some(ast.tu)
                 && global_new_delete_op(n.name()).is_some();
         }
-        let Some(std) = self.s.global_ops.implicit_std else { return false };
         match ast.decls.get(d).kind() {
-            DeclKind::Namespace => ast.first(p) == std,
+            DeclKind::Namespace => self.s.global_ops.implicit_std == Some(ast.first(p)),
+            // WP-1353: the implicit `std::align_val_t` is made in the
+            // program's `namespace std` when one was declared before the
+            // first new-expression or allocation function declaration
+            // (`std_align_val_t`), else in the implicit one.
             DeclKind::Enum => {
                 let n = ast.decls.get(p);
                 n.has(DeclFlags::IMPLICIT)
-                    && n.ctx().is_some_and(|c| ast.first(c) == std)
+                    && n.ctx().is_some_and(|c| is_global_std(ast, c))
                     && ast
                         .decls
                         .get(d)
@@ -329,6 +338,38 @@ impl Writer<'_, '_, '_> {
         self.img.scopes.global_ops.push(GlobalOpStub { rec, op: op as u8, index });
         self.recs.insert(d, rec);
         Ok(Some(rec))
+    }
+
+    /// The stub record of `d` when it is sema's implicit
+    /// `std::align_val_t` (WP-1353), written on first use: the importer
+    /// declares the global allocation functions there and takes its own.
+    pub(super) fn align_val_t_stub(&mut self, d: DeclId) -> Option<u32> {
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        if n.kind() != DeclKind::Enum
+            || !n.has(DeclFlags::IMPLICIT)
+            || !n.ctx().is_some_and(|c| is_global_std(ast, c))
+            || self.s.global_ops.align_val_t.is_none()
+        {
+            return None;
+        }
+        if let Some(&r) = self.recs.get(&d) {
+            return Some(r);
+        }
+        let rec = self.img.decls.len() as u32;
+        self.img.decls.push(DeclRec {
+            flags: 0,
+            owner: 0,
+            access: 0,
+            name: NONE,
+            ctx: NONE,
+            lexical: NONE,
+            loc: NONE,
+            prev: NONE,
+            payload: Payload::Implicit { kind: ALIGN_VAL_T_KIND },
+        });
+        self.recs.insert(d, rec);
+        Some(rec)
     }
 
     /// Lists the carried unnamed classes and enumerations that a typedef
@@ -519,6 +560,20 @@ impl Sema<'_, '_> {
     /// The importer's implicit global allocation or deallocation
     /// function for stub record `i` (WP-1320): declared as a
     /// new-expression would, then the same one by position.
+    /// The importer's implicit `std::align_val_t` (stub kind
+    /// [`ALIGN_VAL_T_KIND`]): declared with the global allocation
+    /// functions, as a new-expression would.
+    pub(super) fn image_align_val_t(&mut self) -> DeclId {
+        self.declare_global_new_delete();
+        let tu = self.ast.tu;
+        let Some(q) = self.global_ops.align_val_t else { return tu };
+        let c = self.ast.types.canonical(q);
+        match self.ast.types.view(c.ty()) {
+            kiln_ast::types::TypeView::Enum(d) => d,
+            _ => tu,
+        }
+    }
+
     pub(super) fn image_global_op(&mut self, img: &Image, i: u32) -> DeclId {
         let tu = self.ast.tu;
         let Ok(k) = img.scopes.global_ops.binary_search_by_key(&i, |g| g.rec) else { return tu };
@@ -603,10 +658,12 @@ impl Sema<'_, '_> {
     /// sema declared by itself: the implicit `std::align_val_t` in the
     /// implicit namespace `std` that `h.ctx` extends.
     pub(super) fn image_enum_prev(&self, h: &DeclHead) -> Option<DeclId> {
-        let std = self.global_ops.implicit_std?;
-        if self.ast.first(h.ctx) != std {
+        // The implicit namespace or the program's (WP-1353): sema makes
+        // the implicit enumeration in whichever `std` lookup found first.
+        if !is_global_std(&self.ast, h.ctx) {
             return None;
         }
+        let std = self.ast.first(h.ctx);
         let sym = h.name.as_ident().filter(|&s| self.ast.symbols().as_str(s) == "align_val_t")?;
         self.ast.lookup_local(std, DeclName::ident(sym)).iter().find(|&p| {
             let n = self.ast.decls.get(p);
@@ -630,10 +687,26 @@ impl Sema<'_, '_> {
     }
 }
 
+/// Whether record `i`, an [`ALIGN_VAL_T_KIND`] stub, is the image's only
+/// one.
+pub(super) fn align_val_t_stub_ok(img: &Image, i: usize) -> bool {
+    let stub = |d: &DeclRec| d.payload == Payload::Implicit { kind: ALIGN_VAL_T_KIND };
+    img.decls.iter().position(stub) == Some(i) && img.decls.iter().filter(|d| stub(d)).count() == 1
+}
+
+/// Whether `ns` is a declaration of namespace `std` at global scope (an
+/// implicit one included), where sema declares `std::align_val_t`.
+pub(super) fn is_global_std(ast: &kiln_ast::Ast, ns: DeclId) -> bool {
+    let n = ast.decls.get(ns);
+    n.kind() == DeclKind::Namespace
+        && n.ctx() == Some(ast.tu)
+        && n.name().as_ident().is_some_and(|s| ast.symbols().as_str(s) == "std")
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::sample;
-    use super::super::{decode, encode};
+    use super::super::{TyRec, decode, encode};
     use super::*;
 
     /// `sample` with a builtin function record appended.
@@ -672,6 +745,46 @@ mod tests {
         ];
         for (what, f) in corrupt {
             let mut img = with_builtin("__builtin_strlen");
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
+    /// WP-1353: the implicit `std::align_val_t`'s stub, named by an enum
+    /// type, round-trips; a second one, or one with a name or a previous
+    /// record, is an error.
+    #[test]
+    fn align_val_t_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let with = || {
+            let mut img = sample();
+            let rec = img.decls.len() as u32;
+            img.decls.push(DeclRec {
+                flags: 0,
+                owner: 0,
+                access: 0,
+                name: NONE,
+                ctx: NONE,
+                lexical: NONE,
+                loc: NONE,
+                prev: NONE,
+                payload: Payload::Implicit { kind: ALIGN_VAL_T_KIND },
+            });
+            img.types.push(TyRec::Enum(rec));
+            img
+        };
+        let img = with();
+        assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+        let corrupt: [Corrupt; 3] = [
+            ("twice", |i| {
+                let d = i.decls.last().unwrap().clone();
+                i.decls.push(d);
+            }),
+            ("named", |i| i.decls.last_mut().unwrap().name = 0),
+            ("a redeclaration", |i| i.decls.last_mut().unwrap().prev = 0),
+        ];
+        for (what, f) in corrupt {
+            let mut img = with();
             f(&mut img);
             assert!(decode(&encode(&img)).is_err(), "{what}");
         }

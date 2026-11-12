@@ -2714,12 +2714,8 @@ u32) and pack byte; the reader interns it with
 `canon_template_type_parm`. Tests: `pch-dependent-array-params-*.cpp`,
 `image-dependent-array-params-run.cpp`,
 `dependent_array_parameters_are_carried`.
-Not yet carried: an importer's header declarations loaded from the image
-record no §6 deduplication keys, so an imported module whose GMF includes
-the same header re-declares its entities instead of skipping them by
-position (`module.global.frag/gmf-floatn-limits.cpp` differs under
-`--pch-diff check`; reduced as the ignored
-`gmf_reinclusion_merges_with_image_declarations`).
+The §6 deduplication keys of a header loaded from the image are WP-1353's
+(below).
 
 **Forms carried by WP-1342 (template declarations).** The writer is
 `bmi_image/tttp.rs` (template template parameters and template-name
@@ -3088,12 +3084,13 @@ tags come from the end of each enumeration.
   importer declares a placeholder and sets the string with
   `set_file_scope_asm_string`).
 
-Still refused in this bucket: a non-word attribute on an explicit
-instantiation (`deprecated("...")`), a non-dependent using-declaration
-of a base member in a class, an explicit specialization of a member
-class template defined out of class, a dependent using pack or
-conversion-function name, a non-template out-of-line defaulted special
-member. Tests: `crates/kiln_driver/tests/pch_decls.rs` and the corpus
+Still refused in this bucket: a non-word attribute with arguments on an
+explicit instantiation (`deprecated("...")`; the argument-less
+`__attribute__((__deprecated__))` is WP-1353's), a dependent using pack
+or conversion-function name. (A non-dependent using-declaration of a
+base member in a class, an explicit specialization of a member class
+template defined out of class and a non-template out-of-line defaulted
+special member are WP-1353's.) Tests: `crates/kiln_driver/tests/pch_decls.rs` and the corpus
 pairs `cpp.include/pch-decl-forms-run.cpp`,
 `module.interface/image-decl-forms-run.cpp`.
 
@@ -3193,6 +3190,119 @@ replay); `kind2_declaration_image_wp1352_forms` (modules_bmi);
 `rejects_corrupt_function_specializations` (kiln_sema); corpus
 `cpp.include/pch-declared-specializations-{run,errors}.cpp` and
 `module.interface/image-declared-specializations-run.cpp`.
+
+**Forms carried by WP-1353.** The writer's additions are in
+`bmi_image/spec.rs`, `deptypes.rs`, `scope.rs`, `attrs.rs` and the new
+`dedup.rs`, `classusing.rs`, `outerspec.rs`, `oodefault.rs` and
+`diagif.rs`. One side section, `dedup`, follows `fsuses`.
+
+- *A template named through a qualifier* ([temp.names]/3,
+  `typename _OrImpl<...>::template _Result<...>` in libc++'s
+  `<__iterator/iterator_traits.h>`, `typename holder::template box<T>`).
+  A specialization whose template name is `TemplateName::Qualified` over
+  a carried template is a dependent type record (type tag 21 `Dep`) of
+  dependent tag 7 `QualTst`: `u8 kw` (0/1, the `template` keyword), the
+  qualifier's steps as for a dependent name (`NnsRec`s), and a
+  qualified reference to a plain `Tst` record of the same arguments
+  (written just before it, quals 0). The validator requires a non-empty
+  valid qualifier and that the reference is a `Tst`. The reader builds
+  the plain specialization, wraps its template name in a `Qualified`
+  name with the importer's qualifier and calls `template_specialization`
+  again, which is what the parser makes. A base class written so
+  (`: _OrImpl<...>::template _Result<...>`, also under `typename`) is a
+  dependent base through it. The census now names the qualifier, the
+  dependent qualifier, the template template parameter and the
+  using-declaration forms of "a template named through a qualifier or
+  parameter" apart; the last three stay refused.
+- *A redeclaration of the implicit `std::align_val_t`* ([new.delete]/1,
+  [cstddef.syn], libstdc++'s `<new>`). Sema declares `std::align_val_t`
+  implicitly with the replaceable allocation functions, in the program's
+  own `std` once one is declared (else an implicit one), at the first
+  new-expression or `operator new` declaration. A header that uses `new`
+  before its own `enum class align_val_t` redeclares that enumeration.
+  The writer gives the enumeration no previous record, and a type naming
+  the implicit enumeration is an `Implicit` record of kind 10
+  (`ALIGN_VAL_T_KIND`; no owner, context, name or previous record, at
+  most one per image). The reader finds the entity redeclared the way
+  the parser does: it calls `declare_global_new_delete` (a no-op once
+  the importer declared them) and takes `global_ops.align_val_t`; the
+  header's enumeration record is an ordinary redeclaration of it
+  (`image_enum_prev` looks in the importer's global `std`). Before, the
+  enumeration's `prev` was the implicit declaration without a record
+  ("a redeclaration of an entity outside the image", `new:94`).
+- *An argument-less word attribute on an explicit instantiation*
+  ([dcl.attr.deprecated], `extern template class
+  __attribute__((__deprecated__)) codecvt_byname<...>` in libc++'s
+  `<__locale>`). An `attrs.insts` entry may be an `Exprs` attribute with
+  no expressions (start and end both 0), as a `Words` one; it carries
+  the attribute as written.
+- *§6 deduplication keys of a precompiled header* (the reason the
+  importer re-declared a header's entities when a module's global module
+  fragment included the header again; `module.global.frag/
+  gmf-floatn-limits.cpp` under `--pch-diff check`). The producer's
+  parser notes each namespace-scope declaration it parses outside a
+  replay (not an empty declaration): its first and last tokens, its
+  token count and the declarations made. The `dedup` section is `u32 n`,
+  then per entry `u32 start, end, ntoks, lo, hi`: the two tokens as
+  image locations, the count (nonzero), and the half-open range of the
+  records made for the declaration (`lo <= hi <=` the record count;
+  `lo == hi`: none), in parse order. An entry whose tokens have no image
+  location is dropped. The reader maps each entry to the importer's
+  locations and the declarations made for its records (stubs of the
+  importer's own declarations, `Implicit` kinds 6 and up, are not part
+  of it); the parser records them as replay's parse would have when its
+  module state activates, so a later global module fragment's copy is
+  skipped by position and the earlier declarations are made visible.
+- *Using-declarations of base members in a class* ([namespace.udecl]/3,
+  `using _RangeAdaptor<_Drop>::operator();` in libstdc++'s `<ranges>`;
+  `bmi_image/classusing.rs`). In a class that is not dependent, a
+  `Using` member record (kind as at namespace scope, its qualifier's
+  steps, non-empty) and one `Shadow` member record per member it
+  introduces, each with its access. A shadow's target is the base
+  member's record: an ordinary member (a non-constructor member
+  function, a field, variable, typedef, class, enumeration, enumerator,
+  template or shadow of the same name) or a member reference record
+  (`Member`) of a class template specialization, which the writer
+  writes before the shadow (a member template of a specialization may
+  now be a `Member` record's pattern). The reader declares them with
+  `using_decl` and `using_shadow`. An inheriting declarator (`using
+  B::B;`) stays refused ("a using-declaration in a class").
+- *An explicit specialization of a member class template defined
+  outside its class* ([temp.expl.spec]/2, `template <> struct
+  __future_base::_Result<void>` in `<future>`; `outerspec.rs`). Written
+  as WP-1345's out-of-class partial specialization: a `Record` record
+  whose context is the (closed) class, its lexical context the
+  namespace, no previous record; the validator accepts it at namespace
+  scope when `cspecs` lists it as an explicit specialization.
+- *A special member defaulted outside its class* ([dcl.fct.def.default]/5,
+  `inline S::S() = default;`; `oodefault.rs`). A `Function`
+  redeclaration of a non-dependent class's special member with the
+  defaulted bit and no body. The importer runs `act_on_defaulted` on
+  each such declaration once the bodies (and so the in-class
+  initializers its definition uses) are built, which defines it as the
+  parser's call after the declarator did. A class template's member
+  defaulted out of class stays refused ("an out-of-line defaulted
+  function").
+- *`diagnose_if` rechecks* ([dcl.attr] extension, clang
+  `diagnoseArgDependentDiagnoseIfAttrs`; `diagif.rs`). Nothing new is
+  written: the importer fills `diagnose_if_recheck` from the bodies it
+  built (every call naming a function with argument-dependent
+  `diagnose_if` attributes, with no value-dependent argument), so an
+  instantiation in the unit diagnoses a shared call as after a replay.
+
+Tests: `qualified_template_names_are_carried`,
+`implicit_align_val_t_redeclarations_are_carried`,
+`deprecated_explicit_instantiations_are_carried`,
+`class_using_declarations_are_carried`,
+`out_of_line_defaulted_members_are_carried`,
+`out_of_class_member_explicit_specializations_are_carried`,
+`diagnose_if_rechecks_follow_the_image`,
+`gmf_reinclusion_merges_with_image_declarations` (kiln_driver
+`pch_decls`); `kind2_declaration_image_wp1353_forms` (modules_bmi);
+`dependent_types_round_trip`, `rejects_corrupt_dependent_types`,
+`align_val_t_records`, `dedup_round_trip`, `rejects_corrupt_dedup`
+(kiln_sema); corpus `cpp.include/pch-decl-followups-{run,errors}.cpp`
+and `module.interface/image-decl-followups-run.cpp`.
 
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
@@ -3919,7 +4029,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 29` since WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 30` since WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
