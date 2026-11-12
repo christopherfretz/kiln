@@ -3100,6 +3100,7 @@ impl Sema<'_, '_> {
 
     /// The built-in unary operator `op` ([expr.unary.op], [expr.pre.incr],
     /// [expr.post.incr]).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn builtin_unary(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
         let e = if op == UnaryOp::AddrOf { e } else { self.resolve_single_overload_candidate(e) };
         let t0 = self.ety(e);
