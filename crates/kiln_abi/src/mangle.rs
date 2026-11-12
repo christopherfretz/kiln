@@ -2824,6 +2824,32 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.subs.push(key);
                 }
             }
+            // `T::template X` as a template template argument: its
+            // unresolved prefix and name (clang `mangleType(TemplateName)`,
+            // `DependentTemplate`), a substitution candidate shared with
+            // the dependent template prefix of the same name.
+            TemplateName::DependentIdentifier { nns, name } => {
+                let key = Sub::DepTemplate(ast.types.canonical_nns(nns), name);
+                if self.try_sub(key) {
+                    return;
+                }
+                let (len, subs) = (self.out.len(), self.subs.len());
+                if self.unresolved_prefix(nns, false) {
+                    self.symbol(name);
+                    self.subs.push(key);
+                } else {
+                    // A qualifier with no unresolved-prefix spelling yet (a
+                    // splice: reflection mangling, open), as for expressions.
+                    self.out.truncate(len);
+                    self.subs.truncate(subs);
+                    self.out.push_str("u7unknown");
+                }
+            }
+            // Not a template template argument: a dependent operator
+            // template or an overload set names a function template, and
+            // a template template parameter pack being substituted is
+            // expanded before any name is mangled. The splice forms are
+            // reflection mangling (spec/reflection.md §8.3).
             _ => self.out.push_str("u7unknown"),
         }
     }
@@ -3393,9 +3419,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 ast.types.canonical_view(q),
                 TypeView::Vector { .. } | TypeView::DependentVector { .. } | TypeView::Complex(_)
             );
+        // A variably modified type (a pointer to a VLA parameter type) is
+        // a candidate that no later type matches: clang never uniques a
+        // `VariableArrayType`, so each one written is a type of its own
+        // (`PA_iPA_i` for two `int (*)[n]` parameters).
+        let vm = ast.types.flags(q.ty()).intersects(kiln_ast::types::TypeFlags::VARIABLY_MODIFIED);
         if !quals.is_empty() && !is_array {
             let key = Sub::Type(q);
-            if self.try_sub(key) {
+            if !vm && self.try_sub(key) {
                 return;
             }
             if quals.is_restrict() {
@@ -3455,7 +3486,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             _ => {}
         }
         let key = Sub::Type(q);
-        if self.try_sub(key) {
+        if !vm && self.try_sub(key) {
             return;
         }
         self.compound(q, view);
@@ -3495,6 +3526,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.ty(e);
                 }
             }
+            // A variable-length array (a Clang extension in C++) is only
+            // ever named in a parameter type (`int (*)[n]`), where clang's
+            // canonical parameter type replaces every bound by `*`
+            // (`getVariableArrayDecayedType`): `A_ <element type>`.
+            TypeView::VariableArray { elem, .. } => {
+                self.out.push_str("A_");
+                self.ty(ast.types.element(q).unwrap_or(elem));
+            }
             // `A <dimension expression> _ <element type>`: a bound that
             // names a template parameter (`T[N]`) keeps the overloads on
             // `const char (&)[N]` and `const wchar_t (&)[N]` apart.
@@ -3505,7 +3544,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     }
                     ExprOperand::Expr(_) => size,
                 };
-                self.dependent_array_bound(size);
+                self.dependent_dimension("A", size);
                 self.out.push('_');
                 self.ty(elem);
             }
@@ -3530,6 +3569,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
             }
             TypeView::ConstantArray(_)
             | TypeView::IncompleteArray(_)
+            | TypeView::VariableArray { .. }
             | TypeView::DependentSizedArray { .. } => self.array_type(q, view),
             TypeView::Function(p) => self.function_type(q, &p, true),
             TypeView::MemberPointer { pointee, class } => self.member_pointer(pointee, class),
@@ -3564,6 +3604,8 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.out.push('_');
                 self.ty(elem);
             }
+            // `Dv <dimension expression> _ <element type>` (dep.rs).
+            TypeView::DependentVector { elem, size, .. } => self.dependent_vector(q, elem, size),
             TypeView::BitInt { signed, width } => {
                 self.out.push_str(if signed { "DB" } else { "DU" });
                 self.out.push_str(&width.to_string());
@@ -3629,6 +3671,14 @@ impl<'a, 'b> Mangler<'a, 'b> {
                 self.ty(base);
                 self.out.push('E');
             }
+            // Never reached by a mangled name (audit, WP-1355): the sugar
+            // views and a deduced placeholder canonicalize away; `Invalid`
+            // stops code generation; `ExtQual` is never formed
+            // (`address_space` is rejected); an `UnresolvedUsing` type is
+            // only named in a class template's pattern, whose members are
+            // mangled once instantiated. A dependent splice type
+            // (`typename [:r:]`) is reflection mangling, still open
+            // (spec/reflection.md §8.3).
             _ => self.out.push_str("u7unknown"),
         }
     }
@@ -3811,6 +3861,9 @@ pub fn builtin_code(b: BuiltinType) -> &'static str {
         // The vendor placeholder for `std::meta::info` until WP-102
         // (GCC 16.1 writes `Dm`; spec/reflection.md §8.3).
         B::MetaInfo => "u6__info",
+        // The expression-only placeholders (`Dependent`, `Overload`,
+        // `BoundMember`, `BuiltinFn`) and `Error` are never the type of a
+        // mangled entity or argument.
         _ => "u7unknown",
     }
 }

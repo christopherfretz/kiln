@@ -52,6 +52,12 @@ impl Mangler<'_, '_> {
             TemplateName::DependentIdentifier { nns, name } => {
                 self.dependent_template_spec(nns, name, args);
             }
+            // No specialization type has any other canonical name: an
+            // operator template or an overload set names functions, and a
+            // template template parameter pack substituted in an
+            // expansion that is not expanded yet (`Z<TTs<Us>...>` in a
+            // member template) is rejected by sema (and crashes clang 19
+            // and 22). The splice forms are reflection mangling.
             _ => self.out.push_str("u7unknown"),
         }
     }
@@ -151,6 +157,7 @@ impl Mangler<'_, '_> {
                     TemplateName::DependentIdentifier { nns, name } => {
                         self.dependent_template_prefix(nns, name);
                     }
+                    // Unreachable, as in `dependent_tst`.
                     _ => self.out.push_str("u7unknown"),
                 }
                 self.template_args(args);
@@ -215,7 +222,7 @@ impl Mangler<'_, '_> {
         }
     }
 
-    fn symbol(&mut self, s: Symbol) {
+    pub(super) fn symbol(&mut self, s: Symbol) {
         let name = self.ast.symbols().as_str(s);
         self.source_name(name);
     }
@@ -252,16 +259,17 @@ impl Mangler<'_, '_> {
         self.out.push_str("u7unknown");
     }
 
-    /// The `A <expression>` head of a dependent-bound array type; an
-    /// unencodable bound is a hard error (the vendor placeholder keeps the
-    /// name well formed).
-    pub(super) fn dependent_array_bound(&mut self, size: ExprOperand) {
+    /// The `<tag> <expression>` head of a dependent-bound array type
+    /// (`A`), dependent-size vector type (`Dv`) or dependent-width
+    /// `_BitInt` (`DB`/`DU`); an unencodable bound is a hard error (the
+    /// vendor placeholder keeps the name well formed).
+    pub(super) fn dependent_dimension(&mut self, tag: &str, size: ExprOperand) {
         let (len, subs) = (self.out.len(), self.subs.len());
         let e = match size {
             ExprOperand::Expr(e) => Some(e),
             ExprOperand::Profile(p) => self.ast.types.profile_expr(p),
         };
-        self.out.push('A');
+        self.out.push_str(tag);
         if let Some(e) = e {
             let saved_failed = self.failed.take();
             if self.expression(e) {
@@ -274,24 +282,44 @@ impl Mangler<'_, '_> {
         }
         self.out.truncate(len);
         self.subs.truncate(subs);
-        self.out.push_str("Au7unknown");
+        self.out.push_str(tag);
+        self.out.push_str("u7unknown");
     }
 
     /// `DB <expression> _` (`_BitInt(N)`) or `DU <expression> _`
     /// (`unsigned _BitInt(N)`) of a dependent width. A width expression
-    /// the mangler cannot spell falls back to `u7unknown` in its place,
-    /// keeping the signed and unsigned forms apart.
+    /// the mangler cannot spell is a hard error, as a dependent array
+    /// bound's (clang `cannot yet mangle expression type`).
     pub(super) fn dependent_bitint(&mut self, signed: bool, width: Option<ExprId>) {
-        let (len, subs) = (self.out.len(), self.subs.len());
         let tag = if signed { "DB" } else { "DU" };
-        self.out.push_str(tag);
-        if !width.is_some_and(|e| self.expression(e)) {
-            self.out.truncate(len);
-            self.subs.truncate(subs);
+        if let Some(e) = width {
+            self.dependent_dimension(tag, ExprOperand::Expr(e));
+        } else {
+            // A profile always keeps its first expression; never reached.
             self.out.push_str(tag);
             self.out.push_str("u7unknown");
         }
         self.out.push('_');
+    }
+
+    /// `Dv <dimension expression> _ <element type>` of the canonical
+    /// dependent vector type `q`: a vector whose size is value-dependent,
+    /// or a `vector_size` vector of a dependent element type (its byte
+    /// size expression; clang `mangleType(const DependentVectorType *)` /
+    /// `DependentSizedExtVectorType`). Sema forms one only for the generic
+    /// and ext kinds (a dependent Neon count is rejected; clang cannot
+    /// mangle one either). The size is the creating spelling's
+    /// expression, as a dependent array bound's.
+    pub(super) fn dependent_vector(&mut self, q: QualType, elem: QualType, size: ExprOperand) {
+        let size = match size {
+            ExprOperand::Profile(p) => {
+                self.ast.types.expr_origin(q.ty(), p).map_or(size, ExprOperand::Expr)
+            }
+            ExprOperand::Expr(_) => size,
+        };
+        self.dependent_dimension("Dv", size);
+        self.out.push('_');
+        self.ty(elem);
     }
 
     // ---- template-argument expressions -----------------------------------

@@ -1281,7 +1281,7 @@ impl TypeContext {
     }
 
     /// The expression written by the `decltype` (or dependent-bound
-    /// array) type that created the canonical type `canonical`
+    /// array, or dependent-size vector) type that created the canonical type `canonical`
     /// ([`TypeContext::arg_origin`]); else the profile's first
     /// expression in the TU.
     pub fn expr_origin(&self, canonical: TypeId, p: ProfileId) -> Option<ExprId> {
