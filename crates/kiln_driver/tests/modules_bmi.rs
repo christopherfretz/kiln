@@ -1948,7 +1948,9 @@ fn kind2_declaration_image_fallback() {
             "a local declaration the image does not carry",
         ),
         // WP-1343: try blocks and delete-expressions are carried now
-        // (image-body-forms-run.cpp).
+        // (image-body-forms-run.cpp). WP-1345: anonymous unions, implicit
+        // members of specializations and dependent using-declarations are
+        // carried now (image-decl-forms-run.cpp).
         (
             "export module f;\nexport inline int g() { struct L { int v; }; return L{1}.v; }\n",
             "a local class or enumeration",
@@ -1960,10 +1962,6 @@ fn kind2_declaration_image_fallback() {
         (
             "export module f;\ntemplate <class T> int h(T) { return 1; }\nexport template <class T> struct S { friend int h<>(S); };\nexport int k = h(S<int>{});\n",
             "a friend specialization or member of a class template",
-        ),
-        (
-            "export module f;\nexport struct S { union { int a; float b; }; };\nexport constexpr int k = 1;\n",
-            "an anonymous union or struct member",
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; };\n\
@@ -1978,11 +1976,6 @@ fn kind2_declaration_image_fallback() {
         (
             "export module f;\nexport template <template <class T> requires true class TT> struct W {};\n",
             "a template template parameter with a requires-clause",
-        ),
-        (
-            "export module f;\nexport template <class T> struct A { int f() { return 1; } };\n\
-             export inline int h() { A<int> a; return a.f(); }\n",
-            "an implicit member of a class template specialization",
         ),
         (
             "export module f;\nexport struct B { int f(); };\nexport struct S { friend int B::f(); };\n",
@@ -2015,11 +2008,6 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport struct B { int f() { return 1; } };\n\
              export struct D : B { using B::f; };\n",
             "a using-declaration in a class",
-        ),
-        (
-            "export module f;\nexport template <class T> struct B { int f(); };\n\
-             export template <class T> struct D : B<T> { using B<T>::f; };\n",
-            "a dependent using-declaration",
         ),
         (
             "export module f;\nexport struct B { B(int) {} };\nexport struct D : B { using B::B; };\n",

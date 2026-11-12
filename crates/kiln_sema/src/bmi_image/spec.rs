@@ -207,7 +207,12 @@ impl Writer<'_, '_, '_> {
                 SpecKind::ExplicitInstantiationDeclaration
                     | SpecKind::ExplicitInstantiationDefinition
             );
+        // An explicit specialization named before its definition, which
+        // is recorded later (WP-1345): named as the replay's use named it,
+        // never instantiated.
+        let deferred = class && self.deferred.contains(&d);
         if !explicit_inst
+            && !deferred
             && !matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
         {
             return Err("an explicit specialization or instantiation");
@@ -229,12 +234,13 @@ impl Writer<'_, '_, '_> {
                     && matches!(&self.img.decls[p as usize].payload,
                         Payload::Record { def: Some(df), .. } if df.end != NONE)
             });
-        if !from_partial && (si.from_args.is_some() || !from_template) {
+        if !deferred && !from_partial && (si.from_args.is_some() || !from_template) {
             return Err("a specialization of a partial specialization");
         }
         let template = self.template_rec(si.template, u8::from(class))?;
-        let complete =
-            class && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
+        let complete = class
+            && !deferred
+            && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
         // The importer names it while it builds the records, before their
         // constraints are in (WP-1284); WP-1344 carries what that cannot
         // change ([`super::constrspec`]).
@@ -273,6 +279,9 @@ impl Writer<'_, '_, '_> {
             payload: Payload::Spec { template, complete, args },
         });
         self.recs.insert(d, i);
+        if complete {
+            self.complete_specs.push((d, i));
+        }
         Ok(Some(i))
     }
 
@@ -308,8 +317,10 @@ impl Writer<'_, '_, '_> {
                     Some(p) => p,
                     // An implicit special member of the specialization
                     // has no pattern to name (WP-1139 follow-up).
+                    // WP-1345: an implicit special member, declared again
+                    // by the importer (`members.rs`).
                     None if ast.decls.get(d).has(DeclFlags::IMPLICIT) => {
-                        return Err("an implicit member of a class template specialization");
+                        return self.implicit_spec_member(d, class).map(Some);
                     }
                     None => return Ok(None),
                 }

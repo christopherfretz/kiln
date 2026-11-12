@@ -41,6 +41,10 @@ const K_HEAD: u8 = 1;
 const K_TRAILING: u8 = 2;
 /// A concept's constraint-expression ([temp.concept]/1).
 const K_CONCEPT: u8 = 3;
+/// A function's `explicit(expr)` ([dcl.fct.spec]/3; WP-1345, kept with
+/// the constraints: an expression of the bodies section patched onto a
+/// function record once the bodies are built).
+const K_EXPLICIT: u8 = 4;
 
 /// One constraint: its kind, its declaration record and its expression
 /// record.
@@ -118,6 +122,9 @@ impl Writer<'_, '_, '_> {
                 return Err("a requires-clause on a non-templated function");
             }
             v.push((K_TRAILING, r));
+        }
+        if let Some(&e) = ast.decls.cold.explicit_expr.get(d) {
+            v.push((K_EXPLICIT, e));
         }
         Ok(v)
     }
@@ -216,7 +223,7 @@ pub(super) fn validate_constraints(img: &Image) -> Res<()> {
         };
         let ok = match (r.kind, &d.payload) {
             (K_PARM, Payload::Ttp { .. } | Payload::Nttp { .. })
-            | (K_TRAILING, Payload::Function { .. }) => true,
+            | (K_TRAILING | K_EXPLICIT, Payload::Function { .. }) => true,
             (K_HEAD, Payload::Template { kind, .. }) => *kind < CONCEPT_KIND,
             // A partial specialization's (WP-1342).
             (K_HEAD, Payload::Record { .. } | Payload::Var { .. }) => {
@@ -260,6 +267,9 @@ impl Sema<'_, '_> {
                 }
                 K_TRAILING => {
                     let _ = self.ast.templates.trailing_requires.insert(d, e);
+                }
+                K_EXPLICIT => {
+                    let _ = self.ast.decls.cold.explicit_expr.insert(d, e);
                 }
                 _ => self.builder().set_concept_constraint(d, e),
             }

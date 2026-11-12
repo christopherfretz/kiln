@@ -1148,3 +1148,79 @@ What remains, by headers freed:
    specializations or members (`__atomic/aliases.h:28`,
    `bits/stl_bvector.h:760`): the reader must complete them after the
    constraints.
+
+## WP-1345: PCH image wave 7d, declarations and class members (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 109 libstdc++), before (base `cf4dcb9c5`),
+on the branch before merging main ("mid", this WP alone) and after
+merging main (which brought WP-1344). Reasons are declarations /
+headers.
+
+```
+lcx.h, before: 26762 top-level declarations, 24042 carried, 2720 not
+lcx.h, mid:    26704 top-level declarations, 24872 carried, 1832 not
+lcx.h, after:  26704 top-level declarations, 25687 carried, 1017 not
+gnu.h, before: 26396 top-level declarations, 24553 carried, 1843 not
+gnu.h, mid:    26396 top-level declarations, 25033 carried, 1363 not
+gnu.h, after:  26396 top-level declarations, 25475 carried,  921 not
+```
+
+Headers through the image: libc++ 29 of 106 before, 31 mid, 35 after;
+libstdc++ 31 of 109 before, 31 mid, 35 after. First refusal of
+`lcx.h`: "a template argument the image does not carry"
+(`__type_traits/is_valid_expansion.h:27`, an explicit argument of a
+name in a body), WP-1344's bucket, before and after. Of `gnu.h`: "a
+dependent using-declaration" (`ext/numeric_traits.h:54`, this bucket)
+before; "a redeclared partial specialization" (`bits/stl_pair.h:1175`,
+WP-1344's bucket) after.
+
+Reasons of this bucket (lcx before → after, gnu before → after):
+
+- a dependent using-declaration (and "outside a class template" /
+  "not named by an identifier"): 2/19 and 39/56 → 0; gnu 12/67 and
+  43/59 → 0.
+- a dependent name not named by an identifier (conversion names):
+  gnu 0/36 → 0.
+- an out-of-line defaulted member: 9/52 → 0; gnu 35/59 → 0.
+- an anonymous union or struct member / an anonymous union member:
+  11/41 → 0; gnu 9/57 and 1/23 → 0.
+- a class member outside its class definition: 6/52 → 0; gnu 17/55 →
+  1/1 (`future:674`, an explicit specialization of a member class
+  template defined out of class).
+- an implicit member of a class template specialization: 24/54 → 0;
+  gnu 34/49 → 0.
+- an inherited constructor or assignment operator: 13/18 → 0; gnu
+  13/30 → 0 (dependent inheriting declarators, in patterns and
+  partial specializations).
+- an out-of-line member of a class nested in a template: 17/1 → 0;
+  gnu 15/22 → 0.
+- a using-declaration in a class (`using enum`, enumerator shadows):
+  gnu 2/31 → 1/2 (`ranges:2755`, a non-dependent
+  `using Base::operator();`).
+- a local declaration the image does not carry (a block-scope
+  function in a template): gnu 1/47 → 0.
+- an attribute the image does not carry yet: 100/67 → 2/26
+  (`__locale:1255`, `deprecated` on an explicit instantiation, not a
+  word operand); gnu 3/13 → 0.
+- a specialization of a class template with an explicit(expr) member:
+  gnu 14/28 → 0.
+- a coroutine, contract-checked or implicitly defaulted function
+  (explicit object parameters): 1/15 → 0; gnu 5/3 → 0.
+- a declaration the image does not carry yet (file-scope `asm`):
+  gnu 1/1 → 0.
+
+What remains, by headers freed:
+
+1. The lambda `__synth_three_way` (`__compare/synth_three_way.h:28`,
+   8/63, "an implicit declaration that is not a special member") and
+   the lambda in `__filesystem/directory_entry.h:227` (1/2): closure
+   types, a later WP's bucket.
+2. A specialization's parameter as a local declaration
+   (`bits/basic_string.h:4524`, gnu 24/37): WP-1344's bucket.
+3. `deprecated` on an explicit instantiation (`__locale:1255`, 2/26).
+4. A non-dependent `using Base::operator();` in a class
+   (`ranges:2755`, gnu 1/2).
+5. An explicit specialization of a member class template defined out
+   of class (`future:674`, gnu 1/1).

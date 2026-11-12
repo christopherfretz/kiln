@@ -45,7 +45,13 @@ impl Writer<'_, '_, '_> {
     /// namespace-scope declarations that may redeclare it. Other locals
     /// get theirs on first use in a body.
     pub(super) fn local_in_order(&mut self, d: DeclId) -> W<()> {
-        if self.carries_local_extern(d) && !self.recs.contains_key(&d) {
+        // So is one in a template pattern, which a later block-scope
+        // declaration may name as its previous one (WP-1345).
+        let n = self.s.ast.decls.get(d);
+        let dep_fn = self.pch
+            && n.kind() == DeclKind::Function
+            && n.has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX);
+        if (dep_fn || self.carries_local_extern(d)) && !self.recs.contains_key(&d) {
             self.local_rec(d)?;
         }
         Ok(())

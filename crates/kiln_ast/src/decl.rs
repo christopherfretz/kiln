@@ -3026,6 +3026,18 @@ impl DeclArena {
         *self.static_assert_mut(d) = StaticAssertData { cond, message };
     }
 
+    /// Replaces the template string of a file-scope `asm` declaration
+    /// (a precompiled header's declaration image builds it after the
+    /// declaration, spec/modules.md §11.11, WP-1345).
+    ///
+    /// # Panics
+    /// If `d` is not a `FileScopeAsm`.
+    pub fn set_file_scope_asm_string(&mut self, d: DeclId, string: ExprId) {
+        let n = &mut self.nodes[d.index() as usize];
+        assert!(n.kind == DeclKind::FileScopeAsm, "not a file-scope asm declaration");
+        n.data = string.raw();
+    }
+
     /// `{` of an enumeration definition.
     pub fn begin_enum_definition(&mut self, e: DeclId) {
         let d = self.enumeration_mut(e);

@@ -44,9 +44,13 @@ enum Op {
     Sym,
     /// `a` and `b` are each an expression or zero.
     Exprs,
-    /// `a` is an expression or zero, `b` zero (`aligned(E)`; the
-    /// `alignas(type-id)` form, a type in `b`, is not carried).
+    /// `a` is an expression or zero, `b` zero or a type (`aligned(E)`,
+    /// `alignas(type-id)`; the type since WP-1345, written as an index
+    /// into [`Attrs::types`]).
     ExprA,
+    /// `a` zero, `b` a type (`preferred_name(typedef-name)`, WP-1345),
+    /// written as an index into [`Attrs::types`].
+    Type,
     /// `a` is a builtin id (written with its spelling), `b` zero.
     Builtin,
     /// `a` is a list of integer literals of type `size_t` (`nonnull`'s
@@ -143,6 +147,13 @@ const TABLE: &[(AttrKind, Op)] = &[
     // `alignas(E)`), checked when it was written.
     (AttrKind::ALIGNED, Op::ExprA),
     (AttrKind::ASM_LABEL, Op::Label),
+    // WP-1345: the typedef naming a specialization of the class template.
+    (AttrKind::PREFERRED_NAME, Op::Type),
+    // WP-1345: the condition and the message (string literal), both
+    // expressions; the flags hold the diagnostic type, the group and
+    // whether the condition names a parameter.
+    (AttrKind::DIAGNOSE_IF, Op::Exprs),
+    (AttrKind::ENABLE_IF, Op::Exprs),
 ];
 
 fn op_of(k: AttrKind) -> Option<Op> {
@@ -155,9 +166,10 @@ pub(super) fn carried(node: &AttrNode, nsyms: usize) -> bool {
         None => false,
         Some(Op::Words(am, bm)) => node.a <= am && node.b <= bm,
         Some(Op::Sym) => (node.a as usize) < nsyms && node.b == 0,
-        Some(Op::Exprs) => true,
+        Some(Op::Exprs | Op::ExprA) => true,
         Some(Op::Builtin) => node.b == 0 && builtin::info(node.a).is_some(),
-        Some(Op::ExprA | Op::Ints) => node.b == 0,
+        Some(Op::Type) => node.a == 0 && node.b != 0,
+        Some(Op::Ints) => node.b == 0,
         Some(Op::Label) => node.b == 0 && node.a != 0,
     }
 }
@@ -220,6 +232,14 @@ pub(super) struct Attrs {
     /// kinds whose words are plain ([`Op::Words`]: `lifetimebound`,
     /// `noescape`, `maybe_unused`).
     pub(super) params: Vec<(u32, AttrRec)>,
+    /// WP-1345: the type arguments of [`Op::Type`] and [`Op::ExprA`]
+    /// nodes.
+    pub(super) types: Vec<super::QRef>,
+    /// WP-1345: the attributes written on an explicit instantiation
+    /// (`decl` its index in the explicit instantiation section),
+    /// ascending; only kinds whose words are plain ([`Op::Words`]:
+    /// `visibility`).
+    pub(super) insts: Vec<AttrRec>,
 }
 
 /// What the writer computed for one declaration, committed with its
@@ -229,6 +249,8 @@ pub(super) struct Pending {
     recs: Vec<(AttrRec, [Option<ExprId>; 2])>,
     builtins: Vec<BuiltinRec>,
     ints: Vec<Vec<(u32, u32)>>,
+    /// The type argument of each record, in order (WP-1345).
+    types: Vec<Option<super::QRef>>,
 }
 
 impl Writer<'_, '_, '_> {
@@ -285,6 +307,30 @@ impl Writer<'_, '_, '_> {
             };
             self.img.attrs.params.push((k, r));
         }
+        Ok(())
+    }
+
+    /// Records attribute `node`, written on explicit instantiation
+    /// `inst` (WP-1345; [`Attrs::insts`]).
+    pub(super) fn inst_attr(&mut self, node: AttrNode, inst: u32) -> W<()> {
+        let nsyms = self.s.ast.symbols().len();
+        if !matches!(op_of(node.kind), Some(Op::Words(..))) || !carried(&node, nsyms) {
+            return Err(UNCARRIED);
+        }
+        let loc = self.loc(node.loc)?;
+        let (scope, name) = self.attr_spelling(node.loc);
+        self.img.attrs.insts.push(AttrRec {
+            decl: inst,
+            kind: node.kind.0,
+            syntax: node.syntax as u8,
+            flags: node.flags,
+            loc,
+            a: node.a,
+            b: node.b,
+            s: NONE,
+            scope,
+            name,
+        });
         Ok(())
     }
 
@@ -346,15 +392,28 @@ impl Writer<'_, '_, '_> {
                 name,
             };
             let mut exprs = [None, None];
+            let mut ty = None;
             match op {
                 Op::Words(..) => {}
+                Op::Type => {
+                    let q = kiln_ast::QualType::from_raw(node.b).ok_or(UNCARRIED)?;
+                    ty = Some(self.qref(q)?);
+                    r.b = NONE;
+                }
                 Op::Sym => {
                     let t = ast.symbols().as_str(Symbol::from_index(node.a)).to_owned();
                     r.s = self.attr_str(&t);
                     r.a = 0;
                 }
-                Op::Exprs | Op::ExprA => {
+                Op::Exprs => {
                     exprs = [ExprId::try_new(node.a), ExprId::try_new(node.b)];
+                    (r.a, r.b) = (NONE, NONE);
+                }
+                Op::ExprA => {
+                    exprs = [ExprId::try_new(node.a), None];
+                    if let Some(q) = kiln_ast::QualType::from_raw(node.b) {
+                        ty = Some(self.qref(q)?);
+                    }
                     (r.a, r.b) = (NONE, NONE);
                 }
                 Op::Builtin => {
@@ -389,6 +448,7 @@ impl Writer<'_, '_, '_> {
                 }
             }
             p.recs.push((r, exprs));
+            p.types.push(ty);
         }
         Ok(p)
     }
@@ -396,7 +456,11 @@ impl Writer<'_, '_, '_> {
     /// Adds `p` to the image, once its declaration's record is in.
     pub(super) fn attr_commit(&mut self, rec: u32, p: Pending) {
         let mut runs = p.ints.into_iter();
-        for (mut r, exprs) in p.recs {
+        for ((mut r, exprs), ty) in p.recs.into_iter().zip(p.types) {
+            if let Some(q) = ty {
+                r.b = self.img.attrs.types.len() as u32;
+                self.img.attrs.types.push(q);
+            }
             let k = self.img.attrs.recs.len() as u32;
             if op_of(AttrKind(r.kind)) == Some(Op::Ints) {
                 let run = runs.next().unwrap_or_default();
@@ -438,6 +502,14 @@ pub(super) fn encode_attrs(w: &mut Wr, a: &Attrs) {
     w.len(a.params.len());
     for (k, r) in &a.params {
         w.u32(*k);
+        encode_rec(w, r);
+    }
+    w.len(a.types.len());
+    for &q in &a.types {
+        w.q(q);
+    }
+    w.len(a.insts.len());
+    for r in &a.insts {
         encode_rec(w, r);
     }
 }
@@ -488,6 +560,14 @@ pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
         let k = r.u32()?;
         a.params.push((k, decode_rec(r)?));
     }
+    let n = r.count(5)?;
+    for _ in 0..n {
+        a.types.push(r.q()?);
+    }
+    let n = r.count(32)?;
+    for _ in 0..n {
+        a.insts.push(decode_rec(r)?);
+    }
     Ok(a)
 }
 
@@ -500,6 +580,7 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
     };
     let nexpr = img.bodies.exprs.len();
     let expr_ok = |i: u32| i == NONE || (i as usize) < nexpr;
+    let ty_ok = |i: u32| (i as usize) < a.types.len();
     let mut last = 0;
     for r in &a.recs {
         if (r.decl as usize) >= img.decls.len() || r.decl < last {
@@ -515,7 +596,8 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
                 Some(Op::Words(am, bm)) => r.a <= am && r.b <= bm && r.s == NONE,
                 Some(Op::Sym | Op::Label) => r.a == 0 && r.b == 0 && str_ok(r.s),
                 Some(Op::Exprs) => expr_ok(r.a) && expr_ok(r.b) && r.s == NONE,
-                Some(Op::ExprA) => expr_ok(r.a) && r.b == NONE && r.s == NONE,
+                Some(Op::ExprA) => expr_ok(r.a) && (r.b == NONE || ty_ok(r.b)) && r.s == NONE,
+                Some(Op::Type) => r.a == 0 && ty_ok(r.b) && r.s == NONE,
                 Some(Op::Builtin) => r.b == 0 && spelled(r.s, r.a),
                 Some(Op::Ints) => {
                     r.s == NONE
@@ -547,6 +629,21 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
         }
         last = (r.decl, k);
     }
+    let mut last = 0;
+    for r in &a.insts {
+        let ok = r.decl >= last
+            && super::explinst::inst_count(img) > r.decl as usize
+            && syntax_of(r.syntax).is_some()
+            && (r.scope == NONE || str_ok(r.scope))
+            && (r.name == NONE || str_ok(r.name))
+            && (r.scope == NONE || r.name != NONE)
+            && r.s == NONE
+            && matches!(op_of(AttrKind(r.kind)), Some(Op::Words(am, bm)) if r.a <= am && r.b <= bm);
+        if !ok {
+            return bad("bad explicit instantiation attribute record");
+        }
+        last = r.decl;
+    }
     for b in &a.builtins {
         let func = img
             .decls
@@ -560,8 +657,9 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
 }
 
 /// The expression arguments the importer fills in once the bodies are
-/// built: (attribute, `a` record, `b` record).
-pub(super) type AttrExprs = Vec<(AttrId, u32, u32)>;
+/// built: (attribute, `a` record, `b` record, the raw `b` word kept when
+/// `b` is no record).
+pub(super) type AttrExprs = Vec<(AttrId, u32, u32, u32)>;
 
 impl Sema<'_, '_> {
     /// Attaches record `rec`'s attributes and builtin identity to `d`,
@@ -573,6 +671,7 @@ impl Sema<'_, '_> {
         d: DeclId,
         main: &Locs,
         pending: &mut AttrExprs,
+        qt: &mut dyn FnMut(&mut Self, super::QRef) -> kiln_ast::QualType,
     ) {
         let a = &img.attrs;
         let lo = a.builtins.partition_point(|b| b.decl < rec);
@@ -591,9 +690,21 @@ impl Sema<'_, '_> {
             let kind = AttrKind(r.kind);
             let loc = main.get(r.loc);
             let syntax = syntax_of(r.syntax).unwrap_or_default();
+            // WP-1345: a type argument, built now (its typedef or class
+            // is an earlier record).
+            let ty = match op_of(kind) {
+                Some(Op::Type | Op::ExprA) if r.b != NONE => {
+                    qt(self, a.types[r.b as usize]).to_raw()
+                }
+                _ => 0,
+            };
+            if kind == AttrKind::DIAGNOSE_IF {
+                self.any_diagnose_if = true;
+            }
             let (x, y) = match op_of(kind) {
                 Some(Op::Sym) => (self.intern(&a.strs[r.s as usize]).index(), 0),
-                Some(Op::Exprs | Op::ExprA) => (0, 0),
+                Some(Op::Exprs) => (0, 0),
+                Some(Op::ExprA | Op::Type) => (0, ty),
                 Some(Op::Ints) => {
                     let ty = self.size_type();
                     let run = &a.ints[r.a as usize..r.a as usize + r.b as usize];
@@ -617,8 +728,11 @@ impl Sema<'_, '_> {
             };
             let id =
                 self.ast.attrs.push(AttrNode { kind, syntax, flags: r.flags, loc, a: x, b: y });
-            if matches!(op_of(kind), Some(Op::Exprs | Op::ExprA)) && (r.a != NONE || r.b != NONE) {
-                pending.push((id, r.a, r.b));
+            match op_of(kind) {
+                Some(Op::Exprs) if r.a != NONE || r.b != NONE => pending.push((id, r.a, r.b, 0)),
+                // The type stays in `b` (WP-1345).
+                Some(Op::ExprA) if r.a != NONE => pending.push((id, r.a, NONE, ty)),
+                _ => {}
             }
             if r.name != NONE && loc.is_valid() {
                 let scope = (r.scope != NONE).then(|| self.intern(&a.strs[r.scope as usize]));
@@ -660,11 +774,36 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// Attaches the attributes written on explicit instantiation `inst`
+    /// to its specialization `spec` (WP-1345), after the instantiation,
+    /// as the parser's declaration does.
+    pub(super) fn image_inst_attrs(&mut self, img: &Image, inst: u32, spec: DeclId, main: &Locs) {
+        let a = &img.attrs;
+        let lo = a.insts.partition_point(|r| r.decl < inst);
+        let mut ids = Vec::new();
+        for r in a.insts[lo..].iter().take_while(|r| r.decl == inst) {
+            let loc = main.get(r.loc);
+            let syntax = syntax_of(r.syntax).unwrap_or_default();
+            let node =
+                AttrNode { kind: AttrKind(r.kind), syntax, flags: r.flags, loc, a: r.a, b: r.b };
+            ids.push(self.ast.attrs.push(node));
+            if r.name != NONE && loc.is_valid() {
+                let scope = (r.scope != NONE).then(|| self.intern(&a.strs[r.scope as usize]));
+                let name = self.intern(&a.strs[r.name as usize]);
+                self.attr_spellings.insert(loc, (scope, name));
+            }
+        }
+        if !ids.is_empty() {
+            self.builder().append_attrs(spec, &ids);
+        }
+    }
+
     /// Fills in the expression arguments of the imported attributes.
     pub(super) fn image_attr_exprs(&mut self, pending: &AttrExprs, built: &super::body::Built) {
         let raw = |i: u32| if i == NONE { 0 } else { built.expr(i).index() };
-        for &(id, a, b) in pending {
-            self.ast.attrs.set_args(id, raw(a), raw(b));
+        for &(id, a, b, keep) in pending {
+            let b = if b == NONE { keep } else { raw(b) };
+            self.ast.attrs.set_args(id, raw(a), b);
         }
     }
 }
