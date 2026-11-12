@@ -1870,6 +1870,29 @@ impl ExprArena {
         Ok(())
     }
 
+    /// Makes a `DeclRefExpr` / `MemberExpr` built in an unevaluated
+    /// operand (`NonOdrUse::Unevaluated`) a potential odr-use again
+    /// (`NonOdrUse::None`): the operand of `typeid` that turned out to be
+    /// a glvalue of polymorphic class type ([expr.typeid]/3; clang
+    /// re-transforms it, `TransformToPotentiallyEvaluated`). Any other
+    /// reason is kept. Returns whether `e` changed.
+    ///
+    /// # Panics
+    /// If `e` is not a `DeclRefExpr` / `MemberExpr`.
+    pub fn clear_unevaluated_non_odr_use(&mut self, e: ExprId) -> bool {
+        let n = &mut self.nodes[e.index() as usize];
+        assert!(
+            matches!(n.kind, ExprKind::DeclRefExpr | ExprKind::MemberExpr),
+            "expected DeclRefExpr or MemberExpr, found {:?}",
+            n.kind
+        );
+        if n.aux != NonOdrUse::Unevaluated as u8 {
+            return false;
+        }
+        n.aux = NonOdrUse::None as u8;
+        true
+    }
+
     /// Records the explicit template arguments `targs` written on the
     /// member access `e` (`b.f<int>`, clang's `hasExplicitTemplateArgs`),
     /// known only once the call resolved the member template. Write-once.

@@ -31,6 +31,70 @@ Planned as 1.1.0.
   alone. Nothing changes without the switch (README.md "Profile-guided
   build", WP-1308).
 
+## [1.0.2] - 2026-11-11
+
+A bug-fix release: fixes found while building the reference workload,
+each with a test. Nothing in it changes what
+[docs/STABILITY.md](docs/STABILITY.md) promises.
+
+### Fixed
+
+- Wrong code: the default member initializers of a member class template
+  were lost when a member declaration of the enclosing class instantiated
+  the template before the end of that class
+  (`struct Outer { template <class T> struct F { bool set{false}; T v; }; F<bool> f; };`).
+  A constructor or aggregate initialization then left those members
+  uninitialized. The initializer is now found at its first use; a use
+  before it is parsed is the error it is for a non-template class
+  ([class.mem.general]/8).
+- Linking against libstdc++: a member explicitly defaulted on its first
+  declaration is defined where it is used even when its class has an
+  explicit instantiation declaration, as clang does (`linkonce_odr`).
+  `std::filesystem` directory iteration failed to link without it.
+- Debug info: a constexpr member of an explicitly instantiated class
+  template (`template class std::vector<T>;`) could be emitted twice
+  when an earlier member called it, and with `-g` LLVM then dropped the
+  translation unit's debug info.
+- Debug info: an explicit instantiation definition of a class template
+  (`template struct V<int>;`) completes the specialization's type and
+  keeps it in the compile unit's retained types, as clang does. The type
+  was described only if a member that referred to it was emitted.
+- Linking: a function called in the operand of `typeid` whose result is a
+  glvalue of polymorphic class type is odr-used, so it is defined or
+  instantiated: `typeid(*p)` with a class template's member `operator*`
+  no longer leaves an undefined symbol at link time. A non-polymorphic
+  operand still names nothing it odr-uses ([expr.typeid]/3).
+- Overload resolution: a comparison whose regular and reversed rewritten
+  candidates tie (`a < b` through `operator<=>(const Base&)`, or `a == b`
+  through the pre-C++20 `operator==(const Base&)`) is a substitution
+  failure in a requires-expression, a concept or a SFINAE'd signature, as
+  in clang and GCC; outside SFINAE it is still accepted with
+  `-Wambiguous-reversed-operator`.
+- Lookup: the namespace-name of a using-directive or of a namespace alias
+  is looked up among namespaces only ([basic.lookup.udir]). A class of
+  the same name in a nearer scope no longer gives "expected namespace
+  name".
+- Constraints: a function's constraints are checked from the function, so
+  a hidden friend's trailing requires-clause may name a private member of
+  the befriending class. Such a friend was dropped from overload
+  resolution, and a deduced-return template was chosen in its place.
+- Placement new: a placement parameter of type reference to a base class
+  accepts an argument of a derived class
+  (`operator new(std::size_t, Allocator &)` with a derived allocator).
+- Abstract classes: binding a reference to an abstract class from an
+  object of an unrelated class through a converting constructor is
+  ill-formed ([class.abstract]/3), and a substitution failure where one
+  is allowed. GoogleTest's printer selection relied on it.
+- Parsing: in `X<args>::name`, `name` is classified in the explicit
+  specialization the template-id names when every argument is a decimal
+  literal or `sizeof(name)`. Nested `BOOST_SCOPE_EXIT` blocks need it.
+- Warnings:
+  - a comparison or conditional expression with an unnamed enumeration
+    warns under `-Wdeprecated-anon-enum-enum-conversion`, as in clang, so
+    `-Wno-deprecated-anon-enum-enum-conversion` silences it;
+  - `-Wcomment` no longer reports a multi-line `//` comment when the
+    spliced-in line is itself a comment.
+
 ## [1.0.1] - 2026-11-11
 
 A bug-fix release. Nothing in it changes what [docs/STABILITY.md](docs/STABILITY.md)
@@ -229,5 +293,6 @@ with no tagged releases. The history is in the git log, the milestones
 in [docs/ROADMAP.md](docs/ROADMAP.md), and each work package's record in
 [docs/BACKLOG.md](docs/BACKLOG.md) and `spec/landed/`.
 
+[1.0.2]: https://github.com/christopherfretz/kiln/releases/tag/v1.0.2
 [1.0.1]: https://github.com/christopherfretz/kiln/releases/tag/v1.0.1
 [1.0.0]: https://github.com/christopherfretz/kiln/releases/tag/v1.0.0

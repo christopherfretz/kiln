@@ -283,7 +283,7 @@ impl Cg<'_> {
         self.nounwind.insert(f, !self.opts.exceptions);
         let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
         if self.f.uses_ph {
-            self.pending.push((f, d, fir));
+            self.defer_body(f, d, fir);
             return Ok(());
         }
         if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {

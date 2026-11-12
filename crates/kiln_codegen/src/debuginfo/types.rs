@@ -675,6 +675,17 @@ impl Cg<'_> {
         }
     }
 
+    /// clang `completeTemplateDefinition`: an explicit instantiation
+    /// definition completes the specialization's type and keeps it in the
+    /// unit's retained types, whether or not a member of it is emitted
+    /// (a dynamic class is left to its vtable, as for a homing
+    /// constructor).
+    pub(crate) fn di_complete_template_definition(&mut self, rd: DeclId) {
+        if self.di_reduced() {
+            self.di_home_class(rd, true);
+        }
+    }
+
     /// clang `CreateTypeDefinition(const RecordType *)` into the
     /// placeholder of `rd` (once).
     fn di_complete_class(&mut self, rd: DeclId) {

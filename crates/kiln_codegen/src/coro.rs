@@ -703,7 +703,7 @@ impl Cg<'_> {
         let loc = decl.map(|d| self.ast.decls.get(d).loc());
         if self.f.uses_ph {
             let Some(d) = decl else { return err(loc, "suspend wrapper outside a function") };
-            self.pending.push((f, d, fir));
+            self.defer_body(f, d, fir);
             return Ok(());
         }
         if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {

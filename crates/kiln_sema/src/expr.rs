@@ -875,7 +875,7 @@ impl Sema<'_, '_> {
 
     /// clang `Expr::IgnoreImplicit`: `e` without its implicit casts and
     /// full-expression, materialization and binding wrappers.
-    fn ignore_implicit(&self, mut e: ExprId) -> ExprId {
+    pub(crate) fn ignore_implicit(&self, mut e: ExprId) -> ExprId {
         loop {
             match self.ast.exprs.get(e).kind() {
                 ExprKind::ImplicitCastExpr

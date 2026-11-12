@@ -2965,6 +2965,12 @@ pub(crate) struct SrcLocCache {
     /// uses with values: (use, location, context, `__impl` object),
     /// computed once the image is built (WP-1310).
     pub(crate) image_uses: Vec<(ExprId, Loc, DeclId, bool)>,
+    /// While a function's constraints are checked with concrete template
+    /// arguments ([`Sema::satisfy`]): the function they are checked from
+    /// (a template's pattern), and the body of the requires-expression
+    /// whose requirements are being substituted there, if any
+    /// ([`Sema::srcloc_ctx`]).
+    pub(crate) satisfying: Option<(DeclId, Option<DeclId>)>,
 }
 
 /// The bit of `SourceLocKind::SourceLocStruct` in a kinds mask.
@@ -2993,7 +2999,7 @@ impl Sema<'_, '_> {
                 None => return self.recover_err(&[], loc),
             },
         };
-        let ctx = self.ctx;
+        let ctx = self.srcloc_ctx();
         let e = self.builder().source_loc_expr(kind, ty, ctx, loc, rparen);
         self.record_source_loc(e, loc, ctx, kind == SourceLocKind::SourceLocStruct);
         if matches!(kind, SourceLocKind::Function | SourceLocKind::SourceLocStruct) {
@@ -3368,7 +3374,7 @@ impl Sema<'_, '_> {
     pub(crate) fn note_default_arg_use(&mut self, e: ExprId, param: DeclId, call_begin: Loc) {
         let kinds = self.default_arg_srcloc_kinds(param);
         if kinds != 0 {
-            let ctx = self.ctx;
+            let ctx = self.srcloc_ctx();
             self.record_source_loc(e, call_begin, ctx, kinds & SRC_LOC_STRUCT_BIT != 0);
             // An immediate invocation in the argument is evaluated where
             // the call is built (clang's rewritten default argument), so
@@ -3442,9 +3448,29 @@ impl Sema<'_, '_> {
     /// holds changes per specialization (`[T = int]`): `e` is marked
     /// instantiation-dependent so instantiation rebuilds it (clang 19's
     /// `SourceLocExpr::MayBeDependent`, `TransformCXXDefaultArgExpr`).
+    /// A function template's pattern whose constraints are being checked
+    /// with concrete arguments is no dependent context here: that
+    /// substitution is final, so the value names the pattern (clang 22).
     fn mark_function_name_dependent(&mut self, e: ExprId, ctx: DeclId) {
+        if self.srcloc.satisfying.is_some_and(|(f, _)| f == ctx) {
+            return;
+        }
         if self.ast.decls.get(ctx).kind().is_function() && self.ctx_template_levels(ctx) > 0 {
             self.ast.exprs.mark_instantiation_dependent(e);
+        }
+    }
+
+    /// The context a source-location builtin (or a default argument
+    /// evaluating one) is used in: the current one, except that while a
+    /// function's constraints are checked from the function
+    /// ([`SrcLocCache::satisfying`]), a requires-expression's
+    /// requirements are in its body, which is no function (clang
+    /// `TransformRequiresExpr` enters the `RequiresExprBodyDecl`, as
+    /// parsing does): its names are empty.
+    pub(crate) fn srcloc_ctx(&self) -> DeclId {
+        match self.srcloc.satisfying {
+            Some((f, body)) if f == self.ctx => body.unwrap_or(f),
+            _ => self.ctx,
         }
     }
 

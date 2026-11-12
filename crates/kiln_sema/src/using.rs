@@ -1096,8 +1096,8 @@ impl Sema<'_, '_> {
     /// `clang::index`.
     pub fn lookup_namespace_name(&self, qual: Option<DeclId>, name: Symbol) -> Option<DeclId> {
         let found = match qual {
-            Some(q) => self.lookup_qualified(q, name, LookupKind::Nested),
-            None => self.lookup_name(name, LookupKind::Nested),
+            Some(q) => self.lookup_qualified(q, name, LookupKind::Namespace),
+            None => self.lookup_name(name, LookupKind::Namespace),
         };
         found
             .decls

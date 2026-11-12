@@ -2295,10 +2295,6 @@ fn is_sfinae_report(id: DiagId) -> bool {
     matches!(id, DiagId::sema_constraint_depends_on_self)
 }
 
-/// clang's `SFINAEFailure` warnings: in a SFINAE context they are a
-/// substitution failure whatever their severity, even when disabled
-/// (`Sema::EmitDiagnostic` consults the SFINAE response before the
-/// mapping). The C99-designator extensions are not among them.
 /// An access-control error ([class.access]) that clang's
 /// `SuppressAccessChecks` discards.
 fn is_access_error(id: DiagId) -> bool {
@@ -2313,9 +2309,14 @@ fn is_access_error(id: DiagId) -> bool {
     )
 }
 
-/// clang's `SFINAEFailure` warnings: a substitution failure whatever the
-/// mapped severity, even under `-Wno-…` or `#pragma … ignored` (narrowing:
-/// [dcl.init.list]/3, [temp.deduct.general]/8).
+/// clang's `SFINAEFailure` warnings: in a SFINAE context they are a
+/// substitution failure whatever the mapped severity, even under
+/// `-Wno-…` or `#pragma … ignored` (`Sema::EmitDiagnostic` consults the
+/// SFINAE response before the mapping; narrowing: [dcl.init.list]/3,
+/// [temp.deduct.general]/8). Outside one they are ordinary warnings.
+/// The extension for a regular-vs-reversed rewritten-operator tie
+/// ([over.match.best.general]/2, [over.match.oper]/3.4) is ill-formed
+/// C++20 that clang and GCC accept only outside SFINAE (WP-1322).
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,
@@ -2329,5 +2330,6 @@ fn is_sfinae_failure(id: DiagId) -> bool {
             | DiagId::sema_init_list_variable_narrowing_const_reference
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
+            | DiagId::sema_ovl_ambiguous_reversed_operator
     )
 }

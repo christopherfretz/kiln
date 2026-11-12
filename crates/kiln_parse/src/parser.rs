@@ -1021,6 +1021,69 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             && !self.template_args_dependent(open, close)
     }
 
+    /// The explicit specialization of class template `d` named by the
+    /// template-id whose arguments lie between `open` and `close`, when each
+    /// argument is a decimal literal without a suffix or `sizeof(name)`
+    /// (any other literal form, octal included, gives `None`). The lookahead does
+    /// not form the specialization, and its members may differ from the
+    /// primary template's and the other specializations' (Boost.ScopeExit's
+    /// `resolve<sizeof(args)>::cmp1<0>::cmp2`: `cmp1` is a member template
+    /// of one explicit specialization and a variable of another).
+    fn lookahead_explicit_spec(&self, d: DeclId, open: usize, close: usize) -> Option<DeclId> {
+        if self.s.ast.decls.get(d).kind() != DeclKind::ClassTemplate {
+            return None;
+        }
+        let mut vals = Vec::new();
+        let mut i = open + 1;
+        while i < close {
+            let t = self.tok_at(i);
+            let (v, next) = if t.kind == TokKind::PpNumber {
+                (decimal_literal(&self.spelling_of(&t))?, i + 1)
+            } else if self.kw_of(t) == Some(Kw::Sizeof)
+                && self.tok_at(i + 1).kind == TokKind::Punct(Punct::LParen)
+                && self.tok_at(i + 3).kind == TokKind::Punct(Punct::RParen)
+            {
+                (self.s.lookahead_sizeof_name(self.ident_of(self.tok_at(i + 2))?)?, i + 4)
+            } else {
+                return None;
+            };
+            vals.push(v);
+            i = if next == close {
+                next
+            } else if self.tok_at(next).kind == TokKind::Punct(Punct::Comma) {
+                next + 1
+            } else {
+                return None;
+            };
+        }
+        self.s.explicit_spec_for_int_args(d, &vals)
+    }
+
+    /// What `class` names once followed by the template argument list
+    /// between `open` and `close`, and whether it is a class template with
+    /// non-dependent arguments ([`Parser::nondependent_template_qualifier`];
+    /// never when the list was `split`). Such a template-id names the
+    /// explicit specialization its arguments select, when the lookahead can
+    /// tell ([`Parser::lookahead_explicit_spec`]).
+    fn class_with_args(
+        &self,
+        class: NameClass,
+        split: bool,
+        open: usize,
+        close: usize,
+    ) -> (bool, NameClass) {
+        let nondep = !split && self.nondependent_template_qualifier(class, open, close);
+        let spec = match class {
+            NameClass::TypeTemplate(d) if nondep => self.lookahead_explicit_spec(d, open, close),
+            _ => None,
+        };
+        let with_args = match spec {
+            Some(s) => NameClass::Type(QualType::DEPENDENT, s),
+            None => type_if_args(class),
+        };
+        (nondep, with_args)
+    }
+
     /// [`Parser::scan_name_walk`] from token `i`, the first component
     /// after a `::` whose scope `scope` is already known.
     fn scan_name_walk_in(
@@ -1100,8 +1163,8 @@ impl<'a, 'sm> Parser<'a, 'sm> {
                         dep_tid = true;
                     }
                 }
-                nondep_class |= !split && self.nondependent_template_qualifier(class, end, close);
-                class = type_if_args(class);
+                let (nondep, with_args) = self.class_with_args(class, split, end, close);
+                (nondep_class, class) = (nondep_class | nondep, with_args);
                 if split {
                     return Ok((close, true, class, name, qual));
                 }
@@ -2070,6 +2133,16 @@ enum ScanStop {
     NoName,
     /// A qualifier component names no scope ([`Parser::not_a_scope_name`]).
     NotAScope,
+}
+
+/// The value of `spelling` when it is a decimal-literal with no suffix or
+/// digit separator ([lex.icon]): `0` or digits not starting with `0`.
+fn decimal_literal(spelling: &str) -> Option<i128> {
+    let octal = spelling.len() > 1 && spelling.starts_with('0');
+    if octal || !spelling.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    spelling.parse().ok()
 }
 
 /// A class or alias template specialization scans as a type.
