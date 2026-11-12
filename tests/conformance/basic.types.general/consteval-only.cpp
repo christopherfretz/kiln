@@ -1,38 +1,37 @@
-// [basic.types.general], [expr.const] P2996R13: std::meta::info and the
-// types built from it are consteval-only. A variable of such a type is
-// constexpr, a function of one is consteval, and an expression of one
+// [expr.const.const], [expr.const.imm] (P4101R1, the value-based model;
+// formerly P2996R13's consteval-only types): a variable whose value holds
+// a non-null reflection is constexpr, an expression whose value does
 // appears only in an immediate function context (an immediate-escalating
-// function escalates instead); no reflection reaches code generation.
+// function escalates instead), and one holding only the null reflection
+// is unrestricted. kiln still requires a function whose type holds
+// std::meta::info to be consteval (WP-1328 land 2 lifts it).
 //@ expect: compile-fail
 //@ args: -freflection
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 29:12 error "consteval-only variable 'cg' not declared 'constexpr'"
-//@ diag: 30:6 error "consteval-only variable 'gv' not declared 'constexpr'"
-//@ diag: 31:13 error "consteval-only variable 'ex' not declared 'constexpr'"
-//@ diag: 33:3 error "consteval-only variable 'w' not declared 'constexpr'"
-//@ diag: 35:7 error "consteval-only variable 'gp' not declared 'constexpr'"
-//@ diag: 40:6 error "function of consteval-only type must be declared 'consteval'"
-//@ diag: 41:16 error "function of consteval-only type must be declared 'consteval'"
-//@ diag: 41:30 error "consteval-only expressions are only allowed"
-//@ diag: 43:6 error "function of consteval-only type must be declared 'consteval'"
-//@ diag: 48:3 error "consteval-only expressions are only allowed"
-//@ diag: 50:7 error "consteval-only expressions are only allowed"
-//@ diag: 52:8 error "consteval-only variable 'p' not declared 'constexpr'"
-//@ diag: 53:8 error "consteval-only variable 'loc' not declared 'constexpr'"
-//@ diag: 55:27 error "consteval-only variable 'l' not declared 'constexpr'"
-//@ diag: 61:21 error "consteval-only expressions are only allowed"
-//@ diag: 56:37 error "consteval-only expressions are only allowed"
-//@ diag: 58:10 note "in instantiation of function template specialization"
+//@ diag: 28:12 error "'cg' is initialized with a consteval-only value but is not declared 'constexpr'"
+//@ diag: 32:3 error "'w' is initialized with a consteval-only value but is not declared 'constexpr'"
+//@ diag: 39:6 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
+//@ diag: 40:16 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
+//@ diag: 40:30 error "consteval-only value outside an immediate function context"
+//@ diag: 42:6 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
+//@ diag: 47:3 error "consteval-only value outside an immediate function context"
+//@ diag: 49:7 error "consteval-only value outside an immediate function context"
+//@ diag: 51:13 error "consteval-only value outside an immediate function context"
+//@ diag: 52:14 error "consteval-only value outside an immediate function context"
+//@ diag: 54:31 error "consteval-only value outside an immediate function context"
+//@ diag: 60:21 error "consteval-only value outside an immediate function context"
+//@ diag: 55:37 error "consteval-only value outside an immediate function context"
+//@ diag: 57:10 note "in instantiation of function template specialization 'g<int>' requested here"
 using info = decltype(^^int);
 constexpr info r = ^^int;
-const info cg = ^^int;                 // not constexpr
-info gv;                               // not constexpr
-extern info ex;                        // not constexpr
+const info cg = ^^int;                 // a non-null reflection, not constexpr
+info gv;                               // OK: the null reflection
+extern info ex;                        // OK: no value
 struct W { info m; };
 W w{^^int};                            // a class with an info member
 constexpr W cw{^^int};                 // OK
-info* gp;                              // a pointer to info
+info* gp;                              // OK: a null pointer
 struct S { static constexpr info sm = ^^int; };  // OK
 constexpr bool b1 = r == ^^int;        // OK: manifestly constant-evaluated
 bool b2 = r == ^^int;                  // OK: constant initialization

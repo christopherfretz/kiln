@@ -34,6 +34,19 @@ pub(crate) fn err<T>(loc: Option<Loc>, msg: impl Into<String>) -> R<T> {
     Err(CodegenError { loc, msg: msg.into() })
 }
 
+/// The error for code that needs a run-time `std::meta::info` object
+/// (one holding the null reflection, well-formed since P4101R1): codegen
+/// has no run-time representation for reflections yet (spec/codegen.md
+/// "Consteval-only variables").
+pub(crate) fn runtime_reflection_error(loc: Option<Loc>) -> CodegenError {
+    CodegenError {
+        loc,
+        msg: "code generation for a run-time 'std::meta::info' value is not supported yet \
+              (P4101R1 run-time reflections)"
+            .into(),
+    }
+}
+
 /// The lowered signature of a function type (clang `CGFunctionInfo` plus
 /// the IR function type).
 #[derive(Clone, Debug)]
@@ -202,9 +215,12 @@ pub(crate) struct Cg<'a> {
     /// local variable (clang `InitializerConstants`;
     /// [`Cg::unnamed_global_from`]).
     pub unnamed_consts: FxHashMap<DeclId, GlobalId>,
-    /// Whether each class definition asked about is consteval-only
-    /// ([`Cg::is_consteval_only`]).
+    /// Whether each class definition asked about reaches
+    /// `std::meta::info` ([`Cg::reaches_meta_info`]).
     pub consteval_only: FxHashMap<DeclId, bool>,
+    /// [`Cg::no_runtime_object`] of each variable asked about: `None`
+    /// when it has an object, `Some(unsupported)` otherwise.
+    pub no_object: FxHashMap<DeclId, Option<bool>>,
     /// Static locals emitted per (function, name), for discriminators.
     pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
     /// `void *`, used to classify implicit object parameters.
@@ -305,14 +321,16 @@ impl<'a> Cg<'a> {
         }
     }
 
-    /// Whether `t` is consteval-only ([basic.types.general], P2996R13;
-    /// sema's `is_consteval_only_type`, spec/reflection-repr.md §6):
-    /// `std::meta::info`, or a pointer, reference, array, function or
-    /// member pointer type or class reaching one through its parts, bases
-    /// or non-static data members. Its objects exist only during constant
-    /// evaluation, so a variable of such a type is never emitted. Classes
+    /// Whether `t` reaches `std::meta::info`: it is `std::meta::info`, or
+    /// a pointer, reference, array, function or member pointer type or
+    /// class reaching it through its parts, bases or non-static data
+    /// members. Codegen has no run-time representation for a reflection
+    /// yet (P4101R1 allows a run-time null one; spec/codegen.md
+    /// "Consteval-only variables"), so a variable of such a type has no
+    /// object: a `constexpr` one is used only for its constant value, any
+    /// other is "not supported yet" ([`Cg::no_runtime_object`]). Classes
     /// are walked with a worklist and cached.
-    pub(crate) fn is_consteval_only(&mut self, t: QualType) -> bool {
+    pub(crate) fn reaches_meta_info(&mut self, t: QualType) -> bool {
         let ast = self.ast;
         let mut seen: FxHashSet<DeclId> = FxHashSet::default();
         let mut records: Vec<DeclId> = Vec::new();
@@ -391,6 +409,41 @@ impl<'a> Cg<'a> {
         found
     }
 
+    /// Whether variable `d` has no run-time object (spec/codegen.md
+    /// "Consteval-only variables"), and if so whether that is an error.
+    /// An immediate object ([expr.const.const]/2, P4101R1: its value has
+    /// a consteval-only constituent, decided by value, not type) exists
+    /// only for constant evaluation: sema made every use of it a constant
+    /// or an error, so it gets no storage. A variable whose type reaches
+    /// `std::meta::info` but whose value is not consteval-only (one
+    /// holding null reflections) has none either: a `constexpr` one is
+    /// read only for its constant value; any other would need a run-time
+    /// reflection, which is not supported yet (`Some(Err)`).
+    pub(crate) fn no_runtime_object(&mut self, d: DeclId) -> Option<R<()>> {
+        let cached = if let Some(&x) = self.no_object.get(&d) {
+            x
+        } else {
+            let x = self.no_runtime_object_uncached(d);
+            self.no_object.insert(d, x);
+            x
+        };
+        let unsupported = cached?;
+        let loc = Some(self.ast.decls.get(d).loc());
+        Some(if unsupported { Err(runtime_reflection_error(loc)) } else { Ok(()) })
+    }
+
+    fn no_runtime_object_uncached(&mut self, d: DeclId) -> Option<bool> {
+        let ast = self.ast;
+        if ast.is_immediate_var(d) {
+            return Some(false);
+        }
+        let q = ast.decls.get(d).ty()?;
+        if !self.reaches_meta_info(q) {
+            return None;
+        }
+        Some(!ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr()))
+    }
+
     pub fn new(
         ast: &'a Ast,
         folds: &'a Folds,
@@ -457,6 +510,7 @@ impl<'a> Cg<'a> {
             static_locals: FxHashMap::default(),
             unnamed_consts: FxHashMap::default(),
             consteval_only: FxHashMap::default(),
+            no_object: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             void_ptr,
             sfns: FxHashMap::default(),
@@ -1025,14 +1079,12 @@ impl<'a> Cg<'a> {
         if ast.weakref_target(d).is_some() {
             return Ok(());
         }
-        // A consteval-only variable has no storage at namespace scope
-        // either, whatever its linkage (`extern constexpr info r`, an
-        // exported one of a module interface; spec/codegen.md
+        // A variable with no run-time object has no storage at namespace
+        // scope either, whatever its linkage (`extern constexpr info r`,
+        // an exported one of a module interface; spec/codegen.md
         // "Consteval-only variables").
-        if let Some(q) = ast.decls.get(d).ty()
-            && self.is_consteval_only(q)
-        {
-            return Ok(());
+        if let Some(r) = self.no_runtime_object(d) {
+            return r;
         }
         // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
         let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);

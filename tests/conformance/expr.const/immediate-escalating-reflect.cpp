@@ -1,7 +1,7 @@
-// [expr.const.imm]/2 (P2996R13): a potentially-evaluated expression of
-// consteval-only type (`^^x`, of type std::meta::info) that is not in an
-// immediate function context nor a subexpression of an immediate
-// invocation is immediate-escalating: it makes an immediate-escalating
+// [expr.const.imm]/2.1 (P4101R1): a potentially-evaluated immediate
+// constant expression (`^^x`, whose value is a non-null reflection) that
+// is not in an immediate function context nor a subexpression of an
+// immediate invocation is immediate-escalating: it makes an immediate-escalating
 // function (a lambda's call operator, a constexpr function template
 // specialization) immediate ([expr.const.imm]/4), and is ill-formed in
 // any other function (spec/sema.md §5.10). Manifestly constant-evaluated
@@ -11,12 +11,12 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 46:26 error "consteval-only expressions are only allowed in a constant-evaluated context"
-//@ diag: 47:18 error "consteval-only expressions are only allowed in a constant-evaluated context"
-//@ diag: 48:50 error "consteval-only expressions are only allowed in a constant-evaluated context"
+//@ diag: 46:26 error "consteval-only value outside an immediate function context"
+//@ diag: 47:18 error "consteval-only value outside an immediate function context"
+//@ diag: 48:50 error "consteval-only value outside an immediate function context"
 //@ diag: 50:22 error "cannot take address of immediate function 'is_refl_int<int>' outside of an immediate invocation"
 //@ diag: 34:35 note "declared here"
-//@ diag: 34:58 note "'is_refl_int<int>' is an immediate function because its body contains an expression of consteval-only type 'std::meta::info'"
+//@ diag: 34:58 note "'is_refl_int<int>' is an immediate function because its body contains a consteval-only value of type 'std::meta::info'"
 //@ diag: 51:22 error "cannot take address of immediate function 'operator()' outside of an immediate invocation"
 //@ diag: 35:12 note "declared here"
 #include "kiln_meta.h"

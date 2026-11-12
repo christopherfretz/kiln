@@ -447,7 +447,9 @@ impl Sema<'_, '_> {
             self.cleanup.needs = true;
             self.cleanup.side_effects |= self.ast.exprs.cleanups_have_side_effects(d);
         }
-        if self.immediate_exempt() || !self.default_has_invocation(decl) {
+        if self.immediate_exempt()
+            || !(self.default_has_invocation(decl) || self.default_leaf(decl).is_some())
+        {
             return;
         }
         self.imm.pending.default_uses.push(DefaultUse { expr: e, decl, loc });
@@ -680,10 +682,13 @@ impl Sema<'_, '_> {
         escalating: Option<DeclId>,
         ctor: bool,
         early: DefaultResults,
-    ) {
+    ) -> bool {
         let mut found = Vec::new();
         self.default_invocations(decl, &mut found);
         let mut early = early.into_iter().peekable();
+        // The first invocation whose result is consteval-only (an
+        // immediate constant expression, [expr.const.imm]/2.1).
+        let mut imm_leaf = None;
         for c in found {
             let at = self.begin_loc(c);
             let r = match early.next_if(|&(x, _)| x == c) {
@@ -698,6 +703,10 @@ impl Sema<'_, '_> {
                 // values instead of evaluating the call again (WP-1129).
                 Ok(v) => {
                     self.ast.exprs.set_default_immediate_value(c, v);
+                    if imm_leaf.is_none() && self.reflection && self.ast.has_consteval_only_value(v)
+                    {
+                        imm_leaf = Some(c);
+                    }
                     continue;
                 }
                 Err(fail) => fail,
@@ -726,11 +735,25 @@ impl Sema<'_, '_> {
                         }
                     };
                     self.escalate(g, why);
-                    return;
+                    return false;
                 }
                 None => self.report_immediate_call(c, callee, fail, Some((decl, loc)), false),
             }
         }
+        let Some(leaf) = imm_leaf.or_else(|| self.default_leaf(decl)) else { return false };
+        if !ctor || self.in_constant_full_expr() {
+            return true;
+        }
+        // A default member initializer is part of the constructor's body
+        // ([expr.const.imm]/4 Note 1): its consteval-only leaf makes an
+        // immediate-escalating constructor immediate, else is an error.
+        if let Some(g) = escalating {
+            self.escalate_consteval_only(g, leaf);
+        } else {
+            let at = self.begin_loc(leaf);
+            self.error(DiagId::sema_consteval_only_expr, at);
+        }
+        false
     }
 
     /// A reference `e` to function `d`: recorded when `d` is immediate
@@ -814,7 +837,14 @@ impl Sema<'_, '_> {
     /// Evaluates immediate invocation `c` ([expr.const]/25).
     fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
         let at = self.begin_loc(c);
-        self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at))
+        // A full-expression sema builds during the evaluation (a template
+        // argument `substitute` converts) is finished on its own: it must
+        // not take the enclosing one's variable or member (WP-1328).
+        let saved = self.take_immediate_state(false);
+        let r =
+            self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
+        self.restore_immediate_state(saved);
+        r
     }
 
     /// The result of immediate invocation `c` of the full-expression being
@@ -942,7 +972,10 @@ impl Sema<'_, '_> {
                 self.check_default_arg_overflow(u.expr, root);
             }
             if escalating.is_none() {
-                self.check_default_use_with(u.decl, u.loc, None, false, results);
+                // A consteval-only result is a leaf of the full-expression.
+                if self.check_default_use_with(u.decl, u.loc, None, false, results) {
+                    self.note_pending_ref(u.expr);
+                }
                 self.imm.early_defaults.push((u.expr, None));
             } else {
                 self.imm.early_defaults.push((u.expr, Some(results)));
@@ -976,6 +1009,45 @@ impl Sema<'_, '_> {
             || self.require_constant_init_of(v).is_some()
     }
 
+    /// A default member initializer's full-expression `e`: its
+    /// invocations are evaluated where it is used; those of the default
+    /// arguments and initializers it uses, here (clang checks them as it
+    /// builds it), unless they are part of one.
+    fn finish_default_init(
+        &mut self,
+        e: ExprId,
+        candidates: Vec<(ExprId, DeclId)>,
+        uses: &[DefaultUse],
+    ) {
+        let (_, _, _, uses) = self.classify_immediate(e, &candidates, &[], uses);
+        for (c, _) in candidates {
+            self.ast.exprs.set_constant_elided(c);
+        }
+        for u in uses {
+            self.check_default_use(u.decl, u.loc, None, false);
+        }
+        self.imm.pending.prefolded.clear();
+    }
+
+    /// The invocations among `outer` whose result is a consteval-only
+    /// value: each is an immediate constant expression
+    /// ([expr.const.imm]/2.1, P4101R1), so a leaf.
+    fn consteval_only_results(
+        &self,
+        outer: &[(ExprId, DeclId)],
+        results: &[Result<ConstValueId, EvalFailure>],
+    ) -> Vec<ExprId> {
+        if !self.reflection {
+            return Vec::new();
+        }
+        outer
+            .iter()
+            .zip(results)
+            .filter(|(_, r)| r.as_ref().is_ok_and(|&v| self.ast.has_consteval_only_value(v)))
+            .map(|(&(c, _), _)| c)
+            .collect()
+    }
+
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):
     /// evaluates its immediate invocations and checks the references to
     /// immediate functions ([expr.const]/16-19).
@@ -994,17 +1066,7 @@ impl Sema<'_, '_> {
         let candidates = std::mem::take(&mut self.imm.pending.candidates);
         let refs = std::mem::take(&mut self.imm.pending.refs);
         if default_init {
-            // Its invocations are evaluated where it is used; those of the
-            // default arguments and initializers it uses, here (clang
-            // checks them as it builds it), unless they are part of one.
-            let (_, _, _, uses) = self.classify_immediate(e, &candidates, &[], &uses);
-            for (c, _) in candidates {
-                self.ast.exprs.set_constant_elided(c);
-            }
-            for u in uses {
-                self.check_default_use(u.decl, u.loc, None, false);
-            }
-            self.imm.pending.prefolded.clear();
+            self.finish_default_init(e, candidates, &uses);
             return;
         }
         let (outer, nested, bad_refs, uses) = self.classify_immediate(e, &candidates, &refs, &uses);
@@ -1016,6 +1078,7 @@ impl Sema<'_, '_> {
         let report_after =
             var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
         let results: Vec<_> = outer.iter().map(|&(c, _)| self.immediate_result(c)).collect();
+        let imm_results = self.consteval_only_results(&outer, &results);
         // Each invocation is evaluated once (WP-1140): its value is
         // stored before the initializer is folded below, so that fold,
         // the variable's own constant-initialization check and codegen
@@ -1077,18 +1140,32 @@ impl Sema<'_, '_> {
                 self.ast.exprs.set_constant_elided(c);
             }
         }
-        // Consteval-only expressions (spec/reflection-repr.md §6).
+        // Consteval-only values (spec/reflection-repr.md §6): the leaves,
+        // and each invocation whose result is consteval-only (an immediate
+        // constant expression, [expr.const.imm]/2.1, P4101R1).
+        let mut bad_refs = bad_refs;
+        bad_refs.extend(imm_results);
         let bad_refs = self.check_consteval_only_leaves(bad_refs, e, var, escalating);
         self.check_immediate_refs(bad_refs, escalating);
+        // The uses whose default argument or member initializer has a
+        // consteval-only leaf or result: each is a leaf of `e`.
+        let mut default_leaves = Vec::new();
         for u in uses {
             let early = match self.imm.early_defaults.iter().position(|&(x, _)| x == u.expr) {
                 Some(i) => match self.imm.early_defaults.swap_remove(i).1 {
                     Some(r) => r,
+                    // Checked early; a consteval-only leaf or result rode
+                    // the references.
                     None => continue,
                 },
                 None => Vec::new(),
             };
-            self.check_default_use_with(u.decl, u.loc, escalating, false, early);
+            if self.check_default_use_with(u.decl, u.loc, escalating, false, early) {
+                default_leaves.push(u.expr);
+            }
+        }
+        if !default_leaves.is_empty() {
+            let _ = self.check_consteval_only_leaves(default_leaves, e, var, escalating);
         }
         self.imm.early_defaults.clear();
         // Those of nested invocations, not evaluated on their own.

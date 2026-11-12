@@ -7817,7 +7817,10 @@ impl Sema<'_, '_> {
             return;
         }
         match self.eval_const(e, EvalContext::init(v, loc)) {
-            Ok(cv) => self.ast.decls.finish_eval(v, Some(cv)),
+            Ok(cv) => {
+                self.ast.decls.finish_eval(v, Some(cv));
+                self.report_early_odr_uses(v);
+            }
             Err(_) if self.refers_to_invalid_var(e) => self.ast.decls.finish_eval(v, None),
             Err(mut f) => {
                 self.ast.decls.finish_eval(v, None);

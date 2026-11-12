@@ -1,7 +1,7 @@
-// [basic.types.general]/12, [expr.const] (P2996R13), [stmt.expand]: a
-// reflection is a consteval-only value, so an expression of type
-// std::meta::info outside an immediate function context and outside a
-// manifestly constant-evaluated one is ill-formed: in a run-time
+// [expr.const.const]/5, [expr.const.imm]/2.1-3 (P4101R1), [stmt.expand]:
+// a non-null reflection is a consteval-only value, so an expression whose
+// value is one, outside an immediate function context (which includes a
+// manifestly constant-evaluated one), is ill-formed: in a run-time
 // `template for` body, comparing the expansion variable with another
 // reflection (define-run-template-for.cpp holds the valid form, the
 // comparison in a constexpr variable's initializer), as in a function
@@ -24,13 +24,13 @@
 //@ diag: 55:23 error "call to consteval function 'std::meta::nonstatic_data_members_of' is not a constant expression"
 //@ diag: 55:23 note "pointer to subobject of heap-allocated object is not a constant expression"
 //@ diag: 55:48 note "heap allocation performed here"
-//@ diag: 55:18 error "consteval-only expressions are only allowed in a constant-evaluated context"
-//@ diag: 56:18 error "consteval-only expressions are only allowed in a constant-evaluated context"
-//@ diag: 57:18 error "consteval-only expressions are only allowed in a constant-evaluated context"
+//@ diag: 55:18 error "consteval-only value outside an immediate function context"
+//@ diag: 56:18 error "consteval-only value outside an immediate function context"
+//@ diag: 57:18 error "consteval-only value outside an immediate function context"
 //@ diag: 55:23 error "call to consteval function 'std::meta::nonstatic_data_members_of' is not a constant expression"
 //@ diag: 55:23 note "pointer to subobject of heap-allocated object is not a constant expression"
 //@ diag: 55:48 note "heap allocation performed here"
-//@ diag: 48:16 error "consteval-only expressions are only allowed in a constant-evaluated context"
+//@ diag: 48:16 error "consteval-only value outside an immediate function context"
 //@ diag: 59:3 note "in instantiation of function template specialization 'f<int>' requested here"
 #include "kiln_meta.h"
 extern "C" int printf(const char*, ...);

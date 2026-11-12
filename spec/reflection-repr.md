@@ -245,96 +245,114 @@ which also prints the arguments (`S<int>::m`, `ns::vt<int>`).
 The form is stable: tests may match it. Golden:
 `tests/conformance/expr.reflect/ast-dump.cpp.expected`.
 
-## 6. Consteval-only ([basic.types.general]/12, [expr.const])
+## 6. Consteval-only values ([expr.const.const], [expr.const.imm]; P4101R1)
 
-A type is consteval-only if it is `std::meta::info`, or a pointer,
-reference, array or member pointer to one, or a function type with one
-in its return or parameter types, or a class with a consteval-only base
-or non-static data member (cached per complete class). Sema enforces:
+Kiln follows the value-based model of P4101R1 (adopted into the working
+draft after the Croydon DIS; `docs/STANDARD_SUPPORT.md`): what may not
+reach run time is a *value*, never a type. The one predicate lives in
+`kiln_ast/src/consteval_only.rs` and is shared by sema and codegen.
 
-- **Variables.** A variable of consteval-only type must be `constexpr`,
-  unless it is declared in an immediate function, in an
-  immediate-escalating function, or in an immediate context
-  (`sema_consteval_only_var`). Checked at the end of its initialization;
-  templated declarations are checked per instantiation.
-- **Functions.** A function whose type is consteval-only must be
-  `consteval`, unless it is immediate-escalating (a constexpr function
-  template specialization, a lambda call operator, a defaulted special
-  member) (`sema_consteval_only_fn`). A defaulted function is never
-  checked. As in GCC 16.1 (CWG3115), the implicit object parameter
-  counts: an implicit object member function, constructor, destructor or
-  conversion function of a class that is consteval-only by the members
-  declared so far (`struct A { int f(); info r; int g(); }` rejects `g`
-  only) must be `consteval`; an explicit object parameter
-  counts as any parameter; static members are unaffected. Inside a
-  template the object-parameter rule is not applied to the pattern.
-  A function whose type becomes consteval-only by substitution
-  (`template <class T> void h(T)` as `h<info>`, a non-constexpr member
-  of `W<info>`) is checked when its definition is instantiated, at its
-  name (`check_consteval_only_inst`); a constexpr or defaulted pattern
-  escalates instead, and a pattern in a system header is not diagnosed
-  (libc++ 19 and libstdc++ 14 predate CWG3115 and instantiate
-  non-constexpr helpers for `vector<info>`; kiln extension).
-- **Expressions.** A potentially-evaluated expression of consteval-only
-  type — a `CXXReflectExpr`, or a reference to a variable, parameter or
-  binding of consteval-only type — must be in an immediate context or a
-  manifestly constant-evaluated full-expression (a `constexpr`
-  variable's initializer, a constant-initialized variable whose
-  initializer folds) (`sema_consteval_only_expr`, once per
-  full-expression). In an immediate-escalating function the expression
-  instead escalates the function to immediate ([expr.const]/18), exactly
-  like an immediate invocation (`escalate_consteval_only`; the reason
-  note is specified in `spec/consteval-blocks.md` §4). When the variable being initialized is
-  itself of consteval-only type, the variable rule reports it, not the
-  expression rule. A class member access (`g.s`, `p->m`) whose member
-  is of consteval-only type is such an expression even when the object
-  expression is not (GCC 16.1 accepts `g.s` and rejects `G::s`; kiln
-  rejects both).
-- **Structured bindings.** The expression of each binding of a
-  decomposition (`e[i]`, `e.m`; spec/sema.md, `struct_bind.rs`
-  `decompose_array`/`decompose_members`) is a full-expression checked as
-  part of the decomposed variable's initializer: for `static constexpr
-  auto [a, b] = arr;` over an `info` array (and the destructuring form
-  of an expansion statement over one) the reference to the
-  consteval-only `e` is reported by the variable rule, which the
-  `constexpr` variable satisfies, not by the expression rule (WP-534).
+- **Consteval-only value** (/1). A reflection other than the null
+  reflection; a pointer to an immediate function, or to or past the end
+  of (a subobject of) an immediate object; a pointer to member naming an
+  immediate member function. `Ast::has_consteval_only_value(c)` walks a
+  frozen value: scalars directly, aggregates through their relocations
+  (every pointer, member pointer and reflection subobject), pointees
+  through the variable, temporary or template parameter object they
+  name (`Ast::object_value`), with a seen-set for self-referential
+  constants.
+- **Immediate object** (/2). An object whose complete object has a
+  consteval-only constituent value or a constituent reference to an
+  immediate object or function: `Ast::is_immediate_var(d)` for a
+  variable or template parameter object `d` whose value is known. A
+  variable not (yet) evaluated is not one. The null reflection is not
+  consteval-only: `std::meta::info x;`, `S s;` of a class with an `info`
+  member, `info* p = nullptr;` and `constexpr S s{{}, "x"}` are not
+  immediate objects.
+- **Variables** (/3). Every immediate object must be a `constexpr`
+  variable's object, a template parameter object, or live within a
+  constant evaluation. A non-`constexpr` variable whose initializer held a
+  consteval-only leaf is allowed only when its initialization is constant
+  (the initializer is manifestly constant-evaluated); its folded value is
+  then checked and, if consteval-only, it is an error
+  (`sema_consteval_only_var`, "'v' is initialized with a consteval-only
+  value but is not declared 'constexpr'"; `check_consteval_only_var`). A
+  reference is not an object: a non-`constexpr` reference bound to an
+  immediate object is well-formed, and its value is recorded so that each
+  use of it is a leaf. A variable whose initialization is not constant
+  reports the leaf instead (the expression rule). The rule applies at
+  namespace and block scope, to static data members, structured bindings,
+  expansion statement variables and template instantiations alike; all
+  reach the same `check_consteval_only_var`.
+- **odr-use before the definition.** "If an immediate object is odr-used
+  ... reachable from a point where it is not defined, the program is
+  ill-formed": within one translation unit an earlier use is always
+  reachable from the later definition, so the diagnostic is required. A
+  reference to a static-storage variable none of whose declarations has an
+  initializer is remembered (`note_early_odr_use`, keyed by the first
+  declaration) and reported, with a "declared here" note, when the
+  definition is evaluated and found immediate (`report_early_odr_uses`).
+- **Expressions** (/5, [expr.const.imm]/2.1-3). An *immediate constant
+  expression* is a glvalue referring to an immediate object or a prvalue
+  whose result object is one. Sema tracks it through its *leaves*: a
+  `CXXReflectExpr`; a reference (`DeclRefExpr`, `MemberExpr` of a static
+  member) to an immediate variable, binding (through its decomposed
+  variable) or template parameter object; a substituted non-type template
+  argument whose value is consteval-only; an immediate invocation whose
+  result is consteval-only; a default argument or default member
+  initializer that holds a leaf, at each use. Each rides the
+  immediate-reference list of its full-expression and is classified with
+  the immediate invocations: inside an immediate invocation or an
+  immediate function context it is fine; in a manifestly
+  constant-evaluated initializer it is fine (then the variable rule
+  applies); in a full-expression that is itself a constant-expression
+  (a template argument, `static_assert`, an array bound, `case`,
+  `noexcept`, a requires-clause: one finished by
+  `act_on_constant_full_expr`) it is fine (/1.2). The parser enters that
+  context before building the expression, so its invocations are not
+  even recorded; template instantiation rebuilds it outside that
+  context, so the leaf check itself asks (`in_constant_full_expr`), and
+  both spellings get one answer. In an immediate-escalating function it makes the function
+  immediate (/2.1 read literally: even an immediate constant expression
+  that is itself a constant expression escalates; `escalate_consteval_only`,
+  reason note in `spec/consteval-blocks.md` §4); elsewhere it is an error
+  (`sema_consteval_only_expr`, "consteval-only value outside an immediate
+  function context", once per full-expression). A default member
+  initializer used by a constructor is part of its body
+  ([expr.const.imm]/4 Note 1): an implicit (escalating) constructor
+  escalates, any other is an error at the leaf.
+- **No permitted-result restriction** (/4 struck it). Within land 1 the
+  old rejection of a `constexpr` variable holding a pointer to an
+  immediate function is kept (land 2 lifts it with P3603).
+- **Templates.** Leaves are recorded at definition time where the
+  evaluation context is known (`consteval_only_pattern`) and re-decided by
+  value in each instantiation and each expansion of an expansion
+  statement (`note_inst_consteval_only`, `note_shared_consteval_only`,
+  `leaf_is_immediate`). A candidate whose value is unknown in the
+  definition — a `constexpr` variable or a binding of a `constexpr`
+  decomposition of dependent type or initializer, a non-type template
+  parameter that can hold a pointer or a reflection — is kept only when
+  its substituted value is consteval-only (`is_pending_constexpr_leaf`).
+  The element variable of a `template for` over a class with an `info`
+  member is therefore a leaf exactly when the element's value holds a
+  non-null reflection.
 
-Codegen emits no block-scope variable of consteval-only type
-(spec/codegen.md §4 "Consteval-only variables"; WP-534).
+The P2996R13 type walk (`is_consteval_only_type`) survives for one kiln
+restriction only: a function whose type holds `std::meta::info` must be
+`consteval` (or immediate-escalating), as before, including the CWG3115
+implicit-object-parameter rule and the system-header exemption for
+instantiated non-constexpr helpers (`sema_consteval_only_fn`,
+`check_consteval_only_inst`). P4101R1 allows such functions with a
+run-time null `info`; that needs a run-time representation and is land 2
+of WP-1328.
 
-In a template, the leaves are recorded at definition time (where the
-evaluation context is known) and re-checked in each instantiation and
-each expansion of an expansion statement. A reference to a variable is
-such a leaf in a template definition too (WP-1263: `m == b` of two
-`constexpr info` variables in a run-time `template for` body, or in a
-function template's body, was accepted; GCC 16.1 rejects it the same
-way; `meta.reflection.define.aggregate/define-run-template-for-neg.cpp`).
-A reference to a `constexpr` variable or a structured binding whose type
-is *dependent* in the definition is recorded as a candidate leaf too
-(`is_dependent_constexpr_leaf`) and kept in an instantiation or
-expansion only when its substituted variable is consteval-only
-(`inst_lost_consteval_only`). That covers the element variable of an
-expansion statement (`template for (constexpr auto e : plan)
-std::puts(e.name);` over a class with an `info` member: the pattern's
-`e` is of undeduced `auto` type), in every form and for `constexpr
-const auto&`, `constexpr auto&&` and a structured-binding declaration,
-and a `constexpr T x` of a function template instantiated with such a
-class; each is reported once per location, in the same words as the
-plain `constexpr E e = plan[0]; std::puts(e.name);` (WP-1330: both were
-accepted; GCC 16.1 rejects them, `stmt.expand/consteval-only-element-*`).
-A non-constexpr variable or a parameter of dependent type is not a
-candidate: its declaration is reported instead
-(`check_consteval_only_var`, `check_consteval_only_inst`). A binding of
-a `constexpr` decomposition of consteval-only type is a leaf even when
-its own type is not (`n` of `constexpr auto [r, n] = plan[0];`: it names
-a subobject of a consteval-only object; GCC 16.1 rejects its run-time
-use too; WP-1330). The well-formed spelling reads the member in a
-`constexpr` variable's initializer first (`constexpr const char* n =
-e.name; std::puts(n);`).
-The
-codegen backstop (`kiln_codegen/src/consts.rs` "reflection values cannot
-be emitted") is reached only through the gaps below.
+Codegen decides by value too (spec/codegen.md §4 "Consteval-only
+variables"): an immediate object has no storage; a variable whose type
+reaches `std::meta::info` but whose value is not consteval-only has none
+either in land 1 — a `constexpr` one is read only through its folded
+members, any other is the error "code generation for a run-time
+'std::meta::info' value is not supported yet", as is a null reflection
+constant reaching emission.
 
-Known gaps (follow-ups): escalation through an implicit `this->m` leaf
-is untested; a defaulted `operator==` of a consteval-only class draws a
-spurious `-Wdefaulted-function-deleted` warning.
+Known gaps (follow-ups): a defaulted `operator==` of a class with an
+`info` member draws a spurious `-Wdefaulted-function-deleted` warning.

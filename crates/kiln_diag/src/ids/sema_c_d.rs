@@ -150,12 +150,12 @@ sema_constant_integer_arg_type = Error (1) "argument to '{0}' must be a constant
 sema_constant_logical_operand = Warning [ConstantLogicalOperand] (1) "use of logical '{0}' with constant operand";
 sema_consteval_block_non_constant = Error (0) "consteval block is not a constant expression";
 sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
-// [expr.const] (P2996R13): an expression of consteval-only type outside an immediate function context.
-sema_consteval_only_expr = Error (0) "consteval-only expressions are only allowed in a constant-evaluated context";
-// [basic.types.general] (P2996R13): a function whose type is consteval-only.
-sema_consteval_only_fn = Error (0) "function of consteval-only type must be declared 'consteval'";
-// [basic.types.general] (P2996R13): an object of consteval-only type that is not a constexpr variable's.
-sema_consteval_only_var = Error (1) "consteval-only variable '{0}' not declared 'constexpr' used outside a constant-evaluated context";
+// [expr.const.imm]/2.1, /3 (P4101R1): an immediate constant expression (a consteval-only value) outside an immediate function context and an immediate-escalating function; also [expr.const.const]/3's odr-use of a variable later defined as an immediate object.
+sema_consteval_only_expr = Error (0) "consteval-only value outside an immediate function context";
+// kiln restriction until a run-time std::meta::info exists (WP-1328 land 2; P2996R13 [basic.types.general]/12's function rule, removed by P4101R1).
+sema_consteval_only_fn = Error (0) "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)";
+// [expr.const.const]/3 (P4101R1): an immediate object that is not a constexpr variable's (a non-constexpr variable initialized with a consteval-only value).
+sema_consteval_only_var = Error (1) "'{0}' is initialized with a consteval-only value but is not declared 'constexpr'";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";
 sema_consteval_wrong_decl_kind = Error (0) "consteval can only be used in function declarations";
 sema_constexpr_body_invalid_stmt = Error (2) "statement not allowed in {1:constexpr|consteval} {0:function|constructor}";

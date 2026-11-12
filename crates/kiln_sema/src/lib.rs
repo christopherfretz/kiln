@@ -290,6 +290,21 @@ pub struct Sema<'a, 'sm> {
     /// immediate function context: checked again in each instantiation
     /// ([`Sema::note_inst_consteval_only`]).
     pub(crate) consteval_only_pattern: kiln_source::fx::FxHashSet<ExprId>,
+    /// Non-`constexpr` variables whose constant initializer holds a
+    /// consteval-only leaf: their value is checked once initialized
+    /// ([`Sema::check_consteval_only_var`], P4101R1 [expr.const.const]/3).
+    pub(crate) consteval_only_inits: kiln_source::fx::FxHashSet<DeclId>,
+    /// Whether each evaluated variable is an immediate object (or refers
+    /// to one), keyed by the variable ([`Sema::is_immediate_var`]).
+    pub(crate) immediate_vars: kiln_source::fx::FxHashMap<DeclId, bool>,
+    /// Potentially-evaluated references outside an immediate function
+    /// context to variables not yet defined, keyed by first declaration:
+    /// reported if the definition makes the variable an immediate object
+    /// (P4101R1 [expr.const.const]/3, the odr-use sentence).
+    pub(crate) early_odr_uses: kiln_source::fx::FxHashMap<DeclId, Vec<Loc>>,
+    /// The consteval-only leaf of each default argument and default
+    /// member initializer walked so far (`consteval_only.rs`).
+    pub(crate) default_leaves: kiln_source::fx::FxHashMap<DeclId, Option<ExprId>>,
     /// Depth of expressions being rebuilt by substitution (their
     /// consteval-only leaves follow the pattern's, not the builders').
     pub(crate) subst_expr_depth: u32,
@@ -1357,6 +1372,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             reflection: false,
             consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
+            consteval_only_inits: kiln_source::fx::FxHashSet::default(),
+            immediate_vars: kiln_source::fx::FxHashMap::default(),
+            early_odr_uses: kiln_source::fx::FxHashMap::default(),
+            default_leaves: kiln_source::fx::FxHashMap::default(),
             subst_expr_depth: 0,
             call_recovery: None,
             subst_template_id: false,

@@ -117,46 +117,48 @@ Rules that keep the bit exact:
   (a `static_assert` too); `ctx.plainly` is the gate for the standard
   `define_aggregate` (WP-470's family).
 
-## 4. Immediate escalation of consteval-only expressions
+## 4. Immediate escalation of immediate constant expressions
 
-[expr.const.imm]/2: an expression of consteval-only type is
-immediate-escalating. This section specifies only that behaviour. Which
-expressions count (the consteval-only *leaves*: a `^^` expression, a
-reference to a variable, parameter or binding of consteval-only type, a
-binding of a `constexpr` decomposition of consteval-only type, and the
-element variable of an expansion statement, whose `constexpr auto` type
-is dependent in the pattern and decided per expansion; WP-1330),
-where they are recorded, the exemptions (immediate context, a
-`constexpr` variable's initializer, a constant-initialized variable
-whose initializer folds) and the template re-check are WP-472's
-representation, specified once in `spec/reflection-repr.md` §6
-(`crates/kiln_sema/src/consteval_only.rs`).
+[expr.const.imm]/2.1 (P4101R1): a potentially-evaluated expression that
+is an *immediate constant expression* ([expr.const.const]/5: a glvalue
+referring to an immediate object, or a prvalue whose result object is
+one) and is neither initially in an immediate function context nor a
+subexpression of an immediate invocation is immediate-escalating. Kiln
+reads /2.1 literally: such an expression escalates even when it is a
+constant expression (`R == ^^int` in `template <info R> constexpr int
+f()`, `^^T == ^^int` in a constexpr function template, and the
+`auto x = F();` of /2 Example 1). This section specifies only that
+behaviour. Which expressions count (the *leaves*, decided by value: a
+`^^` expression, a reference to an immediate variable, binding or
+template parameter object, a substituted template argument or an
+immediate invocation whose value is consteval-only, a default argument
+or member initializer holding one), where they are recorded, the
+exemptions and the template re-check are specified once in
+`spec/reflection-repr.md` §6 (`crates/kiln_sema/src/consteval_only.rs`).
 
 A leaf that is not exempt, checked at `finish_immediate_invocations`:
 
 - inside an immediate-escalating function ([expr.const.imm]/3: a
   lambda's call operator, a defaulted special member, or a constexpr
   function that is a templated entity; see `spec/sema.md` §5.10) makes
-  that function an immediate function, exactly like an immediate
-  invocation. `Sema::escalate_consteval_only` records the reason, so a
-  later use of the function as a non-constant expression explains it
-  with `note_immediate_function_reason_consteval_only` ("... because
-  its body contains an expression of consteval-only type {0}");
+  that function an immediate function ([expr.const.imm]/4.2), exactly
+  like an immediate invocation that is not a constant expression.
+  `Sema::escalate_consteval_only` records the reason, so a later use of
+  the function as a non-constant expression explains it with
+  `note_immediate_function_reason_consteval_only` ("... because its body
+  contains a consteval-only value of type {2}"). A default member
+  initializer is part of the body of the constructor that uses it
+  (/4 Note 1): its leaf escalates an implicit constructor
+  (`check_default_use_with`);
 - anywhere else is the error `sema_consteval_only_expr`
-  ("consteval-only expressions are only allowed in a constant-evaluated
-  context"), once per full-expression and never after an error already
-  reported in it.
+  ("consteval-only value outside an immediate function context"), once
+  per full-expression and never after an error already reported in it.
 
-Test: `tests/conformance/expr.const/immediate-escalating-reflect.cpp`.
+Tests: `tests/conformance/expr.const/immediate-escalating-reflect.cpp`,
+`tests/conformance/expr.const.imm/` (the paragraph's examples).
 
 A plain (non-template) `auto f() { return ^^int; }` is not
-immediate-escalating, so it is ill-formed, not consteval. So is a
-non-template `constexpr` function with an `info` parameter or return
-type (`sema_consteval_only_fn`) and a non-`constexpr` variable of
-consteval-only type (`sema_consteval_only_var`), per
-`spec/reflection-repr.md` §6.
-
-Gaps: a call whose result has consteval-only type (`refl<int>()` in a
-runtime function) is not diagnosed; `^^` in a default argument or a
-default member initializer is checked at its own location, not at the
-use.
+immediate-escalating, so it is ill-formed, not consteval. A function
+whose type holds `std::meta::info` must still be `consteval` in kiln
+(`sema_consteval_only_fn`, "a run-time 'std::meta::info' is not
+supported yet"): P4101R1 lifts that, land 2 of WP-1328.
