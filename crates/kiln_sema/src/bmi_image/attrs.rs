@@ -215,6 +215,11 @@ pub(super) struct Attrs {
     /// The integer literals of [`Op::Ints`] arguments: value and
     /// location.
     ints: Vec<(u32, u32)>,
+    /// WP-1314: the attributes of function parameters (`decl` the
+    /// function record) and the parameter's position, ascending; only
+    /// kinds whose words are plain ([`Op::Words`]: `lifetimebound`,
+    /// `noescape`, `maybe_unused`).
+    pub(super) params: Vec<(u32, AttrRec)>,
 }
 
 /// What the writer computed for one declaration, committed with its
@@ -253,6 +258,51 @@ impl Writer<'_, '_, '_> {
         own(d) || (ast.decls.redecl(d).is_some() && ast.redecls_of(d).any(own))
     }
 
+    /// Records the attributes of parameter `p`, position `k` of function
+    /// record `rec` (WP-1314; [`Attrs::params`]).
+    pub(super) fn param_attrs(&mut self, p: DeclId, rec: u32, k: u32) -> W<()> {
+        let s = self.s;
+        let ast = &s.ast;
+        let nsyms = ast.symbols().len();
+        for a in ast.lists.iter::<AttrId>(ast.attrs.of_decl(p)) {
+            let node = *ast.attrs.get(a);
+            if !matches!(op_of(node.kind), Some(Op::Words(..))) || !carried(&node, nsyms) {
+                return Err(UNCARRIED);
+            }
+            let loc = self.loc(node.loc)?;
+            let (scope, name) = self.attr_spelling(node.loc);
+            let r = AttrRec {
+                decl: rec,
+                kind: node.kind.0,
+                syntax: node.syntax as u8,
+                flags: node.flags,
+                loc,
+                a: node.a,
+                b: node.b,
+                s: NONE,
+                scope,
+                name,
+            };
+            self.img.attrs.params.push((k, r));
+        }
+        Ok(())
+    }
+
+    /// The written scope and name of the attribute at `at`, as string
+    /// indices, or [`NONE`].
+    fn attr_spelling(&mut self, at: kiln_source::Loc) -> (u32, u32) {
+        let s = self.s;
+        let ast = &s.ast;
+        match s.attr_spellings.get(&at) {
+            Some(&(sc, nm)) if at.is_valid() => {
+                let sc = sc.map(|x| ast.symbols().as_str(x).to_owned());
+                let nm = ast.symbols().as_str(nm).to_owned();
+                (sc.map_or(NONE, |x| self.attr_str(&x)), self.attr_str(&nm))
+            }
+            _ => (NONE, NONE),
+        }
+    }
+
     fn attr_str(&mut self, s: &str) -> u32 {
         if let Some(i) = self.img.attrs.strs.iter().position(|x| x == s) {
             return i as u32;
@@ -282,14 +332,7 @@ impl Writer<'_, '_, '_> {
             let node = *ast.attrs.get(a);
             let op = op_of(node.kind).filter(|_| carried(&node, nsyms)).ok_or(UNCARRIED)?;
             let loc = self.loc(node.loc)?;
-            let (scope, name) = match s.attr_spellings.get(&node.loc) {
-                Some(&(sc, nm)) if node.loc.is_valid() => {
-                    let sc = sc.map(|x| ast.symbols().as_str(x).to_owned());
-                    let nm = ast.symbols().as_str(nm).to_owned();
-                    (sc.map_or(NONE, |x| self.attr_str(&x)), self.attr_str(&nm))
-                }
-                _ => (NONE, NONE),
-            };
+            let (scope, name) = self.attr_spelling(node.loc);
             let mut r = AttrRec {
                 decl: rec,
                 kind: node.kind.0,
@@ -378,13 +421,7 @@ pub(super) fn encode_attrs(w: &mut Wr, a: &Attrs) {
     }
     w.len(a.recs.len());
     for r in &a.recs {
-        w.u32(r.decl);
-        w.u16(r.kind);
-        w.u8(r.syntax);
-        w.u8(r.flags);
-        for x in [r.loc, r.a, r.b, r.s, r.scope, r.name] {
-            w.u32(x);
-        }
+        encode_rec(w, r);
     }
     w.len(a.builtins.len());
     for b in &a.builtins {
@@ -398,6 +435,30 @@ pub(super) fn encode_attrs(w: &mut Wr, a: &Attrs) {
         w.u32(v);
         w.u32(loc);
     }
+    w.len(a.params.len());
+    for (k, r) in &a.params {
+        w.u32(*k);
+        encode_rec(w, r);
+    }
+}
+
+fn encode_rec(w: &mut Wr, r: &AttrRec) {
+    w.u32(r.decl);
+    w.u16(r.kind);
+    w.u8(r.syntax);
+    w.u8(r.flags);
+    for x in [r.loc, r.a, r.b, r.s, r.scope, r.name] {
+        w.u32(x);
+    }
+}
+
+fn decode_rec(r: &mut Rd<'_>) -> Res<AttrRec> {
+    let decl = r.u32()?;
+    let kind = r.u16()?;
+    let syntax = r.u8()?;
+    let flags = r.u8()?;
+    let [loc, x, y, s, scope, name] = [r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?];
+    Ok(AttrRec { decl, kind, syntax, flags, loc, a: x, b: y, s, scope, name })
 }
 
 pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
@@ -408,13 +469,7 @@ pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
     }
     let n = r.count(32)?;
     for _ in 0..n {
-        let decl = r.u32()?;
-        let kind = r.u16()?;
-        let syntax = r.u8()?;
-        let flags = r.u8()?;
-        let [loc, x, y, s, scope, name] =
-            [r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?, r.u32()?];
-        a.recs.push(AttrRec { decl, kind, syntax, flags, loc, a: x, b: y, s, scope, name });
+        a.recs.push(decode_rec(r)?);
     }
     let n = r.count(13)?;
     for _ in 0..n {
@@ -427,6 +482,11 @@ pub(super) fn decode_attrs(r: &mut Rd<'_>) -> Res<Attrs> {
     let n = r.count(8)?;
     for _ in 0..n {
         a.ints.push((r.u32()?, r.u32()?));
+    }
+    let n = r.count(36)?;
+    for _ in 0..n {
+        let k = r.u32()?;
+        a.params.push((k, decode_rec(r)?));
     }
     Ok(a)
 }
@@ -467,6 +527,25 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
         if !ok {
             return bad("bad attribute record");
         }
+    }
+    let mut last = (0, 0);
+    for &(k, ref r) in &a.params {
+        let nparams = match img.decls.get(r.decl as usize).map(|d| &d.payload) {
+            Some(Payload::Function { params, .. }) => params.len(),
+            _ => 0,
+        };
+        let ok = (r.decl, k) >= last
+            && (k as usize) < nparams
+            && syntax_of(r.syntax).is_some()
+            && (r.scope == NONE || str_ok(r.scope))
+            && (r.name == NONE || str_ok(r.name))
+            && (r.scope == NONE || r.name != NONE)
+            && r.s == NONE
+            && matches!(op_of(AttrKind(r.kind)), Some(Op::Words(am, bm)) if r.a <= am && r.b <= bm);
+        if !ok {
+            return bad("bad parameter attribute record");
+        }
+        last = (r.decl, k);
     }
     for b in &a.builtins {
         let func = img
@@ -549,6 +628,36 @@ impl Sema<'_, '_> {
             ids.push(id);
         }
         self.builder().append_attrs(d, &ids);
+    }
+
+    /// Attaches the attributes of parameter `k` of function record `rec`
+    /// to `p` (WP-1314).
+    pub(super) fn image_param_attrs(
+        &mut self,
+        img: &Image,
+        rec: u32,
+        k: u32,
+        p: DeclId,
+        main: &Locs,
+    ) {
+        let a = &img.attrs;
+        let lo = a.params.partition_point(|(j, r)| (r.decl, *j) < (rec, k));
+        let mut ids = Vec::new();
+        for (_, r) in a.params[lo..].iter().take_while(|(j, r)| r.decl == rec && *j == k) {
+            let loc = main.get(r.loc);
+            let syntax = syntax_of(r.syntax).unwrap_or_default();
+            let node =
+                AttrNode { kind: AttrKind(r.kind), syntax, flags: r.flags, loc, a: r.a, b: r.b };
+            ids.push(self.ast.attrs.push(node));
+            if r.name != NONE && loc.is_valid() {
+                let scope = (r.scope != NONE).then(|| self.intern(&a.strs[r.scope as usize]));
+                let name = self.intern(&a.strs[r.name as usize]);
+                self.attr_spellings.insert(loc, (scope, name));
+            }
+        }
+        if !ids.is_empty() {
+            self.builder().append_attrs(p, &ids);
+        }
     }
 
     /// Fills in the expression arguments of the imported attributes.

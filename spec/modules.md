@@ -267,7 +267,11 @@ Redeclaration matching ([basic.link]/8) excludes non-exported purview
 declarations of another named module (a declaration with module linkage of
 another module is a different entity); internal-linkage declarations of
 other units are excluded as well. A matched previous declaration attached
-to a different module is the [basic.link]/11 error.
+to a different module is the [basic.link]/11 error. A declaration an
+instantiation made (a befriended function template of `It<char>`
+instantiated in an importer) is attached as the declaration it was
+instantiated from (`instantiated_from`), not as the unit performing the
+instantiation (WP-1314; `module.unit/friend-template-instantiated-attachment.cpp`).
 
 **Instantiation.** While any template is being instantiated
 (`inst.stack` non-empty) the filter is off: the instantiation context
@@ -2393,7 +2397,8 @@ unresolved names.* Carried since the third slice:
   A name whose candidates include a class member, or one sema keeps
   extra state for (a using-shadow or naming class, `ule_found`; an
   implicit member reference, `member_refs`), falls back with "a
-  template expression".
+  template expression (...)", the form named in the parentheses
+  (WP-1314).
 
 The census separates the "a declaration in a template" reason: a
 partial specialization ("an explicit or partial specialization"), a
@@ -2502,6 +2507,94 @@ is built (they are monotone, and the template copies its pattern's),
 so a referenced pattern does not mark the template. Tests:
 `pch-pattern-inits-run.cpp`, `image-pattern-inits-run.cpp` and their
 `-errors` pairs, `kind2_declaration_image_pattern_inits`.
+
+**Forms carried by WP-1314 (libc++).** The census reason "a template
+expression" is split by form: "a template expression (an unresolved
+member reference)", "(a substituted parameter pack)", "(pack
+indexing)", "(an expansion statement's element)", "(a name found
+through a using-declaration)", "(an implicit member
+reference)", "(a name that found a class member)" and "(a name that
+found something other than a function or a function or variable
+template)"; "a local declaration the image does not carry" names a
+local class or enumeration, typedef or alias, using-declaration or
+structured binding on its own. Carried:
+
+- *Explicit template arguments of a resolved name* (`e_v<double>`,
+  `pick<int>(3)`, [temp.arg.explicit]/1): the `DeclRef` side gains a
+  third field, the written argument list as a cold-annotation-128
+  `TA` field (`0` for none); the importer puts it on the name's
+  `DeclRefExtra` as the parser does.
+- *Block-scope static assertions* ([dcl.pre]/10; libc++'s
+  `static_assert` in `std::declval`, `__constexpr_wmemchr`,
+  `__countl_zero`): a local record with the `Assert` payload (no name,
+  no previous declaration, its context the function), the condition
+  and message expression records patched in as for a member assertion.
+  The unit checked a non-dependent one; a pattern's is checked again by
+  each instantiation of its function, so a failing one is diagnosed at
+  that instantiation exactly as after replay. A failed one is invalid
+  and falls back ("an invalid local declaration").
+- *Block-scope typedef and alias declarations* ([dcl.typedef]; 350 of
+  libc++'s refused declarations, `using _Ip = ...;` in a body): a local
+  record with the `Typedef` payload (its name a `pnames` index, no
+  previous declaration, its underlying type written before the record);
+  the importer builds it in its function as the parser does, and an
+  instantiation substitutes it from the pattern's. A local alias
+  template falls back ("a local alias template").
+- *Unresolved names that found class members* ([temp.dep.candidate],
+  [class.member.lookup]; libc++'s `__test<_Tp>(0)` in
+  `__is_referenceable_impl`, `__invoke`'s and `pointer_traits`'
+  detection idioms): an `UnresolvedLookupExpr` whose lookup found
+  member functions or member function or variable templates is carried
+  as one that found namespace members. Its naming class, when the
+  lookup recorded one (`holder::pick(t)`), is the new cold annotation
+  1024 `NAMING`, an `OD(Ctx)` field valid only on that kind; the
+  importer records the found set and naming class as the parser does,
+  so access is checked against the same class at each instantiation.
+  A lookup through a using-declaration (the found set differs from the
+  name's declarations) still falls back ("a template expression (a
+  name found through a using-declaration)"), as does an implicit
+  member reference.
+- *Dependent `decltype` bases* (`struct is_ref : decltype(f<T>(0))`):
+  a dependent `decltype` type is a valid dependent base of a pattern.
+- *A class sema completed from its first declaration across a
+  reopened namespace* (`template <> struct traits<char>;` in one
+  namespace block, its definition in the next): the definition's
+  record sits at the first declaration, so the writer keeps the class
+  open across the reopened namespace's record (a `Namespace` with a
+  previous declaration, while members are still to come), which the
+  validator accepts inside an open class. Any other declaration between
+  the first declaration and the members still closes the class ("a
+  class member outside its class definition"; libc++'s
+  `char_traits<char>`, whose `<__fwd/string.h>` declares the other
+  specializations in between).
+
+**Defaulted comparisons (WP-1314).** A comparison operator defaulted on
+its first declaration (`friend constexpr bool operator==(partial_ordering,
+partial_ordering) noexcept = default;`, a member `operator==`, one in a
+class template; [class.compare.default]) is an ordinary function record:
+its type, `constexpr`, deletedness and deferred exception specification
+are what the unit's class-completion check left. The `defcmps` section
+carries what sema keeps beside it: the `default` keyword's location
+(`special.cmp.default_loc`, where the synthesized body goes and its
+notes point) and the unqualified operator lookups captured at the
+`= default` (`special.cmp.lookups`, records; `NONE` when the unit
+captured none). The importer puts both back after the records and
+before the explicit instantiations, so a use defines the body as after
+a replay, an instantiation copies them from its pattern, and a
+deferred exception specification resolves the same way. Falls back:
+an invalid one, a deduced return type ("a defaulted comparison with a
+deduced return type"), a `<=>` that declared an implicit `operator==`,
+and a captured lookup through a using-declaration or of a declaration
+outside the image. The old reason "a defaulted comparison or an
+out-of-line defaulted function" is now "an out-of-line defaulted
+function". Tests: `pch-defaulted-cmp-*.cpp`,
+`image-defaulted-cmp-run.cpp`.
+
+Tests: `pch-local-static-assert-*.cpp`, `pch-local-typedef-*.cpp`,
+`pch-member-names-*.cpp`, `image-member-names-run.cpp`,
+`pch-reopened-spec-run.cpp`, `image-reopened-spec-run.cpp`,
+`image-local-static-assert-*.cpp`, `image-local-typedef-run.cpp`,
+`local_static_asserts_and_explicit_args_take_the_image`.
 
 **Smaller forms carried by WP-1310.** Attributes on block-scope
 declarations (libstdc++'s `void __terminate() noexcept
@@ -3116,6 +3209,8 @@ attrs   := strs:u32 str*
            recs:u32 arec*            ascending by record
            builtins:u32 (decl:u32 map:u8 id:u32 name:u32)*
            ints:u32 (value:u32 loc:u32)*
+           params:u32 (pos:u32 arec)*  WP-1314: parameter attributes,
+                                     `decl` the function, ascending
 arec    := decl:u32 kind:u16 syntax:u8 flags:u8 loc:u32 a:u32 b:u32
            s:u32 scope:u32 name:u32  s, scope, name: strs indices
 ```
@@ -3124,6 +3219,14 @@ arec    := decl:u32 kind:u16 syntax:u8 flags:u8 loc:u32 a:u32 b:u32
 an expression kind `a` and `b` are expression records or none, for
 `nonnull` the start and length of its run in `ints`, for a `Symbol`,
 builtin or label kind `s` is the text and `a` is 0.
+
+A function parameter's attributes (WP-1314: `[[clang::lifetimebound]]`
+on libc++'s `std::move`, `std::forward`, `std::min`; `noescape`,
+`maybe_unused`) are `params` records: the function's record, the
+parameter's position and the node, attached to the parameter as the
+importer builds it. Only plain-word kinds travel there; a parameter
+with another kind falls back with "an attribute the image does not
+carry yet" (`pch-param-attrs-*.cpp`, `image-param-attrs-*.cpp`).
 
 **Scopes and reserved names (WP-1278).** `bmi_image/scope.rs` carries
 the scopes and names beyond named namespaces and export blocks:
@@ -3343,7 +3446,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 23` since WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 24` since WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
@@ -3380,6 +3483,9 @@ image   := version:u32 main_path:str module:str kw:u32 name_loc:u32
            lexterns:u32 u32*         WP-1293: block-scope declaration
                                      records, in `local_externs` order
            texprs                    WP-1300 ("Expressions in types")
+           defcmps:u32 (rec:u32 kw:u32 (NONE | n:u32 u32*n))*
+                                     WP-1314 ("Defaulted comparisons"),
+                                     ascending by rec
 cspec   := rec:u32 template:u32 (0 | 1 tloc:u32 langle:u32 rangle:u32
            params:u32 u32*) args:u32 carg*      ascending by rec
 carg    := 0 qref | 1 qref value:i128   a type, a value
@@ -3682,7 +3788,7 @@ Falls back (each with its `-v` reason):
   follow-up;
 - template expressions, requires-expressions and concepts: S4 (in a
   pattern, the dependent kinds other than those the slices carry are
-  "a template expression", see "Templates as patterns");
+  "a template expression (...)", see "Templates as patterns");
 - `try` blocks and function-try-blocks, coroutines, expansion
   statements, `asm`, contract assertions, computed `goto`, and
   attributes with arguments (`[[assume(...)]]`): follow-ups under
@@ -3788,8 +3894,9 @@ typedef), is a template or a closure type, is incomplete,
 befriends a member function or a specialization (friends of other
 classes are carried since WP-1292, friend templates and friends in class
 templates since WP-1307), a
-class-specific allocation function, a defaulted comparison or an
-out-of-line defaulted function, a `[[no_unique_address]]` field, any
+class-specific allocation function, an out-of-line defaulted function
+(a defaulted comparison is carried since WP-1314, "Defaulted
+comparisons"), a `[[no_unique_address]]` field, any
 other side data sema keeps in its member maps ("a declaration with
 side data the image does not carry", for example a member named
 through a qualified name), or any `DefinitionBits` outside
@@ -3861,8 +3968,8 @@ classes and templates). The follow-ups, in priority order:
    since WP-1292, and so are classes whose implicit members need
    overload resolution; friend templates and friends in class templates
    since WP-1307), anonymous unions and structs,
-   inherited constructors, defaulted comparisons and out-of-line defaulted
-   functions, class-specific allocation functions,
+   inherited constructors, out-of-line defaulted functions (defaulted
+   comparisons since WP-1314), class-specific allocation functions,
    `[[no_unique_address]]`, the member side maps (qualified member
    names), and in bodies `new`/`delete` (the implicit global allocation
    functions), `typeid`/`dynamic_cast`, `std::initializer_list` and

@@ -1087,7 +1087,12 @@ impl Sema<'_, '_> {
             {
                 continue;
             }
-            let (a, b) = (self.module_attachment(d), self.module_attachment(prev));
+            // A declaration an instantiation made (a befriended function
+            // of `It<char>`, instantiated in an importer) is attached
+            // like the template's declaration it was instantiated from
+            // ([module.unit]/7, [temp.friend]/1; WP-1314).
+            let from = self.ast.instantiated_from(d).unwrap_or(d);
+            let (a, b) = (self.module_attachment(from), self.module_attachment(prev));
             let name = self.decl_name_str(dn.name());
             if a != b {
                 let say = |m: &Option<String>| {

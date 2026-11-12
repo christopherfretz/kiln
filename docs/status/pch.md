@@ -477,6 +477,31 @@ the WP-1320 branch, same session.
 
   All three still replay.
 
+## WP-1314: libc++ wave 6b (2026-11-11)
+
+The wave took the "a template expression" bucket (split by form), the
+defaulted comparisons, parameter attributes, block-scope static
+assertions and typedefs, and explicit template arguments (list and
+census in pch-image-census.md, WP-1314). kiln at the WP-1314 branch,
+`debug` profile; no timings (a release gate holds the cores).
+
+- **Corpus `--pch-diff check`** (`cpp.include`, the `module.*`
+  directories, `tests/differential/pp`, `tests/header-guard`): 178
+  compared, 177 agree. The one difference is the WP-1310 follow-up,
+  `module.global.frag/gmf-floatn-limits.cpp` (entities a global module
+  fragment also declares are not merged with the image's). The 11 new
+  `cpp.include` tests all take the image.
+- **`lcx.h` declarations carried:** 21884 → 22397 of 26762.
+- **Headers carried** (the 106 `lcx.h` headers, each alone): 26 → 26.
+- **Bench path:** `lcx` still replays; its first refusal moved from "a
+  template expression" to "a specialization type the image does not
+  carry" (`__type_traits/common_type.h:41`).
+- **Merged with WP-1320** (the landed tree): `--pch-diff check` on the
+  same directories, 195 compared, 194 agree (the same
+  `gmf-floatn-limits.cpp`); `lcx.h` 23832 of 26762 carried; headers
+  carried 28 (`cwchar`, `limits` flip); `lcx` still replays, now at "a
+  constrained template" (`__type_traits/common_reference.h:63`).
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers

@@ -328,6 +328,47 @@ fn uncarried_sema_state_is_replayed() {
     assert!(ir.stdout.contains("define weak dso_local i32 @f("), "{}", ir.stdout);
 }
 
+/// WP-1314: block-scope static assertions ([dcl.pre]/10, checked again by
+/// each instantiation, [temp.inst]/4), block-scope typedef and alias
+/// declarations ([dcl.typedef]) and names with explicit template
+/// arguments ([temp.arg.explicit]/1) are carried; a failing assertion is
+/// diagnosed as replay diagnoses it.
+#[test]
+fn local_static_asserts_and_explicit_args_take_the_image() {
+    let d = scratch("wp1314-lsa");
+    let header = "\
+template <class T> int f(T t) { static_assert(sizeof(T) < 64, \"small\"); return int(t) + 1; }
+inline int g(int x) { static_assert(sizeof(int) >= 2); return x * 2; }
+template <class T> struct S { static int h() { static_assert(sizeof(T) != 3); return 7; } };
+template <class T> T pick(T a) { return a; }
+inline int callpick() { return pick<int>(3) + pick<long>(4L); }
+template <class T> long td(T t) { typedef const T *P; using L = long; P p = &t; return L(*p); }
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    std::fs::write(
+        d.join("a.cpp"),
+        "int main() { return f(3) + g(2) + S<int>::h() + callpick() + int(td(1)); }\n",
+    )
+    .unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+    std::fs::write(
+        d.join("b.cpp"),
+        "struct Big { char c[100]; operator int() const; };\nstruct T3 { char c[3]; };\n\
+         int a = f(Big{});\nint b = S<T3>::h();\n",
+    )
+    .unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
+    assert!(o.stderr.contains("static assertion failed due to requirement"), "{}", o.stderr);
+    assert!(o.stderr.contains("'sizeof(T3) != 3'"), "{}", o.stderr);
+}
+
 /// A block-scope `extern` or function declaration in the header
 /// ([basic.link]/6) is carried with its link (WP-1293): the unit's
 /// namespace-scope declarations redeclare it as replay's do, in another

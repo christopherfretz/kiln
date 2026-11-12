@@ -716,3 +716,186 @@ constrained partial specializations (2752, 3451), a member-template
 partial specialization (1856) and a specialization of a partial
 specialization (1878); so no further header flips until those land.
 `-fkiln-bmi-image-census=all` (new) lists every refused declaration.
+
+## WP-1314: libc++ wave 6b (2026-11-11)
+
+Debug build of the WP-1314 branch alone (base main `2059be16b`); the
+tree with WP-1320 merged in is measured last, under "Merged with
+WP-1320". IMAGE_VERSION 24 in the last commit (WP-1320 took 23). The
+libc++ family is the 106 headers
+`bench/pch/lcx.h` includes, each built alone as a PCH with
+`-fkiln-pch-image -fkiln-bmi-image-census=all -v`, plus `lcx.h` whole.
+`-fkiln-bmi-image-census=all` (taken from WP-1320, byte for byte) lists
+every refused declaration, so the table counts every refusal reason,
+not only each header's first.
+
+```
+lcx.h, before: 26762 top-level declarations, 21884 carried, 4878 not
+lcx.h, after:  26762 top-level declarations, 22397 carried, 4365 not
+```
+
++513 carried. Headers through the image: 26 of 106 before and after.
+No header flipped: each replayed header has 25 to 45 root reasons, so
+carrying the brief's three buckets moves first refusals but no unit.
+First refusals of the 80 replayed headers before: a template
+expression 31, a defaulted comparison or an out-of-line defaulted
+function 15, a specialization of a template outside the image 7, an
+expression in a type naming a parameter or local declaration 5, a
+type declared outside the image 5, a specialization type 4, 3 or fewer
+for the rest. After: a specialization type the image does not carry
+52, a specialization of a template outside the image 8 (a cascade: its
+roots are the class members of `char_traits<char>`, below), an
+expression in a type naming a parameter or local 5, a type declared
+outside the image 5, 3 or fewer for the rest. `lcx.h` stopped at "a
+template expression" (`is_referenceable.h:34`), then at "an implicit,
+invalid or attributed parameter" (`move.h:30`), and now stops at "a
+specialization type the image does not carry" (`common_type.h:41`).
+
+Every reason, as declarations in `lcx.h` / headers it appears in,
+before and after ("-": absent):
+
+| reason | before | after | example (`/usr/include/c++/v1/`) |
+|---|---:|---:|---|
+| a specialization type the image does not carry | 334 / 75 | 364 / 75 | __type_traits/common_type.h:41:8 |
+| a local declaration the image does not carry | 473 / 75 | - / - | __utility/declval.h:30:56 |
+| a template parameter the image does not carry | 107 / 72 | 107 / 72 | __type_traits/common_reference.h:150:8 |
+| a template expression | 48 / 72 | - / - | __type_traits/is_referenceable.h:34:8 |
+| an implicit, invalid or attributed parameter | 19 / 72 | - / - | __utility/move.h:30:1 |
+| a constrained template | 46 / 71 | 46 / 71 | __type_traits/common_reference.h:63:8 |
+| a template | 27 / 71 | 27 / 71 | __type_traits/common_reference.h:149:47 |
+| an expression in a type naming a parameter or local declaration | 59 / 60 | 116 / 68 | __iterator/iter_move.h:72:54 |
+| a defaulted comparison or an out-of-line defaulted function | 11 / 67 | - / - | __compare/ordering.h:62:47 |
+| an expression the image does not carry yet | 21 / 66 | 29 / 66 | __type_traits/extent.h:25:29 |
+| an explicit specialization argument the image does not carry | 29 / 65 | 29 / 65 | __utility/pair.h:602:8 |
+| an attribute the image does not carry yet | 98 / 64 | 98 / 64 | __math/traits.h:88:1 |
+| a new or delete expression | 27 / 63 | 38 / 63 | __memory/construct_at.h:38:44 |
+| an implicit declaration that is not a special member (CXXRecord) | 6 / 62 | 6 / 62 | __compare/synth_three_way.h:28:65 |
+| a template named through a qualifier or parameter | 3 / 57 | 3 / 57 | __type_traits/is_valid_expansion.h:21:67 |
+| a type the image does not carry | 6 / 57 | 6 / 57 | __ranges/size.h:82:69 |
+| a pseudo-destructor call | 5 / 57 | 5 / 57 | __memory/construct_at.h:65:58 |
+| a declaration not named by an identifier | 39 / 56 | 39 / 56 | __ranges/view_interface.h:76:44 |
+| a template argument the image does not carry | 46 / 43 | 49 / 54 | __format/range_default_formatter.h:96:29 |
+| a partial specialization argument the image does not carry | 2 / 52 | 2 / 52 | __iterator/segmented_iterator.h:72:8 |
+| a class member outside its class definition | 6 / 52 | 6 / 52 | __functional/operations.h:51:19 |
+| an implicit member of a class template specialization | 11 / 21 | 14 / 52 | __memory/uses_allocator_construction.h:148:76 |
+| an implicit declaration that is not a special member (TemplateTypeParm) | 28 / 51 | 28 / 51 | __ranges/access.h:85:19 |
+| a local using-declaration or using-directive | - / - | 29 / 51 | __chrono/convert_to_timespec.h:29:40 |
+| an expression annotation the image does not carry | 7 / 49 | 7 / 49 | __algorithm/sort.h:938:7 |
+| a local class or enumeration | - / - | 6 / 49 | __functional/hash.h:244:32 |
+| an out-of-line defaulted function | - / - | 4 / 47 | __bit_reference:62:55 |
+| a lambda expression | 17 / 26 | 28 / 43 | optional:565:9 |
+| an anonymous union or struct member | 10 / 40 | 10 / 40 | optional:285:3 |
+| a template specialization | 20 / 35 | 20 / 35 | __algorithm/sort.h:891:6 |
+| an explicit specialization or instantiation | 29 / 34 | 30 / 34 | __fwd/string.h:48:7 |
+| a specialization of a partial specialization | 6 / 32 | 7 / 32 | __chrono/hh_mm_ss.h:91:46 |
+| a typeid or dynamic_cast expression | 4 / 3 | 7 / 32 | any:177:35 |
+| a specialization of a constrained template | 10 / 16 | 12 / 32 | __format/format_context.h:69:7 |
+| a try block | 42 / 31 | 43 / 31 | __memory/uninitialized_algorithms.h:59:69 |
+| a template argument list | 17 / 30 | - / - | __thread/support/pthread.h:196:35 |
+| a member template or a template in a template | 2 / 29 | 2 / 29 | __chrono/duration.h:183:12 |
+| an explicitly specialized member | 1 / 26 | 1 / 26 | __locale:1422:32 |
+| a redeclared partial specialization | 3 / 21 | 3 / 21 | bitset:607:8 |
+| an inherited constructor or assignment operator | 13 / 18 | 13 / 18 | optional:348:8 |
+| a coroutine, contract-checked or implicitly defaulted function | 1 / 15 | 1 / 15 | __format/format_arg.h:292:40 |
+| a specialization of a template outside the image | 0 / 7 | 0 / 8 |  |
+| a union initializer | 2 / 7 | 2 / 7 | __mutex/mutex.h:25:20 |
+| a type declared outside the image | 0 / 5 | 0 / 5 |  |
+| a specialization named while its user is recorded | 4 / 5 | 4 / 5 | deque:2588:33 |
+| a dependent using-declaration | 1 / 3 | 1 / 3 | variant:1132:17 |
+| a redeclaration of an entity outside the image | 0 / 1 | 0 / 1 |  |
+| a declaration with side data the image does not carry | 4 / 1 | 4 / 1 | __mdspan/extents.h:330:39 |
+| a variable template specialization | - / - | 13 / 1 | numbers:139:25 |
+| a template expression (a name found through a using-declaration) | - / - | 0 / 1 |  |
+| an out-of-line member of a class nested in a template | 17 / 1 | 17 / 1 | __random/binomial_distribution.h:114:46 |
+
+Cascades in `lcx.h`: 3217 before, 3089 after.
+
+Carried (spec/modules.md §11.11, "Forms carried by WP-1314" and
+"Defaulted comparisons"): the "a template expression" bucket split by
+form; explicit template arguments of a resolved name; block-scope
+static assertions; block-scope typedefs and aliases; unresolved names
+that found class members, with their naming class (cold annotation
+1024); dependent `decltype` bases; parameter attributes of plain-word
+kinds (`[[clang::lifetimebound]]`); defaulted comparisons (the
+`defcmps` section); a class kept open across a reopened namespace.
+
+Still blocking, by headers it appears in: a specialization type the
+image does not carry (75; WP-1320 completes specialization types with
+defaults), a template parameter the image does not carry (72), a
+constrained template (71), a template (71), an expression in a type
+naming a parameter or local (68), an expression the image does not
+carry yet (66), an explicit specialization argument (65), an attribute
+(64; `preferred_name`, `diagnose_if`, `enable_if`), a new or delete
+expression (63; WP-1320 has the global ones), an implicit `CXXRecord`
+(62). The out-of-line defaulted rows (47 headers: `tuple:367`,
+`tuple:422`, `__bit_reference:62`) are in-class defaulted constructors
+the writer sees as not a first declaration or not a special member; a
+reduction outside libc++ does not reproduce it.
+
+### Merged with WP-1320
+
+The final tree (WP-1320 merged in, then this branch), same census:
+
+```
+lcx.h, merged: 26762 top-level declarations, 23832 carried, 2930 not
+```
+
++1948 carried over the "before" run, +1435 over WP-1314 alone.
+Headers through the image: 28 of 106 (`cwchar` and `limits` flip; no
+other header changes). `lcx.h` stops at "a constrained template"
+(`__type_traits/common_reference.h:63`). First refusals of the 78
+replayed headers: a constrained template 44, a specialization of a
+template outside the image 9, an expression in a type naming a
+parameter or local 6, a type declared outside the image 6, a template
+4, 2 or fewer for the rest. Cascades in `lcx.h`: 2073.
+
+Every reason on the merged tree, as declarations in `lcx.h` / headers it
+appears in:
+
+| reason | merged | example (`/usr/include/c++/v1/`) |
+|---|---:|---|
+| a constrained template | 46 / 71 | __type_traits/common_reference.h:63:8 |
+| a template | 28 / 71 | __type_traits/common_reference.h:149:47 |
+| a template parameter the image does not carry | 32 / 70 | __type_traits/common_reference.h:150:8 |
+| an expression in a type naming a parameter or local declaration | 126 / 68 | __iterator/iter_move.h:72:54 |
+| an attribute the image does not carry yet | 100 / 67 | __math/traits.h:88:1 |
+| an expression the image does not carry yet | 15 / 66 | __type_traits/extent.h:25:29 |
+| an explicit specialization argument the image does not carry | 29 / 65 | __utility/pair.h:602:8 |
+| an implicit declaration that is not a special member (CXXRecord) | 6 / 62 | __compare/synth_three_way.h:28:65 |
+| a template argument the image does not carry | 52 / 59 | __format/range_default_formatter.h:96:29 |
+| an expression annotation the image does not carry | 8 / 58 | __iterator/iterator_traits.h:451:8 |
+| a type the image does not carry | 5 / 58 | __ranges/size.h:82:69 |
+| a declaration with side data the image does not carry | 6 / 57 | __utility/pair.h:171:97 |
+| a template named through a qualifier or parameter | 3 / 57 | __type_traits/is_valid_expansion.h:21:67 |
+| a declaration not named by an identifier | 39 / 56 | __ranges/view_interface.h:76:44 |
+| a local using-declaration or using-directive | 35 / 54 | __memory/compressed_pair.h:152:60 |
+| an implicit member of a class template specialization | 23 / 54 | __memory/uses_allocator_construction.h:148:76 |
+| a class member outside its class definition | 6 / 52 | __functional/operations.h:51:19 |
+| a partial specialization argument the image does not carry | 2 / 52 | __iterator/segmented_iterator.h:72:8 |
+| an implicit declaration that is not a special member (TemplateTypeParm) | 28 / 51 | __ranges/access.h:85:19 |
+| a local class or enumeration | 6 / 49 | __functional/hash.h:244:32 |
+| an out-of-line defaulted function | 5 / 47 | __bit_reference:62:55 |
+| a member template or a template in a template | 3 / 45 | __memory/unique_ptr.h:323:10 |
+| a lambda expression | 39 / 43 | optional:565:9 |
+| an anonymous union or struct member | 11 / 41 | optional:285:3 |
+| a new or delete expression | 9 / 39 | __memory/shared_ptr.h:384:8 |
+| a try block | 54 / 37 | __memory/uninitialized_algorithms.h:59:69 |
+| a template specialization | 20 / 35 | __algorithm/sort.h:891:6 |
+| an explicit specialization or instantiation | 30 / 34 | __fwd/string.h:48:7 |
+| a specialization of a constrained template | 12 / 32 | __format/format_context.h:69:7 |
+| a typeid or dynamic_cast expression | 9 / 32 | any:177:35 |
+| an explicitly specialized member | 4 / 26 | __locale:1422:32 |
+| a redeclared partial specialization | 3 / 21 | bitset:607:8 |
+| a dependent using-declaration | 2 / 19 | __charconv/traits.h:156:29 |
+| an inherited constructor or assignment operator | 13 / 18 | optional:348:8 |
+| a specialization of a partial specialization | 9 / 15 | __chrono/hh_mm_ss.h:91:46 |
+| a coroutine, contract-checked or implicitly defaulted function | 1 / 15 | __format/format_arg.h:292:40 |
+| a specialization of a template outside the image | 0 / 9 |  |
+| a union initializer | 2 / 7 | __mutex/mutex.h:25:20 |
+| a deduced template named through a qualifier or parameter | 0 / 7 |  |
+| a specialization named while its user is recorded | 5 / 6 | deque:2588:33 |
+| a type declared outside the image | 0 / 6 |  |
+| a local structured binding | 1 / 2 | __algorithm/ranges_find.h:43:3 |
+| an out-of-line member of a class nested in a template | 17 / 1 | __random/binomial_distribution.h:114:46 |
+| a variable template specialization | 13 / 1 | numbers:139:25 |
+| a template expression (a name found through a using-declaration) | 0 / 1 |  |
