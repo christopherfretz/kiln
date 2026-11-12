@@ -149,7 +149,11 @@ impl Sema<'_, '_> {
                 self.convert_for_init(e, elem, conv::ConvCtx::Initialization)
             })
             .collect();
-        if let Some(extra) = l.items.get(2) {
+        if let Some(extra) = l.items.get(2)
+            && self.is_c()
+        {
+            self.excess_c(extra, "2");
+        } else if let Some(extra) = l.items.get(2) {
             let at = match &extra.value {
                 InitValue::Expr(e) => self.ast.exprs.get(*e).loc(),
                 InitValue::List(inner) => inner.lbrace,

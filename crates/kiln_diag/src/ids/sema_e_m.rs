@@ -25,7 +25,11 @@ sema_exception_spec_in_typedef = Error (1) "exception specifications are not all
 sema_exception_spec_mismatch = Error (0) "exception specification in declaration does not match previous declaration";
 sema_exception_spec_not_parsed = Error (0) "exception specification is not available until end of class definition";
 sema_excess_initializers = Error (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
+// C (clang `ext_excess_initializers`): the excess clauses are ignored.
+sema_excess_initializers_c = ExtWarn [ExcessInitializers] (1) "excess elements in {0:array|vector|scalar|union|struct} initializer";
 sema_excess_initializers_in_char_array = Error (0) "excess elements in char array initializer";
+// C (clang `ext_excess_initializers_in_char_array_initializer`).
+sema_excess_initializers_in_char_array_c = ExtWarn [ExcessInitializers] (0) "excess elements in char array initializer";
 sema_expansion_size_not_constant = Error (0) "expansion size is not a constant expression";
 sema_expect_int = Error (1) "used type {0} where integer is required";
 sema_expected_class_or_namespace = Error (1) "{0} is not a class, namespace, or enumeration";
@@ -232,7 +236,7 @@ sema_init_priority_reserved = WarningError [InitPriorityReserved] (1) "requested
 sema_init_reference_member_uninitialized = Error (1) "reference member of type {0} uninitialized";
 sema_init_string_too_long = Error (2) "initializer-string for char array is too long, array size is {0} but initializer has size {1} (including the null terminating character)";
 // clang `ext_initializer_string_for_char_array_too_long` in C (WP-1286).
-sema_init_string_too_long_c = Warning [ExcessInitializers] (0) "initializer-string for char array is too long";
+sema_init_string_too_long_c = ExtWarn [ExcessInitializers] (0) "initializer-string for char array is too long";
 sema_init_uninit_member = Error (4) "{0:constructor for|implicit default constructor for} {1} must explicitly initialize the {2:reference|const} member {3}";
 sema_init_vector_element_failed = Error (3) "cannot initialize a vector element of type {0} with an {1:rvalue|lvalue} of type {2}";
 sema_initializer_overrides = ExtWarn [InitializerOverrides] (1) "initializer {0:partially |}overrides prior initialization of this subobject";

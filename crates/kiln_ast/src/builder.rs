@@ -1925,6 +1925,22 @@ impl<'a> AstBuilder<'a> {
         self.simple(ExprKind::ConditionalOperator, vk, deps, 0, ty, loc, cond.raw(), side)
     }
 
+    /// A C conditional operator `c ? t : e`: never an lvalue (C17 6.5.15
+    /// footnote 110), whatever its arms, as clang's C `?:`.
+    pub fn c_conditional(
+        &mut self,
+        cond: ExprId,
+        then: ExprId,
+        els: ExprId,
+        ty: QualType,
+        loc: Loc,
+    ) -> ExprId {
+        let deps = self.deps(cond) | self.deps(then) | self.deps(els) | self.type_deps(ty);
+        let side = self.ast.exprs.push_cond_arms(then, els);
+        let vk = ValueCategory::PRValue;
+        self.simple(ExprKind::ConditionalOperator, vk, deps, 0, ty, loc, cond.raw(), side)
+    }
+
     /// A subscript `base[idx]` ([expr.sub]/2): an xvalue if an operand is
     /// an xvalue (array xvalue), else an lvalue.
     pub fn subscript(&mut self, base: ExprId, idx: ExprId, ty: QualType, loc: Loc) -> ExprId {

@@ -618,8 +618,11 @@ impl Sema<'_, '_> {
             return self.recover(ty, &flat, lparen);
         }
         // A vector or `_Complex` literal takes a list of its elements (clang
-        // `InitListChecker::CheckVectorType` / `CheckComplexType`).
+        // `InitListChecker::CheckVectorType` / `CheckComplexType`). In C a
+        // scalar literal's excess elements are only a warning
+        // ([`Sema::excess_c`]).
         if l.items.len() > 1
+            && !self.is_c()
             && !class
             && !self.is_vector_type(ty)
             && self.ast.types.as_complex(ty).is_none()
