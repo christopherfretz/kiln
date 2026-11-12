@@ -136,8 +136,11 @@ pub(crate) fn codegen(
     let decls = input.decls(args, &load);
     let lcap = Capture::default();
     let (lir, _, _) = crate::codegen_cmd::CodegenJob(input.job(&load, lcap.writer())).run();
+    // Each module is printed once, before the next job runs.
+    let lir = lir.map(crate::codegen_cmd::print_ir);
     let rcap = Capture::default();
     let (ir, _, deps) = crate::codegen_cmd::CodegenJob(input.job(args, rcap.writer())).run();
+    let ir = ir.map(crate::codegen_cmd::print_ir);
     let (ltext, rtext) = (lcap.text(), rcap.text());
     let _ = input.stderr.clone().write_all(rtext.as_bytes());
     let diff = decls.err().or_else(|| diags(&ltext, &rtext)).or_else(|| {

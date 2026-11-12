@@ -2345,9 +2345,11 @@ clang 19 accepts the flag too; it behaves the same under
 | `EvaluateAsBooleanCondition` | a CFG branch's condition fold (`cfg/truth.rs` `known_truth`), holding its `EvaluateAsRValue`, as clang's `tryEvaluateBool` | the condition's range |
 | `CheckConstraintSatisfaction` | `kiln_sema` `check_constraints` / `check_concept`, cache hits included, as clang 22 (clang 19 has no such event; kiln records it under `-fclang-compat=19` too). A concept-id met while an enclosing check substitutes its atoms records none (clang 22 normalizes it into that check): `f(3L)` with `template <C T> int f(T)` is one event holding the atom's `EvaluateAsConstantExpr` | the template-id's location (`<t.cpp:4:11>`) |
 | `BuildCFG` | `kiln_sema` `cfg_ensure`: a body's graph, built only when an analysis asks for one (the fall-off-end check, `-Wunreachable-code`, `-Wuninitialized`, ...); clang builds one per analyzed function, kiln fewer | — |
+| `EmitIR` | kiln only: the driver, around `kiln_codegen::emit_with_debug` inside `Frontend`: the module's construction (the `CodeGen Function`, `DebugType` and `DebugGlobalVariable` events nest in it; WP-1366) | — |
 | `CodeGen Function` | `kiln_codegen` `emit_fn_def` | the qualified name |
 | `DebugType` | `-g`: `kiln_codegen` `di_type`, cache hits included (clang's `getOrCreateType`) | the type as written (sugared) |
 | `DebugGlobalVariable` | `-g`: `di_global_var`, a namespace-scope or static variable's descriptor | the qualified name |
+| `PrintIR` | kiln only: the driver, `Module::to_text` once the codegen job has returned the module (its AST, Oven, preprocessor and source manager already dropped): a sibling after `EmitIR`, inside `Frontend`. With `EmitIR` it splits the time between the end of sema and the IR text into building and printing (WP-1366); clang has no printed module before its back end | — |
 | `WriteAST` | driver: writing a module file (`--precompile`, `-fmodule-output`; inside `Frontend`, as clang's for a module interface) or a PCH (after `Frontend`, as clang's). kiln's PCH is a replay record ("Precompiled headers"), not a serialized AST | the output path |
 | `Backend` | driver, from after the frontend to the end of `llc` | — |
 | `Optimizer` | driver, the `opt` child (its `OptModule`, `OptFunction`, `RunPass`, ... merged) | — |
