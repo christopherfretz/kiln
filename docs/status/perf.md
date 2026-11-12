@@ -223,10 +223,32 @@ reserved buffer size.
     static region (24 bytes per `integral_constant<...>::value`); the
     fold is not recorded, but the static high-water mark is. Expected.
     The 20f2caa15 merge adds 8 more bytes (16 for the reflect shapes).
-  - `reflect/s8` `static_bytes` 32944 -> 38864 (+18%): not bisected
-    (follow-up). Ruled out so far: 047c716a1 has 28992, 3409a11e2 and
-    158e5bb9b 30304, b6fed6fa8 39312, so the main step is in
-    3409a11e2..b6fed6fa8 (11-09), first-parent.
+  - `reflect/s8` `static_bytes` 32944 -> 38864 (+18%): two steps,
+    both expected (WP-1337, first-parent bisects of the
+    `-fconstexpr-report` total; per-evaluation deltas compared).
+    - +9008 (30304 -> 39312) at #473 (WP-1109, 00e91d219, class
+      triviality per eligible special member, [special]/6,
+      `select_eligible_special_members`,
+      kiln_sema/src/class/special/prospective.rs:91). Eligibility checks
+      the constraints of each constrained special member when the class
+      is completed, as clang's `SetEligibleMethods` does: for the 140
+      `std::tuple` specializations of the TU, the four constrained
+      copy/move assignment operators (`<tuple>` 1715, 1724, 1753, 1761:
+      `requires (__assignable<...>())`). Each of those 560 constraints
+      instantiates a fresh `__and_v<is_assignable<_Ei&, _Ui>...>`
+      (`<type_traits>` 222). The static space then holds 8 bytes for the
+      variable's initializer (its `__and_<...>::value` read) and 8 for
+      the variable thawed into the static space when the constraint
+      reads it (spec/oven.md "Freeze/thaw"; a `bool` takes an 8-byte
+      static slot): 560 x 16 = 8960 bytes, plus 48 from 6 more trait
+      initializers. Expected cost of a conformance fix. Steps and
+      evaluations rose with it; peak arena did not.
+    - -448 (39312 -> 38864) at #562 (WP-1223, c79f40d15): copy
+      initialization by constructor no longer deduces explicit
+      constructor templates ([over.match.copy]/1.1), so fewer trait
+      variables and constraints (`string_view` 170/174, `ranges_base.h`
+      94/122/173) are evaluated. Expected saving.
+    - The +16 to 38880 is the 20f2caa15 merge above.
 - New baselines (no kiln baseline before): `frontend`
   expansion-giant-obj, expansion-outline-obj, reflection-mangle; `oven`
   switch-dense; `reflect` s1-s6, s9, s10.
