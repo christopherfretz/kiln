@@ -276,11 +276,16 @@ impl Parser<'_, '_> {
             _ if self.at_consteval_block() => {
                 self.parse_consteval_block();
             }
+            // C has no linkage specification: `extern "C"` is the storage
+            // class followed by a string literal, a malformed declarator
+            // ("expected identifier or '('" at the string; the declaration
+            // is skipped through its `;`, or a braced body, as clang).
             (_, Some(Kw::Extern))
-                if matches!(
-                    self.peek(1).kind,
-                    TokKind::StringLit(_) | TokKind::RawStringLit(_)
-                ) =>
+                if !self.s.is_c()
+                    && matches!(
+                        self.peek(1).kind,
+                        TokKind::StringLit(_) | TokKind::RawStringLit(_)
+                    ) =>
             {
                 let _trace = self.trace_decl();
                 self.parse_linkage_spec_with(Vec::new());
@@ -440,7 +445,8 @@ impl Parser<'_, '_> {
     /// specifiers (possibly mixed with C++11 attribute-specifiers after
     /// the first) followed by `extern "lang"` ([dcl.link]).
     pub(crate) fn at_gnu_attrs_before_linkage_spec(&self, n: usize) -> bool {
-        if self.kw_of(self.peek(n)) != Some(Kw::Attribute) {
+        // C has no linkage specification (`parse_external_declaration`).
+        if self.s.is_c() || self.kw_of(self.peek(n)) != Some(Kw::Attribute) {
             return false;
         }
         let mut j = n;

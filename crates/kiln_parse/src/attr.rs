@@ -395,7 +395,11 @@ impl Parser<'_, '_> {
             Some(Kw::Namespace | Kw::StaticAssert | Kw::Template | Kw::Asm | Kw::Export) => true,
             Some(Kw::Inline) => self.kw_of(self.tok_at(j + 1)) == Some(Kw::Namespace),
             Some(Kw::Extern) => {
-                matches!(self.tok_at(j + 1).kind, TokKind::StringLit(_) | TokKind::RawStringLit(_))
+                (!self.s.is_c()
+                    && matches!(
+                        self.tok_at(j + 1).kind,
+                        TokKind::StringLit(_) | TokKind::RawStringLit(_)
+                    ))
                     || self.kw_of(self.tok_at(j + 1)) == Some(Kw::Template)
             }
             // `[[x]] __attribute__((y)) extern "C" ...`: clang's

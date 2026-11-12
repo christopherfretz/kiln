@@ -242,7 +242,7 @@ impl Sema<'_, '_> {
                         self.report_arith_warning(loc);
                         let t2 = self.real_to_complex(t2, ty);
                         let f2 = self.real_to_complex(f2, ty);
-                        self.builder().conditional(c2, t2, f2, ty, loc)
+                        self.builder().c_conditional(c2, t2, f2, ty, loc)
                     }
                     Err(err) => self.conv_failed(&err, t, f, loc),
                 },
@@ -254,7 +254,7 @@ impl Sema<'_, '_> {
         // 6.5.15p3, p5: the same structure or union type, unqualified.
         if self.ast.types.as_record(tt).is_some() && self.ast.types.same_unqualified(tt, ft) {
             let ty = conv::strip_cv(self, tt);
-            return Some(self.builder().conditional(c2, t2, f2, ty, loc));
+            return Some(self.builder().c_conditional(c2, t2, f2, ty, loc));
         }
         // 6.5.15p5: both `void`; one `void` side is a GNU extension.
         let (tv, fv) = (self.ast.types.is_void(tt), self.ast.types.is_void(ft));
@@ -268,25 +268,25 @@ impl Sema<'_, '_> {
             let ty = if fv && !tv { ft } else { tt };
             let t3 = conv::cast_to(self, CastKind::ToVoid, t2, ty, None);
             let f3 = conv::cast_to(self, CastKind::ToVoid, f2, ty, None);
-            return Some(self.builder().conditional(c2, t3, f3, ty, loc));
+            return Some(self.builder().c_conditional(c2, t3, f3, ty, loc));
         }
         // C23 6.5.15p7: both `nullptr_t`.
         if self.is_nullptr_type(tt) && self.is_nullptr_type(ft) {
-            return Some(self.builder().conditional(c2, t2, f2, tt, loc));
+            return Some(self.builder().c_conditional(c2, t2, f2, tt, loc));
         }
         // 6.5.15p6: a null pointer constant takes the other pointer type.
         let (tp, fp) = (self.ast.types.is_pointer(tt), self.ast.types.is_pointer(ft));
         if tp && c_assign::null_pointer_constant(self, f2).is_some() {
             let f3 = conv::cast_to(self, CastKind::NullToPointer, f2, tt, None);
-            return Some(self.builder().conditional(c2, t2, f3, tt, loc));
+            return Some(self.builder().c_conditional(c2, t2, f3, tt, loc));
         }
         if fp && c_assign::null_pointer_constant(self, t2).is_some() {
             let t3 = conv::cast_to(self, CastKind::NullToPointer, t2, ft, None);
-            return Some(self.builder().conditional(c2, t3, f2, ft, loc));
+            return Some(self.builder().c_conditional(c2, t3, f2, ft, loc));
         }
         if tp && fp {
             let (t3, f3, ty) = self.c_cond_pointers(t2, f2, loc);
-            return Some(self.builder().conditional(c2, t3, f3, ty, loc));
+            return Some(self.builder().c_conditional(c2, t3, f3, ty, loc));
         }
         // GNU: a pointer and an integer give the pointer type, with a
         // warning (null pointer constants were taken above).
@@ -304,7 +304,7 @@ impl Sema<'_, '_> {
             } else {
                 (conv::cast_to(self, CastKind::IntegralToPointer, t2, ft, None), f2, ft)
             };
-            return Some(self.builder().conditional(c2, t3, f3, ty, loc));
+            return Some(self.builder().c_conditional(c2, t3, f3, ty, loc));
         }
         let msg = self.diag(DiagId::sema_incompatible_cond_operands, loc).diff_args(self, tt, ft);
         self.emit(msg);

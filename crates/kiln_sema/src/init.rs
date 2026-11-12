@@ -1695,11 +1695,22 @@ impl Sema<'_, '_> {
         {
             return None;
         }
-        if let Some(extra) = l.items.get(1) {
-            let at = match extra.value {
-                InitValue::Expr(e) => self.begin_loc(e),
-                InitValue::List(_) => extra.value.loc(self),
-            };
+        let extra = l.items.get(1).map(|extra| match extra.value {
+            InitValue::Expr(e) => self.begin_loc(e),
+            InitValue::List(_) => extra.value.loc(self),
+        });
+        if self.is_c() {
+            // C: a warning after the string's own, the excess clauses
+            // ignored (clang
+            // `ext_excess_initializers_in_char_array_initializer`).
+            let e = self.init_from_expr(ty, x, ConvCtx::Initialization, entity.unwrap_or(l.lbrace));
+            if let Some(at) = extra {
+                let msg = self.diag(DiagId::sema_excess_initializers_in_char_array_c, at);
+                self.emit(msg);
+            }
+            return Some(e);
+        }
+        if let Some(at) = extra {
             self.agg_excess.set(true);
             let msg = self.diag(DiagId::sema_excess_initializers_in_char_array, at);
             self.emit(msg);
@@ -1839,9 +1850,13 @@ impl Sema<'_, '_> {
             _ => {}
         }
         if let Some(extra) = l.items.get(1) {
-            let at = entity.unwrap_or_else(|| extra.value.loc(self));
-            let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
-            self.emit(self.ref_temp_noted(msg));
+            if self.is_c() {
+                self.excess_c(extra, "2");
+            } else {
+                let at = entity.unwrap_or_else(|| extra.value.loc(self));
+                let msg = self.diag(DiagId::sema_excess_initializers, at).arg("2");
+                self.emit(self.ref_temp_noted(msg));
+            }
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -1908,8 +1923,13 @@ impl Sema<'_, '_> {
             inits = self.vector_elements(elem, count, &l.items, &mut pos, true);
         }
         if let Some(extra) = l.items.get(pos) {
-            let msg = self.diag(DiagId::sema_excess_initializers, extra.value.loc(self)).arg("1");
-            self.emit(self.ref_temp_noted(msg));
+            if self.is_c() {
+                self.excess_c(extra, "1");
+            } else {
+                let at = extra.value.loc(self);
+                let msg = self.diag(DiagId::sema_excess_initializers, at).arg("1");
+                self.emit(self.ref_temp_noted(msg));
+            }
         }
         self.builder().init_list(ty, &inits, None, None, l.lbrace, l.rbrace)
     }
@@ -2181,7 +2201,9 @@ impl Sema<'_, '_> {
     /// [`Sema::agg_error_mark`]). Narrowing, an error by default but of
     /// warning class, does not count.
     fn excess(&self, ty: QualType, item: &InitItem) {
-        self.agg_excess.set(true);
+        if !self.is_c() {
+            self.agg_excess.set(true);
+        }
         if self.agg_error_mark.is_some_and(|m| self.diags.unrecoverable_error_count() > m) {
             return;
         }
@@ -2197,12 +2219,32 @@ impl Sema<'_, '_> {
         } else {
             "4"
         };
+        if self.is_c() {
+            self.excess_c(item, which);
+            return;
+        }
         let at = match item.value {
             InitValue::Expr(e) => self.begin_loc(e),
             InitValue::List(_) => item.value.loc(self),
         };
         let msg = self.diag(DiagId::sema_excess_initializers, at).arg(which);
         self.emit(self.ref_temp_noted(msg));
+    }
+
+    /// C's "excess elements in ... initializer" (C23 6.7.11p2 is a
+    /// constraint, but clang `ext_excess_initializers` only warns, on by
+    /// default, an error under `-pedantic-errors`), at the first excess
+    /// clause `item` (`which`: "0" array, "1" vector, "2" scalar, "3"
+    /// union, "4" struct). The excess clauses were checked as they were
+    /// parsed; they are left out of the initialization, so the
+    /// initialization does not fail and nothing evaluates them.
+    pub(crate) fn excess_c(&self, item: &InitItem, which: &str) {
+        let at = match item.value {
+            InitValue::Expr(e) => self.begin_loc(e),
+            InitValue::List(_) => item.value.loc(self),
+        };
+        let msg = self.diag(DiagId::sema_excess_initializers_c, at).arg(which);
+        self.emit(msg);
     }
 
     /// Adds the `in initialization of temporary ... created to
