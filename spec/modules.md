@@ -2809,6 +2809,91 @@ Tests: `pch-template-template-parm-run.cpp`,
 `Deduced` cases of `dependent_types_round_trip` /
 `rejects_corrupt_dependent_types` (kiln_sema).
 
+**Forms carried by WP-1343 (function bodies).** Each form below was a
+census refusal of a function body or of a type in a declaration.
+- *Parameters in types.* A function's parameters get their section
+  numbers before its type is written, so a trailing return type or
+  `noexcept` operand that names one (`-> decltype(__x + __y)`,
+  [basic.scope.param]) is the parameter word `PARAM | k`. A type inside a
+  requires-expression may name the requirement's own parameters
+  (`requires (T& t) { typename decltype(t.f())::type; }`): those are
+  `PARAM | REQP | k`, numbered in the scope section's requirement
+  parameter list. A local declaration in a type stays refused ("an
+  expression in a type naming a parameter or local declaration").
+- *New expression kinds* (appended to `EXPR_KINDS`, 62-68):
+  62 `CXXRewrittenBinaryOperator` (`[E, EL]`: the semantic form and the
+  written operands; aux the written operator, [over.match.oper]/8); 63
+  `CXXDeleteExpr` (`[E, OD(Value)]`: the operand and the deallocation
+  function; aux whether it is passed the size and the alignment, at most
+  3; `::` and `delete[]` in the flags); 64 `CXXTypeidExpr`
+  (`[Qt, Z]` for a type operand, flag bit 4, else `[E, Z]`; aux is the
+  potentially-evaluated bit); 65 `CXXDynamicCastExpr` and 66
+  `BuiltinBitCastExpr` (casts: `[E, Path]`, aux the cast kind); 67
+  `AtomicExpr` (`[EL, Z]`, aux a `__atomic_*` / `__c11_atomic_*` form
+  `builtin::atomic::form` accepts); 68 `ArrayTypeTraitExpr` (`[Qt, Z]`,
+  aux `__array_rank` or `__array_extent`).
+- *New statement kinds* (`STMT_KINDS` 18-19): 18 `CXXTryStmt` (`[S, SL]`:
+  the block and the handlers); 19 `CXXCatchStmt` (`[OD(Var), S]`: the
+  exception declaration, none for `...`, and the handler). The exception
+  variable is a local `Var` record with spec bit 11 (`exception_var`).
+- *Cold annotations* (from the end of the bit set, after WP-1342's 2048 `COLD_FOUND`;
+  `COLD_ALL` is 32767): 4096 `COLD_MEMBER` on a `MemberExpr` only: its qualifier, found
+  declaration and explicit template arguments (`(Nns, OD(Found), TA)`,
+  `this->Base::m()`); 8192 `COLD_ARRAY` on an `ArrayTypeTraitExpr` only:
+  the dimension expression and the value's low and high words (`(OE, Raw,
+  Raw)`); 16384 `COLD_PACK` on an `IntegerLiteral` only: the pack a
+  `sizeof...` folded to it came from (`D(Pack)`). Each bit on any other
+  kind is invalid.
+- *Union initializers.* The `InitList` side record gains a third field,
+  the initialized union member (`OD(Field)`, `U u{5}`, [dcl.init.aggr]/16).
+- *Block-scope using family.* A using-declaration, its shadows, a
+  using-directive, a using-enum-declaration and a namespace alias at block
+  scope ([namespace.udecl], [enum.udecl], [namespace.alias]) are local
+  records like a block-scope typedef: context the function record, name
+  from the private table, `DeclStmt` naming them (`Dc::Local`). A shadow's
+  target, a directive's namespace and an alias's namespace are earlier
+  non-local records (a shadow's of the same name); a using-enum names an
+  earlier defined enumeration. The importer never adds a block-scope
+  directive to the function's own using-directive list.
+- *Structured bindings.* A block-scope decomposition is its `Var` record
+  followed by one `Binding` record per name (decl tag 28, `K_BINDING`, after WP-1342's 27 `K_TTTP`: a
+  flag byte and type, then the decomposition variable, the holding
+  variable or `NONE`, and the binding expression set from the body's root
+  list, `Root::Binding`); bindings are local only ("a structured binding
+  outside a block" otherwise) and a binding pack stays refused. The
+  importer groups consecutive bindings by decomposition and sets them
+  with `set_decomposition` / `set_binding`.
+- *Types.* Tag 25 `Placeholder` (a flag byte, bit 0 `decltype(auto)` and
+  bit 1 pack, at most 3; the deduced type, `NONE` or the dependent mark
+  `{ty: NONE, quals: 0}`; the type-constraint's concept record, `NONE` for
+  none; its written arguments, none without a concept): a deduced or
+  constrained `auto` (`std::integral auto`). Tag 26 `Atomic` (the value
+  type): `_Atomic(T)`.
+- *Constants.* A body constant may be tag 4, a pointer (its type; a base
+  of byte 0 variable record, 1 function record, 2 lifetime-extended
+  temporary record, 3 `type_info` type, 4 earlier aggregate constant; the
+  byte offset as a `u64`; an optional designated type; the past-the-end
+  byte), or tag 5, an aggregate as the Oven freezes it (its type, its
+  bytes, then the pointer-like subobjects as (offset, earlier pointer or
+  null constant), the padding ranges and the active union members as
+  (offset, `Field` record)). A type's or argument's section carries
+  neither when it names a declaration. A variable's evaluated value stays
+  recomputed. `strong_ordering::less` and `source_location::current()`
+  are such constants.
+
+The forms still refused under this WP's reasons: lambda expressions and
+local classes and enumerations (their records are classes whose context
+is a function), a designated initializer ("an expression the image does
+not carry yet (a designated initializer)"), a default argument used on a
+call of a function template specialization ("a local declaration the
+image does not carry (a specialization's parameter)"), and a dependent
+vector type. Tests: `pch-body-forms-*.cpp`, `image-body-forms-run.cpp`,
+`body_expression_forms_are_carried`,
+`try_blocks_and_local_usings_are_carried`,
+`structured_bindings_and_union_inits_are_carried`,
+`constants_atomic_and_placeholder_types_are_carried`,
+`specialization_default_argument_is_refused`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3534,7 +3619,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 25` since WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 26` since WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

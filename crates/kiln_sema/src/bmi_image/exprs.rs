@@ -203,7 +203,9 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
     match t {
         TyRec::Ex(ExTy::Decltype { e, .. } | ExTy::DepArray { e, .. }) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
-        TyRec::Tst { args, .. } | TyRec::Dep(DepTy::Tmpl { args, .. }) => {
+        TyRec::Tst { args, .. }
+        | TyRec::Dep(DepTy::Tmpl { args, .. })
+        | TyRec::Placeholder { args, .. } => {
             arg_texprs(args, &mut out);
         }
         _ => {}
@@ -213,11 +215,16 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
 
 /// Checks the sections type `t` holds (`below`: the types before it),
 /// marking them `used`; returns one past the highest record they name.
+/// A section may name a function parameter (WP-1343): `owners` gives
+/// each parameter's function record ([`body::param_owners`]), whose
+/// record may use the type (its parameters are built before its type);
+/// one naming a requires-expression parameter is used by no record.
 pub(super) fn validate_ty_texprs(
     img: &Image,
     t: &TyRec,
     below: &dyn Fn(QRef) -> bool,
     used: &mut [bool],
+    owners: &[u32],
 ) -> Res<usize> {
     let mut hi = 0usize;
     for i in ty_texprs(t) {
@@ -225,10 +232,18 @@ pub(super) fn validate_ty_texprs(
             return bad("bad expression section");
         };
         if !used[i as usize] {
-            body::validate_section(img, b, 0, below, true)?;
+            body::validate_section(img, b, owners.len(), below, true)?;
             used[i as usize] = true;
         }
         hi = hi.max(body::section_decl_bound(b));
+        let (param, req) = body::section_max_params(b);
+        if let Some(g) = param {
+            hi = hi.max(owners[g as usize] as usize);
+        }
+        // Requires-expression parameters are declared after the records.
+        if req.is_some() {
+            hi = hi.max(img.decls.len());
+        }
     }
     Ok(hi)
 }
@@ -239,8 +254,9 @@ pub(super) fn validate_unused_texprs(
     used: &[bool],
     qref_ok: &dyn Fn(QRef) -> bool,
 ) -> Res<()> {
+    let np = body::param_count(img);
     for (b, _) in img.texprs.iter().zip(used).filter(|(_, u)| !**u) {
-        body::validate_section(img, b, 0, qref_ok, true)?;
+        body::validate_section(img, b, np, qref_ok, true)?;
     }
     Ok(())
 }
@@ -366,13 +382,22 @@ pub(crate) struct TexprState {
     locs: Option<super::Locs>,
     /// Per section: its state (a built one's root).
     built: Vec<Sec>,
+    /// The function parameters built so far, in image order (WP-1343):
+    /// a section naming one is built only once it exists.
+    pub(super) params: Vec<DeclId>,
+    /// The requires-expression parameters, once declared (WP-1343).
+    pub(super) req_params: Vec<DeclId>,
 }
 
 impl Sema<'_, '_> {
     /// Starts building `img`; returns the state to restore after.
     pub(super) fn image_texprs_enter(&mut self, img: &Image, main: &super::Locs) -> TexprState {
-        let fresh =
-            TexprState { locs: Some(main.clone()), built: vec![Sec::Unbuilt; img.texprs.len()] };
+        let fresh = TexprState {
+            locs: Some(main.clone()),
+            built: vec![Sec::Unbuilt; img.texprs.len()],
+            params: Vec::new(),
+            req_params: Vec::new(),
+        };
         std::mem::replace(&mut self.image_texprs, fresh)
     }
 
@@ -405,7 +430,11 @@ impl Sema<'_, '_> {
         if matches!(self.image_texprs.built.get(k), Some(Sec::Unbuilt)) {
             self.image_texprs.built[k] = Sec::Pending;
             let b = &img.texprs[k];
+            let (np, nr) = (self.image_texprs.params.len(), self.image_texprs.req_params.len());
+            let (param, req) = body::section_max_params(b);
             if body::section_decl_bound(b) <= ids.len()
+                && param.is_none_or(|g| (g as usize) < np)
+                && req.is_none_or(|g| (g as usize) < nr)
                 && let Some(locs) = self.image_texprs.locs.take()
             {
                 let root = self.image_texpr_section(img, tys, ids, b, &locs);

@@ -42,7 +42,9 @@ use kiln_source::{FileId, Loc};
 use crate::Sema;
 use crate::modules::Directive;
 
+mod aggconsts;
 mod attrs;
+mod bindings;
 mod body;
 mod classtempl;
 mod constraints;
@@ -58,6 +60,7 @@ mod membertempl;
 mod patinit;
 mod pch;
 pub use pch::PchDecls;
+mod protoparams;
 mod requires;
 mod scope;
 mod spec;
@@ -71,7 +74,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 25;
+pub(crate) const IMAGE_VERSION: u32 = 26;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -279,7 +282,23 @@ enum TyRec {
     /// A type holding an expression or a pack expansion count (WP-1300,
     /// [`exprs`]).
     Ex(exprs::ExTy),
+    /// WP-1343: any other placeholder type ([dcl.spec.auto]): bit 0 of
+    /// `k` the keyword (`decltype(auto)`), bit 1 a pack (`auto...`); what
+    /// it was deduced as ([`DEDUCED_DEP`] the dependent type, else a
+    /// type), and its type-constraint's concept record ([`NONE`]) and
+    /// arguments as written (`std::integral auto`).
+    Placeholder {
+        k: u8,
+        deduced: Option<QRef>,
+        concept: u32,
+        args: Vec<ArgRec>,
+    },
+    /// WP-1343: `_Atomic(T)` (C11, a GNU extension in C++).
+    Atomic(QRef),
 }
+
+/// A [`TyRec::Placeholder`] deduced as the dependent type.
+const DEDUCED_DEP: QRef = QRef { ty: NONE, quals: 0 };
 
 /// A template argument (S4b): a type, or an integral or `bool` value of
 /// a type.
@@ -421,6 +440,16 @@ enum Payload {
     Assert {
         cond: u32,
         msg: u32,
+    },
+    /// A local structured binding (WP-1343, [dcl.struct.bind]): its type
+    /// (none while dependent), its decomposition variable's record, its
+    /// holding variable's (a tuple-like binding's) or [`NONE`], and its
+    /// binding expression or [`NONE`], patched by `walk_roots`.
+    Binding {
+        ty: Option<QRef>,
+        decomp: u32,
+        holding: u32,
+        expr: u32,
     },
     Function {
         /// Index into [`FN_KINDS`].
@@ -699,6 +728,8 @@ const K_FRIEND: u8 = 25;
 const K_ASSERT: u8 = 26;
 /// A template template parameter (WP-1342, [`tttp`]).
 const K_TTTP: u8 = 27;
+/// A block-scope structured binding (WP-1343).
+const K_BINDING: u8 = 28;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -730,6 +761,7 @@ impl Payload {
             Payload::Friend { .. } => K_FRIEND,
             Payload::Assert { .. } => K_ASSERT,
             Payload::Tttp(_) => K_TTTP,
+            Payload::Binding { .. } => K_BINDING,
         }
     }
 }
@@ -858,6 +890,8 @@ fn var_spec(bits: u32) -> Option<VarSpec> {
         .with_constinit(bit(8))
         .with_inline(bit(9))
         .with_nrvo(bit(10))
+        // A handler's exception variable (WP-1343).
+        .with_exception_var(bit(11))
         .with_cxx_for_range(bit(12));
     (spec.bits() == bits).then_some(spec)
 }
@@ -1061,6 +1095,18 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.q(*ty);
             w.u32(*extending);
             w.u32(*index);
+        }
+        Payload::Binding { ty, decomp, holding, expr } => {
+            match ty {
+                None => w.u8(0),
+                Some(q) => {
+                    w.u8(1);
+                    w.q(*q);
+                }
+            }
+            w.u32(*decomp);
+            w.u32(*holding);
+            w.u32(*expr);
         }
         Payload::Enum { scoped, fixed, def } => {
             w.u8(*scoped);
@@ -1295,6 +1341,20 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Dep(d) => (w.u8(21), deptypes::encode_dep(&mut w, d)).1,
             TyRec::Ex(x) => (w.u8(22), exprs::encode_ex(&mut w, x)).1,
             TyRec::Complex(q) => (w.u8(23), w.q(*q)).1,
+            TyRec::Placeholder { k, deduced, concept, args } => {
+                w.u8(25);
+                w.u8(*k);
+                match deduced {
+                    None => w.u8(0),
+                    Some(q) => {
+                        w.u8(1);
+                        w.q(*q);
+                    }
+                }
+                w.u32(*concept);
+                w.args(args);
+            }
+            TyRec::Atomic(q) => (w.u8(26), w.q(*q)).1,
             TyRec::CanonTtp(depth, index, pack) => {
                 w.u8(24);
                 w.u32(*depth);
@@ -1608,6 +1668,14 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         K_FIELD => Payload::Field { ty: r.q()?, flags: r.u32()?, width: r.u32()?, init: r.u32()? },
         K_ACCESS => Payload::Access,
         K_ASSERT => Payload::Assert { cond: r.u32()?, msg: r.u32()? },
+        K_BINDING => {
+            let ty = match r.u8()? {
+                0 => None,
+                1 => Some(r.q()?),
+                _ => return bad("bad binding type"),
+            };
+            Payload::Binding { ty, decomp: r.u32()?, holding: r.u32()?, expr: r.u32()? }
+        }
         K_IMPLICIT => Payload::Implicit { kind: r.u8()? },
         K_TTP => {
             let (depth, index) = (r.u16()?, r.u16()?);
@@ -1686,6 +1754,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         | TyRec::Elab(_, q)
         | TyRec::QArray(_, q)
         | TyRec::Complex(q)
+        | TyRec::Atomic(q)
         | TyRec::Pack(q) => (vec![*q], Vec::new()),
         TyRec::ElabQ(_, steps, q) => {
             let (mut qs, mut ds) = (vec![*q], Vec::new());
@@ -1714,6 +1783,10 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
         TyRec::Sugar(_) | TyRec::Auto(_) | TyRec::CanonTtp(..) => (Vec::new(), Vec::new()),
+        TyRec::Placeholder { deduced, concept, args, .. } => (
+            args.iter().map(|a| a.q()).chain(deduced.filter(|&q| q != DEDUCED_DEP)).collect(),
+            if *concept == NONE { Vec::new() } else { vec![*concept] },
+        ),
         TyRec::Dep(d) => deptypes::dep_refs(d),
         TyRec::Ex(x) => (exprs::ex_refs(x), Vec::new()),
     }
@@ -1744,7 +1817,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
             })
             .collect(),
         Payload::Ttp { default, .. } => default.iter().copied().collect(),
-        Payload::Friend { ty, .. } => ty.iter().copied().collect(),
+        Payload::Friend { ty, .. } | Payload::Binding { ty, .. } => ty.iter().copied().collect(),
         Payload::Spec { args, .. } => args.iter().map(|a| a.q()).collect(),
         Payload::Record { def: Some(d), .. } => d.bases.iter().map(|b| b.ty).collect(),
         Payload::Function { ty, params, inits, .. } => std::iter::once(*ty)
@@ -1953,6 +2026,21 @@ fn decode(bytes: &[u8]) -> Res<Image> {
             21 => TyRec::Dep(deptypes::decode_dep(&mut r)?),
             22 => TyRec::Ex(exprs::decode_ex(&mut r)?),
             23 => TyRec::Complex(r.q()?),
+            25 => {
+                let k = r.u8()?;
+                let deduced = match r.u8()? {
+                    0 => None,
+                    1 => Some(r.q()?),
+                    _ => return bad("bad placeholder type"),
+                };
+                let concept = r.u32()?;
+                let args = r.args()?;
+                if k > 3 || (concept == NONE && !args.is_empty()) {
+                    return bad("bad placeholder type");
+                }
+                TyRec::Placeholder { k, deduced, concept, args }
+            }
+            26 => TyRec::Atomic(r.q()?),
             24 => {
                 let (depth, index) = (r.u32()?, r.u32()?);
                 match r.u8()? {
@@ -2144,6 +2232,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     let mut pdep = Vec::with_capacity(img.types.len());
     let mut acc = 0usize;
     let mut texprs_used = vec![false; img.texprs.len()];
+    let owners = body::param_owners(img);
     for (j, t) in img.types.iter().enumerate() {
         let (refs, decl) = ty_refs(t);
         if refs.iter().any(|&q| !qref_ok(q, j as u64)) {
@@ -2179,6 +2268,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         )
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
+                    (TyRec::Placeholder { .. }, Payload::Template { kind, .. })
+                        if *kind == constraints::CONCEPT_KIND)
+                    || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
                     // A partial specialization's injected-class-name (WP-1283).
                     || matches!(t, TyRec::Injected(_) | TyRec::Subst { .. })
@@ -2236,7 +2328,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         // WP-1300: the expressions a type holds name earlier types and
         // records only; the type is built after those records.
         let below = |q: QRef| qref_ok(q, j as u64);
-        acc = acc.max(exprs::validate_ty_texprs(img, t, &below, &mut texprs_used)?);
+        acc = acc.max(exprs::validate_ty_texprs(img, t, &below, &mut texprs_used, &owners)?);
         pdep.push(acc);
     }
     exprs::validate_unused_texprs(img, &texprs_used, &|q| qref_ok(q, nt))?;
@@ -2392,6 +2484,34 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 Payload::Typedef { underlying, .. } => {
                     if !qref_at(*underlying, i) {
                         return bad("bad local alias");
+                    }
+                }
+                // WP-1343: a structured binding of an earlier
+                // decomposition variable of the block's function.
+                Payload::Binding { ty, decomp, holding, .. } => {
+                    let var = |x: u32| {
+                        kind_of(x).is_some_and(|v| {
+                            matches!(v.payload, Payload::Var { .. }) && v.ctx == d.ctx
+                        })
+                    };
+                    if ty.is_some_and(|t| !qref_at(t, i))
+                        || d.name == NONE
+                        || d.prev != NONE
+                        || !var(*decomp)
+                        || (*holding != NONE && !var(*holding))
+                    {
+                        return bad("bad structured binding");
+                    }
+                }
+                // WP-1343: a block-scope using-declaration, its shadows and
+                // a using-directive, as at namespace scope (S6).
+                Payload::Using { .. }
+                | Payload::Shadow { .. }
+                | Payload::UsingDir { .. }
+                | Payload::NsAlias { .. }
+                | Payload::UsingEnum { .. } => {
+                    if !body::local_using_ok(img, i, d) {
+                        return bad("bad local using-declaration or using-directive");
                     }
                 }
                 _ => return bad("bad local declaration"),
@@ -2875,6 +2995,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
             }
             Payload::Friend { .. } => friend::validate_friend(img, i, d)?,
+            // Only a block's (WP-1343).
+            Payload::Binding { .. } => return bad("a structured binding outside a block"),
             Payload::Namespace
             | Payload::Export
             | Payload::Typedef { .. }
@@ -3114,6 +3236,7 @@ impl Writer<'_, '_, '_> {
         Ok(steps)
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per type form
     fn ty(&mut self, t: TypeId) -> W<u32> {
         if let Some(&i) = self.tmemo.get(&t) {
             return Ok(i);
@@ -3187,6 +3310,33 @@ impl Writer<'_, '_, '_> {
             {
                 TyRec::Auto(keyword as u8 | u8::from(deduced.is_some()) << 1)
             }
+            TypeView::Auto { keyword, deduced, concept, args, pack }
+                if keyword != AutoKeyword::GnuAutoType =>
+            {
+                let deduced = match deduced {
+                    None => None,
+                    Some(q) if q == QualType::DEPENDENT => Some(DEDUCED_DEP),
+                    Some(q) => Some(self.qref(q)?),
+                };
+                let concept = match concept {
+                    None => NONE,
+                    Some(c) => *self
+                        .recs
+                        .get(&self.s.ast.first(c))
+                        .ok_or("a placeholder constrained by a concept outside the image")?,
+                };
+                let args = match args {
+                    Some(l) => self.written_arg_recs(l)?,
+                    None => Vec::new(),
+                };
+                TyRec::Placeholder {
+                    k: keyword as u8 | u8::from(pack) << 1,
+                    deduced,
+                    concept,
+                    args,
+                }
+            }
+            TypeView::Atomic(v) => TyRec::Atomic(self.qref(v)?),
             TypeView::Typedef { .. }
                 if self.s.image_sugar().iter().any(|q| q.is_some_and(|q| q.ty() == t)) =>
             {
@@ -3724,6 +3874,16 @@ impl Writer<'_, '_, '_> {
         let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
             return Err("a function declared through a typedef");
         };
+        // WP-1343: the parameters are numbered before the type, which
+        // may name them (`-> decltype(x + y)`, [basic.scope.param]).
+        let plist: Vec<DeclId> = ast.lists.iter::<DeclId>(fd.params).collect();
+        let g0 = self.bs.param_pos.len() as u32;
+        for (k, &p) in plist.iter().enumerate() {
+            self.bs.param_pos.push((i, k as u32));
+            if self.bs.params.insert(p, g0 + k as u32).is_some() {
+                return Err("a parameter shared between declarations");
+            }
+        }
         // A destructor written without one keeps its implicit
         // specification deferred even once computed (WP-1036).
         let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d))
@@ -3747,14 +3907,9 @@ impl Writer<'_, '_, '_> {
         if ty.quals != 0 {
             return Err("a function declared through a typedef");
         }
-        let plist: Vec<DeclId> = ast.lists.iter::<DeclId>(fd.params).collect();
         let mut params = Vec::with_capacity(plist.len());
-        for p in plist {
-            let g = self.bs.param_pos.len() as u32;
-            self.bs.param_pos.push((i, params.len() as u32));
-            if self.bs.params.insert(p, g).is_some() {
-                return Err("a parameter shared between declarations");
-            }
+        for (k, p) in plist.into_iter().enumerate() {
+            let g = g0 + k as u32;
             params.push(self.param(p, g)?);
             if ast.decls.get(p).has(DeclFlags::HAS_ATTRS) {
                 self.param_attrs(p, i, params.len() as u32 - 1)?;
@@ -4871,6 +5026,9 @@ impl Sema<'_, '_> {
         let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut enum_inits: Vec<(DeclId, u32)> = Vec::new();
+        // WP-1343: (binding, decomposition, holding variable, expression)
+        // records, in record order (a decomposition's bindings in order).
+        let mut bindings: Vec<(DeclId, u32, u32, u32)> = Vec::new();
         // Static assertions in class templates, completed after the bodies.
         let mut asserts: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
@@ -4955,6 +5113,10 @@ impl Sema<'_, '_> {
                 Payload::Namespace => self.image_namespace(img, i as u32, h, prev),
                 Payload::Export => self.image_scope(img, i as u32, ctx, h),
                 Payload::Function { kind, ty, spec, deferred, params, body, inits: ci, .. } => {
+                    // WP-1343: the parameters first, in the declarator's
+                    // context, as the parser declares them; the function's
+                    // type and later parameters' types may name them.
+                    let ps = self.image_prototype_params(img, &mut tys, &ids, ctx, params, main);
                     let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
                     let spec = fn_spec(*spec).unwrap_or_default();
                     let kind = FN_KINDS[usize::from(*kind)];
@@ -4996,21 +5158,14 @@ impl Sema<'_, '_> {
                         defaulted
                             .push((f, if *deferred { r.flags & !referenced } else { r.flags }));
                     }
-                    let mut ps = Vec::with_capacity(params.len());
-                    for (k, p) in params.iter().enumerate() {
-                        let pty = self.image_ty(img, &mut tys, &ids, p.ty);
-                        let pname =
-                            if p.name == NONE { DeclName::EMPTY } else { pnames[p.name as usize] };
-                        let ploc = lo(self, p.loc);
-                        let index = u16::try_from(k).unwrap_or(u16::MAX);
-                        let pd = self.builder().param(f, pname, ploc, pty, index, p.pflags);
+                    for (k, (p, &pd)) in params.iter().zip(&ps).enumerate() {
+                        self.ast.decls.set_param_owner(pd, f);
                         if let Some(q) = p.orig {
                             let o = self.image_ty(img, &mut tys, &ids, q);
                             self.ast.decls.set_param_original_ty(pd, o);
                         }
                         image_flags(self, pd, p.flags);
                         self.image_param_attrs(img, i as u32, k as u32, pd, main);
-                        ps.push(pd);
                     }
                     if !ps.is_empty() {
                         let _ = self.builder().set_params(f, &ps);
@@ -5044,6 +5199,15 @@ impl Sema<'_, '_> {
                     v
                 }
                 Payload::Label => self.image_label(ctx, name, h.loc),
+                Payload::Binding { ty, decomp, holding, expr } => {
+                    let b = self.builder().binding(h);
+                    if let Some(t) = ty {
+                        let t = self.image_ty(img, &mut tys, &ids, *t);
+                        self.ast.decls.set_ty(b, t);
+                    }
+                    bindings.push((b, *decomp, *holding, *expr));
+                    b
+                }
                 Payload::Let { ty, extending, index } => {
                     let lty = self.image_ty(img, &mut tys, &ids, *ty);
                     let ext = ids[*extending as usize];
@@ -5287,14 +5451,17 @@ impl Sema<'_, '_> {
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
         self.image_extern_c(img, &ids);
-        // Every type before the bodies: a type built while they are holds
-        // expressions of its own (WP-1300) that would interleave with
-        // theirs, whose ids are consecutive.
+        // The requires-expression parameters, which the types of their
+        // requirements may name (WP-1343); then every type before the
+        // bodies: a type built while they are holds expressions of its own
+        // (WP-1300) that would interleave with theirs, whose ids are
+        // consecutive.
+        let reqs = self.image_requires(img, &mut tys, &ids, main);
+        self.image_texprs.req_params.clone_from(&reqs.params);
         if let Some(n) = img.types.len().checked_sub(1) {
             let last = QRef { ty: BUILTINS + 1 + n as u32, quals: 0 };
             let _ = self.image_ty(img, &mut tys, &ids, last);
         }
-        let reqs = self.image_requires(img, &mut tys, &ids, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
@@ -5366,6 +5533,7 @@ impl Sema<'_, '_> {
                 self.check_destructor_delete(ids[i], class);
             }
         }
+        self.image_bindings(&ids, &bindings, &built);
         for (v, init, eval) in inits {
             if init != NONE {
                 let _ = self.builder().set_var_init(v, built.expr(init));
@@ -5555,7 +5723,11 @@ impl Sema<'_, '_> {
                 None => break,
             }
         }
-        self.ast.add_using_directive(at, ns);
+        // A block-scope directive (WP-1343) is the block's, as the
+        // parser's: not the function's for later lookups.
+        if !self.ast.decls.get(at).kind().is_function() {
+            self.ast.add_using_directive(at, ns);
+        }
         d
     }
 
@@ -5723,6 +5895,28 @@ impl Sema<'_, '_> {
                 let kw = if *k & 1 != 0 { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
                 let deduced = (*k & 2 != 0).then_some(QualType::DEPENDENT);
                 self.ast.types.auto_type(kw, deduced, None, None, false)
+            }
+            TyRec::Placeholder { k, deduced, concept, args } => {
+                let kw = if *k & 1 != 0 { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
+                let deduced = deduced
+                    .map(|q| if q == DEDUCED_DEP { QualType::DEPENDENT } else { qt(self, q) });
+                let concept =
+                    (*concept != NONE).then(|| ids.get(*concept as usize).copied()).flatten();
+                let args = (concept.is_some() && !args.is_empty()).then(|| {
+                    let args: Vec<TemplateArg> = args
+                        .iter()
+                        .map(|a| {
+                            let ty = qt(self, a.q());
+                            self.image_arg(ty, a)
+                        })
+                        .collect();
+                    self.ast.types.arg_list(&args)
+                });
+                self.ast.types.auto_type(kw, deduced, concept, args, *k & 2 != 0)
+            }
+            TyRec::Atomic(q) => {
+                let q = qt(self, *q);
+                self.ast.types.atomic(q)
             }
             TyRec::Subst { repl, assoc, index, pack } => {
                 let r = qt(self, *repl);

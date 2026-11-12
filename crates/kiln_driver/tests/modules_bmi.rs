@@ -1947,9 +1947,11 @@ fn kind2_declaration_image_fallback() {
             "export module f;\nexport inline int g() { return [] { return 1; }(); }\n",
             "a local declaration the image does not carry",
         ),
+        // WP-1343: try blocks and delete-expressions are carried now
+        // (image-body-forms-run.cpp).
         (
-            "export module f;\nexport inline int g() { try { return 1; } catch (...) { return 0; } }\n",
-            "a try block",
+            "export module f;\nexport inline int g() { struct L { int v; }; return L{1}.v; }\n",
+            "a local class or enumeration",
         ),
         (
             "export module f;\n#line 40 \"other.h\"\nexport constexpr int g() { return 1; }\n",
@@ -1962,10 +1964,6 @@ fn kind2_declaration_image_fallback() {
         (
             "export module f;\nexport struct S { union { int a; float b; }; };\nexport constexpr int k = 1;\n",
             "an anonymous union or struct member",
-        ),
-        (
-            "export module f;\nexport inline void g(int *p) { delete p; }\nexport constexpr int k = 1;\n",
-            "a new or delete expression",
         ),
         (
             "export module f;\nexport template <class T> struct B { T v; };\n\
@@ -2204,8 +2202,8 @@ fn kind2_image_census() {
     std::fs::write(
         d.join("c.cppm"),
         "export module c;\n\
-         export inline int g() { try { return 1; } catch (...) { return 0; } }\n\
-         export inline int h() { try { return 2; } catch (...) { return 0; } }\n\
+         export inline int g() { struct L { int v; }; return L{1}.v; }\n\
+         export inline int h() { enum E { e = 2 }; return e; }\n\
          export inline int k() { return [] { return 1; }(); }\n\
          export constexpr int sq(int x) { return x * x; }\n\
          export struct S { int a; };\n",
@@ -2223,7 +2221,7 @@ fn kind2_image_census() {
         lines,
         [
             "image census for 'c': 5 top-level declarations, 2 carried, 3 not",
-            "      2  a try block  (first: c.cppm:2:19)",
+            "      2  a local class or enumeration  (first: c.cppm:2:19)",
             "      1  a local declaration the image does not carry  (first: c.cppm:4:19)",
         ],
         "{}",
