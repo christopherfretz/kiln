@@ -192,6 +192,24 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   `/dev/null` with a regular file (WP-1281).
 - Diagnostics: an error in an `#if` expression has clang's caret
   ranges (WP-1290).
+- **Source-compatibility note: previously accepted code is now
+  rejected.** A run-time use of an expansion-statement (`template for`)
+  element variable whose type holds a reflection was accepted:
+  `template for (constexpr auto e : plan) std::puts(e.name);` with
+  `struct E { std::meta::info r; const char* name; }`. It is ill-formed
+  (P2996R13 [expr.const]: `e` is an expression of consteval-only type
+  outside a constant-evaluated context), as the same use of a plain
+  `constexpr E e = plan[0];` already was, and is now rejected with the
+  same "consteval-only expressions are only allowed in a
+  constant-evaluated context" in every expansion form, for `constexpr
+  const auto&` and `constexpr auto&&` element variables, for a
+  structured-binding element declaration, and in function templates
+  (also for a `constexpr T x` of a function template instantiated with
+  such a class, and a binding of a `constexpr` structured binding of
+  one). GCC 16.1 rejects it too. Write `constexpr const char* name =
+  e.name; std::puts(name);` instead: the read is then inside a constexpr
+  variable's initializer. No file in kiln's own tree relied on the old
+  acceptance (WP-1330).
 
 ### Testing and tooling (not user-visible)
 

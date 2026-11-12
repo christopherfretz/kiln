@@ -309,6 +309,28 @@ such a leaf in a template definition too (WP-1263: `m == b` of two
 `constexpr info` variables in a run-time `template for` body, or in a
 function template's body, was accepted; GCC 16.1 rejects it the same
 way; `meta.reflection.define.aggregate/define-run-template-for-neg.cpp`).
+A reference to a `constexpr` variable or a structured binding whose type
+is *dependent* in the definition is recorded as a candidate leaf too
+(`is_dependent_constexpr_leaf`) and kept in an instantiation or
+expansion only when its substituted variable is consteval-only
+(`inst_lost_consteval_only`). That covers the element variable of an
+expansion statement (`template for (constexpr auto e : plan)
+std::puts(e.name);` over a class with an `info` member: the pattern's
+`e` is of undeduced `auto` type), in every form and for `constexpr
+const auto&`, `constexpr auto&&` and a structured-binding declaration,
+and a `constexpr T x` of a function template instantiated with such a
+class; each is reported once per location, in the same words as the
+plain `constexpr E e = plan[0]; std::puts(e.name);` (WP-1330: both were
+accepted; GCC 16.1 rejects them, `stmt.expand/consteval-only-element-*`).
+A non-constexpr variable or a parameter of dependent type is not a
+candidate: its declaration is reported instead
+(`check_consteval_only_var`, `check_consteval_only_inst`). A binding of
+a `constexpr` decomposition of consteval-only type is a leaf even when
+its own type is not (`n` of `constexpr auto [r, n] = plan[0];`: it names
+a subobject of a consteval-only object; GCC 16.1 rejects its run-time
+use too; WP-1330). The well-formed spelling reads the member in a
+`constexpr` variable's initializer first (`constexpr const char* n =
+e.name; std::puts(n);`).
 The
 codegen backstop (`kiln_codegen/src/consts.rs` "reflection values cannot
 be emitted") is reached only through the gaps below.
