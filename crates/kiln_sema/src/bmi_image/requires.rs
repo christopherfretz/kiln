@@ -25,7 +25,7 @@ use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_source::fx::FxHashMap;
 
-use super::body::{Built, Dc, OUTSIDE};
+use super::body::{Built, Dc};
 use super::{
     DECL_FLAGS, DEP, DeclHead, DeclName, Image, LEX_TU, NONE, ParamRec, QRef, Rd, Res, W, Wr,
     Writer, bad,
@@ -128,7 +128,7 @@ impl Writer<'_, '_, '_> {
     /// The word for requires-expression parameter `d` (in body `body`).
     pub(super) fn req_param(&mut self, d: DeclId, body: DeclId) -> W<u32> {
         self.req_body(body)?;
-        let p = *self.bs.req.params.get(&d).ok_or(OUTSIDE)?;
+        let p = *self.bs.req.params.get(&d).ok_or(super::outside::OUT_REQ_PARAM)?;
         Ok(super::body::PARAM | REQP | p)
     }
 
@@ -185,8 +185,17 @@ impl Writer<'_, '_, '_> {
     /// The requires-expression record of `body`.
     fn requires_index(&mut self, body: DeclId) -> W<u32> {
         let t = &self.s.ast.templates;
+        // A substituted requires-expression keeps its pattern's body with
+        // parameters of its own (`requires_expr` in templ/concepts): the
+        // body's record is its first, the parsed one (WP-1360).
         let map = self.bs.req.index.get_or_insert_with(|| {
-            (0..t.requires_len()).filter_map(|i| t.requires_data(i).map(|r| (r.body, i))).collect()
+            let mut m = FxHashMap::default();
+            for i in 0..t.requires_len() {
+                if let Some(r) = t.requires_data(i) {
+                    let _ = m.entry(r.body).or_insert(i);
+                }
+            }
+            m
         });
         map.get(&body).copied().ok_or("a malformed requires-expression")
     }

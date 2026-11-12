@@ -358,7 +358,7 @@ impl Writer<'_, '_, '_> {
             return Ok(None);
         }
         match self.qref(fty) {
-            Err(body::TEXPR_LOCAL) => {}
+            Err(body::TEXPR_LOCAL | super::outside::TEXPR_LATER) => {}
             r => return r.map(|_| None),
         }
         let exc = match value {
@@ -504,13 +504,33 @@ impl Sema<'_, '_> {
         self.image_nx(exc, expr)
     }
 
+    /// WP-1360: a [`LateNx`]'s function waits for its exception
+    /// specification as one whose declarator the parser saved for a
+    /// complete-class context does ([`Sema::defer_late_noexcept`]): a
+    /// specialization the image instantiates before the bodies are built
+    /// (a header's `box<int>`) defers its own ([temp.inst]/14) instead
+    /// of copying a type with none.
+    pub(super) fn image_defer_late_nx(&mut self, f: DeclId) {
+        let Some(ty) = self.ast.decls.get(f).ty() else { return };
+        if self.ast.types.proto(ty).is_none() {
+            return;
+        }
+        let t = self.with_exc_spec(ty, ExcSpec::Deferred(f));
+        self.ast.decls.set_ty(f, t);
+        self.unparsed_exc.insert(f);
+    }
+
     /// Sets each [`LateNx`]'s exception specification on its function
     /// (`ids`) once the bodies are built, as its declarator had it.
     pub(super) fn image_late_nx(&mut self, img: &Image, ids: &[DeclId], built: &body::Built) {
         for l in &img.late_nx {
             let f = ids[l.rec as usize];
-            let Some(fty) = self.ast.decls.get(f).ty() else { continue };
             let exc = self.image_nx(l.exc, Some(built.expr(l.expr)));
+            if self.unparsed_exc.contains(&f) {
+                self.set_member_exception_spec(f, exc);
+                continue;
+            }
+            let Some(fty) = self.ast.decls.get(f).ty() else { continue };
             let q = self.with_exc_spec(fty, exc);
             self.ast.decls.set_ty(f, q);
         }

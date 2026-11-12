@@ -217,7 +217,7 @@ impl Writer<'_, '_, '_> {
             return Err(if class {
                 "a type declared outside the image"
             } else {
-                super::body::OUTSIDE
+                super::outside::OUT_EXPLICIT_SPEC
             });
         }
         if !explicit_inst
