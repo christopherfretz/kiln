@@ -427,6 +427,84 @@ impl Drop for Scope {
     }
 }
 
+thread_local! {
+    static PHASES_ON: Cell<bool> = const { Cell::new(false) };
+    static PHASES: RefCell<Vec<(&'static str, u64)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Starts collecting the driver's phase times on this thread (the
+/// compile statistics log, spec/driver.md "Compile statistics log"):
+/// from now, each [`Phase`] scope and each [`phase_add`] adds its time to
+/// its name's sum, whether or not a trace runs. Clears earlier sums.
+pub fn phases_start() {
+    PHASES.with(|p| p.borrow_mut().clear());
+    PHASES_ON.with(|c| c.set(true));
+}
+
+/// Whether phase times are being collected on this thread.
+#[inline]
+pub fn phases_on() -> bool {
+    PHASES_ON.with(Cell::get)
+}
+
+/// Stops collecting and returns the sums (name, µs), in first-seen order.
+pub fn phases_finish() -> Vec<(&'static str, u64)> {
+    PHASES_ON.with(|c| c.set(false));
+    PHASES.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Adds `start..end` to `name`'s phase sum when phases are collected.
+pub fn phase_add(name: &'static str, start: Instant, end: Instant) {
+    if !phases_on() {
+        return;
+    }
+    let us = micros(end.saturating_duration_since(start));
+    PHASES.with(|p| {
+        let mut p = p.borrow_mut();
+        match p.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, d)) => *d = d.saturating_add(us),
+            None => p.push((name, us)),
+        }
+    });
+}
+
+/// A driver phase (`Frontend`, `EmitIR`, `PrintIR`): a [`Scope`] whose
+/// one pair of clock readings is both the trace's event (when a trace
+/// runs) and the phase sum (when phases are collected). Neither: no
+/// clock read.
+#[derive(Debug)]
+#[must_use = "the phase ends when the scope is dropped"]
+pub struct Phase {
+    name: &'static str,
+    span: Option<Span>,
+    start: Option<Instant>,
+}
+
+impl Phase {
+    /// Begins the `name` phase.
+    #[inline]
+    pub fn new(name: &'static str) -> Phase {
+        let span = begin(name);
+        let start = phases_on().then(|| span.map_or_else(Instant::now, |s| s.start));
+        Phase { name, span, start }
+    }
+}
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if self.span.is_none() && self.start.is_none() {
+            return;
+        }
+        let now = Instant::now();
+        if let Some(s) = self.span.take() {
+            end_at(s, now, String::new, Vec::new);
+        }
+        if let Some(start) = self.start.take() {
+            phase_add(self.name, start, now);
+        }
+    }
+}
+
 /// A finished trace.
 #[derive(Clone, Debug)]
 pub struct Trace {
@@ -927,6 +1005,38 @@ mod tests {
         assert!(!s.active());
         drop(s);
         assert!(finish().is_none());
+    }
+
+    /// The compile statistics log's phase sums (spec/driver.md "Compile
+    /// statistics log"): collected without a trace; with one, the event
+    /// and the sum share the clock readings.
+    #[test]
+    fn phases_sum_with_or_without_a_trace() {
+        let p = Phase::new("Frontend");
+        assert!(p.start.is_none() && p.span.is_none());
+        drop(p);
+        assert!(phases_finish().is_empty());
+        phases_start();
+        drop(Phase::new("Frontend"));
+        drop(Phase::new("Frontend"));
+        let t = Instant::now();
+        phase_add("opt", t, t + std::time::Duration::from_micros(1500));
+        assert!(finish().is_none());
+        let sums = phases_finish();
+        assert_eq!(sums.iter().map(|s| s.0).collect::<Vec<_>>(), ["Frontend", "opt"]);
+        assert_eq!(sums[1].1, 1500);
+        phases_start();
+        start(0, false);
+        drop(Phase::new("EmitIR"));
+        let tr = finish().unwrap();
+        let sums = phases_finish();
+        assert_eq!(tr.events.len(), 1);
+        // Both from one pair of readings: the event's ends are rounded
+        // against the trace start, so they may differ by 1 µs.
+        assert_eq!(sums.len(), 1);
+        assert_eq!(sums[0].0, "EmitIR");
+        assert!(sums[0].1.abs_diff(tr.events[0].dur) <= 1);
+        assert!(!phases_on());
     }
 
     #[test]

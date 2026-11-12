@@ -161,16 +161,26 @@ impl InputTrace {
     }
 
     /// Runs `cmd` (made by [`InputTrace::child`]) inside its clang phase
-    /// span: `Optimizer` for `opt`, `CodeGenPasses` for `llc`.
+    /// span: `Optimizer` for `opt`, `CodeGenPasses` for `llc`. The same
+    /// two clock readings are the child's time in the compile statistics
+    /// log (any tool, by its name; [`trace::phase_add`]).
     pub fn run_child<T>(cmd: &Command, run: impl FnOnce() -> T) -> T {
         let name = match cmd.tool {
-            Tool::Opt => "Optimizer",
-            Tool::Llc => "CodeGenPasses",
-            _ => return run(),
+            Tool::Opt => Some("Optimizer"),
+            Tool::Llc => Some("CodeGenPasses"),
+            _ => None,
         };
+        let stats = trace::phases_on();
+        if name.is_none() && !stats {
+            return run();
+        }
         let start = Instant::now();
         let r = run();
-        trace::complete(name, start, Instant::now(), String::new);
+        let end = Instant::now();
+        if let Some(name) = name {
+            trace::complete(name, start, end, String::new);
+        }
+        trace::phase_add(cmd.tool.name(), start, end);
         r
     }
 
