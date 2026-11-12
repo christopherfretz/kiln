@@ -3424,6 +3424,125 @@ pairs `cpp.include/pch-lambda-forms-{run,errors}.cpp`,
 `cpp.include/pch-wp1350-forms-{run,errors}.cpp`,
 `module.interface/image-lambda-forms-run.cpp`,
 `module.interface/image-wp1350-forms-run.cpp`.
+**Forms carried by WP-1360.** The writer's additions are in the new
+`bmi_image/outside.rs` and in `selfbase.rs`, `body.rs`, `requires.rs`
+and `exprs.rs`. No record tag, type tag or cold-annotation number is
+new. The class definition bits gain bit 62.
+
+- *The outside-image reasons, by kind.* "a body referring to a
+  declaration outside the image" and "a type declared outside the
+  image" were one reason each. The census now names the kind of
+  declaration in parentheses. Each kind below says how a reader would
+  find the entity, which is the shape a later wave carries it in:
+  - *(a compiler builtin)*: a function sema declares lazily on first
+    use (`__builtin_*`). The reader would find it by name, as the
+    parser's lookup declares it. This would be an `Implicit` record
+    whose kind names the builtin (the `GLOBAL_OP_KIND` shape, with the
+    builtin id in place of the operator).
+  - *(an implicit member)*: an implicitly declared special member of a
+    class. It is carried below when the class is closed. Otherwise it
+    stays refused.
+  - *(an implicitly declared function)*, *(a predefined entity)* and
+    the type kind *(a predefined type)*: entities every unit declares
+    (the implicit allocation functions not yet seen, `__func__`, the
+    target's predefined typedefs such as the SVE `__SVBool_t` types in
+    `<bits/math-vector.h>`). The reader would find each in its own
+    unit, as for `std::align_val_t` (kind 10): an `Implicit` record
+    whose kind names the entity, which the importer looks up or
+    declares.
+  - *(a declaration of another unit)*: a declaration owned by an
+    imported module or header unit. The reader would find it through
+    that unit's own image, which is the import section's job (S6).
+  - *(a refused declaration)*: a cascade. The census also prefixes it
+    with "cascade:". It goes away with the first refusal.
+  - *(a later member of its class)* and *(a declaration not
+    recorded)*: a declaration of this unit that the walk records after
+    the body that names it, or never. These are the order-dependent
+    forms. The carried ones are below.
+  - *(a record of another kind)*, *(a base of a class outside the
+    image)*, *(a local declaration of another function)*, *(a parameter
+    of another requires-expression)* and *(an explicit specialization)*:
+    the uses that checked a declaration's record and found none of the
+    kind they need. Before, these used the same words.
+  - Type kinds: *(a closure type)* and *(a local class or enumeration)*
+    are WP-1350's forms. *(a class named before its record)* is a class
+    of this unit named in a type before the walk reaches its record,
+    such as a member class of a specialization (`stor<8, 8>::type`).
+- *A `noexcept` operand naming a later member* ([class.mem.general]/7:
+  the operand is a complete-class context; `noexcept(noexcept(*cur))`
+  before `T *cur;`). Writing the type's operand gives "an expression in
+  a type naming a later class member". The function then goes through
+  the `late` entry, as one whose operand names its parameters does,
+  with the same layout. The importer marks each `late` entry's function
+  as the parser marks a declarator it saved for the complete-class
+  context: its type carries `ExcSpec::Deferred(f)`, listed in
+  `unparsed_exc`. A specialization the importer instantiates before
+  the bodies are built (a header's `counted<long>`) then defers its
+  own specification ([temp.inst]/14) instead of copying a type with
+  none. `image_late_nx` sets the specification with
+  `set_member_exception_spec`.
+- *A class named in its own base clause* ([class.pre]/2: the class is
+  declared at its *class-head-name*; `struct derived : base<derived>`,
+  the CRTP). A class that is not a template, at its first declaration,
+  whose base-specifiers name it, has bit 62 (`BASES_SELF`) in its
+  `RecDef` and no bases in the record. The writer pushes the record,
+  then writes the bases. Their specialization records (`Spec`, and
+  `Member` records under them) follow the class record. It then patches
+  the base list into the record. A base type names the class through a
+  pointer, reference or array type, or a template argument, to depth
+  16. The validator checks the bases as if they were record `j - 1`'s,
+  where `j` is the first record after `i` that is neither `Spec` nor
+  `Member`. Bits 62 and 63 never appear together. The reader gives the
+  class its bases right after it builds record `j - 1`, through the
+  same path as `BASES_AFTER`.
+- *An implicit special member named in a later type*
+  ([class.default.ctor]/1, [class.copy.ctor]/6; `noexcept(cmp()(a,
+  b))`, `-> decltype(ord(cmp()(a, b)))`). The walk writes implicit
+  members after every declaration. A type section that names one whose
+  class record is closed and not dependent writes its `Implicit` record
+  (kind 0 to 5, the special kind, context the class) where it is first
+  named. The end-of-walk pass skips it. The validator accepts an
+  `Implicit` record whose context is a closed class, as well as a
+  complete specialization at the top level.
+- *A function template with a deduced return type declared before its
+  definition and used in between* ([dcl.spec.auto.general]/13,
+  `template <class T> auto f(T); ... template <class T> auto f(T t) {
+  ... }`). `set_deduced_return` gives every redeclaration the
+  definition's type, so the first declaration's type names the
+  definition's template parameters. While it writes such a
+  declaration's type (one listed in `declared_returns`), the writer maps
+  a template parameter of another redeclaration of the same template to
+  its own parameter of the same depth, index, pack-ness and kind
+  ([temp.over.link]/6).
+- *A data member in an unevaluated operand of a member's type*
+  ([expr.prim.id.general]/4; `struct holder { void *p; raw<sizeof(p)>
+  buf; }`). A declaration reference whose target is a `Field` record
+  and whose context is a class is accepted where a value is named.
+- *A requires-expression of a concept whose satisfaction was checked*
+  (a `static_assert(testable<int>)` in the header). A substituted
+  requires-expression keeps its pattern's body with new parameters, so
+  the writer's map from body to requires record keeps the first
+  record, the pattern's. Before, the substituted record's parameters
+  were named from the pattern's body: "a parameter of another
+  requires-expression".
+
+- *A member function template of a specialization in a dependent
+  call* ([temp.res.general]/1, [temp.dep.candidate];
+  `std::_Destroy_aux<false>::__destroy(__first, __last)` in
+  `bits/stl_construct.h`). The callee's lookup result is a `Member`
+  record of the specialization whose pattern is the member template, a
+  `Template` record of kind 0. The validator now accepts it where a
+  lookup finds a declaration (`Dc::Lookup`, `Dc::Found`). Before, it
+  was "(a record of another kind)".
+
+Tests: `noexcept_naming_a_later_member_is_carried`,
+`member_templates_of_specializations_in_dependent_calls_are_carried`,
+`self_naming_bases_are_carried`,
+`implicit_member_named_in_a_type_is_carried`,
+`checked_concepts_sizeof_members_and_auto_redecls_are_carried`
+(kiln_driver `pch_decls`); `kind2_declaration_image_wp1360_forms`
+(modules_bmi); corpus `cpp.include/pch-outside-refs-{run,errors}.cpp`
+and `module.interface/image-outside-refs-{run,errors}.cpp`.
 
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
@@ -4150,7 +4269,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 31` since WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 32` since WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

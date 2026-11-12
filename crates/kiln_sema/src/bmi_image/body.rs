@@ -1143,6 +1143,14 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         },
         Payload::Member { pattern, .. } => {
             let Some(p) = img.decls.get(pattern as usize) else { return false };
+            // WP-1360: a member function template of a specialization
+            // found by a dependent call's lookup (`aux<false>::go(f,
+            // l)`, `bits/stl_construct.h`).
+            if matches!(dc, Dc::Lookup | Dc::Found)
+                && matches!(p.payload, Payload::Template { kind: 0, .. })
+            {
+                return true;
+            }
             p
         }
         _ => d,
@@ -1164,6 +1172,11 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                     | Payload::Nttp { .. }
                     // A local structured binding (WP-1343).
                     | Payload::Binding { .. }
+            ) || (
+                // A non-static data member named by an id-expression in
+                // an unevaluated operand ([expr.prim.id.general]/4,
+                // `sizeof(m)` in a member's type; WP-1360).
+                matches!(d.payload, Payload::Field { .. }) && in_class()
             )
         }
         Dc::Member => {
@@ -1754,6 +1767,8 @@ struct Frame {
     next: usize,
 }
 
+/// The bucket; its kinds are named in `outside.rs` (WP-1360).
+#[allow(dead_code)]
 pub(super) const OUTSIDE: &str = "a body referring to a declaration outside the image";
 /// WP-1300: what an expression in a type may not name (the importer
 /// builds types before parameters and bodies).
@@ -2018,6 +2033,12 @@ impl Writer<'_, '_, '_> {
                 }
                 if k == ExprKind::RequiresExpr {
                     self.requires_ok(e)?;
+                }
+                // WP-1360: an overloaded member access keeps its set in a
+                // Sema side table (`ovl.members`) the image does not
+                // carry; the importer's would name one candidate.
+                if k == ExprKind::MemberExpr && self.s.ovl.members.contains_key(&e) {
+                    return Err(super::outside::OUT_MEMBER_OVERLOADS);
                 }
                 if !expr_aux_ok(k, n.aux()) {
                     return Err("an expression the image does not carry");
@@ -2308,7 +2329,7 @@ impl Writer<'_, '_, '_> {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32 + 1);
                 for g in items {
-                    let (rec, pos) = *self.bs.bspec.get(&g).ok_or(OUTSIDE)?;
+                    let (rec, pos) = *self.bs.bspec.get(&g).ok_or(super::outside::OUT_BASE)?;
                     out.extend([rec, pos]);
                 }
             }
@@ -2585,15 +2606,23 @@ impl Writer<'_, '_, '_> {
         } else if let Some(r) = self.global_op_stub(d)? {
             // WP-1320: an implicit global allocation function.
             r
+        } else if let Some(r) = self.implicit_member_now(d) {
+            // WP-1360: an implicit special member of a closed class.
+            r
         } else {
-            return Err(OUTSIDE);
+            // WP-1360: a `noexcept` operand naming a later member goes
+            // through the late path (`late_noexcept`).
+            if self.bs.texpr > 0 && self.later_member(d) {
+                return Err(super::outside::TEXPR_LATER);
+            }
+            return Err(self.outside_why(d));
         };
         let np = self.bs.param_pos.len();
         if !dc_ok(&self.img, np, w, dc) {
             return Err(if dc == Dc::Local {
                 "a local declaration the image does not carry"
             } else {
-                OUTSIDE
+                super::outside::OUT_KIND
             });
         }
         Ok(w)
@@ -2639,7 +2668,8 @@ impl Writer<'_, '_, '_> {
         }
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
-        let ctx = n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(OUTSIDE)?;
+        let ctx =
+            n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(super::outside::OUT_LOCAL)?;
         if !matches!(self.img.decls[ctx as usize].payload, Payload::Function { .. }) {
             return Err("a local declaration in a nested scope the image does not carry");
         }
@@ -2701,7 +2731,8 @@ impl Writer<'_, '_, '_> {
                     return Err("a lifetime-extended temporary with a constant value");
                 }
                 let ty = n.ty().ok_or("a malformed temporary")?;
-                let extending = self.recs.get(&ld.extending).copied().ok_or(OUTSIDE)?;
+                let extending =
+                    self.recs.get(&ld.extending).copied().ok_or(super::outside::OUT_LOCAL)?;
                 Payload::Let { ty: self.qref(ty)?, extending, index: ld.mangling_index }
             }
             _ => self.local_payload(d, i)?,

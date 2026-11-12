@@ -10,9 +10,10 @@
 //! built the template, before any member, as the parser had the
 //! template when it read the base-clause.
 
+use kiln_ast::types::{ArgView, TypeView};
 use kiln_ast::{DeclId, QualType};
 
-use super::{Image, Payload, RecDef, Writer, ty_refs};
+use super::{BaseRec, Image, Payload, RecDef, W, Writer, ty_refs};
 use crate::Sema;
 
 /// The `RecDef` bit of a class template pattern whose bases name the
@@ -44,23 +45,123 @@ impl Writer<'_, '_, '_> {
     }
 }
 
+/// The `RecDef` bit of a class definition whose bases name the class
+/// itself (`struct B : A<B> {};`, the plain CRTP form; WP-1360): its
+/// bases are checked as if they were the next record's, and the importer
+/// gives the class its bases once its record is built, before any member,
+/// as the parser had declared the class when it read the base-clause
+/// ([class.pre]/2: the class-name is declared at its class-head).
+pub(super) const BASES_SELF: u64 = 1 << 62;
+
+impl Writer<'_, '_, '_> {
+    /// Whether a base of class definition `d` names `d` itself, as a
+    /// template argument of a specialization (`A<B>`, `A<B *>`, nested).
+    pub(super) fn bases_name_self(&self, d: DeclId) -> bool {
+        let ast = &self.s.ast;
+        let Some(r) = ast.decls.record(d) else { return false };
+        ast.lists.get(r.bases).iter().any(|&g| self.names_class(ast.decls.base_spec(g).ty, d, 0))
+    }
+
+    /// Whether canonical type `q` names class `d` through specialization
+    /// arguments, pointers, references or arrays.
+    fn names_class(&self, q: QualType, d: DeclId, depth: u32) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        let ast = &self.s.ast;
+        let c = ast.types.canonical(q);
+        match ast.types.view(c.ty()) {
+            TypeView::Pointer(p)
+            | TypeView::LValueRef(p)
+            | TypeView::RValueRef(p)
+            | TypeView::IncompleteArray(p) => self.names_class(p, d, depth + 1),
+            TypeView::ConstantArray(a) => self.names_class(a.elem, d, depth + 1),
+            TypeView::Record(r) => {
+                ast.first(r) == ast.first(d)
+                    || ast
+                        .spec_info(ast.first(r))
+                        .is_some_and(|(_, si)| self.args_name_class(si.args, d, depth + 1))
+            }
+            _ => false,
+        }
+    }
+
+    fn args_name_class(&self, l: kiln_ast::ArgListId, d: DeclId, depth: u32) -> bool {
+        let ast = &self.s.ast;
+        ast.types.args(l).iter().any(|a| match a.view() {
+            ArgView::Type(t) => self.names_class(t, d, depth),
+            ArgView::Pack(p) => self.args_name_class(p, d, depth + 1),
+            _ => false,
+        })
+    }
+
+    /// Writes the bases of class definition `d`, record `i`, if they
+    /// name the class itself ([`BASES_SELF`]): once the record is pushed,
+    /// so the specialization references they make follow it.
+    pub(super) fn pending_self_bases(&mut self, d: DeclId, i: u32) -> W<()> {
+        match &self.img.decls[i as usize].payload {
+            Payload::Record { def: Some(df), .. } if df.bits & BASES_SELF != 0 => {}
+            _ => return Ok(()),
+        }
+        let ast = &self.s.ast;
+        let Some(r) = ast.decls.record(d) else { return Ok(()) };
+        let list: Vec<u32> = ast.lists.get(r.bases).to_vec();
+        let mut bases = Vec::with_capacity(list.len());
+        for (pos, &g) in list.iter().enumerate() {
+            let bs = *self.s.ast.decls.base_spec(g);
+            let _ = self.bs.bspec.insert(g, (i, pos as u32));
+            bases.push(BaseRec {
+                ty: self.qref(bs.ty)?,
+                loc: self.loc(bs.loc)?,
+                access: bs.access as u8,
+                virt: bs.is_virtual,
+                pack: bs.pack_expansion,
+            });
+        }
+        if let Payload::Record { def: Some(df), .. } = &mut self.img.decls[i as usize].payload {
+            df.bases = bases;
+        }
+        Ok(())
+    }
+}
+
 /// Whether record `i` (a class definition `df`) may name record `i + 1`
 /// in its bases: it has [`BASES_AFTER`] and that record is its class
 /// template.
 pub(super) fn bases_after_ok(img: &Image, i: usize, df: &RecDef) -> bool {
-    df.bits & BASES_AFTER == 0
-        || matches!(
-            img.decls.get(i + 1).map(|r| &r.payload),
-            Some(Payload::Template { kind: 1, pattern, .. }) if *pattern as usize == i
-        )
+    // WP-1360: never both (`BASES_SELF` is for a class that is not a
+    // template), and `BASES_SELF` only with a base (one names the class).
+    (df.bits & BASES_SELF == 0 || !df.bases.is_empty())
+        && (df.bits & BASES_AFTER == 0
+            || (df.bits & BASES_SELF == 0
+                && matches!(
+                    img.decls.get(i + 1).map(|r| &r.payload),
+                    Some(Payload::Template { kind: 1, pattern, .. }) if *pattern as usize == i
+                )))
 }
 
 /// The record index the bases of record `i` (`payload`) are checked at.
-pub(super) fn bases_at(i: usize, payload: &Payload) -> usize {
+pub(super) fn bases_at(img: &Image, i: usize, payload: &Payload) -> usize {
     match payload {
         Payload::Record { def: Some(df), .. } if df.bits & BASES_AFTER != 0 => i + 2,
+        Payload::Record { def: Some(df), .. } if df.bits & BASES_SELF != 0 => self_bases_at(img, i),
         _ => i,
     }
+}
+
+/// The record after which class record `i` with [`BASES_SELF`] gets its
+/// bases, plus one: past the class's record and the specialization and
+/// member references that follow it (those its bases made).
+pub(super) fn self_bases_at(img: &Image, i: usize) -> usize {
+    let mut j = i + 1;
+    while img
+        .decls
+        .get(j)
+        .is_some_and(|r| matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. }))
+    {
+        j += 1;
+    }
+    j
 }
 
 /// The importer's side.

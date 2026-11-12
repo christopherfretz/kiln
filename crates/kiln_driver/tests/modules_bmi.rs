@@ -1889,7 +1889,8 @@ fn kind2_declaration_image_imports() {
     for (src, why) in [
         (
             "export module f;\nimport imgp;\nexport inline int g() { return top::answer(); }\n",
-            "a body referring to a declaration outside the image",
+            // WP-1360: the reasons name the kind of declaration.
+            "a body referring to a declaration outside the image (a declaration of another unit)",
         ),
         (
             "export module f;\nimport imgp;\nexport int g(pa::Pt);\n",
@@ -1897,7 +1898,7 @@ fn kind2_declaration_image_imports() {
         ),
         (
             "export module f;\nimport imgp;\nexport struct D : top::Wrap {};\n",
-            "a type declared outside the image",
+            "a type declared outside the image (a declaration of another unit)",
         ),
         (
             "export module f;\nimport imgp;\nexport namespace q = pa;\n",
@@ -2467,4 +2468,48 @@ fn kind2_declaration_image_designators_and_spec_defaults() {
     let errs = image_round_trip("image-wf", "imgwf", IMGWF, IMGWF_RUN, err, "");
     let want = "m.cppm:6:57: error: field designator 'e' does not refer to any field in type 'Z'";
     assert!(errs.contains(want), "{errs}");
+}
+
+/// WP-1360, spec/modules.md §11.11 "Forms carried by WP-1360": a
+/// `noexcept` operand naming a later member (with a specialization the
+/// module instantiates), a class named in its own base clause, an
+/// implicit constructor named in a later type, a checked concept and a
+/// function template with a deduced return type declared before its
+/// definition. With the unit's source blanked an importer runs them,
+/// its IR is the replay's, and the derived-to-base conversion is still
+/// checked.
+#[test]
+fn kind2_declaration_image_wp1360_forms() {
+    let src = "\
+export module w;
+export template <class T> struct counted {
+  T &get() noexcept(noexcept(*cur)) { return *cur; }
+  T *cur;
+};
+export inline int made() { int x = 1; counted<int> c{&x}; return c.get(); }
+export template <class D> struct base { int twice() const { return 2 * static_cast<const D *>(this)->one(); } };
+export struct derived : base<derived> { int one() const { return 21; } };
+export struct other : base<other> { int one() const { return 1; } };
+struct cmp { bool operator()(int a, int b) const { return a < b; } };
+export struct fn {
+  static auto go(int a, int b) noexcept(noexcept(cmp()(a, b))) -> decltype(cmp()(a, b)) { return cmp()(a, b); }
+};
+export template <class T> concept addable = requires(T t) { t + 1; };
+static_assert(addable<int>);
+export template <class T> auto inc(T t);
+export template <class T> int via(T t) { return int(inc(t)); }
+template <class T> auto inc(T t) { return t + 1; }
+";
+    let run = "\
+import w;
+#include <stdio.h>
+static_assert(noexcept(counted<long>{}.get()) && noexcept(counted<int>{}.get()));
+static_assert(!noexcept(fn::go(1, 2)) && addable<long>);
+int main() {
+  printf(\"%d %d %d %d\\n\", made(), derived{}.twice(), int(fn::go(1, 2)), via(2));
+}
+";
+    let err = "import w;\nderived *p = static_cast<base<other> *>(nullptr);\n";
+    let errs = image_round_trip("image-wp1360", "w", src, run, err, "1 42 1 3\n");
+    assert!(errs.contains("cannot initialize a variable of type 'derived *'"), "{errs}");
 }

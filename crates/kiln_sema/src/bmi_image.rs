@@ -71,6 +71,7 @@ mod members;
 mod membertempl;
 mod oodefault;
 mod outerspec;
+mod outside;
 mod patinit;
 mod pch;
 pub use pch::PchDecls;
@@ -92,7 +93,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 31;
+pub(crate) const IMAGE_VERSION: u32 = 32;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -2776,10 +2777,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
                 // A closure type's, written when something in an open
                 // class (a static data member's initializer) named it
-                // (WP-1350).
+                // (WP-1350); inside another class when a type named it
+                // (WP-1360).
                 (Payload::Implicit { .. }, _) => {
-                    (top.is_none() || lambdas::closure_def(img, d.ctx))
-                        && (closed(d.ctx) || members::complete_spec(img, d.ctx))
+                    (closed(d.ctx)
+                        || (members::complete_spec(img, d.ctx)
+                            && (top.is_none() || lambdas::closure_def(img, d.ctx))))
                         && d.lexical == NONE
                 }
                 // A class template's record follows its pattern's record,
@@ -2917,7 +2920,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         if !name_ok {
             return bad("bad declaration name");
         }
-        let refs_at = selfbase::bases_at(i, &d.payload);
+        let refs_at = selfbase::bases_at(img, i, &d.payload);
         if decl_refs(d).into_iter().any(|q| !qref_at(q, refs_at)) {
             return bad("bad type reference");
         }
@@ -3041,6 +3044,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         || df.bits
                             & !(DEF_BITS
                                 | selfbase::BASES_AFTER
+                                | selfbase::BASES_SELF
                                 | anon_bit
                                 | inh
                                 | lambdas::CLOSURE_BITS)
@@ -3379,6 +3383,9 @@ struct Writer<'s, 'a, 'b> {
     /// WP-1344: the class template whose pattern's bases are being
     /// written, and the record it will have ([`selfbase`]).
     fwd_tmpl: Option<(DeclId, u32)>,
+    /// WP-1360: the function template pattern whose deduced type, set
+    /// from a later redeclaration, is being written ([`outside`]).
+    redecl_ttps: Option<DeclId>,
     /// WP-1352: explicit specializations defined after other
     /// declarations ([`latedef`]).
     late: latedef::LateDefs,
@@ -3488,7 +3495,9 @@ impl Writer<'_, '_, '_> {
 
     /// The record of `d` naming type `t` (its own type, unqualified).
     fn type_decl(&self, d: DeclId, t: TypeId) -> W<u32> {
-        let r = self.recs.get(&d).copied().ok_or("a type declared outside the image")?;
+        let Some(r) = self.recs.get(&d).copied().or_else(|| self.redecl_ttp(d)) else {
+            return Err(self.outside_type_why(d));
+        };
         match self.s.ast.decls.get(d).ty() {
             Some(q) if q.ty() == t && q.quals_bits() == 0 => Ok(r),
             _ => Err("a type the image does not carry"),
@@ -4321,6 +4330,9 @@ impl Writer<'_, '_, '_> {
         // specification deferred even once computed (WP-1036).
         let deferred = ast.types.exc_spec(&proto) == ExcSpec::Deferred(ast.first(d))
             || (first && s.implicit_exc_dtors.contains(&d));
+        // WP-1360: a type deduced from a later redeclaration names its
+        // template parameters (`outside.rs`); reset at the next function.
+        self.redecl_ttps = self.deduced_from_redecl(d);
         let late = if deferred { None } else { self.late_noexcept(fty, &proto)? };
         let ty = if let Some((q, _)) = late {
             q
@@ -4337,6 +4349,7 @@ impl Writer<'_, '_, '_> {
         } else {
             self.qref(fty)?
         };
+        self.redecl_ttps = None;
         if ty.quals != 0 {
             return Err("a function declared through a typedef");
         }
@@ -4590,6 +4603,12 @@ impl Writer<'_, '_, '_> {
                 }
                 b?
             }
+            // WP-1360: a class whose bases name the class itself gets
+            // them once its record is pushed (`self_bases`).
+            None if ast.first(d) == d && self.bases_name_self(d) => {
+                bits |= selfbase::BASES_SELF;
+                Vec::new()
+            }
             None => write_bases(self)?,
         };
         Ok(Payload::Record {
@@ -4748,6 +4767,10 @@ impl Writer<'_, '_, '_> {
             self.close_class(top);
         }
         for (d, ctx, kind) in implicit {
+            // Written already where a type named it (WP-1360, `outside.rs`).
+            if self.recs.contains_key(&d) {
+                continue;
+            }
             let o = mt.owner(d);
             let i = self.img.decls.len() as u32;
             self.img.decls.push(DeclRec {
@@ -4884,6 +4907,11 @@ impl Writer<'_, '_, '_> {
     /// declaration below a namespace, an export block, a linkage
     /// specification or the translation unit, seen as its template when
     /// it is a template's pattern.
+    /// The census refused `d`'s top-level declaration already (WP-1360).
+    fn census_refused(&self, d: DeclId) -> bool {
+        self.census.as_ref().is_some_and(|c| c.dead.contains(&self.census_root(d)))
+    }
+
     fn census_root(&self, d: DeclId) -> DeclId {
         let ast = &self.s.ast;
         let mut cur = d;
@@ -5258,6 +5286,9 @@ impl Writer<'_, '_, '_> {
             payload,
         });
         self.recs.insert(d, i);
+        if class_def {
+            self.pending_self_bases(d, i)?;
+        }
         self.attr_commit(i, attrs);
         self.constraint_commit(i, cons);
         if let Some(k) = self.using_key(d) {
@@ -5295,6 +5326,7 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             deferred: FxHashSet::default(),
             complete_specs: Vec::new(),
             fwd_tmpl: None,
+            redecl_ttps: None,
             late: latedef::LateDefs::default(),
         })
     }
@@ -5555,7 +5587,11 @@ impl Sema<'_, '_> {
         // defaulted and implicit members to define again once used.
         let mut classes: Vec<(DeclId, usize, u64, usize)> = Vec::new();
         // WP-1344: a pattern whose bases wait for its template.
-        let mut self_bases: Option<(DeclId, usize)> = None;
+        // WP-1360: or for the class itself (the record after which they
+        // are given, the class's record).
+        let mut self_bases: Option<(DeclId, usize, usize)> = None;
+        // WP-1360: functions whose `noexcept` operand the bodies give.
+        let late_nx: FxHashSet<u32> = img.late_nx.iter().map(|l| l.rec).collect();
         let mut fields: Vec<(DeclId, u32, u32)> = Vec::new();
         let mut enum_inits: Vec<(DeclId, u32)> = Vec::new();
         // WP-1343: (binding, decomposition, holding variable, expression)
@@ -5826,11 +5862,17 @@ impl Sema<'_, '_> {
                     };
                     self.ast.templates.pattern_next = false;
                     if let Some(df) = def
-                        && df.bits & selfbase::BASES_AFTER != 0
+                        && df.bits & (selfbase::BASES_AFTER | selfbase::BASES_SELF) != 0
                     {
                         let _ = self.builder().begin_record_definition(c);
-                        self_bases = Some((c, i));
-                        classes.push((c, df.end as usize, df.bits & !selfbase::BASES_AFTER, i));
+                        let after = if df.bits & selfbase::BASES_AFTER != 0 {
+                            i + 1
+                        } else {
+                            selfbase::self_bases_at(img, i) - 1
+                        };
+                        self_bases = Some((c, i, after));
+                        let bits = df.bits & !(selfbase::BASES_AFTER | selfbase::BASES_SELF);
+                        classes.push((c, df.end as usize, bits, i));
                     } else if let Some(df) = def {
                         let _ = self.builder().begin_record_definition(c);
                         let bases: Vec<kiln_ast::decl::BaseSpec> = df
@@ -6035,7 +6077,10 @@ impl Sema<'_, '_> {
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
-            if let Some((c, p)) = self_bases.take_if(|&mut (_, p)| p + 1 == i) {
+            if late_nx.contains(&(i as u32)) {
+                self.image_defer_late_nx(d);
+            }
+            if let Some((c, p, _)) = self_bases.take_if(|&mut (_, _, at)| at == i) {
                 self.image_deferred_bases(img, &mut tys, &ids, &|o| main.get(o), c, p);
             }
             self.image_anon_typedef(img, i as u32, &ids);
@@ -6966,7 +7011,9 @@ mod tests {
         }
         assert_eq!(decode(&encode(&img)), Ok(img));
         let mut img = class_sample();
-        set_bits(&mut img, B::NONTRIVIAL_MOVE_ASSIGN.bits() << 1);
+        // A bit the image never carries (bits 62 and 63 are its own,
+        // `selfbase::BASES_SELF` and `BASES_AFTER`, since WP-1360).
+        set_bits(&mut img, B::BEING_DEFINED.bits());
         assert!(decode(&encode(&img)).is_err());
     }
 

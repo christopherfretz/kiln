@@ -2240,3 +2240,124 @@ template <class T> int call() { return pos(-1) + int(sizeof(T)); }
     let o = same(&d, "a.pch", &["-fsyntax-only"], "a.cpp");
     assert!(o.stderr.contains("a.h:2:46: error: negative"), "{}", o.stderr);
 }
+
+/// WP-1360: a `noexcept` operand naming a member its class declares
+/// later (a complete-class context, [class.mem.general]/7) goes through
+/// the late `noexcept` path, in a class template and a plain class.
+#[test]
+fn noexcept_naming_a_later_member_is_carried() {
+    let header = "\
+template <class T> struct box { void swap(box &o) noexcept(noexcept(o.get())) { v = o.v; } T get() const noexcept { return v; } T v; };
+struct plain { int f() noexcept(noexcept(g())) { return g(); } int g() const { return 3; } };
+inline int use() { box<int> a{1}, b{2}; a.swap(b); return plain{}.f() + a.v - 2; }
+";
+    let tu = "static_assert(noexcept(box<int>{}.swap(*(box<int> *)0)));\n\
+static_assert(!noexcept(plain{}.f()));\n\
+int main() { return use() - 3; }\n";
+    image_carries("wp1360n", header, tu);
+}
+
+/// WP-1360: a class whose base names the class itself (`struct D :
+/// B<D>`, the curiously recurring template pattern): its bases are
+/// written after its record (`BASES_SELF`).
+#[test]
+fn self_naming_bases_are_carried() {
+    let header = "\
+template <class D> struct base { int twice() const { return 2 * static_cast<const D *>(this)->v(); } };
+template <class T> struct tag {};
+struct derived : base<derived> { int v() const { return 2; } };
+struct both : base<both>, tag<both *> { int v() const { return 1; } };
+";
+    let tu = "int main() { derived d; both b; base<derived> *p = &d; (void)p; return d.twice() + b.twice() - 6; }\n";
+    image_carries("wp1360c", header, tu);
+}
+
+/// WP-1360: an implicit special member of a closed class named in a
+/// later declaration's type (`noexcept(C())`, `decltype(C()(...))`) is
+/// recorded where first named.
+#[test]
+fn implicit_member_named_in_a_type_is_carried() {
+    let header = "\
+struct cmp { bool operator()(int a, int b) const { return a < b; } };
+struct fn { template <class T> static auto go(T a, T b) noexcept(noexcept(cmp()(a, b))) -> decltype(cmp()(a, b)) { return cmp()(a, b); } };
+";
+    let tu =
+        "static_assert(!noexcept(fn::go(1, 2)));\nint main() { return fn::go(1, 2) ? 0 : 1; }\n";
+    image_carries("wp1360i", header, tu);
+}
+
+/// WP-1360: a concept checked in the header (its satisfied
+/// requires-expression substituted), a member named in an unevaluated
+/// operand of a type (`sizeof(m)`, [expr.prim.id.general]/4), and a
+/// function template with a deduced return type declared before its
+/// definition and used in between.
+#[test]
+fn checked_concepts_sizeof_members_and_auto_redecls_are_carried() {
+    let header = "\
+template <class T> concept testable = requires(T t) { t + 1; };
+static_assert(testable<int>);
+template <int N> struct raw { char b[N]; };
+struct holder { long p; raw<sizeof(p)> r; };
+template <class T> auto conv_to(T t);
+template <class T> int via(T t) { return int(conv_to(t)); }
+template <class T> auto conv_to(T t) { return t + 1; }
+";
+    let tu = "static_assert(testable<long>);\nstatic_assert(sizeof(holder{}.r) == sizeof(long));\n\
+int main() { return via(2) - 3; }\n";
+    image_carries("wp1360r", header, tu);
+}
+
+/// WP-1360: a member function template of a class template
+/// specialization named in a dependent call (`aux<false>::go(f, l)`): the
+/// lookup finds the specialization's member record, whose pattern is the
+/// member template.
+#[test]
+fn member_templates_of_specializations_in_dependent_calls_are_carried() {
+    let header = "\
+template <bool> struct aux { template <class I> static constexpr int go(I f, I l) { return int(l - f); } };
+template <> struct aux<true> { template <class I> static int go(I, I) { return -1; } };
+template <class I> constexpr int span(I f, I l) {
+  if (__builtin_is_constant_evaluated()) return aux<false>::go(f, l);
+  return aux<sizeof(I) == 1>::go(f, l);
+}
+";
+    let tu = "constexpr int a[3] = {};\nstatic_assert(span(a, a + 3) == 3);\n\
+int main() { return span(a, a + 2) - 2; }\n";
+    image_carries("wp1360m", header, tu);
+}
+
+/// WP-1360: an overloaded member access in a dependent call keeps its
+/// candidates in a Sema side table the image does not carry; it is
+/// refused under its own reason ("a template expression (an overloaded
+/// member access)"), and the unit agrees with replay. Before, a set
+/// whose first candidate is not a template was carried with that one
+/// candidate and every instantiation failed after the image.
+#[test]
+fn overloaded_member_accesses_fall_back() {
+    let header = "\
+struct vec { int a[4]; constexpr const int *begin() const { return a; } constexpr const int *end() const { return a + 4; } };
+struct dist_fn {
+  constexpr long operator()(const int *f, const int *l, int) const { return l - f + 100; }
+  template <class I> constexpr long operator()(I f, I l) const { return l - f; }
+  template <class R> constexpr long operator()(R &&r) const { return operator()(r.begin(), r.end()); }
+  template <class R> constexpr long twice(R &&r) const { return this->operator()(r) * 2; }
+};
+";
+    let d = scratch("wp1360o-census");
+    std::fs::write(d.join("a.h"), header).unwrap();
+    let args = ["-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+    let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
+    assert!(
+        o.stderr.contains("a.h:5:37: a template expression (an overloaded member access)"),
+        "{}",
+        o.stderr
+    );
+    let tu = "static_assert(dist_fn{}(vec{}) == 4 && dist_fn{}.twice(vec{}) == 8);\n\
+int main() { vec v{}; return int(dist_fn{}(v) + dist_fn{}.twice(v)) - 12; }\n";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    same(&d, "a.pch", &["-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
+    let check = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+    let o = ok(&d, &[&check[..], &["a.cpp", "-o", "a.out"]].concat());
+    assert_eq!(o.stderr, "");
+    assert_eq!(Command::new(d.join("a.out")).status().unwrap().code(), Some(0));
+}

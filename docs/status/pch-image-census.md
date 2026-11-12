@@ -1489,3 +1489,232 @@ What remains, by headers freed (merged tree):
    expression section (`decltype([]{})`).
 5. Not this bucket's: the local alias after a requires-parameter type
    (`<numeric>`, see above).
+## WP-1360: PCH image wave 8e, declarations outside the image (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 109 libstdc++). Before is base `7c7c8fdfb`
+(main with WP-1353); after is this WP merged with main. Reasons are
+declarations in the whole header / headers they appear in.
+
+```
+lcx.h, before: 26702 top-level declarations, 26015 carried, 687 not
+lcx.h, after:  26702 top-level declarations, 26080 carried, 622 not
+gnu.h, before: 26396 top-level declarations, 25695 carried, 701 not
+gnu.h, after:  26396 top-level declarations, 25849 carried, 547 not
+```
+
+Carried: lcx +65, gnu +154. Headers through the image: libc++ 35 of
+106 and libstdc++ 36 of 109, before and after. Every header these
+reasons freed stops next at another bucket's reason.
+
+First refusals:
+
+- `lcx.h`, before: "a type declared outside the image"
+  (`__compare/synth_three_way.h:28:45`, the first refusal of 44
+  headers).
+- `lcx.h`, after: the same declaration, now named "(a closure type)".
+  It is the `__synth_three_way` lambda, WP-1350's, and the first
+  refusal of 45 headers.
+- `gnu.h`, before: "a body referring to a declaration outside the image
+  (a later member of its class)" (`bits/stl_iterator.h:2396:7`, the
+  first refusal of 33 headers).
+- `gnu.h`, after: "a function declared through a typedef"
+  (`bits/c++locale.h:52:34`, the first refusal of 28 headers). No
+  bucket owns it.
+
+Neither family is a header's first refusal any more, except for the
+closure-type kind.
+
+The two reasons are split by the kind of declaration they name
+(`bmi_image/outside.rs`; how a reader would find each kind is in
+spec/modules.md §11.11 "Forms carried by WP-1360"). "c" marks the
+cascade rows. Before → after:
+
+- a body referring to a declaration outside the image, all kinds:
+  - lcx 0/9 (the first refusal of 9 headers) → 0/3 (none).
+  - gnu 1/40 (the first refusal of 38) → 0/3 (none).
+  - c: lcx 179/63 → 119/64; gnu 150/61 → 52/40.
+  - (a later member of its class): `noexcept` naming a later member.
+    Before: lcx 0/3, gnu 1/33 (`stl_iterator.h:2396`, the
+    `__glibcxx_assert` in a `noexcept` operand naming `_M_current`).
+    After: carried.
+  - (an implicit member): before lcx 0/3, with its cascade 3/56
+    (`__compare/strong_order.h:118`, `noexcept(decltype(...)())` of a
+    later declaration's type). After: carried. The c row is gnu 1/35
+    (`ext/string_conversions.h:101`, a member of the predefined
+    aarch64 `__va_list`).
+  - (a record of another kind): the c rows were lcx 32/50 and gnu
+    41/47.
+    - `bits/stl_construct.h:182`: `_Destroy_aux<false>::__destroy`, a
+      member template of a specialization. Carried.
+    - The rest were overloaded member accesses (below).
+  - (a parameter of another requires-expression): a satisfied
+    concept's substituted requires-expression. Carried.
+  - Still refused: (a base of a class outside the image), lcx 0/3
+    (`__atomic/atomic_flag.h:31:30`, `latch:87`) and gnu 0/3
+    (`bits/atomic_wait.h:459`, `text_encoding:492`).
+- a type declared outside the image, all kinds:
+  - lcx 1/44 (the first refusal of 44) → 1/45 (the first refusal of
+    45).
+  - gnu 0/10 (the first refusal of 7) → 0/11 (the first refusal of 7).
+  - c: lcx 123/57 → 103/40; gnu 157/54 → 105/40.
+  - Carried:
+    - the plain CRTP, `struct B : A<B>`;
+    - an `auto` function template declared before its definition (gnu
+      10 headers).
+  - Still refused, named:
+    - (a closure type), lcx 1/45, gnu 0/3: WP-1350.
+    - (a local class or enumeration), gnu 0/2: WP-1350.
+    - (a predefined type), gnu 0/6 (`math-vector.h:166:23`, the SVE
+      `__SVBool_t` typedefs). It is the first refusal of 6 headers,
+      but each of those stops next at a lambda or local class
+      (WP-1350) or at `c++locale.h:52` (unowned), so carrying it frees
+      none.
+    - (a class named before its record), gnu 0/1 (`any:93:61`, a
+      member class of a specialization).
+- a template expression (an overloaded member access): new, lcx 36/50,
+  gnu 50/47 (the first refusal of 1).
+  - Sites: `__iterator/distance.h:79:59`, `operator()(ranges::begin(r),
+    ranges::end(r))`, and `bits/uniform_int_dist.h:221:2`,
+    `this->__generate(...)`.
+  - A `MemberExpr` of overloaded type keeps its candidates in
+    `Sema::ovl.members`, which the image does not carry.
+  - Before, a set whose first candidate is a member template was
+    refused as "(a record of another kind)". A set whose first
+    candidate is a plain function was carried with only that
+    candidate, and every instantiation after the image failed ("called
+    object type '<overloaded function type>'"; `check` reports the
+    difference). This was a pre-existing silent divergence. That
+    accounts for most of the carried declarations lost against
+    mid-wave (lcx 3, gnu 10).
+  - Carrying it needs a cold annotation for the set: name, candidates,
+    found declarations, naming class, object type, `->`, qualifier and
+    implicit `this`. No cold bit is left (WP-1350 took the last,
+    `COLD_DESIG`), so it needs a side section and is not taken here.
+- Other forms carried, not census rows of their own:
+  - a data member in an unevaluated operand of a type (`sizeof(m)`);
+  - a specialization the header instantiates of a class template
+    whose member's `noexcept` names a later member. The importer now
+    defers it as the parser does; before, the specialization's
+    `noexcept` was lost, a `check`-visible difference.
+
+Top five reasons by headers blocked after this WP (not cascades), with
+their bucket:
+
+- lcx:
+  1. an implicit declaration that is not a special member (CXXRecord),
+     8/63 (`__compare/synth_three_way.h:28:65`, a closure class):
+     WP-1350.
+  2. a lambda expression, 67/59 (`__iterator/advance.h:153:3`):
+     WP-1350.
+  3. a specialization named while its user is recorded, 13/57
+     (`__compare/strong_order.h:125:40`): WP-1358.
+  4. a partial specialization argument the image does not carry, 1/51
+     (`__iterator/segmented_iterator.h:72:8`, the first refusal of
+     14): WP-1358.
+  5. a template expression (an overloaded member access), 36/50: this
+     WP's, named and not carried. Tied with a local class or
+     enumeration, 8/50 (`__functional/hash.h:244:32`), WP-1350's.
+- gnu:
+  1. a lambda expression, 69/69 (`compare:575:7`, the first refusal of
+     21): WP-1350.
+  2. a local class or enumeration, 19/65 (`compare:870:2`): WP-1350.
+  3. a member redeclared in a specialization, 25/62 (`bit:201:5`):
+     WP-1358.
+  4. a template expression (an overloaded member access), 50/47: this
+     WP's, named and not carried.
+  5. a specialization of a partial specialization, 25/42
+     (`bits/basic_string.h:4240:3`): WP-1358.
+
+Not taken from WP-1353's list (none is a census row in either library,
+and none is cheap):
+
+- a dependent using of a pack or conversion name
+  (`bmi_image/depusing.rs:22`);
+- explicit-instantiation ordering under `check`
+  (`bmi_image/explinst.rs`);
+- `special_kind_of` for copy constructors of templates with non-type
+  parameters (`kiln_sema/src/class/special/mod.rs:316`). This one is a
+  sema change: the injected class with a value argument is not
+  recognized by `is_class_type_of`. It reaches triviality and
+  implicit-member decisions everywhere, so it is for its own WP with
+  the libc++ gate.
+
+What remains, by headers freed:
+
+1. The overloaded member access (lcx 50, gnu 47 headers): carry the
+   `OvlMember` set, in a side section keyed by expression (no cold
+   bit is left).
+2. (a base of a class outside the image), lcx 3 and gnu 3 headers.
+3. (a predefined type) and (a predefined entity): the SVE typedefs and
+   `__va_list`'s members. These would be `Implicit` records looked up
+   by name in the importer's unit. They free nothing until WP-1350 and
+   `c++locale.h:52` land.
+4. (a class named before its record): a member class of a
+   specialization named in a type (`any:93:61`, gnu 1 header).
+
+### Merged with WP-1350
+
+The census again on this WP merged with WP-1350 (#655). WP-1350's
+numbers on its own tree were lcx.h 26112 carried / 581 not (37 of 106
+headers) and gnu.h 25778 / 618 (39 of 109).
+
+```
+lcx.h, merged: 26693 top-level declarations, 26178 carried, 515 not
+gnu.h, merged: 26396 top-level declarations, 25941 carried, 455 not
+```
+
+Headers through the image: libc++ 37 of 106, libstdc++ 40 of 109.
+Against WP-1350 alone: lcx +66 carried, gnu +163 and one header.
+
+First refusals:
+
+- `lcx.h`: "a partial specialization argument the image does not
+  carry" (`__iterator/segmented_iterator.h:72:8`, the first refusal of
+  40 headers): WP-1358.
+- `gnu.h`: "a function declared through a typedef"
+  (`bits/c++locale.h:52:34`, the first refusal of 28 headers):
+  unowned.
+
+This WP's reasons on the merged tree (not cascades):
+
+- a template expression (an overloaded member access): lcx 37/51, gnu
+  53/47 (the first refusal of 4).
+- (a predefined type): lcx 0/7 (the first refusal of 7) and gnu 0/6
+  (the first refusal of 6), all `math-vector.h:166:23`. It is libc++
+  `<cmath>`'s only refusal, so carrying it frees that header. Every
+  other one stops next at a WP-1358 reason or at `c++locale.h:52`.
+- (a base of a class outside the image): lcx 0/4, gnu 0/3.
+- (a class named before its record): lcx 0/1 (`any:148`), gnu 0/1.
+- (a local class or enumeration): gnu 0/2, WP-1350's follow-up.
+- Every other "outside the image" kind is gone on the merged tree.
+
+Top five reasons by headers blocked on the merged tree (not cascades):
+
+- lcx:
+  1. a specialization named while its user is recorded, 13/57
+     (`__compare/strong_order.h:125:40`, the first refusal of 14):
+     WP-1358.
+  2. a template expression (an overloaded member access), 37/51
+     (`__iterator/distance.h:79:59`): this WP's, named and not carried.
+  3. a partial specialization argument the image does not carry, 1/51
+     (`__iterator/segmented_iterator.h:72:8`, the first refusal of 40):
+     WP-1358.
+  4. a specialization of a partial specialization, 43/37
+     (`__chrono/duration.h:485:47`): WP-1358.
+  5. an expression in a type naming a parameter or local declaration,
+     11/34 (`__system_error/error_category.h:50:41`): unowned.
+- gnu:
+  1. a member redeclared in a specialization, 27/62 (`bit:201:5`, the
+     first refusal of 16): WP-1358.
+  2. a template expression (an overloaded member access), 53/47
+     (`bits/uniform_int_dist.h:221:2`): this WP's, named and not
+     carried.
+  3. a specialization of a partial specialization, 28/42
+     (`bits/basic_string.h:4240:3`): WP-1358.
+  4. a local declaration the image does not carry (a specialization's
+     parameter), 11/36 (`bits/basic_string.h:4695:5`): left after
+     WP-1350's `specparam.rs`; unowned.
+  5. a function declared through a typedef, 1/35
+     (`bits/c++locale.h:52:34`, the first refusal of 28): unowned.
