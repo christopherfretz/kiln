@@ -137,6 +137,12 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   with `-Cprofile-use=<file>`. `cargo xtask pgo-train` is the training
   alone. Nothing changes without the switch (README.md "Profile-guided
   build", WP-1308).
+- `-fkiln-memory-report` has two exact rows for constant evaluation:
+  `oven.heap-peak`, the most evaluation memory held at once in the
+  translation unit (memory freed again during an evaluation still counts),
+  and `oven.static-peak`. The total counts them instead of the capacity of
+  the Oven's memory buffers, now shown as `oven.mem.capacity` outside the
+  total (spec/oven.md "Memory report: the Oven's peaks", WP-1315).
 
 ### Changed
 
@@ -233,6 +239,15 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   `cargo xtask bench bench/pch` measures kiln's PCH against clang 19's
   and writes docs/status/pch.md, judging kiln's accounted memory rather
   than peak RSS (WP-1294, WP-1303).
+- `cargo xtask bench` judges every kiln entry of `frontend`, `oven`,
+  `overload` and `reflect` on kiln's accounted memory (the
+  `-fkiln-memory-report` total, deterministic) at 2%, from one extra
+  unmeasured compile, beside the RSS gate; the table shows `acct MB` and
+  a `judged` cell per row. A kiln version bump no longer makes kiln's own
+  baselines advisory: since the 1.0.0 bump every main-group comparison
+  had been advisory and no gate judged anything. The four groups are
+  re-recorded. A reflection shape's `--gcc-toolchain=` path is recorded
+  as a placeholder (spec/bench.md, WP-1315).
 
 ## [1.0.2] - 2026-11-11
 

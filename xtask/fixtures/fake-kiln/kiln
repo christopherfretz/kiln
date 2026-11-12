@@ -7,6 +7,9 @@
 # With `-fkiln-instantiation-report=json` it strips the flag, compiles, and
 # on success copies the canned report `<source>.inst.jsonl` (if there is
 # one) to stderr.
+# With `-fkiln-memory-report` it strips the flag, compiles, and on success
+# copies the canned report `<source>.mem` to stderr, or prints
+# `memory: total live=1000 reserved=2000` without one.
 # For `-fdump-ast` it compiles, and on success prints the canned dump
 # `<source>.ast` with `@FILTER@` replaced by the `-fdump-ast-filter=` value;
 # likewise `<source>.layout` for `-fdump-record-layouts` and
@@ -22,11 +25,13 @@ src=
 dump=
 filter=
 inst=
+mem=
 for a in "$@"; do
   shift
   case "$a" in
     -fconstexpr-report=*) report=${a#-fconstexpr-report=} ;;
     -fkiln-instantiation-report=json) inst=1 ;;
+    -fkiln-memory-report) mem=1 ;;
     -fdump-ast) dump=ast ;;
     -fdump-record-layouts) dump=layout ;;
     -fdump-vtable-layouts) dump=vtables ;;
@@ -38,6 +43,11 @@ for a in "$@"; do
 done
 if [ -n "$report" ] && [ -n "$src" ] && [ -f "$src.oven.jsonl" ]; then
   sed "s|@SRC@|$src|g" "$src.oven.jsonl" >"$report" || exit 70
+fi
+if [ -n "$mem" ]; then
+  "${KILN_FAKE_CC:-clang++-19}" "$@" || exit
+  if [ -f "$src.mem" ]; then cat "$src.mem" >&2; else echo "memory: total live=1000 reserved=2000" >&2; fi
+  exit 0
 fi
 if [ -n "$inst" ]; then
   "${KILN_FAKE_CC:-clang++-19}" "$@" || exit

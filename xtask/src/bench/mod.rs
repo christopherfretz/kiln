@@ -69,6 +69,11 @@ options:
   --record                 write the measurements as the new baselines; with
                            --compare-with, also merge the ratio table into
                            docs/status/perf.md
+  --keep-timing            with --record: an entry that already has a baseline
+                           keeps its recorded runs, wall-clock and peak-RSS
+                           figures; everything else (counters, accounted
+                           memory, flags, version) is re-recorded. For a host
+                           too loaded for a trustworthy time baseline
   --compare-with <path>    also measure this compiler (e.g. clang++-22, the libc++
                            slice's oracle, clang++-19, or g++-16, whose flags are
                            mapped as for the GCC oracle) and print
@@ -109,12 +114,32 @@ const INST_GROUP: &str = "frontend";
 /// totals row, [`InstCounters::parse_report`]).
 const INST_FLAG: &str = "-fkiln-instantiation-report=json";
 
+/// The groups whose kiln entries record and are judged on kiln's accounted
+/// memory (`-fkiln-memory-report`, spec/bench.md "Regression policy";
+/// WP-1315). `pp` is not among them: `-E` prints no memory report.
+pub const ACCT_GROUPS: [&str; 4] = ["frontend", "oven", "overload", "reflect"];
+/// kiln's memory report, on stderr (its last line is the total,
+/// [`record::Accounted::parse_report`]).
+pub const ACCT_FLAG: &str = "-fkiln-memory-report";
+
+/// Whether entry `e` of mode `mode`, measured with a compiler of `kind`,
+/// records kiln's accounted memory: kiln, a group of [`ACCT_GROUPS`], and a
+/// compile (`mode: pp` prints no report, `mode: run` measures the program).
+pub fn records_accounted(kind: CompilerKind, group: &str, mode: entry::Mode) -> bool {
+    kind == CompilerKind::Kiln
+        && ACCT_GROUPS.contains(&group)
+        && matches!(mode, entry::Mode::Syntax | entry::Mode::EmitLlvm | entry::Mode::Obj)
+}
+
 /// Parsed command line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Options {
     pub compiler: Option<PathBuf>,
     pub baseline: Option<PathBuf>,
     pub record: bool,
+    /// `--keep-timing`: with `--record`, keep an existing baseline's time and
+    /// RSS figures and re-record only the deterministic ones.
+    pub keep_timing: bool,
     pub compare_with: Option<PathBuf>,
     pub filter: Option<String>,
     pub runs: usize,
@@ -139,6 +164,7 @@ impl Default for Options {
             compiler: None,
             baseline: None,
             record: false,
+            keep_timing: false,
             compare_with: None,
             filter: None,
             runs: 5,
@@ -222,14 +248,18 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 };
                 *slot = parse_pct(f, &value(f)?)?;
             }
-            "--record" | "-v" | "--verbose" if inline.is_some() => {
+            "--record" | "--keep-timing" | "-v" | "--verbose" if inline.is_some() => {
                 return Err(format!("`{flag}` takes no value"));
             }
             "--record" => o.record = true,
+            "--keep-timing" => o.keep_timing = true,
             "-v" | "--verbose" => o.verbose = true,
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
             _ => o.paths.push(PathBuf::from(arg)),
         }
+    }
+    if o.keep_timing && !o.record {
+        return Err("`--keep-timing` needs `--record`".into());
     }
     if o.scaling_n.is_some() && o.scaling.is_none() {
         return Err("`--n` needs `--scaling`".into());
@@ -633,7 +663,7 @@ fn measure_and_report(
     }
 
     if opts.record {
-        record_baselines(cx, entries, &rec.test, &stamp, files)?;
+        record_baselines(cx, entries, &rec.test, &stamp, opts.keep_timing, files)?;
     }
 
     if let (Some(o), Some(orun)) = (oracle, &rec.oracle) {
@@ -813,6 +843,44 @@ fn load_baselines(
     Ok(files)
 }
 
+/// The table header for `judge_all`, dropping the counter and accounted
+/// columns from `rows` when no entry has them.
+fn table_header(test_run: &CompilerRun, rows: &mut [Vec<String>]) -> Vec<&'static str> {
+    let mut header =
+        vec!["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
+    header.insert(header.len() - 1, "judged");
+    // Constexpr and instantiation counters (kiln only): columns only when
+    // some entry has them.
+    let has = |f: fn(&Measurement) -> bool| {
+        test_run.entries.values().any(|o| o.measurement().is_some_and(f))
+    };
+    let (counters, inst) = (has(|m| m.oven.is_some()), has(|m| m.inst.is_some()));
+    // kiln's accounted memory (spec/bench.md "Regression policy"): columns
+    // only when some entry has it.
+    if has(|m| m.accounted.is_some()) {
+        header.splice(9..9, ["acct MB", "acct±"]);
+    } else {
+        for r in rows.iter_mut() {
+            r.drain(17..19);
+        }
+    }
+    if inst {
+        header.splice(9..9, ["inst", "inst±", "inst KiB", "KiB±"]);
+    } else {
+        for r in rows.iter_mut() {
+            r.drain(13..17);
+        }
+    }
+    if counters {
+        header.splice(9..9, ["steps", "steps±", "ev bytes", "bytes±"]);
+    } else {
+        for r in rows.iter_mut() {
+            r.drain(9..13);
+        }
+    }
+    header
+}
+
 fn judge_all(
     opts: &Options,
     cx: &Ctx<'_>,
@@ -874,7 +942,8 @@ fn judge_all(
                 if let Some(spec) = specs.get(&e.id) {
                     t = t.with(&spec.thresholds);
                 }
-                let v = compare::judge(base, m, t.with(&opts.thresholds));
+                let t = t.with(&opts.thresholds);
+                let v = compare::judge(base, m, t);
                 match &v {
                     Verdict::New => report.new += 1,
                     Verdict::Ok => {}
@@ -882,32 +951,20 @@ fn judge_all(
                     Verdict::Regressed { .. } => report.regressed += 1,
                     Verdict::Advisory(_) => report.advisory += 1,
                 }
-                rows.push(row(e, specs.get(&e.id), base, Some(m), &v));
+                let mut r = row(e, specs.get(&e.id), base, Some(m), &v);
+                let judged = compare::judged(base.map(|b| &b.measurement), m, t, &v);
+                r.insert(r.len() - 1, judged);
+                rows.push(r);
             }
         }
     }
-    let mut header =
-        vec!["entry", "mode", "base ms", "ms", "time", "spread", "base MB", "MB", "mem", "status"];
-    // Constexpr and instantiation counters (kiln only): columns only when
-    // some entry has them.
-    let has = |f: fn(&Measurement) -> bool| {
-        test_run.entries.values().any(|o| o.measurement().is_some_and(f))
-    };
-    let (counters, inst) = (has(|m| m.oven.is_some()), has(|m| m.inst.is_some()));
-    if inst {
-        header.splice(9..9, ["inst", "inst±", "inst KiB", "KiB±"]);
-    } else {
-        for r in &mut rows {
-            r.drain(13..17);
+    // Rows of entries not judged have no `judged` cell yet.
+    for r in &mut rows {
+        if r.len() == ROW_CELLS - 1 {
+            r.insert(r.len() - 1, "-".to_owned());
         }
     }
-    if counters {
-        header.splice(9..9, ["steps", "steps±", "ev bytes", "bytes±"]);
-    } else {
-        for r in &mut rows {
-            r.drain(9..13);
-        }
-    }
+    let header = table_header(test_run, &mut rows);
     println!();
     print!("{}", compare::render_table(&header, &rows));
     if let Some(r) = oracle_run {
@@ -1111,7 +1168,60 @@ fn measure(cx: &Ctx<'_>, e: &Entry, spec: &BenchSpec, hash: &str, s: &Subject) -
         Err(why) => return Outcome::Failed(why),
     };
     let counters = Reports { constexpr: p.report.as_deref(), inst: p.inst_report };
-    sample(cx, e, spec, s, &p.cmd, p.cap, counters, (p.flags.join(" "), hash))
+    let outcome = sample(cx, e, spec, s, &p.cmd, p.cap, counters, (recorded_flags(&p.flags), hash));
+    match outcome {
+        Outcome::Measured(mut meas) if records_accounted(s.id.kind, &e.group, spec.mode) => {
+            match measure_accounted(cx, e, &p.flags, s, p.cap) {
+                Ok(acct) => {
+                    meas.accounted = Some(acct);
+                    Outcome::Measured(meas)
+                }
+                Err(why) => Outcome::Failed(format!("{ACCT_FLAG}: {why}")),
+            }
+        }
+        o => o,
+    }
+}
+
+/// The recorded form of `flags`: joined by spaces, with the value of
+/// `--gcc-toolchain=` (an absolute path on this machine, which the
+/// reflection shapes pass, `gen_reflect::kiln_flags`) as
+/// `<gcc-toolchain>`, so a baseline does not depend on where the
+/// toolchain is checked out (spec/bench.md "Records").
+pub fn recorded_flags(flags: &[String]) -> String {
+    flags
+        .iter()
+        .map(|f| match f.strip_prefix("--gcc-toolchain=") {
+            Some(_) => "--gcc-toolchain=<gcc-toolchain>",
+            None => f.as_str(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// kiln's accounted memory for entry `e`: one more compile, unmeasured, of
+/// the measured command's `flags` with [`ACCT_FLAG`] before the input, so
+/// the measured runs never carry it. A failed compile or a missing or
+/// malformed total line is an error.
+fn measure_accounted(
+    cx: &Ctx<'_>,
+    e: &Entry,
+    flags: &[String],
+    s: &Subject,
+    cap: Option<process::MemLimit>,
+) -> Result<record::Accounted, String> {
+    let mut cmd = Command::new(&s.path);
+    cmd.args(flags).arg(ACCT_FLAG).arg(&e.arg).current_dir(&cx.layout.root);
+    if cx.verbose {
+        eprintln!("  $ {}", Shown(&cmd));
+    }
+    let mut c = process::limited(&cmd, cap);
+    let out = process::run(&mut c, RUN_TIMEOUT)
+        .map_err(|err| format!("cannot run {}: {err}", s.path.display()))?;
+    if !out.success() {
+        return Err(describe_failure(&out, cap));
+    }
+    record::Accounted::parse_report(&out.stderr_str())
 }
 
 /// The measured command of an entry, as [`prepare`] builds it.
@@ -1372,6 +1482,11 @@ fn describe_outcome(o: &Outcome) -> String {
     }
 }
 
+/// The cells of a [`row`] once `judge_all` has added the `judged` cell:
+/// nine of time and memory, four of constexpr counters, four of
+/// instantiation counters, two of accounted memory, `judged`, the status.
+const ROW_CELLS: usize = 21;
+
 fn row(
     entry: &Entry,
     spec: Option<&BenchSpec>,
@@ -1407,6 +1522,10 @@ fn row(
     };
     #[allow(clippy::cast_precision_loss)]
     let kib = |n: u64| format!("{:.1}", n as f64 / 1024.0);
+    let (ba, ca) = (b.and_then(|b| b.accounted), cur.and_then(|c| c.accounted));
+    #[allow(clippy::cast_precision_loss)]
+    let acct_delta =
+        ba.zip(ca).and_then(|(x, y)| compare::delta_pct(x.reserved as f64, y.reserved as f64));
     vec![
         entry.id.clone(),
         spec.map_or_else(dash, |s| s.mode.as_str().to_owned()),
@@ -1427,17 +1546,22 @@ fn row(
         compare::pct(inst_delta(|i| i.count)),
         ci.map_or_else(dash, |i| kib(i.bytes)),
         compare::pct(inst_delta(|i| i.bytes)),
+        ca.map_or_else(dash, |a| compare::acct_mb(a.reserved)),
+        acct_delta.map_or_else(dash, |d| format!("{d:+.2}%")),
         status,
     ]
 }
 
 /// Merges the measured entries into `bench/baselines/<group>.json`, keeping
-/// baselines of entries and compiler kinds that did not run.
+/// baselines of entries and compiler kinds that did not run. With
+/// `keep_timing`, an entry that already has a baseline keeps its time and
+/// RSS figures ([`keep_timing_of`]).
 fn record_baselines(
     cx: &Ctx<'_>,
     entries: &[Entry],
     run: &CompilerRun,
     stamp: &str,
+    keep_timing: bool,
     mut files: BTreeMap<String, BaselineFile>,
 ) -> Result<(), String> {
     let mut touched = BTreeMap::new();
@@ -1448,10 +1572,11 @@ fn record_baselines(
             m.samples_wall_ms.clear();
             m.samples_rss_kb.clear();
             let file = files.get_mut(&e.group).expect("loaded above");
-            file.entries
-                .entry(e.name.clone())
-                .or_default()
-                .insert(run.kind.clone(), Baseline { measurement: m, recorded: stamp.to_owned() });
+            let kinds = file.entries.entry(e.name.clone()).or_default();
+            if keep_timing && let Some(old) = kinds.get(&run.kind) {
+                keep_timing_of(&mut m, &old.measurement);
+            }
+            kinds.insert(run.kind.clone(), Baseline { measurement: m, recorded: stamp.to_owned() });
             *touched.entry(e.group.clone()).or_insert(0usize) += 1;
         }
     }
@@ -1461,6 +1586,18 @@ fn record_baselines(
         println!("recorded {n} {} baseline(s) in {}", run.kind, shown_path(&cx.layout.root, &path));
     }
     Ok(())
+}
+
+/// `--keep-timing`: `m` takes `old`'s runs, wall-clock and peak-RSS figures
+/// and keeps its own deterministic ones (counters, accounted memory, flags,
+/// source hash, compiler version).
+pub(crate) fn keep_timing_of(m: &mut Measurement, old: &Measurement) {
+    m.runs = old.runs;
+    m.wall_ms_median = old.wall_ms_median;
+    m.wall_ms_min = old.wall_ms_min;
+    m.wall_ms_max = old.wall_ms_max;
+    m.spread_pct = old.spread_pct;
+    m.max_rss_kb = old.max_rss_kb;
 }
 
 /// Writes `<dir>/<stamp>.json`, adding `-1`, `-2`, ... if the name is taken.

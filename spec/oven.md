@@ -960,9 +960,39 @@ asks whether the evaluation is manifestly constant-evaluated.
   and the type table with its offset index, WP-642). `Oven::memory()`
   (WP-663, `-fkiln-memory-report`) splits the same total into rows
   `oven.code`, `oven.sites`, `oven.funcs`, `oven.thunks` (count = cached
-  thunks), `oven.globals`, `oven.mem` (count = the static top),
-  `oven.memo` and `oven.other`; their reserved bytes sum to
-  `footprint()` (tested).
+  thunks), `oven.globals`, `oven.mem.capacity` (abstract memory's
+  buffers and tables as held; count = the static top), `oven.memo` and
+  `oven.other`; their reserved bytes sum to `footprint()` (tested).
+- **Memory report: the Oven's peaks** (WP-1315). Two more rows count
+  abstract memory exactly, and the report's total counts them instead of
+  `oven.mem.capacity` (a `.capacity` row is shown for information and is
+  outside the total, spec/driver.md):
+  - `oven.heap-peak` (count, live and reserved = the bytes): the
+    translation unit's evaluation-memory high-water mark,
+    `Memory::heap_peak`, the most address space any evaluation held at
+    once, as `peak_arena` counts it (`frame.top + heap.top` plus the
+    reflection bytes), nested evaluations included. Memory a constant
+    evaluation frees again, or that is dropped when it ends, still
+    counts: it is the peak, not what is held when the report is taken.
+    It is kept as `Memory::arena_peak` is, and folded into a
+    translation-unit maximum when an evaluation context ends (the end of
+    the outermost one, `Memory::reset`; the end of a nested one, whose
+    peak is otherwise restored away; and the start of an outermost one),
+    so the VM's paths do nothing new. It never decreases.
+  - `oven.static-peak`: the static space's high-water mark
+    (`Memory::static_peak`, at least the static top).
+
+  Why not the buffers' capacity: `Space::grow` at least doubles a space,
+  so capacity moves in steps unrelated to the peak. In
+  `bench/oven/class-churn.cpp` scaled to N elements, the capacity row was
+  2.18 MB at N = 10000, 10200 and 10500 (peak +5%), 3.16 MB at 11000 and
+  2.51 MB at 15000 (not monotone), while `oven.heap-peak` is 680 472,
+  686 872, 696 472, 843 544 and 1 004 312 bytes: monotone and equal to
+  the evaluation's `peak_arena`. Tests: `mem.rs`
+  `heap_peak_is_the_tu_high_water_mark` (grows with what is held at once,
+  not with churn; not lowered by a free or a reset; deterministic) and
+  `kiln_driver/tests/driver.rs` `memory_report_oven_heap_peak` (the rows
+  and the total from the driver).
 
 ### Reporting protocol
 `-fconstexpr-report=<path>` makes the driver write one report per

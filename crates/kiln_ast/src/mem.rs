@@ -123,7 +123,9 @@ impl MemReport {
 
     /// Sum of `live_bytes` over rows that are not derived totals (rows
     /// whose name starts with `total` or `instantiation` are excluded, as
-    /// the latter is a subset of the others).
+    /// the latter is a subset of the others) or capacities shown for
+    /// information (names ending in `.capacity`: `oven.mem.capacity`,
+    /// whose bytes the exact `oven.*-peak` rows stand for).
     pub fn live_bytes(&self) -> u64 {
         self.rows.iter().filter(|r| !is_derived(&r.name)).map(|r| r.live_bytes).sum()
     }
@@ -135,7 +137,7 @@ impl MemReport {
 }
 
 fn is_derived(name: &str) -> bool {
-    name.starts_with("total") || name.starts_with("instantiation")
+    name.starts_with("total") || name.starts_with("instantiation") || name.ends_with(".capacity")
 }
 
 impl fmt::Display for MemReport {

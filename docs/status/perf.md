@@ -126,6 +126,99 @@ hand before 1.0 (WP-313 to WP-1171) are in
 [perf-history.md](perf-history.md); see perf-history.md for any section
 named "WP-NNN" that used to be on this page.
 
+## Accounted memory gate (WP-1315)
+
+The `frontend`, `oven`, `overload` and `reflect` groups record kiln's
+own `-fkiln-memory-report` total with each kiln baseline and gate it
+at 2% (spec/bench.md "Accounted memory"). The Oven's share is its exact
+high-water marks (`oven.heap-peak`, `oven.static-peak`), not its
+reserved buffer size.
+
+- Coverage: every entry of the four groups that runs at `-fsyntax-only`,
+  `-emit-llvm` or `-c`: frontend 18, oven 27, overload 4, reflect 10.
+  Not covered: `mode: pp` (`-E` prints no report) and `mode: run`.
+- Share of peak RSS the figure covers: 50% or more for 11 of 59
+  entries, 45-49% for 4, under 11% for the header-free `oven` entries;
+  the per-entry list is in spec/bench.md. It is an exact figure for
+  kiln's tables, not an RSS proxy.
+- Determinism: byte-identical over 10 runs of every entry and from a
+  second working directory; re-checked on the `oven` group after the
+  heap-peak change (26 of 26 identical).
+- Proportional: `oven/class-churn` scaled to n = 10000, 10500, 11000,
+  15000, 20000 and 100000 gives a heap peak of 680472, 696472, 843544,
+  1004312, 1360920 and 6648600 bytes, monotone and equal to the
+  `peak_arena` counter; the old reserved `oven.mem` row was flat from
+  10000 to 10500, +45% at 11000 and lower at 15000 than at 11000.
+- Re-record (11-11, 20:46-20:52 ET): one group at a time with the
+  release `kiln++` of the branch head (kiln 1.0.2), nothing else of
+  ours running; load average 8.6-10.2 from other containers. Time
+  spreads 0.2-12.6% (13 entries over 5%). New time and RSS values were
+  kept (not `--keep-timing`), because the old ones no longer reproduce
+  on this host whatever kiln does (next two points); each move past a
+  threshold is listed below.
+- Host, not kiln: the same `kiln++` takes 2.9 ms for `oven/fib` copied
+  to local disk and 16-19 ms run from the virtiofs workspace, where the
+  bench runs it; the old baselines had about 10 ms. So every short
+  entry is 10-12 ms slower (`oven` fib, builtins-*, churn-list,
+  churn-mixed, churn-tree, sieve-nohdr, sort-nohdr, trial-rollback,
+  virtual-dispatch +35-120%; `frontend` templates_deep, virtual-lattice
+  +13%).
+- Binary, not the entry: the peak RSS of a trivial compile went from
+  about 10 MB to 12 MB (main's own release binary measures the same),
+  so every small entry's RSS is 2-3 MB (+15-25%) higher.
+- Larger time moves with identical counters, not attributable at this
+  load without an A/B (follow-up): `oven` churn-vector +8.2%,
+  churn-string +7.7%, vector-alloc +11.9%, class-churn +19.4%, sort
+  +25.6%, string +16.7%, table +31.3%, table-nohdr +27.6%,
+  wide-struct-store +11.1%; `frontend` registration-wide-obj +9.1%,
+  templates_wide +8.3%, virtual-dtor-chain +11.0%; `reflect` s7 +6.7%
+  and s8 +39.9% (both advisory before: flags changed).
+- Real: `frontend/constant-table-emit` 498 -> 1231 ms (+147%, spread
+  0.2%, counters unchanged). `-ftime-trace` puts 1.15 s of 1.29 s in
+  `ParseDeclarationOrFunctionDefinition`, not the Oven (66 ms) or codegen.
+  Not bisected yet (follow-up: between 047c716a1 and fcd83a424).
+- Faster: `oven` inplace-alloc -46.7%, inplace-union -39.6%, time-trace
+  -12.8%; `frontend` accessor-wide-emit -18%, format-like-g -28%,
+  nested-template-ids -50%, templates -12.7%, templates-wide-g -19.8%;
+  `overload/calls` -31.8%. RSS fell for accessor-wide-emit -12.4%,
+  registration-wide-obj -6.8%, simd-generate -6.7%, format-like-g -4.2%.
+- Counter moves the re-record absorbs (the gates were advisory from the
+  1.0.0 version bump, e6199e693, until WP-1315; each bisected on release
+  builds):
+  - `frontend/nested-template-ids-dup` `inst.count` 1200 -> 2400 and
+    `evaluations` 400 -> 800, nodes and bytes unchanged: #521 (WP-1142,
+    021110f28) re-resolves a template-id where clang does
+    (`rerun_template_id_resolution`, crates/kiln_sema/src/overload/address.rs),
+    so `&f<^^T>` in an array initializer substitutes the explicit
+    arguments 9 times instead of 3 (the `default` row). Expected cost of
+    a conformance fix; the repeat is a memo candidate (follow-up). Time
+    -6.5%.
+  - `frontend/simd-generate` `inst.count` 106116 -> 212460, nodes +17%,
+    bytes +20%: #369 (WP-804, e7bb95dde) substitutes the explicit
+    arguments into a leading return type before the CWG1391 conversion
+    check, as clang does (crates/kiln_sema/src/templ/deduce_call.rs
+    "A call substitutes the leading return type too"): one more
+    substitution frame per candidate. Expected; time -1.2%, RSS -6.7%.
+  - `frontend/accessor-wide-emit` `steps` 222 -> 452 (+80% of a tiny
+    count), `calls` 105 -> 199, `bytes` +15.9%: #473 (WP-1109, class
+    triviality per eligible special member, [special]/6) for 244 -> 452,
+    #433 (WP-946, forbidden type definitions) for 222 -> 244; the
+    baseline's 251 was an older figure. Expected; time -18%, RSS -12%.
+  - `oven` inplace-alloc, inplace-union, sieve `static_bytes` +72 to
+    +120 (+4-5%): #417 (WP-948, fa3da210e) folds a const integral
+    initializer with the silent constant-init fold
+    (`Oven::fold_constant_init`), which places the variable in the
+    static region (24 bytes per `integral_constant<...>::value`); the
+    fold is not recorded, but the static high-water mark is. Expected.
+    The 20f2caa15 merge adds 8 more bytes (16 for the reflect shapes).
+  - `reflect/s8` `static_bytes` 32944 -> 38864 (+18%): not bisected
+    (follow-up). Ruled out so far: 047c716a1 has 28992, 3409a11e2 and
+    158e5bb9b 30304, b6fed6fa8 39312, so the main step is in
+    3409a11e2..b6fed6fa8 (11-09), first-parent.
+- New baselines (no kiln baseline before): `frontend`
+  expansion-giant-obj, expansion-outline-obj, reflection-mangle; `oven`
+  switch-dense; `reflect` s1-s6, s9, s10.
+
 ## 1.0 release measurements
 
 The 1.0 release candidate's bench run (WP-1239;

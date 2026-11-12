@@ -581,7 +581,7 @@ fn run_in(
 
     if opts.record {
         if opts.label.is_none() {
-            super::record_baselines(cx, &entries, &rec.test, &stamp, files)?;
+            super::record_baselines(cx, &entries, &rec.test, &stamp, opts.keep_timing, files)?;
         } else {
             println!("--label: the baselines are not recorded (a labelled run is not main's)");
         }
@@ -735,7 +735,7 @@ fn judge(
         }
     }
     for (r, e) in rows.iter_mut().zip(entries) {
-        r.drain(9..17);
+        r.drain(9..19);
         let (base_acct, acct) = accounted_cells(&files, e, test, &test_run.entries[&e.id]);
         let v = variant_of(&e.id);
         let judged = if v.accounted() {

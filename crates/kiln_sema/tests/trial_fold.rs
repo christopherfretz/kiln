@@ -909,13 +909,25 @@ fn member_reads_agree() {
 
 /// `Oven::memory` (`-fkiln-memory-report`) splits `Oven::footprint`
 /// into rows: their reserved bytes sum to it, before and after folds.
+/// The two exact peaks (`oven.heap-peak`, `oven.static-peak`, WP-1315)
+/// are extra rows, and the total counts them instead of the
+/// `oven.mem.capacity` row.
 #[test]
 fn oven_memory_rows_sum_to_footprint() {
     with_sema(|s, _| {
         let sum = |s: &Sema<'_, '_>| {
             let r = s.oven().memory();
             assert!(r.rows.iter().all(|row| row.name.starts_with("oven.")));
-            (r.reserved_bytes(), s.oven().footprint() as u64)
+            let row = |n: &str| r.row(n).map_or(0, |x| x.reserved_bytes);
+            let held: u64 = r
+                .rows
+                .iter()
+                .filter(|x| !x.name.ends_with("-peak"))
+                .map(|x| x.reserved_bytes)
+                .sum();
+            let peaks = row("oven.heap-peak") + row("oven.static-peak");
+            assert_eq!(r.reserved_bytes(), held - row("oven.mem.capacity") + peaks);
+            (held, s.oven().footprint() as u64)
         };
         let (a, b) = sum(s);
         assert_eq!(a, b);

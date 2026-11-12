@@ -4,6 +4,7 @@
 use std::fmt::Write as _;
 
 use super::record::{Baseline, InstCounters, Measurement};
+use crate::util::CompilerKind;
 use crate::util::header::Counter;
 
 /// Regression thresholds in percent.
@@ -104,6 +105,17 @@ impl Verdict {
 /// the operator; no noise allowance, since the figure is deterministic).
 pub const ACCT_PCT: f64 = 2.0;
 
+/// Whether both sides are kiln. kiln is judged against its own past whatever
+/// its version string says (spec/bench.md "Regression policy"): a release
+/// bump must not silence every gate, as 1.0.0 did (WP-1315). The version is
+/// still recorded.
+fn kiln_and_kiln(b: &Measurement, cur: &Measurement) -> bool {
+    let kiln = |m: &Measurement| {
+        CompilerKind::from_version_line(&m.compiler_version) == CompilerKind::Kiln
+    };
+    kiln(b) && kiln(cur)
+}
+
 /// Percentage change from `base` to `cur`.
 pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
     (base > 0.0).then(|| (cur - base) / base * 100.0)
@@ -112,7 +124,8 @@ pub fn delta_pct(base: f64, cur: f64) -> Option<f64> {
 /// Applies the regression policy:
 ///
 /// - Only comparable measurements are judged: same mode, flags, source,
-///   compiler version and host. Otherwise the verdict is `Advisory`.
+///   compiler version (any two kiln versions count as the same compiler)
+///   and host. Otherwise the verdict is `Advisory`.
 /// - Time regresses when even the **fastest** current run is slower than the
 ///   baseline's **median** by more than `time_pct` (and by at least
 ///   [`TIME_FLOOR_MS`]). Host noise only ever adds time, so a load spike moves
@@ -143,7 +156,7 @@ pub fn judge(base: Option<&Baseline>, cur: &Measurement, t: Thresholds) -> Verdi
         Some("flags changed since the baseline".to_owned())
     } else if b.source_hash != cur.source_hash {
         Some("entry source changed since the baseline".to_owned())
-    } else if b.compiler_version != cur.compiler_version {
+    } else if b.compiler_version != cur.compiler_version && !kiln_and_kiln(b, cur) {
         Some(format!("compiler changed (`{}` -> `{}`)", b.compiler_version, cur.compiler_version))
     } else if b.host != cur.host {
         Some(format!(
@@ -275,6 +288,41 @@ pub fn mb(kb: Option<u64>) -> String {
 
 pub fn pct(p: Option<f64>) -> String {
     p.map_or_else(|| "-".to_owned(), |p| format!("{p:+.1}%"))
+}
+
+/// kiln's accounted memory (reserved bytes) in MiB, two decimals: the
+/// gate is 2%, so a tenth of a MiB is too coarse for the small entries.
+#[allow(clippy::cast_precision_loss)]
+pub fn acct_mb(bytes: u64) -> String {
+    format!("{:.2}", bytes as f64 / f64::from(1u32 << 20))
+}
+
+/// The `judged` cell of a report row: the gates verdict `v` applied to
+/// `cur` against `base` and their thresholds (`time 5%, rss 2%, steps
+/// 0%, bytes 2%, inst, acct 2%`), or why none applied (`new`,
+/// `advisory`). A gate is listed only when both sides have its figure,
+/// as [`judge`] requires.
+pub fn judged(base: Option<&Measurement>, cur: &Measurement, t: Thresholds, v: &Verdict) -> String {
+    let Some(b) = base.filter(|_| !matches!(v, Verdict::New | Verdict::Advisory(_))) else {
+        return match v {
+            Verdict::Advisory(_) => "advisory".to_owned(),
+            _ => "new".to_owned(),
+        };
+    };
+    let mut on = vec![format!("time {}%", t.time_pct)];
+    if b.max_rss_kb.is_some() && cur.max_rss_kb.is_some() {
+        on.push(format!("rss {}%", t.mem_pct));
+    }
+    if b.oven.is_some() && cur.oven.is_some() {
+        on.push(format!("steps {}%, bytes {}%", t.steps_pct, t.bytes_pct));
+    }
+    if b.inst.is_some() && cur.inst.is_some() {
+        on.push("inst".to_owned());
+    }
+    if b.accounted.is_some() && cur.accounted.is_some() {
+        on.push(format!("acct {ACCT_PCT}%"));
+    }
+    on.join(", ")
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -613,6 +661,23 @@ mod tests {
         assert!(
             matches!(judge(Some(&b), &c, T), Verdict::Advisory(w) if w.contains("clang version 22"))
         );
+        // kiln against an older kiln: a version bump alone keeps the gates on
+        // (WP-1315); kiln against another compiler, or a kiln baseline with
+        // other flags, stays advisory.
+        let mut kb = b.clone();
+        kb.measurement.compiler_version = "kiln version 0.0.1 (C++26 frontend)".into();
+        let mut c = with(5000.0, 5000.0, Some(100_000));
+        c.compiler_version = "kiln version 1.0.1 (C++26 frontend)".into();
+        assert_eq!(judge(Some(&kb), &c, T), reg(true, false));
+        assert!(
+            matches!(judge(Some(&b), &c, T), Verdict::Advisory(w) if w.contains("compiler changed"))
+        );
+        c.flags.push_str(" -O2");
+        assert!(matches!(judge(Some(&kb), &c, T), Verdict::Advisory(w) if w.contains("flags")));
+        let mut c = with(5000.0, 5000.0, Some(100_000));
+        c.compiler_version = "kiln version 1.0.1 (C++26 frontend)".into();
+        c.host = Host { arch: "x86_64".into(), cpus: 8 };
+        assert!(matches!(judge(Some(&kb), &c, T), Verdict::Advisory(w) if w.contains("x86_64")));
         let mut c = with(5000.0, 5000.0, Some(100_000));
         c.host = Host { arch: "x86_64".into(), cpus: 8 };
         assert!(matches!(judge(Some(&b), &c, T), Verdict::Advisory(w) if w.contains("x86_64")));

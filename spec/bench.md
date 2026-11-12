@@ -20,6 +20,7 @@ cargo xtask bench [options] [paths...]
 | `--record` | Write the measurements as the new baselines (see "Recording"). With `--compare-with`, also merge the ratio table into `docs/status/perf.md`. |
 | `--compare-with <path>` | Also measure this compiler on the same entries and print the ratio table: `clang++-22` (the libc++ slice's oracle, the M4 reference), or `clang++-19` for the history of `docs/status/perf.md`. |
 | `--filter <substr>` | Keep only entries whose id (`<group>/<name>`) contains `<substr>`. |
+| `--keep-timing` | With `--record` only (a usage error otherwise): an entry that already has a baseline of the same compiler kind keeps that baseline's `runs`, `wall_ms_*`, `spread_pct` and `max_rss_kb`; everything else (counters, `accounted`, flags, source hash, version) is re-recorded. For a host too loaded for a trustworthy time baseline (see "Recording"). |
 | `--label <name>` | `bench/pch` only: with `--record`, write region `<name>` of `docs/status/pch.md` and no baselines ("The pch group"). Default `main`; `--label main` is a usage error, since only `--record` without `--label` writes that region (with the baselines). |
 | `--runs <N>` | Runs per entry, N >= 1. Default 5. |
 | `--threshold-time <PCT>` | Allowed wall-clock regression, percent, >= 0. Default 5. |
@@ -245,11 +246,8 @@ declaration image") against clang's on fixed header sets
   - Peak RSS, every variant: 5% (`pch::MEM_PCT`), not 2%. Identical
     recordings differ by up to 2.5% (`gnu/build`, 86 MB). `--threshold-mem`
     overrides it, and governs RSS only.
-  - Accounted memory, `none` variants only: `accounted.reserved` regresses
-    when it grows by more than 2% (`compare::ACCT_PCT`), whatever the
-    options. `reserved` is judged, not `live`: it is the capacity of
-    tables that only grow, so it is a high-water mark, while `live` is
-    what the tables hold when the report is taken. A baseline without
+  - Accounted memory, `none` variants only, as in "Regression policy"
+    ("Accounted memory"): 2% on `accounted.reserved`. A baseline without
     `accounted` is not judged on it, and the next `--record` adds it.
   - Why the `none` variants get a second metric (WP-1303). They show that
     the PCH machinery costs ordinary builds nothing, so a regression there
@@ -446,6 +444,45 @@ the fixed 300 s timeout) fails the entry, and its remaining runs are skipped.
   of the recorded `flags`, so adding them made no baseline advisory. The
   report's timing costs two clock reads per instantiation frame, which is
   inside the wall-clock noise of every frontend entry.
+- **Accounted memory** (kiln only; entries of `frontend`, `oven`,
+  `overload` and `reflect`, `bench::ACCT_GROUPS`; modes `syntax`,
+  `emit-llvm` and `obj`; WP-1315): after the measured runs, one more
+  compile of the same flags, unmeasured, adds `-fkiln-memory-report`
+  before the input (spec/driver.md). Its last `memory: total live=N
+  reserved=N` line is recorded as `accounted`. A failed compile or a
+  missing or malformed line fails the entry
+  (`-fkiln-memory-report: <why>`). The measured runs never carry the
+  flag, so their time, RSS and counters are as before. `mode: pp` has no
+  report (`-E` prints none; a follow-up) and `mode: run` measures the
+  program, so neither records it; nor do the other groups (the libc++
+  slice is record-only; the pch group records its own, "The pch group").
+  What the figure is:
+  - kiln's own tables: the AST, the type context, sema's tables and the
+    Oven's, by capacity, with the Oven's abstract memory counted by its
+    exact high-water marks (`oven.heap-peak`, `oven.static-peak`;
+    spec/oven.md "Memory report"). So evaluation memory that is freed
+    again before the report is taken still counts, as its peak.
+  - Not the process: no allocator overhead, no binary or stacks, no
+    LLVM. At `-fsyntax-only` the kiln binary alone is about 15 MiB of
+    RSS, so the share of the peak RSS the figure covers is small for
+    small entries. Measured in WP-1315 (accounted reserved over the
+    median peak RSS of the 11-12 re-record) it covers 50% or more of the
+    RSS for 11 of the 59 entries: `frontend` simd-generate, trial-folds,
+    templates and templates_wide (59-72%), `reflect` s1, s2, s3, s4, s7
+    and s8 (50-70%), and `overload/arrow-chain` (113%: reserved counts
+    capacity that was never touched). Just under (45-49%):
+    `frontend/constant-table-emit`, `reflect` s5 and s6, `oven/vector-alloc`.
+    The rest is lower: the other `-g`, `-emit` and `-obj` `frontend`
+    entries at 15-37% (registration-wide-obj 17%), `oven` string, sort,
+    wide-struct-*, inplace-*, table and sieve at 23-37%, `overload`
+    calls, ctors and less-10k at 17-35%, and the header-free `oven` entries, `reflect` s9/s10,
+    `frontend` nested-template-ids(-dup), templates_deep, reflection-mangle
+    and the virtual-lattice entries at 0-11%. It is judged on those
+    entries all the same, because it is exact: it is not a proxy for RSS
+    there, and an RSS regression outside kiln's tables shows only in the
+    RSS gate.
+  - Deterministic: byte-identical over 10 runs of every entry and from a
+    second working directory with an absolute input path (WP-1315).
 
 ## Regression policy
 
@@ -456,11 +493,12 @@ same compiler kind** (`kiln`, `clang` or `other`, from the first line of
 | Verdict | When | Fails? |
 |---|---|---|
 | `new` | No baseline for this entry and kind. | no |
-| `advisory` | The baseline differs in mode, flags, source hash, compiler version (first `--version` line), or host (arch, CPU count). Deltas are printed but not judged. | no |
+| `advisory` | The baseline differs in mode, flags, source hash, compiler version (first `--version` line), or host (arch, CPU count). Two kiln versions count as the same compiler (below). Deltas are printed but not judged. | no |
 | `REGRESSED (time)` | `cur.min > base.median * (1 + t)` and `cur.min - base.median >= 2 ms`. | yes, unless `--record` |
 | `REGRESSED (mem)` | `cur.rss > base.rss * (1 + m)`, both sides measured. | yes, unless `--record` |
 | `REGRESSED (steps)` | `cur.steps > base.steps * (1 + s)`, both sides have counters. | yes, unless `--record` |
 | `REGRESSED (bytes)` | `cur.bytes > base.bytes * (1 + b)` or the same for `peak_bytes`, `peak_arena`, `frozen_bytes` or `static_bytes`, both sides have counters. A key the baseline lacks (`peak_arena` and `frozen_bytes` in a baseline recorded before WP-061b, `static_bytes` before WP-322) is not judged. | yes, unless `--record` |
+| `REGRESSED (accounted)` | `cur.accounted.reserved > base.accounted.reserved * 1.02` (`compare::ACCT_PCT`, whatever the options), both sides have it. A baseline without `accounted` is not judged on it. | yes, unless `--record` |
 | `REGRESSED (inst)` | `cur.inst.count > base.inst.count` (exact, whatever the thresholds), or `cur.inst.bytes > base.inst.bytes * (1 + b)`, both sides have instantiation counters. A baseline recorded before WP-086 has none and is not judged on them. | yes, unless `--record` |
 | `improved` | `cur.median < base.min * (1 - t)` and `base.min - cur.median >= 2 ms`, or `cur.rss < base.rss * (1 - m)`, or a counter below its baseline by the same rules. | no |
 | `ok` | Anything else. | no |
@@ -485,6 +523,35 @@ not.
 
 An improvement is a hint to re-record, never a failure.
 
+**kiln against its own past.** A baseline is a regression reference for
+kiln across its releases, so kiln's version string never makes a kiln
+comparison advisory: `kiln version 0.0.1` against `kiln version 1.0.1` is
+judged (it is still recorded, for information). Before WP-1315 it was
+compared like any other compiler's, and the 1.0.0 version bump (WP-1202) made every
+`frontend`, `oven`, `overload`, `reflect`, `pp` and `runtime` baseline
+advisory, so for those groups no gate judged anything from then until
+they were re-recorded. Another compiler kind, or another clang or GCC
+version, is still advisory, as are another mode, flags, source or host.
+
+**Accounted memory.** Every entry that records `accounted` ("Measurement")
+is judged on `accounted.reserved` at 2% (`compare::ACCT_PCT`), whatever
+`--threshold-*` says: the figure is deterministic, so it needs no noise
+allowance, and `--threshold-mem` governs RSS only. `reserved` is judged,
+not `live`: it is the capacity of tables that only grow, plus the Oven's
+exact peaks, so it is a high-water mark, while `live` is what the tables
+hold when the report is taken. It complements peak RSS rather than
+replacing it: RSS moves 2-6% between identical runs on this host (WP-1303;
+transparent huge pages suspected), and in `obj` mode the largest process
+of the compile can be `llc`, not kiln, so a kiln regression smaller than
+that difference does not show in RSS. The Oven's transient memory is
+judged twice: exactly per evaluation by the constexpr counters
+(`peak_bytes`, `peak_arena`, at `--threshold-bytes`), and for the
+translation unit by `oven.heap-peak` in the accounted total. The printed
+table has `acct MB` (reserved bytes, MiB) and `acct±` columns when some
+entry has the figure, and every judged row a `judged` cell naming the
+gates that applied and their thresholds (`time 5%, rss 2%, steps 0%,
+bytes 2%, inst, acct 2%`), or `new` or `advisory`.
+
 The libc++ slice is record-only: its entries get no verdict (see "The
 libcxx-slice entry").
 
@@ -495,7 +562,11 @@ libcxx-slice entry").
 previous baseline for the entry and keeping every other entry and kind. Failed
 entries are not recorded (their old baseline stays). Only the compiler under
 test is recorded, not the `--compare-with` oracle. Regressions are reported
-but do not fail a recording run; failures still do.
+but do not fail a recording run; failures still do. With `--keep-timing`
+the time and RSS figures of an entry that already had a baseline are kept and
+only the deterministic ones are replaced: a re-record on a loaded host (judged
+by the run-to-run spread of the time samples, not by the load average alone)
+must not loosen a time or RSS baseline (WP-1315).
 
 Baselines are committed. Re-record when an intended change moves the numbers,
 when the reference compiler changes, or when the comparison has gone advisory.
@@ -617,7 +688,7 @@ A **measurement** object:
 | Key | Type | Meaning |
 |---|---|---|
 | `mode` | string | `syntax`, `pp`, `emit-llvm`, `obj` or `run` |
-| `flags` | string | Flags between the compiler and the file name, space-joined |
+| `flags` | string | Flags between the compiler and the file name, space-joined. A `--gcc-toolchain=` value (the reflection shapes pass one, an absolute path on this machine) is written `--gcc-toolchain=<gcc-toolchain>`, so the record does not depend on where the toolchain lives (WP-1315) |
 | `source_hash` | string | `fnv1a64:<16 hex digits>` of the entry file's bytes (followed by the generated source for a `generate:` entry) |
 | `runs` | integer | N |
 | `wall_ms_median`, `wall_ms_min`, `wall_ms_max` | number | Milliseconds (µs precision) |
@@ -625,6 +696,7 @@ A **measurement** object:
 | `max_rss_kb` | integer or null | Median peak RSS, KiB; null when not measured |
 | `oven` | object, optional | kiln's constexpr report total: `{"steps", "bytes", "peak_bytes", "calls", "allocs", "peak_arena", "frozen_bytes", "static_bytes", "evaluations"}`, integers. `peak_arena` and `frozen_bytes` may be absent (baselines recorded before WP-061b), and `static_bytes` (before WP-322); a missing one is not compared, and is not written back when the entry is not re-recorded. Absent when the compiler reported none. |
 | `inst` | object, optional | kiln's instantiation report totals (`frontend` entries): `{"count", "nodes", "bytes"}`, integers. Absent for other entries and compilers, and in baselines recorded before WP-086 (not compared then). |
+| `accounted` | object, optional | kiln's accounted memory, the total line of `-fkiln-memory-report` ("Measurement"): `{"live", "reserved"}`, integers. Kiln entries of `frontend`, `oven`, `overload` and `reflect`, and the pch group's `none` variants, have it. Absent for other entries and compilers, and in baselines recorded before WP-1303/WP-1315 (not compared then). |
 | `samples_wall_ms`, `samples_rss_kb` | arrays | Every run, in run order (results files only) |
 | `compiler` | string | The path or name the compiler was invoked as |
 | `compiler_version` | string | First line of `--version` |
