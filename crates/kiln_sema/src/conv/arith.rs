@@ -141,16 +141,17 @@ fn check_enum_operands(
             return Ok(None);
         }
         // clang `checkEnumArithmeticConversions`: an enumeration without a
-        // name for linkage on either side has its own group.
+        // name for linkage on either side has its own group, whatever the
+        // operator.
         let named = |q: QualType| {
             s.ast.types.as_enum(q).is_some_and(|d| {
                 !s.ast.decls.get(d).name().is_empty() || s.ast.decls.typedef_for_anon(d).is_some()
             })
         };
         let id = match kind {
+            _ if !named(lt0) || !named(rt0) => DiagId::sema_arith_anon_enum_enum_deprecated,
             ArithConvKind::Comparison => DiagId::sema_compare_enum_enum_deprecated,
             ArithConvKind::Conditional => DiagId::sema_conditional_enum_enum_deprecated,
-            _ if !named(lt0) || !named(rt0) => DiagId::sema_arith_anon_enum_enum_deprecated,
             _ => DiagId::sema_arith_enum_enum_deprecated,
         };
         return Ok(Some(ConvError::new(id, args)));

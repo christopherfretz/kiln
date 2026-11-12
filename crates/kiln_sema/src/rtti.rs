@@ -1,9 +1,9 @@
 //! Run-time type identification: `typeid` ([expr.typeid]; spec/sema.md
-//! §5.6). Kiln checks and builds the expression; the Oven and codegen do
-//! not evaluate it yet.
+//! §5.6). Kiln checks and builds the expression; codegen and the Oven
+//! evaluate an operand that is a glvalue of polymorphic class type.
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
-use kiln_ast::expr::{CastKind, TypeidOperand};
+use kiln_ast::expr::{CastKind, ExprKind, TypeidOperand};
 use kiln_ast::types::{Nns, Quals, TagKeyword, TypeKind};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
@@ -42,9 +42,9 @@ impl Sema<'_, '_> {
     ///   `err_incomplete_typeid` at the `typeid` keyword).
     ///
     /// An expression operand is evaluated only if it is a glvalue of
-    /// polymorphic class type ([expr.typeid]/3). Its names were still
-    /// checked as an unevaluated operand (clang re-transforms it; a
-    /// known deviation, spec/sema-class.md §8).
+    /// polymorphic class type ([expr.typeid]/3). It was parsed as an
+    /// unevaluated operand, as clang's; an evaluated one is then made
+    /// potentially evaluated ([`Sema::mark_typeid_operand_evaluated`]).
     pub fn act_on_typeid(
         &mut self,
         operand: Result<ExprId, QualType>,
@@ -90,6 +90,7 @@ impl Sema<'_, '_> {
             && evaluated
         {
             self.check_typeid_side_effects(e);
+            self.mark_typeid_operand_evaluated(e);
         }
         let operand = match operand {
             Ok(e) if !self.ast.types.effective_quals(written).is_empty() => {
@@ -128,6 +129,47 @@ impl Sema<'_, '_> {
         self.ast.definition(r).is_none()
             && self.ast.described_template(r).is_none()
             && self.ast.spec_info(r).is_none()
+    }
+
+    /// The operand `e` of `typeid`, parsed (or substituted) as an
+    /// unevaluated operand, turned out to be a glvalue of polymorphic
+    /// class type: it is potentially evaluated ([expr.typeid]/3), so
+    /// what it names is odr-used ([basic.def.odr]/4-5) and its
+    /// temporaries belong to the enclosing full-expression. clang
+    /// re-transforms the operand (`TransformToPotentiallyEvaluated`);
+    /// kiln keeps the nodes: its names outside nested unevaluated
+    /// operands and lambda bodies lose `non_odr_use_unevaluated`, and
+    /// then the operand is marked as a template instantiation marks an
+    /// expression it shares with its pattern
+    /// ([`Sema::mark_shared_expr_referenced`],
+    /// [`Sema::note_shared_temporaries`]): the functions it calls are
+    /// defined or instantiated, and its variables decided at the end of
+    /// the full-expression. Inside a template definition or another
+    /// unevaluated operand only the flags change (WP-1322: a member
+    /// `operator*` used in `typeid(*p)` was never instantiated).
+    fn mark_typeid_operand_evaluated(&mut self, e: ExprId) {
+        let mut stack = self.take_walk_stack(e);
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::ExpressionTraitExpr
+                | ExprKind::RequiresExpr
+                | ExprKind::ConceptSpecializationExpr
+                | ExprKind::LambdaExpr => continue,
+                ExprKind::CXXTypeidExpr if !self.ast.exprs.typeid_potentially_evaluated(x) => {
+                    continue;
+                }
+                ExprKind::DeclRefExpr | ExprKind::MemberExpr => {
+                    self.ast.exprs.clear_unevaluated_non_odr_use(x);
+                }
+                _ => {}
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+        self.put_walk_stack(stack);
+        self.mark_shared_expr_referenced(e);
+        self.note_shared_temporaries(e);
     }
 
     /// Whether `e` is a glvalue of (possibly cv-qualified) polymorphic

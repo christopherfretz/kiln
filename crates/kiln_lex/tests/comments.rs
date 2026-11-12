@@ -51,6 +51,17 @@ fn lex_comment_line_spliced() {
     assert_eq!(l.diags.iter().map(|d| d.0).collect::<Vec<_>>(), [D::MultiLineLineComment]);
 }
 
+/// clang's exemption: no warning when the spliced-in line is itself a `//`
+/// comment, indented or not (a backslash ending a comment-block diagram).
+#[test]
+fn lex_comment_line_spliced_into_comment() {
+    for src in ["// a \\\n// b\nc\n", "  // a \\\n  // b\nc\n", "// a \\\n\t// b\nc\n"] {
+        let l = lex(src);
+        assert_eq!(l.spellings, ["c"], "{src:?}");
+        assert!(l.diags.is_empty(), "{src:?}: {:?}", l.diags);
+    }
+}
+
 /// [lex.comment]: unterminated block comment runs to end of file.
 #[test]
 fn lex_comment_unterminated() {

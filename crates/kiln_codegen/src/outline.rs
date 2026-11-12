@@ -456,7 +456,7 @@ impl Cg<'_> {
             let Some(d) = decl else {
                 return crate::module::err(loc, "outlined statements outside a function");
             };
-            self.pending.push((f, d, fir));
+            self.defer_body(f, d, fir);
             return Ok(noreturn);
         }
         if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {

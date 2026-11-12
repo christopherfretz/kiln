@@ -1,0 +1,35 @@
+TranslationUnitDecl
+|-NamespaceDecl std
+| `-CXXRecordDecl referenced class type_info
+|-CXXRecordDecl referenced struct B definition
+| `-CXXMethodDecl v 'void ()' virtual
+|-CXXRecordDecl referenced struct N definition
+| `-FieldDecl x 'int'
+|-FunctionDecl used pb 'B &(int)'
+| `-ParmVarDecl 'int'
+|-FunctionDecl referenced pn 'N &(int)'
+| `-ParmVarDecl 'int'
+|-VarDecl referenced k 'int'
+|-FunctionDecl f 'const std::type_info &()'
+| `-CompoundStmt
+|   `-ReturnStmt
+|     `-CXXTypeidExpr 'const std::type_info' lvalue
+|       `-CallExpr 'B' lvalue
+|         |-ImplicitCastExpr 'B &(*)(int)' <FunctionToPointerDecay>
+|         | `-DeclRefExpr 'B &(int)' lvalue Function 'pb' 'B &(int)'
+|         `-ImplicitCastExpr 'int' <IntegralCast>
+|           `-CXXNoexceptExpr 'bool'
+|             `-CallExpr 'N' lvalue
+|               |-ImplicitCastExpr 'N &(*)(int)' <FunctionToPointerDecay>
+|               | `-DeclRefExpr 'N &(int)' lvalue Function 'pn' 'N &(int)' non_odr_use_unevaluated
+|               `-ImplicitCastExpr 'int' <LValueToRValue>
+|                 `-DeclRefExpr 'int' lvalue Var 'k' 'int' non_odr_use_unevaluated
+`-FunctionDecl g 'const std::type_info &()'
+  `-CompoundStmt
+    `-ReturnStmt
+      `-CXXTypeidExpr 'const std::type_info' lvalue
+        `-CallExpr 'N' lvalue
+          |-ImplicitCastExpr 'N &(*)(int)' <FunctionToPointerDecay>
+          | `-DeclRefExpr 'N &(int)' lvalue Function 'pn' 'N &(int)' non_odr_use_unevaluated
+          `-ImplicitCastExpr 'int' <LValueToRValue>
+            `-DeclRefExpr 'int' lvalue Var 'k' 'int' non_odr_use_unevaluated

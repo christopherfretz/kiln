@@ -967,13 +967,21 @@ impl Cg<'_> {
         }
         if self.f.uses_ph {
             let fir = std::mem::replace(&mut self.f.fir, Fir::new(Vec::new()));
-            self.pending.push((f, d, fir));
+            self.defer_body(f, d, fir);
             return Ok(());
         }
         if let Err(e) = self.f.fir.lower(&mut self.m, f, &self.phs) {
             return err(Some(ast.decls.get(d).loc()), format!("IR lowering failed: {e:?}"));
         }
         Ok(())
+    }
+
+    /// Queues the body `fir` of `f` (definition `d`) for
+    /// [`Self::resolve_placeholders`]. `f` counts as defined meanwhile, so
+    /// nothing emits its definition again.
+    pub(crate) fn defer_body(&mut self, f: FuncId, d: DeclId, fir: Fir) {
+        self.m.func_mut(f).set_body_pending(true);
+        self.pending.push((f, d, fir));
     }
 
     /// Declares the complete-object structors still unresolved (used but
@@ -990,6 +998,7 @@ impl Cg<'_> {
             }
         }
         for (f, d, fir) in std::mem::take(&mut self.pending) {
+            self.m.func_mut(f).set_body_pending(false);
             if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {
                 return err(
                     Some(self.ast.decls.get(d).loc()),

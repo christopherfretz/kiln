@@ -317,6 +317,19 @@ impl Sema<'_, '_> {
         self.inst.concepts.sat(id).ok
     }
 
+    /// The function whose constraints `entity` holds: `entity` itself, or a
+    /// function template's pattern. Its constraints are checked from the
+    /// function (clang `CheckFunctionConstraints`), so its access as a
+    /// member or friend applies: a hidden friend's requires-clause may name
+    /// a private member (an iterator adaptor's hidden-friend
+    /// `operator-`). Lookup is unaffected: a function adds no scope.
+    fn constrained_function(&self, entity: DeclId) -> Option<DeclId> {
+        match self.ast.template_info(entity) {
+            Some(info) => info.pattern.filter(|&p| self.ast.decls.function(p).is_some()),
+            None => self.ast.decls.function(entity).is_some().then_some(entity),
+        }
+    }
+
     /// Checks `exprs` in order under a `ConstraintsCheck` frame.
     fn satisfy(
         &mut self,
@@ -340,8 +353,16 @@ impl Sema<'_, '_> {
         // ([temp.constr.atomic]/3 substitutes into the template's
         // expression; [temp.dep.candidate]): libc++'s
         // `__unqualified_swappable_with` must see its poison-pill `swap`
-        // when `swappable<T>` is checked from inside namespace std.
-        let ctx = self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu);
+        // when `swappable<T>` is checked from inside namespace std. A
+        // function's are checked from the function itself
+        // ([`Sema::constrained_function`]).
+        let func = self.constrained_function(entity);
+        let ctx = func.unwrap_or_else(|| self.ast.decls.get(entity).ctx().unwrap_or(self.ast.tu));
+        // With concrete arguments that substitution is final: the
+        // function is no dependent context for the source-location
+        // builtins in it ([`Sema::srcloc_ctx`]).
+        let final_fn = func.filter(|_| !self.levels_dependent(levels));
+        let srcloc = std::mem::replace(&mut self.srcloc.satisfying, final_fn.map(|f| (f, None)));
         // Satisfaction checks access also while an explicit
         // specialization's candidates are deduced (clang 22, §6.9).
         let suppress = self.inst.suppress_access.replace(false);
@@ -357,6 +378,7 @@ impl Sema<'_, '_> {
             (ok, records)
         });
         self.inst.suppress_access.set(suppress);
+        self.srcloc.satisfying = srcloc;
         self.pop_inst_frame();
         if ok {
             records.clear();
@@ -534,12 +556,13 @@ impl Sema<'_, '_> {
         // not from where satisfaction is checked ([temp.point]/1,
         // [temp.dep.candidate]): `swap(a, b)` in libc++'s
         // `ranges::__swap` concepts must find the deleted poison pill, not
-        // `std::swap`, when checked from namespace `std`.
+        // `std::swap`, when checked from namespace `std`. A function's are
+        // looked up there too, but from the function itself (its access).
         let r = match self.ast.decls.get(entity).ctx() {
             Some(c)
                 if this_ty.is_none() && self.kind_of(c) == kiln_ast::decl::DeclKind::Namespace =>
             {
-                self.in_inst_context(c, run)
+                self.in_inst_context(self.constrained_function(entity).unwrap_or(c), run)
             }
             _ => run(self),
         };

@@ -918,6 +918,18 @@ a regular call to this operator and a call with the argument order
 reversed" + (non-const member only) "mark 'operator==' as const or add a
 matching 'operator!=' to resolve the ambiguity".
 
+The tie is ill-formed C++20 that clang and GCC accept only outside SFINAE:
+the warning is one of clang's `SFINAEFailure` ExtWarns
+(`ext_ovl_ambiguous_oper_binary_reversed`; kiln's `is_sfinae_failure`,
+spec/sema-templates.md §5.7), so in a requires-expression, a concept's
+atomic constraint, `decltype` in a signature or a default template argument
+the use is a substitution failure, also under
+`-Wno-ambiguous-reversed-operator` (WP-1322,
+`tests/conformance/over.match.oper/reversed-tie-sfinae-run.cpp`). GCC 16.1
+also accepts it outside SFINAE with a warning of its own ("C++20 says that
+these are ambiguous, even though the second is reversed") and rejects it in
+SFINAE.
+
 ## 6. Operator overloading semantics
 
 ### 6.1 Declarations ([over.oper], `check_operator_decl`)

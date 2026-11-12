@@ -35,6 +35,8 @@ Releases:
   release-archive gate (WP-1202).
 - `release-1.0.1.md`: the 1.0.1 release gate, run with the commands of
   `release-1.0.md` against its 1.0.0 results.
+- `release-1.0.2.md`: the 1.0.2 release gate, run with the same commands
+  against the 1.0.1 results.
 
 Standard libraries:
 

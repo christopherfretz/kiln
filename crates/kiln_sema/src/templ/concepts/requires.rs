@@ -157,6 +157,15 @@ impl Substituter<'_, '_, '_> {
         // The requirements are unevaluated operands
         // ([expr.prim.req.general]/2), as in `act_on_requires_expr_start`.
         self.sema.enter_unevaluated();
+        // Checking a function's constraints from the function, the
+        // requirements' source-location builtins are in the body
+        // ([`Sema::srcloc_ctx`]).
+        let srcloc = self.sema.srcloc.satisfying;
+        if let Some((f, _)) = srcloc
+            && f == self.sema.ctx
+        {
+            self.sema.srcloc.satisfying = Some((f, Some(rq.body)));
+        }
         let (new_params, mut ok) = self.requires_params(rq.body, &params, &mut recs);
         // A requirement left dependent (it names a retained level, §7.2)
         // is not checked: the requires-expression stays dependent with
@@ -188,6 +197,7 @@ impl Substituter<'_, '_, '_> {
             }
         }
         self.sema.exit_unevaluated();
+        self.sema.srcloc.satisfying = srcloc;
         if ok && (dependent || pending) {
             let x = self.sema.builder().requires_expr(
                 rq.body,

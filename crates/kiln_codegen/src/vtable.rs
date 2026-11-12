@@ -1493,7 +1493,7 @@ impl Cg<'_> {
         self.f = saved;
         r?;
         if uses_ph {
-            self.pending.push((f, d, fir));
+            self.defer_body(f, d, fir);
         } else if let Err(e) = fir.lower(&mut self.m, f, &self.phs) {
             return err(loc, format!("IR lowering failed: {e:?}"));
         }

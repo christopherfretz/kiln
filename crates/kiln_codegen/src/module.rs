@@ -879,6 +879,15 @@ impl<'a> Cg<'a> {
         // each definition to `HandleTopLevelDecl`).
         let explicit = self.class_explicit_inst_kind(ast.first(d))
             == Some(SpecKind::ExplicitInstantiationDefinition);
+        // clang `EmitTopLevelDecl(ClassTemplateSpecialization)`: only the
+        // specialization named by the explicit instantiation, not its
+        // member classes.
+        if ast
+            .spec_info(ast.first(d))
+            .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDefinition)
+        {
+            self.di_complete_template_definition(d);
+        }
         if explicit && self.is_dynamic(d) && self.vtable_explicit_inst_kind(ast.first(d)).is_some()
         {
             self.explicit_vtables.push(ast.first(d));
@@ -1396,8 +1405,21 @@ impl<'a> Cg<'a> {
     /// clang `GVA_AvailableExternally`: `first` is under an explicit
     /// instantiation declaration or is a GNU inline function, so the
     /// program's definition lives in another translation unit.
+    ///
+    /// A function explicitly defaulted on its first declaration is not
+    /// instantiated but implicitly defined where it is odr-used
+    /// ([dcl.fct.def.default]/5), so the explicit instantiation does not
+    /// provide it (libstdc++'s `extern template class
+    /// __shared_ptr<filesystem::_Dir>` does not export `__shared_ptr(const
+    /// __shared_ptr&) = default`).
     fn defined_elsewhere(&self, first: DeclId) -> bool {
-        self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration)
+        let defaulted = self
+            .ast
+            .decls
+            .function(first)
+            .is_some_and(|f| f.spec.defaulted() == kiln_ast::decl::Defaulted::Explicit);
+        (!defaulted
+            && self.explicit_inst_kind(first) == Some(SpecKind::ExplicitInstantiationDeclaration))
             || self.is_gnu_inline_fn(first)
             || self.c_inline_definition_only(first)
     }
