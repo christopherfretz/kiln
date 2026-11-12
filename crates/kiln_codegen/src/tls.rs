@@ -87,9 +87,8 @@ impl Cg<'_> {
     /// Whether this translation unit defines `first` (an imported module
     /// unit's non-discardable definition belongs to that unit).
     fn tls_defined_here(&self, first: DeclId) -> bool {
-        self.tls_var_def(first).is_some_and(|def| {
-            self.discardable_var(def) || !self.ast.modules.is_imported_named_unit_decl(def)
-        })
+        self.tls_var_def(first)
+            .is_some_and(|def| self.discardable_var(def) || !self.owned_by_imported_unit(def))
     }
 
     /// Whether thread-local variable `d` is `thread_local` (clang

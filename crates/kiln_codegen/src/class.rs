@@ -622,7 +622,7 @@ impl Cg<'_> {
             self.queue_structor(first, v);
             return Ok((V::C(Value::func(f)), None));
         }
-        if !self.discardable_fn(def) && ast.modules.is_imported_named_unit_decl(def) {
+        if !self.discardable_fn(def) && self.owned_by_imported_unit(def) {
             // spec/modules.md §7: the imported unit's object defines the
             // variant (alias or function), so here it is a declaration,
             // as clang references `D1` of an imported class (WP-1198).
@@ -677,7 +677,7 @@ impl Cg<'_> {
             }
             if !self.discardable_fn(d) {
                 // spec/modules.md §7: the module's object defines it.
-                if !ast.modules.is_imported_named_unit_decl(d) {
+                if !self.owned_by_imported_unit(d) {
                     self.emit_structor_def(d, v)?;
                 }
                 continue;

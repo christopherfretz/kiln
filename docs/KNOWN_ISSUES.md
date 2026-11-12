@@ -40,6 +40,46 @@ If you hit something not listed here, please
   repeats the backing clang's "Debian clang version" line
   ([WP-976](BACKLOG.md)).
 
+## LLVM code generator bugs
+
+kiln hands its IR to the system `llc`; these are LLVM bugs that clang
+has too (WP-1354, found by the hod project).
+
+- **AArch64, a 3-byte vector store at -O1 and above writes the wrong
+  bytes.** Converting a 3-lane `ext_vector_type` of 64- or 128-bit
+  integers to 3 lanes of `char` (`__builtin_convertvector`) and copying
+  those 3 bytes out (`memcpy(p, &t, 3)`) is optimized into
+  `trunc <3 x i64>` (or `<3 x i128>`) `to <3 x i8>` plus
+  `store <3 x i8>`, which SelectionDAG lowers so that lane 2 lands in
+  byte 1 and byte 2 is never written. `-O0` (GlobalISel) is right; clang
+  19 and 22 are wrong too. Test (expected failure):
+  `tests/c/c23/llc-o2-vec3-trunc-store-run.c`.
+- **AArch64 FastISel, unsigned compare of an `i1`.** An `i1` produced by
+  a shift or multiply (`unsigned _BitInt(1)` shifted, then compared with
+  `<` or `>=`) is compared as a whole register, so the result can be
+  wrong. AArch64 `-O0` uses GlobalISel and is correct; the bug shows in
+  functions marked `optnone` at `-O1` and above (FastISel), in kiln and
+  clang 19/22 alike. Test (expected failure):
+  `tests/c/c23/llc-o2-optnone-i1-compare-run.c`.
+- **AArch64 GlobalISel, narrow load extended both ways.** `llc -O0`
+  can turn a zero-extended narrow load into a sign-extending load when
+  the value also has a sign-extending use and a zero extension through
+  an odd integer width. Neither kiln nor clang produces that IR shape
+  from C or C++ source that we found; the guard test is
+  `tests/c/c23/llc-o0-narrow-load-sext-run.c`.
+- **`llc` 19 and 22 abort** on `llvm.minimum`/`llvm.maximum` of `fp128`
+  and on `llvm.llround`/`llvm.llrint` returning `i32`. kiln emits
+  neither: it has no `__builtin_elementwise_minimum`/`maximum`, its
+  `fminimum_num` builtins use `llvm.minimumnum`, and `llround`/`llrint`
+  are library calls returning a 64-bit value. Nor does kiln emit the
+  inputs of three other `llc` crashes: `llvm.vector.insert` of a
+  non-power-of-two fixed vector (llc 19; kiln inserts only the
+  power-of-two lengths `-msve-vector-bits` allows), `llvm.ldexp` of
+  `<1 x half>` (llc 19 and 22; kiln has no
+  `__builtin_elementwise_ldexp`), and variable records in a
+  line-tables-only compile unit (llc 19 and 22; `-gline-tables-only`
+  and `-g1` emit no variable records or globals).
+
 ## C mode
 
 `kiln` compiles C from 1.1.0 (`.c`, `.h`, `.i`, or `-x c`; `-std=c89`

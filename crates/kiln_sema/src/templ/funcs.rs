@@ -1015,6 +1015,7 @@ impl Sema<'_, '_> {
         if declaration {
             return;
         }
+        self.module_note_explicit_inst_def(s);
         // [temp.explicit]/10: the definition is instantiated (clang lists
         // the specialization where the explicit instantiation appears).
         let lexical = self.ctx;
@@ -1427,6 +1428,7 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = name_loc;
         });
         if !declaration {
+            self.module_note_explicit_inst_def(m);
             // [temp.explicit]/10: clang hands the definition to codegen
             // where the explicit instantiation appears.
             let lexical = self.ctx;

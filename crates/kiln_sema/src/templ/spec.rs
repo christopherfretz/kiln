@@ -931,6 +931,9 @@ impl Sema<'_, '_> {
                 s.point_of_instantiation = name_loc;
             }
         });
+        if !declaration {
+            self.module_note_explicit_inst_def(spec);
+        }
         let lexical = self.ctx;
         if first_explicit {
             self.builder().declare_spec_in(spec, lexical, name_loc);
@@ -1085,6 +1088,7 @@ impl Sema<'_, '_> {
             x.point_of_instantiation = name_loc;
         });
         if !declaration {
+            self.module_note_explicit_inst_def(m);
             let lexical = self.ctx;
             if let Some(list) = self.ast.decls.member_list(lexical) {
                 let after = list.last.unwrap_or(lexical);

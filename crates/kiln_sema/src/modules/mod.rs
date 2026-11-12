@@ -1059,6 +1059,16 @@ impl Sema<'_, '_> {
         self.ast.modules.units.get(usize::from(self.modules.cur())).map_or("", |u| u.key.as_str())
     }
 
+    /// Records that the current unit holds the explicit instantiation
+    /// definition of `d` (spec/modules.md §7 "Explicit instantiations"):
+    /// codegen defines it in the unit that wrote it, or, for a header
+    /// unit, in each importer.
+    pub(crate) fn module_note_explicit_inst_def(&mut self, d: DeclId) {
+        let first = self.ast.first(d);
+        let unit = self.modules.cur();
+        self.ast.modules.note_explicit_inst_def(first, unit);
+    }
+
     /// The current unit's index (spec/modules.md §6 dedup records).
     pub fn module_current_unit(&self) -> u16 {
         self.modules.cur()

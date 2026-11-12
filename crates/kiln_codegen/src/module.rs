@@ -274,6 +274,10 @@ pub(crate) struct Cg<'a> {
     /// order: their vtables are required ([temp.explicit]/10; Sema's
     /// `MarkVTableUsed(DefinitionRequired)`).
     pub explicit_vtables: Vec<DeclId>,
+    /// The [`Self::explicit_vtables`] whose explicit instantiation
+    /// definition is an imported unit's, emitted after the deferred
+    /// definitions.
+    pub imported_explicit_vtables: Vec<DeclId>,
     /// Vtables already defined.
     pub vt_emitted: FxHashSet<DeclId>,
     /// `_ZTI` definitions by mangled name.
@@ -532,6 +536,7 @@ impl<'a> Cg<'a> {
             deferred_vtables: Vec::new(),
             opportunistic_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
+            imported_explicit_vtables: Vec::new(),
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
@@ -618,6 +623,10 @@ impl<'a> Cg<'a> {
         self.emit_key_function_vtables()?;
         self.emit_end_of_tu_instantiations()?;
         self.emit_deferred()?;
+        if !self.imported_explicit_vtables.is_empty() {
+            self.emit_imported_explicit_vtables()?;
+            self.emit_deferred()?;
+        }
         self.emit_vtables_opportunistically()?;
         self.resolve_placeholders()?;
         self.emit_global_init_trailer()?;
@@ -885,7 +894,7 @@ impl<'a> Cg<'a> {
             // A definition owned by an imported named-module unit (its
             // purview or its global module fragment) belongs to that
             // unit's object file (spec/modules.md §7).
-            if ast.modules.is_imported_named_unit_decl(d) {
+            if self.owned_by_imported_unit(d) {
                 return Ok(());
             }
             // clang `MayBeEmittedEagerly`: a `target_version` function
@@ -1119,7 +1128,7 @@ impl<'a> Cg<'a> {
             return Ok(());
         }
         if !self.discardable_var(d) || self.var_must_emit(d) {
-            if !self.discardable_var(d) && ast.modules.is_imported_named_unit_decl(d) {
+            if !self.discardable_var(d) && self.owned_by_imported_unit(d) {
                 return Ok(());
             }
             return self.emit_var_def(d);
@@ -1335,7 +1344,7 @@ impl<'a> Cg<'a> {
             }
             // An in-class definition attached to a named module is not
             // inline ([class.mfct]/1): an importer only declares it.
-            in_class && (self.fn_is_inline(r) || !ast.modules.is_imported_named_unit_decl(r))
+            in_class && (self.fn_is_inline(r) || !self.owned_by_imported_unit(r))
         })
     }
 
@@ -1442,7 +1451,44 @@ impl<'a> Cg<'a> {
     /// (`shouldEmitFunction`) is the exception
     /// ([`Self::is_available_externally_fn`]).
     pub(crate) fn is_explicit_inst_declaration(&self, first: DeclId) -> bool {
-        self.defined_elsewhere(first) && !self.keeps_available_externally(first)
+        (self.defined_elsewhere(first) && !self.keeps_available_externally(first))
+            || self.explicit_def_imported(first) == Some(true)
+    }
+
+    /// Whether the explicit instantiation definition that governs
+    /// variable or function `first` ([`Self::explicit_inst_kind`]) was
+    /// written in an imported named-module unit (spec/modules.md §7
+    /// "Explicit instantiations"): `Some(true)` there (that unit's object
+    /// file defines it; this one declares it, even an inline function
+    /// at -O1, as clang 22), `Some(false)` in this unit or in a header
+    /// unit (this object defines it `weak_odr`, whoever created the
+    /// specialization), `None` when no explicit instantiation definition
+    /// governs it or modules are not in use. The unit is the one sema
+    /// recorded when it ran the definition, else the owner of the
+    /// specialization (a module file's own records).
+    pub(crate) fn explicit_def_imported(&self, first: DeclId) -> Option<bool> {
+        let m = &self.ast.modules;
+        if !m.active {
+            return None;
+        }
+        let (gov, kind) = self.ast.governing_explicit_inst(first)?;
+        if kind != SpecKind::ExplicitInstantiationDefinition {
+            return None;
+        }
+        let unit = m.explicit_inst_def_unit(gov).unwrap_or_else(|| m.owner(gov).unit);
+        Some(m.is_imported_named_unit(unit))
+    }
+
+    /// Whether definition `d` belongs to an imported named-module unit's
+    /// object file (spec/modules.md §7): an explicitly instantiated
+    /// specialization or member belongs to the unit holding its explicit
+    /// instantiation definition ([`Self::explicit_def_imported`]), any
+    /// other declaration to its owner.
+    pub(crate) fn owned_by_imported_unit(&self, d: DeclId) -> bool {
+        match self.explicit_def_imported(self.ast.first(d)) {
+            Some(imported) => imported,
+            None => self.ast.modules.is_imported_named_unit_decl(d),
+        }
     }
 
     /// clang `GVA_AvailableExternally` kept by `shouldEmitFunction`: an
@@ -1451,7 +1497,9 @@ impl<'a> Cg<'a> {
     /// optimizer can inline it (spec/codegen.md "Explicit instantiation
     /// declarations", "GNU inline functions").
     pub(crate) fn is_available_externally_fn(&self, first: DeclId) -> bool {
-        self.defined_elsewhere(first) && self.keeps_available_externally(first)
+        self.defined_elsewhere(first)
+            && self.keeps_available_externally(first)
+            && self.explicit_def_imported(first) != Some(true)
     }
 
     /// clang `GVA_AvailableExternally`: `first` is under an explicit

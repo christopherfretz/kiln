@@ -402,6 +402,52 @@ complete-object alias this unit would define later). The implicit global
 module ([basic.stc.dynamic.general]/2) even when the first use is in a
 purview, so they are never `_ZW`-mangled.
 
+**Explicit instantiations** ([temp.explicit], [temp.spec.general]/5,
+WP-1354; the PCH and module-file image side is WP-1307 in §11.11). The
+unit that writes an explicit instantiation definition owns the
+specialization's definition, whichever unit declared the template or an
+`extern template` for it. Sema records it (`ModuleTable::explicit_defs`,
+keyed by the first declaration of the function, variable or class
+specialization, with the current unit; `kiln_sema`
+`module_note_explicit_inst_def`). Codegen asks
+`explicit_def_imported` for the governing explicit instantiation (the
+entity's own, or its enclosing class specialization's,
+`governing_explicit_inst`): an imported named unit (purview or GMF)
+means declare only, at every optimization level (never
+`available_externally`, even for an inline member at -O1, as clang);
+this unit or a header unit means define `weak_odr`. With no record (a
+module-file import) the owner is the unit that owns the governing
+explicit instantiation declaration. The table, for a function template,
+member function, static data member, variable template and whole class,
+in a named-module purview, its GMF or a header unit (clang 22 matches
+every row except those marked; tests in `module.interface/explicit-inst-*`
+and `codegen/module_explicit_inst_importer.cpp`):
+
+| module | importer | importer emits |
+|---|---|---|
+| `extern template` | definition | `weak_odr` definition |
+| `extern template` | declaration, or implicit use | declaration (ill-formed NDR unless defined elsewhere) |
+| nothing | definition | `weak_odr` definition |
+| nothing | declaration | declaration |
+| nothing | implicit use | `linkonce_odr` |
+| definition | implicit use | declaration; the module object has `weak_odr` (a header unit: `weak_odr` in the importer) |
+| definition | definition | error: duplicate explicit instantiation ([temp.spec.general]/5) |
+| definition | declaration | error: explicit instantiation declaration follows definition |
+
+The two errors also hold for a static data member outside modules
+(they used to be accepted silently). clang 22 rejects valid code in two
+rows that kiln accepts: an importer's explicit instantiation definition
+(and clang 19, any implicit instantiation) of a named-module static data
+member or whole class ("declaration of 'v' in the global module follows
+declaration in module"), and an explicit instantiation naming a function
+template through an exported using-declaration of a GMF template.
+Ordering: the vtables of imported explicit-instantiation classes are
+emitted after the deferred definitions (clang's order), so
+`run_tu` drains `imported_explicit_vtables` after `emit_deferred`.
+Known difference: for a GMF class whose explicit instantiation
+definition is in the module unit, kiln's module object also defines the
+vtable `weak_odr` where clang's does not (follow-up).
+
 **Module initializers** (Itanium ABI §3.2.6, clang 22
 `EmitCXXModuleInitFunc`; `kiln_codegen/src/module_init.rs` and
 `global_init.rs`). [basic.start.dynamic]/5 orders a variable after those
