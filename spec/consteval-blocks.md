@@ -122,7 +122,10 @@ Rules that keep the bit exact:
 [expr.const.imm]/2: an expression of consteval-only type is
 immediate-escalating. This section specifies only that behaviour. Which
 expressions count (the consteval-only *leaves*: a `^^` expression, a
-reference to a variable, parameter or binding of consteval-only type),
+reference to a variable, parameter or binding of consteval-only type, a
+binding of a `constexpr` decomposition of consteval-only type, and the
+element variable of an expansion statement, whose `constexpr auto` type
+is dependent in the pattern and decided per expansion; WP-1330),
 where they are recorded, the exemptions (immediate context, a
 `constexpr` variable's initializer, a constant-initialized variable
 whose initializer folds) and the template re-check are WP-472's

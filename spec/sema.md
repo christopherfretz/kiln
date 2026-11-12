@@ -10271,6 +10271,9 @@ not supported yet`.
   Inside a template the statement stays a pattern (`CXXExpansionStmt`
   without `expanded`) and is expanded when the enclosing template is
   instantiated; otherwise `act_on_finish_expansion` expands it at once.
+  The element variable's uses in the body are checked as consteval-only
+  leaves in each expansion, as a plain `constexpr` variable's are
+  (spec/reflection-repr.md §6, spec/consteval-blocks.md §4; WP-1330).
 - **Expansion** (`Substituter::expand_expansion`, templ/subst): a child
   Substituter whose `expansions` stack maps the level's depth to the
   current element; each `CXXExpansionSelectExpr` at that depth becomes the

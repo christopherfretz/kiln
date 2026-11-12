@@ -109,9 +109,27 @@ impl Sema<'_, '_> {
             && self.consteval_only_pattern.contains(&e)
             && !self.immediate_exempt()
             && self.is_consteval_only_leaf(r)
+            && !self.inst_lost_consteval_only(e, r)
         {
             self.note_pending_ref(r);
         }
+    }
+
+    /// Whether pattern leaf `e`, a reference to a variable of dependent
+    /// type ([`Sema::is_dependent_constexpr_leaf`]), was substituted to
+    /// `r` whose variable is not of consteval-only type.
+    fn inst_lost_consteval_only(&mut self, e: ExprId, r: ExprId) -> bool {
+        if self.ast.exprs.get(e).kind() != ExprKind::DeclRefExpr
+            || self.ast.exprs.get(r).kind() != ExprKind::DeclRefExpr
+        {
+            return false;
+        }
+        let pd = self.ast.exprs.decl(e);
+        let pty = self.ast.decls.get(pd).ty().unwrap_or(QualType::ERROR);
+        if !self.is_dependent_type(pty) {
+            return false;
+        }
+        !self.is_consteval_only_var(self.ast.exprs.decl(r))
     }
 
     /// A reference `e` to variable `d` ([`Sema::note_consteval_only`]
@@ -126,9 +144,54 @@ impl Sema<'_, '_> {
             return;
         }
         let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-        if self.is_consteval_only_type(ty) {
+        if self.is_consteval_only_var(d) || self.is_dependent_constexpr_leaf(d, ty) {
             self.note_consteval_only(e);
         }
+    }
+
+    /// Whether a reference to variable `d` is a consteval-only leaf: `d`
+    /// is of consteval-only type, or is a structured binding of a
+    /// `constexpr` decomposition of consteval-only type (`n` of
+    /// `constexpr auto [r, n] = e;`, as of a `template for` destructuring
+    /// an aggregate with a `std::meta::info` member: the binding names a
+    /// subobject of a consteval-only object, P2996R13 [expr.const]/25.3;
+    /// "a glvalue that refers to an immediate object", P4101R1
+    /// [expr.const.const]/5.1; GCC 16.1 rejects it too; WP-1330).
+    fn is_consteval_only_var(&mut self, d: DeclId) -> bool {
+        let ty = self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
+        if self.is_consteval_only_type(ty) {
+            return true;
+        }
+        if self.ast.decls.get(d).kind() != DeclKind::Binding {
+            return false;
+        }
+        let Some(v) = self.ast.decls.binding_decomp(d) else { return false };
+        let vty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
+        self.is_constexpr_var(v) && self.is_consteval_only_type(vty)
+    }
+
+    fn is_constexpr_var(&self, v: DeclId) -> bool {
+        self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
+    }
+
+    /// Whether a reference to `d` of type `ty` in a template definition
+    /// is a candidate consteval-only leaf, decided in each instantiation
+    /// and expansion ([`Sema::note_inst_consteval_only`]): a `constexpr`
+    /// variable or a structured binding whose type is dependent (the
+    /// `constexpr auto e` of a `template for`, a `constexpr T x` of a
+    /// function template; WP-1330). A non-constexpr variable or a
+    /// parameter of consteval-only type is reported as a declaration
+    /// ([`Sema::check_consteval_only_var`], `check_consteval_only_inst`).
+    fn is_dependent_constexpr_leaf(&self, d: DeclId, ty: QualType) -> bool {
+        self.in_template()
+            && self.is_dependent_type(ty)
+            && match self.ast.decls.get(d).kind() {
+                DeclKind::Var => self.is_constexpr_var(d),
+                DeclKind::Binding => {
+                    self.ast.decls.binding_decomp(d).is_some_and(|v| self.is_constexpr_var(v))
+                }
+                _ => false,
+            }
     }
 
     /// A member access `e` naming data member or static member variable
