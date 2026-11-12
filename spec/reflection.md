@@ -83,8 +83,10 @@ Section references in brackets are to the C++26 IS.
 - `std::meta::info` is the builtin type `MetaInfo` (spec/types.md),
   `decltype(^^int)`. It is a scalar, structural type: it may be an NTTP,
   and it compares with `==` and `!=` ([expr.eq]) (implemented:
-  `reflection/value-model{,-neg}.cpp`). It is a consteval-only type
-  (§4.1).
+  `reflection/value-model{,-neg}.cpp`). Its non-null values are
+  consteval-only values (spec/reflection-repr.md §6, P4101R1); a
+  run-time `info` is the null reflection, a pointer-sized null
+  (spec/codegen.md "Run-time reflections").
 - A value is a `ReflectionId(u32)` into the AST's `ReflectionTable`.
   `ReflectionId`s are 1-based and dense; table slot 1 is the null
   reflection. In the Oven the value is an 8-byte scalar of
@@ -165,8 +167,13 @@ the IS equality ([expr.eq]):
   type is not a constant expression ("cannot constant evaluate 'memcpy'
   from object of type 'unsigned long' to object of type
   'std::meta::info'"; implemented: `reflection/typed-copy-memcpy-neg.cpp`), and
-  `__builtin_bit_cast` to or from `info` is rejected by sema (not
-  trivially copyable; implemented: `reflection/value-model-neg.cpp`).
+  so is `__builtin_bit_cast` to or from `info` or a class holding one
+  (`info` has constexpr-unknown representation, [expr.const.core]/1.2,
+  [bit.cast]/2 "Constant When", P4101R1; WP-1361). The type itself is
+  scalar, hence trivially copyable, trivial and POD
+  ([basic.types.general]/9; GCC 16.1 agrees): the cast is well-formed,
+  and at run time copies the pointer-sized bits (spec/codegen.md
+  "Run-time reflections").
 - The shadow therefore needs no reflection kind; it keeps only its init
   and pointer bits. No shadow-kind extension is planned.
 
@@ -821,21 +828,22 @@ answers as of that point.
 
 ## 4. The consteval boundary
 
-### 4.1 Consteval-only types
-- The consteval-only rules (which types are consteval-only; the
+### 4.1 Consteval-only values
+- The consteval-only rules (which values are consteval-only; the
   variable, function and expression checks; template leaf tracking) are
-  specified once, in `spec/reflection-repr.md` §6. The escalation
-  behaviour of a consteval-only expression in an immediate-escalating
-  function (the function becomes immediate, with
+  specified once, in `spec/reflection-repr.md` §6 (P4101R1). The
+  escalation behaviour of a consteval-only expression in an
+  immediate-escalating function (the function becomes immediate, with
   `note_immediate_function_reason_consteval_only`) is specified in
   `spec/consteval-blocks.md` §4.
-- No value of consteval-only type reaches codegen. Codegen's constant
-  emitter stays as the backstop for the known gaps: it rejects such a
-  value with "reflection values cannot be emitted"
-  (`kiln_codegen/src/consts.rs`). A namespace-scope variable whose
-  initializer compares or queries reflections but whose own type is not
-  consteval-only (`constexpr bool b = type_of(^^x) == ^^int;`, an array
-  of such bools, a `define_static_string` pointer) is emitted with its
+- No consteval-only value reaches codegen; the null reflection does
+  (spec/codegen.md "Run-time reflections"). Codegen's constant emitter
+  stays as the backstop: it rejects a non-null reflection with an
+  internal error (`kiln_codegen/src/consts.rs`). A namespace-scope
+  variable whose initializer compares or queries reflections but whose
+  own value is not consteval-only (`constexpr bool b = type_of(^^x) ==
+  ^^int;`, an array of such bools, a `define_static_string` pointer) is
+  emitted with its
   folded value and may be odr-used at runtime; the reflection operands
   never reach codegen (GCC 16.1 agrees; WP-505,
   `basic.types.general/consteval-only-namespace-scope-bool-run.cpp`).

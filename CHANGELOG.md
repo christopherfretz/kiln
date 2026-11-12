@@ -28,10 +28,29 @@ Planned as 1.2.0.
   immediate object used by an odr-use before its definition. Still
   rejected, as in 1.1.0: a run-time read of a member of an immediate
   object (`const char* n = e.name;`). Wording: "consteval-only value"
-  replaces "consteval-only type". Code generation of a run-time
-  `std::meta::info` (a non-`constexpr` null reflection) is the error
-  "not supported yet" for now. These are divergences from GCC 16.1,
+  replaces "consteval-only type". These are divergences from GCC 16.1,
   listed in [docs/status/deviations.md](docs/status/deviations.md).
+- P4101R1, second part (WP-1361). Newly accepted (each rejected by
+  1.1.0 and GCC 16.1): run-time `std::meta::info` objects, which hold
+  the null reflection and are emitted as a pointer-sized null, passed
+  and returned like `std::nullptr_t`; non-`consteval` functions with
+  `info` in their type (parameters, return types, members, virtual
+  functions, lambdas, templates, function and member pointers);
+  `constexpr` pointers to immediate functions (`constexpr auto b =
+  plus1;`, arrays and aggregates of them, `constexpr auto e = g();`)
+  and calls through them in constant expressions (P3603); run-time
+  `__builtin_bit_cast` from or to `info`, now trivially copyable,
+  trivial and POD as a scalar type (a constant-evaluated one is "not a
+  constant expression"). Newly rejected: a consteval override of a
+  non-consteval virtual function in a class with an `info` member
+  ([class.virtual]/18 as the working draft words it; a system header
+  is exempt, so libstdc++ 16.1 `<meta>` still compiles). Changed:
+  `__cpp_consteval` is 202606L with reflection enabled (202211L with
+  `-fno-reflection`); immediate-escalation notes name the callee
+  unqualified and say "evaluates the address of an immediate function
+  'operator()'" for a lambda call operator, as clang 19/22 do; a
+  default argument holding a consteval-only value is reported at the
+  call that uses it.
 
 ## [1.1.0] - 2026-11-12
 

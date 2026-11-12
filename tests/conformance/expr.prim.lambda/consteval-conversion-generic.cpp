@@ -3,15 +3,18 @@
 // conversion function template: a specialization whose call operator
 // specialization escalated is immediate (its result cannot leave an
 // immediate function); other specializations are not.
+// C++23: with C++26 reflection kiln follows P4101R1, where such a pointer
+// is a consteval-only value (expr.const.const/p3-immediate-function-pointer-*).
 //@ expect: compile-fail
+//@ std: c++23
 //@ strict-diags
+//@ diag: 22:18 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
+//@ diag: 22:18 note "pointer to a consteval declaration is not a constant expression"
+//@ diag: 21:12 note "declared here"
+//@ diag: 25:19 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
+//@ diag: 25:19 note "pointer to a consteval declaration is not a constant expression"
+//@ diag: 21:12 note "declared here"
 //@ xfail(clang): clang (19 and 22) does not make the conversion of an escalated generic lambda immediate and accepts every use (cf. consteval-conversion.cpp)
-//@ diag: 19:18 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
-//@ diag: 19:18 note "pointer to a consteval declaration is not a constant expression"
-//@ diag: 18:12 note "declared here"
-//@ diag: 22:19 error "call to immediate function '(lambda)::operator auto (*)(int)<int>' is not a constant expression"
-//@ diag: 22:19 note "pointer to a consteval declaration is not a constant expression"
-//@ diag: 18:12 note "declared here"
 //@ requires: clang>=22
 // kiln follows clang 22 naming the closure `(lambda)`
 consteval int id(int x) { return x; }

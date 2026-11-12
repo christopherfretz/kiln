@@ -2058,9 +2058,17 @@ impl Sema<'_, '_> {
         // The callee of a call is not a reference outside an immediate
         // invocation ([expr.const]/18): a dependent call of an immediate
         // function, qualified (kept as the `DeclRefExpr`) or not, is
-        // checked as an invocation when instantiated.
+        // checked as an invocation when instantiated. A callee that is a
+        // variable (`b(t)` of `constexpr auto b = consteval_fn;`) is not an
+        // invocation of a named function: it stays a consteval-only leaf,
+        // decided in each instantiation (P4101R1, [expr.const.imm]/2.1).
         let r = self.ignore_parens(callee);
-        self.forget_immediate_ref(r);
+        let names_var =
+            matches!(self.ast.exprs.get(r).kind(), ExprKind::DeclRefExpr | ExprKind::MemberExpr)
+                && self.ast.decls.function(self.ast.exprs.decl(r)).is_none();
+        if !names_var {
+            self.forget_immediate_ref(r);
+        }
         let ty = QualType::DEPENDENT;
         self.builder().call(f, args, ty, ValueCategory::PRValue, loc, rparen, ExprFlags::NONE)
     }

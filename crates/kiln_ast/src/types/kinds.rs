@@ -760,8 +760,11 @@ impl BuiltinType {
     /// The builtin with the same representation and calling convention:
     /// `_Float32` → `float`, `_Float64` and `_Float32x` → `double`,
     /// `_Float128` → `__float128`, `_Float64x` → `long double`
-    /// (clang/GCC lower and pass them identically, spec/abi.md §2); every
-    /// other builtin is its own twin.
+    /// (clang/GCC lower and pass them identically, spec/abi.md §2);
+    /// `std::meta::info` → `std::nullptr_t` (a run-time reflection is
+    /// the null reflection, a pointer-sized null, passed as `nullptr_t`
+    /// is: spec/codegen.md "Run-time reflections"); every other builtin is
+    /// its own twin.
     #[must_use]
     pub const fn abi_twin(self) -> BuiltinType {
         match self {
@@ -769,6 +772,7 @@ impl BuiltinType {
             BuiltinType::Float64 | BuiltinType::Float32x => BuiltinType::Double,
             BuiltinType::Float64x => BuiltinType::LongDouble,
             BuiltinType::StdFloat128 => BuiltinType::Float128,
+            BuiltinType::MetaInfo => BuiltinType::NullPtr,
             b => b,
         }
     }

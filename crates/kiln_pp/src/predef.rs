@@ -110,7 +110,8 @@ pub struct PredefConfig {
     /// `std` module exports them when the macros are defined).
     pub std_float_aliases: bool,
     /// `-freflection`: `__cpp_impl_reflection 202603L` at C++26 (GCC
-    /// 16.1's value; spec/reflection.md "Feature macros").
+    /// 16.1's value; spec/reflection.md "Feature macros"), and the
+    /// working draft's `__cpp_consteval 202606L` (P4101R1).
     pub reflection: bool,
     /// The `AArch64` target features the `__ARM_*` macros derive from.
     pub arm: ArmTarget,
@@ -576,6 +577,11 @@ fn apply_std_keyed(m: &mut BTreeMap<String, String>, reflection: bool) {
     // -freflection -dM -E`): libstdc++'s `<meta>` keys on it.
     if reflection && cplusplus > 202_302 {
         set(m, "__cpp_impl_reflection", "202603L");
+        // P4101R1 consteval-only values (the working draft's
+        // [cpp.predefined] value; WP-1328, WP-1361): kiln implements the
+        // value model with reflection (spec/reflection-repr.md §6), and
+        // keeps clang's 202211L without it.
+        set(m, "__cpp_consteval", "202606L");
     }
 }
 
@@ -1130,6 +1136,11 @@ mod tests {
             build_predefines(b26, &cfg, &[]).contains("#define __cpp_impl_reflection 202603L\n")
         );
         assert!(!build_predefines(b23, &cfg, &[]).contains("__cpp_impl_reflection"));
+        // P4101R1 (WP-1361): the working draft's [cpp.predefined] value.
+        let base = "#define __cplusplus 202400L\n#define __cpp_consteval 202211L\n";
+        assert!(build_predefines(base, &cfg, &[]).contains("#define __cpp_consteval 202606L\n"));
+        cfg.reflection = false;
+        assert!(build_predefines(base, &cfg, &[]).contains("#define __cpp_consteval 202211L\n"));
     }
 
     /// `-fsigned-char` removes `__CHAR_UNSIGNED__` (the `AArch64` default),

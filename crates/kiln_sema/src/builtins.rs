@@ -2910,13 +2910,11 @@ impl Sema<'_, '_> {
             return self.recover_err(&[sub], loc);
         }
         for (t, which) in [(ty, "1"), (src, "0")] {
-            // `std::meta::info` is scalar, hence trivially copyable, but it
-            // has no value representation to cast through (P2996
-            // [basic.types.general]: a consteval-only type).
-            if self.ast.types.is_reference(t)
-                || !self.is_trivially_copyable_type(t)
-                || self.is_meta_info(t)
-            {
+            // `std::meta::info` is scalar, hence trivially copyable: a
+            // bit_cast through it is well-formed, only not a constant
+            // expression ([bit.cast]/2 "Constant When", P4101R1; the
+            // Oven reports it, spec/oven.md "Builtins").
+            if self.ast.types.is_reference(t) || !self.is_trivially_copyable_type(t) {
                 let msg = self.diag(DiagId::sema_bit_cast_not_trivially_copyable, loc).arg(which);
                 self.emit(msg);
                 return self.recover_err(&[sub], loc);

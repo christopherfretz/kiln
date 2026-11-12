@@ -748,12 +748,14 @@ virtual base 'A'`).
   `tests/conformance/class.virtual/override-control-static-template.cpp`,
   `override-control-requires-out-of-line.cpp`.
 - **consteval** mismatch either way: `consteval function 'f' cannot override a
-  non-consteval function` (and converse). Exception ([class.virtual]/18 as
-  P2996R13 amends it; GCC 16.1 is the oracle, clang 22 has no rule): a
-  consteval function may override a non-consteval one in a class of
-  consteval-only type (a class with a `std::meta::info` member, `<meta>`'s
-  `std::meta::exception::what`; WP-525,
-  `class.virtual/consteval-override-consteval-only.cpp`).
+  non-consteval function` (and converse), [class.virtual]/18 as the
+  working draft words it (P4101R1 removed P2996R13's consteval-only-type
+  allowance; WP-1361, `class.virtual/consteval-override-consteval-only.cpp`).
+  Exemption (kiln extension): with reflection enabled, a consteval
+  overrider declared in a system header is accepted, for libstdc++
+  16.1 `<meta>`'s `std::meta::exception::what`
+  (`class.virtual/consteval-override-system-header.cpp`;
+  spec/reflection-repr.md §6).
 - **Pure/abstract**: `= 0` only on virtuals (`'p' is not virtual and cannot be
   declared pure`). In a dependent class (a template pattern or a class
   nested in one, `Sema::in_dependent_class`; clang `CheckPureMethod`)

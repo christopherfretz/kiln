@@ -1377,34 +1377,27 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   for `break` and `return` (WP-793, `outline.rs`; the full rule is
   spec/landed/codegen/WP-793.md).
 
-- Consteval-only variables (WP-534, WP-1328; P4101R1, by value):
-  `Cg::no_runtime_object(d)` (`module.rs`, memoized per variable)
-  decides whether variable `d` gets a run-time object. An *immediate
-  object* (`Ast::is_immediate_var`: its constant value has a
+- Consteval-only variables (WP-534, WP-1328, WP-1361; P4101R1, by
+  value): `Cg::no_runtime_object(d)` (`module.rs`, memoized per
+  variable) decides whether variable `d` gets a run-time object. An
+  *immediate object* (`Ast::is_immediate_var`: its constant value has a
   consteval-only constituent, a non-null reflection or a pointer to an
   immediate object or function; spec/reflection-repr.md §6) has none:
-  sema made every use of it constant or an error. A variable whose type
-  reaches `std::meta::info` (`Cg::reaches_meta_info`: `info`, or a type
-  containing one through an array element, pointee, referee, member
-  pointer, function return or parameter type, base or non-static data
-  member, memoized per record) has none either, as codegen has no
-  run-time representation for a reflection yet: a `constexpr` one (one
-  holding null reflections, `access_context::unchecked()`) is read only
-  through its constant value, and any other — `std::meta::info x;`, a
-  global `S s;` of a class with an `info` member, `info* p;`, all
-  well-formed since P4101R1 — is the error "code generation for a
-  run-time 'std::meta::info' value is not supported yet (P4101R1
-  run-time reflections)" at its declaration, as is a reflection
-  constant reaching `scalar_const` (land 2 of WP-1328 adds the
-  representation). `emit_one_var_decl` and `emit_global_var` (whatever
-  the linkage: `extern constexpr info r = ^^S;`, an `export`ed one of a
-  module interface, WP-1047) return before allocating storage or
+  sema made every use of it constant or an error. Every other variable
+  is an ordinary object, whatever its type: `std::meta::info x;`, a
+  global `S s;` of a class with an `info` member, `info* p;`,
+  `constexpr S s{{}, "x"}` (holding only null reflections) — see
+  "Run-time reflections" below. `emit_one_var_decl` and
+  `emit_global_var` (whatever the linkage: `extern constexpr info r =
+  ^^S;`, an `export`ed one of a module interface, WP-1047) return for an
+  immediate object before allocating storage or
   lowering the initializer. A scalar member read through `.` of such a
   variable whose value holds a reflection (`s.name` of `constexpr S
   s{{}, "x"}`) is a fold candidate (`fold.rs` `names_reflection_holder`)
   and emits as its constant; a discarded name of one (`(void)ctx;`)
-  emits nothing; any other use reaching `decl_lvalue` is the same "not
-  supported yet" error, never a reference to a missing symbol. In
+  emits nothing; any other use reaching `decl_lvalue` is an internal
+  error ("a consteval-only value ... reached code generation",
+  `consteval_only_error`), never a reference to a missing symbol. In
   particular an expansion statement over a range of `info` (a
   `define_static_array` variable template or call, a `static constexpr
   info arr[]` local) emits no range object, no `__range`/`__begin`/
@@ -1413,6 +1406,37 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   a constant (`tests/conformance/stmt.expand/reflection-info-range-run.cpp`,
   `tests/conformance/basic.types.general/consteval-only-extern-run.cpp`,
   `tests/conformance/expr.const.const/`).
+
+- Run-time reflections (WP-1361; P4101R1 [expr.const.const]/1.1: the
+  null reflection is not a consteval-only value). Sema guarantees that
+  every `std::meta::info` value reaching run time is the null
+  reflection: a non-null one is consteval-only, so every expression
+  yielding one is an immediate constant expression that escalated or was
+  rejected, and every object holding one is an immediate object without
+  storage (a run-time `bit_cast` to `info` copies bits as for any
+  trivially copyable type; a result other than the null reflection's
+  zero bits has no corresponding value, [bit.cast]/2). The run-time
+  representation is therefore a pointer-sized null:
+  - IR type `ptr` (`kiln_abi` `ir_type_of`, as `std::nullptr_t`); size
+    8, alignment 8 on both AArch64 and x86-64 (`kiln_abi` target
+    layout); the null reflection is `ptr null`, and a class or array
+    holding only null reflections is `zeroinitializer` where its other
+    members allow. Zero-, default- and value-initialization store
+    `null`; a constant `Scalar::Reflection` is emitted as `ptr null`
+    only for `ReflectionId::NULL` (`consts.rs`), any other is an
+    internal error.
+  - Copy and assignment are `ptr` loads and stores (`memcpy` inside a
+    class); `==`/`!=` are `icmp eq`/`icmp ne ptr`, always comparing two
+    nulls. TBAA: a scalar node named "std::meta::info"; RTTI `_ZTIDm`.
+  - Passing and returning: exactly as `std::nullptr_t`
+    (`BuiltinType::abi_twin` maps `MetaInfo` to `NullPtr`): one `ptr`
+    without `noundef` — INTEGER class in a GPR on x86-64 (SysV),
+    a GPR on AArch64 (AAPCS64); a class holding `info` is classified
+    by the same rules as a class holding a pointer
+    (`struct { info a; info b; }` is `[2 x i64]` on AArch64 and two
+    `ptr` arguments on x86-64).
+  Tests: `kiln_codegen/tests/runtime_reflection.rs` (both targets),
+  `tests/conformance/expr.const.const/p1-runtime-null-reflection-run.cpp`.
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:

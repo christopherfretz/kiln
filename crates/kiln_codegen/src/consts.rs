@@ -255,7 +255,13 @@ impl Cg<'_> {
                 }
                 Ok(p)
             }
-            Scalar::Reflection { .. } => Err(crate::module::runtime_reflection_error(None)),
+            // The null reflection is a null pointer at run time
+            // (spec/codegen.md "Run-time reflections"); any other cannot
+            // reach run time.
+            Scalar::Reflection { id, .. } if id == kiln_ast::ids::ReflectionId::NULL => {
+                Ok(self.m.const_zero(t))
+            }
+            Scalar::Reflection { .. } => Err(crate::module::consteval_only_error(None)),
         }
     }
 

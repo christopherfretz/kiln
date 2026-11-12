@@ -292,6 +292,16 @@ pub trait SemaBridge {
     fn cxx23(&self) -> bool {
         self.cxx_year() >= 2023
     }
+    /// Whether the P4101R1 consteval-only value model is in force (C++26
+    /// with reflection; spec/reflection-repr.md §6): a constant
+    /// expression's value may then point to, refer to or name an
+    /// immediate function ([expr.const.const]/4 no longer restricts it;
+    /// the object holding it is an immediate object, which sema checks).
+    /// Without it, the pre-P4101R1 permitted-result rule applies (clang's
+    /// `note_consteval_address_accessible`).
+    fn consteval_only_values(&self) -> bool {
+        false
+    }
     /// The layout of a complete record (via `kiln_abi`); `None` while the
     /// class is incomplete (no definition, or still being defined).
     fn ensure_layout(&mut self, record: DeclId) -> Option<&RecordLayout>;

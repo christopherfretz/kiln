@@ -1857,6 +1857,14 @@ static local is `<function's name>.<name>` (clang `getStaticDeclName`,
 `main.n`), a repeated one uniqued by LLVM (`.1`). Tests:
 `tests/c/linkage/symbol-names.c`, `tests/c/interop/`.
 
+### 8.31 Landed (WP-1361): run-time `std::meta::info`
+`std::meta::info` is classified, passed and laid out as `std::nullptr_t`,
+its ABI twin (`BuiltinType::abi_twin` maps `MetaInfo` to `NullPtr`): size
+8, alignment 8, LLVM type `ptr`, INTEGER class on x86-64 and a GPR on
+AArch64, without `noundef`; a class holding one is classified as a class
+holding a pointer. A run-time `info` always holds the null reflection
+(spec/codegen.md "Run-time reflections").
+
 ## 9. Open questions (with recommendation)
 - **A1.** `preferred_align` is equal to `align` on both targets. i386
   `double` is where it differs; out of scope.

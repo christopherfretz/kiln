@@ -3,26 +3,23 @@
 // a non-null reflection is constexpr, an expression whose value does
 // appears only in an immediate function context (an immediate-escalating
 // function escalates instead), and one holding only the null reflection
-// is unrestricted. kiln still requires a function whose type holds
-// std::meta::info to be consteval (WP-1328 land 2 lifts it).
+// is unrestricted, as is a function whose type holds std::meta::info
+// (only its body's values are judged; WP-1361).
 //@ expect: compile-fail
 //@ args: -freflection
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 28:12 error "'cg' is initialized with a consteval-only value but is not declared 'constexpr'"
-//@ diag: 32:3 error "'w' is initialized with a consteval-only value but is not declared 'constexpr'"
-//@ diag: 39:6 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
-//@ diag: 40:16 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
-//@ diag: 40:30 error "consteval-only value outside an immediate function context"
-//@ diag: 42:6 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
-//@ diag: 47:3 error "consteval-only value outside an immediate function context"
-//@ diag: 49:7 error "consteval-only value outside an immediate function context"
-//@ diag: 51:13 error "consteval-only value outside an immediate function context"
-//@ diag: 52:14 error "consteval-only value outside an immediate function context"
-//@ diag: 54:31 error "consteval-only value outside an immediate function context"
-//@ diag: 60:21 error "consteval-only value outside an immediate function context"
-//@ diag: 55:37 error "consteval-only value outside an immediate function context"
-//@ diag: 57:10 note "in instantiation of function template specialization 'g<int>' requested here"
+//@ diag: 25:12 error "'cg' is initialized with a consteval-only value but is not declared 'constexpr'"
+//@ diag: 29:3 error "'w' is initialized with a consteval-only value but is not declared 'constexpr'"
+//@ diag: 37:30 error "consteval-only value outside an immediate function context"
+//@ diag: 44:3 error "consteval-only value outside an immediate function context"
+//@ diag: 46:7 error "consteval-only value outside an immediate function context"
+//@ diag: 48:13 error "consteval-only value outside an immediate function context"
+//@ diag: 49:14 error "consteval-only value outside an immediate function context"
+//@ diag: 51:31 error "consteval-only value outside an immediate function context"
+//@ diag: 57:21 error "consteval-only value outside an immediate function context"
+//@ diag: 52:37 error "consteval-only value outside an immediate function context"
+//@ diag: 54:10 note "in instantiation of function template specialization 'g<int>' requested here"
 using info = decltype(^^int);
 constexpr info r = ^^int;
 const info cg = ^^int;                 // a non-null reflection, not constexpr
@@ -36,10 +33,10 @@ struct S { static constexpr info sm = ^^int; };  // OK
 constexpr bool b1 = r == ^^int;        // OK: manifestly constant-evaluated
 bool b2 = r == ^^int;                  // OK: constant initialization
 static_assert(r == ^^int);
-info f1();                             // not consteval
-constexpr info f2() { return ^^int; }  // not consteval; a plain constexpr function does not escalate
+info f1();                             // OK: not consteval
+constexpr info f2() { return ^^int; }  // a plain constexpr function does not escalate
 consteval info f3() { return ^^int; }  // OK
-void f4(info);                         // a parameter of type info
+void f4(info);                         // OK: a parameter of type info
 auto lam = [](info x) { return x == ^^int; };  // OK: the call operator escalates
 template <info R> int tf() { return 1; }
 int u = tf<^^int>();                   // OK: a template argument

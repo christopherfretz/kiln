@@ -2305,8 +2305,8 @@ impl Cg<'_> {
                 }
                 // A variable with no run-time object named where its value
                 // did not fold (spec/codegen.md "Consteval-only variables").
-                if ast.decls.get(d).kind() == DeclKind::Var && self.no_runtime_object(d).is_some() {
-                    return Err(crate::module::runtime_reflection_error(self.loc_of(e)));
+                if ast.decls.get(d).kind() == DeclKind::Var && self.no_runtime_object(d) {
+                    return Err(crate::module::consteval_only_error(self.loc_of(e)));
                 }
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 if self.referee(dq).is_some() {
@@ -3645,7 +3645,7 @@ impl Cg<'_> {
             }
             if ast.exprs.get(root).kind() == ExprKind::DeclRefExpr
                 && ast.decls.get(ast.exprs.decl(root)).kind() == DeclKind::Var
-                && self.no_runtime_object(ast.exprs.decl(root)).is_some_and(|r| r.is_ok())
+                && self.no_runtime_object(ast.exprs.decl(root))
             {
                 return Ok(());
             }
@@ -5447,8 +5447,8 @@ impl Cg<'_> {
         // only for constant evaluation: sema made every use of it constant
         // ([expr.const.const]/3, P4101R1), so it has no storage
         // (spec/codegen.md "Consteval-only variables").
-        if let Some(r) = self.no_runtime_object(d) {
-            return r;
+        if self.no_runtime_object(d) {
+            return Ok(());
         }
         match v.spec.storage() {
             _ if is_static_local(ast, d) => {

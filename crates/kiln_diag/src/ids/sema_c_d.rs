@@ -153,7 +153,6 @@ sema_consteval_dtor = Error (0) "destructor cannot be declared consteval";
 // [expr.const.imm]/2.1, /3 (P4101R1): an immediate constant expression (a consteval-only value) outside an immediate function context and an immediate-escalating function; also [expr.const.const]/3's odr-use of a variable later defined as an immediate object.
 sema_consteval_only_expr = Error (0) "consteval-only value outside an immediate function context";
 // kiln restriction until a run-time std::meta::info exists (WP-1328 land 2; P2996R13 [basic.types.general]/12's function rule, removed by P4101R1).
-sema_consteval_only_fn = Error (0) "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)";
 // [expr.const.const]/3 (P4101R1): an immediate object that is not a constexpr variable's (a non-constexpr variable initialized with a consteval-only value).
 sema_consteval_only_var = Error (1) "'{0}' is initialized with a consteval-only value but is not declared 'constexpr'";
 sema_consteval_overrides = Error (2) "{0:consteval|non-consteval} function '{1}' cannot override a {0:non-consteval|consteval} function";

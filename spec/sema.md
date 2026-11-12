@@ -7278,7 +7278,7 @@ P2564 escalation ([expr.const]/16-20, [dcl.constexpr]/2).
   (`consteval_only.rs`, checked from `finish_immediate_invocations`).
   A non-exempt leaf in an immediate-escalating function escalates it
   through `escalate_consteval_only` (reason note `... because its body
-  contains an expression of consteval-only type 'std::meta::info'`,
+  contains a consteval-only value of type 'info' (aka 'std::meta::info')`,
   WP-473, `spec/consteval-blocks.md` §4); elsewhere it is
   `sema_consteval_only_expr`. The consteval block itself is
   §5.10's immediate function context by construction (a consteval

@@ -18,8 +18,14 @@ use crate::failure::Note;
 use crate::kbc::{Op, bi};
 use crate::ty::{OTy, TyKind};
 
-/// clang's `note_constexpr_bit_cast_invalid_type` reasons.
-const REASONS: [&str; 5] = ["union", "pointer", "member pointer", "volatile", "reference"];
+/// clang's `note_constexpr_bit_cast_invalid_type` reasons, then kiln's
+/// own: `std::meta::info`, the type with constexpr-unknown representation
+/// ([expr.const.core]/1.2, [bit.cast]/2 "Constant When", P4101R1).
+const REASONS: [&str; 6] =
+    ["union", "pointer", "member pointer", "volatile", "reference", "std::meta::info"];
+
+/// The `REASONS` index of `std::meta::info`.
+const META_INFO: usize = 5;
 
 /// clang's `checkBitCastConstexprEligibilityType`: the reason `q` cannot
 /// be bit-cast in a constant expression, with the notes naming the
@@ -29,6 +35,9 @@ fn ineligible(ast: &Ast, q: QualType, notes: &mut Vec<Note>) -> Option<usize> {
     let rec = ast.types.as_record(c).and_then(|d| ast.definition(d));
     if rec.and_then(|d| ast.decls.record(d)).is_some_and(|r| r.tag == TagKind::Union) {
         return Some(0);
+    }
+    if c.without_quals() == kiln_ast::types::BuiltinType::MetaInfo.qual_type() {
+        return Some(META_INFO);
     }
     match ast.types.canonical_kind(c) {
         TypeKind::Pointer => return Some(1),
@@ -161,11 +170,18 @@ impl Compiler<'_> {
             .map(|r| (r, "to"))
             .or_else(|| ineligible(self.ast(), qs, &mut notes).map(|r| (r, "from")));
         if let Some((r, dir)) = bad {
-            let (with, what) = if r == 4 { ("type with a ", "member") } else { ("", "type") };
-            let msg = format!(
-                "bit_cast {dir} a {with}{} {what} is not allowed in a constant expression",
-                REASONS[r]
-            );
+            let msg = if r == META_INFO {
+                format!(
+                    "bit_cast {dir} a type with constexpr-unknown representation \
+                     ('std::meta::info') is not allowed in a constant expression"
+                )
+            } else {
+                let (with, what) = if r == 4 { ("type with a ", "member") } else { ("", "type") };
+                format!(
+                    "bit_cast {dir} a {with}{} {what} is not allowed in a constant expression",
+                    REASONS[r]
+                )
+            };
             self.bit_cast_read(e, src, ts, td, loc);
             self.trap_notes(loc, msg, notes);
             return;
