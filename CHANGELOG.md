@@ -10,6 +10,29 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 Planned as 1.2.0.
 
+### Changed
+
+- Consteval-only values follow P4101R1 (the working draft's value-based
+  model) instead of P2996R13's consteval-only types (WP-1328, first
+  part). What is ill-formed is now decided by value: an immediate
+  object (one holding a non-null reflection, or a pointer to an
+  immediate function or into an immediate object) must be a `constexpr`
+  variable, a template parameter object, or live within a constant
+  expression, and an expression naming one is an immediate constant
+  expression, so it escalates or is an error outside an immediate
+  function context. Newly accepted: variables, members and pointers
+  whose reflections are all null (`std::meta::info x;`,
+  `thread_local info t;`), non-`constexpr` references bound to an
+  immediate object, and run-time reads of the other members of a
+  `constexpr` object whose reflections are null. Newly rejected: an
+  immediate object used by an odr-use before its definition. Still
+  rejected, as in 1.1.0: a run-time read of a member of an immediate
+  object (`const char* n = e.name;`). Wording: "consteval-only value"
+  replaces "consteval-only type". Code generation of a run-time
+  `std::meta::info` (a non-`constexpr` null reflection) is the error
+  "not supported yet" for now. These are divergences from GCC 16.1,
+  listed in [docs/status/deviations.md](docs/status/deviations.md).
+
 ## [1.1.0] - 2026-11-12
 
 C mode, and the fixes made since 1.0.2. The gate results are in

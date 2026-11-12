@@ -5,7 +5,7 @@
 //@ args: -freflection -I tests/support
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
-//@ diag: 19:6 error "consteval-only variable 'rv' not declared 'constexpr'"
+//@ diag: 19:6 error "'rv' is initialized with a consteval-only value but is not declared 'constexpr'"
 //@ diag: 20:13 error "splice operand must be a constant expression"
 //@ diag: 20:13 note "read of non-constexpr variable 'rv' is not allowed in a constant expression"
 //@ diag: 19:6 note "declared here"

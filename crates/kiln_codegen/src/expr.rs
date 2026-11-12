@@ -2303,6 +2303,11 @@ impl Cg<'_> {
                 {
                     return Ok(lv);
                 }
+                // A variable with no run-time object named where its value
+                // did not fold (spec/codegen.md "Consteval-only variables").
+                if ast.decls.get(d).kind() == DeclKind::Var && self.no_runtime_object(d).is_some() {
+                    return Err(crate::module::runtime_reflection_error(self.loc_of(e)));
+                }
                 let dq = ast.decls.get(d).ty().unwrap_or(q);
                 if self.referee(dq).is_some() {
                     // clang `EmitLoadOfReferenceLValue`: the slot holds the
@@ -3622,6 +3627,28 @@ impl Cg<'_> {
             && ast.exprs.unary_op(e) == UnaryOp::Extension
         {
             return self.emit_ignored(ast.exprs.operand(e));
+        }
+        // A discarded name of a variable with no run-time object, or of a
+        // subobject of one (`(void)r;`, the ignored base `go.inner` of a
+        // folded `go.inner.n`, of a `constexpr` one holding null
+        // reflections), reads nothing.
+        if !self.is_volatile(q) {
+            let mut root = e;
+            loop {
+                match ast.exprs.get(root).kind() {
+                    ExprKind::ParenExpr => root = ast.exprs.operand(root),
+                    ExprKind::MemberExpr if !ast.exprs.get(root).has(ExprFlags::ARROW) => {
+                        root = ast.exprs.operand(root);
+                    }
+                    _ => break,
+                }
+            }
+            if ast.exprs.get(root).kind() == ExprKind::DeclRefExpr
+                && ast.decls.get(ast.exprs.decl(root)).kind() == DeclKind::Var
+                && self.no_runtime_object(ast.exprs.decl(root)).is_some_and(|r| r.is_ok())
+            {
+                return Ok(());
+            }
         }
         if !self.is_glvalue(e) {
             if self.is_aggregate(q) {
@@ -5415,15 +5442,13 @@ impl Cg<'_> {
     fn emit_one_var_decl(&mut self, d: DeclId) -> R<()> {
         let ast = self.ast;
         let Some(v) = ast.decls.var(d) else { return Ok(()) };
-        // A consteval-only variable (`constexpr std::meta::info r`, an
+        // An immediate object (`constexpr std::meta::info r`, an
         // expansion statement's range and iterators over `info`s) exists
-        // only for constant evaluation: sema made it `constexpr` and every
-        // use of it constant ([basic.types.general], P2996R13), so it has
-        // no storage (spec/codegen.md "Consteval-only variables").
-        if let Some(q) = ast.decls.get(d).ty()
-            && self.is_consteval_only(q)
-        {
-            return Ok(());
+        // only for constant evaluation: sema made every use of it constant
+        // ([expr.const.const]/3, P4101R1), so it has no storage
+        // (spec/codegen.md "Consteval-only variables").
+        if let Some(r) = self.no_runtime_object(d) {
+            return r;
         }
         match v.spec.storage() {
             _ if is_static_local(ast, d) => {

@@ -12,10 +12,10 @@
 //@ skip(clang): clang does not implement P2996 reflection
 //@ oracle: gcc
 //@ strict-diags
-//@ diag: 24:67 error "consteval-only expressions are only allowed in a constant-evaluated context"
+//@ diag: 26:56 error "consteval-only value outside an immediate function context"
+//@ diag: 24:67 error "consteval-only value outside an immediate function context"
 //@ diag: 30:3 note "in instantiation of function template specialization 'tp<E>' requested here"
-//@ diag: 26:56 error "consteval-only expressions are only allowed in a constant-evaluated context"
-//@ diag: 27:81 error "consteval-only expressions are only allowed in a constant-evaluated context"
+//@ diag: 27:81 error "consteval-only value outside an immediate function context"
 //@ diag: 32:3 note "in instantiation of function template specialization 'tb<E>' requested here"
 #include <meta>
 #include <cstdio>

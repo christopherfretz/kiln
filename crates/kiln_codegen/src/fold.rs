@@ -11,7 +11,7 @@
 use kiln_abi::Target;
 use kiln_ast::consts::ConstStore;
 use kiln_ast::decl::{DeclFlags, DeclKind, VarStorage};
-use kiln_ast::expr::{BinaryOp, CastKind, ExprKind, UnaryOp};
+use kiln_ast::expr::{BinaryOp, CastKind, ExprFlags, ExprKind, UnaryOp};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::types::{RecordLayout, TypeFlags, TypeView};
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StmtId};
@@ -791,7 +791,7 @@ impl Collect<'_> {
                         let q = ast.types.effective_quals(t);
                         q.is_const() && !q.is_volatile()
                     });
-                if integral || stat {
+                if integral || stat || names_reflection_holder(ast, e) {
                     self.out.push(e);
                 }
                 if stat && let Some(init) = ast.decls.var(d).and_then(|v| v.init) {
@@ -985,6 +985,31 @@ pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     }
     let q = ast.types.effective_quals(ty);
     q.is_const() && !q.is_volatile()
+}
+
+/// Whether member access `e` reads a subobject of a constant variable
+/// whose value holds a reflection (`gs.name` of `constexpr S gs{{},
+/// "x"}`): that variable has no run-time object (spec/codegen.md
+/// "Consteval-only variables"), so the read must fold.
+fn names_reflection_holder(ast: &Ast, mut e: ExprId) -> bool {
+    loop {
+        match ast.exprs.get(e).kind() {
+            ExprKind::MemberExpr if !ast.exprs.get(e).has(ExprFlags::ARROW) => {
+                e = ast.exprs.operand(e);
+            }
+            ExprKind::ParenExpr => e = ast.exprs.operand(e),
+            ExprKind::ImplicitCastExpr if ast.exprs.cast_kind(e) == CastKind::NoOp => {
+                e = ast.exprs.operand(e);
+            }
+            _ => break,
+        }
+    }
+    if ast.exprs.get(e).kind() != ExprKind::DeclRefExpr {
+        return false;
+    }
+    let d = ast.exprs.decl(e);
+    ast.decls.get(d).kind() == DeclKind::Var
+        && ast.object_value(d).is_some_and(|c| ast.holds_reflection(c))
 }
 
 /// Whether local variable `d` has static or thread storage duration

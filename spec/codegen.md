@@ -1377,26 +1377,42 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   for `break` and `return` (WP-793, `outline.rs`; the full rule is
   spec/landed/codegen/WP-793.md).
 
-- Consteval-only variables (WP-534): a block-scope variable whose type
-  is consteval-only (P2996R13 [basic.types.general]: `std::meta::info`,
-  or a type that contains one through an array element, pointee,
-  referee, member pointer, function return or parameter type, base or
-  non-static data member; spec/reflection-repr.md §6) is never emitted:
-  `emit_one_var_decl` returns before allocating storage or lowering the
-  initializer (`Cg::is_consteval_only`, `module.rs`, a walk over the
-  canonical type memoized per record). Such a variable can only be used
-  in constant expressions, and every use of it in emitted code is
-  already folded. In particular an expansion statement over a range of
-  `info` (a `define_static_array` variable template or call, a
-  `static constexpr info arr[]` local) emits no range object, no
-  `__range`/`__begin`/`__end` and no structured-binding object: its
-  prelude declarations are all consteval-only, and each element's
-  constexpr `R` is substituted as a constant
-  (`tests/conformance/stmt.expand/reflection-info-range-run.cpp`).
-  A namespace-scope one is not emitted either, whatever its linkage
-  (`extern constexpr info r = ^^S;`, an `export`ed one of a module
-  interface, WP-1047): `emit_global_var` returns before it too
-  (`tests/conformance/basic.types.general/consteval-only-extern-run.cpp`).
+- Consteval-only variables (WP-534, WP-1328; P4101R1, by value):
+  `Cg::no_runtime_object(d)` (`module.rs`, memoized per variable)
+  decides whether variable `d` gets a run-time object. An *immediate
+  object* (`Ast::is_immediate_var`: its constant value has a
+  consteval-only constituent, a non-null reflection or a pointer to an
+  immediate object or function; spec/reflection-repr.md §6) has none:
+  sema made every use of it constant or an error. A variable whose type
+  reaches `std::meta::info` (`Cg::reaches_meta_info`: `info`, or a type
+  containing one through an array element, pointee, referee, member
+  pointer, function return or parameter type, base or non-static data
+  member, memoized per record) has none either, as codegen has no
+  run-time representation for a reflection yet: a `constexpr` one (one
+  holding null reflections, `access_context::unchecked()`) is read only
+  through its constant value, and any other — `std::meta::info x;`, a
+  global `S s;` of a class with an `info` member, `info* p;`, all
+  well-formed since P4101R1 — is the error "code generation for a
+  run-time 'std::meta::info' value is not supported yet (P4101R1
+  run-time reflections)" at its declaration, as is a reflection
+  constant reaching `scalar_const` (land 2 of WP-1328 adds the
+  representation). `emit_one_var_decl` and `emit_global_var` (whatever
+  the linkage: `extern constexpr info r = ^^S;`, an `export`ed one of a
+  module interface, WP-1047) return before allocating storage or
+  lowering the initializer. A scalar member read through `.` of such a
+  variable whose value holds a reflection (`s.name` of `constexpr S
+  s{{}, "x"}`) is a fold candidate (`fold.rs` `names_reflection_holder`)
+  and emits as its constant; a discarded name of one (`(void)ctx;`)
+  emits nothing; any other use reaching `decl_lvalue` is the same "not
+  supported yet" error, never a reference to a missing symbol. In
+  particular an expansion statement over a range of `info` (a
+  `define_static_array` variable template or call, a `static constexpr
+  info arr[]` local) emits no range object, no `__range`/`__begin`/
+  `__end` and no structured-binding object: its prelude declarations are
+  all without object, and each element's constexpr `R` is substituted as
+  a constant (`tests/conformance/stmt.expand/reflection-info-range-run.cpp`,
+  `tests/conformance/basic.types.general/consteval-only-extern-run.cpp`,
+  `tests/conformance/expr.const.const/`).
 
 ## 5. Driver (`kiln_driver::codegen_cmd`, `link`)
 The normative description is spec/driver.md "Code generation". In short:

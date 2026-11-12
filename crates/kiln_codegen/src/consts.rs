@@ -255,7 +255,7 @@ impl Cg<'_> {
                 }
                 Ok(p)
             }
-            Scalar::Reflection { .. } => err(None, "reflection values cannot be emitted"),
+            Scalar::Reflection { .. } => Err(crate::module::runtime_reflection_error(None)),
         }
     }
 

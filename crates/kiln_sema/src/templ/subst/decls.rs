@@ -1627,7 +1627,14 @@ impl Substituter<'_, '_, '_> {
     pub(crate) fn static_assert_decl(&mut self, d: DeclId) -> SubstResult<(DeclId, bool)> {
         let loc = self.sema.ast.decls.get(d).loc();
         let Some(sa) = self.sema.ast.decls.static_assert(d).copied() else { return Err(SubstFail) };
-        let c = self.expr(sa.cond)?;
+        // Manifestly constant-evaluated, as where it was written (clang
+        // `TransformStaticAssertDecl`'s `ConstantEvaluated` context): its
+        // invocations are not immediate invocations, nor its
+        // consteval-only values leaves (WP-1328).
+        self.sema.enter_constant_evaluated();
+        let c = self.expr(sa.cond);
+        self.sema.exit_constant_evaluated(c.as_ref().ok().copied());
+        let c = c?;
         let m = self.opt_expr(sa.message)?;
         // The errors of the check itself (a failed assertion, a condition
         // that is not constant) leave a declaration; those of a body

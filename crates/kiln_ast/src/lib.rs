@@ -16,6 +16,7 @@ pub mod ast;
 pub mod attr;
 pub mod builder;
 pub mod class;
+pub mod consteval_only;
 pub mod consts;
 pub mod decl;
 pub mod diag_names;
