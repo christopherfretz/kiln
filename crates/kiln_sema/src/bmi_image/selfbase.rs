@@ -93,7 +93,7 @@ impl Sema<'_, '_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::tests::template_sample;
     use super::super::{
         ArgRec, BUILTINS, BaseRec, DEP, DeclRec, NONE, QRef, TyRec, builtintempl, decode, encode,
@@ -104,7 +104,7 @@ mod tests {
     /// `template_sample` plus `template <class T> struct Ch : Ch<T *> {};`
     /// and the dependent `__make_integer_seq<Ch, int>` (a builtin
     /// template's stub, record 17); the pattern's record.
-    fn sample() -> (Image, usize) {
+    pub(in super::super) fn sample() -> (Image, usize) {
         let q = |ty| QRef { ty, quals: 0 };
         let mut img = template_sample();
         let i = img.decls.len() as u32;

@@ -57,7 +57,9 @@ mod deptypes;
 mod depusing;
 mod explinst;
 mod exprs;
+mod fnspec;
 mod friend;
+mod latedef;
 mod localexterns;
 mod locs;
 mod members;
@@ -73,6 +75,7 @@ mod spec;
 mod specinit;
 mod templ;
 mod tttp;
+mod varspec;
 mod written;
 
 use body::{Bodies, BodyState, Root};
@@ -81,7 +84,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 28;
+pub(crate) const IMAGE_VERSION: u32 = 29;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -734,6 +737,14 @@ struct Image {
     late_nx: Vec<exprs::LateNx>,
     /// WP-1314: what sema keeps beside defaulted comparisons.
     defcmps: defcmp::DefCmps,
+    /// WP-1352: the heads of partial specialization definitions written
+    /// after their declarations.
+    lheads: latedef::LateHeads,
+    /// WP-1352: the specialization references that are explicit
+    /// instantiation declarations of function template specializations.
+    fexpl: varspec::FnExplDecls,
+    /// WP-1352: the uses of explicit function specializations.
+    fsuses: fnspec::FnSpecUses,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1479,6 +1490,9 @@ fn encode(img: &Image) -> Vec<u8> {
     patinit::encode_pattern_inits(&mut w, &img.patinits);
     exprs::encode_texprs(&mut w, &img.texprs, &img.late_nx);
     defcmp::encode_defaulted_cmps(&mut w, &img.defcmps);
+    latedef::encode_late_heads(&mut w, &img.lheads);
+    varspec::encode_fn_expl_decls(&mut w, &img.fexpl);
+    fnspec::encode_fn_spec_uses(&mut w, &img.fsuses);
     w.0
 }
 
@@ -2180,6 +2194,9 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.patinits = patinit::decode_pattern_inits(&mut r)?;
     (img.texprs, img.late_nx) = exprs::decode_texprs(&mut r)?;
     img.defcmps = defcmp::decode_defaulted_cmps(&mut r)?;
+    img.lheads = latedef::decode_late_heads(&mut r)?;
+    img.fexpl = varspec::decode_fn_expl_decls(&mut r)?;
+    img.fsuses = fnspec::decode_fn_spec_uses(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2258,6 +2275,7 @@ fn unlisted(img: &Image, i: usize, d: &DeclRec) -> bool {
     body::is_local(img, d)
         || d.flags & DEP != 0
         || classtempl::explicit_of(img, i as u32).is_some()
+        || latedef::late_def_of(img, i as u32).is_some()
         // Found through their shadows (S6).
         || matches!(d.payload, Payload::Using { .. } | Payload::UsingEnum { .. })
 }
@@ -2447,6 +2465,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
     patinit::validate_pattern_inits(img, &|q| qref_at(q, nd))?;
     defcmp::validate_defaulted_cmps(img)?;
+    latedef::validate_late_defs(img, &mut claimed)?;
+    varspec::validate_fn_expl_decls(img)?;
+    fnspec::validate_fn_spec_uses(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -3251,6 +3272,9 @@ struct Writer<'s, 'a, 'b> {
     /// WP-1344: the class template whose pattern's bases are being
     /// written, and the record it will have ([`selfbase`]).
     fwd_tmpl: Option<(DeclId, u32)>,
+    /// WP-1352: explicit specializations defined after other
+    /// declarations ([`latedef`]).
+    late: latedef::LateDefs,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -3407,6 +3431,9 @@ impl Writer<'_, '_, '_> {
     fn ty(&mut self, t: TypeId) -> W<u32> {
         if let Some(&i) = self.tmemo.get(&t) {
             return Ok(i);
+        }
+        if let Some(r) = self.uncarried_subst(t) {
+            return self.ty(r);
         }
         if let Some(rec) = self.template_ty(t)? {
             let i = BUILTINS + 1 + self.img.types.len() as u32;
@@ -3799,8 +3826,8 @@ impl Writer<'_, '_, '_> {
         let access = m.access() as u8;
         let ctx = match n.ctx() {
             Some(c) if c == ast.tu => NONE,
-            Some(c) => match self.recs.get(&c) {
-                Some(&r) => r,
+            Some(c) => match self.class_rec(c) {
+                Some(r) => r,
                 // A member (an out-of-line definition, say) of a class the
                 // image refused: a cascade of the class's own reason.
                 None if ast.decls.get(c).kind() == DeclKind::CXXRecord => {
@@ -3813,7 +3840,7 @@ impl Writer<'_, '_, '_> {
         let lexical = if n.has(DeclFlags::HAS_LEXICAL_CTX) {
             match ast.decls.lexical_ctx(d) {
                 Some(c) if c == ast.tu => LEX_TU,
-                Some(c) => self.recs.get(&c).copied().ok_or("an unsupported lexical context")?,
+                Some(c) => self.class_rec(c).ok_or("an unsupported lexical context")?,
                 None => return Err("an unsupported lexical context"),
             }
         } else {
@@ -3836,6 +3863,8 @@ impl Writer<'_, '_, '_> {
             }
             None => NONE,
             Some(p) if self.implicit_prev(d, p) => NONE,
+            // WP-1352: an explicit specialization's written declaration.
+            Some(p) if self.fn_spec_prev(d, p) => NONE,
             Some(p) => self
                 .recs
                 .get(&p)
@@ -4066,6 +4095,8 @@ impl Writer<'_, '_, '_> {
             // A member function template's (WP-1292) and a deduction
             // guide's (WP-1284) too.
             Some((TemplLinkKind::Pattern, _)) => true,
+            // WP-1352: an explicit specialization's written declaration.
+            Some(_) if self.fn_spec_entry(d, i)? => false,
             Some(_) => return Err("a template specialization"),
         };
         let spec = fd.spec;
@@ -4317,6 +4348,8 @@ impl Writer<'_, '_, '_> {
                     .described_template(ast.first(d))
                     .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::ClassTemplate) => {}
             // WP-1283: listed with its template and arguments.
+            Some((TemplLinkKind::Specialization | TemplLinkKind::PartialSpecialization, _))
+                if self.late_emitting(d) => {}
             Some((TemplLinkKind::Specialization | TemplLinkKind::PartialSpecialization, _)) => {
                 self.class_spec_entry(d, i)?;
             }
@@ -4325,6 +4358,11 @@ impl Writer<'_, '_, '_> {
         self.cold_gate(d)?;
         let tag = rd.tag as u8;
         if ast.definition(d) != Some(d) {
+            return Ok(Payload::Record { tag, def: None });
+        }
+        // WP-1352: defined after other declarations, in a record of its own.
+        if let Some(m) = self.late_split(d) {
+            self.late_defer(d, m);
             return Ok(Payload::Record { tag, def: None });
         }
         let b = rd.defn;
@@ -4476,7 +4514,11 @@ impl Writer<'_, '_, '_> {
         self.img.main = sm.file_name(self.main).to_owned();
         let mut st = Pass::default();
         for d in self.collect_order() {
+            self.late_def_at(d, &mut st)?;
             if self.census.as_ref().is_some_and(|c| !c.dead.is_empty()) && self.census_dead(d) {
+                continue;
+            }
+            if self.var_spec_at(d)? || self.member_inst_at(d)? {
                 continue;
             }
             let before = self.marks();
@@ -4660,6 +4702,10 @@ impl Writer<'_, '_, '_> {
         self.usings.retain(|_, v| *v < n);
         self.tmemo.retain(|_, v| *v < t);
         self.img.cspecs.truncate(n);
+        self.late.truncate(n);
+        self.img.lheads.truncate(n);
+        self.img.fexpl.truncate(n);
+        self.img.fsuses.truncate(n);
         self.img.attrs.params.retain(|(_, r)| r.decl < n);
         let k = self.img.explinsts_len() as u32;
         self.img.attrs.insts.retain(|r| r.decl < k);
@@ -4913,7 +4959,7 @@ impl Writer<'_, '_, '_> {
                 .ok_or("an implicit declaration that is not a special member")?;
             let implicit_default =
                 ast.decls.function(d).is_some_and(|f| f.spec.defaulted() == Defaulted::Implicit);
-            let class = n.ctx().and_then(|c| self.recs.get(&c).copied());
+            let class = n.ctx().and_then(|c| self.class_rec(c));
             if class.is_some_and(|c| self.img.decls[c as usize].flags & DEP != 0) {
                 return Err("an implicit member of a class template");
             }
@@ -5068,6 +5114,7 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             deferred: FxHashSet::default(),
             complete_specs: Vec::new(),
             fwd_tmpl: None,
+            late: latedef::LateDefs::default(),
         })
     }
 }
@@ -5266,6 +5313,7 @@ impl Sema<'_, '_> {
             explinst::explicit_inst_locs(&img, &mut offs);
             patinit::pattern_init_locs(&img, &mut offs);
             defcmp::defaulted_cmp_locs(&img, &mut offs);
+            latedef::late_head_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -5445,6 +5493,10 @@ impl Sema<'_, '_> {
                     }
                     let f = if kind == DeclKind::CXXDeductionGuide {
                         self.builder().deduction_guide(h, fty, spec)
+                    } else if let Some(f) =
+                        self.image_fn_spec(img, &mut tys, &ids, i as u32, &h, fty, spec)
+                    {
+                        f
                     } else {
                         self.builder().function(h, kind, fty, spec, prev)
                     };
@@ -5567,7 +5619,12 @@ impl Sema<'_, '_> {
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
                     }
-                    let c = if classtempl::partial_of(img, i as u32).is_some()
+                    // WP-1352: the definition of an explicit
+                    // specialization declared before.
+                    let c = if let Some(p) = latedef::late_def_of(img, i as u32) {
+                        let c = ids[p as usize];
+                        self.image_late_def(img, &ids, main, i as u32, c, h.loc)
+                    } else if classtempl::partial_of(img, i as u32).is_some()
                         || classtempl::explicit_of(img, i as u32).is_some()
                     {
                         self.image_class_spec(img, &mut tys, &ids, main, i as u32, h, tag)
@@ -5722,9 +5779,16 @@ impl Sema<'_, '_> {
                 }
                 Payload::Spec { .. } => {
                     let loc = lo(self, r.loc);
-                    self.image_spec(img, &mut tys, &ids, r, loc).unwrap_or(self.ast.tu)
+                    let s = self.image_spec(img, &mut tys, &ids, r, loc).unwrap_or(self.ast.tu);
+                    self.image_fn_expl_decl(img, i as u32, s, loc);
+                    s
                 }
-                Payload::Member { .. } => self.image_member(&ids, r),
+                Payload::Member { .. } => {
+                    let m = self.image_member(&ids, r);
+                    let loc = lo(self, r.loc);
+                    self.image_member_expl_decl(img, i as u32, m, loc);
+                    m
+                }
                 Payload::Using { steps } => {
                     if let Some(op) = r
                         .name
@@ -5905,6 +5969,7 @@ impl Sema<'_, '_> {
         self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
         self.image_mark_specs(img, &ids, main);
+        self.image_fn_spec_uses(img, &ids, main);
         // Defaulted and implicit special members the module used are
         // defined again (spec/modules.md §11.11 "Classes").
         for (f, flags) in defaulted {
@@ -6523,6 +6588,9 @@ mod tests {
             explinsts: explinst::ExplInsts::default(),
             patinits: patinit::PatInits::default(),
             defcmps: defcmp::DefCmps::default(),
+            lheads: latedef::LateHeads::default(),
+            fexpl: varspec::FnExplDecls::default(),
+            fsuses: fnspec::FnSpecUses::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

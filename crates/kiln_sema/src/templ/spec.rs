@@ -482,6 +482,7 @@ impl Sema<'_, '_> {
             }
             if use_ == TagUse::Definition {
                 self.templ.partial_def_loc.insert(p, name_loc);
+                self.templ.partial_def_head.insert(p, head);
                 self.take_spec_class_key(p, keyword);
             }
             return Ok(p);

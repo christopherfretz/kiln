@@ -1224,3 +1224,101 @@ What remains, by headers freed:
    (`ranges:2755`, gnu 1/2).
 5. An explicit specialization of a member class template defined out
    of class (`future:674`, gnu 1/1).
+
+## WP-1352: PCH image wave 8a, the specialization forms WP-1344 left (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 108 libstdc++), before (base `03a0cba1b`),
+on main after WP-1345 (#649, its own census above, "main") and on this
+WP merged with it ("after"). Reasons are declarations / headers; the
+per-reason figures below compare the base with this WP before the
+merge (the forms are this WP's alone).
+
+```
+lcx.h, before: 26762 top-level declarations, 24702 carried, 2060 not
+lcx.h, main:   26704 top-level declarations, 25687 carried, 1017 not
+lcx.h, after:  26704 top-level declarations, 25915 carried,  789 not
+gnu.h, before: 26396 top-level declarations, 24887 carried, 1509 not
+gnu.h, main:   26396 top-level declarations, 25475 carried,  921 not
+gnu.h, after:  26396 top-level declarations, 25674 carried,  722 not
+```
+
+Headers through the image: libc++ 33 of 106 before, 35 main, 35
+after; libstdc++ 35 of 108 before, 35 main (of 109, WP-1345's list),
+36 after. Against main: lcx +228 carried, gnu +199. First refusal of
+`lcx.h`: before, "a template argument the image does not carry: an
+explicit argument of a name in a body"
+(`__type_traits/is_valid_expansion.h:27`, this bucket's); after, "a
+template named through a qualifier or parameter"
+(`__iterator/iterator_traits.h:101`, another bucket's, the first
+refusal of 40 libc++ headers). Of `gnu.h`: main, "a redeclared partial
+specialization" (`bits/stl_pair.h:1175`, this bucket's); after, "a
+redeclaration of an entity outside the image" (`new:94`, another
+bucket's, the first refusal of 36 libstdc++ headers). This bucket's
+per-header first refusals left: libc++ "a variable template
+specialization" (1, `numbers:139`), "a partial specialization argument
+the image does not carry" (1, `segmented_iterator.h:72`), "a
+specialization named while its user is recorded" (1), "a
+specialization of a constrained template: completed, with a
+constrained partial specialization" (1).
+
+Reasons of this bucket (lcx before → after, gnu before → after):
+
+- a redeclared partial specialization: 2/21 → 0; gnu 3/63 → 0.
+- the explicit specialization declared, then defined
+  (`__fwd/string.h:29`): its cascades went ("a specialization of a
+  template outside the image" at `__fwd/string.h:29..39`).
+- a variable template specialization: 15/2 → 15/2 (libc++'s are
+  constrained, `numbers:139`); gnu 21/57 → 0.
+- a template argument the image does not carry: an explicit argument of
+  a name in a body: 2/61 → 0; gnu 2/50 → 0. "... a substituted
+  parameter of an uncarried template": 0/2 → 0; gnu 11/28 → 0.
+- a template specialization: 20/35 → 0; gnu 156/37 → 0 (explicit
+  specializations and explicit instantiation declarations of function
+  templates; definitions would be "... an explicit instantiation
+  definition", none in either library's headers).
+- an explicit specialization or instantiation: 31/34 → 0; gnu 75/28 →
+  0 (typedefs naming the refused explicit specializations, and
+  extern templates).
+- an explicitly specialized member: 4/26 → 0 (libc++'s `extern
+  template` of single `basic_string` members, `__locale:1422`).
+- unchanged: a specialization of a partial specialization 23/35 (gnu
+  16/42), constrained completions 34/34 + 5/8 (gnu 11/29 + 6/30), an
+  explicit specialization argument the image does not carry 7/27 (gnu
+  1/31), a specialization named while its user is recorded 5/6 (gnu
+  1/2), a partial specialization argument 1/51, an implicit member of
+  a class template specialization 29/60 (gnu 37/37).
+
+Pre-existing bug found (not image-related, xfail
+`module.interface/explicit-inst-def-after-imported-extern-run.cpp`): an
+importer's explicit instantiation definition of a function template
+specialization that the imported module declared `extern template` is
+not emitted (kiln_codegen module.rs `is_imported_named_unit_decl`).
+
+What remains, by headers freed (merged tree):
+
+1. Completed specializations of templates with constrained partial
+   specializations or members (`__atomic/aliases.h:28` 35/34,
+   `__format/format_context.h:69` 7/15, `bits/stl_bvector.h:760` 6/30,
+   `bits/iterator_concepts.h:695` 11/29): the reader must complete
+   them after the constraints.
+2. A specialization named while its user is recorded: 10/57 lcx
+   (`__compare/compare_partial_order_fallback.h:60`, exposed by
+   WP-1345's implicit members), `deque:2588`; gnu 1/2 (`barrier:87`).
+3. A specialization of a partial specialization: 38/37 lcx
+   (`__chrono/duration.h:485`), gnu
+   26/42 (`bits/basic_string.h:4240`).
+4. The partial specialization argument at `segmented_iterator.h:72`
+   (1/51) and an explicit specialization argument (gnu
+   `text_encoding:671`, 1/31).
+5. An explicit argument of a name in a body, newly exposed in gnu
+   (`chrono:2497`, 6/2).
+6. Constrained variable templates and variable templates with partial
+   specializations (`numbers:139`, 15/2).
+7. Function template explicit specializations declared more than once,
+   with pack arguments, or at class scope; explicit instantiation
+   definitions of function templates and members.
+
+(The implicit member of a class template specialization is gone:
+WP-1345 carries it.)

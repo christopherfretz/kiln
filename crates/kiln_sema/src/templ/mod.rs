@@ -197,6 +197,9 @@ pub struct TemplState {
     /// was defined: the redefinition note points there (kiln reuses the
     /// first declaration, clang adds a redeclaration).
     pub(crate) partial_def_loc: kiln_source::fx::FxHashMap<DeclId, Loc>,
+    /// The template-head of each such definition (WP-1352: the
+    /// declaration image writes it with the definition's record).
+    pub(crate) partial_def_head: kiln_source::fx::FxHashMap<DeclId, TemplateParamListId>,
     /// The head consumed by the declaration being built: its pattern is
     /// wrapped in a template decl by [`Sema::finish_template_pattern`].
     pub(crate) cur: Option<TemplateParamListId>,
