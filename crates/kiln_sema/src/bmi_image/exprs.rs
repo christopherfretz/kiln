@@ -386,24 +386,36 @@ impl Sema<'_, '_> {
     ) {
         let Some(t) = img.types.get(k) else { return };
         for i in ty_texprs(t) {
-            let i = i as usize;
-            if !matches!(self.image_texprs.built.get(i), Some(Sec::Unbuilt)) {
-                continue;
-            }
-            self.image_texprs.built[i] = Sec::Pending;
-            let b = &img.texprs[i];
-            // Every record a section names is built before the type
-            // (validated); checked again, never trusted.
-            if body::section_decl_bound(b) > ids.len() {
-                continue;
-            }
-            let Some(locs) = self.image_texprs.locs.take() else { continue };
-            let root = self.image_texpr_section(img, tys, ids, b, &locs);
-            self.image_texprs.locs = Some(locs);
-            if let Some(r) = root {
-                self.image_texprs.built[i] = Sec::Built(r);
+            self.image_texpr_build(img, tys, ids, i);
+        }
+    }
+
+    /// Builds section `i` unless it is built (or being built); its root.
+    /// Every record a section names is built before its holder (a type,
+    /// or since WP-1320 a non-type parameter's default); checked again,
+    /// never trusted.
+    pub(super) fn image_texpr_build(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        i: u32,
+    ) -> Option<ExprId> {
+        let k = i as usize;
+        if matches!(self.image_texprs.built.get(k), Some(Sec::Unbuilt)) {
+            self.image_texprs.built[k] = Sec::Pending;
+            let b = &img.texprs[k];
+            if body::section_decl_bound(b) <= ids.len()
+                && let Some(locs) = self.image_texprs.locs.take()
+            {
+                let root = self.image_texpr_section(img, tys, ids, b, &locs);
+                self.image_texprs.locs = Some(locs);
+                if let Some(r) = root {
+                    self.image_texprs.built[k] = Sec::Built(r);
+                }
             }
         }
+        self.image_texpr(i)
     }
 
     /// The root of section `i`, once built.

@@ -213,17 +213,10 @@ impl Writer<'_, '_, '_> {
             let converted: Vec<TemplateArg> = ast.types.args(si.args).to_vec();
             let packs = converted.iter().any(|a| matches!(a.view(), ArgView::Pack(_)));
             // The parameters the written arguments leave to their
-            // defaults: a non-type parameter's default is built after
-            // the records, too late for `get_class_spec`.
-            let info = ast.template_info(ast.first(si.template)).ok_or(MALFORMED)?;
-            let plist = ast.templates.param_list(info.params).params;
-            let defaulted = ast.lists.iter::<DeclId>(plist).skip(written.len()).any(|q| {
-                ast.decls.get(q).kind() != DeclKind::TemplateTypeParm
-                    && ast.templates.defaults.get(q).is_some()
-            });
-            if defaulted {
-                return Err("an explicit specialization using a non-type default argument");
-            }
+            // defaults: a non-type parameter's default is built with its
+            // record when it is a section (WP-1320), else after the
+            // records, too late for `get_class_spec`.
+            self.spec_defaults_ok(d, si.template, written.len())?;
             let mut out = Vec::with_capacity(written.len());
             for (k, a) in written.into_iter().enumerate() {
                 // `X<3>`: the converted value, which prints the same.
@@ -235,6 +228,87 @@ impl Writer<'_, '_, '_> {
         };
         self.img.cspecs.specs.push(entry);
         Ok(())
+    }
+
+    /// Whether the importer converts the defaults explicit specialization
+    /// `d` of `template` leaves to its non-type parameters (after
+    /// `written` arguments) as replay did (WP-1320): each default is an
+    /// expression section of the head template's own parameter (one
+    /// inherited from another declaration is set after the records), and
+    /// what converting it instantiated (the specializations whose point
+    /// of instantiation is `d`'s) is classes without static data members
+    /// or member functions: their initializers and bodies come with the
+    /// image's bodies, after the record.
+    fn spec_defaults_ok(&self, d: DeclId, template: DeclId, written: usize) -> W<()> {
+        const WHY: &str = "an explicit specialization using a non-type default argument";
+        let s = self.s;
+        let ast = &s.ast;
+        let head = s.head_template(ast.first(template));
+        let info = ast.template_info(head).ok_or(MALFORMED)?;
+        let plist = ast.templates.param_list(info.params).params;
+        let mut ranges = Vec::new();
+        for q in ast.lists.iter::<DeclId>(plist).skip(written) {
+            if ast.decls.get(q).kind() == DeclKind::TemplateTypeParm {
+                continue;
+            }
+            let own = ast.templates.defaults.get(q).copied();
+            if own.is_none() && s.template_default(q).is_some() {
+                return Err(WHY);
+            }
+            let sect = self.recs.get(&q).is_some_and(|&r| {
+                matches!(self.img.decls[r as usize].payload, Payload::Nttp { sect: true, .. })
+            });
+            match own.map(|a| a.view()) {
+                None => {}
+                Some(ArgView::Expr { expr, .. }) if sect => {
+                    ranges.push((ast.decls.get(q).loc(), ast.end_loc(expr)));
+                }
+                Some(_) => return Err(WHY),
+            }
+        }
+        if ranges.is_empty() {
+            return Ok(());
+        }
+        // Everything the defaults instantiated: at the specialization, or
+        // inside a default's own text. A consumer rebuilds those from the
+        // section, so each must be a class the record phase completes
+        // without bodies (no static data members, no member functions).
+        let at = ast.decls.get(d).loc();
+        for x in
+            self.instantiated_where(|l| l == at || ranges.iter().any(|&(b, e)| b <= l && l <= e))
+        {
+            let class_ok = ast.decls.get(x).kind() == DeclKind::CXXRecord
+                && ast.members(x).all(|m| {
+                    !matches!(ast.decls.get(m).kind(), DeclKind::Var)
+                        && ast.decls.function(m).is_none()
+                });
+            if !class_ok {
+                return Err(WHY);
+            }
+        }
+        Ok(())
+    }
+
+    /// The implicit instantiations whose point of instantiation satisfies
+    /// `at` (WP-1320; indexed on first use).
+    fn instantiated_where(&self, at: impl Fn(kiln_source::Loc) -> bool) -> Vec<DeclId> {
+        use kiln_ast::RawId as _;
+        let ast = &self.s.ast;
+        let map = self.poi.get_or_init(|| {
+            let mut m: kiln_source::fx::FxHashMap<kiln_source::Loc, Vec<DeclId>> =
+                kiln_source::fx::FxHashMap::default();
+            for raw in 1..ast.decls.next_id().raw() {
+                let Some(x) = DeclId::from_raw(raw) else { continue };
+                if let Some((_, si)) = ast.spec_info(x)
+                    && si.kind == SpecKind::ImplicitInstantiation
+                    && si.point_of_instantiation.is_valid()
+                {
+                    m.entry(si.point_of_instantiation).or_default().push(x);
+                }
+            }
+            m
+        });
+        map.iter().filter(|(l, _)| at(**l)).flat_map(|(_, v)| v.iter().copied()).collect()
     }
 
     /// Written argument `a` as the image carries it: a type or value as

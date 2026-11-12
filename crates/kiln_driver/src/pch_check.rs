@@ -188,8 +188,37 @@ pub(crate) fn preprocess_record(
 }
 
 /// The diagnostics' first difference.
+///
+/// The replay may also first repeat the header's own warnings, which its
+/// producer reported and a consumer that loads the image does not
+/// (WP-1320; as the PCH differential accepts, spec/harness.md): the
+/// `N warnings generated.` lines left out, the replay's diagnostics are
+/// then the load's preceded by lines with no error.
 fn diags(load: &str, replay: &str) -> Option<String> {
+    let body = |t: &str| -> String {
+        t.lines().filter(|l| !is_summary(l)).fold(String::new(), |mut s, l| {
+            s.push_str(l);
+            s.push('\n');
+            s
+        })
+    };
+    let (l, r) = (body(load), body(replay));
+    if let Some(head) = r.strip_suffix(l.as_str())
+        && !head.lines().any(|x| x.contains("error: "))
+    {
+        return None;
+    }
     first_difference(load, replay).map(|d| format!("the diagnostics differ at {d}"))
+}
+
+/// A `N warnings generated.` / `N warnings and M errors generated.` line.
+fn is_summary(line: &str) -> bool {
+    line.strip_suffix(" generated.").is_some_and(|s| {
+        s.split(' ').all(|w| {
+            w.chars().all(|c| c.is_ascii_digit())
+                || matches!(w, "warning" | "warnings" | "error" | "errors" | "and")
+        })
+    })
 }
 
 /// The declaration nodes of an AST dump, each with its depth (the tree
@@ -256,6 +285,27 @@ mod tests {
             first_difference("a\n", "a\nc\n").as_deref(),
             Some("line 2: end of text (image) vs 'c' (replay)")
         );
+    }
+
+    #[test]
+    fn header_warnings_first() {
+        let hw =
+            "In file included from <command line>:1:\n./w.h:1:37: warning: unused variable 'u'\n";
+        let tu = "t.cpp:1:5: warning: x\n";
+        assert_eq!(diags("", &format!("{hw}1 warning generated.\n")), None);
+        assert_eq!(
+            diags(
+                &format!("{tu}1 warning generated.\n"),
+                &format!("{hw}{tu}2 warnings generated.\n")
+            ),
+            None
+        );
+        // An error is never the header's (its producer would have failed),
+        // and the load's diagnostics must come last.
+        assert!(diags("", "./w.h:1:1: error: e\n1 error generated.\n").is_some());
+        assert!(diags(tu, &format!("{tu}{hw}")).is_some());
+        assert!(is_summary("3 warnings and 1 error generated."));
+        assert!(!is_summary("note: generated."));
     }
 
     #[test]

@@ -1964,7 +1964,7 @@ fn kind2_declaration_image_fallback() {
             "an anonymous union or struct member",
         ),
         (
-            "export module f;\nexport inline int *g() { return new int(1); }\nexport constexpr int k = 1;\n",
+            "export module f;\nexport inline void g(int *p) { delete p; }\nexport constexpr int k = 1;\n",
             "a new or delete expression",
         ),
         (

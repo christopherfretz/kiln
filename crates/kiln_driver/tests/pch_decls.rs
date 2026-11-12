@@ -440,6 +440,265 @@ int main() {
     assert!(o.stderr.contains("no matching constructor"), "{}", o.stderr);
 }
 
+/// Redeclarations of the replaceable global allocation functions (the
+/// shape of libstdc++'s `<new>`, [new.delete]/2: they redeclare the
+/// implicit ones) and a dependent direct-initialization in a class
+/// template (`<bits/postypes.h>`, [dcl.init.general]/16) are carried
+/// (WP-1320).
+#[test]
+fn global_new_delete_and_paren_inits_are_carried() {
+    let d = scratch("wp1320a");
+    let header = "\
+namespace std { using size_t = decltype(sizeof 0); enum class align_val_t : size_t {}; }
+void *operator new(std::size_t);
+void operator delete(void *) noexcept;
+void *operator new(std::size_t, std::align_val_t);
+inline void *operator new(std::size_t, void *p) noexcept { return p; }
+template <class T> struct Pos {
+  T off;
+  Pos(T o) : off(o) {}
+  Pos &operator+=(T x) { off += x; return *this; }
+  Pos operator+(T x) const { Pos p(*this); p += x; return p; }
+};
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+int main() {
+  int *p = new int(3); int r = *p; delete p;
+  alignas(int) unsigned char b[sizeof(int)]; r += *::new (b) int(4);
+  Pos<long> a(1); r += int((a + 2).off);
+  return r - 10;
+}
+";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    let ir = same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    assert!(ir.stdout.contains("@_Znwm"), "{}", ir.stdout);
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+    // The unit's replacement of a header-declared global allocation
+    // function is a definition of the same function.
+    std::fs::write(
+        d.join("b.cpp"),
+        "void *operator new(std::size_t n) { return __builtin_malloc(n); }\nint *f() { return new int; }\n",
+    )
+    .unwrap();
+    let o = same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "b.cpp");
+    assert!(o.stdout.contains("define dso_local noundef nonnull ptr @_Znwm"), "{}", o.stdout);
+}
+
+/// WP-1320: explicit specializations that take a non-type default
+/// argument (the shape of `__gnu_cxx::__promote`) are carried, the
+/// default as an expression; a default that instantiates a class with a
+/// static data member keeps the header replayed.
+#[test]
+fn nttp_default_explicit_specs_are_carried() {
+    let d = scratch("wp1320b");
+    let header = "\
+template <class T> struct IsInt { enum { value = 0 }; };
+template <> struct IsInt<int> { enum { value = 1 }; };
+template <class T, bool = IsInt<T>::value> struct Promote { typedef double type; };
+template <class T> struct Promote<T, false> {};
+template <> struct Promote<float> { typedef float type; };
+template <> struct Promote<long double> { typedef long double type; };
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+int main() {
+  Promote<int>::type x = 1.5; Promote<float>::type y = 2.5f;
+  return int(x + y) - 4 + int(sizeof(Promote<long double>::type) != sizeof(long double));
+}
+";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+    let refused = "\
+template <class T> struct IsI { static constexpr bool value = false; };
+template <class T, bool = IsI<T>::value> struct X { int a; };
+template <> struct X<long> { long b; };
+";
+    let note = produce(&d, "b", refused);
+    assert!(
+        note.contains("replay the header: an explicit specialization using a non-type default"),
+        "{note}"
+    );
+}
+
+/// WP-1320: a dependent `X<T>` completed with its defaults (its
+/// canonical type is `X<T, d>`) and a base that is a dependent member
+/// type (`typename X<T>::type`) are carried.
+#[test]
+fn dependent_default_specializations_are_carried() {
+    let d = scratch("wp1320c");
+    let header = "\
+template <bool B> struct BC { static constexpr bool value = B; typedef BC type; };
+template <class T> struct IsA : BC<false> {};
+template <> struct IsA<int> : BC<true> {};
+template <class T, bool = IsA<T>::value> struct H : BC<false> {};
+template <class T> struct H<T, true> : BC<true> {};
+template <class T> struct Is : H<T>::type {};
+template <class T, int N = sizeof(T)> struct Sz { typedef char type[N]; };
+template <class T> struct Hold { typename Sz<T>::type b; };
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+struct S {};
+int main() {
+  Hold<long> h;
+  return (Is<int>::value ? 0 : 1) + (Is<S>::value ? 2 : 0) + (sizeof(h.b) == sizeof(long) ? 0 : 4);
+}
+";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+}
+
+/// Block-scope `static_assert` declarations, typedefs and alias
+/// declarations (`declval`'s and `__call_is_nt`'s shapes in `<type_traits>`)
+/// are carried (WP-1320).
+#[test]
+fn local_asserts_and_aliases_are_carried() {
+    let d = scratch("wp1320l");
+    let header = "\
+template <class T> struct Id { typedef T type; };
+template <class T> struct No { static constexpr bool value = false; };
+template <class T> T &&dv() noexcept { static_assert(No<T>::value, \"odr\"); return dv<T>(); }
+template <class T> constexpr int sz() { using U = typename Id<T>::type; typedef U V; static_assert(sizeof(V) > 0); return sizeof(U) + sizeof(V); }
+inline int plain() { using I = int; static_assert(sizeof(I) == 4, \"int\"); I x = 3; return x; }
+template <class T> constexpr bool nt = noexcept(dv<T>());
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "\
+static_assert(sz<int>() == 8 && nt<int>);
+int main() { return sz<char>() + plain() == 5 ? 0 : 1; }
+";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+}
+
+/// A dependent array parameter's adjusted type names the canonical
+/// template parameter type (WP-1320, type tag 24).
+#[test]
+fn dependent_array_parameters_are_carried() {
+    let d = scratch("wp1320arr");
+    let header = "\
+template <class T> T first2(const T a[2]) { return a[0] + a[1]; }
+template <class T> struct H { template <class U> T at(const U k[3]) const { return T(k[2]); } };
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "int main() { int a[2] = {1, 2}; short k[3] = {0, 0, 3}; return first2(a) + H<int>{}.at(k) == 6 ? 0 : 1; }\n";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+}
+
+/// GNU complex types (`__complex__ float` in `<complex>`) are carried
+/// (WP-1320, type tag 23).
+#[test]
+fn complex_types_are_carried() {
+    let d = scratch("wp1320x");
+    let header = "\
+typedef __complex__ float cf;
+inline cf mk(float a, float b) { cf z; __real__ z = a; __imag__ z = b; return z; }
+template <class T> struct Box { _Complex double v; T re() const { return T(__real__ v); } };
+inline _Complex double twice(_Complex double z) { return z * 2.0; }
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("consumers use its declaration image"), "{note}");
+    let tu = "int main() { Box<int> b{twice(3.0)}; return b.re() == 6 && __imag__ mk(1, 2) == 2 ? 0 : 1; }\n";
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+}
+
+/// Reduced from `module.global.frag/gmf-floatn-limits.cpp` under
+/// `--pch-diff check` (WP-1320 deliverable 5, not fixed): an importer's
+/// header declarations loaded from the image record no cross-unit
+/// deduplication keys (spec/modules.md §6), so an imported module's GMF
+/// that includes the same header re-declares `size_t` and redefines `lim`
+/// (an invalid template) instead of being skipped by position, and the
+/// declarations differ from the replay's. The fix carries the keys of the
+/// header's namespace-scope declarations in the image (or records them
+/// while reading it).
+#[test]
+#[ignore = "WP-1320 follow-up: image declarations record no §6 dedup keys for an imported GMF"]
+fn gmf_reinclusion_merges_with_image_declarations() {
+    let d = scratch("wp1320g");
+    let header = "\
+#ifndef A_H
+#define A_H
+typedef unsigned long size_t;
+template <class T> struct lim { static constexpr int d = 1; };
+template <> struct lim<float> { static constexpr size_t d = 24; };
+#endif
+";
+    std::fs::write(d.join("a.h"), header).unwrap();
+    let o =
+        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let m = "module;\n#include \"a.h\"\nexport module m;\nexport constexpr int get() { return lim<float>::d == 24; }\n";
+    std::fs::write(d.join("m.cppm"), m).unwrap();
+    ok(&d, &["-std=c++20", "--precompile", "-x", "c++-module", "m.cppm", "-o", "m.pcm"]);
+    std::fs::write(d.join("t.cpp"), "import m;\nstatic_assert(get() == 1);\nint main() {}\n")
+        .unwrap();
+    let check =
+        ["-std=c++20", "-fmodule-file=m=m.pcm", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+    let o = kiln(&d, &[&check[..], &["-fsyntax-only", "t.cpp"]].concat());
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+}
+
+/// A header template's definition-time warning is repeated by the replay
+/// and not by the image's consumer; `check` accepts that (WP-1320).
+#[test]
+fn check_accepts_header_warnings() {
+    let d = scratch("wp1320w");
+    std::fs::write(d.join("w.h"), "template <class T> int f(T) { int unused; return 0; }\n")
+        .unwrap();
+    let o = ok(&d, &["-Wall", "-fkiln-pch-image", "-x", "c++-header", "w.h", "-o", "w.pch"]);
+    assert!(o.stderr.contains("unused variable"), "{}", o.stderr);
+    std::fs::write(d.join("w.cpp"), "int main() { return f(1); }\n").unwrap();
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-Wall", "-fkiln-pch-image=check", "-include-pch", "w.pch"];
+        let o = ok(&d, &[&check[..], mode, &["w.cpp", "-o", "-"]].concat());
+        assert!(!o.stderr.contains("differs"), "{mode:?}: {}", o.stderr);
+        assert!(o.stderr.contains("unused variable"), "{mode:?}: {}", o.stderr);
+    }
+}
+
 /// `check` builds the image and replays, and finds them equal.
 #[test]
 fn check_runs_both() {

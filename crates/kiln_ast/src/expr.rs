@@ -1647,7 +1647,8 @@ impl ExprArena {
     pub fn push_init_list(&mut self, x: InitListExtra) -> u32 {
         push_side(&mut self.init_lists, x)
     }
-    pub(crate) fn push_new_extra(&mut self, x: NewExtra) -> u32 {
+    /// Appends a new-expression record (the module image's loader, WP-1320).
+    pub fn push_new_extra(&mut self, x: NewExtra) -> u32 {
         push_side(&mut self.news, x)
     }
 

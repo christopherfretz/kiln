@@ -648,3 +648,71 @@ same → the same as `gnu`; `lcx` "a template expression" → the same. All
 three still replay; `gnu` still has 3648 of 24591 declarations
 refused, so the next waves are needed before a bench case flips.
 
+
+## WP-1320: PCH image wave 6a, libstdc++ roots (2026-11-11)
+
+Debug builds: "before" is main at `fcd83a424` (IMAGE_VERSION 22), "after"
+the WP-1320 branch; same two purviews and commands as the WP-1283
+section, both binaries in one session.
+
+```
+allstd, before: 26761 top-level declarations, 21894 carried, 4867 not  (18.5 s, 127 MiB)
+allstd, after:  26761 top-level declarations, 23358 carried, 3403 not  (22.4 s, 124 MiB)
+stdcxx, before: 25287 top-level declarations, 21462 carried, 3825 not  (16.6 s, 112 MiB)
+stdcxx, after:  25233 top-level declarations, 22680 carried, 2553 not  (18.0 s, 110 MiB)
+```
+
++1464 / +1218 carried. stdcxx counts 54 fewer top-level declarations
+because explicit class instantiations are now listed after the walk
+rather than where the walk first meets their specialization. Forms
+carried (spec/modules.md §11.11 "Forms carried by WP-1320"): explicit
+specializations taking a non-type default, dependent specializations
+completed with defaults (and `typename X<T>::type` bases), explicit
+instantiations in reopened namespaces, new-expressions and the implicit
+global allocation functions (`Implicit` kind 7), pseudo-destructor
+calls, explicit template arguments of a declaration reference,
+block-scope `static_assert`s, typedefs and aliases, GNU complex types
+(type tag 23) and canonical template parameter types (type tag 24).
+Rows that changed by 15 or more (before → after):
+
+| allstd | stdcxx | first reason |
+|---|---|---|
+| 473 → 37 | 358 → 58 | a local declaration the image does not carry |
+| 334 → 0 | 206 → 0 | a specialization type the image does not carry |
+| 16 → 0 | 89 → 0 | a template argument list |
+| — | 159 → 0 | a type the image does not carry |
+| 27 → 9 | 33 → 17 | a new or delete expression |
+| 107 → 32 | 63 → 21 | a template parameter the image does not carry |
+| 547 → 220 | 471 → 280 | cascade: a redeclaration of an entity outside the image |
+| 601 → 288 | 604 → 459 | cascade: a specialization of a template outside the image |
+| — | 38 → 0 | cascade: an explicit instantiation in a namespace outside the image |
+| 522 → 733 | 265 → 189 | cascade: a body referring to a declaration outside the image |
+| 59 → 75 | 54 → 72 | an expression in a type naming a parameter or local declaration |
+| — | 32 → 70 | a try block |
+| — | 87 → 111 | a template expression |
+
+Per header (109 libstdc++ 14 headers, each `#include <h>` alone as a
+PCH, `-fkiln-pch-image -fkiln-bmi-image-census`), first refusal per
+declaration: declarations in `bench/pch/gnu.h` / headers where it occurs.
+
+| reason | before | after |
+|---|---|---|
+| a specialization type the image does not carry | 222 / 78 | 0 |
+| a local declaration the image does not carry | 383 / 78 | 59 / 64 |
+| a type the image does not carry | 159 / 27 | 0 |
+| a template argument list | 90 / 68 | 0 |
+| a pseudo-destructor call | 7 / 78 | 0 |
+| a new or delete expression | 33 / 78 | 17 / 28 |
+| an explicit specialization using a non-type default argument | 8 / 67 | 0 |
+| a redeclaration of an entity outside the image | 0 / 12 | 0 |
+| an explicit instantiation in a namespace outside the image | 0 / 10 | 0 |
+| a template parameter the image does not carry | 63 / 78 | 21 / 78 |
+
+Census-clean headers: 29 → 31 (`<new>`, `<iosfwd>`). Every other
+header includes `<type_traits>`, whose remaining roots are "a template
+expression" (16, WP-1314's), template template parameters ("a
+template" / "a template parameter", type_traits:2742, 2750, 2782, 3900),
+constrained partial specializations (2752, 3451), a member-template
+partial specialization (1856) and a specialization of a partial
+specialization (1878); so no further header flips until those land.
+`-fkiln-bmi-image-census=all` (new) lists every refused declaration.
