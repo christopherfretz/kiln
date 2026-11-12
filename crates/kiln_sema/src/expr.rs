@@ -3131,30 +3131,16 @@ impl Sema<'_, '_> {
                 None => bad(self, e),
             };
         }
+        if matches!(op, UnaryOp::Plus | UnaryOp::Minus | UnaryOp::Not)
+            && (self.ast.types.is_array(t0) || self.ast.types.is_function(t0))
+        {
+            return self.unary_of_decayed(op, e, loc);
+        }
         // An `_Atomic(T)` operand is checked as its `T` (the lvalue
         // conversion strips it, clang `DefaultLvalueConversion`).
         let tv = self.ast.types.as_atomic(t0).unwrap_or(t0);
         match op {
             UnaryOp::Plus | UnaryOp::Minus => {
-                // clang `CreateBuiltinUnaryOp`: the operand's usual unary
-                // conversions come first, so an array or a function is a
-                // pointer, valid only for C++'s unary `+`
-                // ([expr.unary.op]/7; C23 6.5.4.3p1 wants an arithmetic
-                // type) and reported as the pointer type.
-                if self.ast.types.is_array(t0) || self.ast.types.is_function(t0) {
-                    let x = conv::decay(self, e);
-                    if self.is_err_expr(x) {
-                        return x;
-                    }
-                    let tx = self.ety(x);
-                    if op == UnaryOp::Minus || self.is_c() {
-                        let msg =
-                            self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
-                        self.emit(msg);
-                        return self.recover_err(&[x], loc);
-                    }
-                    return self.builder().unary(op, x, tx, loc, ExprFlags::CANNOT_OVERFLOW);
-                }
                 let ok = self.is_arith_operand(tv)
                     || (op == UnaryOp::Plus && !self.is_c() && self.ast.types.is_pointer(tv));
                 if !ok {
@@ -3173,18 +3159,6 @@ impl Sema<'_, '_> {
             UnaryOp::Not => {
                 // GNU: `~` of a complex operand is its conjugate.
                 let complex = self.ast.types.as_complex(tv).is_some();
-                if self.ast.types.is_array(t0) || self.ast.types.is_function(t0) {
-                    // Reported as the decayed pointer type (clang).
-                    let x = conv::decay(self, e);
-                    if self.is_err_expr(x) {
-                        return x;
-                    }
-                    let tx = self.ety(x);
-                    let msg =
-                        self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
-                    self.emit(msg);
-                    return self.recover_err(&[x], loc);
-                }
                 if !(complex || self.ast.types.is_integral(tv) || conv::is_unscoped_enum(self, tv))
                 {
                     return bad(self, e);
@@ -3239,6 +3213,25 @@ impl Sema<'_, '_> {
                 self.recover_err(&[e], loc)
             }
         }
+    }
+
+    /// Unary `+`, `-` or `~` of an array or function `e` (clang
+    /// `CreateBuiltinUnaryOp`): the usual unary conversions come first, so
+    /// the operand is a pointer, valid only for C++'s unary `+`
+    /// ([expr.unary.op]/7; C23 6.5.4.3p1 wants an arithmetic type, `~` an
+    /// integer one) and reported as the pointer type.
+    fn unary_of_decayed(&mut self, op: UnaryOp, e: ExprId, loc: Loc) -> ExprId {
+        let x = conv::decay(self, e);
+        if self.is_err_expr(x) {
+            return x;
+        }
+        let tx = self.ety(x);
+        if op == UnaryOp::Plus && !self.is_c() {
+            return self.builder().unary(op, x, tx, loc, ExprFlags::CANNOT_OVERFLOW);
+        }
+        let msg = self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
+        self.emit(msg);
+        self.recover_err(&[x], loc)
     }
 
     fn address_of(&mut self, e: ExprId, loc: Loc) -> ExprId {
