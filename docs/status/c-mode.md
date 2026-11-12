@@ -615,14 +615,14 @@ Written by `cargo xtask gcc-torture --report docs/status/c-mode.md` on wp/1304 (
 
 GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarch64-unknown-linux-gnu`.
 
-- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `8f3ffed0d`
-- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --profile harness`
-- kiln: kiln version 1.0.1 (C++26 frontend, LLVM IR backend) (-fclang-compat=19)
+- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `1d3f41331`
+- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --compiler kiln-1.1.0-aarch64-unknown-linux-gnu/bin/kiln`
+- kiln: kiln version 1.1.0 (C++26 frontend, LLVM IR backend) (-fclang-compat=19)
 - gcc: gcc (GCC) 16.1.0
 - clang: Debian clang version 19.1.7 (3+b1)
 - option sets: -O0, -O2; -std=gnu23 first
 - limits: 2048 MiB address space per step (plus kiln's stack reservation); compile/link timeout 120 s, run timeout 10 s; -j 4
-- 3813 tests, 7572 cases run, 27 skip rows; wall 845 s
+- 3813 tests, 7572 cases run, 27 skip rows; wall 1652 s
 
 ### Results by class (cases)
 
@@ -661,17 +661,16 @@ GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarc
 | cases | cluster | examples |
 |---:|---|---|
 | 170 | compile-reject: error: unknown type name '…' | compile/20000420-1.c -O0, compile/20000420-1.c -O2, compile/20010102-1.c -O0 |
-| 148 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20010320-1.c -O0 |
+| 146 | compile-reject: error: use of undeclared identifier '…' | compile/20000105-1.c -O0, compile/20000105-1.c -O2, compile/20010320-1.c -O0 |
 | 96 | compile-reject: error: function definition is not allowed here | compile/20010226-1.c -O0, compile/20010226-1.c -O2, compile/20020309-1.c -O0 |
 | 60 | compile-reject: error: a type specifier is required for all declarations | compile/20080704-1.c -O0, compile/20080704-1.c -O2, compile/20101216-1.c -O0 |
 | 38 | compile-reject: error: fields must have a constant size: '…' extension will never be supported | compile/20010605-1.c -O0, compile/20010605-1.c -O2, compile/20020210-1.c -O0 |
 | 31 | wrong: signal: N (SIGABRT) | execute/20010122-1.c -O2, execute/20031003-1.c -O0, execute/20230630-2.c -O0 |
-| 16 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/dse.c -O0, compile/dse.c -O2, compile/pr19121.c -O0 |
+| 20 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/dse.c -O0, compile/dse.c -O2, compile/pr19121.c -O0 |
 | 14 | compile-reject: error: indirect goto in function with no address-of-label expressions | compile/920502-1.c -O0, compile/920502-1.c -O2, compile/920826-1.c -O0 |
 | 6 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-de… | compile/pr100576.c -O0, compile/pr100576.c -O2, compile/pr36154.c -O0 |
 | 6 | compile-reject: error: expected parameter declarator | compile/s.c -O0, compile/s.c -O2, compile/structs.c -O0 |
 | 6 | compile-reject: error: non-void function '…' should return a value | compile/20020418-1.c -O0, compile/20020418-1.c -O2, compile/20020927-1.c -O0 |
-| 4 | compile-reject: error: call to undeclared function '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/udivmod4.c -O0, compile/udivmod4.c -O2, execute/20010605-2.c -O0 |
 | 4 | compile-reject: error: illegal storage class on function | compile/20011023-1.c -O0, compile/20011023-1.c -O2, compile/nested-3.c -O0 |
 | 4 | compile-reject: error: incompatible pointer to integer conversion initializing '…' with an expression of type '…' [-Wint-conversion] | compile/920501-11.c -O0, compile/920501-11.c -O2, compile/pr96796.c -O0 |
 | 4 | compile-reject: error: second parameter of '…' (argument array) must be of type '…' | compile/call.c -O0, compile/call.c -O2, compile/pr22269.c -O0 |
@@ -680,6 +679,7 @@ GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarc
 | 3 | wrong: exit N | execute/20031003-1.c -O2, execute/921202-1.c -O2, execute/pr79286.c -O2 |
 | 2 | compile-reject: error: address of vector element requested | execute/pr108292.c -O0, execute/pr108292.c -O2 |
 | 2 | compile-reject: error: array is too large (N elements) | execute/991014-1.c -O0, execute/991014-1.c -O2 |
+| 2 | compile-reject: error: call to undeclared function '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declaration] | compile/udivmod4.c -O0, compile/udivmod4.c -O2 |
 | 2 | compile-reject: error: call to undeclared library function '…' with type '…'; ISO CN and later do not support implicit function declarations [-Wimplicit-function-declar… | compile/pr33133.c -O0, compile/pr33133.c -O2 |
 | 2 | compile-reject: error: cannot combine with previous '…' declaration specifier | compile/20010903-2.c -O0, compile/20010903-2.c -O2 |
 | 2 | compile-reject: error: cannot decrement value of type '…' (vector of N '…' values) | execute/pr123753.c -O0, execute/pr123753.c -O2 |
@@ -717,7 +717,7 @@ GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarc
 
 ### Flags a compiler rejected (dropped from its cases)
 
-- kiln: `--param ggc-min-expand=0`, `--param ggc-min-expand=1`, `--param ggc-min-heapsize=1024`, `--param=max-sched-extend-regions-iters=10`, `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fexpensive-optimizations`, `-ffat-lto-objects`, `-ffloat-store`, `-fgimple`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmodulo-sched`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-gcse`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-inline-functions`, `-fno-ipa-cp`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-ivopts`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tracer`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dce`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-fno-tree-vrp`, `-fno-vect-cost-model`, `-fnon-call-exceptions`, `-foptimize-strlen`, `-fpack-struct`, `-fsave-optimization-record`, `-fsched2-use-superblocks`, `-fschedule-insns2`, `-fselective-scheduling2`, `-ftracer`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`, `-funroll-all-loops`, `-funroll-loops`, `-funswitch-loops`, `-std=c2y`
+- kiln: `--param ggc-min-expand=0`, `--param ggc-min-expand=1`, `--param ggc-min-heapsize=1024`, `--param=max-sched-extend-regions-iters=10`, `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fexpensive-optimizations`, `-ffat-lto-objects`, `-ffloat-store`, `-fgimple`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmodulo-sched`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-gcse`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-inline-functions`, `-fno-ipa-cp`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-ivopts`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tracer`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dce`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-fno-tree-vrp`, `-fno-vect-cost-model`, `-fnon-call-exceptions`, `-foptimize-strlen`, `-fpack-struct`, `-fsave-optimization-record`, `-fsched2-use-superblocks`, `-fschedule-insns2`, `-fselective-scheduling2`, `-ftracer`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`, `-funroll-all-loops`, `-funroll-loops`, `-funswitch-loops`
 - clang: `-fconserve-stack`, `-fdump-tree-optimized`, `-fdump-tree-ssa`, `-fgimple`, `-fharden-compares`, `-findirect-inlining`, `-fipa-icf`, `-fipa-modref`, `-fira-algorithm=priority`, `-flive-range-shrinkage`, `-fmove-loop-invariants`, `-fno-code-hoisting`, `-fno-dce`, `-fno-early-inlining`, `-fno-guess-branch-probability`, `-fno-if-conversion`, `-fno-ipa-ra`, `-fno-ira-share-spill-slots`, `-fno-move-loop-invariants`, `-fno-printf-return-value`, `-fno-tree-bit-ccp`, `-fno-tree-ccp`, `-fno-tree-ch`, `-fno-tree-coalesce-vars`, `-fno-tree-copy-prop`, `-fno-tree-dominator-opts`, `-fno-tree-dse`, `-fno-tree-forwprop`, `-fno-tree-fre`, `-fno-tree-loop-distribute-patterns`, `-fno-tree-loop-im`, `-fno-tree-pre`, `-fno-tree-sra`, `-foptimize-strlen`, `-fsched2-use-superblocks`, `-fselective-scheduling2`, `-ftree-loop-distribution`, `-ftree-loop-vectorize`, `-ftree-parallelize-loops=2`
 
 <!-- gcc-torture:end -->

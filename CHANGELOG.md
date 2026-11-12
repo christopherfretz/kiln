@@ -8,7 +8,12 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
-Planned as 1.1.0.
+Planned as 1.2.0.
+
+## [1.1.0] - 2026-11-12
+
+C mode, and the fixes made since 1.0.2. The gate results are in
+[docs/status/release-1.1.0.md](docs/status/release-1.1.0.md).
 
 ### C mode
 
