@@ -47,12 +47,6 @@ pub(super) const OUT_OTHER: &str =
 /// variable named as a function, ...).
 pub(super) const OUT_KIND: &str =
     "a body referring to a declaration outside the image (a record of another kind)";
-/// An overloaded member access of a dependent call (`operator()(r.begin(),
-/// r.end())` in a member template, [over.call.func]/3): sema keeps the set
-/// in a side table (`ovl.members`) the image does not carry, so the
-/// importer's access would name only the first candidate. Its own reason
-/// rather than "outside the image": the candidates may all have records.
-pub(super) const OUT_MEMBER_OVERLOADS: &str = "a template expression (an overloaded member access)";
 /// A base-specifier of a class with no record (an inherited member's
 /// path).
 pub(super) const OUT_BASE: &str =

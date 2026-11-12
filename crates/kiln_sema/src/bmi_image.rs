@@ -72,6 +72,7 @@ mod membertempl;
 mod oodefault;
 mod outerspec;
 mod outside;
+mod ovlmember;
 mod patinit;
 mod pch;
 pub use pch::PchDecls;
@@ -97,7 +98,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 33;
+pub(crate) const IMAGE_VERSION: u32 = 34;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -2831,8 +2832,15 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     true
                 }
                 // A namespace reopened while the class sema completed
-                // from its first declaration is open (WP-1314).
-                (Payload::Namespace, NONE) if top.is_some() && d.prev != NONE && scope(d.ctx) => {
+                // from its first declaration is open (WP-1314), lexically
+                // in a reopened block of its enclosing namespace too
+                // (`namespace a { namespace b {`, WP-1368).
+                (Payload::Namespace, lex)
+                    if top.is_some()
+                        && d.prev != NONE
+                        && scope(d.ctx)
+                        && (lex == LEX_TU || scope(lex)) =>
+                {
                     true
                 }
                 (_, NONE) if local_tag => top.is_none_or(|t| d.ctx == t),
