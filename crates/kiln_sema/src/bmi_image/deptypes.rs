@@ -51,6 +51,12 @@ pub(super) enum DepTy {
     /// The type of a `using typename B<T>::type;` member (WP-1345,
     /// [`super::depusing`]): its record.
     Using(u32),
+    /// `nns::[template] X<args>` with a qualifier naming the template
+    /// (WP-1353, `typename _OrImpl<true>::template _Result<...>` once an
+    /// alias template is substituted): whether `template` was written,
+    /// the qualifier, and the unqualified specialization (an earlier
+    /// [`TyRec::Tst`]) whose template name the importer qualifies.
+    QualTst { kw: bool, steps: Vec<NnsRec>, tst: QRef },
 }
 
 const T_NAME: u8 = 0;
@@ -60,6 +66,7 @@ const T_MEMPTR: u8 = 3;
 const T_VECTOR: u8 = 4;
 const T_DEDUCED: u8 = 5;
 const T_USING: u8 = 6;
+const T_QUAL_TST: u8 = 7;
 
 impl Writer<'_, '_, '_> {
     /// The record of type view `v`, `None` when this module does not
@@ -180,6 +187,12 @@ pub(super) fn encode_dep(w: &mut Wr, d: &DepTy) {
             w.u8(T_USING);
             w.u32(*d);
         }
+        DepTy::QualTst { kw, steps, tst } => {
+            w.u8(T_QUAL_TST);
+            w.u8(u8::from(*kw));
+            w.steps(steps);
+            w.q(*tst);
+        }
     }
 }
 
@@ -233,6 +246,14 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
             DepTy::Deduced { template, deduced, qual }
         }
         T_USING => DepTy::Using(r.u32()?),
+        T_QUAL_TST => {
+            let kw = match r.u8()? {
+                k @ (0 | 1) => k == 1,
+                _ => return bad("bad dependent type"),
+            };
+            let steps = r.steps()?;
+            DepTy::QualTst { kw, steps, tst: r.q()? }
+        }
         _ => return bad("bad dependent type"),
     })
 }
@@ -275,6 +296,10 @@ pub(super) fn dep_refs(d: &DepTy) -> (Vec<QRef>, Vec<u32>) {
             qs.extend(*deduced);
         }
         DepTy::Using(d) => ds.push(*d),
+        DepTy::QualTst { steps: s, tst, .. } => {
+            steps(s, &mut qs);
+            qs.push(*tst);
+        }
     }
     (qs, ds)
 }
@@ -296,6 +321,16 @@ pub(super) fn dep_ok(img: &Image, d: &DepTy, nd: usize) -> bool {
             named && qual.as_ref().is_none_or(|(s, _)| super::steps_ok(img, s, nd))
         }
         DepTy::Transform { .. } | DepTy::MemPtr { .. } | DepTy::Vector { .. } => true,
+        // A non-empty qualifier over an unqualified specialization.
+        DepTy::QualTst { steps, tst, .. } => {
+            !steps.is_empty()
+                && super::steps_ok(img, steps, nd)
+                && tst.quals == 0
+                && matches!(
+                    tst.ty.checked_sub(super::BUILTINS + 1).and_then(|j| img.types.get(j as usize)),
+                    Some(TyRec::Tst { .. })
+                )
+        }
         DepTy::Using(d) => matches!(
             img.decls.get(*d as usize).map(|r| &r.payload),
             Some(Payload::DepUsing { typename: true, .. })
@@ -378,6 +413,18 @@ impl Sema<'_, '_> {
                 Some(&u) => QualType::unqual(self.ast.types.unresolved_using_type(u)),
                 None => QualType::ERROR,
             },
+            DepTy::QualTst { kw, steps, tst } => {
+                let t = qt(self, *tst);
+                let TypeView::TemplateSpecialization { name, args, underlying, alias } =
+                    self.ast.types.view(t.ty())
+                else {
+                    return t;
+                };
+                let nns = self.image_dep_nns(img, steps, ids, qt);
+                let n = TemplateName::Qualified { nns, template_kw: *kw, underlying: name };
+                let name = self.ast.types.template_name(n);
+                self.ast.types.template_specialization(name, args, underlying, alias)
+            }
         }
     }
 
@@ -442,7 +489,13 @@ mod tests {
                 deduced: None,
                 qual: Some((vec![NnsRec::Global], true)),
             }),
+            // `typename t::template Box<int>` (WP-1353): the plain
+            // specialization, then the qualified one naming it.
+            TyRec::Tst { template: 16, args: vec![ArgRec::Type(q(int))], under: None },
         ]);
+        let tst = BUILTINS + 1 + img.types.len() as u32 - 1;
+        let steps = vec![NnsRec::Ty(q(t), false)];
+        img.types.push(TyRec::Dep(DepTy::QualTst { kw: true, steps, tst: q(tst) }));
         (img, first as u32)
     }
 
@@ -460,7 +513,7 @@ mod tests {
     #[test]
     fn rejects_corrupt_dependent_types() {
         type Corrupt = (&'static str, fn(&mut Image, usize));
-        let corrupt: [Corrupt; 8] = [
+        let corrupt: [Corrupt; 11] = [
             ("name out of range", |i, f| {
                 i.types[f] = TyRec::Dep(DepTy::Name { kw: 5, steps: vec![], name: 999 });
             }),
@@ -493,6 +546,21 @@ mod tests {
             ("deduced record out of range", |i, f| {
                 i.types[f + 6] =
                     TyRec::Dep(DepTy::Deduced { template: 999, deduced: None, qual: None });
+            }),
+            ("qualified template name without a qualifier", |i, f| {
+                if let TyRec::Dep(DepTy::QualTst { steps, .. }) = &mut i.types[f + 10] {
+                    steps.clear();
+                }
+            }),
+            ("qualified template name of no specialization", |i, f| {
+                if let TyRec::Dep(DepTy::QualTst { tst, .. }) = &mut i.types[f + 10] {
+                    tst.ty = BUILTINS + 1 + f as u32;
+                }
+            }),
+            ("qualified template name with qualifiers", |i, f| {
+                if let TyRec::Dep(DepTy::QualTst { tst, .. }) = &mut i.types[f + 10] {
+                    tst.quals = 1;
+                }
             }),
         ];
         for (what, f) in corrupt {

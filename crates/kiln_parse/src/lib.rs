@@ -438,6 +438,9 @@ pub fn parse_preprocessed<'a, 'sm>(
     if opts.record_image {
         s.record_module_image();
     }
+    if opts.record_pch {
+        s.record_pch_decl_keys();
+    }
     if opts.record_carried {
         s.record_carried_constants();
     }

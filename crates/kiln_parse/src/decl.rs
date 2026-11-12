@@ -178,10 +178,14 @@ impl Parser<'_, '_> {
             self.module_after_decl(start);
             return;
         }
+        // WP-1353: a precompiled header's producer notes the keys a
+        // module unit's parse would record (spec/modules.md §6).
+        let note = self.pch_key_start();
         self.parse_external_declaration_inner();
         // An abbreviated function template's invented head ends with its
         // declaration ([dcl.fct]/22).
         self.s.act_on_end_abbreviated();
+        self.pch_key_end(note);
     }
 
     /// `__extension__` before an alias- or using-declaration (libc++

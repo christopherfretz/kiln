@@ -64,6 +64,19 @@ enum Op {
     Label,
 }
 
+/// Whether an attribute of kind `kind` with words `a`, `b` is one an
+/// explicit instantiation's attribute vector holds: plain words, or an
+/// expression kind written without its expressions (WP-1353:
+/// `__attribute__((__deprecated__))` on libc++'s `extern template class
+/// codecvt_byname<char16_t, ...>`, [dcl.attr.deprecated]).
+fn inst_word(kind: AttrKind, a: u32, b: u32) -> bool {
+    match op_of(kind) {
+        Some(Op::Words(am, bm)) => a <= am && b <= bm,
+        Some(Op::Exprs) => a == 0 && b == 0,
+        _ => false,
+    }
+}
+
 const ANY: u32 = u32::MAX;
 const FLAG: Op = Op::Words(0, 0);
 
@@ -314,7 +327,7 @@ impl Writer<'_, '_, '_> {
     /// `inst` (WP-1345; [`Attrs::insts`]).
     pub(super) fn inst_attr(&mut self, node: AttrNode, inst: u32) -> W<()> {
         let nsyms = self.s.ast.symbols().len();
-        if !matches!(op_of(node.kind), Some(Op::Words(..))) || !carried(&node, nsyms) {
+        if !inst_word(node.kind, node.a, node.b) || !carried(&node, nsyms) {
             return Err(UNCARRIED);
         }
         let loc = self.loc(node.loc)?;
@@ -638,7 +651,7 @@ pub(super) fn validate_attrs(img: &Image) -> Res<()> {
             && (r.name == NONE || str_ok(r.name))
             && (r.scope == NONE || r.name != NONE)
             && r.s == NONE
-            && matches!(op_of(AttrKind(r.kind)), Some(Op::Words(am, bm)) if r.a <= am && r.b <= bm);
+            && inst_word(AttrKind(r.kind), r.a, r.b);
         if !ok {
             return bad("bad explicit instantiation attribute record");
         }

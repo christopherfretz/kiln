@@ -1322,3 +1322,82 @@ What remains, by headers freed (merged tree):
 
 (The implicit member of a class template specialization is gone:
 WP-1345 carries it.)
+
+## WP-1353: PCH image wave 8c, the declaration follow-ups of WP-1345 (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 109 libstdc++), before (base `f5e545047`,
+main with WP-1352) and after (this WP; main's later commits changed
+only `docs/BACKLOG.md`). Reasons are declarations / headers.
+
+```
+lcx.h, before: 26704 top-level declarations, 25915 carried, 789 not
+lcx.h, after:  26702 top-level declarations, 26015 carried, 687 not
+gnu.h, before: 26396 top-level declarations, 25674 carried, 722 not
+gnu.h, after:  26396 top-level declarations, 25695 carried, 701 not
+```
+
+(`lcx.h`'s two fewer top-level declarations are the `__locale:1255`
+and `:1257` explicit instantiations, now carried and counted with the
+specializations they declare.)
+
+Headers through the image: libc++ 35 of 106 before and after;
+libstdc++ 36 of 109 before and after. lcx +100 carried, gnu +21. First
+refusal of `lcx.h`: before, "a template named through a qualifier or
+parameter" (`__iterator/iterator_traits.h:101`, this bucket's, first
+refusal of 40 headers); after, "a type declared outside the image"
+(`__compare/synth_three_way.h:28:45`, the `__synth_three_way` lambda,
+WP-1350's, first refusal of 44 headers). Of `gnu.h`: before, "a
+redeclaration of an entity outside the image" (`new:94`, this
+bucket's, first refusal of 36 headers); after, "a body referring to a
+declaration outside the image" (`bits/stl_iterator.h:2396:7`,
+`__glibcxx_assert` in a body, a body form, first refusal of 38
+headers). None of this bucket's reasons is a header's first refusal
+any more.
+
+Reasons of this bucket (lcx before → after, gnu before → after):
+
+- a template named through a qualifier or parameter (all of the
+  qualified form, `TemplateName::Qualified`): 8/56 → 0; gnu 5/3 → 0.
+  The census now names the dependent-qualifier, template template
+  parameter and using-declaration forms apart (none in either
+  library).
+- a redeclaration of an entity outside the image (the implicit
+  `std::align_val_t`, `new:94`, `new:181`): 0/2 → 0; gnu 1/36 → 0. Its
+  cascade "a redeclaration of an entity outside the image": 36/55 →
+  33/54; gnu 52/52 → 52/50 (what is left cascades from other buckets).
+- an attribute the image does not carry yet (`deprecated` on an
+  explicit instantiation, `__locale:1255`): 2/26 → 0.
+- a using-declaration in a class (`ranges:2755`): gnu 1/2 → 0.
+- a class member outside its class definition (`future:674`): gnu 1/1
+  → 0.
+- an out-of-line defaulted function: none in either library; carried
+  for a class that is not a template (`out_of_line_defaulted_members_
+  are_carried`).
+- the `diagnose_if` recheck and the global-module-fragment
+  deduplication keys are not census reasons: `--pch-diff check`
+  differences, gone (`diagnose_if_rechecks_follow_the_image`,
+  `module.global.frag/gmf-floatn-limits.cpp`).
+- unchanged: a local declaration the image does not carry (a
+  specialization's parameter) gnu 24/37 (`bits/basic_string.h:4524`,
+  `__to_wstring_numeric`, whose body passes a lambda to
+  `__resize_and_overwrite`; not taken, WP-1350 was to check whether it
+  is its default-argument form).
+
+What remains, by headers freed:
+
+1. A specialization's parameter (`bits/basic_string.h:4524`, gnu
+   24/37), as above.
+2. A dependent using-declaration of a pack or a conversion name
+   (`bmi_image/depusing.rs:22`): no census rows in either library.
+3. Explicit-instantiation ordering under `check`
+   (`bmi_image/explinst.rs`): the importer runs explicit instantiations
+   after the records, so `check` sees a later declaration move before
+   it; no census rows.
+4. `special_kind_of` returns None for copy constructors of templates
+   with non-type parameters (`kiln_sema/src/class/special/mod.rs:316`):
+   no census rows.
+5. A plain CRTP base naming a class not declared before (`struct B :
+   A<B> {};`) is refused "a type declared outside the image" at `B`
+   (found here; another bucket's; `ranges` declares `_Drop` first).

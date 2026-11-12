@@ -1073,16 +1073,12 @@ inline _Complex double twice(_Complex double z) { return z * 2.0; }
 }
 
 /// Reduced from `module.global.frag/gmf-floatn-limits.cpp` under
-/// `--pch-diff check` (WP-1320 deliverable 5, not fixed): an importer's
-/// header declarations loaded from the image record no cross-unit
-/// deduplication keys (spec/modules.md §6), so an imported module's GMF
-/// that includes the same header re-declares `size_t` and redefines `lim`
-/// (an invalid template) instead of being skipped by position, and the
-/// declarations differ from the replay's. The fix carries the keys of the
-/// header's namespace-scope declarations in the image (or records them
-/// while reading it).
+/// `--pch-diff check` (WP-1320 deliverable 5, fixed by WP-1353): an
+/// imported module's GMF that includes the header the importer loaded
+/// from the image is skipped by position (spec/modules.md §6), as after a
+/// replay, instead of re-declaring `size_t` and redefining `lim`: the
+/// image carries the producer's deduplication keys (`dedup` section).
 #[test]
-#[ignore = "WP-1320 follow-up: image declarations record no §6 dedup keys for an imported GMF"]
 fn gmf_reinclusion_merges_with_image_declarations() {
     let d = scratch("wp1320g");
     let header = "\
@@ -1910,4 +1906,166 @@ int main() { sb<int> b; return b.get() + int(need(0).b) + int(f().b) - 5; }\n";
         o.stderr
     );
     assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
+
+/// WP-1353: a class template named through a qualifier in a dependent
+/// type (`typename pick<...>::template result<...>`, the `_Or` shape of
+/// libc++'s `<__iterator/iterator_traits.h>`, [temp.names]/3) is a
+/// dependent type record of tag 7 (`QualTst`): the template keyword,
+/// the qualifier's steps and the plain specialization it names.
+#[test]
+fn qualified_template_names_are_carried() {
+    let header = "\
+struct no { static constexpr bool value = false; };
+template <bool> struct pick;
+template <> struct pick<true> {
+  template <class R, class F, class... Rest>
+  using result = typename pick<!bool(F::value) && sizeof...(Rest) != 0>::template result<F, Rest...>;
+};
+template <> struct pick<false> { template <class R, class...> using result = R; };
+template <class... A> using any = typename pick<sizeof...(A) != 0>::template result<no, A...>;
+template <class T> struct is_ptr { static constexpr bool value = false; };
+template <class T> struct is_ptr<T *> { static constexpr bool value = true; };
+template <class T> struct ptr_or_char : any<is_ptr<T>, is_ptr<T *>> {};
+template <class T> concept ptrish = any<is_ptr<T>>::value;
+struct holder { template <class T> struct box { T v; }; };
+template <class T> struct wrap { typename holder::template box<T> b; };
+";
+    let tu = "\
+static_assert(ptr_or_char<int>::value && ptrish<int *> && !ptrish<int>);
+int main() { wrap<int> w{{3}}; return w.b.v - 3; }
+";
+    image_carries("wp1353q", header, tu);
+}
+
+/// WP-1353: a header's `std::align_val_t` redeclares the enumeration sema
+/// declares implicitly for the replaceable allocation functions
+/// ([new.delete]/1, [cstddef.syn]) when a `new` came first, in the
+/// program's own `std`. The type is an `Implicit` record of kind 10 the
+/// reader resolves to the importer's implicit enumeration, and the
+/// header's declaration is its redeclaration.
+#[test]
+fn implicit_align_val_t_redeclarations_are_carried() {
+    let header = "\
+namespace std { typedef decltype(sizeof 0) size_t; }
+inline int *make() { return new int(7); }
+namespace std { enum class align_val_t : size_t {}; }
+inline std::size_t align_of(std::align_val_t a) { return static_cast<std::size_t>(a); }
+";
+    let tu = "\
+int main() { int *p = make(); int r = *p - 7; delete p; return r + int(align_of(std::align_val_t{2})) - 2; }
+";
+    image_carries("wp1353a", header, tu);
+}
+
+/// WP-1353: `__attribute__((__deprecated__))` on an explicit instantiation
+/// declaration (`__locale`'s `extern template class
+/// _LIBCPP_DEPRECATED_... codecvt_byname<...>`): a word attribute in the
+/// instantiation's attribute list.
+#[test]
+fn deprecated_explicit_instantiations_are_carried() {
+    let header = "\
+template <class T> struct old { T v; int get() const { return int(v); } };
+extern template struct __attribute__((__deprecated__)) old<char>;
+";
+    let tu = "int main() { old<int> o{2}; return o.get() - 2; }\n";
+    image_carries("wp1353d", header, tu);
+}
+
+/// WP-1353: non-dependent using-declarations of base members in a class
+/// ([namespace.udecl]/3): a member function, a data member and a typedef
+/// of an ordinary base, with access, and a member function template of a
+/// class template specialization base (`using _RangeAdaptor<_Drop>::
+/// operator();` in libstdc++'s `<ranges>`), whose shadow names a member
+/// reference record.
+#[test]
+fn class_using_declarations_are_carried() {
+    let header = "\
+struct A { int f(int) const { return 1; } int v = 5; typedef long L; };
+struct B : A { int f(long) const { return 2; } using A::f; using A::v; using A::L; };
+class C : A { public: using A::f; private: using A::v; };
+template <class D> struct adaptor {
+  template <class X> constexpr int operator()(X x) const { return static_cast<const D &>(*this)(x, 1); }
+};
+struct drop;
+struct drop : adaptor<drop> {
+  constexpr int operator()(int a, int b) const { return a + b; }
+  using adaptor<drop>::operator();
+};
+inline constexpr drop dr;
+";
+    let tu = "\
+static_assert(dr(2) == 3);
+int main() { B b; C c; B::L l = 3; return b.f(0) + b.f(0L) + b.v + c.f(0) + int(l) + dr(1, 2) - 15; }
+";
+    image_carries("wp1353u", header, tu);
+    let d = scratch_of("wp1353u");
+    std::fs::write(d.join("b.cpp"), "int g(C c) { return c.v; }\n").unwrap();
+    let args = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
+    assert!(o.stderr.contains("'v' is a private member of 'C'"), "{}", o.stderr);
+    assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
+
+/// WP-1353: an explicit specialization of a member class template
+/// defined outside its class (`template <> struct
+/// __future_base::_Result<void>` in libstdc++'s `<future>`,
+/// [temp.expl.spec]/2), beside an out-of-class partial specialization.
+#[test]
+fn out_of_class_member_explicit_specializations_are_carried() {
+    let header = "\
+struct outer {
+  struct base { virtual ~base() {} virtual int k() const { return 0; } };
+  template <class R> struct res : base { R v{}; int k() const override { return 1; } };
+};
+template <class R> struct outer::res<R &> : outer::base { R *p = nullptr; int k() const override { return 2; } };
+template <> struct outer::res<void> : outer::base {
+  typedef void result_type;
+  int k() const override { return 3; }
+private:
+  void destroy() { delete this; }
+};
+";
+    let tu = "\
+int main() { outer::res<int> a; outer::res<int &> b; outer::res<void> c; return a.k() + b.k() + c.k() - 6; }
+";
+    image_carries("wp1353f", header, tu);
+}
+
+/// WP-1353: special members of a class that is not a template defaulted
+/// outside the class ([dcl.fct.def.default]/5): user-provided, defined
+/// where written; the importer defaults its redeclaration again once the
+/// bodies (the in-class initializers) are built.
+#[test]
+fn out_of_line_defaulted_members_are_carried() {
+    let header = "\
+struct M { int x = 2; constexpr M() = default; M(M &&) noexcept; M &operator=(M &&) noexcept; ~M(); };
+inline M::M(M &&) noexcept = default;
+inline M &M::operator=(M &&) noexcept = default;
+inline M::~M() = default;
+struct P { constexpr P(); int y; M m; };
+constexpr P::P() = default;
+inline int use() { P p; M a; M b(static_cast<M &&>(a)); b = static_cast<M &&>(a); return p.m.x + b.x; }
+";
+    let tu = "int main() { M c; M d(static_cast<M &&>(c)); return use() + d.x - 6; }\n";
+    image_carries("wp1353o", header, tu);
+}
+
+/// WP-1353: a call in a template definition of a function with an
+/// argument-dependent `diagnose_if` attribute and non-dependent
+/// arguments is checked when the unit instantiates the template, after
+/// the image as after a replay (the importer fills the recheck map from
+/// the bodies it built).
+#[test]
+fn diagnose_if_rechecks_follow_the_image() {
+    let d = scratch("wp1353i");
+    let header = "\
+inline int pos(int x) __attribute__((diagnose_if(x < 0, \"negative\", \"error\"))) { return x; }
+template <class T> int call() { return pos(-1) + int(sizeof(T)); }
+";
+    let note = produce(&d, "a", header);
+    assert!(note.contains("declaration image"), "{note}");
+    std::fs::write(d.join("a.cpp"), "int main() { return call<char>(); }\n").unwrap();
+    let o = same(&d, "a.pch", &["-fsyntax-only"], "a.cpp");
+    assert!(o.stderr.contains("a.h:2:46: error: negative"), "{}", o.stderr);
 }

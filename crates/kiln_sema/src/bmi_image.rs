@@ -49,12 +49,16 @@ mod bindings;
 mod body;
 mod builtintempl;
 mod classtempl;
+mod classusing;
 mod constraints;
 mod constrspec;
 mod declocs;
+mod dedup;
+pub use dedup::ExtDecl;
 mod defcmp;
 mod deptypes;
 mod depusing;
+mod diagif;
 mod explinst;
 mod exprs;
 mod fnspec;
@@ -64,6 +68,8 @@ mod localexterns;
 mod locs;
 mod members;
 mod membertempl;
+mod oodefault;
+mod outerspec;
 mod patinit;
 mod pch;
 pub use pch::PchDecls;
@@ -84,7 +90,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 29;
+pub(crate) const IMAGE_VERSION: u32 = 30;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -745,6 +751,8 @@ struct Image {
     fexpl: varspec::FnExplDecls,
     /// WP-1352: the uses of explicit function specializations.
     fsuses: fnspec::FnSpecUses,
+    /// WP-1353: a precompiled header's cross-unit deduplication keys.
+    dedup: dedup::Dedup,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1493,6 +1501,7 @@ fn encode(img: &Image) -> Vec<u8> {
     latedef::encode_late_heads(&mut w, &img.lheads);
     varspec::encode_fn_expl_decls(&mut w, &img.fexpl);
     fnspec::encode_fn_spec_uses(&mut w, &img.fsuses);
+    dedup::encode_dedup(&mut w, &img.dedup);
     w.0
 }
 
@@ -2197,6 +2206,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.lheads = latedef::decode_late_heads(&mut r)?;
     img.fexpl = varspec::decode_fn_expl_decls(&mut r)?;
     img.fsuses = fnspec::decode_fn_spec_uses(&mut r)?;
+    img.dedup = dedup::decode_dedup(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2215,7 +2225,8 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
             TyRec::Elab(_, q)
             | TyRec::ElabQ(_, _, q)
             | TyRec::Paren(q)
-            | TyRec::Tst { under: Some(q), .. } => q.ty,
+            | TyRec::Tst { under: Some(q), .. }
+            | TyRec::Dep(deptypes::DepTy::QualTst { tst: q, .. }) => q.ty,
             TyRec::Typedef(d) => match img.decls.get(*d as usize)?.payload {
                 Payload::Typedef { underlying, .. } => underlying.ty,
                 // A completed specialization's member typedef (WP-1344).
@@ -2257,7 +2268,13 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
                 | TyRec::Tst { under: None, .. }
                 | TyRec::Ex(exprs::ExTy::Decltype { dep: true, .. }),
             ) => return true,
-            Some(TyRec::Tst { under: Some(u), .. }) => q = *u,
+            // And `typename nns::template X<args>` (WP-1353: `_Or<...>`'s
+            // substituted pattern).
+            Some(
+                TyRec::Tst { under: Some(u), .. }
+                | TyRec::Dep(deptypes::DepTy::QualTst { tst: u, .. })
+                | TyRec::ElabQ(_, _, u),
+            ) => q = *u,
             // `typename X<T>::type` (WP-1320: `is_signed`'s base).
             Some(TyRec::Dep(deptypes::DepTy::Name { .. } | deptypes::DepTy::Tmpl { .. })) => {
                 return true;
@@ -2346,7 +2363,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             let ok = img.decls.get(d as usize).is_some_and(|r| {
                 matches!(
                     (t, &r.payload),
-                    (TyRec::Enum(_), Payload::Enum { .. })
+                    // Or the implicit `std::align_val_t` (WP-1353).
+                    (
+                        TyRec::Enum(_),
+                        Payload::Enum { .. } | Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND }
+                    )
                         // Or a specialization's member typedef (WP-1344).
                         | (TyRec::Typedef(_), Payload::Typedef { .. } | Payload::Member { .. })
                         | (TyRec::Record(_), Payload::Record { .. })
@@ -2468,6 +2489,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     latedef::validate_late_defs(img, &mut claimed)?;
     varspec::validate_fn_expl_decls(img)?;
     fnspec::validate_fn_spec_uses(img)?;
+    dedup::validate_dedup(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2519,6 +2541,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                                     | Payload::Field { .. }
                                                     // A member typedef (WP-1344).
                                                     | Payload::Typedef { .. }
+                                                    // A member template a
+                                                    // class's using names
+                                                    // (WP-1353).
+                                                    | Payload::Template { .. }
                                             )
                                     }),
                                 _ => false,
@@ -2703,9 +2729,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // A builtin function, at global scope (WP-1278); declared
                 // lazily, its record may fall among the members of the
                 // class whose member first used it (WP-1310).
-                (Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }, _) => {
-                    d.ctx == NONE && d.lexical == NONE
-                }
+                (
+                    Payload::Implicit {
+                        kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND | scope::ALIGN_VAL_T_KIND,
+                    },
+                    _,
+                ) => d.ctx == NONE && d.lexical == NONE,
                 // A builtin template's stub (WP-1344).
                 (Payload::Implicit { kind }, _) if builtintempl::is_kind(*kind) => {
                     d.ctx == NONE && d.lexical == NONE
@@ -2744,14 +2773,16 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
                 // An out-of-line partial specialization of a member
-                // template has no previous declaration (WP-1345).
+                // template has no previous declaration (WP-1345), nor
+                // has an explicit one (WP-1353).
                 _ => {
                     top.is_none()
                         && (scope(d.ctx)
                             || (closed(d.ctx)
                                 && (d.prev != NONE
                                     || (d.lexical != NONE
-                                        && classtempl::partial_of(img, i as u32).is_some()))))
+                                        && (classtempl::partial_of(img, i as u32).is_some()
+                                            || classtempl::explicit_of(img, i as u32).is_some())))))
                 }
             };
             let member_only = matches!(
@@ -3004,6 +3035,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad builtin function record");
                 }
             }
+            Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND } => {
+                if d.prev != NONE || d.name != NONE || !scope::align_val_t_stub_ok(img, i) {
+                    return bad("bad implicit std::align_val_t record");
+                }
+            }
             Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
                 if d.prev != NONE || d.flags != 0 || d.owner != 0 {
                     return bad("bad builtin template record");
@@ -3103,6 +3139,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 }
             }
             // S6: the using family, at namespace scope only.
+            // WP-1353: a non-dependent class-scope using-declaration and
+            // its shadows.
+            Payload::Using { .. } | Payload::Shadow { .. }
+                if in_class
+                    && kind_of(d.ctx)
+                        .is_some_and(|c| classusing::class_using_rec_ok(img, c, d, i)) => {}
             Payload::Using { steps } => {
                 if in_class || !steps_ok(img, steps, i) {
                     return bad("bad using-declaration");
@@ -3492,7 +3534,10 @@ impl Writer<'_, '_, '_> {
                 let params = ps.into_iter().map(|q| self.qref(q)).collect::<W<Vec<_>>>()?;
                 TyRec::Func { ret, params, info, exc, nx: NONE }
             }
-            TypeView::Enum(d) => TyRec::Enum(self.type_decl(d, t)?),
+            TypeView::Enum(d) => TyRec::Enum(match self.align_val_t_stub(d) {
+                Some(r) => r,
+                None => self.type_decl(d, t)?,
+            }),
             TypeView::Record(d) => TyRec::Record(self.type_decl(self.s.ast.first(d), t)?),
             TypeView::TemplateTypeParm(d) => TyRec::Ttp(self.type_decl(d, t)?),
             TypeView::PackExpansion { pattern, num_expansions: None } => {
@@ -3567,6 +3612,20 @@ impl Writer<'_, '_, '_> {
     /// using-directive, namespace alias or using-enum-declaration at
     /// namespace scope, whose target must be a record of the image.
     fn using_record(&mut self, d: DeclId) -> W<Payload> {
+        // A non-dependent class-scope using-declaration's shadow (WP-1353).
+        let class_shadow = match self.s.ast.decls.get(d).ctx().and_then(|c| self.recs.get(&c)) {
+            Some(&c)
+                if matches!(self.img.decls[c as usize].payload, Payload::Record { .. })
+                    && self.s.ast.decls.get(d).kind() == DeclKind::UsingShadow
+                    && self.class_using_ok(d) =>
+            {
+                Some(
+                    self.class_shadow_target(d)?
+                        .ok_or("a using-declaration naming a declaration outside the image")?,
+                )
+            }
+            _ => None,
+        };
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let in_class = n
@@ -3585,8 +3644,10 @@ impl Writer<'_, '_, '_> {
                     _ => false,
                 }
         };
-        if in_class && !class_using_enum() {
-            return Err("a using-declaration in a class");
+        // A non-dependent class-scope using-declaration (WP-1353).
+        let class_using = in_class && self.class_using_ok(d);
+        if in_class && !class_using_enum() && !class_using {
+            return Err(classusing::CLASS_USING);
         }
         let rec = |x: Option<DeclId>| x.and_then(|x| self.recs.get(&x).copied());
         let payload_of = |r: u32| &self.img.decls[r as usize].payload;
@@ -3594,6 +3655,9 @@ impl Writer<'_, '_, '_> {
             DeclKind::Using => {
                 let q = ast.using_qualifier(d).ok_or("a using-declaration without a qualifier")?;
                 Payload::Using { steps: self.nns_steps(q)? }
+            }
+            DeclKind::UsingShadow if class_using => {
+                Payload::Shadow { target: class_shadow.ok_or(classusing::CLASS_USING)? }
             }
             DeclKind::UsingShadow => {
                 let t = rec(ast.using_target(d))
@@ -4134,7 +4198,9 @@ impl Writer<'_, '_, '_> {
         // injected class through a value argument): the importer
         // defines only the instantiations, as after replay.
         let pattern_special = || s.special_kind_of(d).is_some() || self.dep_member(d);
-        if defaulted && !cmp && (!first || !pattern_special()) {
+        // WP-1353: a special member defaulted outside its class.
+        let out_of_line = defaulted && !first && self.out_of_line_defaulted_ok(d);
+        if defaulted && !cmp && !out_of_line && (!first || !pattern_special()) {
             return Err("an out-of-line defaulted function");
         }
         if cmp {
@@ -5041,9 +5107,11 @@ impl Writer<'_, '_, '_> {
             // at namespace scope (`template <class R> struct
             // fb::res<R&> { ... };`, [temp.spec.partial.general]/7;
             // WP-1345) has no previous declaration.
+            // ... and an explicit specialization of one (`template <>
+            // struct fb::res<void> { ... };`, [temp.expl.spec]/2; WP-1353).
             let outer_partial = h.lexical != NONE
                 && n.kind() == DeclKind::CXXRecord
-                && self.s.ast.partial_spec_info(d).is_some();
+                && (self.s.ast.partial_spec_info(d).is_some() || self.outer_explicit_spec(d));
             if class_ctx
                 && st.open.is_empty()
                 && (h.lexical == NONE || (h.prev == NONE && !outer_partial))
@@ -5384,6 +5452,8 @@ impl Sema<'_, '_> {
         let mut asms: Vec<(DeclId, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
+        // Special members defaulted outside their class (WP-1353).
+        let mut out_of_line_defaulted: Vec<(DeclId, Loc)> = Vec::new();
         let mut nttp_defaults: Vec<(DeclId, u32, bool)> = Vec::new();
         let mut redecl_templates: Vec<DeclId> = Vec::new();
         // S4: the pattern records, built as the parser builds a pattern.
@@ -5508,6 +5578,9 @@ impl Sema<'_, '_> {
                     }
                     if !ci.is_empty() {
                         ctors.push((f, i));
+                    }
+                    if spec.defaulted() == Defaulted::Explicit && prev.is_some() {
+                        out_of_line_defaulted.push((f, h.loc));
                     }
                     if spec.defaulted() == Defaulted::Explicit {
                         // Still deferred in the unit (named only in a
@@ -5703,6 +5776,7 @@ impl Sema<'_, '_> {
                 Payload::Implicit { kind: scope::GLOBAL_OP_KIND } => {
                     self.image_global_op(img, i as u32)
                 }
+                Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND } => self.image_align_val_t(),
                 Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
                     self.image_builtin_template(*kind)
                 }
@@ -5825,7 +5899,9 @@ impl Sema<'_, '_> {
             // A builtin function is the importer's own declaration.
             let builtin = matches!(
                 r.payload,
-                Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }
+                Payload::Implicit {
+                    kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND | scope::ALIGN_VAL_T_KIND
+                }
             ) || matches!(r.payload, Payload::Implicit { kind } if builtintempl::is_kind(kind));
             if !builtin
                 && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. })
@@ -5970,6 +6046,9 @@ impl Sema<'_, '_> {
         self.image_explicit_insts(img, &mut tys, &ids, main);
         self.image_mark_specs(img, &ids, main);
         self.image_fn_spec_uses(img, &ids, main);
+        for (f, loc) in out_of_line_defaulted {
+            self.image_out_of_line_defaulted(f, loc);
+        }
         // Defaulted and implicit special members the module used are
         // defined again (spec/modules.md §11.11 "Classes").
         for (f, flags) in defaulted {
@@ -5992,6 +6071,8 @@ impl Sema<'_, '_> {
         for (e, at, ctx, location) in std::mem::take(&mut self.srcloc.image_uses) {
             self.image_source_loc_use(e, at, ctx, location);
         }
+        self.image_diagnose_if_rechecks(&built, img.bodies.exprs.len() as u32);
+        self.image_dedup(img, main, &ids);
         self.module_owner_changed();
     }
 
@@ -6591,6 +6672,7 @@ mod tests {
             lheads: latedef::LateHeads::default(),
             fexpl: varspec::FnExplDecls::default(),
             fsuses: fnspec::FnSpecUses::default(),
+            dedup: dedup::Dedup::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
