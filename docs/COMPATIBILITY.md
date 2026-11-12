@@ -145,9 +145,13 @@ macros and feature-test answers at every standard, symbol names, C/C++
 interop) matches `clang-22 -x c` and `clang-19 -x c`; every
 `__has_feature`/`__has_builtin`/`__has_attribute`/`__has_c_attribute`/
 `__is_identifier` answer kiln knows matches both clangs in every C
-standard on both targets. C-only semantics are in progress
-([KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode)), so no C project has been
-rated yet.
+standard on both targets. The C semantics and GNU C extensions are in
+place (WP-1276 onward; [CHANGELOG.md](../CHANGELOG.md)). zlib, sqlite,
+Lua, c-ares and zstd build with kiln as their C compiler and pass their
+tests, and GCC's `gcc.c-torture` suites run through kiln, GCC and
+clang; the measurements are in [status/c-mode.md](status/c-mode.md),
+the gaps in [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode). The C projects
+are not rated in the table below yet.
 
 ## C++20 modules
 
@@ -236,7 +240,7 @@ passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
 
 | feature | status | notes |
 |---|---|---|
-| PCH (`-x c++-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; correctness, not speed** | kiln's PCH is a textual record: the header path, the hash of every file it read, and the options that change meaning. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then processes the header again as if `-include`d. **A PCH build is not faster than the same build without one in 1.0.** clang's `.pch` files are refused, and vice versa. Same-size edits are found by content, not mtime. `-include foo.h` does not look for `foo.h.pch` (use `-include-pch`). A serialized-AST PCH that shares the module-file format is a follow-up. |
+| PCH (`-x c++-header`, `-x c-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; correctness, not speed** | By default kiln's PCH is a textual record: the header path, the hash of every file it read, and the options that change meaning. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then processes the header again as if `-include`d. **A PCH build is not faster than the same build without one.** clang's `.pch` files are refused, and vice versa. Same-size edits are found by content, not mtime. The first `-include foo.h` uses `foo.h.pch` (or `foo.h.gch`) when one exists, as in clang. The serialized form that shares the module-file format (`-fkiln-pch-image`) is experimental and off by default; a C header always takes the textual path ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#precompiled-headers), [status/pch.md](status/pch.md)). |
 
 ## Libraries and applications
 

@@ -2029,12 +2029,14 @@ only whole, and every doubt replays the header.
   header with no output (`-E` itself replays only the header).
 - **Not the default.** `-fkiln-pch-image` stays off by default, though
   the harness differential (spec/harness.md "PCH differential") is
-  green on both paths. The image carries no header of the C++ standard
-  library yet: every libc++ PCH in the m3 gate, and 124 of the 141
-  corpus PCHs, take the fallback. A default `load` would only add the
-  producer's image pass and a warning-capable record to every PCH
-  build. The default flips when the image carries the standard
-  headers (WP-1283, WP-1284).
+  green on both paths. The image carries only part of the C++ standard
+  library: docs/status/pch.md records how many libc++ and libstdc++
+  headers it carries alone and which corpus PCHs take the fallback, and
+  every realistic prefix there (`<bits/stdc++.h>`, the libc++ header
+  set, the `mid` set) is still replayed. A default `load` would mostly
+  add the producer's image pass and a warning-capable record to every
+  PCH build. The default flips when the image carries the standard
+  headers (WP-1314, WP-1320; planned for 1.2.0).
 - **Measured.** See docs/status/pch.md.
 - **Tests.** `crates/kiln_driver/tests/pch_decls.rs` covers:
   - image against replay (declarations, IR);

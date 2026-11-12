@@ -1,7 +1,8 @@
 # Known issues
 
 This page lists what kiln does not do yet, or does differently, as of
-1.0. Each item names the work package that tracks it in
+the release this file ships with (on `main`, as of the current commit).
+Each item names the work package that tracks it in
 [BACKLOG.md](BACKLOG.md), where one exists. How to use the parts that do
 work is in the [user guide](USER_GUIDE.md). Measured results for each
 library and project are in [COMPATIBILITY.md](COMPATIBILITY.md).
@@ -13,7 +14,7 @@ If you hit something not listed here, please
 
 - **Linux on aarch64 and x86_64 only.** Any other `--target` (macOS,
   Windows, 32-bit, other architectures) is `unsupported target`. Support
-  for other platforms is not planned for 1.0.
+  for other platforms is not planned.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
 - **x86 function multiversioning** (`target_clones`, several
@@ -41,26 +42,76 @@ If you hit something not listed here, please
 
 ## C mode
 
-`kiln` compiles C (`.c`, `.h`, `.i`, or `-x c`; `-std=c89` to `c23` and
-the `gnu` dialects) from 1.1.0: C lexing and keywords, clang's C
-predefines and feature-test answers, and C linkage (unmangled names) are
-clang's. `kiln++` compiles a `.c` file as C++, with a warning, as
-`clang++` does. What is not done yet:
+`kiln` compiles C from 1.1.0 (`.c`, `.h`, `.i`, or `-x c`; `-std=c89`
+to `c23` and the `gnu` dialects, default `gnu17`), with C's own
+semantics where C differs from C++ and the GNU C extensions clang
+implements ([CHANGELOG.md](../CHANGELOG.md)). `kiln++` compiles a `.c`
+file as C++, with a warning, as `clang++` does. zlib, sqlite, Lua,
+c-ares and zstd build with kiln and pass their tests, and on GCC 16.1's
+`gcc.c-torture` suites at `-std=gnu23` kiln fails no case that clang 19
+passes ([status/c-mode.md](status/c-mode.md)). The `-std=gnu17` table on
+that page was measured before the C semantics landed and is not a
+current figure. What is not done yet:
 
-- **C-only semantics.** The parts of C that C++ shares (structs, unions,
-  enums, functions, pointers, arrays, statements) are checked by the C++
-  rules. Where C differs, kiln still applies C++'s rule for now: implicit
-  `void *` conversions, the separate tag namespace, the type of `'a'`
-  (`int` in C), tentative definitions, K&R definitions, implicit `int`
-  and implicit function declarations in C89, VLAs and compound literals
-  ([WP-1276](BACKLOG.md)).
-- `_Imaginary` and `_Decimal32`/`64`/`128` are identifiers, not keywords;
-  `__builtin_types_compatible_p` is not a keyword.
-- Strict `-std=c89` `-E` output: `//` after a line splice or inside a
-  skipped `#if` group is not handled as clang does, and `-pedantic`
-  gives no line-comment warning.
-- C99/C11 use C++'s table of characters allowed in identifiers.
-- `-x c-header` precompiled headers are not built.
+- **Found during release review, tracked as [WP-1331](BACKLOG.md):**
+  - `<tgmath.h>` before C23 is rejected: its `__attribute__((overloadable))`
+    declaration with only `...` gives "ISO C requires a named parameter
+    before '...'". At `-std=c23` it compiles.
+  - `-ansi` is `unknown argument`; `-std=c2y`, `gnu2y` and
+    `iso9899:199409` are `invalid value`. clang 19 takes all four.
+  - `#embed` at `-std=c23` warns "#embed is a Clang extension
+    [-Wc23-extensions]" where clang gives no warning, which breaks a
+    `-Werror` build.
+  - The C23 `_BitInt` literal suffixes `wb` and `uwb` are "invalid
+    suffix 'wb' on integer constant". `_BitInt(N)` itself works.
+  - An assembler source (`.s`, `.S`) is not assembled by `-c`: kiln
+    warns "'linker' input unused [-Wunused-command-line-argument]",
+    writes no object and exits 0. In a link step it is passed to the
+    linking clang, which assembles it.
+  - `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`,
+    `-Wfortify-source` and `-Warray-bounds` on a constant out-of-range
+    index are not emitted, in C and C++.
+- **Rejected, where clang accepts:**
+  - More than the declared number of array initializers
+    (`int a[2] = { 1, 2, 3 };`) is the error "excess elements in array
+    initializer", where clang warns ([WP-1318](BACKLOG.md)).
+- **Accepted, where clang rejects** ([WP-1318](BACKLOG.md)):
+  `extern "C"` in a C file, `&` of a `?:` whose operands are `*p` with
+  `p` a `void *`, and `sizeof(+a)` with `a` an array.
+- **C++ syntax in a C file** (references, `template`, `namespace`,
+  `::`, `class`, lambdas) is rejected, but with the C++ parser's errors
+  and recovery, not clang's (`tests/c/cxx-only/cxx-syntax-rejected.c`).
+- **Driver:**
+  - CMake reports the ASM compiler identification as "unknown", since
+    `--version` does not say "clang version" (no build of the C rows
+    depends on it). A link error prints the backing `clang++:` line
+    before kiln's own ([WP-1298](BACKLOG.md)).
+  - `-fms-extensions` is `unknown argument` ([WP-896](BACKLOG.md)).
+- **Diagnostics:**
+  - some C warnings are missing: `-Wdeclaration-after-statement` (C89),
+    `-Wmissing-prototypes`, `-Wmissing-variable-declarations`,
+    `-Wgnu-folding-constant`, `-Wvla` on `sizeof(int[n])`, and the
+    "expanded from macro 'offsetof'" note ([WP-1319](BACKLOG.md));
+  - after an invalid redefinition of an enumeration, its new
+    enumerators are also reported as undeclared ([WP-1317](BACKLOG.md)).
+- **Implicitly declared `setjmp` and `vfork`** (called without their
+  header) are not marked as returning twice ([WP-1317](BACKLOG.md));
+  with `<setjmp.h>` included they are.
+- **Precompiled C headers** are always replayed: `-fkiln-pch-image`
+  writes no declaration image for a C header ([WP-1316](BACKLOG.md);
+  see [Precompiled headers](#precompiled-headers)).
+- **GNU C extensions that clang does not implement either**, and that
+  kiln rejects with clang's errors: nested functions ("function
+  definition is not allowed here"), variable length arrays in a
+  structure ("fields must have a constant size"), and initializing the
+  flexible array member of an automatic object.
+- **Limits:** the very deeply nested structures of
+  `gcc.c-torture/compile/limits-structnest.c` take more than 120 s to
+  compile, where clang stops at its bracket-nesting limit; an
+  initialized array of 10^17 structures
+  (`struct S { int f; } a[100000000000000001][3] = {0};`,
+  `compile/pr65680.c`) exhausts memory instead of being diagnosed or
+  emitted sparsely, as clang does ([WP-1298](BACKLOG.md)).
 
 ## Reflection
 
@@ -125,8 +176,8 @@ missing (spec/modules.md §11.10):
   importer re-parses the module's text. Since WP-985 the file also
   carries the module's constant-evaluation results, so the importer does
   not evaluate those again (spec/modules.md §11.11). The declaration
-  image that replaces the re-parse (`-fkiln-bmi-image`) ships in 1.0 as
-  an experimental opt-in: it is off by default and does not cover `std`
+  image that replaces the re-parse (`-fkiln-bmi-image`) is an
+  experimental opt-in: it is off by default and does not cover `std`
   yet. Making it the default is [WP-1070](BACKLOG.md). Importing
   libc++'s `std` module file costs about what compiling `std.cppm`
   in-process costs ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
@@ -134,6 +185,24 @@ missing (spec/modules.md §11.10):
   `std` does not keep the two global module fragments apart
   ([status/libcxx-m5.md](status/libcxx-m5.md)). WP-460 fixed it, but the
   full suite has not been re-run since.
+
+## Precompiled headers
+
+PCHs work (`-x c++-header`, `-x c-header`, `-emit-pch`, `-include-pch`;
+[COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)), but they do not
+make a build faster. The shipped path checks the PCH and then replays
+the header's tokens, so a PCH build costs what the same build with
+`-include` costs.
+
+- The serialized form (`-fkiln-pch-image`, spec/driver.md "The
+  declaration image") is experimental and off by default. It carries
+  only some standard library headers (on 2026-11-11, 32 of 118 libc++ 19
+  headers and 29 of 109 libstdc++ 14 headers, each alone), so a
+  realistic prefix such as `<bits/stdc++.h>` is still replayed
+  ([status/pch.md](status/pch.md); [WP-1314](BACKLOG.md),
+  [WP-1320](BACKLOG.md)). It is planned as the default for 1.2.0.
+- A C header never gets a declaration image and is always replayed
+  ([WP-1316](BACKLOG.md)).
 
 ## Sanitizers and coverage
 
@@ -147,7 +216,9 @@ missing (spec/modules.md §11.10):
   [spec/landed/codegen/WP-1003.md](../spec/landed/codegen/WP-1003.md).
 - **gcov filters** `-fprofile-filter-files` and `-fprofile-exclude-files`
   are rejected: [WP-1004](BACKLOG.md).
-- **Profile-guided optimization is not part of 1.0.**
+- **Profile-guided optimization of the program being compiled** is not
+  supported (kiln's own PGO build, `cargo xtask build --pgo`, is
+  unrelated).
   `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`,
   `-fprofile-instr-use` and `-fprofile-sample-use` are rejected with an
   error that says so.
@@ -172,7 +243,7 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
-| `-f[no-]stack-clash-protection`, `-f[no-]common`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" | — |
+| `-f[no-]stack-clash-protection`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" (`-f[no-]common` takes effect in C, for tentative definitions) | — |
 
 `-ffat-lto-objects` is rejected: fat objects are [WP-899](BACKLOG.md).
 
@@ -296,6 +367,9 @@ Templates, lookup and overloading:
   deduced non-type argument's type against its parameter's
   (`os<int E>` against `os<auto E>` is called ambiguous).
   [WP-1236](BACKLOG.md).
+- `module.unit/friend-template-instantiated-attachment.cpp`: a
+  redeclaration made by an importer's instantiation is checked against
+  the importer's module attachment. WP-1307 follow-up.
 
 Constant evaluation and reflection:
 
@@ -307,9 +381,6 @@ Constant evaluation and reflection:
   template arguments. WP-1243 follow-up.
 - `ext.clang.pass.object.size/pass-object-size-lenient-xfail.cpp`: no
   lenient designator for object-size folds. WP-808.
-- `meta.reflection.define.aggregate/define-run-template-for.cpp`: an
-  expansion statement over a defined class's members. WP-474, WP-478,
-  WP-479.
 
 Attributes, calling conventions and extensions:
 
@@ -340,6 +411,10 @@ Code generation, ABI and sanitizers:
 
 - `basic.link/unnamed-enum-internal-name-run.cpp`: an internal unnamed
   enumeration mangles as `Ut_` instead of clang's `$_N`. WP-941.
+- `expr.typeid/polymorphic-operand-immediate-invocation-run.cpp`: an
+  immediate invocation in the operand of a polymorphic `typeid` is not
+  evaluated at compile time, so the link fails on the `consteval`
+  function. [WP-1324](BACKLOG.md).
 - `cfenv.syn/fenv-access-fetestexcept-run.cpp`: `#pragma STDC
   FENV_ACCESS ON` is rejected (no constrained intrinsics). WP-806.
 - `driver.sanitize/ubsan-desc-identity-ir.cpp`: UBSan type descriptors
@@ -363,10 +438,16 @@ Diagnostics and dumps:
   befriended class template's pattern where clang prints it
   instantiated. [WP-129](BACKLOG.md).
 
+C mode:
+
+- `tests/c/cxx-only/cxx-syntax-rejected.c`: C++-only syntax in a C file
+  gets the C++ parser's errors and recovery, not clang's
+  ([C mode](#c-mode)). WP-1276 follow-up.
+
 ## Crashes
 
 kiln reports an internal compiler error instead of crashing silently, and
 writes a reproducer ([REPORTING-BUGS.md](REPORTING-BUGS.md)). The known
 internal-error sites were turned into diagnostics (WP-971 to WP-973).
-Testing the reproducer of a preprocessed `.i` input waits on C support:
+The reproducer of a C input (a preprocessed `.i`) is not tested yet:
 [WP-974](BACKLOG.md).
