@@ -2378,6 +2378,58 @@ the one evaluation). kiln memoizes constant calls, so a verbose trace
 has one `ConstevalCall` / `ConstexprCall` per evaluated call, not per
 call in the source's recursion.
 
+## Compile statistics log
+
+`KILN_STATS_LOG=<path>` (WP-1370; kiln only, read once per run, unset or
+empty: off) makes the driver append one JSON line per job to `<path>`:
+one per source input of a compile or link run (`-c`, `-S`, `-emit-llvm`,
+linking), one per input of `-fsyntax-only` / `--precompile`, and one for
+the link itself; none for `-E`/`-M`, an assembler input or a header
+precompile. A job's line is written when the job ends, success or
+failure. The file is opened in append mode and the line written with a
+single `write` of at most 4096 bytes, so the lines of concurrent kiln
+processes (a parallel build sharing one log) never interleave; a line
+whose input path would exceed the bound has the path cut and
+`"truncated":true`. A log that cannot be opened or written is ignored:
+the variable never changes an output, the tools run or the exit status.
+Off, it costs one environment lookup per run: no phase sums, no walk of
+the IR.
+
+**Fields** (the contract; in this order, more may be added at the end):
+
+| Field | Value |
+|---|---|
+| `input` | the input path as given; `null` on the link's line |
+| `output_kind` | `obj` (`-c`), `asm` (`-S`), `llvm-ir` (`-S -emit-llvm`), `bitcode` (`-c -emit-llvm`), `link` (an input of a linking run, and the link), `syntax-only`, `precompile` |
+| `opt_level` | the `-O` level as written after `-O` (`"0"` when none, `"1"` for `-O`; `"2"`, `"s"`, `"fast"`, ...) |
+| `debug` | whether a `-g` debug-information kind is in effect |
+| `lto` | `"none"`, `"full"`, `"thin"` |
+| `triggers` | the conditions that made the driver schedule `opt` for this input's IR ("Code generation", IR optimization), each that holds, in this order: `opt-level` (`-O1` and above), `lto`, `sanitizer`, `coverage`, `alwaysinline` (an `alwaysinline` attribute group: a definition or a call site), `instrument-entry` (the `"instrument-function-entry` attribute), `coro` (a declared `llvm.coro.*` intrinsic). Any one alone schedules `opt`; `[]` when it does not run (also under `-disable-llvm-passes`, and for a job with no module) |
+| `alwaysinline_defs` | `define`s whose function attribute group holds `alwaysinline` |
+| `alwaysinline_callsites` | `call` / `invoke` / `callbr` instructions whose attribute group holds `alwaysinline` |
+| `available_externally_defs` | `define available_externally` functions |
+| `ir_bytes` | the length of the frontend's IR text |
+| `functions_defined` | `define`s |
+| `frontend_ms` | the `Frontend` phase less `EmitIR` and `PrintIR`: preprocessing, parsing, sema, the Oven |
+| `emit_ir_ms`, `print_ir_ms` | the `EmitIR` and `PrintIR` phases ("Time trace") |
+| `children_ms` | an object: per tool run for the job (`opt`, `llc`, `llvm-as`, `llvm-objcopy`; `clang++` on the link's line), its summed wall time |
+| `total_ms` | the job, from its start to its end |
+| `exit` | `0`, or `1` when a step of the job failed |
+| `truncated` | present (`true`) only when the input path was cut |
+
+The five counts are of the module the frontend produced, before `opt`,
+taken from its IR text in one pass over the part before the metadata
+section (exact for kiln's printer: a quoted name holding `#N` is not a
+group reference); they are `null` for a job with no module (an error, or
+`-fsyntax-only` / `--precompile`). Times are milliseconds with three
+decimals, wall clock, from the same clock readings `-ftime-trace` takes
+for the events of the same names (`kiln_source::trace::Phase`,
+`InputTrace::run_child`); the log starts no trace and writes no trace
+file. Implementation: `crates/kiln_driver/src/stats.rs`; tests:
+`crates/kiln_driver/tests/stats_log.rs`. `scripts/stats-summary.py <log>...`
+prints the per-trigger-set tables of a log (jobs, `opt`, `llc` and total
+time, the `{alwaysinline}`-only distributions, the `-g` split).
+
 ## Constexpr profile
 
 `-fconstexpr-stats` and `-fconstexpr-profile[=<format>|<file>]`

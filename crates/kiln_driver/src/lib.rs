@@ -33,6 +33,7 @@ pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
 pub mod scan_deps;
+pub mod stats;
 pub mod syntax_cmd;
 pub mod templ_opts;
 pub mod time;
@@ -815,6 +816,9 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let mut output = String::new();
     let mut errors = 0u32;
     let mut side_deps: Vec<(String, String)> = Vec::new();
+    let stats_log = matches!(args.action, Action::SyntaxOnly | Action::Precompile)
+        .then(stats::log_path)
+        .flatten();
     if args.deps.cdb_fragment.is_some() {
         // `-E`/`-M` write to `-o` or standard output; `-fsyntax-only`
         // has no output.
@@ -873,10 +877,16 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 let out = pp_cmd::precompile_output(args, &input.path);
                 time_trace::InputTrace::start(s, time_trace::path(args, None, &input.path, &out))
             });
+            // spec/driver.md "Compile statistics log": the job's record.
+            let stats = stats_log.as_ref().map(|_| stats::Job::start(Some(&input.path)));
             let r = {
-                let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
+                let _frontend = kiln_source::trace::Phase::new("Frontend");
                 syntax_only(args, &tc, std, &input.path, stdin, &diag_opts, &io)
             };
+            if let (Some(mut j), Some(log)) = (stats, &stats_log) {
+                j.failed = r.errors > 0;
+                j.finish(args, log);
+            }
             if let Some(mut t) = trace {
                 t.failed = r.errors > 0;
                 if let Err((path, e)) = t.finish(&args.program) {

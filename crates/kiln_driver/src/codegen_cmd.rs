@@ -471,7 +471,7 @@ impl CodegenJob<'_> {
             );
             // spec/driver.md "Time trace": `EmitIR` is the module's
             // construction, `PrintIR` (the caller's) its text.
-            let emit = kiln_source::trace::Scope::new("EmitIR");
+            let emit = kiln_source::trace::Phase::new("EmitIR");
             let (r, warnings) =
                 kiln_codegen::emit_with_debug(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
             drop(emit);
@@ -515,7 +515,7 @@ impl CodegenJob<'_> {
 /// the module are never kept side by side past the print), under the
 /// `PrintIR` time-trace event (spec/driver.md "Time trace", WP-1366).
 pub(crate) fn print_ir(module: Module) -> String {
-    let print = kiln_source::trace::Scope::new("PrintIR");
+    let print = kiln_source::trace::Phase::new("PrintIR");
     let text = module.to_text();
     drop(print);
     drop(module);
@@ -950,7 +950,7 @@ fn assembler(args: &Args, tc: &Toolchain, source: &str, out: String) -> Command 
 /// metadata is most of its text (WP-817). A top-level line opening with
 /// `!` starts the section; no other line does (instructions are
 /// indented and a string's newline is escaped).
-fn code_part(ir: &str) -> &str {
+pub(crate) fn code_part(ir: &str) -> &str {
     if ir.starts_with('!') {
         return "";
     }
@@ -966,10 +966,13 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
     ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
 }
 
-/// Whether the IR defines an `always_inline` function (an attribute
-/// group holds `alwaysinline`; kiln puts it on definitions only). clang's
-/// O0 pipeline (`AlwaysInlinerPass`) inlines every call to one, deleting
-/// a discardable one left unused, before `-emit-llvm` writes the module.
+/// Whether the IR has an `alwaysinline` attribute group: on a definition
+/// (an `always_inline` function) or on a call site (kiln marks the calls
+/// of a `[[clang::always_inline]]` statement and those inside a
+/// `flatten` function, `kiln_codegen` `stmt_call_attrs`). clang's O0
+/// pipeline (`AlwaysInlinerPass`) inlines every such call and every
+/// call to such a function, deleting a discardable one left unused,
+/// before `-emit-llvm` writes the module.
 pub fn needs_always_inline(ir: &str) -> bool {
     ir.lines().any(|l| {
         l.starts_with("attributes #") && l.split_ascii_whitespace().any(|w| w == "alwaysinline")
@@ -979,9 +982,9 @@ pub fn needs_always_inline(ir: &str) -> bool {
 /// The `opt` runs between the frontend and the IR's consumer, if any:
 /// at `-O1` and above the default pipeline of the level (which places
 /// `CoroEarly`, `CoroSplit`, `CoroElide` and `CoroCleanup` where clang's does);
-/// at `-O0` clang's whole O0 pipeline when the module defines an
-/// `always_inline` function (`AlwaysInlinerPass`, then the coroutine
-/// lowering), else clang's O0 coroutine lowering (`CoroConditionalWrapper` in
+/// at `-O0` clang's whole O0 pipeline when the module has an
+/// `alwaysinline` definition or call site (`AlwaysInlinerPass`, then
+/// the coroutine lowering), else clang's O0 coroutine lowering (`CoroConditionalWrapper` in
 /// `buildO0DefaultPipeline`: `CoroEarly`, `CoroSplit`, `CoroCleanup`,
 /// then `GlobalDCE`), only for a module that needs it. The first run
 /// writes bitcode, which the second reads back discarding the local
@@ -1013,6 +1016,28 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
         None => return None,
     };
     Some(opt_commands(args, tc, passes))
+}
+
+/// The conditions that make [`ir_passes`] schedule `opt` for the IR
+/// text `ir`, each by its stable name (spec/driver.md "Compile
+/// statistics log"): every one that holds, in this order, any one of
+/// which alone schedules it; empty when `opt` does not run. Only the
+/// statistics log asks (it walks the text once more).
+pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'static str> {
+    if args.disable_llvm_passes {
+        return Vec::new();
+    }
+    let ir = code_part(ir);
+    let checks = [
+        ("opt-level", opt_pipeline(args.opt_flag.as_deref()).is_some()),
+        ("lto", args.codegen.lto.is_some()),
+        ("sanitizer", sanitizer_passes(args, tc).is_some()),
+        ("coverage", coverage_passes(args).is_some()),
+        ("alwaysinline", needs_always_inline(ir)),
+        ("instrument-entry", ir.contains("\"instrument-function-entry")),
+        ("coro", needs_coro_lowering(ir)),
+    ];
+    checks.into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
 }
 
 /// The `opt` runs `-###` prints after a frontend step: those of an `-O1`
@@ -1405,6 +1430,15 @@ fn execute(
     // frontend step to its last step before the next input or the link.
     let trace_settings = time_trace::settings(args).ok().flatten();
     let mut trace: Option<InputTrace> = None;
+    // spec/driver.md "Compile statistics log": one record per source
+    // input and one for the link, each ended where its trace ends.
+    let stats_log = crate::stats::log_path();
+    let mut stats: Option<crate::stats::Job> = None;
+    let end_stats = |stats: &mut Option<crate::stats::Job>| {
+        if let (Some(j), Some(log)) = (stats.take(), &stats_log) {
+            j.finish(args, log);
+        }
+    };
     let mut traced_children = 0usize;
     let mut traced_inputs = 0usize;
     let mut child = |trace: &mut Option<InputTrace>, cmd: &Command| -> Command {
@@ -1423,16 +1457,24 @@ fn execute(
         match step {
             Step::Frontend { input, dest } => {
                 end_trace(trace.take(), args, diag_opts, io);
+                end_stats(&mut stats);
+                stats = stats_log.as_ref().map(|_| crate::stats::Job::start(Some(&input.path)));
                 traced_inputs += 1;
                 trace =
                     trace_settings.map(|s| start_trace(args, s, &input.path, temp, traced_inputs));
                 let text = {
-                    let _frontend = kiln_source::trace::Scope::new("Frontend");
+                    let _frontend = kiln_source::trace::Phase::new("Frontend");
                     frontend(args, tc, input, stdin_text, diag_opts, io)
                 };
                 if let Some(t) = trace.as_mut() {
                     t.failed |= text.is_none();
                     t.begin_backend();
+                }
+                if let Some(j) = stats.as_mut() {
+                    j.failed |= text.is_none();
+                    if let Some(t) = &text {
+                        j.module(args, tc, t);
+                    }
                 }
                 // The IR-level passes run before the IR is written or
                 // piped on (spec/driver.md "IR optimization").
@@ -1472,6 +1514,9 @@ fn execute(
                 if let Some(t) = trace.as_mut() {
                     t.failed |= !ok;
                 }
+                if let Some(j) = stats.as_mut() {
+                    j.failed |= !ok;
+                }
                 ir = ok.then_some(data);
                 skip_piped = ir.is_none();
                 failed |= ir.is_none();
@@ -1485,12 +1530,14 @@ fn execute(
             }
             Step::Preprocess { input, dest } => {
                 end_trace(trace.take(), args, diag_opts, io);
+                end_stats(&mut stats);
                 let ok = preprocess_asm(args, tc, input, dest, stdin_text, diag_opts, io, temp);
                 skip_piped = !ok;
                 failed |= !ok;
             }
             Step::Assemble { cmd, after_pp } => {
                 end_trace(trace.take(), args, diag_opts, io);
+                end_stats(&mut stats);
                 if *after_pp && skip_piped {
                     continue;
                 }
@@ -1524,28 +1571,46 @@ fn execute(
                 if let Some(t) = trace.as_mut() {
                     t.failed |= !ok;
                 }
+                if let Some(j) = stats.as_mut() {
+                    j.failed |= !ok;
+                }
                 failed |= !ok;
             }
             Step::External { cmd, piped: false } if !matches!(cmd.tool, Tool::Linker) => {
                 // `-gz`'s in-place `llvm-objcopy`: part of the input.
                 if !failed {
-                    let ok = cmd.run(None, &mut io.stdout, &io.stderr, drv);
+                    let ok = InputTrace::run_child(cmd, || {
+                        cmd.run(None, &mut io.stdout, &io.stderr, drv)
+                    });
                     if let Some(t) = trace.as_mut() {
                         t.failed |= !ok;
+                    }
+                    if let Some(j) = stats.as_mut() {
+                        j.failed |= !ok;
                     }
                     failed |= !ok;
                 }
             }
             Step::External { cmd, piped: false } => {
                 end_trace(trace.take(), args, diag_opts, io);
+                end_stats(&mut stats);
                 // The link step: only when everything before it worked.
                 if !failed {
-                    failed |= !cmd.run(None, &mut io.stdout, &io.stderr, drv);
+                    let mut link = stats_log.as_ref().map(|_| crate::stats::Job::start(None));
+                    let ok = InputTrace::run_child(cmd, || {
+                        cmd.run(None, &mut io.stdout, &io.stderr, drv)
+                    });
+                    if let Some(j) = link.as_mut() {
+                        j.failed = !ok;
+                    }
+                    end_stats(&mut link);
+                    failed |= !ok;
                 }
             }
         }
     }
     end_trace(trace.take(), args, diag_opts, io);
+    end_stats(&mut stats);
     i32::from(failed)
 }
 
