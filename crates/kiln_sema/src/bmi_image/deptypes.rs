@@ -48,6 +48,9 @@ pub(super) enum DepTy {
     /// (`ns::X(args)`, WP-1342): its steps and whether `template` was
     /// written.
     Deduced { template: u32, deduced: Option<QRef>, qual: Option<(Vec<NnsRec>, bool)> },
+    /// The type of a `using typename B<T>::type;` member (WP-1345,
+    /// [`super::depusing`]): its record.
+    Using(u32),
 }
 
 const T_NAME: u8 = 0;
@@ -56,6 +59,7 @@ const T_TRANSFORM: u8 = 2;
 const T_MEMPTR: u8 = 3;
 const T_VECTOR: u8 = 4;
 const T_DEDUCED: u8 = 5;
+const T_USING: u8 = 6;
 
 impl Writer<'_, '_, '_> {
     /// The record of type view `v`, `None` when this module does not
@@ -111,6 +115,9 @@ impl Writer<'_, '_, '_> {
                 let template = self.template_rec(td, 1)?;
                 let deduced = deduced.map(|q| self.qref(q)).transpose()?;
                 DepTy::Deduced { template, deduced, qual }
+            }
+            TypeView::UnresolvedUsing(d) => {
+                DepTy::Using(*self.recs.get(&d).ok_or("a type declared outside the image")?)
             }
             _ => return Ok(None),
         })))
@@ -169,6 +176,10 @@ pub(super) fn encode_dep(w: &mut Wr, d: &DepTy) {
                 }
             }
         }
+        DepTy::Using(d) => {
+            w.u8(T_USING);
+            w.u32(*d);
+        }
     }
 }
 
@@ -221,6 +232,7 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
             };
             DepTy::Deduced { template, deduced, qual }
         }
+        T_USING => DepTy::Using(r.u32()?),
         _ => return bad("bad dependent type"),
     })
 }
@@ -262,6 +274,7 @@ pub(super) fn dep_refs(d: &DepTy) -> (Vec<QRef>, Vec<u32>) {
             ds.push(*template);
             qs.extend(*deduced);
         }
+        DepTy::Using(d) => ds.push(*d),
     }
     (qs, ds)
 }
@@ -283,6 +296,10 @@ pub(super) fn dep_ok(img: &Image, d: &DepTy, nd: usize) -> bool {
             named && qual.as_ref().is_none_or(|(s, _)| super::steps_ok(img, s, nd))
         }
         DepTy::Transform { .. } | DepTy::MemPtr { .. } | DepTy::Vector { .. } => true,
+        DepTy::Using(d) => matches!(
+            img.decls.get(*d as usize).map(|r| &r.payload),
+            Some(Payload::DepUsing { typename: true, .. })
+        ),
     }
 }
 
@@ -357,6 +374,10 @@ impl Sema<'_, '_> {
                 }
                 self.ast.types.deduced_template_specialization(name, deduced)
             }
+            DepTy::Using(d) => match ids.get(*d as usize) {
+                Some(&u) => QualType::unqual(self.ast.types.unresolved_using_type(u)),
+                None => QualType::ERROR,
+            },
         }
     }
 

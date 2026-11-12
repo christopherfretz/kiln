@@ -2994,6 +2994,109 @@ Tests: `pack_arguments_are_carried`,
 refused); `self_bases_and_builtin_templates_round_trip`,
 `rejects_corrupt_self_bases_and_builtin_templates` (kiln_sema).
 
+**Forms carried by WP-1345 (declarations and class members).** Each
+form below was a census refusal of a declaration or class member; new
+tags come from the end of each enumeration.
+- *Dependent using-declarations.* `using B<T>::f;` and `using typename
+  B<T>::type;` in a class template ([namespace.udecl], [temp.dep.type])
+  are decl kind 29 `K_DEP_USING`: a flag byte (bit 0 `typename`) and the
+  qualifier's steps; the name is the header's (an identifier, an
+  operator, or `N_CTOR` for an inheriting declarator `using B<T>::B;`,
+  [class.inhctor.init], which the importer names again from the rebuilt
+  qualifier's canonical type and does not enter in lookup). The typename
+  form's type is dependent type tag 6 `T_USING` (the record). A class
+  template pattern whose inherited constructors all come from such
+  declarators keeps `HAS_INHERITED_CTOR` in its definition bits. A pack
+  and a conversion-function name stay refused.
+- *Attributes.* `preferred_name(T)` (attribute op `Type`: the attrs
+  section gains a trailing vector of type references), `diagnose_if(cond,
+  msg, kind)` and `enable_if(cond, msg)` (conditions in the body root
+  list, like the other expression attributes).
+- *`explicit(expr)`.* Constraint-patch kind 4 `K_EXPLICIT` on a function
+  record: the operand, patched into `cold.explicit_expr` with the
+  constraints ([dcl.fct.spec]/3).
+- *Names.* A literal operator (`operator""_x`, [over.literal]) is name
+  word `N_LIT | k` (`N_LIT` = `0x8000_0000`, `k` the suffix's identifier);
+  a conversion function template is named by `N_CONV` like its pattern.
+- *Invented template parameters.* An abbreviated function template's
+  invented type parameters ([dcl.fct]/22) carry `IMPLICIT` in their
+  record flags.
+- *Defaulted members of patterns.* A member of a class template pattern
+  defaulted on its first declaration is a function record like any
+  other; its definition is made when an instantiation uses it.
+- *Implicit members of specializations.* Each implicitly declared
+  special member of a complete class template specialization reference
+  is an `Implicit` record whose context is that reference, in member
+  order (a body naming one writes the members sema declared before it
+  first, so overload candidates are listed as in replay); the importer,
+  which instantiated the class at that reference, declares each again as
+  sema does lazily and defines it when it was used. A specialization
+  whose members have `explicit(expr)` is carried like any other: the
+  importer resolves the specifier when overload resolution asks, after
+  the constraint patches.
+- *Explicit specializations named before their declaration.* When a
+  declaration names an explicit specialization of a class template
+  before `template <> struct X<...>` declares it (sema makes it at the
+  first name and specializes it in place), the writer visits the
+  specialization just before its first member, where replay declares
+  it; the declarations in between name it through an incomplete
+  specialization reference.
+- *Anonymous unions and structs* ([class.union.anon]). The unnamed
+  member class keeps `ANONYMOUS` (definition bit `ANON_BIT`) on a record
+  with name `NONE`; its unnamed object member is decl kind 30
+  `K_ANON_OBJ` (the class record), and each name it injects is decl kind
+  31 `K_INDIRECT` (the object record; the importer finds the indirect
+  field the class definition made, by name). A constructor's member
+  initializer may name a member of an anonymous member (`Field`, init
+  kind 2) or an indirect field (init kind 3).
+- *Using-enum in a class* ([enum.udecl]). A non-dependent class's
+  `using enum E;` is its `UsingEnum` record and the enumerator shadows
+  it introduces are `Shadow` records in the class, each with its access.
+  Other class-scope using-declarations stay refused.
+- *Conversion names in dependent member access.* The name word of a
+  `CXXDependentScopeMemberExpr` naming `operator T` (`__d.operator
+  basic_string_view<C, T>()` in a requires-expression) is `0x8000_0000
+  | ty << 3 | quals` (the type index below `2^27`); the importer names
+  the conversion to the rebuilt type's canonical type.
+- *Out-of-line members of nested classes.* A member of a class nested
+  in a class template or partial specialization defined outside it
+  (`template <class C> basic_ostream<C>::sentry::sentry(...)`) is
+  preceded by every enclosing template-head's parameters, as WP-1292's
+  out-of-line member templates are. An out-of-line partial
+  specialization of a member class template (`template <class R> struct
+  fb::res<R&> { ... };`) is a class record whose context is the closed
+  class, with lexical context the namespace and no previous
+  declaration.
+- *Explicit object member functions* ([dcl.fct]/6). Function specifier
+  bit 20 (`explicit_object`); the first parameter's flags carry
+  `ParamData::EXPLICIT_OBJECT`, which no other parameter may.
+- *Block-scope function declarations in templates.* `extern T* f();`
+  in a member of a class template (`polymorphic_allocator()`'s
+  `get_default_resource`) is a local function record written in
+  declaration order with its previous declaration; sema keeps it out of
+  `local_externs`, and so does the image.
+- *Attributes on explicit instantiations.* Plain-word attributes written
+  on `template class` / `extern template class` (`visibility`, libc++'s
+  `_LIBCPP_EXTERN_TEMPLATE_TYPE_VIS`) are a second trailing vector of the
+  attrs section, keyed by the instantiation's index in the explicit
+  instantiation section; the importer appends them to the
+  specialization after running the instantiation. Attributes the
+  specialization took from its template's declarations are made again
+  by the instantiation.
+- *File-scope `asm`* ([dcl.asm]). Decl kind 32 `K_ASM`: the string
+  literal, a body-section expression patched in with the bodies (the
+  importer declares a placeholder and sets the string with
+  `set_file_scope_asm_string`).
+
+Still refused in this bucket: a non-word attribute on an explicit
+instantiation (`deprecated("...")`), a non-dependent using-declaration
+of a base member in a class, an explicit specialization of a member
+class template defined out of class, a dependent using pack or
+conversion-function name, a non-template out-of-line defaulted special
+member. Tests: `crates/kiln_driver/tests/pch_decls.rs` and the corpus
+pairs `cpp.include/pch-decl-forms-run.cpp`,
+`module.interface/image-decl-forms-run.cpp`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3719,7 +3822,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 27` since WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 28` since WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

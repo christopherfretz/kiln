@@ -28,7 +28,7 @@ use kiln_ast::decl::{
     TemplLinkKind, VarSpec, VarStorage,
 };
 use kiln_ast::modules::{Owner, UnitKind};
-use kiln_ast::names::{DeclName, OverloadedOperator};
+use kiln_ast::names::{DeclName, DeclNameView, OverloadedOperator};
 use kiln_ast::stmt::StmtKind;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
@@ -43,6 +43,7 @@ use crate::Sema;
 use crate::modules::Directive;
 
 mod aggconsts;
+mod anon;
 mod attrs;
 mod bindings;
 mod body;
@@ -53,11 +54,13 @@ mod constrspec;
 mod declocs;
 mod defcmp;
 mod deptypes;
+mod depusing;
 mod explinst;
 mod exprs;
 mod friend;
 mod localexterns;
 mod locs;
+mod members;
 mod membertempl;
 mod patinit;
 mod pch;
@@ -78,7 +81,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 27;
+pub(crate) const IMAGE_VERSION: u32 = 28;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -100,6 +103,9 @@ const N_DTOR: u32 = 0xFFFF_FF01;
 const N_CONV: u32 = 0xFFFF_FF02;
 const N_GUIDE: u32 = 0xFFFF_FF03;
 const N_OP: u32 = 0xFFFF_FE00;
+/// A literal operator's name word: `N_LIT` plus its ud-suffix's index
+/// in `names` (WP-1345, [over.literal]).
+const N_LIT: u32 = 0x8000_0000;
 
 /// What the writer hands the driver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -631,6 +637,28 @@ enum Payload {
         ty: Option<QRef>,
         owned: u32,
     },
+    /// A dependent using-declarator in a class template (WP-1345,
+    /// [`depusing`]): `typename` written, and the qualifier.
+    DepUsing {
+        typename: bool,
+        steps: Vec<NnsRec>,
+    },
+    /// The unnamed member object of an anonymous union or struct
+    /// (WP-1345, [`anon`]): the class record.
+    AnonObj {
+        rec: u32,
+    },
+    /// A member name an anonymous union or struct injected (WP-1345,
+    /// [`anon`]): the member object's record.
+    Indirect {
+        obj: u32,
+    },
+    /// A namespace-scope `asm ( string-literal ) ;` ([dcl.asm], WP-1345):
+    /// the string literal, an expression of the body section patched in
+    /// with the bodies.
+    Asm {
+        string: u32,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -738,6 +766,13 @@ const K_ASSERT: u8 = 26;
 const K_TTTP: u8 = 27;
 /// A block-scope structured binding (WP-1343).
 const K_BINDING: u8 = 28;
+/// A dependent using-declarator (WP-1345, [`depusing`]).
+const K_DEP_USING: u8 = 29;
+/// An anonymous union's member object (WP-1345, [`anon`]).
+const K_ANON_OBJ: u8 = 30;
+/// A member an anonymous union injected (WP-1345, [`anon`]).
+const K_INDIRECT: u8 = 31;
+const K_ASM: u8 = 32;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -770,6 +805,10 @@ impl Payload {
             Payload::Assert { .. } => K_ASSERT,
             Payload::Tttp(_) => K_TTTP,
             Payload::Binding { .. } => K_BINDING,
+            Payload::DepUsing { .. } => K_DEP_USING,
+            Payload::AnonObj { .. } => K_ANON_OBJ,
+            Payload::Indirect { .. } => K_INDIRECT,
+            Payload::Asm { .. } => K_ASM,
         }
     }
 }
@@ -839,6 +878,8 @@ fn fn_spec(bits: u32) -> Option<FnSpec> {
         .with_variadic(bit(17))
         .with_override(bit(18))
         .with_final(bit(19))
+        // An explicit object member function ([dcl.fct]/6, WP-1345).
+        .with_explicit_object(bit(20))
         .with_virtual_written(bit(21))
         .with_storage_inherited(bit(22))
         .with_not_selected(bit(23))
@@ -870,6 +911,7 @@ fn init_kind_of(k: u8) -> CtorInitKind {
     match k {
         0 => CtorInitKind::Base,
         2 => CtorInitKind::Field,
+        3 => CtorInitKind::IndirectField,
         _ => CtorInitKind::Delegating,
     }
 }
@@ -1210,7 +1252,14 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(*pattern);
         }
         Payload::Using { steps } => w.steps(steps),
+        Payload::DepUsing { typename, steps } => {
+            w.u8(u8::from(*typename));
+            w.steps(steps);
+        }
         Payload::Shadow { target: x }
+        | Payload::AnonObj { rec: x }
+        | Payload::Indirect { obj: x }
+        | Payload::Asm { string: x }
         | Payload::UsingDir { ns: x }
         | Payload::NsAlias { target: x }
         | Payload::UsingEnum { e: x } => w.u32(*x),
@@ -1737,7 +1786,18 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_MEMBER => Payload::Member { spec: r.u32()?, pattern: r.u32()? },
         K_USING => Payload::Using { steps: r.steps()? },
+        K_DEP_USING => {
+            let typename = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return bad("bad flag byte"),
+            };
+            Payload::DepUsing { typename, steps: r.steps()? }
+        }
         K_SHADOW => Payload::Shadow { target: r.u32()? },
+        K_ANON_OBJ => Payload::AnonObj { rec: r.u32()? },
+        K_INDIRECT => Payload::Indirect { obj: r.u32()? },
+        K_ASM => Payload::Asm { string: r.u32()? },
         K_USING_DIR => Payload::UsingDir { ns: r.u32()? },
         K_NS_ALIAS => Payload::NsAlias { target: r.u32()? },
         K_USING_ENUM => Payload::UsingEnum { e: r.u32()? },
@@ -1821,8 +1881,11 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::UsingDir { .. }
         | Payload::NsAlias { .. }
         | Payload::UsingEnum { .. }
+        | Payload::AnonObj { .. }
+        | Payload::Indirect { .. }
+        | Payload::Asm { .. }
         | Payload::Record { def: None, .. } => Vec::new(),
-        Payload::Using { steps } => steps
+        Payload::Using { steps } | Payload::DepUsing { steps, .. } => steps
             .iter()
             .filter_map(|s| match s {
                 NnsRec::Ty(q, _) => Some(*q),
@@ -2285,6 +2348,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             Payload::Tttp(_)
                         )
                         | (TyRec::Subst { .. }, Payload::Template { .. })
+                        // WP-1345: `using typename B<T>::type;`.
+                        | (TyRec::Dep(deptypes::DepTy::Using(_)), Payload::DepUsing { .. })
                 ) || matches!((t, &r.payload),
                     // A dependent builtin template specialization (WP-1344).
                     (TyRec::Tst { under: None, .. }, Payload::Implicit { kind })
@@ -2530,7 +2595,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
             continue;
         }
-        if d.flags & !(DECL_FLAGS | DEP) != 0
+        // An invented template parameter is implicit (WP-1345).
+        let invented = match d.payload {
+            Payload::Ttp { .. } => DeclFlags::IMPLICIT.bits(),
+            _ => 0,
+        };
+        if d.flags & !(DECL_FLAGS | DEP | invented) != 0
             || d.owner >> 2 > 2
             || matches!(d.payload, Payload::Label | Payload::Let { .. })
         {
@@ -2620,7 +2690,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     d.ctx == NONE && d.lexical == NONE
                 }
                 (Payload::Implicit { .. }, _) => {
-                    top.is_none() && closed(d.ctx) && d.lexical == NONE
+                    top.is_none()
+                        && (closed(d.ctx) || members::complete_spec(img, d.ctx))
+                        && d.lexical == NONE
                 }
                 // A class template's record follows its pattern's record,
                 // inside the pattern's definition (S4b), in the pattern's
@@ -2650,11 +2722,24 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     true
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
-                _ => top.is_none() && (scope(d.ctx) || (closed(d.ctx) && d.prev != NONE)),
+                // An out-of-line partial specialization of a member
+                // template has no previous declaration (WP-1345).
+                _ => {
+                    top.is_none()
+                        && (scope(d.ctx)
+                            || (closed(d.ctx)
+                                && (d.prev != NONE
+                                    || (d.lexical != NONE
+                                        && classtempl::partial_of(img, i as u32).is_some()))))
+                }
             };
             let member_only = matches!(
                 d.payload,
-                Payload::Field { .. } | Payload::Access | Payload::Assert { .. }
+                Payload::Field { .. }
+                    | Payload::Access
+                    | Payload::Assert { .. }
+                    | Payload::AnonObj { .. }
+                    | Payload::Indirect { .. }
             );
             if !ok || (member_only && !in_class) {
                 return bad("bad declaration context");
@@ -2683,10 +2768,17 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             | Payload::Assert { .. }
             | Payload::Implicit { .. }
             | Payload::UsingDir { .. }
+            | Payload::Asm { .. }
             | Payload::Friend { .. } => d.name == NONE,
             // The target's, the enumeration's or the pattern's name
             // (checked below); a using-declarator may name an operator.
-            Payload::Shadow { .. } | Payload::UsingEnum { .. } | Payload::Template { .. } => true,
+            // ... and, checked with the payload, WP-1345's.
+            Payload::Shadow { .. }
+            | Payload::UsingEnum { .. }
+            | Payload::Template { .. }
+            | Payload::DepUsing { .. }
+            | Payload::AnonObj { .. }
+            | Payload::Indirect { .. } => true,
             Payload::Using { .. } => match d.name {
                 n if n >= N_OP => {
                     n < N_CTOR
@@ -2711,6 +2803,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 N_DTOR => *kind == 3,
                 N_CONV => *kind == 4,
                 N_GUIDE => *kind == FN_GUIDE,
+                n if (N_LIT..N_OP).contains(&n) => *kind == 0 && ident(n - N_LIT),
                 n if (N_OP..N_CTOR).contains(&n) => {
                     *kind < 2
                         && u8::try_from(n - N_OP)
@@ -2763,7 +2856,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         // The field may follow the constructor in its
                         // class: inits are applied after every record.
                         2 => img.decls.get(x.target as usize).is_some_and(|f| {
-                            matches!(f.payload, Payload::Field { .. }) && f.ctx == d.ctx
+                            matches!(f.payload, Payload::Field { .. })
+                                && (f.ctx == d.ctx || anon::anon_within(img, f.ctx, d.ctx))
+                        }),
+                        // An injected member (WP-1345).
+                        3 => img.decls.get(x.target as usize).is_some_and(|f| {
+                            matches!(f.payload, Payload::Indirect { .. }) && f.ctx == d.ctx
                         }),
                         4 => x.target == 0,
                         // A virtual base (its type checked with the
@@ -2789,10 +2887,14 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad function specifiers");
                 }
                 let pack = if d.flags & DEP != 0 { ParamData::PACK } else { 0 };
-                for p in params {
+                let this = fn_spec(*spec).is_some_and(FnSpec::has_explicit_object);
+                for (k, p) in params.iter().enumerate() {
+                    // The explicit object parameter is the first (WP-1345).
+                    let eo = if this && k == 0 { ParamData::EXPLICIT_OBJECT } else { 0 };
                     if (p.name != NONE && p.name as usize >= img.pnames.len())
                         || p.flags & !(DECL_FLAGS | (d.flags & DEP)) != 0
-                        || p.pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0
+                        || p.pflags & !(ParamData::SCOPE_DEPTH_MASK | pack | eo) != 0
+                        || (this && k == 0 && p.pflags & ParamData::EXPLICIT_OBJECT == 0)
                     {
                         return bad("bad parameter");
                     }
@@ -2828,9 +2930,16 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 if let Some(df) = def {
                     let parent_end = stack.last().map_or(nd, |&(_, e)| e);
                     let end = df.end as usize;
+                    let anon_bit = if d.name == NONE { anon::ANON_BIT } else { 0 };
+                    // A pattern's dependent inheriting declarator (WP-1345).
+                    let inh = if d.flags & DEP != 0 {
+                        DefinitionBits::HAS_INHERITED_CTOR.bits()
+                    } else {
+                        0
+                    };
                     if end <= i
                         || end > parent_end
-                        || df.bits & !(DEF_BITS | selfbase::BASES_AFTER) != 0
+                        || df.bits & !(DEF_BITS | selfbase::BASES_AFTER | anon_bit | inh) != 0
                         || !selfbase::bases_after_ok(img, i, df)
                     {
                         return bad("bad class definition");
@@ -2994,7 +3103,13 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                 | Payload::Shadow { .. }
                         )
                 });
-                if in_class || !ok {
+                // An enumerator a class's using-enum-declaration
+                // introduces (WP-1345).
+                let class_enum = in_class
+                    && d.flags & DEP == 0
+                    && kind_of(*target)
+                        .is_some_and(|t| matches!(t.payload, Payload::Enumerator { .. }));
+                if (in_class && !class_enum) || !ok {
                     return bad("bad using-shadow");
                 }
             }
@@ -3017,11 +3132,27 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 let ok = kind_of(*e).is_some_and(|t| {
                     t.name == d.name && matches!(t.payload, Payload::Enum { def: Some(_), .. })
                 });
-                if in_class || !ok {
+                if (in_class && d.flags & DEP != 0) || !ok {
                     return bad("bad using-enum-declaration");
                 }
             }
             Payload::Friend { .. } => friend::validate_friend(img, i, d)?,
+            Payload::DepUsing { .. } => {
+                if d.prev != NONE || !depusing::dep_using_ok(img, d) {
+                    return bad("bad dependent using-declaration");
+                }
+            }
+            // At namespace scope only (WP-1345).
+            Payload::Asm { .. } => {
+                if in_class || d.prev != NONE || d.flags & DEP != 0 {
+                    return bad("bad file-scope asm declaration");
+                }
+            }
+            Payload::AnonObj { .. } | Payload::Indirect { .. } => {
+                if d.prev != NONE || d.lexical != NONE || !anon::anon_ok(img, i, d) {
+                    return bad("bad anonymous union member");
+                }
+            }
             // Only a block's (WP-1343).
             Payload::Binding { .. } => return bad("a structured binding outside a block"),
             Payload::Namespace
@@ -3111,6 +3242,12 @@ struct Writer<'s, 'a, 'b> {
     /// WP-1320: the implicit instantiations by point of instantiation
     /// ([`classtempl`]).
     poi: std::cell::OnceCell<FxHashMap<Loc, Vec<DeclId>>>,
+    /// WP-1345: the explicit specializations named before their
+    /// definitions, recorded at their first members ([`members`]).
+    deferred: FxHashSet<DeclId>,
+    /// WP-1345: the complete specialization references, whose used
+    /// implicit members are recorded after the declarations.
+    complete_specs: Vec<(DeclId, u32)>,
     /// WP-1344: the class template whose pattern's bases are being
     /// written, and the record it will have ([`selfbase`]).
     fwd_tmpl: Option<(DeclId, u32)>,
@@ -3409,7 +3546,19 @@ impl Writer<'_, '_, '_> {
             .ctx()
             .and_then(|c| self.recs.get(&c))
             .is_some_and(|&c| matches!(self.img.decls[c as usize].payload, Payload::Record { .. }));
-        if in_class {
+        // A using-enum-declaration in a class and the enumerator shadows
+        // it introduces ([enum.udecl]/1, WP-1345).
+        let class_using_enum = || {
+            !n.has(DeclFlags::DEPENDENT_CTX)
+                && match n.kind() {
+                    DeclKind::UsingEnum => true,
+                    DeclKind::UsingShadow => ast
+                        .using_target(d)
+                        .is_some_and(|t| ast.decls.get(t).kind() == DeclKind::EnumConstant),
+                    _ => false,
+                }
+        };
+        if in_class && !class_using_enum() {
             return Err("a using-declaration in a class");
         }
         let rec = |x: Option<DeclId>| x.and_then(|x| self.recs.get(&x).copied());
@@ -3506,18 +3655,46 @@ impl Writer<'_, '_, '_> {
             {
                 N_CTOR
             }
+            // A dependent inheriting using-declarator (WP-1345, checked by
+            // `depusing.rs`).
+            V::Constructor(_) if n.kind() == DeclKind::UnresolvedUsingValue => N_CTOR,
             V::Destructor(t) if n.kind() == DeclKind::CXXDestructor && class_canon() == Some(t) => {
                 N_DTOR
             }
-            V::Conversion(q) if n.kind() == DeclKind::CXXConversion => {
-                let ret = n.ty().and_then(|f| match ast.types.view(f.ty()) {
-                    TypeView::Function(p) => Some(ast.types.canonical(p.ret())),
-                    _ => None,
+            // A conversion function template's too: its pattern's name
+            // (WP-1345).
+            V::Conversion(q)
+                if n.kind() == DeclKind::CXXConversion
+                    || ast
+                        .template_info(d)
+                        .and_then(|i| i.pattern)
+                        .is_some_and(|p| ast.decls.get(p).kind() == DeclKind::CXXConversion) =>
+            {
+                let f = match n.kind() {
+                    DeclKind::FunctionTemplate => ast.template_info(d).and_then(|i| i.pattern),
+                    _ => Some(d),
+                };
+                let ret = f.and_then(|f| ast.decls.get(f).ty()).and_then(|f| {
+                    match ast.types.view(f.ty()) {
+                        TypeView::Function(p) => Some(ast.types.canonical(p.ret())),
+                        _ => None,
+                    }
                 });
                 if ret != Some(q) {
                     return Err("a conversion function declared through a typedef");
                 }
                 N_CONV
+            }
+            // A literal operator (or literal operator template, WP-1345):
+            // its ud-suffix is written in its literal token, which no
+            // macro replaces, so it is not gated.
+            V::LiteralOperator(sym) => {
+                let s = ast.symbols().as_str(sym).to_owned();
+                let k = Self::name_ix(&mut self.names, &mut self.img.names, &s);
+                if k >= N_LIT {
+                    return Err("an image with too many names");
+                }
+                N_LIT + k
             }
             V::DeductionGuide(t) => {
                 // A guide is carried at namespace scope only; a member
@@ -3550,6 +3727,16 @@ impl Writer<'_, '_, '_> {
         let mut extra = n.flags().bits() & !(DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits());
         if n.kind() == DeclKind::UsingShadow {
             // Every shadow is implicit; the reader's builder marks it.
+            extra &= !DeclFlags::IMPLICIT.bits();
+        }
+        if matches!(n.kind(), DeclKind::Field | DeclKind::IndirectField) {
+            // What an anonymous class declares, made again by the
+            // importer (WP-1345, `anon.rs`; the record refuses others).
+            extra &= !DeclFlags::IMPLICIT.bits();
+        }
+        if n.kind() == DeclKind::TemplateTypeParm {
+            // An abbreviated function template's invented parameter
+            // ([dcl.fct]/22), carried in the record's flags (WP-1345).
             extra &= !DeclFlags::IMPLICIT.bits();
         }
         if extra & DeclFlags::HAS_ATTRS.bits() != 0 && self.attrs_carried(d) {
@@ -3595,14 +3782,10 @@ impl Writer<'_, '_, '_> {
         {
             return Err(self.in_template_reason(d));
         }
-        if n.has(DeclFlags::HAS_LEXICAL_CTX)
-            && self.dep_member(d)
-            && n.ctx().and_then(|c| ast.described_template(ast.first(c))).is_none()
-            // A member of a partial specialization (WP-1307).
-            && n.ctx().and_then(|c| ast.partial_spec_info(ast.first(c))).is_none()
-        {
-            return Err("an out-of-line member of a class nested in a template");
-        }
+        // An out-of-line member of a class nested in a class template
+        // (`template <class C> basic_ostream<C>::sentry::sentry(...)`)
+        // names every enclosing template-head's parameters
+        // (`membertempl::claim_outer_heads`; WP-1345).
         let m = n.misc();
         if m.friend() != FriendKind::None {
             self.friend_gate(d)?;
@@ -3659,7 +3842,12 @@ impl Writer<'_, '_, '_> {
                 .copied()
                 .ok_or("a redeclaration of an entity outside the image")?,
         };
-        let flags = n.flags().bits() & (DECL_FLAGS | DEP);
+        let invented = if n.kind() == DeclKind::TemplateTypeParm {
+            n.flags().bits() & DeclFlags::IMPLICIT.bits()
+        } else {
+            0
+        };
+        let flags = n.flags().bits() & (DECL_FLAGS | DEP) | invented;
         let name = if parm {
             // Not a declared name of the unit: not gated, like a
             // function parameter's.
@@ -3682,6 +3870,11 @@ impl Writer<'_, '_, '_> {
     fn record(&mut self, d: DeclId, i: u32) -> W<Payload> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
+        // WP-1345: an anonymous class's member object or injected member.
+        if let Some(p) = self.anon_member(d)? {
+            return Ok(p);
+        }
+        let ast = &self.s.ast;
         Ok(match n.kind() {
             DeclKind::Namespace => {
                 let nd = ast.decls.namespace(d).ok_or("a malformed namespace")?;
@@ -3805,9 +3998,18 @@ impl Writer<'_, '_, '_> {
                 }
                 Payload::Assert { cond: NONE, msg: NONE }
             }
+            DeclKind::FileScopeAsm => {
+                // Patched by `walk_roots` (WP-1345).
+                let e = ast.file_scope_asm_string(d).ok_or("a malformed asm declaration")?;
+                self.bs.roots.push(Root::Assert(i, 2, e));
+                Payload::Asm { string: NONE }
+            }
             DeclKind::Friend => self.friend_record(d)?,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
             DeclKind::TemplateTemplateParm => self.tttp(d)?,
+            DeclKind::UnresolvedUsingValue | DeclKind::UnresolvedUsingTypename => {
+                self.dep_using(d)?
+            }
             DeclKind::FunctionTemplate
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
@@ -3830,7 +4032,8 @@ impl Writer<'_, '_, '_> {
             return Err("an inherited constructor");
         }
         if c.delete_message.contains(d)
-            || c.explicit_expr.contains(d)
+            // `explicit(expr)` travels with the constraints (WP-1345).
+            || (c.explicit_expr.contains(d) && self.s.ast.decls.function(d).is_none())
             || c.record_pack.contains(d)
             || c.requires_clause.contains(d)
             || c.contracts.contains(d)
@@ -3876,7 +4079,7 @@ impl Writer<'_, '_, '_> {
         if kind == 1
             && matches!(
                 ast.names.view(n.name()),
-                kiln_ast::names::DeclNameView::Operator(
+                DeclNameView::Operator(
                     OverloadedOperator::New
                         | OverloadedOperator::Delete
                         | OverloadedOperator::ArrayNew
@@ -3894,7 +4097,13 @@ impl Writer<'_, '_, '_> {
         // A defaulted comparison (WP-1314): its `default` keyword and
         // operator lookups travel in `defcmp`.
         let cmp = defaulted && first && s.cmp_kind(d).is_some();
-        if defaulted && !cmp && (!first || s.special_kind_of(d).is_none()) {
+        // WP-1345: a member of a class template's pattern whose special
+        // kind sema leaves to the instantiation (`E(E const&) = default`
+        // of `template <bool B> struct E`, whose parameter names the
+        // injected class through a value argument): the importer
+        // defines only the instantiations, as after replay.
+        let pattern_special = || s.special_kind_of(d).is_some() || self.dep_member(d);
+        if defaulted && !cmp && (!first || !pattern_special()) {
             return Err("an out-of-line defaulted function");
         }
         if cmp {
@@ -4045,7 +4254,9 @@ impl Writer<'_, '_, '_> {
                 }
                 CtorInitKind::Field => {
                     let f = DeclId::try_new(x.target).ok_or("a malformed ctor-initializer")?;
-                    if ast.decls.get(f).ctx() != Some(class) {
+                    // A member of an anonymous class of the class
+                    // (WP-1345) too.
+                    if ast.decls.get(f).ctx() != Some(class) && !self.anon_member_of(f, class) {
                         return Err("a ctor-initializer of an anonymous union member");
                     }
                     // The field may follow the constructor: resolved when
@@ -4063,7 +4274,12 @@ impl Writer<'_, '_, '_> {
                     }
                     q.ty
                 }
-                CtorInitKind::IndirectField => return Err("an anonymous union member"),
+                // WP-1345: resolved as a field's.
+                CtorInitKind::IndirectField => {
+                    let f = DeclId::try_new(x.target).ok_or("a malformed ctor-initializer")?;
+                    self.bs.init_fields.push((i, k as u32, f));
+                    NONE
+                }
             };
             // Patched by `walk_roots`.
             self.bs.roots.push(Root::CtorInit(i, k as u32, x.init));
@@ -4118,12 +4334,14 @@ impl Writer<'_, '_, '_> {
         if let Some(&k) = ast.decls.cold.key_function.get(d) {
             self.keys.push((i, k));
         }
-        if b.contains(DefinitionBits::HAS_INHERITED_CTOR)
+        // A class template pattern whose inheriting declarators are all
+        // dependent keeps the bit (WP-1345, `depusing.rs`).
+        if (b.contains(DefinitionBits::HAS_INHERITED_CTOR) && !depusing::dep_inheriting(ast, d))
             || b.contains(DefinitionBits::HAS_INHERITED_ASSIGN)
         {
             return Err("an inherited constructor or assignment operator");
         }
-        if b.contains(DefinitionBits::ANONYMOUS) {
+        if b.contains(DefinitionBits::ANONYMOUS) && !self.anon_class_ok(d) {
             return Err("an anonymous union or struct member");
         }
         // The implicit members sema declared eagerly at `}`
@@ -4132,7 +4350,8 @@ impl Writer<'_, '_, '_> {
         // and the importer declares them again on the completed class
         // (WP-1292).
         let bits = b.without(DefinitionBits::COMPLETE).bits();
-        if bits & !DEF_BITS != 0 {
+        // An anonymous class keeps its bit (WP-1345, `anon.rs`).
+        if bits & !(DEF_BITS | anon::ANON_BIT | DefinitionBits::HAS_INHERITED_CTOR.bits()) != 0 {
             return Err("a class with properties the image does not carry yet");
         }
         let list: Vec<u32> = ast.lists.get(rd.bases).to_vec();
@@ -4190,7 +4409,9 @@ impl Writer<'_, '_, '_> {
         } else {
             pd.flags
         };
-        if pflags & !(ParamData::SCOPE_DEPTH_MASK | pack) != 0 {
+        // An explicit object parameter (WP-1345; the function's spec bit
+        // says which).
+        if pflags & !(ParamData::SCOPE_DEPTH_MASK | pack | ParamData::EXPLICIT_OBJECT) != 0 {
             return Err("a parameter with an adjusted type or a pack");
         }
         let orig = pd.original_ty.map(|q| self.qref(q)).transpose()?;
@@ -4254,7 +4475,7 @@ impl Writer<'_, '_, '_> {
         }
         self.img.main = sm.file_name(self.main).to_owned();
         let mut st = Pass::default();
-        for d in ast.decls.ids() {
+        for d in self.collect_order() {
             if self.census.as_ref().is_some_and(|c| !c.dead.is_empty()) && self.census_dead(d) {
                 continue;
             }
@@ -4359,6 +4580,7 @@ impl Writer<'_, '_, '_> {
         self.anon_typedefs()?;
         self.decl_locs()?;
         self.local_externs()?;
+        self.spec_implicit_members()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
                 self.miss(i, "a ctor-initializer of a field outside the image")?;
@@ -4439,6 +4661,8 @@ impl Writer<'_, '_, '_> {
         self.tmemo.retain(|_, v| *v < t);
         self.img.cspecs.truncate(n);
         self.img.attrs.params.retain(|(_, r)| r.decl < n);
+        let k = self.img.explinsts_len() as u32;
+        self.img.attrs.insts.retain(|r| r.decl < k);
         self.img.defcmps.truncate(n);
     }
 
@@ -4668,7 +4892,17 @@ impl Writer<'_, '_, '_> {
         if n.has(DeclFlags::IMPLICIT) && self.builtin_record(d)? {
             return Ok(());
         }
-        if n.has(DeclFlags::IMPLICIT) && n.kind() != DeclKind::UsingShadow {
+        if n.has(DeclFlags::IMPLICIT)
+            && !matches!(
+                n.kind(),
+                DeclKind::UsingShadow
+                    | DeclKind::TemplateTypeParm
+                    // An anonymous class's member object and injected
+                    // members (WP-1345, `anon.rs`).
+                    | DeclKind::Field
+                    | DeclKind::IndirectField
+            )
+        {
             // An implicitly declared special member: the importer
             // declares it again (spec/modules.md §11.11 "Classes").
             if n.kind() == DeclKind::IndirectField {
@@ -4757,7 +4991,17 @@ impl Writer<'_, '_, '_> {
             }
             let class_ctx = h.ctx != NONE
                 && matches!(self.img.decls[h.ctx as usize].payload, Payload::Record { .. });
-            if class_ctx && st.open.is_empty() && (h.lexical == NONE || h.prev == NONE) {
+            // A partial specialization of a member class template declared
+            // at namespace scope (`template <class R> struct
+            // fb::res<R&> { ... };`, [temp.spec.partial.general]/7;
+            // WP-1345) has no previous declaration.
+            let outer_partial = h.lexical != NONE
+                && n.kind() == DeclKind::CXXRecord
+                && self.s.ast.partial_spec_info(d).is_some();
+            if class_ctx
+                && st.open.is_empty()
+                && (h.lexical == NONE || (h.prev == NONE && !outer_partial))
+            {
                 return Err("a class member outside its class definition");
             }
             if h.ctx != NONE
@@ -4821,6 +5065,8 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             census: census.then(Census::default),
             pch: false,
             poi: std::cell::OnceCell::new(),
+            deferred: FxHashSet::default(),
+            complete_specs: Vec::new(),
             fwd_tmpl: None,
         })
     }
@@ -4843,6 +5089,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::CXXRecord
         | K::Field
         | K::AccessSpec
+        | K::FileScopeAsm
         | K::CXXMethod
         | K::CXXConstructor
         | K::CXXDestructor
@@ -4862,17 +5109,18 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::UsingEnum
         | K::UsingShadow
         | K::Friend
-        | K::StaticAssert => Ok(()),
-        K::IndirectField => Err("an anonymous union or struct member"),
+        | K::StaticAssert
+        | K::UnresolvedUsingValue
+        | K::UnresolvedUsingTypename
+        // WP-1345 (`anon.rs`).
+        | K::IndirectField => Ok(()),
         K::ClassTemplateSpecialization
         | K::ClassTemplatePartialSpecialization
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
         | K::FriendTemplate => Err("a template"),
         K::ConstructorUsingShadow => Err("an inheriting constructor"),
-        K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
-            Err("a dependent using-declaration")
-        }
+        K::UsingPack => Err("a dependent using-declaration"),
         _ => Err("a declaration the image does not carry yet"),
     }
 }
@@ -5085,6 +5333,7 @@ impl Sema<'_, '_> {
         let mut bindings: Vec<(DeclId, u32, u32, u32)> = Vec::new();
         // Static assertions in class templates, completed after the bodies.
         let mut asserts: Vec<(DeclId, u32, u32)> = Vec::new();
+        let mut asms: Vec<(DeclId, u32)> = Vec::new();
         let mut ctors: Vec<(DeclId, usize)> = Vec::new();
         let mut defaulted: Vec<(DeclId, u8)> = Vec::new();
         let mut nttp_defaults: Vec<(DeclId, u32, bool)> = Vec::new();
@@ -5144,6 +5393,11 @@ impl Sema<'_, '_> {
                 }
                 // A special member's name: recomputed below.
                 n if n >= N_OP => DeclName::EMPTY,
+                // A literal operator's (WP-1345).
+                n if n >= N_LIT => match self.ast.names.view(names[(n - N_LIT) as usize]) {
+                    DeclNameView::Identifier(sym) => DeclName::literal_operator(sym),
+                    _ => DeclName::EMPTY,
+                },
                 n => names[n as usize],
             };
             let mut h = DeclHead::new(ctx, name, lo(self, r.loc));
@@ -5369,6 +5623,13 @@ impl Sema<'_, '_> {
                     asserts.push((d, *cond, *msg));
                     d
                 }
+                Payload::Asm { string } => {
+                    // A placeholder until the bodies are built (WP-1345).
+                    let t = self.builder().bool_literal(QualType::BOOL, true, h.loc);
+                    let d = self.builder().file_scope_asm(ctx, h.loc, t);
+                    asms.push((d, *string));
+                    d
+                }
                 Payload::Friend { target, ty, owned } => {
                     let t = match ty {
                         None => FriendTarget::Decl(ids[*target as usize]),
@@ -5488,6 +5749,14 @@ impl Sema<'_, '_> {
                     self.builder().namespace_alias(h, ids[*target as usize], prev)
                 }
                 Payload::UsingEnum { e } => self.builder().using_enum(h, ids[*e as usize]),
+                Payload::DepUsing { .. } => self.image_dep_using(img, r, h, &ids, &mut |s, q| {
+                    s.image_ty(img, &mut tys, &ids, q)
+                }),
+                Payload::AnonObj { rec } => {
+                    let a = (r.access != 0).then(|| access_of(r.access));
+                    self.image_anon_obj(&h, ids[*rec as usize], a)
+                }
+                Payload::Indirect { obj } => self.image_indirect(ctx, h.name, ids[*obj as usize]),
             };
             // A builtin function is the importer's own declaration.
             let builtin = matches!(
@@ -5501,7 +5770,8 @@ impl Sema<'_, '_> {
                 image_flags(self, d, r.flags);
             }
             if !builtin {
-                self.image_attrs(img, i as u32, d, main, &mut attr_exprs);
+                let qt = &mut |s: &mut Self, q| s.image_ty(img, &mut tys, &ids, q);
+                self.image_attrs(img, i as u32, d, main, &mut attr_exprs, qt);
             }
             debug_assert_eq!(ids.len(), i);
             ids.push(d);
@@ -5545,6 +5815,9 @@ impl Sema<'_, '_> {
             let message = (msg != NONE).then(|| built.expr(msg));
             self.ast.decls.set_static_assert_exprs(d, built.expr(cond), message);
         }
+        for (d, string) in asms {
+            self.ast.decls.set_file_scope_asm_string(d, built.expr(string));
+        }
         for (d, init) in enum_inits {
             self.ast.decls.replace_enumerator_init(d, built.expr(init));
         }
@@ -5572,12 +5845,14 @@ impl Sema<'_, '_> {
                             let q = self.ast.decls.base_spec(g).ty;
                             q.ty().index()
                         }),
-                        CtorInitKind::Field => ids[x.target as usize].index(),
+                        CtorInitKind::Field | CtorInitKind::IndirectField => {
+                            ids[x.target as usize].index()
+                        }
                         CtorInitKind::VirtualBase => {
                             let q = QRef { ty: x.target, quals: 0 };
                             self.image_ty(img, &mut tys, &ids, q).ty().index()
                         }
-                        _ => 0,
+                        CtorInitKind::Delegating => 0,
                     };
                     kiln_ast::decl::CtorInit {
                         target,

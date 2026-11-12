@@ -47,6 +47,10 @@ use super::{
 pub(super) const PARAM: u32 = 0x8000_0000;
 /// A variable's evaluation state "not a constant" (`eval` field).
 pub(super) const NOT_CONST: u32 = u32::MAX - 1;
+/// A dependent member name's word for a conversion-function name
+/// (WP-1345): this bit, the target type's index shifted left by 3 and
+/// its qualifiers (below `N_OP`).
+const NAME_CONV: u32 = 0x8000_0000;
 
 // ---------------------------------------------------------------------------
 // The model
@@ -533,7 +537,9 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         | X::CXXRewrittenBinaryOperator => [f(F::E), f(F::EL)],
         X::CXXDeleteExpr => [f(F::E), f(F::OD(Dc::Value))],
         X::CXXUnresolvedConstructExpr | X::ParenListExpr | X::AtomicExpr => [f(F::EL), Z],
-        X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
+        // WP-1345: no object for a member a dependent using-declarator
+        // names (an implicit `this->name`).
+        X::CXXDependentScopeMemberExpr => [f(F::OE), f(F::Name)],
         X::DependentScopeDeclRefExpr => [f(F::Nns), f(F::Name)],
         // `b` is the selected association's expression, NONE while the
         // selection is result-dependent (checked to be an association's).
@@ -1117,6 +1123,9 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     };
     let in_class = || {
         img.decls.get(d.ctx as usize).is_some_and(|c| matches!(c.payload, Payload::Record { .. }))
+            // An implicit member of a specialization (WP-1345).
+            || (matches!(d.payload, Payload::Implicit { .. })
+                && super::members::complete_spec(img, d.ctx))
     };
     match dc {
         Dc::Value | Dc::Found | Dc::Lookup => {
@@ -1139,9 +1148,18 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                     | Payload::Enumerator { .. }
                     | Payload::Implicit { .. }
                     | Payload::Field { .. }
+                    // An anonymous class's member object or injected
+                    // member (WP-1345).
+                    | Payload::AnonObj { .. }
+                    | Payload::Indirect { .. }
             ) && in_class()
         }
-        Dc::Field => matches!(d.payload, Payload::Field { .. }),
+        Dc::Field => {
+            matches!(
+                d.payload,
+                Payload::Field { .. } | Payload::AnonObj { .. } | Payload::Indirect { .. }
+            )
+        }
         Dc::Ctor => {
             matches!(
                 d.payload,
@@ -1226,6 +1244,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
             Payload::Assert { cond, msg } => {
                 if *cond as usize >= ne || (*msg != NONE && *msg as usize >= ne) {
                     return bad("bad static assertion");
+                }
+            }
+            Payload::Asm { string } => {
+                if *string as usize >= ne {
+                    return bad("bad file-scope asm declaration");
                 }
             }
             Payload::Nttp { default, profile, sect, .. } => {
@@ -1317,6 +1340,9 @@ pub(super) fn validate_section(
             F::AL => w[1..].chunks(2).all(|a| word_attr(a[0], Loc::INVALID).is_some()),
             F::Name => {
                 (w[0] as usize) < img.pnames.len()
+                    || (w[0] & NAME_CONV != 0
+                        && w[0] < super::N_OP
+                        && qref_ok(QRef { ty: (w[0] & !NAME_CONV) >> 3, quals: (w[0] & 7) as u8 }))
                     || w[0].checked_sub(super::N_OP).is_some_and(|o| {
                         u8::try_from(o).ok().and_then(OverloadedOperator::from_u8).is_some()
                     })
@@ -2114,6 +2140,7 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per field kind
     fn word(&mut self, f: Fv, out: &mut Vec<u32>) -> W<()> {
         let lists = &self.s.ast.lists;
         match f {
@@ -2140,6 +2167,16 @@ impl Writer<'_, '_, '_> {
                 // instantiation): not gated, like a local's.
                 if let kiln_ast::names::DeclNameView::Operator(op) = self.s.ast.names.view(n) {
                     out.push(super::N_OP + u32::from(op as u8));
+                } else if let kiln_ast::names::DeclNameView::Conversion(t) =
+                    self.s.ast.names.view(n)
+                {
+                    // `x.operator T()` in a dependent member access
+                    // (WP-1345): the target type, packed.
+                    let q = self.qref(t)?;
+                    if q.ty >= 1 << 27 {
+                        return Err("a dependent name not named by an identifier");
+                    }
+                    out.push(NAME_CONV | q.ty << 3 | u32::from(q.quals));
                 } else {
                     let s = self.ident(n).ok_or("a dependent name not named by an identifier")?;
                     out.push(Self::name_ix(&mut self.pnames, &mut self.img.pnames, &s));
@@ -2483,7 +2520,10 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         let kind = n.kind();
-        let local_fn = kind == DeclKind::Function && self.carries_local_extern(d);
+        // A block-scope function declaration in a template pattern, which
+        // sema keeps out of `local_externs` (WP-1345).
+        let dep_fn = kind == DeclKind::Function && n.has(DeclFlags::DEPENDENT_CTX);
+        let local_fn = kind == DeclKind::Function && self.carries_local_extern(d) || dep_fn;
         if !local_fn
             && !matches!(
                 kind,
@@ -2547,7 +2587,7 @@ impl Writer<'_, '_, '_> {
         }
         let prev = match ast.decls.redecl(d).and_then(|r| r.prev) {
             None => NONE,
-            Some(p) if self.carries_local_extern(d) => self.local_extern_prev(p)?,
+            Some(p) if dep_fn || self.carries_local_extern(d) => self.local_extern_prev(p)?,
             Some(_) => return Err("a local redeclaration"),
         };
         let name = match n.name() {
@@ -2825,9 +2865,11 @@ impl Writer<'_, '_, '_> {
                 }
                 Root::Assert(rec, slot, e) => {
                     let i = self.walk(Node::E(e))?;
-                    if let Payload::Assert { cond, msg } = &mut self.img.decls[rec as usize].payload
-                    {
-                        *if slot == 0 { cond } else { msg } = i;
+                    match &mut self.img.decls[rec as usize].payload {
+                        Payload::Assert { cond, msg } => *if slot == 0 { cond } else { msg } = i,
+                        // A file-scope asm's string (WP-1345).
+                        Payload::Asm { string } => *string = i,
+                        _ => {}
                     }
                 }
                 Root::Noexcept(rec, exc, e) => {
@@ -3292,6 +3334,11 @@ impl Sema<'_, '_> {
                         .and_then(OverloadedOperator::from_u8)
                         .map_or(DeclName::EMPTY, DeclName::operator)
                         .to_raw()
+                } else if w[0] & NAME_CONV != 0 {
+                    let q = QRef { ty: (w[0] & !NAME_CONV) >> 3, quals: (w[0] & 7) as u8 };
+                    let t = self.image_ty(img, tys, ids, q);
+                    let c = self.ast.types.canonical(t);
+                    self.ast.names.conversion(c).to_raw()
                 } else {
                     let n = img.pnames.get(w[0] as usize).map_or("", String::as_str);
                     DeclName::ident(self.intern(n)).to_raw()

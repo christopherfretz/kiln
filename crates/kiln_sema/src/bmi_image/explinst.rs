@@ -72,6 +72,20 @@ impl Writer<'_, '_, '_> {
             })
     }
 
+    /// The attributes of specialization `d` that are not one of its
+    /// pattern `from`'s declarations' (same kind and location: the
+    /// instantiation copied those): the ones written on the explicit
+    /// instantiation.
+    fn written_attrs(&self, d: DeclId, from: DeclId) -> Vec<kiln_ast::attr::AttrNode> {
+        let ast = &self.s.ast;
+        let of = |x: DeclId| {
+            ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(x)).map(|a| *ast.attrs.get(a))
+        };
+        let pat: Vec<_> =
+            ast.redecls_of(from).take(4096).flat_map(of).map(|n| (n.kind, n.loc)).collect();
+        of(d).filter(|n| !pat.contains(&(n.kind, n.loc))).collect()
+    }
+
     /// Lists explicit instantiation `d` (a class template specialization;
     /// the caller skips it and its members).
     pub(super) fn explicit_class_inst(&mut self, d: DeclId) -> W<()> {
@@ -80,9 +94,15 @@ impl Writer<'_, '_, '_> {
         let n = ast.decls.get(d);
         let (_, si) = ast.spec_info(d).ok_or("a malformed specialization")?;
         let si = *si;
-        if n.has(kiln_ast::decl::DeclFlags::HAS_ATTRS) {
-            return Err(super::ATTRIBUTED);
-        }
+        // WP-1345: attributes the instantiation took from its template's
+        // declarations (`preferred_name`) are made again when the
+        // importer instantiates; ones written on the instantiation itself
+        // (`visibility`) are listed with it (`Attrs::insts`).
+        let own_attrs = if n.has(kiln_ast::decl::DeclFlags::HAS_ATTRS) {
+            self.written_attrs(d, si.from)
+        } else {
+            Vec::new()
+        };
         // Instantiated from the primary template's own pattern (not a
         // partial specialization or a member template).
         let from_template = ast.template_info(si.from).is_some()
@@ -121,6 +141,14 @@ impl Writer<'_, '_, '_> {
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
         let loc = self.loc(n.loc())?;
         let definition = si.kind == SpecKind::ExplicitInstantiationDefinition;
+        let k = self.img.explinsts.insts.len() as u32;
+        let before = self.img.attrs.insts.len();
+        for a in own_attrs {
+            if let Err(e) = self.inst_attr(a, k) {
+                self.img.attrs.insts.truncate(before);
+                return Err(e);
+            }
+        }
         self.img.explinsts.insts.push(ExplInst { template, args, loc, lexical, owner, definition });
         Ok(())
     }
@@ -159,6 +187,19 @@ pub(super) fn decode_explicit_insts(r: &mut Rd) -> Res<ExplInsts> {
         });
     }
     Ok(ExplInsts { insts })
+}
+
+/// The number of explicit instantiations (WP-1345: attribute records
+/// name one).
+pub(super) fn inst_count(img: &Image) -> usize {
+    img.explinsts.insts.len()
+}
+
+impl Image {
+    /// [`inst_count`].
+    pub(super) fn explinsts_len(&self) -> usize {
+        inst_count(self)
+    }
 }
 
 /// The section's locations, for the decoder's offset check.
@@ -207,7 +248,7 @@ impl Sema<'_, '_> {
         main: &Locs,
     ) {
         let unit = self.module_current_unit();
-        for x in &img.explinsts.insts {
+        for (k, x) in img.explinsts.insts.iter().enumerate() {
             let tmpl = self.ast.first(ids[x.template as usize]);
             let mut args = Vec::with_capacity(x.args.len());
             for a in &x.args {
@@ -221,8 +262,11 @@ impl Sema<'_, '_> {
             let next = self.ast.decls.next_id();
             self.ast.modules.set_owner_from(next, owner);
             let saved = std::mem::replace(&mut self.ctx, lexical);
-            let _ = self.act_on_explicit_class_inst(tmpl, &args, &locs, !x.definition, loc);
+            let spec = self.act_on_explicit_class_inst(tmpl, &args, &locs, !x.definition, loc);
             self.ctx = saved;
+            if let Ok(spec) = spec {
+                self.image_inst_attrs(img, k as u32, spec, main);
+            }
         }
     }
 }

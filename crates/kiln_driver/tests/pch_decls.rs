@@ -1308,3 +1308,364 @@ fn virtual_dtor_noexcept_matches_replay() {
     let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
     assert_eq!(ok(&d, &check).stderr, "");
 }
+
+/// WP-1345: dependent using-declarations in class templates
+/// ([namespace.udecl]/1: `using B<T>::name;`, `using typename
+/// B<T>::type;`, an operator) are carried, and each instantiation
+/// redoes them.
+#[test]
+fn dependent_using_declarations_are_carried() {
+    let header = "\
+template <class T> struct B { static const bool value = sizeof(T) > 1; typedef T type;
+  static int f(int x) { return x + 1; } int g() const { return 2; } };
+template <class T> struct D : B<T> {
+  using B<T>::value;
+  using typename B<T>::type;
+  using B<T>::f;
+  using B<T>::g;
+  enum { width = value ? sizeof(T) * 8 : 0 };
+  static type h(type t) { return f(t); }
+  int k() const { return g() + 1; }
+};
+struct Op { int operator()(int x) const { return x; } bool operator==(const Op&) const { return true; } };
+template <class T> struct F : T { using T::operator(); using T::operator==; };
+";
+    let tu = "int main() { D<int> d; F<Op> o;
+  return D<int>::width == 32 && D<int>::h(2) == 3 && d.k() == 3 && o(4) == 4 ? 0 : 1; }\n";
+    carried_1343("wp1345u", header, tu);
+}
+
+/// WP-1345: `preferred_name`, `diagnose_if`, `enable_if` and
+/// `alignas(type)` are carried: the importer's printing, overload
+/// resolution, warnings and errors and layout are the replay's.
+#[test]
+fn preferred_name_diagnose_if_and_enable_if_are_carried() {
+    let header = "\
+template <class C> struct bs;
+using str = bs<char>;
+template <class C> struct [[clang::preferred_name(str)]] bs { C c; };
+inline int f(int n) __attribute__((enable_if(n > 0, \"positive\"))) { return 1; }
+inline int f(int n) { return 2; }
+inline void g(int n) __attribute__((diagnose_if(n < 0, \"negative\", \"warning\"))) {}
+template <class T> struct V { void at(int n) const __attribute__((diagnose_if(n < 0, \"neg\", \"warning\"))) {} };
+struct alignas(double) AD { char c; };
+template <class T> struct alignas(T) AT { char c; };
+";
+    let tu = "int main() { g(1); V<int>{}.at(2); bs<char> s{}; (void)s;
+  static_assert(alignof(AD) == alignof(double) && alignof(AT<long double>) == alignof(long double));
+  return f(1) + f(-1) - 3; }\n";
+    carried_1343("wp1345a", header, tu);
+    // The attribute's diagnostic, and an error naming the specialization,
+    // are the replay's (clang++ 19 and 22 print the same).
+    let d = scratch("wp1345a2");
+    std::fs::write(d.join("a.h"), header).unwrap();
+    std::fs::write(
+        d.join("a.cpp"),
+        "template <class T> struct hold { T t; };\nint main() { g(-1); hold<bs<char>> s; int x = s; return x; }\n",
+    )
+    .unwrap();
+    ok(&d, &["-std=c++26", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let o = kiln(&d, &[&args[..], &["a.cpp"]].concat());
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("warning: negative"), "{}", o.stderr);
+    assert!(
+        o.stderr.contains("no viable conversion from 'hold<bs<char>>' to 'int'"),
+        "{}",
+        o.stderr
+    );
+    assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
+
+/// WP-1345: an implicit special member of a specialization the header
+/// used (the default constructor and destructor of `holder<S>`, which
+/// an inline variable's initialization names) is carried and defined
+/// again.
+#[test]
+fn implicit_members_of_specializations_are_carried() {
+    let header = "\
+struct S { int v = 7; ~S() {} };
+template <class T> struct holder { T t; int n; };
+inline holder<S> hs;
+inline int get() { holder<S> h; h.n = 2; return h.t.v + h.n; }
+";
+    let tu = "int main() { return hs.t.v + get() - 16; }\n";
+    carried_1343("wp1345i", header, tu);
+}
+
+/// WP-1345: `explicit(expr)` ([dcl.fct.spec]/3) on constructors and
+/// conversion functions, of a class template's members (substituted by
+/// each instantiation) and of a class.
+#[test]
+fn explicit_specifiers_are_carried() {
+    let header = "\
+template <class T> constexpr bool small = sizeof(T) < 4;
+template <class T> struct W {
+  T v;
+  explicit(small<T>) W(T x) : v(x) {}
+  template <class U> explicit(!small<U>) W(U*, U u) : v(T(u)) {}
+  explicit(sizeof(T) > 1) operator bool() const { return v != 0; }
+};
+struct N { explicit(true) N(int) {} explicit(false) N(long) {} };
+";
+    let tu = "\
+template <class T, class A> concept conv = requires(A a) { [](T) {}(a); };
+static_assert(!conv<W<char>, char> && conv<W<long>, long> && conv<N, long>);
+int main() { W<char> c(char(1)); bool b = c; W<long> l = 3L; return int(l.v) + b - 5 + (bool)l; }
+";
+    carried_1343("wp1345x", header, tu);
+}
+
+/// WP-1345: conversion function templates, literal operators and
+/// literal operator templates are named in the image.
+#[test]
+fn conversion_templates_and_literal_operators_are_carried() {
+    let header = "\
+struct M { long v;
+  template <class T> requires (sizeof(T) >= 4) constexpr explicit operator T() const { return T(v); }
+  template <class T> operator T*() const { return nullptr; } };
+namespace lits {
+inline namespace sv { constexpr unsigned long long operator\"\"_k(unsigned long long n) { return n * 1000; } }
+template <char... C> constexpr int operator\"\"_n() { return sizeof...(C); }
+}
+";
+    let tu = "using namespace lits;
+int main() { M m{5}; int* p = m; return int(m) + (p ? 1 : 0) + int(2_k / 1000) + 123_n - 10; }\n";
+    carried_1343("wp1345c", header, tu);
+}
+
+/// WP-1345: abbreviated function templates ([dcl.fct]/22): their
+/// invented template parameters are carried.
+#[test]
+fn abbreviated_function_templates_are_carried() {
+    let header = "\
+struct F {
+  void operator()(auto&&) const = delete;
+  template <class T> int operator()(T* p) const { return *p; }
+  int twice(const auto& x, auto... ys) const { return int(x) * 2 + int(sizeof...(ys)); }
+};
+inline constexpr F f{};
+inline int plus1(auto x) { return int(x) + 1; }
+template <class T> struct B { static int g(T t, auto u) { return int(t) + int(u); } };
+";
+    let tu = "template <class X> concept callable = requires(X x) { f(x); };
+static_assert(!callable<int> && callable<int*>);
+int main() { int v = 3; return f(&v) + f.twice(1.5, 'a', 2) + plus1(2.0) + B<int>::g(1, 2L) - 13; }\n";
+    carried_1343("wp1345t", header, tu);
+}
+
+/// WP-1345: a class template pattern's explicitly defaulted copy
+/// constructor whose class has a non-type parameter (sema leaves its
+/// special kind to the instantiations), and an explicit specialization
+/// a declaration names before it is declared (`plus<void>` in a
+/// variable template partial specialization's arguments, then
+/// `template <> struct plus<void> { ... }`, its members after them).
+#[test]
+fn pattern_defaults_and_late_explicit_specializations_are_carried() {
+    let header = "\
+template <bool S, class Tag = void> struct EDC {
+  int v = 1;
+  constexpr EDC() noexcept = default;
+  constexpr EDC(EDC const&) noexcept = default;
+};
+template <class T = void> struct pl { T operator()(T a, T b) const { return a + b; } };
+template <class Tag, class Op, class A, class B> inline const bool desugars = false;
+struct plus_tag {};
+template <class A, class B> inline const bool desugars<plus_tag, pl<void>, A, B> = true;
+template <> struct pl<void> {
+  template <class A, class B> auto operator()(A a, B b) const { return a + b; }
+  typedef void is_transparent;
+};
+";
+    let tu = "int main() { EDC<true> e; EDC<true> f = e;
+  static_assert(desugars<plus_tag, pl<void>, int, long> && !desugars<plus_tag, pl<int>, int, int>);
+  return pl<>{}(1, 2L) + pl<int>{}(f.v, 1) - 5; }\n";
+    carried_1343("wp1345d", header, tu);
+}
+
+/// WP-1345: anonymous unions and structs in classes and class template
+/// patterns ([class.union.anon]): the member object and the injected
+/// member names, mem-initializers naming them, and member access.
+#[test]
+fn anonymous_class_members_are_carried() {
+    let header = "\
+struct U {
+  union { char c; int v; };
+  struct { short a, b; };
+  U() : v(5) {}
+  explicit U(char x) : c(x) {}
+  int get() const { return v + a * 0; }
+};
+template <class T> struct Opt {
+  union { char null_; T val_; };
+  bool engaged_;
+  constexpr Opt() : null_(), engaged_(false) {}
+  constexpr Opt(T t) : val_(t), engaged_(true) {}
+  constexpr T value_or(T d) const { return engaged_ ? val_ : d; }
+};
+class P { int x = 1; public: union { long l; double d; }; };
+";
+    let tu = "static_assert(Opt<int>(3).value_or(1) == 3 && Opt<int>().value_or(4) == 4);
+int main() { U u; U w('a'); P p; p.l = 2; Opt<long> o(7);
+  return u.get() + (w.c == 'a') + int(p.l) + int(o.value_or(0)) - 15; }\n";
+    carried_1343("wp1345n", header, tu);
+}
+
+/// The directory [`carried_1343`] made for `name` (not emptied).
+fn scratch_of(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("kiln-pch-decls-{}-{name}", std::process::id()))
+}
+
+/// WP-1345: a dependent inheriting constructor (`using B<T>::B;`,
+/// [class.inhctor.init]) in a class template, and a dependent
+/// using-declaration of a base's member next to it.
+#[test]
+fn dependent_inheriting_constructors_are_carried() {
+    let header = "\
+template <class T> struct B { B(int) {} B(T, T) {} int v = 0; };
+template <class T> struct D : B<T> { using B<T>::B; };
+template <class T> struct E : D<T> { using D<T>::D; using D<T>::v; };
+template <class T, bool = true> struct pay;
+template <class T> struct pay<T, true> : B<T> { using B<T>::B; };
+";
+    let tu = "D<int> d(1);\nE<long> e(2L, 3L);\npay<int> p(4);\nint main() { return d.v + e.v + p.v; }\n";
+    carried_1343("wp1345o", header, tu);
+}
+
+/// WP-1345: a using-enum-declaration in a class ([enum.udecl]) and the
+/// enumerator shadows it introduces, with their access; a block-scope
+/// function declaration in a template's member; a namespace-scope
+/// `asm` declaration ([dcl.asm]).
+#[test]
+fn class_using_enum_local_functions_and_asm_are_carried() {
+    let header = "\
+struct te {
+  enum class id : int { a = 1, b, c };
+  using enum id;
+  int f() const { return int(b); }
+private:
+  enum class q { x = 7 };
+  using enum q;
+public:
+  static int g() { return int(x); }
+};
+struct mr { int k = 6; };
+inline mr* def() noexcept { static mr m; return &m; }
+template <class T> struct pa {
+  mr* r;
+  pa() noexcept { extern mr* def() noexcept __attribute__((__returns_nonnull__)); r = def(); }
+};
+inline int plain() { extern mr* def() noexcept; return def()->k; }
+asm(\".globl wp1345_sym\\n.set wp1345_sym, 0\");
+";
+    let tu = "int main() { te t; pa<int> p;
+  return t.f() + int(te::c) + te::g() + p.r->k + plain() - 24; }\n";
+    carried_1343("wp1345p", header, tu);
+    // The private enumerator stays private.
+    let d = scratch_of("wp1345p");
+    std::fs::write(d.join("b.cpp"), "int z = int(te::x);\n").unwrap();
+    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
+    assert!(o.stderr.contains("error: 'x' is a private member of 'te'"), "{}", o.stderr);
+    assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
+
+/// WP-1345: out-of-line members of classes nested in class templates
+/// and partial specializations, an out-of-line partial specialization
+/// of a member class template, and explicit object member functions
+/// ([dcl.fct]/6).
+#[test]
+fn nested_out_of_line_members_and_explicit_object_parameters_are_carried() {
+    let header = "\
+template <class C> struct os {
+  class sentry;
+  struct in { int f(); static int s; template <class U> U g(U); };
+  int v = 3;
+};
+template <class C> class os<C>::sentry {
+  bool ok;
+public:
+  explicit sentry(os& o);
+  ~sentry();
+  explicit operator bool() const { return ok; }
+};
+template <class C> os<C>::sentry::sentry(os& o) : ok(o.v == 3) {}
+template <class C> os<C>::sentry::~sentry() {}
+template <class C> int os<C>::in::f() { return 4; }
+template <class C> int os<C>::in::s = 5;
+template <class C> template <class U> U os<C>::in::g(U u) { return u + 1; }
+template <class C, class D> struct p3 {};
+template <class C> struct p3<C, int> { struct in { int f(); }; };
+template <class C> int p3<C, int>::in::f() { return sizeof(C); }
+struct fb {
+  struct rb { int k = 1; };
+  template <class R> struct res : rb { R r{}; };
+};
+template <class R> struct fb::res<R&> : fb::rb { R* p = nullptr; int g() { return 2; } };
+struct S {
+  int v = 4;
+  int get(this const S& s) { return s.v; }
+  template <class Self> auto&& ref(this Self&& self) { return static_cast<Self&&>(self).v; }
+};
+template <class T> struct W {
+  T t;
+  template <class Self> constexpr T val(this Self&& self) { return self.t + 1; }
+  T plain(this W w);
+};
+template <class T> T W<T>::plain(this W w) { return w.t * 2; }
+";
+    let tu = "int main() {
+  os<char> o; os<char>::sentry s(o); os<char>::in i; p3<char, int>::in q;
+  fb::res<int&> x; fb::res<int> y; S z; W<int> w{3}; z.ref() = 5;
+  static_assert(W<int>{1}.val() == 2);
+  return (bool(s) ? 0 : 1) + i.f() + os<char>::in::s + int(i.g(1L)) + q.f() + x.g() + x.k
+    + y.r + z.get() + w.val() + w.plain() - 29; }\n";
+    carried_1343("wp1345q", header, tu);
+}
+
+/// WP-1345: `x.operator T()` in a dependent member access, attributes
+/// written on explicit instantiations, and a specialization with
+/// `explicit(expr)` members the header completed: copy-initialization
+/// still sees which constructors are explicit, and the implicit members
+/// are declared in replay's order (the candidate notes match).
+#[test]
+fn conversion_names_instantiation_attributes_and_explicit_specs_are_carried() {
+    let header = "\
+template <class T> struct sv {};
+template <class R, class T>
+constexpr bool has_conv = requires (R& r) { r.operator sv<T>(); };
+struct A { operator sv<int>() const { return {}; } };
+template <class T> struct [[gnu::visibility(\"default\")]] sb { T v{}; T get() const { return v; } };
+template <class T> constexpr bool imp = sizeof(T) > 1;
+template <class A, class B> struct pr {
+  A a; B b;
+  constexpr pr() : a(), b() {}
+  template <class U, class V> explicit(!imp<U>) constexpr pr(U u, V v) : a(u), b(v) {}
+  explicit(sizeof(A) == 1) constexpr pr(A x) : a(x) {}
+};
+inline pr<bool, long> need(long) { pr<bool, long> p(true); p.b = 3; return p; }
+// Last: the importer runs explicit instantiations after the records
+// (WP-1307), so `check` sees a later declaration move before it.
+template struct __attribute__((__visibility__(\"hidden\"))) sb<int>;
+";
+    let tu = "static_assert(has_conv<A, int> && !has_conv<A, long>);
+pr<bool, long> f() { return {1, 2L}; }
+int main() { sb<int> b; return b.get() + int(need(0).b) + int(f().b) - 5; }\n";
+    carried_1343("wp1345r", header, tu);
+    let d = scratch_of("wp1345r");
+    std::fs::write(d.join("b.cpp"), "pr<bool, long> z = true;\npr<bool, long> w = {'c', 2};\n")
+        .unwrap();
+    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
+    assert!(
+        o.stderr.contains("no viable conversion from 'bool' to 'pr<bool, long>'"),
+        "{}",
+        o.stderr
+    );
+    assert!(
+        o.stderr.contains("chosen constructor is explicit in copy-initialization"),
+        "{}",
+        o.stderr
+    );
+    assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
