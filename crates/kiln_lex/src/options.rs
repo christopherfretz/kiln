@@ -78,6 +78,16 @@ pub struct LexOptions {
     /// delimited-escape extension warning). Only the diagnostic mapping
     /// reads it. Default: `false` (clang 22).
     pub clang19: bool,
+    /// Assembler-with-cpp (a `.S` input, `-x assembler-with-cpp`; clang
+    /// `LangOptions::AsmPreprocessor`): an unterminated or empty
+    /// character or string literal is an unknown token without a
+    /// diagnostic, since `'` and `"` are ordinary characters in assembly
+    /// (spec/lex.md "Assembler-with-cpp"). Default: `false`.
+    pub asm: bool,
+    /// `<:` `:>` `<%` `%>` `%:` `%:%:` are digraphs ([lex.digraph], C95
+    /// 6.4.6/3). Default: `true`; off for strict C89, where clang 19/22
+    /// lex them as their separate characters (spec/lex.md "C mode").
+    pub digraphs: bool,
 }
 
 impl LexOptions {
@@ -93,6 +103,8 @@ impl LexOptions {
             reflection: false,
             preprocessed_output: false,
             clang19: false,
+            asm: false,
+            digraphs: true,
         }
     }
 }

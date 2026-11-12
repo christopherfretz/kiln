@@ -1335,7 +1335,9 @@ impl<'a> Lexer<'a> {
         let is_string = quote == '"';
         if !is_string && self.src.decode(p).0 == Some('\'') {
             let (_, s) = self.src.decode(p);
-            self.diag(LexDiagKind::EmptyCharLiteral, start, p + s);
+            if !self.opts.asm {
+                self.diag(LexDiagKind::EmptyCharLiteral, start, p + s);
+            }
             return (TokKind::Unknown, p + s, TokFlags::empty());
         }
         loop {
@@ -1347,7 +1349,9 @@ impl<'a> Lexer<'a> {
                     } else {
                         LexDiagKind::UnterminatedChar
                     };
-                    self.diag(kind, start, p);
+                    if !self.opts.asm {
+                        self.diag(kind, start, p);
+                    }
                     return (TokKind::Unknown, p, TokFlags::empty());
                 }
                 Some(c) if c == quote => {
@@ -1561,6 +1565,7 @@ impl<'a> Lexer<'a> {
         let two = |p: Punct| (TokKind::Punct(p), p2, none);
         let digraph = |p: Punct, end: usize| (TokKind::Punct(p), end, TokFlags::DIGRAPH);
         let cxx26 = self.opts.reflection && self.std_at_least(Std::Cxx26);
+        let dg = self.opts.digraphs;
         match (c, c2) {
             ('{', _) => one(P::LBrace),
             ('}', _) => one(P::RBrace),
@@ -1599,7 +1604,7 @@ impl<'a> Lexer<'a> {
             // `::` is a token in every C mode too (C23 6.4.6; clang lexes it
             // before C23 for `[[gnu::x]]`).
             (':', Some(':')) => two(P::ColonColon),
-            (':', Some('>')) => digraph(P::RSquare, p2),
+            (':', Some('>')) if dg => digraph(P::RSquare, p2),
             (':', Some(']')) if cxx26 => two(P::SpliceClose),
             (':', _) => one(P::Colon),
             ('+', Some('+')) => two(P::PlusPlus),
@@ -1617,8 +1622,8 @@ impl<'a> Lexer<'a> {
             ('/', Some('=')) => two(P::SlashEqual),
             ('/', _) => one(P::Slash),
             ('%', Some('=')) => two(P::PercentEqual),
-            ('%', Some('>')) => digraph(P::RBrace, p2),
-            ('%', Some(':')) => {
+            ('%', Some('>')) if dg => digraph(P::RBrace, p2),
+            ('%', Some(':')) if dg => {
                 let (c3, s3) = self.src.decode(p2);
                 if c3 == Some('%') {
                     let (c4, s4) = self.src.decode(p2 + s3);
@@ -1656,7 +1661,7 @@ impl<'a> Lexer<'a> {
                 }
                 _ => two(P::LessEqual),
             },
-            ('<', Some(':')) => {
+            ('<', Some(':')) if dg => {
                 // [lex.pptoken]/3.2: `<::` not followed by `:` or `>` is `<` `::`.
                 if self.std_at_least(Std::Cxx11) && self.cxx() {
                     let (c3, s3) = self.src.decode(p2);
@@ -1666,7 +1671,7 @@ impl<'a> Lexer<'a> {
                 }
                 digraph(P::LSquare, p2)
             }
-            ('<', Some('%')) => digraph(P::LBrace, p2),
+            ('<', Some('%')) if dg => digraph(P::LBrace, p2),
             ('<', _) => one(P::Less),
             ('>', Some('=')) => two(P::GreaterEqual),
             ('>', Some('>')) => match self.src.decode(p2) {

@@ -1424,6 +1424,29 @@ impl Sema<'_, '_> {
         self.ast.types.function(p.ret(), &params, info, exc)
     }
 
+    /// C17 6.7.6/1: a parameter-type-list names a parameter before its
+    /// `...`; C23 allows `(...)`, and clang allows it on an
+    /// `overloadable` function in every C dialect (`<tgmath.h>`'s
+    /// `__tg_promote(...)`): the attribute anywhere on the declaration,
+    /// decl-specifiers or declarator (clang `GetFullTypeForDeclarator`,
+    /// `err_ellipsis_first_param`; WP-1331).
+    fn c_check_ellipsis_first(&mut self, ds: &DeclSpec, d: &Declarator) {
+        if d.c_ellipsis_first.is_empty() {
+            return;
+        }
+        let overloadable = ds
+            .attrs
+            .iter()
+            .chain(&d.attrs)
+            .any(|&a| self.ast.attrs.get(a).kind == AttrKind::OVERLOADABLE);
+        if overloadable {
+            return;
+        }
+        for &l in &d.c_ellipsis_first {
+            self.emit(self.diag(DiagId::parse_ellipsis_first_param, l));
+        }
+    }
+
     /// C before C23 (clang `GetFullTypeForDeclarator`,
     /// `warn_strict_prototypes`, -Wstrict-prototypes): every function
     /// declarator `()` without a prototype, at its `(`. A K&R identifier
@@ -3382,6 +3405,7 @@ impl Sema<'_, '_> {
         d: &Declarator,
     ) -> Option<DeclId> {
         self.finish_invented_head();
+        self.c_check_ellipsis_first(ds, d);
         if ds.friend.is_none()
             && let Some(nloc) = d.name.map(|n| n.1).or(d.special.map(|s| s.1))
         {

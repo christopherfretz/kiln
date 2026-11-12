@@ -9,6 +9,10 @@ Attributes = "attributes" [UnknownAttributes, IgnoredAttributes];
 BitfieldConstantConversion = "bitfield-constant-conversion" [SingleBitBitfieldConstantConversion];
 BoolConversion = "bool-conversion" [PointerBoolConversion, UndefinedBoolConversion];
 C99Extensions = "c99-extensions" [C99Designator];
+CPre23CompatPedantic = "pre-c23-compat-pedantic" [CPre23Compat];
+// WP-1331: clang's old name for `pre-c23-compat`.
+CPre2xCompat = "pre-c2x-compat" [CPre23Compat];
+CPre2xCompatPedantic = "pre-c2x-compat-pedantic" [CPre23CompatPedantic];
 ConstantConversion = "constant-conversion" [BitfieldConstantConversion];
 Conversion = "conversion" [BoolConversion, LiteralConversion, ConstantConversion, EnumConversion, ImplicitFloatConversion, IntConversion, NonLiteralNullConversion, NullConversion];
 ConversionNull = "conversion-null" [NullConversion];

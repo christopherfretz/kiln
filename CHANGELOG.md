@@ -30,6 +30,39 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   (`__has_c_attribute`; `__has_cpp_attribute` is C++ only), and C
   linkage (unmangled names, `fn.var` static locals),
   so C and C++ objects link together (WP-1275, WP-1290).
+- Assembly inputs (WP-1331): `.s` (`-x assembler`) is assembled and
+  `.S` / `.sx` (`-x assembler-with-cpp`) preprocessed by kiln in
+  assembler-with-cpp mode (`__ASSEMBLER__`, `#` comments and `'` passed
+  through) and then assembled, by `-c` or in a link, mixed with C and
+  C++ inputs, with `-Wa,` / `-Xassembler` passed to the assembler (the
+  LLVM installation's `clang++ -c -x assembler`). `-E`, `-S` and
+  `-fsyntax-only` on a `.S` write the preprocessed text; on a `.s` they
+  warn `'assembler' input unused`, as clang. Before, `-c x.s` warned
+  `'linker' input unused`, wrote no object and exited 0.
+- `<tgmath.h>` compiles in every C dialect (WP-1331): before C23 a
+  function declared with only `...` is accepted when it is
+  `overloadable`, as clang does; before, the header was rejected below
+  `-std=c23`, including at the default `gnu17`.
+- `-std=` takes every spelling clang 19 and 22 take, with their meaning
+  (WP-1331): `-ansi` (`c89` for C, `c++98` for C++; the last of it and
+  `-std=` wins), C94 `iso9899:199409` (`__STDC_VERSION__ 199409L`,
+  digraphs), `c2y` / `gnu2y` (`202400L`), `iso9899:199x` and
+  `iso9899:201x`; `iso9899:2024` is invalid at `-fclang-compat=19`, as in
+  clang 19. Strict `-std=c89` no longer lexes digraphs. OpenCL and HLSL
+  standards are "not allowed with 'C'" (or `'C++'`), and an invalid value
+  lists the language's standards in notes, as clang does.
+- `#embed` in C (WP-1331): no warning at `-std=c23`/`gnu23` and later
+  (only `-Wpre-c23-compat`), and "#embed is a C23 extension" before C23,
+  as clang 19/22; before, every C dialect warned "#embed is a Clang
+  extension", which broke `-Werror` C23 builds.
+- C23 `_BitInt` literal suffixes `wb` / `uwb` (WP-1331, any of clang's
+  spellings: `WB`, `uWB`, `wbU`, ...): the type is the narrowest
+  `_BitInt` holding the value (`0wb` is `_BitInt(2)`, `0uwb`
+  `unsigned _BitInt(1)`), in code and in `#if`, with clang's
+  "a C23 extension" warning before C23 and `-Wpre-c23-compat` from C23
+  on; C++ still rejects them, as clang. Before, they were "invalid
+  suffix". A literal over 128 bits is still "too large" on x86-64, where
+  clang accepts it.
 - C semantics, each where C differs from C++ (WP-1276, WP-1285 to
   WP-1287, WP-1301, WP-1311):
   - conversions: `void *` to and from any object pointer, integer and

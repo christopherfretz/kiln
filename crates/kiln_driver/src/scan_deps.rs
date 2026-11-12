@@ -568,6 +568,7 @@ fn scan(args: &Args, cmd: &[String], diags: SharedWriter) -> Option<Scanned> {
         stdin_text,
         diag_opts: &diag_opts,
         stderr: diags.clone(),
+        asm: false,
     };
     let sm = SourceManager::new();
     let interner = Interner::new();

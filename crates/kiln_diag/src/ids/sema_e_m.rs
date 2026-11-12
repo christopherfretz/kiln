@@ -257,6 +257,9 @@ sema_inst_member_dropped = Error (2) "kiln: internal error: member '{0}' of {1} 
 sema_inst_part_dropped = Error (2) "kiln: internal error: {0} in {1} was not instantiated and no diagnostic says why";
 sema_int_literal_implicitly_unsigned = ExtWarn [ImplicitlyUnsignedLiteral] (0) "integer literal is too large to be represented in a signed integer type, interpreting as unsigned";
 sema_int_literal_too_large = Error (0) "integer literal is too large to be represented in any integer type";
+// WP-1331: a `wb` literal wider than `BITINT_MAXWIDTH` with its sign bit
+// (clang `err_integer_literal_too_large` with `signed `).
+sema_int_literal_too_large_signed = Error (0) "integer literal is too large to be represented in any signed integer type";
 sema_integer_complex = Extension [GnuComplexInteger] (0) "complex integer types are a GNU extension";
 sema_integer_constant_overflow = Warning [IntegerOverflow] (2) "overflow in expression; result is {0} with type {1}";
 sema_integer_constants_in_conditional_always_true = Warning [TautologicalConstantCompare] (0) "converting the result of '?:' with integer constants to a boolean always evaluates to 'true'";

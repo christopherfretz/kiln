@@ -327,12 +327,39 @@ pub(crate) fn input_std(args: &Args, lang: Lang) -> Result<LangStd, Box<Diag>> {
                 .arg("C++"),
         ));
     }
+    if args.ansi {
+        // `-ansi` (the last of it and `-std=`): `-std=c89` for C,
+        // `-std=c++98` for C++ (clang 19/22 `Clang::ConstructJob`).
+        let s = if cplusplus { "c++98" } else { "c89" };
+        return Ok(LangStd::parse(s).unwrap_or_else(|| LangStd::default_for(cplusplus)));
+    }
     let Some(s) = &args.std else { return Ok(LangStd::default_for(cplusplus)) };
-    let std = LangStd::parse(s).ok_or_else(|| {
-        Box::new(
-            Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(format!("-std={s}")).arg(s),
-        )
-    })?;
+    let compat19 = args.predef.clang_compat == kiln_pp::ClangCompat::Clang19;
+    // clang 19 has no `iso9899:2024` alias for C23 (clang 20 added it).
+    let parsed = LangStd::parse(s).filter(|_| !(compat19 && s == "iso9899:2024"));
+    let foreign = toolchain::foreign_std(s, compat19);
+    let std = match parsed {
+        Some(std) => std,
+        // An OpenCL or HLSL standard clang knows but kiln does not
+        // compile: clang's wrong-language error, whatever the input.
+        None if foreign => {
+            return Err(Box::new(
+                Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID)
+                    .arg(format!("-std={s}"))
+                    .arg(if cplusplus { "C++" } else { "C" }),
+            ));
+        }
+        None => {
+            let mut d =
+                Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(format!("-std={s}")).arg(s);
+            for (spell, what) in toolchain::std_notes(cplusplus, compat19) {
+                d = d.with_note(
+                    Diag::new(DiagId::drv_note_use_std, Span::INVALID).arg(spell).arg(what),
+                );
+            }
+            return Err(Box::new(d));
+        }
+    };
     if std.cplusplus != cplusplus {
         return Err(Box::new(
             Diag::new(DiagId::drv_argument_not_allowed_with, Span::INVALID)
@@ -465,6 +492,7 @@ pub(crate) fn syntax_only(
         stdin_text: input.stdin_text,
         diag_opts,
         stderr: io.stderr.clone(),
+        asm: false,
     };
     SyntaxJob(job).run()
 }
@@ -802,6 +830,25 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         e.flush();
     }
     for input in inputs {
+        // spec/driver.md "Assembler inputs": `-E`, `-M` and
+        // `-fsyntax-only` stop before a plain `.s` is assembled.
+        if input.asm == Some(args::AsmKind::Plain) {
+            if !args.quiet_unused_arguments {
+                let sm = SourceManager::new();
+                let e = make_engine(
+                    &sm,
+                    &codegen_cmd::driver_diag_options(&diag_opts),
+                    io.stderr.clone(),
+                    Some(&args.program),
+                );
+                Diag::new(DiagId::drv_input_unused, Span::INVALID)
+                    .arg(&input.path)
+                    .arg(args::AsmKind::Plain.type_name())
+                    .emit(&e);
+                e.flush();
+            }
+            continue;
+        }
         let lang = args.input_lang(input);
         let std = match input_std(args, lang) {
             Ok(s) => s,
@@ -814,7 +861,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
                 continue;
             }
         };
-        if matches!(args.action, Action::SyntaxOnly | Action::Precompile) {
+        // A `.S` under `-fsyntax-only` is only preprocessed, and the text
+        // written (to `-o`, else standard output), as clang's phases stop
+        // there for assembler-with-cpp.
+        if matches!(args.action, Action::SyntaxOnly | Action::Precompile) && input.asm.is_none() {
             let stdin = if input.path == "-" { stdin_text.clone() } else { None };
             // spec/driver.md "Time trace": `--precompile` traces its job
             // (`Frontend`, then the module file's `WriteAST`), named
@@ -851,6 +901,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
             stdin_text: if input.path == "-" { stdin_text.clone() } else { None },
             diag_opts: &diag_opts,
             stderr: io.stderr.clone(),
+            asm: input.asm == Some(args::AsmKind::Cpp),
         };
         // spec/driver.md "Time trace": `-E` / `-M` trace the
         // preprocessor job alone (`ExecuteCompiler`), as clang.

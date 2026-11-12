@@ -310,6 +310,11 @@ pub enum LexDiagKind {
     HexFloatExtension,
     /// A `z`/`Z` suffix before C++23 (`ext_cxx23_size_t_suffix`).
     SizeSuffixExtension,
+    /// A `wb`/`uwb` suffix in C before C23 (`ext_c23_bitint_suffix`).
+    BitIntSuffixExtension,
+    /// A `wb`/`uwb` suffix in C23 and later
+    /// (`warn_c23_compat_bitint_suffix`, off by default).
+    BitIntSuffixCompat,
     /// An `f32`/`f64`/`f128`/`bf16` suffix (any case) before C++23 (GCC's
     /// pedantic warning; kiln `lit_float_suffix_ext`).
     FloatSuffixExtension,
@@ -406,6 +411,8 @@ impl LexDiagKind {
             | K::BinaryLiteralExtension
             | K::HexFloatExtension
             | K::SizeSuffixExtension
+            | K::BitIntSuffixExtension
+            | K::BitIntSuffixCompat
             | K::FloatSuffixExtension
             | K::FloatSuffixGnu
             | K::InvalidEncoding { error: false, .. }

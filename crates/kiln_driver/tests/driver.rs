@@ -321,7 +321,11 @@ fn argument_errors() {
         o.stderr.starts_with("kiln++: error: argument to '-o' is missing (expected 1 value)\n")
     );
     let o = kiln(&["-E", "-std=c++27", "-"], "");
-    assert_eq!((o.code, o.stderr.as_str()), (1, "error: invalid value 'c++27' in '-std=c++27'\n"));
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.starts_with(
+        "error: invalid value 'c++27' in '-std=c++27'\n\
+         note: use 'c++98' or 'c++03' for 'ISO C++ 1998 with amendments' standard\n"
+    ));
     let o = kiln(&["-E", "-std=c11", "-"], "");
     assert_eq!(o.stderr, "error: invalid argument '-std=c11' not allowed with 'C++'\n");
     let o = kiln(&["-emit-llvm", "-"], "");
@@ -573,6 +577,64 @@ fn macros_only() {
     assert!(!o.stdout.contains("__cplusplus"));
     assert!(o.stdout.contains("#define __STDC_VERSION__ 201112L\n"));
     assert!(o.stdout.contains("#define __STRICT_ANSI__ 1\n"));
+}
+
+/// WP-1331: `-ansi`, the C94 and C2y spellings, clang's other `-std=`
+/// aliases and the standards kiln cannot compile, as clang 19/22 answer
+/// them (spec/driver.md "Language mode").
+#[test]
+fn std_spellings_like_clang() {
+    let version = |args: &[&str]| {
+        let mut v = vec!["-E", "-P", "-x", "c"];
+        v.extend_from_slice(args);
+        v.push("-");
+        // Strict C89 has no digraphs: `%:define` is no directive there.
+        let o = kiln(&v, "__STDC_VERSION__ __STRICT_ANSI__\n%:define D d\nD\n");
+        assert_eq!(o.code, 0, "{args:?}: {}", o.stderr);
+        o.stdout.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    assert_eq!(version(&["-ansi"]), "__STDC_VERSION__ 1 %:define D d D");
+    assert_eq!(version(&["--ansi"]), "__STDC_VERSION__ 1 %:define D d D");
+    assert_eq!(version(&["-std=c89"]), "__STDC_VERSION__ 1 %:define D d D");
+    assert_eq!(version(&["-std=gnu89"]), "__STDC_VERSION__ __STRICT_ANSI__ d");
+    assert_eq!(version(&["-std=iso9899:199409"]), "199409L 1 d");
+    assert_eq!(version(&["-std=iso9899:199x"]), "199901L 1 d");
+    assert_eq!(version(&["-std=iso9899:201x"]), "201112L 1 d");
+    assert_eq!(version(&["-std=c2y"]), "202400L 1 d");
+    assert_eq!(version(&["-std=gnu2y"]), "202400L __STRICT_ANSI__ d");
+    // The last of `-ansi` and `-std=` wins.
+    assert_eq!(version(&["-ansi", "-std=c11"]), "201112L 1 d");
+    assert_eq!(version(&["-std=c11", "-ansi"]), "__STDC_VERSION__ 1 %:define D d D");
+    // `iso9899:2024` is clang 20's.
+    assert_eq!(version(&["-std=iso9899:2024"]), "202311L 1 d");
+    let o = kiln(&["-E", "-fclang-compat=19", "-x", "c", "-std=iso9899:2024", "-"], "");
+    assert!(o.stderr.starts_with("error: invalid value 'iso9899:2024' in '-std=iso9899:2024'\n"));
+    assert!(o.stderr.contains("note: use 'c23' for 'Working Draft for ISO C23' standard\n"));
+    let o = kiln(&["-E", "-x", "c", "-std=foo", "-"], "");
+    assert!(o.stderr.contains("note: use 'c23' or 'iso9899:2024' for 'ISO C 2023' standard\n"));
+    assert!(o.stderr.ends_with(
+        "note: use 'gnu2y' for 'Working Draft for ISO C2y with GNU extensions' standard\n"
+    ));
+    // `-ansi` is `-std=c++98` for C++, in either driver mode.
+    let o = kiln(&["-E", "-dM", "-ansi", "-x", "c++", "/dev/null"], "");
+    assert!(o.stdout.contains("#define __cplusplus 199711L\n"));
+    assert!(o.stdout.contains("#define __STRICT_ANSI__ 1\n"));
+    let o = kiln_named(Some("kiln"), &["-E", "-dM", "-ansi", "-x", "c++", "/dev/null"], "");
+    assert!(o.stdout.contains("#define __cplusplus 199711L\n"));
+    // OpenCL and HLSL: clang's wrong-language error (`hlsl202y` is clang
+    // 22's; clang 19 has never heard of it).
+    for (args, lang) in [(&["-x", "c", "-std=cl2.0"][..], "C"), (&["-std=hlsl202x"][..], "C++")] {
+        let mut v = vec!["-E"];
+        v.extend_from_slice(args);
+        v.push("-");
+        let o = kiln(&v, "");
+        let s = args.last().unwrap();
+        assert_eq!(o.stderr, format!("error: invalid argument '{s}' not allowed with '{lang}'\n"));
+    }
+    let o = kiln(&["-E", "-std=hlsl202y", "-"], "");
+    assert_eq!(o.stderr, "error: invalid argument '-std=hlsl202y' not allowed with 'C++'\n");
+    let o = kiln(&["-E", "-fclang-compat=19", "-std=hlsl202y", "-"], "");
+    assert!(o.stderr.starts_with("error: invalid value 'hlsl202y' in '-std=hlsl202y'\n"));
 }
 
 #[test]

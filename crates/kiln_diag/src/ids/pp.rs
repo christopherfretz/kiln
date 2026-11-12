@@ -19,6 +19,10 @@ pp_elifdef_ext = Extension (1) "use of a '#{0}' directive is a C++23 extension";
 pp_elifdef_without_if = Error (1) "#{0} without #if";
 pp_else_after_else = Error (0) "#else after #else";
 pp_else_without_if = Error (0) "#else without #if";
+// WP-1331: `#embed` in C before C23 (clang 19/22 `ext_pp_embed_directive`).
+pp_embed_c23_ext = ExtWarn [C23Extensions] (0) "#embed is a C23 extension";
+// WP-1331: `#embed` in C23 and later, off by default.
+pp_embed_compat = WarningOff [CPre23Compat] (0) "#embed is incompatible with C standards before C23";
 pp_embed_defined = Error (0) "'defined' cannot appear within this context";
 pp_embed_duplicate_param = Error (1) "cannot specify parameter '{0}' twice in the same '#embed' directive";
 pp_embed_ext = ExtWarn [C23Extensions] (0) "#embed is a Clang extension";

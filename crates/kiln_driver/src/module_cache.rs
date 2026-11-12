@@ -417,6 +417,7 @@ impl StdCache {
                         stdin_text: None,
                         diag_opts: &self.diag_opts,
                         stderr: SharedWriter::new(log.clone()),
+                        asm: false,
                     };
                     let r = SyntaxJob(job).run();
                     let files = r.dep_list.map(|l| l.borrow().files().to_vec());

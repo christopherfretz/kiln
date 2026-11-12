@@ -200,6 +200,8 @@ pub fn literal_diags(
             K::BinaryLiteralExtension => Diag::new(DiagId::lit_binary_ext, start),
             K::HexFloatExtension => Diag::new(DiagId::lit_hex_float_ext, start),
             K::SizeSuffixExtension => Diag::new(DiagId::lit_size_t_ext, start),
+            K::BitIntSuffixExtension => Diag::new(DiagId::lit_bit_int_suffix_ext, start),
+            K::BitIntSuffixCompat => Diag::new(DiagId::lit_bit_int_suffix_compat, start),
             K::FloatSuffixExtension => Diag::new(DiagId::lit_float_suffix_ext, at).arg(range),
             K::FloatSuffixGnu => Diag::new(DiagId::lit_float_suffix_gnu, start),
             K::IntegerTooLarge => Diag::new(DiagId::sema_int_literal_too_large, start),
