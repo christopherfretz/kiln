@@ -44,8 +44,10 @@ pub(super) enum DepTy {
     /// A vector of `count` elements of kind `kind`.
     Vector { elem: QRef, count: u32, kind: u8 },
     /// A deduced class template type: the class template's record and
-    /// the deduced type.
-    Deduced { template: u32, deduced: Option<QRef> },
+    /// the deduced type; `qual`, a name written with a qualifier
+    /// (`ns::X(args)`, WP-1342): its steps and whether `template` was
+    /// written.
+    Deduced { template: u32, deduced: Option<QRef>, qual: Option<(Vec<NnsRec>, bool)> },
 }
 
 const T_NAME: u8 = 0;
@@ -82,11 +84,33 @@ impl Writer<'_, '_, '_> {
                 DepTy::Vector { elem: self.qref(elem)?, count, kind: kind as u8 }
             }
             TypeView::DeducedTemplateSpecialization { name, deduced } => {
-                let TemplateName::Template(td) = self.s.ast.types.template_name_view(name) else {
-                    return Err("a deduced template named through a qualifier or parameter");
+                const WHY: &str = "a deduced template named through a qualifier or parameter";
+                let types = &self.s.ast.types;
+                let (td, qual) = match types.template_name_view(name) {
+                    TemplateName::Template(td) => (td, None),
+                    TemplateName::Qualified { nns, template_kw, underlying } => {
+                        let TemplateName::Template(td) = types.template_name_view(underlying)
+                        else {
+                            return Err(WHY);
+                        };
+                        (td, Some((self.nns_steps(nns)?, template_kw)))
+                    }
+                    // `TT(args)` of a template template parameter
+                    // (WP-1342): its record.
+                    TemplateName::TemplateTemplateParm { decl, .. } => {
+                        let r = *self.recs.get(&decl).ok_or(super::tttp::PARM_OUTSIDE)?;
+                        let deduced = deduced.map(|q| self.qref(q)).transpose()?;
+                        return Ok(Some(TyRec::Dep(DepTy::Deduced {
+                            template: r,
+                            deduced,
+                            qual: None,
+                        })));
+                    }
+                    _ => return Err(WHY),
                 };
                 let template = self.template_rec(td, 1)?;
-                DepTy::Deduced { template, deduced: deduced.map(|q| self.qref(q)).transpose()? }
+                let deduced = deduced.map(|q| self.qref(q)).transpose()?;
+                DepTy::Deduced { template, deduced, qual }
             }
             _ => return Ok(None),
         })))
@@ -132,11 +156,18 @@ pub(super) fn encode_dep(w: &mut Wr, d: &DepTy) {
             w.u32(*count);
             w.u8(*kind);
         }
-        DepTy::Deduced { template, deduced } => {
+        DepTy::Deduced { template, deduced, qual } => {
             w.u8(T_DEDUCED);
             w.u32(*template);
             w.u32(deduced.map_or(0, |q| q.ty));
             w.u8(deduced.map_or(0, |q| q.quals));
+            match qual {
+                None => w.u8(0),
+                Some((steps, kw)) => {
+                    w.u8(1 + u8::from(*kw));
+                    w.steps(steps);
+                }
+            }
         }
     }
 }
@@ -180,7 +211,16 @@ pub(super) fn decode_dep(r: &mut Rd<'_>) -> Res<DepTy> {
             }
             DepTy::Vector { elem, count, kind }
         }
-        T_DEDUCED => DepTy::Deduced { template: r.u32()?, deduced: opt_q(r)? },
+        T_DEDUCED => {
+            let template = r.u32()?;
+            let deduced = opt_q(r)?;
+            let qual = match r.u8()? {
+                0 => None,
+                k @ (1 | 2) => Some((r.steps()?, k == 2)),
+                _ => return bad("bad dependent type"),
+            };
+            DepTy::Deduced { template, deduced, qual }
+        }
         _ => return bad("bad dependent type"),
     })
 }
@@ -215,7 +255,10 @@ pub(super) fn dep_refs(d: &DepTy) -> (Vec<QRef>, Vec<u32>) {
         DepTy::Transform { base, result, .. } => qs.extend(std::iter::once(*base).chain(*result)),
         DepTy::MemPtr { pointee, class } => qs.extend([*pointee, *class]),
         DepTy::Vector { elem, .. } => qs.push(*elem),
-        DepTy::Deduced { template, deduced } => {
+        DepTy::Deduced { template, deduced, qual } => {
+            if let Some((s, _)) = qual {
+                steps(s, &mut qs);
+            }
             ds.push(*template);
             qs.extend(*deduced);
         }
@@ -231,10 +274,14 @@ pub(super) fn dep_ok(img: &Image, d: &DepTy, nd: usize) -> bool {
         DepTy::Name { steps, name, .. } | DepTy::Tmpl { steps, name, .. } => {
             name_ok(*name) && super::steps_ok(img, steps, nd)
         }
-        DepTy::Deduced { template, .. } => matches!(
-            img.decls.get(*template as usize).map(|r| &r.payload),
-            Some(Payload::Template { kind: 1, .. })
-        ),
+        DepTy::Deduced { template, qual, .. } => {
+            let named = match img.decls.get(*template as usize).map(|r| &r.payload) {
+                Some(Payload::Template { kind: 1, .. }) => true,
+                Some(Payload::Tttp(t)) => t.kind == 0 && qual.is_none(),
+                _ => false,
+            };
+            named && qual.as_ref().is_none_or(|(s, _)| super::steps_ok(img, s, nd))
+        }
         DepTy::Transform { .. } | DepTy::MemPtr { .. } | DepTy::Vector { .. } => true,
     }
 }
@@ -265,7 +312,7 @@ impl Sema<'_, '_> {
                     .iter()
                     .map(|a| {
                         let ty = qt(self, a.q());
-                        self.image_arg(ty, a)
+                        self.image_targ(ids, ty, a)
                     })
                     .collect();
                 let list = self.ast.types.arg_list(&args);
@@ -288,10 +335,26 @@ impl Sema<'_, '_> {
                 let e = qt(self, *elem);
                 self.ast.types.vector(e, *count, VectorKind::from_u8(*kind))
             }
-            DepTy::Deduced { template, deduced } => {
+            DepTy::Deduced { template, deduced, qual } => {
                 let deduced = deduced.map(|q| qt(self, q));
                 let t = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
-                let name = self.ast.types.template_name_of(t);
+                let mut name = if matches!(
+                    img.decls.get(*template as usize).map(|r| &r.payload),
+                    Some(Payload::Tttp(_))
+                ) {
+                    self.template_name_for(t)
+                } else {
+                    self.ast.types.template_name_of(t)
+                };
+                if let Some((steps, template_kw)) = qual {
+                    let nns = self.image_dep_nns(img, steps, ids, qt);
+                    let n = TemplateName::Qualified {
+                        nns,
+                        template_kw: *template_kw,
+                        underlying: name,
+                    };
+                    name = self.ast.types.template_name(n);
+                }
                 self.ast.types.deduced_template_specialization(name, deduced)
             }
         }
@@ -350,8 +413,14 @@ mod tests {
             }),
             TyRec::Dep(DepTy::MemPtr { pointee: q(int), class: q(t) }),
             TyRec::Dep(DepTy::Vector { elem: q(t), count: 4, kind: 0 }),
-            TyRec::Dep(DepTy::Deduced { template: 16, deduced: None }),
-            TyRec::Dep(DepTy::Deduced { template: 16, deduced: Some(q(int)) }),
+            TyRec::Dep(DepTy::Deduced { template: 16, deduced: None, qual: None }),
+            TyRec::Dep(DepTy::Deduced { template: 16, deduced: Some(q(int)), qual: None }),
+            // `::Box(x)` (WP-1342).
+            TyRec::Dep(DepTy::Deduced {
+                template: 16,
+                deduced: None,
+                qual: Some((vec![NnsRec::Global], true)),
+            }),
         ]);
         (img, first as u32)
     }
@@ -370,7 +439,7 @@ mod tests {
     #[test]
     fn rejects_corrupt_dependent_types() {
         type Corrupt = (&'static str, fn(&mut Image, usize));
-        let corrupt: [Corrupt; 7] = [
+        let corrupt: [Corrupt; 8] = [
             ("name out of range", |i, f| {
                 i.types[f] = TyRec::Dep(DepTy::Name { kw: 5, steps: vec![], name: 999 });
             }),
@@ -390,10 +459,19 @@ mod tests {
                 i.types[f + 4] = TyRec::Dep(DepTy::MemPtr { pointee: later, class: later });
             }),
             ("deduced function template", |i, f| {
-                i.types[f + 6] = TyRec::Dep(DepTy::Deduced { template: 13, deduced: None });
+                i.types[f + 6] =
+                    TyRec::Dep(DepTy::Deduced { template: 13, deduced: None, qual: None });
+            }),
+            ("deduced qualifier step out of range", |i, f| {
+                i.types[f + 8] = TyRec::Dep(DepTy::Deduced {
+                    template: 16,
+                    deduced: None,
+                    qual: Some((vec![NnsRec::Ident(999)], false)),
+                });
             }),
             ("deduced record out of range", |i, f| {
-                i.types[f + 6] = TyRec::Dep(DepTy::Deduced { template: 999, deduced: None });
+                i.types[f + 6] =
+                    TyRec::Dep(DepTy::Deduced { template: 999, deduced: None, qual: None });
             }),
         ];
         for (what, f) in corrupt {

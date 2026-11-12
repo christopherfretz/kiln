@@ -142,26 +142,25 @@ impl Writer<'_, '_, '_> {
         let entry = if let Some((_, p)) = ast.partial_spec_info(d) {
             let p = *p;
             let list = *ast.templates.param_list(p.params);
-            let n = ast.decls.get(d);
-            let in_class = n.ctx().is_some_and(|c| ast.decls.record(c).is_some());
-            if list.depth != 0 || in_class {
-                return Err("a member template or a template in a template");
+            // A member template's partial specialization is carried
+            // (WP-1342), at its template's depth.
+            let tdepth =
+                ast.template_info(p.template).map(|i| ast.templates.param_list(i.params).depth);
+            if tdepth != Some(list.depth) {
+                return Err(MALFORMED);
             }
             // Declared, then defined: the definition's template-head
             // has parameters of its own, after the record.
             if self.s.templ.partial_def_loc.contains_key(&d) {
                 return Err("a redeclared partial specialization");
             }
-            if list.requires.is_some() {
-                return Err("a constrained template");
-            }
+            // A requires-clause is carried by `constraint_roots`
+            // (WP-1342).
             let template = self.template_rec(p.template, tkind)?;
             let mut params = Vec::new();
             let mut decls = Vec::new();
             for q in ast.lists.iter::<DeclId>(list.params) {
-                params.push(
-                    *self.recs.get(&q).ok_or("a template parameter the image does not carry")?,
-                );
+                params.push(*self.recs.get(&q).ok_or(super::tttp::PARM_OUTSIDE)?);
                 decls.push(q);
             }
             let args: Vec<TemplateArg> = ast.types.args(p.args).to_vec();
@@ -416,6 +415,18 @@ fn encode_arg(w: &mut Wr, a: &CArg) {
         }
         // Never written: no specialization argument is an expression.
         CArg::Arg(ArgRec::Expr(..)) => w.u8(u8::MAX),
+        // A template (WP-1342).
+        CArg::Arg(ArgRec::Template(d, k)) => {
+            w.u8(4);
+            w.u32(*d);
+            w.u32(*k);
+        }
+        // A dependent template name (WP-1342).
+        CArg::Arg(ArgRec::DepTemplate(t, k)) => {
+            w.u8(5);
+            w.u32(*t);
+            w.u32(*k);
+        }
         CArg::Pack(v) => {
             w.u8(3);
             w.len(v.len());
@@ -431,6 +442,8 @@ fn decode_arg(r: &mut Rd, top: bool) -> Res<CArg> {
         0 => CArg::Arg(ArgRec::Type(r.q()?)),
         1 => CArg::Arg(ArgRec::Value(r.q()?, r.i128()?)),
         2 => CArg::Parm(r.u32()?),
+        4 => CArg::Arg(ArgRec::Template(r.u32()?, r.u32()?)),
+        5 => CArg::Arg(ArgRec::DepTemplate(r.u32()?, r.u32()?)),
         3 if top => {
             let n = r.count(5)?;
             let mut v = Vec::with_capacity(n);
@@ -521,7 +534,8 @@ pub(super) fn validate_class_specs(
         else {
             return bad("bad class template specialization");
         };
-        let Payload::Template { kind: tkind @ (1 | 3), params: tparams, .. } = &t.payload else {
+        let Payload::Template { kind: tkind @ (1 | 3), params: tparams, depth, .. } = &t.payload
+        else {
             return bad("bad class template specialization");
         };
         let ok = match tkind {
@@ -541,6 +555,12 @@ pub(super) fn validate_class_specs(
             CArg::Arg(ArgRec::Type(q)) => qref_at(*q, at),
             CArg::Arg(ArgRec::Value(q, _)) => q.ty <= BUILTINS && q.quals == 0,
             CArg::Parm(p) => params.contains(p),
+            CArg::Arg(ArgRec::Template(d, _)) => {
+                (*d as usize) < at && super::tttp::tname_rec(img, *d)
+            }
+            CArg::Arg(ArgRec::DepTemplate(t, _)) => {
+                qref_at(QRef { ty: *t, quals: 0 }, at) && super::tttp::dep_tname_ty(img, *t)
+            }
             CArg::Pack(_) | CArg::Arg(ArgRec::Expr(..)) => false,
         };
         let Some(h) = &c.head else {
@@ -564,8 +584,11 @@ pub(super) fn validate_class_specs(
                 && img.decls.get(p as usize).is_some_and(|x| {
                     x.ctx == scope
                         && match x.payload {
-                            Payload::Ttp { depth: 0, index, .. }
-                            | Payload::Nttp { depth: 0, index, .. } => usize::from(index) == k,
+                            Payload::Ttp { depth: d, index, .. }
+                            | Payload::Nttp { depth: d, index, .. } => {
+                                d == *depth && usize::from(index) == k
+                            }
+                            Payload::Tttp(ref t) => t.depth == *depth && usize::from(t.index) == k,
                             _ => false,
                         }
                 });
@@ -608,7 +631,7 @@ impl Sema<'_, '_> {
         let tmpl = self.ast.first(ids[c.template as usize]);
         let args = self.image_spec_args(img, tys, ids, c);
         if let Some(head) = &c.head {
-            let list = self.image_partial_head(ids, main, head);
+            let list = self.image_partial_head(img, ids, main, c.template, head);
             let al = self.ast.types.arg_list(&args);
             return self.builder().class_partial_spec(h, tmpl, list, al, tag);
         }
@@ -661,7 +684,7 @@ impl Sema<'_, '_> {
         let tmpl = self.ast.first(ids[c.template as usize]);
         let args = self.image_spec_args(img, tys, ids, c);
         if let Some(head) = &c.head {
-            let list = self.image_partial_head(ids, main, head);
+            let list = self.image_partial_head(img, ids, main, c.template, head);
             let al = self.ast.types.arg_list(&args);
             return Some(self.builder().var_partial_spec(h, tmpl, list, al, ty, vspec));
         }
@@ -706,13 +729,19 @@ impl Sema<'_, '_> {
     /// A partial specialization's template-head.
     fn image_partial_head(
         &mut self,
+        img: &Image,
         ids: &[DeclId],
         main: &Locs,
+        template: u32,
         head: &PartialHead,
     ) -> kiln_ast::TemplateParamListId {
         let ps: Vec<DeclId> = head.params.iter().map(|&p| ids[p as usize]).collect();
         let (t, l, r) = (main.get(head.tloc), main.get(head.langle), main.get(head.rangle));
-        self.builder().template_param_list(t, l, r, 0, &ps, None)
+        let depth = match img.decls[template as usize].payload {
+            Payload::Template { depth, .. } => depth,
+            _ => 0,
+        };
+        self.builder().template_param_list(t, l, r, depth, &ps, None)
     }
 
     fn image_carg(
@@ -725,7 +754,7 @@ impl Sema<'_, '_> {
         match a {
             CArg::Arg(x) => {
                 let ty = self.image_ty(img, tys, ids, x.q());
-                self.image_arg(ty, x)
+                self.image_targ(ids, ty, x)
             }
             CArg::Parm(p) => self.template_param_arg(ids[*p as usize]),
             CArg::Pack(_) => TemplateArg::NULL,

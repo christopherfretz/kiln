@@ -117,6 +117,15 @@ impl Writer<'_, '_, '_> {
                 }
                 ArgRec::Value(q, v)
             }
+            // WP-1342: a template, or a pack expansion of one.
+            ArgView::Template(n) => self.tname_arg(n, 0)?,
+            ArgView::TemplateExpansion { name, num_expansions } => {
+                let k = match num_expansions {
+                    None => 1,
+                    Some(k) => k.checked_add(2).ok_or(ARG)?,
+                };
+                self.tname_arg(name, k)?
+            }
             _ => return Err(ARG),
         })
     }
@@ -345,6 +354,17 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         Ok(Some(match ast.types.view(t) {
             TypeView::TemplateSpecialization { name, args, underlying, alias } => {
+                // `TT<args>` of a template template parameter (WP-1342):
+                // dependent, its arguments as written.
+                if let Some(template) = self.tst_ttp(name)? {
+                    if underlying.is_some() || alias {
+                        return Err(
+                            "a template template parameter's specialization with an underlying type",
+                        );
+                    }
+                    let args = self.written_arg_recs(args)?;
+                    return Ok(Some(TyRec::Tst { template, args, under: None }));
+                }
                 let TemplateName::Template(td) = ast.types.template_name_view(name) else {
                     return Err("a template named through a qualifier or parameter");
                 };
@@ -428,6 +448,8 @@ impl Sema<'_, '_> {
                 TemplateArg::value(ty, c)
             }
             ArgRec::Expr(i, p) => self.image_expr_arg(i, p),
+            // Built by `image_targ`, which has the records.
+            ArgRec::Template(..) | ArgRec::DepTemplate(..) => TemplateArg::NULL,
         }
     }
 
@@ -451,7 +473,7 @@ impl Sema<'_, '_> {
         let mut list = Vec::with_capacity(args.len());
         for a in args {
             let ty = self.image_ty(img, tys, ids, a.q());
-            list.push(self.image_arg(ty, a));
+            list.push(self.image_targ(ids, ty, a));
         }
         let spec = if kind == 1 {
             let locs = vec![loc; list.len()];

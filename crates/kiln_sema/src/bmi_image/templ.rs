@@ -149,7 +149,7 @@ impl Writer<'_, '_, '_> {
     fn template_params(&self, list: &TemplateParamList) -> W<Vec<u32>> {
         let mut params = Vec::new();
         for p in self.s.ast.lists.iter::<DeclId>(list.params) {
-            params.push(*self.recs.get(&p).ok_or("a template parameter the image does not carry")?);
+            params.push(*self.recs.get(&p).ok_or(super::tttp::PARM_OUTSIDE)?);
         }
         Ok(params)
     }
@@ -210,13 +210,9 @@ impl Writer<'_, '_, '_> {
     pub(super) fn lookup_ok(&self, e: ExprId) -> W<()> {
         let s = self.s;
         let ast = &s.ast;
-        // WP-1314: one census reason per form.
-        // The naming class is carried (WP-1314); a using-shadow is not.
-        if let Some(f) = s.ovl.ule_found.get(&e)
-            && (f.naming.is_none() || f.found != ast.unresolved_decls(e))
-        {
-            return Err("a template expression (a name found through a using-declaration)");
-        }
+        // WP-1314: one census reason per form. The naming class is
+        // carried (WP-1314), and so is a using-shadow (WP-1342: the
+        // body's `COLD_FOUND`).
         if s.member_refs.contains_key(&e) {
             return Err("a template expression (an implicit member reference)");
         }

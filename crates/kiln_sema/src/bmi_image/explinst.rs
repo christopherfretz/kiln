@@ -180,8 +180,11 @@ pub(super) fn validate_explicit_insts(img: &Image, qref_ok: &dyn Fn(QRef) -> boo
         let args_ok = x.args.iter().all(|a| match *a {
             ArgRec::Type(q) => qref_ok(q),
             ArgRec::Value(q, _) => q.ty <= BUILTINS && q.quals == 0,
-            // The writer lists converted arguments, never expressions.
-            ArgRec::Expr(..) => false,
+            // A template (WP-1342).
+            ArgRec::Template(d, 0) => super::tttp::tname_rec(img, d),
+            // The writer lists converted arguments, never expressions
+            // or dependent names.
+            ArgRec::Expr(..) | ArgRec::Template(..) | ArgRec::DepTemplate(..) => false,
         });
         if !matches!(tmpl, Some(Payload::Template { kind: 1, .. })) || !lex_ok || !args_ok {
             return bad("bad explicit instantiation");
@@ -207,7 +210,7 @@ impl Sema<'_, '_> {
             let mut args = Vec::with_capacity(x.args.len());
             for a in &x.args {
                 let ty = self.image_ty(img, tys, ids, a.q());
-                args.push(self.image_arg(ty, a));
+                args.push(self.image_targ(ids, ty, a));
             }
             let loc = main.get(x.loc);
             let locs = vec![loc; args.len()];
