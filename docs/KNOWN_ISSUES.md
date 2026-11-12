@@ -1,7 +1,8 @@
 # Known issues
 
 This page lists what kiln does not do yet, or does differently, as of
-1.0. Each item names the work package that tracks it in
+the release this file ships with (on `main`, as of the current commit).
+Each item names the work package that tracks it in
 [BACKLOG.md](BACKLOG.md), where one exists. How to use the parts that do
 work is in the [user guide](USER_GUIDE.md). Measured results for each
 library and project are in [COMPATIBILITY.md](COMPATIBILITY.md).
@@ -13,7 +14,7 @@ If you hit something not listed here, please
 
 - **Linux on aarch64 and x86_64 only.** Any other `--target` (macOS,
   Windows, 32-bit, other architectures) is `unsupported target`. Support
-  for other platforms is not planned for 1.0.
+  for other platforms is not planned.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
 - **x86 function multiversioning** (`target_clones`, several
@@ -52,12 +53,25 @@ passes ([status/c-mode.md](status/c-mode.md)). The `-std=gnu17` table on
 that page was measured before the C semantics landed and is not a
 current figure. What is not done yet:
 
+- **Found during release review, tracked as [WP-1331](BACKLOG.md):**
+  - `<tgmath.h>` before C23 is rejected: its `__attribute__((overloadable))`
+    declaration with only `...` gives "ISO C requires a named parameter
+    before '...'". At `-std=c23` it compiles.
+  - `-ansi` is `unknown argument`; `-std=c2y`, `gnu2y` and
+    `iso9899:199409` are `invalid value`. clang 19 takes all four.
+  - `#embed` at `-std=c23` warns "#embed is a Clang extension
+    [-Wc23-extensions]" where clang gives no warning, which breaks a
+    `-Werror` build.
+  - The C23 `_BitInt` literal suffixes `wb` and `uwb` are "invalid
+    suffix 'wb' on integer constant". `_BitInt(N)` itself works.
+  - An assembler source (`.s`, `.S`) is not assembled by `-c`: kiln
+    warns "'linker' input unused [-Wunused-command-line-argument]",
+    writes no object and exits 0. In a link step it is passed to the
+    linking clang, which assembles it.
+  - `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`,
+    `-Wfortify-source` and `-Warray-bounds` on a constant out-of-range
+    index are not emitted, in C and C++.
 - **Rejected, where clang accepts:**
-  - `<tgmath.h>` before C23. Its `__attribute__((overloadable))`
-    declaration with only `...` is rejected: "ISO C requires a named
-    parameter before '...'". At `-std=c23` it compiles.
-  - The C23 `_BitInt` literal suffixes `wb` and `uwb`: "invalid suffix
-    'wb' on integer constant". `_BitInt(N)` itself works.
   - More than the declared number of array initializers
     (`int a[2] = { 1, 2, 3 };`) is the error "excess elements in array
     initializer", where clang warns ([WP-1318](BACKLOG.md)).
@@ -68,12 +82,6 @@ current figure. What is not done yet:
   `::`, `class`, lambdas) is rejected, but with the C++ parser's errors
   and recovery, not clang's (`tests/c/cxx-only/cxx-syntax-rejected.c`).
 - **Driver:**
-  - `-ansi` is `unknown argument`; `-std=c2y`, `gnu2y` and
-    `iso9899:199409` are `invalid value`. clang 19 takes all four.
-  - An assembler source (`.s`, `.S`) is not assembled by `-c`: kiln
-    warns "'linker' input unused" and writes no object. In a link step
-    it is passed to the linking clang, which assembles it
-    ([WP-1298](BACKLOG.md)).
   - CMake reports the ASM compiler identification as "unknown", since
     `--version` does not say "clang version" (no build of the C rows
     depends on it). A link error prints the backing `clang++:` line
@@ -84,10 +92,6 @@ current figure. What is not done yet:
     `-Wmissing-prototypes`, `-Wmissing-variable-declarations`,
     `-Wgnu-folding-constant`, `-Wvla` on `sizeof(int[n])`, and the
     "expanded from macro 'offsetof'" note ([WP-1319](BACKLOG.md));
-  - as in C++, `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`
-    and `-Wfortify-source` are not emitted;
-  - `#embed` at `-std=c23` warns "#embed is a Clang extension" where
-    clang gives no warning, which breaks a `-Werror` build;
   - after an invalid redefinition of an enumeration, its new
     enumerators are also reported as undeclared ([WP-1317](BACKLOG.md)).
 - **Implicitly declared `setjmp` and `vfork`** (called without their
@@ -172,8 +176,8 @@ missing (spec/modules.md §11.10):
   importer re-parses the module's text. Since WP-985 the file also
   carries the module's constant-evaluation results, so the importer does
   not evaluate those again (spec/modules.md §11.11). The declaration
-  image that replaces the re-parse (`-fkiln-bmi-image`) ships in 1.0 as
-  an experimental opt-in: it is off by default and does not cover `std`
+  image that replaces the re-parse (`-fkiln-bmi-image`) is an
+  experimental opt-in: it is off by default and does not cover `std`
   yet. Making it the default is [WP-1070](BACKLOG.md). Importing
   libc++'s `std` module file costs about what compiling `std.cppm`
   in-process costs ([COMPATIBILITY.md](COMPATIBILITY.md#c20-modules)).
@@ -212,7 +216,9 @@ the header's tokens, so a PCH build costs what the same build with
   [spec/landed/codegen/WP-1003.md](../spec/landed/codegen/WP-1003.md).
 - **gcov filters** `-fprofile-filter-files` and `-fprofile-exclude-files`
   are rejected: [WP-1004](BACKLOG.md).
-- **Profile-guided optimization is not part of 1.0.**
+- **Profile-guided optimization of the program being compiled** is not
+  supported (kiln's own PGO build, `cargo xtask build --pgo`, is
+  unrelated).
   `-fprofile-generate`, `-fcs-profile-generate`, `-fprofile-use`,
   `-fprofile-instr-use` and `-fprofile-sample-use` are rejected with an
   error that says so.
@@ -237,7 +243,7 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
-| `-f[no-]stack-clash-protection`, `-f[no-]common`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" | — |
+| `-f[no-]stack-clash-protection`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" (`-f[no-]common` takes effect in C, for tentative definitions) | — |
 
 `-ffat-lto-objects` is rejected: fat objects are [WP-899](BACKLOG.md).
 

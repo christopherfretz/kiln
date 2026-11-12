@@ -30,7 +30,7 @@ kiln++ --version
 The tree is relocatable, so you can unpack it anywhere:
 
 ```
-bin/kiln
+bin/kiln                      the C driver: .c, .h and .i inputs are C
 bin/kiln++ -> kiln            kiln++ compiles every input as C++
 bin/kiln-scan-deps -> kiln    the dependency scanner, also linked as
                               clang-scan-deps-22 and clang-scan-deps
@@ -109,12 +109,13 @@ for each build system, with the projects that validate it, is in
   ```sh
   CXX=kiln++ cmake -S . -B build
   # or: cmake -DCMAKE_CXX_COMPILER=kiln++ ...
+  # C, too: CC=kiln (The C compiler identification is Clang 22.1.8)
   ```
 
   C++20 modules (`FILE_SET CXX_MODULES`) need CMake 3.28 or newer and
   the Ninja generator, as with clang. See [Modules](#modules).
 
-- **Autotools** works unchanged: `./configure CXX=kiln++`. `AC_PROG_CXX`
+- **Autotools** works unchanged: `./configure CC=kiln CXX=kiln++`. `AC_PROG_CXX`
   sees a GNU-compatible compiler through `__GNUC__`, and libtool
   queries the linker through `-print-prog-name=ld` and `-shared -v`, both
   of which kiln answers as clang does.
@@ -191,9 +192,19 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   association is evaluated, including in constant expressions.
 - **C**: `kiln` (not `kiln++`) treats `.c`, `.h` and `.i` as C and
   compiles them (`-std=c89`, `c99`, `c11`, `c17`, `c23` and `gnuNN`;
-  default `gnu17`, as clang). C and C++ objects link together: C names
-  are not mangled. C semantics are in progress; see
-  [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode).
+  default `gnu17`, as clang), with C's own rules where C differs from
+  C++ and the GNU C extensions clang implements. C and C++ objects link
+  together: C names are not mangled. `kiln` links as `clang` does (no
+  libstdc++, no libm without `-lm`), so link C++ objects with `kiln++`.
+  What C mode covers is in [CHANGELOG.md](../CHANGELOG.md), its gaps in
+  [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode), and its measurements in
+  [status/c-mode.md](status/c-mode.md).
+- **Precompiled headers**: `-x c++-header` (or `-x c-header`) writes a
+  PCH and `-include-pch` uses it, with clang's flags. The PCH is checked
+  and its header replayed, so it does not make a build faster; the
+  serialized form behind `-fkiln-pch-image` is experimental and off by
+  default ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#precompiled-headers),
+  [COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)).
 
 ### Modules
 
