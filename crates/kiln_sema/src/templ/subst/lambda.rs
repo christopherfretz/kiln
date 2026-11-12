@@ -91,6 +91,13 @@ impl Substituter<'_, '_, '_> {
             return Err(SubstFail);
         };
         self.locals.insert(call_op, DeclOrPack::Decl(new_op));
+        // The pattern call operator's attributes (`always_inline`,
+        // `noinline`, `flatten`, `cold`, ...), as for any instantiated
+        // function (clang `TransformLambdaExpr` → `InstantiateAttrs`): the
+        // rebuilt specifiers carry none. A generic lambda's new call
+        // operator is itself a pattern, whose specializations take them
+        // from it (`function_spec_attrs`).
+        self.class_attrs(new_op, call_op);
         // A generic lambda's dependent access checks are replayed by the
         // instantiations of the new call operator.
         self.sema.copy_dependent_access(call_op, new_op);

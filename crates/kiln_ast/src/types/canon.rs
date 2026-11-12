@@ -415,7 +415,11 @@ impl TypeContext {
             let key = Key::pair(TypeKind::DependentVector, kind as u16, raw(elem), expr.raw());
             self.intern_with(key, flags, |ctx| {
                 let ce = ctx.canonical(elem);
-                Some(Self::uq(ctx.dependent_vector_canonical(ce, size, kind)))
+                let c = Self::uq(ctx.dependent_vector_canonical(ce, size, kind));
+                // The mangled `Dv <expression> _` spells the creating
+                // spelling's size expression, as a dependent array bound.
+                ctx.note_expr_origin(c.ty(), expr);
+                Some(c)
             })
         };
         t.into()

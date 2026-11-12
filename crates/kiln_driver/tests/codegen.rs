@@ -783,6 +783,42 @@ fn unmangleable_expression_is_an_error() {
 }
 
 #[test]
+fn unmangleable_dimension_is_an_error() {
+    // spec/landed/abi/WP-1355.md: an unencodable `_BitInt` width (it used
+    // to be a silent `DBu7unknown_`) or dependent vector size is the same
+    // hard error as an array bound's, as in clang 19 and 22.
+    let d = scratch("unmangleable_dim");
+    let src = "template <class T> void f(_BitInt(__builtin_bit_cast(unsigned, T(8)))) {}\n\
+               template <class T> using ev = T \
+               __attribute__((ext_vector_type(__builtin_bit_cast(unsigned, T(4)))));\n\
+               template <class T> void g(ev<T>) {}\n\
+               typedef int i4 __attribute__((ext_vector_type(4)));\n\
+               void use() { f<int>(0); g<int>(i4{}); }\n";
+    let want = [
+        "t.cpp:1:35: error: cannot yet mangle expression type BuiltinBitCastExpr",
+        "t.cpp:2:64: error: cannot yet mangle expression type BuiltinBitCastExpr",
+    ];
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let _ = std::fs::remove_file(d.join("t.ll"));
+    let o = kiln_in(&d, &["-std=c++26", "-S", "-emit-llvm", "t.cpp"]);
+    let err = text(&o.stderr);
+    let errors: Vec<&str> = err.lines().filter(|l| l.contains(": error: ")).collect();
+    assert_eq!(errors, want, "{err}");
+    assert_eq!(o.status.code(), Some(1));
+    assert!(!d.join("t.ll").exists());
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args(["-std=c++26", "-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        let cerr = text(&c.stderr);
+        let cerrors: Vec<&str> = cerr.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(cerrors, want, "clang++-19");
+    }
+}
+
+#[test]
 fn duplicate_mangled_name() {
     let d = scratch("dupname");
     let cases = [
