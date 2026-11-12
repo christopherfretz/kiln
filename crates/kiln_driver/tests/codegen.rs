@@ -52,6 +52,33 @@ fn setup(name: &str) -> PathBuf {
     d
 }
 
+/// A codegen warning made an error by `-Werror` (here
+/// `-Watomic-alignment`, emitted while the module is built) fails the
+/// compile: exit 1 and no output file, the module dropped unprinted
+/// (WP-1366; clang writes none either).
+#[test]
+fn codegen_error_writes_no_output() {
+    let d = scratch("cg-werror");
+    std::fs::write(
+        d.join("big.cpp"),
+        "struct B { char c[32]; };\nvoid f(B *p) { B t; __atomic_load(p, &t, 5); }\n",
+    )
+    .unwrap();
+    let o = kiln_in(&d, &["-S", "-emit-llvm", "big.cpp"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).contains("[-Watomic-alignment]"), "{}", text(&o.stderr));
+    assert!(d.join("big.ll").exists());
+    std::fs::remove_file(d.join("big.ll")).unwrap();
+    for a in [&["-S", "-emit-llvm"][..], &["-S", "-emit-llvm", "-o", "-"][..]] {
+        let o = kiln_in(&d, &[a, &["-Werror", "big.cpp"]].concat());
+        assert_eq!(o.status.code(), Some(1), "{a:?}");
+        assert!(text(&o.stderr).contains("[-Werror,-Watomic-alignment]"), "{}", text(&o.stderr));
+        assert!(text(&o.stderr).ends_with("2 errors generated.\n"), "{}", text(&o.stderr));
+        assert!(o.stdout.is_empty(), "{a:?}");
+        assert!(!d.join("big.ll").exists(), "{a:?}");
+    }
+}
+
 #[test]
 fn emit_llvm_text() {
     let d = setup("ll");

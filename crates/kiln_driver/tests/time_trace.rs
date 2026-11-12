@@ -293,6 +293,38 @@ fn granularity_drops_short_events() {
     }
 }
 
+/// The module's construction (`EmitIR`) and its printing (`PrintIR`) are
+/// two sibling events inside `Frontend` (WP-1366): the print starts after
+/// the construction ends. No `llc` runs (`-S -emit-llvm`).
+#[test]
+fn emit_and_print_ir_are_siblings() {
+    let d = setup("emit-print");
+    run(
+        &kilnpp(),
+        &d,
+        &["-std=c++20", "-S", "-emit-llvm", "-ftime-trace", "-ftime-trace-granularity=0", "t.cpp"],
+    );
+    let j = Json::parse(&std::fs::read_to_string(d.join("t.json")).unwrap()).unwrap();
+    check_structure(&j);
+    let ev = events(&j);
+    let one = |name: &str| {
+        let v: Vec<_> = ev.iter().filter(|e| e.name == name && e.ph == "X").collect();
+        assert_eq!(v.len(), 1, "{name}");
+        v[0]
+    };
+    let (fe, emit, print) = (one("Frontend"), one("EmitIR"), one("PrintIR"));
+    for e in [emit, print] {
+        assert!(fe.ts <= e.ts && e.ts + e.dur <= fe.ts + fe.dur, "{} outside Frontend", e.name);
+    }
+    assert!(emit.ts + emit.dur <= print.ts, "PrintIR nested in EmitIR");
+    let f = ev.iter().find(|e| e.name == "CodeGen Function" && e.detail() == "main").unwrap();
+    assert!(
+        emit.ts <= f.ts && f.ts + f.dur <= emit.ts + emit.dur,
+        "CodeGen Function outside EmitIR"
+    );
+    assert!(ev.iter().any(|e| e.name == "Total PrintIR"));
+}
+
 /// Without `-ftime-trace` nothing is written and nothing is said.
 #[test]
 fn no_flag_no_trace() {

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use kiln_codegen::{AutoVarInit, CodegenOptions, RelocModel, Visibility};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Group};
 use kiln_lex::Interner;
+use kiln_llvm::Module;
 use kiln_parse::{ParseOptions, parse_preprocessed};
 use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
@@ -234,10 +235,13 @@ pub struct CodegenJob<'j>(pub Job<'j>);
 
 impl CodegenJob<'_> {
     /// Runs the job: diagnostics (and the `N errors generated.` summary)
-    /// to standard error. Returns the module's text, or `None` after an
-    /// error (the error count is the second element), and the `-MD` /
-    /// `-MMD` dependency list, complete whatever the errors (the third).
-    pub fn run(self) -> (Option<String>, u32, Option<SharedDeps>) {
+    /// to standard error. Returns the module, or `None` after an error
+    /// (the error count is the second element), and the `-MD` / `-MMD`
+    /// dependency list, complete whatever the errors (the third). The
+    /// caller prints the module (`print_ir`): by then the AST, the
+    /// Oven, the preprocessor and the source manager are gone, so the
+    /// print's peak holds the module and its text only (WP-633, WP-1366).
+    pub fn run(self) -> (Option<Module>, u32, Option<SharedDeps>) {
         let job = &self.0;
         let sm = SourceManager::new();
         let interner = Arc::new(Interner::new());
@@ -254,11 +258,11 @@ impl CodegenJob<'_> {
             engine.flush();
             return (None, engine.error_count(), None);
         }
-        let mut ir = None;
+        let mut module = None;
         let mut deps = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                ir = self.lower(&sm, &engine, &interner, inputs, &mut deps);
+                module = self.lower(&sm, &engine, &interner, inputs, &mut deps);
             }
         });
         engine.flush();
@@ -269,7 +273,9 @@ impl CodegenJob<'_> {
             let _ = writeln!(err, "{s}");
         }
         let errors = engine.error_count();
-        (if errors == 0 { ir } else { None }, errors, deps)
+        // After an error (a `-Werror` codegen warning, say) the module is
+        // dropped unprinted: nothing is written for a failed compile.
+        (if errors == 0 { module } else { None }, errors, deps)
     }
 
     #[allow(
@@ -283,7 +289,7 @@ impl CodegenJob<'_> {
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
         deps_out: &mut Option<SharedDeps>,
-    ) -> Option<String> {
+    ) -> Option<Module> {
         let job = &self.0;
         let a = job.args;
         let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
@@ -463,8 +469,12 @@ impl CodegenJob<'_> {
                 kiln_source::activity::Phase::Codegen,
                 kiln_source::Loc::INVALID,
             );
+            // spec/driver.md "Time trace": `EmitIR` is the module's
+            // construction, `PrintIR` (the caller's) its text.
+            let emit = kiln_source::trace::Scope::new("EmitIR");
             let (r, warnings) =
                 kiln_codegen::emit_with_debug(&mut tu.ast, &mut tu.oven, &target, &opts, Some(sm));
+            drop(emit);
             drop(phase);
             for w in warnings {
                 w.emit(engine);
@@ -492,11 +502,24 @@ impl CodegenJob<'_> {
             crate::write_memory_report(&tu.memory(), &mut job.stderr.clone());
         }
         // The AST, the Oven and the module are each about as large as the
-        // IR text for a big unit: print only once the AST is gone, so the
-        // peak holds two of the three, not all of them (WP-633).
+        // IR text for a big unit: the module leaves `lower` only once the
+        // AST is gone, and the caller prints it after `run` has dropped the
+        // preprocessor and the source manager too, so the peak holds two
+        // of the three, not all of them (WP-633, WP-1366).
         drop(tu);
-        module.map(|m| m.to_text())
+        module
     }
+}
+
+/// Prints a module the codegen job returned, consuming it (its text and
+/// the module are never kept side by side past the print), under the
+/// `PrintIR` time-trace event (spec/driver.md "Time trace", WP-1366).
+pub(crate) fn print_ir(module: Module) -> String {
+    let print = kiln_source::trace::Scope::new("PrintIR");
+    let text = module.to_text();
+    drop(print);
+    drop(module);
+    text
 }
 
 /// The codegen coverage options of the compile of `input` (WP-941).
@@ -1652,8 +1675,8 @@ fn frontend(
     let (ir, deps) = if let Some(r) = checked {
         r
     } else {
-        let (ir, _, deps) = CodegenJob(job).run();
-        (ir, deps)
+        let (module, _, deps) = CodegenJob(job).run();
+        (module.map(print_ir), deps)
     };
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
