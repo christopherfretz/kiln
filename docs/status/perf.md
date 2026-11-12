@@ -176,7 +176,19 @@ reserved buffer size.
 - Real: `frontend/constant-table-emit` 498 -> 1231 ms (+147%, spread
   0.2%, counters unchanged). `-ftime-trace` puts 1.15 s of 1.29 s in
   `ParseDeclarationOrFunctionDefinition`, not the Oven (66 ms) or codegen.
-  Not bisected yet (follow-up: between 047c716a1 and fcd83a424).
+  Bisected (WP-1335, first-parent, release builds, best of 5): #508
+  (WP-1144, 2286d44e0, 1366 ms; its parent 4b62cab9b 643 ms). WP-1144
+  made a subscript or `.` member access of a constant variable a
+  potential result of its lvalue-to-rvalue conversion ([basic.def.odr]/3),
+  so each `names[...]` of the table became a constant non-odr-use
+  candidate, and `act_on_full_expr_at` tested every pending reference
+  against the candidates with a linear `Vec::contains`: O(N^2) in the
+  initializer's id-expressions (it already was for bare names, `{v, v,
+  ...}`). The candidates are sorted once now (`ConstantCandidates`, a
+  binary search). `-fsyntax-only`, 2000/4000/8000/16000 elements:
+  185/443/1130/2788 ms before (1.0.2), 187/330/583/1079 ms after;
+  `tests/stress/init-list-constant-refs-65536.cpp` guards the shape.
+  Baseline re-recorded for this entry only: 650 ms median (load 15).
 - Faster: `oven` inplace-alloc -46.7%, inplace-union -39.6%, time-trace
   -12.8%; `frontend` accessor-wide-emit -18%, format-like-g -28%,
   nested-template-ids -50%, templates -12.7%, templates-wide-g -19.8%;

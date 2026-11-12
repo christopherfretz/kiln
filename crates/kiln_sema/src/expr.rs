@@ -759,6 +759,7 @@ impl Sema<'_, '_> {
             }
             self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
         }
+        let constant = ConstantCandidates::new(constant);
         if !self.potential_caps.is_empty() && self.in_template() {
             self.resolve_potential_captures(e, &constant);
         }
@@ -767,7 +768,7 @@ impl Sema<'_, '_> {
             let d = self.ast.exprs.decl(r);
             let is_ref =
                 self.ast.types.is_reference(self.ast.decls.get(d).ty().unwrap_or(QualType::ERROR));
-            if (is_ref || constant.contains(&r)) && self.usable_in_constant_expressions(d) {
+            if (is_ref || constant.contains(r)) && self.usable_in_constant_expressions(d) {
                 let _ = self.ast.exprs.set_non_odr_use(r, NonOdrUse::Constant);
                 continue;
             }
@@ -7486,4 +7487,50 @@ struct CondOps {
     t: ExprId,
     f: ExprId,
     loc: Loc,
+}
+
+/// The `DeclRefExpr`s of a full-expression that are potential results of
+/// an lvalue-to-rvalue operand (the constant non-odr-use candidates of
+/// [basic.def.odr]/5.2), sorted for a logarithmic membership test.
+/// [`Sema::act_on_full_expr_at`] tests every pending reference of the
+/// full-expression against them: with a linear search a braced
+/// initializer of N elements naming constant variables (`{a[0], a[1],
+/// ...}`) was O(N^2), 1.2 s for an 8,000-element constant table
+/// (WP-1335). The only query is [`Self::contains`].
+pub(crate) struct ConstantCandidates(Vec<ExprId>);
+
+impl ConstantCandidates {
+    /// The candidates `v`, in any order, with repeats.
+    pub(crate) fn new(mut v: Vec<ExprId>) -> Self {
+        v.sort_unstable();
+        v.dedup();
+        Self(v)
+    }
+
+    /// Whether `r` is a candidate (a binary search).
+    pub(crate) fn contains(&self, r: ExprId) -> bool {
+        self.0.binary_search(&r).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod constant_candidates_tests {
+    use super::ConstantCandidates;
+    use kiln_ast::ExprId;
+    use kiln_ast::ids::RawId;
+
+    fn id(i: u32) -> ExprId {
+        ExprId::from_raw(i).expect("a non-zero id")
+    }
+
+    /// WP-1335: the candidates are kept sorted and unique, whatever order
+    /// the walk found them in, so membership is a binary search.
+    #[test]
+    fn sorted_unique_membership() {
+        let c = ConstantCandidates::new(vec![id(9), id(3), id(9), id(5), id(1)]);
+        assert_eq!(c.0, vec![id(1), id(3), id(5), id(9)]);
+        assert!(c.contains(id(5)) && c.contains(id(1)) && c.contains(id(9)));
+        assert!(!c.contains(id(2)) && !c.contains(id(10)));
+        assert!(!ConstantCandidates::new(Vec::new()).contains(id(1)));
+    }
 }

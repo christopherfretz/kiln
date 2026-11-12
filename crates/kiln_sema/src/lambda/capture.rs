@@ -615,11 +615,15 @@ impl Sema<'_, '_> {
     /// == r; }` gets its member (WP-581). When no lambda can capture it,
     /// the use is diagnosed now if it must be an odr-use in every
     /// instantiation.
-    pub(crate) fn resolve_potential_captures(&mut self, full: ExprId, constant: &[ExprId]) {
+    pub(crate) fn resolve_potential_captures(
+        &mut self,
+        full: ExprId,
+        constant: &crate::expr::ConstantCandidates,
+    ) {
         let dependent = self.ast.exprs.get(full).deps().intersects(ExprDeps::TYPE_VALUE_INST);
         for r in std::mem::take(&mut self.potential_caps) {
             let d = self.ast.exprs.decl(r);
-            if !dependent && constant.contains(&r) && self.usable_in_constant_expressions(d) {
+            if !dependent && constant.contains(r) && self.usable_in_constant_expressions(d) {
                 continue;
             }
             let loc = self.eloc(r);

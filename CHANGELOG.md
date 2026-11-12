@@ -161,6 +161,13 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 
 ### Fixed
 
+- Compile time: a large braced initializer whose elements name
+  constant variables (a generated table such as `{names[3], 4}, ...`
+  over a `constexpr` array, or `{v, v, ...}`) was quadratic in its
+  element count. Since 1.0.0 that included elements that subscript a
+  constant array or access a member of one, so an 8,000-element constant
+  table took 1.2 s instead of 0.5 s, and 16,000 elements 2.8 s; it is
+  linear again (1.0 s at 16,000) (WP-1335).
 - C++: unary `+` of a function (`+fn`) is a function pointer instead of
   an error, and `-`/`~` of an array or function report the decayed
   pointer type, as clang (WP-1318).
