@@ -9,8 +9,8 @@
 
 **A C++26 compiler frontend in safe Rust, built around a constexpr oven.**
 
-kiln compiles C++26 source to LLVM IR and leaves optimization, code
-generation and linking to LLVM. It exists for compile-time evaluation:
+kiln compiles C++26 source, and C, to LLVM IR and leaves optimization,
+code generation and linking to LLVM. It exists for compile-time evaluation:
 constexpr, consteval and C++26 reflection code that makes compilers slow
 and memory-hungry today. kiln's constant evaluator, the Oven, was designed
 for that work from the start, and the test suite tracks its wall-clock
@@ -79,8 +79,12 @@ Then compile:
 
 ```sh
 kiln++ -std=c++26 hello.cpp -o hello && ./hello
-CXX=kiln++ cmake -S . -B build && cmake --build build
+kiln -std=c17 hello.c -o hello && ./hello
+CC=kiln CXX=kiln++ cmake -S . -B build && cmake --build build
 ```
+
+`kiln++` is the C++ driver and `kiln` the C driver, as `clang++` and
+`clang` are.
 
 CMake identifies kiln as Clang and needs no changes. Autotools works
 unchanged too. Meson needs a wrapper. The
@@ -185,7 +189,8 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.4% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet; the declaration image (`-fkiln-bmi-image`) is experimental and off by default | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
-| C | preprocessing only | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode) |
+| Precompiled headers | supported (C++ and C), checked and replayed, so not faster than `-include`; the serialized image (`-fkiln-pch-image`) is experimental and off by default | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#precompiled-headers) |
+| C89 to C23 and GNU C (`kiln`) | supported since 1.1.0; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode), [status/c-mode.md](docs/status/c-mode.md) |
 | Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
 
 ## Documentation

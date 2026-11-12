@@ -10,16 +10,118 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 Planned as 1.1.0.
 
+### C mode
+
+kiln compiles C. Its C behaviour is tested against clang (`-x c`),
+diagnostic wording included. What is not done is in
+[docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode), and the
+measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
+
+- Drivers and dialects: `kiln` compiles `.c` (and `.h`, `.i`) as C, and
+  `-x c` selects C under either driver. `kiln++` compiles a `.c` file as
+  C++, with clang++'s deprecation warning. `-std=c89` (`c90`,
+  `iso9899:1990`), `c99`, `c11`, `c17` (`c18`), `c23` (`c2x`), each
+  with its `gnu` dialect; the default is `gnu17`, as in clang 19. C has
+  its own lexing (no C++-only punctuators, user-defined literals or
+  alternative tokens; no `//` comments in strict C89), C keywords
+  (`_Imaginary` and `_Decimal32/64/128` are rejected as unsupported
+  types, as in clang), each standard's identifier characters for UCNs,
+  clang's C predefined macros and feature-test answers
+  (`__has_c_attribute`; `__has_cpp_attribute` is C++ only), and C
+  linkage (unmangled names, `fn.var` static locals),
+  so C and C++ objects link together (WP-1275, WP-1290).
+- C semantics, each where C differs from C++ (WP-1276, WP-1285 to
+  WP-1287, WP-1301, WP-1311):
+  - conversions: `void *` to and from any object pointer, integer and
+    pointer conversions and incompatible pointer types diagnosed as
+    clang does (`-Wint-conversion` is an error by default;
+    `-Wincompatible-pointer-types` is an error by default, as in clang
+    22, and a warning at `-fclang-compat=19`), pointer casts to narrower
+    integers, `void *` and function-pointer arithmetic (GNU), C pointer
+    comparisons and `?:` composite types, no C++ narrowing in brace
+    initializers or case labels;
+  - types: character literals are `int`, string literals are not
+    `const`, `!`, comparisons and `&&`/`||` yield `int`, an enumeration
+    with no negative enumerator promotes to `unsigned int`, `_Generic`
+    matches by C compatibility;
+  - declarations: the separate tag name space, tentative definitions
+    (`-fcommon` and the `common` attribute), C99 and GNU89 `inline`
+    (`-fgnu89-inline`), functions without a prototype, K&R
+    definitions, implicit `int` and implicit function declarations
+    (warnings in C89, errors from C99, as in clang), implicit
+    declarations of the C library functions clang predeclares, no
+    overloading (`__attribute__((overloadable))` keeps it), and
+    prototype-scope tags and enumerators;
+  - arrays and objects: variable length arrays, `[static N]`,
+    `[restrict]` and `[*]` in array parameters, compound literals as
+    lvalues (and file-scope compound literals as static objects),
+    initialization of a `char` array by a string that exactly fills
+    it, flexible array members initialized in static objects (GNU);
+  - static initializers fold what clang folds (address constants
+    through casts and offsets, pointer and label-address differences,
+    IEEE floating results), and a C static is never initialized at run
+    time: a non-constant initializer is clang's error;
+  - statements: `goto` past an initialized declaration (but not into
+    the scope of a VLA), and falling off the end of a non-void function
+    without a trap (C only makes using the value undefined);
+  - C99, C11 and C23 constructs: `_Bool`, `_Complex`, designated
+    initializers, `_Static_assert`, `_Noreturn`, `_Alignas`, `_Alignof`,
+    `_Thread_local`, `_Atomic`, anonymous structs and unions, C23
+    `bool`/`true`/`false`, `nullptr`, `constexpr` objects, `auto`,
+    `typeof`/`typeof_unqual`, `enum E : T`, `static_assert` without a
+    message, `= {}`, `[[attributes]]` and `_BitInt(N)`.
+- GNU C extensions, as clang implements them: statement expressions,
+  `typeof`, `?:` with an omitted middle operand, case ranges and
+  designator ranges, labels as values and computed `goto`, local labels
+  (`__label__`), old-style `field:` designators, zero-length arrays,
+  `transparent_union`, `cleanup`, `packed`, `__int128`, vector types,
+  inline assembly and `__builtin_types_compatible_p` (WP-1276,
+  WP-1287, WP-1288, WP-1290).
+- What builds: five C projects with their own build systems pass their
+  tests with kiln as the C compiler: zlib 1.3.2, sqlite 3.54.1, Lua
+  5.4.8, c-ares 1.34.9 and zstd 1.5.7 (2026-11-11). GCC 16.1's
+  `gcc.c-torture` suites at `-std=gnu23`, `-O0` and `-O2`: 6912 of 7572
+  cases pass, against 6887 for clang 19 (2026-11-11, kiln at
+  `-fclang-compat=19`). Every case kiln fails, clang 19 fails too
+  (WP-1277, WP-1282, WP-1295, WP-1301, WP-1304).
+- Diagnostics for the C-only rules are clang 22's, or clang 19's with
+  `-fclang-compat=19`, including `-Wstrict-prototypes`,
+  `-Wdeprecated-non-prototype`, `-Wincompatible-library-redeclaration`,
+  `-Warray-parameter`, `-Wsizeof-array-argument` and
+  `-Wsizeof-array-decay` (the last two in C++ too), C types printed as C
+  (`struct S`, `_Bool`) (WP-1312).
+- Linking: `kiln` links as `clang` does, so a C program does not pull
+  in libstdc++ or libm; link C++ objects with `kiln++` (WP-1282).
+- Precompiled C headers: `-x c-header` (or a `.h` input under `kiln`)
+  writes a PCH that a C compile takes with `-include-pch` or by the
+  `-include` probe (WP-1275, WP-1303).
+
 ### Added
 
-- C mode: `kiln` (or `-x c`) compiles C at `-std=c89`, `c99`, `c11`,
-  `c17`, `c23` and the `gnu` dialects (default `gnu17`). C lexing (no
-  C++-only punctuators, user-defined literals or alternative tokens),
-  C keywords, clang's C predefined macros and feature-test answers
-  (`__has_c_attribute`; `__has_cpp_attribute` is C++ only), and C
-  linkage (unmangled names, `fn.var` static locals), so C and C++ objects
-  link together. C-only semantics are still in progress
-  ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode)) (WP-1275).
+- Precompiled headers: kiln's PCH works as in 1.0 (`-x c++-header`,
+  `-emit-pch`, `-include-pch`, and now `-x c-header`): by default the
+  consumer validates the PCH and then replays the header's tokens, so a
+  PCH build costs what the same build with `-include` costs. 1.1.0 adds
+  an experimental serialized form behind
+  `-fkiln-pch-image[=write|check|load]` (`-fno-kiln-pch-image`), off by
+  default: the producer also writes the header's preprocessor state
+  and, when it can carry every declaration of the header, a
+  declaration image; a `load` consumer then builds the declarations
+  from the image instead of parsing the header, and `check` builds both
+  ways and reports the first difference. A header holding anything the
+  image cannot carry, and every C header, gets no image, and its
+  consumers replay it; the two paths are never mixed. The image
+  does not yet carry most standard library headers, so real prefixes
+  still replay ([docs/status/pch.md](docs/status/pch.md)). It is
+  planned as the default for 1.2.0 (spec/driver.md "The declaration
+  image", WP-1280, WP-1036, WP-1293).
+- GNU extensions in C++ too: local labels (`__label__`), old-style
+  `field:` designators (`-Wgnu-designator`),
+  `__builtin_extract_return_addr`, `__builtin_frob_return_addr` and
+  `__builtin___clear_cache` (WP-1288).
+- Driver: `-rpath <dir>` is passed to the link; `-Wa,<args>` and
+  `-Xassembler <arg>` take the integrated assembler's options clang
+  takes (`--noexecstack` and others) (WP-1288).
 - Profile-guided build of kiln itself: `cargo xtask build --pgo` and
   `cargo xtask dist --pgo` build instrumented, train on a fixed corpus
   from `bench/`, merge with `llvm-profdata` (rustc's LLVM major, found in
@@ -30,6 +132,81 @@ Planned as 1.1.0.
   with `-Cprofile-use=<file>`. `cargo xtask pgo-train` is the training
   alone. Nothing changes without the switch (README.md "Profile-guided
   build", WP-1308).
+
+### Changed
+
+- The experimental declaration image of module files and PCHs
+  (`-fkiln-bmi-image`, `-fkiln-pch-image`; both off by default) carries
+  more of C++: locations in other files and in macro expansions,
+  declaration attributes, linkage specifications, inline and unnamed
+  namespaces, class, alias and variable templates with their
+  specializations and member templates, friend templates, explicit
+  instantiations, constraints, deduction guides, expressions in types
+  and template arguments, block-scope `extern` declarations and
+  `static_assert` in templates. Whatever it does not carry falls back
+  to the 1.0 replay. `-fkiln-bmi-image-census` prints, per reason, what
+  a unit's image would refuse (WP-1070, WP-1278, WP-1279, WP-1283,
+  WP-1284, WP-1292, WP-1293, WP-1300, WP-1307, WP-1310).
+
+### Fixed
+
+- Crash: a GNU binary conditional whose condition is a logical,
+  relational or `!` expression (`(a || b) ?: c`) no longer stops code
+  generation with the internal error "phi operand %N is defined", in C
+  and C++ (WP-1288).
+- Crash: an `asm` statement with a `_Complex` operand no longer crashes
+  the backend; the operand is passed indirectly, as clang does
+  (WP-1288).
+- `__builtin_constant_p` of a value that is not a constant expression
+  is left to the optimizer (`llvm.is.constant`), as in clang, so it is
+  1 once inlining makes the argument constant. It was always 0
+  (WP-1288).
+- AArch64: the NEON table builtins `vqtbl2` to `vqtbl4`, `vqtbx1` to
+  `vqtbx4`, `vtbl3`, `vtbl4` and `vtbx1` to `vtbx4` were "not supported
+  in code generation". They are lowered as clang 19 lowers them
+  (WP-1288).
+- Parsing: a later declarator of a group may begin with GNU attributes
+  (`void f(void), __attribute__((noreturn)) g(void);`), in a member
+  declaration too (WP-1301). A compound literal after `sizeof` or
+  `alignof` (`sizeof (struct P){ 0 }`) is the operand expression, not a
+  type-id followed by a stray brace (WP-1287).
+- Accepts-invalid:
+  - a `static` namespace-scope variable after a declaration with
+    external linkage (a block-scope `extern` included), and a
+    non-`static` one after a `static` first declaration, are errors
+    ([dcl.stc]/4); a block-scope `extern` declaration now redeclares a
+    later declaration in any block of its namespace ([basic.link]/6)
+    (WP-1293);
+  - a function whose first declaration lacks `[[noreturn]]` while a
+    later one has it is an error ([dcl.attr.noreturn]/1) (WP-1311);
+  - a `reinterpret_cast`, or a C-style cast performing one, in the
+    initializer of a `constexpr` or `constinit` variable is an error
+    ([expr.const]/5.15). The same initializer of a variable that is
+    neither is still static data, with no guard or dynamic
+    initialization (WP-1295);
+  - pointer arithmetic on a pointer to a variable length array (the GNU
+    extension in C++) is not a constant expression (WP-1287).
+- Module and PCH outputs: `--precompile -o /dev/null` or
+  `-emit-pch -o /dev/null` (any path that exists and is not a regular
+  file) is written in place, as clang does. Run as root, kiln replaced
+  `/dev/null` with a regular file (WP-1281).
+- Diagnostics: an error in an `#if` expression has clang's caret
+  ranges (WP-1290).
+
+### Testing and tooling (not user-visible)
+
+- The OSS harness builds C with kiln (`kiln-cc`, a per-project `c` key,
+  per-language TU counts), with the five C rows above (WP-1277).
+  `cargo xtask gcc-torture` runs GCC 16.1's `gcc.c-torture` suites
+  through kiln, GCC and clang and writes the generated tables of
+  docs/status/c-mode.md (WP-1277, WP-1282). The `tests/c/` corpus has
+  clang 19 `-x c` as its oracle (WP-1275).
+- PCH: `cargo xtask test` and `cargo xtask libcxx` take
+  `--pch-diff load|replay|check`, a differential of the image and the
+  replay path, run over a corpus slice in `cargo xtask ci` (WP-1036).
+  `cargo xtask bench bench/pch` measures kiln's PCH against clang 19's
+  and writes docs/status/pch.md, judging kiln's accounted memory rather
+  than peak RSS (WP-1294, WP-1303).
 
 ## [1.0.2] - 2026-11-11
 
