@@ -95,6 +95,11 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 - Precompiled C headers: `-x c-header` (or a `.h` input under `kiln`)
   writes a PCH that a C compile takes with `-include-pch` or by the
   `-include` probe (WP-1275, WP-1303).
+- C mode matches clang on excess initializers (a -Wexcess-initializers
+  warning, an error only under `-pedantic-errors`; the extra clauses are
+  dropped and never evaluated), rejects `extern "C"` ("expected
+  identifier or '('"), treats every `?:` as a non-lvalue, and rejects
+  unary `+`, `-` and `~` of an array or function (WP-1318).
 
 ### Added
 
@@ -132,17 +137,6 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   with `-Cprofile-use=<file>`. `cargo xtask pgo-train` is the training
   alone. Nothing changes without the switch (README.md "Profile-guided
   build", WP-1308).
-- C mode matches clang on excess initializers (a -Wexcess-initializers
-  warning, an error only under `-pedantic-errors`; the extra clauses are
-  dropped and never evaluated), rejects `extern "C"` ("expected
-  identifier or '('"), treats every `?:` as a non-lvalue, and rejects
-  unary `+`, `-` and `~` of an array or function (WP-1318).
-
-### Fixed
-
-- C++: unary `+` of a function (`+fn`) is a function pointer instead of
-  an error, and `-`/`~` of an array or function report the decayed
-  pointer type, as clang (WP-1318).
 
 ### Changed
 
@@ -161,6 +155,9 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 
 ### Fixed
 
+- C++: unary `+` of a function (`+fn`) is a function pointer instead of
+  an error, and `-`/`~` of an array or function report the decayed
+  pointer type, as clang (WP-1318).
 - Crash: a GNU binary conditional whose condition is a logical,
   relational or `!` expression (`(a || b) ?: c`) no longer stops code
   generation with the internal error "phi operand %N is defined", in C
