@@ -62,6 +62,7 @@ mod requires;
 mod scope;
 mod spec;
 mod templ;
+mod tttp;
 mod written;
 
 use body::{Bodies, BodyState, Root};
@@ -70,7 +71,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 24;
+pub(crate) const IMAGE_VERSION: u32 = 25;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -289,6 +290,14 @@ enum ArgRec {
     /// An expression as written (WP-1300, [`exprs`]): its section and
     /// whether it has a profile (a dependent argument's).
     Expr(u32, bool),
+    /// A template (WP-1342, [`tttp`]): the record of a carried template
+    /// or template template parameter; 0 plain, 1 a pack expansion of
+    /// unknown length, `k + 2` one of `k` elements.
+    Template(u32, u32),
+    /// A dependent template name `nns::template name` (WP-1342): the
+    /// type `nns::template name<>` that carries it, and the pack word as
+    /// for [`ArgRec::Template`].
+    DepTemplate(u32, u32),
 }
 
 impl ArgRec {
@@ -297,7 +306,8 @@ impl ArgRec {
     fn q(self) -> QRef {
         match self {
             ArgRec::Type(q) | ArgRec::Value(q, _) => q,
-            ArgRec::Expr(..) => exprs::EXPR_ARG_TY,
+            ArgRec::Expr(..) | ArgRec::Template(..) => exprs::EXPR_ARG_TY,
+            ArgRec::DepTemplate(ty, _) => QRef { ty, quals: 0 },
         }
     }
 }
@@ -522,6 +532,8 @@ enum Payload {
         profile: bool,
         sect: bool,
     },
+    /// A template template parameter (WP-1342, [`tttp`]).
+    Tttp(Box<tttp::TttpRec>),
     /// A template (S4): `kind` 0 a function template; its pattern record
     /// (earlier, same name and context) and its template-head (the
     /// `template`, `<` and `>` locations, depth, parameter records);
@@ -685,6 +697,8 @@ const K_NS_ALIAS: u8 = 23;
 const K_USING_ENUM: u8 = 24;
 const K_FRIEND: u8 = 25;
 const K_ASSERT: u8 = 26;
+/// A template template parameter (WP-1342, [`tttp`]).
+const K_TTTP: u8 = 27;
 
 impl Payload {
     fn code(&self) -> u8 {
@@ -715,6 +729,7 @@ impl Payload {
             Payload::UsingEnum { .. } => K_USING_ENUM,
             Payload::Friend { .. } => K_FRIEND,
             Payload::Assert { .. } => K_ASSERT,
+            Payload::Tttp(_) => K_TTTP,
         }
     }
 }
@@ -929,6 +944,16 @@ impl Wr {
                     self.u32(e);
                     self.u8(u8::from(p));
                 }
+                ArgRec::Template(d, k) => {
+                    self.u8(3);
+                    self.u32(d);
+                    self.u32(k);
+                }
+                ArgRec::DepTemplate(t, k) => {
+                    self.u8(4);
+                    self.u32(t);
+                    self.u32(k);
+                }
             }
         }
     }
@@ -1098,6 +1123,7 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(default.map_or(0, |q| q.ty));
             w.u8(default.map_or(0, |q| q.quals));
         }
+        Payload::Tttp(t) => tttp::encode_tttp(w, t),
         Payload::Nttp { ty, depth, index, pack, default, profile, sect } => {
             w.q(*ty);
             w.u16(*depth);
@@ -1419,6 +1445,8 @@ impl<'a> Rd<'a> {
                         _ => return bad("bad template argument"),
                     }
                 }
+                3 => ArgRec::Template(self.u32()?, self.u32()?),
+                4 => ArgRec::DepTemplate(self.u32()?, self.u32()?),
                 _ => return bad("bad template argument"),
             });
         }
@@ -1596,6 +1624,7 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
             };
             Payload::Ttp { depth, index, typename_kw, pack, begin, default }
         }
+        K_TTTP => tttp::decode_tttp(r)?,
         K_NTTP => {
             let (ty, depth, index, bits) = (r.q()?, r.u16()?, r.u16()?, r.u8()?);
             if bits > 7 {
@@ -1700,6 +1729,7 @@ fn decl_refs(d: &DeclRec) -> Vec<QRef> {
         | Payload::Assert { .. }
         | Payload::Implicit { .. }
         | Payload::Template { .. }
+        | Payload::Tttp(_)
         | Payload::Member { .. }
         | Payload::Shadow { .. }
         | Payload::UsingDir { .. }
@@ -1750,6 +1780,7 @@ fn same_kind(a: &Payload, b: &Payload) -> bool {
             | Payload::Export
             | Payload::Ttp { .. }
             | Payload::Nttp { .. }
+            | Payload::Tttp(_)
             | Payload::Template { .. }
             | Payload::Spec { .. }
             | Payload::Member { .. }
@@ -2141,6 +2172,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             Payload::Template { kind: 1, .. }
                         )
                         | (TyRec::Tst { under: Some(_), .. }, Payload::Template { kind: 2, .. })
+                        // `TT<args>` (WP-1342).
+                        | (
+                            TyRec::Tst { under: None, .. } | TyRec::Dep(deptypes::DepTy::Deduced { .. }),
+                            Payload::Tttp(_)
+                        )
                         | (TyRec::Subst { .. }, Payload::Template { .. })
                 ) || matches!((t, &r.payload),
                     (TyRec::Record(_), Payload::Spec { template, .. }) if class_tmpl(*template))
@@ -2152,6 +2188,10 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 return bad("bad declaration reference in a type");
             }
             acc = acc.max(d as usize + 1);
+        }
+        // Template-name arguments (WP-1342): earlier templates.
+        if let TyRec::Tst { args, .. } | TyRec::Dep(deptypes::DepTy::Tmpl { args, .. }) = t {
+            acc = acc.max(tttp::validate_tname_args(img, args, nd)?);
         }
         if let TyRec::ElabQ(_, steps, _) = t
             && !steps_ok(img, steps, nd)
@@ -2258,6 +2298,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                 && params.iter().zip(args).all(|(&p, a)| {
                                     match (&img.decls[p as usize].payload, a) {
                                         (Payload::Ttp { .. }, ArgRec::Type(q)) => qref_at(*q, i),
+                                        (Payload::Tttp(_), ArgRec::Template(d, 0)) => {
+                                            (*d as usize) < i && tttp::tname_rec(img, *d)
+                                        }
                                         (Payload::Nttp { .. }, ArgRec::Value(q, _)) => {
                                             q.ty <= BUILTINS && q.quals == 0
                                         }
@@ -2384,7 +2427,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             // A member template's pattern and parameters are its
             // template record's (WP-1292).
             let own_tmpl = pats.get(&(i as u32)).map(|&t| &img.decls[t as usize].payload);
-            if own_tmpl.is_some() || matches!(d.payload, Payload::Ttp { .. } | Payload::Nttp { .. })
+            if own_tmpl.is_some()
+                || matches!(
+                    d.payload,
+                    Payload::Ttp { .. } | Payload::Nttp { .. } | Payload::Tttp(_)
+                )
             {
                 dependent.push(i);
             } else {
@@ -2515,7 +2562,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 n => ident(n),
             },
             // Template parameters name `pnames`, like function parameters.
-            Payload::Ttp { .. } | Payload::Nttp { .. } => {
+            Payload::Ttp { .. } | Payload::Nttp { .. } | Payload::Tttp(_) => {
                 d.name == NONE || (d.name as usize) < img.pnames.len()
             }
             // An unnamed namespace has no name.
@@ -2690,7 +2737,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad implicit member");
                 }
             }
-            Payload::Ttp { .. } | Payload::Nttp { .. } => {
+            Payload::Ttp { .. } | Payload::Nttp { .. } | Payload::Tttp(_) => {
                 // A member template's are in its class (WP-1292).
                 if d.flags & DEP == 0
                     || !(scope(d.ctx) || in_class)
@@ -2700,6 +2747,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad template parameter");
                 }
                 templ::validate_nttp_section(img, i, &d.payload, &qref_at)?;
+                if let Payload::Tttp(t) = &d.payload {
+                    tttp::validate_tttp(img, i, t, &mut claimed)?;
+                }
             }
             Payload::Template { kind, pattern, depth, params, .. } => {
                 // S4: a function template, its pattern the function just
@@ -2760,11 +2810,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 for (k, &x) in params.iter().enumerate() {
                     let ok = kind_of(x).is_some_and(|r| {
                         r.ctx == pscope
-                            && match r.payload {
+                            && match &r.payload {
                                 Payload::Ttp { depth: pd, index, .. }
                                 | Payload::Nttp { depth: pd, index, .. } => {
-                                    pd == *depth && usize::from(index) == k
+                                    pd == depth && usize::from(*index) == k
                                 }
+                                Payload::Tttp(t) => t.depth == *depth && usize::from(t.index) == k,
                                 _ => false,
                             }
                     });
@@ -2927,7 +2978,7 @@ fn gated_names(img: &Image) -> Vec<u32> {
     for r in &img.decls {
         if (r.name as usize) >= on.len()
             || body::is_local(img, r)
-            || matches!(r.payload, Payload::Ttp { .. } | Payload::Nttp { .. })
+            || matches!(r.payload, Payload::Ttp { .. } | Payload::Nttp { .. } | Payload::Tttp(_))
         {
             continue;
         }
@@ -3346,7 +3397,12 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let n = ast.decls.get(d);
         self.head_flags(d)?;
-        let parm = matches!(n.kind(), DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm);
+        let parm = matches!(
+            n.kind(),
+            DeclKind::TemplateTypeParm
+                | DeclKind::NonTypeTemplateParm
+                | DeclKind::TemplateTemplateParm
+        );
         if n.has(DeclFlags::DEPENDENT_CTX)
             && !parm
             && !matches!(
@@ -3571,6 +3627,7 @@ impl Writer<'_, '_, '_> {
             }
             DeclKind::Friend => self.friend_record(d)?,
             DeclKind::TemplateTypeParm | DeclKind::NonTypeTemplateParm => self.template_parm(d)?,
+            DeclKind::TemplateTemplateParm => self.tttp(d)?,
             DeclKind::FunctionTemplate
             | DeclKind::ClassTemplate
             | DeclKind::TypeAliasTemplate
@@ -4591,6 +4648,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::Concept
         | K::TemplateTypeParm
         | K::NonTypeTemplateParm
+        | K::TemplateTemplateParm
         | K::NamespaceAlias
         | K::UsingDirective
         | K::Using
@@ -4603,8 +4661,7 @@ fn kind_gate(k: DeclKind) -> W<()> {
         | K::ClassTemplatePartialSpecialization
         | K::VarTemplateSpecialization
         | K::VarTemplatePartialSpecialization
-        | K::FriendTemplate
-        | K::TemplateTemplateParm => Err("a template"),
+        | K::FriendTemplate => Err("a template"),
         K::ConstructorUsingShadow => Err("an inheriting constructor"),
         K::UsingPack | K::UnresolvedUsingValue | K::UnresolvedUsingTypename => {
             Err("a dependent using-declaration")
@@ -4740,6 +4797,7 @@ impl Sema<'_, '_> {
                         offs.extend(df.bases.iter().map(|b| b.loc));
                     }
                     Payload::Ttp { begin, .. } => offs.push(*begin),
+                    Payload::Tttp(t) => tttp::tttp_locs(t, &mut offs),
                     Payload::Template { tloc, using, langle, rangle, .. } => {
                         offs.extend([*tloc, *using, *langle, *rangle]);
                     }
@@ -4865,7 +4923,10 @@ impl Sema<'_, '_> {
                 NONE => DeclName::EMPTY,
                 // Locals name `pnames` (they are not gated, "ODR merging").
                 n if body::is_local(img, r)
-                    || matches!(r.payload, Payload::Ttp { .. } | Payload::Nttp { .. }) =>
+                    || matches!(
+                        r.payload,
+                        Payload::Ttp { .. } | Payload::Nttp { .. } | Payload::Tttp(_)
+                    ) =>
                 {
                     pnames[n as usize]
                 }
@@ -5125,6 +5186,7 @@ impl Sema<'_, '_> {
                     }
                     t
                 }
+                Payload::Tttp(t) => self.image_tttp(h, t, &ids, &lo),
                 Payload::Nttp { ty, depth, index, pack, default, profile, sect } => {
                     let pty = self.image_ty(img, &mut tys, &ids, *ty);
                     let t = self.builder().non_type_template_parm(h, pty, *depth, *index, *pack);
@@ -5628,13 +5690,13 @@ impl Sema<'_, '_> {
                     .iter()
                     .map(|a| {
                         let ty = qt(self, a.q());
-                        self.image_arg(ty, a)
+                        self.image_targ(ids, ty, a)
                     })
                     .collect();
                 let under = under.map(|u| qt(self, u));
-                let tmpl = ids.get(*template as usize).map_or(self.ast.tu, |&t| self.ast.first(t));
+                let tmpl = ids.get(*template as usize).copied().unwrap_or(self.ast.tu);
                 let alias = self.ast.decls.get(tmpl).kind() == DeclKind::TypeAliasTemplate;
-                let name = self.ast.types.template_name_of(tmpl);
+                let name = self.image_tst_name(tmpl);
                 let list = self.ast.types.arg_list(&args);
                 self.ast.types.template_specialization(name, list, under, alias)
             }

@@ -2721,6 +2721,94 @@ position (`module.global.frag/gmf-floatn-limits.cpp` differs under
 `--pch-diff check`; reduced as the ignored
 `gmf_reinclusion_merges_with_image_declarations`).
 
+**Forms carried by WP-1342 (template declarations).** The writer is
+`bmi_image/tttp.rs` (template template parameters and template-name
+arguments) plus additions to `classtempl.rs`, `constraints.rs`,
+`deptypes.rs`, `spec.rs` and `body.rs`. The census reason "a template
+parameter the image does not carry" is now "a template parameter outside
+the image" (a parameter whose own record was refused for another
+reason, counted as a cascade); "a template" no longer names a template
+template parameter.
+
+- *Template template parameters* ([temp.param]/1, [temp.arg.template]).
+  A `TemplateTemplateParm` is a dependent record of kind 27 (`K_TTTP`),
+  after the records of its own parameters (one level deeper, in the
+  same context): u16 depth, u16 index, a flag byte (bit 0 pack, bit 1
+  `typename` written, bits 2.. the parameter kind: 0 type, 1 variable,
+  2 concept template, P2841), u32 first token (or `NONE`), u32
+  `template`, `<` and `>` locations, u16 depth of its own head, a
+  counted list of its parameter records, and its default as a record
+  and a pack word (`NONE`, 0 for none). The validator claims its
+  parameters (earlier, same context, depth = its head's depth, index =
+  position) and checks the default names an earlier template or
+  template template parameter record. The reader builds the head with
+  `template_param_list`, the parameter with `template_template_parm` and
+  `set_ttp_kind`, and the default with `template_name_for`. A template
+  record's, a partial specialization head's and an enclosing
+  parameter's lists may name it where they name `Ttp`/`Nttp` records.
+  Refused, each under its own reason: a parameter written without
+  `class` or `typename`, a constrained one, one whose own head has a
+  requires-clause, and a default that is not a template name.
+- *Template-name arguments.* An argument naming a template is
+  `ArgRec::Template(record, pack)` (argument tag 3: u32 record, u32
+  pack word: 0 plain, 1 `TT...`, k + 2 an expansion of k elements); the
+  record is a class, alias, variable, function or concept template or
+  a template template parameter. A dependent template name
+  `nns::template name` (`__xref<_Tp>::template __apply`) is
+  `ArgRec::DepTemplate(type, pack)` (tag 4): `type` is a dependent type
+  record `nns::template name<>` (`DepTy::Tmpl` without arguments) that
+  the writer adds for it, from whose `DependentTemplateSpecialization`
+  the reader takes the qualifier and name back as
+  `TemplateName::DependentIdentifier`. In the class specialization
+  section the same arguments are tags 4 and 5; in a body's template
+  argument list (`F::TA`) they are kinds 3 (record, pack) and 4 (type,
+  pack), not inside an expression section. `TT<args>` of a template
+  template parameter is a dependent `TyRec::Tst` naming the parameter's
+  record, its arguments as written, no underlying type.
+- *Constrained templates* ([temp.constr.decl]). A class or variable
+  template whose parameters are constrained or whose head has a
+  requires-clause, and every partial specialization with either, is
+  carried: a partial specialization's requires-clause is a constraint
+  record of kind `K_HEAD` (1) on the specialization's record, built
+  into the specialization's parameter list by the reader. (Explicit
+  specializations of a constrained template stay refused, "a
+  specialization of a constrained template", WP-1344.)
+- *Member partial specializations* ([temp.spec.partial.general]/7). A
+  partial specialization of a member template, of a class or of a
+  class template pattern at any depth, is listed in the class
+  specialization section like a namespace-scope one; its head's depth
+  is its template's (`Template` record `depth`), which the validator
+  requires of each head parameter and the reader passes to
+  `template_param_list`. Its parameters' context is the class.
+- *Qualified and parameter class template deduction*
+  ([dcl.type.class.deduct]). `DepTy::Deduced` (dependent type tag
+  `T_DEDUCED`) gains, after the deduced type, a byte: 0 unqualified, 1
+  qualified, 2 qualified with `template`, then (for 1 and 2) the
+  qualifier's steps; the reader rebuilds `TemplateName::Qualified` over
+  the template's name. Its template may also be a type template
+  template parameter's record (unqualified), named with
+  `template_name_for` (`decltype(_Cont(std::declval<_Rg>()))`).
+- *Names found through using-declarations* ([namespace.udecl]/1). An
+  unresolved name whose lookup found using-shadows (`using
+  std::pow;` then `pow(x, y)` in a function template) carries what it
+  found as the body cold annotation `COLD_FOUND` (bit 2048, after
+  `COLD_NAMING`, which it requires): an `F::DL` of `Dc::Lookup` as long
+  as the name's declarations, the shadow records (or the declaration
+  where lookup found it directly). The reader restores sema's
+  `ule_found` from it, so instantiation sees the same set.
+
+Tests: `pch-template-template-parm-run.cpp`,
+`pch-constrained-partial-spec-*.cpp`, `pch-member-partial-spec-*.cpp`,
+`pch-using-shadow-call-*.cpp` (cpp.include, with `Inputs/` headers);
+`template_template_parameters_are_carried`,
+`constrained_partial_specializations_are_carried`,
+`member_partial_specializations_are_carried`,
+`using_shadow_calls_and_qualified_deduction_are_carried` (kiln_driver
+`pch_decls`); `template_template_parameters_round_trip`,
+`rejects_corrupt_template_template_parameters`, and the qualified
+`Deduced` cases of `dependent_types_round_trip` /
+`rejects_corrupt_dependent_types` (kiln_sema).
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3446,7 +3534,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 24` since WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 25` since WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

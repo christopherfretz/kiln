@@ -610,6 +610,165 @@ int main() {
     }
 }
 
+/// WP-1342: `header` takes the image, and `tu` compiled against it
+/// agrees with replay (`-fkiln-pch-image=check`) for syntax and IR, and
+/// runs to exit code 0.
+fn image_agrees(name: &str, header: &str, tu: &str) {
+    let d = scratch(name);
+    std::fs::write(d.join("a.h"), header).unwrap();
+    let o =
+        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    let load = ["-std=c++20", "-fkiln-pch-image=load", "-include-pch", "a.pch"];
+    let o = ok(&d, &[&load[..], &["-v", "-fsyntax-only", "a.cpp"]].concat());
+    assert!(o.stderr.contains("': declaration image ("), "{}", o.stderr);
+    same(&d, "a.pch", &["-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
+    for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+        let check = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+        assert_eq!(o.stderr, "", "{mode:?}");
+    }
+    ok(&d, &[&load[..], &["a.cpp", "-o", "a.out"]].concat());
+    let run = Command::new(d.join("a.out")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
+}
+
+/// WP-1342: template template parameters (defaults, packs, in partial
+/// specializations of class and variable templates, named with
+/// arguments) and dependent template names (`M<T>::template apply`) as
+/// template arguments.
+#[test]
+fn template_template_parameters_are_carried() {
+    let header = "\
+template <class T> struct box { T v; };
+template <class T, class U = int> struct duo { T a; U b; };
+template <template <class...> class F, class... A> struct lazy : F<A...> {};
+template <template <class...> class T, class... A, class = T<A...>>
+constexpr bool valid(int) { return true; }
+template <template <class...> class, class...> constexpr bool valid(...) { return false; }
+template <class T> struct first;
+template <template <class, class...> class S, class T, class... A>
+struct first<S<T, A...>> { using type = T; };
+template <class T, template <class...> class P> constexpr bool is_spec = false;
+template <template <class...> class P, class... A> constexpr bool is_spec<P<A...>, P> = true;
+template <class T, template <class> class W = box> struct wrap { W<T> w; };
+template <template <class> class... Ws> struct many { static constexpr int n = sizeof...(Ws); };
+template <template <class> class W, class T> constexpr int wsize() { return sizeof(W<T>); }
+template <class T> struct meta { template <class U> struct apply { duo<T, U> d; }; };
+template <class T, template <class> class Q> struct with { Q<T> q; };
+template <class T> using meta_of = with<long, meta<T>::template apply>;
+template <class T> struct cell { T v; cell(T t) : v(t) {} };
+template <template <class...> class C, class A> auto make(A a) { return C(a); }
+";
+    let tu = "\
+int main() {
+  static_assert(is_spec<duo<int>, duo> && !is_spec<box<int>, duo>);
+  static_assert(valid<box, int>(0) && !valid<box, int, int>(0));
+  static_assert(sizeof(first<duo<char, long>>::type) == 1 && many<box, box>::n == 2);
+  wrap<int> w{{3}};
+  lazy<duo, char, short> l{};
+  meta_of<char> m{};
+  return w.w.v - 3 + int(sizeof(l) - 4) + wsize<box, char>() - 1
+       + int(sizeof(m.q.d) - sizeof(duo<char, long>)) + make<cell>(2).v - 2;
+}
+";
+    image_agrees("wp1342a", header, tu);
+}
+
+/// WP-1342: partial specializations with requires-clauses and
+/// type-constraints, ordered by subsumption.
+#[test]
+fn constrained_partial_specializations_are_carried() {
+    let header = "\
+template <class T> constexpr bool is_ref_v = false;
+template <class T> constexpr bool is_ref_v<T&> = true;
+template <class T> concept ref = is_ref_v<T>;
+template <class T> concept small = sizeof(T) <= 4;
+template <class T> concept has_type = requires { typename T::type; };
+template <class A, class B> struct pick { static constexpr int value = 0; };
+template <class A, class B> requires ref<A> && has_type<B>
+struct pick<A, B> { static constexpr int value = 1; };
+template <class A, class B> requires ref<A> && has_type<B> && small<B>
+struct pick<A, B> { static constexpr int value = 2; };
+template <small A, class B> struct pick<A*, B> { static constexpr int value = 3; };
+template <class T> constexpr int kind = 0;
+template <class T> requires small<T> constexpr int kind<T> = 1;
+";
+    let tu = "\
+struct HT { using type = int; };
+struct Big { using type = int; long a, b; };
+int main() {
+  static_assert(pick<int, HT>::value == 0 && pick<int&, HT>::value == 2);
+  static_assert(pick<int&, Big>::value == 1 && pick<int*, Big>::value == 3);
+  static_assert(kind<char> == 1 && kind<Big> == 0);
+  return pick<Big*, Big>::value;
+}
+";
+    image_agrees("wp1342b", header, tu);
+}
+
+/// WP-1342: partial specializations of member templates, of a class
+/// and of a class template.
+#[test]
+fn member_partial_specializations_are_carried() {
+    let header = "\
+struct base {
+protected:
+  template <class...> struct list {};
+  template <class T, class... U> struct list<T, U...> : list<U...> {
+    static constexpr int size = sizeof(T);
+  };
+  template <class T> static constexpr int vt = 3;
+  template <class T> static constexpr int vt<T&> = 4;
+public:
+  static int f();
+};
+template <class T> struct outer {
+  template <class U, class = void> struct ptr { static constexpr int v = 0; };
+  template <class U> struct ptr<U*, void> { static constexpr int v = sizeof(T); };
+  template <class U> requires (sizeof(U) == 8) struct ptr<U, void> { static constexpr int v = 8; };
+  template <class U, bool = true> union st { U u; };
+  template <class U> union st<U, false> { U u; T t; };
+};
+";
+    let tu = "\
+int base::f() { return list<char, int>::size + vt<int&>; }
+int main() {
+  static_assert(outer<char>::ptr<int>::v == 0 && outer<short>::ptr<int*>::v == 2);
+  static_assert(outer<short>::ptr<long>::v == 8);
+  static_assert(sizeof(outer<long>::st<char, false>) == sizeof(long));
+  return base::f() - 5;
+}
+";
+    image_agrees("wp1342c", header, tu);
+}
+
+/// WP-1342: calls in templates through using-declarations, and a
+/// qualified class template name deduced from an initializer.
+#[test]
+fn using_shadow_calls_and_qualified_deduction_are_carried() {
+    let header = "\
+namespace lib {
+inline int mag(int x) { return x < 0 ? -x : x; }
+inline long mag(long x) { return x < 0 ? -x : x; }
+template <class T> T twice(T t) { return t + t; }
+template <class T> struct cell { T v; cell(T t) : v(t) {} };
+}
+namespace det {
+using lib::mag;
+using lib::twice;
+template <class T> T alt(T t) { return mag(t) + twice(t); }
+template <class T> struct holder { static T go(T t) { return twice<T>(mag(t)); } };
+template <class T> T wrapped(T t) { return lib::cell(t).v; }
+}
+";
+    let tu = "\
+int main() { return det::alt(-2) + det::holder<long>::go(-3) + det::wrapped(1) == 5 ? 0 : 1; }
+";
+    image_agrees("wp1342d", header, tu);
+}
+
 /// Block-scope `static_assert` declarations, typedefs and alias
 /// declarations (`declval`'s and `__call_is_nt`'s shapes in `<type_traits>`)
 /// are carried (WP-1320).

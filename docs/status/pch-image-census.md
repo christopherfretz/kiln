@@ -899,3 +899,72 @@ appears in:
 | an out-of-line member of a class nested in a template | 17 / 1 | __random/binomial_distribution.h:114:46 |
 | a variable template specialization | 13 / 1 | numbers:139:25 |
 | a template expression (a name found through a using-declaration) | 0 / 1 |  |
+
+## WP-1342: PCH image wave 7a, template declarations (2026-11-12)
+
+Debug build of the WP-1342 branch (base main `bdf052a17`, IMAGE_VERSION
+24 there). Method as in the WP-1314 section: `bench/pch/lcx.h` (libc++
+19) and `bench/pch/gnu.h` (libstdc++ 14) whole, plus each of their
+headers alone (106 libc++, 109 libstdc++), every one with
+`-fkiln-pch-image -fkiln-bmi-image-census=all -v`. The bucket: template
+declarations. "a template parameter the image does not carry" was
+mostly a cascade (a parameter refused for another reason, its template
+then refused too); it is now "a template parameter outside the image",
+counted as a cascade, and the template template parameters it also
+counted are carried.
+
+My reasons, as declarations in the whole header / headers they appear
+in, before and after ("-": absent):
+
+| reason | lcx before | lcx after | gnu before | gnu after |
+|---|---:|---:|---:|---:|
+| a constrained template | 46 / 71 | - | 52 / 78 | - |
+| a template | 28 / 71 | - | 39 / 78 | - |
+| a template parameter the image does not carry | 32 / 70 | - | 21 / 78 | - |
+| a member template or a template in a template | 3 / 45 | - | 18 / 78 | - |
+| a template named through a qualifier or parameter | 3 / 57 | - | 1 / 51 | - |
+| a deduced template named through a qualifier or parameter | 0 / 7 | - | 15 / 54 | - |
+| a template expression (a name found through a using-declaration) | 0 / 1 | - | 37 / 27 | - |
+| cascade: a template parameter outside the image (new name) | - | 17 / 52 | - | 3 / 52 |
+
+Carried forms (spec/modules.md §11.11, "Forms carried by WP-1342"):
+template template parameters (record kind 27) and template-name
+arguments, dependent template names as arguments (`__xref<_Tp>::template
+__apply`, `common_reference.h:153`), constrained class and variable
+templates and constrained partial specializations, partial
+specializations of member templates (of classes and of class templates,
+`type_traits:1856`, `alloc_traits.h:69`, `stl_iterator.h:2283`),
+qualified and template-template-parameter class template deduction
+(`ranges_util.h:749`, `__ranges/to.h:161`, `ranges:9470`), and names
+found through using-declarations in template bodies (the tr1 special
+functions, `cmath:3762`, `format:1397`).
+
+```
+lcx.h, before: 26762 top-level declarations, 23832 carried, 2930 not
+lcx.h, after:  26762 top-level declarations, 23837 carried, 2925 not
+gnu.h, before: 26396 top-level declarations, 23756 carried, 2640 not
+gnu.h, after:  26396 top-level declarations, 24296 carried, 2100 not
+```
+
+Headers through the image: libc++ 28 of 106 before and after,
+libstdc++ 31 of 109 before and after. No header flipped: every
+replayed header still has reasons of the sibling buckets. The libc++
+count moves little because carrying a constrained template exposes
+each of its specializations ("a specialization of a constrained
+template", 12 / 32 before, 66 / 36 after; WP-1344) where the template's
+own refusal had hidden them. First refusal of `lcx.h`: "a constrained
+template" (`common_reference.h:63`) before, "an expression the image
+does not carry yet" (`__type_traits/extent.h:25`) after. `gnu.h`: "a
+dependent using-declaration" (`ext/numeric_traits.h:54`) before and
+after. Per libstdc++ header, the first refusal "a member template or a
+template in a template" (58 headers, `type_traits:1856`) became "a
+template argument the image does not carry" (58, `type_traits:1878`: a
+specialization `_List<unsigned char, ...>` with a pack argument, WP-1344).
+
+What remains is other buckets' (and the cascade above, whose roots are
+defaults and types refused for their own reasons, e.g.
+`__algorithm/unwrap_iter.h:77`): "a specialization of a constrained
+template" (66 / 36 lcx, 10 / 38 gnu; `system_error:167`,
+`ranges:8828`), the pack-argument specialization at `type_traits:1878`,
+"a partial specialization argument the image does not carry"
+(`aligned_union.h:32`).

@@ -136,8 +136,13 @@ const COLD_SRCLOC: u16 = 512;
 /// no using-shadow among them (sema's `ule_found`, WP-1314): an
 /// [`F::OD`] of [`Dc::Ctx`] (a class), only on `UnresolvedLookupExpr`.
 const COLD_NAMING: u16 = 1024;
+/// What an unresolved name found when that is not its declarations
+/// (WP-1342: a using-declaration's shadow in place of the declaration it
+/// names): an [`F::DL`] of [`Dc::Lookup`] as long as the name's, only on
+/// `UnresolvedLookupExpr`.
+const COLD_FOUND: u16 = 2048;
 /// Every annotation bit.
-const COLD_ALL: u16 = 2047;
+const COLD_ALL: u16 = 4095;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -596,6 +601,7 @@ fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
         (COLD_SRCLOC, F::D(Dc::Ctx)),
         (COLD_SRCLOC, F::Bool),
         (COLD_NAMING, F::OD(Dc::Ctx)),
+        (COLD_FOUND, F::DL(Dc::Lookup)),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -1001,6 +1007,7 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Param | Dc::Concept => false,
         Dc::Pack => {
             matches!(d.payload, Payload::Ttp { pack: true, .. } | Payload::Nttp { pack: true, .. })
+                || matches!(&d.payload, Payload::Tttp(t) if t.pack)
         }
         // A default argument or member initializer's use context: any
         // declaration context the image carries.
@@ -1142,6 +1149,13 @@ pub(super) fn validate_section(
                 1 => (a[1] as usize) < e_lim && a[2] <= 1,
                 // A return-type requirement's invented parameter.
                 2 => !texpr && super::requires::invented_ok(img, a[1], a[2]),
+                // A template (WP-1342).
+                3 => !texpr && super::tttp::tname_rec(img, a[1]),
+                4 => {
+                    !texpr
+                        && qref_ok(QRef { ty: a[1], quals: 0 })
+                        && super::tttp::dep_tname_ty(img, a[1])
+                }
                 _ => false,
             }),
             F::RB => !texpr && (w[0] as usize) < img.reqs.recs.len(),
@@ -1231,7 +1245,8 @@ pub(super) fn validate_section(
             || e.cold & !COLD_ALL != 0
             || (e.cold & (COLD_REWRITE | COLD_SRCLOC) != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
-            || (e.cold & COLD_NAMING != 0 && k != ExprKind::UnresolvedLookupExpr)
+            || (e.cold & (COLD_NAMING | COLD_FOUND) != 0 && k != ExprKind::UnresolvedLookupExpr)
+            || (e.cold & COLD_FOUND != 0 && e.cold & COLD_NAMING == 0)
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
             return bad("bad expression bits");
@@ -1416,6 +1431,9 @@ enum Fv {
     EL(ListId),
     SL(ListId),
     DL(ListId, Dc),
+    /// What unresolved name `e` found (sema's `ule_found`, WP-1342),
+    /// written as an [`F::DL`] of [`Dc::Lookup`].
+    Found(ExprId),
     QL(ListId),
     Nns(Option<NnsId>),
     AL(ListId),
@@ -1646,12 +1664,17 @@ impl Writer<'_, '_, '_> {
                 Fv::Raw(u32::from(sv.location.is_some())),
             ]);
         }
-        // `lookup_ok` accepts only a naming class with no using-shadow.
+        // The naming class, and what lookup found when that is not the
+        // name's declarations (a using-shadow, WP-1342).
         if ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr
             && let Some(f) = self.s.ovl.ule_found.get(&e)
         {
             cold |= COLD_NAMING;
             v.push(Fv::D(f.naming, Dc::Ctx));
+            if f.found != ast.unresolved_decls(e) {
+                cold |= COLD_FOUND;
+                v.push(Fv::Found(e));
+            }
         }
         cold
     }
@@ -1917,6 +1940,13 @@ impl Writer<'_, '_, '_> {
                     out.push(self.dref(d, dc)?);
                 }
             }
+            Fv::Found(e) => {
+                let ds = self.s.ovl.ule_found.get(&e).map(|f| f.found.clone()).unwrap_or_default();
+                out.push(ds.len() as u32);
+                for d in ds {
+                    out.push(self.dref(d, Dc::Lookup)?);
+                }
+            }
             Fv::QL(l) => {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32);
@@ -2043,6 +2073,15 @@ impl Writer<'_, '_, '_> {
                 ArgView::Expr { expr, profile } => {
                     let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
                     out.extend([1, e, u32::from(profile.is_some())]);
+                }
+                // A template (WP-1342), not in an expression section
+                // (built before the records it names).
+                ArgView::Template(_) | ArgView::TemplateExpansion { .. } if self.bs.texpr == 0 => {
+                    match self.arg_rec(a)? {
+                        super::ArgRec::Template(r, k) => out.extend([3, r, k]),
+                        super::ArgRec::DepTemplate(t, k) => out.extend([4, t, k]),
+                        _ => return Err("a malformed body"),
+                    }
                 }
                 _ => return Err("a template argument the image does not carry"),
             }
@@ -2744,10 +2783,18 @@ impl Sema<'_, '_> {
             }
         }
         if e.cold & COLD_NAMING != 0 {
-            // What `build_overload_ref` keeps: the decls are what lookup
-            // found (no using-shadow), and the naming class.
+            // What `build_overload_ref` keeps: the naming class, and what
+            // lookup found (the decls, or the shadows naming them).
             let naming = DeclId::from_raw(next());
-            let found = self.ast.unresolved_decls(id);
+            let decls = self.ast.unresolved_decls(id);
+            let found = if e.cold & COLD_FOUND != 0 {
+                ListId::from_raw(next())
+                    .map(|l| self.ast.lists.iter::<DeclId>(l).collect::<Vec<DeclId>>())
+                    .filter(|f| f.len() == decls.len())
+                    .unwrap_or(decls)
+            } else {
+                decls
+            };
             self.ovl.ule_found.insert(id, crate::overload::UleFound { found, naming });
         }
     }
@@ -2861,6 +2908,13 @@ impl Sema<'_, '_> {
                         kiln_ast::types::TemplateArg::ty(q)
                     } else if a[0] == 2 {
                         kiln_ast::types::TemplateArg::ty(built.reqs.invented(a[1], a[2]))
+                    } else if a[0] == 3 {
+                        let rec = super::ArgRec::Template(a[1], a[2]);
+                        self.image_targ(ids, QualType::INT, &rec)
+                    } else if a[0] == 4 {
+                        let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: 0 });
+                        let rec = super::ArgRec::DepTemplate(a[1], a[2]);
+                        self.image_targ(ids, q, &rec)
                     } else {
                         let e = ExprId::from_raw(built.ebase + a[1])
                             .unwrap_or_else(|| unreachable!("validated operand"));

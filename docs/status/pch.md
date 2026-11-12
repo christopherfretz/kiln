@@ -502,6 +502,27 @@ census in pch-image-census.md, WP-1314). kiln at the WP-1314 branch,
   carried 28 (`cwchar`, `limits` flip); `lcx` still replays, now at "a
   constrained template" (`__type_traits/common_reference.h:63`).
 
+## WP-1342: template declarations, wave 7a (2026-11-12)
+
+The wave carried the template-declaration bucket (list and numbers in
+pch-image-census.md, WP-1342): template template parameters and
+template-name arguments, constrained templates and partial
+specializations, member partial specializations, qualified and
+parameter class template deduction, and names found through
+using-declarations in template bodies. kiln at the WP-1342 branch,
+`debug` profile; no timings (a release gate holds the cores).
+
+- **Corpus `--pch-diff check`** (`cpp.include`, the `module.*`
+  directories, `tests/differential/pp`, `tests/header-guard`): 202
+  compared, 201 agree (the known `module.global.frag/gmf-floatn-limits.cpp`).
+  The 7 new `cpp.include` tests all take the image.
+- **Declarations carried:** `lcx.h` 23832 → 23837 of 26762; `gnu.h`
+  23756 → 24296 of 26396.
+- **Headers carried:** libc++ 28 → 28 of 106, libstdc++ 31 → 31 of 109.
+- **Bench path:** `lcx` and `gnu` still replay; `lcx` now stops at "an
+  expression the image does not carry yet" (`__type_traits/extent.h:25`),
+  `gnu` at "a dependent using-declaration" (`ext/numeric_traits.h:54`).
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers

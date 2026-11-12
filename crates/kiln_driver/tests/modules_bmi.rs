@@ -1978,8 +1978,8 @@ fn kind2_declaration_image_fallback() {
             "a redeclared partial specialization",
         ),
         (
-            "export module f;\nexport template <template <class> class TT> struct W {};\n",
-            "a template",
+            "export module f;\nexport template <template <class T> requires true class TT> struct W {};\n",
+            "a template template parameter with a requires-clause",
         ),
         (
             "export module f;\nexport template <class T> struct A { int f() { return 1; } };\n\

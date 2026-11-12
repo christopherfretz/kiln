@@ -30,6 +30,8 @@ use crate::Sema;
 /// alias and variable templates).
 pub(super) const CONCEPT_KIND: u8 = 4;
 
+const MALFORMED_PARTIAL: &str = "a malformed partial specialization";
+
 /// A template parameter's immediately-declared constraint
 /// ([temp.param]/4).
 const K_PARM: u8 = 0;
@@ -87,6 +89,14 @@ impl Writer<'_, '_, '_> {
                     v.push((K_HEAD, r));
                 }
             }
+            // A partial specialization's requires-clause (WP-1342,
+            // [temp.spec.partial]/1): kind 1 on its record.
+            DeclKind::CXXRecord | DeclKind::Var if ast.partial_spec_info(d).is_some() => {
+                let (_, p) = ast.partial_spec_info(d).ok_or(MALFORMED_PARTIAL)?;
+                if let Some(r) = t.param_list(p.params).requires {
+                    v.push((K_HEAD, r));
+                }
+            }
             DeclKind::Concept => {
                 let info = ast.template_info(d).ok_or("a malformed concept")?;
                 // A concept merged with another unit's (`act_concept`) is
@@ -135,6 +145,21 @@ impl Writer<'_, '_, '_> {
             ast.template_parm(p).is_some_and(|x| x.constraint.is_some()) || tt.ttp_owner.contains(p)
         });
         if list.requires.is_some() || parm_constrained {
+            return true;
+        }
+        // WP-1342: a partial specialization with constraints, which the
+        // importer's matching would see without them.
+        let partial_constrained = tt.partials_of(t).iter().any(|&k| {
+            tt.partial(k).is_some_and(|p| {
+                let pl = tt.param_list(p.params);
+                pl.requires.is_some()
+                    || ast
+                        .lists
+                        .iter::<DeclId>(pl.params)
+                        .any(|q| ast.template_parm(q).is_some_and(|x| x.constraint.is_some()))
+            })
+        });
+        if partial_constrained {
             return true;
         }
         let Some(pattern) = info.pattern else { return true };
@@ -193,6 +218,10 @@ pub(super) fn validate_constraints(img: &Image) -> Res<()> {
             (K_PARM, Payload::Ttp { .. } | Payload::Nttp { .. })
             | (K_TRAILING, Payload::Function { .. }) => true,
             (K_HEAD, Payload::Template { kind, .. }) => *kind < CONCEPT_KIND,
+            // A partial specialization's (WP-1342).
+            (K_HEAD, Payload::Record { .. } | Payload::Var { .. }) => {
+                super::classtempl::partial_of(img, r.decl).is_some()
+            }
             (K_CONCEPT, Payload::Template { kind, .. }) => *kind == CONCEPT_KIND,
             _ => false,
         };
@@ -222,6 +251,10 @@ impl Sema<'_, '_> {
                 K_HEAD => {
                     if let Some(info) = self.ast.template_info(d) {
                         let l = info.params;
+                        self.builder().set_param_list_requires(l, e);
+                    } else if let Some((_, p)) = self.ast.partial_spec_info(d) {
+                        // A partial specialization's (WP-1342).
+                        let l = p.params;
                         self.builder().set_param_list_requires(l, e);
                     }
                 }
