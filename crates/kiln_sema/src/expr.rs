@@ -321,6 +321,29 @@ impl Sema<'_, '_> {
     ///
     /// # Panics
     /// If the constant store is exhausted.
+    /// [`Self::int_const`] for a non-negative value read as `u128`: zero
+    /// above bit 127 in a type wider than 128 bits (a `_BitInt(129)`
+    /// literal), where `int_const` would sign-extend.
+    pub(crate) fn uint_const(&mut self, ty: QualType, v: u128) -> ConstValueId {
+        let t = conv::strip_cv(self, ty);
+        if let Some((w, signed)) = int_info(&self.ast, t)
+            && w > 128
+        {
+            let mut words = vec![0u64; IntBits::words_for(w)];
+            #[allow(clippy::cast_possible_truncation, reason = "the low and high words")]
+            {
+                words[0] = v as u64;
+                words[1] = (v >> 64) as u64;
+            }
+            if let Some(bits) = IntBits::from_words(w, &words) {
+                let scalar = Scalar::Int { ty: t, signed, bits };
+                return self.ast.consts.push_scalar(scalar).expect("integer constants intern");
+            }
+        }
+        #[allow(clippy::cast_possible_wrap, reason = "bit pattern")]
+        self.int_const(ty, v as i128)
+    }
+
     pub(crate) fn int_const(&mut self, ty: QualType, v: i128) -> ConstValueId {
         let t = conv::strip_cv(self, ty);
         let scalar = if self.ast.types.builtin(t) == Some(BuiltinType::Bool) {
@@ -2645,6 +2668,9 @@ impl Sema<'_, '_> {
             return self.recover_err(&[], loc);
         }
         let radix = ast_radix(lit.radix);
+        if lit.suffix.size == kiln_lex::literal::IntSize::BitInt {
+            return self.bit_int_literal(lit, radix, loc);
+        }
         match literal::classify_integer_literal(self, lit) {
             Ok(t) => {
                 if let Some(w) = &t.warning {
@@ -2666,6 +2692,46 @@ impl Sema<'_, '_> {
                 self.recover_err(&[], loc)
             }
         }
+    }
+
+    /// A `wb` / `uwb` literal (C23 6.4.4.1p3, WP-1331): `_BitInt(N)` with
+    /// the smallest `N` that holds the value and a sign bit (at least 2),
+    /// `unsigned _BitInt(N)` with the smallest `N` that holds it (at least
+    /// 1), as clang `Sema::ActOnNumericConstant`. Wider than the target's
+    /// `BITINT_MAXWIDTH` (128 on `AArch64`) is clang's "too large" error,
+    /// recovering as the widest `_BitInt` with the value truncated. A value
+    /// wider than 128 bits on a target that allows wider (x86-64) is
+    /// "too large" too: kiln's literal values are 128-bit (spec/sema.md
+    /// "C mode release-review gaps").
+    fn bit_int_literal(&mut self, lit: &IntegerLiteral<'_>, radix: Radix, loc: Loc) -> ExprId {
+        let u = lit.suffix.unsigned;
+        let max = self.abi.bit_int_max_width;
+        let (value, wide) = lit.wrapping_value();
+        let need = if wide { u32::MAX } else { literal::bit_int_literal_width(value, u) };
+        let width = if need > max {
+            let id = if u {
+                DiagId::sema_int_literal_too_large
+            } else {
+                DiagId::sema_int_literal_too_large_signed
+            };
+            let d = self.diag(id, loc);
+            self.emit(d);
+            if max > 128 {
+                return self.recover_err(&[], loc);
+            }
+            max
+        } else {
+            need
+        };
+        let value = if width < 128 { value & ((1u128 << width) - 1) } else { value };
+        let ty = self.ast.types.bit_int(!u, width);
+        let e = if let Ok(v) = u64::try_from(value) {
+            self.builder().int_literal(ty, v, radix, loc)
+        } else {
+            let cv = self.uint_const(ty, value);
+            self.builder().wide_int_literal(ty, cv, radix, loc)
+        };
+        if lit.imaginary { self.imaginary_literal(e, loc) } else { e }
     }
 
     /// A floating literal ([lex.fcon]).

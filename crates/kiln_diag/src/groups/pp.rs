@@ -4,6 +4,8 @@
 
 BuiltinMacroRedefined = "builtin-macro-redefined" [];
 C23Extensions = "c23-extensions" [];
+// WP-1331: clang's C pre-C23 compatibility warnings (`#embed`, `wb`).
+CPre23Compat = "pre-c23-compat" [];
 Cxx11LongLong = "c++11-long-long" [];
 DateTime = "date-time" [];
 DisabledMacroExpansion = "disabled-macro-expansion" [];

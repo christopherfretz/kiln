@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use super::{Diags, LitDiag};
 use crate::diag::LexDiagKind;
-use crate::options::Std;
+use crate::options::{CStd, Std};
 
 /// The base of a numeric literal.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -45,6 +45,9 @@ pub enum IntSize {
     LongLong,
     /// `z` / `Z` (C++23).
     Size,
+    /// `wb` / `WB` (C23 6.4.4.1, a C23 extension in older C; C only, as
+    /// clang): the type is the narrowest `_BitInt` holding the value.
+    BitInt,
 }
 
 /// An integer-suffix ([lex.icon]).
@@ -115,6 +118,21 @@ impl IntegerLiteral<'_> {
         self.digits.chars().try_fold(0u128, |v, c| {
             v.checked_mul(u128::from(radix))?.checked_add(u128::from(c.to_digit(radix)?))
         })
+    }
+
+    /// The value's low 128 bits, and whether it is wider (clang's
+    /// truncated recovery value for a too-wide `wb` literal).
+    pub fn wrapping_value(&self) -> (u128, bool) {
+        let radix = self.radix.value();
+        let mut wide = false;
+        let mut v = 0u128;
+        for d in self.digits.chars().filter_map(|c| c.to_digit(radix)) {
+            let (m, o1) = v.overflowing_mul(u128::from(radix));
+            let (a, o2) = m.overflowing_add(u128::from(d));
+            wide |= o1 || o2;
+            v = a;
+        }
+        (v, wide)
     }
 }
 
@@ -334,6 +352,8 @@ struct Parser<'s> {
     s: &'s str,
     b: &'s [u8],
     std: Std,
+    /// The C standard, `None` for C++.
+    c: Option<CStd>,
     diags: Diags,
 }
 
@@ -432,7 +452,16 @@ impl<'s> Parser<'s> {
 /// are not supported. A ud-suffix's universal-character-names are not
 /// expanded.
 pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
-    let mut p = Parser { s: spelling, b: spelling.as_bytes(), std, diags: Diags::default() };
+    classify_number_in(spelling, std, None)
+}
+
+/// [`classify_number`] for a language mode: in C (`c` is `Some`) the
+/// `wb`/`uwb` `_BitInt` suffixes (C23 6.4.4.1; WP-1331) are integer
+/// suffixes, with clang's extension warning before C23 and its
+/// `-Wpre-c23-compat` warning from C23 on. C++ has no such suffix (clang
+/// 19/22: "invalid suffix 'wb' on integer constant").
+pub fn classify_number_in(spelling: &str, std: Std, c: Option<CStd>) -> Number<'_> {
+    let mut p = Parser { s: spelling, b: spelling.as_bytes(), std, c, diags: Diags::default() };
     let b = p.b;
     let invalid = |p: Parser<'_>| {
         let has_error = p.diags.error;
@@ -478,6 +507,14 @@ pub fn classify_number(spelling: &str, std: Std) -> Number<'_> {
         }
     } else if sx.size == IntSize::Size && std < Std::Cxx23 {
         p.diags.push(LexDiagKind::SizeSuffixExtension, suffix_begin, b.len());
+    } else if sx.size == IntSize::BitInt {
+        // clang points at the literal's start.
+        let kind = if c.is_some_and(|c| c >= CStd::C23) {
+            LexDiagKind::BitIntSuffixCompat
+        } else {
+            LexDiagKind::BitIntSuffixExtension
+        };
+        p.diags.push(kind, 0, b.len());
     }
     // WP-361: as GCC, the P1467 suffixes are accepted before C++23 too
     // (libstdc++'s `<limits>` and `<bits/c++config.h>` spell `0.5F32` and
@@ -753,6 +790,18 @@ impl Parser<'_> {
                         i += 1;
                         true
                     }
+                }
+                // `wb` / `WB` (not `wB` / `Wb`), C only.
+                b'w' | b'W'
+                    if !floating
+                        && !has_size
+                        && self.c.is_some()
+                        && rest.get(1) == Some(&if c == b'w' { b'b' } else { b'B' }) =>
+                {
+                    has_size = true;
+                    sx.size = IntSize::BitInt;
+                    i += 2;
+                    true
                 }
                 b'z' | b'Z' if !floating && !has_size => {
                     has_size = true;

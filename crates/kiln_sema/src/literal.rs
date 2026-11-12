@@ -172,6 +172,15 @@ pub fn classify_integer_literal(
     })
 }
 
+/// The width of a `wb` (`unsigned`: `uwb`) literal's `_BitInt` type
+/// (C23 6.4.4.1p3): the value's bits, plus a sign bit when signed; at
+/// least 2 signed and 1 unsigned (`0wb` is `_BitInt(2)`, `0uwb`
+/// `unsigned _BitInt(1)`).
+pub fn bit_int_literal_width(value: u128, unsigned: bool) -> u32 {
+    let bits = 128 - value.leading_zeros();
+    if unsigned { bits.max(1) } else { (bits + 1).max(2) }
+}
+
 /// Types a floating literal ([lex.fcon]): its type and value.
 ///
 /// # Errors

@@ -299,6 +299,7 @@ fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptV
         stdin_text: None,
         diag_opts: &diag_opts,
         stderr: sink,
+        asm: false,
     };
     let fp = job.fingerprint();
     let get = |k: &str| fp.iter().find(|(key, _)| key == k).map_or("", |(_, v)| v.as_str());

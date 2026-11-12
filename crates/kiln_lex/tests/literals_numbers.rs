@@ -1,8 +1,10 @@
 //! pp-number classification: [lex.icon], [lex.fcon], [lex.ext].
 //! Diagnostics match clang 19 (`-fsyntax-only -pedantic`) unless noted.
 #![allow(clippy::float_cmp)] // exact literals: the lexer must round-trip them bit-for-bit
-use kiln_lex::literal::{FloatSuffix, IntSize, IntSuffix, NumberClass, Radix, classify_number};
-use kiln_lex::{LexDiagKind as D, Std};
+use kiln_lex::literal::{
+    FloatSuffix, IntSize, IntSuffix, NumberClass, Radix, classify_number, classify_number_in,
+};
+use kiln_lex::{CStd, LexDiagKind as D, Std};
 
 fn int(sp: &str) -> (Radix, String, IntSuffix, Option<u128>) {
     let n = classify_number(sp, Std::Cxx26);
@@ -223,6 +225,37 @@ fn lex_icon_fcon_extensions() {
     assert_eq!(diags_in("0x1p1", Std::Cxx17), []);
     assert_eq!(diags_in("1z", Std::Cxx20), [D::SizeSuffixExtension]);
     assert_eq!(diags_in("1uz", Std::Cxx20), [D::SizeSuffixExtension]);
+}
+
+/// WP-1331, C23 6.4.4.1: `wb` / `WB` with `u` / `U` in either order, in
+/// C only; an extension before C23, a compat warning from C23 on, at the
+/// literal's start.
+#[test]
+fn bit_int_suffixes() {
+    let c = |sp: &str, c: CStd| {
+        let n = classify_number_in(sp, Std::Cxx17, Some(c));
+        let kinds: Vec<D> = n.diags.iter().map(|d| d.kind).collect();
+        let suffix = match n.class {
+            NumberClass::Integer(l) => Some((l.suffix, l.value())),
+            _ => None,
+        };
+        (suffix, kinds)
+    };
+    let bit = |unsigned| IntSuffix { unsigned, size: IntSize::BitInt };
+    for sp in ["1wb", "1WB"] {
+        assert_eq!(c(sp, CStd::C23), (Some((bit(false), Some(1))), vec![D::BitIntSuffixCompat]));
+    }
+    for sp in ["1uwb", "1Uwb", "1wbu", "1WBU", "1uWB"] {
+        assert_eq!(c(sp, CStd::C17).0, Some((bit(true), Some(1))), "{sp}");
+    }
+    assert_eq!(c("0x7fwb", CStd::C11).1, [D::BitIntSuffixExtension]);
+    let n = classify_number_in("0xffwb", Std::Cxx17, Some(CStd::C23));
+    assert_eq!(n.diags[0].range, 0..6);
+    for sp in ["1wB", "1Wb", "1wbl", "1lwb", "1wbwb", "1uwbu", "1.0wb", "1zwb"] {
+        assert_eq!(c(sp, CStd::C23).0, None, "{sp}");
+    }
+    // C++ has no such suffix.
+    assert_eq!(diags_in("1wb", Std::Cxx26), [D::InvalidSuffix { floating: false }]);
 }
 
 /// Diagnostic ranges point into the spelling.

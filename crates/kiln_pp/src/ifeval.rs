@@ -13,7 +13,7 @@
 
 use kiln_diag::{Diag, DiagId};
 use kiln_lex::literal::{
-    EncodingParams, IntSize, LitDiag, LiteralOptions, NumberClass, Radix, classify_number,
+    EncodingParams, IntSize, LitDiag, LiteralOptions, NumberClass, Radix, classify_number_in,
     decode_char_from_source, invalid_utf8,
 };
 use kiln_lex::{Encoding, LexDiagKind, LexOptions, Punct, Std, Symbol, TokFlags, TokKind, Token};
@@ -414,7 +414,7 @@ impl<'c> Ev<'c> {
             return Ok(v.at(tok.span));
         }
         let spelling = self.cx.spelling(&tok);
-        let n = classify_number(&spelling, self.std);
+        let n = classify_number_in(&spelling, self.std, self.c);
         self.lit_diags(&tok, &spelling, &n.diags, None);
         if n.has_error {
             return Err(Abort);
@@ -777,8 +777,9 @@ fn is_soft_error(d: &LitDiag, spelling: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{IntSize, NumberClass, Radix, Std, classify_number, op_punct, plain_decimal};
+    use super::{IntSize, NumberClass, Radix, Std, op_punct, plain_decimal};
     use crate::builtin::OPERATOR_NAMES;
+    use kiln_lex::literal::classify_number;
 
     /// [lex.digraph]/2: the evaluator's alternative-token table is the
     /// crate's.

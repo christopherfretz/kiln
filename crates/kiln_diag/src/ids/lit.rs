@@ -7,6 +7,11 @@ lit_bad_char_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal charac
 lit_bad_string_encoding = Error (0) "illegal character encoding in string literal";
 lit_bad_string_encoding_warn = ExtWarn [InvalidSourceEncoding] (0) "illegal character encoding in string literal";
 lit_binary_ext = Extension [Cxx14BinaryLiteral] (0) "binary integer literals are a C++14 extension";
+// WP-1331: a `wb`/`uwb` suffix from C23 on, off by default (clang 19/22
+// `warn_c23_compat_bitint_suffix`).
+lit_bit_int_suffix_compat = WarningOff [CPre23Compat] (0) "'_BitInt' suffix for literals is incompatible with C standards before C23";
+// WP-1331: a `wb`/`uwb` suffix before C23 (`ext_c23_bitint_suffix`).
+lit_bit_int_suffix_ext = ExtWarn [C23Extensions] (0) "'_BitInt' suffix for literals is a C23 extension";
 lit_char_constant_too_long = Warning (0) "character constant too long for its type";
 lit_char_too_large = Error (0) "character too large for enclosing character literal type";
 lit_delimited_escape_empty = Error (0) "delimited escape sequence cannot be empty";

@@ -156,6 +156,17 @@ pub struct PpOptions {
     /// 19's escape rules (`LiteralOptions::clang19_escapes`; an empty
     /// `\x{}` leaves its `}`, WP-1268).
     pub clang19_escapes: bool,
+    /// Assembler-with-cpp (clang `LangOptions::AsmPreprocessor`; a `.S`
+    /// input): `#` followed by anything that is not a directive is passed
+    /// through as text (with its line), `# <number>` is a line marker only
+    /// in the predefines buffer, `#` before a non-parameter in a
+    /// function-like macro body is kept as an ordinary token, and the
+    /// lexer's [`LexOptions::asm`] rules apply (spec/pp.md
+    /// "Assembler-with-cpp").
+    pub asm: bool,
+    /// Digraphs are tokens ([`LexOptions::digraphs`]). Default: `true`;
+    /// off only for strict C89 (WP-1331).
+    pub digraphs: bool,
 }
 
 impl PpOptions {
@@ -186,6 +197,8 @@ impl PpOptions {
             main_is_header: false,
             meta_hint: None,
             clang19_escapes: false,
+            asm: false,
+            digraphs: true,
         }
     }
 
@@ -200,6 +213,8 @@ impl PpOptions {
         o.reflection = self.reflection;
         o.preprocessed_output = self.preprocessed_output;
         o.clang19 = self.clang19_escapes;
+        o.asm = self.asm;
+        o.digraphs = self.digraphs;
         o
     }
 

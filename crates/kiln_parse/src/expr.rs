@@ -13,8 +13,8 @@ use kiln_ast::names::DeclName;
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_lex::literal::{
-    CodeUnits, NumberClass, SourceBytes, StringLiteral, classify_number, decode_char_from_source,
-    decode_string_from_source, invalid_utf8,
+    CodeUnits, NumberClass, SourceBytes, StringLiteral, classify_number_in,
+    decode_char_from_source, decode_string_from_source, invalid_utf8,
 };
 use kiln_lex::{Punct, Std, TokKind, Token};
 use kiln_sema::expr::CastStyle;
@@ -2862,7 +2862,7 @@ impl Parser<'_, '_> {
     fn parse_number(&mut self) -> ExprId {
         let t = self.bump();
         let sp = self.spelling_of(&t);
-        let n = classify_number(&sp, self.std);
+        let n = classify_number_in(&sp, self.std, self.lex_opts.c);
         self.literal_diags(&t, &sp, &n.diags, None);
         if n.has_error {
             return self.s.act_on_error_expr(&[], t.span.lo);

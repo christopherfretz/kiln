@@ -190,6 +190,41 @@ compound literals) are WP-1276's.
   `tests/c/run/static-init-*.c`,
   `tests/c/decl/static-init-not-constant*.c`.
 
+#### 1.0.5 C mode release-review gaps (WP-1331)
+
+- **`(...)` before C23** (C17 6.7.6p1): a parameter list of only `...`
+  is `ISO C requires a named parameter before '...'` before C23, at the
+  `...`, except on an `overloadable` function, in every C dialect, as
+  clang's `GetFullTypeForDeclarator` (clang's `<tgmath.h>` declares
+  `__tg_promote(...)` so). In a declaration (file, block, member
+  context) the parser records the `...` in `Declarator::c_ellipsis_first`
+  and `act_on_declarator` reports it unless the decl-specifiers or the
+  declarator carry `overloadable` (the attribute after one declarator
+  covers that declarator only); in a type-id or a parameter the parser
+  reports it at once. Tests:
+  `tests/c/decl/ellipsis-first-param-overloadable.c`,
+  `tests/c/run/tgmath-gnu{89,99,11,17,23}.c` (sqrt, pow, fabs, creal on
+  float, double, long double and complex arguments, against clang).
+- **`_BitInt` literals** (C23 6.4.4.1p3): a `wb` literal
+  (`IntSize::BitInt`, spec/lex.md) is `_BitInt(N)` with `N` the value's
+  bits plus a sign bit, at least 2 (`0wb` is `_BitInt(2)`, `255wb`
+  `_BitInt(9)`); a `uwb` literal is `unsigned _BitInt(N)` with `N` the
+  value's bits, at least 1 (`literal::bit_int_literal_width`,
+  `Sema::bit_int_literal`; clang `ActOnNumericConstant`). Wider than the
+  target's `BITINT_MAXWIDTH` (128 on `AArch64`) is
+  `sema_int_literal_too_large` (unsigned) or
+  `sema_int_literal_too_large_signed` ("... in any signed integer type"),
+  recovering as the widest `_BitInt` with the value truncated, as clang.
+  Deviation: kiln's literal values are 128-bit, so on x86-64 (maximum
+  8388608) a literal over 128 bits is "too large" where clang types it
+  (`tests/c/c23/bitint-literal-wide-x86_64.c`, xfail); on x86-64 a signed 129-bit
+  literal (`0xffff...ffffwb`, 32 digits) is supported (`Sema::uint_const`
+  zero-extends it). In `#if` the literal is `intmax_t` (`wb`) or
+  `uintmax_t` (`uwb`), with clang's too-large error above 64 bits. Tests:
+  `tests/c/c23/bitint-literal-*.c` (types by `_Generic`, sizes by
+  `sizeof`, run against clang), `tests/c/pp/bitint-literal-if.c`,
+  `tests/c/cxx-only/bitint-literal-suffix.cpp`.
+
 #### 1.0.4 C mode correctness batch (WP-1311)
 
 - **Prototype-scope tags and enumerators** (C23 6.2.1p4): an

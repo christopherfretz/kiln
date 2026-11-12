@@ -117,12 +117,22 @@ impl LangStd {
         let v = if gnu { rest } else { s };
         let (base, lex, c) = match v {
             "c89" | "c90" | "iso9899:1990" | "89" | "90" => ("c89", S::Cxx98, C::C89),
-            "c99" | "c9x" | "iso9899:1999" | "99" | "9x" => ("c99", S::Cxx98, C::C99),
-            "c11" | "c1x" | "iso9899:2011" | "11" | "1x" => ("c11", S::Cxx11, C::C11),
+            // C94 (C90 with amendment 1): C89 with digraphs and
+            // `__STDC_VERSION__ 199409L`; there is no `gnu94`.
+            "iso9899:199409" => ("c94", S::Cxx98, C::C89),
+            "c99" | "c9x" | "iso9899:1999" | "iso9899:199x" | "99" | "9x" => {
+                ("c99", S::Cxx98, C::C99)
+            }
+            "c11" | "c1x" | "iso9899:2011" | "iso9899:201x" | "11" | "1x" => {
+                ("c11", S::Cxx11, C::C11)
+            }
             "c17" | "c18" | "iso9899:2017" | "iso9899:2018" | "17" | "18" => {
                 ("c17", S::Cxx11, C::C17)
             }
             "c23" | "c2x" | "iso9899:2024" | "23" | "2x" => ("c23", S::Cxx17, C::C23),
+            // The C2y working draft: C23's language with
+            // `__STDC_VERSION__ 202400L` (spec/driver.md "Language mode").
+            "c2y" | "2y" => ("c2y", S::Cxx17, C::C23),
             _ => return None,
         };
         // `gnu89` but not `gnuc89`; `c89` but not `89`.
@@ -177,10 +187,119 @@ impl LangStd {
         }
     }
 
+    /// The `resource/predefines` base file's standard: C94 shares C89's
+    /// and C2y C23's, [`Self::stdc_version`] overriding the one macro
+    /// that differs.
+    pub fn predefines_base(&self) -> &'static str {
+        match self.base {
+            "c94" => "c89",
+            "c2y" => "c23",
+            b => b,
+        }
+    }
+
+    /// The `__STDC_VERSION__` that differs from the predefines base
+    /// file's (clang 19/22 `InitializeStandardPredefinedMacros`).
+    pub fn stdc_version(&self) -> Option<&'static str> {
+        match self.base {
+            "c94" => Some("199409L"),
+            "c2y" => Some("202400L"),
+            _ => None,
+        }
+    }
+
+    /// Digraphs are tokens: everywhere but strict C89 (clang 19/22
+    /// `LangStandard::hasDigraphs`; `iso9899:199409` and `gnu89` have
+    /// them).
+    pub fn digraphs(&self) -> bool {
+        self.base != "c89" || self.gnu
+    }
+
     /// C++20 or later.
     pub fn cxx20(&self) -> bool {
         self.cplusplus && self.lex >= kiln_lex::Std::Cxx20
     }
+}
+
+/// `-std=<s>` names an `OpenCL` or HLSL standard (clang 19/22
+/// `LangStandards.def`, aliases included; `hlsl202y` is clang 22's). kiln
+/// compiles neither language, so clang's "not allowed with" error for a C
+/// or C++ input is the answer (spec/driver.md "Language mode").
+pub fn foreign_std(s: &str, compat19: bool) -> bool {
+    matches!(
+        s,
+        "cl" | "CL"
+            | "cl1.0"
+            | "cl1.1"
+            | "CL1.1"
+            | "cl1.2"
+            | "CL1.2"
+            | "cl2.0"
+            | "CL2.0"
+            | "cl3.0"
+            | "CL3.0"
+            | "clc++"
+            | "CLC++"
+            | "clc++1.0"
+            | "CLC++1.0"
+            | "clc++2021"
+            | "CLC++2021"
+            | "hlsl"
+            | "hlsl2015"
+            | "hlsl2016"
+            | "hlsl2017"
+            | "hlsl2018"
+            | "hlsl2021"
+            | "hlsl202x"
+    ) || (s == "hlsl202y" && !compat19)
+}
+
+/// The notes after an invalid `-std=` value: the language's standards
+/// with their spellings, as (spellings, description) (clang 19/22
+/// `LangStandards.def` order; clang 20 renamed C23 and added
+/// `iso9899:2024`).
+pub fn std_notes(cplusplus: bool, compat19: bool) -> Vec<(&'static str, &'static str)> {
+    if cplusplus {
+        return vec![
+            ("'c++98' or 'c++03'", "ISO C++ 1998 with amendments"),
+            ("'gnu++98' or 'gnu++03'", "ISO C++ 1998 with amendments and GNU extensions"),
+            ("'c++11'", "ISO C++ 2011 with amendments"),
+            ("'gnu++11'", "ISO C++ 2011 with amendments and GNU extensions"),
+            ("'c++14'", "ISO C++ 2014 with amendments"),
+            ("'gnu++14'", "ISO C++ 2014 with amendments and GNU extensions"),
+            ("'c++17'", "ISO C++ 2017 with amendments"),
+            ("'gnu++17'", "ISO C++ 2017 with amendments and GNU extensions"),
+            ("'c++20'", "ISO C++ 2020 DIS"),
+            ("'gnu++20'", "ISO C++ 2020 DIS with GNU extensions"),
+            ("'c++23'", "ISO C++ 2023 DIS"),
+            ("'gnu++23'", "ISO C++ 2023 DIS with GNU extensions"),
+            ("'c++2c' or 'c++26'", "Working draft for C++2c"),
+            ("'gnu++2c' or 'gnu++26'", "Working draft for C++2c with GNU extensions"),
+        ];
+    }
+    let (c23, gnu23) = if compat19 {
+        (
+            ("'c23'", "Working Draft for ISO C23"),
+            ("'gnu23'", "Working Draft for ISO C23 with GNU extensions"),
+        )
+    } else {
+        (("'c23' or 'iso9899:2024'", "ISO C 2023"), ("'gnu23'", "ISO C 2023 with GNU extensions"))
+    };
+    vec![
+        ("'c89', 'c90', or 'iso9899:1990'", "ISO C 1990"),
+        ("'iso9899:199409'", "ISO C 1990 with amendment 1"),
+        ("'gnu89' or 'gnu90'", "ISO C 1990 with GNU extensions"),
+        ("'c99' or 'iso9899:1999'", "ISO C 1999"),
+        ("'gnu99'", "ISO C 1999 with GNU extensions"),
+        ("'c11' or 'iso9899:2011'", "ISO C 2011"),
+        ("'gnu11'", "ISO C 2011 with GNU extensions"),
+        ("'c17', 'iso9899:2017', 'c18', or 'iso9899:2018'", "ISO C 2017"),
+        ("'gnu17' or 'gnu18'", "ISO C 2017 with GNU extensions"),
+        c23,
+        gnu23,
+        ("'c2y'", "Working Draft for ISO C2y"),
+        ("'gnu2y'", "Working Draft for ISO C2y with GNU extensions"),
+    ]
 }
 
 /// The C++ standard library (`-stdlib=`).
@@ -421,7 +540,11 @@ impl Toolchain {
 
     /// The predefines base file for `std`.
     pub fn predefines_path(&self, std: &LangStd) -> PathBuf {
-        self.data_dir.join("predefines").join(format!("{}.{}.txt", self.target.triple, std.base))
+        self.data_dir.join("predefines").join(format!(
+            "{}.{}.txt",
+            self.target.triple,
+            std.predefines_base()
+        ))
     }
 
     /// The toolchain's include directories, after the user's, in clang's
@@ -597,6 +720,10 @@ pub enum Tool {
     Linker,
     /// `llvm-objcopy`: `-gz` compresses an object's debug sections.
     Objcopy,
+    /// `clang++ -c -x assembler`: the integrated assembler, for `.s`
+    /// and preprocessed `.S` inputs (WP-1331; spec/driver.md "Assembler
+    /// inputs").
+    Assembler,
 }
 
 impl Tool {
@@ -607,7 +734,7 @@ impl Tool {
             Tool::Llc => "llc",
             Tool::LlvmAs => "llvm-as",
             Tool::Opt => "opt",
-            Tool::Linker => "clang++",
+            Tool::Linker | Tool::Assembler => "clang++",
             Tool::Objcopy => "llvm-objcopy",
         }
     }
@@ -617,6 +744,7 @@ impl Tool {
         match self {
             Tool::Llc | Tool::LlvmAs | Tool::Opt | Tool::Objcopy => "backend",
             Tool::Linker => "linker",
+            Tool::Assembler => "assembler",
         }
     }
 }
@@ -780,7 +908,36 @@ mod tests {
         let s = LangStd::parse("gnu99").unwrap();
         assert!(s.gnu && s.base == "c99");
         assert_eq!(LangStd::parse("iso9899:2017").map(|s| s.base), Some("c17"));
-        for bad in ["c++27", "gnu", "c", "gnuc11", "99", "gnu++", "c++"] {
+        // WP-1331: clang 19/22's whole C list, aliases included.
+        for (v, base) in [
+            ("iso9899:199409", "c94"),
+            ("iso9899:199x", "c99"),
+            ("iso9899:201x", "c11"),
+            ("c2y", "c2y"),
+            ("gnu2y", "c2y"),
+            ("gnu9x", "c99"),
+            ("gnu1x", "c11"),
+            ("gnu18", "c17"),
+            ("gnu2x", "c23"),
+        ] {
+            assert_eq!(LangStd::parse(v).map(|s| s.base), Some(base), "{v}");
+        }
+        let c94 = LangStd::parse("iso9899:199409").unwrap();
+        assert_eq!((c94.predefines_base(), c94.stdc_version()), ("c89", Some("199409L")));
+        assert!(c94.digraphs() && !LangStd::parse("c89").unwrap().digraphs());
+        assert!(LangStd::parse("gnu89").unwrap().digraphs());
+        for bad in [
+            "c++27",
+            "gnu",
+            "c",
+            "gnuc11",
+            "99",
+            "gnu++",
+            "c++",
+            "gnuiso9899:199409",
+            "2y",
+            "iso9899:2023",
+        ] {
             assert_eq!(LangStd::parse(bad), None, "{bad}");
         }
     }

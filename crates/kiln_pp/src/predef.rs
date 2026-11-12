@@ -121,6 +121,9 @@ pub struct PredefConfig {
     /// The `-fsanitize=` macros (`__SANITIZE_ADDRESS__` and friends; the
     /// driver's `Sanitize::macros`, WP-675), on every target.
     pub sanitize_macros: Vec<(String, Option<String>)>,
+    /// The `__STDC_VERSION__` replacing the base file's: C94's `199409L`
+    /// and C2y's `202400L`, which share C89's and C23's files (WP-1331).
+    pub stdc_version: Option<&'static str>,
 }
 
 /// The `AArch64` target state of `-march=` / `-mcpu=` /
@@ -185,6 +188,7 @@ impl PredefConfig {
             arm: ArmTarget::default(),
             x86_macros: Vec::new(),
             sanitize_macros: Vec::new(),
+            stdc_version: None,
         }
     }
 }
@@ -408,6 +412,9 @@ pub fn build_predefines(base: &str, cfg: &PredefConfig, cmdline: &[CmdMacro]) ->
         }
     }
     apply_flags(&mut m, cfg);
+    if let Some(v) = cfg.stdc_version {
+        set(&mut m, "__STDC_VERSION__", v);
+    }
     if cfg.aarch64 {
         apply_arm(&mut m, &cfg.arm, cfg.clang_compat);
     } else {

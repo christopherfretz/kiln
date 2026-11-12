@@ -3762,7 +3762,7 @@ impl Parser<'_, '_> {
                 break;
             }
             if let Some(l) = self.eat(Punct::Ellipsis) {
-                self.c_check_ellipsis_first(params.is_empty(), l);
+                self.c_check_ellipsis_first(d, params.is_empty(), l);
                 variadic = true;
                 break;
             }
@@ -5209,9 +5209,19 @@ impl Parser<'_, '_> {
 
     /// C17 6.7.6/1: a parameter-type-list names a parameter before the
     /// `...` at `l`; C23 allows `(...)` (clang `err_ellipsis_first_param`).
-    fn c_check_ellipsis_first(&mut self, first: bool, l: Loc) {
+    /// In a declaration the check waits for its attributes (an
+    /// `overloadable` function may, WP-1331: `Sema::act_on_declarator`);
+    /// elsewhere (a type-id, a parameter) it is reported here.
+    fn c_check_ellipsis_first(&mut self, d: &mut Declarator, first: bool, l: Loc) {
         if first && self.s.is_c() && !self.s.c_at_least(kiln_lex::CStd::C23) {
-            self.s.error(DiagId::parse_ellipsis_first_param, l);
+            if matches!(
+                d.ctx,
+                DeclaratorContext::File | DeclaratorContext::Block | DeclaratorContext::Member
+            ) {
+                d.c_ellipsis_first.push(l);
+            } else {
+                self.s.error(DiagId::parse_ellipsis_first_param, l);
+            }
         }
     }
 

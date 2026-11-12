@@ -220,6 +220,11 @@ as `clang-19 -x c` lexes them:
   (`a.*b` is `.` `*`); `::` is one in every C mode, as in clang.
 - **`<::`** ([lex.pptoken]/3.2) is C++'s rule: in C `<:` is always the
   digraph (`a<::b` is `a` `<:` `:` `b`).
+- **No digraphs in strict C89** (WP-1331; C95 6.4.6/3 added them with
+  amendment 1): with `LexOptions::digraphs` false (the driver's
+  `LangStd::digraphs`, false for `-std=c89` only) `<:` `:>` `<%` `%>`
+  `%:` `%:%:` lex as their separate characters, as in clang 19/22;
+  `gnu89` and `iso9899:199409` keep them.
 - **No ud-suffixes** (C23 6.4.4, 6.4.5): `"s"_x` is a string and an
   identifier.
 - **Raw strings** are a GNU extension of gnu99 and later (`gnu: true`);
@@ -261,6 +266,13 @@ as `clang-19 -x c` lexes them:
   spec/pp.md "C mode"); the lexer has no keywords.
 
 Tests: `crates/kiln_lex/tests/c_mode.rs`, `tests/c/lex/`.
+
+### Assembler-with-cpp (WP-1331)
+
+`LexOptions::asm` (a `.S` input, spec/pp.md "Assembler-with-cpp"): an
+unterminated character or string literal, and the empty `''`, are formed
+as an unknown token as usual but without a diagnostic, as clang's lexer
+under `AsmPreprocessor` (`'` is an ordinary character in assembly).
 
 ### Directive and header-name protocol
 - `in_directive`: the next newline (not consumed) or end of input yields
@@ -400,7 +412,8 @@ pub struct FloatLiteral<'s> { radix, int_digits, frac_digits, exponent: i64, suf
 pub fn is_valid_ud_suffix(s: &str, Std) -> bool;  // clang NumericLiteralParser::isValidUDSuffix
 //   parse_f64() / parse_f32(): correctly rounded (ties to even), inf on overflow
 pub enum Radix { Binary, Octal, Decimal, Hex }  pub struct IntSuffix { unsigned, size: IntSize }
-pub enum IntSize { None, Long, LongLong, Size }
+pub enum IntSize { None, Long, LongLong, Size, BitInt }  // BitInt: C's `wb` (WP-1331)
+pub fn classify_number_in(spelling, Std, c: Option<CStd>) -> Number;  // classify_number = c None
 pub enum FloatSuffix { None, F, L, F16, F32, F64, F128, BF16 }
 ```
 All of this is additive to the WP-010 interface; the new `LexDiagKind`
@@ -443,7 +456,14 @@ variants are additions to a `#[non_exhaustive]` enum.
 - pp-numbers: binary (C++14; earlier `BinaryLiteralExtension`), octal,
   decimal, hex; hex floats (C++17; `HexFloatExtension`); digit separators
   (C++14; `DigitSeparatorPosition`); integer suffixes `u`, `l`, `ll`, `z`
-  (C++23; `SizeSuffixExtension`) in any legal order and case; float
+  (C++23; `SizeSuffixExtension`) in any legal order and case, and in C
+  only (`classify_number_in` with `c` set; WP-1331) `wb` / `WB` (not
+  `wB` / `Wb`; C23 6.4.4.1) with `u` / `U` before or after, never with
+  `l`/`ll`/`z`: `IntSize::BitInt`, diagnosed at the literal's start with
+  `BitIntSuffixExtension` before C23 (`lit_bit_int_suffix_ext`, "a C23
+  extension" [-Wc23-extensions]) and `BitIntSuffixCompat` from C23 on
+  (`lit_bit_int_suffix_compat`, off-by-default [-Wpre-c23-compat]); in
+  C++ `1wb` stays an invalid suffix, as clang 19/22; float
   suffixes `f l f16 f32 f64 f128 bf16` (see "Extended floating
   suffixes"). Diagnostics follow clang's
   `NumericLiteralParser` (`InvalidDigit`, `InvalidSuffix`,

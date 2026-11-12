@@ -23,7 +23,7 @@ mod number;
 
 pub use number::{
     FloatLiteral, FloatSuffix, IntSize, IntSuffix, IntegerLiteral, Number, NumberClass, Radix,
-    classify_number, is_valid_ud_suffix,
+    classify_number, classify_number_in, is_valid_ud_suffix,
 };
 
 use std::fmt::Write as _;

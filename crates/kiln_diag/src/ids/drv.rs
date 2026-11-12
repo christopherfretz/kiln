@@ -19,6 +19,8 @@ drv_compilation_database = Error (2) "compilation database '{0}' could not be op
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
+// WP-1331: clang `warn_drv_input_file_unused` (`'assembler'`: a `.s` under `-S`, `-E`, `-fsyntax-only`, `-M`).
+drv_input_unused = Warning [UnusedCommandLineArgument] (2) "{0}: '{1}' input unused";
 // WP-811: a driver option spelled like a warning (`-Wframe-larger-than=N`);
 // WP-813: `-fpatchable-function-entry=` with a malformed value.
 drv_invalid_argument_to_option = Error (2) "invalid argument '{0}' to -{1}";
@@ -44,6 +46,8 @@ drv_module_file_nameless = Warning [EagerLoadCxxNamedModules] (0) "the form '-fm
 drv_no_input_files = Error (0) "no input files";
 drv_no_such_file = Error (1) "no such file or directory: '{0}'";
 drv_not_implemented = Error (1) "{0} is not implemented yet";
+// WP-1331: the standards an invalid `-std=` value lists, one per note.
+drv_note_use_std = Note (2) "use {0} for '{1}' standard";
 drv_opt_not_valid_on_target = Error (1) "option '{0}' cannot be specified on this target";
 // ----- WP-228 (driver flags a target does not support)
 drv_option_ignored = Warning [OptionIgnored] (2) "'{0}' does not support '{1}'; flag ignored";

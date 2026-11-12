@@ -162,6 +162,10 @@ pub struct Job<'j> {
     pub diag_opts: &'j DiagOptions,
     /// Standard error.
     pub stderr: SharedWriter,
+    /// The input is assembler-with-cpp (`.S`, WP-1331): the preprocessor
+    /// runs in its mode ([`PpOptions::asm`]) and `__ASSEMBLER__` is
+    /// defined.
+    pub asm: bool,
 }
 
 impl Job<'_> {
@@ -217,6 +221,7 @@ impl Job<'_> {
         let cplusplus = self.std.cplusplus;
         let mut cfg = PredefConfig::new(cplusplus);
         cfg.gnu = self.std.gnu;
+        cfg.stdc_version = self.std.stdc_version();
         cfg.aarch64 = self.toolchain.target.is_aarch64();
         if cfg.aarch64 {
             // Errors were reported by the driver's own `resolve` pass.
@@ -269,7 +274,15 @@ impl Job<'_> {
         cfg.reflection = p.reflection_for(&self.std);
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
-        Some(build_predefines(&base, &cfg, &self.args.macros))
+        let mut text = build_predefines(&base, &cfg, &self.args.macros);
+        if self.asm {
+            // clang `InitializePredefinedMacros`: `__ASSEMBLER__` under
+            // `AsmPreprocessor`. The `<command line>` part (the `-D`s)
+            // follows a line marker; the macro goes before it.
+            let at = text.find("# 1 \"<command line>\"").unwrap_or(text.len());
+            text.insert_str(at, "#define __ASSEMBLER__ 1\n");
+        }
+        Some(text)
     }
 
     fn pp_options(&self, predefines: String) -> PpOptions {
@@ -280,7 +293,11 @@ impl Job<'_> {
         o.trigraphs = a.trigraphs.unwrap_or(
             !(self.std.gnu || self.std.cplusplus && self.std.lex >= kiln_lex::Std::Cxx17),
         );
-        o.dollar_in_identifiers = a.dollars.unwrap_or(true);
+        // clang `LangOptions::setLangDefaults`: no `$` in identifiers in
+        // assembler-with-cpp, where it marks immediates.
+        o.dollar_in_identifiers = a.dollars.unwrap_or(!self.asm);
+        o.asm = self.asm;
+        o.digraphs = self.std.digraphs();
         o.keep_comments = a.print.comments || a.print.macro_comments;
         o.keep_macro_comments = a.print.macro_comments;
         o.reflection = a.predef.reflection_for(&self.std);

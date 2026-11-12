@@ -21,7 +21,7 @@ use kiln_pp::{ClangCompat, PicModel};
 use kiln_sema::target::Target;
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, Args, DriverMode, Input, LinkOptKind};
+use crate::args::{Action, Args, AsmKind, DriverMode, Input, LinkOptKind};
 use crate::link::Command;
 use crate::pp_cmd::{Job, PpInputs, SharedDeps, SharedSkips};
 use crate::time_trace::{self, InputTrace};
@@ -68,10 +68,10 @@ impl Phase {
     }
 }
 
-/// True if `input` is compiled (a C or C++ source, or any file after
-/// `-x`); everything else is a linker input, as in clang.
+/// True if `input` is compiled (a C or C++ source, an assembly input, or
+/// any file after `-x`); everything else is a linker input, as in clang.
 pub fn is_source(input: &Input) -> bool {
-    if input.lang.is_some() || input.path == "-" {
+    if input.lang.is_some() || input.asm.is_some() || input.path == "-" {
         return true;
     }
     let ext = Path::new(&input.path).extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -552,6 +552,12 @@ enum Step<'a> {
     /// An external command (`llc`, `llvm-as`, `clang++`), with the IR of
     /// the preceding frontend step on its standard input if `piped`.
     External { cmd: Command, piped: bool },
+    /// Preprocess an assembler-with-cpp input (`.S`) into `dest` (`-` is
+    /// standard output), as `-E` would (WP-1331).
+    Preprocess { input: &'a Input, dest: String },
+    /// Assemble (`clang++ -c -x assembler`); skipped when `after_pp` and
+    /// the preceding [`Step::Preprocess`] failed.
+    Assemble { cmd: Command, after_pp: bool },
 }
 
 /// Where a frontend step's IR goes.
@@ -590,7 +596,7 @@ pub fn compile(
             return 1;
         }
         if !args.quiet_unused_arguments {
-            warn_unused_link_inputs(args, inputs, &drv);
+            warn_unused_link_inputs(args, inputs, phase, &drv);
         }
     }
     if check_asm_opts(args, phase, sources, &drv) {
@@ -667,7 +673,7 @@ fn check_asm_opts(args: &Args, phase: Phase, sources: usize, drv: &DiagEngine<'_
 
 /// `<x>: 'linker' input unused` and `argument unused during compilation`
 /// for a compile-only run, in command-line order.
-fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>) {
+fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], phase: Phase, drv: &DiagEngine<'_>) {
     let report_opts = |pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
             match o.kind {
@@ -690,8 +696,20 @@ fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], drv: &DiagEngine<'_>)
     // `inputs` holds only the existing inputs; positions count all of them.
     for (pos, input) in args.inputs.iter().enumerate() {
         report_opts(pos);
-        if inputs.iter().any(|i| std::ptr::eq(*i, input)) && !is_source(input) {
+        let existing = inputs.iter().any(|i| std::ptr::eq(*i, input));
+        if existing && !is_source(input) {
             Diag::new(DiagId::drv_linker_input_unused, Span::INVALID).arg(&input.path).emit(drv);
+        }
+        // `-S` (and `-S -emit-llvm`) stop before a plain `.s` is
+        // assembled: clang `'assembler' input unused`.
+        if existing
+            && input.asm == Some(AsmKind::Plain)
+            && matches!(phase, Phase::IrText | Phase::Assembly)
+        {
+            Diag::new(DiagId::drv_input_unused, Span::INVALID)
+                .arg(&input.path)
+                .arg(AsmKind::Plain.type_name())
+                .emit(drv);
         }
     }
     report_opts(args.inputs.len());
@@ -754,6 +772,12 @@ fn plan<'a>(
             link_inputs.push((pos, input.path.clone()));
             continue;
         }
+        if let Some(kind) = input.asm {
+            if let Some(obj) = plan_asm(args, tc, input, kind, phase, temp, n, &mut steps) {
+                link_inputs.push((pos, obj));
+            }
+            continue;
+        }
         let out = || args.output.clone().unwrap_or_else(|| default_output(&input.path, phase));
         match phase {
             Phase::IrText => {
@@ -808,6 +832,93 @@ fn plan<'a>(
         steps.push(Step::External { cmd: link_command(args, tc, &link_inputs), piped: false });
     }
     steps
+}
+
+/// The steps of an assembly input (spec/driver.md "Assembler inputs",
+/// WP-1331), as clang's phases: a `.S` is preprocessed (to its output
+/// under `-S` and `-S -emit-llvm`, standard output by default, else to a
+/// temporary `.s`), then assembled to the object (`-c`, also with
+/// `-emit-llvm` or `-flto`) or, for a link, a temporary object, which is
+/// returned. A plain `.s` has no step under `-S` (`'assembler' input
+/// unused`, [`warn_unused_link_inputs`]).
+#[allow(clippy::too_many_arguments)]
+fn plan_asm<'a>(
+    args: &Args,
+    tc: &Toolchain,
+    input: &'a Input,
+    kind: AsmKind,
+    phase: Phase,
+    temp: &TempDir,
+    n: usize,
+    steps: &mut Vec<Step<'a>>,
+) -> Option<String> {
+    let stem = Path::new(&input.path)
+        .file_stem()
+        .map_or_else(|| input.path.clone(), |s| s.to_string_lossy().into_owned());
+    if matches!(phase, Phase::IrText | Phase::Assembly) {
+        if kind == AsmKind::Cpp {
+            let dest = args.output.clone().unwrap_or_else(|| "-".to_owned());
+            steps.push(Step::Preprocess { input, dest });
+        }
+        return None;
+    }
+    let source = if kind == AsmKind::Cpp {
+        let s = temp.file(&format!("{n}-{stem}.s"));
+        steps.push(Step::Preprocess { input, dest: s.clone() });
+        s
+    } else {
+        input.path.clone()
+    };
+    let (out, linked) = if phase == Phase::Link {
+        (temp.file(&format!("{n}-{stem}.o")), true)
+    } else {
+        (args.output.clone().unwrap_or_else(|| default_output(&input.path, Phase::Object)), false)
+    };
+    let cmd = assembler(args, tc, &source, out.clone());
+    steps.push(Step::Assemble { cmd, after_pp: kind == AsmKind::Cpp });
+    linked.then_some(out)
+}
+
+/// The integrated assembler on `source` (the input, or its preprocessed
+/// text), writing the object `out`: `clang++ -c -x assembler` of the
+/// selected LLVM installation, with the target, `-march=` / `-mcpu=`,
+/// the `-I` directories (`.include`), `-g`, `-gz`, `-fno-pic` and the
+/// `-Wa,` / `-Xassembler` options, as clang's `cc1as` job receives them.
+fn assembler(args: &Args, tc: &Toolchain, source: &str, out: String) -> Command {
+    let mut cmd = Command::new(tc, Tool::Assembler);
+    cmd.arg(format!("--target={}", tc.target.triple));
+    if let Some(m) = &args.march {
+        cmd.arg(format!("-march={m}"));
+    }
+    if let Some(m) = &args.mcpu {
+        cmd.arg(format!("-mcpu={m}"));
+    }
+    for (g, d) in &args.dirs {
+        if *g == kiln_pp::DirGroup::Angled {
+            cmd.arg(format!("-I{d}"));
+        }
+    }
+    if let Some(v) = args.debug.dwarf_version() {
+        cmd.arg("-g").arg(format!("-gdwarf-{v}"));
+    }
+    if let Some(z) = args.debug.compression() {
+        cmd.arg(format!("-gz={}", z.name()));
+    }
+    if args.predef.pic == Some(PicModel::None) {
+        cmd.arg("-fno-pic");
+    }
+    for o in &args.asm {
+        if o.opt == "-Wa," {
+            cmd.arg(o.arg.clone());
+        } else {
+            for v in &o.values {
+                cmd.arg("-Xassembler").arg(v.clone());
+            }
+        }
+    }
+    cmd.arg("-Qunused-arguments").arg("-c").arg("-x").arg("assembler").arg(source);
+    cmd.arg("-o").arg(out);
+    cmd
 }
 
 /// The module text before its metadata section, which LLVM's printer
@@ -1219,7 +1330,10 @@ fn render(step: &Step<'_>, quote_all: bool) -> String {
             };
             format!(" (in-process) frontend \"{}\" -> \"{to}\"\n", input.path)
         }
-        Step::External { cmd, .. } => cmd.render(quote_all),
+        Step::External { cmd, .. } | Step::Assemble { cmd, .. } => cmd.render(quote_all),
+        Step::Preprocess { input, dest } => {
+            format!(" (in-process) preprocessor \"{}\" -> \"{dest}\"\n", input.path)
+        }
     }
 }
 
@@ -1346,6 +1460,27 @@ fn execute(
                     failed = true;
                 }
             }
+            Step::Preprocess { input, dest } => {
+                end_trace(trace.take(), args, diag_opts, io);
+                let ok = preprocess_asm(args, tc, input, dest, stdin_text, diag_opts, io, temp);
+                skip_piped = !ok;
+                failed |= !ok;
+            }
+            Step::Assemble { cmd, after_pp } => {
+                end_trace(trace.take(), args, diag_opts, io);
+                if *after_pp && skip_piped {
+                    continue;
+                }
+                if Phase::of(args) == Phase::Link
+                    && let Err(e) = temp.create()
+                {
+                    let dir = temp.path.display().to_string();
+                    report_output_error(diag_opts, &io.stderr, &dir, &e.to_string());
+                    failed = true;
+                    continue;
+                }
+                failed |= !cmd.run(None, &mut io.stdout, &io.stderr, drv);
+            }
             Step::External { cmd, piped: true } => {
                 if skip_piped {
                     continue;
@@ -1402,6 +1537,72 @@ fn end_trace(trace: Option<InputTrace>, args: &Args, diag_opts: &DiagOptions, io
     }
 }
 
+/// A [`Step::Preprocess`]: the `-E` job of the assembler-with-cpp input
+/// written to `dest`, and its `-MD` / `-MMD` file. False after an error.
+#[allow(clippy::too_many_arguments)]
+fn preprocess_asm(
+    args: &Args,
+    tc: &Toolchain,
+    input: &Input,
+    dest: &str,
+    stdin_text: Option<&str>,
+    diag_opts: &DiagOptions,
+    io: &mut Io,
+    temp: &TempDir,
+) -> bool {
+    let std = match input_std(args, args.input_lang(input)) {
+        Ok(s) => s,
+        Err(d) => {
+            let sm = SourceManager::new();
+            let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+            d.emit(&e);
+            e.flush();
+            return false;
+        }
+    };
+    let job = Job {
+        args,
+        toolchain: tc,
+        std,
+        path: &input.path,
+        stdin_text: (input.path == "-").then(|| stdin_text.unwrap_or_default().to_owned()),
+        diag_opts,
+        stderr: io.stderr.clone(),
+        asm: true,
+    };
+    let r = job.run();
+    if r.errors > 0 {
+        return false;
+    }
+    if Path::new(dest).starts_with(&temp.path)
+        && let Err(e) = temp.create()
+    {
+        report_output_error(
+            diag_opts,
+            &io.stderr,
+            &temp.path.display().to_string(),
+            &e.to_string(),
+        );
+        return false;
+    }
+    if let Err(e) = write_output(Some(dest), &r.output, &mut io.stdout) {
+        report_output_error(diag_opts, &io.stderr, dest, &e);
+        return false;
+    }
+    if let Some(files) = r.deps {
+        let text = crate::deps::deps_text(args, &input.path, &files);
+        let path = match crate::deps::dep_destination(args, &input.path) {
+            crate::deps::DepDest::Main => "-".to_owned(),
+            crate::deps::DepDest::File(f) => f,
+        };
+        if let Err(e) = write_output(Some(&path), &text, &mut io.stdout) {
+            report_output_error(diag_opts, &io.stderr, &path, &e);
+            return false;
+        }
+    }
+    true
+}
+
 /// The frontend on one source input; `None` after an error. Writes the
 /// input's `-MD` / `-MMD` dependency file, errors or not
 /// ([`crate::deps::write_side_file`]).
@@ -1435,6 +1636,7 @@ fn frontend(
         stdin_text: (input.path == "-").then(|| stdin_text.unwrap_or_default().to_owned()),
         diag_opts,
         stderr: io.stderr.clone(),
+        asm: false,
     };
     let checked = crate::pch_check::codegen(
         args,

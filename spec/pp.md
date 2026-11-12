@@ -608,6 +608,35 @@ all 20 configurations, and under each probed flag, against `clang-19 -x
 c` and, at 22, `clang-22 -x c` (a missing clang is skipped); the only
 allowed differences are the ACLE header builtins at 22 (above).
 
+### Assembler-with-cpp (WP-1331)
+
+`PpOptions::asm` (a `.S` input; clang `LangOptions::AsmPreprocessor`)
+preprocesses assembly, where `#`, `'` and `$` are ordinary characters:
+
+- `#` at the start of a line followed by a token that names no directive
+  is not an error (`invalid preprocessing directive`): the `#`, that token
+  and the rest of the line are returned to the token stream and
+  macro-expanded as text (clang `HandleDirective` re-enters the `#` and
+  the token after it). `# <number> ...` is such a line too, except in the
+  predefines buffer (where kiln's own line markers are directives): in
+  assembly it is usually a comment. A `#` alone on a line is still the
+  null directive.
+- In a function-like macro's replacement list a `#` not followed by a
+  parameter (or `__VA_OPT__`) is kept as an ordinary token, not `'#' is
+  not followed by a macro parameter`; it does not stringize, and the `-E`
+  printer does not indent it as a `#` (clang turns it into an unknown
+  token). A `#` ending the list is still the error.
+- The lexer (`LexOptions::asm`) forms an unterminated `'` or `"` literal
+  and the empty `''` as an unknown token without the
+  `missing terminating` / `empty character constant` diagnostics.
+- The driver defines `__ASSEMBLER__ 1` (just before the `<command line>`
+  part of the predefines) and turns off `$` in identifiers by default.
+
+Everything else (directives, expansion, `//` and `/* */` comments,
+`-E` printing) is the input language's. Tests:
+`crates/kiln_driver/tests/asm_inputs.rs` (`-E` text checked against
+clang 19 and 22).
+
 ### `PpCallbacks`: consumers are WP-014 (`-M`), WP-017 (`-dD`, `-dI`) and phase 7
 
 ```rust
@@ -856,7 +885,15 @@ spec/modules.md §11.13.
 - **`#embed`.** The core produces `prefix`, then the byte tokens
   (`is_embed_byte`: a pp-number per byte and the commas between them,
   spelled in one scratch buffer per embed), then `suffix`. An empty resource produces `if_empty`
-  instead. Each embed is preceded by `Marker::Embed`.
+  instead. Each embed is preceded by `Marker::Embed`. Its diagnostic
+  follows the language (WP-1331, clang 19/22 `ext_pp_embed_directive` /
+  `warn_compat_pp_embed_directive`): in C++, at every standard,
+  `pp_embed_ext` "#embed is a Clang extension" [-Wc23-extensions]; in C
+  before C23, `pp_embed_c23_ext` "#embed is a C23 extension"
+  [-Wc23-extensions]; in C23 and later (C2y too) nothing by default, only
+  `pp_embed_compat` "#embed is incompatible with C standards before C23"
+  under `-Wpre-c23-compat` (also `-Wpre-c2x-compat` and the `-pedantic`
+  groups), so `-std=c23 -Werror` compiles an `#embed`.
 - **`#line` and line markers.** `#line` operands are macro-expanded; line
   markers are not. Marker flag 2 with no matching flag-1 marker in the
   file is an error. Presumed locations are kept by kiln_source

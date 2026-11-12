@@ -59,7 +59,8 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-o <file>` | output file (`-` is standard output) |
 | `--driver-mode=g++`, `--driver-mode=gcc` | hidden (not in `--help`): the driver mode, overriding the program name; the last wins, wherever it is (see "Driver modes") |
 | `-x <lang>` | language of the following inputs: `c`, `c-header`, `cpp-output` -> C; `c++`, `c++-header`, `c++-cpp-output`, `c++-module` -> C++; `none` resets |
-| `-std=<std>` | `c++98`..`c++26`, `gnu++NN`, the `0x/1y/1z/2a/2b/2c` aliases; C: `c89/c99/c11/c17/c23`, `gnuNN`, `iso9899:*` |
+| `-std=<std>` | `c++98`..`c++26`, `gnu++NN`, the `0x/1y/1z/2a/2b/2c` aliases; C: `c89/c99/c11/c17/c23/c2y`, `gnuNN`, `iso9899:*` (clang's whole list; "Language mode") |
+| `-ansi`, `--ansi` | `-std=c89` for C, `-std=c++98` for C++; the last of it and `-std=` wins |
 | `-D`, `-U` | command-line macros, in order |
 | `-include <file>` (joined or separate) | `#include "<file>"` at the end of the predefines' `<command line>` section, after the `-D`/`-U` macros, in order (clang `AddImplicitInclude`); found from the working directory first, then the `"..."` search chain |
 | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem` | user search directories; `-I=dir` is relative to the sysroot |
@@ -129,7 +130,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
 | `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-rpath <dir>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs (`-rpath` takes a separate value only, as clang's; WP-1288) |
-| `-Wa,<a>[,<b>...]`, `-Xassembler <a>` | assembler options (WP-1288). kiln has no assembler step (`llc` writes the object, and marks the stack non-executable with `.note.GNU-stack` already), so the values are checked against what clang's integrated assembler accepts on Linux and otherwise have no effect: `--noexecstack`, `-L`, `--fatal-warnings`, `--no-warn`, `-W`, `-I<dir>` / `-I <dir>`, `-gdwarf-*`, `-force_cpusubtype_ALL`, `--allow-experimental-crel`, `--no-crel`, `-march=`/`-mcpu=`/`-mfpu=<v>`, `-mrelax-relocations=yes\|no`. `--compress-debug-sections[=none\|zlib\|zstd]` (also `-compress-...`) acts as `-gz[=...]` when there is no `-gz` (an unknown type is `invalid value '<t>' in '<v>'`). Any other value is `unsupported argument '<v>' to option '-Wa,'` (or `'-Xassembler'`), as in clang, and is checked only when a source is assembled (`-c` or a link); `-E`, `-fsyntax-only`, `-S` and `-emit-llvm` ignore them. Without a source to assemble, `-Wa,` is `argument unused during compilation: '-Wa,...'`, and `-Xassembler <a>` too under `-c` (clang's link job claims it silently). Not accepted, unlike clang: `--crel`, `--defsym`, `--version` |
+| `-Wa,<a>[,<b>...]`, `-Xassembler <a>` | assembler options (WP-1288). For a C or C++ source kiln has no assembler step (`llc` writes the object, and marks the stack non-executable with `.note.GNU-stack` already), so the values are checked against what clang's integrated assembler accepts on Linux and otherwise have no effect; an assembly input's assembler receives them as written ("Assembler inputs", WP-1331). The accepted values: `--noexecstack`, `-L`, `--fatal-warnings`, `--no-warn`, `-W`, `-I<dir>` / `-I <dir>`, `-gdwarf-*`, `-force_cpusubtype_ALL`, `--allow-experimental-crel`, `--no-crel`, `-march=`/`-mcpu=`/`-mfpu=<v>`, `-mrelax-relocations=yes\|no`. `--compress-debug-sections[=none\|zlib\|zstd]` (also `-compress-...`) acts as `-gz[=...]` when there is no `-gz` (an unknown type is `invalid value '<t>' in '<v>'`). Any other value is `unsupported argument '<v>' to option '-Wa,'` (or `'-Xassembler'`), as in clang, and is checked only when a source is assembled (`-c` or a link); `-E`, `-fsyntax-only`, `-S` and `-emit-llvm` ignore them. Without a source to assemble, `-Wa,` is `argument unused during compilation: '-Wa,...'`, and `-Xassembler <a>` too under `-c` (clang's link job claims it silently). Not accepted, unlike clang: `--crel`, `--defsym`, `--version` |
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
 | `-dI` | with `-E`: the text, plus every `#include`/`#include_next`/`#import` directive as `#include "x.h" /* clang -E -dI */` before the header's text (clang's spelling, WP-920) |
 | `-fmodule-file=<name>=<path>`, `-fprebuilt-module-path=<dir>` | C++20 modules: where module interface sources are found (see "Modules"); `-fmodule-file=<path>` without a name names a module file whose header gives the module (spec/modules.md §11.6) |
@@ -665,6 +666,8 @@ as in clang's table:
 | `.h` | `c-header` | C | C++ (`c++-header`), with the warning |
 | `.i` | `cpp-output` | C | C++ (`c++-cpp-output`), with the warning |
 | `.cc`, `.cp`, `.cpp`, `.CPP`, `.cxx`, `.c++`, `.C`, `.ii`, `.cppm`, `.ixx`, `.hh`, `.hpp`, `.hxx`, `.H`, `.inc` | C++ types | C++ | C++ |
+| `.s` | `assembler` | assembly (below) | same |
+| `.S`, `.sx` | `assembler-with-cpp` | assembly, preprocessed (below) | same |
 | standard input (`-`) | | C | C++ |
 | anything else | | C++ for `-E`/`-fsyntax-only`; a linker input for codegen | same |
 
@@ -676,6 +679,42 @@ behavior is deprecated [-Wdeprecated]`. The `-W` options apply to it
 and no job runs. A C input runs the whole pipeline (`-E`,
 `-fsyntax-only`, codegen, link) in its language mode (below, WP-1275);
 the C semantics beyond the subset C shares with C++ are WP-1276's.
+
+### Assembler inputs (WP-1331)
+
+An assembly input is a `.s` (`-x assembler`) or `.S` / `.sx` (`-x
+assembler-with-cpp`) file, as clang types them; the driver mode does not
+matter. clang's phases apply, so no assembly input is ever silently
+dropped:
+
+| action | `.s` | `.S` |
+|---|---|---|
+| `-E`, `-M`, `-fsyntax-only` | `<f>: 'assembler' input unused` (`-Wunused-command-line-argument`), nothing else | preprocessed (`-E`, `-fsyntax-only`: the text to `-o` or standard output; `-M`: the rule) |
+| `-S`, `-S -emit-llvm` | `<f>: 'assembler' input unused` | preprocessed text to `-o`, else standard output |
+| `-c` (also with `-emit-llvm` or `-flto`) | assembled to `-o`, else `<stem>.o` | preprocessed to a temporary `.s`, then assembled |
+| link | assembled to a temporary object, linked in command-line order | preprocessed, assembled, linked |
+
+A `.S` is preprocessed by kiln's preprocessor in assembler-with-cpp mode
+(spec/pp.md "Assembler-with-cpp"): as C (gnu17 by default; a C++
+`-std=` preprocesses it as that C++ standard, as clang does), with
+`__ASSEMBLER__` defined as `1` and `$` not an identifier character
+(`-fdollars-in-identifiers` overrides). `-MD` / `-MMD` write its
+dependency file as for a C input. The line markers in the temporary file
+make the assembler's diagnostics name the `.S` and its lines.
+
+The assembler is the selected LLVM installation's `clang++` run as
+`clang++ --target=<triple> [-march=] [-mcpu=] [-I<dir>...] [-g
+-gdwarf-<N>] [-gz=<t>] [-fno-pic] [-Wa,... | -Xassembler <a>...]
+-Qunused-arguments -c -x assembler <file> -o <object>`: clang's
+integrated assembler (`cc1as`), which kiln does not reimplement. The
+`-Wa,` and `-Xassembler` values are checked first ("Assembler options"
+above) and then passed on unchanged. With no LLVM installation the step
+is the usual missing-tool error, naming `clang++`. A failing assembly is
+the assembler's diagnostics followed by `assembler command failed with
+exit code <n> (use -v to see invocation)`, exit status 1 and no object;
+the link does not run. `-###` and `-v` print the steps (`(in-process)
+preprocessor "<f>.S" -> "<tmp>.s"`, then the `clang++` command).
+Test: `crates/kiln_driver/tests/asm_inputs.rs`.
 
 ### Language mode (WP-1275)
 
@@ -689,13 +728,50 @@ dialects are the same `CStd` with `LangStd::gnu` set. `-std=` spellings:
 
 | `CStd` | spellings |
 |---|---|
-| `C89` | `c89`, `c90`, `iso9899:1990`, `gnu89`, `gnu90` |
-| `C99` | `c99`, `c9x`, `iso9899:1999`, `gnu99`, `gnu9x` |
-| `C11` | `c11`, `c1x`, `iso9899:2011`, `gnu11`, `gnu1x` |
+| `C89` | `c89`, `c90`, `iso9899:1990`, `gnu89`, `gnu90`; `iso9899:199409` (C94) |
+| `C99` | `c99`, `c9x`, `iso9899:1999`, `iso9899:199x`, `gnu99`, `gnu9x` |
+| `C11` | `c11`, `c1x`, `iso9899:2011`, `iso9899:201x`, `gnu11`, `gnu1x` |
 | `C17` | `c17`, `c18`, `iso9899:2017`, `iso9899:2018`, `gnu17`, `gnu18` |
-| `C23` | `c23`, `c2x`, `iso9899:2024`, `gnu23`, `gnu2x` |
+| `C23` | `c23`, `c2x`, `iso9899:2024`, `gnu23`, `gnu2x`; `c2y`, `gnu2y` (C2y) |
 
 Without `-std=` a C input is `gnu17` (clang 19's default).
+
+WP-1331 completes the list against clang 19 and 22 (`LangStandards.def`,
+aliases included); every spelling clang accepts means what it means to
+clang, and nothing else is accepted:
+
+- **C94** (`iso9899:199409`, C90 with amendment 1; there is no `gnu94`)
+  is `CStd::C89` with `LangStd::base` `c94`: C89's predefines file with
+  `__STDC_VERSION__ 199409L` (`LangStd::stdc_version`,
+  `PredefConfig::stdc_version`) and digraphs.
+- **Digraphs** (`LangStd::digraphs`, `PpOptions::digraphs`,
+  `LexOptions::digraphs`) are tokens everywhere but strict `c89`: there
+  `<:` `:>` `<%` `%>` `%:` `%:%:` are their separate characters, so
+  `%:define` is no directive (clang's `c89` has no `Digraphs`; `gnu89`
+  and C94 do).
+- **C2y** (`c2y`, `gnu2y`, the working draft) is `CStd::C23` with base
+  `c2y`: C23's predefines with `__STDC_VERSION__ 202400L`, exactly as
+  clang 19/22 differ. kiln has none of clang 22's C2y-only features
+  (`_Countof`, `if` declarations, ...) yet; source using one is
+  diagnosed, never compiled as something else.
+- **`iso9899:2024`** is clang 20's alias for `c23`: at
+  `-fclang-compat=19` it is an invalid value, as in clang 19.
+- **`-ansi` / `--ansi`** is `-std=c89` for a C input and `-std=c++98`
+  for a C++ input (in `kiln` and `kiln++` alike, per input); the last of
+  `-ansi` and `-std=` wins (`Args::ansi`).
+- **OpenCL and HLSL** standards (`cl`, `CL`, `cl1.0`..`cl3.0`, their
+  `CL` aliases, `clc++`, `clc++1.0`, `clc++2021` and their `CLC++`
+  aliases, `hlsl`, `hlsl2015`..`hlsl202x`, and clang 22's `hlsl202y`):
+  kiln compiles neither language, and clang rejects them for a C or C++
+  input with `invalid argument '-std=<v>' not allowed with 'C'` (or
+  `'C++'`); kiln does the same (`toolchain::foreign_std`).
+- An **invalid value** (`invalid value '<v>' in '-std=<v>'`) is followed
+  by clang's notes listing the input language's standards
+  (`note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990'
+  standard`, ...; `drv_note_use_std`, `toolchain::std_notes`), with
+  clang 19's C23 entry (`'c23'` for `'Working Draft for ISO C23'`) at
+  `-fclang-compat=19`. clang lists every language's standards for an
+  assembler input; kiln lists C's there.
 
 ## Installation layout
 
@@ -2763,7 +2839,10 @@ Each deviation is covered by a test or a test note.
 10. **No `cc1` frontend command in `-###`/`-v`.** The frontend runs in
     process and prints as ` (in-process) frontend "<in>" -> "<out>"`;
     the backend is a separate `llc` (clang runs it inside `cc1`), and
-    the assembler is `llc -filetype=obj`, not `cc1as`.
+    the assembler is `llc -filetype=obj`, not `cc1as` (an assembly
+    input's is a separate `clang++ -c -x assembler`, "Assembler
+    inputs", which prints its own diagnostics and then the driver's
+    `assembler command failed`).
 11. **The IR is optimized by a separate `opt` run** of LLVM's default
     pipeline ("IR optimization" above), not inside the frontend, and
     kiln's unoptimized IR differs from clang's in places (no lifetime

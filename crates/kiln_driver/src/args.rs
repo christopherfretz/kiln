@@ -62,6 +62,45 @@ impl Lang {
     }
 }
 
+/// An assembly input (spec/driver.md "Assembler inputs", WP-1331).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AsmKind {
+    /// `.s`, `-x assembler`: assembled as is.
+    Plain,
+    /// `.S`, `.sx`, `-x assembler-with-cpp`: preprocessed (kiln's
+    /// preprocessor in assembler-with-cpp mode), then assembled.
+    Cpp,
+}
+
+impl AsmKind {
+    /// The assembly type of a file by its extension, as clang's
+    /// `lookupTypeForExtension` (case-sensitive: `.s` is plain, `.S` and
+    /// `.sx` are preprocessed).
+    pub fn of_path(p: &str) -> Option<AsmKind> {
+        match std::path::Path::new(p).extension().and_then(|e| e.to_str()) {
+            Some("s") => Some(AsmKind::Plain),
+            Some("S" | "sx") => Some(AsmKind::Cpp),
+            _ => None,
+        }
+    }
+
+    /// clang's name of the type, as in `'<type>' input unused`.
+    pub fn type_name(self) -> &'static str {
+        match self {
+            AsmKind::Plain => "assembler",
+            AsmKind::Cpp => "assembler-with-cpp",
+        }
+    }
+}
+
+/// The input type a `-x` sets: a language (and whether it is a
+/// `-header` type), or assembly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum XType {
+    Lang(Lang, bool),
+    Asm(AsmKind),
+}
+
 /// The driver mode, as clang's (`--driver-mode=`, else the program name;
 /// spec/driver.md "Driver modes"): what an input without `-x` is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -118,6 +157,9 @@ pub struct Input {
     /// That `-x` was `c-header` or `c++-header` (WP-1023: the input is
     /// precompiled; see [`Args::is_header_input`]).
     pub header: bool,
+    /// An assembly input: `-x assembler[-with-cpp]`, or without `-x` a
+    /// `.s` / `.S` / `.sx` file (WP-1331). `lang` is `None` then.
+    pub asm: Option<AsmKind>,
 }
 
 /// The `-ftime-trace` family (spec/driver.md "Time trace").
@@ -390,10 +432,11 @@ impl LinkOptKind {
 }
 
 /// An assembler option: `-Wa,<a>,<b>` or `-Xassembler <a>` (WP-1288).
-/// kiln has no assembler step (`llc` writes the object), so the values are
-/// checked against the integrated assembler options clang accepts and
-/// otherwise have no effect, except `--compress-debug-sections`, which acts
-/// as `-gz` (spec/driver.md "Assembler options").
+/// A C or C++ source has no assembler step (`llc` writes the object), so
+/// the values are checked against the integrated assembler options clang
+/// accepts and otherwise have no effect, except `--compress-debug-sections`,
+/// which acts as `-gz` (spec/driver.md "Assembler options"); an assembly
+/// input's assembler receives them as written (WP-1331).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AsmOpt {
     /// The option as written: `-Wa,--noexecstack` or `-Xassembler`.
@@ -531,6 +574,9 @@ pub struct Args {
     pub action: Action,
     /// `-std=` as written.
     pub std: Option<String>,
+    /// `-ansi` / `--ansi` came after the last `-std=` (WP-1331): the
+    /// input's language picks `-std=c89` or `-std=c++98`.
+    pub ansi: bool,
     /// `--version`.
     pub version: bool,
     /// `-v`.
@@ -1017,8 +1063,13 @@ const SEPARATE: &[&str] = &["-ftrapv-handler", "-include-pch"];
 impl Input {
     /// The input `path` under the `-x` in force (its language, and
     /// whether that is a `-header` type).
-    fn under_x(path: &str, x: Option<(Lang, bool)>) -> Input {
-        Input { path: path.to_owned(), lang: x.map(|(l, _)| l), header: x.is_some_and(|(_, h)| h) }
+    fn under_x(path: &str, x: Option<XType>) -> Input {
+        let (lang, header, asm) = match x {
+            Some(XType::Lang(l, h)) => (Some(l), h, None),
+            Some(XType::Asm(k)) => (None, false, Some(k)),
+            None => (None, false, AsmKind::of_path(path)),
+        };
+        Input { path: path.to_owned(), lang, header, asm }
     }
 }
 
@@ -1041,7 +1092,7 @@ impl Args {
             predef: PredefArgs { clang_compat: DEFAULT_CLANG_COMPAT, ..PredefArgs::default() },
             ..Args::default()
         };
-        let mut x: Option<(Lang, bool)> = None;
+        let mut x: Option<XType> = None;
         let mut verify = VerifyRaw::default();
         let mut i = 0;
         while i < argv.len() {
@@ -1285,6 +1336,17 @@ impl Args {
     /// The language of `input`: its `-x`, else [`Lang::of_input`] in
     /// [`Args::mode`].
     pub fn input_lang(&self, input: &Input) -> Lang {
+        if input.asm.is_some() {
+            // clang preprocesses assembly as C, or as C++ under a C++
+            // `-std=` (whatever the driver mode).
+            let cxx = !self.ansi
+                && self
+                    .std
+                    .as_deref()
+                    .and_then(crate::toolchain::LangStd::parse)
+                    .is_some_and(|s| s.cplusplus);
+            return if cxx { Lang::Cxx } else { Lang::C };
+        }
         input.lang.unwrap_or_else(|| Lang::of_input(&input.path, self.mode).0)
     }
 
@@ -1295,6 +1357,7 @@ impl Args {
     pub fn is_header_input(&self, input: &Input) -> bool {
         input.header
             || input.lang.is_none()
+                && input.asm.is_none()
                 && matches!(
                     std::path::Path::new(&input.path).extension().and_then(|e| e.to_str()),
                     Some("h" | "hh" | "hpp" | "hxx" | "H")
@@ -1307,7 +1370,7 @@ impl Args {
     pub fn promoted_inputs<'a>(&self, inputs: &[&'a Input]) -> Vec<(&'a Input, Promotion)> {
         inputs
             .iter()
-            .filter(|i| i.lang.is_none())
+            .filter(|i| i.lang.is_none() && i.asm.is_none())
             .filter_map(|&i| Lang::of_input(&i.path, self.mode).1.map(|p| (i, p)))
             .collect()
     }
@@ -1320,7 +1383,7 @@ impl Args {
         value: Valued<'_>,
         next: Option<&String>,
         xclang: bool,
-        x: &mut Option<(Lang, bool)>,
+        x: &mut Option<XType>,
     ) {
         match (value, next) {
             (Valued::Next, Some(v)) if opt == "-ftrapv-handler" => {
@@ -1334,7 +1397,7 @@ impl Args {
         }
     }
 
-    fn valued(&mut self, opt: &str, v: &str, x: &mut Option<(Lang, bool)>) {
+    fn valued(&mut self, opt: &str, v: &str, x: &mut Option<XType>) {
         let v_owned = v.to_owned();
         match opt {
             "-D" => self.macros.push(CmdMacro::Define(v_owned)),
@@ -1354,7 +1417,10 @@ impl Args {
             "-resource-dir" => self.resource_dir = Some(v_owned),
             "-target" | "--target" => self.target = Some(v_owned),
             "-target-feature" => self.target_features.push(v_owned),
-            "-std" | "--std" => self.std = Some(v_owned),
+            "-std" | "--std" => {
+                self.std = Some(v_owned);
+                self.ansi = false;
+            }
             "-o" => self.output = Some(v_owned),
             "-l" | "-L" => self.link.push(LinkOpt {
                 pos: self.inputs.len(),
@@ -1374,7 +1440,9 @@ impl Args {
             "-MT" => self.deps.targets.push((v_owned, false)),
             "-MQ" => self.deps.targets.push((v_owned, true)),
             "-x" => match Lang::from_x(v) {
-                Some(l) => *x = Some((l, v.ends_with("-header"))),
+                Some(l) => *x = Some(XType::Lang(l, v.ends_with("-header"))),
+                None if v == "assembler" => *x = Some(XType::Asm(AsmKind::Plain)),
+                None if v == "assembler-with-cpp" => *x = Some(XType::Asm(AsmKind::Cpp)),
                 None if v == "none" => *x = None,
                 None => self.errors.push(ArgError::InvalidValue("-x".to_owned(), v_owned)),
             },
@@ -1485,6 +1553,7 @@ impl Args {
             "-fno-module-file-deps" => self.deps.module_files = Some(false),
             "-MG" => self.deps.missing_generated = true,
             "-trigraphs" | "--trigraphs" | "-ftrigraphs" => self.trigraphs = Some(true),
+            "-ansi" | "--ansi" => self.ansi = true,
             "-fno-trigraphs" => self.trigraphs = Some(false),
             "-fdollars-in-identifiers" => self.dollars = Some(true),
             "-fno-dollars-in-identifiers" => self.dollars = Some(false),
@@ -2124,7 +2193,10 @@ mod tests {
             ]
         );
         assert_eq!(a.output.as_deref(), Some("out"));
-        assert_eq!(a.inputs, [Input { path: "t.cpp".into(), lang: None, header: false }]);
+        assert_eq!(
+            a.inputs,
+            [Input { path: "t.cpp".into(), lang: None, header: false, asm: None }]
+        );
         assert_eq!(a.errors, []);
     }
 

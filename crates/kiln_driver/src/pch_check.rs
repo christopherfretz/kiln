@@ -68,6 +68,7 @@ impl Input<'_> {
             stdin_text: self.stdin_text.clone(),
             diag_opts: self.diag_opts,
             stderr,
+            asm: false,
         }
     }
 

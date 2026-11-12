@@ -54,20 +54,9 @@ that page was measured before the C semantics landed and is not a
 current figure. What is not done yet:
 
 - **Found during release review, tracked as [WP-1331](BACKLOG.md):**
-  - `<tgmath.h>` before C23 is rejected: its `__attribute__((overloadable))`
-    declaration with only `...` gives "ISO C requires a named parameter
-    before '...'". At `-std=c23` it compiles.
-  - `-ansi` is `unknown argument`; `-std=c2y`, `gnu2y` and
-    `iso9899:199409` are `invalid value`. clang 19 takes all four.
-  - `#embed` at `-std=c23` warns "#embed is a Clang extension
-    [-Wc23-extensions]" where clang gives no warning, which breaks a
-    `-Werror` build.
-  - The C23 `_BitInt` literal suffixes `wb` and `uwb` are "invalid
-    suffix 'wb' on integer constant". `_BitInt(N)` itself works.
-  - An assembler source (`.s`, `.S`) is not assembled by `-c`: kiln
-    warns "'linker' input unused [-Wunused-command-line-argument]",
-    writes no object and exits 0. In a link step it is passed to the
-    linking clang, which assembles it.
+  - A `wb` / `uwb` literal over 128 bits (x86-64 allows up to 8388608)
+    is "integer literal is too large"; clang types it as `_BitInt(N)`
+    (`tests/c/c23/bitint-literal-wide-x86_64.c`, xfail).
   - `-Wunused-function`, `-Wparentheses`, `-Wsign-compare`,
     `-Wfortify-source` and `-Warray-bounds` on a constant out-of-range
     index are not emitted, in C and C++.

@@ -498,6 +498,7 @@ fn preprocess(args: &Args, input: &CrashInput) -> Option<String> {
                 stdin_text: input.stdin.clone(),
                 diag_opts: &diag_opts,
                 stderr: sink,
+                asm: false,
             };
             Some(job.run().output)
         })

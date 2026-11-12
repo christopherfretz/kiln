@@ -132,6 +132,10 @@ impl<'a> Preprocessor<'a, '_> {
             }
             self.emit(Diag::new(DiagId::pp_embedded_directive_ext, name.tok.span));
         }
+        if self.opts.asm && self.asm_passthrough(&name, dir) {
+            self.asm_reinject(hash, name);
+            return;
+        }
         match name.kind() {
             TokKind::Eod => {}
             TokKind::PpNumber => self.do_line_marker(name),
@@ -163,6 +167,39 @@ impl<'a> Preprocessor<'a, '_> {
             },
         }
         self.finish_directive();
+    }
+
+    /// Whether the directive line `# name ...` of an assembler-with-cpp
+    /// input is text, not a directive (clang `HandleDirective` under
+    /// `AsmPreprocessor`): `name` is no directive (and not the end of the
+    /// line), or a number outside the predefines buffer (`# 4` may be an
+    /// assembler comment).
+    fn asm_passthrough(&self, name: &PpTok, dir: Option<Dir>) -> bool {
+        match name.kind() {
+            TokKind::Eod => false,
+            TokKind::PpNumber => {
+                !matches!(self.frames.last(), Some(Frame::File(f)) if Some(f.file) == self.predef_file)
+            }
+            _ => dir.is_none(),
+        }
+    }
+
+    /// Returns the `#`, `name` and the rest of the line to the token
+    /// stream, macro-expanded as ordinary text (clang re-enters `#` and
+    /// the token after it with expansion enabled).
+    fn asm_reinject(&mut self, hash: Token, name: PpTok) {
+        let mut toks = self.take_buf();
+        toks.push(PpTok::new(hash));
+        toks.push(name);
+        loop {
+            let t = self.lex_unexpanded();
+            if matches!(t.kind(), TokKind::Eod | TokKind::Eof) {
+                break;
+            }
+            toks.push(t);
+        }
+        self.finish_directive();
+        self.push_stream(toks, false);
     }
 
     /// Reads the macro name of `#define` / `#undef` / `#ifdef` / ...
@@ -586,6 +623,18 @@ impl<'a> Preprocessor<'a, '_> {
                 let next = self.lex_unexpanded();
                 let is_va_opt = next.ident() == Some(self.syms.va_opt);
                 if !is_va_opt && !next.ident().is_some_and(|s| params.contains(&s)) {
+                    // Assembler-with-cpp: `#` is often a comment or an
+                    // immediate there; it stays an ordinary token (clang
+                    // `ReadMacroDefinition`).
+                    if self.opts.asm && next.kind() != TokKind::Eod {
+                        // An unknown token, as clang's, so that the
+                        // printer does not indent it as a `#`.
+                        let mut hash = tok;
+                        hash.tok.kind = TokKind::Unknown;
+                        body.push(hash);
+                        tok = next;
+                        continue;
+                    }
                     self.emit(Diag::new(DiagId::pp_hash_not_followed_by_param, next.tok.span));
                     return false;
                 }
@@ -1764,11 +1813,18 @@ impl Preprocessor<'_, '_> {
         Ok((v, cur.tok.span))
     }
 
-    /// `#embed` ([cpp.embed], a Clang extension in C++): the resource's
-    /// bytes become `prefix` tokens, comma-separated integer literals and
-    /// `suffix` tokens, or the `if_empty` tokens when it is empty.
+    /// `#embed` ([cpp.embed], a Clang extension in C++ at every standard,
+    /// C23 6.10.4 in C: an extension before C23, a `-Wpre-c23-compat`
+    /// warning from C23 on): the resource's bytes become `prefix` tokens,
+    /// comma-separated integer literals and `suffix` tokens, or the
+    /// `if_empty` tokens when it is empty.
     fn do_embed(&mut self, name: PpTok) {
-        self.emit(Diag::new(DiagId::pp_embed_ext, name.tok.span));
+        let id = match self.opts.c {
+            None => DiagId::pp_embed_ext,
+            Some(c) if c >= kiln_lex::CStd::C23 => DiagId::pp_embed_compat,
+            Some(_) => DiagId::pp_embed_c23_ext,
+        };
+        self.emit(Diag::new(id, name.tok.span));
         let Ok(ft) = self.lex_header_name() else { return };
         if ft.kind() != TokKind::HeaderName {
             self.emit(Diag::new(DiagId::pp_include_expects_file, ft.tok.span));

@@ -831,6 +831,12 @@ pub struct Declarator {
     /// `this` before a parameter-declaration (an explicit object
     /// parameter, P0847 [dcl.fct]/6).
     pub explicit_object: Option<Loc>,
+    /// C before C23: the `...` of each function declarator here that
+    /// names no parameter before it (`void f(...)`), set by the parser
+    /// for a declaration; [`crate::Sema::act_on_declarator`] reports them
+    /// unless the declaration is `overloadable` (clang
+    /// `GetFullTypeForDeclarator`, `err_ellipsis_first_param`; WP-1331).
+    pub c_ellipsis_first: Vec<Loc>,
     /// Where the innermost function declarator's `const`, `volatile`,
     /// ref-qualifier and `__restrict` are ("explicit object member
     /// function cannot have '...' qualifier" points at the first and
@@ -1060,6 +1066,7 @@ impl Declarator {
             pure: None,
             late_noexcept: None,
             explicit_object: None,
+            c_ellipsis_first: Vec::new(),
             fn_qual_locs: [None; 4],
             fn_nullability: None,
             nullability: Vec::new(),
