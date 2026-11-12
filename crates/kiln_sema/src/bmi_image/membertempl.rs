@@ -65,7 +65,9 @@ pub(super) fn enclosing_heads(
     while cur != NONE {
         let r = img.decls.get(cur as usize)?;
         match r.payload {
-            Payload::Record { .. } => {
+            // WP-1350: a closure type or local class is in a function,
+            // a template's pattern or not.
+            Payload::Record { .. } | Payload::Function { .. } => {
                 if let Some(n) = head_len(img, pats, cur) {
                     out.push(n);
                 }

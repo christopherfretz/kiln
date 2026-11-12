@@ -35,6 +35,7 @@
 
 use kiln_ast::types::{
     BuiltinType, ExcSpec, ExprOperand, FuncProto, NoexceptValue, TemplateArg, TypeKind, TypeView,
+    VectorKind,
 };
 use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 
@@ -69,6 +70,10 @@ pub(super) enum ExTy {
     DepArray { elem: QRef, e: u32, canon: bool },
     /// `P...` expanding to `n` elements.
     PackN { pattern: QRef, n: u32 },
+    /// A vector of a value-dependent element count (WP-1350:
+    /// `__attribute__((ext_vector_type(N))) T`), `kind` its
+    /// `VectorKind`; `canon` as for [`ExTy::DepArray`].
+    DepVector { elem: QRef, e: u32, kind: u8, canon: bool },
 }
 
 pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
@@ -90,6 +95,13 @@ pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
             w.q(*pattern);
             w.u32(*n);
         }
+        ExTy::DepVector { elem, e, kind, canon } => {
+            w.u8(3);
+            w.q(*elem);
+            w.u32(*e);
+            w.u8(*kind);
+            w.u8(u8::from(*canon));
+        }
     }
 }
 
@@ -110,6 +122,16 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
             }
         }
         2 => ExTy::PackN { pattern: r.q()?, n: r.u32()? },
+        3 => {
+            let (elem, e, kind) = (r.q()?, r.u32()?, r.u8()?);
+            if VectorKind::from_u8(kind) as u8 != kind {
+                return bad("bad dependent vector type");
+            }
+            match r.u8()? {
+                c @ 0..=1 => ExTy::DepVector { elem, e, kind, canon: c != 0 },
+                _ => return bad("bad dependent vector type"),
+            }
+        }
         _ => return bad("bad expression type"),
     })
 }
@@ -118,7 +140,7 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
 pub(super) fn ex_refs(x: &ExTy) -> Vec<QRef> {
     match x {
         ExTy::Decltype { under, .. } => vec![*under],
-        ExTy::DepArray { elem, .. } => vec![*elem],
+        ExTy::DepArray { elem, .. } | ExTy::DepVector { elem, .. } => vec![*elem],
         ExTy::PackN { pattern, .. } => vec![*pattern],
     }
 }
@@ -201,7 +223,9 @@ fn arg_texprs(args: &[ArgRec], out: &mut Vec<u32>) {
 fn ty_texprs(t: &TyRec) -> Vec<u32> {
     let mut out = Vec::new();
     match t {
-        TyRec::Ex(ExTy::Decltype { e, .. } | ExTy::DepArray { e, .. }) => out.push(*e),
+        TyRec::Ex(
+            ExTy::Decltype { e, .. } | ExTy::DepArray { e, .. } | ExTy::DepVector { e, .. },
+        ) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
         TyRec::Tst { args, .. }
         | TyRec::Dep(DepTy::Tmpl { args, .. })
@@ -303,6 +327,14 @@ impl Writer<'_, '_, '_> {
                 };
                 let elem = self.qref(elem)?;
                 ExTy::DepArray { elem, e: self.texpr(expr)?, canon }
+            }
+            TypeView::DependentVector { elem, size, kind } => {
+                let (expr, canon) = match size {
+                    ExprOperand::Expr(e) => (e, false),
+                    ExprOperand::Profile(p) => (first(p)?, true),
+                };
+                let elem = self.qref(elem)?;
+                ExTy::DepVector { elem, e: self.texpr(expr)?, kind: kind as u8, canon }
             }
             TypeView::PackExpansion { pattern, num_expansions: Some(n) } => {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
@@ -523,6 +555,13 @@ impl Sema<'_, '_> {
                 let q = qt(self, pattern);
                 self.ast.types.pack_expansion(q, Some(n))
             }
+            ExTy::DepVector { elem, e, kind, canon } => {
+                let elem = qt(self, elem);
+                let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
+                let p = self.dependent_profile(e);
+                let q = self.ast.types.dependent_vector(elem, e, p, VectorKind::from_u8(kind));
+                if canon { self.ast.types.canonical(q) } else { q }
+            }
         }
     }
 }
@@ -549,6 +588,7 @@ mod tests {
             ExTy::Decltype { e: 1, under: q, dep: false, canon: false },
             ExTy::DepArray { elem: q, e: 2, canon: true },
             ExTy::PackN { pattern: q, n: 7 },
+            ExTy::DepVector { elem: q, e: 3, kind: 3, canon: false },
         ] {
             assert_eq!(round(&x), x);
         }

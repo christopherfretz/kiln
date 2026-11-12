@@ -222,9 +222,14 @@ impl Sema<'_, '_> {
     /// The value of the data member `field` (at offset 0) of the
     /// constant-initialized category value `holder` (clang's
     /// `ValueInfo::hasValidIntValue`).
-    fn cmp_value_int(&self, holder: DeclId, field: DeclId) -> Option<i64> {
-        let VarEvalState::Value(v) = self.ast.decls.var(holder)?.eval.state() else {
-            return None;
+    /// A declaration image does not carry an aggregate value (spec/modules.md
+    /// §11.11): an imported holder's is folded from its initializer here.
+    fn cmp_value_int(&mut self, holder: DeclId, field: DeclId) -> Option<i64> {
+        let data = self.ast.decls.var(holder)?;
+        let v = match (data.eval.state(), data.init) {
+            (VarEvalState::Value(v), _) => v,
+            (VarEvalState::NotEvaluated, Some(init)) => self.try_fold(init)?,
+            _ => return None,
         };
         let img = self.ast.consts.aggregate(v)?;
         let fty = self.ast.decls.get(field).ty()?;

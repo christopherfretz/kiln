@@ -1943,17 +1943,20 @@ fn kind2_declaration_image_imports() {
 fn kind2_declaration_image_fallback() {
     let d = scratch("image-fallback");
     for (src, why) in [
+        // WP-1350: lambdas and local classes are carried now
+        // (image-lambda-forms-run.cpp), but not a lambda in a
+        // requires-expression or a local class a deduced return type names.
         (
-            "export module f;\nexport inline int g() { return [] { return 1; }(); }\n",
-            "a local declaration the image does not carry",
+            "export module f;\nexport template <class T> concept C = requires { [] {}; };\n",
+            "a closure or local class named before its context is recorded",
         ),
         // WP-1343: try blocks and delete-expressions are carried now
         // (image-body-forms-run.cpp). WP-1345: anonymous unions, implicit
         // members of specializations and dependent using-declarations are
         // carried now (image-decl-forms-run.cpp).
         (
-            "export module f;\nexport inline int g() { struct L { int v; }; return L{1}.v; }\n",
-            "a local class or enumeration",
+            "export module f;\nexport inline auto g() { struct L { int v = 1; }; return L{}; }\n",
+            "a closure or local class named before its context is recorded",
         ),
         (
             "export module f;\n#line 40 \"other.h\"\nexport constexpr int g() { return 1; }\n",
@@ -2181,8 +2184,8 @@ fn kind2_image_census() {
         d.join("c.cppm"),
         "export module c;\n\
          export inline int g() { struct L { int v; }; return L{1}.v; }\n\
-         export inline int h() { enum E { e = 2 }; return e; }\n\
-         export inline int k() { return [] { return 1; }(); }\n\
+         export inline auto h() { enum E { e = 2 }; return E{}; }\n\
+         export inline auto k() { return [] { struct R { int q; }; return R{1}; }(); }\n\
          export constexpr int sq(int x) { return x * x; }\n\
          export struct S { int a; };\n",
     )
@@ -2198,9 +2201,8 @@ fn kind2_image_census() {
     assert_eq!(
         lines,
         [
-            "image census for 'c': 5 top-level declarations, 2 carried, 3 not",
-            "      2  a local class or enumeration  (first: c.cppm:2:19)",
-            "      1  a local declaration the image does not carry  (first: c.cppm:4:19)",
+            "image census for 'c': 5 top-level declarations, 3 carried, 2 not",
+            "      2  a closure or local class named before its context is recorded  (first: c.cppm:3:20)",
         ],
         "{}",
         o.stderr
@@ -2430,4 +2432,39 @@ int main() {
     let err = "import w;\nstatic_assert(ptrish<int>);\n";
     let errs = image_round_trip("image-wp1353", "w", src, run, err, "1 1 3 4\n");
     assert!(errs.contains("static assertion failed"), "{errs}");
+}
+
+const IMGLF: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-lambda-forms.cppm");
+const IMGLF_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-lambda-forms-run.cpp");
+const IMGWF: &str =
+    include_str!("../../../tests/conformance/module.interface/Inputs/img-wp1350-forms.cppm");
+const IMGWF_RUN: &str =
+    include_str!("../../../tests/conformance/module.interface/image-wp1350-forms-run.cpp");
+
+/// WP-1350 (§11.11 "Forms carried by WP-1350"): lambdas, closure types,
+/// local classes and enumerations come from the image. With the unit's
+/// source blanked an importer still runs them, its IR is the replay's,
+/// and a closure's deleted copy assignment is diagnosed as after a
+/// replay ([expr.prim.lambda.closure]).
+#[test]
+fn kind2_declaration_image_lambdas() {
+    let err = "import imglf;\nint main() { lf::withcap = lf::withcap; }\n";
+    let errs = image_round_trip("image-lf", "imglf", IMGLF, IMGLF_RUN, err, "");
+    let want = "cannot be assigned because its copy assignment operator is implicitly deleted";
+    assert!(errs.contains(want), "{errs}");
+}
+
+/// WP-1350: designated initializers in templates, vectors of a dependent
+/// count, a member typedef named in a member alias template and default
+/// argument uses of a specialization's parameters come from the image; a
+/// designator naming no member of the instantiated type is diagnosed in
+/// the module, as after a replay ([dcl.init.aggr]).
+#[test]
+fn kind2_declaration_image_designators_and_spec_defaults() {
+    let err = "import imgwf;\nstruct Z { int a; };\nint main() { return wf::dep(Z{1}).a; }\n";
+    let errs = image_round_trip("image-wf", "imgwf", IMGWF, IMGWF_RUN, err, "");
+    let want = "m.cppm:6:57: error: field designator 'e' does not refer to any field in type 'Z'";
+    assert!(errs.contains(want), "{errs}");
 }

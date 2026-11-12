@@ -217,9 +217,11 @@ int g() { 2; return 0; }
 #[test]
 fn uncarried_header_is_replayed() {
     let d = scratch("fallback");
-    let note = produce(&d, "l", "inline auto l = [](int a) { return a; };\n");
+    // WP-1350: a lambda is carried now; a local class a deduced return
+    // type names is not.
+    let note = produce(&d, "l", "inline auto l() { struct R { int q = 0; }; return R{}; }\n");
     assert!(note.contains("consumers replay the header: "), "{note}");
-    std::fs::write(d.join("l.cpp"), "int main() { return l(0); }\n").unwrap();
+    std::fs::write(d.join("l.cpp"), "int main() { return l().q; }\n").unwrap();
     let note = path_note(&d, "l.pch", "l.cpp");
     assert!(note.contains("'l.pch' is replayed: it has no declaration image"), "{note}");
     same(&d, "l.pch", &["-S", "-emit-llvm"], "l.cpp");
@@ -1271,19 +1273,188 @@ inline decltype(auto) dr(int& r) { return (r); }
     carried_1343("wp1343c", header, tu);
 }
 
-/// WP-1343 remaining: a default argument used on a call of a function
-/// template specialization names the specialization's parameter, which
-/// has no record (`bits/fs_path.h`'s `string<char>()`); the header is
-/// replayed, with the reason.
+/// WP-1350: a default argument used on a call of a function template
+/// specialization names the specialization's parameter
+/// (`bits/fs_path.h`'s `string<char>()`); the image names it through
+/// the specialization, the importer instantiates the used default again,
+/// and the unit's own calls of the same specializations still find
+/// their defaults.
 #[test]
-fn specialization_default_argument_is_refused() {
-    let d = scratch("wp1343p");
+fn specialization_default_arguments_are_carried() {
     let header = "\
 template <class T> T sq(T x, T k = T(2)) { return x * k; }
 inline int use() { return sq<int>(3); }
+struct Al { int id = 7; };
+struct Str {
+  int n = 0, a = 0;
+  template <class It> Str(It b, It e, const Al& al = Al()) : n(int(e - b)), a(al.id) {}
+};
+inline Str mk(const char* s) { return Str(s, s + 3); }
 ";
-    let note = produce(&d, "a", header);
-    assert!(note.contains("a specialization's parameter"), "{note}");
+    let tu = "int main() { const char* q = \"ab\"; Str s(q, q + 2);
+  return use() + sq<int>(4) + mk(q).a + s.n == 6 + 8 + 7 + 2 ? 0 : 1; }\n";
+    carried_1343("wp1350p", header, tu);
+}
+
+/// WP-1350: lambdas (captures, generic and pack lambdas, the conversion
+/// to a function pointer, in a default member initializer), local
+/// classes with virtual members, designated initializers in templates,
+/// vectors of a dependent count, `__builtin_convertvector` and a member
+/// typedef named in a member alias template come from the image.
+#[test]
+fn lambdas_local_classes_and_template_forms_are_carried() {
+    let header = "\
+inline int plain(int x) { auto f = [x, &y = x](int z) mutable { y += z; return x + z; }; int r = f(1); return r + x; }
+inline int noncap() { int (*p)(int) = [](int y) { return y * 2; }; return p(4); }
+template <class... T> int count(T... t) { return [&] { return (0 + ... + int(t)); }(); }
+inline int generic() { auto g = [](auto a, auto b) { return a + b; }; return g(1, 2) + int(g(1.5, 2.5)); }
+struct M { int (*fp)(int) = [](int a) { return a - 1; }; };
+inline int lvirt() {
+  struct B { virtual int f() { return 1; } virtual ~B() = default; };
+  struct D : B { int f() override { return 2; } };
+  D d; B& b = d; return b.f();
+}
+struct In { int c = 1; int d = 2; };
+struct Out { int a = 0; In b; };
+template <class T> Out mk(T x) { return Out{.a = int(x), .b = {.d = int(x) + 1}}; }
+template <class T, unsigned long N> using vec __attribute__((__ext_vector_type__(N))) = T;
+template <class T, unsigned long N> long widen(vec<T, N> v) {
+  vec<long, N> w = __builtin_convertvector(v, vec<long, N>); return w[0] + w[N - 1];
+}
+template <class T, class D, bool = (sizeof(D) > 0)> struct ptr_of { using type = T*; };
+template <bool B> struct en {};
+template <> struct en<true> { using type = int; };
+template <class T> struct up {
+  using pointer = typename ptr_of<T, int>::type;
+  pointer p = nullptr;
+  template <class UP> using Same = typename en<__is_same(typename UP::pointer, pointer)>::type;
+  template <class U, class = Same<up<U>>> int same() const { return 1; }
+};
+";
+    let tu = "int main() { vec<int, 4> v = {1, 2, 3, 4};
+  int r = plain(1) + noncap() + count(1, 2L, 'a') + generic() + M{}.fp(3) + lvirt() + mk(3).b.d +
+          int(widen<int, 4>(v)) + up<int>{}.same<int>();
+  return r == 4 + 8 + 100 + 7 + 2 + 2 + 4 + 5 + 1 ? 0 : 1; }\n";
+    carried_1343("wp1350l", header, tu);
+}
+
+/// WP-1350 with WP-1355: a dependent vector type read back from the image
+/// keeps its size expression as the canonical type's origin, so a
+/// template of the header instantiated in the unit mangles `Dv <expr> _`
+/// as under replay and as clang (`tests/mangle/dependent_vector.cpp`).
+#[test]
+fn dependent_vector_types_mangle_as_replayed() {
+    let header = "\
+template <class T, unsigned long N> using ev = T __attribute__((ext_vector_type(N)));
+template <class T, unsigned long N>
+using vs = T __attribute__((__vector_size__(N * sizeof(T))));
+template <class T> using vs16 = T __attribute__((__vector_size__(16)));
+template <class T, unsigned long N> bool a1(ev<T, N>) { return true; }
+template <class T, unsigned long N> bool a2(vs<T, N>) { return true; }
+template <class T> bool a4(vs16<T>) { return true; }
+template <class T, unsigned long N> void b4(ev<T, N>, T *) {}
+";
+    let tu = "using v4 = int __attribute__((ext_vector_type(4)));
+using w4 = int __attribute__((__vector_size__(16)));
+int main() { v4 x{}; w4 y{}; b4<int, 4>(x, nullptr);
+  return a1<int, 4>(x) && a2<int, 4>(y) && a4<int>(y) ? 0 : 1; }\n";
+    carried_1343("wp1350v", header, tu);
+    let d = scratch_of("wp1350v");
+    let ir = ["-std=c++26", "-fkiln-pch-image=load", "-include-pch", "a.pch", "-S", "-emit-llvm"];
+    let o = ok(&d, &[&ir[..], &["a.cpp", "-o", "-"]].concat());
+    for name in [
+        "@_Z2a1IiLm4EEbDvT0__T_",
+        "@_Z2a2IiLm4EEbDvmlT0_stT__S0_",
+        "@_Z2a4IiEbDvLi16E_T_",
+        "@_Z2b4IiLm4EEvDvT0__T_PS0_",
+    ] {
+        assert!(o.stdout.contains(name), "{name}: {}", o.stdout);
+    }
+}
+
+/// WP-1350: a dependent base named through a qualifier (`std::X<T>`,
+/// first reached once `<compare>`'s lambdas were carried) and comparison
+/// category values defined out of line, whose aggregate values the image
+/// does not carry: the built-in `<=>` folds them from the initializers.
+#[test]
+fn qualified_dependent_base_and_comparison_categories_are_carried() {
+    let header = "\
+namespace q { template <class A, class B> struct pr { int v = 1; }; }
+template <class T, class U> struct D : q::pr<T, U> {};
+namespace std {
+class partial_ordering {
+  signed char _M_value;
+  constexpr explicit partial_ordering(signed char v) noexcept : _M_value(v) {}
+public:
+  static const partial_ordering less, equivalent, greater, unordered;
+  friend constexpr bool operator<(partial_ordering v, int) noexcept { return v._M_value == -1; }
+};
+inline constexpr partial_ordering partial_ordering::less(-1);
+inline constexpr partial_ordering partial_ordering::equivalent(0);
+inline constexpr partial_ordering partial_ordering::greater(1);
+inline constexpr partial_ordering partial_ordering::unordered(2);
+}
+";
+    let tu = "static_assert((1.0 <=> 2.0) < 0);
+int main() { D<int, long> d; return d.v == 1 && (2.0 <=> 1.0) < 0 ? 1 : 0; }\n";
+    carried_1343("wp1350c", header, tu);
+}
+
+/// Found by WP-1350 on its tree merged with WP-1353 (libc++ `<numeric>`,
+/// `__numeric/gcd_lcm.h`; not fixed, no WP-1350 form involved): a type
+/// naming a requires-expression parameter (`decltype(*i)` in a concept)
+/// is built after every record (`exprs::validate_ty_texprs`), and types
+/// are built in order, so a later body's local alias whose type is
+/// written after it fails the reader's check and the header is replayed
+/// ("an internal image inconsistency"). The fix writes such types after
+/// the records' types, or builds types on demand.
+#[test]
+#[ignore = "pre-existing: a local alias's type written after a requires-parameter type"]
+fn local_alias_after_requires_parameter_type() {
+    let d = scratch("wp1350q");
+    let header = "template <class T> concept deref = requires(T i) { typename decltype(*i)::x; };
+template <class T> struct mk { using type = unsigned long; };
+template <class T> unsigned long g(T m) {
+  using W = typename mk<T>::type;
+  return static_cast<W>(m);
+}
+";
+    std::fs::write(d.join("q.h"), header).unwrap();
+    let o =
+        ok(&d, &["-std=c++26", "-v", "-fkiln-pch-image", "-x", "c++-header", "q.h", "-o", "q.pch"]);
+    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+}
+
+/// WP-1350: the forms the image still refuses replay the header, with the
+/// reason: a lambda in a requires-expression (its context, the body, has
+/// no record), a local class named by a deduced return type (named
+/// before its function's record), a requires-expression in a type.
+#[test]
+fn uncarried_lambda_forms_are_refused() {
+    let d = scratch("wp1350r");
+    let named = "a closure or local class named before its context is recorded";
+    for (name, header, why) in [
+        (
+            "a",
+            "template <class T> concept C = requires { [] {}; };\nstatic_assert(C<int>);\n",
+            named,
+        ),
+        ("b", "inline auto lret() { struct R { int q = 11; }; return R{}; }\n", named),
+        (
+            "c",
+            "template <bool B, class X, class Y> struct cond { using type = X; };
+template <class F> using pick = typename cond<requires (F& f) { f(); }, int, long>::type;
+inline pick<void(*)()> v = 1;\n",
+            "an expression in a type naming a parameter or local declaration",
+        ),
+    ] {
+        std::fs::write(d.join(format!("{name}.h")), header).unwrap();
+        let (h, pch) = (format!("{name}.h"), format!("{name}.pch"));
+        let o =
+            ok(&d, &["-std=c++26", "-v", "-fkiln-pch-image", "-x", "c++-header", &h, "-o", &pch]);
+        let want = format!("consumers replay the header: {why}");
+        assert!(o.stderr.contains(&want), "{}", o.stderr);
+    }
 }
 
 /// Reduced from `cpp.include/pch-body-forms-errors.cpp` under `--pch-diff
