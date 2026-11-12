@@ -241,24 +241,32 @@ impl Writer<'_, '_, '_> {
         // member template.
         let from_template = ast.template_info(si.from).is_some()
             || ast.described_template(si.from).map(|t| ast.first(t)) == Some(si.template);
-        let from_partial = si.from_args.is_some()
-            && ast.partial_spec_info(si.from).is_some()
-            && self.recs.get(&si.from).is_some_and(|&p| {
-                super::classtempl::partial_of(&self.img, p).is_some()
-                    && matches!(&self.img.decls[p as usize].payload,
-                        Payload::Record { def: Some(df), .. } if df.end != NONE)
-            });
-        if !deferred && !from_partial && (si.from_args.is_some() || !from_template) {
+        // WP-1358: a partial specialization declared before its
+        // definition (`iterator_concepts.h:75`) has its definition's
+        // record later.
+        let from_partial = self.instantiated_from_partial(&si, var);
+        // A member template of a class specialization's (WP-1358,
+        // [`super::mtspec`]): named through its member reference.
+        let member_tmpl = if class || var { None } else { self.member_template_of(&si)? };
+        if member_tmpl.is_none()
+            && !deferred
+            && !from_partial
+            && (si.from_args.is_some() || !from_template)
+        {
             return Err("a specialization of a partial specialization");
         }
-        let template = self.template_rec(si.template, if var { 3 } else { u8::from(class) })?;
+        let template = match member_tmpl {
+            Some(m) => m,
+            None => self.template_rec(si.template, if var { 3 } else { u8::from(class) })?,
+        };
         let complete = class
             && !deferred
             && ast.decls.record(d).is_some_and(|r| r.defn.contains(DefinitionBits::COMPLETE));
         // The importer names it while it builds the records, before their
         // constraints are in (WP-1284); WP-1344 carries what that cannot
         // change ([`super::constrspec`]).
-        if let Some(why) = self.constrained_spec_why(si.template, complete) {
+        let sel = if var { self.var_partial_sel(&si)? } else { self.partial_sel_of(&si, complete) };
+        if let Some(why) = self.constrained_spec_why(si.template, complete, si.from) {
             return Err(why);
         }
         let args = self.spec_arg_recs(si.args)?;
@@ -278,6 +286,11 @@ impl Writer<'_, '_, '_> {
                 "a specialization of a class template with a bit-field or a default member initializer",
             );
         }
+        if complete {
+            // WP-1358: what its completion completes with a selection.
+            self.pre_record_sels(d)?;
+        }
+        let ast = &self.s.ast;
         let loc = self.loc(si.point_of_instantiation)?;
         let o = ast.modules.owner(d);
         let i = self.img.decls.len() as u32;
@@ -293,6 +306,9 @@ impl Writer<'_, '_, '_> {
             payload: Payload::Spec { template, complete, args },
         });
         self.recs.insert(d, i);
+        if let Some(p) = sel {
+            self.partial_sel_commit(i, p);
+        }
         if complete {
             self.complete_specs.push((d, i));
         }
@@ -545,12 +561,17 @@ impl Writer<'_, '_, '_> {
                 }
             }
             TypeView::SubstTemplateTypeParm { replacement, associated, index, pack_index } => {
-                let assoc =
-                    self.recs.get(&self.s.ast.first(associated)).copied().ok_or(ARG_SUBST)?;
+                let assoc = match self.recs.get(&self.s.ast.first(associated)) {
+                    Some(&r) => r,
+                    // A member function template of a class
+                    // specialization's (WP-1358).
+                    None => self.subst_member_template(associated)?.ok_or(ARG_SUBST)?,
+                };
                 // A template's parameter, or a carried partial
                 // specialization's (WP-1283).
                 if !matches!(self.img.decls[assoc as usize].payload, Payload::Template { .. })
                     && super::classtempl::partial_of(&self.img, assoc).is_none()
+                    && super::mtspec::params(&self.img, assoc).is_none()
                 {
                     return Err(ARG_SUBST);
                 }
@@ -653,14 +674,16 @@ impl Sema<'_, '_> {
         img: &Image,
         tys: &mut Vec<QualType>,
         ids: &[DeclId],
-        r: &DeclRec,
+        (i, r): (u32, &DeclRec),
         loc: Loc,
     ) -> Option<DeclId> {
         let Payload::Spec { template, complete, args } = &r.payload else { return None };
-        let Payload::Template { kind, .. } = img.decls.get(*template as usize)?.payload else {
-            return None;
+        let (kind, tmpl) = match img.decls.get(*template as usize)?.payload {
+            Payload::Template { kind, .. } => (kind, self.ast.first(*ids.get(*template as usize)?)),
+            // A member template of a class specialization (WP-1358).
+            Payload::Member { .. } => (0, *ids.get(*template as usize)?),
+            _ => return None,
         };
-        let tmpl = self.ast.first(*ids.get(*template as usize)?);
         // A pack's elements (WP-1344): written one by one for a class
         // template, which converts them again, as one pack for a
         // function template's converted list.
@@ -688,9 +711,19 @@ impl Sema<'_, '_> {
         }
         let spec = if kind == 1 {
             let locs = vec![loc; list.len()];
-            self.get_class_spec(tmpl, &list, &locs, loc).ok()?
+            let spec = self.get_class_spec(tmpl, &list, &locs, loc).ok()?;
+            // WP-1358: the unit's partial specialization, before any
+            // completion matches them.
+            self.image_partial_sel(img, ids, i, spec);
+            spec
         } else if kind == 3 {
-            self.image_var_template_spec(tmpl, &list, loc)?
+            // WP-1358: the unit's partial specialization.
+            let sel = self.image_var_sel(img, ids, i, tmpl);
+            let v = self.image_var_template_spec(tmpl, &list, loc);
+            if sel {
+                self.image_var_sel_done(tmpl);
+            }
+            v?
         } else {
             let sugared = self.ast.types.arg_list(&list);
             let canonical = self.ast.types.canonical_args(sugared);

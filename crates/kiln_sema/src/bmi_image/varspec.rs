@@ -273,12 +273,12 @@ impl Writer<'_, '_, '_> {
     /// a reference record, `None` when it can.
     pub(super) fn var_spec_why(&self, si: &SpecInfo) -> Option<&'static str> {
         let ast = &self.s.ast;
-        let t = ast.first(si.template);
-        // The importer matches partial specializations and checks the
-        // constraints while it reads the records, before either is in.
-        if !ast.templates.partials_of(t).is_empty() || self.constrained_template(t) {
-            return Some(VAR_SPEC);
-        }
+        // The importer matches the partial specializations while it reads
+        // the records, before their constraints are in: the image keeps
+        // the unit's selection (WP-1358, [`super::psel`]). A constrained
+        // template's constraints, checked then too, held for the unit's
+        // specialization ([temp.names]/7).
+        //
         // A deduced type comes from the initializer, which comes with the
         // bodies ([dcl.spec.auto.general]/11).
         let pty = ast.decls.get(si.from).ty().unwrap_or(QualType::ERROR);

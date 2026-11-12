@@ -141,7 +141,14 @@ impl Writer<'_, '_, '_> {
         if !ns(ast.decls.get(d).ctx()) {
             return None;
         }
-        let first = ast.decls.record(d)?.members.first?;
+        // Not an implicit special member: sema declares one when it is
+        // first needed, after declarations that are not between the
+        // declaration and the definition (`template <> struct tag<0> {};`
+        // whose default constructor a later `tag<1>()` declares; WP-1358).
+        let first = ast.members(d).find(|&m| {
+            !(ast.decls.get(m).has(kiln_ast::decl::DeclFlags::IMPLICIT)
+                && s.special_kind_of(m).is_some())
+        })?;
         let between = (d.raw() + 1..first.raw()).filter_map(DeclId::from_raw).any(|x| {
             let n = ast.decls.get(x);
             let o = ast.modules.owner(x);

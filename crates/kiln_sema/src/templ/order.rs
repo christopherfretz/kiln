@@ -3,6 +3,7 @@
 //! spec/sema-templates.md §7). Partial ordering of function templates
 //! ([temp.func.order]) is WP-071; with function parameter packs, WP-131.
 
+use crate::bmi_image::PartialChoice;
 use kiln_ast::DeclId;
 use kiln_ast::ExprId;
 use kiln_ast::QualType;
@@ -71,6 +72,16 @@ impl Sema<'_, '_> {
         }
         let canonical = self.ast.types.canonical_args(args);
         let as_: Vec<TemplateArg> = self.ast.types.args(canonical).to_vec();
+        // A declaration image being built recorded the unit's result
+        // before the constraints are in (WP-1358, spec/modules.md §11.11).
+        let mut candidates = candidates;
+        match self.image_partial_choice(who) {
+            Some(PartialChoice::Primary) => return Ok(None),
+            Some(PartialChoice::Partial(p)) => candidates.retain(|&i| {
+                self.ast.templates.partial(i).is_some_and(|x| self.ast.first(x.partial) == p)
+            }),
+            None => {}
+        }
         let mut matched: Vec<PartialMatch> = Vec::new();
         for i in candidates {
             let Some(p) = self.ast.templates.partial(i).copied() else { continue };

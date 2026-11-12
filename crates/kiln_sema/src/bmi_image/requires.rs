@@ -101,6 +101,16 @@ pub(super) struct ReqState {
     index: Option<FxHashMap<DeclId, u32>>,
 }
 
+impl ReqState {
+    /// Drops the bodies from record `recs` and the parameters from index
+    /// `nparams` on (WP-1358, a record written again).
+    pub(super) fn truncate(&mut self, recs: u32, nparams: u32) {
+        self.bodies.retain(|_, r| *r < recs);
+        self.params.retain(|_, k| *k < nparams);
+        self.invented.retain(|_, (r, _)| *r < recs);
+    }
+}
+
 impl Writer<'_, '_, '_> {
     /// Why requires-expression `e` falls back, if it does.
     pub(super) fn requires_ok(&self, e: ExprId) -> W<()> {

@@ -75,7 +75,11 @@ mod outside;
 mod patinit;
 mod pch;
 pub use pch::PchDecls;
+mod mtspec;
+mod named;
 mod protoparams;
+mod psel;
+pub(crate) use psel::PartialChoice;
 mod requires;
 mod scope;
 mod selfbase;
@@ -93,7 +97,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 32;
+pub(crate) const IMAGE_VERSION: u32 = 33;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -761,6 +765,9 @@ struct Image {
     dedup: dedup::Dedup,
     /// WP-1350: lambda-expressions' side records ([`lambdas`]).
     lambdas: lambdas::Lambdas,
+    /// WP-1358: the partial specializations complete specializations of
+    /// templates with constrained ones were instantiated from.
+    psels: psel::PartialSels,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1512,6 +1519,7 @@ fn encode(img: &Image) -> Vec<u8> {
     fnspec::encode_fn_spec_uses(&mut w, &img.fsuses);
     dedup::encode_dedup(&mut w, &img.dedup);
     lambdas::encode_lambdas(&mut w, &img.lambdas);
+    psel::encode_partial_sels(&mut w, &img.psels);
     w.0
 }
 
@@ -2220,6 +2228,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.fsuses = fnspec::decode_fn_spec_uses(&mut r)?;
     img.dedup = dedup::decode_dedup(&mut r)?;
     img.lambdas = lambdas::decode_lambdas(&mut r)?;
+    img.psels = psel::decode_partial_sels(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2422,6 +2431,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     // A partial specialization's injected-class-name (WP-1283).
                     || matches!(t, TyRec::Injected(_) | TyRec::Subst { .. })
                         && classtempl::partial_of(img, d).is_some()
+                    // A member function template's parameter (WP-1358).
+                    || matches!(t, TyRec::Subst { .. }) && mtspec::params(img, d).is_some()
             });
             if !ok {
                 return bad("bad declaration reference in a type");
@@ -2512,6 +2523,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     fnspec::validate_fn_spec_uses(img)?;
     dedup::validate_dedup(img)?;
     lambdas::validate_lambdas(img, body::param_count(img))?;
+    psel::validate_partial_sels(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2540,6 +2552,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                 && (*kind == 1 || !*complete)
                                 && spec::spec_args_ok(img, params, args, i, &qref_at)
                         }
+                        // WP-1358: of a member function template.
+                        Payload::Member { .. } => {
+                            mtspec::params(img, *template).is_some_and(|params| {
+                                !*complete && spec::spec_args_ok(img, params, args, i, &qref_at)
+                            })
+                        }
                         _ => false,
                     })
                 }
@@ -2554,7 +2572,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                         // (WP-1307): the same entity.
                                         (m.ctx == p
                                             || chain.get(m.ctx as usize) == chain.get(p as usize)
-                                            || classtempl::partial_of(img, m.ctx) == Some(template))
+                                            || classtempl::partial_of(img, m.ctx) == Some(template)
+                                            // Its definition's record
+                                            // (WP-1358).
+                                            || latedef::late_def_of(img, m.ctx)
+                                                .and_then(|p| classtempl::partial_of(img, p))
+                                                == Some(template))
                                             && m.lexical == NONE
                                             && matches!(
                                                 m.payload,
@@ -2565,7 +2588,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                                     | Payload::Typedef { .. }
                                                     // A member template a
                                                     // class's using names
-                                                    // (WP-1353).
+                                                    // (WP-1353), a member
+                                                    // function template (WP-1358).
                                                     | Payload::Template { .. }
                                             )
                                     }),
@@ -2778,12 +2802,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // A closure type's, written when something in an open
                 // class (a static data member's initializer) named it
                 // (WP-1350); inside another class when a type named it
-                // (WP-1360).
+                // (WP-1360); one of a complete specialization reference
+                // named by a member's record of an open class (WP-1358,
+                // `named.rs`).
                 (Payload::Implicit { .. }, _) => {
-                    (closed(d.ctx)
-                        || (members::complete_spec(img, d.ctx)
-                            && (top.is_none() || lambdas::closure_def(img, d.ctx))))
-                        && d.lexical == NONE
+                    (closed(d.ctx) || members::complete_spec(img, d.ctx)) && d.lexical == NONE
                 }
                 // A class template's record follows its pattern's record,
                 // inside the pattern's definition (S4b), in the pattern's
@@ -4703,7 +4726,7 @@ impl Writer<'_, '_, '_> {
             if self.census.as_ref().is_some_and(|c| !c.dead.is_empty()) && self.census_dead(d) {
                 continue;
             }
-            if self.var_spec_at(d)? || self.member_inst_at(d)? {
+            if self.var_spec_at(d)? || self.member_inst_at(d)? || self.mt_spec_at(d) {
                 continue;
             }
             let before = self.marks();
@@ -4896,6 +4919,7 @@ impl Writer<'_, '_, '_> {
         self.img.lheads.truncate(n);
         self.img.fexpl.truncate(n);
         self.img.fsuses.truncate(n);
+        self.img.psels.truncate(n);
         self.img.attrs.params.retain(|(_, r)| r.decl < n);
         let k = self.img.explinsts_len() as u32;
         self.img.attrs.insts.retain(|r| r.decl < k);
@@ -5040,6 +5064,7 @@ impl Writer<'_, '_, '_> {
     /// One declaration of the purview, in id order ([`Writer::collect`]).
     #[allow(clippy::too_many_lines)] // the purview's declaration kinds, with the class nesting
     fn one(&mut self, d: DeclId, st: &mut Pass) -> W<()> {
+        let entry_len = self.img.decls.len();
         let s = self.s;
         let ast = &s.ast;
         let mt = &ast.modules;
@@ -5191,14 +5216,22 @@ impl Writer<'_, '_, '_> {
             return Err("a declaration before the module's last import");
         }
         let h = self.head(d)?;
+        // WP-1358: what it is no member of ends first.
+        if self.img.decls.len() == entry_len {
+            self.close_before(d, &h, st);
+        }
         // The specialization references its types name come first
         // (S4b): `record` must not add records before its own.
         self.prescan(d);
+        let before = self.named_marks();
         let i = self.img.decls.len() as u32;
         let payload = self.record(d, i)?;
-        if self.img.decls.len() as u32 != i {
-            return Err("a specialization named while its user is recorded");
-        }
+        // WP-1358: what `prescan` missed, written first.
+        let (i, payload) = if self.img.decls.len() as u32 == i {
+            (i, payload)
+        } else {
+            self.record_after_named(d, before)?
+        };
         let tmpl_of_open = matches!(payload,
             Payload::Template { kind: 1, pattern, .. } if st.open.last() == Some(&pattern));
         match &payload {
@@ -6015,7 +6048,9 @@ impl Sema<'_, '_> {
                 }
                 Payload::Spec { .. } => {
                     let loc = lo(self, r.loc);
-                    let s = self.image_spec(img, &mut tys, &ids, r, loc).unwrap_or(self.ast.tu);
+                    let s = self
+                        .image_spec(img, &mut tys, &ids, (i as u32, r), loc)
+                        .unwrap_or(self.ast.tu);
                     self.image_fn_expl_decl(img, i as u32, s, loc);
                     s
                 }
@@ -6114,6 +6149,7 @@ impl Sema<'_, '_> {
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
         self.image_constraints(img, &ids, &built);
+        self.image_member_constraints(img, &ids);
         self.image_written(img, &mut tys, &ids, main);
         self.image_nttp_defaults(&nttp_defaults, &built);
         self.image_late_nx(img, &ids, &built);
@@ -6851,6 +6887,7 @@ mod tests {
             fsuses: fnspec::FnSpecUses::default(),
             dedup: dedup::Dedup::default(),
             lambdas: lambdas::Lambdas::default(),
+            psels: psel::PartialSels::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),
