@@ -10,13 +10,13 @@
 
 use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::types::{ArgView, TemplateArg};
-use kiln_ast::{DeclId, ExprId};
+use kiln_ast::{DeclId, ExprId, QualType};
 
 use kiln_ast::templates::{TemplateInfo, TemplateParamList};
 
-use super::body::{Built, Root};
+use super::body::{self, Built, Root};
 use super::constraints::CONCEPT_KIND;
-use super::{NONE, Payload, W, Writer};
+use super::{Image, NONE, Payload, QRef, Res, W, Writer, bad};
 use crate::Sema;
 
 impl Writer<'_, '_, '_> {
@@ -42,17 +42,32 @@ impl Writer<'_, '_, '_> {
                 Some(ArgView::Expr { expr, profile }) => (Some(expr), profile.is_some()),
                 Some(_) => return Err("a default template argument of a non-type parameter"),
             };
-            if let Some(e) = expr {
-                self.bs.roots.push(Root::TemplDefault(self.img.decls.len() as u32, e));
-            }
             let ty = self.qref(n.ty().ok_or("a malformed template parameter")?)?;
+            // WP-1320: the default as an expression section, built with
+            // the record, as the parser sets it on the parameter: an
+            // explicit specialization that leaves it to the default
+            // (`template <> struct __promote<double>` of `template <class
+            // T, bool = __is_integer<T>::__value>`) converts it when its
+            // record is built, before the image's bodies. One a section
+            // cannot hold stays in the bodies.
+            let mut default = NONE;
+            let mut sect = false;
+            if let Some(e) = expr {
+                match self.texpr(e) {
+                    Ok(i) => (default, sect) = (i, true),
+                    Err(_) => {
+                        self.bs.roots.push(Root::TemplDefault(self.img.decls.len() as u32, e));
+                    }
+                }
+            }
             return Ok(Payload::Nttp {
                 ty,
                 depth: p.depth,
                 index: p.index,
                 pack: p.pack,
-                default: NONE,
+                default,
                 profile,
+                sect,
             });
         }
         let default = match default {
@@ -222,8 +237,44 @@ impl Writer<'_, '_, '_> {
     }
 }
 
+/// Checks the section default of non-type parameter record `i`
+/// (`payload`): a section whose records and types are all before the
+/// record (WP-1320).
+pub(super) fn validate_nttp_section(
+    img: &Image,
+    i: usize,
+    payload: &Payload,
+    qref_at: &dyn Fn(QRef, usize) -> bool,
+) -> Res<()> {
+    let Payload::Nttp { default, sect: true, .. } = payload else { return Ok(()) };
+    let Some(b) = img.texprs.get(*default as usize) else {
+        return bad("bad default template argument");
+    };
+    if body::section_decl_bound(b) > i {
+        return bad("bad default template argument");
+    }
+    body::validate_section(img, b, 0, &|q| qref_at(q, i), true)
+}
+
 /// The importer's side.
 impl Sema<'_, '_> {
+    /// Gives non-type parameter `p` the default argument of section `i`
+    /// as it is built (WP-1320), as `act_on_template_default` stores it;
+    /// none when the section does not build.
+    pub(super) fn image_nttp_section_default(
+        &mut self,
+        img: &Image,
+        tys: &mut Vec<QualType>,
+        ids: &[DeclId],
+        p: DeclId,
+        i: u32,
+        profile: bool,
+    ) {
+        let Some(e) = self.image_texpr_build(img, tys, ids, i) else { return };
+        let profile = profile.then(|| self.ast.profile_expr(e));
+        let _ = self.builder().set_template_default(p, TemplateArg::expr(e, profile));
+    }
+
     /// Gives each non-type parameter its default argument once the
     /// bodies are built: the expression, with its canonical profile when
     /// the writer's argument had one (as `act_on_template_default`

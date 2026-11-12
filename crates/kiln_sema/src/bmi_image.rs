@@ -69,7 +69,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 22;
+pub(crate) const IMAGE_VERSION: u32 = 23;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -121,6 +121,10 @@ pub struct ImageCensus {
     /// Per attribute name: the declarations of the attributed-declaration
     /// row that carry it, most frequent first.
     pub attrs: Vec<(String, usize)>,
+    /// With `-fkiln-bmi-image-census=all` (WP-1320): every counted
+    /// top-level declaration's reason and `file:line:col`, in the order
+    /// the writer met them.
+    pub all: Vec<(String, String)>,
 }
 
 /// One reason of an [`ImageCensus`].
@@ -149,6 +153,9 @@ struct Census {
     rows: Vec<(String, usize, String)>,
     by_reason: FxHashMap<String, usize>,
     attrs: FxHashMap<String, usize>,
+    /// Every counted top-level declaration, its reason and location, in
+    /// census order (WP-1320, `-fkiln-bmi-image-census=all`).
+    all: Vec<(String, String)>,
 }
 
 /// The lengths [`Writer::rollback`] restores after a census failure.
@@ -177,6 +184,11 @@ struct Pass {
     /// The implicit instantiations the unit made, and everything
     /// declared in them (members of a class specialization).
     skipped: FxHashSet<DeclId>,
+    /// The explicit class instantiations, listed after the walk in
+    /// source order (WP-1320): the specialization's declaration is the
+    /// one made where the specialization was first named, often before
+    /// the namespace block the instantiation is written in.
+    explinsts: Vec<DeclId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +210,12 @@ enum TyRec {
     CArray(QRef, u64),
     IArray(QRef),
     Paren(QRef),
+    /// `_Complex T` (WP-1320: `__complex__ float` in <complex>).
+    Complex(QRef),
+    /// A canonical template type parameter type, named by no parameter
+    /// declaration (WP-1320: the adjusted type of a dependent array
+    /// parameter, `const T a[2]`): depth, index, pack.
+    CanonTtp(u32, u32, bool),
     Elab(u8, QRef),
     /// A type named through a nested-name-specifier (`ns::S`,
     /// `Outer::Inner`): keyword, the qualifier's steps outermost first,
@@ -491,7 +509,9 @@ enum Payload {
     },
     /// A non-type template parameter (S4); a pack (WP-1279); its default
     /// template argument's expression record or [`NONE`], and whether
-    /// that argument carries its canonical profile (WP-1279).
+    /// that argument carries its canonical profile (WP-1279); with `sect`
+    /// (WP-1320), `default` is an expression section instead, built with
+    /// the record ([`templ`]).
     Nttp {
         ty: QRef,
         depth: u16,
@@ -499,6 +519,7 @@ enum Payload {
         pack: bool,
         default: u32,
         profile: bool,
+        sect: bool,
     },
     /// A template (S4): `kind` 0 a function template; its pattern record
     /// (earlier, same name and context) and its template-head (the
@@ -1074,11 +1095,11 @@ fn encode_decl(w: &mut Wr, d: &DeclRec) {
             w.u32(default.map_or(0, |q| q.ty));
             w.u8(default.map_or(0, |q| q.quals));
         }
-        Payload::Nttp { ty, depth, index, pack, default, profile } => {
+        Payload::Nttp { ty, depth, index, pack, default, profile, sect } => {
             w.q(*ty);
             w.u16(*depth);
             w.u16(*index);
-            w.u8(u8::from(*pack) | u8::from(*profile) << 1);
+            w.u8(u8::from(*pack) | u8::from(*profile) << 1 | u8::from(*sect) << 2);
             w.u32(*default);
         }
         Payload::Template { kind, pattern, tloc, using, langle, rangle, depth, params } => {
@@ -1244,6 +1265,13 @@ fn encode(img: &Image) -> Vec<u8> {
             TyRec::Auto(k) => (w.u8(20), w.u8(*k)).1,
             TyRec::Dep(d) => (w.u8(21), deptypes::encode_dep(&mut w, d)).1,
             TyRec::Ex(x) => (w.u8(22), exprs::encode_ex(&mut w, x)).1,
+            TyRec::Complex(q) => (w.u8(23), w.q(*q)).1,
+            TyRec::CanonTtp(depth, index, pack) => {
+                w.u8(24);
+                w.u32(*depth);
+                w.u32(*index);
+                w.u8(u8::from(*pack));
+            }
             TyRec::Subst { repl, assoc, index, pack } => {
                 w.u8(18);
                 w.q(*repl);
@@ -1566,11 +1594,11 @@ fn decode_decl(r: &mut Rd<'_>) -> Res<DeclRec> {
         }
         K_NTTP => {
             let (ty, depth, index, bits) = (r.q()?, r.u16()?, r.u16()?, r.u8()?);
-            if bits > 3 {
+            if bits > 7 {
                 return bad("bad flag byte");
             }
-            let (pack, profile, default) = (bits & 1 != 0, bits & 2 != 0, r.u32()?);
-            Payload::Nttp { ty, depth, index, pack, default, profile }
+            let (pack, profile, sect) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
+            Payload::Nttp { ty, depth, index, pack, default: r.u32()?, profile, sect }
         }
         K_TEMPLATE => {
             let kind = r.u8()?;
@@ -1624,6 +1652,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
         | TyRec::Paren(q)
         | TyRec::Elab(_, q)
         | TyRec::QArray(_, q)
+        | TyRec::Complex(q)
         | TyRec::Pack(q) => (vec![*q], Vec::new()),
         TyRec::ElabQ(_, steps, q) => {
             let (mut qs, mut ds) = (vec![*q], Vec::new());
@@ -1651,7 +1680,7 @@ fn ty_refs(t: &TyRec) -> (Vec<QRef>, Vec<u32>) {
             (args.iter().map(|a| a.q()).chain(*under).collect(), vec![*template])
         }
         TyRec::Subst { repl, assoc, .. } => (vec![*repl], vec![*assoc]),
-        TyRec::Sugar(_) | TyRec::Auto(_) => (Vec::new(), Vec::new()),
+        TyRec::Sugar(_) | TyRec::Auto(_) | TyRec::CanonTtp(..) => (Vec::new(), Vec::new()),
         TyRec::Dep(d) => deptypes::dep_refs(d),
         TyRec::Ex(x) => (exprs::ex_refs(x), Vec::new()),
     }
@@ -1888,6 +1917,14 @@ fn decode(bytes: &[u8]) -> Res<Image> {
             },
             21 => TyRec::Dep(deptypes::decode_dep(&mut r)?),
             22 => TyRec::Ex(exprs::decode_ex(&mut r)?),
+            23 => TyRec::Complex(r.q()?),
+            24 => {
+                let (depth, index) = (r.u32()?, r.u32()?);
+                match r.u8()? {
+                    p @ 0..=1 => TyRec::CanonTtp(depth, index, p == 1),
+                    _ => return bad("bad template parameter type"),
+                }
+            }
             18 => {
                 let repl = r.q()?;
                 let (assoc, index, pack) = (r.u32()?, r.u32()?, r.u32()?);
@@ -1984,7 +2021,8 @@ fn base_class(img: &Image, q: QRef, complete: &dyn Fn(u32) -> bool) -> Option<u3
 /// Whether `q` is a dependent base class type of a class template's
 /// pattern (S4b): a type parameter or a dependent specialization, also
 /// named through a dependent alias template specialization
-/// (`__bool_constant<__is_x<T>::value>`, WP-1300).
+/// (`__bool_constant<__is_x<T>::value>`, WP-1300), or a dependent
+/// member type of one.
 fn dependent_base(img: &Image, q: QRef) -> bool {
     let mut q = q;
     for _ in 0..64 {
@@ -1994,6 +2032,10 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
         match img.types.get((q.ty - BUILTINS - 1) as usize) {
             Some(TyRec::Ttp(_) | TyRec::Tst { under: None, .. }) => return true,
             Some(TyRec::Tst { under: Some(u), .. }) => q = *u,
+            // `typename X<T>::type` (WP-1320: `is_signed`'s base).
+            Some(TyRec::Dep(deptypes::DepTy::Name { .. } | deptypes::DepTy::Tmpl { .. })) => {
+                return true;
+            }
             _ => return false,
         }
     }
@@ -2117,7 +2159,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             return bad("bad function type bits");
         }
         // A specialization type's underlying type is the record type of
-        // a specialization reference of the same template.
+        // a specialization reference of the same template, or (WP-1320)
+        // the dependent specialization of the same template with its
+        // defaults written.
         if let TyRec::Tst { template, under: Some(u), .. } = t
             && !matches!(
                 img.decls.get(*template as usize).map(|r| &r.payload),
@@ -2126,10 +2170,15 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         {
             let ok = u.quals == 0
                 && u.ty > BUILTINS
-                && matches!(img.types.get((u.ty - BUILTINS - 1) as usize),
-                    Some(TyRec::Record(r)) if matches!(img.decls.get(*r as usize).map(|x| &x.payload),
-                        Some(Payload::Spec { template: st, .. }) if st == template)
-                        || classtempl::explicit_of(img, *r) == Some(*template));
+                && match img.types.get((u.ty - BUILTINS - 1) as usize) {
+                    Some(TyRec::Record(r)) => {
+                        matches!(img.decls.get(*r as usize).map(|x| &x.payload),
+                            Some(Payload::Spec { template: st, .. }) if st == template)
+                            || classtempl::explicit_of(img, *r) == Some(*template)
+                    }
+                    Some(TyRec::Tst { template: t2, under: None, .. }) => t2 == template,
+                    _ => false,
+                };
             if !ok {
                 return bad("bad specialization type");
             }
@@ -2261,7 +2310,9 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             }
             open_enum = None;
             match &d.payload {
-                Payload::Label => {}
+                // A block-scope `static_assert` (WP-1320): its operands are
+                // checked with every texpr.
+                Payload::Label | Payload::Assert { .. } => {}
                 // A block-scope function declaration (WP-1293).
                 Payload::Function { .. } => {
                     if !localexterns::local_fn_ok(img, i, &qref_at) {
@@ -2281,6 +2332,12 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                         })
                     {
                         return bad("bad lifetime-extended temporary");
+                    }
+                }
+                // A block-scope alias (WP-1320).
+                Payload::Typedef { underlying, .. } => {
+                    if !qref_at(*underlying, i) {
+                        return bad("bad local alias");
                     }
                 }
                 _ => return bad("bad local declaration"),
@@ -2365,7 +2422,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // A builtin function, at global scope (WP-1278); declared
                 // lazily, its record may fall among the members of the
                 // class whose member first used it (WP-1310).
-                (Payload::Implicit { kind: scope::BUILTIN_KIND }, _) => {
+                (Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }, _) => {
                     d.ctx == NONE && d.lexical == NONE
                 }
                 (Payload::Implicit { .. }, _) => {
@@ -2607,7 +2664,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                     return bad("bad field flags");
                 }
             }
-            Payload::Implicit { kind: scope::BUILTIN_KIND } => {
+            Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND } => {
                 if d.prev != NONE {
                     return bad("bad builtin function record");
                 }
@@ -2626,6 +2683,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 {
                     return bad("bad template parameter");
                 }
+                templ::validate_nttp_section(img, i, &d.payload, &qref_at)?;
             }
             Payload::Template { kind, pattern, depth, params, .. } => {
                 // S4: a function template, its pattern the function just
@@ -2834,6 +2892,9 @@ struct Writer<'s, 'a, 'b> {
     census: Option<Census>,
     /// WP-1036: the image of a precompiled header ([`pch`]).
     pch: bool,
+    /// WP-1320: the implicit instantiations by point of instantiation
+    /// ([`classtempl`]).
+    poi: std::cell::OnceCell<FxHashMap<Loc, Vec<DeclId>>>,
 }
 
 /// A reserved identifier ([lex.name]/3): `__x` or `_X`.
@@ -3010,6 +3071,10 @@ impl Writer<'_, '_, '_> {
             TypeView::RValueRef(q) => TyRec::RRef(self.qref(q)?),
             TypeView::ConstantArray(a) => TyRec::CArray(self.qref(a.elem)?, a.size),
             TypeView::IncompleteArray(q) => TyRec::IArray(self.qref(q)?),
+            TypeView::Complex(q) => TyRec::Complex(self.qref(q)?),
+            TypeView::CanonTemplateTypeParm { depth, index, pack } => {
+                TyRec::CanonTtp(depth, index, pack)
+            }
             TypeView::Paren(q) => TyRec::Paren(self.qref(q)?),
             TypeView::Elaborated { keyword, nns: None, named } => {
                 TyRec::Elab(keyword as u8, self.qref(named)?)
@@ -3947,6 +4012,19 @@ impl Writer<'_, '_, '_> {
                 Err(why) => return Err(why),
             }
         }
+        let mut insts = std::mem::take(&mut st.explinsts);
+        insts.sort_by_key(|&d| ast.decls.get(d).loc());
+        for d in insts {
+            let before = self.marks();
+            match self.explicit_class_inst(d) {
+                Ok(()) => {}
+                Err(why) if self.census.is_some() => {
+                    self.rollback(before);
+                    self.census_fail(d, why, true);
+                }
+                Err(why) => return Err(why),
+            }
+        }
         let Pass { mut open, implicit, .. } = st;
         while let Some(top) = open.pop() {
             self.close_class(top);
@@ -4164,14 +4242,16 @@ impl Writer<'_, '_, '_> {
             () if why.starts_with("an implicit declaration") => kind,
             () => why.to_owned(),
         };
-        if let Some(&i) = c.by_reason.get(&reason) {
-            c.rows[i].1 += 1;
-            return;
-        }
+        let row = c.by_reason.get(&reason).copied();
         let example = sm.presumed_line_col(at).map_or_else(
             || format!("{:?} '{}'", ast.decls.get(d).kind(), self.s.qualified_decl_name(d)),
             |p| format!("{}:{}:{}", p.file_name, p.line, p.col),
         );
+        c.all.push((reason.clone(), example.clone()));
+        if let Some(i) = row {
+            c.rows[i].1 += 1;
+            return;
+        }
         c.by_reason.insert(reason.clone(), c.rows.len());
         c.rows.push((reason, 1, example));
     }
@@ -4277,7 +4357,8 @@ impl Writer<'_, '_, '_> {
             // importer after its bodies (`explinst.rs`); its members are
             // the instantiation's.
             let _ = st.skipped.insert(d);
-            return self.explicit_class_inst(d);
+            st.explinsts.push(d);
+            return Ok(());
         }
         if ast.spec_info(d).is_some_and(|(_, si)| {
             matches!(si.kind, SpecKind::ImplicitInstantiation | SpecKind::Undeclared)
@@ -4443,6 +4524,7 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             usings: FxHashMap::default(),
             census: census.then(Census::default),
             pch: false,
+            poi: std::cell::OnceCell::new(),
         })
     }
 }
@@ -4568,6 +4650,7 @@ impl Sema<'_, '_> {
             .map(|(reason, count, example)| CensusRow { reason, count, example })
             .collect();
         out.rows.sort_by_key(|r| std::cmp::Reverse(r.count));
+        out.all = c.all;
         out.attrs = c.attrs.into_iter().collect();
         out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Some(out)
@@ -4792,6 +4875,8 @@ impl Sema<'_, '_> {
                     }
                     if patterns.contains(&(i as u32)) {
                         self.ast.templates.pattern_next = true;
+                    } else if prev.is_none() && r.flags & DEP == 0 {
+                        prev = self.image_global_new_delete_prev(&h, kind, fty);
                     }
                     let f = if kind == DeclKind::CXXDeductionGuide {
                         self.builder().deduction_guide(h, fty, spec)
@@ -4972,6 +5057,9 @@ impl Sema<'_, '_> {
                 Payload::Implicit { kind: scope::BUILTIN_KIND } => {
                     self.image_builtin(img, i as u32)
                 }
+                Payload::Implicit { kind: scope::GLOBAL_OP_KIND } => {
+                    self.image_global_op(img, i as u32)
+                }
                 Payload::Implicit { kind } => {
                     let k = crate::class::SpecialKind::ALL[usize::from(*kind).min(5)];
                     // Declaring one implicit member can declare another
@@ -5002,10 +5090,12 @@ impl Sema<'_, '_> {
                     }
                     t
                 }
-                Payload::Nttp { ty, depth, index, pack, default, profile } => {
+                Payload::Nttp { ty, depth, index, pack, default, profile, sect } => {
                     let pty = self.image_ty(img, &mut tys, &ids, *ty);
                     let t = self.builder().non_type_template_parm(h, pty, *depth, *index, *pack);
-                    if *default != NONE {
+                    if *sect {
+                        self.image_nttp_section_default(img, &mut tys, &ids, t, *default, *profile);
+                    } else if *default != NONE {
                         nttp_defaults.push((t, *default, *profile));
                     }
                     t
@@ -5071,7 +5161,10 @@ impl Sema<'_, '_> {
                 Payload::UsingEnum { e } => self.builder().using_enum(h, ids[*e as usize]),
             };
             // A builtin function is the importer's own declaration.
-            let builtin = r.payload == Payload::Implicit { kind: scope::BUILTIN_KIND };
+            let builtin = matches!(
+                r.payload,
+                Payload::Implicit { kind: scope::BUILTIN_KIND | scope::GLOBAL_OP_KIND }
+            );
             if !builtin
                 && !matches!(r.payload, Payload::Spec { .. } | Payload::Member { .. })
                 && !pats.contains_key(&(i as u32))
@@ -5521,6 +5614,13 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 self.ast.types.pack_expansion(q, None)
             }
+            TyRec::Complex(q) => {
+                let q = qt(self, *q);
+                self.ast.types.complex(q)
+            }
+            TyRec::CanonTtp(depth, index, pack) => {
+                QualType::unqual(self.ast.types.canon_template_type_parm(*depth, *index, *pack))
+            }
             TyRec::Auto(k) => {
                 let kw = if *k & 1 != 0 { AutoKeyword::DecltypeAuto } else { AutoKeyword::Auto };
                 let deduced = (*k & 2 != 0).then_some(QualType::DEPENDENT);
@@ -5758,7 +5858,7 @@ mod tests {
                         deps: 0,
                         ty: q(int),
                         loc: 107,
-                        words: vec![body::PARAM, 0, NONE, 108],
+                        words: vec![body::PARAM, 0, NONE, 0, 108],
                     },
                     // 7 + y (the operands' shapes only matter to Sema)
                     body::ExprRec {
@@ -6235,6 +6335,7 @@ mod tests {
                     pack: false,
                     default: NONE,
                     profile: false,
+                    sect: false,
                 },
             ),
             head(
@@ -6320,6 +6421,7 @@ mod tests {
                     pack: false,
                     default: NONE,
                     profile: false,
+                    sect: false,
                 };
             }),
         ];

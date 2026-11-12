@@ -150,6 +150,7 @@ impl Sema<'_, '_> {
             .map(|(reason, count, example)| super::CensusRow { reason, count, example })
             .collect();
         out.rows.sort_by_key(|r| std::cmp::Reverse(r.count));
+        out.all = c.all;
         out.attrs = c.attrs.into_iter().collect();
         out.attrs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         out

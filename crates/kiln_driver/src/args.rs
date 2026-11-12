@@ -704,6 +704,9 @@ pub struct Args {
     /// image cannot carry each top-level declaration of the main module
     /// unit (spec/modules.md §11.11 "Fallback census").
     pub bmi_image_census: bool,
+    /// `-fkiln-bmi-image-census=all` (WP-1320): the census also lists
+    /// every refused top-level declaration with its reason.
+    pub bmi_image_census_all: bool,
     /// Errors, in order.
     pub errors: Vec<ArgError>,
     /// The `-fconstexpr-*` options.
@@ -1569,6 +1572,10 @@ impl Args {
             "-fkiln-bmi-image" => self.bmi_image = true,
             "-fno-kiln-bmi-image" => self.bmi_image = false,
             "-fkiln-bmi-image-census" => self.bmi_image_census = true,
+            "-fkiln-bmi-image-census=all" => {
+                self.bmi_image_census = true;
+                self.bmi_image_census_all = true;
+            }
             "-fkiln-pch-image" | "-fkiln-pch-image=write" => self.pch.image = PchImage::Write,
             "-fkiln-pch-image=check" => self.pch.image = PchImage::Check,
             "-fkiln-pch-image=load" => self.pch.image = PchImage::Load,

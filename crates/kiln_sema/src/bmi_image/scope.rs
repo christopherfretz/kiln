@@ -38,8 +38,8 @@
 //! mangling see the typedef name.
 
 use kiln_ast::decl::{DeclFlags, DeclKind, LinkageLang, NamespaceData, ScopeData, builtin};
-use kiln_ast::names::DeclName;
-use kiln_ast::{DeclHead, DeclId};
+use kiln_ast::names::{DeclName, OverloadedOperator};
+use kiln_ast::{DeclHead, DeclId, QualType};
 use kiln_source::Loc;
 
 use super::{DECL_FLAGS, DeclRec, Image, NONE, Payload, Rd, Res, W, Wr, Writer, bad};
@@ -58,6 +58,22 @@ pub(super) struct LinkRec {
 /// The `Implicit` record kind of a lazily declared builtin function
 /// (special members are 0 to 5).
 pub(super) const BUILTIN_KIND: u8 = 6;
+
+/// The `Implicit` record kind of one of the implicitly declared global
+/// allocation and deallocation functions ([basic.stc.dynamic.general]/2,
+/// WP-1320).
+pub(super) const GLOBAL_OP_KIND: u8 = 7;
+
+/// An implicit global allocation or deallocation function: `Implicit`
+/// record `rec`, the `index`th implicit `operator op` sema declares
+/// (`declare_global_new_delete`, in declaration order).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct GlobalOpStub {
+    rec: u32,
+    /// `OverloadedOperator` (`new`, `new[]`, `delete`, `delete[]`).
+    op: u8,
+    index: u8,
+}
 
 /// A lazily declared builtin function: `Implicit` record `rec`.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -80,6 +96,9 @@ pub(super) struct Scopes {
     /// (unnamed class or enumeration, the typedef naming it for linkage
     /// purposes) records, ascending by typedef.
     anon_typedefs: Vec<(u32, u32)>,
+    /// Implicit global allocation and deallocation function records,
+    /// ascending (WP-1320).
+    global_ops: Vec<GlobalOpStub>,
 }
 
 /// `d` is an implicit `extern "C"` linkage specification at global
@@ -91,6 +110,29 @@ fn builtin_scope(s: &Sema<'_, '_>, d: DeclId) -> bool {
         && n.has(DeclFlags::IMPLICIT)
         && n.ctx() == Some(ast.tu)
         && ast.decls.scope(d).and_then(ScopeData::linkage_lang) == Some(LinkageLang::C)
+}
+
+/// The implicit global `operator` functions named `name`, in declaration
+/// order.
+fn implicit_global_ops(s: &Sema<'_, '_>, name: DeclName) -> Vec<DeclId> {
+    let ast = &s.ast;
+    let mut v: Vec<DeclId> = ast
+        .lookup_local(ast.tu, name)
+        .iter()
+        .filter(|&f| {
+            let n = ast.decls.get(f);
+            n.kind() == DeclKind::Function && n.has(DeclFlags::IMPLICIT)
+        })
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The operator of a replaceable global allocation or deallocation
+/// function's name ([new.delete], WP-1320).
+fn global_new_delete_op(name: DeclName) -> Option<OverloadedOperator> {
+    use OverloadedOperator as O;
+    name.as_operator().filter(|op| matches!(op, O::New | O::ArrayNew | O::Delete | O::ArrayDelete))
 }
 
 /// `d`'s name is declared at global namespace scope: its context is the
@@ -150,9 +192,18 @@ impl Writer<'_, '_, '_> {
 
     /// `p`, the previous declaration of `d`, is one the importer's sema
     /// declares by itself and the reader finds again ([`Sema::image_prev`]):
-    /// the implicit namespace `std` or its `std::align_val_t`.
+    /// the implicit namespace `std` or its `std::align_val_t`, or an
+    /// implicit global allocation or deallocation function (WP-1320,
+    /// [`Sema::image_global_new_delete_prev`]).
     pub(super) fn implicit_prev(&self, d: DeclId, p: DeclId) -> bool {
         let ast = &self.s.ast;
+        if ast.decls.get(d).kind() == DeclKind::Function {
+            let n = ast.decls.get(p);
+            return n.kind() == DeclKind::Function
+                && n.has(DeclFlags::IMPLICIT)
+                && n.ctx() == Some(ast.tu)
+                && global_new_delete_op(n.name()).is_some();
+        }
         let Some(std) = self.s.global_ops.implicit_std else { return false };
         match ast.decls.get(d).kind() {
             DeclKind::Namespace => ast.first(p) == std,
@@ -242,6 +293,44 @@ impl Writer<'_, '_, '_> {
         Ok(true)
     }
 
+    /// The record of `d` when it is one of the implicitly declared
+    /// global allocation and deallocation functions (WP-1320): a stub
+    /// the importer resolves to its own after declaring them.
+    pub(super) fn global_op_stub(&mut self, d: DeclId) -> W<Option<u32>> {
+        let s = self.s;
+        let ast = &s.ast;
+        let n = ast.decls.get(d);
+        let Some(op) = global_new_delete_op(n.name()) else { return Ok(None) };
+        if n.kind() != DeclKind::Function || !n.has(DeclFlags::IMPLICIT) || n.ctx() != Some(ast.tu)
+        {
+            return Ok(None);
+        }
+        if let Some(&r) = self.recs.get(&d) {
+            return Ok(Some(r));
+        }
+        let index = implicit_global_ops(s, n.name())
+            .iter()
+            .position(|&x| x == d)
+            .and_then(|i| u8::try_from(i).ok())
+            .ok_or("an implicit allocation function sema did not declare")?;
+        let o = ast.modules.owner(d);
+        let rec = self.img.decls.len() as u32;
+        self.img.decls.push(DeclRec {
+            flags: n.flags().bits() & DECL_FLAGS,
+            owner: u8::from(o.purview) | (u8::from(o.exported) << 1),
+            access: 0,
+            name: NONE,
+            ctx: NONE,
+            lexical: NONE,
+            loc: NONE,
+            prev: NONE,
+            payload: Payload::Implicit { kind: GLOBAL_OP_KIND },
+        });
+        self.img.scopes.global_ops.push(GlobalOpStub { rec, op: op as u8, index });
+        self.recs.insert(d, rec);
+        Ok(Some(rec))
+    }
+
     /// Lists the carried unnamed classes and enumerations that a typedef
     /// names for linkage purposes; the typedef must be carried too.
     pub(super) fn anon_typedefs(&mut self) -> W<()> {
@@ -297,6 +386,12 @@ pub(super) fn encode_scopes(w: &mut Wr, s: &Scopes) {
         w.u32(t);
         w.u32(td);
     }
+    w.len(s.global_ops.len());
+    for g in &s.global_ops {
+        w.u32(g.rec);
+        w.u8(g.op);
+        w.u8(g.index);
+    }
 }
 
 pub(super) fn decode_scopes(r: &mut Rd) -> Res<Scopes> {
@@ -328,6 +423,12 @@ pub(super) fn decode_scopes(r: &mut Rd) -> Res<Scopes> {
     s.anon_typedefs = Vec::with_capacity(n);
     for _ in 0..n {
         s.anon_typedefs.push((r.u32()?, r.u32()?));
+    }
+    let n = r.count(6)?;
+    s.global_ops = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (rec, op, index) = (r.u32()?, r.u8()?, r.u8()?);
+        s.global_ops.push(GlobalOpStub { rec, op, index });
     }
     Ok(s)
 }
@@ -374,6 +475,20 @@ pub(super) fn validate_scopes(img: &Image) -> Res<()> {
     {
         return bad("a bad typedef naming an unnamed class");
     }
+    let op_stub = |r: u32| matches!(rec(r), Some(d) if d.payload == Payload::Implicit { kind: GLOBAL_OP_KIND });
+    let op_stubs =
+        img.decls.iter().filter(|d| d.payload == Payload::Implicit { kind: GLOBAL_OP_KIND });
+    if !s.global_ops.windows(2).all(|w| w[0].rec < w[1].rec)
+        || op_stubs.count() != s.global_ops.len()
+        || !s.global_ops.iter().all(|g| {
+            op_stub(g.rec)
+                && OverloadedOperator::from_u8(g.op)
+                    .and_then(|o| global_new_delete_op(DeclName::operator(o)))
+                    .is_some()
+        })
+    {
+        return bad("a bad implicit allocation function record");
+    }
     Ok(())
 }
 
@@ -399,6 +514,21 @@ impl Sema<'_, '_> {
                 && self.ast.decls.builtin_id(p) == Some(b.id)
         });
         found.or_else(|| self.lazily_create_builtin(sym, Loc::INVALID)).unwrap_or(tu)
+    }
+
+    /// The importer's implicit global allocation or deallocation
+    /// function for stub record `i` (WP-1320): declared as a
+    /// new-expression would, then the same one by position.
+    pub(super) fn image_global_op(&mut self, img: &Image, i: u32) -> DeclId {
+        let tu = self.ast.tu;
+        let Ok(k) = img.scopes.global_ops.binary_search_by_key(&i, |g| g.rec) else { return tu };
+        let g = img.scopes.global_ops[k];
+        let Some(op) = OverloadedOperator::from_u8(g.op) else { return tu };
+        self.declare_global_new_delete();
+        implicit_global_ops(self, DeclName::operator(op))
+            .get(usize::from(g.index))
+            .copied()
+            .unwrap_or(tu)
     }
 
     /// Links typedef record `i`, just built, to the unnamed class or
@@ -445,6 +575,28 @@ impl Sema<'_, '_> {
             }
         }
         ns
+    }
+
+    /// The previous declaration of function record `h` (type `ty`, no
+    /// previous record): a replaceable global allocation or deallocation
+    /// function redeclares the implicit one sema declares first, as
+    /// `act_on_global_new_delete_decl` finds it ([new.delete]/2,
+    /// WP-1320). Every global `operator new` / `operator delete` goes
+    /// through it, as in the parser, so the implicit functions are
+    /// declared at the same point.
+    pub(super) fn image_global_new_delete_prev(
+        &mut self,
+        h: &DeclHead,
+        kind: DeclKind,
+        ty: QualType,
+    ) -> Option<DeclId> {
+        let op = global_new_delete_op(h.name)?;
+        let ctx = self.ast.redecl_context(h.ctx);
+        if kind != DeclKind::Function || self.ast.decls.get(ctx).kind() != DeclKind::TranslationUnit
+        {
+            return None;
+        }
+        self.act_on_global_new_delete_decl(op, ty).1
     }
 
     /// The previous declaration of enumeration record `i` (header `h`)
@@ -520,6 +672,47 @@ mod tests {
         ];
         for (what, f) in corrupt {
             let mut img = with_builtin("__builtin_strlen");
+            f(&mut img);
+            assert!(decode(&encode(&img)).is_err(), "{what}");
+        }
+    }
+
+    /// WP-1320: an implicit global allocation function record
+    /// round-trips; one not listed, listed for another operator, or not
+    /// at global scope, is an error.
+    #[test]
+    fn global_op_records() {
+        type Corrupt = (&'static str, fn(&mut Image));
+        let with = || {
+            let mut img = sample();
+            let rec = img.decls.len() as u32;
+            img.decls.push(DeclRec {
+                flags: DeclFlags::IMPLICIT.bits() & DECL_FLAGS,
+                owner: 0,
+                access: 0,
+                name: NONE,
+                ctx: NONE,
+                lexical: NONE,
+                loc: NONE,
+                prev: NONE,
+                payload: Payload::Implicit { kind: GLOBAL_OP_KIND },
+            });
+            let op = OverloadedOperator::New as u8;
+            img.scopes.global_ops.push(GlobalOpStub { rec, op, index: 0 });
+            img
+        };
+        let img = with();
+        assert_eq!(decode(&encode(&img)).as_ref(), Ok(&img));
+        let corrupt: [Corrupt; 4] = [
+            ("unlisted", |i| i.scopes.global_ops.clear()),
+            ("not a stub", |i| i.scopes.global_ops[0].rec = 0),
+            ("not an allocation function", |i| {
+                i.scopes.global_ops[0].op = OverloadedOperator::Plus as u8;
+            }),
+            ("in a namespace", |i| i.decls.last_mut().unwrap().ctx = 0),
+        ];
+        for (what, f) in corrupt {
+            let mut img = with();
             f(&mut img);
             assert!(decode(&encode(&img)).is_err(), "{what}");
         }

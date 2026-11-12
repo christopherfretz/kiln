@@ -446,6 +446,37 @@ profile for the census and the corpus.
   explicit specialization using a non-type default argument"; `lcx`:
   "a template expression").
 
+## WP-1320: libstdc++ roots, wave 6a (2026-11-11)
+
+The wave took the libstdc++ refusal roots (list in
+pch-image-census.md, WP-1320). Debug builds of main (`fcd83a424`) and
+the WP-1320 branch, same session.
+
+- **Corpus `--pch-diff check`** (`cpp.include`, the `module.*`
+  directories, `cpp.module`, `tests/differential/pp`,
+  `tests/header-guard`): 184 compared, 92 through the image (main: 73
+  of the same 184). 15 of the new ones are WP-1320's own tests; the
+  others are `pch-global-new-paren-{run,errors}.cpp` and libc++'s
+  `<cwchar>` and `<limits>` header-guard units. One difference remains,
+  `module.global.frag/gmf-floatn-limits.cpp`. Its cause: declarations
+  loaded from the image record no cross-unit dedup keys, so an imported
+  module's GMF re-declares them. It is reduced as the ignored
+  `gmf_reinclusion_merges_with_image_declarations` (pch_decls). A
+  header template that warns where it is defined no longer makes
+  `check` differ.
+- **Headers carried** (libstdc++ 14, each alone): census-clean 29 → 31
+  of 109. All the others wait on `<type_traits>` (WP-1314's template
+  expressions, then template template parameters and constrained
+  partial specializations).
+- **Bench path** (`-v` note of the producer), before → after:
+  - `gnu`: "an explicit specialization using a non-type default
+    argument" → "a dependent using-declaration"; 22379 → 23669 of
+    26450 / 26396 declarations carried.
+  - `mid`: the same → the same as `gnu`; 8751 → 9141 of 9806.
+  - `lcx`: "a template expression" → the same; 21884 → 23348 of 26762.
+
+  All three still replay.
+
 ## What turns the image on for real
 
 1. **Coverage.** The image must carry the libc++ and libstdc++ headers

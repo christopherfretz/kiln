@@ -24,8 +24,8 @@ use kiln_ast::consts::{FloatKind, IntBits, NullKind, Scalar};
 use kiln_ast::decl::{DeclMisc, NewDecl, Payload as AstPayload, VarEvalState};
 use kiln_ast::expr::{
     BinaryOp, CastKind, CharKind, CompoundAssignExtra, ConstructionKind, DeclRefExtra, ExprDeps,
-    ExprKind, ExprNode, InitListExtra, NonOdrUse, Radix, StorageDuration, StringKind, TraitKind,
-    TypeTrait, UnaryOp,
+    ExprKind, ExprNode, InitListExtra, NewExtra, NewInitStyle, NonOdrUse, Radix, StorageDuration,
+    StringKind, TraitKind, TypeTrait, UnaryOp,
 };
 use kiln_ast::names::OverloadedOperator;
 use kiln_ast::stmt::{CaseData, IfData, LoopData, RangeForData, StmtKind, StmtNode, SwitchData};
@@ -286,6 +286,10 @@ enum Side {
     Case,
     Loop,
     RangeFor,
+    /// A new-expression's allocated type, array bound, initializer,
+    /// placement arguments (present flag and list), allocation and
+    /// deallocation functions and type location (WP-1320).
+    New,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -297,23 +301,25 @@ enum Slot {
 }
 
 fn side_fields(s: Side) -> &'static [F] {
-    use F::{D, E, Loc, Nns, OD, OE, OS, Qt, S, SL};
+    use F::{Bool, D, E, EL, Loc, Nns, OD, OE, OS, Qt, S, SL};
     match s {
         Side::Arms => &[E, E],
         Side::CompoundAssign => &[E, Qt, Qt],
         Side::InitList => &[OE, Loc],
-        Side::DeclRef => &[Nns, OD(Dc::Found)],
+        // WP-1320: and the explicit template arguments (`declval<T>()`).
+        Side::DeclRef => &[Nns, OD(Dc::Found), F::TA],
         Side::If => &[OS, OD(Dc::Var), OE, OS, OS],
         Side::Switch => &[OS, OD(Dc::Var), E, S, SL],
         Side::Case => &[E, OE, S],
         Side::Loop => &[OS, OD(Dc::Var), OE, OE, OS],
         Side::RangeFor => &[OS, D(Dc::Var), OD(Dc::Var), OD(Dc::Var), OE, OE, D(Dc::Var), S, Loc],
+        Side::New => &[Qt, OE, OE, Bool, EL, OD(Dc::Value), OD(Dc::Value), Loc],
     }
 }
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 59] = {
+pub(super) const EXPR_KINDS: [ExprKind; 62] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -390,6 +396,11 @@ pub(super) const EXPR_KINDS: [ExprKind; 59] = {
         // WP-1310: a source-location builtin call, its values computed
         // again by the importer (libc++ `<source_location>`).
         X::SourceLocExpr,
+        // WP-1320: `T x(args)` with a dependent type or argument, kept as
+        // written until the instantiation ([dcl.init.general]/16).
+        X::ParenListExpr,
+        X::CXXPseudoDestructorExpr,
+        X::CXXNewExpr,
     ]
 };
 
@@ -440,7 +451,7 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         X::ConditionalOperator | X::ChooseExpr => [f(F::E), Sd(Side::Arms)],
         X::ParenExpr => [f(F::E), f(F::Loc)],
         X::CallExpr | X::CXXOperatorCallExpr | X::CXXMemberCallExpr => [f(F::E), f(F::EL)],
-        X::CXXUnresolvedConstructExpr => [f(F::EL), Z],
+        X::CXXUnresolvedConstructExpr | X::ParenListExpr => [f(F::EL), Z],
         X::CXXDependentScopeMemberExpr => [f(F::E), f(F::Name)],
         X::DependentScopeDeclRefExpr => [f(F::Nns), f(F::Name)],
         // `b` is the selected association's expression, NONE while the
@@ -461,6 +472,10 @@ fn expr_shape(k: ExprKind, bits: u8) -> [Slot; 2] {
         | X::PackExpansionExpr => [f(F::E), Z],
         X::TypeTraitExpr => [f(F::QL), f(F::Bool)],
         X::CXXNoexceptExpr => [f(F::E), f(F::Bool)],
+        // The object and the destroyed type; `->` and qualified in aux
+        // (WP-1320).
+        X::CXXPseudoDestructorExpr => [f(F::E), f(F::Qt)],
+        X::CXXNewExpr => [Sd(Side::New), Z],
         X::ConstantExpr => [f(F::E), f(F::OCv)],
         X::MaterializeTemporaryExpr => [f(F::E), f(F::OD(Dc::Let))],
         X::StmtExpr => [f(F::S), Z],
@@ -510,7 +525,8 @@ fn expr_aux_ok(k: ExprKind, aux: u8) -> bool {
         X::TypeTraitExpr => usize::from(aux) < TypeTrait::all().len(),
         // The constant's result kind; `->` and the `template` keyword
         // ([temp.names]/3, WP-1284).
-        X::ConstantExpr | X::CXXDependentScopeMemberExpr => aux <= 3,
+        X::ConstantExpr | X::CXXDependentScopeMemberExpr | X::CXXPseudoDestructorExpr => aux <= 3,
+        X::CXXNewExpr => NewInitStyle::from_u8(aux).is_some(),
         X::MaterializeTemporaryExpr => StorageDuration::from_u8(aux & 3).is_some() && aux >> 3 == 0,
         X::CXXThisExpr
         | X::ExprWithCleanups
@@ -967,8 +983,13 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
         Dc::Var => matches!(d.payload, Payload::Var { .. }),
         // A block-scope function declaration's statement (WP-1293).
         Dc::Local => {
-            matches!(d.payload, Payload::Var { .. } | Payload::Function { kind: 0, .. })
-                && is_local(img, d)
+            matches!(
+                d.payload,
+                Payload::Var { .. }
+                    | Payload::Function { kind: 0, .. }
+                    | Payload::Assert { .. }
+                    | Payload::Typedef { .. }
+            ) && is_local(img, d)
         }
         Dc::Label => matches!(d.payload, Payload::Label),
         Dc::Let => matches!(d.payload, Payload::Let { .. }),
@@ -1027,8 +1048,11 @@ pub(super) fn validate_bodies(img: &Image, qref_ok: &dyn Fn(QRef) -> bool) -> Re
                     return bad("bad static assertion");
                 }
             }
-            Payload::Nttp { default, profile, .. } => {
-                if (*default != NONE && *default as usize >= ne) || (*default == NONE && *profile) {
+            Payload::Nttp { default, profile, sect, .. } => {
+                // A section default is checked with its record (templ.rs).
+                if (!*sect && *default != NONE && *default as usize >= ne)
+                    || (*default == NONE && *profile)
+                {
                     return bad("bad default template argument");
                 }
             }
@@ -1490,13 +1514,14 @@ impl Writer<'_, '_, '_> {
                 vec![Fv::E(array_filler), Fv::Loc(rbrace)]
             }
             (Side::DeclRef, Some(e), _) => match (raw, ex.decl_ref_extra(e)) {
-                (0, _) | (_, None) => vec![Fv::Nns(None), Fv::D(None, Dc::Value)],
-                (_, Some(x)) => {
-                    if x.template_args.is_some() {
-                        return Err("a template argument list");
-                    }
-                    vec![Fv::Nns(x.qualifier), Fv::D(x.found_decl, Dc::Found)]
+                (0, _) | (_, None) => {
+                    vec![Fv::Nns(None), Fv::D(None, Dc::Value), Fv::TA(None)]
                 }
+                (_, Some(x)) => vec![
+                    Fv::Nns(x.qualifier),
+                    Fv::D(x.found_decl, Dc::Found),
+                    Fv::TA(x.template_args),
+                ],
             },
             (Side::If, _, Some(s)) => {
                 let IfData { init, cond_var, cond, then, els } = *st.if_data(s);
@@ -1527,6 +1552,19 @@ impl Writer<'_, '_, '_> {
                     var(Some(loop_var)),
                     ss(body),
                     Fv::Loc(colon),
+                ]
+            }
+            (Side::New, Some(e), _) => {
+                let x = ex.new_extra(e);
+                vec![
+                    Fv::Qt(x.allocated_ty),
+                    Fv::E(x.array_size),
+                    Fv::E(x.init),
+                    Fv::Raw(u32::from(x.placement.is_some())),
+                    Fv::EL(x.placement.unwrap_or(ListId::EMPTY)),
+                    Fv::D(x.operator_new, Dc::Value),
+                    Fv::D(x.operator_delete, Dc::Value),
+                    Fv::Loc(x.type_loc),
                 ]
             }
             _ => return Err("a malformed body"),
@@ -1633,7 +1671,7 @@ impl Writer<'_, '_, '_> {
                 let mut v = self.slots_fv(node, expr_shape(k, n.raw_bits()), [n.a(), n.b()])?;
                 // A braced argument placeholder (`T(a, {b})`) lives in a
                 // Sema side table the image does not carry.
-                if k == ExprKind::CXXUnresolvedConstructExpr
+                if matches!(k, ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr)
                     && ListId::from_raw(n.a()).is_some_and(|l| {
                         ast.lists.iter::<ExprId>(l).any(|x| self.s.is_braced_arg(x))
                     })
@@ -2113,6 +2151,9 @@ impl Writer<'_, '_, '_> {
         } else if let Some(r) = self.member_rec(d)? {
             // S4b: a member of a class template specialization.
             r
+        } else if let Some(r) = self.global_op_stub(d)? {
+            // WP-1320: an implicit global allocation function.
+            r
         } else {
             return Err(OUTSIDE);
         };
@@ -2138,7 +2179,12 @@ impl Writer<'_, '_, '_> {
         if !local_fn
             && !matches!(
                 kind,
-                DeclKind::Var | DeclKind::Label | DeclKind::LifetimeExtendedTemporary
+                DeclKind::Var
+                    | DeclKind::Label
+                    | DeclKind::LifetimeExtendedTemporary
+                    | DeclKind::StaticAssert
+                    | DeclKind::Typedef
+                    | DeclKind::TypeAlias
             )
         {
             return Err("a local declaration the image does not carry");
@@ -2194,10 +2240,7 @@ impl Writer<'_, '_, '_> {
         let flags = n.flags().bits() & (LOCAL_FLAGS | DEP);
         let o = ast.modules.owner(d);
         let owner = u8::from(o.purview) | (u8::from(o.exported) << 1);
-        // The type first: naming a specialization may add its record.
-        if let Some(t) = n.ty() {
-            self.qref(t)?;
-        }
+        self.local_type_first(d)?;
         let i = u32::try_from(self.img.decls.len()).map_err(|_| "a body too large")?;
         let attrs = self.attr_recs(d, i)?;
         let payload = match kind {
@@ -2211,8 +2254,7 @@ impl Writer<'_, '_, '_> {
                 let extending = self.recs.get(&ld.extending).copied().ok_or(OUTSIDE)?;
                 Payload::Let { ty: self.qref(ty)?, extending, index: ld.mangling_index }
             }
-            DeclKind::Function => self.function(d, i)?,
-            _ => self.var_payload(d, i)?,
+            _ => self.local_payload(d, i)?,
         };
         if self.img.decls.len() != i as usize {
             return Err("a specialization named while its user is recorded");
@@ -2231,6 +2273,33 @@ impl Writer<'_, '_, '_> {
         self.recs.insert(d, i);
         self.attr_commit(i, attrs);
         Ok(i)
+    }
+
+    /// Records local `d`'s type before `d`: naming a specialization may
+    /// add its record. An alias's own type names the alias, so its
+    /// underlying type instead.
+    fn local_type_first(&mut self, d: DeclId) -> W<()> {
+        let ast = &self.s.ast;
+        let n = ast.decls.get(d);
+        if matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias) {
+            let td = *ast.decls.typedef(d).ok_or("a malformed typedef")?;
+            self.qref(td.underlying)?;
+        } else if let Some(t) = n.ty() {
+            self.qref(t)?;
+        }
+        Ok(())
+    }
+
+    /// The payload of local `d` (record `i`) other than a label or a
+    /// lifetime-extended temporary.
+    fn local_payload(&mut self, d: DeclId, i: u32) -> W<Payload> {
+        match self.s.ast.decls.get(d).kind() {
+            DeclKind::Function => self.function(d, i),
+            // A block-scope `static_assert` or alias (WP-1320: `declval`'s
+            // and `__call_is_nt`'s in <type_traits>), as at namespace scope.
+            DeclKind::StaticAssert | DeclKind::Typedef | DeclKind::TypeAlias => self.record(d, i),
+            _ => self.var_payload(d, i),
+        }
     }
 
     /// Walks every pending root and patches the records that point at it.
@@ -2416,11 +2485,10 @@ pub(super) const LOCAL_FLAGS: u8 =
 fn expr_reason(k: ExprKind) -> &'static str {
     use ExprKind as X;
     match k {
-        X::CXXNewExpr | X::CXXDeleteExpr => "a new or delete expression",
+        X::CXXDeleteExpr => "a new or delete expression",
         X::CXXTypeidExpr | X::CXXDynamicCastExpr => "a typeid or dynamic_cast expression",
         X::CXXStdInitializerListExpr => "a std::initializer_list",
         X::CXXInheritedCtorInitExpr => "an inherited constructor",
-        X::CXXPseudoDestructorExpr => "a pseudo-destructor call",
         X::LambdaExpr => "a lambda expression",
         X::RequiresExpr => "a requires-expression or concept",
         X::CoawaitExpr | X::DependentCoawaitExpr | X::CoyieldExpr => "a coroutine",
@@ -2879,6 +2947,7 @@ impl Sema<'_, '_> {
 
     /// The two slot values from the token values; also how many tokens
     /// the slots used (the rest are cold annotations).
+    #[allow(clippy::too_many_lines)] // one arm per field kind, kept together with `Fv`
     fn image_slots(&mut self, shape: [Slot; 2], vals: &[u32], _n: Node) -> (u32, u32, usize) {
         let mut p = 0usize;
         let mut out = [0u32; 2];
@@ -2919,12 +2988,16 @@ impl Sema<'_, '_> {
                             }),
                             Side::DeclRef => {
                                 let (qualifier, found_decl) = (NnsId::from_raw(v[0]), d(v[1]));
-                                if qualifier.is_none() && found_decl.is_none() {
+                                let template_args = kiln_ast::ArgListId::from_raw(v[2]);
+                                if qualifier.is_none()
+                                    && found_decl.is_none()
+                                    && template_args.is_none()
+                                {
                                     0
                                 } else {
                                     ex.push_declref_extra(DeclRefExtra {
                                         qualifier,
-                                        template_args: None,
+                                        template_args,
                                         found_decl,
                                     })
                                 }
@@ -2966,6 +3039,16 @@ impl Sema<'_, '_> {
                                     .unwrap_or_else(|| unreachable!("validated operand")),
                                 body: req_s(v[7]),
                                 colon: Loc::from_raw(v[8]),
+                            }),
+                            Side::New => ex.push_new_extra(NewExtra {
+                                allocated_ty: q(v[0]),
+                                array_size: e(v[1]),
+                                init: e(v[2]),
+                                placement: (v[3] != 0)
+                                    .then(|| ListId::from_raw(v[4]).unwrap_or(ListId::EMPTY)),
+                                operator_new: d(v[5]),
+                                operator_delete: d(v[6]),
+                                type_loc: Loc::from_raw(v[7]),
                             }),
                         }
                     } else {

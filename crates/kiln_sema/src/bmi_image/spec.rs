@@ -297,6 +297,47 @@ impl Writer<'_, '_, '_> {
         Ok(Some(i))
     }
 
+    /// Why underlying type `q` of a `X<args>` naming template record
+    /// `template` is not one the image carries, or `None` when it is (a
+    /// specialization reference or carried explicit specialization of
+    /// `template`). WP-1320 names the form for the census.
+    fn tst_under_form(&self, q: super::QRef, template: u32) -> Option<&'static str> {
+        if q.quals != 0 {
+            return Some("a specialization type: a qualified underlying type");
+        }
+        if q.ty <= super::BUILTINS {
+            return Some("a specialization type: a builtin underlying type");
+        }
+        let r = match &self.img.types[(q.ty - super::BUILTINS - 1) as usize] {
+            TyRec::Record(r) => *r,
+            // A dependent `X<T>` completed with its defaults, `X<T, d>`
+            // (`dependent_spec_canon`, [temp.arg.general]/9).
+            TyRec::Tst { template: t, under: None, .. } if *t == template => return None,
+            TyRec::Tst { .. } => {
+                return Some("a specialization type: another template's specialization");
+            }
+            TyRec::Injected(_) => {
+                return Some("a specialization type: a partial specialization's own type");
+            }
+            _ => return Some("a specialization type: an underlying type that is not a class"),
+        };
+        match self.img.decls[r as usize].payload {
+            Payload::Spec { template: st, .. } if st == template => None,
+            _ if super::classtempl::explicit_of(&self.img, r) == Some(template) => None,
+            Payload::Spec { .. } => {
+                Some("a specialization type: a specialization of another template record")
+            }
+            _ if super::classtempl::explicit_of(&self.img, r).is_some() => {
+                Some("a specialization type: an explicit specialization of another template record")
+            }
+            _ if super::classtempl::partial_of(&self.img, r).is_some() => {
+                Some("a specialization type: a partial specialization")
+            }
+            Payload::Record { .. } => Some("a specialization type: a plain class"),
+            _ => Some("a specialization type: another record"),
+        }
+    }
+
     /// A class template type (S4b): `X<args>` naming a carried class
     /// template, or the injected-class-name of its pattern; `None` for
     /// any other type.
@@ -327,15 +368,8 @@ impl Writer<'_, '_, '_> {
                     None => None,
                     Some(u) => {
                         let q = self.qref(u)?;
-                        let ok = q.quals == 0
-                            && q.ty > super::BUILTINS
-                            && matches!(self.img.types[(q.ty - super::BUILTINS - 1) as usize],
-                                TyRec::Record(r) if matches!(self.img.decls[r as usize].payload,
-                                    Payload::Spec { template: st, .. } if st == template)
-                                    || super::classtempl::explicit_of(&self.img, r)
-                                        == Some(template));
-                        if !ok {
-                            return Err("a specialization type the image does not carry");
+                        if let Some(why) = self.tst_under_form(q, template) {
+                            return Err(why);
                         }
                         Some(q)
                     }

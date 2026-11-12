@@ -777,6 +777,11 @@ impl Job<'_> {
                 let _ = writeln!(err, "{n:>7}  {a}");
             }
         }
+        if self.args.bmi_image_census_all {
+            for (reason, at) in &c.all {
+                let _ = writeln!(err, "refused: {at}: {reason}");
+            }
+        }
     }
 
     /// Writes the main unit's module file once `pp` has read it to its

@@ -2532,6 +2532,102 @@ attributes and locations in the predefined buffers are described under
 `pch-builtin-in-class-run.cpp`, `image-builtin-in-class-run.cpp`,
 `local_attributes_and_pattern_inits_are_carried`.
 
+**Forms carried by WP-1320.** A redeclaration of a replaceable global
+allocation or deallocation function (`void *operator new(std::size_t)`
+in libstdc++'s `<new>`, [new.delete]/2) has the implicit declaration sema
+makes as its previous declaration; the writer gives it no previous record,
+and the reader passes every non-dependent global `operator new` /
+`operator delete` record without one through
+`act_on_global_new_delete_decl`, as the parser does, which declares the
+implicit functions at the same point and finds the one it redeclares. A
+variable of a dependent type directly initialized (`fpos __pos(*this);`
+in `<bits/postypes.h>`, [dcl.init.general]/16) keeps its `ParenListExpr`
+(expression kind 59, its expressions and end location; a braced argument
+still falls back). Tests: `pch-global-new-paren-*.cpp`,
+`image-paren-init-run.cpp`, `global_new_delete_and_paren_inits_are_carried`.
+A non-type template parameter's default argument is carried as an
+expression section (`Nttp` flag bit 2, `sect`; its `default` is then the
+section) whenever the section can carry it, else as before; the reader
+builds it before the records that need it and sets it with its profile.
+That lets an explicit specialization that takes the default (`template<>
+struct __promote<double>` in `<ext/type_traits.h>`, whose `bool =
+__is_integer<_Tp>::__value`, [temp.arg.general]/1) be carried: the
+reader rebuilds the default when it converts the arguments. The writer
+still refuses ("an explicit specialization using a non-type default
+argument") when the default is inherited from an earlier declaration, is
+not a section, or instantiated anything at the specialization or inside
+the default's text that is not a class without static data members and
+member functions (those would be completed only with the bodies, after
+the records). Tests: `pch-nttp-default-spec-*.cpp`,
+`image-nttp-default-spec-run.cpp`, `nttp_default_explicit_specs_are_carried`.
+A dependent class template specialization written with fewer arguments
+than parameters (`__is_signed_helper<_Tp>` in `<type_traits>`) has as
+its underlying type the dependent specialization completed with the
+defaults (`__is_signed_helper<_Tp, is_arithmetic<_Tp>::value>`,
+`dependent_spec_canon`, [temp.arg.general]/9); the writer carries that
+`TyRec::Tst` (of the same template, itself without an underlying type)
+as `under`, and the reader accepts it there. A dependent member type
+(`typename X<T>::type`, a `DepTy::Name` or `DepTy::Tmpl`) is a valid
+dependent base class. The remaining refusals of the old reason name
+their form ("a specialization type: ..."). Tests:
+`pch-dependent-default-tst-*.cpp`, `image-dependent-default-tst-run.cpp`,
+`dependent_default_specializations_are_carried`.
+Explicit class instantiations are listed after the walk, in source
+order, not where the walk meets their declaration: that declaration is
+the specialization's, made where it was first named (`typedef
+basic_ios<char> ios;` in `<iosfwd>`), usually before the namespace block
+the instantiation is written in (`extern template class
+basic_ios<char>;` in `<bits/basic_ios.tcc>`), which was then not yet
+recorded ("an explicit instantiation in a namespace outside the image").
+The reader runs the list in order after the bodies, as before. Tests:
+`pch-reopened-extern-template-*.cpp`, `image-reopened-explinst-run.cpp`.
+A pseudo-destructor call keeps its `CXXPseudoDestructorExpr` (expression
+kind 60: the object, the destroyed type, `->` and qualified in aux;
+`noexcept(declval<_Tp&>().~_Tp())` in `<type_traits>`). A new-expression
+keeps its `CXXNewExpr` (kind 61, with a side record of the allocated
+type, array bound, initializer, placement arguments, allocation and
+deallocation functions and type location; the initialization style in
+aux, `::`, array form and written array in the bits). One of the
+implicitly declared global allocation and deallocation functions
+([basic.stc.dynamic.general]/2) that a body names is an `Implicit` record
+of kind 7 (`GLOBAL_OP_KIND`), unnamed and at global scope, listed in the
+scope section's allocation function list with its operator and its
+position among the implicit `operator` functions of that name sema
+declares (`declare_global_new_delete`, in declaration order); the
+importer declares them as a new-expression would and takes the one at
+that position. A declaration reference's side record also carries its
+explicit template arguments (`std::declval<void*>()`, an `F::TA` token;
+none is a zero count), which were refused as "a template argument list".
+Tests: `pch-new-dtor-targs-*.cpp`, `image-new-dtor-targs-run.cpp`,
+`global_op_records`.
+A block-scope `static_assert`, typedef or alias declaration
+(`declval`'s assertion and `__call_is_nt`'s `using _Up = ...` in
+`<type_traits>`, [dcl.pre]/10, [dcl.typedef]/2) is a local record like a
+variable: its context is the function record, it is named from the
+private name table and its `DeclStmt` names it (`Dc::Local`). The
+assertion's payload is the namespace-scope one, patched by the roots
+walk; the alias records its underlying type before itself (its own type
+names it). Validation accepts `Assert` and `Typedef` payloads among the
+locals. Tests: `pch-local-decls-*.cpp`, `image-local-decls-run.cpp`,
+`local_asserts_and_aliases_are_carried`.
+A GNU complex type (`_Complex double`, `__complex__ float` in
+`<complex>`) is a type record of tag 23 holding its element type; the
+reader interns it with `complex`. Tests: `pch-complex-types-*.cpp`,
+`image-complex-types-run.cpp`, `complex_types_are_carried`.
+A canonical template type parameter type that no parameter declaration
+names (the adjusted type of a dependent array parameter, `const T a[2]`,
+[dcl.fct]/5) is a type record of tag 24 holding its depth, index (both
+u32) and pack byte; the reader interns it with
+`canon_template_type_parm`. Tests: `pch-dependent-array-params-*.cpp`,
+`image-dependent-array-params-run.cpp`,
+`dependent_array_parameters_are_carried`.
+Not yet carried: an importer's header declarations loaded from the image
+record no §6 deduplication keys, so an imported module whose GMF includes
+the same header re-declares its entities instead of skipping them by
+position (`module.global.frag/gmf-floatn-limits.cpp` differs under
+`--pch-diff check`; reduced as the ignored
+`gmf_reinclusion_merges_with_image_declarations`).
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -3242,9 +3338,12 @@ flag, byte for byte, and the image's own `-v` fallback reason is
 unchanged (`kind2_image_census`). A unit with no image for a
 unit-level reason prints "image census for '<module>': no image:
 <reason>", and a non-module TU "image census: not a module unit".
+`-fkiln-bmi-image-census=all` (WP-1320) also prints, last, one line per
+refused top-level declaration in source order, "refused: <example>:
+<reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 22` since WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 23` since WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is
