@@ -5354,6 +5354,11 @@ Names there are not odr-used.
     marked `non_odr_use_constant`. So is a reference usable in constant
     expressions.
   - Every other queued variable is marked `used`.
+  - Cost: linear in the full-expression. The candidates are sorted
+    once (`ConstantCandidates`), and each queued reference is a binary
+    search, not a scan: a braced initializer of N elements naming
+    constant variables (`{a[0], s.m, v, ...}`) was O(N^2) (WP-1335;
+    test `tests/stress/init-list-constant-refs-65536.cpp`).
 - **Potential results** (`l2r_potential_results`, WP-1144; clang 19/22
   `Sema::CheckLValueToRValueConversionOperand` and
   `rebuildPotentialResultsAsNonOdrUsed`, SemaExpr.cpp):
