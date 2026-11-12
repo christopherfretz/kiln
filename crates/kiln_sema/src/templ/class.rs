@@ -1348,8 +1348,6 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(FrameKind::MemberFunction, f, pattern, poi) {
             return;
         }
-        let name_loc = self.ast.decls.get(f).loc();
-        self.check_consteval_only_inst(f, pattern, name_loc);
         if let Some((i, _)) = self.ast.member_spec_info(f) {
             self.ast.templates.update_member_spec(i, |m| {
                 if m.point_of_instantiation == Loc::INVALID {

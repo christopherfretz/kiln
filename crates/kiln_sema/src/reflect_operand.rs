@@ -414,7 +414,7 @@ impl Sema<'_, '_> {
         })
     }
 
-    /// The `CXXReflectExpr` of `r`, an expression of consteval-only type
+    /// The `CXXReflectExpr` of `r`, a consteval-only leaf
     /// ([`Sema::note_consteval_only`]); past the reflection table's limit,
     /// the fatal `sema_too_many_reflections` and a recovery expression
     /// ([`Sema::build_reflect_expr`]).

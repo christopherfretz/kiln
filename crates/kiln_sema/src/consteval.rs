@@ -40,8 +40,8 @@ pub(crate) struct Escalation {
     default_init: Option<DeclId>,
     /// `default_init` is a written mem-initializer ("the initializer of").
     written: bool,
-    /// An immediate-escalating expression of this consteval-only type
-    /// (`^^x`; `callee` is then the escalated function itself).
+    /// An immediate-escalating expression whose consteval-only value has
+    /// this type (`^^x`; `callee` is then the escalated function itself).
     consteval_only: Option<QualType>,
 }
 
@@ -126,6 +126,11 @@ pub(crate) struct ImmState {
     /// [`Sema::default_invocations`] order up to the first failure
     /// (WP-1171): consumed by [`Sema::finish_immediate_invocations`].
     early_defaults: Vec<(ExprId, Option<DefaultResults>)>,
+    /// Where each default argument or default member initializer whose
+    /// consteval-only leaf is being checked is used: it has no first token
+    /// of its own, so it is reported there (clang
+    /// `CXXDefaultArgExpr::getUsedLocation`).
+    pub(crate) default_use_locs: HashMap<ExprId, Loc>,
 }
 
 /// The results of the immediate invocations of a default argument or
@@ -1145,10 +1150,46 @@ impl Sema<'_, '_> {
         // constant expression, [expr.const.imm]/2.1, P4101R1).
         let mut bad_refs = bad_refs;
         bad_refs.extend(imm_results);
-        let bad_refs = self.check_consteval_only_leaves(bad_refs, e, var, escalating);
+        // A default argument or member initializer is reported where it
+        // is used, whichever check reaches it.
+        for u in &uses {
+            self.imm.default_use_locs.insert(u.expr, u.loc);
+        }
+        let (mut bad_refs, reported) =
+            self.check_consteval_only_leaves_reported(bad_refs, e, var, escalating);
+        // One error per full-expression: a leaf reported (a substituted
+        // template argument naming an immediate function is both a leaf
+        // and a reference to that function) silences the references.
+        if reported {
+            bad_refs.clear();
+        }
+        // A `constexpr` variable's initializer is manifestly
+        // constant-evaluated, so a reference to an immediate function in
+        // it is in an immediate function context ([expr.const.imm]/1.2);
+        // its value, a pointer to an immediate function, is consteval-only
+        // and the variable an immediate object, which /3.1 allows (P4101R1,
+        // carrying P3603's constexpr pointers to immediate functions).
+        if self.reflection && var.is_some_and(|v| self.is_constexpr_var(v)) {
+            bad_refs.clear();
+        }
         self.check_immediate_refs(bad_refs, escalating);
-        // The uses whose default argument or member initializer has a
-        // consteval-only leaf or result: each is a leaf of `e`.
+        self.check_default_uses(uses, e, var, escalating);
+        self.imm.default_use_locs.clear();
+        self.imm.early_defaults.clear();
+        // Those of nested invocations, not evaluated on their own.
+        self.imm.pending.prefolded.clear();
+    }
+
+    /// The uses whose default argument or member initializer has a
+    /// consteval-only leaf or result: each is a leaf of full-expression
+    /// `e` (of variable `var`'s initializer, if any).
+    fn check_default_uses(
+        &mut self,
+        uses: Vec<DefaultUse>,
+        e: ExprId,
+        var: Option<DeclId>,
+        escalating: Option<DeclId>,
+    ) {
         let mut default_leaves = Vec::new();
         for u in uses {
             let early = match self.imm.early_defaults.iter().position(|&(x, _)| x == u.expr) {
@@ -1167,9 +1208,6 @@ impl Sema<'_, '_> {
         if !default_leaves.is_empty() {
             let _ = self.check_consteval_only_leaves(default_leaves, e, var, escalating);
         }
-        self.imm.early_defaults.clear();
-        // Those of nested invocations, not evaluated on their own.
-        self.imm.pending.prefolded.clear();
     }
 
     /// The references to immediate functions outside every immediate
@@ -1403,7 +1441,7 @@ impl Sema<'_, '_> {
                 .arg(u8::from(is_ctor(f)))
                 .arg(self.unqualified_decl_name(field))
                 .arg(u8::from(self.is_consteval_kind(why.callee)))
-                .arg(name(why.callee))
+                .arg(self.unqualified_decl_name(why.callee))
                 .arg(u8::from(is_ctor(why.callee)))
                 .arg(u8::from(!why.written)),
             None => self
@@ -1413,9 +1451,13 @@ impl Sema<'_, '_> {
                 } else {
                     name(f)
                 })
-                .arg(u8::from(why.call))
+                // clang names the callee unqualified, and finds a
+                // lambda's call operator through the `DeclRefExpr` of its
+                // closure call, so it "evaluates the address of" it
+                // (clang 19 and 22 `DiagnoseImmediateEscalatingReason`).
+                .arg(u8::from(why.call && !self.is_lambda_call_op(why.callee)))
                 .arg(u8::from(self.is_consteval_kind(why.callee)))
-                .arg(name(why.callee))
+                .arg(self.unqualified_decl_name(why.callee))
                 .arg(u8::from(is_ctor(f)))
                 .arg(u8::from(is_ctor(why.callee))),
         })

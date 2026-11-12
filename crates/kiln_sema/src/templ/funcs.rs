@@ -289,8 +289,6 @@ impl Sema<'_, '_> {
         if !self.push_inst_frame(crate::templ::stack::FrameKind::FunctionSpec, f, tmpl, poi) {
             return;
         }
-        let name_loc = self.ast.decls.get(f).loc();
-        self.check_consteval_only_inst(f, pdef, name_loc);
         if let Some((i, _)) = self.ast.spec_info(f) {
             self.ast.templates.update_spec(i, |s| {
                 if s.point_of_instantiation == Loc::INVALID {

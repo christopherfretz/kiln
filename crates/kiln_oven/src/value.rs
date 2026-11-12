@@ -668,9 +668,12 @@ impl Oven {
         })
     }
 
-    /// [expr.const]/22: a constant expression's value does not point
-    /// to (or refer to, or name as a member) an immediate function
-    /// (clang `note_consteval_address_accessible`).
+    /// [expr.const]/22 before P4101R1: a constant expression's value does
+    /// not point to (or refer to, or name as a member) an immediate
+    /// function (clang `note_consteval_address_accessible`). Under the
+    /// consteval-only value model ([`SemaBridge::consteval_only_values`])
+    /// it may: such a value is consteval-only and the object holding it an
+    /// immediate object ([expr.const.const]/1-4), checked by sema.
     fn check_not_immediate(
         &self,
         b: &dyn SemaBridge,
@@ -678,6 +681,9 @@ impl Oven {
         reference: bool,
         loc: Loc,
     ) -> Result<(), Freeze> {
+        if b.consteval_only_values() {
+            return Ok(());
+        }
         let ast = b.ast();
         let immediate = ast.decls.function(d).is_some_and(|f| {
             f.spec.constexpr_kind() == kiln_ast::decl::ConstexprKind::Consteval

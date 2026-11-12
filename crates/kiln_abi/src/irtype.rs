@@ -322,7 +322,10 @@ impl<'a> IrTypes<'a> {
                 Arch::AArch64 => IrType::Fp128,
             },
             BuiltinType::Float128 | BuiltinType::StdFloat128 => IrType::Fp128,
-            BuiltinType::NullPtr => IrType::Ptr,
+            // `std::meta::info` at run time holds only the null
+            // reflection, a null pointer (spec/codegen.md "Run-time
+            // reflections"; P4101R1).
+            BuiltinType::NullPtr | BuiltinType::MetaInfo => IrType::Ptr,
             b if b.is_sizeless() => sve_type(b),
             // A placeholder with no size (an error or dependent type, which
             // only an undiagnosed instantiation failure lets reach codegen)

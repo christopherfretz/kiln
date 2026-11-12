@@ -987,10 +987,10 @@ pub(crate) fn refers_to_const_var(ast: &Ast, mut e: ExprId) -> bool {
     q.is_const() && !q.is_volatile()
 }
 
-/// Whether member access `e` reads a subobject of a constant variable
-/// whose value holds a reflection (`gs.name` of `constexpr S gs{{},
-/// "x"}`): that variable has no run-time object (spec/codegen.md
-/// "Consteval-only variables"), so the read must fold.
+/// Whether member access `e` reads a subobject of an immediate object
+/// (`gs.n` of `constexpr S gs{^^int, "x", 1}` in a constant context):
+/// that variable has no run-time object (spec/codegen.md "Consteval-only
+/// variables"), so the read must fold.
 fn names_reflection_holder(ast: &Ast, mut e: ExprId) -> bool {
     loop {
         match ast.exprs.get(e).kind() {
@@ -1008,8 +1008,7 @@ fn names_reflection_holder(ast: &Ast, mut e: ExprId) -> bool {
         return false;
     }
     let d = ast.exprs.decl(e);
-    ast.decls.get(d).kind() == DeclKind::Var
-        && ast.object_value(d).is_some_and(|c| ast.holds_reflection(c))
+    ast.decls.get(d).kind() == DeclKind::Var && ast.is_immediate_var(d)
 }
 
 /// Whether local variable `d` has static or thread storage duration

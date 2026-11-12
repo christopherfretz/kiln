@@ -16,15 +16,14 @@
 //@ args: -freflection
 //@ skip(clang): clang 19/22 do not implement P2996 reflection
 //@ strict-diags
-//@ diag: 35:36 error "consteval-only value outside an immediate function context"
-//@ diag: 39:8 error "consteval-only value outside an immediate function context"
-//@ diag: 43:47 error "consteval-only value outside an immediate function context"
-//@ diag: 44:54 error "consteval-only value outside an immediate function context"
-//@ diag: 46:24 error "consteval-only value outside an immediate function context"
-//@ diag: 51:6 error "function whose type holds 'std::meta::info' must be declared 'consteval' (a run-time 'std::meta::info' is not supported yet)"
-//@ diag: 53:47 error "consteval-only value outside an immediate function context"
-//@ diag: 58:8 error "consteval-only value outside an immediate function context"
-//@ diag: 60:15 note "in instantiation of function template specialization 'in_template<int>' requested here"
+//@ diag: 34:36 error "consteval-only value outside an immediate function context"
+//@ diag: 38:8 error "consteval-only value outside an immediate function context"
+//@ diag: 42:47 error "consteval-only value outside an immediate function context"
+//@ diag: 43:54 error "consteval-only value outside an immediate function context"
+//@ diag: 45:24 error "consteval-only value outside an immediate function context"
+//@ diag: 52:47 error "consteval-only value outside an immediate function context"
+//@ diag: 57:8 error "consteval-only value outside an immediate function context"
+//@ diag: 59:15 note "in instantiation of function template specialization 'in_template<int>' requested here"
 extern "C" int puts(const char*);
 using info = decltype(^^int);
 struct Tag { info what; const char* label; };

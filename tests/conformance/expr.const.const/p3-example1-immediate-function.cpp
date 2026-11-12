@@ -2,11 +2,11 @@
 // immediate functions: `a` is an error (a non-constexpr variable holding
 // a consteval-only value, /1.2), `b` and `c` are OK (a constexpr
 // variable, a template parameter object), as /4 no longer restricts the
-// result of a constant expression. kiln keeps the pre-P4101R1 rejection
-// of `b` and `c` until WP-1328 land 2 (P3603 constexpr pointers to
-// consteval functions); GCC 16.1 and clang 22 reject `b` too.
+// result of a constant expression (P3603's constexpr pointers to
+// immediate functions, carried by P4101R1; WP-1361). GCC 16.1 and clang
+// 22 still reject `b` (docs/status/deviations.md); `a` keeps clang's
+// wording.
 //@ expect: compile-fail
-//@ xfail(kiln): b and c are WP-1328 land 2 (constexpr pointers to immediate functions)
 //@ skip(clang): clang implements the pre-P4101R1 permitted-result rule
 //@ strict-diags
 //@ diag: 19:10 error "cannot take address of consteval function 'plus1' outside of an immediate invocation"

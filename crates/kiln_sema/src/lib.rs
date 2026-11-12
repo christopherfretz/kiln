@@ -283,9 +283,6 @@ pub struct Sema<'a, 'sm> {
     /// `-freflection` (P2996 spike, WP-267; default off): `^^`, type
     /// splices and the reflection intrinsics (spec/reflection.md).
     pub reflection: bool,
-    /// [`Sema::is_consteval_only_type`] of the complete classes seen
-    /// (keyed by definition).
-    pub(crate) consteval_only_records: kiln_source::fx::FxHashMap<DeclId, bool>,
     /// The consteval-only leaves of template definitions outside every
     /// immediate function context: checked again in each instantiation
     /// ([`Sema::note_inst_consteval_only`]).
@@ -1370,7 +1367,6 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             exc_disabled_pattern: kiln_source::fx::FxHashSet::default(),
             rtti: true,
             reflection: false,
-            consteval_only_records: kiln_source::fx::FxHashMap::default(),
             consteval_only_pattern: kiln_source::fx::FxHashSet::default(),
             consteval_only_inits: kiln_source::fx::FxHashSet::default(),
             immediate_vars: kiln_source::fx::FxHashMap::default(),

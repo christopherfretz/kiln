@@ -321,9 +321,59 @@ reach run time is a *value*, never a type. The one predicate lives in
   initializer used by a constructor is part of its body
   ([expr.const.imm]/4 Note 1): an implicit (escalating) constructor
   escalates, any other is an error at the leaf.
-- **No permitted-result restriction** (/4 struck it). Within land 1 the
-  old rejection of a `constexpr` variable holding a pointer to an
-  immediate function is kept (land 2 lifts it with P3603).
+- **No permitted-result restriction** (/4 struck it; P3603's constexpr
+  pointers to immediate functions ride the value model, P4101R1 §4.4).
+  A `constexpr` variable may hold a pointer to an immediate function
+  (`constexpr auto b = plus1;`, `constexpr int (*arr[])(int) = {plus1};`,
+  a member of a `constexpr` aggregate): its object is an immediate
+  object (/3.1), so naming `plus1` in its manifestly constant-evaluated
+  initializer is not an error (`finish_immediate_invocations` drops the
+  references when the variable is `constexpr`), and the Oven no longer
+  checks the result for immediate-function pointers
+  (`SemaBridge::consteval_only_values`). A call through such a variable
+  (`b(1)`) is not an immediate invocation: `b` is a leaf, so the call
+  is fine in a constant context, escalates an immediate-escalating
+  function, and is an error elsewhere; a dependent call keeps a variable
+  callee as a leaf (`dependent_call`). A function pointer template
+  argument (`C<plus1>`) is a template parameter object. Each
+  full-expression gets one error: a reported leaf silences the
+  "cannot take address of consteval function" of the same expression.
+  Judgment, [expr.const.const]/5 Example 2: `constexpr auto e = g();`
+  (`g` returns `plus1`) is accepted, although the example's comment
+  says "error: not a constant expression": /4 now reads "A core
+  constant expression is a constant expression unless it is a prvalue
+  whose result object has a constituent value that is an invalid
+  pointer value or is indeterminate or erroneous", `e`'s object is an
+  immediate object of a `constexpr` variable (/3.1), and the
+  initializer is an immediate function context ([expr.const.imm]/1.2);
+  /3 Example 1 (`constexpr auto b = plus1; // OK`) agrees. The comment
+  is a stale non-normative remnant of the struck permitted-result rule.
+- **Functions** ([expr.const.imm]/3: nothing is restricted by type).
+  A function whose type holds `std::meta::info` (a parameter, a return
+  type, a class with an `info` member, an implicit object parameter) is
+  an ordinary function: its body is judged by its leaves like any other
+  (a `return ^^int;` in a non-escalating function is an error at the
+  leaf; in an immediate-escalating one it escalates). Lambdas,
+  templates, defaulted members, function pointers and member pointers
+  need no rule of their own. A run-time `info` is always the null
+  reflection (codegen, below).
+- **Virtual functions** ([class.virtual]/18 as the working draft words
+  it: "A non-immediate virtual function shall not be overridden by an
+  immediate virtual function. An immediate virtual function shall not be
+  overridden by a non-immediate virtual function."). P2996R13's
+  consteval-only-type allowance is gone; user code gets
+  `sema_consteval_overrides` either way. Exemption (kiln extension, for
+  GCC 16.1's libstdc++ `<meta>`, whose `meta::exception::what` is a
+  consteval override of `exception::what`): with reflection enabled, a
+  consteval overrider declared in a system header is accepted
+  (`report_override_mismatch`).
+- **`bit_cast`** ([bit.cast]/2 "Constant When: Neither To nor From has
+  constexpr-unknown representation"; [expr.const.core]/1.2 lists
+  `std::meta::info`). A `__builtin_bit_cast` from or to `info`, or a type
+  with an `info` subobject, is well-formed; in a constant evaluation it
+  is not a constant expression (the Oven's "bit_cast from a type with
+  constexpr-unknown representation ('std::meta::info') is not allowed
+  in a constant expression", with clang's subobject notes).
 - **Templates.** Leaves are recorded at definition time where the
   evaluation context is known (`consteval_only_pattern`) and re-decided by
   value in each instantiation and each expansion of an expansion
@@ -337,22 +387,10 @@ reach run time is a *value*, never a type. The one predicate lives in
   member is therefore a leaf exactly when the element's value holds a
   non-null reflection.
 
-The P2996R13 type walk (`is_consteval_only_type`) survives for one kiln
-restriction only: a function whose type holds `std::meta::info` must be
-`consteval` (or immediate-escalating), as before, including the CWG3115
-implicit-object-parameter rule and the system-header exemption for
-instantiated non-constexpr helpers (`sema_consteval_only_fn`,
-`check_consteval_only_inst`). P4101R1 allows such functions with a
-run-time null `info`; that needs a run-time representation and is land 2
-of WP-1328.
-
 Codegen decides by value too (spec/codegen.md §4 "Consteval-only
-variables"): an immediate object has no storage; a variable whose type
-reaches `std::meta::info` but whose value is not consteval-only has none
-either in land 1 — a `constexpr` one is read only through its folded
-members, any other is the error "code generation for a run-time
-'std::meta::info' value is not supported yet", as is a null reflection
-constant reaching emission.
+variables" and "Run-time reflections"): an immediate object has no
+storage, and any other object exists at run time, `info` included. A
+run-time `std::meta::info` is pointer-sized and always null.
 
 Known gaps (follow-ups): a defaulted `operator==` of a class with an
 `info` member draws a spurious `-Wdefaulted-function-deleted` warning.

@@ -9,6 +9,7 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ xfail(gcc): GCC 16.1's access_context::via rejects a union (its is_class_type check excludes unions)
+//@ meta-header: skip GCC 16.1's <meta> access_context::via rejects a union (as xfail(gcc))
 #include "kiln_meta.h"
 using namespace std::meta;
 

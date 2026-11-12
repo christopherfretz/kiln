@@ -1055,11 +1055,10 @@ impl Sema<'_, '_> {
     /// [basic.types.general]/9 (clang `isTriviallyCopyableType`).
     pub(crate) fn is_trivially_copyable_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
-        // kiln: `std::meta::info` is scalar but copied only as an `info`
-        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
-        if self.is_meta_info_type(e) {
-            return false;
-        }
+        // `std::meta::info` is scalar: trivially copyable, trivial and
+        // POD ([basic.types.general]/9; GCC 16.1 agrees). A constant
+        // evaluation still copies it only as an `info` (spec/reflection.md
+        // §2.5, typed copy).
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
@@ -1077,11 +1076,10 @@ impl Sema<'_, '_> {
     /// [basic.types.general]/9 trivial types (clang `isTrivialType`).
     fn is_trivial_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
-        // kiln: `std::meta::info` is scalar but copied only as an `info`
-        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
-        if self.is_meta_info_type(e) {
-            return false;
-        }
+        // `std::meta::info` is scalar: trivially copyable, trivial and
+        // POD ([basic.types.general]/9; GCC 16.1 agrees). A constant
+        // evaluation still copies it only as an `info` (spec/reflection.md
+        // §2.5, typed copy).
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }
@@ -1106,11 +1104,10 @@ impl Sema<'_, '_> {
     /// standard-layout.
     pub(crate) fn is_pod_type(&self, q: QualType) -> bool {
         let e = self.base_element(q);
-        // kiln: `std::meta::info` is scalar but copied only as an `info`
-        // (spec/reflection.md §2.5, typed copy), so not trivially copyable.
-        if self.is_meta_info_type(e) {
-            return false;
-        }
+        // `std::meta::info` is scalar: trivially copyable, trivial and
+        // POD ([basic.types.general]/9; GCC 16.1 agrees). A constant
+        // evaluation still copies it only as an `info` (spec/reflection.md
+        // §2.5, typed copy).
         if self.is_dependent_type(e) || !self.is_complete(e) {
             return false;
         }

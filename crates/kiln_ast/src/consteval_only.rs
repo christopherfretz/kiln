@@ -41,27 +41,6 @@ impl Ast {
         self.decl_is_immediate(d, &mut seen)
     }
 
-    /// Whether frozen value `c` holds a reflection (the null one too) as
-    /// a subobject, not through a pointer: an object of it has no
-    /// run-time representation in codegen yet (spec/codegen.md
-    /// "Consteval-only variables").
-    pub fn holds_reflection(&self, c: ConstValueId) -> bool {
-        let mut stack = vec![c];
-        let mut steps = 0usize;
-        while let Some(c) = stack.pop() {
-            steps += 1;
-            if steps > 1_000_000 {
-                break;
-            }
-            match self.consts.get(c) {
-                ConstValue::Scalar(Scalar::Reflection { .. }) => return true,
-                ConstValue::Scalar(_) => {}
-                ConstValue::Aggregate(img) => stack.extend(img.relocs.iter().map(|r| r.value)),
-            }
-        }
-        false
-    }
-
     /// The constant value of variable, temporary or template parameter
     /// object `d`, through its redeclarations.
     pub fn object_value(&self, d: DeclId) -> Option<ConstValueId> {

@@ -30,89 +30,23 @@
 //! ([`Sema::check_consteval_only_var`]). Nothing here looks at a type,
 //! except to skip values that cannot hold a pointer or a reflection.
 //!
-//! The P2996R13 type walk ([`Sema::is_consteval_only_type`]) survives for
-//! one kiln restriction only: a non-`consteval` function with a
-//! `std::meta::info` parameter or return type is still rejected
-//! ([`Sema::check_consteval_only_fn`]) until codegen represents a run-time
-//! (null) `std::meta::info` (WP-1328 land 2).
+//! Functions are not restricted by their type: a non-`consteval`
+//! function may take and return `std::meta::info` (or a class holding
+//! one), which exists at run time holding the null reflection
+//! (spec/codegen.md "Run-time reflections"). What its body may not do is
+//! decided by the same leaves: one outside an immediate function context
+//! escalates an immediate-escalating function and is an error in any
+//! other (WP-1361).
 
-use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, Defaulted, VarEvalState};
+use kiln_ast::decl::{DeclFlags, DeclKind, VarEvalState};
 use kiln_ast::expr::ExprKind;
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
-use kiln_source::Loc;
 
 use crate::Sema;
 
 impl Sema<'_, '_> {
-    /// Whether `t` is consteval-only ([basic.types.general], P2996R13):
-    /// `std::meta::info`; a pointer, reference or array of one; a
-    /// function type with a consteval-only return or parameter type; a
-    /// member pointer with a consteval-only member type; a class with a
-    /// consteval-only base or non-static data member. Always false
-    /// without `-freflection`.
-    pub(crate) fn is_consteval_only_type(&mut self, t: QualType) -> bool {
-        if !self.reflection {
-            return false;
-        }
-        let mut t = t;
-        // Bounded: a type nests finitely; classes recurse below.
-        loop {
-            match self.ast.types.canonical_view(t) {
-                TypeView::Builtin(_) => return self.is_meta_info(t),
-                TypeView::Pointer(p)
-                | TypeView::LValueRef(p)
-                | TypeView::RValueRef(p)
-                | TypeView::IncompleteArray(p)
-                | TypeView::MemberPointer { pointee: p, .. } => t = p,
-                TypeView::ConstantArray(_) | TypeView::VariableArray { .. } => {
-                    let Some(e) = self.ast.types.element(t) else { return false };
-                    t = e;
-                }
-                TypeView::Function(p) => {
-                    let mut parts = vec![p.ret()];
-                    parts.extend_from_slice(self.ast.types.params(&p));
-                    return parts.into_iter().any(|q| self.is_consteval_only_type(q));
-                }
-                TypeView::Record(r) => return self.is_consteval_only_record(r),
-                _ => return false,
-            }
-        }
-    }
-
-    /// [`Sema::is_consteval_only_type`] of class `r`, cached once the
-    /// class is complete. A class reached again through its own members
-    /// (`struct N { N* next; }`) counts as not consteval-only there: the
-    /// answer is then decided by its other members.
-    fn is_consteval_only_record(&mut self, r: DeclId) -> bool {
-        let Some(def) = self.ast.definition(r) else { return false };
-        if let Some(&b) = self.consteval_only_records.get(&def) {
-            return b;
-        }
-        let complete = self
-            .ast
-            .decls
-            .record(def)
-            .is_some_and(|x| x.defn.contains(kiln_ast::decl::DefinitionBits::COMPLETE));
-        self.consteval_only_records.insert(def, false);
-        let bases: Vec<QualType> =
-            self.ast.decls.bases(def, &self.ast.lists).map(|b| b.ty).collect();
-        let fields: Vec<QualType> = self
-            .ast
-            .members(def)
-            .filter(|&m| self.ast.decls.get(m).kind() == DeclKind::Field)
-            .filter_map(|m| self.ast.decls.get(m).ty())
-            .collect();
-        let b = bases.into_iter().chain(fields).any(|q| self.is_consteval_only_type(q));
-        if complete {
-            self.consteval_only_records.insert(def, b);
-        } else {
-            self.consteval_only_records.remove(&def);
-        }
-        b
-    }
-
     /// Whether a value of type `t` can be or hold a consteval-only value
     /// (a cheap filter before any value is looked at): everything but an
     /// arithmetic, enumeration, `bool`, `nullptr_t` or `void` type.
@@ -321,7 +255,7 @@ impl Sema<'_, '_> {
         }
     }
 
-    fn is_constexpr_var(&self, v: DeclId) -> bool {
+    pub(crate) fn is_constexpr_var(&self, v: DeclId) -> bool {
         self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr())
     }
 
@@ -459,6 +393,18 @@ impl Sema<'_, '_> {
         var: Option<DeclId>,
         escalating: Option<DeclId>,
     ) -> Vec<ExprId> {
+        self.check_consteval_only_leaves_reported(refs, e, var, escalating).0
+    }
+
+    /// [`Self::check_consteval_only_leaves`], and whether one was
+    /// reported.
+    pub(crate) fn check_consteval_only_leaves_reported(
+        &mut self,
+        refs: Vec<ExprId>,
+        e: ExprId,
+        var: Option<DeclId>,
+        escalating: Option<DeclId>,
+    ) -> (Vec<ExprId>, bool) {
         let mut reported = false;
         let mut rest = Vec::with_capacity(refs.len());
         for r in refs {
@@ -468,7 +414,7 @@ impl Sema<'_, '_> {
                 reported = self.check_consteval_only_leaf(r, e, var, escalating);
             }
         }
-        rest
+        (rest, reported)
     }
 
     /// Whether the full-expression ending is itself a manifestly
@@ -521,7 +467,15 @@ impl Sema<'_, '_> {
             self.escalate_consteval_only(g, r);
             return false;
         }
-        let loc = self.begin_loc(r);
+        // A default argument or member initializer has no first token of
+        // its own: it is reported where it is used (clang
+        // `CXXDefaultArgExpr::getUsedLocation`).
+        let loc = match self.ast.exprs.get(r).kind() {
+            ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
+                self.imm.default_use_locs.get(&r).copied().unwrap_or(self.ast.exprs.get(r).loc())
+            }
+            _ => self.begin_loc(r),
+        };
         self.error(DiagId::sema_consteval_only_expr, loc);
         true
     }
@@ -566,89 +520,5 @@ impl Sema<'_, '_> {
         let name = self.unqualified_decl_name(v);
         let msg = self.diag(DiagId::sema_consteval_only_var, n.loc()).arg(name);
         self.emit(msg);
-    }
-
-    /// Function `f`, declared at `loc`: one of consteval-only type is
-    /// `consteval` ([basic.types.general], P2996R13), unless it is
-    /// immediate-escalating (a lambda's call operator, a defaulted
-    /// member, a templated `constexpr` function: it becomes immediate
-    /// through its body).
-    pub(crate) fn check_consteval_only_fn(&mut self, f: DeclId, loc: Loc) {
-        if !self.reflection {
-            return;
-        }
-        let n = *self.ast.decls.get(f);
-        let Some(x) = self.ast.decls.function(f) else { return };
-        let spec = x.spec;
-        if n.has(DeclFlags::INVALID) || self.is_immediate_fn(f) || self.is_immediate_escalating(f) {
-            return;
-        }
-        // A templated constexpr function is immediate-escalating; the
-        // other members of an instantiated class were checked in the
-        // pattern (follow-up: a type that became consteval-only).
-        if (self.in_template() && spec.constexpr_kind() == ConstexprKind::Constexpr)
-            || self.inst.stack.in_instantiation_record()
-        {
-            return;
-        }
-        let ty = n.ty().unwrap_or(QualType::ERROR);
-        // A member of a templated class is checked per instantiated
-        // definition, when its class is known (`check_consteval_only_inst`;
-        // GCC 16.1 checks no templated member through its class).
-        if self.is_consteval_only_type(ty)
-            || (!self.in_template() && self.has_consteval_only_object_param(f))
-        {
-            self.error(DiagId::sema_consteval_only_fn, loc);
-        }
-    }
-
-    /// Instantiated function `f` of pattern `pattern`, at `loc`: the
-    /// rule of `check_consteval_only_fn` for a type that became
-    /// consteval-only by substitution (`template <class T> void h(T)`
-    /// as `h<info>`, a member of `W<info>` with a `T` member), checked when
-    /// the definition is instantiated, as GCC 16.1 does. A pattern whose
-    /// own type was already consteval-only was reported at its
-    /// declaration; a `constexpr` or defaulted pattern is
-    /// immediate-escalating.
-    pub(crate) fn check_consteval_only_inst(&mut self, f: DeclId, pattern: DeclId, loc: Loc) {
-        if !self.reflection
-            || self.ast.decls.get(f).has(DeclFlags::INVALID)
-            || self.is_immediate_fn(f)
-            || self.is_immediate_escalating(f)
-        {
-            return;
-        }
-        let Some(p) = self.ast.decls.function(pattern) else { return };
-        if p.spec.constexpr_kind() != ConstexprKind::None || p.spec.defaulted() != Defaulted::No {
-            return;
-        }
-        // Standard libraries that predate CWG3115 (libc++ 19, libstdc++
-        // 14) define non-constexpr helpers (`vector::__throw_length_error`,
-        // `ranges::__access::__begin`) that `vector<info>` instantiates; a
-        // pattern in a system header is not diagnosed (kiln extension).
-        let ploc = self.ast.decls.get(pattern).loc();
-        if self.diags.sm().is_in_system_header(ploc) {
-            return;
-        }
-        let ty = |s: &Self, d: DeclId| s.ast.decls.get(d).ty().unwrap_or(QualType::ERROR);
-        let (fty, pty) = (ty(self, f), ty(self, pattern));
-        if (self.is_consteval_only_type(fty) || self.has_consteval_only_object_param(f))
-            && !self.is_consteval_only_type(pty)
-        {
-            self.error(DiagId::sema_consteval_only_fn, loc);
-        }
-    }
-
-    /// Whether implicit object member function `f` (a constructor and a
-    /// destructor included) is of a consteval-only class: GCC 16.1 counts
-    /// the implicit object parameter in the function's type (CWG3115), so
-    /// the class's members declared so far decide, as for its other
-    /// parameters.
-    fn has_consteval_only_object_param(&mut self, f: DeclId) -> bool {
-        if !self.is_implicit_object_member(f) {
-            return false;
-        }
-        let Some(c) = self.ast.decls.get(f).ctx() else { return false };
-        self.kind_of(c) == DeclKind::CXXRecord && self.is_consteval_only_record(c)
     }
 }

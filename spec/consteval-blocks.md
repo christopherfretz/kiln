@@ -159,6 +159,6 @@ Tests: `tests/conformance/expr.const/immediate-escalating-reflect.cpp`,
 
 A plain (non-template) `auto f() { return ^^int; }` is not
 immediate-escalating, so it is ill-formed, not consteval. A function
-whose type holds `std::meta::info` must still be `consteval` in kiln
-(`sema_consteval_only_fn`, "a run-time 'std::meta::info' is not
-supported yet"): P4101R1 lifts that, land 2 of WP-1328.
+whose type holds `std::meta::info` need not be `consteval`
+([expr.const.imm]/3, P4101R1): only its leaves are judged, as in any
+other function (spec/reflection-repr.md §6 "Functions").

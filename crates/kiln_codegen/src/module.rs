@@ -34,15 +34,17 @@ pub(crate) fn err<T>(loc: Option<Loc>, msg: impl Into<String>) -> R<T> {
     Err(CodegenError { loc, msg: msg.into() })
 }
 
-/// The error for code that needs a run-time `std::meta::info` object
-/// (one holding the null reflection, well-formed since P4101R1): codegen
-/// has no run-time representation for reflections yet (spec/codegen.md
-/// "Consteval-only variables").
-pub(crate) fn runtime_reflection_error(loc: Option<Loc>) -> CodegenError {
+/// The error for a constant holding a consteval-only value (a non-null
+/// reflection, a pointer to an immediate function or into an immediate
+/// object) reaching emission: sema keeps every one of them out of
+/// run-time code ([expr.const.const]/3, [expr.const.imm]/3; P4101R1), so
+/// this is an internal error, never a silent miscompile or a reference to
+/// a missing symbol (spec/codegen.md "Run-time reflections").
+pub(crate) fn consteval_only_error(loc: Option<Loc>) -> CodegenError {
     CodegenError {
         loc,
-        msg: "code generation for a run-time 'std::meta::info' value is not supported yet \
-              (P4101R1 run-time reflections)"
+        msg: "internal error: a consteval-only value (a reflection or a pointer to an \
+              immediate function or object) reached code generation"
             .into(),
     }
 }
@@ -215,12 +217,8 @@ pub(crate) struct Cg<'a> {
     /// local variable (clang `InitializerConstants`;
     /// [`Cg::unnamed_global_from`]).
     pub unnamed_consts: FxHashMap<DeclId, GlobalId>,
-    /// Whether each class definition asked about reaches
-    /// `std::meta::info` ([`Cg::reaches_meta_info`]).
-    pub consteval_only: FxHashMap<DeclId, bool>,
-    /// [`Cg::no_runtime_object`] of each variable asked about: `None`
-    /// when it has an object, `Some(unsupported)` otherwise.
-    pub no_object: FxHashMap<DeclId, Option<bool>>,
+    /// [`Cg::no_runtime_object`] of each variable asked about.
+    pub no_object: FxHashMap<DeclId, bool>,
     /// Static locals emitted per (function, name), for discriminators.
     pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
     /// `void *`, used to classify implicit object parameters.
@@ -325,127 +323,21 @@ impl<'a> Cg<'a> {
         }
     }
 
-    /// Whether `t` reaches `std::meta::info`: it is `std::meta::info`, or
-    /// a pointer, reference, array, function or member pointer type or
-    /// class reaching it through its parts, bases or non-static data
-    /// members. Codegen has no run-time representation for a reflection
-    /// yet (P4101R1 allows a run-time null one; spec/codegen.md
-    /// "Consteval-only variables"), so a variable of such a type has no
-    /// object: a `constexpr` one is used only for its constant value, any
-    /// other is "not supported yet" ([`Cg::no_runtime_object`]). Classes
-    /// are walked with a worklist and cached.
-    pub(crate) fn reaches_meta_info(&mut self, t: QualType) -> bool {
-        let ast = self.ast;
-        let mut seen: FxHashSet<DeclId> = FxHashSet::default();
-        let mut records: Vec<DeclId> = Vec::new();
-        let mut pending: Vec<DeclId> = Vec::new();
-        let mut types = vec![t];
-        let mut found = false;
-        'walk: loop {
-            while let Some(mut t) = types.pop() {
-                // Bounded: a type nests finitely.
-                loop {
-                    match ast.types.canonical_view(t) {
-                        TypeView::Builtin(_) => {
-                            if ast.types.canonical(t).without_quals()
-                                == BuiltinType::MetaInfo.qual_type()
-                            {
-                                found = true;
-                                break 'walk;
-                            }
-                            break;
-                        }
-                        TypeView::Pointer(p)
-                        | TypeView::LValueRef(p)
-                        | TypeView::RValueRef(p)
-                        | TypeView::IncompleteArray(p)
-                        | TypeView::MemberPointer { pointee: p, .. } => t = p,
-                        TypeView::ConstantArray(_) | TypeView::VariableArray { .. } => {
-                            let Some(e) = ast.types.element(t) else { break };
-                            t = e;
-                        }
-                        TypeView::Function(p) => {
-                            types.push(p.ret());
-                            types.extend_from_slice(ast.types.params(&p));
-                            break;
-                        }
-                        TypeView::Record(r) => {
-                            if let Some(def) = ast.definition(r) {
-                                match self.consteval_only.get(&def) {
-                                    Some(&true) => {
-                                        found = true;
-                                        break 'walk;
-                                    }
-                                    Some(&false) => {}
-                                    None => {
-                                        if seen.insert(def) {
-                                            records.push(def);
-                                            pending.push(def);
-                                        }
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                        _ => break,
-                    }
-                }
-            }
-            // The next class not yet walked: its bases and fields.
-            let Some(def) = pending.pop() else { break };
-            types.extend(ast.decls.bases(def, &ast.lists).map(|b| b.ty));
-            types.extend(
-                ast.members(def)
-                    .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
-                    .filter_map(|m| ast.decls.get(m).ty()),
-            );
-        }
-        if !found {
-            // Nothing reachable from `t` is consteval-only.
-            for d in records {
-                self.consteval_only.insert(d, false);
-            }
-        } else if let TypeView::Record(r) = ast.types.canonical_view(t)
-            && let Some(def) = ast.definition(r)
-        {
-            self.consteval_only.insert(def, true);
-        }
-        found
-    }
-
     /// Whether variable `d` has no run-time object (spec/codegen.md
-    /// "Consteval-only variables"), and if so whether that is an error.
-    /// An immediate object ([expr.const.const]/2, P4101R1: its value has
-    /// a consteval-only constituent, decided by value, not type) exists
-    /// only for constant evaluation: sema made every use of it a constant
-    /// or an error, so it gets no storage. A variable whose type reaches
-    /// `std::meta::info` but whose value is not consteval-only (one
-    /// holding null reflections) has none either: a `constexpr` one is
-    /// read only for its constant value; any other would need a run-time
-    /// reflection, which is not supported yet (`Some(Err)`).
-    pub(crate) fn no_runtime_object(&mut self, d: DeclId) -> Option<R<()>> {
-        let cached = if let Some(&x) = self.no_object.get(&d) {
-            x
-        } else {
-            let x = self.no_runtime_object_uncached(d);
-            self.no_object.insert(d, x);
-            x
-        };
-        let unsupported = cached?;
-        let loc = Some(self.ast.decls.get(d).loc());
-        Some(if unsupported { Err(runtime_reflection_error(loc)) } else { Ok(()) })
-    }
-
-    fn no_runtime_object_uncached(&mut self, d: DeclId) -> Option<bool> {
-        let ast = self.ast;
-        if ast.is_immediate_var(d) {
-            return Some(false);
+    /// "Consteval-only variables"): an immediate object
+    /// ([expr.const.const]/2, P4101R1: its value has a consteval-only
+    /// constituent, decided by value, not type) exists only for constant
+    /// evaluation, as sema made every use of it a constant or an error. Any
+    /// other variable has one, whatever its type: a `std::meta::info` it
+    /// holds is the null reflection at run time (spec/codegen.md "Run-time
+    /// reflections").
+    pub(crate) fn no_runtime_object(&mut self, d: DeclId) -> bool {
+        if let Some(&x) = self.no_object.get(&d) {
+            return x;
         }
-        let q = ast.decls.get(d).ty()?;
-        if !self.reaches_meta_info(q) {
-            return None;
-        }
-        Some(!ast.decls.var(d).is_some_and(|v| v.spec.is_constexpr()))
+        let x = self.ast.is_immediate_var(d);
+        self.no_object.insert(d, x);
+        x
     }
 
     pub fn new(
@@ -513,7 +405,6 @@ impl<'a> Cg<'a> {
             srcloc: None,
             static_locals: FxHashMap::default(),
             unnamed_consts: FxHashMap::default(),
-            consteval_only: FxHashMap::default(),
             no_object: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             void_ptr,
@@ -1092,8 +983,8 @@ impl<'a> Cg<'a> {
         // scope either, whatever its linkage (`extern constexpr info r`,
         // an exported one of a module interface; spec/codegen.md
         // "Consteval-only variables").
-        if let Some(r) = self.no_runtime_object(d) {
-            return r;
+        if self.no_runtime_object(d) {
+            return Ok(());
         }
         // [dcl.link]/8: `extern "C" int x;` declares, like `extern`.
         let ext = v.spec.storage() == VarStorage::Extern || ast.decls.is_single_line_linkage(d);
