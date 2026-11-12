@@ -6,7 +6,6 @@
 //@ expect: run
 //@ std: c++20
 //@ module: fta=Inputs/friend-template-attach.cppm
-//@ xfail(kiln): WP-1307 follow-up, module_check_links checks redeclarations made by an importer's instantiation against the importer's attachment
 import fta;
 int main() {
   fta::It<char> i;

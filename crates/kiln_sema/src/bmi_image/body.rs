@@ -132,8 +132,12 @@ const COLD_TEMPLATE_KW: u16 = 256;
 /// a source-location builtin (WP-1310): the location and context its
 /// values are for, and whether they include the `__impl` object.
 const COLD_SRCLOC: u16 = 512;
+/// The naming class of an unresolved name that found class members with
+/// no using-shadow among them (sema's `ule_found`, WP-1314): an
+/// [`F::OD`] of [`Dc::Ctx`] (a class), only on `UnresolvedLookupExpr`.
+const COLD_NAMING: u16 = 1024;
 /// Every annotation bit.
-const COLD_ALL: u16 = 1023;
+const COLD_ALL: u16 = 2047;
 
 // ---------------------------------------------------------------------------
 // The schema
@@ -591,6 +595,7 @@ fn layout(shape: [Slot; 2], cold: u16) -> Vec<F> {
         (COLD_SRCLOC, F::Loc),
         (COLD_SRCLOC, F::D(Dc::Ctx)),
         (COLD_SRCLOC, F::Bool),
+        (COLD_NAMING, F::OD(Dc::Ctx)),
     ] {
         if cold & bit != 0 {
             v.push(f);
@@ -1226,6 +1231,7 @@ pub(super) fn validate_section(
             || e.cold & !COLD_ALL != 0
             || (e.cold & (COLD_REWRITE | COLD_SRCLOC) != 0
                 && !matches!(k, ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr))
+            || (e.cold & COLD_NAMING != 0 && k != ExprKind::UnresolvedLookupExpr)
             || e.deps & !ExprDeps::TYPE_VALUE_INST.with(ExprDeps::UNEXPANDED_PACK).bits() != 0
         {
             return bad("bad expression bits");
@@ -1639,6 +1645,13 @@ impl Writer<'_, '_, '_> {
                 Fv::D(Some(sv.ctx), Dc::Ctx),
                 Fv::Raw(u32::from(sv.location.is_some())),
             ]);
+        }
+        // `lookup_ok` accepts only a naming class with no using-shadow.
+        if ast.exprs.get(e).kind() == ExprKind::UnresolvedLookupExpr
+            && let Some(f) = self.s.ovl.ule_found.get(&e)
+        {
+            cold |= COLD_NAMING;
+            v.push(Fv::D(f.naming, Dc::Ctx));
         }
         cold
     }
@@ -2187,11 +2200,11 @@ impl Writer<'_, '_, '_> {
                     | DeclKind::TypeAlias
             )
         {
-            return Err("a local declaration the image does not carry");
+            return Err(local_reason(kind));
         }
         let ctx = n.ctx().and_then(|c| self.recs.get(&c).copied()).ok_or(OUTSIDE)?;
         if !matches!(self.img.decls[ctx as usize].payload, Payload::Function { .. }) {
-            return Err("a local declaration the image does not carry");
+            return Err("a local declaration in a nested scope the image does not carry");
         }
         let allowed = LOCAL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits();
         let mut extra = n.flags().bits() & !allowed;
@@ -2482,6 +2495,19 @@ impl Writer<'_, '_, '_> {
 pub(super) const LOCAL_FLAGS: u8 =
     DeclFlags::IMPLICIT.bits() | DeclFlags::USED.bits() | DeclFlags::REFERENCED.bits();
 
+/// The census reason of a local declaration of kind `k` the image does
+/// not carry (WP-1314: one per kind).
+fn local_reason(k: DeclKind) -> &'static str {
+    match k {
+        DeclKind::CXXRecord | DeclKind::Enum => "a local class or enumeration",
+        DeclKind::Using | DeclKind::UsingShadow | DeclKind::UsingDirective => {
+            "a local using-declaration or using-directive"
+        }
+        DeclKind::Binding => "a local structured binding",
+        _ => "a local declaration the image does not carry",
+    }
+}
+
 fn expr_reason(k: ExprKind) -> &'static str {
     use ExprKind as X;
     match k {
@@ -2493,17 +2519,14 @@ fn expr_reason(k: ExprKind) -> &'static str {
         X::RequiresExpr => "a requires-expression or concept",
         X::CoawaitExpr | X::DependentCoawaitExpr | X::CoyieldExpr => "a coroutine",
         X::CXXReflectExpr | X::CXXSpliceExpr => "a reflection or splice",
-        X::UnresolvedLookupExpr
-        | X::UnresolvedMemberExpr
-        | X::CXXDependentScopeMemberExpr
-        | X::SubstNonTypeTemplateParmPackExpr
-        | X::FunctionParmPackExpr
-        | X::PackExpansionExpr
-        | X::CXXFoldExpr
-        | X::PackIndexingExpr
-        | X::SizeOfPackExpr
-        | X::CXXUnresolvedConstructExpr
-        | X::CXXExpansionSelectExpr => "a template expression",
+        // WP-1314: the template expressions not carried yet, one census
+        // reason each (the rest of the family is in [`EXPR_KINDS`]).
+        X::UnresolvedMemberExpr => "a template expression (an unresolved member reference)",
+        X::SubstNonTypeTemplateParmPackExpr | X::FunctionParmPackExpr => {
+            "a template expression (a substituted parameter pack)"
+        }
+        X::PackIndexingExpr => "a template expression (pack indexing)",
+        X::CXXExpansionSelectExpr => "a template expression (an expansion statement's element)",
         _ => "an expression the image does not carry yet",
     }
 }
@@ -2719,6 +2742,13 @@ impl Sema<'_, '_> {
             if let Some(ctx) = ctx {
                 self.srcloc.image_uses.push((id, at, ctx, location));
             }
+        }
+        if e.cold & COLD_NAMING != 0 {
+            // What `build_overload_ref` keeps: the decls are what lookup
+            // found (no using-shadow), and the naming class.
+            let naming = DeclId::from_raw(next());
+            let found = self.ast.unresolved_decls(id);
+            self.ovl.ule_found.insert(id, crate::overload::UleFound { found, naming });
         }
     }
 

@@ -210,19 +210,31 @@ impl Writer<'_, '_, '_> {
     pub(super) fn lookup_ok(&self, e: ExprId) -> W<()> {
         let s = self.s;
         let ast = &s.ast;
-        if s.ovl.ule_found.contains_key(&e) || s.member_refs.contains_key(&e) {
-            return Err("a template expression");
+        // WP-1314: one census reason per form.
+        // The naming class is carried (WP-1314); a using-shadow is not.
+        if let Some(f) = s.ovl.ule_found.get(&e)
+            && (f.naming.is_none() || f.found != ast.unresolved_decls(e))
+        {
+            return Err("a template expression (a name found through a using-declaration)");
+        }
+        if s.member_refs.contains_key(&e) {
+            return Err("a template expression (an implicit member reference)");
         }
         for d in ast.unresolved_decls(e) {
             let n = ast.decls.get(d);
-            let member = n.ctx().is_some_and(|c| ast.decls.record(c).is_some());
-            if member
-                || !matches!(
-                    n.kind(),
-                    DeclKind::Function | DeclKind::FunctionTemplate | DeclKind::VarTemplate
-                )
-            {
-                return Err("a template expression");
+            // A class member (WP-1314: `C::f<T>(0)`, a static member
+            // template named in a class template): instantiation looks
+            // the name up again in the class, as after replay.
+            if !matches!(
+                n.kind(),
+                DeclKind::Function
+                    | DeclKind::CXXMethod
+                    | DeclKind::FunctionTemplate
+                    | DeclKind::VarTemplate
+            ) {
+                return Err(
+                    "a template expression (a name that found something other than a function or a function or variable template)",
+                );
             }
         }
         Ok(())

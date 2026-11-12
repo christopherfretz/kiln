@@ -47,6 +47,7 @@ mod body;
 mod classtempl;
 mod constraints;
 mod declocs;
+mod defcmp;
 mod deptypes;
 mod explinst;
 mod exprs;
@@ -69,7 +70,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 23;
+pub(crate) const IMAGE_VERSION: u32 = 24;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -654,6 +655,8 @@ struct Image {
     /// WP-1300: `noexcept(e)` naming the function's own parameters, in
     /// the bodies ([`exprs::LateNx`]).
     late_nx: Vec<exprs::LateNx>,
+    /// WP-1314: what sema keeps beside defaulted comparisons.
+    defcmps: defcmp::DefCmps,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1328,6 +1331,7 @@ fn encode(img: &Image) -> Vec<u8> {
     explinst::encode_explicit_insts(&mut w, &img.explinsts);
     patinit::encode_pattern_inits(&mut w, &img.patinits);
     exprs::encode_texprs(&mut w, &img.texprs, &img.late_nx);
+    defcmp::encode_defaulted_cmps(&mut w, &img.defcmps);
     w.0
 }
 
@@ -1980,6 +1984,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.explinsts = explinst::decode_explicit_insts(&mut r)?;
     img.patinits = patinit::decode_pattern_inits(&mut r)?;
     (img.texprs, img.late_nx) = exprs::decode_texprs(&mut r)?;
+    img.defcmps = defcmp::decode_defaulted_cmps(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2030,7 +2035,12 @@ fn dependent_base(img: &Image, q: QRef) -> bool {
             return false;
         }
         match img.types.get((q.ty - BUILTINS - 1) as usize) {
-            Some(TyRec::Ttp(_) | TyRec::Tst { under: None, .. }) => return true,
+            // `decltype(impl::test<T>(0))` too (WP-1314: `is_referenceable`).
+            Some(
+                TyRec::Ttp(_)
+                | TyRec::Tst { under: None, .. }
+                | TyRec::Ex(exprs::ExTy::Decltype { dep: true, .. }),
+            ) => return true,
             Some(TyRec::Tst { under: Some(u), .. }) => q = *u,
             // `typename X<T>::type` (WP-1320: `is_signed`'s base).
             Some(TyRec::Dep(deptypes::DepTy::Name { .. } | deptypes::DepTy::Tmpl { .. })) => {
@@ -2217,6 +2227,7 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     localexterns::validate_local_externs(img)?;
     explinst::validate_explicit_insts(img, &|q| qref_at(q, nd))?;
     patinit::validate_pattern_inits(img, &|q| qref_at(q, nd))?;
+    defcmp::validate_defaulted_cmps(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2448,6 +2459,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 (Payload::Record { def: None, .. }, NONE)
                     if top.is_some() && d.prev == NONE && scope(d.ctx) =>
                 {
+                    true
+                }
+                // A namespace reopened while the class sema completed
+                // from its first declaration is open (WP-1314).
+                (Payload::Namespace, NONE) if top.is_some() && d.prev != NONE && scope(d.ctx) => {
                     true
                 }
                 (_, NONE) => top.map_or_else(|| scope(d.ctx), |t| d.ctx == t),
@@ -3638,8 +3654,14 @@ impl Writer<'_, '_, '_> {
         // declaration: the importer defines it again (its body and
         // ctor-initializers are synthesized, spec/modules.md §11.11).
         let defaulted = spec.defaulted() == Defaulted::Explicit;
-        if defaulted && (!first || s.special_kind_of(d).is_none()) {
-            return Err("a defaulted comparison or an out-of-line defaulted function");
+        // A defaulted comparison (WP-1314): its `default` keyword and
+        // operator lookups travel in `defcmp`.
+        let cmp = defaulted && first && s.cmp_kind(d).is_some();
+        if defaulted && !cmp && (!first || s.special_kind_of(d).is_none()) {
+            return Err("an out-of-line defaulted function");
+        }
+        if cmp {
+            self.defaulted_cmp(d, i)?;
         }
         let fty = n.ty().ok_or("a malformed function")?;
         let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
@@ -3677,6 +3699,9 @@ impl Writer<'_, '_, '_> {
                 return Err("a parameter shared between declarations");
             }
             params.push(self.param(p, g)?);
+            if ast.decls.get(p).has(DeclFlags::HAS_ATTRS) {
+                self.param_attrs(p, i, params.len() as u32 - 1)?;
+            }
         }
         if let Some((_, (exc, e))) = late {
             self.bs.roots.push(Root::Noexcept(i, exc, e));
@@ -3910,9 +3935,10 @@ impl Writer<'_, '_, '_> {
             // Patched by `walk_roots`.
             self.bs.roots.push(Root::Default(g, e));
         }
-        if n.flags().bits() & !(DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits()) != 0
-            || n.misc().name_independent()
-        {
+        // Attributes (WP-1314): `Writer::param_attrs`.
+        let allowed =
+            DECL_FLAGS | DEP | DeclFlags::HAS_LEXICAL_CTX.bits() | DeclFlags::HAS_ATTRS.bits();
+        if n.flags().bits() & !allowed != 0 || n.misc().name_independent() {
             return Err("an implicit, invalid or attributed parameter");
         }
         let name = match n.name() {
@@ -4149,6 +4175,8 @@ impl Writer<'_, '_, '_> {
         self.usings.retain(|_, v| *v < n);
         self.tmemo.retain(|_, v| *v < t);
         self.img.cspecs.truncate(n);
+        self.img.attrs.params.retain(|(_, r)| r.decl < n);
+        self.img.defcmps.truncate(n);
     }
 
     /// The top-level declaration `d` belongs to: the outermost enclosing
@@ -4448,11 +4476,16 @@ impl Writer<'_, '_, '_> {
                 && h.prev == NONE
                 && h.lexical == NONE
                 && !befriended;
+            // A namespace reopened between a class's first declaration
+            // and its definition's members (`template <> struct
+            // char_traits<char>;` in one block, its definition in the
+            // next: sema completes the first declaration; WP-1314).
+            let reopened = matches!(payload, Payload::Namespace) && h.prev != NONE;
             while let Some(&top) = st.open.last() {
                 let inside = || st.open_last.get(&top).is_some_and(|&l| l > d);
                 if h.lexical == NONE && h.ctx == top
                     || befriended && h.lexical == top
-                    || elaborated && inside()
+                    || (elaborated || reopened) && inside()
                 {
                     break;
                 }
@@ -4719,6 +4752,7 @@ impl Sema<'_, '_> {
             declocs::decl_loc_offsets(&img, &mut offs);
             explinst::explicit_inst_locs(&img, &mut offs);
             patinit::pattern_init_locs(&img, &mut offs);
+            defcmp::defaulted_cmp_locs(&img, &mut offs);
             if img.kw == NONE || img.name_loc == NONE || !offs.into_iter().all(off_ok) {
                 return bad("an offset past the end of the module's source");
             }
@@ -4914,6 +4948,7 @@ impl Sema<'_, '_> {
                             self.ast.decls.set_param_original_ty(pd, o);
                         }
                         image_flags(self, pd, p.flags);
+                        self.image_param_attrs(img, i as u32, k as u32, pd, main);
                         ps.push(pd);
                     }
                     if !ps.is_empty() {
@@ -5291,6 +5326,7 @@ impl Sema<'_, '_> {
                 let _ = self.ast.decls.set_default_arg(params_all[g], built.expr(p.default));
             }
         }
+        self.image_defaulted_cmps(img, &ids, main);
         self.image_explicit_insts(img, &mut tys, &ids, main);
         self.image_mark_specs(img, &ids, main);
         // Defaulted and implicit special members the module used are
@@ -5884,6 +5920,7 @@ mod tests {
             declocs: declocs::DeclLocs::default(),
             explinsts: explinst::ExplInsts::default(),
             patinits: patinit::PatInits::default(),
+            defcmps: defcmp::DefCmps::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

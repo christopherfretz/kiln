@@ -2025,10 +2025,7 @@ fn kind2_declaration_image_fallback() {
             "an inherited constructor or assignment operator",
         ),
         ("module;\nint h();\nexport module f;\nexport int g();\n", "a global module fragment"),
-        (
-            "export module f;\nstruct S { int x; bool operator==(const S &) const = default; };\nexport constexpr S v{3};\n",
-            "a defaulted comparison",
-        ),
+        // WP-1314: a defaulted `==` is carried now (image-defaulted-cmp-run.cpp).
     ] {
         std::fs::write(d.join("f.cppm"), src).unwrap();
         let o = kiln(&d, &["-v", "-fkiln-bmi-image", "--precompile", "f.cppm", "-o", "f.pcm"]);
