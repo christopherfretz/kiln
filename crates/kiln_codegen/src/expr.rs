@@ -2027,6 +2027,23 @@ impl Cg<'_> {
     /// conditional are glvalues and are loaded (`c ? f() : x` with a
     /// reference-returning `f`, WP-418).
     fn emit_arm(&mut self, a: ExprId) -> R<Option<V>> {
+        // A `void` glvalue arm (C's GNU `c ? *pv : *pv`, C17 6.5.15p5: the
+        // conditional is a void prvalue since WP-1318) is never loaded,
+        // even when volatile: `*p` yields its operand's value (clang
+        // `VisitUnaryDeref` of `void` visits the operand, so the arms
+        // meet in a `phi ptr`), any other is evaluated for effect only
+        // (WP-1347).
+        if self.is_glvalue(a) && self.ast.types.is_void(self.ast.exprs.get(a).ty()) {
+            let inner = self.skip_parens(a);
+            let ast = self.ast;
+            if ast.exprs.get(inner).kind() == ExprKind::UnaryOperator
+                && ast.exprs.unary_op(inner) == UnaryOp::Deref
+            {
+                return self.emit_scalar_opt(ast.exprs.operand(inner));
+            }
+            self.emit_lvalue(a)?;
+            return Ok(None);
+        }
         if self.is_glvalue(a) { self.emit_glvalue_load(a) } else { self.emit_scalar_opt(a) }
     }
 

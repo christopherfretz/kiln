@@ -9106,7 +9106,12 @@ warnings and converts the operands as GCC does. kiln follows its C paths
 - **`void` indirection** (C17 6.5.3.2p4, DR 106). `*p` of a pointer to
   (qualified) `void` is a `void` expression: an on-by-default
   `-Wvoid-ptr-dereference` extension warning, not C++'s error
-  (`tests/c/expr/void-pointer-dereference.c`).
+  (`tests/c/expr/void-pointer-dereference.c`). The `void` lvalue is never
+  loaded, `volatile void` included: as an arm of the (prvalue, WP-1318)
+  `void` conditional it lowers to its pointer operand's value, as clang
+  `VisitUnaryDeref`, so two such arms meet in a `phi ptr`; elsewhere it is
+  discarded (`emit_arm`, WP-1347; `tests/c/run/void-deref-conditional-arms.c`,
+  `tests/c/expr/void-deref-conditional-ir.c`).
 - **Comma operator** (C17 6.5.17p2). The right operand takes the
   array/function-to-pointer and lvalue conversions (`conv::decay`), so
   the result is a prvalue: `sizeof (0, f)` is a pointer's size.
