@@ -1468,9 +1468,14 @@ impl Oven {
     /// maps and construction steps; count = functions), `oven.thunks`
     /// (the thunk caches; count = cached thunks), `oven.globals` (globals
     /// and the per-variable and per-literal maps; count = globals),
-    /// `oven.mem` (abstract memory; count = static space bytes),
+    /// `oven.heap-peak` (the translation unit's evaluation-memory
+    /// high-water mark, `Memory::heap_peak`; count = bytes),
+    /// `oven.static-peak` (the static space's; count = bytes),
+    /// `oven.mem.capacity` (abstract memory's buffers and tables as held;
+    /// count = static space bytes; a `.capacity` row, outside the total),
     /// `oven.memo` and `oven.other` (registers, stacks, scratch, type
-    /// table). The rows' reserved bytes sum to [`Oven::footprint`].
+    /// table). The reserved bytes of every row but the two peaks sum to
+    /// [`Oven::footprint`].
     pub fn memory(&self) -> kiln_ast::mem::MemReport {
         use kiln_ast::mem::{MemReport, MemRow};
         fn cap<T>(v: &Vec<T>) -> u64 {
@@ -1533,8 +1538,15 @@ impl Oven {
             + map(&self.unknowns)
             + cap(&self.let_pending);
         r.push(MemRow::new("oven.globals", self.globals.len() as u64, globals_live, globals_cap));
+        // Abstract memory enters the total by its exact high-water marks,
+        // not by its buffers' capacity, which doubles as it grows and so
+        // moves in steps unrelated to the peak (WP-1315).
+        let hp = self.mem.heap_peak();
+        r.push(MemRow::new("oven.heap-peak", hp, hp, hp));
+        let sp = self.mem.static_peak().max(self.mem.static_top());
+        r.push(MemRow::new("oven.static-peak", sp, sp, sp));
         let m = self.mem.footprint() as u64;
-        r.push(MemRow::new("oven.mem", self.mem.static_top(), m, m));
+        r.push(MemRow::new("oven.mem.capacity", self.mem.static_top(), m, m));
         let m = self.memo.footprint() as u64;
         r.push(MemRow::new("oven.memo", 0, m, m));
         let other =
@@ -1693,6 +1705,7 @@ impl Oven {
         self.run.depth_base = 0;
         self.mem.allocated = 0;
         self.mem.peak = 0;
+        self.mem.fold_peak();
         self.mem.arena_peak = 0;
         self.mem.heap_allocs = 0;
         self.mem.ctx = 0;
@@ -1814,6 +1827,9 @@ impl Oven {
             refl: self.run.counters.refl,
             reclaimed: self.mem.allocated.saturating_sub(self.mem.held().saturating_sub(held0)),
         };
+        // The nested context's peak is its own (exclusive) and is restored
+        // away below; the translation unit's high-water mark keeps it.
+        self.mem.fold_peak();
         self.mem.free_heap_of(ctx, &self.types);
         self.mem.release(mark, &self.types);
         self.stack.truncate(sp);

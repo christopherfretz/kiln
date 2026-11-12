@@ -760,7 +760,14 @@ counters from its `-fconstexpr-report` total, into `bench/results/<date>.json`
 one per entry and compiler kind. A run fails if any entry regresses beyond its
 threshold (default 5% time, 2% memory, 0% steps, 2% constexpr bytes; an entry
 can set its own with `threshold-*:` directives, and `--threshold-*` options
-override both). The counters are deterministic, so they catch evaluator
+override both). Kiln entries of `frontend`, `oven`, `overload` and
+`reflect` are also judged on kiln's accounted memory, the
+`-fkiln-memory-report` total from one extra unmeasured compile, at 2%: it
+is deterministic where peak RSS moves 2-6% between identical runs, it
+sees kiln alone where an `obj` compile's largest process is `llc`, and it
+counts the Oven's evaluation memory by its exact peak (`oven.heap-peak`),
+so memory reclaimed during an evaluation still shows (WP-1303, WP-1315;
+spec/bench.md "Regression policy"). The counters are deterministic, so they catch evaluator
 regressions that host noise would hide in the timings, and `oven:` budgets
 on bench entries are enforced too, as is a `budget-time:` directive: an
 absolute ceiling on kiln's fastest run that holds even under `--record`, so a
@@ -768,7 +775,8 @@ re-recording cannot absorb a regression past it (`bench/pp/headers.cpp`
 carries one at 1.5x its recorded kiln time, WP-487). The time rule compares the fastest current run
 with the baseline median so host load does not read as a regression, and a
 baseline taken with a different compiler version, host or entry source is
-advisory only. The same corpus is run through clang to produce the
+advisory only, except that kiln is always compared with its own past:
+two kiln versions count as the same compiler (WP-1315). The same corpus is run through clang to produce the
 comparison table in `docs/status/perf.md`. The `libcxx-slice` entry
 (`bench/libcxx-slice/slice.list`, selected only when named) times kiln
 against clang 22 on ~50 heavy libc++ 22 tests at `-fsyntax-only`, with the

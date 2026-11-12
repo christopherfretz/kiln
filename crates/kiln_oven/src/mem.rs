@@ -794,6 +794,10 @@ pub(crate) struct Memory {
     pub peak: u64,
     /// Peak address space held: `frame.top + heap.top`.
     pub arena_peak: u64,
+    /// The largest [`Memory::arena_peak`] of the translation unit so far
+    /// ([`Memory::heap_peak`]): folded in when an evaluation ends, never
+    /// on the VM's paths, and never lowered (WP-1315).
+    tu_arena_peak: u64,
     /// Bytes the running evaluation added to the translation unit's
     /// reflection table and interned constant store (`refl_bytes`;
     /// spec/oven.md "Reflection bytes"): live for the rest of the
@@ -870,6 +874,7 @@ impl Memory {
             allocated: 0,
             peak: 0,
             arena_peak: 0,
+            tu_arena_peak: 0,
             refl: 0,
             limit,
             cur_frame: 0,
@@ -956,9 +961,29 @@ impl Memory {
             + self.trial.footprint()
     }
 
+    /// Folds the running evaluation's [`Memory::arena_peak`] into the
+    /// translation unit's ([`Memory::heap_peak`]). Called when an
+    /// evaluation context ends (or a new outermost one starts), before
+    /// its peak is reset or restored.
+    pub fn fold_peak(&mut self) {
+        self.tu_arena_peak = self.tu_arena_peak.max(self.arena_peak);
+    }
+
+    /// The translation unit's evaluation-memory high-water mark: the most
+    /// address space (`frame.top + heap.top` and the reflection bytes, as
+    /// `peak_arena` counts it) any evaluation held at once, nested
+    /// evaluations included. Memory freed during an evaluation, or
+    /// dropped at its end, still counts: this is the peak, exact and
+    /// independent of how the buffers grew (`oven.heap-peak`,
+    /// spec/oven.md "Memory report"; WP-1315).
+    pub fn heap_peak(&self) -> u64 {
+        self.tu_arena_peak.max(self.arena_peak)
+    }
+
     /// Drops every frame and heap allocation (end of a top-level
     /// evaluation); buffers are kept.
     pub fn reset(&mut self) {
+        self.fold_peak();
         self.frame.top = 0;
         self.life_frame = false;
         self.life_hi = 0;
@@ -2736,6 +2761,44 @@ mod tests {
             free(&mut m, p);
         }
         assert_eq!(m.heap_live, 0);
+    }
+
+    /// spec/oven.md "Memory report" (WP-1315): `heap_peak` is the
+    /// translation unit's evaluation-memory high-water mark. It grows with
+    /// what is held at once, not with churn; a free or the end of an
+    /// evaluation does not lower it; and it is the same in every run.
+    #[test]
+    fn heap_peak_is_the_tu_high_water_mark() {
+        let run = |n: u64, rounds: u32| {
+            let mut m = Memory::new(256 * MIB);
+            for _ in 0..rounds {
+                let ps: Vec<u64> = (0..n).map(|_| heap(&mut m, 1000)).collect();
+                for p in ps {
+                    free(&mut m, p);
+                }
+            }
+            let during = m.heap_peak();
+            assert_eq!(m.heap_live, 0);
+            m.reset();
+            assert_eq!(m.heap_peak(), during, "reset lowered the peak");
+            // A smaller later evaluation leaves it alone.
+            let p = heap(&mut m, 8);
+            free(&mut m, p);
+            m.reset();
+            assert_eq!(m.heap_peak(), during);
+            during
+        };
+        let one = run(100, 1);
+        assert_eq!(one, 100 * block_size(1000));
+        // Ten times the churn at the same peak: the same figure.
+        assert_eq!(run(100, 10), one);
+        // Ten times as much held at once: ten times the figure.
+        assert_eq!(run(1000, 1), 10 * one);
+        // Deterministic.
+        assert_eq!(run(100, 3), run(100, 3));
+        // Proportional where the buffer capacity is not: 5% more held at
+        // once is 5% more peak.
+        assert_eq!(run(105, 1), 105 * block_size(1000));
     }
 
     #[test]

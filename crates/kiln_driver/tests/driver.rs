@@ -1957,6 +1957,69 @@ fn memory_report_rows() {
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
 
+/// spec/oven.md "Memory report" (WP-1315): `oven.heap-peak` is the
+/// translation unit's evaluation-memory high-water mark, exact: memory a
+/// constant evaluation frees again still counts, churn at the same peak
+/// does not add to it, and holding twice as much at once doubles what
+/// the evaluation adds. The total counts it and `oven.static-peak` instead
+/// of the `oven.mem.capacity` row (and leaves out `instantiation.*`).
+#[test]
+fn memory_report_oven_heap_peak() {
+    let report = |held: u32, rounds: u32| {
+        let src = format!(
+            "constexpr int churn(int held, int rounds) {{\n\
+               int s = 0;\n\
+               for (int r = 0; r < rounds; ++r) {{\n\
+                 char *p[64];\n\
+                 for (int i = 0; i < held; ++i) p[i] = new char[4096]{{}};\n\
+                 for (int i = 0; i < held; ++i) {{ s += p[i][0]; delete[] p[i]; }}\n\
+               }}\n\
+               return s + 1;\n\
+             }}\n\
+             static_assert(churn({held}, {rounds}) == 1);\n"
+        );
+        let o =
+            kiln(&["-std=c++26", "-fkiln-memory-report", "-fsyntax-only", "-x", "c++", "-"], &src);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        let field = |name: &str, key: &str| -> u64 {
+            let line = o
+                .stderr
+                .lines()
+                .find(|l| l.starts_with(&format!("memory: {name} ")))
+                .unwrap_or_else(|| panic!("no {name} row: {}", o.stderr));
+            line.split_whitespace()
+                .find_map(|w| w.strip_prefix(&format!("{key}=")))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("{line}"))
+        };
+        let rows: u64 = o
+            .stderr
+            .lines()
+            .filter_map(|l| l.strip_prefix("memory: "))
+            .filter(|l| {
+                !l.starts_with("total ")
+                    && !l.starts_with("instantiation")
+                    && !l.contains(".capacity ")
+            })
+            .map(|l| {
+                l.split_whitespace()
+                    .find_map(|w| w.strip_prefix("reserved="))
+                    .and_then(|n| n.parse::<u64>().ok())
+                    .unwrap()
+            })
+            .sum();
+        assert_eq!(field("total", "reserved"), rows, "{}", o.stderr);
+        assert!(field("oven.mem.capacity", "reserved") > 0);
+        field("oven.heap-peak", "reserved")
+    };
+    let one = report(8, 1);
+    assert!(one >= 8 * 4096, "{one}");
+    assert_eq!(report(8, 10), one, "churn at the same peak");
+    let two = report(16, 1);
+    assert_eq!(two - one, 8 * 4096, "twice as much held at once");
+    assert_eq!(report(16, 1), two, "deterministic");
+}
+
 /// spec/oven.md "Trial folds" (WP-798): a failed outermost trial fold
 /// gives its thunk's code back, so the `-Winteger-overflow` scan
 /// ([expr.pre]/4) of many non-constant operands keeps no thunk per

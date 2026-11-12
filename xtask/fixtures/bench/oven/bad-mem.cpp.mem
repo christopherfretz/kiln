@@ -1,0 +1,2 @@
+memory: oven.code count=1 live=8 reserved=8
+memory: total live=12

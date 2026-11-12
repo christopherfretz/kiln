@@ -59,6 +59,10 @@ fn parses_the_command_line() {
     assert_eq!(o.paths, [PathBuf::from("bench/oven")]);
 
     assert_eq!(parse_args(args(&["-h"])).unwrap(), None);
+    let o = parse_args(args(&["--record", "--keep-timing"])).unwrap().unwrap();
+    assert!(o.record && o.keep_timing);
+    assert!(parse_args(args(&["--keep-timing"])).is_err(), "needs --record");
+    assert!(parse_args(args(&["--record", "--keep-timing=1"])).is_err());
     let o = parse_args(args(&["--label", "wp/1292@abc123", "bench/pch"])).unwrap().unwrap();
     assert_eq!(o.label.as_deref(), Some("wp/1292@abc123"));
     for bad in [
@@ -275,6 +279,95 @@ fn constexpr_counters_with_a_fake_kiln() {
     assert!(!r.failing, "{r:?}");
     let base = BaselineFile::load(&base_path, "oven").unwrap();
     assert!(base.entries["counted"]["clang"].measurement.oven.is_none());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// kiln's accounted memory (spec/bench.md "Regression policy", WP-1315):
+/// recorded from one extra compile with `-fkiln-memory-report` (the fake
+/// kiln prints `memory: total live=1000 reserved=2000`), never a measured
+/// run's flag, and judged at `compare::ACCT_PCT` whatever the thresholds; a
+/// baseline without it is not judged on it; a malformed report fails the
+/// entry; clang records none.
+#[test]
+fn accounted_memory_with_a_fake_kiln() {
+    if identify(Path::new("clang++-19")).is_err() {
+        eprintln!("skipping: clang++-19 not available");
+        return;
+    }
+    let dir = scratch("acct");
+    let lay = layout(&dir);
+    let kiln = lay.root.join("xtask/fixtures/fake-kiln/kiln");
+    let counted = [lay.bench.join("oven/counted.cpp")];
+    let loose = ThresholdOverrides {
+        time_pct: Some(1000.0),
+        mem_pct: Some(1000.0),
+        bytes_pct: Some(1000.0),
+        ..ThresholdOverrides::default()
+    };
+
+    // 1. Record: the total lands in the baseline, the flag not in `flags`.
+    let opts = Options { runs: 2, record: true, ..Options::default() };
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.new == 1, "{r:?}");
+    let base_path = lay.baselines.join("oven.json");
+    let m = &BaselineFile::load(&base_path, "oven").unwrap().entries["counted"]["kiln"].measurement;
+    assert_eq!(m.accounted, Some(record::Accounted { live: 1000, reserved: 2000 }));
+    assert!(!m.flags.contains("memory-report"), "{}", m.flags);
+
+    // 2. Reserved bytes 1.99% over the baseline pass, 2.56% fail, however
+    //    loose the other thresholds; 2.6% under is an improvement.
+    let doctor = |reserved: Option<u64>| {
+        let mut file = BaselineFile::load(&base_path, "oven").unwrap();
+        let entry = file.entries.get_mut("counted").unwrap().get_mut("kiln").unwrap();
+        entry.measurement.accounted =
+            reserved.map(|reserved| record::Accounted { live: 1, reserved });
+        std::fs::write(&base_path, file.to_json("oven").to_pretty()).unwrap();
+    };
+    let opts = Options { runs: 2, thresholds: loose, ..Options::default() };
+    doctor(Some(1961));
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.regressed == 0, "{r:?}");
+    doctor(Some(1950));
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(r.failing && r.regressed == 1, "{r:?}");
+    doctor(Some(2054));
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.improved == 1, "{r:?}");
+
+    // 3. A baseline from before the metric loads and is not judged on it.
+    doctor(None);
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing && r.regressed == 0 && r.improved == 0, "{r:?}");
+
+    // 4. A malformed total fails the entry.
+    let bad = [lay.bench.join("oven/bad-mem.cpp")];
+    let r = execute(&opts, &lay, &kiln, &bad).unwrap();
+    assert!(r.failing && r.failed == 1, "{r:?}");
+
+    // 5. `--keep-timing` re-records the accounted figure and keeps the
+    //    existing baseline's runs, wall-clock and RSS figures.
+    let mut file = BaselineFile::load(&base_path, "oven").unwrap();
+    let old = &mut file.entries.get_mut("counted").unwrap().get_mut("kiln").unwrap().measurement;
+    (old.runs, old.wall_ms_median, old.wall_ms_min, old.wall_ms_max) = (9, 123.0, 120.0, 130.0);
+    (old.spread_pct, old.max_rss_kb, old.accounted) = (8.13, Some(4242), None);
+    std::fs::write(&base_path, file.to_json("oven").to_pretty()).unwrap();
+    let opts = Options { runs: 2, record: true, keep_timing: true, ..Options::default() };
+    let r = execute(&opts, &lay, &kiln, &counted).unwrap();
+    assert!(!r.failing, "{r:?}");
+    let m = &BaselineFile::load(&base_path, "oven").unwrap().entries["counted"]["kiln"].measurement;
+    assert_eq!((m.runs, m.wall_ms_median, m.wall_ms_min, m.wall_ms_max), (9, 123.0, 120.0, 130.0));
+    assert_eq!((m.spread_pct, m.max_rss_kb), (8.13, Some(4242)));
+    assert_eq!(m.accounted, Some(record::Accounted { live: 1000, reserved: 2000 }));
+    assert!(m.oven.is_some());
+
+    // 6. clang records none.
+    let clang = Path::new("clang++-19");
+    let opts = Options { runs: 1, record: true, ..Options::default() };
+    let r = execute(&opts, &lay, clang, &counted).unwrap();
+    assert!(!r.failing, "{r:?}");
+    let base = BaselineFile::load(&base_path, "oven").unwrap();
+    assert!(base.entries["counted"]["clang"].measurement.accounted.is_none());
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -510,6 +603,7 @@ fn perf_md_merges_across_recordings() {
             "budget/under",
             "frontend/inst",
             "frontend/no-report",
+            "oven/bad-mem",
             "oven/counted",
             "oven/over-budget",
             "tiny/answer"
@@ -544,4 +638,37 @@ fn gcc_flags_are_mapped_like_the_gcc_oracle() {
         subject_flags(CompilerKind::Gcc, &e, &spec),
         ["-std=c++26", "-fsyntax-only", "-fconstexpr-ops-limit=200000000", "-freflection"]
     );
+}
+
+/// Which entries record accounted memory (spec/bench.md "Regression
+/// policy"): kiln's compiles in the main groups, not `-E`, not a measured
+/// program, not other groups, not other compilers.
+#[test]
+fn accounted_memory_entries() {
+    use entry::Mode;
+    let k = CompilerKind::Kiln;
+    for g in ["frontend", "oven", "overload", "reflect"] {
+        for m in [Mode::Syntax, Mode::EmitLlvm, Mode::Obj] {
+            assert!(records_accounted(k, g, m), "{g} {m:?}");
+        }
+        assert!(!records_accounted(k, g, Mode::Pp), "{g}");
+        assert!(!records_accounted(k, g, Mode::Run), "{g}");
+        assert!(!records_accounted(CompilerKind::Clang, g, Mode::Syntax), "{g}");
+        assert!(!records_accounted(CompilerKind::Gcc, g, Mode::Syntax), "{g}");
+    }
+    for g in ["pp", "runtime", "libcxx-slice", "pch", "tiny"] {
+        assert!(!records_accounted(k, g, Mode::Syntax), "{g}");
+    }
+}
+
+/// A reflection shape's `--gcc-toolchain=` path is recorded as a
+/// placeholder, so the baseline is the same in every checkout.
+#[test]
+fn recorded_flags_hide_the_toolchain_path() {
+    let f = |v: &[&str]| recorded_flags(&v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>());
+    assert_eq!(
+        f(&["-std=c++26", "-fsyntax-only", "--gcc-toolchain=/a/b/usr/local", "-freflection"]),
+        "-std=c++26 -fsyntax-only --gcc-toolchain=<gcc-toolchain> -freflection"
+    );
+    assert_eq!(f(&["-std=c++26", "-O2"]), "-std=c++26 -O2");
 }
