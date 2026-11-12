@@ -253,7 +253,12 @@ impl Writer<'_, '_, '_> {
                 // `X<3>`: the converted value, which prints the same.
                 let c = if packs { None } else { converted.get(k).copied() };
                 let rec = match (self.written_arg(a, c), a.view()) {
-                    (Some(a), _) => self.arg_rec(a).map_err(|_| EXPLICIT_ARG)?,
+                    // WP-1358: what is outside the image keeps its
+                    // reason, a cascade (`enable_borrowed_range<
+                    // text_encoding::aliases_view>`).
+                    (Some(a), _) => self.arg_rec(a).map_err(|e| {
+                        if e.contains("outside the image") { e } else { EXPLICIT_ARG }
+                    })?,
                     // WP-1344: any other expression as written, which the
                     // importer's `get_class_spec` converts again.
                     (None, ArgView::Expr { expr, profile }) => ArgRec::Expr(
@@ -416,8 +421,16 @@ impl Writer<'_, '_, '_> {
         if expanded {
             e = ex.operand(e);
         }
-        if profile.is_none() || ex.get(e).kind() != ExprKind::DeclRefExpr {
+        if profile.is_none() {
             return Err(PARTIAL_ARG);
+        }
+        // WP-1358: any other dependent expression (`sizeof(_Tp) * 0`,
+        // libc++'s `<__iterator/segmented_iterator.h>`), as written: a
+        // non-deduced context ([temp.deduct.type]/5) the importer
+        // substitutes when it matches.
+        if ex.get(e).kind() != ExprKind::DeclRefExpr {
+            let i = self.texpr(expr).map_err(|_| PARTIAL_ARG_EXPR)?;
+            return Ok(CArg::Arg(ArgRec::Expr(i, true)));
         }
         let p = ex.decl(e);
         let k = decls.iter().position(|&x| x == p).ok_or(PARTIAL_ARG)?;

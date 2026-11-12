@@ -419,6 +419,9 @@ pub(crate) struct TexprState {
     pub(super) params: Vec<DeclId>,
     /// The requires-expression parameters, once declared (WP-1343).
     pub(super) req_params: Vec<DeclId>,
+    /// WP-1358: the partial specialization each class specialization the
+    /// image completes was instantiated from ([`super::psel`]).
+    pub(super) partial_sels: kiln_source::fx::FxHashMap<DeclId, Option<DeclId>>,
 }
 
 impl Sema<'_, '_> {
@@ -429,6 +432,7 @@ impl Sema<'_, '_> {
             built: vec![Sec::Unbuilt; img.texprs.len()],
             params: Vec::new(),
             req_params: Vec::new(),
+            partial_sels: kiln_source::fx::FxHashMap::default(),
         };
         std::mem::replace(&mut self.image_texprs, fresh)
     }

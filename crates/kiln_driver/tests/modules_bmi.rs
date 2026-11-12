@@ -1987,9 +1987,10 @@ fn kind2_declaration_image_fallback() {
         ),
         (
             // WP-1344: one of a template with only its own constraints is
-            // carried; a completed one with a constrained member is not.
+            // carried; WP-1358 carries a completed one with a constrained
+            // member function, not one whose overloads differ in them.
             "export module f;\nexport template <class T> struct A {\n  \
-             int f() requires (sizeof(T) > 1) { return 1; }\n};\n\
+             int f() requires (sizeof(T) > 1) { return 1; }\n  int f() const { return 2; }\n};\n\
              export inline int g() { return sizeof(A<long>); }\n",
             "a specialization of a constrained template: completed, with a constrained member",
         ),

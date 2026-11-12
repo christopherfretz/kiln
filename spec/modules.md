@@ -3126,9 +3126,9 @@ function entries).
   instantiated in `image_mark_specs`, a constant one at once. A body's
   `DeclRefExpr` naming it names that record (`dc_ok` accepts template
   kind 3). Still refused ("a variable template specialization"): a
-  template with partial specializations or constraints (the reader
-  would match or check them before they are in) and a placeholder
-  type.
+  placeholder type. (A template with partial specializations or
+  constraints was refused until WP-1358: the selection is kept in
+  `psels`.)
 - *Declaration order*. Implicit variable and function template
   specializations at namespace scope are written where the walk meets
   them (`var_spec_at`), so the importer makes them in replay's order
@@ -3543,6 +3543,119 @@ Tests: `noexcept_naming_a_later_member_is_carried`,
 (kiln_driver `pch_decls`); `kind2_declaration_image_wp1360_forms`
 (modules_bmi); corpus `cpp.include/pch-outside-refs-{run,errors}.cpp`
 and `module.interface/image-outside-refs-{run,errors}.cpp`.
+
+**Forms carried by WP-1358 (specializations).** The writer's additions
+are `bmi_image/psel.rs`, `mtspec.rs` and `named.rs`, plus
+`constrspec.rs`, `spec.rs`, `classtempl.rs`, `latedef.rs` and
+`body.rs`. One side section follows `lambdas` (WP-1350): `psels`.
+
+- *Partial specialization selections* ([temp.spec.partial.match]/2).
+  The importer completes a specialization while it reads the records,
+  before the constraints are patched in, so it cannot repeat matching
+  against a constrained partial specialization. `psels` keeps the
+  unit's result: `u32 n`, then per entry `u32 spec, u32 partial` (the
+  partial specialization's record, or `NONE` for the primary
+  template), ascending by `spec`. An entry names a complete `Spec` of a
+  class template (template kind 1) whose template has a constrained
+  partial specialization, or any `Spec` of a variable template (kind
+  3) with partial specializations. Its partial specialization is a
+  partial specialization of that template recorded before it. The
+  reader notes the entry before it completes or declares the
+  specialization, and `match_partial_args` then deduces against that
+  partial specialization only (the arguments matched it, so deduction
+  succeeds) or takes the primary template. A class whose completion
+  completes others (bases, data member classes at any depth) that need
+  a selection has their references written first (`pre_record_sels`),
+  so they are completed first, each with its selection. Variable
+  templates with partial specializations or constraints are carried
+  this way (`numbers:139`'s `e_v<double>`). A constrained variable
+  template's constraints held for the unit's specialization
+  ([temp.names]/7).
+- *Constrained members of completed specializations* ([temp.mem.func]/1,
+  [over.over]). The completion copies a member function's trailing
+  requires-clause (`member_constraints`), which is not in yet at record
+  time. After `image_constraints`, the reader gives every function
+  member of a complete class specialization that lacks one the
+  trailing requires-clause of the member it was instantiated from,
+  with the specialization's arguments. A member template gets what the
+  completion copies from its pattern's head (`Substituter::param_list`):
+  its parameters' type-constraints and its requires-clause,
+  unsubstituted, and its `member_constraints` entry. Before WP-1358 a
+  member template of a carried specialization had none, so a
+  consumer's specializations of it mangled without them (`Tk`/`Q`).
+  Still refused ("a specialization of a constrained template:
+  completed, with a constrained member"): of a constrained class
+  template, a member with a trailing requires-clause in a nested
+  class, or one whose name another member shares (overloads differing
+  only in their constraints, [basic.scope.scope]/4), a special
+  member's (its constraints decide which is eligible, [special]/6),
+  and any constrained member template (WP-1344). Of any class
+  template, a constrained member function template with the name and
+  function type of another member function template of its class
+  ([temp.over.link]/7: the completion, without the constraints, would
+  declare it as that one; such a specialization was wrongly carried
+  before). A specialization of a constrained member template that the
+  header itself makes is refused as "a specialization of a constrained
+  member template of a class specialization": it is made at record
+  time, before the constraints, and would mangle without them.
+- *Specializations of partial specializations*. A partial
+  specialization declared before it is defined (`template <class T>
+  struct traits<T *>;`, `<bits/iterator_concepts.h>`), or defined just
+  before the declaration naming its specialization: `spec_rec` takes
+  the definition's record as `from`. `one` closes the open classes a
+  declaration is no member of before its specialization references
+  are written (`close_before`), so the importer completes the
+  specialization after the partial specialization's definition ends.
+- *Specializations named while their user is recorded*. What `prescan`
+  does not reach (`ptag<1>()` in a trailing return type's `decltype`,
+  whose implicit default constructor the record adds) is dropped with
+  the record's numbering, written first in the order the record named
+  it, and the record written again (`record_after_named`). A record
+  that still names a new reference, or names anything but a `Spec`,
+  `Member` or `Implicit` record, is refused ("a specialization named
+  while its user is recorded"). `late_split` ignores implicit special
+  members, which sema declares when they are first needed.
+- *Member function template specializations* ([temp.mem]/1,
+  `chrono::hours(__h)`). The template of a specialization of a member
+  template of a class specialization is that class's `Member` record
+  (S4b) whose pattern is the member template's `Template` record (kind
+  0). The specialization is a `Spec` with that template. The reader
+  finds the member template in its class specialization and makes the
+  specialization with the same arguments. `mt_spec_at` writes these
+  where the walk meets them (losing overload candidates included, as
+  `var_spec_at`), and writes the class specialization first when only a
+  body named it before (`dur<long>(h)`). A substituted type parameter
+  whose template is such a member template names that `Member` record.
+  A body's `DeclRefExpr` may name such a `Member` record.
+- *Dependent expressions as partial specialization arguments*
+  (`segmented_iterator.h:72`, `has<T, sizeof(T) * 0>`). A non-type
+  argument of a partial specialization that is a dependent expression
+  other than a parameter reference is a type expression argument
+  (`ArgRec::Expr`). One without a profile is refused ("a partial
+  specialization argument the image does not carry").
+- *Value and pack template arguments in bodies* (`chrono`'s literal
+  operator templates). A body's explicit template argument token is 3
+  words per argument. Kind 5 is a value `[5, type, constant index]`.
+  Kind 6 is a pack `[6, n, 0]`, followed by its n elements (no nested
+  pack).
+
+Tests: `constrained_partial_specialization_selections_are_carried`,
+`specializations_named_while_recorded_are_carried`,
+`member_template_specializations_are_carried`,
+`member_template_specializations_of_body_named_classes_are_carried`,
+`specializations_of_partial_specializations_are_carried`,
+`variable_template_partial_selections_are_carried`,
+`partial_specialization_argument_expressions_are_carried`,
+`value_and_pack_template_arguments_in_bodies_are_carried`,
+`constrained_members_of_completed_specializations` (kiln_driver
+`pch_decls`). `record_time_completion_concept_id_matches_replay` and
+`record_time_completion_variable_template_matches_replay` are ignored
+repros of pre-existing bugs (a record-time completion evaluates a
+concept-id or a variable template before its constraint or initializer
+is in). `kind2_declaration_image_fallback` (modules_bmi);
+`partial_selections_round_trip` (kiln_sema). Corpus:
+`cpp.include/pch-spec-forms-{run,errors}.cpp` and
+`module.interface/image-spec-forms-{run,errors}.cpp`.
 
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
@@ -4269,7 +4382,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 32` since WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 33` since WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

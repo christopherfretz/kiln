@@ -1489,6 +1489,7 @@ What remains, by headers freed (merged tree):
    expression section (`decltype([]{})`).
 5. Not this bucket's: the local alias after a requires-parameter type
    (`<numeric>`, see above).
+
 ## WP-1360: PCH image wave 8e, declarations outside the image (2026-11-12)
 
 Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
@@ -1718,3 +1719,92 @@ Top five reasons by headers blocked on the merged tree (not cascades):
      WP-1350's `specparam.rs`; unowned.
   5. a function declared through a typedef, 1/35
      (`bits/c++locale.h:52:34`, the first refusal of 28): unowned.
+
+## WP-1358: PCH image wave 8d, the specialization forms WP-1352 left (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all`), and of each standard
+header alone (106 libc++, 108 libstdc++). Before is `74fb107db` (main
+with WP-1350, WP-1328 and WP-1360, the censuses above); after is this
+WP merged with it. Reasons are declarations / headers.
+
+```
+lcx.h, before: 26693 top-level declarations, 26178 carried, 515 not
+lcx.h, after:  26693 top-level declarations, 26274 carried, 419 not
+gnu.h, before: 26396 top-level declarations, 25941 carried, 455 not
+gnu.h, after:  26396 top-level declarations, 25878 carried, 518 not
+```
+
+Headers through the image: libc++ 38 of 106 before, 44 after;
+libstdc++ 39 of 108 before and after. lcx +96 carried, gnu -63. gnu's
+decrease is correct refusals. Before, the image carried complete
+specializations of class templates whose member function templates
+differ only in their constraints (libstdc++'s `pair` constructors, one
+of them deleted). The importer's completion declared the second as the
+first and made the specialization invalid (`check`:
+"ClassTemplateSpecializationDecl invalid"). They are now refused ("a
+specialization of a constrained template: completed, with a
+constrained member", gnu 2/10 → 17/40). Their cascades follow
+("cascade: a redeclaration of an entity outside the image" 35/37 →
+82/39, "cascade: an alias template outside the image" 3/5 → 16/11; lcx
+6/1 → 13/18).
+
+First refusal of `lcx.h`: before, "a partial specialization argument
+the image does not carry" (`segmented_iterator.h:72`, this bucket's,
+the first refusal of 40 headers); after, "a body referring to a
+declaration outside the image (a declaration not recorded)"
+(`__fwd/subrange.h:35`, another bucket's, the first refusal of 42). Of
+`gnu.h`: before and after, "a function declared through a typedef"
+(`bits/c++locale.h:52`, another bucket's).
+
+Reasons of this bucket (lcx before → after, gnu before → after):
+
+- a specialization of a partial specialization: 43/37 → 0/2 (`span:558`,
+  `ranges`); gnu 28/42 → 0.
+- a specialization of a constrained template: completed, with a
+  constrained partial specialization: 32/25 → 0; gnu 10/8 → 0
+  (`psels`).
+- a specialization named while its user is recorded: 13/57 → 0; gnu
+  1/2 → 0.
+- a partial specialization argument the image does not carry: 1/51 →
+  0.
+- a template argument the image does not carry: an explicit argument of
+  a name in a body: gnu 6/2 → 0 (`chrono:2497`, TA kinds 5 and 6).
+- a variable template specialization: 15/2 → 2/1 (`numbers:139` is
+  carried; what is left is a placeholder type, `elements_view.h:406`).
+- a specialization of a constrained template: completed, with a
+  constrained member: 7/15 → 8/16 (`__format/format_context.h:69`);
+  gnu 2/10 → 17/40 (above; the rest are of constrained class
+  templates, `iterator_concepts.h:309`, `stl_bvector.h:760`).
+- new: a specialization of a constrained member template of a class
+  specialization: 2/6 (`print:361`, `__ostream/print.h:171`).
+- function template explicit specializations declared more than once,
+  with a pack argument or at class scope, and explicit instantiation
+  definitions: none in either library's census.
+
+Pre-existing bugs found:
+
+- Fixed: a member template of a carried complete specialization lost
+  its constraints, so a consumer's specialization of it mangled without
+  `Tk`/`Q`. Specializations whose member function templates differ only
+  in their constraints were carried invalid (now refused).
+- Kept as ignored repros (kiln_driver `pch_decls`):
+  `record_time_completion_concept_id_matches_replay` and
+  `record_time_completion_variable_template_matches_replay`. A
+  record-time completion evaluates a concept-id or a variable
+  template's value before its constraint or initializer is in.
+
+What remains, by headers:
+
+1. Completed specializations of constrained class templates with a
+   constrained member, and of any class template with member templates
+   differing only in their constraints (`__format/format_context.h:69`
+   8/16, gnu `iterator_concepts.h:309`, `stl_bvector.h:760`,
+   `hashtable_policy.h:571`, 17/40). The importer must complete them
+   after the constraints are in.
+2. A specialization of a constrained member template that the header
+   makes (`print:361`, 2/6). It is made at record time, before the
+   constraints.
+3. A specialization of a partial specialization at `span:558` (0/2).
+4. A variable template with a placeholder type (`elements_view.h:406`,
+   2/1).

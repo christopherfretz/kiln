@@ -2241,6 +2241,304 @@ template <class T> int call() { return pos(-1) + int(sizeof(T)); }
     assert!(o.stderr.contains("a.h:2:46: error: negative"), "{}", o.stderr);
 }
 
+/// WP-1358 (spec/modules.md §11.11 "Forms carried by WP-1358"):
+/// complete specializations of class templates with constrained partial
+/// specializations ([temp.spec.partial.match]/2; `__atomic_base` in
+/// libc++'s `<__atomic/aliases.h>`), named directly or completed as a
+/// base: the image records the partial specialization each was
+/// instantiated from, as the importer reads them before the constraints.
+#[test]
+fn constrained_partial_specialization_selections_are_carried() {
+    let header = "\
+template <class T> concept I = sizeof(T) == 4;
+template <class T> concept J = sizeof(T) == 8;
+template <class T> struct A { int a; static constexpr int k = 0; int get() const { return a; } };
+template <I T> struct A<T> { int b; static constexpr int k = 1; int get() const { return b + 10; } };
+template <class T> requires J<T> struct A<T*> { long c; static constexpr int k = 2; };
+template <class T> struct A<T*> { int d; static constexpr int k = 3; };
+using AI = A<int>;
+inline int f() { A<int> x{}; A<char> y{}; return x.get() + y.get() + A<double*>::k + A<char*>::k; }
+template <class T> concept Big = sizeof(T) > 2;
+template <class T> struct B { int a; char b[3]; };
+template <Big T> struct B<T> { int c; };
+template <class T> struct X : B<T> {};
+inline int g() { X<char> x; X<int> y; return sizeof(x) + sizeof(y); }
+";
+    let tu = "\
+static_assert(A<double*>::k == 2 && A<char*>::k == 3 && AI::k == 1 && A<char>::k == 0);
+static_assert(sizeof(X<char>) == 8 && sizeof(X<long>) == 4);
+int main() { return f() == 15 && g() == 12 ? 0 : 1; }
+";
+    image_carries("wp1358a", header, tu);
+}
+
+/// WP-1358: a specialization a declaration's record names that `prescan`
+/// does not reach (the implicit default constructor of `ptag<1>` in a
+/// `decltype`, libc++'s `<__compare/compare_partial_order_fallback.h>`)
+/// is written before the record, which is written again.
+#[test]
+fn specializations_named_while_recorded_are_carried() {
+    let header = "\
+template <unsigned N> struct ptag : ptag<N - 1> {};
+template <> struct ptag<0> {};
+namespace n {
+struct fn {
+  template <class T> static constexpr auto go(T t, ptag<1>) -> decltype(t + 1) { return t + 1; }
+  template <class T> static constexpr auto go(T t, ptag<0>) -> decltype(t) { return t; }
+  template <class T>
+  constexpr auto operator()(T t) const noexcept(noexcept(go(t, ptag<1>()))) -> decltype(go(t, ptag<1>())) {
+    return go(t, ptag<1>());
+  }
+};
+inline constexpr auto f = fn{};
+}
+";
+    let tu = "\
+static_assert(n::f(1) == 2);
+int main() { return n::f(2) == 3 ? 0 : 1; }
+";
+    image_carries("wp1358b", header, tu);
+}
+
+/// WP-1358: specializations of member function templates of class
+/// specializations (`chrono::hours(__h)` in libc++'s
+/// `<__chrono/duration.h>`, [temp.mem]/1): named through the member
+/// template's member reference, a losing candidate's included.
+#[test]
+fn member_template_specializations_are_carried() {
+    let header = "\
+template <class R, int P = 1>
+struct dur {
+  R r;
+  template <class R2>
+  constexpr explicit dur(const R2& x) : r(static_cast<R>(x) * P) {}
+  template <class R2, int Q>
+  constexpr dur(const dur<R2, Q>& d) : r(d.r * Q / P) {}
+  constexpr R count() const { return r; }
+  template <class U> U as() const { return U(r); }
+};
+using hours = dur<long, 60>;
+using mins = dur<long>;
+constexpr hours make_h(unsigned long long h) { return hours(static_cast<long>(h)); }
+inline long in_mins(hours h) { return mins(h).count() + h.as<int>(); }
+";
+    let tu = "\
+static_assert(make_h(2).count() == 120);
+int main() { return in_mins(make_h(1)) == 3660 && make_h(1).as<long>() == 60 ? 0 : 1; }
+";
+    image_carries("wp1358c", header, tu);
+}
+
+/// WP-1358: a class specialization first named in a body
+/// (`dur<long>(h)`) is written where the walk meets its member
+/// template's specializations, a losing candidate's included.
+#[test]
+fn member_template_specializations_of_body_named_classes_are_carried() {
+    let header = "\
+template <class R, int P = 1> struct dur {
+  R r;
+  template <class R2> constexpr explicit dur(const R2 &x) : r(static_cast<R>(x) * P) {}
+  template <class R2, int Q> constexpr dur(const dur<R2, Q> &d) : r(d.r * Q / P) {}
+  constexpr R count() const { return r; }
+};
+using hours = dur<long, 60>;
+inline long in_mins(hours h) { return dur<long>(h).count(); }
+";
+    image_carries("wp1358j", header, "int main() { return in_mins(hours(2)) == 7200 ? 0 : 1; }\n");
+}
+
+/// WP-1358: specializations of a partial specialization declared before
+/// its definition (`iterator_traits<_Tp*>` in libstdc++'s
+/// `<bits/iterator_concepts.h>`) or named by the next declaration, whose
+/// record the definition's end then precedes.
+#[test]
+fn specializations_of_partial_specializations_are_carried() {
+    let header = "\
+template <class I> struct traits;
+template <class T> struct traits<T*>;
+template <class I> struct traits { using value = int; };
+template <class T> struct traits<T*> { using value = T; static constexpr int k = 2; };
+using cp = traits<char*>::value;
+inline int kk() { return traits<long*>::k + sizeof(cp); }
+template <class T> struct tr2 {};
+template <class T> struct tr2<T&> { static constexpr int k = 5; };
+inline constexpr int k2 = tr2<int&>::k;
+";
+    let tu = "int main() { return kk() == 3 && k2 == 5 && traits<int*>::k == 2 ? 0 : 1; }\n";
+    image_carries("wp1358d", header, tu);
+}
+
+/// WP-1358: constrained variable templates and ones with (constrained)
+/// partial specializations (`<numbers>`'s `e_v`): the image records
+/// which partial specialization each specialization took.
+#[test]
+fn variable_template_partial_selections_are_carried() {
+    let header = "\
+template <class T> concept fp = __is_same(T, float) || __is_same(T, double);
+template <class T> concept big = sizeof(T) >= 8;
+template <class T> struct ill { static_assert(sizeof(T) == 0, \"bad\"); };
+template <class T> inline constexpr T e_v = ill<T>{};
+template <fp T> inline constexpr T e_v<T> = T(2.5);
+template <class T> inline constexpr int k_v = 1;
+template <class T> inline constexpr int k_v<T*> = 2;
+template <class T> requires big<T> inline constexpr int k_v<T*> = 3;
+template <big T> inline constexpr int c_v = sizeof(T);
+inline constexpr double e = e_v<double>;
+inline constexpr float ef = e_v<float>;
+inline constexpr int ks = k_v<char*> * 100 + k_v<long*> * 10 + k_v<int> + c_v<long>;
+";
+    let tu = "\
+static_assert(e == 2.5 && ef == 2.5f && ks == 239 && k_v<double*> == 3 && e_v<double> == 2.5);
+int main() { return ks == 239 ? 0 : 1; }
+";
+    image_carries("wp1358e", header, tu);
+}
+
+/// WP-1358: dependent expressions as partial specialization arguments
+/// (`sizeof(T) * 0`, the `<segmented_iterator.h>` detection idiom).
+#[test]
+fn partial_specialization_argument_expressions_are_carried() {
+    let header = "\
+typedef unsigned long size_t;
+struct ft { static constexpr bool value = false; };
+struct tt { static constexpr bool value = true; };
+template <class T> struct seg;
+template <> struct seg<int> { using type = int; };
+template <class T, size_t = 0> struct has : ft {};
+template <class T> struct has<T, sizeof(T) * 0> : tt {};
+template <class T> using is_seg = has<seg<T>>;
+template <int N, int M = N % 2> struct par { static constexpr int k = 0; };
+template <int N> struct par<N, (N * 0)> { static constexpr int k = 1; };
+inline bool f() { return is_seg<int>::value && !is_seg<long>::value && par<3>::k == 0; }
+";
+    let tu = "\
+static_assert(is_seg<int>::value && !is_seg<char>::value);
+int main() { return f() && par<4>::k == 1 && par<5>::k == 0 ? 0 : 1; }
+";
+    image_carries("wp1358f", header, tu);
+}
+
+/// WP-1358: value and pack explicit template arguments of a name in a
+/// body (`<chrono>`'s literal operators, `operator""_s<'3', ...>`).
+#[test]
+fn value_and_pack_template_arguments_in_bodies_are_carried() {
+    let header = "\
+template <char... C> struct digits { static constexpr long v = 0; };
+template <char C, char... R> struct digits<C, R...> {
+  static constexpr long p() { long x = 1; for (unsigned i = 0; i < sizeof...(R); ++i) x *= 10; return x; }
+  static constexpr long v = (C - '0') * p() + digits<R...>::v;
+};
+struct sec { long n; };
+template <char... C> constexpr sec operator\"\"_s() { return sec{digits<C...>::v}; }
+template <int N, char K> constexpr int pick() { return N + K; }
+inline long epoch() { return (378691210_s).n + pick<3, 'a'>(); }
+";
+    let tu = "\
+static_assert((12_s).n == 12);
+int main() { return epoch() == 378691210 + 100 ? 0 : 1; }
+";
+    image_carries("wp1358g", header, tu);
+}
+
+/// WP-1358: a completed specialization whose member function has a
+/// trailing requires-clause, or whose member template has constraints,
+/// gets them back after the image's constraints are in; overloads
+/// differing only in constraints, and a constrained member template's
+/// specializations the header makes, are still refused.
+#[test]
+fn constrained_members_of_completed_specializations() {
+    let header = "\
+template <class T> concept I = sizeof(T) == 4;
+template <class T> struct W { int f() const requires I<T> { return 1; } int g() const { return 0; } };
+inline int use() { return W<int>{}.f() + W<char>{}.g(); }
+";
+    image_carries("wp1358h", header, "int main() { return use() == 1 ? 0 : 1; }\n");
+    // A constrained member template gets its constraints back (it was
+    // declared without them, and its specializations in the consumer
+    // mangled without `Tk`).
+    let header = "\
+template <class T> concept I = sizeof(T) == 4;
+template <class T> struct W { template <I U> W(U, int) : k(2) {} W() : k(0) {} template <class U> requires I<U> int h(U) const { return 100; } int k; int g() const { return k + 1; } };
+inline int use() { W<char> w; return w.g(); }
+";
+    let tu =
+        "int main() { W<char> w(1, 0); return use() == 1 && w.h(2) == 100 && w.k == 2 ? 0 : 1; }\n";
+    image_carries("wp1358k", header, tu);
+    let d = scratch("wp1358i");
+    let why = "a specialization of a constrained template: completed, with a constrained member";
+    for (n, h) in [
+        "template <class T> struct A {\n  int f() requires (sizeof(T) > 1) { return 1; }\n  \
+         int f() const { return 2; }\n};\ninline int g() { return sizeof(A<long>); }\n",
+        "template <class T> concept I = sizeof(T) == 4;\ntemplate <class T> struct W {\n  \
+         template <class U> requires I<U> int g(U) const { return 10; }\n  \
+         template <class U> requires (!I<U>) int g(U) const { return 20; }\n  \
+         int k() const { return 1; }\n};\ninline int use() { return W<int>{}.k(); }\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (hf, pch) = (format!("h{n}.h"), format!("h{n}.pch"));
+        std::fs::write(d.join(&hf), h).unwrap();
+        let o =
+            ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", &hf, "-o", &pch]);
+        assert!(o.stderr.contains(&format!("consumers replay the header: {why}")), "{}", o.stderr);
+    }
+    // A specialization of a constrained member template the header
+    // makes: its mangled name has the instantiated head's constraints.
+    std::fs::write(d.join("c.h"), "template <class T> concept I = sizeof(T) == 4;\ntemplate <class T> struct W { template <I U> static int h(U) { return 100; } int k; };\ninline int use() { W<char> w{}; return W<int>::h(1) + w.k; }\n").unwrap();
+    let o =
+        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "c.h", "-o", "c.pch"]);
+    let why = "a specialization of a constrained member template of a class specialization";
+    assert!(o.stderr.contains(&format!("consumers replay the header: {why}")), "{}", o.stderr);
+}
+
+/// WP-1358 found (pre-existing, 1.1.0): a dependent concept-id in a
+/// member typedef of a specialization the importer completes while it
+/// reads the records is satisfied before the concept's constraint is
+/// patched in. The image is carried but its `X<char>::t` is `int`.
+#[test]
+#[ignore = "pre-existing (1.1.0): record-time completion evaluates a concept-id before its constraint is in"]
+fn record_time_completion_concept_id_matches_replay() {
+    let d = scratch("wp1358x");
+    let header = "\
+template <class T> concept Big = sizeof(T) > 2;
+template <bool B, class T, class F> struct cond { using type = F; };
+template <class T, class F> struct cond<true, T, F> { using type = T; };
+template <class T> struct X { using t = typename cond<Big<T>, int, char>::type; t m; };
+inline int f() { X<char> x; return sizeof(x); }
+";
+    std::fs::write(d.join("a.h"), header).unwrap();
+    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    std::fs::write(d.join("a.cpp"), "static_assert(sizeof(X<char>) == 1);\nint main() {}\n")
+        .unwrap();
+    let check =
+        ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    assert_eq!(ok(&d, &check).stderr, "");
+}
+
+/// WP-1358 found (pre-existing, 1.1.0): a variable template's value
+/// needed by a record-time completion (`cond<big_v<T>, ...>`) is
+/// evaluated before the initializers come with the bodies.
+#[test]
+#[ignore = "pre-existing (1.1.0): record-time completion needs a variable template initializer not yet in"]
+fn record_time_completion_variable_template_matches_replay() {
+    let d = scratch("wp1358y");
+    let header = "\
+template <class T> constexpr bool big_v = sizeof(T) > 2;
+template <bool B, class T, class F> struct cond { using type = F; };
+template <class T, class F> struct cond<true, T, F> { using type = T; };
+template <class T> struct X { using t = typename cond<big_v<T>, int, char>::type; t m; };
+inline int g() { X<int> x; return sizeof(x); }
+";
+    std::fs::write(d.join("a.h"), header).unwrap();
+    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    std::fs::write(d.join("a.cpp"), "static_assert(sizeof(X<int>) == 4);\nint main() {}\n")
+        .unwrap();
+    let check =
+        ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    assert_eq!(ok(&d, &check).stderr, "");
+}
+
 /// WP-1360: a `noexcept` operand naming a member its class declares
 /// later (a complete-class context, [class.mem.general]/7) goes through
 /// the late `noexcept` path, in a class template and a plain class.

@@ -205,6 +205,11 @@ const COLD_DESIG: u16 = 32768;
 // The schema
 // ---------------------------------------------------------------------------
 
+/// The census reason of an explicit template argument of a name in a
+/// body that [`F::TA`] does not hold.
+const TA_ARG: &str =
+    "a template argument the image does not carry: an explicit argument of a name in a body";
+
 /// What a declaration field may name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Dc {
@@ -1102,6 +1107,32 @@ fn shadow_end(img: &Image, w: u32) -> Option<u32> {
 }
 
 /// Whether declaration word `w` names something of class `dc`.
+/// Each pack header of an [`F::TA`] token's arguments `w` (three words
+/// each) is followed by as many elements, none of them a pack (WP-1358).
+fn ta_packs_ok(w: &[u32]) -> bool {
+    let chunks: Vec<&[u32]> = w.chunks(3).collect();
+    let mut k = 0;
+    while k < chunks.len() {
+        let a = chunks[k];
+        if a.len() != 3 {
+            return false;
+        }
+        if a[0] == 6 {
+            let n = a[1] as usize;
+            if a[2] != 0
+                || chunks.len() - k - 1 < n
+                || chunks[k + 1..k + 1 + n].iter().any(|e| e[0] == 6 || e.len() != 3)
+            {
+                return false;
+            }
+            k += 1 + n;
+        } else {
+            k += 1;
+        }
+    }
+    true
+}
+
 #[allow(clippy::too_many_lines)] // one arm per declaration class
 pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if w == LEX_TU {
@@ -1125,6 +1156,10 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
     if dc == Dc::Found && matches!(d.payload, Payload::Template { kind: 0 | 3, .. }) {
         return true;
     }
+    // A member function template of a class specialization (WP-1358).
+    if matches!(dc, Dc::Found | Dc::Lookup) && super::mtspec::params(img, w).is_some() {
+        return true;
+    }
     // S6: a declaration found through a using-declaration's shadow (of
     // a shadow ...): the declaration it ends in.
     if dc == Dc::Found && matches!(d.payload, Payload::Shadow { .. }) {
@@ -1139,7 +1174,13 @@ pub(super) fn dc_ok(img: &Image, nparams: usize, w: u32, dc: Dc) -> bool {
                 let Some(p) = img.decls.get(*pattern as usize) else { return false };
                 p
             }
-            _ => return false,
+            // Of a member function template (WP-1358).
+            _ => match super::mtspec::pattern_fn(img, template)
+                .and_then(|p| img.decls.get(p as usize))
+            {
+                Some(p) => p,
+                None => return false,
+            },
         },
         Payload::Member { pattern, .. } => {
             let Some(p) = img.decls.get(pattern as usize) else { return false };
@@ -1389,16 +1430,31 @@ pub(super) fn validate_section(
                         u8::try_from(o).ok().and_then(OverloadedOperator::from_u8).is_some()
                     })
             }
-            F::TA => w[1..].chunks(3).all(|a| match a[0] {
-                0 => a[2] <= 7 && qref_ok(QRef { ty: a[1], quals: a[2] as u8 }),
-                1 => (a[1] as usize) < e_lim && a[2] <= 1,
-                // A return-type requirement's invented parameter.
-                2 => !texpr && super::requires::invented_ok(img, a[1], a[2]),
-                // A template (WP-1342).
-                3 => super::tttp::tname_rec(img, a[1]),
-                4 => qref_ok(QRef { ty: a[1], quals: 0 }) && super::tttp::dep_tname_ty(img, a[1]),
-                _ => false,
-            }),
+            F::TA => {
+                ta_packs_ok(&w[1..])
+                    && w[1..].chunks(3).all(|a| match a[0] {
+                        0 => a[2] <= 7 && qref_ok(QRef { ty: a[1], quals: a[2] as u8 }),
+                        // A value (WP-1358).
+                        5 => {
+                            let q = QRef { ty: a[1], quals: 0 };
+                            qref_ok(q)
+                                && super::spec::value_ty_ok(img, q)
+                                && (a[2] as usize) < b.consts.len()
+                        }
+                        // A pack's header, checked by `ta_packs_ok`.
+                        6 => true,
+                        1 => (a[1] as usize) < e_lim && a[2] <= 1,
+                        // A return-type requirement's invented parameter.
+                        2 => !texpr && super::requires::invented_ok(img, a[1], a[2]),
+                        // A template (WP-1342).
+                        3 => super::tttp::tname_rec(img, a[1]),
+                        4 => {
+                            qref_ok(QRef { ty: a[1], quals: 0 })
+                                && super::tttp::dep_tname_ty(img, a[1])
+                        }
+                        _ => false,
+                    })
+            }
             F::RB => !texpr && (w[0] as usize) < img.reqs.recs.len(),
             F::Reqs => !texpr && super::requires::reqs_ok(img, w, e_lim, qref_ok),
             F::LB => !texpr && super::lambdas::lb_ok(img, w[0], e_lim),
@@ -2422,7 +2478,10 @@ impl Writer<'_, '_, '_> {
         Ok(())
     }
 
-    /// Explicit template arguments `l` as an [`F::TA`] token (WP-1279).
+    /// Explicit template arguments `l` as an [`F::TA`] token (WP-1279):
+    /// three words per argument; a pack (WP-1358: a literal operator
+    /// template's characters, `378691210s` in libstdc++'s `<chrono>`) is
+    /// a header (6, its length, 0) and its elements.
     fn targ_words(&mut self, l: Option<kiln_ast::ArgListId>, out: &mut Vec<u32>) -> W<()> {
         use kiln_ast::types::ArgView;
         let Some(l) = l else {
@@ -2430,37 +2489,59 @@ impl Writer<'_, '_, '_> {
             return Ok(());
         };
         let args = self.s.ast.types.args(l).to_vec();
-        out.push(args.len() as u32 + 1);
+        let mut words = Vec::with_capacity(3 * args.len());
         for a in args {
-            match a.view() {
-                ArgView::Type(q) => {
-                    if let Some((rb, k)) = self.invented_arg(q)? {
-                        out.extend([2, rb, k]);
-                    } else {
-                        let q = self.qref(q)?;
-                        out.extend([0, q.ty, u32::from(q.quals)]);
-                    }
+            if let ArgView::Pack(p) = a.view() {
+                let elems = self.s.ast.types.args(p).to_vec();
+                words.extend([6, elems.len() as u32, 0]);
+                for e in elems {
+                    self.targ_word(e, &mut words)?;
                 }
-                ArgView::Expr { expr, profile } => {
-                    let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
-                    out.extend([1, e, u32::from(profile.is_some())]);
-                }
-                // A template (WP-1342); in an expression section too
-                // (WP-1352: its type is built after the record it names,
-                // [`section_decl_bound`]).
-                ArgView::Template(_) | ArgView::TemplateExpansion { .. } => {
-                    match self.arg_rec(a)? {
-                        super::ArgRec::Template(r, k) => out.extend([3, r, k]),
-                        super::ArgRec::DepTemplate(t, k) => out.extend([4, t, k]),
-                        _ => return Err("a malformed body"),
-                    }
-                }
-                _ => {
-                    return Err(
-                        "a template argument the image does not carry: an explicit argument of a name in a body",
-                    );
+            } else {
+                self.targ_word(a, &mut words)?;
+            }
+        }
+        out.push((words.len() / 3) as u32 + 1);
+        out.extend(words);
+        Ok(())
+    }
+
+    /// One explicit template argument of [`Self::targ_words`].
+    fn targ_word(&mut self, a: kiln_ast::types::TemplateArg, out: &mut Vec<u32>) -> W<()> {
+        use kiln_ast::types::ArgView;
+        match a.view() {
+            ArgView::Type(q) => {
+                if let Some((rb, k)) = self.invented_arg(q)? {
+                    out.extend([2, rb, k]);
+                } else {
+                    let q = self.qref(q)?;
+                    out.extend([0, q.ty, u32::from(q.quals)]);
                 }
             }
+            ArgView::Expr { expr, profile } => {
+                let e = *self.bs.emap.get(&expr).ok_or("a malformed body")?;
+                out.extend([1, e, u32::from(profile.is_some())]);
+            }
+            // A template (WP-1342); in an expression section too
+            // (WP-1352: its type is built after the record it names,
+            // [`section_decl_bound`]).
+            ArgView::Template(_) | ArgView::TemplateExpansion { .. } => match self.arg_rec(a)? {
+                super::ArgRec::Template(r, k) => out.extend([3, r, k]),
+                super::ArgRec::DepTemplate(t, k) => out.extend([4, t, k]),
+                _ => return Err("a malformed body"),
+            },
+            // A value (WP-1358): its type and constant.
+            ArgView::Value { ty, value } => {
+                let q = self.qref(ty)?;
+                let c = self.cnst(value)?;
+                match c {
+                    Some(c) if q.quals == 0 && super::spec::value_ty_ok(&self.img, q) => {
+                        out.extend([5, q.ty, c]);
+                    }
+                    _ => return Err(TA_ARG),
+                }
+            }
+            _ => return Err(TA_ARG),
         }
         Ok(())
     }
@@ -3486,26 +3567,52 @@ impl Sema<'_, '_> {
                 if w[0] == 0 {
                     return 0;
                 }
-                let mut args = Vec::with_capacity(w.len() / 3);
+                // A pack's header (WP-1358): its length, its elements next.
+                let mut conv: Vec<Result<kiln_ast::types::TemplateArg, u32>> =
+                    Vec::with_capacity(w.len() / 3);
                 for a in w[1..].chunks(3) {
-                    args.push(if a[0] == 0 {
+                    conv.push(if a[0] == 6 {
+                        Err(a[1])
+                    } else if a[0] == 5 {
+                        let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: 0 });
+                        Ok(kiln_ast::types::TemplateArg::value(q, built.consts[a[2] as usize]))
+                    } else if a[0] == 0 {
                         let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: a[2] as u8 });
-                        kiln_ast::types::TemplateArg::ty(q)
+                        Ok(kiln_ast::types::TemplateArg::ty(q))
                     } else if a[0] == 2 {
-                        kiln_ast::types::TemplateArg::ty(built.reqs.invented(a[1], a[2]))
+                        Ok(kiln_ast::types::TemplateArg::ty(built.reqs.invented(a[1], a[2])))
                     } else if a[0] == 3 {
                         let rec = super::ArgRec::Template(a[1], a[2]);
-                        self.image_targ(ids, QualType::INT, &rec)
+                        Ok(self.image_targ(ids, QualType::INT, &rec))
                     } else if a[0] == 4 {
                         let q = self.image_ty(img, tys, ids, QRef { ty: a[1], quals: 0 });
                         let rec = super::ArgRec::DepTemplate(a[1], a[2]);
-                        self.image_targ(ids, q, &rec)
+                        Ok(self.image_targ(ids, q, &rec))
                     } else {
                         let e = ExprId::from_raw(built.ebase + a[1])
                             .unwrap_or_else(|| unreachable!("validated operand"));
                         let profile = (a[2] != 0).then(|| self.ast.profile_expr(e));
-                        kiln_ast::types::TemplateArg::expr(e, profile)
+                        Ok(kiln_ast::types::TemplateArg::expr(e, profile))
                     });
+                }
+                let mut args = Vec::with_capacity(conv.len());
+                let mut k = 0;
+                while k < conv.len() {
+                    match conv[k] {
+                        Ok(a) => {
+                            args.push(a);
+                            k += 1;
+                        }
+                        Err(n) => {
+                            let n = n as usize;
+                            let elems: Vec<_> =
+                                conv[k + 1..k + 1 + n].iter().filter_map(|x| x.ok()).collect();
+                            args.push(kiln_ast::types::TemplateArg::pack(
+                                self.ast.types.arg_list(&elems),
+                            ));
+                            k += 1 + n;
+                        }
+                    }
                 }
                 self.ast.types.arg_list(&args).raw()
             }
