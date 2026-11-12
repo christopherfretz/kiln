@@ -132,6 +132,17 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
   with `-Cprofile-use=<file>`. `cargo xtask pgo-train` is the training
   alone. Nothing changes without the switch (README.md "Profile-guided
   build", WP-1308).
+- C mode matches clang on excess initializers (a -Wexcess-initializers
+  warning, an error only under `-pedantic-errors`; the extra clauses are
+  dropped and never evaluated), rejects `extern "C"` ("expected
+  identifier or '('"), treats every `?:` as a non-lvalue, and rejects
+  unary `+`, `-` and `~` of an array or function (WP-1318).
+
+### Fixed
+
+- C++: unary `+` of a function (`+fn`) is a function pointer instead of
+  an error, and `-`/`~` of an array or function report the decayed
+  pointer type, as clang (WP-1318).
 
 ### Changed
 

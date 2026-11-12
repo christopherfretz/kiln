@@ -3148,7 +3148,8 @@ impl Sema<'_, '_> {
                     }
                     let tx = self.ety(x);
                     if op == UnaryOp::Minus || self.is_c() {
-                        let msg = self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
+                        let msg =
+                            self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
                         self.emit(msg);
                         return self.recover_err(&[x], loc);
                     }
@@ -3179,7 +3180,8 @@ impl Sema<'_, '_> {
                         return x;
                     }
                     let tx = self.ety(x);
-                    let msg = self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
+                    let msg =
+                        self.diag(DiagId::sema_invalid_unary_operand, loc).arg(self.ty_arg(tx));
                     self.emit(msg);
                     return self.recover_err(&[x], loc);
                 }

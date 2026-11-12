@@ -288,6 +288,50 @@ Tests: `tests/c/expr/{static-array-argument,sizeof-array-decay,void-deref-addres
 `tests/c/decl/{incomplete-variable-braced-init,static-follows-non-static-note,static-in-inline-19,static-in-inline-22,incompatible-library-redeclaration}.c`
 and the group 1 tests listed in docs/status/c-mode.md.
 
+#### 1.0.6 C behaviour fixes (WP-1318)
+
+Accept/reject decisions matched against clang 19 and 22 at gnu17 and
+gnu23.
+
+- Excess initializers (C23 6.7.11p2, clang `ext_excess_initializers`;
+  `init.rs` `excess_c`). A clause left over in a braced list of an
+  array, structure, union, scalar, vector or `_Complex` object, a
+  compound literal included, is `sema_excess_initializers_c` (ExtWarn,
+  -Wexcess-initializers: on by default, an error under
+  `-pedantic-errors`). It is reported at the first excess clause, also
+  for a scalar (C++ reports a scalar's at the entity). The excess
+  clauses were checked when parsed; they are left out of the
+  initialization, which does not fail, so the object keeps its declared
+  size, nothing evaluates them, and the variable stays valid for later
+  warnings (-Wunused-variable). A char array's excess clause after its
+  string is `sema_excess_initializers_in_char_array_c`, after the
+  string's own diagnostic. A too-long string
+  (`sema_init_string_too_long_c`) is an ExtWarn too. C++ keeps the
+  hard errors.
+- `extern "C"` (C has no linkage specification): the parser takes no
+  linkage-specification branch in C, so `extern` is a storage class and
+  the string literal a malformed declarator, "expected identifier or
+  '('" at the string; the declaration is skipped through its `;` or its
+  braced body, as clang.
+- `?:` is never an lvalue in C (C17 6.5.15 footnote 110;
+  `Builder::c_conditional`), whatever its operands: `&(c ? *p : *p)`
+  with `p` a `void *` and `&(c ? s1 : s2)` are "cannot take the address
+  of an rvalue", and assigning to a structure `?:` is "expression is
+  not assignable".
+- Unary `+`, `-`, `~` (C23 6.5.4.3p1; clang `CreateBuiltinUnaryOp`): an
+  array or function operand is converted to a pointer first, so it is
+  rejected as "invalid argument type 'int *' to unary expression" (the
+  pointer type) and `sizeof(+a)` is no longer the array's size. C++
+  allows the pointer for unary `+` only ([expr.unary.op]/7: `+fn` is
+  valid there). `!` of an array or function is valid.
+
+Tests: `tests/c/run/excess-initializers-ignored.c`,
+`tests/c/decl/excess-initializers-pedantic-errors.c`,
+`tests/c/parse/extern-c-linkage-spec.c`,
+`tests/c/expr/{conditional-not-lvalue,unary-arithmetic-operand-decay}.c`,
+`tests/c/run/conditional-not-lvalue.c`,
+`tests/conformance/expr.unary.op/unary-operand-array-function-decay.cpp`.
+
 ### 1.1 Clang compatibility level (`clang_compat`, WP-355)
 `Sema::clang_compat` is the driver's `-fclang-compat=<major>` (19 or
 22; spec/driver.md). It selects which clang release's observable output

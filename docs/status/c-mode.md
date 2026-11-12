@@ -181,12 +181,28 @@ Measured with the harness build of wp/1312:
 Found while doing this, but not changed here (each changes what kiln
 accepts, rejects or emits):
 
-- `extern "C"` in a C file is accepted silently; clang reports "expected
-  identifier or '('".
-- `&(c ? *p : *p)` on `void *` is accepted.
-- `sizeof(+a)` on an array is accepted.
-- Excess array initializer elements are an error, where clang warns.
-- -Wunused-variable fires on an invalid declaration.
+- ~~`extern "C"` in a C file is accepted silently; clang reports "expected
+  identifier or '('".~~ Fixed by WP-1318.
+- ~~`&(c ? *p : *p)` on `void *` is accepted.~~ Fixed by WP-1318 (no C
+  `?:` is an lvalue).
+- ~~`sizeof(+a)` on an array is accepted.~~ Fixed by WP-1318 (`+`, `-`,
+  `~` of an array or function).
+- ~~Excess array initializer elements are an error, where clang warns.~~
+  Fixed by WP-1318 (also scalars, structs, vectors, `_Complex`, compound
+  literals and char arrays).
+- -Wunused-variable fires on an invalid declaration: not reproduced by
+  WP-1318. kiln already skips an `INVALID` declaration and a scope with
+  an unrecoverable error, as clang; about 60 invalid block- and
+  file-scope declarations at gnu17 and gnu23 (with and without
+  `-pedantic-errors`) and every `tests/c` file under `-Wall` give the
+  same -Wunused-variable output as clang 19. The only differences
+  found come from errors kiln does not give yet (below). The bogus
+  -Wdangling next to excess initializers did not reproduce either.
+- Missing errors that let -Wunused-variable through (WP-1318 finds,
+  not fixed): a block-scope `_Thread_local`/`__thread` variable ("must
+  have global storage"); C23 `constexpr` initializers that are not
+  exactly representable (`constexpr float f = 1.0 / 3;`,
+  `constexpr unsigned u = -1;`) or a non-null `constexpr` pointer.
 - C89 -Wdeclaration-after-statement is missing.
 - Case-value overflow in C++98 is not checked.
 - The "expanded from macro" note for `offsetof` is missing.
