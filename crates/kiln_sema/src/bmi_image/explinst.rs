@@ -30,7 +30,7 @@ use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ArgView, TemplateArg};
 use kiln_ast::{DeclId, QualType};
 
-use super::{ArgRec, BUILTINS, Image, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad};
+use super::{ArgRec, Image, Locs, NONE, Payload, QRef, Rd, Res, W, Wr, Writer, bad};
 use crate::Sema;
 
 /// One explicit instantiation.
@@ -179,12 +179,14 @@ pub(super) fn validate_explicit_insts(img: &Image, qref_ok: &dyn Fn(QRef) -> boo
                 .is_some_and(|r| matches!(r.payload, Payload::Namespace));
         let args_ok = x.args.iter().all(|a| match *a {
             ArgRec::Type(q) => qref_ok(q),
-            ArgRec::Value(q, _) => q.ty <= BUILTINS && q.quals == 0,
+            ArgRec::Value(q, _) => super::spec::value_ty_ok(img, q),
             // A template (WP-1342).
             ArgRec::Template(d, 0) => super::tttp::tname_rec(img, d),
             // The writer lists converted arguments, never expressions
             // or dependent names.
-            ArgRec::Expr(..) | ArgRec::Template(..) | ArgRec::DepTemplate(..) => false,
+            ArgRec::Expr(..) | ArgRec::Template(..) | ArgRec::DepTemplate(..) | ArgRec::Pack(_) => {
+                false
+            }
         });
         if !matches!(tmpl, Some(Payload::Template { kind: 1, .. })) || !lex_ok || !args_ok {
             return bad("bad explicit instantiation");

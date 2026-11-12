@@ -1994,9 +1994,12 @@ fn kind2_declaration_image_fallback() {
             "a member deduction guide",
         ),
         (
-            "export module f;\nexport template <class T> requires (sizeof(T) > 1) struct A {};\n\
+            // WP-1344: one of a template with only its own constraints is
+            // carried; a completed one with a constrained member is not.
+            "export module f;\nexport template <class T> struct A {\n  \
+             int f() requires (sizeof(T) > 1) { return 1; }\n};\n\
              export inline int g() { return sizeof(A<long>); }\n",
-            "a specialization of a constrained template",
+            "a specialization of a constrained template: completed, with a constrained member",
         ),
         (
             "export module f;\nexport template <int N> struct F { int a : N; int b = 4; };\n\
