@@ -78,7 +78,7 @@ struct Decoded {
     builtin_file: Option<FileId>,
 }
 
-impl<'a> Preprocessor<'a, '_> {
+impl Preprocessor<'_, '_> {
     /// The snapshot point (spec/pp.md "Snapshots"): once the main file
     /// has ended ([`Self::next`] returned `Eof`), closes it as the end of
     /// an included file would (its include guard is recorded), so that no

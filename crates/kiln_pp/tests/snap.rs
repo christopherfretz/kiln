@@ -413,7 +413,7 @@ fn small<'a, 'd>(
     main: &str,
 ) -> Preprocessor<'a, 'd> {
     let mut o = PpOptions::new(Std::Cxx26);
-    o.predefines = "#define __small__ 1\n".to_owned();
+    "#define __small__ 1\n".clone_into(&mut o.predefines);
     o.modules = Some(ModuleOptions::default());
     let mut pp = Preprocessor::new(sm, engine, interner, o);
     let r = MemoryResolver::new()
@@ -525,11 +525,11 @@ fn small_snapshot() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
 
 /// Restores a (maybe corrupt) engine and preprocessor snapshot into a
 /// fresh consumer; when both decode, reads a main file with them.
-fn restore_and_use(i: &[u8], s: &[u8], e: &[u8], p: &[u8]) -> bool {
-    let interner: Interner = from_bytes(i).unwrap();
-    let sm: SourceManager = from_bytes(s).unwrap();
+fn restore_and_use(ib: &[u8], sb: &[u8], eb: &[u8], pb: &[u8]) -> bool {
+    let interner: Interner = from_bytes(ib).unwrap();
+    let sm: SourceManager = from_bytes(sb).unwrap();
     let mut engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    let mut r = Reader::new(e);
+    let mut r = Reader::new(eb);
     if engine.snap_restore(&mut r).and_then(|()| r.finish()).is_err() {
         return false;
     }
@@ -537,7 +537,7 @@ fn restore_and_use(i: &[u8], s: &[u8], e: &[u8], p: &[u8]) -> bool {
     o.modules = Some(ModuleOptions::default());
     let mut pp = Preprocessor::new(&sm, &engine, &interner, o);
     pp.set_include_resolver(Box::new(MemoryResolver::new().with_header("g.h", "#define G 2\n")));
-    let mut r = Reader::new(p);
+    let mut r = Reader::new(pb);
     if pp.snap_restore(&mut r).and_then(|()| r.finish()).is_err() {
         return false;
     }
@@ -557,12 +557,16 @@ fn restore_and_use(i: &[u8], s: &[u8], e: &[u8], p: &[u8]) -> bool {
 /// errors or values that work, never a panic.
 #[test]
 fn corrupt_snapshots_never_panic() {
-    let (i, s, e, p) = small_snapshot();
-    assert!(restore_and_use(&i, &s, &e, &p));
-    for (k, bytes) in [&e, &p].into_iter().enumerate() {
+    let (ib, sb, eb, pb) = small_snapshot();
+    assert!(restore_and_use(&ib, &sb, &eb, &pb));
+    for (k, bytes) in [&eb, &pb].into_iter().enumerate() {
         let step = (bytes.len() / 300).max(1);
         let with = |b: &[u8]| {
-            if k == 0 { restore_and_use(&i, &s, b, &p) } else { restore_and_use(&i, &s, &e, b) }
+            if k == 0 {
+                restore_and_use(&ib, &sb, b, &pb)
+            } else {
+                restore_and_use(&ib, &sb, &eb, b)
+            }
         };
         for cut in (0..bytes.len()).step_by(step) {
             assert!(!with(&bytes[..cut]), "root {k} cut at {cut} decoded");
