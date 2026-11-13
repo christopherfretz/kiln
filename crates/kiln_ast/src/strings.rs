@@ -335,8 +335,14 @@ impl kiln_snap::Snap for StringPool {
         Ok(StringPool { bytes, entries, table })
     }
 
+    const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("root", "StringPool")
+        .field::<Vec<u8>>("bytes")
+        .field::<Vec<Entry>>("entries")
+        .skip("table", "HashTable<StringLitId>")
+        .finish();
     fn schema(s: &mut kiln_snap::Schema) {
         let d = kiln_snap::Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Vec<u8>>("bytes")
             .field::<Vec<Entry>>("entries")
             .skip::<HashTable<StringLitId>>("table");

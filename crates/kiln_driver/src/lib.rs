@@ -31,6 +31,9 @@ mod pch;
 mod pch_check;
 mod pch_image;
 mod pch_snapshot;
+/// The `KILN_SNAP_TIMING` process phase timer (WP-1401): `main` marks its
+/// start and prints the report before it exits.
+pub use pch_snapshot::{phase_report, process_started};
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
@@ -676,6 +679,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         return scan_deps::run(argv0, &command_line, io);
     }
     let args = Args::parse_as(argv0, &command_line);
+    pch_snapshot::phase("arguments");
     // The hidden `-fkiln-crash-for-testing=` (spec/driver.md "Internal
     // compiler errors"); per thread, so set (or cleared) on every run.
     kiln_source::activity::set_crash_for_testing(args.crash_for_testing);
@@ -710,6 +714,7 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(flag).arg(value).emit(&drv);
     }
     let tc = toolchain_of(&args, &drv);
+    pch_snapshot::phase("toolchain");
     let (target_features, feature_errors) = features::resolve(&args, &tc.target);
     for e in &feature_errors {
         emit_arg_error(e, &drv);
@@ -804,9 +809,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let args: &Args = probed.as_ref().unwrap_or(&args);
     // `-include-pch` (spec/driver.md "Precompiled headers", WP-1023): the
     // checked PCH replays as `-include`s.
+    pch_snapshot::phase("driver checks");
     let Ok(pch_args) = pch::consumer(args, &tc, &inputs, &diag_opts, &io.stderr) else {
         return 1;
     };
+    pch_snapshot::phase("pch record and snapshot validation");
     let args: &Args = pch_args.as_ref().unwrap_or(args);
 
     if args.action == Action::Precompile && inputs.len() > 1 && args.output.is_some() {

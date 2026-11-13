@@ -56,7 +56,7 @@
 //! snapshot is checked by `kiln_ast`).
 
 use kiln_ast::{ConstValueId, DeclId, ExprId};
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::Loc;
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
@@ -471,8 +471,49 @@ impl Oven {
 
     /// Registers the encoding of [`Oven::snap_put`]: its hash is
     /// `{ let mut s = Schema::new(); Oven::snap_schema(&mut s); s.hash() }`.
+    /// The constant schema hash of the root ([`Self::snap_schema`]).
+    pub const SNAP_SCHEMA_HASH: u64 = SchemaHash::new("configured root", "Oven")
+        .field::<Types>("types")
+        .field::<Vec<u32>>("code")
+        .field::<usize>("padded")
+        .field::<Vec<Site>>("sites")
+        .field::<Vec<Loc>>("step_locs")
+        .field::<Vec<mem::Origin>>("origins")
+        .field::<Vec<TrapInfo>>("traps")
+        .field::<Vec<Func>>("funcs")
+        .field::<FxHashMap<DeclId, u32>>("func_map")
+        .field::<FxHashMap<DeclId, u32>>("base_funcs")
+        .field::<FxHashMap<u32, Box<[CtorStep]>>>("ctor_steps")
+        .field::<FxHashSet<DeclId>>("volatile_decls")
+        .field::<FxHashSet<ExprId>>("volatile_exprs")
+        .field::<FxHashMap<(ExprId, Option<DeclId>, bool), u32>>("thunks")
+        .field::<FxHashMap<(ExprId, ExprId, bool), u32>>("thunks_at")
+        .field::<Option<LastThunk>>("last_thunk")
+        .field::<Vec<Global>>("globals")
+        .field::<FxHashMap<DeclId, u32>>("global_map")
+        .field::<Vec<u32>>("provisional")
+        .field::<FxHashMap<u32, (OTy, u64)>>("provisional_objs")
+        .field::<FxHashMap<(mem::Sp, u64), i64>>("addr_int_disps")
+        .field::<std::cell::RefCell<Vec<(u64, i64)>>>("synth")
+        .field::<Vec<(ExprId, ExprId)>>("label_diffs")
+        .field::<FxHashMap<(mem::Sp, u64), (u32, i64)>>("label_diff_cells")
+        .field::<FxHashMap<ExprId, u32>>("lit_exprs")
+        .field::<FxHashMap<ConstValueId, u64>>("thawed")
+        .field::<FxHashMap<DeclId, u64>>("lets")
+        .field::<FxHashMap<DeclId, u64>>("unknowns")
+        .field::<FrameState>("frame")
+        .root_field("mem", Memory::SNAP_SCHEMA_HASH)
+        .field::<Excs>("exc")
+        .field::<Memo>("memo")
+        .field::<MemPtrs>("mp")
+        .field::<Virt>("virt")
+        .field::<MetaState>("meta")
+        .field::<ReflSeen>("refl_seen")
+        .field::<DmsTable>("dms")
+        .finish();
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
+            .hash(Self::SNAP_SCHEMA_HASH)
             .field::<Types>("types")
             .field::<Vec<u32>>("code")
             .field::<usize>("padded")

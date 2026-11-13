@@ -24,6 +24,7 @@ struct Rec {
 struct Slow(Rec);
 
 impl Snap for Slow {
+    const SCHEMA_HASH: u64 = Rec::SCHEMA_HASH;
     fn put(&self, w: &mut Writer) {
         self.0.put(w);
     }

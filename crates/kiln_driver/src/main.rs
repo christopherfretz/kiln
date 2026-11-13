@@ -8,6 +8,7 @@ use kiln_sema::stack_guard::StackGuard;
 /// "Internal compiler errors"), then runs the driver; a panic anywhere
 /// unwinds back here and becomes one report and its exit code.
 fn main() {
+    kiln_driver::process_started();
     kiln_driver::crash::install_hook();
     let mut command_line = std::env::args();
     let argv0 = command_line.next().unwrap_or_else(|| "kiln".to_owned());
@@ -16,6 +17,7 @@ fn main() {
         Ok(code) => code,
         Err(_) => kiln_driver::crash::report(&argv0, &raw),
     };
+    kiln_driver::phase_report();
     std::process::exit(code);
 }
 

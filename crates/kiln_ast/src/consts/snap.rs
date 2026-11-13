@@ -13,7 +13,7 @@
 //! ([`Pools::check_scalar`], [`Pools::check_image`]).
 
 use hashbrown::HashTable;
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 use super::{
     ConstStore, ConstValue, F_AUX, F_DESIG, F_WIDE, FloatKind, IntBits, Pools, PtrBase, kind,
@@ -132,8 +132,15 @@ impl Snap for ConstStore {
         Ok(ConstStore { pools, table })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "ConstStore")
+        .field::<Pools>("pools")
+        .skip("table", "HashTable<ConstValueId>")
+        .finish();
     fn schema(s: &mut Schema) {
-        let d = Desc::new("root").field::<Pools>("pools").skip::<HashTable<ConstValueId>>("table");
+        let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
+            .field::<Pools>("pools")
+            .skip::<HashTable<ConstValueId>>("table");
         if s.register::<Self>(d) {
             Pools::schema(s);
         }

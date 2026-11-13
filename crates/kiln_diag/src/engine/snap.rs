@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 
-use kiln_snap::{Desc, ErrorKind, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, ErrorKind, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::Span;
 
 use super::{DiagEngine, State};
@@ -52,6 +52,17 @@ impl Snap for DiagId {
             .ok_or_else(|| r.error::<Self>(ErrorKind::BadValue("diagnostic id out of range")))
     }
 
+    const SCHEMA_HASH: u64 = {
+        let mut h =
+            SchemaHash::new("diag_id", "DiagId").note("u16 index").number(DiagId::ALL.len() as u64);
+        let mut i = 0;
+        while i < DiagId::ALL.len() {
+            h = h.note(DiagId::ALL[i].name());
+            i += 1;
+        }
+        h.finish()
+    };
+
     fn schema(s: &mut Schema) {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         for id in DiagId::ALL {
@@ -61,7 +72,7 @@ impl Snap for DiagId {
             }
         }
         let note = format!("u16 index of {} ids, names {h:016x}", DiagId::ALL.len());
-        s.register::<Self>(Desc::new("diag_id").note(&note));
+        s.register::<Self>(Desc::new("diag_id").hash(Self::SCHEMA_HASH).note(&note));
     }
 }
 
@@ -182,8 +193,15 @@ impl DiagEngine<'_> {
 
     /// Registers the snapshot's descriptor (the fields
     /// [`Self::snap_put`] writes) and those of the types it encodes.
+    /// The constant schema hash of the root ([`Self::snap_schema`]).
+    pub const SNAP_SCHEMA_HASH: u64 = SchemaHash::new("configured root", "DiagEngine")
+        .field::<HashSet<(DiagId, Span, u64)>>("seen")
+        .field::<Pragmas>("pragmas")
+        .field::<u32>("prefix_reported")
+        .finish();
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
+            .hash(Self::SNAP_SCHEMA_HASH)
             .field::<HashSet<(DiagId, Span, u64)>>("seen")
             .field::<Pragmas>("pragmas")
             .field::<u32>("prefix_reported");

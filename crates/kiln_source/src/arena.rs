@@ -11,7 +11,7 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 /// log2 of the first chunk's size.
 const FIRST_CHUNK_BITS: u32 = 6;
@@ -129,8 +129,9 @@ impl<T: Snap> Snap for AppendVec<T> {
         Ok(v)
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("seq", "AppendVec").field::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("seq").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }

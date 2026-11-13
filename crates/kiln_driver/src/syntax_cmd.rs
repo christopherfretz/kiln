@@ -75,7 +75,10 @@ impl SyntaxJob<'_> {
         }
         if let Some(s) = &job.args.pch.snapshot_use {
             match self.run_restored(s) {
-                Ok(r) => return r,
+                Ok(r) => {
+                    crate::pch_snapshot::phase("teardown of the roots");
+                    return r;
+                }
                 Err(why) => {
                     let why = format!("not used ({why}); the header is replayed");
                     crate::pch_snapshot::note(job.args, &job.stderr, &s.pch, &why);
@@ -125,6 +128,7 @@ impl SyntaxJob<'_> {
     ) -> Result<JobResult, String> {
         use std::io::Write as _;
         let job = &self.0;
+        crate::pch_snapshot::phase("job setup");
         let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
         let mut engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
         engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
@@ -140,6 +144,7 @@ impl SyntaxJob<'_> {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
                 let mut restore = Some(restore);
                 self.parse(&sm, &engine, &interner, inputs, None, &mut result, restore.as_mut());
+                crate::pch_snapshot::phase("reports and teardown of the AST");
                 failed = restore.and_then(|r| r.failed);
             }
         });
@@ -507,6 +512,7 @@ impl SyntaxJob<'_> {
             let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
             restore.timer.mark("continue");
             restore.timer.report();
+            crate::pch_snapshot::phase("restore and main file with end of unit");
             self.after_parse(
                 sm, engine, interner, tu, pp, deps, main_id, verify, dump_opts, &target, result,
             );

@@ -16,7 +16,7 @@ use std::sync::atomic::{
 };
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
 
-use crate::{Desc, ErrorKind, Reader, Schema, Snap, SnapError, Writer, put_seq};
+use crate::{Desc, ErrorKind, Reader, Schema, SchemaHash, Snap, SnapError, Writer, put_seq};
 
 // ----- scalars ----------------------------------------------------------
 
@@ -32,8 +32,9 @@ macro_rules! int {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 r.array_of::<$n>(stringify!($t)).map(<$t>::from_le_bytes)
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("int", stringify!($t)).finish();
             fn schema(s: &mut Schema) {
-                s.register::<Self>(Desc::new("int"));
+                s.register::<Self>(Desc::new("int").hash(Self::SCHEMA_HASH));
             }
         }
     )*};
@@ -59,8 +60,9 @@ macro_rules! word {
                     SnapError::new(ErrorKind::BadValue(stringify!($t)), stringify!($t), at)
                 })
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("int", stringify!($t)).finish();
             fn schema(s: &mut Schema) {
-                s.register::<Self>(Desc::new("int"));
+                s.register::<Self>(Desc::new("int").hash(Self::SCHEMA_HASH));
             }
         }
     )*};
@@ -81,8 +83,9 @@ macro_rules! float {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 <$bits>::get(r).map(<$t>::from_bits)
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("float", stringify!($t)).finish();
             fn schema(s: &mut Schema) {
-                s.register::<Self>(Desc::new("float"));
+                s.register::<Self>(Desc::new("float").hash(Self::SCHEMA_HASH));
             }
         }
     )*};
@@ -104,8 +107,9 @@ impl Snap for bool {
             _ => Err(SnapError::new(ErrorKind::BadValue("bool"), "bool", r.offset() - 1)),
         }
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("bool", "bool").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("bool"));
+        s.register::<Self>(Desc::new("bool").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -121,8 +125,9 @@ impl Snap for char {
         char::from_u32(v)
             .ok_or_else(|| SnapError::new(ErrorKind::BadValue("char"), "char", r.offset() - 4))
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("char", "char").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("char"));
+        s.register::<Self>(Desc::new("char").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -144,8 +149,10 @@ macro_rules! nonzero {
                     SnapError::new(ErrorKind::BadValue("zero NonZero"), stringify!(NonZero<$t>), at)
                 })
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("nonzero", "NonZero").field::<$t>("0").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("nonzero", "NonZero").shape::<$t>("0").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("nonzero").field::<$t>("0")) {
+                if s.register::<Self>(Desc::new("nonzero").hash(Self::SCHEMA_HASH).field::<$t>("0")) {
                     <$t>::schema(s);
                 }
             }
@@ -171,8 +178,9 @@ impl Snap for () {
     fn get(_: &mut Reader<'_>) -> Result<Self, SnapError> {
         Ok(())
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("unit", "()").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("unit"));
+        s.register::<Self>(Desc::new("unit").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -185,8 +193,9 @@ impl<T: ?Sized + 'static> Snap for PhantomData<T> {
     fn get(_: &mut Reader<'_>) -> Result<Self, SnapError> {
         Ok(PhantomData)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("phantom", "PhantomData").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("phantom"));
+        s.register::<Self>(Desc::new("phantom").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -202,8 +211,12 @@ macro_rules! tuple {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 Ok(($($t::get(r)?,)+))
             }
+            const SCHEMA_HASH: u64 =
+                SchemaHash::new("tuple", "tuple")$(.field::<$t>(stringify!($n)))+.finish();
+            const SHAPE_HASH: u64 =
+                SchemaHash::new("tuple", "tuple")$(.shape::<$t>(stringify!($n)))+.finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("tuple")$(.field::<$t>(stringify!($n)))+) {
+                if s.register::<Self>(Desc::new("tuple").hash(Self::SCHEMA_HASH)$(.field::<$t>(stringify!($n)))+) {
                     $($t::schema(s);)+
                 }
             }
@@ -248,8 +261,14 @@ impl<T: Snap, const N: usize> Snap for [T; N] {
         }
         Ok(items.map(|x| x.unwrap_or_else(|| unreachable!("every element decoded"))))
     }
+    const SCHEMA_HASH: u64 =
+        SchemaHash::new("array", "[T; N]").number(N as u64).field::<T>("item").finish();
+    const SHAPE_HASH: u64 =
+        SchemaHash::new("array", "[T; N]").number(N as u64).shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("array").note(&N.to_string()).field::<T>("item")) {
+        if s.register::<Self>(
+            Desc::new("array").hash(Self::SCHEMA_HASH).note(&N.to_string()).field::<T>("item"),
+        ) {
             T::schema(s);
         }
     }
@@ -269,8 +288,10 @@ impl<T: Snap> Snap for Option<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get_option(r)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("option", "Option").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("option", "Option").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("option").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("option").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -298,8 +319,14 @@ impl<T: Snap, E: Snap> Snap for Result<T, E> {
             t => Err(r.bad_tag::<Self>(u64::from(t), 1)),
         }
     }
+    const SCHEMA_HASH: u64 =
+        SchemaHash::new("result", "Result").field::<T>("ok").field::<E>("err").finish();
+    const SHAPE_HASH: u64 =
+        SchemaHash::new("result", "Result").shape::<T>("ok").shape::<E>("err").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("result").field::<T>("ok").field::<E>("err")) {
+        if s.register::<Self>(
+            Desc::new("result").hash(Self::SCHEMA_HASH).field::<T>("ok").field::<E>("err"),
+        ) {
             T::schema(s);
             E::schema(s);
         }
@@ -317,8 +344,10 @@ impl<T: Snap> Snap for Box<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get(r).map(Box::new)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("box", "Box").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("box", "Box").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("box").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("box").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -343,8 +372,10 @@ impl<T: Snap> Snap for Vec<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         get_vec(r)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("seq", "Vec").field::<T>("item").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("seq", "Vec").shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("seq").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }
@@ -360,8 +391,10 @@ impl<T: Snap> Snap for Box<[T]> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         get_vec(r).map(Vec::into_boxed_slice)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("seq", "Box<[T]>").field::<T>("item").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("seq", "Box<[T]>").shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("seq").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }
@@ -377,8 +410,10 @@ impl<T: Snap> Snap for VecDeque<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         get_vec(r).map(VecDeque::from)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("seq", "VecDeque").field::<T>("item").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("seq", "VecDeque").shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("seq").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }
@@ -394,8 +429,9 @@ impl Snap for String {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         r.str().map(str::to_owned)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("str", "String").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("str"));
+        s.register::<Self>(Desc::new("str").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -409,8 +445,9 @@ impl Snap for Box<str> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         r.str().map(Box::from)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("str", "Box<str>").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("str"));
+        s.register::<Self>(Desc::new("str").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -424,8 +461,9 @@ impl Snap for Cow<'static, str> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         r.str().map(|s| Cow::Owned(s.to_owned()))
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("str", "Cow<str>").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("str"));
+        s.register::<Self>(Desc::new("str").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -439,8 +477,10 @@ impl<T: Snap + Clone> Snap for Cow<'static, [T]> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         get_vec(r).map(Cow::Owned)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("seq", "Cow<[T]>").field::<T>("item").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("seq", "Cow<[T]>").shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("seq").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }
@@ -472,8 +512,9 @@ impl Snap for PathBuf {
         #[cfg(not(unix))]
         r.str().map(PathBuf::from)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("path", "PathBuf").finish();
     fn schema(s: &mut Schema) {
-        s.register::<Self>(Desc::new("path"));
+        s.register::<Self>(Desc::new("path").hash(Self::SCHEMA_HASH));
     }
 }
 
@@ -490,8 +531,10 @@ impl<T: Snap + Copy> Snap for Cell<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get(r).map(Cell::new)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("cell", "Cell").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("cell", "Cell").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("cell").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("cell").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -512,8 +555,10 @@ impl<T: Snap> Snap for RefCell<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get(r).map(RefCell::new)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("cell", "RefCell").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("cell", "RefCell").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("cell").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("cell").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -530,8 +575,10 @@ impl<T: Snap> Snap for OnceCell<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         Ok(T::get_option(r)?.map_or_else(OnceCell::new, OnceCell::from))
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("once", "OnceCell").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("once", "OnceCell").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("once").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("once").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -548,8 +595,10 @@ impl<T: Snap> Snap for OnceLock<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         Ok(T::get_option(r)?.map_or_else(OnceLock::new, OnceLock::from))
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("once", "OnceLock").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("once", "OnceLock").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("once").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("once").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -567,8 +616,10 @@ impl<T: Snap> Snap for Mutex<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get(r).map(Mutex::new)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("lock", "Mutex").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("lock", "Mutex").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("lock").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("lock").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -586,8 +637,10 @@ impl<T: Snap> Snap for RwLock<T> {
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
         T::get(r).map(RwLock::new)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("lock", "RwLock").field::<T>("0").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("lock", "RwLock").shape::<T>("0").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("lock").field::<T>("0")) {
+        if s.register::<Self>(Desc::new("lock").hash(Self::SCHEMA_HASH).field::<T>("0")) {
             T::schema(s);
         }
     }
@@ -606,8 +659,10 @@ macro_rules! atomic {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 <$t>::get(r).map(<$a>::new)
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("atomic", stringify!($a)).field::<$t>("0").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("atomic", stringify!($a)).shape::<$t>("0").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("atomic").field::<$t>("0")) {
+                if s.register::<Self>(Desc::new("atomic").hash(Self::SCHEMA_HASH).field::<$t>("0")) {
                     <$t>::schema(s);
                 }
             }
@@ -703,8 +758,10 @@ macro_rules! hash_map {
                 }
                 Ok(m)
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("map", stringify!($($map)::+)).field::<K>("key").field::<V>("value").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("map", stringify!($($map)::+)).shape::<K>("key").shape::<V>("value").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("map").field::<K>("key").field::<V>("value")) {
+                if s.register::<Self>(Desc::new("map").hash(Self::SCHEMA_HASH).field::<K>("key").field::<V>("value")) {
                     K::schema(s);
                     V::schema(s);
                 }
@@ -742,8 +799,10 @@ macro_rules! hash_set {
                 }
                 Ok(m)
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("set", stringify!($($set)::+)).field::<T>("item").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("set", stringify!($($set)::+)).shape::<T>("item").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("set").field::<T>("item")) {
+                if s.register::<Self>(Desc::new("set").hash(Self::SCHEMA_HASH).field::<T>("item")) {
                     T::schema(s);
                 }
             }
@@ -780,8 +839,14 @@ impl<K: Snap + Ord, V: Snap> Snap for BTreeMap<K, V> {
         }
         Ok(m)
     }
+    const SCHEMA_HASH: u64 =
+        SchemaHash::new("ordmap", "BTreeMap").field::<K>("key").field::<V>("value").finish();
+    const SHAPE_HASH: u64 =
+        SchemaHash::new("ordmap", "BTreeMap").shape::<K>("key").shape::<V>("value").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("ordmap").field::<K>("key").field::<V>("value")) {
+        if s.register::<Self>(
+            Desc::new("ordmap").hash(Self::SCHEMA_HASH).field::<K>("key").field::<V>("value"),
+        ) {
             K::schema(s);
             V::schema(s);
         }
@@ -803,8 +868,10 @@ impl<T: Snap + Ord> Snap for BTreeSet<T> {
         }
         Ok(m)
     }
+    const SCHEMA_HASH: u64 = SchemaHash::new("ordset", "BTreeSet").field::<T>("item").finish();
+    const SHAPE_HASH: u64 = SchemaHash::new("ordset", "BTreeSet").shape::<T>("item").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("ordset").field::<T>("item")) {
+        if s.register::<Self>(Desc::new("ordset").hash(Self::SCHEMA_HASH).field::<T>("item")) {
             T::schema(s);
         }
     }
@@ -858,8 +925,10 @@ macro_rules! shared {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 get_shared(r, |r| T::get(r).map($ptr::new))
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<T>")).field::<T>("0").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<T>")).shape::<T>("0").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("shared").field::<T>("0")) {
+                if s.register::<Self>(Desc::new("shared").hash(Self::SCHEMA_HASH).field::<T>("0")) {
                     T::schema(s);
                 }
             }
@@ -876,8 +945,10 @@ macro_rules! shared {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 get_shared(r, |r| get_vec(r).map($ptr::from))
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<[T]>")).field::<Vec<T>>("0").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<[T]>")).shape::<Vec<T>>("0").finish();
             fn schema(s: &mut Schema) {
-                if s.register::<Self>(Desc::new("shared").field::<Vec<T>>("0")) {
+                if s.register::<Self>(Desc::new("shared").hash(Self::SCHEMA_HASH).field::<Vec<T>>("0")) {
                     <Vec<T>>::schema(s);
                 }
             }
@@ -894,8 +965,10 @@ macro_rules! shared {
             fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
                 get_shared(r, |r| r.str().map($ptr::from))
             }
+            const SCHEMA_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<str>")).field::<String>("0").finish();
+            const SHAPE_HASH: u64 = SchemaHash::new("shared", concat!(stringify!($ptr), "<str>")).shape::<String>("0").finish();
             fn schema(s: &mut Schema) {
-                s.register::<Self>(Desc::new("shared").field::<String>("0"));
+                s.register::<Self>(Desc::new("shared").hash(Self::SCHEMA_HASH).field::<String>("0"));
             }
         }
     )*};

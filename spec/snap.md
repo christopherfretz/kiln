@@ -33,6 +33,8 @@ derived lookup tables) is a **root**, and its encoding is written by hand
 pub trait Snap: Sized + 'static {
     const SIZE: Option<usize> = None;
     const OPTION_SIZE: Option<usize> = /* SIZE + 1 */;
+    const SCHEMA_HASH: u64;                                    // required
+    const SHAPE_HASH: u64 = Self::SCHEMA_HASH;                 // own items only
     fn put(&self, w: &mut Writer);
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError>;
     fn schema(s: &mut Schema);
@@ -58,7 +60,8 @@ The contract an impl keeps (the derive keeps it by construction):
   sharing table). `SIZE = None`: every `put` writes at least one byte
   (this bounds a sequence's length by the remaining bytes).
 - `schema` registers the type once and recurses into every type it
-  encodes ([Schema hash](#schema-hash)).
+  encodes, and `SCHEMA_HASH` folds the same facts at compile time
+  ([Schema hash](#schema-hash)).
 - `put` takes `&self`: encoding requires quiescence (no other thread
   appending; a `RefCell` mutably borrowed during `put` panics, documented
   at its impl; held locks are waited for).
@@ -181,9 +184,34 @@ with `skip` and `with(path)` marked. `schema_hash::<T>()` is FNV-1a over
 the sorted descriptors. Descriptors hold only names, so the hash is equal
 across builds of the same sources and changes when any reachable field is
 added, removed, renamed, reordered or retyped, a variant changes, or an
-attribute changes the encoding. A snapshot stores the hash of its root and
-is refused, never misread, by a build with another. A hand-written impl
-whose encoding changes without a field change bumps its `Desc::note`.
+attribute changes the encoding. A hand-written impl whose encoding
+changes without a field change bumps its `Desc::note`.
+
+`Snap::SCHEMA_HASH` (WP-1401) is the same fact as a constant, so a load
+walks nothing: a `SchemaHash` const-fn builder folds, in the order the
+descriptor lists them, the kind and the type's own name, each field's
+name with its type's `SCHEMA_HASH` (or `skip` / `with(path)` with the
+spelled type), each variant's name and discriminant, and notes. A field
+that closes a cycle of types, one whose type names the type itself
+(`Box<Self>`, `Vec<Node>`) or one marked `#[snap(cycle)]` (`InitValue`'s
+`InitList`, which reaches `InitValue` again), folds its type's
+`SHAPE_HASH` instead (`SchemaHash::cycle`): the type's own items, with
+a derived type's fields by their spelling and a container's elements by
+their `SHAPE_HASH`, so it depends on no constant of the cycle. A cycle
+left open is a compile error (E0391) at the constants involved.
+`Schema::unfolded` names, for each root of a walk, the reached types
+whose items its constant misses because a cycle is closed at the wrong
+place; the driver's test asserts it is empty. A hand-written root defines its
+`SNAP_SCHEMA_HASH` the same way and folds subordinate roots with
+`root_field`; the configured `Sema` root folds its registered fields'
+types through `reg_hash`, which infers each from a field projection.
+Every `Desc` carries its type's constant (`Desc::hash`), and the driver's
+`schema_constants_cover_every_type` test walks all snapshot roots and
+checks that every reached type has a constant and that two different
+descriptors never share one: a constant missing a field, an attribute
+or a type parameter the descriptor names fails it. The driver stores
+`pch_snapshot::SCHEMA_HASH`, folded over its five roots; a snapshot with
+another is refused, never misread.
 
 ## The derive
 
@@ -202,6 +230,9 @@ Attributes:
 - `#[snap(with = "path::module")]` on a field: written by
   `module::put(&T, &mut Writer)`, read by `module::get(&mut Reader<'_>) ->
   Result<T, SnapError>` (the field's size becomes `None`).
+- `#[snap(cycle)]` on an encoded field: the field's type reaches this
+  type again; the schema constant folds the field type's `SHAPE_HASH`
+  ([Schema hash](#schema-hash)). Encoding unchanged.
 - `#[snap(bound = "T: Trait, ...")]` on the type: replaces the automatic
   `T: Snap` bounds (for a parameter used only in `PhantomData`, or behind
   an associated type).
@@ -487,7 +518,8 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
 - `crates/kiln_snap/tests/snap.rs`: every derive shape, enum tags, fixed
   sizes and the flat bulk layout, standard impls, maps in both modes,
   sharing and its errors, truncation at every byte, bit flips, error
-  paths, every schema-hash change; streaming reads (decoded as from a
+  paths, every schema-hash change, in the walk and in the constant;
+  streaming reads (decoded as from a
   slice over every source chunking, short sources, trailing bytes);
   `derive_errors` doc tests.
 - `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md

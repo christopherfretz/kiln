@@ -37,7 +37,7 @@
 //! profile arenas, canonical entry links in range, absent ids ascending and
 //! in range).
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::fx::{FxHashMap, FxHashSet};
 
 use super::args::{ArgTable, ListEntry, TemplateArg};
@@ -94,8 +94,14 @@ impl Snap for KeyedTable {
         Ok(KeyedTable { entries, intern })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "KeyedTable")
+        .field::<Vec<KeyedEntry>>("entries")
+        .field::<Vec<u32>>("intern.absent")
+        .skip("intern", "InternTable")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Vec<KeyedEntry>>("entries")
             .field::<Vec<u32>>("intern.absent")
             .skip::<InternTable>("intern");
@@ -134,8 +140,15 @@ impl Snap for ArgTable {
         Ok(ArgTable { args, lists, intern })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "ArgTable")
+        .field::<Vec<TemplateArg>>("args")
+        .field::<Vec<ListEntry>>("lists")
+        .field::<Vec<u32>>("intern.absent")
+        .skip("intern", "InternTable")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Vec<TemplateArg>>("args")
             .field::<Vec<ListEntry>>("lists")
             .field::<Vec<u32>>("intern.absent")
@@ -174,8 +187,15 @@ impl Snap for ProfileTable {
         Ok(ProfileTable { words, entries, intern })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "ProfileTable")
+        .field::<Vec<u32>>("words")
+        .field::<Vec<ProfileEntry>>("entries")
+        .field::<Vec<u32>>("intern.absent")
+        .skip("intern", "InternTable")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Vec<u32>>("words")
             .field::<Vec<ProfileEntry>>("entries")
             .field::<Vec<u32>>("intern.absent")
@@ -344,8 +364,31 @@ impl Snap for TypeContext {
         })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "TypeContext")
+        .field::<Store>("store")
+        .field::<Vec<u32>>("intern.absent")
+        .skip("intern", "InternTable")
+        .field::<KeyedTable>("names")
+        .field::<Vec<DeclId>>("name_decls")
+        .field::<FxHashSet<DeclId>>("dependent_templates")
+        .field::<FxHashMap<u32, TemplateNameId>>("first_dtst_names")
+        .field::<bool>("dtst_first_spelling")
+        .field::<FxHashMap<TypeId, FuncProto>>("exc_protos")
+        .field::<FxHashMap<TypeId, ArgListId>>("arg_origins")
+        .field::<FxHashMap<TypeId, ExprId>>("expr_origins")
+        .field::<FxHashMap<TypeId, ArgListId>>("alias_converted")
+        .field::<KeyedTable>("nns")
+        .field::<ArgTable>("args")
+        .field::<ProfileTable>("profiles")
+        .skip("profile_scratch", "super::profile_expr::ProfileScratch")
+        .field::<TargetTypes>("target")
+        .field::<TypeOptions>("opts")
+        .field::<bool>("exhausted")
+        .field::<Option<ExprId>>("vla_star_bound")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Store>("store")
             .field::<Vec<u32>>("intern.absent")
             .skip::<InternTable>("intern")

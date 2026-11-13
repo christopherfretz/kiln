@@ -1858,7 +1858,11 @@ The text runs up to and including the `end` line, and only the text has
 to be UTF-8. The image is the bytes after it. Without an `image` line,
 any byte after `end` makes the record corrupt ("trailing bytes"). With
 one, the bytes after `end` must be exactly the image, with that length
-and checksum.
+and checksum. A consumer that needs the image only for its snapshot
+(no `-fkiln-pch-image=check|load`) reads the record as a stream
+(WP-1401): the text whole, then the image in pieces through its
+checksum and the block's own, leaving it in the file; the same checks
+in the same order as a read of the whole file, and the same verdicts.
 
 The `file` lines list every file the producer read (the dependency list
 `-MD` writes), with each file's size, modification time (nanoseconds
@@ -2239,8 +2243,10 @@ end of the prefix:
 Command-line errors are left out too: a compile with any does not run.
 
 **Validation.** Before decoding, the consumer checks, in order: the
-section block's checksum (`bmi::block_checksum`, word-wise), the section
-header, the schema hash (computed once per process), the identity, and
+section block's checksum (`bmi::block_checksum`, word-wise; checked
+while the record was read when the image stays in the file), the section
+header, the schema hash (a compile-time constant, spec/snap.md "Schema
+hash"), the identity, and
 then every file the record lists:
 - `-fkiln-pch-validate=mtime` (the default): a file with the recorded
   size and modification time is unchanged and is not read. A file with
