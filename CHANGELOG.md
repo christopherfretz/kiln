@@ -87,6 +87,16 @@ Planned as 1.2.0.
 
 ### Fixed
 
+- Sema correctness (WP-1359, WP-1334, WP-1386). `Z<TTs<Us>...>` in a
+  member template of a class template with a template template parameter
+  pack `TTs` is expanded (deduction, explicit arguments, return types,
+  requires-clauses; mangled with clang's `_SUBSTPACK_`) instead of being
+  rejected as not implemented. In a template, `this->sm` naming a
+  `constexpr` static data member of dependent type that holds a
+  reflection is a consteval-only leaf in each instantiation. A variably
+  modified type is no template argument, so a coroutine with a variably
+  modified parameter is an error as in clang. In C, two pointers to
+  variable length arrays of compatible element types can be subtracted.
 - Coroutine fixes (WP-1374, found by the hod project). A coroutine's own
   parameter objects are kept out of the coroutine frame, as clang 22
   does, so a parameter the ramp destroys after the frame is freed (a

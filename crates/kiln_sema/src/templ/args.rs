@@ -817,6 +817,18 @@ impl Sema<'_, '_> {
         #[cfg(feature = "op-stats")]
         let _t = crate::templ::deduce_stats::timer("check_template_arg");
         match (self.kind_of(p), a.view()) {
+            // A variably modified type (GNU C++ VLAs) is no template
+            // argument (clang's `err_variably_modified_template_arg`; a
+            // coroutine with a parameter of one fails forming
+            // `std::coroutine_traits<R, P...>`, [dcl.fct.def.coroutine]/4).
+            (DeclKind::TemplateTypeParm, ArgView::Type(t))
+                if self.ast.types.qflags(t).contains(TypeFlags::VARIABLY_MODIFIED) =>
+            {
+                let d =
+                    self.diag(DiagId::sema_variably_modified_template_arg, at).arg(self.ty_arg(t));
+                self.emit(d);
+                Err(())
+            }
             (DeclKind::TemplateTypeParm, ArgView::Type(t)) => {
                 // Before C++17 an argument's exception specification is
                 // not part of it (spec/types.md §5.4).

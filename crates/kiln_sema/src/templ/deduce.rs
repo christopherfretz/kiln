@@ -1113,6 +1113,19 @@ impl Sema<'_, '_> {
         d: &mut DeducedArgs,
     ) -> Tdk {
         let t = &self.ast.types;
+        // A template template parameter pack substituted earlier into a
+        // partially substituted pattern (§7.2): its element for the
+        // element being deduced must match; outside an element it is not
+        // deduced from.
+        if let kiln_ast::types::TemplateName::SubstTemplateTemplateParmPack { args, .. } =
+            t.template_name_view(pn)
+        {
+            let elem = d.pack_elem.and_then(|i| t.args(args).get(i).copied());
+            return match elem.map(|x| x.view()) {
+                Some(ArgView::Template(e)) => self.deduce_template_name(e, an, d),
+                _ => Tdk::Success,
+            };
+        }
         if let Some(parm) = self.template_parm_of_name(pn)
             && parm.depth == d.depth
         {

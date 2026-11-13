@@ -332,10 +332,22 @@ impl Sema<'_, '_> {
 
     /// A member access `e` naming static member variable `m` (`h.sm`,
     /// `S::sm` through an object): a leaf, as a reference to a variable
-    /// is ([`Sema::note_consteval_only_ref`]). A non-static data member
-    /// is never one by itself: its object expression decides.
+    /// is ([`Sema::note_consteval_only_ref`]). In a template definition
+    /// a `constexpr` member whose value is not known yet (`this->sm` with
+    /// `sm` of dependent type) is a candidate, decided in each
+    /// instantiation (WP-1334). A non-static data member is never one by
+    /// itself: its object expression decides.
     pub(crate) fn note_consteval_only_member(&mut self, e: ExprId, m: DeclId, _ty: QualType) {
-        if self.ast.decls.get(m).kind() == DeclKind::Var && self.is_immediate_var(m) {
+        if self.ast.decls.get(m).kind() != DeclKind::Var {
+            return;
+        }
+        let ty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+        let leaf = if self.in_template() {
+            self.is_pending_constexpr_leaf(m, ty) || self.is_immediate_var(m)
+        } else {
+            self.is_immediate_var(m)
+        };
+        if leaf {
             self.note_consteval_only(e);
         }
     }

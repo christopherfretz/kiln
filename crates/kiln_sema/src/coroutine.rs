@@ -16,7 +16,7 @@ use kiln_ast::decl::{ConstexprKind, DeclFlags, DeclKind, FnSpec, FnStorage, Init
 use kiln_ast::expr::{CastKind, CoawaitParts, ExprKind, SuspendKind, UnaryOp, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::CoroutineBodyData;
-use kiln_ast::types::{Nns, RefQual, TagKeyword, TemplateArg};
+use kiln_ast::types::{Nns, RefQual, TagKeyword, TemplateArg, TypeFlags};
 use kiln_ast::{DeclHead, DeclId, ExprId, QualType, StmtId};
 use kiln_diag::{Diag, DiagId};
 use kiln_source::Loc;
@@ -376,7 +376,22 @@ impl Sema<'_, '_> {
             args.push(TemplateArg::ty(t));
         }
         let (params, _) = self.fn_params(f).unwrap_or_default();
-        args.extend(params.into_iter().map(TemplateArg::ty));
+        let decls = self.param_decls(f);
+        for (i, t) in params.into_iter().enumerate() {
+            // A variably modified parameter type is no template argument
+            // (diagnosed when the template-id is formed): named as the
+            // parameter declares it (`int (*)[n]`, not the prototype's
+            // `int (*)[*]`), as clang does.
+            let t = if self.ast.types.qflags(t).contains(TypeFlags::VARIABLY_MODIFIED) {
+                decls
+                    .get(i)
+                    .and_then(|&p| self.ast.decls.get(p).ty())
+                    .map_or(t, QualType::without_quals)
+            } else {
+                t
+            };
+            args.push(TemplateArg::ty(t));
+        }
         let name = self.template_name_for(tmpl);
         let Ok(TemplateIdRef::Type(traits)) = self.act_template_id(name, &args, kw_loc, kw_loc)
         else {

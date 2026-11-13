@@ -52,12 +52,21 @@ impl Mangler<'_, '_> {
             TemplateName::DependentIdentifier { nns, name } => {
                 self.dependent_template_spec(nns, name, args);
             }
+            // A template template parameter pack substituted into a
+            // pattern that still names an unexpanded dependent pack
+            // (`Z<TTs<Us>...>` in a member template of
+            // `S<template<class> class... TTs>`): the vendor token
+            // `_SUBSTPACK_` that clang writes for the template name
+            // (`mangleType(TemplateName)`, `SubstTemplateTemplateParmPack`;
+            // clang 19 and 22 crash before reaching it here), then the
+            // arguments, as for the type pack (WP-1214, WP-1359).
+            TemplateName::SubstTemplateTemplateParmPack { .. } => {
+                self.out.push_str("_SUBSTPACK_");
+                self.template_args(args);
+            }
             // No specialization type has any other canonical name: an
-            // operator template or an overload set names functions, and a
-            // template template parameter pack substituted in an
-            // expansion that is not expanded yet (`Z<TTs<Us>...>` in a
-            // member template) is rejected by sema (and crashes clang 19
-            // and 22). The splice forms are reflection mangling.
+            // operator template or an overload set names functions. The
+            // splice forms are reflection mangling.
             _ => self.out.push_str("u7unknown"),
         }
     }

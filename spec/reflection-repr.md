@@ -297,7 +297,11 @@ reach run time is a *value*, never a type. The one predicate lives in
   whose result object is one. Sema tracks it through its *leaves*: a
   `CXXReflectExpr`; a reference (`DeclRefExpr`, `MemberExpr` of a static
   member) to an immediate variable, binding (through its decomposed
-  variable) or template parameter object; a substituted non-type template
+  variable, or a tuple-like binding's own variable, [dcl.struct.bind]/7)
+  or template parameter object; in a template definition, a reference to
+  a `constexpr` variable, binding or static data member whose value is not
+  known yet (a dependent type or initializer: `this->sm` with `sm` of type
+  `T`), decided in each instantiation (WP-1330, WP-1334); a substituted non-type template
   argument whose value is consteval-only; an immediate invocation whose
   result is consteval-only; a default argument or default member
   initializer that holds a leaf, at each use. Each rides the

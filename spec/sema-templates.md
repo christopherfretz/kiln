@@ -5618,7 +5618,7 @@ The `SpecKind` transitions are those of §4.5.
 | pack argument | `TemplateArg::Pack(ListId)` holding the canonical element args |
 | function parameter pack (pattern) | a `ParmVar` of `PackExpansion` type |
 | function parameter pack (instantiated) | N `ParmVar`s; a reference that cannot expand yet is a `FunctionParmPackExpr` |
-| pack substituted while an inner pattern is still unexpanded | `SubstTemplateTypeParmPack`, `SubstNonTypeTemplateParmPackExpr` |
+| pack substituted while an inner pattern is still unexpanded | `SubstTemplateTypeParmPack`, `SubstNonTypeTemplateParmPackExpr`, the template name `SubstTemplateTemplateParmPack` |
 | using-declaration pack | a `UsingPack` decl |
 | structured binding pack (pattern, P1061) | a `Binding` in `Sema::binding_packs`, of type `PackExpansion(DEPENDENT)` |
 | structured binding pack (decomposed) | N `IMPLICIT` `Binding`s of the pack's name (`Sema::binding_pack_elems`) that replace it in the decomposition's binding list (`Decls::expand_decomp_bindings`) |
@@ -5873,6 +5873,18 @@ index, pack}`, which is dependent and unexpanded, and the result is
 `PackExpansion(pattern')`. A later substitution that expands the
 pattern takes element *i* of the recorded pack (clang's
 `SubstTemplateTypeParmPackType`).
+
+A substituted template template parameter pack is kept the same way, as
+the template name `SubstTemplateTemplateParmPack {associated, index,
+args}` (WP-1359): `Z<TTs<Us>...>` in a member template of
+`S<template<class> class... TTs>` keeps `TTs` until `Us` is supplied,
+`TTs<Us>` being a dependent `TemplateSpecialization` of that name; a
+later expansion takes element *i* of the pack as the template, and
+deduction of element *i* matches the argument's template against
+element *i* (a different template is a mismatch). A kept pack used as a
+template template argument (`W<TTs, Us>...`) is kept the same way. clang
+19 and 22 accept these in sema but crash mangling such a member; GCC
+16.1 rejects the deduction.
 
 A substituted non-type pack is kept the same way, as
 `SubstNonTypeTemplateParmPackExpr {param, pack}` (value- and
