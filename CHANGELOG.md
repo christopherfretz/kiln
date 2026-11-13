@@ -10,6 +10,15 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 Planned as 1.2.0.
 
+### Added
+
+- Experimental `-fkiln-backend=hod` (also `KILN_BACKEND=hod`; WP-1371):
+  at `-O0`, an object's module is handed, before `opt`, to the hod back
+  end (github.com/christopherfretz/hod, an external executable found with
+  `--hod=`, `KILN_HOD`, next to `llc`, or on `PATH`), with `opt` + `llc`
+  as the fallback whenever hod declines or fails. The default stays
+  `llvm`. spec/driver.md "Back-end selection".
+
 ### Changed
 
 - Consteval-only values follow P4101R1 (the working draft's value-based

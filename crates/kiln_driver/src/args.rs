@@ -694,6 +694,12 @@ pub struct Args {
     /// default, WP-909; the hidden `kiln-hashed` is a prototype; the
     /// last one wins).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
+    /// `-fkiln-backend=llvm|hod` (the last one wins; `None`: the
+    /// `KILN_BACKEND` variable, else LLVM; spec/driver.md "Back-end
+    /// selection", WP-1371).
+    pub backend: Option<crate::hod::Backend>,
+    /// `--hod=<path>` (joined only): the hod executable.
+    pub hod: Option<String>,
     /// The hidden `-fkiln-bmi-kind=1|2`: the module file kind written
     /// (spec/modules.md §11.11; `None` is kind 2 when it applies).
     pub bmi_kind: Option<u8>,
@@ -1597,6 +1603,13 @@ impl Args {
                             .errors
                             .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
                     }
+                } else if let Some(v) = arg.strip_prefix("-fkiln-backend=") {
+                    match crate::hod::Backend::parse(v) {
+                        Some(b) => self.backend = Some(b),
+                        None => self
+                            .errors
+                            .push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned())),
+                    }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-source-path-style=") {
                     match v {
                         "clang" => self.source_path_style = SourcePathStyle::Clang,
@@ -1739,10 +1752,12 @@ impl Args {
     /// The standard library flags: `-stdlib=` (also `--stdlib=`),
     /// `-f[no-]experimental-library`, `--gcc-toolchain=` and
     /// `--gcc-install-dir=` (joined only, as clang), and kiln's
-    /// `--llvm-dir=` (joined only).
+    /// `--llvm-dir=` and `--hod=` (joined only).
     fn stdlib_flag(&mut self, arg: &str) -> bool {
         if let Some(v) = arg.strip_prefix("--llvm-dir=") {
             self.llvm_dir = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--hod=") {
+            self.hod = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("--gcc-toolchain=") {
             self.gcc_toolchain = Some(v.to_owned());
         } else if let Some(v) = arg.strip_prefix("--gcc-install-dir=") {

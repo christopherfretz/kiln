@@ -561,6 +561,7 @@ All `-fkiln-*` flags are experimental.
 | Variable | Effect |
 |---|---|
 | `KILN_LLVM_DIR` | LLVM installation to use, if `--llvm-dir` is not given; otherwise kiln searches (see [Run-time dependencies](#run-time-dependencies)) |
+| `KILN_BACKEND`, `KILN_HOD`, `KILN_HOD_STRICT` | experimental: the object back end (`llvm`, the default, or `hod`) if `-fkiln-backend=` is not given, the hod executable if `--hod=` is not given, and `1` to make a hod failure an error instead of a fallback to `llc` (spec/driver.md, "Back-end selection") |
 | `KILN_RESOURCE_DIR` | resource directory (builtin headers, predefines), if `-resource-dir` is not given |
 | `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` | fixed values for `__DATE__`, `__TIME__`, `__TIMESTAMP__` (spec/driver.md, "Reproducible time") |
 | `XDG_CACHE_HOME`, `HOME` | where the `std` module cache lives when `-fmodules-cache-path=` is not given (see [The `std` module cache](#the-std-module-cache)) |

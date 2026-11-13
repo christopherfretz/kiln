@@ -570,8 +570,12 @@ pub(crate) fn driver_diag_options(opts: &DiagOptions) -> DiagOptions {
 /// One step of the plan.
 #[derive(Debug)]
 enum Step<'a> {
-    /// Run the frontend on an input; the IR goes to `dest`.
-    Frontend { input: &'a Input, dest: Dest },
+    /// Run the frontend on an input; the IR goes to `dest`. With `hod`
+    /// (`-fkiln-backend=hod`, spec/driver.md "Back-end selection") the
+    /// module goes to that command first, when the route predicate
+    /// holds ([`hod_takes`]); the `opt` runs and the next `llc` step are
+    /// the fallback.
+    Frontend { input: &'a Input, dest: Dest, hod: Option<Command> },
     /// An external command (`llc`, `llvm-as`, `clang++`), with the IR of
     /// the preceding frontend step on its standard input if `piped`.
     External { cmd: Command, piped: bool },
@@ -626,8 +630,22 @@ pub fn compile(
         drv.flush();
         return 1;
     }
+    // spec/driver.md "Back-end selection": an executable is required
+    // only where the hod route is planned.
+    let hod = if hod_planned(args, tc) {
+        match crate::hod::find(args, tc) {
+            Ok(p) => Some(p),
+            Err(searched) => {
+                Diag::new(DiagId::drv_hod_not_found, Span::INVALID).arg(searched).emit(&drv);
+                drv.flush();
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
     let temp = TempDir::new();
-    let plan = plan(args, tc, inputs, phase, &temp);
+    let plan = plan(args, tc, inputs, phase, &temp, hod.as_deref());
     if args.deps.cdb_fragment.is_some() {
         let jobs: Vec<_> = inputs
             .iter()
@@ -653,9 +671,15 @@ pub fn compile(
             let _ = err.write_all(render(step, true).as_bytes());
             // The `opt` runs `execute` makes after the frontend, as `-v`
             // prints them (spec/driver.md "`-###`").
-            if matches!(step, Step::Frontend { .. }) {
+            if let Step::Frontend { hod, .. } = step {
                 for cmd in planned_ir_passes(args, tc).unwrap_or_default() {
                     let _ = err.write_all(cmd.render(true).as_bytes());
+                }
+                // The hod run, then a marker: the next `llc` is its
+                // fallback (spec/driver.md "Back-end selection").
+                if let Some(h) = hod {
+                    let _ = err.write_all(h.render(true).as_bytes());
+                    let _ = err.write_all(HOD_FALLBACK_MARK.as_bytes());
                 }
             }
         }
@@ -779,13 +803,15 @@ impl TempDir {
     }
 }
 
-/// The steps for `inputs`, in order.
+/// The steps for `inputs`, in order. `hod`: the hod executable, when
+/// the hod route is planned ([`hod_planned`]).
 fn plan<'a>(
     args: &Args,
     tc: &Toolchain,
     inputs: &[&'a Input],
     phase: Phase,
     temp: &TempDir,
+    hod: Option<&Path>,
 ) -> Vec<Step<'a>> {
     let mut steps = Vec::new();
     let mut link_inputs: Vec<(usize, String)> = Vec::new();
@@ -804,28 +830,28 @@ fn plan<'a>(
         let out = || args.output.clone().unwrap_or_else(|| default_output(&input.path, phase));
         match phase {
             Phase::IrText => {
-                steps.push(Step::Frontend { input, dest: Dest::File(out()) });
+                steps.push(Step::Frontend { input, dest: Dest::File(out()), hod: None });
             }
             // WP-873: an LTO object is the pre-link pipeline's bitcode.
             Phase::Bitcode | Phase::Object if args.codegen.lto.is_some() => {
-                steps.push(Step::Frontend { input, dest: Dest::Pipe });
+                steps.push(Step::Frontend { input, dest: Dest::Pipe, hod: None });
                 steps.push(Step::External { cmd: lto_writer(args, tc, out()), piped: true });
             }
             Phase::Assembly if args.codegen.lto.is_some() => {
-                steps.push(Step::Frontend { input, dest: Dest::File(out()) });
+                steps.push(Step::Frontend { input, dest: Dest::File(out()), hod: None });
             }
             Phase::Bitcode => {
-                steps.push(Step::Frontend { input, dest: Dest::Pipe });
+                steps.push(Step::Frontend { input, dest: Dest::Pipe, hod: None });
                 let mut cmd = Command::new(tc, Tool::LlvmAs);
                 cmd.arg("-o").arg(out()).arg("-");
                 steps.push(Step::External { cmd, piped: true });
             }
             Phase::Assembly | Phase::Object => {
-                steps.push(Step::Frontend { input, dest: Dest::Pipe });
-                steps.push(Step::External {
-                    cmd: llc(args, tc, phase, out(), &input.path),
-                    piped: true,
-                });
+                let cmd = llc(args, tc, phase, out(), &input.path);
+                let hod =
+                    hod.filter(|_| phase == Phase::Object).map(|h| crate::hod::command(h, &cmd));
+                steps.push(Step::Frontend { input, dest: Dest::Pipe, hod });
+                steps.push(Step::External { cmd, piped: true });
                 // `-gz`: `llc` cannot compress, so the object's debug
                 // sections are compressed in place after it.
                 if phase == Phase::Object
@@ -840,12 +866,14 @@ fn plan<'a>(
             Phase::Link => {
                 let stem = default_output(&input.path, Phase::Object);
                 let obj = temp.file(&format!("{n}-{stem}"));
-                steps.push(Step::Frontend { input, dest: Dest::Pipe });
                 let cmd = if args.codegen.lto.is_some() {
                     lto_writer(args, tc, obj.clone())
                 } else {
                     llc(args, tc, phase, obj.clone(), &input.path)
                 };
+                let hod =
+                    hod.filter(|_| cmd.tool == Tool::Llc).map(|h| crate::hod::command(h, &cmd));
+                steps.push(Step::Frontend { input, dest: Dest::Pipe, hod });
                 steps.push(Step::External { cmd, piped: true });
                 link_inputs.push((pos, obj));
             }
@@ -1039,6 +1067,40 @@ pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'stati
     ];
     checks.into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
 }
+
+/// The static half of the hod route's predicate (spec/driver.md
+/// "Back-end selection"): the back end is hod, the output an object
+/// (`-c`, or the objects of a link), at `-O0`, without `-flto`, a
+/// sanitizer, coverage or instrumentation (`-finstrument-functions*`,
+/// `-fxray-instrument`, `-fpatchable-function-entry=`). Every other run
+/// takes the LLVM route untouched; `-fkiln-backend=hod` is a request for
+/// the cases hod can take, not an error elsewhere.
+fn hod_planned(args: &Args, tc: &Toolchain) -> bool {
+    let c = &args.codegen;
+    crate::hod::selected(args).unwrap_or_default() == crate::hod::Backend::Hod
+        && matches!(Phase::of(args), Phase::Object | Phase::Link)
+        && c.lto.is_none()
+        && opt_pipeline(args.opt_flag.as_deref()).is_none()
+        && !args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.any()
+        && coverage_passes(args).is_none()
+        && !c.instrument_functions
+        && !c.instrument_functions_after_inlining
+        && !c.xray_instrument
+        && c.patchable_function_entry.is_none()
+}
+
+/// The dynamic half of the hod route's predicate: the `opt` trigger
+/// set of the module ([`opt_triggers`], read from the text that goes to
+/// hod's standard input) is empty or exactly {`alwaysinline`}. A
+/// coroutine module (`coro`) or an instrumented one takes the LLVM route.
+fn hod_takes(args: &Args, tc: &Toolchain, ir: &str) -> bool {
+    opt_triggers(args, tc, ir).iter().all(|t| *t == "alwaysinline")
+}
+
+/// `-###`'s line between the hod command and the `llc` command that is
+/// its fallback.
+const HOD_FALLBACK_MARK: &str =
+    " (fallback if hod declines or fails: opt as the module needs, then llc)\n";
 
 /// The `opt` runs `-###` prints after a frontend step: those of an `-O1`
 /// or higher level, whose pipeline does not depend on the IR, and those
@@ -1371,7 +1433,7 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
 /// A step as `-###` (`quote_all`) or `-v` prints it.
 fn render(step: &Step<'_>, quote_all: bool) -> String {
     match step {
-        Step::Frontend { input, dest } => {
+        Step::Frontend { input, dest, .. } => {
             let to = match dest {
                 Dest::File(f) => f.as_str(),
                 Dest::Pipe => "|",
@@ -1426,6 +1488,8 @@ fn execute(
     // feeds `llc` directly (`ir_passes`).
     let mut ir: Option<Vec<u8>> = None;
     let mut skip_piped = false;
+    // hod wrote this input's object: its `llc` step is skipped.
+    let mut hod_done = false;
     // spec/driver.md "Time trace": one trace per source input, from its
     // frontend step to its last step before the next input or the link.
     let trace_settings = time_trace::settings(args).ok().flatten();
@@ -1450,12 +1514,18 @@ fn execute(
         t.child(cmd, temp.file(&format!("time-trace-{traced_children}.json")))
     };
     for step in plan {
+        if hod_done && matches!(step, Step::External { cmd, piped: true } if cmd.tool == Tool::Llc)
+        {
+            hod_done = false;
+            continue;
+        }
         if args.verbose {
             let mut err = io.stderr.clone();
             let _ = err.write_all(render(step, false).as_bytes());
         }
         match step {
-            Step::Frontend { input, dest } => {
+            Step::Frontend { input, dest, hod } => {
+                hod_done = false;
                 end_trace(trace.take(), args, diag_opts, io);
                 end_stats(&mut stats);
                 stats = stats_log.as_ref().map(|_| crate::stats::Job::start(Some(&input.path)));
@@ -1474,6 +1544,33 @@ fn execute(
                     j.failed |= text.is_none();
                     if let Some(t) = &text {
                         j.module(args, tc, t);
+                    }
+                }
+                // spec/driver.md "Back-end selection": hod first, on the
+                // module before `opt`.
+                if let (Some(h), Some(t)) = (hod, &text)
+                    && hod_takes(args, tc, t)
+                {
+                    match run_hod(h, t, args, &mut stats, drv, io, temp) {
+                        HodStep::Done => {
+                            hod_done = true;
+                            skip_piped = false;
+                            ir = None;
+                            continue;
+                        }
+                        HodStep::Fallback => {}
+                        HodStep::Failed => {
+                            if let Some(t) = trace.as_mut() {
+                                t.failed = true;
+                            }
+                            if let Some(j) = stats.as_mut() {
+                                j.failed = true;
+                            }
+                            failed = true;
+                            skip_piped = true;
+                            ir = None;
+                            continue;
+                        }
                     }
                 }
                 // The IR-level passes run before the IR is written or
@@ -1573,6 +1670,9 @@ fn execute(
                 }
                 if let Some(j) = stats.as_mut() {
                     j.failed |= !ok;
+                    if cmd.tool == Tool::Llc {
+                        j.backend.get_or_insert("llvm");
+                    }
                 }
                 failed |= !ok;
             }
@@ -1612,6 +1712,85 @@ fn execute(
     end_trace(trace.take(), args, diag_opts, io);
     end_stats(&mut stats);
     i32::from(failed)
+}
+
+/// What [`run_hod`] leaves to the caller.
+enum HodStep {
+    /// The object is written: skip `opt` and `llc`.
+    Done,
+    /// Take today's route (`opt` as the IR needs, then `llc`).
+    Fallback,
+    /// A hod failure under `KILN_HOD_STRICT=1`: reported, the input
+    /// failed.
+    Failed,
+}
+
+/// Runs hod (`cmd`, made by [`crate::hod::command`]) on the module text
+/// `ir` (spec/driver.md "Back-end selection"): status 0 is done; status
+/// 2 (declined) falls back silently (`-v`: one line naming the reason);
+/// any other status or a signal warns and falls back, or is an error
+/// with `KILN_HOD_STRICT=1`. A non-zero status never leaves an `-o`
+/// file behind.
+#[allow(clippy::too_many_arguments)]
+fn run_hod(
+    cmd: &Command,
+    ir: &str,
+    args: &Args,
+    stats: &mut Option<crate::stats::Job>,
+    drv: &DiagEngine<'_>,
+    io: &mut Io,
+    temp: &TempDir,
+) -> HodStep {
+    use crate::hod::Outcome;
+    // A link's objects go to its temporary directory; if it cannot be
+    // made, the `llc` step reports it.
+    if Phase::of(args) == Phase::Link && temp.create().is_err() {
+        return HodStep::Fallback;
+    }
+    let obj = crate::hod::output(cmd).filter(|o| *o != "-");
+    if args.verbose {
+        let mut err = io.stderr.clone();
+        let _ = err.write_all(cmd.render(false).as_bytes());
+    }
+    let (outcome, out) = InputTrace::run_child(cmd, || crate::hod::run(cmd, ir.as_bytes()));
+    if let Some(j) = stats.as_mut() {
+        j.backend = Some(outcome.backend());
+        j.hod_reason = outcome.reason().map(str::to_owned);
+    }
+    if outcome == Outcome::Compiled {
+        if obj.is_none() {
+            let _ = io.stdout.write_all(&out);
+            let _ = io.stdout.flush();
+        }
+        return HodStep::Done;
+    }
+    if let Some(o) = obj
+        && Path::new(o).exists()
+    {
+        let _ = std::fs::remove_file(o);
+    }
+    match outcome {
+        Outcome::Compiled => HodStep::Done,
+        Outcome::Declined(reason) => {
+            if args.verbose {
+                let mut err = io.stderr.clone();
+                let _ = writeln!(err, " (hod declined '{reason}'; falling back to llc)");
+            }
+            HodStep::Fallback
+        }
+        Outcome::Failed { status, message } => {
+            let message = if message.is_empty() { "no message".to_owned() } else { message };
+            if crate::hod::strict() {
+                Diag::new(DiagId::drv_hod_failed_strict, Span::INVALID)
+                    .arg(status)
+                    .arg(message)
+                    .emit(drv);
+                return HodStep::Failed;
+            }
+            Diag::new(DiagId::drv_hod_failed, Span::INVALID).arg(status).arg(message).emit(drv);
+            HodStep::Fallback
+        }
+    }
 }
 
 /// Finishes an input's time trace and writes it. A trace that cannot

@@ -161,13 +161,15 @@ impl InputTrace {
     }
 
     /// Runs `cmd` (made by [`InputTrace::child`]) inside its clang phase
-    /// span: `Optimizer` for `opt`, `CodeGenPasses` for `llc`. The same
+    /// span: `Optimizer` for `opt`, `CodeGenPasses` for `llc` and hod. The same
     /// two clock readings are the child's time in the compile statistics
     /// log (any tool, by its name; [`trace::phase_add`]).
     pub fn run_child<T>(cmd: &Command, run: impl FnOnce() -> T) -> T {
+        // hod (`-fkiln-backend=hod`) stands in for `llc`: the same span,
+        // `hod` as its detail. It writes no trace of its own.
         let name = match cmd.tool {
             Tool::Opt => Some("Optimizer"),
-            Tool::Llc => Some("CodeGenPasses"),
+            Tool::Llc | Tool::Hod => Some("CodeGenPasses"),
             _ => None,
         };
         let stats = trace::phases_on();
@@ -178,7 +180,13 @@ impl InputTrace {
         let r = run();
         let end = Instant::now();
         if let Some(name) = name {
-            trace::complete(name, start, end, String::new);
+            let hod = cmd.tool == Tool::Hod;
+            trace::complete(
+                name,
+                start,
+                end,
+                || if hod { "hod".to_owned() } else { String::new() },
+            );
         }
         trace::phase_add(cmd.tool.name(), start, end);
         r

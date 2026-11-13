@@ -23,6 +23,7 @@ pub mod deps;
 pub mod features;
 pub mod fp_flags;
 mod help;
+pub mod hod;
 pub mod link;
 pub mod llvm;
 pub mod module_cache;
@@ -669,6 +670,11 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     let drv = make_engine(&dsm, &drv_opts, io.stderr.clone(), Some(&args.program));
     for e in &args.errors {
         emit_arg_error(e, &drv);
+    }
+    // spec/driver.md "Back-end selection": a bad `KILN_BACKEND` is a
+    // usage error, as a bad `-fkiln-backend=` is.
+    if let Err((arg, v)) = hod::selected(&args) {
+        Diag::new(DiagId::drv_invalid_value, Span::INVALID).arg(arg).arg(v).emit(&drv);
     }
     for f in &args.frameworks {
         Diag::new(DiagId::drv_framework_dir_ignored, Span::INVALID).arg(f).emit(&drv);

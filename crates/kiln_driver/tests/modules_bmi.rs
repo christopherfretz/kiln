@@ -2556,3 +2556,44 @@ int main() {
     let errs = image_round_trip("image-wp1368", "w", src, run, err, "2 1 3 1 3 7 1\n");
     assert!(errs.contains("'p' is a private member of 'priv'"), "{errs}");
 }
+
+/// WP-1369, spec/modules.md §11.11 "Forms carried by WP-1369": functions
+/// declared through a typedef (a later definition, a default argument a
+/// redeclaration adds, a member), `decltype`/`__typeof` declarators, a
+/// member of a base of an implicit instantiation and a member class of
+/// one. With the unit's source blanked an importer runs them, its IR is
+/// the replay's, and a redeclaration differing only in its return type
+/// is still an error.
+#[test]
+fn kind2_declaration_image_wp1369_forms() {
+    let src = "\
+export module w;
+export typedef int F(int);
+export F twice;
+export int twice(int x = 4) { return 2 * x; }
+export struct S { F m; };
+int S::m(int a) { return a + 1; }
+export int k(int);
+export decltype(k) dk;
+export __typeof(k) tk;
+int k(int a) { return a; }
+int dk(int a) { return a * 3; }
+int tk(int a) { return a * 5; }
+template <class T> struct base { T v; T take(T d) { return v -= d; } };
+template <class T> struct atom : base<T> {};
+export struct latch { atom<long> a; long down(long u) { return a.take(u); } };
+template <unsigned L> struct storage { struct type { alignas(8) unsigned char d[L]; }; };
+export struct holder { void *p; storage<sizeof(p)>::type buf; };
+";
+    let run = "\
+import w;
+#include <stdio.h>
+int main() {
+  latch l{}; l.a.v = 9; l.down(2);
+  printf(\"%d %d %d %d %ld %d\\n\", twice(), S{}.m(1), dk(2), tk(1), l.a.v, int(sizeof(holder)));
+}
+";
+    let err = "import w;\nlong twice(int);\n";
+    let errs = image_round_trip("image-wp1369", "w", src, run, err, "8 2 6 5 7 16\n");
+    assert!(errs.contains("functions that differ only in their return type"), "{errs}");
+}

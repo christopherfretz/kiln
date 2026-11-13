@@ -744,7 +744,12 @@ impl Sema<'_, '_> {
             match op_of(kind) {
                 Some(Op::Exprs) if r.a != NONE || r.b != NONE => pending.push((id, r.a, r.b, 0)),
                 // The type stays in `b` (WP-1345).
-                Some(Op::ExprA) if r.a != NONE => pending.push((id, r.a, NONE, ty)),
+                Some(Op::ExprA) if r.a != NONE => {
+                    pending.push((id, r.a, NONE, ty));
+                    if kind == AttrKind::ALIGNED {
+                        self.image_aligned_pending(id);
+                    }
+                }
                 _ => {}
             }
             if r.name != NONE && loc.is_valid() {

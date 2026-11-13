@@ -724,6 +724,11 @@ pub enum Tool {
     /// and preprocessed `.S` inputs (WP-1331; spec/driver.md "Assembler
     /// inputs").
     Assembler,
+    /// hod, the `-O0` back end standing in for `opt` and `llc` under
+    /// `-fkiln-backend=hod` (WP-1371; spec/driver.md "Back-end
+    /// selection"). Not part of an LLVM installation: found by
+    /// [`crate::hod::find`].
+    Hod,
 }
 
 impl Tool {
@@ -736,13 +741,14 @@ impl Tool {
             Tool::Opt => "opt",
             Tool::Linker | Tool::Assembler => "clang++",
             Tool::Objcopy => "llvm-objcopy",
+            Tool::Hod => "hod",
         }
     }
 
     /// The failure wording's stage: `<stage> command failed ...`.
     pub fn stage(self) -> &'static str {
         match self {
-            Tool::Llc | Tool::LlvmAs | Tool::Opt | Tool::Objcopy => "backend",
+            Tool::Llc | Tool::LlvmAs | Tool::Opt | Tool::Objcopy | Tool::Hod => "backend",
             Tool::Linker => "linker",
             Tool::Assembler => "assembler",
         }
