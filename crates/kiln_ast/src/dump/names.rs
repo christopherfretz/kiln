@@ -800,6 +800,14 @@ impl<'a> AstNames<'a> {
         let n = exprs.get(e);
         let d = depth + 1;
         match n.kind() {
+            // The literal standing for a substituted `sizeof...(P)`
+            // (`Templates::size_of_pack_origin`) prints as clang's
+            // substituted `SizeOfPackExpr`.
+            ExprKind::IntegerLiteral if let Some(&p) = ast.templates.size_of_pack_origin.get(e) => {
+                out.push_str("sizeof...(");
+                self.write_name(p, out);
+                out.push(')');
+            }
             ExprKind::IntegerLiteral => {
                 match exprs.int_value(e) {
                     Some(v) => {

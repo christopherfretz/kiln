@@ -481,6 +481,30 @@ impl Sema<'_, '_> {
 
     /// The operator and operands of a failed `static_assert` condition
     /// worth explaining (clang's `DiagnoseStaticAssertDetails`).
+    /// clang `getTypeSizeInChars(q).isZero()` for an object type `q` of
+    /// a pointer subtraction: an array with a zero or runtime bound
+    /// (`int[0]`, `int[n]`, `int[2][n]`: a variable length array has no
+    /// static size), or a complete type of size zero (a C empty struct).
+    fn zero_size_pointee(&self, q: QualType) -> bool {
+        let t = &self.ast.types;
+        let mut c = t.canonical(q);
+        for _ in 0..256 {
+            match t.view(c.ty()) {
+                TypeView::VariableArray { .. } => return true,
+                TypeView::ConstantArray(a) if a.size == 0 => return true,
+                TypeView::ConstantArray(a) => c = t.canonical(a.elem),
+                TypeView::QualifiedArray { base, .. } => {
+                    c = t.canonical(QualType::unqual(base));
+                }
+                _ => break,
+            }
+        }
+        if t.is_void(c) || t.is_function(c) {
+            return false;
+        }
+        crate::target::size_align(&self.ast, q, self.abi()).is_some_and(|(s, _)| s == 0)
+    }
+
     pub(crate) fn comparison_parts(&self, e: ExprId) -> Option<(&'static str, ExprId, ExprId)> {
         let e = self.ignore_paren_full_imp_casts(e);
         if self.ast.exprs.get(e).kind() != ExprKind::BinaryOperator {
@@ -4158,6 +4182,19 @@ impl Sema<'_, '_> {
             }
             if !self.check_pointer_pair_arith(lt, rt, loc) || !same {
                 return self.recover_err(&[l2, r2], loc);
+            }
+            // [expr.add]/5 (a zero-size object: GNU zero-length arrays and
+            // empty C structs; clang also counts a variable length array,
+            // whose static size is zero): clang `CheckSubtractionOperands`'
+            // `warn_sub_ptr_zero_size_types`, on the right pointee.
+            if let Some(b) = b
+                && self.zero_size_pointee(b)
+            {
+                let shown = self.ast.types.pointee_sugared(rt).unwrap_or(b);
+                let msg = self
+                    .diag(DiagId::sema_sub_ptr_zero_size_types, loc)
+                    .arg(self.ty_arg(shown.without_quals()));
+                self.emit(msg);
             }
             let ty = self.ptrdiff_type();
             return self.builder().binary(op, l2, r2, ty, loc);

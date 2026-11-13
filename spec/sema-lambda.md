@@ -425,7 +425,11 @@ lvalue-to-rvalue on a constant). Without a capture-default:
 `variable 'x' cannot be implicitly captured in a lambda with no
 capture-default specified` with clang's notes (`lambda expression begins
 here`, `capture 'x' by value` / `by reference`, `default capture by
-value` / `by reference`). A use of an enclosing function's local outside
+value` / `by reference`). A member of a block-scope anonymous union
+names a member of the union's unnamed variable, which a lambda with a
+capture-default cannot capture either: `unnamed variable cannot be
+implicitly captured in a lambda expression` with a `declared here` note at
+the union (clang `isVariableCapturable`, WP-1405). A use of an enclosing function's local outside
 any lambda is `reference to local variable 'x' declared in enclosing
 function`.
 

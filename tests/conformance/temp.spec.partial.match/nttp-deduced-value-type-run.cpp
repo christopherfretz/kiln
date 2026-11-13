@@ -1,15 +1,19 @@
 // [temp.spec.partial.match]/2, [temp.deduct.type]/20, [temp.arg.nontype]/1:
 // a partial specialization matches only when each deduced value fits its
-// parameter's type: an integral parameter takes an integral or unscoped
-// enumeration value that converts without narrowing, any other fixed type
-// only a value of that type, and a placeholder type (`auto *P`,
-// `auto Q::*M`) only a value whose type it deduces from (clang
-// `ConvertDeducedTemplateArgument`). Before WP-1105 kiln let `nullptr`,
+// parameter's type: a fixed type takes only a value of that type (an
+// `int` parameter no `bool`, `char` or enumerator: the type of the
+// parameter differs from the type the `auto` parameter takes), and a
+// placeholder type (`auto *P`, `auto Q::*M`) only a value whose type it
+// deduces from. GCC 16.1 agrees; clang 19/22 convert integral values
+// (WP-1405). The qualification case `C<(const int *)&x>` is
+// nttp-pointer-qualification-differs.cpp (GCC matches it). Before WP-1105 kiln let `nullptr`,
 // `&x`, `1.0` or a scoped enumerator of an `auto` primary bind `int N`,
 // and `0` bind `auto *P`; deduced packs are checked element by element.
 //@ std: c++20
+//@ oracle: gcc
+//@ skip(clang): clang 19/22 match a partial specialization whose non-type parameter type differs from the primary's
 //@ expect: run
-//@ stdout: A 111100000 B 1000 C 100 D 10 F 101 G 100 H 100 K 10 M 01 N 10 P 10 R 101
+//@ stdout: A 100000000 B 1000 C 10 D 10 F 100 G 100 H 100 K 10 M 01 N 10 P 10 R 001
 extern "C" int printf(const char *, ...);
 enum E { e1 = 1 };
 enum E2 { f1 = 1 };
@@ -48,7 +52,7 @@ int main() {
   printf("A %d%d%d%d%d%d%d%d%d ", A<1>::v, A<true>::v, A<'c'>::v, A<e1>::v, A<SE::s1>::v,
          A<nullptr>::v, A<&x>::v, A<1.0>::v, A<300000000000L>::v);
   printf("B %d%d%d%d ", B<&x>::v, B<0>::v, B<nullptr>::v, B<&Q::m>::v);
-  printf("C %d%d%d ", C<&x>::v, C<nullptr>::v, C<(const int *)&x>::v);
+  printf("C %d%d ", C<&x>::v, C<nullptr>::v);
   printf("D %d%d ", D<e1>::v, D<1>::v);
   printf("F %d%d%d ", F<true>::v, F<2>::v, F<1>::v);
   printf("G %d%d%d ", G<&Q::m>::v, G<0>::v, G<&x>::v);

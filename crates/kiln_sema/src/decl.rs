@@ -1866,11 +1866,19 @@ impl Sema<'_, '_> {
                     if self.std >= kiln_lex::Std::Cxx20 && self.inst.stack.is_empty() {
                         self.check_volatile_params(params);
                     }
-                    // clang `getCanonicalParamType`: a variably modified
-                    // parameter type has its bounds replaced by `[*]` in
-                    // the function type (C17 6.7.6.3p15).
-                    let mut ptys: Vec<QualType> =
-                        params.iter().map(|p| self.vla_star_decayed(p.ty)).collect();
+                    // clang `getCanonicalParamType`: in C a variably
+                    // modified parameter type has its bounds replaced by
+                    // `[*]` in the function type (C17 6.7.6.3p15). In C++
+                    // (the GNU extension) it keeps its own variable length
+                    // array type, never the same as another one
+                    // (spec/sema.md §4.2): two such declarations declare
+                    // two functions, and an out-of-line member definition
+                    // matches no declaration (clang 19 and 22).
+                    let mut ptys: Vec<QualType> = if self.is_c() {
+                        params.iter().map(|p| self.vla_star_decayed(p.ty)).collect()
+                    } else {
+                        params.iter().map(|p| p.ty).collect()
+                    };
                     // C17 6.9.1p10 (clang `ActOnFunctionDeclarator`): a K&R
                     // definition's type has the default-promoted parameter
                     // types, without a prototype.

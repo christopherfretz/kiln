@@ -1677,7 +1677,13 @@ silently (`diag = None`) at those sites. S3O lists them.
      a deduced pack element by element. So
      `nullptr`, `&x`, `1.0` or a scoped enumerator of a `template<auto V>`
      primary does not bind `template<int N> A<N>` (WP-1105,
-     `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`);
+     `tests/conformance/temp.spec.partial.match/nttp-deduced-value-type-run.cpp`).
+     Before that check, deduction itself fails when the type of a
+     non-type parameter differs from that of the corresponding parameter
+     of the template named by the enclosing template-id
+     ([temp.deduct.type]/20; `nttp_types`, WP-1405, §6.2), so the
+     conversion this check allows only applies to a parameter whose type
+     matches or is dependent;
    - finish the deduction: substitute the deduced args into `p.args` and
      require canonical equality with `A`;
    - check `p`'s associated constraints (§8). For a class template, their
@@ -3990,7 +3996,13 @@ a lambda's included, diagnoses the use of the found member template and
 then of its specialization (clang `CreateFunctionRefExpr`), so a generic
 `[[deprecated]]` lambda warns `'operator()'` and `'operator()<int>'`
 (`warn_deprecated_template_use`;
-`tests/conformance/dcl.attr.deprecated/lambda-call-operator.cpp`).
+`tests/conformance/dcl.attr.deprecated/lambda-call-operator.cpp`). So
+does a member access naming a member function template (`s.f(1)`,
+`p->g(2)`, an implicit `this->f(1)`; `finish_member_winner`, clang
+`FixOverloadedFunctionReference`); a qualified name, a static member
+named through an implicit `this` and a non-member warn only for the
+specialization (WP-1405,
+`tests/conformance/dcl.attr.deprecated/member-template-call.cpp`).
 
 ### 5.7 SFINAE
 
@@ -4754,9 +4766,52 @@ is more specialized than `template<auto E> f(V<E>)` (and
 call those calls ambiguous, GCC 16.1 agrees with kiln (WP-1236,
 tests/conformance/temp.deduct.type/nttp-deduced-type-mismatch.cpp,
 tests/conformance/temp.func.order/typed-nttp-more-specialized-than-auto-run.cpp).
-Class partial specialization matching does not check it, as clang (whose
-`os<'c'>` matches `template<int E> os<E>` of `template<auto...> os`; GCC's
-does not).
+Class and variable template partial specialization matching applies the
+same rule (WP-1405; `deduce_partial` sets `nttp_types` and fails on a
+recorded mismatch): `template<short s> struct X<A<s>>` does not match
+`X<A<1>>` of `template<int> struct A`, nor `template<unsigned N>
+Z<Arr<N>>` match `Z<Arr<2>>` of `template<unsigned long> struct Arr`,
+while `template<int s> X<CA<s>>` matches `X<CA<1>>` of `template<const
+int> struct CA` (cv-qualifiers do not count), and a parameter whose type
+is dependent (`template<class T, T t> X<V<t> *>`) deduces its type from
+the argument instead. The rules read: [temp.deduct.type]/20, second
+sentence ("If P has a form that contains <i>, and if the type of i
+differs from the type of the corresponding template parameter of the
+template named by the enclosing simple-template-id, deduction fails";
+added by P0127R2 with `auto` template parameters, the resolution of
+CWG1770), its example (`template<short s> void f(A<s>)` does not deduce
+from `A<1>`, `g(B<s>)` of `template<const short>` does);
+[temp.spec.partial.match]/2-3 (the arguments of a partial specialization
+are deduced from the specialization's "as specified in
+[temp.deduct.type]", so the rule applies unchanged); [temp.arg.nontype]/1
+(the converted constant expression a primary template's argument is
+converted to fixes the type of `i` to the primary parameter's, or the
+deduced placeholder type for an `auto` one). Clang 19 and 22 implement
+the rule for function templates only and match the partial
+specialization (llvm `DeduceTemplateArguments` does not run its
+`ConvertDeducedTemplateArgument` type check for partial specializations);
+GCC 16.1 follows the standard, and kiln follows it, at every
+`-fclang-compat`. So a value of another type no longer matches by
+conversion: `L<127>` of `template<long N> L` does not match
+`template<signed char C> L<C>`, nor `S<'c'>` or `S<3L>` of `template<auto>
+S` match `template<int N> S<N>`, nor `os<'c'>` of `template<auto...> os`
+match `template<int E> os<E>` (it takes `template<auto E> os<E>`); before
+WP-1405 kiln converted the value and matched when it fit
+(`deduced_value_fits`, clang's behaviour). One case where GCC is lenient
+and kiln is not: `C<(const int *)&x>` of `template<auto> C` does not match
+`template<int *P> C<P>` (the types differ; clang 19/22 agree, GCC 16.1
+matches). Strict everywhere: the corpus, the libc++ M3 gate, `#include
+<bits/stdc++.h>` in C++26 (GCC 14's and GCC 16's libstdc++) and the
+`gnu`, `mid`, `lcx` and `meta` PCH bench prefixes compile unchanged, so no
+system-header exemption is needed. Tests:
+tests/conformance/temp.spec.partial.match/nttp-type-differs-no-match.cpp,
+narrowing-nttp-deduced-types.cpp, narrowing-nttp-no-match.cpp,
+narrowing-nttp-dependent-type-clang19.cpp, nttp-deduced-value-type-run.cpp
+(GCC as the oracle, `skip(clang)`),
+nttp-pointer-qualification-differs.cpp (clang as the oracle),
+temp.spec.partial.general/auto-primary-typed-nttp-partial-run.cpp and
+temp.spec.partial.order/typed-nttp-more-specialized-than-auto-run.cpp
+(GCC as the oracle).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
@@ -5854,7 +5909,10 @@ selected and checked when the template is instantiated. Test:
    pack that deduction may still extend (`PackName.partial`), clang's
    "(at least 3 vs. 2)" variant is used, with the explicit length first;
    `deduce_call` checks this before deducing (`check_partial_pack_lengths`,
-   WP-161).
+   WP-161): the function parameter packs, the parameter types naming the
+   pack in a nested expansion (`Z<TTs<Us>...>`, `TTs` an enclosing class
+   template's pack), and, when substituting the explicit arguments
+   failed on a length, the leading return type (WP-1405).
 4. **Expand.** For k in 0..N, substitute the pattern with
    `pack_index = Some(k)`. Restore the previous index afterwards. Inner
    expansions keep their own packs untouched.
@@ -6622,6 +6680,12 @@ follow. For an atom:
 | a return-type constraint failed | "because type constraint 'C<int>' was not satisfied:" followed by the nested chain |
 | a nested requirement failed | "because 'B' evaluated to false" (or the nested chain) |
 | `\|\|` | notes for *both* operands, left first |
+| a `&&` or `\|\|` left in a substituted atom (an expanded fold over an enclosing class's pack, or over the function's own) | the notes of each false operand of the chain, the first "because", the rest "and" (clang `diagnoseWellFormedUnsatisfiedConstraintExpr`; WP-1405) |
+
+A substituted `sizeof...(P)` prints as written, `'sizeof...(Us) ==
+sizeof...(T)' (1 == 2)` (clang's substituted `SizeOfPackExpr`; kiln's
+literal is recognized through `size_of_pack_origin`, WP-1405,
+`tests/conformance/temp.constr.atomic/unsatisfied-note-pack-size-and-fold.cpp`).
 
 ## 9. Builtins table
 

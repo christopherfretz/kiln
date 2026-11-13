@@ -134,7 +134,12 @@ impl Sema<'_, '_> {
         self.inst.sfinae.borrow_mut().push(SfinaeState::default());
         let mut d = DeducedArgs::new(list.depth, n);
         d.params = Some(list.params);
+        // [temp.deduct.type]/20 (second sentence), [temp.spec.partial.match]/2:
+        // `template<short s> X<A<s>>` does not match `X<A<1>>` of
+        // `template<int> A` (GCC; clang 19 and 22 match; §6.2).
+        d.nttp_types = true;
         let mut ok = self.deduce_args(&ps, as_, true, &mut d, poi) == Tdk::Success;
+        ok &= d.nttp_mismatch.is_none();
         if ok && p.has_pack {
             self.empty_undeduced_packs(list.params, &mut d);
         }

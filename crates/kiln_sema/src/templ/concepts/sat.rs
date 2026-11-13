@@ -651,6 +651,38 @@ impl Sema<'_, '_> {
         })
     }
 
+    /// The records of a `&&` / `||` chain left in a substituted atom
+    /// (`false_atom_records`).
+    fn logical_chain_records(&mut self, inner: ExprId) -> Vec<SatRecord> {
+        // Clang recurses into both sides of a false `&&` (into the
+        // right one only when the left is true) and of a false
+        // `||`: every false operand of the chain, in order. The
+        // chain of one operator is walked iteratively (a fold
+        // over a long pack nests deeply).
+        let op = self.ast.exprs.binary_op(inner);
+        let mut leaves = Vec::new();
+        let mut stack = vec![inner];
+        while let Some(e) = stack.pop() {
+            let e = self.ignore_paren_imp_casts(e);
+            if self.ast.exprs.get(e).kind() == ExprKind::BinaryOperator
+                && self.ast.exprs.binary_op(e) == op
+            {
+                let [l, r] = self.ast.exprs.operands(e);
+                stack.push(r);
+                stack.push(l);
+            } else {
+                leaves.push(e);
+            }
+        }
+        let mut recs = Vec::new();
+        for e in leaves {
+            if op == BinaryOp::LOr || self.fold_int(e).is_none_or(|v| v == 0) {
+                recs.extend(self.false_atom_records(e));
+            }
+        }
+        recs
+    }
+
     /// The notes explaining why the (substituted, non-dependent) atomic
     /// constraint `x` evaluated to false (§8.7).
     pub(crate) fn false_atom_records(&mut self, x: ExprId) -> Vec<SatRecord> {
@@ -718,6 +750,16 @@ impl Sema<'_, '_> {
                     args: vec![self.expr_text(inner)],
                     nested: None,
                 }]
+            }
+            // A `&&` or `||` left in the substituted atom (an expanded fold
+            // over a pack the normal form does not split, such as an
+            // enclosing template's): the operands that made it false, as
+            // clang's `diagnoseWellFormedUnsatisfiedConstraintExpr` ("and"
+            // after the first).
+            ExprKind::BinaryOperator
+                if matches!(self.ast.exprs.binary_op(inner), BinaryOp::LAnd | BinaryOp::LOr) =>
+            {
+                self.logical_chain_records(inner)
             }
             _ => {
                 if let Some((op, l, r)) = self.comparison_parts(inner)

@@ -78,13 +78,29 @@ compound literals) are WP-1276's.
   (`TypeContext::vla_star_bound`, printed `[*]`). A function type's
   parameters are star-decayed, so `void f(int n, int a[n][n])` and
   `void f(int, int a[*][*])` are compatible; the `ParmVarDecl` keeps the
-  written type, whose bounds codegen evaluates in the prologue. Pointer
+  written type, whose bounds codegen evaluates in the prologue. In C++
+  (the GNU extension) the function type keeps the parameter's own
+  variable length array type instead, as clang: two declarations of a
+  function with such a parameter declare two overloads (no
+  redefinition, two candidates), an `extern "C"` redeclaration
+  conflicts, and an out-of-line or qualified definition matches no
+  declaration ("out-of-line definition of 'f' does not match any
+  declaration", WP-1405;
+  `tests/conformance/dcl.meaning/out-of-line-vla-parameter-no-match.cpp`,
+  `tests/conformance/dcl.fct/vla-parameter-declares-overload.cpp`). A
+  written `[*]` still shares the star bound there (clang makes two such
+  declarations distinct as well; not followed). Pointer
   compatibility (`conv::c_assign::compatible`, 6.2.7) treats a VLA
   bound as matching any bound, which also gives `composite_pointer`
   its C rule (pointers to compatible types compare and convert), and
   pointer subtraction (6.5.7p3) checks the same compatibility, so
   `int (*)[m] - int (*)[n]` is valid in C (WP-1386; C++ requires the
-  same type, and two VLA types are never the same, as in clang). A
+  same type, and two VLA types are never the same, as in clang).
+  Subtracting pointers to a zero-size type warns (clang
+  `warn_sub_ptr_zero_size_types`, `-Wpointer-arith`, on by default; the
+  right operand's pointee, sugared): a zero-length array, a C empty
+  struct, and every variable length array, whose static size clang takes
+  as zero (WP-1405, `tests/conformance/expr.add/sub-zero-size-pointee.cpp`). A
   variably modified type is no template argument (clang
   `err_variably_modified_template_arg`, "variably modified type T cannot
   be used as a template argument"), which also rejects a coroutine with a

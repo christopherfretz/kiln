@@ -87,6 +87,18 @@ Planned as 1.2.0.
 
 ### Fixed
 
+- Sema correctness (WP-1405). In C++ a variable length array parameter
+  keeps its type, so an out-of-line member definition, a redeclaration or
+  a friend whose VLA parameter differs no longer matches (as in clang). A
+  lambda cannot implicitly capture a member of a block-scope anonymous
+  union. A class or variable template partial specialization whose
+  non-type parameter's type differs from the primary's no longer matches
+  by converting the value ([temp.deduct.type]/20, as GCC). Calling a
+  deprecated member template by name warns for the template, then the
+  specialization. Clang's wording for partial pack lengths with explicit
+  arguments, a deduced template that does not match, constraint notes on
+  `sizeof...` and folds, `-Wpointer-arith` on pointers to a zero-size VLA,
+  and the `aka` of a pointer to a typedef'd VLA.
 - Sema correctness (WP-1359, WP-1334, WP-1386). `Z<TTs<Us>...>` in a
   member template of a class template with a template template parameter
   pack `TTs` is expanded (deduction, explicit arguments, return types,

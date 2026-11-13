@@ -1328,6 +1328,11 @@ impl Printer<'_> {
     /// True if the node of `q` itself is an array (clang's
     /// `isa<ArrayType>(QualType)`: sugar does not count).
     fn is_array_node(&self, q: QualType) -> bool {
+        // The node printed: under `diag_desugar` the sugar is looked
+        // through first (`'A *' (aka 'int (*)[m]')` for `typedef int
+        // A[m]`, as `before`/`after` do).
+        let q = if self.diag_desugar { self.diag_strip(q) } else { q };
+        let q = if self.canon_args { self.ctx.canonical(q) } else { q };
         let (t, _) = split(self.ctx, q);
         self.ctx.kind(t).is_array()
     }

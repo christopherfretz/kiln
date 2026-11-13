@@ -1114,17 +1114,17 @@ impl Sema<'_, '_> {
     ) -> Tdk {
         let t = &self.ast.types;
         // A template template parameter pack substituted earlier into a
-        // partially substituted pattern (§7.2): its element for the
-        // element being deduced must match; outside an element it is not
-        // deduced from.
-        if let kiln_ast::types::TemplateName::SubstTemplateTemplateParmPack { args, .. } =
+        // partially substituted pattern (§7.2) names no template: nothing
+        // is deduced from it and it is not compared here (clang
+        // `DeduceTemplateArguments` on a `TemplateName` without a
+        // template declaration); a wrong template is caught by the
+        // check of the substituted parameter against the argument
+        // ([temp.deduct.call]/4, "deduced type ... does not match
+        // adjusted type").
+        if let kiln_ast::types::TemplateName::SubstTemplateTemplateParmPack { .. } =
             t.template_name_view(pn)
         {
-            let elem = d.pack_elem.and_then(|i| t.args(args).get(i).copied());
-            return match elem.map(|x| x.view()) {
-                Some(ArgView::Template(e)) => self.deduce_template_name(e, an, d),
-                _ => Tdk::Success,
-            };
+            return Tdk::Success;
         }
         if let Some(parm) = self.template_parm_of_name(pn)
             && parm.depth == d.depth

@@ -106,14 +106,19 @@ impl Sema<'_, '_> {
     /// The function parameter packs whose pattern also expands the
     /// explicitly specified pack (the last explicit argument, when a
     /// pack: [temp.arg.explicit]/9) against the other packs of the
-    /// pattern: one shorter than the explicit pack can never match
-    /// (clang reports it substituting the explicit arguments, with the
-    /// pack partially substituted). The failure, if any.
+    /// pattern, and the leading return type `ret` and the parameter
+    /// types that name the pack in a nested expansion (`Z<TTs<Us>...>`,
+    /// `TTs` an enclosing class's pack): one shorter than the explicit
+    /// pack can never match (clang reports it substituting the explicit
+    /// arguments, with the pack partially substituted: "at least 3 vs.
+    /// 2"). The failure, if any.
+    #[allow(clippy::too_many_arguments, reason = "the step's inputs")]
     fn check_partial_pack_lengths(
         &mut self,
         ft: DeclId,
         d: &DeducedArgs,
         levels: &crate::templ::args::MultiLevelArgs,
+        ret: Option<QualType>,
         tys: &[QualType],
         shown: ArgListId,
         loc: Loc,
@@ -126,13 +131,34 @@ impl Sema<'_, '_> {
             return None;
         }
         let partial = (d.depth, u16::try_from(last).ok()?);
-        for &t in tys {
-            let Some(pat) = crate::templ::pack::type_pattern(self, t) else { continue };
+        let names_partial = |s: &Self, t: QualType| {
+            let mut used = vec![false; last + 1];
+            s.mark_used_type(t, u32::from(partial.0), &mut used, 0);
+            used[last]
+        };
+        let types: Vec<(QualType, bool)> = ret
+            .into_iter()
+            .chain(tys.iter().copied())
+            .map(|t| {
+                let pat = crate::templ::pack::type_pattern(self, t);
+                (pat.unwrap_or(t), pat.is_some())
+            })
+            .collect();
+        for (t, expansion) in types {
+            // Another type names the pack only in a nested expansion;
+            // one that does not name it cannot fail this way.
+            if !expansion && !names_partial(self, t) {
+                continue;
+            }
             let r = self.in_sfinae(FrameKind::ExplicitArgSubstitution, ft, Some(shown), loc, |s| {
                 s.in_template_context(ft, |s| {
                     let mut sub = Substituter::new(s, levels);
                     sub.partial_pack = Some(partial);
-                    let _ = sub.expand_pattern_at(None, |sub| sub.ty(pat, loc));
+                    if expansion {
+                        let _ = sub.expand_pattern_at(None, |sub| sub.ty(t, loc));
+                    } else {
+                        let _ = sub.ty(t, loc);
+                    }
                 });
             });
             if let Some(((), Err(Some(diag)))) = r
@@ -798,6 +824,7 @@ impl Sema<'_, '_> {
                 }
                 _ => None,
             };
+            let leading_ret = ret.and_then(|(r, trailing)| (!trailing).then_some(r));
             let ret = ret.map(|(r, trailing)| match (trailing, &trailing_levels) {
                 (false, _) => ExplicitRet::Leading(r),
                 (true, l) => ExplicitRet::Trailing(r, l.as_ref().unwrap_or(&sugared_levels)),
@@ -852,7 +879,7 @@ impl Sema<'_, '_> {
                 Some((Ok((t, f, kept)), Ok(()))) => {
                     retained = kept;
                     if let Some(f) =
-                        self.check_partial_pack_lengths(ft, &d, &levels, &tys, shown, loc)
+                        self.check_partial_pack_lengths(ft, &d, &levels, None, &tys, shown, loc)
                     {
                         return Err(f);
                     }
@@ -870,9 +897,33 @@ impl Sema<'_, '_> {
                     }
                 }
                 Some((_, failed)) => {
+                    // A leading return type (or a parameter) expanding the
+                    // explicitly given pack with a shorter one fails as
+                    // partially substituted ("at least N vs. M"), not with
+                    // the pack's explicit length.
+                    let failed = failed.err().flatten();
+                    if failed.as_ref().is_some_and(|x| {
+                        matches!(
+                            x.id(),
+                            Some(
+                                DiagId::sema_pack_length_mismatch
+                                    | DiagId::sema_pack_length_mismatch_outer
+                            )
+                        )
+                    }) && let Some(f) = self.check_partial_pack_lengths(
+                        ft,
+                        &d,
+                        &levels,
+                        leading_ret,
+                        &tys,
+                        shown,
+                        loc,
+                    ) {
+                        return Err(f);
+                    }
                     let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
                     f.args = Some(shown);
-                    f.diag = failed.err().flatten();
+                    f.diag = failed;
                     return Err(f);
                 }
             }
@@ -1058,8 +1109,12 @@ impl Sema<'_, '_> {
             if r == Tdk::Success {
                 self.resugar_call_deduction(p, a, &undeduced, &mut d);
             }
+            // A parameter deducing only through a template argument pack
+            // expansion (`Z<TTs<Us>...>`) is an original call argument
+            // too (clang `hasDeducibleTemplateParameters`).
             if r == Tdk::Success
-                && self.has_deducible_params(p, &d, false)
+                && (self.has_deducible_params(p, &d, false)
+                    || self.has_deducible_pack_expansion(p, &d))
                 && self.is_original_arg(a)
             {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
