@@ -1,5 +1,7 @@
 //! The [`Ast`]: every arena of a translation unit (spec/ast.md §2.2).
 
+mod snap;
+
 use std::sync::Arc;
 
 use kiln_source::symbol::Interner;

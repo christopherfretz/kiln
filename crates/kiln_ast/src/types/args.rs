@@ -138,19 +138,19 @@ impl TemplateArg {
 }
 
 #[derive(Clone, Copy, Debug, kiln_snap::Snap)]
-struct ListEntry {
-    start: u32,
-    len: u32,
-    canon: u32,
-    flags: TypeFlags,
+pub(super) struct ListEntry {
+    pub(super) start: u32,
+    pub(super) len: u32,
+    pub(super) canon: u32,
+    pub(super) flags: TypeFlags,
 }
 
 /// The argument arena and the list intern table.
 #[derive(Debug)]
 pub(crate) struct ArgTable {
-    args: Vec<TemplateArg>,
-    lists: Vec<ListEntry>,
-    intern: InternTable,
+    pub(super) args: Vec<TemplateArg>,
+    pub(super) lists: Vec<ListEntry>,
+    pub(super) intern: InternTable,
 }
 
 impl ArgTable {

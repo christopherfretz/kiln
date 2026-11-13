@@ -884,3 +884,59 @@ impl HeapSize for StmtArena {
         r
     }
 }
+
+impl StmtArena {
+    /// The checks of a decoded arena (spec/ast.md "Snapshots"): every side
+    /// array keeps its dummy, and every header's side index (and every asm
+    /// statement's operand range) is inside its side array.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let StmtArena {
+            nodes,
+            ifs,
+            switches,
+            cases,
+            loops,
+            range_fors,
+            expansions,
+            asms,
+            asm_operands,
+            coros,
+            fp_overrides,
+        } = self;
+        let side = [ifs.len(), switches.len(), cases.len(), loops.len(), range_fors.len()];
+        if nodes.is_empty()
+            || nodes.len() > StmtId::MAX_INDEX as usize + 1
+            || side.contains(&0)
+            || expansions.is_empty()
+            || asms.is_empty()
+            || coros.is_empty()
+            || fp_overrides.is_empty()
+        {
+            return Err("statement arena without its dummies");
+        }
+        if asms.iter().any(|d| {
+            u64::from(d.operands) + u64::from(d.num_outputs) + u64::from(d.num_inputs)
+                > asm_operands.len() as u64
+        }) {
+            return Err("asm operands out of range");
+        }
+        for n in &nodes[1..] {
+            let (i, len) = match n.kind {
+                StmtKind::IfStmt => (n.a, ifs.len()),
+                StmtKind::SwitchStmt => (n.a, switches.len()),
+                StmtKind::CaseStmt => (n.a, cases.len()),
+                StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => (n.a, loops.len()),
+                StmtKind::CXXForRangeStmt => (n.a, range_fors.len()),
+                StmtKind::CXXExpansionStmt => (n.a, expansions.len()),
+                StmtKind::CoroutineBodyStmt => (n.a, coros.len()),
+                StmtKind::GCCAsmStmt => (n.a, asms.len()),
+                StmtKind::CompoundStmt => (u32::from(n.aux), fp_overrides.len()),
+                _ => continue,
+            };
+            if i as usize >= len {
+                return Err("statement side index out of range");
+            }
+        }
+        Ok(())
+    }
+}
