@@ -311,13 +311,25 @@ fn recurse<T: Snap>(s: &mut Schema, _field: for<'x> fn(&'x Sema<'static, 'static
     T::schema(s);
 }
 
-/// TEMPORARY until `kiln_ast`'s root lands (WP-1380): the AST is not
-/// written, and a restore keeps the consumer's.
-fn put_ast(_ast: &Ast, _w: &mut Writer) {}
+/// Writes the AST through its own root (`kiln_ast`, spec/ast.md
+/// "Snapshots"), its interner included as a shared `Arc`.
+fn put_ast(ast: &Ast, w: &mut Writer) {
+    w.put(ast);
+}
 
-/// TEMPORARY until `kiln_ast`'s root lands (WP-1380), see [`put_ast`].
-#[allow(clippy::unnecessary_wraps, reason = "TEMPORARY, the signature of the real one")]
-fn get_ast(_r: &mut Reader<'_>, _into: &mut Ast) -> Result<(), SnapError> {
+/// Reads the AST [`put_ast`] wrote into `into`. The decoded AST must share
+/// `into`'s interner: the consumer reads the interner earlier in the same
+/// stream (the preprocessor's root) and builds its fresh `Sema` over it,
+/// so the AST's `Arc` is a back-reference to that allocation; a fresh
+/// interner here would not be the preprocessor's.
+fn get_ast(r: &mut Reader<'_>, into: &mut Ast) -> Result<(), SnapError> {
+    let ast: Ast = r.get()?;
+    if !std::ptr::eq(ast.symbols(), into.symbols()) {
+        return Err(r.invalid::<Ast>(
+            "the AST's interner is not the consumer's (read the interner first, in the same stream)",
+        ));
+    }
+    *into = ast;
     Ok(())
 }
 
@@ -433,13 +445,14 @@ macro_rules! root_impl {
             /// [`Self::snap_put`] writes besides the AST and the Oven) and
             /// those of the types it encodes.
             pub fn snap_schema(s: &mut Schema) {
-                let mut d = Desc::new("configured root");
+                let mut d = Desc::new("configured root").field::<Ast>("ast");
                 $( d = reg(d, stringify!($s), |x| &x.$s); )*
                 $( d = d.skip::<()>(stringify!($c)); )*
                 $( d = d.skip::<()>(stringify!($t)); )*
                 $( d = d.skip::<()>(stringify!($x)); )*
                 $( d = d.skip::<()>(stringify!($b)); )*
                 if s.register::<Sema<'static, 'static>>(d) {
+                    Ast::schema(s);
                     $( recurse(s, |x| &x.$s); )*
                 }
             }
