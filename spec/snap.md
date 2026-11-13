@@ -222,6 +222,33 @@ The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
 `kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
 "Snapshots" states their behaviour.
 
+Roots so far: the pilots; `kiln_diag::DiagEngine` and
+`kiln_pp::Preprocessor` (configured, WP-1379); `kiln_ast::Ast` with
+`TypeContext`, `ConstStore` and `StringPool` (WP-1380); `kiln_oven::Oven`
+(WP-1381); `kiln_sema::Sema` (configured, WP-1382, spec/sema.md §8b).
+A *configured* root borrows or is configured by the consumer: it is not
+`Snap`, but has `snap_put(&self, &mut Writer)`, `snap_restore(&mut self,
+&mut Reader)` applied to a fresh object the consumer built, and
+`snap_schema`; it also says when it is at rest (`snapshot_ready`).
+
+What the Sema root (WP-1382) added to the recipe:
+
+- More classes than the four above: *scratch* (a reused buffer),
+  *reference* (a borrowed object, the consumer's) and *owned root*
+  (another crate's root inside this one). A root with a hundred fields
+  names them in one `macro_rules!` list per class, from which the
+  destructure, the writes, the schema and the at-rest checks are
+  generated.
+- A transient field is checked, not assumed: the quiescence check names
+  the first one not as a fresh object has it.
+- Configuration inside a state field (a limit inside a state struct) is
+  saved from the consumer's object before the restore and put back.
+- A field type from a crate the WP may not touch (`Range<u32>`) gets a
+  `#[snap(with = ...)]` module, not an impl.
+- A shared `Arc` (the interner) is restored as the same allocation only
+  when every holder is in the same stream after its first writer; a root
+  that needs the consumer's allocation checks `ptr_eq` and refuses.
+
 ## Recipe: making a crate's types `Snap`
 
 1. Add `kiln_snap.workspace = true` to the crate's `[dependencies]`.
@@ -272,6 +299,10 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
   paths, every schema-hash change; `derive_errors` doc tests.
 - `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md
   "Snapshots").
+- `crates/kiln_parse/tests/snap.rs`: `Sema` at the end of the pch bench
+  prefixes and a `<meta>` prefix: encode, decode, encode; the original and
+  the restored state continue a main file identically; quiescence;
+  corruption.
 
 ## Open questions
 
