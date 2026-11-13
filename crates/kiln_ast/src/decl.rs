@@ -6990,4 +6990,110 @@ impl DeclArena {
         }
         Ok(())
     }
+
+    /// The check of decoded base-specifier references: every value of a
+    /// record's `bases` list is a base-specifier index. `lists` is checked.
+    pub(crate) fn check_restored_bases(
+        &self,
+        lists: &crate::lists::IdLists,
+    ) -> Result<(), &'static str> {
+        let n = self.base_specs.len();
+        let ok = self.records.iter().all(|r| {
+            lists.checked_get(r.bases).is_some_and(|v| v.iter().all(|&i| (i as usize) < n))
+        });
+        if ok { Ok(()) } else { Err("base-specifier index out of range") }
+    }
+
+    /// The number of base-specifiers (index 0 is the dummy).
+    pub(crate) fn base_spec_count(&self) -> usize {
+        self.base_specs.len()
+    }
+}
+
+/// The range checks of a decoded AST's ids (spec/ast.md "Snapshots";
+/// reduced from the snapshot corruption fuzzer's crafted mutants,
+/// `kiln_driver/tests/pch_snapshot_fuzz.rs`, WP-1396).
+#[cfg(test)]
+mod snap_range_tests {
+    use std::sync::Arc;
+
+    use kiln_source::symbol::Interner;
+
+    use crate::Ast;
+    use crate::ids::{DeclId, QualType};
+    use crate::types::TypeContext;
+
+    fn ast() -> Ast {
+        Ast::new(Arc::new(Interner::new()), TypeContext::default())
+    }
+
+    fn decode(a: &Ast) -> Result<Ast, String> {
+        kiln_snap::from_bytes::<Ast>(&kiln_snap::to_bytes(a)).map_err(|e| e.to_string())
+    }
+
+    /// A declaration's link past the declaration arena: `DeclArena::get`
+    /// indexed out of bounds during codegen.
+    #[test]
+    fn decl_id_past_the_arena_is_refused() {
+        let mut a = ast();
+        assert!(decode(&a).is_ok());
+        let past = DeclId::new(a.decls.len() as u32 + 1);
+        let tu = a.tu.index() as usize;
+        a.decls.nodes[tu].next = Some(past);
+        let e = decode(&a).expect_err("a link past the arena decoded");
+        assert!(e.contains("declaration id out of range"), "{e}");
+    }
+
+    /// An id above its id space (`DeclId::MAX_INDEX`): `DeclArena::get`
+    /// indexed at 4294901808. And a `QualType` whose type index is 0.
+    #[test]
+    fn ids_outside_their_space_are_refused() {
+        let raw = 0xFFFF_0030u32.to_le_bytes();
+        assert!(kiln_snap::from_bytes::<DeclId>(&raw).is_err());
+        assert!(kiln_snap::from_bytes::<Option<DeclId>>(&raw).is_err());
+        assert!(kiln_snap::from_bytes::<QualType>(&5u32.to_le_bytes()).is_err());
+        assert_eq!(kiln_snap::from_bytes::<Option<QualType>>(&[0; 4]), Ok(None));
+        let max = DeclId::MAX_INDEX.to_le_bytes();
+        assert_eq!(kiln_snap::from_bytes::<DeclId>(&max), Ok(DeclId::new(DeclId::MAX_INDEX)));
+    }
+
+    /// A record's base list naming a base-specifier past the arena:
+    /// `DeclArena::bases` indexed `base_specs` out of bounds while parsing.
+    #[test]
+    fn base_specifier_past_the_arena_is_refused() {
+        let mut a = ast();
+        let n = a.decls.base_specs.len() as u32;
+        a.decls.records[0].bases = a.lists.push_raw(&[n]);
+        let e = decode(&a).expect_err("a base list past the arena decoded");
+        assert!(e.contains("base-specifier index out of range"), "{e}");
+    }
+
+    /// XFAIL (spec/snap.md "Threat model", known gaps): the untyped words
+    /// of an AST node (`aux`, `a`, `b`) are not validated at decode. A
+    /// `BinaryOperator` whose `aux` is no opcode decodes, and
+    /// `ExprArena::binary_op` panics at use ("the builder stores a valid
+    /// opcode in aux"); reduced from the long crafted fuzz run, whose other
+    /// internal errors are of the same kind (ids, list words and enum tags
+    /// in node operands). Unignore once node operands are validated.
+    #[test]
+    #[ignore = "known gap: AST node operands are not validated at decode"]
+    fn binary_operator_without_an_opcode_is_refused() {
+        use crate::expr::{ExprDeps, ExprFlags, ExprKind, ExprNode, ObjectKind, ValueCategory};
+        let mut a = ast();
+        let ty = QualType::unqual(crate::ids::TypeId::new(1));
+        let lhs = crate::ids::ExprId::new(crate::ids::ExprId::MAX_INDEX).index();
+        a.exprs.push(ExprNode::new(
+            ExprKind::BinaryOperator,
+            ValueCategory::PRValue,
+            ObjectKind::Ordinary,
+            ExprFlags::NONE,
+            ExprDeps::NONE,
+            0xFF,
+            ty,
+            kiln_source::Loc::INVALID,
+            lhs,
+            lhs,
+        ));
+        decode(&a).expect_err("a BinaryOperator without an opcode decoded");
+    }
 }

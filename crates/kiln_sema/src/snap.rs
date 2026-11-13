@@ -461,7 +461,9 @@ macro_rules! root_impl {
                 self.inst.limits = limits;
                 self.inst.report.format = report_format;
                 self.inst.guard = guard;
-                if let Err(why) = self.check_restored() {
+                // The Oven's and these fields' ids index the AST decoded
+                // before them (spec/snap.md "Id ranges").
+                if let Err(why) = self.check_restored().and_then(|()| self.ast.check_ids(r)) {
                     return Err(r.invalid::<Self>(why));
                 }
                 mark("fields");

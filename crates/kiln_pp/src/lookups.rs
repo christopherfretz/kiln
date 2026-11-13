@@ -145,6 +145,47 @@ impl LookupLog {
         })
     }
 
+    /// Checks a decoded log's indices (WP-1396, spec/snap.md "Threat
+    /// model"): every directory index (a result's, an includer's, an
+    /// `after`, the list's) names one of [`LookupLog::dirs`], and
+    /// [`LookupLog::angled_start`] is within the list. A log read from a
+    /// file that fails is refused before it is repeated.
+    ///
+    /// # Errors
+    /// What is out of range.
+    pub fn validate(&self) -> Result<(), String> {
+        let n = self.dirs.len();
+        let bad = |what: &str, i: u32| -> Result<(), String> {
+            if (i as usize) < n {
+                Ok(())
+            } else {
+                Err(format!("its lookup log names directory {i} of {n} ({what})"))
+            }
+        };
+        for &d in &self.list {
+            bad("search list", d)?;
+        }
+        if self.angled_start as usize > self.list.len() {
+            return Err(format!(
+                "its lookup log starts the <...> search at {} of {}",
+                self.angled_start,
+                self.list.len()
+            ));
+        }
+        for l in &self.lookups {
+            if let Some(i) = l.includer {
+                bad("includer", i)?;
+            }
+            if let Some(a) = l.after {
+                bad("include_next", a)?;
+            }
+            if let Found::Dir { dir, .. } = l.found {
+                bad("result", dir)?;
+            }
+        }
+        Ok(())
+    }
+
     fn dir(&self, i: u32) -> &str {
         self.dirs.get(i as usize).map_or("", String::as_str)
     }

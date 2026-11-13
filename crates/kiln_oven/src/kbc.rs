@@ -8,6 +8,8 @@
 //! (integers canonical: sign- or zero-extended from their width; floats
 //! as their IEEE bit pattern; pointers as an encoded `mem::Ptr`).
 
+pub(crate) mod verify;
+
 macro_rules! ops {
     ($($name:ident = $n:expr,)*) => {
         /// A KBC opcode.
@@ -18,6 +20,19 @@ macro_rules! ops {
         impl Op {
             /// Operand words of each opcode, indexed by its discriminant.
             pub const OPERANDS: &'static [u8] = &[$($n,)*];
+
+            /// The opcode with discriminant `b`, if there is one (the
+            /// snapshot verifier, `verify.rs`).
+            pub fn try_from_u8(b: u8) -> Option<Op> {
+                #[allow(non_upper_case_globals)]
+                mod disc {
+                    $(pub const $name: u8 = super::Op::$name as u8;)*
+                }
+                match b {
+                    $(disc::$name => Some(Op::$name),)*
+                    _ => None,
+                }
+            }
 
             /// The opcode with discriminant `b`. A `match` on the
             /// discriminants rather than a table lookup: LLVM folds it to

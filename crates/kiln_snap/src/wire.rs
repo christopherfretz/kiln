@@ -195,10 +195,15 @@ pub struct Reader<'a> {
     src: Option<Box<dyn std::io::Read + 'a>>,
     /// Input bytes still in `src`.
     left: usize,
+    /// The largest id read in each id space ([`Reader::note_id`]).
+    ids: [u32; ID_SPACES],
 }
 
 /// The bytes a streaming reader reads from its source at a time.
 pub const WINDOW: usize = 1 << 20;
+
+/// The number of id spaces a [`Reader`] tracks ([`Reader::note_id`]).
+pub const ID_SPACES: usize = 32;
 
 impl fmt::Debug for Reader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -217,6 +222,24 @@ impl<'a> Reader<'a> {
         Reader::sub(bytes, 0)
     }
 
+    /// Records that an id with index `index` of id space `space` was read
+    /// (spec/snap.md "Id ranges"): an id type's `get` calls it, and the
+    /// root that owns the space compares [`Reader::id_max`] with the arena
+    /// it indexes once it is decoded. A `space` of [`ID_SPACES`] or more is
+    /// ignored.
+    #[inline]
+    pub fn note_id(&mut self, space: usize, index: u32) {
+        if let Some(m) = self.ids.get_mut(space) {
+            *m = (*m).max(index);
+        }
+    }
+
+    /// The largest index [`Reader::note_id`] recorded for `space` so far
+    /// (0 when none).
+    pub fn id_max(&self, space: usize) -> u32 {
+        self.ids.get(space).copied().unwrap_or(0)
+    }
+
     /// A slice reader whose first byte has the absolute offset `base`.
     #[inline]
     fn sub(bytes: &'a [u8], base: usize) -> Self {
@@ -229,6 +252,7 @@ impl<'a> Reader<'a> {
             win: Vec::new(),
             src: None,
             left: 0,
+            ids: [0; ID_SPACES],
         }
     }
 
@@ -246,6 +270,7 @@ impl<'a> Reader<'a> {
             win: Vec::new(),
             src: Some(Box::new(src)),
             left: len,
+            ids: [0; ID_SPACES],
         }
     }
 
@@ -436,6 +461,21 @@ impl<'a> Reader<'a> {
         self.bytes(n).map(|_| ())
     }
 
+    /// Skips `n` padding bytes written by [`Writer::zeros`], checking that
+    /// each is zero: a nonzero pad byte is damage (or a mismatched layout)
+    /// that a plain [`skip`](Reader::skip) would hide.
+    #[inline]
+    pub fn skip_zeros(&mut self, n: usize) -> Result<(), SnapError> {
+        let at = self.offset();
+        let b = self.bytes(n)?;
+        match b.iter().position(|&x| x != 0) {
+            None => Ok(()),
+            Some(i) => {
+                Err(SnapError::new(ErrorKind::BadValue("nonzero padding"), "padding", at + i))
+            }
+        }
+    }
+
     /// Reads a length or count written by [`Writer::length`]. Not checked
     /// against the input: use [`Reader::seq_len`] for element counts.
     #[inline]
@@ -514,12 +554,19 @@ impl<'a> Reader<'a> {
                 }
                 let per = if self.streaming { (WINDOW / s).max(1) } else { n.max(1) };
                 let mut left = n;
+                let mut ids = self.ids;
                 while left > 0 {
                     let k = left.min(per);
                     let start = self.offset();
                     let block = self.bytes(k * s)?;
+                    // One sub-reader, moved from chunk to chunk, carries the
+                    // id maxima through the block and back.
+                    let mut sub = Reader::sub(&[], start);
+                    sub.ids = ids;
                     for (i, chunk) in block.chunks_exact(s).enumerate() {
-                        let mut sub = Reader::sub(chunk, start + i * s);
+                        sub.buf = chunk;
+                        sub.pos = 0;
+                        sub.base = start + i * s;
                         push(T::get(&mut sub)?);
                         debug_assert_eq!(
                             sub.pos,
@@ -529,8 +576,10 @@ impl<'a> Reader<'a> {
                             sub.pos
                         );
                     }
+                    ids = sub.ids;
                     left -= k;
                 }
+                self.ids = ids;
             }
             _ => {
                 for _ in 0..n {

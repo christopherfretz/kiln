@@ -71,6 +71,13 @@ impl IdLists {
         &self.data[start as usize..(start + len) as usize]
     }
 
+    /// The elements of `list`, or `None` if there is no such list (a
+    /// decoded id's range check).
+    pub(crate) fn checked_get(&self, list: ListId) -> Option<&[u32]> {
+        let &(start, len) = self.spans.get(list.index() as usize)?;
+        self.data.get(start as usize..(start as usize).checked_add(len as usize)?)
+    }
+
     /// The number of elements of `list`.
     pub fn len(&self, list: ListId) -> usize {
         self.spans[list.index() as usize].1 as usize

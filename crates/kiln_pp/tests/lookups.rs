@@ -268,3 +268,121 @@ fn producer_misses_are_not_asked_again() {
     let (o, s, _) = fs.queries();
     assert!(o + s - before.0 - before.1 <= 4);
 }
+
+/// splitmix64, for [`hostile_logs_are_validated_and_repeat_without_panic`].
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// WP-1396 (spec/snap.md "Threat model"): a log read from a damaged or
+/// crafted PCH. [`LookupLog::validate`] refuses any index out of range,
+/// and repeating a log that passes it never panics or hangs, whatever its
+/// names and directories hold: empty, `.`, `..`, absolute, NUL, non-ASCII,
+/// separators only, very long ([cpp.include]/7).
+#[test]
+fn hostile_logs_are_validated_and_repeat_without_panic() {
+    use kiln_pp::{Characteristic, Found, Lookup, LookupForm};
+    let deep = "x/".repeat(1 << 15);
+    let strings: Vec<String> = [
+        "",
+        ".",
+        "..",
+        "/",
+        "//",
+        "../../etc/passwd",
+        "/abs/v.h",
+        "v.h",
+        "n.h",
+        "a\0b",
+        "\0",
+        "\u{e9}/\u{fc}.h",
+        "a/",
+        "/a",
+        "/a/",
+        "./v.h",
+        "q.h/..",
+        &deep,
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    let forms = [LookupForm::Include, LookupForm::Next, LookupForm::Embed];
+    let chars = [Characteristic::User, Characteristic::System, Characteristic::ExternCSystem];
+    let mut rng = Rng(0x1396);
+    let (mut valid, mut refused) = (0, 0);
+    for _ in 0..3000 {
+        let ndirs = rng.below(5);
+        let dirs: Vec<String> =
+            (0..ndirs).map(|_| strings[rng.below(strings.len())].clone()).collect();
+        // Mostly in range, sometimes not (one past, or far past).
+        let idx = |rng: &mut Rng| -> u32 {
+            match rng.below(8) {
+                0 => ndirs as u32,
+                1 => u32::MAX,
+                _ if ndirs == 0 => 0,
+                _ => rng.below(ndirs) as u32,
+            }
+        };
+        let list: Vec<u32> = (0..rng.below(4)).map(|_| idx(&mut rng)).collect();
+        let angled_start =
+            if rng.below(8) == 0 { u32::MAX } else { rng.below(list.len() + 1) as u32 };
+        let lookups: Vec<Lookup> = (0..rng.below(6))
+            .map(|_| {
+                let found = match rng.below(4) {
+                    0 => Found::Missing,
+                    1 => Found::Includer,
+                    2 => Found::Dir { dir: idx(&mut rng), characteristic: chars[rng.below(3)] },
+                    _ => Found::Embed { path: strings[rng.below(strings.len())].clone() },
+                };
+                Lookup {
+                    name: strings[rng.below(strings.len())].clone(),
+                    form: forms[rng.below(3)],
+                    angled: rng.below(2) == 0,
+                    includer: (rng.below(2) == 0).then(|| idx(&mut rng)),
+                    after: (rng.below(2) == 0).then(|| idx(&mut rng)),
+                    found,
+                }
+            })
+            .collect();
+        let log = LookupLog { dirs, lookups, list, angled_start };
+        if log.validate().is_err() {
+            refused += 1;
+        } else {
+            valid += 1;
+        }
+        // Repeated over the tree with or without validation: an answer,
+        // never a panic (each query is a map lookup: no hang).
+        let mut fs = tree();
+        let _ = check(&log, &mut fs, DIRS);
+        let _ = log.absolute();
+    }
+    assert!(valid > 500 && refused > 500, "valid {valid}, refused {refused}");
+    // Each out-of-range index is named.
+    let one = |f: &dyn Fn(&mut LookupLog)| {
+        let mut log = record(tree(), "/p/h.h", DIRS);
+        assert_eq!(log.validate(), Ok(()));
+        f(&mut log);
+        log.validate().expect_err("out of range")
+    };
+    let n = record(tree(), "/p/h.h", DIRS).dirs.len() as u32;
+    assert!(one(&|l| l.list.push(n)).contains("search list"));
+    assert!(one(&|l| l.angled_start = l.list.len() as u32 + 1).contains("<...>"));
+    assert!(one(&|l| l.lookups[0].includer = Some(n)).contains("includer"));
+    assert!(one(&|l| l.lookups[0].after = Some(u32::MAX)).contains("include_next"));
+    assert!(
+        one(&|l| l.lookups[0].found = Found::Dir { dir: n, characteristic: Characteristic::User })
+            .contains("result")
+    );
+}

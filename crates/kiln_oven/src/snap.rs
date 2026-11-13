@@ -48,12 +48,16 @@
 //! index): every function entry inside `code`, every function, global
 //! and type index a table holds in range, the memo's tables and
 //! recency list, the static space's maps, slots and free lists, the
-//! pointer marks' tags. Not validated (it would take a bytecode
-//! verifier; the snapshot is same-build and checksummed): the operands
-//! of the instructions in `code` (registers, site, trap, origin and
-//! function indices, jump targets), the pointers stored in static memory
-//! and in globals, and the AST ids the tables hold (the AST's own
-//! snapshot is checked by `kiln_ast`).
+//! pointer marks' tags, and the bytecode (`kbc/verify.rs`, WP-1396):
+//! opcodes, instruction boundaries, registers within the owning
+//! function's frame, jump targets, and every function, global, type,
+//! trap, step-location and origin operand; the `Unwind` entry, the call
+//! sites and the non-throwing cache. The AST ids the tables and the code
+//! hold are range-checked against the AST after the whole restore
+//! (`kiln_ast::Ast::check_ids`; the code's are noted on the reader).
+//! Not validated: the pointers stored in static memory and in globals,
+//! which are checked at every use as any pointer the evaluator computes
+//! (`Memory::alloc_of`: slot, generation, liveness; bounds at access).
 
 use kiln_ast::{ConstValueId, DeclId, ExprId};
 use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
@@ -387,8 +391,20 @@ impl Oven {
             refl_seen: at("Oven.refl_seen", r.get())?,
             dms: at("Oven.dms", r.get())?,
         };
-        if let Err(why) = parts.check(self.budget.memo_entries) {
-            return Err(r.invalid::<Oven>(why));
+        match parts
+            .check(self.budget.memo_entries)
+            .map_err(str::to_owned)
+            .and_then(|()| parts.verify_code())
+        {
+            Err(why) => return Err(r.invalid::<Oven>(why)),
+            // The code's AST ids, for the AST's range check after the
+            // whole restore (spec/snap.md "Id ranges").
+            Ok(ids) => {
+                use kiln_ast::ids::space;
+                r.note_id(space::DECL, ids.decl);
+                r.note_id(space::EXPR, ids.expr);
+                r.note_id(space::TYPE, ids.ty);
+            }
         }
         let Parts {
             types,
@@ -600,6 +616,10 @@ impl Parts {
         if self.padded > ncode {
             return Err("code padding past the end of the code");
         }
+        let (_, nothrow) = self.exc.snap_refs();
+        if nothrow.into_iter().any(|f| f as usize >= nfuncs) {
+            return Err("non-throwing cache names an unknown function");
+        }
         for f in &self.funcs {
             let outside = f.entry as usize >= ncode;
             if (outside && (f.entry != UNCOMPILED || f.state == FState::Ready))
@@ -668,5 +688,23 @@ impl Parts {
             return Err("reflection type out of range");
         }
         Ok(())
+    }
+
+    /// The bytecode verifier over the checked tables (`kbc/verify.rs`):
+    /// the AST ids the code holds, for the AST's range check.
+    fn verify_code(&self) -> Result<crate::kbc::verify::AstIds, String> {
+        let (unwind, _) = self.exc.snap_refs();
+        let heap: Vec<bool> =
+            self.origins.iter().map(|o| matches!(o, mem::Origin::Heap(..))).collect();
+        let tables = crate::kbc::verify::Tables {
+            funcs: &self.funcs,
+            nglobals: self.globals.len(),
+            ntypes: self.types.infos.len(),
+            ntraps: self.traps.len(),
+            nsteps: self.step_locs.len(),
+            heap_origins: &heap,
+        };
+        crate::kbc::verify::verify(&self.code, &tables, self.sites.iter().map(|s| s.pc), unwind)
+            .map_err(|f| f.to_string())
     }
 }

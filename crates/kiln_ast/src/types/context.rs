@@ -305,6 +305,17 @@ fn q_opt(raw: u32) -> Option<QualType> {
 }
 
 impl TypeContext {
+    /// The largest index of the template name, nested-name-specifier,
+    /// argument list and profile tables (the snapshot range check).
+    pub(crate) fn max_table_ids(&self) -> [usize; 4] {
+        [
+            self.names.entries.len().saturating_sub(1),
+            self.nns.entries.len().saturating_sub(1),
+            self.args.lists.len().saturating_sub(1),
+            self.profiles.entries.len().saturating_sub(1),
+        ]
+    }
+
     /// A context for `target` with default (C++17+) options, with the
     /// builtins at ids 1..=90 (§5.1).
     pub fn new(target: TargetTypes) -> Self {

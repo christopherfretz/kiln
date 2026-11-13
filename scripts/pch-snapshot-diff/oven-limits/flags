@@ -1,0 +1,4 @@
+-std=c++26
+--gcc-toolchain=@GCC16@
+-fconstexpr-steps=200000
+-fconstexpr-backtrace-limit=4

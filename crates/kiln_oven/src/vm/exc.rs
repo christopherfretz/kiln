@@ -89,6 +89,12 @@ pub(crate) struct Excs {
 }
 
 impl Excs {
+    /// The pc of the `Op::Unwind` and the function indices of the
+    /// non-throwing cache (the snapshot checks, `snap.rs`).
+    pub(crate) fn snap_refs(&self) -> (Option<u32>, impl Iterator<Item = u32> + '_) {
+        (self.unwind_pc, self.nothrow.keys().copied())
+    }
+
     pub fn footprint(&self) -> usize {
         (self.inflight.capacity() + self.caught.capacity()) * size_of::<Exc>()
             + self.nothrow.capacity() * 8

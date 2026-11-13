@@ -821,6 +821,11 @@ impl Default for AttrArena {
 }
 
 impl AttrArena {
+    /// The largest index (the snapshot range check).
+    pub(crate) fn max_index(&self) -> usize {
+        self.nodes.len().saturating_sub(1)
+    }
+
     /// An arena holding only the dummy.
     pub fn new() -> Self {
         Self::default()

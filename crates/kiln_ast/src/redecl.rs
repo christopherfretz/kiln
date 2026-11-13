@@ -37,6 +37,11 @@ impl Default for RedeclTable {
 }
 
 impl RedeclTable {
+    /// The largest index (the snapshot range check).
+    pub(crate) fn max_index(&self) -> usize {
+        self.groups.len().saturating_sub(1)
+    }
+
     /// A table holding only the dummy.
     pub fn new() -> Self {
         Self::default()

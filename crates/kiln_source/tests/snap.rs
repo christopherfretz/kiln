@@ -253,6 +253,36 @@ fn source_manager_disk_text_is_not_stored() {
     assert!(restored.text(g).starts_with("int y;"));
 }
 
+/// The physical line a `#line` directive records is checked when the
+/// restored buffer is read (it cannot be before): a directive that does
+/// not match its text makes the buffer unavailable, never a wrong
+/// presumed line (WP-1387).
+#[test]
+fn source_manager_line_directive_is_checked_on_read() {
+    let dir = TempDir::new("physline");
+    fs::write(dir.0.join("l.h"), "a\nb\n#line 50\nc\n").unwrap();
+    let sm = SourceManager::new();
+    let f = sm.load_file(&dir.0.join("l.h")).unwrap();
+    sm.add_line_directive(f, 14, 50, None);
+    let c = sm.loc(f, 14);
+    assert_eq!(sm.presumed_line_col(c).map(|p| p.line), Some(50));
+    let bytes = to_bytes(&sm);
+    // The directive: offset 14, phys_line 4, new_line 50.
+    let rec: Vec<u8> = [14u32, 4, 50].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let at = bytes.windows(12).position(|w| w == rec).expect("the directive's encoding");
+    let good: SourceManager = from_bytes(&bytes).unwrap();
+    assert_eq!(good.presumed_line_col(c).map(|p| p.line), Some(50));
+    assert!(good.lazy_fallbacks().is_empty());
+    for wrong in [3u32, 5, 1000] {
+        let mut b = bytes.clone();
+        b[at + 4..at + 8].copy_from_slice(&wrong.to_le_bytes());
+        let bad: SourceManager = from_bytes(&b).unwrap();
+        assert!(bad.presumed_line_col(c).is_none(), "phys_line {wrong}");
+        assert_eq!(bad.line_col(c), None);
+        assert_eq!(bad.lazy_fallbacks(), vec![(f, LazyOutcome::Unavailable)]);
+    }
+}
+
 #[test]
 fn source_manager_decode_is_checked() {
     let dir = TempDir::new("checked");

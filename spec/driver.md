@@ -2256,6 +2256,20 @@ header (was a user header)`. An `#include_next` that continues
 after a directory the consumer's list does not have is a difference
 (`... continues after '/d', which is not in the search list`).
 
+*A damaged log (WP-1396).* The log is read from the file, after the
+block checksum has accepted the section. Its counts are bounded by the
+bytes left (spec/snap.md "Threat model"), and `LookupLog::validate`
+checks every directory index (each result's, includer's, `after` and
+search-list entry) against its directory table, and the `<...>` start
+against the list. A log that fails is a section that cannot be read: the
+snapshot is refused with a `-v` note (`its lookup log names directory 7
+of 3 (result)`), not with `-Wpch-snapshot-unused`, as for any other
+decoding error. A log that passes is repeated as written. Its names and
+directories are only joined into paths and asked about: an empty, `..`,
+absolute, NUL or very long name is a file that is not there, or another
+file. A different result refuses the snapshot as a configuration
+refusal, with the warning.
+
 *Soundness.* (1) The prefix's tokens depend on the search path only
 through its lookups' results (the predefines and the feature queries,
 which also read options, are components of their own); a result fixes
@@ -2436,6 +2450,22 @@ cases of `scripts/pch-snapshot-diff/`.
   `-ferror-limit=`'s effect on the prefix and
   `-ftemplate-backtrace-limit=` are options: they are in the identity
   (or cannot matter, spec/snap.md) and stay the consumer's.
+- **A prefix file changed after the check** (WP-1396). The restored
+  source manager re-reads a prefix file only when its text is first
+  needed (a caret line, a presumed location, `-g`), and checks
+  it against the recorded length and content hash then. A file that no
+  longer matches (an edit no check before the restore sees: a system
+  header, which the record's check skips as clang does, edited to the
+  same size with its mtime put back under the default
+  `-fkiln-pch-validate=mtime`; or any file with `-fno-validate-pch`) ends the compilation with `fatal error: file '<f>' has been
+  modified since the precompiled header '<p.pch>' was built: content
+  changed` (`drv_pch_file_modified`, clang's wording) after the
+  consumer's own diagnostics, with exit status 1 and no output: it never
+  compiles against the blank text it would otherwise see. A `#line`
+  directive whose recorded physical line does not match the text is
+  treated the same (spec/source.md "Snapshots"). `-v` with
+  `KILN_SNAP_TIMING=1` says how many prefix files were read after the
+  restore.
 - **Producer.** A header with warnings gets a snapshot; one with errors
   (with `-Werror`, its warnings are errors) gets no PCH at all.
 - **`-verify`.** A `-verify` consumer restores, and the verifier sees

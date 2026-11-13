@@ -29,7 +29,7 @@ mod wire;
 pub use error::{ErrorKind, SnapError};
 pub use kiln_snap_derive::Snap;
 pub use schema::{Desc, Schema, SchemaHash, schema_hash};
-pub use wire::{Reader, WINDOW, Writer};
+pub use wire::{ID_SPACES, Reader, WINDOW, Writer};
 
 /// A type that can be written to a snapshot and read back.
 ///
@@ -111,7 +111,7 @@ pub trait Snap: Sized + 'static {
         match r.u8()? {
             0 => {
                 if let Some(n) = Self::SIZE {
-                    r.skip(n)?;
+                    r.skip_zeros(n)?;
                 }
                 Ok(None)
             }
@@ -264,7 +264,7 @@ pub mod __private {
         }
     }
 
-    /// Skips the padding [`pad`] wrote.
+    /// Skips the padding [`pad`] wrote, checking it is zero.
     #[inline]
     pub fn skip_pad(
         r: &mut Reader<'_>,
@@ -273,7 +273,7 @@ pub mod __private {
         variant: Option<usize>,
     ) -> Result<(), SnapError> {
         match (total, variant) {
-            (Some(t), Some(v)) => r.skip(t - tag - v),
+            (Some(t), Some(v)) => r.skip_zeros(t - tag - v),
             _ => Ok(()),
         }
     }

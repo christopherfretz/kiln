@@ -160,6 +160,11 @@ impl Default for LambdaArena {
 }
 
 impl LambdaArena {
+    /// The largest lambda index (the snapshot range check).
+    pub(crate) fn max_index(&self) -> usize {
+        self.records.len().saturating_sub(1)
+    }
+
     /// Adds a record.
     pub fn push(&mut self, x: LambdaData) -> LambdaId {
         let id = LambdaId::new(u32::try_from(self.records.len()).unwrap_or(u32::MAX));

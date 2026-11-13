@@ -121,7 +121,7 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// Version 2 (WP-1403) added the lookup log to the head.
 pub(crate) const FORMAT_VERSION: u32 = 2;
 /// The length of the magic and the format version.
-const HEADER_LEN: usize = 12;
+pub(crate) const HEADER_LEN: usize = 12;
 
 /// The fields of [`Args`] the fingerprint leaves out, reset to their
 /// defaults before the rest is compared (spec/driver.md "Snapshots", the
@@ -509,6 +509,37 @@ pub(crate) fn prefix_reported(
     }
 }
 
+/// After a restored compile (WP-1396, spec/driver.md "PCH snapshot:
+/// behaviour"): a file of the prefix (one of the first `restored`
+/// buffers) whose text the compile read and that no longer holds the
+/// text the snapshot was built from ends the compile with a fatal error.
+/// An edit that keeps a file's size and modification time passes
+/// `mtime` validation; the restored state was built from the old text,
+/// so the compile cannot go on. The buffer is unavailable (no line or
+/// column of it was printed). True when it reported one.
+pub(crate) fn changed_files(
+    sm: &SourceManager,
+    restored: usize,
+    pch: &str,
+    engine: &DiagEngine<'_>,
+) -> bool {
+    if timing() {
+        let (n, bytes) = sm.lazy_reads(restored);
+        eprintln!("snapshot-timing: prefix files read after the restore: {n} ({bytes} bytes)");
+    }
+    let changed = sm
+        .lazy_fallbacks()
+        .into_iter()
+        .find(|&(f, how)| f.index() < restored && how == kiln_source::LazyOutcome::Unavailable);
+    let Some((f, _)) = changed else { return false };
+    kiln_diag::Diag::new(kiln_diag::DiagId::drv_pch_file_modified, kiln_source::Span::INVALID)
+        .arg(sm.file_name(f))
+        .arg(pch)
+        .arg("content changed")
+        .emit(engine);
+    true
+}
+
 /// Why a consumer does not use a PCH's snapshot (it replays the header).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Refusal {
@@ -708,6 +739,9 @@ fn snapshot_head(
     }
     let id: Vec<(String, String)> = r.get().map_err(decode)?;
     let lookups: kiln_pp::LookupLog = r.get().map_err(decode)?;
+    // WP-1396: a damaged log is a section that cannot be read (`-v`
+    // only, as a decoding error), not a configuration refusal.
+    lookups.validate().map_err(|why| (Refusal::quiet(why), false))?;
     let (mine, list) = identity_and_list(args, tc, std, diag_opts);
     // WP-1403: the search list is compared by the prefix's lookups, and
     // the working directory only when the prefix names a file relatively
@@ -1831,5 +1865,51 @@ mod tests {
         let mut old = MAGIC.to_vec();
         old.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 2");
+    }
+}
+
+#[cfg(test)]
+mod changed_file_tests {
+    use kiln_diag::{DiagEngine, DiagOptions, SharedBuffer, TextSink};
+    use kiln_source::hash::content_hash;
+    use kiln_source::{LazyFile, SourceManager};
+
+    use super::changed_files;
+
+    /// A restored prefix buffer whose file changed after the consumer's
+    /// file check (same size) ends the compile with clang's fatal error
+    /// once its text is read; a buffer not read yet, or past the restored
+    /// prefix, is not reported ([cpp.include]; spec/driver.md "PCH
+    /// snapshot: behaviour"). WP-1396.
+    #[test]
+    fn a_prefix_file_changed_after_the_check_is_fatal() {
+        let d = std::env::temp_dir().join(format!("kiln-wp1396-changed-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("p.h");
+        let (old, new) = ("int f(int a);\n", "int f(int b);\n");
+        std::fs::write(&path, new).unwrap();
+        let sm = SourceManager::new();
+        let len = u32::try_from(old.len()).unwrap();
+        let LazyFile::Added(f) =
+            sm.add_lazy_file("p.h", &path, len, content_hash(old.as_bytes()), None)
+        else {
+            panic!("the lazy buffer was not added")
+        };
+        let opts = DiagOptions::default();
+        let out = SharedBuffer::new();
+        let engine = DiagEngine::new(&sm, &opts, TextSink::new(out.clone(), &opts));
+        assert!(!changed_files(&sm, f.index() + 1, "p.pch", &engine), "not read yet");
+        let _ = sm.text(f);
+        assert!(!changed_files(&sm, f.index(), "p.pch", &engine), "past the restored prefix");
+        assert_eq!(out.contents(), "");
+        assert!(changed_files(&sm, f.index() + 1, "p.pch", &engine));
+        let text = out.contents();
+        assert!(
+            text.contains(
+                "fatal error: file 'p.h' has been modified since the precompiled header 'p.pch' was built: content changed"
+            ),
+            "{text}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

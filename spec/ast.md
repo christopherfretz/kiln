@@ -1335,8 +1335,18 @@ impls and their classification tables; every other table derives `Snap`.
   node's payload or side index is inside the table it indexes, type
   lists and canonical links are in range, node kinds are known, every
   constant decodes and passes the interning checks, string entries lie
-  in the byte pool. Ids stored inside records as operands are not
-  range-checked yet: a query that follows one out of range panics.
+  in the byte pool, a record's base list and a cast's base path name
+  base-specifiers in range. **Typed ids** (WP-1396): every id type of
+  `ids.rs` decodes by hand, rejecting an index above its `MAX_INDEX` (and
+  a `QualType` with type index 0) and recording the largest index read
+  per id space (`ids::space`, `Reader::note_id`); the decoded AST checks
+  each space's maximum against the arena it indexes (`Ast::check_ids`),
+  and `Sema`'s restore checks again after the Oven and its own fields
+  (which hold ids into the AST) are decoded. `MAX_INDEX` itself, the
+  filler of the arenas' dummy entries, is not recorded. Not covered:
+  ids packed into untyped `u32` slots (`ExprNode`/`StmtNode` operands
+  other than cast paths, `IdLists` values other than base lists), which
+  need a per-kind walk, and `DmsId` (it indexes the Oven's table).
 - **Links out of the AST**: `Loc`, `Span` and `FileId` into the
   `SourceManager` (a separate root, which must be in the same snapshot);
   `Reflectee::DataMemberSpec(DmsId)` into the Oven's `DmsTable` (the

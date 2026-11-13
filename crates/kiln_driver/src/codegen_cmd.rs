@@ -299,6 +299,7 @@ impl CodegenJob<'_> {
     ) -> Result<(Option<Module>, u32, Option<SharedDeps>), String> {
         let job = &self.0;
         let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
+        let restored = sm.file_count();
         let mut engine = make_engine(&sm, diag_opts, job.stderr.clone(), None);
         engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
         restore.timer.mark("DiagEngine");
@@ -316,6 +317,7 @@ impl CodegenJob<'_> {
             return Err(why);
         }
         crate::pch_snapshot::prefix_reported(job.args, &job.stderr, &snap.pch, &engine);
+        crate::pch_snapshot::changed_files(&sm, restored, &snap.pch, &engine);
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
