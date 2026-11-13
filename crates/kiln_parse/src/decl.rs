@@ -126,11 +126,25 @@ impl Parser<'_, '_> {
 
     /// translation-unit ([basic.link]): declarations to end of file.
     pub fn parse_translation_unit(&mut self) {
+        self.parse_top_level_declarations();
+        self.end_translation_unit();
+    }
+
+    /// The declarations of a translation unit to the end of the main
+    /// file, without the end-of-TU work ([`Self::end_translation_unit`]):
+    /// a precompiled prefix stops here (spec/parse.md "Snapshots").
+    pub(crate) fn parse_top_level_declarations(&mut self) {
         while !self.at_eof() {
             self.parse_external_declaration();
             let tu = self.s.ast.tu;
             self.s.ast.decls.end_top_level_decl(tu);
         }
+    }
+
+    /// The end of the translation unit: pragmas left at its end, the
+    /// module events, the pending instantiations ([temp.point]/7) and
+    /// clang's `ActOnEndOfTranslationUnit` checks.
+    pub(crate) fn end_translation_unit(&mut self) {
         self.take_fp_pragmas(FpAt::File);
         self.flush_fp_pragmas();
         self.module_flush();

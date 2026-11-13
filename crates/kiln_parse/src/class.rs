@@ -62,7 +62,7 @@ pub(crate) struct LateFnParts {
 }
 
 impl LateFnParts {
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.default_args.is_empty() && self.noexcept.is_none() && self.contracts.is_none()
     }
 }

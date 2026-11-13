@@ -395,6 +395,42 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.inst.report.format = opts.inst_report;
 }
 
+/// The literal options of a translation unit under `opts` for `target`.
+fn literal_options(opts: &ParseOptions, target: &Target) -> LiteralOptions {
+    LiteralOptions {
+        char8: opts.char8,
+        clang19_escapes: opts.clang_compat < 22,
+        c: opts.c,
+        ..LiteralOptions::new(opts.std, encoding_params(target))
+    }
+}
+
+/// A new [`Sema`] over an empty AST, configured from `opts` and `limits`:
+/// the start of every translation unit, and the object a snapshot is
+/// restored into ([`Sema::snap_restore`], spec/parse.md "Snapshots").
+#[must_use]
+pub fn new_sema<'a, 'sm>(
+    interner: Arc<Interner>,
+    diags: &'a DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+) -> Sema<'a, 'sm> {
+    // Before C++17 the exception specification is not part of the
+    // function type ([except.spec], pre-P0012): canonical function types
+    // drop it, so type identity, mangling and `typeid` ignore `noexcept`
+    // (spec/types.md §5.4).
+    let type_opts = TypeOptions { noexcept_in_type: opts.std >= Std::Cxx17 };
+    let ast = Ast::new(interner, TypeContext::with_options(target.types.clone(), type_opts));
+    let mut s = Sema::for_target(ast, diags, target);
+    s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
+    if limits.profile != ProfileLevel::Off {
+        s.set_constexpr_profile(limits.profile);
+    }
+    configure(&mut s, opts);
+    s
+}
+
 /// Parses and analyses the translation unit `pp` produces (its main file
 /// entered), reporting to `diags` and evaluating constant expressions
 /// under `limits`. `interner` must be the preprocessor's. Returns the
@@ -417,24 +453,8 @@ pub fn parse_preprocessed<'a, 'sm>(
         std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),
         "the AST and the preprocessor share an interner"
     );
-    // Before C++17 the exception specification is not part of the
-    // function type ([except.spec], pre-P0012): canonical function types
-    // drop it, so type identity, mangling and `typeid` ignore `noexcept`
-    // (spec/types.md §5.4).
-    let type_opts = TypeOptions { noexcept_in_type: opts.std >= Std::Cxx17 };
-    let ast = Ast::new(interner, TypeContext::with_options(target.types.clone(), type_opts));
-    let lit_opts = LiteralOptions {
-        char8: opts.char8,
-        clang19_escapes: opts.clang_compat < 22,
-        c: opts.c,
-        ..LiteralOptions::new(opts.std, encoding_params(&target))
-    };
-    let mut s = Sema::for_target(ast, diags, target);
-    s.set_constexpr_limits(limits.budget, limits.backtrace_limit);
-    if limits.profile != ProfileLevel::Off {
-        s.set_constexpr_profile(limits.profile);
-    }
-    configure(&mut s, opts);
+    let lit_opts = literal_options(opts, &target);
+    let mut s = new_sema(interner, diags, target, opts, limits);
     if opts.record_image {
         s.record_module_image();
     }
@@ -468,8 +488,19 @@ pub fn parse_preprocessed<'a, 'sm>(
     }
     p.parse_translation_unit();
     drop(phase);
+    finish_tu(p, main_id, &main, opts)
+}
+
+/// The end of [`parse_preprocessed`] and [`continue_preprocessed`]: the
+/// parser's last events, then the parts of a [`ParsedTu`].
+fn finish_tu<'a, 'sm>(
+    p: Parser<'a, 'sm>,
+    main_id: Option<FileId>,
+    main: &str,
+    opts: &ParseOptions,
+) -> (ParsedTu, Preprocessor<'sm, 'a>) {
     let (s, src) = p.finish();
-    let name = main.rsplit('/').next().unwrap_or(&main);
+    let name = main.rsplit('/').next().unwrap_or(main);
     let inst_report = s.instantiation_report(name);
     let mut s = s;
     let cfg_dump = std::mem::take(&mut s.cfg_out);
@@ -499,4 +530,110 @@ pub fn parse_preprocessed<'a, 'sm>(
         pragmas,
     };
     (tu, src.into_preprocessor())
+}
+
+/// A prefix parsed to its end by [`parse_prefix`]: the semantic state to
+/// snapshot or continue, the preprocessor, and whether the state is at
+/// rest for a snapshot.
+pub struct ParsedPrefix<'a, 'sm> {
+    /// The semantic state at the end of the prefix, before any
+    /// end-of-translation-unit work.
+    pub sema: Sema<'a, 'sm>,
+    /// The preprocessor, at the end of the prefix's main file.
+    pub pp: Preprocessor<'sm, 'a>,
+    /// `Ok` when the parser and [`Sema::snapshot_ready`] are at rest;
+    /// otherwise the first thing that is not (a prefix ending inside a
+    /// namespace, a linkage specification or a class; an option a
+    /// snapshot does not carry).
+    pub ready: Result<(), String>,
+}
+
+impl std::fmt::Debug for ParsedPrefix<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParsedPrefix").field("ready", &self.ready).finish_non_exhaustive()
+    }
+}
+
+/// Entry point (a) of a snapshot (spec/parse.md "Snapshots"): parses the
+/// translation unit `pp` produces as a *prefix*, to the end of its main
+/// file, without the end-of-translation-unit work (pending
+/// instantiations, the end-of-TU checks), and hands back the parts.
+/// `opts` must not record a module image, a PCH or carried constants, nor
+/// load a PCH: [`ParsedPrefix::ready`] refuses those.
+///
+/// # Panics
+///
+/// If `interner` is not `pp`'s interner.
+#[must_use]
+pub fn parse_prefix<'a, 'sm>(
+    pp: Preprocessor<'sm, 'a>,
+    interner: Arc<Interner>,
+    diags: &'a DiagEngine<'sm>,
+    target: Target,
+    opts: &ParseOptions,
+    limits: ConstexprLimits,
+) -> ParsedPrefix<'a, 'sm> {
+    assert!(
+        std::ptr::eq(Arc::as_ptr(&interner), std::ptr::from_ref(pp.interner())),
+        "the AST and the preprocessor share an interner"
+    );
+    let refused = if opts.record_image {
+        Some("a module image is being recorded")
+    } else if opts.record_pch {
+        Some("a PCH image is being recorded")
+    } else if opts.record_carried {
+        Some("carried constants are being recorded")
+    } else if opts.pch.is_some() {
+        Some("a PCH is loaded")
+    } else {
+        None
+    };
+    let lit_opts = literal_options(opts, &target);
+    let s = new_sema(interner, diags, target, opts, limits);
+    let mut src = TokenSource::new(pp, diags);
+    src.keep_all(opts.keep_tokens);
+    let mut p = Parser::new(s, src, lit_opts);
+    let phase = activity::enter(Phase::Parse, Loc::INVALID);
+    p.parse_top_level_declarations();
+    p.end_prefix();
+    drop(phase);
+    let ready = match refused {
+        Some(why) => Err(why.to_owned()),
+        None => p.snapshot_ready().and_then(|()| p.s.snapshot_ready()),
+    };
+    let (sema, src) = p.finish();
+    ParsedPrefix { sema, pp: src.into_preprocessor(), ready }
+}
+
+/// Entry point (b) of a snapshot (spec/parse.md "Snapshots"): continues
+/// `sema` (the end of a prefix from [`parse_prefix`], or a snapshot of
+/// one restored into [`new_sema`]) with the translation unit `pp`
+/// produces (its main file entered), to the end, end-of-TU work
+/// included. `opts` and `target` must be the prefix's.
+///
+/// # Panics
+///
+/// If `sema`'s interner is not `pp`'s.
+#[must_use]
+pub fn continue_preprocessed<'a, 'sm>(
+    sema: Sema<'a, 'sm>,
+    pp: Preprocessor<'sm, 'a>,
+    target: &Target,
+    opts: &ParseOptions,
+) -> (ParsedTu, Preprocessor<'sm, 'a>) {
+    assert!(
+        std::ptr::eq(std::ptr::from_ref(sema.ast.symbols()), std::ptr::from_ref(pp.interner())),
+        "the AST and the preprocessor share an interner"
+    );
+    let diags = sema.diags;
+    let lit_opts = literal_options(opts, target);
+    let main_id = pp.main_file();
+    let main = main_id.map(|f| diags.sm().file_name(f).to_owned()).unwrap_or_default();
+    let mut src = TokenSource::new(pp, diags);
+    src.keep_all(opts.keep_tokens);
+    let mut p = Parser::new(sema, src, lit_opts);
+    let phase = activity::enter(Phase::Parse, Loc::INVALID);
+    p.parse_translation_unit();
+    drop(phase);
+    finish_tu(p, main_id, &main, opts)
 }

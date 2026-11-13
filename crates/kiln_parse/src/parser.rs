@@ -420,6 +420,118 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         (self.s, self.src.into_inner())
     }
 
+    /// The end of a snapshot prefix ([`crate::parse_prefix`]): handles the
+    /// events after the prefix's last token and applies the file-scope FP
+    /// pragmas queued there, as the end of a translation unit does, but
+    /// without the end-of-TU work.
+    pub(crate) fn end_prefix(&mut self) {
+        self.handle_events(usize::MAX);
+        self.take_fp_pragmas(crate::fp_pragma::FpAt::File);
+    }
+
+    /// Whether the parser is at rest for a snapshot of the semantic state
+    /// (spec/parse.md "Snapshots"): at top level, at the end of the
+    /// prefix, nothing saved for later parsing. Nothing of the parser is
+    /// written: the consumer builds a new one over its own token source,
+    /// so every field is one of
+    ///
+    /// | field | class | why |
+    /// |---|---|---|
+    /// | `s` | owned root | [`Sema`], written by its own root |
+    /// | `sm` | reference | the consumer's source manager |
+    /// | `src` | rebuilt | the consumer's token source over its preprocessor |
+    /// | `kw`, `lex_opts`, `lit_opts`, `std` | configuration | from the options and the interner ([`Parser::new`]) |
+    /// | `targs_memo` | rebuilt | a memo valid for one lookup stamp |
+    /// | `replay`, `late`, `late_fn`, `mods`, `depth`, `fp_pragmas`, `loop_hints`, `stmt_attrs`, `lead_decl_attrs`, `chunk_decl_attrs`, `decltype_scope`, `template_delay_level`, `template_decl_kind`, `member_depr`, `halt`, `in_stmt_expr` | transient, checked | token replay, late-parsed class members and default arguments, a module unit (refused), open brackets, pragmas and attributes waiting for their construct |
+    /// | `cur`, `prev_hi`, `prev_lo`, `pos` | transient | the token position: the consumer starts at its main file's first token |
+    /// | `gnu_attr_end`, `cxx11_attr_run`, `expr_invalid`, `cast_paren_list`, `paren_callee`, `comma_loc`, `greater_is_op`, `greater_off_depth`, `pack_hint`, `addr_operand_at`, `offsetof_at`, `catch_declarator`, `in_exception_decl`, `type_id_constraint`, `named_cast_type_id`, `param_typename`, `param_recovery`, `next_tag_site`, `param_abort`, `typename_failed`, `typename_pack_index`, `stmt_attrs_loc` | transient | handed from one grammar rule to the next within a declaration; a new parser starts from the defaults, as it does at the start of a translation unit |
+    /// | `trace` | transient | test-only parse trace |
+    ///
+    /// No field is state: the late-parse lists end with their class, and
+    /// pragma events are applied as they arrive (the `#pragma` state is
+    /// Sema's).
+    ///
+    /// # Errors
+    /// The first field not at rest.
+    pub(crate) fn snapshot_ready(&self) -> Result<(), String> {
+        let Parser {
+            s: _,
+            sm: _,
+            src: _,
+            cur: _,
+            prev_hi: _,
+            prev_lo: _,
+            pos: _,
+            gnu_attr_end: _,
+            chunk_decl_attrs,
+            cxx11_attr_run: _,
+            depth,
+            kw: _,
+            lex_opts: _,
+            lit_opts: _,
+            std: _,
+            replay,
+            mods,
+            late,
+            late_fn,
+            member_depr,
+            #[cfg(test)]
+                trace: _,
+            in_stmt_expr,
+            expr_invalid: _,
+            cast_paren_list: _,
+            paren_callee: _,
+            comma_loc: _,
+            greater_is_op: _,
+            greater_off_depth: _,
+            pack_hint: _,
+            addr_operand_at: _,
+            offsetof_at: _,
+            catch_declarator: _,
+            in_exception_decl: _,
+            type_id_constraint: _,
+            named_cast_type_id: _,
+            param_typename: _,
+            param_recovery: _,
+            next_tag_site: _,
+            param_abort: _,
+            typename_failed: _,
+            typename_pack_index: _,
+            targs_memo: _,
+            halt,
+            decltype_scope,
+            template_delay_level,
+            template_decl_kind,
+            stmt_attrs,
+            lead_decl_attrs,
+            stmt_attrs_loc: _,
+            loop_hints,
+            fp_pragmas,
+        } = self;
+        let open = [
+            ("replay", !replay.is_empty()),
+            ("mods", mods.is_some()),
+            ("late", !late.is_empty()),
+            ("late_fn", !late_fn.is_empty()),
+            ("member_depr", member_depr.is_some()),
+            ("depth", *depth != [0; 3]),
+            ("fp_pragmas", !fp_pragmas.is_empty()),
+            ("loop_hints", !loop_hints.is_empty()),
+            ("stmt_attrs", !stmt_attrs.is_empty()),
+            ("lead_decl_attrs", !lead_decl_attrs.is_empty()),
+            ("chunk_decl_attrs", !chunk_decl_attrs.is_empty()),
+            ("decltype_scope", decltype_scope.is_some()),
+            ("template_delay_level", template_delay_level.is_some()),
+            ("template_decl_kind", template_decl_kind.is_some()),
+            ("halt", halt.get().is_some()),
+            ("in_stmt_expr", *in_stmt_expr),
+        ];
+        match open.iter().find(|o| o.1) {
+            Some((name, _)) => Err(format!("Parser.{name}: not at rest")),
+            None => Ok(()),
+        }
+    }
+
     /// Finishes parsing, returning the semantic state.
     pub fn into_sema(self) -> Sema<'a, 'sm> {
         self.finish().0
