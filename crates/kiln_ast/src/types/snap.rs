@@ -394,3 +394,44 @@ impl TypeContext {
         self.args.lists.len()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use kiln_snap::Snap;
+
+    use super::super::args::ListEntry;
+    use crate::decl::{DeclNode, FunctionData, ParamData, RecordData, TypedefData, VarData};
+    use crate::expr::ExprNode;
+    use crate::ids::QualType;
+    use crate::stmt::StmtNode;
+    use crate::types::{TemplateArg, TypeNode};
+
+    /// The records of the largest arenas (by bytes, `-fkiln-memory-report`
+    /// on `<bits/stdc++.h>`) encode at a fixed size, so their arrays are
+    /// one bulk copy (spec/snap.md "Fixed-size records").
+    #[test]
+    fn largest_records_are_fixed_size() {
+        let sizes = [
+            ("ExprNode", ExprNode::SIZE),
+            ("DeclNode", DeclNode::SIZE),
+            ("TypeNode", TypeNode::SIZE),
+            ("TemplateArg", TemplateArg::SIZE),
+            ("ListEntry", ListEntry::SIZE),
+            ("StmtNode", StmtNode::SIZE),
+            ("[u32; 3]", <[u32; 3]>::SIZE),
+            ("(u32, u32)", <(u32, u32)>::SIZE),
+            ("QualType", QualType::SIZE),
+            ("FunctionData", FunctionData::SIZE),
+            ("ParamData", ParamData::SIZE),
+            ("RecordData", RecordData::SIZE),
+            ("VarData", VarData::SIZE),
+            ("TypedefData", TypedefData::SIZE),
+        ];
+        let got: Vec<_> = sizes.iter().map(|&(n, s)| format!("{n}={s:?}")).collect();
+        let want = "ExprNode=Some(20) DeclNode=Some(28) TypeNode=Some(8) TemplateArg=Some(9) \
+                    ListEntry=Some(13) StmtNode=Some(16) [u32; 3]=Some(12) (u32, u32)=Some(8) \
+                    QualType=Some(4) FunctionData=Some(24) ParamData=Some(12) RecordData=Some(37) \
+                    VarData=Some(24) TypedefData=Some(16)";
+        assert_eq!(got.join(" "), want);
+    }
+}

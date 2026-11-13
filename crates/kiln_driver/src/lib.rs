@@ -34,6 +34,8 @@ pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;
 pub mod scan_deps;
+#[cfg(test)]
+mod snap_tests;
 pub mod stats;
 pub mod syntax_cmd;
 pub mod templ_opts;

@@ -38,3 +38,6 @@ kiln_snap.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+kiln_snap.workspace = true
