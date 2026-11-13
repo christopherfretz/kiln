@@ -120,7 +120,10 @@ impl<'a> Preprocessor<'a, '_> {
     /// Enters `file` as the main file of a preprocessor with no open
     /// file: after [`Self::end_main_file`], or after
     /// [`Self::snap_restore`]. Unlike [`Self::enter_main_file`], the
-    /// predefines are not read again: they are part of the state.
+    /// predefines are not read again: they are part of the state. The
+    /// `#pragma clang diagnostic` state in effect at the end of the prefix
+    /// continues at the start of `file`, as it continues in the includer
+    /// after the end of an `-include`d header.
     ///
     /// # Errors
     /// A file is open.
@@ -130,6 +133,7 @@ impl<'a> Preprocessor<'a, '_> {
         }
         self.main_file = Some(file);
         self.push_file(file, None, None, None, false, false);
+        self.diags.pragma_file_exit(self.sm.loc(file, 0));
         if self.modules.is_some() {
             self.module_lines = crate::modules::has_module_lines(self.sm.text(file));
         }
@@ -406,6 +410,10 @@ impl<'a> Preprocessor<'a, '_> {
                     _ => true,
                 })
                 && m.enabled.get()
+                && (m.function_like || m.params.is_empty())
+                && (!m.variadic || (m.function_like && !m.params.is_empty()))
+                && (!m.named_variadic || m.variadic)
+                && (m.body.is_empty() || self.body_spelled(m))
         };
         if !d.macros.map.iter().all(|(k, m)| def_ok(Some(k), m)) {
             return Err("a macro definition is inconsistent");
@@ -432,6 +440,21 @@ impl<'a> Preprocessor<'a, '_> {
             return Err("a live attribute macro out of range");
         }
         Ok(())
+    }
+
+    /// A replacement list's locations, as the expansion code uses them
+    /// without a check: the definition range is one allocated entry, and
+    /// each token is spelled at its offset `rel` in it.
+    fn body_spelled(&self, m: &MacroDef) -> bool {
+        let start = m.def_start;
+        let at = |n: u32| start.to_raw().checked_add(n).map(Loc::from_raw);
+        at(m.def_len).is_some_and(|end| self.sm.same_entry_distance(start, end) == Some(m.def_len))
+            && m.body.iter().zip(&m.rel).all(|(t, &(lo, hi))| {
+                lo <= hi
+                    && hi <= m.def_len
+                    && Some(t.tok.span.lo) == at(lo)
+                    && Some(t.tok.span.hi) == at(hi)
+            })
     }
 
     /// Registers the snapshot's descriptor (the fields
