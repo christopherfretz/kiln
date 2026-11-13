@@ -588,6 +588,13 @@ impl Cg<'_> {
         if self.m.global(g).initializer().is_some() || !self.vt_emitted.insert(first) {
             return Ok(());
         }
+        // clang `GenerateClassData` -> `completeClassData`: the unit that
+        // defines the vtable emits the class's full debug type (vtable
+        // homing, spec/codegen.md §5.1); an `available_externally` copy
+        // does not (clang 19 and 22 keep the declaration).
+        if self.di.is_some() && linkage != VtLinkage::AvailableExternally {
+            self.di_home_class(first, false);
+        }
         if self.class_bits_of(first).contains(DefinitionBits::HAS_VIRTUAL_BASES) {
             // clang `GenerateClassData`: the VTT (and its construction
             // vtables) before the vtable's own initializer.
@@ -728,6 +735,11 @@ impl Cg<'_> {
             let Some(&(so, off)) = subs.get(usize::from(sub.0)) else {
                 return err(loc, "VTT vtable of an unknown subobject");
             };
+            // clang `GenerateConstructionVTable` -> `completeClassData`:
+            // the base subobject's class gets its full debug type.
+            if self.di.is_some() && linkage != VtLinkage::AvailableExternally {
+                self.di_home_class(so.class, false);
+            }
             let l = match self.vts.construction_vtable(rd, sub) {
                 Ok(l) => l,
                 Err(e) => return err(loc, format!("cannot lay out a construction vtable: {e:?}")),
