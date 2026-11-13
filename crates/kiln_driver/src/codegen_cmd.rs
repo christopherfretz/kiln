@@ -258,11 +258,20 @@ impl CodegenJob<'_> {
             engine.flush();
             return (None, engine.error_count(), None);
         }
+        if let Some(s) = &job.args.pch.snapshot_use {
+            match self.run_restored(s, &diag_opts) {
+                Ok(r) => return r,
+                Err(why) => {
+                    let why = format!("not used ({why}); the header is replayed");
+                    crate::pch_snapshot::note(job.args, &job.stderr, &s.pch, &why);
+                }
+            }
+        }
         let mut module = None;
         let mut deps = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                module = self.lower(&sm, &engine, &interner, inputs, &mut deps);
+                module = self.lower(&sm, &engine, &interner, inputs, &mut deps, None);
             }
         });
         engine.flush();
@@ -278,51 +287,53 @@ impl CodegenJob<'_> {
         (if errors == 0 { module } else { None }, errors, deps)
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "target, parse and codegen options in one straight-line pipeline"
-    )]
-    fn lower<'sm>(
+    /// EXPERIMENTAL (WP-1383): [`Self::run`] with the `-include-pch`
+    /// file's snapshot restored in place of a replay of its header
+    /// (`crate::pch_snapshot`); `Err` (nothing reported) when it cannot
+    /// be restored, and the caller replays.
+    #[allow(clippy::type_complexity)]
+    fn run_restored(
         &self,
-        sm: &'sm SourceManager,
-        engine: &DiagEngine<'sm>,
-        interner: &'sm Arc<Interner>,
-        inputs: PpInputs,
-        deps_out: &mut Option<SharedDeps>,
-    ) -> Option<Module> {
+        snap: &crate::args::PchSnapshotUse,
+        diag_opts: &DiagOptions,
+    ) -> Result<(Option<Module>, u32, Option<SharedDeps>), String> {
+        let job = &self.0;
+        let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
+        let mut engine = make_engine(&sm, diag_opts, job.stderr.clone(), None);
+        engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
+        restore.timer.mark("DiagEngine");
+        let mut module = None;
+        let mut deps = None;
+        let mut failed = None;
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                let mut restore = Some(restore);
+                module = self.lower(&sm, &engine, &interner, inputs, &mut deps, restore.as_mut());
+                failed = restore.and_then(|r| r.failed);
+            }
+        });
+        if let Some(why) = failed {
+            return Err(why);
+        }
+        engine.flush();
+        if let Some(s) = engine.summary()
+            && diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = job.stderr.clone();
+            let _ = writeln!(err, "{s}");
+        }
+        let errors = engine.error_count();
+        Ok((if errors == 0 { module } else { None }, errors, deps))
+    }
+
+    /// The parser's options of the job (`pch`: a declaration image to
+    /// load).
+    fn parse_options(&self, pch: Option<kiln_parse::PchLoad>) -> ParseOptions {
         let job = &self.0;
         let a = job.args;
-        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
-            Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
-                .arg(job.toolchain.target.triple)
-                .emit(engine);
-            return None;
-        };
-        if let Some(signed) = a.predef.char_signed {
-            target.types.char_signed = signed;
-        }
-        // WP-813: the flags this target rejects end the `-cc1` job.
         let x86 = !job.toolchain.target.is_aarch64();
-        let target_errors = a.codegen.target_errors(x86);
-        if !target_errors.is_empty() {
-            for e in &target_errors {
-                e.emit(engine);
-            }
-            return None;
-        }
-        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
-        // `X86TargetInfo::setMaxAtomicWidth`).
-        if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
-            target.types.max_atomic_inline_bytes = 16;
-        }
-        let mut inputs = inputs;
-        let skipped = a.coverage.mapping().then(SharedSkips::default);
-        inputs.skipped.clone_from(&skipped);
-        let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
-        let main_id = pp.main_file();
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
-        let pch = crate::pch_image::sema_load(a, &pp, sm, engine).ok()?;
-        let popts = ParseOptions {
+        ParseOptions {
             exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
             rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
             inst_limits: a.templ.limits(),
@@ -353,10 +364,78 @@ impl CodegenJob<'_> {
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             pch,
             ..job.std.parse_options()
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "target, parse and codegen options in one straight-line pipeline"
+    )]
+    fn lower<'sm>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        inputs: PpInputs,
+        deps_out: &mut Option<SharedDeps>,
+        restore: Option<&mut crate::pch_snapshot::Restore<'_>>,
+    ) -> Option<Module> {
+        let job = &self.0;
+        let a = job.args;
+        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
+            Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
+                .arg(job.toolchain.target.triple)
+                .emit(engine);
+            return None;
         };
-        let limits = a.constexpr.limits();
-        let (mut tu, mut pp) =
-            parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        if let Some(signed) = a.predef.char_signed {
+            target.types.char_signed = signed;
+        }
+        // WP-813: the flags this target rejects end the `-cc1` job.
+        let x86 = !job.toolchain.target.is_aarch64();
+        let target_errors = a.codegen.target_errors(x86);
+        if !target_errors.is_empty() {
+            for e in &target_errors {
+                e.emit(engine);
+            }
+            return None;
+        }
+        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
+        // `X86TargetInfo::setMaxAtomicWidth`).
+        if crate::features::resolve(a, &job.toolchain.target).0.x86_cx16() {
+            target.types.max_atomic_inline_bytes = 16;
+        }
+        let mut inputs = inputs;
+        let skipped = a.coverage.mapping().then(SharedSkips::default);
+        inputs.skipped.clone_from(&skipped);
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        let (mut tu, mut pp, deps, main_id) = if let Some(restore) = restore {
+            // EXPERIMENTAL (WP-1383): the prefix's state restored.
+            let (sema, pp, deps, popts) =
+                job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
+                    self.parse_options(o)
+                })?;
+            let main_id = pp.main_file();
+            let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
+            restore.timer.mark("continue");
+            restore.timer.report();
+            (tu, pp, deps, main_id)
+        } else {
+            let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
+            let main_id = pp.main_file();
+            let pch = crate::pch_image::sema_load(a, &pp, sm, engine).ok()?;
+            let popts = self.parse_options(pch);
+            let limits = a.constexpr.limits();
+            let (tu, pp) = parse_preprocessed(
+                pp,
+                Arc::clone(interner),
+                engine,
+                target.clone(),
+                &popts,
+                limits,
+            );
+            (tu, pp, deps, main_id)
+        };
         job.note_image_imports(&pp);
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());

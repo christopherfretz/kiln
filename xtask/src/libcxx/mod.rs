@@ -320,6 +320,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                 let v = value("--pch-diff")?;
                 o.pch_diff = Some(
                     crate::util::pch_diff::PchDiff::parse(&v)
+                        .filter(|m| *m != crate::util::pch_diff::PchDiff::Snapshot)
                         .ok_or_else(|| format!("bad --pch-diff `{v}` (load|replay|check)"))?,
                 );
             }

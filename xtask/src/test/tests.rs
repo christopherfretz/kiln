@@ -1101,6 +1101,7 @@ fn pch_diff_option() {
     assert_eq!(o(&["--pch-diff", "load"]), Some(PchDiff::Load));
     assert_eq!(o(&["--pch-diff=replay"]), Some(PchDiff::Replay));
     assert_eq!(o(&["--pch-diff=check"]), Some(PchDiff::Check));
+    assert_eq!(o(&["--pch-diff=snapshot"]), Some(PchDiff::Snapshot));
     assert!(parse_args(strings(&["--pch-diff", "image"])).is_err());
 }
 

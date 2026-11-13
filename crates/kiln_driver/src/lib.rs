@@ -30,6 +30,7 @@ pub mod module_cache;
 mod pch;
 mod pch_check;
 mod pch_image;
+mod pch_snapshot;
 pub mod pp_cmd;
 pub mod rsp;
 pub mod sanitize;

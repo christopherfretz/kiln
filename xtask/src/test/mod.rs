@@ -58,7 +58,8 @@ options:
   --pch-diff <how>    PCH differential: kiln compiles each test that opens with
                       #includes without a PCH and with -include-pch of a PCH of
                       them, read by `load` (the declaration image, or its
-                      fallback), `replay` or `check`; the exit status,
+                      fallback), `replay`, `check` or `snapshot` (the
+                      experimental -fkiln-pch-snapshot); the exit status,
                       diagnostics, IR and run must agree; no oracles, xfail
                       ignored (spec/harness.md \"PCH differential\")
   --external <dir>    run every .c/.cpp under <dir> (outside the repo) as
@@ -262,10 +263,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--bmi-image" => o.bmi_image = true,
             "--pch-diff" => {
                 let v = value("--pch-diff")?;
-                o.pch_diff = Some(
-                    crate::util::pch_diff::PchDiff::parse(&v)
-                        .ok_or_else(|| format!("bad --pch-diff `{v}` (load|replay|check)"))?,
-                );
+                o.pch_diff =
+                    Some(crate::util::pch_diff::PchDiff::parse(&v).ok_or_else(|| {
+                        format!("bad --pch-diff `{v}` (load|replay|check|snapshot)")
+                    })?);
             }
             "--bmi-kind" => {
                 let v = value("--bmi-kind")?;

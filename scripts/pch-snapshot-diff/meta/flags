@@ -1,0 +1,2 @@
+-std=c++26
+--gcc-toolchain=@GCC16@

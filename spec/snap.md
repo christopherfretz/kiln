@@ -236,7 +236,6 @@ The roots so far:
   `snap_put` (refused unless ready; writes nothing then), `snap_restore`
   (into an unused Oven; validates everything before assigning anything)
   and `snap_schema`; spec/oven.md "Snapshots" states its behaviour.
-
 - `kiln_sema::Sema` (`src/snap.rs`), a *configured* root (WP-1382;
   spec/sema.md §8b): it borrows the diagnostics engine and holds the
   consumer's options, so it is not `Snap` but has `snap_put(&self, &mut
@@ -261,14 +260,6 @@ What the Sema root (WP-1382) added to the recipe:
 - A shared `Arc` (the interner) is restored as the same allocation only
   when every holder is in the same stream after its first writer; a root
   that needs the consumer's allocation checks `ptr_eq` and refuses.
-
-`kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`)
-is a **configured** root: its limits and options are the consumer's, so
-it is not `Snap`. The consumer builds the Oven as it would without a
-snapshot and applies one to it: `snap_ready` (the quiescence check),
-`snap_put` (refused unless ready; writes nothing then), `snap_restore`
-(into an unused Oven; validates everything before assigning anything)
-and `snap_schema`. spec/oven.md "Snapshots" states its behaviour.
 
 ### Configured roots
 
@@ -318,6 +309,51 @@ pub fn snap_schema(s: &mut Schema);   // associated, no `self`
 The configured roots are `kiln_diag::DiagEngine` (`src/engine/snap.rs`,
 spec/diag.md §7.8) and `kiln_pp::Preprocessor` (`src/snap.rs`, spec/pp.md
 "Snapshots").
+
+### Whole-compiler restore order
+
+The experimental PCH snapshot (WP-1383, `kiln_driver/src/pch_snapshot.rs`,
+docs/status/pch-snapshot-prototype.md) writes the whole front end at the
+end of a prefix as one stream, so `Arc<Interner>` sharing between the
+roots is kept. The producer parses an empty main file whose `-include`s
+are its own and the header (`kiln_parse::parse_prefix`), checks
+`ready`, closes the main file (`Preprocessor::end_main_file`) and writes,
+in this order:
+
+1. `SourceManager` (plain `Snap`);
+2. `Arc<Interner>` (plain `Snap`);
+3. `DiagEngine::snap_put`;
+4. `Preprocessor::snap_put`;
+5. `Sema::snap_put` (the `Ast`, then the Oven, then Sema's own fields).
+
+The consumer restores in the same order, and builds each configured
+root from its own command line just before applying the snapshot to it:
+
+1. the source manager and the interner, before anything loads a file or
+   interns a name;
+2. the diagnostics engine (`make_engine` over the restored source
+   manager), then `snap_restore`;
+3. the main file loaded into the restored source manager (it gets the
+   next file id after the producer's);
+4. the preprocessor configured as without a snapshot (resolver, `#if`
+   evaluator, feature queries, module options) but with no main file
+   entered, then `snap_restore`, then `enter_next_main_file(main)`; the
+   consumer's own predefines are not read again (they are state), and
+   its `-include`s after the PCH are entered as a new `<built-in>`
+   buffer (`Preprocessor::enter_builtin_includes`);
+5. a fresh `Sema` (`kiln_parse::new_sema`, with the consumer's
+   `ParseOptions` and constexpr limits), then `snap_restore` (the
+   `Ast`, the Oven, then Sema's own fields);
+6. the reader must be at its end; then
+   `kiln_parse::continue_preprocessed` parses the main file and the
+   rest of the job (end-of-translation-unit work, codegen) runs as
+   without a snapshot.
+
+Any decoding or validation error before step 6 drops everything the
+restore built, and the job starts again by replaying the header; the
+error is reported only by `-v`. The section is used only when its head
+matches: the schema hash of all five roots, the kiln build, and the
+command line minus its inputs and outputs.
 
 ## Recipe: making a crate's types `Snap`
 

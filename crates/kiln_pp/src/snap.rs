@@ -140,6 +140,26 @@ impl Preprocessor<'_, '_> {
         Ok(())
     }
 
+    /// After [`Self::enter_next_main_file`]: enters `text`, the consumer's
+    /// own predefines buffer reduced to the `-include`s that follow a
+    /// restored precompiled header (WP-1383), as a new `<built-in>`
+    /// buffer on top of the main file, as [`Self::enter_main_file`] enters
+    /// the full predefines. It becomes the predefines buffer (its
+    /// `#include`s are found from the working directory).
+    ///
+    /// # Errors
+    /// The main file is not the only open file, or location space is
+    /// exhausted.
+    pub fn enter_builtin_includes(&mut self, text: String) -> Result<(), String> {
+        if self.frames.len() != 1 {
+            return Err(format!("Preprocessor.frames: {} open", self.frames.len()));
+        }
+        let b = self.sm.add_virtual("<built-in>", text).map_err(|e| e.to_string())?;
+        self.push_file(b, None, None, None, false, false);
+        self.predef_file = Some(b);
+        Ok(())
+    }
+
     /// Whether the preprocessor is at rest for a snapshot (spec/pp.md
     /// "Snapshots"): no file open, nothing queued or read ahead, no
     /// directive, macro argument or `#if` being read, no module state but

@@ -62,6 +62,15 @@ impl SyntaxJob<'_> {
         if let Some(v) = &job.args.verify {
             return self.run_verify(v.clone());
         }
+        if let Some(s) = &job.args.pch.snapshot_use {
+            match self.run_restored(s) {
+                Ok(r) => return r,
+                Err(why) => {
+                    let why = format!("not used ({why}); the header is replayed");
+                    crate::pch_snapshot::note(job.args, &job.stderr, &s.pch, &why);
+                }
+            }
+        }
         let sm = SourceManager::new();
         // The preprocessor and the AST share the interner; it outlives
         // the engine.
@@ -81,7 +90,7 @@ impl SyntaxJob<'_> {
         }
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                self.parse(&sm, &engine, &interner, inputs, None, &mut result);
+                self.parse(&sm, &engine, &interner, inputs, None, &mut result, None);
             }
         });
         engine.flush();
@@ -93,6 +102,174 @@ impl SyntaxJob<'_> {
         }
         result.errors = engine.error_count();
         result
+    }
+
+    /// EXPERIMENTAL (WP-1383): the job with the `-include-pch` file's
+    /// snapshot restored in place of a replay of its header
+    /// (`crate::pch_snapshot`); `Err` (nothing reported) when it cannot
+    /// be restored, and the caller replays.
+    fn run_restored(&self, snap: &crate::args::PchSnapshotUse) -> Result<JobResult, String> {
+        use std::io::Write as _;
+        let job = &self.0;
+        let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
+        let mut engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
+        engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
+        restore.timer.mark("DiagEngine");
+        let mut result = JobResult::default();
+        let x86 = !job.toolchain.target.is_aarch64();
+        let invocation = job.args.codegen.invocation_errors(x86, job.toolchain.target.triple);
+        if !invocation.is_empty() {
+            return Err("a -cc1 invocation error".to_owned());
+        }
+        let mut failed = None;
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                let mut restore = Some(restore);
+                self.parse(&sm, &engine, &interner, inputs, None, &mut result, restore.as_mut());
+                failed = restore.and_then(|r| r.failed);
+            }
+        });
+        if let Some(why) = failed {
+            return Err(why);
+        }
+        engine.flush();
+        if let Some(s) = engine.summary()
+            && job.diag_opts.format == kiln_diag::Format::Text
+        {
+            let mut err = job.stderr.clone();
+            let _ = writeln!(err, "{s}");
+        }
+        result.errors = engine.error_count();
+        Ok(result)
+    }
+
+    /// EXPERIMENTAL (WP-1383): the producer's snapshot pass. The job's
+    /// input is an empty main file whose `-include`s are the producer's
+    /// and the header; it is parsed to its end without the
+    /// end-of-translation-unit work, closed, and every root written, in
+    /// restore order. `Err`: why there is no snapshot.
+    pub(crate) fn snapshot(self) -> Result<Vec<u8>, String> {
+        let job = &self.0;
+        let sm = SourceManager::new();
+        let interner = Arc::new(Interner::new());
+        let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
+        let mut out = Err("the preprocessor could not be built".to_owned());
+        crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
+            if let Some(inputs) = job.pp_inputs(&sm, &engine) {
+                out = self.snapshot_parse(&sm, &engine, &interner, inputs);
+            }
+        });
+        engine.flush();
+        out
+    }
+
+    fn snapshot_parse<'sm>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        inputs: PpInputs,
+    ) -> Result<Vec<u8>, String> {
+        let job = &self.0;
+        let a = job.args;
+        let Some(target) = self.target(engine) else {
+            return Err("the target is not supported".to_owned());
+        };
+        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
+            return Err("the preprocessor could not be built".to_owned());
+        };
+        let popts = self.parse_options(None);
+        let limits = a.constexpr.limits();
+        let started = std::time::Instant::now();
+        let mut p =
+            kiln_parse::parse_prefix(pp, Arc::clone(interner), engine, target, &popts, limits);
+        let parsed = started.elapsed();
+        p.ready?;
+        if engine.error_count() > 0 {
+            return Err(format!("the prefix has {} error(s)", engine.error_count()));
+        }
+        p.pp.end_main_file()?;
+        let started = std::time::Instant::now();
+        let mut w = kiln_snap::Writer::new();
+        w.put(sm);
+        w.put(interner);
+        engine.snap_put(&mut w)?;
+        p.pp.snap_put(&mut w)?;
+        p.sema.snap_put(&mut w)?;
+        let bytes = w.into_bytes();
+        if crate::pch_snapshot::timing() {
+            eprintln!(
+                "snapshot-timing: producer prefix parse {:.2} ms, encode {:.2} ms, {} bytes",
+                parsed.as_secs_f64() * 1000.0,
+                started.elapsed().as_secs_f64() * 1000.0,
+                bytes.len()
+            );
+        }
+        Ok(bytes)
+    }
+
+    /// The target of the job's triple, or `None` once the error is
+    /// reported.
+    fn target(&self, engine: &DiagEngine<'_>) -> Option<Target> {
+        let job = &self.0;
+        let a = job.args;
+        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
+            Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
+                .arg(job.toolchain.target.triple)
+                .emit(engine);
+            return None;
+        };
+        target.types.char_signed = a.predef.char_signed.unwrap_or(target.types.char_signed);
+        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
+        // `X86TargetInfo::setMaxAtomicWidth`).
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        if feats.x86_cx16() {
+            target.types.max_atomic_inline_bytes = 16;
+        }
+        Some(target)
+    }
+
+    /// The parser's options of the job (`pch`: a declaration image to
+    /// load).
+    fn parse_options(&self, pch: Option<kiln_parse::PchLoad>) -> ParseOptions {
+        let job = &self.0;
+        let a = job.args;
+        let x86 = !job.toolchain.target.is_aarch64();
+        let feats = crate::features::resolve(a, &job.toolchain.target).0;
+        let writes_kind2 = a.bmi_kind != Some(1) && job.module_output_path().is_some();
+        ParseOptions {
+            exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+            rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
+            inst_limits: a.templ.limits(),
+            inst_report: a.templ.report,
+            reflection: a.predef.reflection_for(&job.std),
+            coro_aligned_allocation: a.predef.coro_aligned_allocation,
+            lax_vector_conversions: a.lax_vector_conversions,
+            clang_compat: a.predef.clang_compat.major(),
+            gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
+            no_builtin: a.no_builtin(),
+            no_builtin_fns: a.no_builtin_fns(),
+            freestanding: a.predef.freestanding.unwrap_or(false),
+            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            char8: a.predef.char8_t,
+            math_errno: a.fp_model().opts.math_errno,
+            sve: feats.sve,
+            sve_vector_bits: feats.sve_vector_bits,
+            aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
+            cfg_dump: a.dump_cfg,
+            cfg_stats: a.cfg_stats,
+            cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
+            permissive: a.permissive,
+            contract_semantic: a.contract_semantic.unwrap_or_default(),
+            cf_protection_branch: a.codegen.cf_protection_branch(x86),
+            record_carried: writes_kind2,
+            record_image: a.bmi_image && writes_kind2,
+            image_census: a.bmi_image_census,
+            gnu89_inline: a.predef.gnu89_inline_for(&job.std),
+            record_pch: a.pch.producing && a.pch.image != crate::args::PchImage::Off,
+            pch,
+            ..job.std.parse_options()
+        }
     }
 
     /// `-verify` (spec/driver.md "-verify", spec/diag.md §11): the
@@ -111,7 +288,7 @@ impl SyntaxJob<'_> {
                 let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
                 let v = Verifier::new(&sm, opts.clone(), inputs.main.file(), quoted_lookup(dirs));
                 let v = Rc::new(RefCell::new(v));
-                self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result);
+                self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result, None);
                 verifier = Some(v);
             }
         });
@@ -166,6 +343,7 @@ impl SyntaxJob<'_> {
     }
 
     #[allow(clippy::too_many_lines, reason = "the job's phases, in order")]
+    #[allow(clippy::too_many_arguments)]
     fn parse<'sm>(
         &self,
         sm: &'sm SourceManager,
@@ -174,25 +352,32 @@ impl SyntaxJob<'_> {
         inputs: PpInputs,
         verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
         result: &mut JobResult,
+        restore: Option<&mut crate::pch_snapshot::Restore<'_>>,
     ) {
         let job = &self.0;
         let a = job.args;
         let Ok(dump_opts) = self.dump_options(sm, engine, inputs.main.file()) else {
             return;
         };
-        let Ok(mut target) = Target::from_triple(job.toolchain.target.triple) else {
-            Diag::new(DiagId::drv_unsupported_target, Span::INVALID)
-                .arg(job.toolchain.target.triple)
-                .emit(engine);
+        let Some(target) = self.target(engine) else { return };
+        if let Some(restore) = restore {
+            // EXPERIMENTAL (WP-1383): the prefix's state restored.
+            let Some(parts) =
+                job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
+                    self.parse_options(o)
+                })
+            else {
+                return;
+            };
+            let (sema, pp, deps, popts) = parts;
+            let main_id = pp.main_file();
+            let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
+            restore.timer.mark("continue");
+            restore.timer.report();
+            self.after_parse(
+                sm, engine, interner, tu, pp, deps, main_id, verify, dump_opts, &target, result,
+            );
             return;
-        };
-        target.types.char_signed = a.predef.char_signed.unwrap_or(target.types.char_signed);
-        let x86 = !job.toolchain.target.is_aarch64();
-        // WP-630: `cx16` makes 128-bit atomics lock-free (clang
-        // `X86TargetInfo::setMaxAtomicWidth`).
-        let feats = crate::features::resolve(a, &job.toolchain.target).0;
-        if feats.x86_cx16() {
-            target.types.max_atomic_inline_bytes = 16;
         }
         let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
         else {
@@ -202,45 +387,36 @@ impl SyntaxJob<'_> {
             let v = Rc::clone(v);
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
-        let writes_kind2 = a.bmi_kind != Some(1) && job.module_output_path().is_some();
         let Ok(pch) = crate::pch_image::sema_load(a, &pp, sm, engine) else { return };
-        let popts = ParseOptions {
-            exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
-            rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
-            inst_limits: a.templ.limits(),
-            inst_report: a.templ.report,
-            reflection: a.predef.reflection_for(&job.std),
-            coro_aligned_allocation: a.predef.coro_aligned_allocation,
-            lax_vector_conversions: a.lax_vector_conversions,
-            clang_compat: a.predef.clang_compat.major(),
-            gnu_lib_builtins: a.stdlib.unwrap_or_default() == crate::toolchain::StdLib::LibStdCxx,
-            no_builtin: a.no_builtin(),
-            no_builtin_fns: a.no_builtin_fns(),
-            freestanding: a.predef.freestanding.unwrap_or(false),
-            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
-            char8: a.predef.char8_t,
-            math_errno: a.fp_model().opts.math_errno,
-            sve: feats.sve,
-            sve_vector_bits: feats.sve_vector_bits,
-            aarch64_cpu_valid: crate::features::aarch64_attr_cpu_valid,
-            cfg_dump: a.dump_cfg,
-            cfg_stats: a.cfg_stats,
-            cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
-            permissive: a.permissive,
-            contract_semantic: a.contract_semantic.unwrap_or_default(),
-            cf_protection_branch: a.codegen.cf_protection_branch(x86),
-            record_carried: writes_kind2,
-            record_image: a.bmi_image && writes_kind2,
-            image_census: a.bmi_image_census,
-            gnu89_inline: a.predef.gnu89_inline_for(&job.std),
-            record_pch: a.pch.producing && a.pch.image != crate::args::PchImage::Off,
-            pch,
-            ..job.std.parse_options()
-        };
+        let popts = self.parse_options(pch);
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();
-        let (tu, mut pp) =
+        let (tu, pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
+        self.after_parse(
+            sm, engine, interner, tu, pp, deps, main_id, verify, dump_opts, &target, result,
+        );
+    }
+
+    /// The end of [`Self::parse`]: module and PCH output, reports and
+    /// dumps of the parsed unit `tu`.
+    #[allow(clippy::too_many_arguments)]
+    fn after_parse<'sm>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        tu: kiln_parse::ParsedTu,
+        mut pp: kiln_pp::Preprocessor<'sm, '_>,
+        deps: Option<crate::pp_cmd::SharedDeps>,
+        main_id: Option<FileId>,
+        verify: Option<&Rc<RefCell<Verifier<'sm>>>>,
+        dump_opts: Option<DumpOptions<'sm>>,
+        target: &Target,
+        result: &mut JobResult,
+    ) {
+        let job = &self.0;
+        let a = job.args;
         job.note_image_imports(&pp);
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
@@ -278,11 +454,11 @@ impl SyntaxJob<'_> {
         if a.dump_record_layouts {
             // clang prints each class as Sema completes it, before any
             // AST dump at the end of the translation unit.
-            let layouts = kiln_abi::dump_all_record_layouts(&ast, &target, Some(sm));
+            let layouts = kiln_abi::dump_all_record_layouts(&ast, target, Some(sm));
             result.output.push_str(&layouts);
         }
         if a.dump_vtable_layouts {
-            result.output.push_str(&kiln_abi::vtable::dump_all_vtable_layouts(&ast, &target));
+            result.output.push_str(&kiln_abi::vtable::dump_all_vtable_layouts(&ast, target));
         }
         if let Some(d) = dump_opts {
             let mut out: Vec<u8> = Vec::new();

@@ -868,6 +868,44 @@ pub struct PchArgs {
     /// image: what a `load` consumer compiles with, run next to the
     /// replay and compared with it (WP-1036; set by `crate::pch`).
     pub check_load: Option<Box<PchCheckLoad>>,
+    /// EXPERIMENTAL, undocumented (WP-1383 prototype): the last of
+    /// `-f[no-]kiln-pch-snapshot[=write|load]`. Not in `--help`.
+    pub snapshot: PchSnapshot,
+    /// The `-include-pch` file's whole-front-end snapshot, when
+    /// `-fkiln-pch-snapshot=load` found a usable one (set by
+    /// `crate::pch`). The rest of the arguments are replay's, the
+    /// fallback.
+    pub snapshot_use: Option<PchSnapshotUse>,
+}
+
+/// EXPERIMENTAL (WP-1383 prototype, spec/snap.md "Whole-compiler restore
+/// order"): `-fkiln-pch-snapshot`'s mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PchSnapshot {
+    /// No snapshot is written or read.
+    #[default]
+    Off,
+    /// The producer also writes the front end's state at the end of the
+    /// header as one more PCH section.
+    Write,
+    /// The consumer restores that state instead of replaying the header,
+    /// and replays on any mismatch.
+    Load,
+}
+
+/// A snapshot a consumer job restores (`crate::pch_snapshot`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PchSnapshotUse {
+    /// The PCH file, for `-v` notes.
+    pub pch: String,
+    /// The snapshot section's bytes.
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    /// Where the restored roots start in [`Self::bytes`] (after the
+    /// identity).
+    pub start: usize,
+    /// The consumer's `-include`s after the PCH (those the producer did
+    /// not have).
+    pub includes: Vec<String>,
 }
 
 /// The arguments a `load` consumer differs in from replay's.
@@ -1586,6 +1624,10 @@ impl Args {
             "-fkiln-pch-image=check" => self.pch.image = PchImage::Check,
             "-fkiln-pch-image=load" => self.pch.image = PchImage::Load,
             "-fno-kiln-pch-image" => self.pch.image = PchImage::Off,
+            // EXPERIMENTAL (WP-1383): deliberately not in `--help`.
+            "-fkiln-pch-snapshot=write" => self.pch.snapshot = PchSnapshot::Write,
+            "-fkiln-pch-snapshot=load" => self.pch.snapshot = PchSnapshot::Load,
+            "-fno-kiln-pch-snapshot" => self.pch.snapshot = PchSnapshot::Off,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }
@@ -1620,6 +1662,8 @@ impl Args {
                         )),
                     }
                 } else if let Some(v) = arg.strip_prefix("-fkiln-pch-image=") {
+                    self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+                } else if let Some(v) = arg.strip_prefix("-fkiln-pch-snapshot=") {
                     self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
                 } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
                     match v {

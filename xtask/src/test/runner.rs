@@ -195,6 +195,7 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         advisory: None,
         gcc_compared: false,
         pch_flags: Vec::new(),
+        pch_snapshot_timing: false,
         pch_src: None,
     };
     let (status, reason, details) = t.evaluate();
@@ -231,6 +232,9 @@ struct Test<'a> {
     /// The PCH differential's `-include-pch` flags, which the compiler
     /// under test's test-file compiles get while they are set.
     pch_flags: Vec<std::ffi::OsString>,
+    /// `--pch-diff snapshot`: the consumer prints its snapshot timing
+    /// (which tells a restore from a replay).
+    pch_snapshot_timing: bool,
     /// The PCH differential's copy of the test file, which the compiler
     /// under test compiles in its place while it is set.
     pch_src: Option<PathBuf>,
@@ -611,6 +615,9 @@ impl Test<'_> {
         match &self.pch_src {
             Some(src) if program == self.cfg.compiler => {
                 c.args(&self.pch_flags);
+                if self.pch_snapshot_timing {
+                    c.env(crate::util::pch_diff::SNAPSHOT_TIMING_ENV, "1");
+                }
                 c.arg("-iquote").arg(self.test_dir()).arg(src);
             }
             _ => {

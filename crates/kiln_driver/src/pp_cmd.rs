@@ -501,6 +501,31 @@ impl Job<'_> {
         inputs: PpInputs,
         staged: bool,
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
+        let (mut pp, deps, main) =
+            self.configure_preprocessor(sm, engine, interner, inputs, staged)?;
+        crate::pch_image::start(self.args, &mut pp, sm, interner, engine);
+        match main {
+            MainInput::File(f) => pp.enter_main_file(f),
+            MainInput::Capsule(bytes) => {
+                if !pp.enter_main_capsule(self.path, &bytes) {
+                    return None;
+                }
+            }
+        }
+        Some((pp, deps))
+    }
+
+    /// [`Self::build_preprocessor`] without entering the main input (and
+    /// without the `-fkiln-pch-image` hooks): the preprocessor a
+    /// restored PCH snapshot is applied to (`crate::pch_snapshot`).
+    pub(crate) fn configure_preprocessor<'a, 'd>(
+        &self,
+        sm: &'a SourceManager,
+        engine: &'d DiagEngine<'a>,
+        interner: &'a Interner,
+        inputs: PpInputs,
+        staged: bool,
+    ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>, MainInput)> {
         let a = self.args;
         let PpInputs { skipped, list, main, predefines } = inputs;
         // The module cache's key takes the predefines and the search list
@@ -602,16 +627,7 @@ impl Job<'_> {
             })),
             (None, None) => {}
         }
-        crate::pch_image::start(a, &mut pp, sm, interner, engine);
-        match main {
-            MainInput::File(f) => pp.enter_main_file(f),
-            MainInput::Capsule(bytes) => {
-                if !pp.enter_main_capsule(self.path, &bytes) {
-                    return None;
-                }
-            }
-        }
-        Some((pp, deps))
+        Some((pp, deps, main))
     }
 
     /// The options a module file records and checks (spec/modules.md
