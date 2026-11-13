@@ -73,6 +73,7 @@ dependencies = [
  "kiln_parse",
  "kiln_pp",
  "kiln_sema",
+ "kiln_snap",
  "kiln_source",
 ]
 
