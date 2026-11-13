@@ -1985,6 +1985,23 @@ fn frontend(
         stderr: io.stderr.clone(),
         asm: false,
     };
+    // `-fkiln-pch-snapshot=check` (WP-1392): compared first, then
+    // compiled by replay.
+    let snap_check = crate::pch_snapshot::check_replay(args);
+    let snap_diff = snap_check.as_ref().and_then(|_| {
+        crate::pch_snapshot::check_difference(
+            args,
+            tc,
+            std,
+            &input.path,
+            job.stdin_text.as_deref(),
+            diag_opts,
+        )
+    });
+    let job = match &snap_check {
+        Some(replay) => Job { args: replay, ..job },
+        None => job,
+    };
     let checked = crate::pch_check::codegen(
         args,
         &crate::pch_check::Input {
@@ -1996,12 +2013,16 @@ fn frontend(
             stderr: &io.stderr,
         },
     );
-    let (ir, deps) = if let Some(r) = checked {
+    let (mut ir, deps) = if let Some(r) = checked {
         r
     } else {
         let (module, _, deps) = CodegenJob(job).run();
         (module.map(print_ir), deps)
     };
+    if let Some(d) = snap_diff {
+        crate::pch_snapshot::report_mismatch(args, diag_opts, &io.stderr, &d);
+        ir = None;
+    }
     if let Some(list) = deps
         && !crate::deps::write_side_file(args, &input.path, &list.borrow(), diag_opts, io)
     {

@@ -1831,14 +1831,14 @@ store Oven state, is a follow-up; it would share the module-file format
   not `-target` with `-feature`, and `-MT`/`-MQ` are not `-M`. `args.rs`
   `longest_option_wins` tests each such collision.
 
-### Format (`KILNPCH 1`)
+### Format (`KILNPCH 2`)
 
 The record is UTF-8 text, one field per line. Values are tab-separated,
 with `\\`, `\t`, `\n` and `\r` escaped. It is written atomically (a
 temporary file, then a rename). Lines, in order:
 
 ```
-KILNPCH 1                               magic and format version
+KILNPCH 2                               magic and format version
 kiln <version> <commit|-> -fclang-compat=<N>
 cwd <producer's working directory>
 main <the header, as spelled>
@@ -1848,8 +1848,8 @@ opt v\t<option>\t<value>                a language option (value)
 target <triple>
 macro D\t<name>\t<definition>           -D/-U of the producer, in order
 macro U\t<name>
-file <size>\t<fnv1a64 hex>\t<0|1 system>\t<spelled>\t<absolute>
-image <length>\t<fnv1a64 hex of the image>   (with -fkiln-pch-image)
+file <size>\t<mtime ns>\t<fnv1a64 hex>\t<0|1 system>\t<spelled>\t<absolute>
+image <length>\t<block checksum hex of the image>   (with a section)
 end <fnv1a64 hex of every byte before this line>
 <the image: <length> bytes>
 ```
@@ -1861,7 +1861,12 @@ one, the bytes after `end` must be exactly the image, with that length
 and checksum.
 
 The `file` lines list every file the producer read (the dependency list
-`-MD` writes), with each file's size and content hash. An unknown line, a
+`-MD` writes), with each file's size, modification time (nanoseconds
+since the Unix epoch, taken before the file is read; 0 when the file
+system has none) and content hash. The image's checksum is
+`bmi::block_checksum`, the word-wise checksum of the section block
+(spec/modules.md §11.13), not FNV-1a: a snapshot makes the image tens of
+megabytes. Version 2 (WP-1392) added the time and that checksum. An unknown line, a
 missing field or a bad checksum makes the record corrupt. A different
 version is "older" or "newer". A different `kiln` line is "built from a
 different branch". The language options are those of the module-file
@@ -2130,9 +2135,158 @@ only whole, and every doubt replays the header.
   The harness differential runs `--pch-diff load|replay` over the
   corpus slice in `cargo xtask ci` and over libc++ (spec/libcxx.md).
 
+### Snapshots (WP-1392)
+
+The snapshot is the PCH's whole front-end state at the end of the
+header (spec/snap.md "Whole-compiler restore order"): the source
+manager, the interner, the diagnostics engine, the preprocessor and
+`Sema` with its AST and Oven, restored with every id unchanged. A
+consumer that restores it does not process the header again. It is
+written as section 4 (`bmi::SECTION_SNAPSHOT`) of the record's section
+block, next to the `-fkiln-pch-image` sections; replay reads the same
+file. Until it becomes the default, the options below are hidden (not in
+`--help`).
+
+**Modes** (`-f[no-]kiln-pch-snapshot[=...]`, the last one wins):
+
+| option | producer | consumer |
+|---|---|---|
+| `-fkiln-pch-snapshot` | writes the section | restores it |
+| `=write` | writes the section | replays |
+| `=load` | writes none | restores it |
+| `=check` | writes the section | restores it **and** replays, compares, reports a difference |
+| `-fno-kiln-pch-snapshot` (default) | writes none | replays |
+
+`=check` compiles the main file to `-fdump-ast=locs` twice in the same
+process, once restored and once replaying, and compares (1) whether the
+snapshot could be restored at all, (2) the diagnostics, and (3) the dump.
+For (2), the `N warnings generated.` lines are left out and replay's
+diagnostics must be the restored ones, preceded only by lines without an
+error: the header's own warnings, which a restored compile does not show
+again (as clang's PCH does not; owner decision). The first difference is
+the error `the snapshot of precompiled header '<pch>' differs from
+replaying the header: <what> differs at line N: '<snapshot>' (snapshot)
+vs '<replay>' (replay)`, and the compile fails. The job's own results
+(diagnostics, dump, IR, `-MD` list) are replay's. It is the debugging
+mode, and it is slow: three front-end runs.
+
+**Producer conditions.** The section is written after the ordinary PCH
+job, by a second pass over an empty main file whose `-include`s are the
+producer's own followed by the header. There is no section, and a `-v`
+note says why (`snapshot not written: <why>`), for a header with errors, or a prefix whose state is not at rest (`Type.field: why`
+from the quiescence checks).
+
+**Section layout.** `KILNSNAP` (8 bytes), the section's format version
+(u32, little-endian, now 1; independent of kiln's version), then a
+`kiln_snap` stream with the schema hash of the five roots (u64) and the
+identity (the components below), then the roots' stream. A section
+shorter than 12 bytes, with another magic or another format version is
+refused before anything is decoded (`its section is truncated (no
+header)`, `... is not a kiln snapshot (bad magic)`, `... has format
+version N, expected 1`).
+
+**Identity.** The consumer computes the same components and compares
+them in this order. The first that differs refuses the snapshot, and
+`-v` names it: `note: precompiled header 'p.pch': snapshot not used:
+target differs: 'aarch64-unknown-linux-gnu' (producer) vs
+'x86_64-pc-linux-gnu' (here)`, or for a component of several lines,
+`-D/-U list differs at line 2: '-DA=1' (producer) vs '-DA=2' (here)`.
+Each component is derived from the parsed configuration, so two
+spellings that reach the same state agree:
+
+| component | what it is | covers |
+|---|---|---|
+| (schema hash) | checked first, before the identity is decoded | the layout of every root |
+| kiln build | `kiln <version> <commit>` | the build that wrote it |
+| working directory | the current directory | relative paths: the header, `-I`, `__FILE__` |
+| language | the resolved standard (`LangStd`: C or C++, the standard, GNU or not; a C header's snapshot is refused by a C++ consumer and by another C standard) | `-std=`, `-ansi`, `-x`, the driver mode's default |
+| target | the triple and the resolved target features | `--target`, `-march`, `-mcpu`, `-m<feature>`, `-target-feature` |
+| include search path | the resolved search list, as `-v` prints it | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem`, `CPATH`, `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `--sysroot`, `-isysroot`, `--gcc-toolchain`, `--gcc-install-dir`, the GCC installation found, `-stdlib`, `--llvm-dir`, `-resource-dir`, `-nostdinc*` |
+| -D/-U list | `-D`/`-U` in order | the command-line macros |
+| predefined macros | the predefines buffer without the `-D`/`-U`s and the `-include`s | everything that makes a predefined macro (`-O`, `-f[no-]exceptions`, `-fsanitize=`, `-fclang-compat=`, ...) |
+| feature queries | the `__has_feature`/`__has_extension` flags in effect and the compat level | the raw `-f` options those read |
+| warning policy | `DiagOptions::policy_fingerprint`: the policy's flags, every id mapped away from its default, and the last sign of each named group | `-W...`, `-w`, `-pedantic[-errors]`, `-R...` |
+| prefix maps | `-fmacro-prefix-map`/`-ffile-prefix-map`, in order | `__FILE__` and source-location spellings |
+| source path style | `-fkiln-source-path-style=` | the same |
+| reproducible time | the fixed epoch, if any | `-fkiln-reproducible-time`, `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` |
+| options | every other parsed option (`Args`, pretty-printed, one field per line) | anything not listed here, including options added later |
+
+The warning policy is the one component where option order can differ
+and still match: two `-W` lists give the same text exactly when the
+policies they build cannot be told apart by any diagnostic (the policy
+reads the order of its `-W` options only to find the last sign of a
+group). So `-Wshadow -Wunused-variable` and `-Wunused-variable -Wshadow`
+match; `-Wall -Wno-unused-variable` and `-Wno-unused-variable -Wall` do
+not. Every other list stays in order.
+
+Left out of the identity, because they cannot change the state at the
+end of the prefix:
+
+| options | why |
+|---|---|
+| the inputs, `-o`, `-c`, `-S`, `-emit-llvm`, `-fsyntax-only`, `-E`, `--precompile`, `-fmodule-output`, the program name | the main file's compile and where it goes; the prefix is the same |
+| `-include` | the PCH's own are matched by the record; the consumer's later ones are entered after the restore |
+| `-include-pch` and the PCH options (`-f[no-]kiln-pch-*`, `-emit-pch`, `-fno-validate-pch`) | the mechanism itself |
+| `-M*`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ`, `-MP`, `-MG`, `-MJ` | dependency output is written from the record's file list and the main file's |
+| `-g*` and the debug prefix maps | read only by code generation |
+| `-v`, `--version`, `--help`, `-print-*`, `-###` | reports |
+| `-fdump-*`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-memory-report`, `-ftime-trace*`, `-fkiln-bmi-image-census*` | reports about the main file's compile |
+| `-verify`, `-verify=`, `-verify-ignore-unexpected` | they check the diagnostics the job emits; when a `-verify` consumer restores and when it replays is in "PCH snapshot: behaviour" below |
+| how diagnostics are shown: colour, `-fdiagnostics-*`, `-ferror-limit=`, `-fmacro-backtrace-limit=`, `-ftabstop=`, carets, columns | a prefix with errors gets no snapshot, so the limit cannot have stopped it, and the rest only formats text |
+| crash reporting (`-f[no-]crash-diagnostics*`, `-fkiln-crash-for-testing=`) | only after an internal error |
+| `-fkiln-backend=`, `--hod=`, `-disable-llvm-passes`, `-Wa,`, `-Xassembler`, linker options, `-Qunused-arguments`, `-fmodules-prune-*` | after the front end, or cache housekeeping |
+
+Command-line errors are left out too: a compile with any does not run.
+
+**Validation.** Before decoding, the consumer checks, in order: the
+section block's checksum (`bmi::block_checksum`, word-wise), the section
+header, the schema hash (computed once per process), the identity, and
+then every file the record lists:
+- `-fkiln-pch-validate=mtime` (the default): a file with the recorded
+  size and modification time is unchanged and is not read. A file with
+  another size is changed. A file with the same size and another time
+  is read and hashed: the same text is accepted (a touched file), other
+  text is changed. A record without a time (0) is hashed. This is
+  clang's check, with the content as the fallback rather than an error.
+- `-fkiln-pch-validate=content`: every file is read and hashed.
+
+An edit that keeps both the size and the modification time is not
+detected in `mtime` mode (as in clang); `content` detects it. The
+restored source manager does not check a file again when it reads its
+text later, so such an edit reaches the compile with the recorded
+offsets (follow-up: validate a lazily read buffer against its recorded
+hash).
+
+**Fallback.** Every refusal (no section, a bad header, another build,
+an identity difference, a changed file, a decode error, a failed
+restore) replays the header silently, exactly as without the option,
+and `-v` prints `note: precompiled header '<pch>': snapshot not used:
+<why>` (or `snapshot not used (<why>); the header is replayed` for a
+failure during the restore). The replay's own checks (spec "Diagnostics"
+above) still apply and report as usual. Consumers that always replay:
+`-E`/`-M`, `-fkiln-pch-image=check`, module units; a `-verify` consumer
+replays in the cases "PCH snapshot: behaviour" below lists.
+
+**Measured** (`<bits/stdc++.h>`, release build, see
+docs/status/pch-snapshot-prototype.md, 5 runs each): before WP-1392,
+section block 94-96 ms + identity 2 ms + file check 20-33 ms (load
+average 16); after, section block 4.2-4.7 ms + schema hash 1.7-2.1 ms +
+identity 1.0-1.4 ms + file check 1.0-1.2 ms, about 8.5 ms (load average
+18). `-v` prints the split as `snapshot-timing:`.
+
+**Tests.** `crates/kiln_driver/tests/pch_snapshot.rs`: each identity
+component refuses and is named; irrelevant options and commuting `-W`
+options do not refuse; the file check (touched but identical: used;
+same time, other size: refused; content mode); the section header
+(truncated, foreign, old version); the modes, `=check` clean, with a
+prefix that warns, and with a difference. Unit tests: the language
+component tells C from C++ and C standards apart; `-verify` options do
+not refuse.
+
 ### PCH snapshot: behaviour (EXPERIMENTAL, WP-1394)
 
-The snapshot (`-fkiln-pch-snapshot=write|load`, hidden; spec/snap.md
+The snapshot (`-fkiln-pch-snapshot` and its modes, "Snapshots" above,
+hidden; spec/snap.md
 "Whole-compiler restore order") stands in for a replay of the header.
 These are the consumer's rules; every refusal is a silent replay with
 `-v` `note: precompiled header 'p.pch': snapshot not used: <why>` (or

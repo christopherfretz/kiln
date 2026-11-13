@@ -352,8 +352,9 @@ root from its own command line just before applying the snapshot to it:
 Any decoding or validation error before step 6 drops everything the
 restore built, and the job starts again by replaying the header; the
 error is reported only by `-v`. The section is used only when its head
-matches: the schema hash of all five roots, the kiln build, and the
-command line minus its inputs and outputs.
+matches: its magic and format version, the schema hash of all five
+roots, and the configuration fingerprint (spec/driver.md "Snapshots",
+the identity table).
 
 ## Recipe: making a crate's types `Snap`
 

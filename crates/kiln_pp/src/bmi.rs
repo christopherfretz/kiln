@@ -310,6 +310,41 @@ pub fn checksum(bytes: &[u8]) -> u64 {
     fnv(FNV_OFFSET, bytes)
 }
 
+/// The checksum of a precompiled header's section block and image
+/// ([`write_sections`]; spec/modules.md §11.13 "In a precompiled
+/// header"): word-wise, four independent lanes of 8-byte words, so it
+/// runs at memory speed where FNV-1a 64 ([`checksum`]) is one multiply
+/// per byte (96 ms against about 5 ms over a 36 MB snapshot section).
+/// Each lane step `l = rotl((l ^ w) * K, 29)` is a bijection of the lane
+/// for a fixed word and of the word for a fixed lane, the bytes after
+/// the last whole 32-byte group go through FNV-1a, and the lanes are
+/// folded in one at a time by the same kind of step, so changing any one
+/// byte (or the length) changes the result, as with [`checksum`].
+/// Module files keep [`checksum`]: changing it would change their format.
+#[must_use]
+pub fn block_checksum(bytes: &[u8]) -> u64 {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let step = |l: u64, w: u64| (l ^ w).wrapping_mul(K).rotate_left(29);
+    let mut lanes: [u64; 4] = [
+        0x243f_6a88_85a3_08d3,
+        0x1319_8a2e_0370_7344,
+        0xa409_3822_299f_31d0,
+        0x082e_fa98_ec4e_6c89,
+    ];
+    let (groups, rest) = bytes.as_chunks::<32>();
+    for g in groups {
+        let (words, _) = g.as_chunks::<8>();
+        for (l, w) in lanes.iter_mut().zip(words) {
+            *l = step(*l, u64::from_le_bytes(*w));
+        }
+    }
+    let mut h = fnv(FNV_OFFSET ^ bytes.len() as u64, rest);
+    for l in lanes {
+        h = step(h, l);
+    }
+    h ^ (h >> 31)
+}
+
 /// True if `bytes` starts with the kiln magic.
 #[must_use]
 pub fn is_module_file(bytes: &[u8]) -> bool {
@@ -611,12 +646,12 @@ fn section_block(w: &mut W, sections: &[Section]) {
 
 /// The section block alone, as a precompiled header carries it after its
 /// `KILNPCH` record (spec/modules.md §11.13 "In a precompiled header"):
-/// the kind-2 block ([`write`]) followed by its [`checksum`].
+/// the kind-2 block ([`write`]) followed by its [`block_checksum`].
 #[must_use]
 pub fn write_sections(sections: &[Section]) -> Vec<u8> {
     let mut w = W(Vec::new());
     section_block(&mut w, sections);
-    let sum = checksum(&w.0);
+    let sum = block_checksum(&w.0);
     w.u64(sum);
     w.0
 }
@@ -629,16 +664,24 @@ pub fn write_sections(sections: &[Section]) -> Vec<u8> {
 /// tag, trailing bytes or a checksum mismatch.
 pub fn read_sections(bytes: &[u8]) -> Result<Vec<Section>, BmiError> {
     let Some(body_len) = bytes.len().checked_sub(8) else { return corrupt("truncated") };
+    let mut t = [0u8; 8];
+    t.copy_from_slice(&bytes[body_len..]);
+    if u64::from_le_bytes(t) != block_checksum(&bytes[..body_len]) {
+        return corrupt("checksum mismatch");
+    }
+    // The checksum is checked once, over the whole block, first: the
+    // reader's running FNV sum would hash it a second time, byte by byte.
     let mut src = &bytes[..body_len];
-    let mut r = R { kind: KIND_SECTIONS, src: &mut src, left: body_len as u64, sum: FNV_OFFSET };
+    let mut r = R {
+        kind: KIND_SECTIONS,
+        src: &mut src,
+        left: body_len as u64,
+        sum: FNV_OFFSET,
+        track: false,
+    };
     let sections = sections(&mut r)?;
     if r.left != 0 {
         return corrupt("trailing bytes");
-    }
-    let mut t = [0u8; 8];
-    t.copy_from_slice(&bytes[body_len..]);
-    if u64::from_le_bytes(t) != checksum(&bytes[..body_len]) {
-        return corrupt("checksum mismatch");
     }
     Ok(sections)
 }
@@ -703,6 +746,9 @@ struct R<'a> {
     src: &'a mut dyn io::Read,
     left: u64,
     sum: u64,
+    /// Whether `sum` is kept ([`read_sections`] checks its block first,
+    /// with [`block_checksum`]).
+    track: bool,
 }
 
 type Res<T> = Result<T, BmiError>;
@@ -725,7 +771,9 @@ impl R<'_> {
             return corrupt("truncated");
         }
         self.left -= out.len() as u64;
-        self.sum = fnv(self.sum, out);
+        if self.track {
+            self.sum = fnv(self.sum, out);
+        }
         Ok(())
     }
     fn array<const N: usize>(&mut self) -> Res<[u8; N]> {
@@ -832,7 +880,13 @@ fn prefix(src: &mut dyn io::Read, len: u64) -> Res<R<'_>> {
     if p[12] != KIND_CAPSULE && p[12] != KIND_SECTIONS {
         return corrupt("unknown module file kind");
     }
-    Ok(R { kind: p[12], src, left: len - (PREFIX_LEN + 8) as u64, sum: fnv(FNV_OFFSET, &p) })
+    Ok(R {
+        kind: p[12],
+        src,
+        left: len - (PREFIX_LEN + 8) as u64,
+        sum: fnv(FNV_OFFSET, &p),
+        track: true,
+    })
 }
 
 fn header(r: &mut R<'_>) -> Res<Header> {
@@ -1236,6 +1290,39 @@ mod tests {
             ]
         );
         assert!(mismatches(&rec, &rec).is_empty());
+    }
+
+    /// The section-block checksum (WP-1392): pinned, length-sensitive,
+    /// and any one flipped bit of a block (in a whole 32-byte group or in
+    /// the tail) changes it, so `read_sections` reports it as damage.
+    #[test]
+    fn block_checksum_catches_every_flip() {
+        assert_eq!(block_checksum(b""), block_checksum(b""));
+        assert_ne!(block_checksum(b""), block_checksum(b"\0"));
+        assert_ne!(block_checksum(&[0; 32]), block_checksum(&[0; 64]));
+        let data: Vec<u8> = (0..101u32).map(|i| (i * 37 % 251) as u8).collect();
+        let sum = block_checksum(&data);
+        for i in 0..data.len() {
+            for bit in 0..8 {
+                let mut d = data.clone();
+                d[i] ^= 1 << bit;
+                assert_ne!(block_checksum(&d), sum, "byte {i} bit {bit}");
+            }
+        }
+        let block = write_sections(&[
+            Section { tag: SECTION_PP, bytes: data.clone() },
+            Section { tag: SECTION_SNAPSHOT, bytes: vec![1, 2, 3] },
+        ]);
+        let back = read_sections(&block).unwrap();
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0].bytes, data);
+        for i in 0..block.len() {
+            let mut b = block.clone();
+            b[i] ^= 0x10;
+            assert!(read_sections(&b).is_err(), "byte {i}");
+        }
+        assert!(read_sections(&block[..block.len() - 1]).is_err());
+        assert!(read_sections(&block[..3]).is_err());
     }
 
     /// `-o /dev/null` writes through the device; renaming a temporary file

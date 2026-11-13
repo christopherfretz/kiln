@@ -234,3 +234,15 @@ the `pch:` tests. Every prefix ended at rest.
 - **W9** is unchanged.
 
 The net is about 6 product WPs instead of 8.
+
+## Validation after WP-1392
+
+`<bits/stdc++.h>` (gnu), empty main, `-c`, release build, 5 runs each,
+`-v` timing lines:
+
+- Before (load average 16.3/15.0): section block 94-96 ms, identity with
+  the schema hash about 1.9 ms, file check 20-33 ms. Wall 437-530 ms.
+- After (load average 18.7/17.5): section block 4.2-4.7 ms (word-wise
+  `block_checksum`), schema hash 1.7-2.1 ms (once per process), identity
+  1.0-1.4 ms, file check 1.0-1.2 ms (mtime first): about 8.5 ms. Wall
+  320-348 ms.
