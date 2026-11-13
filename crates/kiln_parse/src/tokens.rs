@@ -51,17 +51,28 @@ pub enum Event {
         /// The pushed visibility (`None` for `pop`).
         push: Option<String>,
     },
-    /// `#pragma weak name`.
+    /// `#pragma weak name` or `#pragma weak name = target`.
     PragmaWeak {
         /// The name.
         name: Symbol,
         /// Its token.
         loc: Loc,
+        /// The target of the alias form and its token.
+        target: Option<(Symbol, Loc)>,
     },
-    /// A pragma clang implements and kiln does not yet (`weak = alias`,
-    /// `clang attribute`, ...).
+    /// `#pragma redefine_extname old new`.
+    RedefineExtname {
+        /// `old` and its token.
+        old: (Symbol, Loc),
+        /// `new` and its token.
+        new: (Symbol, Loc),
+    },
+    /// `#pragma clang attribute ...` (clang's `annot_pragma_attribute`).
+    PragmaAttribute(AttrPragma),
+    /// A pragma clang implements and kiln does not yet (`clang section`,
+    /// ...).
     UnsupportedPragma {
-        /// The pragma's name (`"weak name = alias"`, `"clang attribute"`).
+        /// The pragma's name (`"align"`, `"clang section"`).
         what: String,
         /// Its first token.
         loc: Loc,
@@ -188,6 +199,33 @@ pub struct LoopHintInfo {
     /// Where the value ends (clang's `eof` terminator): the token after
     /// the value or its `)`.
     pub value_end: Loc,
+}
+
+/// A `#pragma clang attribute` (clang's `PragmaAttributeInfo`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttrPragma {
+    /// The `attribute` token (clang's pragma location).
+    pub loc: Loc,
+    /// The namespace of `NS.push` / `NS.pop`.
+    pub namespace: Option<Symbol>,
+    /// What the pragma does.
+    pub action: AttrPragmaAction,
+    /// The tokens between the parentheses of `push (...)` or `(...)`
+    /// (empty for an empty `push` and for `pop`).
+    pub tokens: Vec<Token>,
+    /// Where the attribute tokens end (the closing `)`).
+    pub end: Loc,
+}
+
+/// [`AttrPragma::action`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttrPragmaAction {
+    /// `push`, with or without an attribute.
+    Push,
+    /// `pop`.
+    Pop,
+    /// `(attribute, apply_to = ...)` after an empty `push`.
+    Attribute,
 }
 
 /// How many consumed tokens the window keeps behind the parser's position

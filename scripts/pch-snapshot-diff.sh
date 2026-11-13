@@ -45,8 +45,8 @@ done
 cases=("$@")
 if [ ${#cases[@]} -eq 0 ]; then
   cases=(gnu mid lcx meta diag diag-once c17 gnu23 open-push-macro open-diag-push
-    open-pack open-visibility open-once open-fp-pragma open-weak
-    search-extra search-shadow search-has-include)
+    open-pack open-visibility open-once open-fp-pragma open-weak open-weak-alias
+    open-extname attr-region search-extra search-shadow search-has-include)
 fi
 status=0
 for c in "${cases[@]}"; do

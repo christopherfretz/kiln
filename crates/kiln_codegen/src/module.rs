@@ -3065,10 +3065,12 @@ impl<'a> Cg<'a> {
         }
         // clang `GetOrCreateLLVMGlobal` returns an existing global of the
         // name unchanged, whatever its type: variables whose asm labels
-        // name one symbol share it.
+        // name one symbol share it, as does a variable whose own name is
+        // another's asm label (`#pragma redefine_extname`, WP-1399).
         if let Some(g) = self.m.get_global(&name)
             && !name.is_empty()
-            && mangle::asm_label(ast, first).is_some()
+            && (mangle::asm_label(ast, first).is_some()
+                || self.gvars.iter().any(|(&d, &h)| h == g && mangle::asm_label(ast, d).is_some()))
         {
             self.gvars.insert(first, g);
             return Ok(g);

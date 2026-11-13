@@ -351,7 +351,8 @@ kiln_diag engine.rs:178), `pack` (sema decl.rs:10744/7761, layout props.rs:181, 
 templ/class.rs:1993), `GCC visibility push/pop` (sema visibility.rs:312), loop pragmas
 (codegen loop_md.rs). Rejected with "'#pragma X' is not supported yet" (error, OK by policy):
 `weak`, `redefine_extname`, `align`, `options align`, `ms_struct`, `clang attribute`,
-`clang section`. Unknown pragmas get -Wunknown-pragmas exactly like clang (incl. `GCC optimize`,
+`clang section` (since then `weak` in WP-803, `weak a = b`, `redefine_extname` and `clang
+attribute` in WP-1399 are implemented). Unknown pragmas get -Wunknown-pragmas exactly like clang (incl. `GCC optimize`,
 `GCC target`, MS-only pragmas).
 
 ### Class A (silent, no diagnostic), by impact

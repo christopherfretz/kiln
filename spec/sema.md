@@ -3157,7 +3157,75 @@ instantiation unless stated.
   in the translation unit's scope; when there is none it is recorded
   (`Sema::weak_pending`) and applied to the first `extern "C"` function
   or variable later declared with that name (WP-803;
-  `tests/conformance/cpp.pragma/weak-run.cpp`). The attributes of an explicit
+  `tests/conformance/cpp.pragma/weak-run.cpp`). A name never declared
+  is `weak identifier 'X' never declared` at the end of the translation
+  unit (at the pragma), and a name that declares something other than a
+  function or variable by then is `'weak' attribute only applies to
+  variables and functions`.
+  **Pragmas naming symbols** (WP-1399, `pragma_names.rs`):
+  `#pragma weak alias = target` (clang `ActOnPragmaWeakAlias`,
+  `DeclClonePragmaWeak`) declares `alias` at namespace scope of the
+  translation unit with the target's type (a function's parameters
+  rebuilt, C++ language linkage) and gives it implicit `weak` and
+  `alias("target")` attributes, so codegen emits `@alias = weak alias`
+  of the target's symbol. A function alias's name is mangled in C++, as
+  clang does; the alias attribute names the target by its identifier,
+  so a C++ (mangled) target is the codegen error `alias must point to a
+  defined variable or function`, as in clang. A target not yet declared
+  is pending (`Sema::weak_pending`, with the alias) and taken by the
+  first `extern "C"` (C: any) function or variable of that name; a
+  C++-linkage later declaration does not take it.
+  `#pragma redefine_extname old new` (clang `ActOnPragmaRedefineExtname`)
+  gives the `extern "C"` (C: any) function or variable `old` the asm
+  label `new` (an implicit `asm_label`, the `__asm__("new")` machinery).
+  A declaration without C language linkage is `#pragma redefine_extname
+  is applicable to external C declarations only; not applied to
+  {function|variable} 'X'` [-Wpragmas] at the declaration. A declaration
+  with a written asm label keeps it, and so does one already defined or
+  used before the pragma: clang's code generator has named its symbol by
+  then (GCC renames every use). An `old` not yet declared is pending
+  (`Sema::extname_pending`, the first pragma for a name wins) and
+  applied to the first `extern "C"` declaration of that name without a
+  written asm label (`act_on_asm_label`).
+  **`#pragma clang attribute`** (WP-1399, `pragma_attr.rs`; clang
+  `ActOnPragmaAttribute*`, `AddPragmaAttributes`): `[NS.]push` opens a
+  group (`Sema::pragma_attrs`), `[NS.]pop` closes the innermost group of
+  that namespace (none: `'#pragma clang attribute [NS.]pop' with no
+  matching '#pragma clang attribute [NS.]push'`), reporting each entry
+  no declaration received (`unused attribute 'X' in '#pragma clang
+  attribute push' region` [-Wpragma-clang-attribute] with `'#pragma clang
+  attribute push' regions ends here`). Each attribute of `push (attr,
+  apply_to = rules)` or `(attr, apply_to = rules)` becomes an entry of
+  the innermost group (none: `'#pragma clang attribute' attribute with
+  no matching '#pragma clang attribute push'`); its rules are checked
+  against the attribute's own rule set (`attr_rules`, clang 19's
+  `getMatchRules` for C++: a sub-rule of an allowed primary rule is
+  allowed, the rest are `attribute 'X' can't be applied to 'a', and 'b'`
+  and dropped); for an attribute with no rule set (`annotate`,
+  `swift_attr`) a sub-rule beside its own primary rule is `redundant
+  attribute subject matcher sub-rule`, and a negated sub-rule beside
+  another sub-rule of the same rule `negated ... contradicts sub-rule`
+  (the negated ones are then dropped). The entry is pushed in both
+  cases. Every later declaration a rule selects (clang
+  `checkAttributeMatchRuleAppliesTo`: `function`, `function(is_member)`,
+  `record`, `record(unless(is_union))`, `enum`, `enum_constant`,
+  `field`, `namespace`, `type_alias`, `variable` and its five sub-rules,
+  `hasType(functionType)` through a pointer or reference) receives a copy
+  of the entry's attribute node before its attributes are checked
+  (`add_pragma_attrs`): declarators (variables, functions, fields,
+  typedefs), special members, alias-declarations, class and enum heads
+  that declare or define, enumerators, namespace definitions, and
+  function parameters (`void` excepted). Instantiations receive none
+  (they copy the pattern's). A group still open at the end of the
+  translation unit is `unterminated '#pragma clang attribute push' at end
+  of file` at its push. Not done (WP-1399 follow-ups): friend function
+  declarations, a nested namespace definition's outer namespaces, rule
+  sets that differ in C, and the rules of an attribute's strict set that
+  clang disables for the language (accepted silently by clang, reported
+  by kiln). Tests: `tests/conformance/cpp.pragma/weak-alias-*.cpp`,
+  `redefine-extname*.cpp`, `clang-attribute-*.cpp`,
+  `tests/c/run/pragma-symbol-names.c`,
+  `tests/c/linkage/pragma-symbol-names.c`. The attributes of an explicit
   instantiation of a function, variable or class template
   specialization ([temp.explicit]) are checked the same way and become
   the specialization's own (clang `ActOnExplicitInstantiation`); one that

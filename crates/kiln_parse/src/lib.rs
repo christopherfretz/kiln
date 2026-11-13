@@ -8,6 +8,7 @@
 
 mod asm;
 mod attr;
+mod attr_pragma;
 mod class;
 mod consteval_block;
 mod contracts;

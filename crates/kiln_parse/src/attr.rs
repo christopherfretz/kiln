@@ -809,7 +809,7 @@ impl Parser<'_, '_> {
 
     /// The arguments of attribute `name`, if any: `Some(args)`, or `None`
     /// after a syntax error.
-    fn parse_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
+    pub(crate) fn parse_attr_args(&mut self, name: Symbol) -> Option<Vec<AttrArg>> {
         let Some(open) = self.eat(Punct::LParen) else { return Some(Vec::new()) };
         let text = self.s.ast.symbols().as_str(name).to_owned();
         if !takes_expr_args(&text) {

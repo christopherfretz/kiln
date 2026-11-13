@@ -3,7 +3,6 @@
 // assembly name 'new', whether it is declared before or after the
 // pragma. Found while testing PCH prefixes (WP-1394).
 //@ expect: compile-ok
-//@ xfail(kiln): WP-1394 follow-up, '#pragma redefine_extname' is rejected as not supported yet
 extern "C" int declared_first(void);
 #pragma redefine_extname declared_first renamed_first
 #pragma redefine_extname declared_later renamed_later
