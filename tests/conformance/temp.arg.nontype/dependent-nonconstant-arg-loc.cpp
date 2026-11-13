@@ -1,10 +1,10 @@
-// A non-type template argument that is not a constant expression once its
-// template is instantiated is reported at the argument (clang 19/22), not
-// at an unrelated later location. kiln reports the error at the next
-// top-level declaration's template-id (22:13) or the `<` (21:38): xfail
-// repro found by WP-1361, a follow-up.
+// [temp.arg.nontype]/2: a non-type argument that is not a constant
+// expression once its template is instantiated is reported at the
+// argument (clang 19/22), at its substituted expression: not at locations
+// the parser recorded for another template-id (22:13) nor the template
+// name (21:38), as kiln did before WP-1362 (found by WP-1361).
+// The "in instantiation of" notes follow each error, as clang orders them.
 //@ expect: compile-fail
-//@ xfail(kiln): instantiated non-type template argument errors carry a stale location (WP-1361 follow-up)
 //@ strict-diags
 //@ diag: 19:77 error "non-type template argument is not a constant expression"
 //@ diag: 20:19 note "in instantiation of function template specialization 'O<int>::f<X>' requested here"
