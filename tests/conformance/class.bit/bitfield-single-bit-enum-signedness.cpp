@@ -3,7 +3,7 @@
 // clang's `isSignedIntegerType()` of the bit-field's type. That is false for
 // a scoped enumeration whatever its underlying type ([dcl.enum]/5: it is not
 // an integer type), so `enum class E : int` truncates as unsigned and 1 stays
-// 1 (the reference workload record header's `Av a : 1; a = Av::Has;`, a
+// 1 (a downstream record header's `Av a : 1; a = Av::Has;`, a
 // -Werror failure in 10 TUs). An unscoped enumeration follows its underlying
 // type: `int` (fixed, or chosen for a negative enumerator) and `signed char`
 // warn, `unsigned int` (chosen without one) and `unsigned char` do not. A

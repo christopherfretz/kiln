@@ -1,7 +1,7 @@
 // [depr.arith.conv.enum]: as in clang, a comparison or conditional expression
 // between enumerations either of which has no name for linkage warns under
 // -Wdeprecated-anon-enum-enum-conversion, not -Wdeprecated-enum-compare(-conditional),
-// so disabling the former silences it. Reduced from the reference workload: static
+// so disabling the former silences it. Reduced from real code: static
 // assertions comparing `Trait<T>::VALUE` (an unnamed enum per instantiation).
 //@ std: c++23
 //@ expect: compile-fail

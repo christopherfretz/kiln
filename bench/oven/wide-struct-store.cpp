@@ -1,5 +1,5 @@
 //@ args: -fconstexpr-steps=200000000
-// Oven wide-class stores (WP-642, F23 of docs/status/perf-reference-workload.md):
+// Oven wide-class stores (WP-642, F23 of docs/status/perf-reflection.md):
 // one class with 2^WIDE_LOG2 members (4,096 here), each holding a small
 // union, value-initialized and then stored member by member, alternating
 // the union's active member every round, in a constexpr loop. Every store

@@ -1480,6 +1480,15 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   `explicit_instantiation_retained_type.cpp`), namespaces, global and static member
   variables (`DIGlobalVariableExpression`), parameters and locals
   (`#dbg_declare`), and lexical blocks;
+- under `-g`, also imported entities (WP-1365,
+  spec/landed/codegen/WP-1365.md): a `DIImportedEntity` per
+  using-directive (`DW_TAG_imported_module`), namespace alias and
+  using-declaration (`DW_TAG_imported_declaration`, one per declaration,
+  naming a definition or a declaration-only node), in the compile unit's
+  `imports:` at namespace scope and in the subprogram's `retainedNodes`
+  (scoped to the innermost lexical block) at block scope; a
+  line-tables-only unit has no `globals:`, `retainedTypes:`, `enums:`,
+  `imports:` and no variable records;
 - statement and expression locations with clang's `EmitStopPoint`,
   `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
   steps, breaks and finishes where it does in a clang build.
@@ -4582,8 +4591,8 @@ No lowering changed; the new forms reach codegen as existing AST.
   lane, splat, narrowing and permute builtins with the type-code and
   alignment rules (spec/landed/codegen/WP-628.md "NEON load/store
   builtins"; a load or store takes the pointer operand's known
-  alignment, not always `align 1`), and the arithmetic builtins the
-  reference workload reaches (WP-628.md "NEON arithmetic builtins":
+  alignment, not always `align 1`), and the arithmetic builtins that
+  real scanner and linear-algebra code reaches (WP-628.md "NEON arithmetic builtins":
   `vpadd`, `vqsub`, `vmax`, `vmin`, `vabs`, `vsqrt`, `vfma`, `vbsl`,
   `vtst` as `sext (icmp ne (and a, b), zeroinitializer)`, `vcvt`, the
   `v{max,min,add}v` reductions, `vmull_p64`; and every other builtin an

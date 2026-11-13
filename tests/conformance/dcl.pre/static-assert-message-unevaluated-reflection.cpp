@@ -2,8 +2,8 @@
 // static_assert-message of an assertion that holds is an unevaluated
 // operand, so a consteval message builder whose evaluation would fail
 // (return_type_of on a data member throws std::meta::exception; a
-// thrown int) is never run, in each instantiation (the reference
-// workload's generator shape: a diagnostic string built with
+// thrown int) is never run, in each instantiation (a downstream
+// generator shape: a diagnostic string built with
 // define_static_string and display_string_of). GCC 16.1 agrees; clang
 // evaluates such messages (WP-570; spec/sema.md §4.6).
 //@ expect: compile-ok

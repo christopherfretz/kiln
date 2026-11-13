@@ -10,7 +10,7 @@
 // `enable_if` default template argument, a concept's atomic constraint
 // and `if constexpr (requires ...)` all see the operator as unusable. A
 // class whose comparisons do not tie is unaffected. WP-1322 (the
-// reference workload): kiln satisfied the requirements.
+// downstream code): kiln satisfied the requirements.
 //@ expect: run
 //@ std: c++20
 //@ args: -Wno-ambiguous-reversed-operator

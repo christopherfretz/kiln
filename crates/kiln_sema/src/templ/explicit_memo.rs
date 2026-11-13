@@ -4,7 +4,7 @@
 //! Step 1 substitutes a call's explicit template arguments into the
 //! template's function parameter types (and, for an address or a
 //! declaration, its whole function type) on every deduction attempt. The
-//! reference workload repeats the same `f<X>(...)` call shape thousands of
+//! generated binding code repeats the same `f<X>(...)` call shape thousands of
 //! times, and almost every repeat substitutes the same arguments into the
 //! same types again. This memo answers such a repeat with the earlier
 //! result.

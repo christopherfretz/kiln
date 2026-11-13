@@ -3,7 +3,7 @@
 // its loads carry `!range !{i8 0, i8 2}` as a `bool`'s do (clang
 // `getRangeForLoadFromType`, `hasBooleanRepresentation`) and the `i1`
 // values reach comparisons, selects and switches folded by LLVM. The shape
-// is the reference workload's Handler (`Policy : bool`
+// is a downstream Handler (`Policy : bool`
 // member tested with `==`).
 //@ expect: run
 //@ args: -O2

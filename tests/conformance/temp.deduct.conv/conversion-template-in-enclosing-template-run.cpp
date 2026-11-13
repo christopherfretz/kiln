@@ -28,7 +28,7 @@ struct ns { getter fetch(int n) { return {n}; } };
 
 enum class colour { red };
 
-// The reference workload's shape: constrained `const &` and `&&` overloads.
+// The shape found in real code: constrained `const &` and `&&` overloads.
 struct picky {
   int seed;
   template <class U, std::enable_if_t<std::is_base_of_v<handle, U>, int> = 0>

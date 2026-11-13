@@ -4,7 +4,7 @@
 // (clang's `isSameOrCompatibleFunctionType` for a non-dependent P), and
 // the function pointer conversion is checked on the deduced A: dropping
 // `noexcept` is allowed, adding it (k2) is "deduced type ... does not
-// match adjusted type". The shape of the reference workload's
+// match adjusted type". The shape of a downstream
 // `extract_from<Side>(handle, &Handle::getSide)`
 // over a `noexcept` getter (field-extraction header). Matches clang 21.
 //@ expect: compile-fail

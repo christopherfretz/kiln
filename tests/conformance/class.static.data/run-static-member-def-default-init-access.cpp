@@ -3,7 +3,7 @@
 // uses, and the constructor a default-initialization calls
 // ([dcl.init.general]/7), are access checked as from a member: a private
 // default constructor initializes `inst`. Without an initializer as with
-// one, for a class, an explicit specialization (the reference workload's Metrics
+// one, for a class, an explicit specialization (a downstream Metrics
 // a metrics macro), a member of a partial
 // specialization and of a class template (both instantiated), and a nested
 // class.

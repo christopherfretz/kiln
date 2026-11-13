@@ -252,4 +252,4 @@ R1–R5.
    incomplete, from an injection point outside its definition. It never
    adds to a class mid-definition. This needs confirming against the
    final wording. Should the spike intrinsic stay as a kiln extension
-   (the reference workload might want it), or be removed at M6?
+   (real code might want it), or be removed at M6?

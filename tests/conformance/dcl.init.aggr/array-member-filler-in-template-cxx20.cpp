@@ -1,6 +1,6 @@
 // [dcl.init.aggr]/5, [dcl.init.list]/3.4, [temp.inst]: a braced
 // initializer of an aggregate whose array member the list leaves out
-// (`S addr{};` with `char path[108]`, the reference workload's
+// (`S addr{};` with `char path[108]`, reduced from real code's
 // `sockaddr_un addr{};` in a lambda in a function template), in a templated
 // entity at -std=c++20: each specialization initializes the variable again
 // from the written list, so the omitted array member is value-initialized

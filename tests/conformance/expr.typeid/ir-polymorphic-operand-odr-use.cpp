@@ -3,7 +3,7 @@
 // calls are odr-used and emitted: the implicitly instantiated
 // `P<B>::operator*`, the conversion function `W::operator B&` and the
 // inline `inl` are defined (linkonce_odr) in this module, as clang's.
-// WP-1322 (the reference workload): kiln declared `P<B>::operator*` only.
+// WP-1322 (found in downstream code): kiln declared `P<B>::operator*` only.
 //@ expect: ir
 //@ min-oracle: 22
 //@ std: c++20

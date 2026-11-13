@@ -341,6 +341,12 @@ impl Cg<'_> {
                                 self.emit_vla_bounds(t.underlying)?;
                             }
                         }
+                        // clang `EmitDecl` -> `CGDebugInfo` (WP-1365).
+                        DeclKind::UsingDirective | DeclKind::Using | DeclKind::NamespaceAlias => {
+                            if self.di.is_some() {
+                                self.di_using_local(d);
+                            }
+                        }
                         _ => {}
                     }
                 }

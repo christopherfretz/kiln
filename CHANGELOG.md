@@ -18,6 +18,12 @@ Planned as 1.2.0.
   `--hod=`, `KILN_HOD`, next to `llc`, or on `PATH`), with `opt` + `llc`
   as the fallback whenever hod declines or fails. The default stays
   `llvm`. spec/driver.md "Back-end selection".
+- `-g`: imported entities (WP-1365, reported by hod). Using-directives,
+  using-declarations and namespace aliases, at namespace and block scope,
+  get clang's `DW_TAG_imported_module` / `DW_TAG_imported_declaration`, so
+  gdb and lldb resolve names reached through them. Nothing changes at
+  `-gline-tables-only` or without `-g`.
+  spec/landed/codegen/WP-1365.md.
 
 ### Changed
 
@@ -365,7 +371,7 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 
 ## [1.0.2] - 2026-11-11
 
-A bug-fix release: fixes found while building the reference workload,
+A bug-fix release: fixes found while building downstream code,
 each with a test. Nothing in it changes what
 [docs/STABILITY.md](docs/STABILITY.md) promises.
 

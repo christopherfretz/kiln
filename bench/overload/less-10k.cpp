@@ -8,7 +8,7 @@
 // built-in `operator<(L, R)` candidates over the promoted arithmetic types
 // the conversion functions reach ([over.built]/13), which is where the
 // memoized built-in tables (`sema.ovl.conv_types`) pay off. Mirrors
-// the reference workload's comparison-heavy generated key types. No library headers.
+// comparison-heavy generated key types in real code. No library headers.
 
 #define KILN_10(m, p) m(p##0) m(p##1) m(p##2) m(p##3) m(p##4) \
                       m(p##5) m(p##6) m(p##7) m(p##8) m(p##9)
