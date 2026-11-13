@@ -218,9 +218,16 @@ fields, or configuration owned by the consumer's command line. A root:
    the ids and locations that adding the same content to the original
    would.
 
-The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
-`kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
-"Snapshots" states their behaviour.
+The roots so far:
+
+- `kiln_source::SourceManager` (`src/manager/snap.rs`) and
+  `kiln_source::symbol::Interner` (`src/symbol/snap.rs`), the pilots;
+  spec/source.md "Snapshots" states their behaviour.
+- `kiln_ast::Ast` (`src/ast/snap.rs`) with `TypeContext` and its
+  `KeyedTable`, `ArgTable`, `ProfileTable` (`src/types/snap.rs`),
+  `ConstStore` (`src/consts/snap.rs`), `StringPool` (`src/strings.rs`)
+  and `ColdMap` (`src/slot.rs`); spec/ast.md §17 states their behaviour.
+  `kiln_abi`'s target and layout types derive `Snap` (no root).
 
 ## Recipe: making a crate's types `Snap`
 
@@ -249,6 +256,21 @@ The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
 6. Do not call the encoding from the compiler until the snapshot
    container (WP-1283 later phases) wires it in.
 
+Gaps the recipe does not cover (met in `kiln_ast`, WP-1380):
+
+- **A `hashbrown::HashTable` of ids** whose keys live in other arenas
+  has no impl: its owner writes nothing for it and rebuilds it. When not
+  every id is in the table (reserved slots, uninterned nodes), write the
+  list of absent ids so that membership is exact after the rebuild.
+- **`&'static str` fields** (names of compiled-in tables) have no impl:
+  write the string and resolve it against the list of known names on
+  read (`kiln_ast::slot::ColdMap`).
+- **Records with ids as operands** are not range-checked by the derive;
+  validating them needs a per-kind walk the root has to write by hand.
+- **Links to state outside the root** (source locations, ids into
+  another crate's tables) are not checked by the encoding: the consumer
+  must put the roots they point into in the same snapshot.
+
 ## Performance
 
 Hand-run (`cargo run --release -p kiln_snap --example snap_bench`), best
@@ -272,6 +294,11 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
   paths, every schema-hash change; `derive_errors` doc tests.
 - `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md
   "Snapshots").
+- `crates/kiln_driver/src/snap_tests.rs`: the AST of real prefixes
+  (`bench/pch` mid, gnu, lcx; a GCC 16 `<meta>` prefix) round-trips with
+  the same `-fdump-ast`, canonical bytes and interning; truncations and
+  bit flips of the mid snapshot never panic. The test-only hook is in
+  `syntax_cmd.rs`.
 
 ## Open questions
 
