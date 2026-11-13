@@ -1,0 +1,13 @@
+# The reasons a PCH snapshot consumer may replay its header instead of
+# restoring the snapshot, under `cargo xtask test --pch-diff snapshot
+# --pch-diff-require-restore` (spec/harness.md "PCH differential").
+# A consumer that replays for any other reason FAILs: a test that used to
+# restore and now replays is a regression in restorability.
+#
+# One entry per line: `<pattern> :: <justification>`. The pattern is a
+# substring of the reason the accounting prints after `replay: `
+# (`producer: <why the PCH has no snapshot>` or `consumer: <why the
+# snapshot was not used>`). Keep the list short: every entry is a case
+# the snapshot does not cover.
+
+is a module unit, which a replay compiles with the header before its module declaration :: a prefix in front of a module declaration is not a module unit's global module fragment; the snapshot of a non-module prefix cannot stand in for it (`--pch-diff-synthetic` only: module.private.frag/private-without-module.cpp)

@@ -843,4 +843,37 @@ mod behaviour {
         assert!(o.stderr.contains("'x.cppm' is a module unit"), "{}", o.stderr);
         assert!(o.stderr.contains("module declaration must occur at the start"), "{}", o.stderr);
     }
+
+    /// WP-1395: a module whose global module fragment includes the prefix's
+    /// header again ([module.global.frag]/1). A replay of the prefix records
+    /// its declarations for the cross-unit deduplication (spec/modules.md §6),
+    /// so the fragment's copy is skipped; a restored snapshot carries the
+    /// same keys (`ModSema::prefix_keys`). Before, the restored consumer
+    /// reported `template parameter redefines default argument` in the
+    /// fragment's copy of the header. clang 19 accepts the program too.
+    #[test]
+    fn module_fragment_repeats_the_prefix() {
+        let d = scratch("gmf");
+        write(
+            &d,
+            &[
+                ("h.h", "#pragma once\ntemplate <class R = int> int g() { return 1; }\n"),
+                ("p.h", "#include \"h.h\"\n"),
+                (
+                    "m.cppm",
+                    "module;\n#include \"h.h\"\nexport module m;\nexport int f() { return g<int>(); }\n",
+                ),
+                ("t.cpp", "\nimport m;\nint main() { return f() + g() - 2; }\n"),
+            ],
+        );
+        let o = kiln(&d, &["-std=c++26", "--precompile", "m.cppm", "-o", "m.pcm"]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        let flags = ["-std=c++26", "-fmodule-file=m=m.pcm"];
+        produce(&d, &flags, "c++-header", "p.h", "p.pch");
+        let (r, s) = both(&d, &flags, "p.pch", &["-fsyntax-only", "t.cpp"]);
+        assert_eq!(r.code, 0, "{}", r.stderr);
+        assert!(restored(&s), "{}", s.stderr);
+        assert_eq!(s.code, 0, "{}", s.stderr);
+        assert_eq!(diags(&s), diags(&r));
+    }
 }

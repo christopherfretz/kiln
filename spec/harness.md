@@ -22,7 +22,9 @@ cargo xtask test [options] [paths...]
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
 | `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
-| `--pch-diff load\|replay\|check` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036. |
+| `--pch-diff load\|replay\|check\|snapshot` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036; `snapshot` WP-1383/WP-1395. |
+| `--pch-diff-require-restore` | With `--pch-diff snapshot` (else a usage error): a test whose consumer replayed the header for a reason `tests/pch-snapshot-replay-allow.txt` does not allow FAILs (see "PCH differential"). WP-1395. |
+| `--pch-diff-synthetic` | With `--pch-diff` (else a usage error): a test with no `#include` line gets the synthetic prefix `#include <bits/stdc++.h>` (see "PCH differential"). WP-1395. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
 | `--shard K/N` | Run only shard `K` of `N` (`1 <= K <= N`, else a usage error): of the sorted test list (after `--filter`), test `i` (0-based) runs iff `i % N == K - 1`. Round-robin, so a slow directory is spread over every shard, and shards `1..N` of one `N` are exactly the unsharded run, each test in one shard. A shard of a list shorter than `N` may be empty, which is not an error (an empty selection before sharding still is). The run's first line says `(shard K/N of M)`. Not with `--external` (usage error). `ci --shard` passes it to both corpus runs (WP-692, "CI"). |
@@ -933,10 +935,57 @@ found) twice:
   holds; an unguarded header would otherwise be read twice), and
   `-include-pch pchdiff.pch` plus the consumer flag: `load`
   `-fkiln-pch-image=load`, `replay` `-fno-kiln-pch-image`, `check`
-  `-fkiln-pch-image=check`. `pchdiff.pch` is built from `pchdiff.h`, the
-  leading `#include` lines, with the test's `-std`, `args` and the
+  `-fkiln-pch-image=check`, `snapshot` `-fkiln-pch-snapshot=load`.
+  `pchdiff.pch` is built from `pchdiff.h`, the leading `#include` lines,
+  with the test's `-std`, `args`, the `-fmodule-file=` flags of its
+  `module:` lines, `-iquote <test dir>`, in the consumer's order, and the
   producer's `-fkiln-pch-image -v -x c++-header` (so `load` and `replay`
-  read the same file).
+  read the same file; `snapshot` adds `-fkiln-pch-snapshot=write`, and
+  `-fclang-compat=` and the `kiln_meta.h` flags come first, as in the
+  consumer: a snapshot is used only when the producer's command line
+  is the consumer's, spec/driver.md). Neither build passes the report
+  options an `oven:` or `inst-report:` test otherwise gets: no budget is
+  checked, and the option would be the consumer's alone.
+
+**The synthetic prefix** (`--pch-diff-synthetic`, WP-1395). A test of a
+compared kind with no `#include` (or `#import`) line anywhere, which is
+otherwise skipped, is given the prefix `#include <bits/stdc++.h>` (all of
+libstdc++, the largest realistic prefix): the reference build is the copy
+compiled with `-include pchdiff.h` (that one line), and it must give the
+plain build's success, diagnostics (as compared below) and run, or the
+test is a SKIP ("the synthetic prefix changes the test's result"; most
+often a name the test declares that the library declares too, or a
+diagnostic count). It is also a SKIP when the reference build exceeds
+the test's memory cap ("the synthetic prefix exceeds the test's memory
+limit"), and when the plain build reports `stack exhausted` ("the test
+measures the stack depth, which the prefix shifts": where a stack guard
+fires depends on how deep the compiler's own frames are when the main
+file starts, which a restore changes by a few frames). The PCH build compiles the unchanged copy with
+`-include-pch` of it, without `-iquote`. The prefix's PCH is built once
+per distinct producer command line in the run and shared by its tests.
+The comparison is then the reference against the PCH build. Not in `ci`:
+over the corpus it costs about an hour of CPU.
+
+**Snapshot accounting** (`snapshot`, WP-1395). Each consumer runs with
+`KILN_SNAP_TIMING=1`, so kiln prints its snapshot notes as
+`snapshot-timing: note: ...` and `snapshot-timing: restore ...` after a
+restore. A test's reason is `snapshot` (restored), `replay: producer:
+<why>` (the producer's `-v` note: the PCH has no snapshot) or `replay:
+consumer: <why>` (the consumer's last note: the snapshot was not used).
+A FAIL keeps the reason too. With `--pch-diff-require-restore`, a test
+whose consumer replayed FAILs unless a line of
+`tests/pch-snapshot-replay-allow.txt` allows it: `<pattern> ::
+<justification>`, both non-empty, `#` comments; the pattern is a
+substring of the reason after `replay: `. A malformed or missing file is
+an infrastructure error.
+
+**The accounting lines.** After the summary, every `--pch-diff` run
+prints `pch-diff <how>: N consumers ran[: R restored, P replayed]; F
+failed before the consumer ran; S skipped`, then one line per path (the
+reason above, or `image (N records)` / `replay: <why>` for `load`) with
+its count and how many of those FAILed, and `skipped:` with one line per
+skip reason (numbers reduced to `N`; a replay reason's quoted paths to
+`'…'`).
 
 Each build is `-S -emit-llvm` and, for a `run` test, first the binary and
 its run. A test with `module:` lines runs two-step (its units are built
@@ -947,16 +996,23 @@ success or failure; the diagnostics, after dropping the include stack
 (`In file included from` lines), the `N warnings generated.` line and
 kiln's `note: precompiled header` notes, either equal or equal to the
 producer's diagnostics followed by the consumer's (a consumer that loads
-the image does not diagnose the header again); the IR after the usual
-normalization ("IR tests"); and a run test's exit status, stdout
-and stderr. Its reason is the path the producer's `-v` note names (`image
+the image does not diagnose the header again; a restored snapshot's
+consumer does not either, and says how many the header reported, which
+are dropped from the front of the plain build's); the IR after the usual
+normalization ("IR tests"), and without DIFile checksums (the copy's
+bytes differ) and inline asm `!srcloc` values (raw locations, which a
+PCH shifts in clang too); and a run test's exit status, stdout and
+stderr, with the binary's name, a sanitizer report's process id,
+addresses and `BuildId` reduced (they differ between any two runs). An
+`ir` test needs no oracle here. Its reason is the path the producer's `-v` note names (`image
 (N records)` or `replay: <why>`; `replay` under `--pch-diff replay`). A
 plain build that fails is a SKIP ("kiln fails without a PCH"), and so is a
 PCH that does not build when the plain build fails too; a PCH that does
 not build when the test compiles, a crash, or any difference is a
 **FAIL** showing it.
 
-`ci` runs `load` and `replay` over `tests/conformance/cpp.include` and
+`ci` runs `load`, `replay` and `snapshot --pch-diff-require-restore`
+over `tests/conformance/cpp.include` and
 `tests/conformance/module.interface` (run 6 under "CI"). `cargo xtask
 libcxx --pch-diff <how>` is the same comparison over libc++ tests
 (spec/libcxx.md).
@@ -1482,7 +1538,9 @@ if the first fails, so one cannot hide the other:
    selected by `--step kiln`, take the same `--shard`, and are judged like
    it.
 6. **PCH differential** (WP-1036): `cargo xtask test --compiler <that
-   kiln> --pch-diff load`, then `--pch-diff replay`, over
+   kiln> --pch-diff load`, then `--pch-diff replay`, then `--pch-diff
+   snapshot --pch-diff-require-restore` (WP-1395: a consumer that stops
+   restoring its snapshot fails CI), over
    `tests/conformance/cpp.include` and `tests/conformance/module.interface`
    only (printed as `corpus (kiln --pch-diff <how>)`; "PCH differential").
    Like run 5 they are selected by `--step kiln`, take the same `--shard`

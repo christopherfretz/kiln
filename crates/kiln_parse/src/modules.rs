@@ -70,7 +70,16 @@ impl Parser<'_, '_> {
     /// sema loaded from its image, as parsing them in this unit would
     /// have (WP-1353).
     fn pch_image_keys(&mut self) {
-        let keys = self.s.take_pch_dedup();
+        let mut keys = self.s.take_pch_dedup();
+        // WP-1395: a restored snapshot's prefix, as a replay of it would
+        // have recorded its declarations.
+        keys.extend(self.s.take_prefix_keys().into_iter().map(|k| kiln_sema::ExtDecl {
+            start: k.start,
+            end: k.end,
+            ntoks: k.ntoks,
+            lo: k.lo,
+            hi: k.hi,
+        }));
         if keys.is_empty() {
             return;
         }
@@ -87,10 +96,11 @@ impl Parser<'_, '_> {
     }
 
     /// At a namespace-scope declaration's start in a precompiled header's
-    /// producer: its first token's index and location, and the next
-    /// declaration (WP-1353).
+    /// producer (WP-1353) or a snapshot prefix (WP-1395): its first
+    /// token's index and location, and the next declaration.
     pub(crate) fn pch_key_start(&mut self) -> Option<(usize, Loc, DeclId)> {
-        if !self.s.records_pch_decl_keys() || self.at_eof() || self.in_replay() {
+        let noted = self.s.records_pch_decl_keys() || self.s.records_prefix_keys();
+        if !noted || self.at_eof() || self.in_replay() {
             return None;
         }
         let t = self.tok();
@@ -109,13 +119,9 @@ impl Parser<'_, '_> {
         }
         let Ok(ntoks) = u32::try_from(pos - pos0) else { return };
         let end = self.tok_at(pos - 1).span.lo;
-        self.s.pch_note_external_decl(kiln_sema::ExtDecl {
-            start: at,
-            end,
-            ntoks,
-            lo: first.index(),
-            hi: self.s.ast.decls.next_id().index(),
-        });
+        let (lo, hi) = (first.index(), self.s.ast.decls.next_id().index());
+        self.s.pch_note_external_decl(kiln_sema::ExtDecl { start: at, end, ntoks, lo, hi });
+        self.s.note_prefix_key(kiln_sema::modules::PrefixKey { start: at, end, ntoks, lo, hi });
     }
 
     /// Queues a module event for the next declaration start.

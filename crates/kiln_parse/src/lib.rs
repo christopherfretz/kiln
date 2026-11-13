@@ -589,13 +589,17 @@ pub fn parse_prefix<'a, 'sm>(
         None
     };
     let lit_opts = literal_options(opts, &target);
-    let s = new_sema(interner, diags, target, opts, limits);
+    let mut s = new_sema(interner, diags, target, opts, limits);
+    // The keys a module-tracking parse would record (spec/modules.md §6),
+    // for a consumer that imports a module (WP-1395).
+    s.record_prefix_keys();
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(s, src, lit_opts);
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.parse_top_level_declarations();
     p.end_prefix();
+    p.s.end_prefix_keys();
     drop(phase);
     let ready = match refused {
         Some(why) => Err(why.to_owned()),

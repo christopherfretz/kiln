@@ -26,6 +26,7 @@ mod gcc;
 mod oracle_retry;
 #[path = "pch_diff.rs"]
 mod pch_diff;
+pub use pch_diff::SyntheticPchs;
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
@@ -94,6 +95,13 @@ pub struct Config {
     /// `--pch-diff`: the PCH differential (`spec/harness.md` "PCH
     /// differential"); `None` outside it.
     pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
+    /// `--pch-diff-require-restore`: under `--pch-diff snapshot`, a
+    /// consumer that replayed for a reason this allow-list does not name
+    /// FAILs (`spec/harness.md` "PCH differential").
+    pub pch_require_restore: Option<crate::util::pch_diff::AllowList>,
+    /// `--pch-diff-synthetic`: a test without `#include`s gets the
+    /// synthetic prefix, its PCHs shared by the run.
+    pub pch_synthetic: Option<SyntheticPchs>,
 }
 
 /// The debug-info sweep's configuration.
@@ -195,8 +203,9 @@ pub fn run_test(cfg: &Config, case: &TestCase, index: usize) -> TestResult {
         advisory: None,
         gcc_compared: false,
         pch_flags: Vec::new(),
-        pch_snapshot_timing: false,
         pch_src: None,
+        pch_path: None,
+        pch_consumer: PchConsumer::default(),
     };
     let (status, reason, details) = t.evaluate();
     if t.dir.exists() {
@@ -232,12 +241,31 @@ struct Test<'a> {
     /// The PCH differential's `-include-pch` flags, which the compiler
     /// under test's test-file compiles get while they are set.
     pch_flags: Vec<std::ffi::OsString>,
-    /// `--pch-diff snapshot`: the consumer prints its snapshot timing
-    /// (which tells a restore from a replay).
-    pch_snapshot_timing: bool,
     /// The PCH differential's copy of the test file, which the compiler
     /// under test compiles in its place while it is set.
     pch_src: Option<PathBuf>,
+    /// The PCH differential's path once the consumer has run (`image (N
+    /// records)`, `snapshot`, `replay: <why>`), kept for a FAIL's reason.
+    pch_path: Option<String>,
+    /// How the PCH differential's copy is compiled while `pch_src` is set.
+    pch_consumer: PchConsumer,
+}
+
+/// How the PCH differential's copy of the test file is compiled.
+#[derive(Clone, Copy)]
+struct PchConsumer {
+    /// `--pch-diff snapshot`: the consumer prints its snapshot timing
+    /// (which tells a restore from a replay).
+    snapshot_timing: bool,
+    /// With `-iquote <test dir>` (not for the synthetic prefix, whose
+    /// test has no `#include`).
+    iquote: bool,
+}
+
+impl Default for PchConsumer {
+    fn default() -> Self {
+        Self { snapshot_timing: false, iquote: true }
+    }
 }
 
 impl Test<'_> {
@@ -279,7 +307,8 @@ impl Test<'_> {
             return Some("no `module:` lines (`--bmi-kind`)".to_owned());
         }
         if self.cfg.pch_diff.is_some() {
-            return pch_diff::pch_diff_skip(spec, source, self.case);
+            let synthetic = self.cfg.pch_synthetic.is_some();
+            return pch_diff::pch_diff_skip(spec, source, self.case, synthetic);
         }
         None
     }
@@ -439,7 +468,8 @@ impl Test<'_> {
                     format!("not supported by this compiler (`{name}` needs kiln or clang)");
                 return (Status::Skip, Some(reason), String::new());
             }
-            if self.cfg.oracle.is_none() {
+            // The PCH differential compares kiln's own two IRs (WP-1395).
+            if self.cfg.oracle.is_none() && self.cfg.pch_diff.is_none() {
                 let reason = format!("no oracle (`{name}` is checked against the oracle's dump)");
                 return (Status::Skip, Some(reason), String::new());
             }
@@ -615,10 +645,13 @@ impl Test<'_> {
         match &self.pch_src {
             Some(src) if program == self.cfg.compiler => {
                 c.args(&self.pch_flags);
-                if self.pch_snapshot_timing {
+                if self.pch_consumer.snapshot_timing {
                     c.env(crate::util::pch_diff::SNAPSHOT_TIMING_ENV, "1");
                 }
-                c.arg("-iquote").arg(self.test_dir()).arg(src);
+                if self.pch_consumer.iquote {
+                    c.arg("-iquote").arg(self.test_dir());
+                }
+                c.arg(src);
             }
             _ => {
                 c.arg(&self.case.name);
@@ -1152,10 +1185,15 @@ impl Test<'_> {
         out: Option<&Path>,
     ) -> Result<Output, Problem> {
         let mut cmd = self.command(&self.cfg.compiler, spec, mode, out);
-        if spec.inst_report.is_some() {
+        // The PCH differential checks no `oven:`/`inst-report:` budget,
+        // so its compiles write no report: a report option is the
+        // consumer's alone and would keep a snapshot from being used
+        // (WP-1395).
+        let reports = self.cfg.pch_diff.is_none();
+        if spec.inst_report.is_some() && reports {
             cmd.arg("-fkiln-instantiation-report=json");
         }
-        if !spec.oven.is_empty() {
+        if !spec.oven.is_empty() && reports {
             // Only kiln gets here (`evaluate` skips the rest). A stale report
             // must not pass for this compile's.
             let report = self.report_path()?;
@@ -1170,7 +1208,7 @@ impl Test<'_> {
         }
         let o = self.exec("the compiler", &cmd, self.cfg.compile_timeout)?;
         let stderr = o.stderr_str();
-        if spec.inst_report.is_some() {
+        if spec.inst_report.is_some() && reports {
             self.inst_report = Some(inst_report::extract(&stderr));
         }
         let crashed = o.code().is_none()
