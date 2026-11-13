@@ -80,6 +80,9 @@ const EXCLUDED: &[(&str, bool)] = &[
     ("-fno-kiln-pch-snapshot", false),
     ("-fcolor-diagnostics", false),
     ("-fno-color-diagnostics", false),
+    // WP-1394: how the consumer's diagnostics are checked; a `-verify`
+    // consumer restores (spec/driver.md "PCH snapshot: behaviour").
+    ("-verify", false),
 ];
 
 /// Prefixes of joined options left out of [`identity`] (see
@@ -90,6 +93,8 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "-fdump-ast",
     "-ferror-limit=",
     "-fdiagnostics-color",
+    "-verify=",
+    "-verify-ignore-unexpected",
     "-g",
     "-include",
     "--include=",
@@ -189,6 +194,29 @@ pub(crate) fn note(args: &Args, stderr: &SharedWriter, pch: &str, what: &str) {
             &mut err,
             format_args!("note: precompiled header '{pch}': snapshot {what}\n"),
         );
+    }
+}
+
+/// After the diagnostics engine `engine` is restored from `pch`'s
+/// snapshot (WP-1394, spec/driver.md "PCH snapshot: behaviour"): the header's own
+/// diagnostics are not shown again, nor counted; `-v` says how many
+/// there were, and `KILN_SNAP_TIMING` prints the count for the
+/// differential (`scripts/pch-snapshot-diff/consumer-only.awk`).
+pub(crate) fn prefix_reported(
+    args: &Args,
+    stderr: &SharedWriter,
+    pch: &str,
+    engine: &DiagEngine<'_>,
+) {
+    let n = engine.prefix_reported();
+    if timing() {
+        eprintln!("snapshot-timing: the header reported {n} diagnostic(s) when it was built");
+    }
+    if n > 0 {
+        let what = format!(
+            "restored; the {n} warning(s) and error(s) its header reported when it was built are not shown again"
+        );
+        note(args, stderr, pch, &what);
     }
 }
 
@@ -431,9 +459,6 @@ pub(crate) fn produce(
     header: &str,
     diag_opts: &kiln_diag::DiagOptions,
 ) -> Result<Vec<u8>, String> {
-    if std.c.is_some() {
-        return Err("a C header has none".to_owned());
-    }
     let mut a = args.clone();
     a.action = crate::args::Action::SyntaxOnly;
     a.includes.push(header.to_owned());

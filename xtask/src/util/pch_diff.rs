@@ -189,13 +189,49 @@ pub fn diag_lines(stderr: &str) -> Vec<&str> {
 /// producer's `producer`) are those without it (`plain`): equal, or the
 /// producer's followed by the consumer's (a consumer that loads the
 /// image does not diagnose the header again, as clang's does not).
+///
+/// A snapshot consumer (`-fkiln-pch-snapshot=load`, WP-1394) says under
+/// `KILN_SNAP_TIMING` how many warnings and errors the header reported
+/// when it was built ([`snapshot_prefix_reported`]); those come first
+/// in `plain`, and `with` must be `plain` without them (the
+/// consumer-only diagnostics, spec/driver.md "PCH snapshot: behaviour").
 pub fn same_diags(plain: &str, producer: &str, with: &str) -> bool {
+    let n = snapshot_prefix_reported(with);
     let (plain, with) = (diag_lines(plain), diag_lines(with));
     if plain == with {
         return true;
     }
+    if let Some(n) = n {
+        return without_leading_diags(&plain, n) == with.as_slice();
+    }
     let both: Vec<&str> = diag_lines(producer_diags(producer)).into_iter().chain(with).collect();
     plain == both
+}
+
+/// What a restored snapshot's consumer says its header reported:
+/// `snapshot-timing: the header reported N diagnostic(s)`.
+pub fn snapshot_prefix_reported(stderr: &str) -> Option<usize> {
+    stderr.lines().find_map(|l| {
+        let rest = l.strip_prefix("snapshot-timing: the header reported ")?;
+        rest.split(' ').next()?.parse().ok()
+    })
+}
+
+/// Whether `l` is a warning's or an error's first line.
+fn primary(l: &str) -> bool {
+    !l.starts_with(' ')
+        && (l.contains(": warning: ") || l.contains(": error: ") || l.contains(": fatal error: "))
+}
+
+/// `lines` from its `n + 1`th warning or error on: without the first
+/// `n` and their source lines and notes.
+fn without_leading_diags<'a, 'b>(lines: &'b [&'a str], n: usize) -> &'b [&'a str] {
+    if n == 0 {
+        return lines;
+    }
+    let at =
+        lines.iter().enumerate().filter(|(_, l)| primary(l)).nth(n).map_or(lines.len(), |(i, _)| i);
+    &lines[at..]
 }
 
 /// The producer's diagnostics: its stderr after the `-v` banner (which
@@ -247,6 +283,19 @@ mod tests {
         ));
         assert!(!same_diags(plain, producer, "t.cpp:3:2: error: e\n"));
         assert!(same_diags(plain, producer, "snapshot-timing: restore x\nt.cpp:3:1: error: e\n"));
+        // A snapshot consumer: the header's first diagnostic is not shown
+        // again; a later one at the same place (the main file's
+        // instantiation) is its own.
+        let plain = "h.h:1:5: warning: w\n  1 | x\nh.h:2:1: note: n\nh.h:1:5: warning: w\nt.cpp:3:1: error: e\n";
+        let with = "snapshot-timing: the header reported 1 diagnostic(s) when it was built\n";
+        assert!(same_diags(
+            plain,
+            "",
+            &format!("h.h:1:5: warning: w\nt.cpp:3:1: error: e\n{with}")
+        ));
+        assert!(!same_diags(plain, "", &format!("t.cpp:3:1: error: e\n{with}")));
+        assert_eq!(snapshot_prefix_reported(with), Some(1));
+        assert_eq!(snapshot_prefix_reported("x\n"), None);
     }
 
     #[test]

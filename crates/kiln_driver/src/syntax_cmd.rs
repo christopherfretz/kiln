@@ -60,7 +60,18 @@ impl SyntaxJob<'_> {
         use std::io::Write as _;
         let job = &self.0;
         if let Some(v) = &job.args.verify {
-            return self.run_verify(v.clone());
+            if let Some(s) = &job.args.pch.snapshot_use {
+                // spec/driver.md "PCH snapshot: behaviour": a `-verify` consumer
+                // restores when the header reported nothing.
+                match self.run_verify_inner(v.clone(), Some(s)) {
+                    Ok(r) => return r,
+                    Err(why) => {
+                        let why = format!("not used ({why}); the header is replayed");
+                        crate::pch_snapshot::note(job.args, &job.stderr, &s.pch, &why);
+                    }
+                }
+            }
+            return self.run_verify_inner(v.clone(), None).unwrap_or_default();
         }
         if let Some(s) = &job.args.pch.snapshot_use {
             match self.run_restored(s) {
@@ -132,6 +143,7 @@ impl SyntaxJob<'_> {
         if let Some(why) = failed {
             return Err(why);
         }
+        crate::pch_snapshot::prefix_reported(job.args, &job.stderr, &snap.pch, &engine);
         engine.flush();
         if let Some(s) = engine.summary()
             && job.diag_opts.format == kiln_diag::Format::Text
@@ -275,23 +287,63 @@ impl SyntaxJob<'_> {
     /// `-verify` (spec/driver.md "-verify", spec/diag.md §11): the
     /// diagnostics are buffered, the comments scanned as the
     /// preprocessor lexes them, and only the verifier's report printed.
-    fn run_verify(self, opts: VerifyOptions) -> JobResult {
+    ///
+    /// With `snap` (EXPERIMENTAL, WP-1394) the `-include-pch` file's
+    /// snapshot is restored instead of a replay of its header; `Err`
+    /// (nothing reported) when it cannot be, or when the header reported
+    /// diagnostics when it was built: those are not shown again, so a
+    /// directive expecting one could not be satisfied, and the caller
+    /// replays (spec/driver.md "PCH snapshot: behaviour"). Without `snap` it is
+    /// always `Ok`.
+    fn run_verify_inner(
+        &self,
+        opts: VerifyOptions,
+        snap: Option<&crate::args::PchSnapshotUse>,
+    ) -> Result<JobResult, String> {
         let job = &self.0;
-        let sm = SourceManager::new();
-        let interner = Arc::new(Interner::new());
         let sink = MemorySink::new();
-        let engine = DiagEngine::new(&sm, job.diag_opts, sink.clone());
+        let (sm, interner, mut restore) = match snap {
+            Some(s) => {
+                let (sm, interner, restore) = crate::pch_snapshot::open(s)?;
+                (sm, interner, Some(restore))
+            }
+            None => (SourceManager::new(), Arc::new(Interner::new()), None),
+        };
+        let mut engine = DiagEngine::new(&sm, job.diag_opts, sink.clone());
+        if let Some(restore) = &mut restore {
+            engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
+            restore.timer.mark("DiagEngine");
+            let n = engine.prefix_reported();
+            if n != 0 {
+                return Err(format!(
+                    "-verify: the header reported {n} diagnostic(s), which a restore does not show"
+                ));
+            }
+        }
         let mut result = JobResult::default();
         let mut verifier = None;
+        let mut failed = None;
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
                 let dirs: Vec<String> = inputs.list.dirs().iter().map(|d| d.path.clone()).collect();
                 let v = Verifier::new(&sm, opts.clone(), inputs.main.file(), quoted_lookup(dirs));
                 let v = Rc::new(RefCell::new(v));
-                self.parse(&sm, &engine, &interner, inputs, Some(&v), &mut result, None);
+                self.parse(
+                    &sm,
+                    &engine,
+                    &interner,
+                    inputs,
+                    Some(&v),
+                    &mut result,
+                    restore.as_mut(),
+                );
+                failed = restore.take().and_then(|r| r.failed);
                 verifier = Some(v);
             }
         });
+        if let Some(why) = failed {
+            return Err(why);
+        }
         let verifier = verifier.unwrap_or_else(|| {
             Rc::new(RefCell::new(Verifier::new(&sm, opts, None, Box::new(|_, _, _| None))))
         });
@@ -308,7 +360,7 @@ impl SyntaxJob<'_> {
             let _ = writeln!(err, "{s}");
         }
         result.errors = report.problems;
-        result
+        Ok(result)
     }
 
     /// `-fdump-ast`'s options, or `Err` once the reason is diagnosed.
@@ -369,7 +421,13 @@ impl SyntaxJob<'_> {
             else {
                 return;
             };
-            let (sema, pp, deps, popts) = parts;
+            let (sema, mut pp, deps, popts) = parts;
+            if let Some(v) = verify {
+                // Nothing is lexed yet: the main file's comments (and the
+                // `-include`s' after the PCH) reach the verifier.
+                let v = Rc::clone(v);
+                pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
+            }
             let main_id = pp.main_file();
             let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
             restore.timer.mark("continue");

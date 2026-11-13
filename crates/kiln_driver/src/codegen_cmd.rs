@@ -315,6 +315,7 @@ impl CodegenJob<'_> {
         if let Some(why) = failed {
             return Err(why);
         }
+        crate::pch_snapshot::prefix_reported(job.args, &job.stderr, &snap.pch, &engine);
         engine.flush();
         if let Some(s) = engine.summary()
             && diag_opts.format == kiln_diag::Format::Text
