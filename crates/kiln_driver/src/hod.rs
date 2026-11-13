@@ -4,10 +4,13 @@
 //! hod (github.com/christopherfretz/hod) is a safe-Rust `-O0` back end
 //! that stands in for `llc`. It is an external executable, like `llc`:
 //! kiln has no dependency on it. Under `-fkiln-backend=hod` the driver
-//! hands it the module before `opt` (when the only `opt` trigger is
-//! `alwaysinline`, or there is none) as `hod --strict <the llc
-//! arguments> -o <obj>`, and falls back to `opt` + `llc` when hod
-//! declines (status 2) or fails. The route itself is in
+//! hands it the module before `opt` (when its `opt` triggers are a
+//! subset of {`alwaysinline`, `coro`}: hod's "pre-opt modules") as
+//! `hod --strict <the llc arguments> -o <obj>`, and falls back to `opt` +
+//! `llc` when hod declines (status 2) or fails. hod's own bugs
+//! (`internal-error`, `internal-panic`, a contained panic) are status 1,
+//! a failure: a warning and the fallback, an error under
+//! `KILN_HOD_STRICT=1`; never a silent decline. The route itself is in
 //! `codegen_cmd::execute`; this module selects the back end, finds the
 //! executable and reads hod's answer (hod's `spec/cli.md`, "Exit status"
 //! and "Strict mode").

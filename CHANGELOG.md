@@ -18,6 +18,13 @@ Planned as 1.2.0.
   `--hod=`, `KILN_HOD`, next to `llc`, or on `PATH`), with `opt` + `llc`
   as the fallback whenever hod declines or fails. The default stays
   `llvm`. spec/driver.md "Back-end selection".
+- `-fkiln-backend=hod`: coroutine translation units are handed to hod
+  before `opt` too (WP-1398): a module whose only `opt` triggers are
+  `alwaysinline` and coroutines goes to hod, which compiles the
+  coroutines itself; when hod declines, kiln runs the coroutine passes
+  and `llc` as before. `KILN_STATS_LOG` lines gain `hod_skip`, the reason
+  a job was not offered to hod. spec/driver.md "Back-end selection",
+  "Compile statistics log".
 - `-g`: imported entities (WP-1365, reported by hod). Using-directives,
   using-declarations and namespace aliases, at namespace and block scope,
   get clang's `DW_TAG_imported_module` / `DW_TAG_imported_declaration`, so

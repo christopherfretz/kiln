@@ -137,6 +137,9 @@ pub struct Job {
     pub backend: Option<&'static str>,
     /// hod's reason when it declined, or its status when it failed.
     pub hod_reason: Option<String>,
+    /// Why the job was not offered to hod although hod is the selected
+    /// back end (`codegen_cmd::hod_skip`); `None` otherwise.
+    pub hod_skip: Option<&'static str>,
 }
 
 impl Job {
@@ -151,6 +154,7 @@ impl Job {
             failed: false,
             backend: None,
             hod_reason: None,
+            hod_skip: None,
         }
     }
 
@@ -258,6 +262,19 @@ impl Job {
             }
             None => o.push_str("null"),
         }
+        // A `-fsyntax-only` / `--precompile` job has no object either.
+        let skip = self.hod_skip.or_else(|| {
+            (self.input.is_some()
+                && matches!(kind, "syntax-only" | "precompile")
+                && crate::hod::selected(args).unwrap_or_default() == crate::hod::Backend::Hod)
+                .then_some("output-kind")
+        });
+        match skip {
+            Some(s) => {
+                let _ = write!(o, ",\"hod_skip\":\"{s}\"");
+            }
+            None => o.push_str(",\"hod_skip\":null"),
+        }
         if truncated {
             o.push_str(",\"truncated\":true");
         }
@@ -344,7 +361,7 @@ mod tests {
         assert!(l.contains("\"triggers\":[\"alwaysinline\",\"coro\"]"));
         assert!(l.contains("\"frontend_ms\":4.000,\"emit_ir_ms\":1.000,\"print_ir_ms\":0.000"));
         assert!(l.contains("\"children_ms\":{\"opt\":2.500},\"total_ms\":9.001,\"exit\":0,"));
-        assert!(l.ends_with(",\"backend\":null,\"hod_reason\":null}\n"));
+        assert!(l.ends_with(",\"backend\":null,\"hod_reason\":null,\"hod_skip\":null}\n"));
         assert!(trace::Json::parse(l.trim_end()).is_ok());
         let long = "d/".repeat(4000) + "x.cpp";
         let mut j = Job::start(Some(&long));
@@ -354,7 +371,7 @@ mod tests {
         assert!(
             l.len() <= MAX_LINE
                 && l.ends_with(
-                    ",\"exit\":1,\"backend\":null,\"hod_reason\":null,\"truncated\":true}\n"
+                    ",\"exit\":1,\"backend\":null,\"hod_reason\":null,\"hod_skip\":null,\"truncated\":true}\n"
                 )
         );
         let mut j = Job::start(Some("x.cpp"));
@@ -363,9 +380,32 @@ mod tests {
         let l = j.line(&a, &[("hod", 1)], 1);
         let _ = trace::phases_finish();
         assert!(l.ends_with(
-            ",\"backend\":\"hod-declined\",\"hod_reason\":\"alwaysinline:\\\"q\\\"\"}\n"
+            ",\"backend\":\"hod-declined\",\"hod_reason\":\"alwaysinline:\\\"q\\\"\",\"hod_skip\":null}\n"
         ));
         assert!(trace::Json::parse(l.trim_end()).is_ok());
+        // spec/driver.md "Compile statistics log": `hod_skip`.
+        let mut j = Job::start(Some("x.cpp"));
+        j.hod_skip = Some("instrument-entry");
+        let l = j.line(&a, &[], 1);
+        let _ = trace::phases_finish();
+        assert!(l.ends_with(",\"hod_reason\":null,\"hod_skip\":\"instrument-entry\"}\n"), "{l}");
+        let hod = |extra: &str| {
+            Args::parse(&["-fkiln-backend=hod".to_owned(), extra.to_owned(), "x.cpp".to_owned()])
+        };
+        for (extra, want) in
+            [("-fsyntax-only", "\"output-kind\""), ("--precompile", "\"output-kind\"")]
+        {
+            let l = Job::start(Some("x.cpp")).line(&hod(extra), &[], 1);
+            let _ = trace::phases_finish();
+            assert!(l.ends_with(&format!(",\"hod_skip\":{want}}}\n")), "{extra}: {l}");
+        }
+        let llvm = Args::parse(&["-fkiln-backend=llvm".to_owned(), "-fsyntax-only".to_owned()]);
+        let l = Job::start(Some("x.cpp")).line(&llvm, &[], 1);
+        let _ = trace::phases_finish();
+        assert!(l.ends_with(",\"hod_skip\":null}\n"), "{l}");
+        let link = Job::start(None).line(&hod("-c"), &[("clang++", 1)], 1);
+        let _ = trace::phases_finish();
+        assert!(link.ends_with(",\"hod_skip\":null}\n"), "{link}");
         let link = Job::start(None).line(&a, &[("clang++", 1)], 1);
         let _ = trace::phases_finish();
         assert!(link.starts_with("{\"input\":null,\"output_kind\":\"link\""));

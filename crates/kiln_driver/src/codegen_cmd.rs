@@ -1130,7 +1130,7 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
 /// text `ir`, each by its stable name (spec/driver.md "Compile
 /// statistics log"): every one that holds, in this order, any one of
 /// which alone schedules it; empty when `opt` does not run. Only the
-/// statistics log asks (it walks the text once more).
+/// statistics log and the hod route ask (each walks the text once more).
 pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'static str> {
     if args.disable_llvm_passes {
         return Vec::new();
@@ -1149,32 +1149,75 @@ pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'stati
 }
 
 /// The static half of the hod route's predicate (spec/driver.md
-/// "Back-end selection"): the back end is hod, the output an object
-/// (`-c`, or the objects of a link), at `-O0`, without `-flto`, a
-/// sanitizer, coverage or instrumentation (`-finstrument-functions*`,
-/// `-fxray-instrument`, `-fpatchable-function-entry=`). Every other run
-/// takes the LLVM route untouched; `-fkiln-backend=hod` is a request for
-/// the cases hod can take, not an error elsewhere.
+/// "Back-end selection"): the back end is hod and [`hod_static_skip`]
+/// finds nothing. Every other run takes the LLVM route untouched;
+/// `-fkiln-backend=hod` is a request for the cases hod can take, not an
+/// error elsewhere.
 fn hod_planned(args: &Args, tc: &Toolchain) -> bool {
-    let c = &args.codegen;
     crate::hod::selected(args).unwrap_or_default() == crate::hod::Backend::Hod
-        && matches!(Phase::of(args), Phase::Object | Phase::Link)
-        && c.lto.is_none()
-        && opt_pipeline(args.opt_flag.as_deref()).is_none()
-        && !args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.any()
-        && coverage_passes(args).is_none()
-        && !c.instrument_functions
-        && !c.instrument_functions_after_inlining
-        && !c.xray_instrument
-        && c.patchable_function_entry.is_none()
+        && hod_static_skip(args, tc).is_none()
 }
+
+/// The first condition of the run that keeps hod from being offered its
+/// modules, by its `hod_skip` name (spec/driver.md "Compile statistics
+/// log"), in this order: the output is not an object (`-c`, or the
+/// objects of a link): `output-kind`; an `-O` level above 0:
+/// `opt-level`; `-flto`: `lto`; a sanitizer: `sanitizer`; coverage:
+/// `coverage`; `-finstrument-functions*`, `-fxray-instrument` or
+/// `-fpatchable-function-entry=`: `instrument`. `None`: the route is
+/// planned.
+fn hod_static_skip(args: &Args, tc: &Toolchain) -> Option<&'static str> {
+    let c = &args.codegen;
+    if !matches!(Phase::of(args), Phase::Object | Phase::Link) {
+        Some("output-kind")
+    } else if opt_pipeline(args.opt_flag.as_deref()).is_some() {
+        Some("opt-level")
+    } else if c.lto.is_some() {
+        Some("lto")
+    } else if args.sanitize(!tc.target.is_aarch64(), tc.target.triple).0.opts.any() {
+        Some("sanitizer")
+    } else if coverage_passes(args).is_some() {
+        Some("coverage")
+    } else if c.instrument_functions
+        || c.instrument_functions_after_inlining
+        || c.xray_instrument
+        || c.patchable_function_entry.is_some()
+    {
+        Some("instrument")
+    } else {
+        None
+    }
+}
+
+/// The `opt` triggers hod accepts in a module before `opt` (hod's
+/// `spec/cli.md` "Pre-opt modules"): it compiles an `alwaysinline` call
+/// out of line and a switch-resumed coroutine body once, with its frame
+/// in the heap, in place of the always-inliner and the coroutine passes.
+const HOD_TRIGGERS: [&str; 2] = ["alwaysinline", "coro"];
 
 /// The dynamic half of the hod route's predicate: the `opt` trigger
 /// set of the module ([`opt_triggers`], read from the text that goes to
-/// hod's standard input) is empty or exactly {`alwaysinline`}. A
-/// coroutine module (`coro`) or an instrumented one takes the LLVM route.
+/// hod's standard input) is a subset of {`alwaysinline`, `coro`}. An
+/// instrumented module (`instrument-entry`) takes the LLVM route.
 fn hod_takes(args: &Args, tc: &Toolchain, ir: &str) -> bool {
-    opt_triggers(args, tc, ir).iter().all(|t| *t == "alwaysinline")
+    opt_triggers(args, tc, ir).iter().all(|t| HOD_TRIGGERS.contains(t))
+}
+
+/// The statistics log's `hod_skip` of a job whose module has the `opt`
+/// triggers `triggers` (empty without a module): `None` unless the back
+/// end is hod and the job is not offered to hod; then the first static
+/// reason ([`hod_static_skip`]), else the first trigger outside
+/// [`HOD_TRIGGERS`], by its name.
+pub(crate) fn hod_skip(
+    args: &Args,
+    tc: &Toolchain,
+    triggers: &[&'static str],
+) -> Option<&'static str> {
+    if crate::hod::selected(args).unwrap_or_default() != crate::hod::Backend::Hod {
+        return None;
+    }
+    hod_static_skip(args, tc)
+        .or_else(|| triggers.iter().copied().find(|t| !HOD_TRIGGERS.contains(t)))
 }
 
 /// `-###`'s line between the hod command and the `llc` command that is
@@ -1625,6 +1668,7 @@ fn execute(
                     if let Some(t) = &text {
                         j.module(args, tc, t);
                     }
+                    j.hod_skip = hod_skip(args, tc, &j.triggers);
                 }
                 // spec/driver.md "Back-end selection": hod first, on the
                 // module before `opt`.
