@@ -33,6 +33,9 @@ kiln_abi.workspace = true
 kiln_llvm.workspace = true
 kiln_codegen.workspace = true
 
+[dev-dependencies]
+kiln_snap.workspace = true
+
 [lints]
 workspace = true
 

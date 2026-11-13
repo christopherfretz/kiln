@@ -15,14 +15,14 @@ use kiln_source::fx::FxHashMap;
 /// Most arguments a memoized function may take.
 pub(crate) const MAX_ARGS: usize = 4;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) struct MemoKey {
     pub func: u32,
     pub args: [u128; MAX_ARGS],
 }
 
 /// What a call produced and cost.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct MemoVal {
     pub result: u128,
     pub steps: u64,
@@ -38,7 +38,7 @@ pub(crate) struct MemoVal {
 
 const NONE: u32 = u32::MAX;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Entry {
     key: MemoKey,
     val: MemoVal,
@@ -46,7 +46,7 @@ struct Entry {
     next: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct Memo {
     cap: usize,
     map: FxHashMap<MemoKey, u32>,
@@ -111,6 +111,43 @@ impl Memo {
         if self.tail == NONE {
             self.tail = i;
         }
+    }
+
+    /// The invariants of a decoded memo (`crate::snap`): `cap` is the
+    /// consumer's, every entry is mapped once by its key, the recency
+    /// list links every entry once, and every key names a function below
+    /// `nfuncs`.
+    pub(crate) fn check_restored(&self, cap: usize, nfuncs: usize) -> Result<(), &'static str> {
+        let n = self.entries.len();
+        if self.cap != cap {
+            return Err("memo capacity differs from the configured one");
+        }
+        if n > cap || self.map.len() != n {
+            return Err("memo table sizes inconsistent");
+        }
+        for (k, &i) in &self.map {
+            if self.entries.get(i as usize).is_none_or(|e| e.key != *k) {
+                return Err("memo map names the wrong entry");
+            }
+        }
+        // The key's top two bits are the evaluation context (vm.rs).
+        if self.entries.iter().any(|e| (e.key.func & !(3 << 30)) as usize >= nfuncs) {
+            return Err("memo entry of an unknown function");
+        }
+        let (mut i, mut prev, mut seen) = (self.head, NONE, 0usize);
+        while i != NONE {
+            let Some(e) = self.entries.get(i as usize) else {
+                return Err("memo recency list out of range");
+            };
+            if e.prev != prev || seen >= n {
+                return Err("memo recency list inconsistent");
+            }
+            (prev, i, seen) = (i, e.next, seen + 1);
+        }
+        if seen != n || self.tail != prev {
+            return Err("memo recency list does not link every entry");
+        }
+        Ok(())
     }
 
     pub fn get(&mut self, key: &MemoKey) -> Option<MemoVal> {

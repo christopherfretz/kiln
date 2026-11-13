@@ -57,14 +57,14 @@ pub enum Shape {
 
 /// A scalar member of a recipe's class: its byte offset in the complete
 /// object and its type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Leaf {
     pub off: u64,
     pub ty: OTy,
 }
 
 /// A [`Shape`] matched against one class's layout.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) enum Recipe {
     /// A pointer and a size (`Shape::Str`, or a span-like range).
     Span { ptr: Leaf, len: Leaf },
@@ -80,10 +80,27 @@ pub(crate) enum Recipe {
     Whole,
 }
 
+impl Recipe {
+    /// The types it names (`crate::snap`).
+    pub(crate) fn types(&self) -> impl Iterator<Item = OTy> {
+        let (a, b, c, d) = match *self {
+            Recipe::Span { ptr, len } => (Some(ptr.ty), Some(len.ty), None, None),
+            Recipe::Vector { begin, end, cap, elem } => {
+                (Some(begin.ty), Some(end.ty), Some(cap.ty), Some(elem))
+            }
+            Recipe::Ptr(l) => (Some(l.ty), None, None, None),
+            Recipe::Pair(x, y) => (Some(x.ty), Some(y.ty), None, None),
+            Recipe::Inline { elem, .. } => (Some(elem), None, None, None),
+            Recipe::Whole => (None, None, None, None),
+        };
+        [a, b, c, d].into_iter().flatten()
+    }
+}
+
 /// The exception path of a call site (spec/reflection.md §8.2): the
 /// register the VM sets when the call throws, and the recipes of the
 /// `std::meta::exception` constructor's message and location parameters.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct ExcSite {
     pub flag: u32,
     pub what: Recipe,
@@ -92,7 +109,7 @@ pub(crate) struct ExcSite {
 
 /// What the VM knows of one compiled intrinsic call (operand 3 of its
 /// `bi::META` instruction is its index + 1).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct MetaSite {
     /// The call expression (the origin of the storage it allocates).
     pub e: ExprId,
@@ -134,14 +151,16 @@ pub struct ExcCtor {
 }
 
 /// The materialization state of an Oven.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct MetaState {
     pub sites: Vec<MetaSite>,
     /// The elements of a [`MetaOut::Infos`] result (reused: no
     /// allocation per call in steady state).
+    #[snap(skip)]
     pub infos: Vec<ReflectionId>,
     /// The exception the last failing site throws, until its
     /// constructor's arguments are filled (`bi::META_EXC`).
+    #[snap(skip)]
     pub pending: Option<MetaThrow>,
     /// The `std::meta::info` type, once a range argument was compiled
     /// ([`Oven::meta_range_at`] reads its elements).

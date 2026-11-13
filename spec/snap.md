@@ -254,6 +254,14 @@ What the Sema root (WP-1382) added to the recipe:
   when every holder is in the same stream after its first writer; a root
   that needs the consumer's allocation checks `ptr_eq` and refuses.
 
+`kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`)
+is a **configured** root: its limits and options are the consumer's, so
+it is not `Snap`. The consumer builds the Oven as it would without a
+snapshot and applies one to it: `snap_ready` (the quiescence check),
+`snap_put` (refused unless ready; writes nothing then), `snap_restore`
+(into an unused Oven; validates everything before assigning anything)
+and `snap_schema`. spec/oven.md "Snapshots" states its behaviour.
+
 ## Recipe: making a crate's types `Snap`
 
 1. Add `kiln_snap.workspace = true` to the crate's `[dependencies]`.

@@ -6,7 +6,7 @@ use std::fmt;
 use kiln_source::Loc;
 
 /// One note of a failure.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct Note {
     /// Where the note points.
     pub loc: Loc,

@@ -25,7 +25,7 @@ use crate::ty::{OTy, TyKind, Types};
 use crate::{Oven, SemaBridge};
 
 /// One interned member pointer value.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct MpEntry {
     /// The `FieldDecl` or `CXXMethodDecl` (first declaration).
     pub member: DeclId,
@@ -66,12 +66,28 @@ struct MpLayout {
 }
 
 /// The interned member pointer values of an Oven.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct MemPtrs {
     entries: Vec<MpEntry>,
     map: FxHashMap<(DeclId, bool, Box<[DeclId]>), u32>,
     /// The `pending` entries.
     pending: Vec<u32>,
+}
+
+impl MemPtrs {
+    /// The invariants of decoded member pointer values (`crate::snap`):
+    /// the intern map and the pending list name entries, member
+    /// functions name compiled functions.
+    pub(crate) fn check_restored(&self, nfuncs: usize) -> Result<(), &'static str> {
+        let n = self.entries.len() as u32;
+        if self.map.values().chain(&self.pending).any(|&i| i >= n) {
+            return Err("member pointer table names an unknown entry");
+        }
+        if self.entries.iter().any(|e| e.fn_index != 0 && e.fn_index as usize >= nfuncs) {
+            return Err("member pointer of an unknown function");
+        }
+        Ok(())
+    }
 }
 
 impl MemPtrs {

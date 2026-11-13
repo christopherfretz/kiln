@@ -17,11 +17,11 @@ mod path;
 pub(crate) use path::{Hop, Walk, alt_members};
 
 /// A type in the Oven's table.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct OTy(pub u32);
 
 /// The shape of a type.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum TyKind {
     Void,
     Bool,
@@ -74,7 +74,7 @@ pub(crate) enum TyKind {
     Opaque,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct TyInfo {
     /// Canonical, cv-unqualified.
     pub q: QualType,
@@ -103,7 +103,7 @@ pub(crate) struct TyInfo {
     pub uhull: (u32, u32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct FieldInfo {
     pub decl: DeclId,
     pub ty: OTy,
@@ -133,7 +133,7 @@ pub(crate) enum Scal {
     Ptr,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Types {
     pub infos: Vec<TyInfo>,
     pub fields: Vec<FieldInfo>,
@@ -189,6 +189,7 @@ pub(crate) struct Types {
     member_idx: FxHashMap<DeclId, u32>,
     /// The subobject path cache (WP-644, [`path`]): memoized
     /// memory-independent walk steps, bounded by [`PATH_CACHE_MAX`].
+    #[snap(skip)]
     paths: path::PathCache,
     /// How many provisional slots were rebuilt in place: a walk result
     /// remembered across a rebuild is stale (the union-path memo,
@@ -281,6 +282,57 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
         },
         _ => return None,
     })
+}
+
+impl Types {
+    /// The invariants of a decoded type table (`crate::snap`): every
+    /// type, field and union position a table entry names is in range,
+    /// and the offset index rows exist.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let n = self.infos.len();
+        let ok = |t: OTy| (t.0 as usize) < n;
+        for i in &self.infos {
+            let fine = match i.kind {
+                TyKind::Ptr(t)
+                | TyKind::Array { elem: t, .. }
+                | TyKind::BoolVec { elem: t, .. } => ok(t),
+                TyKind::Record { first, count, .. } => {
+                    u64::from(first) + u64::from(count) <= self.fields.len() as u64
+                }
+                _ => true,
+            };
+            if !fine || i.upos.0 > i.upos.1 || i.upos.1 as usize > self.union_pos.len() {
+                return Err("type table entry out of range");
+            }
+        }
+        if !self.fields.iter().all(|f| ok(f.ty))
+            || !self.union_pos.iter().all(|&(_, t)| ok(t))
+            || !self.map.values().all(|&t| ok(t))
+            || !self.arrays.values().chain(self.const_arrays.values()).all(|&t| ok(t))
+            || !self.provisional.values().chain(self.provisional_slots.iter()).all(|&t| ok(t))
+            || !self.nv_views.iter().chain(self.nv_class.iter()).all(|(&a, &b)| ok(a) && ok(b))
+            || !self.empty_bases.iter().all(|(&t, v)| ok(t) && v.iter().all(|&(b, _)| ok(b)))
+            || !self.data_sizes.keys().all(|&t| ok(t))
+        {
+            return Err("type table map names an unknown type");
+        }
+        if self.idx_order.len() != self.idx_reach.len() {
+            return Err("type offset index rows inconsistent");
+        }
+        for (&t, &s) in &self.idx_start {
+            let rows = match self.infos.get(t.0 as usize).map(|i| i.kind) {
+                Some(TyKind::Record { count, .. }) => count as usize,
+                _ => return Err("offset index of a non-record type"),
+            };
+            if s as usize + rows > self.idx_order.len() {
+                return Err("offset index rows out of range");
+            }
+        }
+        if self.idx_order.iter().any(|&i| i as usize >= self.fields.len()) {
+            return Err("offset index names an unknown field");
+        }
+        Ok(())
+    }
 }
 
 impl Types {
