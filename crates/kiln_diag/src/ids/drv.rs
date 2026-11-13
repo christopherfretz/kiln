@@ -18,6 +18,10 @@ drv_command_signalled = Error (1) "{0} command failed due to signal (use -v to s
 drv_compilation_database = Error (2) "compilation database '{0}' could not be opened: {1}";
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
+// WP-1371: `-fkiln-backend=hod` (spec/driver.md "Back-end selection").
+drv_hod_failed = Warning (2) "hod failed ({0}): {1}; falling back to llc";
+drv_hod_failed_strict = Error (2) "hod failed ({0}): {1} (KILN_HOD_STRICT=1: no fallback)";
+drv_hod_not_found = Error (1) "-fkiln-backend=hod: no hod executable found (searched {0})";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
 // WP-1331: clang `warn_drv_input_file_unused` (`'assembler'`: a `.s` under `-S`, `-E`, `-fsyntax-only`, `-M`).
 drv_input_unused = Warning [UnusedCommandLineArgument] (2) "{0}: '{1}' input unused";

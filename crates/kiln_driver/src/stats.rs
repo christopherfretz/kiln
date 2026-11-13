@@ -131,6 +131,12 @@ pub struct Job {
     pub counts: Option<IrCounts>,
     /// A step of the job failed.
     pub failed: bool,
+    /// The back end that made the job's code (spec/driver.md "Back-end
+    /// selection"): `llvm` (`llc` ran), `hod`, `hod-declined`,
+    /// `hod-failed`; `None` when none ran.
+    pub backend: Option<&'static str>,
+    /// hod's reason when it declined, or its status when it failed.
+    pub hod_reason: Option<String>,
 }
 
 impl Job {
@@ -143,6 +149,8 @@ impl Job {
             triggers: Vec::new(),
             counts: None,
             failed: false,
+            backend: None,
+            hod_reason: None,
         }
     }
 
@@ -232,6 +240,24 @@ impl Job {
         o.push('}');
         let _ = write!(o, ",\"total_ms\":{}", Ms(total_us));
         let _ = write!(o, ",\"exit\":{}", u8::from(self.failed));
+        match self.backend {
+            Some(b) => {
+                let _ = write!(o, ",\"backend\":\"{b}\"");
+            }
+            None => o.push_str(",\"backend\":null"),
+        }
+        o.push_str(",\"hod_reason\":");
+        match &self.hod_reason {
+            // A reason is a short name; a failure's status text is too.
+            Some(r) => {
+                let mut at = r.len().min(128);
+                while !r.is_char_boundary(at) {
+                    at -= 1;
+                }
+                trace::json_str(&mut o, &r[..at]);
+            }
+            None => o.push_str("null"),
+        }
         if truncated {
             o.push_str(",\"truncated\":true");
         }
@@ -317,14 +343,29 @@ mod tests {
         assert!(l.starts_with("{\"input\":\"x.cpp\",\"output_kind\":\"obj\",\"opt_level\":\"0\""));
         assert!(l.contains("\"triggers\":[\"alwaysinline\",\"coro\"]"));
         assert!(l.contains("\"frontend_ms\":4.000,\"emit_ir_ms\":1.000,\"print_ir_ms\":0.000"));
-        assert!(l.contains("\"children_ms\":{\"opt\":2.500},\"total_ms\":9.001,\"exit\":0}"));
+        assert!(l.contains("\"children_ms\":{\"opt\":2.500},\"total_ms\":9.001,\"exit\":0,"));
+        assert!(l.ends_with(",\"backend\":null,\"hod_reason\":null}\n"));
         assert!(trace::Json::parse(l.trim_end()).is_ok());
         let long = "d/".repeat(4000) + "x.cpp";
         let mut j = Job::start(Some(&long));
         j.failed = true;
         let l = j.line(&a, &[], 0);
         let _ = trace::phases_finish();
-        assert!(l.len() <= MAX_LINE && l.ends_with(",\"exit\":1,\"truncated\":true}\n"));
+        assert!(
+            l.len() <= MAX_LINE
+                && l.ends_with(
+                    ",\"exit\":1,\"backend\":null,\"hod_reason\":null,\"truncated\":true}\n"
+                )
+        );
+        let mut j = Job::start(Some("x.cpp"));
+        j.backend = Some("hod-declined");
+        j.hod_reason = Some("alwaysinline:\"q\"".to_owned());
+        let l = j.line(&a, &[("hod", 1)], 1);
+        let _ = trace::phases_finish();
+        assert!(l.ends_with(
+            ",\"backend\":\"hod-declined\",\"hod_reason\":\"alwaysinline:\\\"q\\\"\"}\n"
+        ));
+        assert!(trace::Json::parse(l.trim_end()).is_ok());
         let link = Job::start(None).line(&a, &[("clang++", 1)], 1);
         let _ = trace::phases_finish();
         assert!(link.starts_with("{\"input\":null,\"output_kind\":\"link\""));

@@ -2378,6 +2378,81 @@ the one evaluation). kiln memoizes constant calls, so a verbose trace
 has one `ConstevalCall` / `ConstexprCall` per evaluated call, not per
 call in the source's recursion.
 
+## Back-end selection (WP-1371)
+
+`-fkiln-backend=llvm|hod` (kiln only; the last one wins) selects the back
+end that makes objects; without it the variable `KILN_BACKEND` (set and
+not empty) does, and the default is `llvm`: `opt` when the IR needs it,
+then `llc` ("Code generation"). Any other value of either is a usage
+error, `invalid value '<v>' in '-fkiln-backend=<v>'` (`'KILN_BACKEND=<v>'`
+for the variable). The variable is checked on every run, the flag
+wherever it appears.
+
+**hod** (github.com/christopherfretz/hod) is a safe-Rust `-O0` back end
+that stands in for `llc`, an external executable like `llc` (kiln has no
+dependency on it). `-fkiln-backend=hod` is a request for the cases hod
+can take, not an error elsewhere: every other case takes the LLVM route
+untouched. The contract kiln codes against is hod's `spec/cli.md`
+("Options", "Strict mode", "Exit status"): hod accepts every option kiln
+passes to `llc`, and in strict mode answers status 0 (the object is
+written, nothing printed), 2 (declined: one line `hod: error: unsupported
+construct '<reason>' (strict mode: no fallback)`, the `-o` file not
+touched) or 1 (an error in hod); death by a signal is a hod bug. kiln
+never sets `HOD_FALLBACK_LLC`/`--fallback`.
+
+- **The executable**: `--hod=<path>` (joined only), else `KILN_HOD`, else
+  `hod` in the directory of the `llc` kiln would use (`<llvm>/bin`), else
+  `hod` on `PATH`. A path named by the flag or the variable is used as
+  is (no further search). It is looked for only when the route below is
+  planned for the run (an object output at `-O0` ...); when none is
+  found that is an error naming what was searched, `-fkiln-backend=hod:
+  no hod executable found (searched '<llvm>/bin/hod' (next to llc),
+  PATH)` (or `'<path>' (from --hod=)` / `(from KILN_HOD)`), exit status
+  1, nothing compiled: never a silent LLVM compile.
+- **The route** (`codegen_cmd::hod_planned`, `hod_takes`): for an object
+  output (`-c`, or each source of a link), at `-O0`, without `-flto`, a
+  sanitizer (any `-fsanitize=`), coverage (`--coverage`,
+  `-fprofile-instr-generate`), `-finstrument-functions[-after-inlining]`,
+  `-fxray-instrument` or `-fpatchable-function-entry=`, and when the
+  module's `opt` triggers ("Compile statistics log": read from the same
+  printed text that becomes hod's standard input, no second print) are
+  none or exactly `alwaysinline`, the driver runs
+  `hod --strict <the llc arguments, unchanged> -o <obj> -` with the module
+  text before `opt` on its standard input. A coroutine module (`coro`),
+  an instrumented one (`instrument-entry`), `-S`, `-emit-llvm`, any `-O`
+  level above 0 and `-flto` take the LLVM route. `-disable-llvm-passes`
+  keeps its meaning: `opt` never runs, and the module `llc` would get is
+  the one hod gets.
+- **The answers:**
+
+| hod | what the driver does |
+|---|---|
+| status 0 | done: no `opt` and no `llc` for this input; `-gz`'s `llvm-objcopy` still runs |
+| status 2 (declined) | today's steps, `opt` if the IR needs it then `llc`, byte-identical to `-fkiln-backend=llvm`; no diagnostic (`-v`: one line ` (hod declined '<reason>'; falling back to llc)`) |
+| status 1, any other status, a signal, or hod cannot be started | warning `hod failed (<exit code N \| signal N \| not started>): <its first stderr line, or "no message">; falling back to llc`, then today's steps; with `KILN_HOD_STRICT=1` an error instead (`hod failed (...): ... (KILN_HOD_STRICT=1: no fallback)`), the input fails |
+
+  After any non-zero status the `-o` file is removed before the
+  fallback (or the error): a stale or partial object never survives.
+- **`-v`** prints the hod command before running it; the `opt` and `llc`
+  commands appear only when the fallback runs them, after the decline
+  line or the warning. **`-###`** prints, after the frontend step, the
+  hod command, then the line ` (fallback if hod declines or fails: opt as
+  the module needs, then llc)`, then the `llc` command as usual.
+- **`-ftime-trace`**: hod's run is a `CodeGenPasses` span with detail
+  `hod`, as `llc`'s is; hod is passed no `--time-trace` options (it
+  accepts and ignores them) and no trace file is read from it.
+- **`KILN_STATS_LOG`**: the line's `backend` is `hod`, `hod-declined` or
+  `hod-failed`, `hod_reason` the reason or the failure status, and
+  `children_ms` holds `hod`'s time beside `opt`'s and `llc`'s.
+- **Environment variables**: `KILN_BACKEND` (`llvm` / `hod`), `KILN_HOD`
+  (the executable), `KILN_HOD_STRICT=1` (a hod failure is an error).
+
+Implementation: `crates/kiln_driver/src/hod.rs` (selection, search,
+hod's answer), `codegen_cmd::run_hod` (the route); tests:
+`crates/kiln_driver/tests/hod_backend.rs` (a fake hod script: every
+answer, the predicate's exclusions, the search order, precedence, `-###`,
+`-ftime-trace`, the statistics fields).
+
 ## Compile statistics log
 
 `KILN_STATS_LOG=<path>` (WP-1370; kiln only, read once per run, unset or
@@ -2412,9 +2487,11 @@ the IR.
 | `functions_defined` | `define`s |
 | `frontend_ms` | the `Frontend` phase less `EmitIR` and `PrintIR`: preprocessing, parsing, sema, the Oven |
 | `emit_ir_ms`, `print_ir_ms` | the `EmitIR` and `PrintIR` phases ("Time trace") |
-| `children_ms` | an object: per tool run for the job (`opt`, `llc`, `llvm-as`, `llvm-objcopy`; `clang++` on the link's line), its summed wall time |
+| `children_ms` | an object: per tool run for the job (`opt`, `llc`, `llvm-as`, `llvm-objcopy`, `hod`; `clang++` on the link's line), its summed wall time |
 | `total_ms` | the job, from its start to its end |
 | `exit` | `0`, or `1` when a step of the job failed |
+| `backend` | the back end that made the job's code ("Back-end selection", WP-1371): `llvm` (`llc` ran), `hod`, `hod-declined`, `hod-failed`; `null` when neither ran (`-emit-llvm`, an error before code generation, the link) |
+| `hod_reason` | hod's reason when it declined, its status (`exit code 1`, `signal 9`) when it failed, else `null`; at most 128 bytes |
 | `truncated` | present (`true`) only when the input path was cut |
 
 The five counts are of the module the frontend produced, before `opt`,

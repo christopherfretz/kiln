@@ -91,14 +91,8 @@ impl Command {
             Diag::new(DiagId::drv_unable_to_execute, Span::INVALID).arg(self.tool.name()).emit(drv);
             return false;
         };
-        let spawned = Process::new(program)
-            .args(&self.args)
-            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-        let mut child = match spawned {
-            Ok(c) => c,
+        let (status, out, err) = match spawn_and_wait(program, &self.args, input) {
+            Ok(r) => r,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 Diag::new(DiagId::drv_unable_to_execute, Span::INVALID)
                     .arg(program.display())
@@ -113,33 +107,6 @@ impl Command {
                 return false;
             }
         };
-        // Feed standard input and drain standard error on their own
-        // threads so that no pipe can fill up and deadlock the child.
-        let child_in = child.stdin.take();
-        let child_err = child.stderr.take();
-        let mut child_out = child.stdout.take();
-        let (out, err) = std::thread::scope(|s| {
-            if let (Some(mut w), Some(text)) = (child_in, input) {
-                s.spawn(move || {
-                    // A child that exits early closes the pipe; its exit
-                    // status says what went wrong.
-                    let _ = w.write_all(text);
-                });
-            }
-            let err = s.spawn(move || {
-                let mut buf = Vec::new();
-                if let Some(mut e) = child_err {
-                    let _ = e.read_to_end(&mut buf);
-                }
-                buf
-            });
-            let mut out = Vec::new();
-            if let Some(o) = child_out.as_mut() {
-                let _ = o.read_to_end(&mut out);
-            }
-            (out, err.join().unwrap_or_default())
-        });
-        let status = child.wait();
         let _ = stdout.write_all(&out);
         let _ = stdout.flush();
         if !err.is_empty() {
@@ -147,29 +114,65 @@ impl Command {
             let _ = e.write_all(&err);
             let _ = e.flush();
         }
-        match status {
-            Ok(st) if st.success() => true,
-            Ok(st) => {
-                match st.code() {
-                    Some(code) => Diag::new(DiagId::drv_command_failed, Span::INVALID)
-                        .arg(self.tool.stage())
-                        .arg(code)
-                        .emit(drv),
-                    None => Diag::new(DiagId::drv_command_signalled, Span::INVALID)
-                        .arg(self.tool.stage())
-                        .emit(drv),
-                }
-                false
-            }
-            Err(e) => {
-                Diag::new(DiagId::drv_cannot_execute, Span::INVALID)
-                    .arg(program.display())
-                    .arg(e)
-                    .emit(drv);
-                false
-            }
+        if status.success() {
+            return true;
         }
+        match status.code() {
+            Some(code) => Diag::new(DiagId::drv_command_failed, Span::INVALID)
+                .arg(self.tool.stage())
+                .arg(code)
+                .emit(drv),
+            None => Diag::new(DiagId::drv_command_signalled, Span::INVALID)
+                .arg(self.tool.stage())
+                .emit(drv),
+        }
+        false
     }
+}
+
+/// Runs `program` with `args` and `input` on its standard input (or
+/// none), collecting its standard output and standard error; returns
+/// its exit status and both. An error: it could not be started or
+/// waited for.
+pub(crate) fn spawn_and_wait(
+    program: &std::path::Path,
+    args: &[String],
+    input: Option<&[u8]>,
+) -> std::io::Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
+    let mut child = Process::new(program)
+        .args(args)
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Feed standard input and drain standard error on their own
+    // threads so that no pipe can fill up and deadlock the child.
+    let child_in = child.stdin.take();
+    let child_err = child.stderr.take();
+    let mut child_out = child.stdout.take();
+    let (out, err) = std::thread::scope(|s| {
+        if let (Some(mut w), Some(text)) = (child_in, input) {
+            s.spawn(move || {
+                // A child that exits early closes the pipe; its exit
+                // status says what went wrong.
+                let _ = w.write_all(text);
+            });
+        }
+        let err = s.spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut e) = child_err {
+                let _ = e.read_to_end(&mut buf);
+            }
+            buf
+        });
+        let mut out = Vec::new();
+        if let Some(o) = child_out.as_mut() {
+            let _ = o.read_to_end(&mut out);
+        }
+        (out, err.join().unwrap_or_default())
+    });
+    let status = child.wait()?;
+    Ok((status, out, err))
 }
 
 /// Appends `a` as `llvm::sys::printArg` does.
