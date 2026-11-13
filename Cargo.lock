@@ -133,8 +133,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiln_snap"
+version = "1.1.0"
+dependencies = [
+ "hashbrown",
+ "kiln_snap_derive",
+]
+
+[[package]]
+name = "kiln_snap_derive"
+version = "1.1.0"
+
+[[package]]
 name = "kiln_source"
 version = "1.1.0"
+dependencies = [
+ "kiln_snap",
+]
 
 [[package]]
 name = "libc"

@@ -1,0 +1,18 @@
+[package]
+name = "kiln_snap_derive"
+description = "`#[derive(Snap)]` for kiln_snap: front-end state snapshots (spec/snap.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+# No dependencies: the derive is written on the compiler's own
+# `proc_macro::TokenStream` (no `syn`, `quote` or `proc-macro2`; spec/snap.md
+# "The derive").
+[dependencies]
+
+[lints]
+workspace = true

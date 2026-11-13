@@ -282,6 +282,45 @@ text; skipping it is the lexer's job.
   every interner on the thread (strings are unique per interner); a miss
   takes the lock. The cache only changes speed, never results.
 
+## Snapshots
+`SourceManager` and `Interner` implement `kiln_snap::Snap` as hand-written
+roots (spec/snap.md "Hand-written roots"; prototype WP-1377, not yet used
+by the compiler). `FileId`, `Loc`, `Span`, `Symbol` and the table records
+derive it. The field classification tables are at the impls
+(`src/manager/snap.rs`, `src/symbol/snap.rs`).
+
+- **Tables are data.** Buffer entries, ranges, expansion entries, macro
+  names, presumed names, file kinds, include-guard suggestions, gcc
+  spellings and the allocation frontiers are written as they are, so every
+  `FileId` and `Loc` is unchanged and content added after the restore gets
+  the ids and locations it would have got in the original.
+- **File text is not stored.** A buffer read from disk is written as its
+  path and the content hash of its decoded text and restored as a lazy
+  buffer of that path (`Origin::Lazy`, the `add_lazy_file` mechanism): the
+  file is read on first use and checked against length and hash; a file
+  that changed makes the buffer unavailable (no line or column is
+  reported) and a later load of it gets a new buffer, exactly as for a
+  module file's lazy buffer. Its load report is recomputed on that read.
+  Virtual buffers (`<built-in>`, `<command line>`, `<scratch space>`) are
+  carried inline, and so is a lazy buffer whose recorded copy was used. A
+  lazy buffer not read yet loses its copy closure.
+- **Rebuilt**: the path index (`by_path`), by `stat`ing each on-disk
+  buffer's path in id order; line-start tables, on first use.
+  **Transient**: the lookup hints. **Configuration** (not stored, set by
+  the consumer): the macro prefix map and the source path style.
+- A buffer name is its path as given (`to_string_lossy`): a non-UTF-8 path
+  is restored lossily.
+- Decoding validates what queries rely on: ranges tile file space in order
+  with each buffer's own range at its start, expansion entries tile macro
+  space with every link pointing below the entry, one macro name per macro
+  entry, frontiers equal the table ends, sorted file kinds, and every
+  index in range. The `phys_line` of a `#line` directive in a disk buffer
+  cannot be checked before the text is read; `presumed_line_col`
+  saturates instead of underflowing.
+- `Interner` writes its strings in symbol order and restores them by
+  interning in order into a fresh interner (refusing a duplicate), so
+  every `Symbol` is unchanged; restore it before anything interns.
+
 ## Limits
 File ranges share 2^31 positions (each buffer and each inclusion uses
 `len + 1`), expansion
@@ -318,6 +357,11 @@ entries another 2^31 (`len + 1` each). Exhaustion is reported as
 - The gcc source path style: recorded spelling, canonicalized only for a
   system directory and only when shorter, first record wins, `#line`
   names and the main file kept.
+- Snapshots (`tests/snap.rs`): every query over every location and buffer
+  equal after a round trip; content added after the restore gets the same
+  ids and locations; equal canonical bytes; disk text not stored and a
+  changed file unavailable; truncation and bit flips are errors or
+  decode to a value whose queries do not panic; interner symbols kept.
 
 ## Open questions
 1. **`#line` state per inclusion.** Inclusion ranges (WP-056) give

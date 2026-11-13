@@ -18,13 +18,17 @@ use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use kiln_snap::Snap;
+
 use crate::fx::FxBuildHasher;
+
+mod snap;
 
 /// An interned identifier: a 4-byte handle into an [`Interner`].
 ///
 /// Two symbols from the same interner are equal exactly when their strings
 /// are equal. Symbols from different interners must not be mixed.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Snap)]
 pub struct Symbol(u32);
 
 impl Symbol {

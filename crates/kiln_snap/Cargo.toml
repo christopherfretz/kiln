@@ -1,0 +1,15 @@
+[package]
+name = "kiln_snap"
+description = "Front-end state snapshots: the `Snap` trait, its runtime and schema hash (spec/snap.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kiln_snap_derive.workspace = true
+# `Snap` for hashbrown's maps and sets (already a workspace dependency).
+hashbrown.workspace = true
+
+[lints]
+workspace = true
