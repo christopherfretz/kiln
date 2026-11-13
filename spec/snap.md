@@ -228,14 +228,13 @@ The roots so far:
   `ConstStore` (`src/consts/snap.rs`), `StringPool` (`src/strings.rs`)
   and `ColdMap` (`src/slot.rs`); spec/ast.md §17 states their behaviour.
   `kiln_abi`'s target and layout types derive `Snap` (no root).
-
-`kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`)
-is a **configured** root: its limits and options are the consumer's, so
-it is not `Snap`. The consumer builds the Oven as it would without a
-snapshot and applies one to it: `snap_ready` (the quiescence check),
-`snap_put` (refused unless ready; writes nothing then), `snap_restore`
-(into an unused Oven; validates everything before assigning anything)
-and `snap_schema`. spec/oven.md "Snapshots" states its behaviour.
+- `kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`),
+  a **configured** root: its limits and options are the consumer's, so
+  it is not `Snap`. The consumer builds the Oven as it would without a
+  snapshot and applies one to it: `snap_ready` (the quiescence check),
+  `snap_put` (refused unless ready; writes nothing then), `snap_restore`
+  (into an unused Oven; validates everything before assigning anything)
+  and `snap_schema`; spec/oven.md "Snapshots" states its behaviour.
 
 ## Recipe: making a crate's types `Snap`
 
