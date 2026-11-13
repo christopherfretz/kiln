@@ -2624,15 +2624,13 @@ int main() { return span(a, a + 2) - 2; }\n";
     image_carries("wp1360m", header, tu);
 }
 
-/// WP-1360: an overloaded member access in a dependent call keeps its
-/// candidates in a Sema side table the image does not carry; it is
-/// refused under its own reason ("a template expression (an overloaded
-/// member access)"), and the unit agrees with replay. Before, a set
-/// whose first candidate is not a template was carried with that one
-/// candidate and every instantiation failed after the image.
-#[test]
-fn overloaded_member_accesses_fall_back() {
-    let header = "\
+/// The overloaded member accesses of WP-1368's tests: implicit `this`
+/// (a plain overload and member templates), `.` and `->` on a
+/// non-dependent object with a static candidate, explicit template
+/// arguments, a member hidden by the derived class's, a using-declaration
+/// that brings the base's in, a class template's `this->f`, and a private
+/// candidate.
+const OVL_MEMBERS: &str = "\
 struct vec { int a[4]; constexpr const int *begin() const { return a; } constexpr const int *end() const { return a + 4; } };
 struct dist_fn {
   constexpr long operator()(const int *f, const int *l, int) const { return l - f + 100; }
@@ -2640,22 +2638,112 @@ struct dist_fn {
   template <class R> constexpr long operator()(R &&r) const { return operator()(r.begin(), r.end()); }
   template <class R> constexpr long twice(R &&r) const { return this->operator()(r) * 2; }
 };
+struct obj {
+  constexpr int f(int) const { return 1; }
+  constexpr int f(long) const { return 2; }
+  static constexpr int f(double) { return 3; }
+  template <class T> constexpr int g(T) const { return 10; }
+  constexpr int g(int) const { return 20; }
+};
+template <class T> constexpr int dot(T t) { obj o; return o.f(t); }
+template <class T> constexpr int arrow(T t) { obj o; const obj *p = &o; return p->f(t); }
+template <class T> constexpr int targs(T t) { obj o; return o.g<int>(t) + o.g(t); }
+struct base { constexpr int h(int) const { return 1; } constexpr int h(char) const { return 4; } };
+struct hides : base { constexpr int h(long) const { return 2; } constexpr int h(const char *) const { return 5; } };
+struct uses : base { using base::h; constexpr int h(long) const { return 3; } constexpr int h(double) const { return 6; } };
+template <class T> constexpr int hid(T t) { hides d; return d.h(t); }
+template <class T> constexpr int used(T t) { uses d; return d.h(t); }
+template <class V> struct gen {
+  V v;
+  template <class I> constexpr V run(I i) { return this->run(i, v); }
+  template <class I> constexpr V run(I i, V w) { return i + w; }
+  constexpr V run(int *, V) { return -1; }
+};
+struct priv {
+  constexpr int p(long) const { return 1; }
+private:
+  constexpr int p(int) const { return 2; }
+};
+template <class T> constexpr int callp(T t) { priv x; return x.p(t); }
 ";
-    let d = scratch("wp1360o-census");
-    std::fs::write(d.join("a.h"), header).unwrap();
-    let args = ["-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
-    let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
-    assert!(
-        o.stderr.contains("a.h:5:37: a template expression (an overloaded member access)"),
-        "{}",
-        o.stderr
-    );
-    let tu = "static_assert(dist_fn{}(vec{}) == 4 && dist_fn{}.twice(vec{}) == 8);\n\
-int main() { vec v{}; return int(dist_fn{}(v) + dist_fn{}.twice(v)) - 12; }\n";
-    std::fs::write(d.join("a.cpp"), tu).unwrap();
-    same(&d, "a.pch", &["-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
+
+/// WP-1368: an overloaded member access in a dependent call carries its
+/// whole candidate set (WP-1360 refused it; before that, the image kept
+/// one candidate and every instantiation failed). Each instantiation
+/// picks the overload replay picks: the plain function or the template,
+/// the static member, the derived class's hiding member, the base's
+/// brought in by `using`, the explicit template argument's.
+#[test]
+fn overloaded_member_accesses_are_carried() {
+    let tu = "\
+static_assert(dist_fn{}(vec{}) == 4 && dist_fn{}.twice(vec{}) == 8);
+static_assert(dot(1) == 1 && dot(1L) == 2 && dot(1.0) == 3);
+static_assert(arrow(1) == 1 && arrow(1L) == 2 && arrow(1.0) == 3);
+static_assert(targs(1) == 30 && targs(1L) == 20);
+static_assert(hid(1) == 2 && hid(\"x\") == 5);
+static_assert(used(1) == 1 && used('c') == 4 && used(1L) == 3);
+static_assert(gen<int>{5}.run(2) == 7 && callp(1L) == 1);
+int main() {
+  vec v{};
+  gen<long> g{1};
+  return int(dist_fn{}(v) + dist_fn{}.twice(v)) - 12 + dot(1L) - 2 + used(1.5) - 6 + int(g.run(1)) - 2;
+}
+";
+    image_carries("wp1368a", OVL_MEMBERS, tu);
+}
+
+/// WP-1368: through the image, access checking still sees a private
+/// candidate ([class.access]/4: the better match is chosen, then checked)
+/// and an ambiguity among the overloads a using-declaration joins is still one.
+#[test]
+fn overloaded_member_access_errors_match_replay() {
+    let d = scratch("wp1368e");
+    std::fs::write(d.join("a.h"), OVL_MEMBERS).unwrap();
+    let o =
+        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    std::fs::write(d.join("a.cpp"), "int a = callp(1);\nint b = used(1u);\n").unwrap();
+    let o = same(&d, "a.pch", &["-std=c++20", "-fsyntax-only"], "a.cpp");
+    assert_ne!(o.code, 0);
+    assert!(o.stderr.contains("'p' is a private member of 'priv'"), "{}", o.stderr);
+    assert!(o.stderr.contains("call to member function 'h' is ambiguous"), "{}", o.stderr);
     let check = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
-    let o = ok(&d, &[&check[..], &["a.cpp", "-o", "a.out"]].concat());
-    assert_eq!(o.stderr, "");
-    assert_eq!(Command::new(d.join("a.out")).status().unwrap().code(), Some(0));
+    let o = kiln(&d, &[&check[..], &["-fsyntax-only", "a.cpp"]].concat());
+    assert!(!o.stderr.contains("differs"), "{}", o.stderr);
+}
+
+/// WP-1368 (a pre-existing WP-1352 validator bug): a partial
+/// specialization declared in one block of a namespace and defined in a
+/// reopened block (libstdc++'s `iterator_traits<_Tp*>`). Its head's
+/// parameters are in the second block, which the validator rejected as
+/// "an internal image inconsistency" (no census reason; the header was
+/// replayed).
+#[test]
+fn partial_specialization_defined_in_a_reopened_namespace_is_carried() {
+    let header = "\
+namespace n { template <class T> struct it; template <class T> struct it<T *>; }
+namespace n { template <class T> struct it<T *> { using type = T; static constexpr int k = sizeof(T); }; }
+";
+    let tu = "static_assert(n::it<long *>::k == sizeof(long));\n\
+int main() { n::it<int *>::type x = 0; return x; }\n";
+    image_carries("wp1368n", header, tu);
+}
+
+/// WP-1368 (a pre-existing WP-1314 validator bug): an explicit
+/// specialization declared in one block of a nested namespace and
+/// defined in a reopened one (libc++'s `std { inline namespace __1 {`
+/// blocks). The inner namespace's reopening record, written while the
+/// specialization's record is open, has the reopened outer block as its
+/// lexical context; the validator accepted only none and rejected the
+/// image as "an internal image inconsistency" (`<compare>`, `<utility>`,
+/// `<tuple>`, `<typeindex>`).
+#[test]
+fn specialization_defined_in_a_reopened_nested_namespace_is_carried() {
+    let header = "\
+namespace s { inline namespace v { template <class T> struct tr; template <> struct tr<char>; } }
+namespace s { inline namespace v { template <> struct tr<char> { using type = char; static constexpr int k = 1; static int f() { return 2; } }; } }
+";
+    let tu = "static_assert(s::tr<char>::k == 1);\n\
+int main() { s::tr<char>::type c = 0; return c + s::tr<char>::f() - 2; }\n";
+    image_carries("wp1368s", header, tu);
 }

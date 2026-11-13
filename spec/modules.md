@@ -3703,6 +3703,102 @@ is in). `kind2_declaration_image_fallback` (modules_bmi);
 `cpp.include/pch-spec-forms-{run,errors}.cpp` and
 `module.interface/image-spec-forms-{run,errors}.cpp`.
 
+**Forms carried by WP-1368 (overloaded member accesses).** The
+writer's and reader's additions are in the new `bmi_image/ovlmember.rs`,
+with a dispatch line in `body.rs`. One expression record kind is new:
+kind byte 72, a second `MemberExpr` entry at the end of `EXPR_KINDS`. No
+cold-annotation bit, type tag or declaration bit is new.
+
+- *An overloaded member access in a dependent call* ([expr.ref]/7,
+  [over.match.call]/2, [over.match.funcs]/4; `operator()(r.begin(),
+  r.end())` through an implicit `this`, `this->gen(f, t, g, p)`, `o.f(t)`
+  and `p->f(t)` on an object that is not dependent, `o.g<int>(t)`).
+  Lookup found several member functions, a member function template or
+  a static data member template, and the call's arguments are
+  dependent, so the pattern keeps kiln's `UnresolvedMemberExpr`: a
+  `MemberExpr` of overloaded type naming the first candidate, its set in
+  Sema's `ovl.members` side table. The instantiation rebuilds the access
+  from it: the table entry forces the rebuild, and gives the explicit
+  template arguments, the qualifier and whether a static candidate
+  leaves the implicit `this` unused. WP-1360 refused the form ("a
+  template expression (an overloaded member access)"). Before that, the
+  image kept the first candidate only, and every instantiation failed.
+  - *Record.* Kind 72 has the `MemberExpr` bits, aux and cold
+    annotations. Its slots are the object expression (a pointer for
+    `->`, `this` for the implicit form) and the first candidate as a
+    lookup result (`Dc::Lookup`: a member function, a member function
+    or variable template, or a member of a specialization). After the
+    cold annotations come nine fields:
+    1. the candidates in declaration order, a `DL` of `Dc::Lookup`;
+    2. what lookup found for each, a `DL` of `Dc::Lookup` of the same
+       length. This is the using-declaration's shadow for a base member
+       a `using` brings in ([namespace.udecl]/14), not the member it
+       names, else the candidate itself;
+    3. the naming class ([class.access.base]/5), `D` of `Dc::Ctx`;
+    4. the object's class, `D` of `Dc::Ctx`;
+    5. the object type, `Qt`;
+    6. the member name, `Name`;
+    7. the qualifier (`x.B::f`), `Nns`;
+    8. whether the object is an implicit `this`, `Bool`;
+    9. the explicit template arguments, `TA`.
+  - *Validation.* There is at least one candidate, as many found
+    declarations as candidates, and the first candidate is the slot's.
+  - *Reader.* It builds the `MemberExpr` as for kind 40 and inserts the
+    set into `ovl.members` under the new expression. The arrow is the
+    record's `ARROW` bit.
+  - *Members hidden or joined.* The set is lookup's result at the
+    definition ([class.member.lookup]): a base member hidden by the
+    derived class's is not in it, and one a using-declaration brings in
+    is (its shadow in field 2). Access is checked when the call chooses
+    a candidate, against the naming class, as replay does.
+  - *Dependent base.* A member found only in a dependent base has no
+    set at the definition. That access is a
+    `CXXDependentScopeMemberExpr` (its name only, S4), never kind 72,
+    so a kind-72 record never has an empty set. "Not carried" is a
+    refusal of the whole body.
+  - *Still refused, named.* A candidate (or a found shadow, naming
+    class or object class) with no record refuses the body under
+    WP-1360's outside-the-image reason for its kind. A set that does
+    not match its expression (object, first candidate or `->` other
+    than the node's, or no candidates) is "an overloaded member access
+    whose set does not match its expression". A name that is neither an
+    identifier, an operator nor a conversion keeps "a dependent name not
+    named by an identifier".
+  - *An address-of-member overload set* (`&C::f` naming several
+    members) is an `UnresolvedLookupExpr` with a naming class. It does
+    not share this record and was already carried (`COLD_NAMING`,
+    WP-1314).
+
+- *A partial specialization defined in a reopened namespace* (a
+  pre-existing validator bug of WP-1352's late definitions, met once the
+  overloaded member accesses no longer stop libstdc++ `<optional>`;
+  `template <class T> struct it<T *>;` in one `namespace n {}`, its
+  definition in another; libstdc++ `iterator_traits<_Tp*>`). The
+  definition's head parameters have the second block's namespace record
+  as their context, while the definition record keeps the listed
+  record's. The validator now accepts a parameter context that is the
+  scope or another block of the same namespace (same name, same
+  parent). Before, the image failed its own decode ("an internal image
+  inconsistency", invisible to the census) and the header was replayed.
+- *A class completed from its first declaration across a reopened
+  nested namespace* (a pre-existing validator bug of WP-1314, met in
+  libc++ `<compare>`, `<utility>`, `<tuple>` and `<typeindex>` once
+  WP-1358 carried their specializations: `namespace s { inline
+  namespace v { template <> struct tr<char>; } }`, the definition in a
+  second such block). The inner namespace's reopening record, written
+  while the class is open, has the reopened outer block as its lexical
+  context; the validator accepted that record only without one. It now
+  accepts a lexical context that is a namespace (or the translation
+  unit).
+
+Tests: `overloaded_member_accesses_are_carried`,
+`overloaded_member_access_errors_match_replay`,
+`partial_specialization_defined_in_a_reopened_namespace_is_carried`,
+`specialization_defined_in_a_reopened_nested_namespace_is_carried`
+(kiln_driver `pch_decls`); `kind2_declaration_image_wp1368_forms` (modules_bmi);
+corpus `cpp.include/pch-ovl-members-{run,errors}.cpp` and
+`module.interface/image-ovl-members-{run,errors}.cpp`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -4428,7 +4524,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 33` since WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 34` since WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

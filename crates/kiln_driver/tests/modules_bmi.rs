@@ -2514,3 +2514,45 @@ int main() {
     let errs = image_round_trip("image-wp1360", "w", src, run, err, "1 42 1 3\n");
     assert!(errs.contains("cannot initialize a variable of type 'derived *'"), "{errs}");
 }
+
+/// WP-1368: overloaded member accesses in dependent calls (an implicit
+/// `this` with a member template, `.` with a static candidate, a
+/// using-declaration joining a base's members, a class template's
+/// `this->f`, a private candidate) carry their candidate sets; the
+/// importer's instantiations choose and check as the replayed source's.
+#[test]
+fn kind2_declaration_image_wp1368_forms() {
+    let src = "\
+export module w;
+export struct vec { int a[2]; const int *begin() const { return a; } const int *end() const { return a + 2; } };
+export struct dist_fn {
+  long operator()(const int *f, const int *l, int) const { return l - f + 100; }
+  template <class I> long operator()(I f, I l) const { return l - f; }
+  template <class R> long operator()(R &&r) const { return operator()(r.begin(), r.end()); }
+};
+export struct obj { int f(int) const { return 1; } static int f(double) { return 3; } };
+export template <class T> int dot(T t) { obj o; return o.f(t); }
+struct base { int h(int) const { return 1; } };
+export struct uses : base { using base::h; int h(long) const { return 3; } };
+export template <class T> int used(T t) { uses d; return d.h(t); }
+export template <class V> struct gen {
+  V v;
+  template <class I> V run(I i) { return this->run(i, v); }
+  template <class I> V run(I i, V w) { return i + w; }
+  V run(int *, V) { return -1; }
+};
+export struct priv { int p(long) const { return 1; } private: int p(int) const { return 2; } };
+export template <class T> int callp(T t) { priv x; return x.p(t); }
+";
+    let run = "\
+import w;
+#include <stdio.h>
+int main() {
+  gen<int> g{5};
+  printf(\"%ld %d %d %d %d %d %d\\n\", dist_fn{}(vec{}), dot(1), dot(1.5), used(1), used(1L), g.run(2), callp(1L));
+}
+";
+    let err = "import w;\nint a = callp(1);\n";
+    let errs = image_round_trip("image-wp1368", "w", src, run, err, "2 1 3 1 3 7 1\n");
+    assert!(errs.contains("'p' is a private member of 'priv'"), "{errs}");
+}

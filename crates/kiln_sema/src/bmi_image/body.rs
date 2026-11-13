@@ -353,7 +353,7 @@ fn word_attr(w: u32, loc: Loc) -> Option<AttrNode> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Side {
+pub(super) enum Side {
     Arms,
     CompoundAssign,
     InitList,
@@ -370,7 +370,7 @@ enum Side {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Slot {
+pub(super) enum Slot {
     /// The slot is 0.
     Zero,
     F(F),
@@ -397,7 +397,7 @@ fn side_fields(s: Side) -> &'static [F] {
 
 /// The expression kinds the image carries; the record's kind byte indexes
 /// this table (append only).
-pub(super) const EXPR_KINDS: [ExprKind; 72] = {
+pub(super) const EXPR_KINDS: [ExprKind; 73] = {
     use ExprKind as X;
     [
         X::IntegerLiteral,
@@ -502,6 +502,10 @@ pub(super) const EXPR_KINDS: [ExprKind; 72] = {
         // WP-1350: `__builtin_convertvector(v, T)` (its `)` is the end
         // location).
         X::ConvertVectorExpr,
+        // WP-1368: an overloaded member access (kiln's
+        // `UnresolvedMemberExpr`), a `MemberExpr` record of its own kind
+        // with its candidate set ([`super::ovlmember`]).
+        X::MemberExpr,
     ]
 };
 
@@ -697,6 +701,25 @@ fn stmt_aux_ok(k: StmtKind, aux: u16) -> bool {
         StmtKind::IfStmt => aux <= 3,
         _ => aux == 0,
     }
+}
+
+/// The fields of expression record kind `ki`, in order: [`layout`],
+/// then an overloaded member access's set (WP-1368).
+fn rec_layout(ki: u8, bits: u8, cold: u16) -> Vec<F> {
+    let mut v = layout(rec_shape(ki, bits), cold);
+    if ki == super::ovlmember::OVL_MEMBER {
+        v.extend_from_slice(super::ovlmember::OVL_FIELDS);
+    }
+    v
+}
+
+/// The slots of expression record kind `ki` (an index into
+/// [`EXPR_KINDS`]).
+fn rec_shape(ki: u8, bits: u8) -> [Slot; 2] {
+    if ki == super::ovlmember::OVL_MEMBER {
+        return super::ovlmember::OVL_SHAPE;
+    }
+    EXPR_KINDS.get(usize::from(ki)).map_or([Slot::Zero; 2], |&k| expr_shape(k, bits))
 }
 
 /// The fields of a record, in order: both slots, then the cold
@@ -1563,7 +1586,7 @@ pub(super) fn validate_section(
         if !qref_ok(e.ty) {
             return bad("bad expression type");
         }
-        let fields = layout(expr_shape(k, e.bits), e.cold);
+        let fields = rec_layout(e.kind, e.bits, e.cold);
         let Some(toks) = tokens(&fields, &e.words) else {
             return bad("bad expression record");
         };
@@ -1594,6 +1617,9 @@ pub(super) fn validate_section(
             if sel != NONE && !gen_assocs(f, w).any(|a| a[3] == sel) {
                 return bad("bad generic selection");
             }
+        }
+        if e.kind == super::ovlmember::OVL_MEMBER && !super::ovlmember::ovl_ok(&toks) {
+            return bad("bad overloaded member access");
         }
     }
     Ok(())
@@ -1655,8 +1681,10 @@ pub(super) fn param_owners(img: &Image) -> Vec<u32> {
 /// Every declaration word a validated section's expressions hold.
 fn section_decl_words(b: &Bodies, out: &mut dyn FnMut(u32)) {
     for e in &b.exprs {
-        let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
-        for (f, w) in tokens(&layout(expr_shape(k, e.bits), e.cold), &e.words).unwrap_or_default() {
+        if usize::from(e.kind) >= EXPR_KINDS.len() {
+            continue;
+        }
+        for (f, w) in tokens(&rec_layout(e.kind, e.bits, e.cold), &e.words).unwrap_or_default() {
             match f {
                 F::D(_) | F::OD(_) => out(w[0]),
                 F::DL(_) => w[1..].iter().for_each(|&x| out(x)),
@@ -1685,8 +1713,10 @@ fn section_decl_words(b: &Bodies, out: &mut dyn FnMut(u32)) {
 pub(super) fn section_locs(b: &Bodies, out: &mut Vec<u32>) {
     for e in &b.exprs {
         out.push(e.loc);
-        let Some(&k) = EXPR_KINDS.get(usize::from(e.kind)) else { continue };
-        for (f, w) in tokens(&layout(expr_shape(k, e.bits), e.cold), &e.words).unwrap_or_default() {
+        if usize::from(e.kind) >= EXPR_KINDS.len() {
+            continue;
+        }
+        for (f, w) in tokens(&rec_layout(e.kind, e.bits, e.cold), &e.words).unwrap_or_default() {
             match f {
                 F::Loc => out.push(w[0]),
                 F::Desig => out.extend(w[1..].chunks(2).map(|d| d[1])),
@@ -1779,7 +1809,7 @@ pub(super) struct BodyState {
 
 /// A field value on the writer's side, before translation.
 #[derive(Clone, Copy, Debug)]
-enum Fv {
+pub(super) enum Fv {
     Raw(u32),
     E(Option<ExprId>),
     S(Option<StmtId>),
@@ -1808,6 +1838,10 @@ enum Fv {
     LB(kiln_ast::ids::LambdaId),
     /// The designators of this `DesignatedInitExpr`.
     Desig(ExprId),
+    /// The candidates (false) or what lookup found (true) of overloaded
+    /// member access `e` (WP-1368), written as an [`F::DL`] of
+    /// [`Dc::Lookup`].
+    Ovl(ExprId, bool),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2090,16 +2124,16 @@ impl Writer<'_, '_, '_> {
                 if k == ExprKind::RequiresExpr {
                     self.requires_ok(e)?;
                 }
-                // WP-1360: an overloaded member access keeps its set in a
-                // Sema side table (`ovl.members`) the image does not
-                // carry; the importer's would name one candidate.
-                if k == ExprKind::MemberExpr && self.s.ovl.members.contains_key(&e) {
-                    return Err(super::outside::OUT_MEMBER_OVERLOADS);
-                }
+                // WP-1368: an overloaded member access keeps its set in a
+                // Sema side table (`ovl.members`): a record kind of its own
+                // carries it ([`super::ovlmember`]).
+                let ovl = k == ExprKind::MemberExpr && self.s.ovl.members.contains_key(&e);
+                let ki = if ovl { super::ovlmember::OVL_MEMBER as usize } else { ki };
                 if !expr_aux_ok(k, n.aux()) {
                     return Err("an expression the image does not carry");
                 }
-                let mut v = self.slots_fv(node, expr_shape(k, n.raw_bits()), [n.a(), n.b()])?;
+                let shape = rec_shape(ki as u8, n.raw_bits());
+                let mut v = self.slots_fv(node, shape, [n.a(), n.b()])?;
                 // A braced argument placeholder (`T(a, {b})`) lives in a
                 // Sema side table the image does not carry.
                 if matches!(k, ExprKind::CXXUnresolvedConstructExpr | ExprKind::ParenListExpr)
@@ -2135,6 +2169,9 @@ impl Writer<'_, '_, '_> {
                     return Err("an expression annotation the image does not carry");
                 }
                 let cold = self.cold_fields(e, &mut v);
+                if ovl {
+                    self.ovl_member_fv(e, &mut v)?;
+                }
                 if k == ExprKind::UnresolvedLookupExpr {
                     self.lookup_ok(e)?;
                 }
@@ -2364,6 +2401,7 @@ impl Writer<'_, '_, '_> {
                     out.push(self.dref(d, dc)?);
                 }
             }
+            Fv::Ovl(e, found) => self.ovl_member_words(e, found, out)?,
             Fv::Found(e) => {
                 let ds = self.s.ovl.ule_found.get(&e).map(|f| f.found.clone()).unwrap_or_default();
                 out.push(ds.len() as u32);
@@ -3327,8 +3365,8 @@ impl Sema<'_, '_> {
         vals: &mut Vec<u32>,
     ) {
         let k = EXPR_KINDS[usize::from(e.kind)];
-        let shape = expr_shape(k, e.bits);
-        let fields = layout(shape, e.cold);
+        let shape = rec_shape(e.kind, e.bits);
+        let fields = rec_layout(e.kind, e.bits, e.cold);
         let toks = tokens(&fields, &e.words).unwrap_or_default();
         vals.clear();
         for &(f, w) in &toks {
@@ -3451,6 +3489,10 @@ impl Sema<'_, '_> {
             && k == ExprKind::InitListExpr
         {
             self.ast.exprs.set_syntactic_list(id, w);
+        }
+        if e.kind == super::ovlmember::OVL_MEMBER {
+            let w: [u32; super::ovlmember::OVL_FIELDS.len()] = std::array::from_fn(|_| next());
+            self.image_ovl_member(id, a, e.bits, w);
         }
     }
 

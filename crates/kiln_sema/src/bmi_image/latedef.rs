@@ -266,6 +266,22 @@ impl Writer<'_, '_, '_> {
     }
 }
 
+/// Whether records `a` and `b` are one scope: the same record, or two
+/// blocks of one namespace ([namespace.def.general]/2: a reopened
+/// namespace). A partial specialization declared in one `namespace n {}`
+/// and defined in another has its head's parameters in the second block
+/// while its records keep the first's context (WP-1368).
+fn same_namespace(img: &Image, a: u32, b: u32) -> bool {
+    if a == b {
+        return true;
+    }
+    let ns = |x: u32| img.decls.get(x as usize).filter(|r| matches!(r.payload, Payload::Namespace));
+    match (ns(a), ns(b)) {
+        (Some(x), Some(y)) => x.name == y.name && x.ctx == y.ctx,
+        _ => false,
+    }
+}
+
 /// The listed explicit or partial specialization record whose definition
 /// record `j` is.
 pub(super) fn late_def_of(img: &Image, j: u32) -> Option<u32> {
@@ -339,7 +355,7 @@ pub(super) fn validate_late_defs(img: &Image, claimed: &mut [bool]) -> Res<()> {
                 && q > d.prev
                 && !claimed[q as usize]
                 && img.decls.get(q as usize).is_some_and(|x| {
-                    x.ctx == scope
+                    same_namespace(img, x.ctx, scope)
                         && x.flags & DEP != 0
                         && match x.payload {
                             Payload::Ttp { depth: dd, index, .. }

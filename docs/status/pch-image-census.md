@@ -1809,3 +1809,168 @@ What remains, by headers:
 3. A specialization of a partial specialization at `span:558` (0/2).
 4. A variable template with a placeholder type (`elements_view.h:406`,
    2/1).
+
+## WP-1368: PCH image wave 9a, overloaded member accesses (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all -v`), and of each standard
+header alone (106 libc++, 109 libstdc++), method as in WP-1314. Before
+is base `74fb107db` (WP-1360); after is this WP merged with main
+`9987d3f3f` (the numbers on the unmerged branch are the same). Reasons
+are declarations in the whole header / headers they appear in.
+
+```
+lcx.h, before: 26693 top-level declarations, 26178 carried, 515 not
+lcx.h, after:  26693 top-level declarations, 26212 carried, 481 not
+gnu.h, before: 26396 top-level declarations, 25941 carried, 455 not
+gnu.h, after:  26396 top-level declarations, 25987 carried, 409 not
+```
+
+Carried: lcx +34, gnu +46. Headers through the image: libc++ 37 of 106
+and libstdc++ 40 of 109, before and after.
+
+This WP's reason:
+
+- a template expression (an overloaded member access): lcx 37/51 → 0/0,
+  gnu 53/47 (the first refusal of 4) → 0/0.
+- It was one form. The image now carries the whole candidate set
+  (spec/modules.md §11.11, "Forms carried by WP-1368"). The sub-forms
+  left refused have reasons of their own, and none occurs in either
+  library: a candidate with no record (WP-1360's outside-the-image
+  kinds), "an overloaded member access whose set does not match its
+  expression", and a name that is no identifier, operator or
+  conversion.
+
+First refusals, unchanged:
+
+- `lcx.h`: "a partial specialization argument the image does not
+  carry" (`__iterator/segmented_iterator.h:72:8`, the first refusal of
+  40 headers): WP-1358.
+- `gnu.h`: "a function declared through a typedef"
+  (`bits/c++locale.h:52:34`, the first refusal of 28 headers): WP-1369.
+
+Where the four libstdc++ headers this reason stopped first stop now:
+
+- `<latch>`, `<semaphore>`: "(a base of a class outside the image)",
+  `bits/atomic_wait.h:459:5`: WP-1369.
+- `<optional>`, `<expected>`: no declaration is refused, but the image
+  fails its own decode ("an internal image inconsistency", which the
+  census does not count), so the header is replayed. Two
+  validator bugs, both pre-existing:
+  - A partial specialization declared in one namespace block and
+    defined in a reopened one (`iterator_traits<_Tp*>`): the definition
+    head's parameters are in the second block, and the late-definition
+    validator wanted the first. Fixed here (`bmi_image/latedef.rs`,
+    `same_namespace`; test
+    `partial_specialization_defined_in_a_reopened_namespace_is_carried`).
+  - A nested namespace reopened, with a lexical context (a reopened
+    block of its enclosing namespace), while a class sema completed
+    from its first declaration is open (`ranges::_Cpo`; libc++'s
+    `std { inline namespace __1 {` blocks). The WP-1314 context arm
+    accepted only a namespace with no lexical context. Fixed here after
+    the merge with WP-1358, which met it in four more libc++ headers
+    (see below); test
+    `specialization_defined_in_a_reopened_nested_namespace_is_carried`.
+
+Top five reasons by headers blocked after this WP (not cascades), with
+their bucket:
+
+- lcx:
+  1. a specialization named while its user is recorded, 13/57
+     (`__compare/strong_order.h:125:40`, the first refusal of 14):
+     WP-1358.
+  2. a partial specialization argument the image does not carry, 1/51
+     (`__iterator/segmented_iterator.h:72:8`, the first refusal of 40):
+     WP-1358.
+  3. a specialization of a partial specialization, 44/37
+     (`__chrono/duration.h:485:47`): WP-1358.
+  4. an expression in a type naming a parameter or local declaration,
+     11/34 (`__system_error/error_category.h:50:41`): unowned.
+  5. a friend specialization or member of a class template, 1/33
+     (`string:2240:53`): unowned.
+- gnu:
+  1. a member redeclared in a specialization, 27/62 (`bit:201:5`, the
+     first refusal of 16): WP-1358.
+  2. a specialization of a partial specialization, 32/42
+     (`bits/basic_string.h:4240:3`): WP-1358.
+  3. a local declaration the image does not carry (a specialization's
+     parameter), 12/36 (`bits/basic_string.h:4695:5`): unowned.
+  4. a function declared through a typedef, 1/35
+     (`bits/c++locale.h:52:34`, the first refusal of 28): WP-1369.
+  5. a friend specialization or member of a class template, 1/29
+     (`streambuf:152:7`): unowned.
+
+The declarations this WP freed that stop at a later reason: lcx +1
+each on "a specialization of a partial specialization", "an exception
+specification the image does not carry" (now 7/10) and a cascade; gnu
++4 on "a specialization of a partial specialization", +1 on "a
+specialization's parameter", "a member of a nested class of a
+specialization" and a cascade.
+
+No unit flips yet. The headers that had this reason (51 libc++, 47
+libstdc++) now first stop at:
+
+- lcx: a partial specialization argument the image does not carry 39
+  (WP-1358); (a predefined type) 6 (WP-1369); a specialization named
+  while its user is recorded 6 (WP-1358).
+- gnu: a function declared through a typedef 24 (WP-1369); (a
+  predefined type) 5 (WP-1369); a member redeclared in a specialization
+  5 (WP-1358); a specialization of a class template with a bit-field or
+  a default member initializer 4; a variable with specifiers the image
+  does not carry 2; (a base of a class outside the image) 2 (WP-1369);
+  the decode failure above 2; one each for an expression in a type
+  naming a parameter or local declaration, a specialization of a
+  partial specialization (WP-1358) and a specialization of a
+  constrained template.
+
+### After merging WP-1358 (main `2701392ec`, IMAGE_VERSION 34)
+
+The numbers above are against WP-1360. Re-measured on this WP merged
+with main after WP-1358 landed (same method; WP-1358's own section
+counts headers differently, so compare its totals, not its header
+counts):
+
+```
+lcx.h, main (WP-1358 section): 26274 carried, 419 not
+lcx.h, this WP merged:         26309 carried, 384 not
+gnu.h, main (WP-1358 section): 25878 carried, 518 not
+gnu.h, this WP merged:         25926 carried, 470 not
+```
+
+Carried: lcx +35, gnu +48. Headers through the image: libc++ 42 of 106,
+libstdc++ 40 of 109. This WP's reason is 0/0 in both. The first
+refusals are now `__fwd/subrange.h:35:38` "a body referring to a
+declaration outside the image (a declaration not recorded)" (lcx, the
+first refusal of 42) and `bits/c++locale.h:52:34` (gnu, WP-1369).
+
+Merging WP-1358 turned libc++ `<compare>`, `<utility>`, `<tuple>`,
+`<typeindex>` and `<scoped_allocator>` into decode failures (they had
+been refused before reaching the image's checks). The nested namespace
+fix above brings the first four through the image. Still failing their
+own decode, all replayed as before:
+
+- libc++ `<numeric>` (before this WP too) and, once this WP no longer
+  refuses them, libc++ `<charconv>` and libstdc++ `<optional>` and
+  `<expected>`: "bad local variable" / "bad local alias". A local's
+  type is interned after a dependent `decltype` type whose expression
+  names a later record (a local of a body written after it), so the
+  validator's in-order type rule (`pdep`) fails. The writer emits no
+  refusal, so these headers would otherwise be carried whole. Not
+  fixed here: an ordering bug of the body writer, not of this form.
+- libc++ `<scoped_allocator>`: "bad template", from main (WP-1358),
+  not traced.
+
+Top five reasons by headers blocked (not cascades):
+
+- lcx: a body referring to a declaration outside the image (a
+  declaration not recorded) 1/42 (`__fwd/subrange.h:35:38`); an
+  expression in a type naming a parameter or local declaration 11/34;
+  a friend specialization or member of a class template 1/33
+  (`string:2240:53`); a specialization of a constrained template,
+  completed, with a constrained member 8/16; a closure or local class
+  named before its context is recorded 1/16 (`optional:565:9`).
+- gnu: a member redeclared in a specialization 25/62 (`bit:201:5`); a
+  specialization of a constrained template, completed, with a
+  constrained member 17/40; a specialization's parameter 13/35; a
+  function declared through a typedef 1/35 (the first refusal of 28,
+  WP-1369); a friend specialization or member of a class template 1/29.
