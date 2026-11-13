@@ -385,11 +385,11 @@ struct Outcome {
     dump: String,
 }
 
-fn continue_main<'a, 'sm>(
+fn continue_main<'sm>(
     cfg: &Config,
     sm: &'sm SourceManager,
     interner: &'sm Arc<Interner>,
-    s: Sema<'a, 'sm>,
+    s: Sema<'_, 'sm>,
     sink: &MemorySink,
     main: &str,
 ) -> Outcome {
@@ -422,11 +422,11 @@ fn continue_both(cfg: &Config, name: &str, prefix: &str, main: &str) -> Outcome 
         let bytes = write(sm, interner, &s, false);
         (bytes, continue_main(cfg, sm, interner, s, sink, main))
     });
-    let (sm, interner, r) = read_front(&bytes).expect("decode");
+    let (sm, interner, reader) = read_front(&bytes).expect("decode");
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &diag_options(), sink.clone());
-    let s = read_sema(r, &interner, &engine, cfg).expect("decode Sema");
-    let restored = continue_main(cfg, &sm, &interner, s, &sink, main);
+    let sema = read_sema(reader, &interner, &engine, cfg).expect("decode Sema");
+    let restored = continue_main(cfg, &sm, &interner, sema, &sink, main);
     if original != restored {
         let d = |a: &[String], b: &[String]| {
             a.iter().zip(b).position(|(x, y)| x != y).map_or(a.len().min(b.len()), |i| i)
@@ -513,7 +513,7 @@ fn continue_mid() {
     assert!(!all.contains(" Error: "), "{all}");
 }
 
-const META_CONTINUE_PREFIX: &str = r#"#include <meta>
+const META_CONTINUE_PREFIX: &str = r"#include <meta>
 #include <vector>
 #include <string>
 #include <map>
@@ -531,7 +531,7 @@ struct Point {
 };
 enum class Color { red, green, blue };
 }
-"#;
+";
 
 const META_CONTINUE_MAIN: &str = r#"consteval std::size_t data_members() {
   return std::meta::nonstatic_data_members_of(^^pfx::Point,
