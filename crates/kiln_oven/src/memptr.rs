@@ -25,7 +25,7 @@ use crate::ty::{OTy, TyKind, Types};
 use crate::{Oven, SemaBridge};
 
 /// One interned member pointer value.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct MpEntry {
     /// The `FieldDecl` or `CXXMethodDecl` (first declaration).
     pub member: DeclId,
@@ -66,7 +66,7 @@ struct MpLayout {
 }
 
 /// The interned member pointer values of an Oven.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct MemPtrs {
     entries: Vec<MpEntry>,
     map: FxHashMap<(DeclId, bool, Box<[DeclId]>), u32>,

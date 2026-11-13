@@ -160,7 +160,7 @@ impl Ptr {
 /// allocation, its offset and its type. Nested unions can share an offset
 /// (`union N { char c; union { int x; } q; }`: `N` and `q` both at 0), so
 /// the offset alone does not name one (WP-224).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) struct UKey {
     /// `alloc_key << 32 | offset`.
     pub at: u64,
@@ -179,7 +179,7 @@ impl UKey {
 }
 
 /// One of the three byte spaces.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) enum Sp {
     Frame,
     Heap,
@@ -221,7 +221,7 @@ pub(crate) fn fn_ptr(func: u32) -> u64 {
 }
 
 /// What an allocation is, for diagnostics and freezing.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum Origin {
     None,
     /// A local variable or parameter.
@@ -320,7 +320,7 @@ impl DynKind {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Alloc {
     pub base: u32,
     pub size: u32,
@@ -342,7 +342,7 @@ pub(crate) struct Alloc {
 /// a lax fold ([`Memory::lax`]; spec/oven.md "Lax folds").
 pub(crate) const LAX_READ: u32 = 1;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Space {
     pub bytes: Vec<u8>,
     /// Per granule: bit i = byte i is initialized.

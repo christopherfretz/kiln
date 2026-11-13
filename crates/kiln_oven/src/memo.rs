@@ -15,14 +15,14 @@ use kiln_source::fx::FxHashMap;
 /// Most arguments a memoized function may take.
 pub(crate) const MAX_ARGS: usize = 4;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) struct MemoKey {
     pub func: u32,
     pub args: [u128; MAX_ARGS],
 }
 
 /// What a call produced and cost.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct MemoVal {
     pub result: u128,
     pub steps: u64,
@@ -38,7 +38,7 @@ pub(crate) struct MemoVal {
 
 const NONE: u32 = u32::MAX;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Entry {
     key: MemoKey,
     val: MemoVal,
@@ -46,7 +46,7 @@ struct Entry {
     next: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct Memo {
     cap: usize,
     map: FxHashMap<MemoKey, u32>,

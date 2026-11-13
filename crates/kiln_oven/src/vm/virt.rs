@@ -22,7 +22,7 @@ use crate::mem::{MemFault, Origin, Ptr};
 use crate::ty::{OTy, TyKind};
 
 /// One subobject of a class (indexed by [`SubobjectId`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Sub {
     /// Byte offset in the complete object.
     pub off: u64,
@@ -46,7 +46,7 @@ pub(crate) struct Sub {
 }
 
 /// The subobject graph of a class with offsets.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct PolyInfo {
     /// The class (first declaration; `None` for a non-class).
     pub decl: Option<DeclId>,
@@ -66,7 +66,7 @@ pub(crate) struct PolyInfo {
 }
 
 /// A resolved virtual call.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Target {
     func: u32,
     /// The overrider's subobject offset minus the called subobject's.
@@ -85,7 +85,7 @@ struct Target {
 type RelKey = (OTy, i64, DeclId, OTy, u32, u64);
 
 /// A resolved call through a [`REL`] word.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct RelTarget {
     t: Target,
     /// The overrider's subobject (index in the running class's graph).
@@ -122,7 +122,7 @@ pub(crate) fn cov_adj(w: u128) -> CovAdj {
 
 /// The Oven's per-class caches (insert-only: the class graph of a
 /// complete class never changes).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Virt {
     map: FxHashMap<OTy, u32>,
     infos: Vec<PolyInfo>,

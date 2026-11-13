@@ -17,11 +17,11 @@ mod path;
 pub(crate) use path::{Hop, Walk, alt_members};
 
 /// A type in the Oven's table.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct OTy(pub u32);
 
 /// The shape of a type.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum TyKind {
     Void,
     Bool,
@@ -74,7 +74,7 @@ pub(crate) enum TyKind {
     Opaque,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct TyInfo {
     /// Canonical, cv-unqualified.
     pub q: QualType,
@@ -103,7 +103,7 @@ pub(crate) struct TyInfo {
     pub uhull: (u32, u32),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct FieldInfo {
     pub decl: DeclId,
     pub ty: OTy,
@@ -133,7 +133,7 @@ pub(crate) enum Scal {
     Ptr,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Types {
     pub infos: Vec<TyInfo>,
     pub fields: Vec<FieldInfo>,
@@ -189,6 +189,7 @@ pub(crate) struct Types {
     member_idx: FxHashMap<DeclId, u32>,
     /// The subobject path cache (WP-644, [`path`]): memoized
     /// memory-independent walk steps, bounded by [`PATH_CACHE_MAX`].
+    #[snap(skip)]
     paths: path::PathCache,
     /// How many provisional slots were rebuilt in place: a walk result
     /// remembered across a rebuild is stale (the union-path memo,

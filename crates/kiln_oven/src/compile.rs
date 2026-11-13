@@ -43,7 +43,7 @@ pub(crate) use new_delete::{is_named, is_std_named};
 /// `Func::entry` of a function not compiled yet.
 pub(crate) const UNCOMPILED: u32 = u32::MAX;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum FState {
     /// Not compiled yet.
     Stub,
@@ -62,7 +62,7 @@ pub(crate) enum FState {
     Invalid,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum RetKind {
     Void,
     Scalar(OTy),
@@ -71,7 +71,7 @@ pub(crate) enum RetKind {
     Sret(OTy),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct ParamInfo {
     pub decl: DeclId,
     pub ty: OTy,
@@ -82,7 +82,7 @@ pub(crate) struct ParamInfo {
     pub is_ref: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct Func {
     /// `None` for a top-level thunk.
     pub decl: Option<DeclId>,
@@ -109,7 +109,7 @@ pub(crate) struct Func {
 }
 
 /// The source of a faulting instruction.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Site {
     pub pc: u32,
     pub loc: Loc,
@@ -117,14 +117,14 @@ pub(crate) struct Site {
 }
 
 /// A compiled-in failure.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct TrapInfo {
     pub loc: Loc,
     pub msg: String,
     pub extra: Vec<Note>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum GKind {
     Var(DeclId),
     /// A string literal object; the `StringLiteral` expr that created it
@@ -132,7 +132,7 @@ pub(crate) enum GKind {
     Str(StringLitId, OTy, Option<ExprId>),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum GState {
     Unresolved,
     /// Its storage: a static allocation holding the thawed value, the
@@ -148,7 +148,7 @@ pub(crate) enum GState {
     Bound(u64),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Global {
     pub kind: GKind,
     pub state: GState,

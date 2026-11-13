@@ -53,7 +53,7 @@ pub enum FrameEval {
 }
 
 /// What a frame stub does with its expression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub(crate) enum FrameHow {
     /// Its value.
     Value,
@@ -75,15 +75,19 @@ type FrameSave = Vec<(usize, Vec<u8>, Vec<u8>, Vec<u8>)>;
 type FrameStubs = Vec<(Vec<DeclId>, u32)>;
 
 /// The state of the potential-constant frame evaluations.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct FrameState {
     /// The running job's frame: each tracked variable and its object.
+    #[snap(skip)]
     binds: Vec<(DeclId, u64)>,
     /// The running job's evaluation.
+    #[snap(skip)]
     how: Option<FrameHow>,
     /// The object a [`FrameHow::Init`] job initializes.
+    #[snap(skip)]
     target: u64,
     /// The bytes the tracked objects take.
+    #[snap(skip)]
     bytes: u64,
     /// The stubs compiled so far, by expression and evaluation: each for
     /// the variables of a frame, in order.

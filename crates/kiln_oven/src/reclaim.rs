@@ -18,7 +18,7 @@ use kiln_ast::{DeclId, ExprId};
 use crate::Oven;
 
 /// The lengths of the tables a compilation appends to.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) struct Tables {
     code: usize,
     padded: usize,
@@ -32,7 +32,7 @@ pub(crate) struct Tables {
 
 /// The thunk [`Oven::compile_thunk`] compiled last: its index, cache key
 /// and the tables just after it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct LastThunk {
     idx: u32,
     key: (ExprId, Option<DeclId>, bool),

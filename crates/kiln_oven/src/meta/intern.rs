@@ -23,7 +23,7 @@ pub(crate) const REFL_ENTRY_BYTES: u64 =
 /// not), cumulative over the Oven's lifetime: an outer call subtracts
 /// what the calls nested inside it (in evaluations its bridge callback
 /// ran) already attributed, so no byte is charged twice.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ReflSeen {
     content: u64,
     entries: u64,

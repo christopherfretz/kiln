@@ -26,7 +26,7 @@ super::meta_family! { pub enum DefineOp {
 /// tuple (T, N, A, W, NUA)), validated by sema. Two equal descriptions
 /// are one reflection (spec/reflection.md §2.3): the name's encoding
 /// (`u8string` or `string`) is not part of it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct Dms {
     /// `dealias(type)` (canonical, qualifiers kept).
     pub ty: QualType,
@@ -46,7 +46,7 @@ pub struct Dms {
 /// Which members of `std::meta::data_member_options` hold what, found by
 /// sema once per translation unit (by name: `name`, `alignment`,
 /// `bit_width`, `no_unique_address`) and cached here.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct OptionsPlan {
     /// The options class (canonical, unqualified).
     pub class: QualType,
@@ -85,21 +85,25 @@ type LeafKey = (OTy, Option<OTy>, bool);
 
 /// The interned data member descriptions of a translation unit, and
 /// the reader's state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct DmsTable {
     specs: Vec<Dms>,
     ids: FxHashMap<Dms, DmsId>,
     plan: Option<OptionsPlan>,
     /// The last name read (reused: no allocation per name).
+    #[snap(skip)]
     name: Vec<u8>,
     /// `define_aggregate`'s descriptions (reused across calls).
+    #[snap(skip)]
     buf: Vec<Dms>,
     /// The leaves of each `(type, stop, unions)` searched, as offsets
     /// from the object: the walk is done once per type, not per call.
     layouts: FxHashMap<LeafKey, Vec<(u64, OTy)>>,
     /// The leaves of the object being read (reused).
+    #[snap(skip)]
     scratch: Vec<Leaf>,
     /// The `annotations` read last (reused).
+    #[snap(skip)]
     anns: Vec<ReflectionId>,
     /// The interned annotation lists; list `k` is `ann_lists[k - 1]`.
     ann_lists: Vec<Box<[ReflectionId]>>,
