@@ -287,6 +287,7 @@ sema_invalid_pcs = Error (0) "invalid PCS type";
 sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_invalid_use_of_function_type = Error (0) "a function type is not allowed here";
+sema_lambda_capture_anonymous_var = Error (0) "unnamed variable cannot be implicitly captured in a lambda expression";
 sema_lambda_capture_default_arg = Error (0) "lambda expression in default argument cannot capture any entity";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";
 sema_late_asm_label = Error (1) "cannot apply asm label to {0:variable|function} after its first use";

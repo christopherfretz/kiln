@@ -490,6 +490,16 @@ impl Sema<'_, '_> {
                 self.note_this_use(loc);
             }
         }
+        // [dcl.attr.deprecated]/4: a member access naming a member
+        // function template warns for the template, then for the
+        // specialization (clang `FixOverloadedFunctionReference` of the
+        // member expression runs `DiagnoseUseOfDecl` on the found
+        // declaration; a static member named through an implicit `this`
+        // above becomes a `DeclRefExpr` and warns only for the
+        // specialization).
+        if self.kind_of(f) == DeclKind::FunctionTemplate {
+            self.warn_deprecated_template_use(f, loc);
+        }
         self.diagnose_deprecated(d, loc);
         let e = self.member_of_object(m.base, m.obj_ty, m.def, m.arrow, d, shadow, m.nns, loc);
         if let Some(targs) = m.targs

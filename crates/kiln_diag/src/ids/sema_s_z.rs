@@ -105,6 +105,7 @@ sema_storage_class_for_static_member = Error (0) "static data member definition 
 sema_storage_class_on_typedef = Error (0) "'typedef' cannot be combined with a storage class";
 sema_string_literal_operator_template = ExtWarn [GnuStringLiteralOperatorTemplate] (0) "string literal operator templates are a GNU extension";
 sema_sub_ptr_compatible = Error (2) "{0} and {1} are not pointers to compatible types";
+sema_sub_ptr_zero_size_types = Warning [PointerArith] (1) "subtraction of pointers to type {0} of zero size has undefined behavior";
 sema_subscript_function_type = Error (1) "subscript of pointer to function type {0}";
 sema_subscript_incomplete_type = Error (1) "subscript of pointer to incomplete type {0}";
 sema_subscript_not_integer = Error (0) "array subscript is not an integer";

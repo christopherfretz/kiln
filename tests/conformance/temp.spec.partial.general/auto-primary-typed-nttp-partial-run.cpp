@@ -4,10 +4,15 @@
 // (`T *P`, `T C::*M`, `int N`); its argument list then differs from the
 // primary's, and the parameters that occur only in that type (`T`, `C`)
 // are deduced from the type of the argument. The intrusive queue and heap
-// shapes are those of a sender/receiver library (WP-789).
+// shapes are those of a sender/receiver library (WP-789). `int N` matches
+// only an `int` value: for `'c'` and `3L` the type of `N` differs from the
+// type the `auto` parameter takes, so deduction fails (WP-1405; GCC 16.1
+// agrees, clang 19/22 match them).
+//@ oracle: gcc
+//@ skip(clang): clang 19/22 match a partial specialization whose non-type parameter type differs from the primary's
 //@ expect: run
 //@ std: c++20
-//@ stdout: 1 2 3 3 3 1 | 1 2 | 8 4
+//@ stdout: 1 2 3 0 0 1 | 1 2 | 8 4
 extern "C" int printf(const char *, ...);
 
 template <auto V> struct S { static constexpr int k = 0; };

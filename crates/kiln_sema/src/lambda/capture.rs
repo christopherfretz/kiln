@@ -227,6 +227,21 @@ impl Sema<'_, '_> {
                     }
                     return Err(Captured::Failed);
                 }
+                // [expr.prim.lambda.capture]/7, [class.union.anon]/1: a
+                // member of a block-scope anonymous union names a member
+                // of its unnamed variable, which has no name to capture
+                // (clang `isVariableCapturable`'s
+                // `err_lambda_capture_anonymous_var`).
+                if self.ast.decls.get(d).name().is_empty() {
+                    if build {
+                        let note = self.diag(DiagId::note_declared_at, self.ast.decls.get(d).loc());
+                        let msg = self
+                            .diag(DiagId::sema_lambda_capture_anonymous_var, loc)
+                            .with_note(note);
+                        self.emit(msg);
+                    }
+                    return Err(Captured::Failed);
+                }
                 chain.push(l);
                 let Some(p) = self.lambda_parent(l) else { return Err(Captured::Failed) };
                 c = p;
@@ -667,9 +682,14 @@ impl Sema<'_, '_> {
                 .arg(format!("'{name}'")),
         );
         msg = msg.with_note(self.diag(DiagId::note_lambda_decl, lbracket));
-        msg = msg
-            .with_note(self.diag(DiagId::note_lambda_capture_by_value, rbracket).arg(name.clone()));
-        msg = msg.with_note(self.diag(DiagId::note_lambda_capture_by_ref, rbracket).arg(name));
+        // An unnamed variable (a block-scope anonymous union's) has no
+        // name to add to the capture list (clang 19 and 22).
+        if !name.is_empty() {
+            msg = msg.with_note(
+                self.diag(DiagId::note_lambda_capture_by_value, rbracket).arg(name.clone()),
+            );
+            msg = msg.with_note(self.diag(DiagId::note_lambda_capture_by_ref, rbracket).arg(name));
+        }
         if !explicit_vars {
             let at = lbracket.with_offset(1);
             msg = msg.with_note(self.diag(DiagId::note_lambda_default_by_value, at));
