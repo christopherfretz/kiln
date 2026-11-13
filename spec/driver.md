@@ -2768,12 +2768,16 @@ never sets `HOD_FALLBACK_LLC`/`--fallback`.
   `-fprofile-instr-generate`), `-finstrument-functions[-after-inlining]`,
   `-fxray-instrument` or `-fpatchable-function-entry=`, and when the
   module's `opt` triggers ("Compile statistics log": read from the same
-  printed text that becomes hod's standard input, no second print) are
-  none or exactly `alwaysinline`, the driver runs
+  printed text that becomes hod's standard input, no second print) are a
+  subset of {`alwaysinline`, `coro`} (WP-1398: hod's "pre-opt modules",
+  its `spec/cli.md`: hod compiles an `alwaysinline` call out of line and
+  a switch-resumed coroutine body once, with its frame in the heap, in
+  place of the always-inliner and the coroutine passes), the driver runs
   `hod --strict <the llc arguments, unchanged> -o <obj> -` with the module
-  text before `opt` on its standard input. A coroutine module (`coro`),
-  an instrumented one (`instrument-entry`), `-S`, `-emit-llvm`, any `-O`
-  level above 0 and `-flto` take the LLVM route. `-disable-llvm-passes`
+  text before `opt` on its standard input. An instrumented module
+  (`instrument-entry`: `-finstrument-function-entry-bare`), `-S`,
+  `-emit-llvm`, any `-O` level above 0 and `-flto` take the LLVM route
+  (the statistics log's `hod_skip` names which). `-disable-llvm-passes`
   keeps its meaning: `opt` never runs, and the module `llc` would get is
   the one hod gets.
 - **The answers:**
@@ -2781,11 +2785,15 @@ never sets `HOD_FALLBACK_LLC`/`--fallback`.
 | hod | what the driver does |
 |---|---|
 | status 0 | done: no `opt` and no `llc` for this input; `-gz`'s `llvm-objcopy` still runs |
-| status 2 (declined) | today's steps, `opt` if the IR needs it then `llc`, byte-identical to `-fkiln-backend=llvm`; no diagnostic (`-v`: one line ` (hod declined '<reason>'; falling back to llc)`) |
+| status 2 (declined) | today's steps, `opt` if the IR needs it then `llc`, byte-identical to `-fkiln-backend=llvm` (a module with a coroutine body: the whole `-O0` pipeline, as its `await_suspend` wrappers are `alwaysinline`; one with only handle operations: the coroutine lowering alone; then `llc`); no diagnostic (`-v`: one line ` (hod declined '<reason>'; falling back to llc)`, then the `opt` and `llc` commands) |
 | status 1, any other status, a signal, or hod cannot be started | warning `hod failed (<exit code N \| signal N \| not started>): <its first stderr line, or "no message">; falling back to llc`, then today's steps; with `KILN_HOD_STRICT=1` an error instead (`hod failed (...): ... (KILN_HOD_STRICT=1: no fallback)`), the input fails |
 
   After any non-zero status the `-o` file is removed before the
   fallback (or the error): a stale or partial object never survives.
+  hod's own bugs, `internal-error` and `internal-panic` (a panic hod
+  contained), are status 1 in hod's contract ("Reasons", "Exit
+  status"), never a decline: a warning and the fallback, or the error
+  under `KILN_HOD_STRICT=1`.
 - **`-v`** prints the hod command before running it; the `opt` and `llc`
   commands appear only when the fallback runs them, after the decline
   line or the warning. **`-###`** prints, after the frontend step, the
@@ -2795,8 +2803,9 @@ never sets `HOD_FALLBACK_LLC`/`--fallback`.
   `hod`, as `llc`'s is; hod is passed no `--time-trace` options (it
   accepts and ignores them) and no trace file is read from it.
 - **`KILN_STATS_LOG`**: the line's `backend` is `hod`, `hod-declined` or
-  `hod-failed`, `hod_reason` the reason or the failure status, and
-  `children_ms` holds `hod`'s time beside `opt`'s and `llc`'s.
+  `hod-failed`, `hod_reason` the reason or the failure status,
+  `children_ms` holds `hod`'s time beside `opt`'s and `llc`'s, and
+  `hod_skip` says why a job was not offered to hod.
 - **Environment variables**: `KILN_BACKEND` (`llvm` / `hod`), `KILN_HOD`
   (the executable), `KILN_HOD_STRICT=1` (a hod failure is an error).
 
@@ -2845,6 +2854,7 @@ the IR.
 | `exit` | `0`, or `1` when a step of the job failed |
 | `backend` | the back end that made the job's code ("Back-end selection", WP-1371): `llvm` (`llc` ran), `hod`, `hod-declined`, `hod-failed`; `null` when neither ran (`-emit-llvm`, an error before code generation, the link) |
 | `hod_reason` | hod's reason when it declined, its status (`exit code 1`, `signal 9`) when it failed, else `null`; at most 128 bytes |
+| `hod_skip` | `null` unless hod is the selected back end ("Back-end selection") and the job was not offered to it; then the first of, in this order: `output-kind` (no object: `-S`, `-emit-llvm`, `-fsyntax-only`, `--precompile`), `opt-level` (an `-O` level above 0), `lto`, `sanitizer`, `coverage`, `instrument` (`-finstrument-functions[-after-inlining]`, `-fxray-instrument`, `-fpatchable-function-entry=`), else the first `opt` trigger outside {`alwaysinline`, `coro`} by its `triggers` name (today only `instrument-entry` reaches it); `null` on the link's line (WP-1398) |
 | `truncated` | present (`true`) only when the input path was cut |
 
 The five counts are of the module the frontend produced, before `opt`,
