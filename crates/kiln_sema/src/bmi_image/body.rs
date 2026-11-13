@@ -1421,12 +1421,7 @@ pub(super) fn validate_section(
         match f {
             F::Raw | F::Loc => true,
             F::Bool => w[0] <= 1,
-            F::Path => w[1..].chunks(2).all(|p| {
-                img.decls.get(p[0] as usize).is_some_and(|r| match &r.payload {
-                    Payload::Record { def: Some(df), .. } => (p[1] as usize) < df.bases.len(),
-                    _ => false,
-                })
-            }),
+            F::Path => w[1..].chunks(2).all(|p| super::specbase::path_element_ok(img, p[0], p[1])),
             F::E => (w[0] as usize) < e_lim,
             F::OE => opt(w[0], e_lim),
             F::S => (w[0] as usize) < s_lim,
@@ -2423,7 +2418,10 @@ impl Writer<'_, '_, '_> {
                 let items: Vec<u32> = lists.get(l).to_vec();
                 out.push(items.len() as u32 + 1);
                 for g in items {
-                    let (rec, pos) = *self.bs.bspec.get(&g).ok_or(super::outside::OUT_BASE)?;
+                    let (rec, pos) = match self.bs.bspec.get(&g) {
+                        Some(&x) => x,
+                        None => self.spec_base(g)?,
+                    };
                     out.extend([rec, pos]);
                 }
             }
@@ -2724,6 +2722,9 @@ impl Writer<'_, '_, '_> {
             r
         } else if let Some(r) = self.global_op_stub(d)? {
             // WP-1320: an implicit global allocation function.
+            r
+        } else if let Some(r) = self.va_member(d) {
+            // WP-1369: a member of the class `__builtin_va_list` names.
             r
         } else if let Some(r) = self.implicit_member_now(d) {
             // WP-1360: an implicit special member of a closed class.
@@ -3567,9 +3568,12 @@ impl Sema<'_, '_> {
                     let v: Vec<u32> = w[1..]
                         .chunks(2)
                         .map(|p| {
+                            // A specialization reference's own instantiation
+                            // (WP-1369, `specbase.rs`).
                             let bases = ids
                                 .get(p[0] as usize)
-                                .and_then(|&c| self.ast.decls.record(c))
+                                .map(|&c| self.ast.definition(c).unwrap_or(c))
+                                .and_then(|c| self.ast.decls.record(c))
                                 .map_or(ListId::EMPTY, |r| r.bases);
                             self.ast.lists.get(bases).get(p[1] as usize).copied().unwrap_or(0)
                         })

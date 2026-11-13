@@ -34,8 +34,8 @@
 //! them (such a type keeps falling back).
 
 use kiln_ast::types::{
-    BuiltinType, ExcSpec, ExprOperand, FuncProto, NoexceptValue, TemplateArg, TypeKind, TypeView,
-    VectorKind,
+    BuiltinType, ExcSpec, ExprOperand, FuncProto, NoexceptValue, TemplateArg, TypeKind,
+    TypeOfOperand, TypeView, VectorKind,
 };
 use kiln_ast::{DeclId, ExprId, QualType, TypeId};
 
@@ -74,6 +74,11 @@ pub(super) enum ExTy {
     /// `__attribute__((ext_vector_type(N))) T`), `kind` its
     /// `VectorKind`; `canon` as for [`ExTy::DepArray`].
     DepVector { elem: QRef, e: u32, kind: u8, canon: bool },
+    /// WP-1369: a non-dependent `typeof(e)` / `typeof_unqual(e)` (`e`
+    /// its section, `ty` its computed type) or `typeof(type)` (`e`
+    /// [`NONE`], `ty` the operand), as `__typeof(f) g;` declares a
+    /// function.
+    TypeOf { e: u32, ty: QRef, unqual: bool },
 }
 
 pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
@@ -101,6 +106,12 @@ pub(super) fn encode_ex(w: &mut Wr, x: &ExTy) {
             w.u32(*e);
             w.u8(*kind);
             w.u8(u8::from(*canon));
+        }
+        ExTy::TypeOf { e, ty, unqual } => {
+            w.u8(4);
+            w.u32(*e);
+            w.q(*ty);
+            w.u8(u8::from(*unqual));
         }
     }
 }
@@ -132,6 +143,13 @@ pub(super) fn decode_ex(r: &mut Rd<'_>) -> Res<ExTy> {
                 _ => return bad("bad dependent vector type"),
             }
         }
+        4 => {
+            let (e, ty) = (r.u32()?, r.q()?);
+            match r.u8()? {
+                u @ 0..=1 => ExTy::TypeOf { e, ty, unqual: u != 0 },
+                _ => return bad("bad typeof type"),
+            }
+        }
         _ => return bad("bad expression type"),
     })
 }
@@ -142,6 +160,7 @@ pub(super) fn ex_refs(x: &ExTy) -> Vec<QRef> {
         ExTy::Decltype { under, .. } => vec![*under],
         ExTy::DepArray { elem, .. } | ExTy::DepVector { elem, .. } => vec![*elem],
         ExTy::PackN { pattern, .. } => vec![*pattern],
+        ExTy::TypeOf { ty, .. } => vec![*ty],
     }
 }
 
@@ -227,6 +246,7 @@ fn ty_texprs(t: &TyRec) -> Vec<u32> {
             ExTy::Decltype { e, .. } | ExTy::DepArray { e, .. } | ExTy::DepVector { e, .. },
         ) => out.push(*e),
         TyRec::Func { exc, nx, .. } if *exc >= NX_FALSE => out.push(*nx),
+        TyRec::Ex(ExTy::TypeOf { e, .. }) if *e != NONE => out.push(*e),
         TyRec::Tst { args, .. }
         | TyRec::Dep(DepTy::Tmpl { args, .. })
         | TyRec::Placeholder { args, .. } => {
@@ -339,6 +359,14 @@ impl Writer<'_, '_, '_> {
             TypeView::PackExpansion { pattern, num_expansions: Some(n) } => {
                 ExTy::PackN { pattern: self.qref(pattern)?, n }
             }
+            // WP-1369: a dependent one (a profile) is not carried.
+            TypeView::TypeOf { operand: TypeOfOperand::Expr(e), underlying: Some(u), unqual } => {
+                let ty = self.qref(u)?;
+                ExTy::TypeOf { e: self.texpr(e)?, ty, unqual }
+            }
+            TypeView::TypeOf { operand: TypeOfOperand::Type(q), unqual, .. } => {
+                ExTy::TypeOf { e: NONE, ty: self.qref(q)?, unqual }
+            }
             _ => return Ok(None),
         })))
     }
@@ -422,6 +450,9 @@ pub(crate) struct TexprState {
     /// WP-1358: the partial specialization each class specialization the
     /// image completes was instantiated from ([`super::psel`]).
     pub(super) partial_sels: kiln_source::fx::FxHashMap<DeclId, Option<DeclId>>,
+    /// WP-1369: `alignas` operands instantiated before they were in
+    /// ([`super::alignfix`]).
+    pub(crate) aligned: super::alignfix::AlignedFixups,
 }
 
 impl Sema<'_, '_> {
@@ -433,6 +464,7 @@ impl Sema<'_, '_> {
             params: Vec::new(),
             req_params: Vec::new(),
             partial_sels: kiln_source::fx::FxHashMap::default(),
+            aligned: super::alignfix::AlignedFixups::default(),
         };
         std::mem::replace(&mut self.image_texprs, fresh)
     }
@@ -586,6 +618,14 @@ impl Sema<'_, '_> {
                 let q = self.ast.types.dependent_vector(elem, e, p, VectorKind::from_u8(kind));
                 if canon { self.ast.types.canonical(q) } else { q }
             }
+            ExTy::TypeOf { e, ty, unqual } => {
+                let ty = qt(self, ty);
+                if e == NONE {
+                    return self.ast.types.typeof_type(ty, unqual);
+                }
+                let Some(e) = self.image_texpr(e) else { return QualType::ERROR };
+                self.ast.types.typeof_expr(e, ty, unqual, None)
+            }
         }
     }
 }
@@ -613,6 +653,8 @@ mod tests {
             ExTy::DepArray { elem: q, e: 2, canon: true },
             ExTy::PackN { pattern: q, n: 7 },
             ExTy::DepVector { elem: q, e: 3, kind: 3, canon: false },
+            ExTy::TypeOf { e: 5, ty: q, unqual: false },
+            ExTy::TypeOf { e: NONE, ty: q, unqual: true },
         ] {
             assert_eq!(round(&x), x);
         }

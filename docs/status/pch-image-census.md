@@ -1974,3 +1974,93 @@ Top five reasons by headers blocked (not cascades):
   constrained member 17/40; a specialization's parameter 13/35; a
   function declared through a typedef 1/35 (the first refusal of 28,
   WP-1369); a friend specialization or member of a class template 1/29.
+
+## WP-1369: PCH image wave 9b, functions through typedefs, predefined types, specialization bases (2026-11-12)
+
+Census of `bench/pch/lcx.h` and `bench/pch/gnu.h` (`-std=c++26
+-fkiln-pch-image -fkiln-bmi-image-census=all -v`), and of each standard
+header alone (106 libc++, 108 libstdc++). Before is main `2701392ec`
+(WP-1358) and, for the totals, main `0e0f5df11` (WP-1368's own merged
+numbers above); after is this WP merged with `0e0f5df11`, IMAGE_VERSION
+35. A header is "through the image" when the `-v` note says consumers
+use its declaration image (a decode failure is not). Reasons are
+declarations / headers.
+
+```
+lcx.h, 2701392ec: 26693 top-level declarations, 26274 carried, 419 not
+lcx.h, 0e0f5df11: 26693 top-level declarations, 26309 carried, 384 not
+lcx.h, after:     26693 top-level declarations, 26405 carried, 288 not
+gnu.h, 2701392ec: 26396 top-level declarations, 25878 carried, 518 not
+gnu.h, 0e0f5df11: 26396 top-level declarations, 25926 carried, 470 not
+gnu.h, after:     26396 top-level declarations, 26007 carried, 389 not
+```
+
+Carried against `0e0f5df11`: lcx +96, gnu +81. Headers through the
+image: libc++ 38 of 106 at `2701392ec`, 42 at `0e0f5df11`, 43 after;
+libstdc++ 39, 40, 40. Headers with no refusal: libc++ 52, libstdc++ 42.
+
+This WP's reasons (against `2701392ec`):
+
+- a function declared through a typedef: gnu 1/35 (the first refusal
+  of 28 headers, `bits/c++locale.h:52`) → 0/0.
+- a predefined type: lcx 0/7 (first refusal of 7) and cascade 6/24
+  (`math-vector.h:166`), gnu 0/6 and cascade 3/6 → 0/0; one gnu
+  cascade header is left (`ccomplex`, from `new:94` "a redeclaration of
+  an entity outside the image" of `std::align_val_t`, another bucket).
+- a base of a class outside the image: lcx 0/5 and cascade 5/4
+  (`atomic_flag.h:31`), gnu 0/2 and cascade 6/34 (`text_encoding:492`)
+  → 0/0.
+- a class named before its record: lcx 0/2 and cascade 5/3 (`any:148`),
+  gnu 0/1 and cascade 3/3 (`any:93`) → cascade 1/1 (lcx) and 1/2 (gnu)
+  only: a nested CRTP class of a class template,
+  `struct value_type : view_interface<value_type>`
+  (`__ranges/lazy_split_view.h:182`, `ranges:3362`).
+
+First refusals: `lcx.h` unchanged, `__fwd/subrange.h:35` "a body
+referring to a declaration outside the image (a declaration not
+recorded)", the first refusal of 49 headers. `gnu.h`:
+`bits/std_function.h:716:11` "an expression in a type naming a
+parameter or local declaration" (was `bits/c++locale.h:52`, this WP's).
+
+Pre-existing bugs found:
+
+- Fixed: an `alignas(alignof(T))` (or `alignas(N)`) of a class
+  template's member, or of a member class its fields complete, took the
+  strictest alignment in a specialization the reader completes while
+  it reads the records (its operand comes with the bodies). The image
+  was used and the layout silently wrong (`struct H { M<long> m; ... }`
+  32 bytes through the image, 24 after replay). `bmi_image/alignfix.rs`;
+  `record_time_completion_alignas_matches_replay` is no longer ignored.
+- Fixed: a using-directive in a function template's body failed the
+  reader's local flag check, so the header was replayed ("an internal
+  image inconsistency"); `local_using_directive_in_a_template_is_carried`.
+- Not fixed: a generic lambda in a function template (`template <class
+  U> int g(U u) { auto l = [](auto x) { return int(x); }; return
+  l(u); }`) fails decode. `membertempl::head_len` counts only class
+  template heads, so the call operator template's depth is one more
+  than the reader expects ("bad template"); counting function template
+  heads exposes the next check ("a member of an unclaimed dependent
+  class": the closure is dependent and nothing claims it). WP-1350's
+  lambda records need both.
+
+Decode failures ("an internal image inconsistency", replayed): 11
+headers, 5 at `0e0f5df11`. Still there: libc++ `<numeric>`,
+`<charconv>`, `<scoped_allocator>`, libstdc++ `<optional>`,
+`<expected>`. New, reached because this WP no longer refuses them
+earlier: libc++ `<atomic>` and `<stdatomic.h>` (the generic lambda
+above), `<cmath>` ("bad local variable", the body writer's type order
+WP-1368 describes), `<latch>`, `<semaphore>` and `<any>` (not traced).
+
+What remains, by headers blocked (first refusals of the single-header
+runs):
+
+1. lcx: a body referring to a declaration outside the image (a
+   declaration not recorded), 49 (`__fwd/subrange.h:35`).
+2. gnu: a specialization of a constrained template: completed, with a
+   constrained member, 35 (`bits/hashtable_policy.h:571`).
+3. gnu: a member redeclared in a specialization, 19 (`bit:201`).
+4. gnu: a specialization of a class template with a bit-field or a
+   default member initializer, 4; lcx 1.
+5. The decode failures above, 11.
+6. This WP's: the nested CRTP class (`__ranges/lazy_split_view.h:182`,
+   `ranges:3362`), cascades only.

@@ -43,6 +43,7 @@ use crate::Sema;
 use crate::modules::Directive;
 
 mod aggconsts;
+mod alignfix;
 mod anon;
 mod attrs;
 mod bindings;
@@ -62,6 +63,7 @@ mod diagif;
 mod explinst;
 mod exprs;
 mod fnspec;
+mod fnsugar;
 mod friend;
 mod lambdas;
 mod latedef;
@@ -75,6 +77,7 @@ mod outside;
 mod ovlmember;
 mod patinit;
 mod pch;
+mod predef;
 pub use pch::PchDecls;
 mod mtspec;
 mod named;
@@ -85,6 +88,7 @@ mod requires;
 mod scope;
 mod selfbase;
 mod spec;
+mod specbase;
 mod specinit;
 mod specparam;
 mod templ;
@@ -98,7 +102,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 34;
+pub(crate) const IMAGE_VERSION: u32 = 35;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -769,6 +773,11 @@ struct Image {
     /// WP-1358: the partial specializations complete specializations of
     /// templates with constrained ones were instantiated from.
     psels: psel::PartialSels,
+    /// WP-1369: the written types of functions declared through a
+    /// typedef.
+    fsugar: fnsugar::FnSugars,
+    /// WP-1369: the member classes of specializations the unit completed.
+    mclasses: specbase::MemberClasses,
 }
 
 const K_NAMESPACE: u8 = 1;
@@ -1521,6 +1530,8 @@ fn encode(img: &Image) -> Vec<u8> {
     dedup::encode_dedup(&mut w, &img.dedup);
     lambdas::encode_lambdas(&mut w, &img.lambdas);
     psel::encode_partial_sels(&mut w, &img.psels);
+    fnsugar::encode_fn_sugars(&mut w, &img.fsugar);
+    specbase::encode_member_classes(&mut w, &img.mclasses);
     w.0
 }
 
@@ -2121,7 +2132,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 TyRec::QArray(c, q)
             }
             12 => match r.u8()? {
-                k @ 0..=5 => TyRec::Sugar(k),
+                k if usize::from(k) < predef::sugar_count() => TyRec::Sugar(k),
                 _ => return bad("unknown builtin typedef"),
             },
             13 => TyRec::Record(r.u32()?),
@@ -2230,6 +2241,8 @@ fn decode(bytes: &[u8]) -> Res<Image> {
     img.dedup = dedup::decode_dedup(&mut r)?;
     img.lambdas = lambdas::decode_lambdas(&mut r)?;
     img.psels = psel::decode_partial_sels(&mut r)?;
+    img.fsugar = fnsugar::decode_fn_sugars(&mut r)?;
+    img.mclasses = specbase::decode_member_classes(&mut r)?;
     if !r.0.is_empty() {
         return bad("trailing bytes");
     }
@@ -2401,7 +2414,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                             TyRec::Typedef(_) | TyRec::TypedefAs(..),
                             Payload::Typedef { .. } | Payload::Member { .. }
                         )
-                        | (TyRec::Record(_), Payload::Record { .. })
+                        // A member class of a specialization (WP-1369).
+                        | (TyRec::Record(_), Payload::Record { .. } | Payload::Member { .. })
                         | (
                             TyRec::ElabQ(..) | TyRec::Dep(_),
                             Payload::Namespace | Payload::NsAlias { .. }
@@ -2525,6 +2539,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
     dedup::validate_dedup(img)?;
     lambdas::validate_lambdas(img, body::param_count(img))?;
     psel::validate_partial_sels(img)?;
+    fnsugar::validate_fn_sugars(img, &qref_at)?;
+    specbase::validate_member_classes(img)?;
     for (i, d) in img.decls.iter().enumerate() {
         let kind_of = |x: u32| img.decls.get(x as usize).filter(|_| (x as usize) < i);
         while stack.last().is_some_and(|&(_, end)| end <= i) {
@@ -2592,6 +2608,8 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                                                     // (WP-1353), a member
                                                     // function template (WP-1358).
                                                     | Payload::Template { .. }
+                                                    // A member class (WP-1369).
+                                                    | Payload::Record { .. }
                                             )
                                     }),
                                 _ => false,
@@ -2619,7 +2637,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
         {
             // A local of a template's pattern is dependent, like it.
             if d.flags & !(body::LOCAL_FLAGS | DEP) != 0
-                || (d.flags & DEP) != (f.flags & DEP)
+                || ((d.flags & DEP) != (f.flags & DEP)
+                    // WP-1369: sema's using-directive has no
+                    // `DEPENDENT_CTX` (`Sema::using_directive`), in a
+                    // template as elsewhere.
+                    && !(f.flags & DEP != 0 && matches!(d.payload, Payload::UsingDir { .. })))
                 || d.owner > 3
                 || d.access != 0
                 || d.lexical != NONE
@@ -2806,8 +2828,15 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
                 // (WP-1360); one of a complete specialization reference
                 // named by a member's record of an open class (WP-1358,
                 // `named.rs`).
+                // WP-1369: the `va_list` class stub, at global scope.
+                (Payload::Implicit { kind: predef::VA_RECORD_KIND }, _) => {
+                    predef::va_stub_ok(img, i)
+                }
                 (Payload::Implicit { .. }, _) => {
-                    (closed(d.ctx) || members::complete_spec(img, d.ctx)) && d.lexical == NONE
+                    (closed(d.ctx)
+                        || members::complete_spec(img, d.ctx)
+                        || predef::is_va_stub(img, d.ctx))
+                        && d.lexical == NONE
                 }
                 // A class template's record follows its pattern's record,
                 // inside the pattern's definition (S4b), in the pattern's
@@ -3126,6 +3155,11 @@ fn validate(img: &Image, lookup: &[(u32, u32, u32)]) -> Res<()> {
             Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND } => {
                 if d.prev != NONE || d.name != NONE || !scope::align_val_t_stub_ok(img, i) {
                     return bad("bad implicit std::align_val_t record");
+                }
+            }
+            Payload::Implicit { kind: predef::VA_RECORD_KIND } => {
+                if !predef::va_stub_ok(img, i) || d.flags != 0 || d.owner != 0 {
+                    return bad("bad va_list class record");
                 }
             }
             Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
@@ -3525,7 +3559,7 @@ impl Writer<'_, '_, '_> {
     }
 
     /// The record of `d` naming type `t` (its own type, unqualified).
-    fn type_decl(&self, d: DeclId, t: TypeId) -> W<u32> {
+    pub(super) fn type_decl(&self, d: DeclId, t: TypeId) -> W<u32> {
         let Some(r) = self.recs.get(&d).copied().or_else(|| self.redecl_ttp(d)) else {
             return Err(self.outside_type_why(d));
         };
@@ -3662,9 +3696,15 @@ impl Writer<'_, '_, '_> {
             }
             TypeView::Record(d) => {
                 let d = self.s.ast.first(d);
-                // WP-1350: a closure type or local class, written on use.
-                self.lazy_type(d)?;
-                TyRec::Record(self.type_decl(d, t)?)
+                // WP-1369: the class `__builtin_va_list` names (`predef.rs`).
+                if self.is_va_record(d) && self.s.ast.decls.get(d).ty().is_some_and(|q| q.ty() == t)
+                {
+                    TyRec::Sugar(predef::SUGAR_VA_RECORD)
+                } else {
+                    // WP-1350: a closure type or local class, written on use.
+                    self.lazy_type(d)?;
+                    TyRec::Record(self.record_type_decl(d, t)?)
+                }
             }
             TypeView::TemplateTypeParm(d) => TyRec::Ttp(self.type_decl(d, t)?),
             TypeView::PackExpansion { pattern, num_expansions: None } => {
@@ -3709,6 +3749,10 @@ impl Writer<'_, '_, '_> {
                 let sugar = self.s.image_sugar();
                 let k = sugar.iter().position(|q| q.is_some_and(|q| q.ty() == t)).unwrap_or(0);
                 TyRec::Sugar(k as u8)
+            }
+            // WP-1369: a predefined SVE typedef (`predef.rs`).
+            TypeView::Typedef { decl, .. } if self.sve_sugar(decl, t).is_some() => {
+                TyRec::Sugar(self.sve_sugar(decl, t).unwrap_or(predef::SUGAR_SVE))
             }
             TypeView::Typedef { decl, underlying } if self.resugared(decl, t) => {
                 let r = *self.recs.get(&decl).ok_or("a type declared outside the image")?;
@@ -4343,7 +4387,10 @@ impl Writer<'_, '_, '_> {
         if cmp {
             self.defaulted_cmp(d, i)?;
         }
-        let fty = n.ty().ok_or("a malformed function")?;
+        let written = n.ty().ok_or("a malformed function")?;
+        // WP-1369: one declared through a typedef records the function
+        // type under the sugar, and the sugar in `fnsugar`.
+        let fty = self.fn_type_under(written).ok_or("a function declared through a typedef")?;
         let TypeView::Function(proto) = ast.types.view(fty.ty()) else {
             return Err("a function declared through a typedef");
         };
@@ -4383,6 +4430,12 @@ impl Writer<'_, '_, '_> {
         self.redecl_ttps = None;
         if ty.quals != 0 {
             return Err("a function declared through a typedef");
+        }
+        if written != fty {
+            if deferred || late.is_some() {
+                return Err("a function declared through a typedef");
+            }
+            self.fn_sugar(i, written)?;
         }
         let mut params = Vec::with_capacity(plist.len());
         for (k, p) in plist.into_iter().enumerate() {
@@ -4928,6 +4981,8 @@ impl Writer<'_, '_, '_> {
         self.img.fexpl.truncate(n);
         self.img.fsuses.truncate(n);
         self.img.psels.truncate(n);
+        self.img.fsugar.truncate(n);
+        self.img.mclasses.truncate(n);
         self.img.attrs.params.retain(|(_, r)| r.decl < n);
         let k = self.img.explinsts_len() as u32;
         self.img.attrs.insts.retain(|r| r.decl < k);
@@ -5735,6 +5790,9 @@ impl Sema<'_, '_> {
                     // type and later parameters' types may name them.
                     let ps = self.image_prototype_params(img, &mut tys, &ids, ctx, params, main);
                     let mut fty = self.image_ty(img, &mut tys, &ids, *ty);
+                    if let Some(t) = self.image_fn_sugar(img, &mut tys, &ids, i as u32, fty) {
+                        fty = t;
+                    }
                     let spec = fn_spec(*spec).unwrap_or_default();
                     let kind = FN_KINDS[usize::from(*kind)];
                     h.name = self.image_special_name(r.name, kind, ctx, fty).unwrap_or(h.name);
@@ -5980,6 +6038,7 @@ impl Sema<'_, '_> {
                     self.image_global_op(img, i as u32)
                 }
                 Payload::Implicit { kind: scope::ALIGN_VAL_T_KIND } => self.image_align_val_t(),
+                Payload::Implicit { kind: predef::VA_RECORD_KIND } => self.image_va_record(),
                 Payload::Implicit { kind } if builtintempl::is_kind(*kind) => {
                     self.image_builtin_template(*kind)
                 }
@@ -6156,6 +6215,9 @@ impl Sema<'_, '_> {
         self.image_lambdas(img, &ids, &params_all, main);
         let built = self.image_bodies(img, &mut tys, &ids, &params_all, reqs, main);
         self.image_attr_exprs(&attr_exprs, &built);
+        // WP-1369: after the attributes' expressions (`alignas(A)`).
+        self.image_fix_aligned();
+        self.image_member_classes(img, &ids);
         self.image_constraints(img, &ids, &built);
         self.image_member_constraints(img, &ids);
         self.image_written(img, &mut tys, &ids, main);
@@ -6560,6 +6622,7 @@ impl Sema<'_, '_> {
                 let q = qt(self, *q);
                 self.ast.types.qualify(q, Quals::from_bits(*c))
             }
+            TyRec::Sugar(k) if *k >= predef::SUGAR_VA_RECORD => self.image_predef_sugar(*k),
             TyRec::Sugar(k) => {
                 self.image_sugar()[usize::from(*k).min(5)].unwrap_or(QualType::ERROR)
             }
@@ -6896,6 +6959,8 @@ mod tests {
             dedup: dedup::Dedup::default(),
             lambdas: lambdas::Lambdas::default(),
             psels: psel::PartialSels::default(),
+            fsugar: fnsugar::FnSugars::default(),
+            mclasses: specbase::MemberClasses::default(),
             cons: constraints::Constraints::default(),
             reqs: requires::ReqBodies::default(),
             written: Vec::new(),

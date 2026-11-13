@@ -3799,6 +3799,100 @@ Tests: `overloaded_member_accesses_are_carried`,
 corpus `cpp.include/pch-ovl-members-{run,errors}.cpp` and
 `module.interface/image-ovl-members-{run,errors}.cpp`.
 
+**Forms carried by WP-1369.** The writer's additions are
+`bmi_image/fnsugar.rs`, `predef.rs` and `specbase.rs`, plus `exprs.rs`
+(a type form) and `body.rs`. Two side sections follow `psels`
+(WP-1358): `fsugar`, then `mclasses`.
+
+- *Functions declared through a typedef* ([dcl.fct]/13: `typedef int
+  F(int); F f;`, the member `struct S { F m; };`, through an alias
+  template, `decltype(k)` or `__typeof(k)`, glibc's `extern "C"
+  __typeof(uselocale) __uselocale;`). Sema gives the declaration the
+  type as written and one unnamed parameter per parameter type
+  (`typedef_fn_params`). The record is an ordinary function record
+  whose type is the first function type under the sugar (each step
+  unqualified), so its parameters match its type as every function
+  record's do. `fsugar` keeps the written type: `u32 n`, then per entry
+  `u32 rec, QRef ty`, ascending by `rec`. An entry names a `Function`
+  record, once; its type is unqualified and names only records before
+  it. The reader builds the declaration with the written type when it is
+  the same type as the record's (else the record's). A later
+  redeclaration, a default argument it adds, and a later or out-of-line
+  definition are their own records, as for any function. Still refused
+  under the same reason: a written type whose exception specification
+  is deferred or names the function's parameters (`late_noexcept`), and
+  a conversion function so declared.
+- *`typeof`* (a GNU extension). A non-dependent `typeof(e)` /
+  `typeof_unqual(e)` is `ExTy` tag 4 `[u32 e, QRef ty, u8 unqual]`, `e`
+  the expression section and `ty` its computed type; `typeof(type)` is
+  the same tag with `e` = `NONE` and `ty` the operand. A dependent one
+  (a profile) is not carried ("a type the image does not carry").
+- *Predefined target types* (`predef.rs`). `TyRec::Sugar` numbers past
+  the six of `image_sugar`: 6 is the class `__builtin_va_list` names
+  (`std::__va_list` on `AArch64`, `__va_list_tag` on x86-64), and
+  `7 + j` the predefined typedef of the `j`-th SVE ACLE sizeless type in
+  `BuiltinType::ALL` order (`__SVFloat32_t`, `__SVBool_t`, ...,
+  `__clang_svint8x2_t`, ...; declared on `AArch64` only, glibc's
+  `math-vector.h:166`). The importer names its own: the class of its
+  `__builtin_va_list`, or its implicit typedef of that name looked up
+  in the translation unit (the builtin type itself when it declares
+  none). An image of another target has none of them; a precompiled
+  header is only used for its own target (§11.4). The implicit special
+  members of the `va_list` class that sema declared on use (its copy
+  constructor, `vsnprintf(s, n, f, v)` passing a `va_list` by value on
+  `AArch64`) are `Implicit` records of their special kind whose context
+  is an `Implicit` record of kind 11, the image's only one, at global
+  scope with no name, standing for that class; the reader resolves the
+  stub to its own class and declares the member there.
+- *Base paths through implicit instantiations* ([conv.ptr]/3,
+  [expr.ref]: `a.fetch_sub(u)` with `a` an `atomic<long>` whose
+  `fetch_sub` is its base template's). A path element may name a
+  complete `Spec` of a class template (template kind 1) with the
+  position of the base-specifier in its definition; the reader takes
+  the base-specifier at that position in its own instantiation (whose
+  bases come in the pattern's order, [temp.inst]/2). Such a position is
+  not checked against a base count, which the image does not have.
+- *Member classes of implicit instantiations* ([temp.inst]/3:
+  `aligned_storage<sizeof(p), alignof(void *)>::type`, `any:93`). A
+  class type naming a member class of a carried class template's
+  implicit instantiation is `TyRec::Record` of its `Member` reference
+  (S4b), whose pattern is the member class's `Record`. When the unit
+  completed the member class, `mclasses` lists the reference: `u32 n`,
+  then `u32 rec` per entry, ascending, each a `Member` whose pattern is
+  a `Record`. The reader completes those after the attributes'
+  expressions are in (a member class's `alignas(A)` is substituted when
+  it is instantiated), not while it reads the records.
+
+- *`alignas` operands instantiated while the image is read*
+  (`alignfix.rs`; pre-existing, found here). The reader fills an
+  attribute's operand expressions in only after the bodies, but a class
+  specialization the unit completed is completed with its record, which
+  instantiates its pattern's attributes ([dcl.align]/1): a data member's
+  `alignas(alignof(T))`, or one of a member class its fields complete,
+  had no operand yet and took the strictest alignment. The reader now
+  notes each `aligned` attribute whose operand is pending; an
+  instantiation of one is a placeholder `aligned` attribute, kept with
+  the substitution's arguments and pattern/specialization pairs, whose
+  operand is substituted (a pack's strictest element) once the operands
+  are in. The record layouts computed in between are then dropped. No
+  format change.
+- *A using-directive in a function template's body* (pre-existing,
+  found here). Sema declares it without `DEPENDENT_CTX`
+  (`Sema::using_directive`); the reader accepts that for a local
+  `UsingDir` of a dependent function, where it required the function's
+  flag of every local.
+
+Tests: `functions_declared_through_a_typedef_are_carried`,
+`predefined_sve_typedefs_are_carried` (both targets),
+`va_list_class_is_carried` (both targets),
+`bases_and_member_classes_of_specializations_are_carried`,
+`record_time_completion_alignas_matches_replay`,
+`local_using_directive_in_a_template_is_carried` (pch_decls);
+`kind2_declaration_image_wp1369_forms` (modules_bmi);
+`function_sugars_round_trip`, `ex_types_round_trip` (kiln_sema). Corpus:
+`cpp.include/pch-typedef-fns-{run,errors}.cpp` and
+`module.interface/image-typedef-fns-{run,errors}.cpp`.
+
 **Static assertions in class templates (WP-1307).** A
 `static_assert` in a class template, a member class of one or a
 partial specialization (dependent: `DEPENDENT_CTX`) is a member record
@@ -4524,7 +4618,7 @@ refused top-level declaration in source order, "refused: <example>:
 <reason>", for per-header tables.
 
 **Versioning and the fingerprint.** The section starts with its own
-format word (`IMAGE_VERSION = 34` since WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
+format word (`IMAGE_VERSION = 35` since WP-1369, 34 for WP-1368, 33 for WP-1358, 32 for WP-1360, 31 for WP-1350, 30 for WP-1353, 29 for WP-1352, 28 for WP-1345, 27 for WP-1344, 26 for WP-1343, 25 for WP-1342, 24 for WP-1314, 23 for WP-1320, 22 for WP-1310, 21 for WP-1307, 20 for WP-1300, 19 for WP-1292, 18 for WP-1293, 16 for WP-1284, 15 for WP-1283, 14 for WP-1278, 13 for WP-1279, 12 for WP-1070 (S7), 11 for WP-1068 (S6), 10 for WP-1132, 9 for WP-1120, 8 for the first WP-1132 slice, 7 for WP-1162, 6 for WP-1166, 5 for WP-1139, 4 for the first S4
 slice, 3 for S3, 2 for S2; rejected if different). The file
 header's kiln version and the flags fingerprint (§11.4) already reject a
 file made by another kiln or under other flags. `-fkiln-bmi-image` is

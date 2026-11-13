@@ -2747,3 +2747,182 @@ namespace s { inline namespace v { template <> struct tr<char> { using type = ch
 int main() { s::tr<char>::type c = 0; return c + s::tr<char>::f() - 2; }\n";
     image_carries("wp1368s", header, tu);
 }
+
+/// WP-1369, spec/modules.md §11.11 "Forms carried by WP-1369": functions
+/// declared through a typedef of function type ([dcl.fct]/13), at
+/// namespace scope and as members, through an alias template, `decltype`
+/// and `__typeof`: a later declaration adding a default argument, a
+/// `noexcept` in the typedef, out-of-line and later definitions, and a
+/// class template's member, as after replay.
+#[test]
+fn functions_declared_through_a_typedef_are_carried() {
+    let header = "\
+typedef int F(int);
+typedef int N(int) noexcept;
+F f;
+int f(int = 7);
+N nf;
+template <class T> using Un = T(T);
+template <class T> struct Box { F get; Un<T> twice; static N sget; };
+template <class T> int Box<T>::get(int x) { return x + 1; }
+template <class T> T Box<T>::twice(T t) { return t + t; }
+template <class T> int Box<T>::sget(int x) noexcept { return x * 3; }
+struct Q { F mf; F vf; };
+inline int Q::mf(int a) { return a - 1; }
+inline int use() { return f() + Box<int>{}.get(1); }
+int k(int);
+decltype(k) dk;
+__typeof(k) tk;
+Un<long> ul;
+";
+    let tu = "\
+int f(int v) { return v; }
+int nf(int v) noexcept { return v + 2; }
+int Q::vf(int a) { return a * 4; }
+int dk(int a) { return a; }
+int tk(int a) { return a + 1; }
+long ul(long a) { return a; }
+static_assert(noexcept(nf(1)) && !noexcept(f(1)) && noexcept(Box<int>::sget(1)));
+int main() {
+  Q q; Box<long> b;
+  return f() + nf(1) + q.mf(2) + q.vf(1) + b.get(1) + int(b.twice(3)) + Box<int>::sget(1)
+       + use() + dk(0) + tk(0) + int(ul(1)) - 293;
+}
+";
+    image_carries("wp1369t", header, tu);
+}
+
+/// WP-1369: the predefined SVE typedefs (`__SVFloat32_t`, `__SVBool_t`,
+/// the tuple types) named by a header are the importer's own on
+/// `AArch64`; an x86-64 image of the same header names none (they are not
+/// declared there). Both agree with replay under `check`.
+#[test]
+fn predefined_sve_typedefs_are_carried() {
+    let header = "\
+#ifdef __aarch64__
+typedef __SVFloat32_t sv_f32;
+typedef __SVBool_t sv_b;
+typedef __clang_svint8x2_t sv_i8x2;
+sv_f32 vmul(sv_f32, sv_b);
+inline int sz() { return sizeof(sv_b *) + sizeof(sv_i8x2 *); }
+#else
+inline int sz() { return 16; }
+#endif
+";
+    let tu = "int main() { return sz() - 16; }\n";
+    let d = scratch("wp1369s");
+    std::fs::write(d.join("a.h"), header).unwrap();
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    for target in ["--target=aarch64-linux-gnu", "--target=x86_64-linux-gnu"] {
+        let args = [target, "-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+        let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
+        assert!(!o.stderr.contains("refused: "), "{target}: {}", o.stderr);
+        assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+        same(&d, "a.pch", &[target, "-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
+        for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
+            let check = [target, "-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+            let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
+            assert_eq!(o.stderr, "", "{target} {mode:?}");
+        }
+    }
+}
+
+/// WP-1369: the class `__builtin_va_list` names (`std::__va_list` on
+/// `AArch64`, copied when a `va_list` is passed by value, with its
+/// implicit copy constructor; `__va_list_tag` on x86-64, the decayed
+/// parameter type) is the importer's own.
+#[test]
+fn va_list_class_is_carried() {
+    let header = "\
+int vsn(const char *, __builtin_va_list);
+inline int pass(const char *f, __builtin_va_list v) { return vsn(f, v); }
+typedef __builtin_va_list VL;
+int take(VL);
+";
+    let tu = "int main() { return 0; }\n";
+    let d = scratch("wp1369v");
+    std::fs::write(d.join("a.h"), header).unwrap();
+    std::fs::write(d.join("a.cpp"), tu).unwrap();
+    for target in ["--target=aarch64-linux-gnu", "--target=x86_64-linux-gnu"] {
+        let args = [target, "-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+        let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
+        assert!(!o.stderr.contains("refused: "), "{target}: {}", o.stderr);
+        same(&d, "a.pch", &[target, "-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
+        let check = [target, "-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let o = ok(&d, &[&check[..], &["-fsyntax-only", "a.cpp"]].concat());
+        assert_eq!(o.stderr, "", "{target}");
+    }
+}
+
+/// WP-1369: a member of a base of an implicit instantiation named through
+/// a derived-to-base path (`a.fetch_sub(u)`, `atomic<long>` deriving
+/// from its base template), and a member class of an implicit
+/// instantiation named in a type (`storage<8, 8>::type`): the importer's
+/// own instantiation has the base and the member class.
+#[test]
+fn bases_and_member_classes_of_specializations_are_carried() {
+    let header = "\
+template <class T> struct base { T v; T fetch_sub(T d) { return v -= d; } };
+template <class T> struct atom : base<T> {};
+struct latch { atom<long> a; long cd(long u) { return a.fetch_sub(u); } long get() { return a.v; } };
+template <unsigned L, unsigned A> struct storage { struct type { alignas(A) unsigned char data[L]; }; };
+struct any_ { void *p; storage<sizeof(p), alignof(void *)>::type buf; };
+inline int an() { any_ a{}; return sizeof(a.buf); }
+";
+    let tu = "\
+int main() { latch l{}; l.a.v = 5; l.cd(2); return int(l.get()) + an() - 3 - int(sizeof(void *)); }
+";
+    image_carries("wp1369b", header, tu);
+}
+
+/// WP-1369 found (pre-existing, 1.1.0) and fixed: a specialization the
+/// importer completes while it reads the records instantiates its
+/// pattern's `alignas(A)` before the attributes' expressions are in (they
+/// come with the bodies); the instantiation is a placeholder substituted
+/// once they are (`bmi_image/alignfix.rs`), so `U` is 16 bytes through the
+/// image as after replay, and `check` finds no difference.
+#[test]
+fn record_time_completion_alignas_matches_replay() {
+    let d = scratch("wp1369x");
+    let header = "\
+template <unsigned L, unsigned A> struct st { alignas(A) unsigned char data[L]; };
+struct U { void *p; st<sizeof(p), alignof(void *)> buf; };
+";
+    std::fs::write(d.join("a.h"), header).unwrap();
+    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    std::fs::write(
+        d.join("a.cpp"),
+        "int main() { U u{}; return int(sizeof(u)) - 2 * int(sizeof(void *)); }\n",
+    )
+    .unwrap();
+    let check = [
+        "-std=c++20",
+        "-fkiln-pch-image=check",
+        "-include-pch",
+        "a.pch",
+        "-S",
+        "-emit-llvm",
+        "a.cpp",
+        "-o",
+        "-",
+    ];
+    assert_eq!(ok(&d, &check).stderr, "");
+}
+
+/// WP-1369 found (pre-existing, 1.1.0) and fixed: a using-directive in
+/// the body of a function template (libc++'s `<atomic>` and `<cmath>`
+/// reach one once their functions declared through a typedef are
+/// carried) has no `DEPENDENT_CTX` in sema, which the reader required of
+/// every local of a template's pattern, so the header was replayed ("an
+/// internal image inconsistency").
+#[test]
+fn local_using_directive_in_a_template_is_carried() {
+    let header = "\
+namespace N { inline int g(int x) { return x; } }
+template <class T> int f(T t) { using namespace N; return g(t); }
+template <class T> struct S { int h(T t) { using namespace N; return g(t) + 1; } };
+inline int u() { return f(1) + S<int>{}.h(2); }
+";
+    let tu = "int main() { return u() - 4; }\n";
+    image_carries("wp1369u", header, tu);
+}

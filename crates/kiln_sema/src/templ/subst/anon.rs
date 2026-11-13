@@ -228,21 +228,21 @@ impl Substituter<'_, '_, '_> {
         self.copy_annotations(spec, def);
         let ast = &self.sema.ast;
         let list = ast.attrs.of_decl(def);
-        let nodes: Vec<AttrNode> = ast
+        let nodes: Vec<(AttrId, AttrNode)> = ast
             .lists
             .iter::<AttrId>(list)
-            .map(|a| *ast.attrs.get(a))
+            .map(|a| (a, *ast.attrs.get(a)))
             // A local variable's `cleanup` names a function, not a dependent
             // entity (WP-807); clang's `annotate` is lowered on every
             // instantiated variable (WP-1113).
-            .filter(|n| {
+            .filter(|(_, n)| {
                 !only_aligned
                     || matches!(n.kind, AttrKind::ALIGNED | AttrKind::CLEANUP | AttrKind::ANNOTATE)
             })
             // clang does not clone a visibility attribute (`Clone = 0`):
             // codegen reads the pattern's (spec/codegen.md "Symbol
             // visibility"); a `mode` is applied to the substituted type.
-            .filter(|n| {
+            .filter(|(_, n)| {
                 !matches!(n.kind, AttrKind::VISIBILITY | AttrKind::TYPE_VISIBILITY | AttrKind::MODE)
             })
             .collect();
@@ -250,8 +250,17 @@ impl Substituter<'_, '_, '_> {
             return;
         }
         let mut out = Vec::new();
-        for node in nodes {
+        for (id, node) in nodes {
             if node.kind == AttrKind::ALIGNED {
+                // An operand an image has not filled in yet (WP-1369,
+                // bmi_image/alignfix.rs).
+                if node.a == 0
+                    && node.b == 0
+                    && let Some(p) = self.image_aligned_placeholder(id, node)
+                {
+                    out.push(p);
+                    continue;
+                }
                 // `alignas(Ts...)` is one attribute per element
                 // ([dcl.align]/1, [temp.variadic]/5; clang
                 // `instantiateDependentAlignedAttr`); the strictest wins.
