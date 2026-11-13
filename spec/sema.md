@@ -10969,6 +10969,22 @@ Context checks, in clang's order (`isValidCoroutineContext`):
 - A `return` statement in a coroutine is `return statement not allowed
   in coroutine; did you mean 'co_return'?` (reported at the body's end,
   with the coroutine note).
+- No dynamic stack allocation (the frame has a fixed size; WP-1374),
+  checked at the body's end after the `return` error, when the promise
+  was built (also in a template pattern): the first variable length array
+  type written in the body (a variable, a typedef, a pointer to one,
+  `sizeof(int[n])`, inside a statement expression; clang
+  `FunctionScopeInfo::FirstVLALoc`, at its `[`) is `variable length
+  arrays in a coroutine are not supported`. A nested lambda's or local
+  class's own body is its own function and may use one. **Stricter than
+  clang** (docs/status/deviations.md): the first evaluated call of
+  `__builtin_alloca`, `__builtin_alloca_with_align`, an `_uninitialized`
+  form, or `alloca` where it is a library builtin (GNU modes; a strict
+  `-std=c++NN` calls the library function, as clang) (at the callee), else the first variable length
+  array an instantiation forms, is `<a call to 'NAME'|a variable length
+  array instantiated from a template> in a coroutine is not supported:
+  the coroutine frame cannot hold a dynamically sized stack allocation`;
+  clang accepts both and its back end aborts.
 
 **The promise ([dcl.fct.def.coroutine]/4-5).** At the first keyword (not
 in a template pattern) Sema declares the parameter copies, then the

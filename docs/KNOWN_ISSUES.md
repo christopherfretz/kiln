@@ -67,6 +67,17 @@ has too (WP-1354, found by the hod project).
   an odd integer width. Neither kiln nor clang produces that IR shape
   from C or C++ source that we found; the guard test is
   `tests/c/c23/llc-o0-narrow-load-sext-run.c`.
+- **Coroutines, `get_return_object()` throws.** When the ramp's call to
+  `get_return_object()` throws and the coroutine's final awaiter has an
+  `await_suspend` returning a handle (symmetric transfer), CoroSplit
+  keeps the ramp's exception-object and selector slots in the coroutine
+  frame. The ramp frees the frame and then reads those slots to resume
+  unwinding: a use after free (garbage or a crash under heap
+  perturbation, an AddressSanitizer report). clang 19 and 22 emit the
+  same IR (clang 22 does not mark those slots `!coro.outside.frame`
+  either), so kiln does not work around it (WP-1374). Test (expected
+  failure):
+  `tests/conformance/dcl.fct.def.coroutine/gro-throws-frame-slots-asan-run.cpp`.
 - **`llc` 19 and 22 abort** on `llvm.minimum`/`llvm.maximum` of `fp128`
   and on `llvm.llround`/`llvm.llrint` returning `i32`. kiln emits
   neither: it has no `__builtin_elementwise_minimum`/`maximum`, its
