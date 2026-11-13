@@ -4133,7 +4133,17 @@ impl Sema<'_, '_> {
                 return self.invalid_operands(l, r, loc);
             }
             let (a, b) = (self.ast.types.pointee(lt), self.ast.types.pointee(rt));
+            // C: pointers to compatible types (C23 6.5.7p3), so
+            // `int (*)[m] - int (*)[n]` is valid (two variable length
+            // array types of compatible element types are compatible,
+            // 6.7.7.3p6); C++: the same type ([expr.add]/2.2, clang
+            // `CheckSubtractionOperands`).
             let same = match (a, b) {
+                (Some(a), Some(b)) if self.is_c() => {
+                    let t = &self.ast.types;
+                    let (a, b) = (t.canonical(a).without_quals(), t.canonical(b).without_quals());
+                    conv::c_assign::compatible(self, a, b)
+                }
                 (Some(a), Some(b)) => self.ast.types.same_unqualified(a, b),
                 _ => false,
             };
@@ -6413,7 +6423,7 @@ impl Sema<'_, '_> {
         let e = self.builder().member(base, m, ty, arrow, loc, extra);
         if self.unevaluated > 0 {
             let _ = self.ast.exprs.set_non_odr_use(e, NonOdrUse::Unevaluated);
-        } else if self.reflection && !self.in_template() {
+        } else if self.reflection {
             self.note_consteval_only_member(e, m, ty);
         }
         e

@@ -1248,9 +1248,12 @@ impl Sema<'_, '_> {
             return Ok(TemplateIdRef::Type(match self.ast.types.template_name_view(name) {
                 // `TT<args>` for a template template parameter `TT`, and
                 // `[: r :]<args>` with a dependent `r` in a type position
-                // (P2996 [temp.names]/1).
+                // (P2996 [temp.names]/1); and `TTs<args>` with `TTs` a
+                // template template parameter pack kept by a partially
+                // substituted expansion (spec/sema-templates.md §7.2).
                 TemplateName::TemplateTemplateParm { .. }
                 | TemplateName::CanonTemplateTemplateParm { .. }
+                | TemplateName::SubstTemplateTemplateParmPack { .. }
                 | TemplateName::Splice { .. }
                 | TemplateName::SpliceProfile(_) => {
                     self.ast.types.template_specialization(name, list, None, false)

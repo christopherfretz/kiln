@@ -2845,11 +2845,16 @@ impl<'a, 'b> Mangler<'a, 'b> {
                     self.out.push_str("u7unknown");
                 }
             }
+            // A template template parameter pack substituted into a
+            // pattern not expanded yet, as a template argument
+            // (`Z<Y<TTs>...>`): clang's `_SUBSTPACK_`.
+            TemplateName::SubstTemplateTemplateParmPack { .. } => {
+                self.out.push_str("_SUBSTPACK_");
+            }
             // Not a template template argument: a dependent operator
-            // template or an overload set names a function template, and
-            // a template template parameter pack being substituted is
-            // expanded before any name is mangled. The splice forms are
-            // reflection mangling (spec/reflection.md §8.3).
+            // template or an overload set names a function template. The
+            // splice forms are reflection mangling (spec/reflection.md
+            // §8.3).
             _ => self.out.push_str("u7unknown"),
         }
     }

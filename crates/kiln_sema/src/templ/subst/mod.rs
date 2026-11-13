@@ -569,10 +569,62 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             return None;
         };
         let ArgLookup::Arg(a) = self.lookup(depth as u16, index as u16) else { return None };
+        // A pack kept by a partially substituted expansion (§7.2) has no
+        // single argument yet.
+        if self.pack_index.is_none() && matches!(a.view(), ArgView::Pack(_)) {
+            return None;
+        }
         let ArgView::Template(t) = self.element(a, None, loc).ok()?.view() else { return None };
         match self.sema.ast.types.template_name_view(t) {
             TemplateName::Qualified { nns, .. } => Some(nns),
             _ => None,
+        }
+    }
+
+    /// A template template parameter pack argument `a` kept by a
+    /// partially substituted expansion (§7.2): the template name
+    /// `SubstTemplateTemplateParmPack` (WP-1359).
+    fn kept_ttp_pack(
+        &mut self,
+        a: TemplateArg,
+        decl: Option<DeclId>,
+        depth: u16,
+        index: u32,
+        loc: Loc,
+    ) -> SubstResult<kiln_ast::ids::TemplateNameId> {
+        let ArgView::Pack(l) = a.view() else { return Err(SubstFail) };
+        let len = self.sema.ast.types.args(l).len();
+        self.sweep_kept(len, |s| s.parm_pack_name(decl), loc)?;
+        let associated = self.assoc(depth).ok_or(SubstFail)?;
+        Ok(self.sema.ast.types.template_name(TemplateName::SubstTemplateTemplateParmPack {
+            associated,
+            index,
+            args: l,
+        }))
+    }
+
+    /// Kept template template parameter pack `n` (pack `args`): its
+    /// element for the current index; itself while another partial
+    /// expansion is rebuilt.
+    fn subst_ttp_pack_name(
+        &mut self,
+        n: kiln_ast::ids::TemplateNameId,
+        args: ArgListId,
+        loc: Loc,
+    ) -> SubstResult<kiln_ast::ids::TemplateNameId> {
+        let len = self.sema.ast.types.args(args).len();
+        if self.pack.keep && self.pack_index.is_none() {
+            self.sweep_kept(len, |_| crate::templ::pack::PackName::outer(), loc)?;
+            return Ok(n);
+        }
+        let len = u32::try_from(len).unwrap_or(u32::MAX);
+        let i = self.pack_reached(len, |_| crate::templ::pack::PackName::outer(), loc)?;
+        match self.sema.ast.types.args(args)[i as usize].view() {
+            ArgView::Template(t) => Ok(match self.sema.ast.types.template_name_view(t) {
+                TemplateName::Qualified { underlying, .. } => underlying,
+                _ => t,
+            }),
+            _ => Err(SubstFail),
         }
     }
 
@@ -587,8 +639,25 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
             TemplateName::TemplateTemplateParm { depth, index, .. }
             | TemplateName::CanonTemplateTemplateParm { depth, index, .. } => {
                 let (d, i) = (depth as u16, index as u16);
+                let decl = match self.sema.ast.types.template_name_view(n) {
+                    TemplateName::TemplateTemplateParm { decl, .. } => Some(decl),
+                    _ => None,
+                };
                 match self.lookup(d, i) {
-                    ArgLookup::Arg(a) => match self.element(a, None, loc)?.view() {
+                    // Rebuilding a partially substituted expansion
+                    // (§7.2): a template template parameter pack of an
+                    // outer level (`TTs<Us>...` in a member template of
+                    // `S<template<class> class... TTs>`) is kept as its
+                    // argument pack, expanded in lockstep with the inner
+                    // packs later ([temp.variadic]/7).
+                    ArgLookup::Arg(a)
+                        if self.pack.keep
+                            && self.pack_index.is_none()
+                            && matches!(a.view(), ArgView::Pack(_)) =>
+                    {
+                        self.kept_ttp_pack(a, decl, d, index, loc)
+                    }
+                    ArgLookup::Arg(a) => match self.element(a, decl, loc)?.view() {
                         // clang prints a substituted template template
                         // parameter through its replacement's declaration
                         // (`apply<int>`, not `template apply<int>`): the
@@ -613,6 +682,13 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
                     }
                     ArgLookup::Missing => Err(SubstFail),
                 }
+            }
+            // A substituted template template parameter pack of a
+            // partially substituted expansion (§7.2): its element for the
+            // current index; it stays while another partial expansion is
+            // rebuilt.
+            TemplateName::SubstTemplateTemplateParmPack { args, .. } => {
+                self.subst_ttp_pack_name(n, args, loc)
             }
             // `[: r :]<args>` with a dependent `r` (P2996 [temp.names]/1):
             // the template the substituted operand designates.

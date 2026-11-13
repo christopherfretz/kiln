@@ -350,6 +350,7 @@ sema_var_partial_spec_redecl_scope = Error (2) "variable template partial specia
 sema_var_spec_not_in_enclosing_ns = Error (2) "variable template specialization of '{0}' not in a namespace enclosing '{1}'";
 sema_var_template_spec_type = Error (4) "type {2} of {0:explicit instantiation|explicit specialization|partial specialization|redeclaration} of '{1}' does not match expected type {3}";
 sema_variable_sized_type_in_struct = ExtWarn [GnuVariableSizedTypeNotAtEnd] (2) "field '{0}' with variable sized type {1} not at the end of a struct or class is a GNU extension";
+sema_variably_modified_template_arg = Error (1) "variably modified type {0} cannot be used as a template argument";
 sema_vector_element_sizes_not_equal = WarningError [VecElemSize] (2) "vector operands do not have the same elements sizes ({0} and {1})";
 sema_vector_implicit_truncation = Error (3) "cannot convert between {0:scalar|vector} type {1} and vector type {2} as implicit conversion would cause truncation";
 sema_vector_invalid_element_type = Error (1) "invalid vector element type {0}";

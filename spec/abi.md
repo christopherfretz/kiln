@@ -1252,7 +1252,13 @@ no Itanium production; clang 19 and 22 write the vendor token
 `X_SUBSTPACK_E` as a template argument and no substitution candidate, a
 type pack (`SubstTemplateTypeParmPackType`) a bare `_SUBSTPACK_` and a
 candidate like any type (`tl<T, U>...` in a member of `ty<T...>` is
-`2tlIJ_SUBSTPACK_T_EE`). A default argument (`CXXDefaultArgExpr`) or
+`2tlIJ_SUBSTPACK_T_EE`). A template template parameter pack
+(`SubstTemplateTemplateParmPack`, WP-1359) is the bare `_SUBSTPACK_` as
+a template name, clang's `mangleType(TemplateName)` spelling (clang 19
+and 22 crash before writing it): `TTs<Us>...` in a member of
+`S<template<class> class... TTs>` is `Dp_SUBSTPACK_IT_E`, and
+`W<TTs, Us>...` is
+`Dp1WI_SUBSTPACK_T_E`. A default argument (`CXXDefaultArgExpr`) or
 default member initializer (`CXXDefaultInitExpr`) in a non-dependent
 subexpression of a dependent operand mangles as the expression it stands
 for (`h()` is `clL_Z1hiELi3EE` for `int h(int = 3)`). A braced list

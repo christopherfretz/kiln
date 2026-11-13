@@ -81,7 +81,15 @@ compound literals) are WP-1276's.
   written type, whose bounds codegen evaluates in the prologue. Pointer
   compatibility (`conv::c_assign::compatible`, 6.2.7) treats a VLA
   bound as matching any bound, which also gives `composite_pointer`
-  its C rule (pointers to compatible types compare and convert). A
+  its C rule (pointers to compatible types compare and convert), and
+  pointer subtraction (6.5.7p3) checks the same compatibility, so
+  `int (*)[m] - int (*)[n]` is valid in C (WP-1386; C++ requires the
+  same type, and two VLA types are never the same, as in clang). A
+  variably modified type is no template argument (clang
+  `err_variably_modified_template_arg`, "variably modified type T cannot
+  be used as a template argument"), which also rejects a coroutine with a
+  variably modified parameter type, whose `std::coroutine_traits`
+  arguments name it as the parameter declares it (WP-1386). A
   `goto` or `switch` jump into the scope of a VLA is an error
   (spec/sema.md §7; `tests/c/stmt/jump-into-vla-scope.c`). `-Wvla` is
   off by default, `-Wvla-extension` warns before C99 under
