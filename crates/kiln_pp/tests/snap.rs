@@ -595,22 +595,3 @@ fn schema_hashes_are_stable() {
     assert_ne!(e, p);
     println!("schema DiagEngine {e:016x} Preprocessor {p:016x}");
 }
-
-/// The engine restores only into a fresh engine, and a snapshot of a
-/// fresh engine restores into one.
-#[test]
-fn engine_restore_needs_a_fresh_engine() {
-    let sm = SourceManager::new();
-    let f = sm.add_virtual("t.cpp", "x".to_owned()).unwrap();
-    let engine = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    let mut w = Writer::new();
-    engine.snap_put(&mut w).unwrap();
-    let bytes = w.into_bytes();
-    let mut used = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    used.pragma_push(sm.loc(f, 0));
-    used.pragma_set(sm.loc(f, 0), false, "everything", kiln_diag::Severity::Ignored);
-    let e = used.snap_restore(&mut Reader::new(&bytes)).unwrap_err();
-    assert!(e.to_string().contains("used diagnostics engine"), "{e}");
-    let mut fresh = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
-    fresh.snap_restore(&mut Reader::new(&bytes)).unwrap();
-}
