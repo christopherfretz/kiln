@@ -8,7 +8,7 @@
 // function template the operand is polymorphic or not per instantiation:
 // `Q<NP>::operator*`, whose body cannot be instantiated, is named only in
 // an unevaluated operand. A non-polymorphic operand stays unevaluated:
-// `undefined_np` is never defined. WP-1322 (the reference workload): kiln
+// `undefined_np` is never defined. WP-1322 (found in downstream code): kiln
 // referenced `P<B>::operator*` without instantiating it, a link failure.
 //@ expect: run
 //@ std: c++20

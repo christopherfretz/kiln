@@ -1053,7 +1053,7 @@ pub(crate) const CLANG_GROUP_NAMES: &[&str] = &[
 /// Sorted (bytewise) warning-group names clang added after 19, accepted at
 /// `-fclang-compat=22` (the default). Generated as `clang++-21
 /// --print-diagnostic-options` minus [`CLANG_GROUP_NAMES`] (clang 21 is the
-/// newest clang the reference workload builds with; it passes
+/// newest clang that large downstream builds use; they pass
 /// `-Wno-nontrivial-memcall` on every translation unit).
 pub(crate) const CLANG_POST19_GROUP_NAMES: &[&str] = &[
     "arm-interrupt-save-fp-no-vfp-unit",

@@ -749,6 +749,12 @@ impl<'a> Cg<'a> {
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
+                // clang `EmitTopLevelDecl` -> `CGDebugInfo` (WP-1365).
+                DeclKind::UsingDirective | DeclKind::Using | DeclKind::NamespaceAlias => {
+                    if self.di.is_some() {
+                        self.di_using_top(d);
+                    }
+                }
                 _ => {}
             }
         }

@@ -5,7 +5,7 @@
 // explicit arguments select, qualified or not, at namespace or class
 // scope, as an identifier template-id does (`^^ns::plain<int>`). Before
 // WP-1246 the parser stopped after `^^ns::operator==` and rejected the
-// `<int>` ("expected '(' for function-style cast", a reference-workload
+// `<int>` ("expected '(' for function-style cast", a downstream
 // finding). In a template the arguments may be dependent
 // (`^^ns::operator==<T>`, `^^ns::plain<T>`, `^^T::template operator()<int>`):
 // the reflection resolves at instantiation (spec/reflection-repr.md §2).
@@ -33,7 +33,7 @@ struct S {
 using namespace ns;
 using std::string_view;
 
-// The reference workload's reduced form.
+// The form reduced from real code.
 constexpr info eq = ^^ns::operator== <int>;
 static_assert(std::meta::is_function(eq));
 static_assert(!std::meta::is_function_template(eq));

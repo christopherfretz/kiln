@@ -9,7 +9,7 @@
 // print with C precedence: a binary operator's operands bare at its own
 // level, any template-id, concept-id or `T::v` operand parenthesized;
 // `sizeof (T)`, `sizeof ... (Ts ...)`, a conditional without its colon.
-// The reference workload compares these strings against GCC's.
+// Downstream code compares these strings against GCC's.
 //@ expect: compile-ok
 //@ oracle: gcc
 //@ args: -freflection -I tests/support
@@ -27,7 +27,7 @@ using namespace std::meta;
 namespace demo {
 constexpr bool flag = true;
 template <class T> concept Cn = std::is_integral_v<T>;
-// The reduced reference-workload case.
+// The case reduced from real code.
 template <class T> requires std::is_integral_v<T> struct OnlyInt {};
 template <std::integral T> struct TC {};
 template <class T> requires (sizeof(T) > 4) struct Big {};

@@ -112,6 +112,7 @@ impl DebugOptions {
 }
 
 pub(crate) mod func;
+mod imported;
 pub(crate) mod md5;
 mod stmt;
 mod types;
@@ -233,7 +234,27 @@ pub(crate) struct Di<'a> {
     pub enums: Vec<MetadataId>,
     pub retained: Vec<MetadataId>,
     pub globals: Vec<MetadataId>,
+    /// The compile unit's imported entities (namespace scope, WP-1365).
     pub imported: Vec<MetadataId>,
+    /// clang `NamespaceAliasCache`: imported entities by alias.
+    pub ns_aliases: FxHashMap<DeclId, MetadataId>,
+    /// Using-declarations of functions and variables, resolved at the end
+    /// of the unit (clang `FwdDeclReplaceMap`).
+    pending_imports: Vec<PendingImport>,
+    /// (scope, entity, file, line) of the pending ones: an identical
+    /// entity is kept once (LLVM uniquing).
+    import_keys: FxHashSet<(MetadataId, DeclId, MetadataId, u32)>,
+}
+
+/// An imported entity whose `entity:` is a function or variable not
+/// known before the end of the unit (definition or declaration).
+struct PendingImport {
+    /// The `distinct` placeholder, replaced by the uniqued entity.
+    node: MetadataId,
+    /// The function or variable.
+    target: DeclId,
+    /// Its fields, `entity: null` to fill in.
+    fields: Vec<(&'static str, MdField)>,
 }
 
 impl<'a> Cg<'a> {
@@ -293,6 +314,9 @@ impl<'a> Cg<'a> {
             retained: Vec::new(),
             globals: Vec::new(),
             imported: Vec::new(),
+            ns_aliases: FxHashMap::default(),
+            pending_imports: Vec::new(),
+            import_keys: FxHashSet::default(),
         }));
     }
 
@@ -394,6 +418,9 @@ impl<'a> Cg<'a> {
     /// become declarations; the compile unit gets its enums, retained
     /// types, globals and imported entities.
     pub(crate) fn finish_debug_info(&mut self) {
+        // Before the classes are completed: a declaration's type may
+        // name one.
+        self.di_resolve_imports();
         let Some(order) = self.di.as_deref().map(|d| d.class_order.clone()) else { return };
         for rd in order {
             let (done, p) = match self.di.as_deref() {

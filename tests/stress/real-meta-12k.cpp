@@ -1,5 +1,5 @@
 // [meta.syn] through libstdc++ 16.1's real <meta> (WP-484): 12,500
-// reflection calls over 100 data members, the names the reference workload
+// reflection calls over 100 data members, the names real binding code
 // uses most (identifier_of, display_string_of as string_view; type_of,
 // is_public, dealias, has_identifier), with the members as the header's
 // std::vector<info> and access_context::unchecked() its own struct. GCC

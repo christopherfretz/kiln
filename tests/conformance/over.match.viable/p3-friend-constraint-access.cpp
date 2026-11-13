@@ -2,7 +2,7 @@
 // trailing requires-clause is checked from the friend, so it may name a private
 // member of the befriending class; the friend stays viable and, as a
 // non-template, beats an equally good template ([over.match.best.general]/2.4).
-// Reduced from the reference workload: an iterator adaptor whose
+// Reduced from real code: an iterator adaptor whose
 // constrained `operator-` kiln found unsatisfied when the class was in a
 // namespace, so the deduced-return template was chosen and recursed.
 //@ expect: run

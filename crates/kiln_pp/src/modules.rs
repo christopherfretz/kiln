@@ -247,6 +247,45 @@ impl ModState {
         let record = opts.record.then(Box::default);
         ModState { opts, record, ..ModState::default() }
     }
+
+    /// The first field that keeps a snapshot from being taken (spec/pp.md
+    /// "Snapshots"): only `opts` (configuration) and `builtin_file`
+    /// (state) are carried, so every other field must be as a fresh
+    /// state has it: no unit read, built, imported or recorded.
+    pub(crate) fn snap_unready(&self) -> Option<&'static str> {
+        let ModState {
+            opts: _,
+            building,
+            built,
+            module,
+            builtin_file: _,
+            header_files,
+            record,
+            replays,
+            unit_replay,
+            main_replay,
+            main_carried,
+            main_unit,
+            scanned,
+            image_log,
+        } = self;
+        let field = if !building.is_empty() || !unit_replay.is_empty() {
+            "building: inside an imported unit"
+        } else if !built.is_empty() || !header_files.is_empty() || !image_log.is_empty() {
+            "built: a unit was imported"
+        } else if module.is_some() || main_unit.is_some() {
+            "module: a module declaration was read"
+        } else if record.is_some() {
+            "record: a module file is being recorded"
+        } else if !replays.is_empty() || main_replay.is_some() || main_carried.is_some() {
+            "replays: a module file was replayed"
+        } else if !scanned.is_empty() {
+            "scanned: an import was scanned"
+        } else {
+            return None;
+        };
+        Some(field)
+    }
 }
 
 /// The resolver lookups of the main unit, for its module file

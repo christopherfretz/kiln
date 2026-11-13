@@ -744,8 +744,8 @@ kinds. `recorded` is the timestamp of the results file of the recording run.
 
 `bench/reflect/s1.cpp` .. `s6.cpp` are the six workload shapes of
 docs/plans/m6-reflection.md §3.8, and `s7.cpp`/`s8.cpp` the two stress
-shapes of the reference-workload profile
-(docs/status/perf-reference-workload.md, WP-551), and `s9.cpp` and
+shapes of the reflection codebase profile
+(docs/status/perf-reflection.md, WP-551), and `s9.cpp` and
 `s10.cpp` the reflection-mangling shapes (spec/reflection.md §8.3, WP-501,
 WP-879), all written by `cargo xtask gen-reflect`
 (`xtask/src/gen_reflect.rs`) and committed at each shape's default N.

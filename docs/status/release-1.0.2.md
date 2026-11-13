@@ -5,7 +5,7 @@ The release gate for 1.0.2, a bug-fix release
 1.0.1, cut from the `release/1.0` maintenance branch
 ([../VALIDATION.md](../VALIDATION.md) "Patch releases"). Every release runs the same gate
 before its tag: the release archive, the full libc++ suite on aarch64
-and x86_64, the full open-source corpus, and the reference workload. The
+and x86_64, the full open-source corpus, and a downstream reflection-heavy build. The
 commands are those of [release-1.0.md](release-1.0.md), with `1.0.0`
 replaced by `1.0.2`; the 1.0.1 results in
 [release-1.0.1.md](release-1.0.1.md) are the baseline. A check passes
@@ -105,9 +105,9 @@ candidates except the flakes named here.
 - glaze 100/102: `cbor_test` and `msgpack_test` are the known build
   failures ([oss.md](oss.md)).
 
-## Reference workload
+## Downstream build
 
-The reference workload's maintainers build and test the RC: its cold
+The maintainers of a large reflection-heavy codebase build and test the RC: its cold
 build, its unit tests, and its diagnostics lane.
 
 | | result |

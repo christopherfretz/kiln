@@ -7,7 +7,7 @@
 // `isQualifiedMemberAccess` in `BuildUnaryOp`), so no `operator&` is looked
 // up and no instantiation runs while the name `C::m` is still pending. The
 // shape is nanobind's `class_<T>::def_rw("name", &::ns::T::member)` as
-// the reference workload generates it, for a member of type `std::map<int, int>`: the
+// generated binding code writes it, for a member of type `std::map<int, int>`: the
 // lookup of `operator&` for `std::map<int, int, less<int>,
 // allocator<pair<const int, int>>>` instantiated `std::pair<const int, int>`,
 // whose `explicit(...)` constant expression ended the pending `&S::m` as a

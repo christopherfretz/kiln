@@ -9,7 +9,7 @@
 // emitted LLVM 22's form for an LLVM 21 backend at -fclang-compat=22, so
 // every -O1+ compile of a function with a local aggregate failed in `opt`
 // ("Intrinsic has incorrect argument type! llvm.lifetime.start.p0"). The
-// shape is the reference workload's RelWithDebInfo tarball build: block-scope
+// shape is a downstream RelWithDebInfo tarball build: block-scope
 // aggregates passed by address to out-of-line functions, in nested
 // blocks, loops, `switch`es and behind `goto`s.
 //@ expect: run

@@ -197,7 +197,7 @@ throw-away instrumented build, one run each:
   templates_wide; `llvm-as-19` alone (parsing the text) goes from 0.44
   to 1.13 s and from 0.02 to 0.39 s. On format-test's `-S -emit-llvm`
   path the two `opt-19` runs add about 1.1 s with `-g`. That is the
-  text round trip (perf-reference-workload.md F4), not front-end work.
+  text round trip (perf-reflection.md F4), not front-end work.
 
 **What changed.** Static node names and field keys (`&'static str`), so
 a node allocates only its field list; hash-once interning into a
@@ -272,8 +272,21 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   (`crates/kiln_ast/src/types/print.rs:472`, called from
   `crates/kiln_codegen/src/debuginfo/types.rs:584`).
 - D: no `defaulted: true` on template parameters (`types.rs:1178`).
-- D: no `DIImportedEntity` for `using` declarations or directives
-  (`debuginfo/mod.rs:417`).
+- D (WP-1365): a using-declaration of a function with a deduced return
+  type is skipped when its definition follows the declaration (or, at
+  block scope, when the enclosing body is not deferred); clang decides by
+  when the type is deduced relative to its emission point
+  (`debuginfo/imported.rs` `undeduced_at`). With `-include-pch`, the
+  header's using-directives, using-declarations and aliases get entities
+  in kiln (they reach the top-level walk) and none in clang, whose AST
+  reader hands them to no consumer.
+- D: a class is defined wherever limited `-g` does not omit it
+  (`types.rs:633` `di_omit`); kiln does not track clang's
+  `isCompleteDefinitionRequired`, so a class reached only through a
+  pointer or a typedef (`FILE`'s `_IO_FILE`, `allocator<char>`) is
+  defined where clang declares it. The standard library's
+  using-declarations (WP-1365) reach more of them: `<iostream>` +
+  `<sstream>` gets about 6% more `.debug_info` than clang 19.
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
   atexit stubs.
 - D: no `DILocalVariable` for structured bindings or variable-length
@@ -306,8 +319,8 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   text by `llc-19`, and twice by the two `opt-19` runs of an
   `always_inline` module's `-S -emit-llvm`
   (`kiln_driver/src/codegen_cmd.rs` `ir_passes`); a bitcode writer or a
-  single `opt` run would cut it (perf-reference-workload.md F4).
+  single `opt` run would cut it (perf-reflection.md F4).
 - Call-site declaration subprograms above `-O0` (the call site DIE gap).
 - The D items under "Gaps", in roughly this order: structured bindings,
-  `DIImportedEntity`, global-initializer subprograms, alias templates,
-  then the rest.
+  global-initializer subprograms, alias templates, then the rest
+  (`DIImportedEntity`: WP-1365).

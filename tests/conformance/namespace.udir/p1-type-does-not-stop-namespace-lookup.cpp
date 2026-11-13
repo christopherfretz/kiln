@@ -3,7 +3,7 @@
 // namespaces, so a class of the same name in an inner scope does not stop the
 // search before the namespace's scope; nor does an injected-class-name. (A name
 // in such a directive's nested-name-specifier is not yet restricted likewise.)
-// Reduced from the reference workload: `using namespace Request;` inside a
+// Reduced from real code: `using namespace Request;` inside a
 // namespace that has a class `Request`, reaching the namespace `Request`
 // through `using namespace Vendor::Product;`.
 //@ expect: compile-ok

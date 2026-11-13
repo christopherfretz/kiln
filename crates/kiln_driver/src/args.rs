@@ -1437,7 +1437,7 @@ impl Args {
                 kind: if opt == "-l" { LinkOptKind::Input } else { LinkOptKind::Option },
             }),
             // A program search directory: clang++ finds the linker there
-            // (the reference workload's toolchain passes `-B/opt/llvm/bin -fuse-ld=lld`).
+            // (a typical clang toolchain passes `-B/opt/llvm/bin -fuse-ld=lld`).
             // Silent when compiling, as in clang.
             "-B" => self.link.push(LinkOpt {
                 pos: self.inputs.len(),
@@ -2338,7 +2338,7 @@ mod tests {
 
     #[test]
     fn build_system_flags_accepted() {
-        // the reference workload's clang toolchain and the reference workload's generator compile.
+        // a downstream clang toolchain and a downstream generator compile.
         let a = parse("-m64 -pipe -fpermissive -fconstexpr-ops-limit=2000000000 a.cpp");
         assert_eq!(a.errors, []);
         assert!(a.permissive);

@@ -8111,7 +8111,7 @@ impl Sema<'_, '_> {
         // out-of-line static data member definition is in the scope of
         // its class too, so its constructor's access is checked as from
         // a member (`F<int> F<int>::inst;` with a private default
-        // constructor, the reference workload's Metrics).
+        // constructor, as in real code).
         self.default_init_var(v);
         self.initializing = None;
     }

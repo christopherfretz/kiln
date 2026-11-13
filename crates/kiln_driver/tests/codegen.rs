@@ -2213,3 +2213,50 @@ fn sanitizer_ignorelist_errors() {
         (Some(1), "kiln++: error: no such file or directory: 'none.txt'\n")
     );
 }
+
+/// A line-tables-only compile unit (`-gline-tables-only`, `-g1`, also when
+/// optimizing) carries no `globals:`, `retainedTypes:`, `enums:` or
+/// `imports:` and describes no variable or imported entity (llc 22
+/// rejects that shape); at `-g` the same unit has its imported entities
+/// (WP-1365, [namespace.udir], [namespace.udecl], [namespace.alias]).
+#[test]
+fn line_tables_only_has_no_variables() {
+    let d = scratch("cg-line-tables");
+    let src = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/codegen/debug_imported_line_tables.cpp"),
+    )
+    .unwrap();
+    std::fs::write(d.join("lt.cpp"), src).unwrap();
+    let banned = [
+        "globals:",
+        "retainedTypes:",
+        "enums:",
+        "imports:",
+        "#dbg_declare",
+        "#dbg_value",
+        "DILocalVariable",
+        "DIGlobalVariable",
+        "DIImportedEntity",
+        "retainedNodes",
+    ];
+    for args in [
+        &["-gline-tables-only"][..],
+        &["-g1"],
+        &["-gline-tables-only", "-O1"],
+        &["-g1", "-O2"],
+        &["-g", "-gline-tables-only"],
+    ] {
+        let o = kiln_in(&d, &[&["-S", "-emit-llvm", "-o", "-", "lt.cpp"][..], args].concat());
+        assert_eq!(o.status.code(), Some(0), "{args:?}: {}", text(&o.stderr));
+        let ll = text(&o.stdout);
+        assert!(ll.contains("emissionKind: LineTablesOnly"), "{args:?}");
+        for b in banned {
+            assert!(!ll.contains(b), "{args:?}: `{b}` in a line-tables-only unit");
+        }
+    }
+    let o = kiln_in(&d, &["-S", "-emit-llvm", "-o", "-", "-g", "lt.cpp"]);
+    let ll = text(&o.stdout);
+    assert!(ll.contains("imports:") && ll.contains("DW_TAG_imported_module"), "{ll}");
+    assert!(ll.contains("name: \"inner\"") && ll.contains("#dbg_declare"), "{ll}");
+}

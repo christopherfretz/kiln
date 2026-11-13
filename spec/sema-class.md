@@ -3285,7 +3285,7 @@ lands.
 Performance and memory (bench.md): `bench/frontend/classes.cpp` (generated: 5k
 classes, depth-6 hierarchies, 20 members each, implicit members never used)
 gates `Ast::memory()` bytes per class — the lazy policy must keep unused
-implicit members at zero bytes — and a reference-workload-style synthetic (many small
+implicit members at zero bytes — and a synthetic in the style of real reflection code (many small
 polymorphic classes) for `final_overrider`/vtable cache size.
 
 Virtual lattices (WP-400): every walk over a class's bases visits each

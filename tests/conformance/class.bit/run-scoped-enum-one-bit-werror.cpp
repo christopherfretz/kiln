@@ -1,7 +1,7 @@
 // [class.bit]/1, [dcl.enum]/5: a scoped enumeration is not a signed integer
 // type, so storing `Av::Has` (1) into a one-bit `Av` bit-field is no
 // -Wsingle-bit-bitfield-constant-conversion (clang's `isSignedIntegerType()`)
-// and a -Wall -Werror build compiles; the shape of the reference workload
+// and a -Wall -Werror build compiles; the shape of a downstream
 // record header. The stored value reads back sign-extended from
 // the underlying `int`, as clang's codegen does (-1, so not `Av::Has`).
 //@ expect: run
