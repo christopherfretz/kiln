@@ -10,6 +10,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/christopherfretz/kiln"
 
 [workspace.dependencies]
+kiln_snap_derive = { path = "crates/kiln_snap_derive" }
+kiln_snap    = { path = "crates/kiln_snap" }
 kiln_source  = { path = "crates/kiln_source" }
 kiln_diag    = { path = "crates/kiln_diag" }
 kiln_lex     = { path = "crates/kiln_lex" }
