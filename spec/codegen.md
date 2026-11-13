@@ -1471,7 +1471,9 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
 - under `-g`, also types (basic, pointer/reference, arrays, enums,
   typedefs, classes with members, bases, methods, vtable holders and
   template parameters; class definitions homed as clang's
-  `-fno-standalone-debug` does; an explicit instantiation definition of
+  `-fno-standalone-debug` does: a dynamic class is a definition only in
+  a unit that defines its vtable or a construction vtable for it, else a
+  declaration, spec/landed/codegen/WP-1372.md; an explicit instantiation definition of
   a class template specialization that is not a dynamic class completes
   the specialization's type and keeps it in the unit's retained types,
   clang's `completeTemplateDefinition`,
