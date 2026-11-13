@@ -56,6 +56,74 @@ or 22, kiln++ runs with `KILN_LLVM_DIR=/usr/lib/llvm-N` and, for N ≠ 19,
 When neither exists the run fails with exit status 2 before compiling
 anything, naming both places (`--list` does not need them).
 
+### Cross targets
+
+Three environment variables (`features.rs`; unit tests
+`cross_target_environment`, `multiarch_directories`,
+`target_and_executor_commands`, `exec_expansion`) run the suite for
+another target, e.g. x86_64 binaries under qemu user emulation on an
+AArch64 host. With none of them set, nothing changes: no command line,
+library directory, feature or limit differs.
+
+- **`KILN_LIBCXX_TARGET=<triple>`** (blank: unset) names a Linux target.
+  A triple that names no Linux OS is rejected with exit status 2. It is
+  the `target=` feature and the triple the thread-API features are
+  derived from ("Feature set"); every compile and link of the run
+  (including `.sh.cpp` commands through `%{compile_flags}` and
+  `%{link_flags}`, the `_LIBCPP_VERSION` probe, clang mode and the
+  `-fsyntax-only` compiles of `cargo xtask bench`'s libc++ slice) gets
+  `--target=<triple>` right after `-stdlib=libc++` (compile) or
+  `-pthread` (link). The target is *cross* when its Debian multiarch
+  directory (`<arch>-linux-<env>` without the vendor, `<env>` defaulting
+  to `gnu`, `i[3-6]86` → `i386`, `arm*` → `arm`) is not the host default
+  target's; `KILN_LIBCXX_TARGET=<host triple>` only adds the flag.
+  For a cross target:
+  - the system libc++ (the host's) is never used: the libc++ is the
+    package tree `.toolchain/libcxx-N-root` ("Toolchain") holding the
+    target's `usr/lib/<multiarch>/libc++.a` (`dpkg-deb -x` of the target
+    architecture's `libc++-N-dev`, `libc++abi-N-dev` and
+    `libunwind-N-dev`). Without one the run fails with exit status 2
+    before compiling anything, naming the directories it looked in;
+  - the link's `-L` is not the tree's library directory but
+    `<scratch>.libcxx/`, holding symbolic links to its three static
+    archives only (`libc++.a`, `libc++abi.a`, `libc++experimental.a`;
+    a missing one is the same exit-2 error). The driver's own trailing
+    `-lc++`, outside the runner's `-Bstatic`, would otherwise open the
+    tree's `libc++.so` linker script, whose `libc++.so.1` is in the
+    runtime package `libc++1-N`, installed for the host only.
+  - kiln++ must find the target's C runtime and libgcc itself (a cross
+    GCC installation, spec/driver.md "Toolchain"); the harness passes no
+    `--sysroot`.
+- **`KILN_LIBCXX_EXEC="<words>"`** (split at whitespace, no shell
+  quoting; blank: unset) runs every test binary: the run step is `<words>
+  ./t.exe` and `%{exec}` in `.sh.cpp` commands is the words, each
+  shell-quoted ("RUN lines"). Nothing else executes a built binary.
+  The run step's `--mem-limit` and RSS measurement apply to the executor
+  process (`--mem-limit 0` if the emulator reserves more address space).
+- **`KILN_LIBCXX_TIMEOUT_SCALE=<n>`** (a number > 0, default 1)
+  multiplies both run limits, `--timeout` and `--run-timeout-long`
+  ("Timeouts and retries"); compile and link limits do not change.
+  Compute-bound tests run 7 to 12 times slower under qemu user emulation,
+  so an emulated run sets `KILN_LIBCXX_TIMEOUT_SCALE=10`.
+
+Each variable that is set is written before `cargo xtask libcxx` in the
+report's command line ("Report"), and the report's target is the
+`target=` triple.
+
+What stays the host's: `locale -a` and `zdump` (the `locale.*` and
+`has-no-zdump` features), the `TMPDIR`, symlink and path-length
+environment exclusions and the warning-flag probe (which compiles with
+no `--target`; flag acceptance does not depend on it). They are right
+for an executor that shares the host's file system, as qemu user
+emulation does; a remote executor is out of scope. An emulated x86_64
+run on AArch64 is:
+
+```
+KILN_LIBCXX_TARGET=x86_64-unknown-linux-gnu \
+KILN_LIBCXX_EXEC="qemu-x86_64 -L /usr/x86_64-linux-gnu" \
+KILN_LIBCXX_TIMEOUT_SCALE=10 cargo xtask libcxx --tag llvmorg-22.1.8 ...
+```
+
 ## Command line
 
 ```
@@ -346,7 +414,7 @@ until nothing changes (at most 10 rounds, lit's `recursiveExpansionLimit`; past 
 built-in `%{name}`s are `format.py`'s: `%{cxx}` (the compiler),
 `%{flags}` (empty), `%{compile_flags}` (the base flags and the test's
 `ADDITIONAL_COMPILE_FLAGS`), `%{link_flags}`, `%{exec}` (empty: tests run
-locally), `%{build}` (`%{cxx} %s %{flags} %{compile_flags} %{link_flags}
+locally; `$KILN_LIBCXX_EXEC`'s words when set, see "Cross targets"), `%{build}` (`%{cxx} %s %{flags} %{compile_flags} %{link_flags}
 -o %t.exe`), `%{run}` (`%{exec} %t.exe`) and `%{verify}` (`%{cxx} %s
 %{flags} %{compile_flags}` with the `.verify.cpp` flags), plus the
 resolved `lit.local.cfg` substitutions. Each expanded command runs as a
@@ -455,7 +523,7 @@ taken as clang 19 sees this machine so the set does not move with kiln.
 **Target.** The target triple is kiln's default target,
 `<host arch>-unknown-linux-gnu` (`features::target_triple`; the harness
 passes no `--target`), so the same harness gives the right set on aarch64
-and x86_64. From it and the host (`features::target_features`), as lit
+and x86_64; `$KILN_LIBCXX_TARGET` replaces it ("Cross targets"). From it and the host (`features::target_features`), as lit
 derives them: `target=<triple>` (`params.py` `target_triple`), `linux`
 when the triple's OS is Linux (`__linux__` among the compiler's macros,
 `features.py`) and `buildhost=<os>` (`sys.platform`, `linux` here). lit
@@ -611,6 +679,7 @@ A test binary runs under `--timeout` (default 30 s), or under
 `--list` shows `(long: REQUIRES: long_tests)` or `(long:
 slow_tests.txt)` after `run`, and `(ALLOW_RETRIES: N)` when the test has
 it. Compile and link steps always use `--compile-timeout`.
+`$KILN_LIBCXX_TIMEOUT_SCALE` multiplies both run limits ("Cross targets").
 
 **`ALLOW_RETRIES: N`.** lit reruns a failing test up to `N` more times
 and reports the last attempt. The driver reruns only the run step: the
@@ -642,6 +711,10 @@ kiln++ -std=c++26 -stdlib=libc++ -resource-dir <repo>/resource -pthread \
 kiln t.o -o t.exe -stdlib=libc++ -pthread -lc++experimental -lc++abi
 ./t.exe                     # cwd = scratch, --timeout, --mem-limit, no TZ
 ```
+
+`$KILN_LIBCXX_TARGET` adds `--target=<triple>` to the compile and link
+lines and `$KILN_LIBCXX_EXEC` puts its words before `./t.exe` ("Cross
+targets").
 
 The test binary runs without `TZ` in its environment, as under lit (whose
 `config.environment` does not pass it on): `current_zone()` is then the
@@ -826,7 +899,8 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   `lit.local.cfg`; `local_cfg_substitutions_and_features`,
   `local_cfg_mirror`, `run_lines` (WP-386); `clang_dialect_flags`
   (WP-980).
-- `script.rs`: `expansion`, `checks`, `line_kinds`, `quoting` (WP-386).
+- `script.rs`: `expansion`, `checks`, `line_kinds`, `quoting` (WP-386);
+  `exec_expansion` (`%{exec}`/`%{run}` with executor words, WP-1391).
 - `cluster.rs`: normalization, message extraction, counting, crash keys.
 - `run.rs`: verdict order, outcome rules; `env_exclusions` (the lists
   are sorted, the root reasons, the `--mem-limit` gate, `Uid:` parsing);
@@ -843,7 +917,10 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   timeout is retried under the given limit); `preparation_of_scripts`
   (`.sh.cpp` idioms) and its `ETXTBSY` regression loop (fake scripts are
   written by a child `cp`/`chmod`, never held open for writing by this
-  process, while another thread forks); `clang_mode_flags`.
+  process, while another thread forks); `clang_mode_flags`;
+  `target_and_executor_commands` (with the cross-target variables unset
+  the compile, link and run commands are byte-for-byte the earlier ones;
+  set, where `--target` and the executor go; WP-1391).
 - `report.rs`: counts, page rendering (with the `kiln build profile` row
   and the two peak-RSS rows, measured and unavailable), marker splicing.
 - `mod.rs`: options, discovery, `lit.local.cfg` lookup;
@@ -855,14 +932,18 @@ Unit tests are table-driven and live in `xtask/src/libcxx/*.rs`:
   `tag_selection`
   (`--tag`, `KILN_LIBCXX_TAG`, bad tags) and `checkouts_coexist` (two
   `.toolchain/libcxx-<tag>` checkouts side by side, the legacy
-  `.toolchain/llvm-project` for the default tag only).
+  `.toolchain/llvm-project` for the default tag only); `cross_target_tree`
+  (a cross target's tree, the error naming where it looked, the
+  static-archives directory; WP-1391).
 - `features.rs`: the set is sorted and unique, with no compiler-identity
   feature and no static `locale.*`; `locale_names_normalize_like_glibc`;
   `locale_features_from_locale_a` (no locales, the provisioned seven, a
   bare `fr_CA`); `target_features_from_the_triple` (Linux triples with and
   without a vendor, a non-Linux one); `thread_api_from_config_site_and_target`
   (libc++ 19 and 22 spellings, no threads, an explicit API, a target
-  `__config` maps to no API).
+  `__config` maps to no API); `cross_target_environment`
+  (`KILN_LIBCXX_TARGET`/`_EXEC`/`_TIMEOUT_SCALE` values) and
+  `multiarch_directories` (Debian multiarch names, what is cross; WP-1391).
 - `directives.rs`: `allow_retries_and_long_tests` (`ALLOW_RETRIES:` must
   be one integer; which `REQUIRES:` mark a test long); `verify_directives`
   (what counts as a clang-verify directive).

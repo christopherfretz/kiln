@@ -24,6 +24,14 @@ Planned as 1.2.0.
   gdb and lldb resolve names reached through them. Nothing changes at
   `-gline-tables-only` or without `-g`.
   spec/landed/codegen/WP-1365.md.
+- `cargo xtask libcxx` cross runs (WP-1391, proposed by hod):
+  `KILN_LIBCXX_TARGET=<triple>` compiles and links the suite for another
+  Linux target (the `target=` feature follows; a cross target links the
+  static archives of its `.toolchain/libcxx-N-root` tree),
+  `KILN_LIBCXX_EXEC="<words>"` runs the test binaries and `%{exec}`
+  through an executor such as `qemu-x86_64`, and
+  `KILN_LIBCXX_TIMEOUT_SCALE=<n>` stretches both run limits (10 under
+  emulation). Unset, nothing changes. spec/libcxx.md "Cross targets".
 
 ### Changed
 

@@ -68,6 +68,17 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
 
 environment:
   KILN_LIBCXX_TAG        the default --tag
+  KILN_LIBCXX_TARGET     a Linux target triple to compile the suite for: every
+                         compile and link gets --target=<triple>, the `target=`
+                         and thread-API features follow it; for another arch
+                         than the host's the libc++ comes from
+                         .toolchain/libcxx-N-root/usr/lib/<arch>-linux-<env>
+                         (spec/libcxx.md \"Cross targets\")
+  KILN_LIBCXX_EXEC       words that run a test binary (%{exec}, split at
+                         whitespace), e.g. `qemu-x86_64 -L /usr/x86_64-linux-gnu`
+  KILN_LIBCXX_TIMEOUT_SCALE
+                         multiplies --timeout and --run-timeout-long (default 1;
+                         under qemu user emulation use 10)
   KILN_ORACLE            only for a tag whose major is not 19 or 22: kiln++ runs with
                          KILN_LLVM_DIR=/usr/lib/llvm-N of the tag's major (19 or 22),
                          else of KILN_ORACLE (spec/libcxx.md \"Toolchain\")
@@ -402,11 +413,18 @@ fn tag_major(tag: &str) -> Option<u32> {
 /// itself), else an extracted Debian package tree
 /// `.toolchain/libcxx-N-root` of this or the main checkout (spec/libcxx.md
 /// "Toolchain": `libc++-N-dev` cannot be installed beside `libc++-19-dev`).
+///
+/// For a cross `target` (`$KILN_LIBCXX_TARGET` of another architecture,
+/// [`features::is_cross`]) the system install is the host's and is never
+/// used: the tree must hold the target's `usr/lib/<multiarch>/libc++.a`,
+/// else the error names the directories looked in.
 fn libcxx_install(
     root: &Path,
     toolchain: crate::oracle::Oracle,
+    target: Option<&str>,
 ) -> Result<Option<LibcxxTree>, String> {
-    if toolchain.libcxx_include().is_dir() {
+    let cross = target.filter(|t| features::is_cross(t));
+    if cross.is_none() && toolchain.libcxx_include().is_dir() {
         return Ok(None);
     }
     let n = toolchain.version;
@@ -414,14 +432,33 @@ fn libcxx_install(
     if let Some(main) = main_checkout(root) {
         bases.push(main);
     }
-    let arch = format!("{}-linux-gnu", std::env::consts::ARCH);
-    for b in &bases {
-        let tree = b.join(".toolchain").join(format!("libcxx-{n}-root"));
-        let include = tree.join(format!("usr/lib/llvm-{n}/include/c++/v1"));
-        let lib = tree.join("usr/lib").join(&arch);
-        if include.is_dir() && lib.join("libc++.a").is_file() {
-            return Ok(Some(LibcxxTree { include, lib }));
-        }
+    let triple = target.map_or_else(features::host_triple, str::to_owned);
+    let arch = features::multiarch_dir(&triple)
+        .ok_or_else(|| format!("{}: `{triple}` is not a Linux target", features::TARGET_ENV))?;
+    if let Some(t) = cross {
+        let looked: Vec<String> = bases
+            .iter()
+            .map(|b| {
+                b.join(".toolchain")
+                    .join(format!("libcxx-{n}-root/usr/lib"))
+                    .join(&arch)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        return find_tree(&bases, n, &arch).map(Some).ok_or_else(|| {
+            format!(
+                "{}={t}: no libc++ {n} for {arch} (looked for libc++.a and \
+                 usr/lib/llvm-{n}/include/c++/v1 next to {}); extract the target \
+                 architecture's libc++-{n}-dev, libc++abi-{n}-dev and libunwind-{n}-dev \
+                 into .toolchain/libcxx-{n}-root (spec/libcxx.md \"Cross targets\")",
+                features::TARGET_ENV,
+                looked.join(" and ")
+            )
+        });
+    }
+    if let Some(tree) = find_tree(&bases, n, &arch) {
+        return Ok(Some(tree));
     }
     Err(format!(
         "no libc++ {n} headers at {} or in .toolchain/libcxx-{n}-root; install \
@@ -429,6 +466,46 @@ fn libcxx_install(
          there (spec/libcxx.md \"Toolchain\")",
         toolchain.libcxx_include().display()
     ))
+}
+
+/// The first `.toolchain/libcxx-<n>-root` of `bases` with libc++ `n`'s
+/// headers and `usr/lib/<arch>/libc++.a`.
+fn find_tree(bases: &[PathBuf], n: u32, arch: &str) -> Option<LibcxxTree> {
+    for b in bases {
+        let tree = b.join(".toolchain").join(format!("libcxx-{n}-root"));
+        let include = tree.join(format!("usr/lib/llvm-{n}/include/c++/v1"));
+        let lib = tree.join("usr/lib").join(arch);
+        if include.is_dir() && lib.join("libc++.a").is_file() {
+            return Some(LibcxxTree { include, lib });
+        }
+    }
+    None
+}
+
+/// The static archives of a libc++ package tree.
+const STATIC_ARCHIVES: [&str; 3] = ["libc++.a", "libc++abi.a", "libc++experimental.a"];
+
+/// For a cross target, `tree` with its `lib` replaced by `dir`, a
+/// directory of symbolic links to its [`STATIC_ARCHIVES`] only. The
+/// driver's own trailing `-lc++` (outside the runner's `-Bstatic`) then
+/// finds `libc++.a` again instead of the package's `libc++.so` linker
+/// script, whose `libc++.so.1` is in the runtime package `libc++1-N`,
+/// installed for the host only. An archive the tree lacks is an error
+/// naming it (not a link failure in every test). Linux-only, like the
+/// harness (`std::os::unix::fs::symlink`).
+fn static_archives(tree: &LibcxxTree, dir: &Path) -> Result<LibcxxTree, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    for a in STATIC_ARCHIVES {
+        let src = tree.lib.join(a);
+        if !src.is_file() {
+            return Err(format!("{}: no {}", features::TARGET_ENV, src.display()));
+        }
+        let link = dir.join(a);
+        let _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&src, &link)
+            .map_err(|e| format!("cannot link {}: {e}", link.display()))?;
+    }
+    Ok(LibcxxTree { include: tree.include.clone(), lib: dir.to_path_buf() })
 }
 
 /// The main checkout when `root` is a worktree of it: the common git dir's
@@ -565,6 +642,10 @@ struct Setup {
     libcxx: Option<LibcxxTree>,
     features: Vec<String>,
     libcxx_version: Option<u32>,
+    /// `$KILN_LIBCXX_TARGET` ([`features::cross_target`]).
+    target: Option<String>,
+    /// `$KILN_LIBCXX_EXEC` ([`features::executor`]).
+    exec: Vec<String>,
 }
 
 impl Setup {
@@ -588,14 +669,24 @@ impl Setup {
                 checkout.display()
             ));
         }
-        let libcxx = if install { libcxx_install(root, toolchain)? } else { None };
+        let target = features::cross_target();
+        if let Some(t) = &target
+            && features::multiarch_dir(t).is_none()
+        {
+            return Err(format!(
+                "{}: `{t}` is not a Linux target triple (<arch>-<vendor>-linux-<env>)",
+                features::TARGET_ENV
+            ));
+        }
+        let libcxx =
+            if install { libcxx_install(root, toolchain, target.as_deref())? } else { None };
         // The headers the run compiles against: the system install, or the
         // extracted `.toolchain/libcxx-N-root` (also for `--list`, which does
         // not set up the run's tree), so the features follow its
         // `__config_site`.
         let headers = match &libcxx {
             Some(t) => t.include.clone(),
-            None => libcxx_install(root, toolchain)
+            None => libcxx_install(root, toolchain, target.as_deref())
                 .ok()
                 .flatten()
                 .map_or_else(|| toolchain.libcxx_include(), |t| t.include),
@@ -608,12 +699,16 @@ impl Setup {
             libcxx,
             features: features::detect(&headers),
             libcxx_version: features::libcxx_version(&headers),
+            target,
+            exec: features::executor(),
         })
     }
 
     /// The run configuration of `compiler` (`clang`: clang mode). Probes
     /// the compiler's warning flags in a scratch file next to `scratch`;
-    /// `tmp` is the run's `TMPDIR` root (`run::tmp_root`).
+    /// `tmp` is the run's `TMPDIR` root (`run::tmp_root`). For a cross
+    /// target the tree's archives are linked from a directory next to
+    /// `scratch` ([`static_archives`]).
     fn config(
         &self,
         root: &Path,
@@ -622,8 +717,14 @@ impl Setup {
         scratch: &Path,
         tmp: &Path,
         limits: &Limits,
-    ) -> Config {
-        Config {
+    ) -> Result<Config, String> {
+        let libcxx = match (&self.libcxx, &self.target) {
+            (Some(t), Some(target)) if features::is_cross(target) => {
+                Some(static_archives(t, &scratch.with_extension("libcxx"))?)
+            }
+            (t, _) => t.clone(),
+        };
+        Ok(Config {
             kiln: compiler.to_path_buf(),
             clang,
             libcxx_include: self.toolchain.libcxx_include(),
@@ -631,7 +732,7 @@ impl Setup {
             tag: self.tag.clone(),
             llvm_dir: self.toolchain.llvm_dir(),
             clang_compat: self.toolchain.version,
-            libcxx: self.libcxx.clone(),
+            libcxx,
             resource_dir: root.join("resource"),
             features: self.features.clone(),
             libcxx_version: self.libcxx_version,
@@ -651,7 +752,9 @@ impl Setup {
             tmp: tmp.to_path_buf(),
             keep: limits.keep,
             pch_diff: if clang { None } else { limits.pch_diff },
-        }
+            target: self.target.clone(),
+            exec: self.exec.clone(),
+        })
     }
 }
 
@@ -723,7 +826,7 @@ pub fn syntax_compiles(
         keep: false,
         pch_diff: None,
     };
-    let cfg = setup.config(root, compiler, clang, scratch, scratch, &limits);
+    let cfg = setup.config(root, compiler, clang, scratch, scratch, &limits)?;
     let out = tests
         .iter()
         .enumerate()
@@ -839,10 +942,13 @@ fn execute(opts: &Options) -> Result<bool, String> {
     // Clang mode: the harness self-check (spec/libcxx.md "Clang mode").
     let clang = opts.compiler.is_some()
         && crate::util::identify(&kiln)?.kind == crate::util::CompilerKind::Clang;
+    // `$KILN_LIBCXX_TIMEOUT_SCALE`: an executor slower than the host
+    // stretches both run limits alike (spec/libcxx.md "Cross targets").
+    let scale = features::timeout_scale()?;
     let limits = Limits {
         compile_timeout: opts.compile_timeout(),
-        run_timeout: opts.run_timeout,
-        long_run_timeout: opts.long_run_timeout,
+        run_timeout: opts.run_timeout.mul_f64(scale),
+        long_run_timeout: opts.long_run_timeout.mul_f64(scale),
         mem: MemLimit::from_mib(opts.mem_limit_mib),
         keep: opts.keep,
         pch_diff: opts.pch_diff,
@@ -850,7 +956,7 @@ fn execute(opts: &Options) -> Result<bool, String> {
     if clang && opts.pch_diff.is_some() {
         return Err("--pch-diff runs kiln only (its producer and consumer flags)".to_owned());
     }
-    let cfg = setup.config(&root, &kiln, clang, &scratch, &tmp, &limits);
+    let cfg = setup.config(&root, &kiln, clang, &scratch, &tmp, &limits)?;
     let jobs: Vec<Job<'_>> = tests
         .iter()
         .enumerate()
@@ -998,7 +1104,17 @@ fn run_info(opts: &Options, cfg: &Config, root: &Path, wall: Duration) -> report
     };
     let kiln_version =
         crate::util::identify(&cfg.kiln).map_or_else(|_| "unknown".to_owned(), |id| id.version);
-    let mut command = "cargo xtask libcxx".to_owned();
+    // The environment that changes the run comes first, so the command
+    // reproduces it (none of it set: the bare command).
+    let mut command = String::new();
+    for name in [features::TARGET_ENV, features::EXEC_ENV, features::TIMEOUT_SCALE_ENV] {
+        if let Ok(v) = std::env::var(name)
+            && !v.trim().is_empty()
+        {
+            let _ = write!(command, "{name}={} ", script::quote(v.trim()));
+        }
+    }
+    command.push_str("cargo xtask libcxx");
     let gate = opts.gate.as_deref().unwrap_or("m3");
     if cfg.tag != gate_tag(gate) {
         let _ = write!(command, " --tag {}", cfg.tag);
@@ -1345,6 +1461,49 @@ mod tests {
         std::fs::create_dir_all(tc.join(format!("libcxx-{t22}"))).unwrap();
         assert_eq!(default_checkout(&base, TESTS_TAG), tc.join(format!("libcxx-{TESTS_TAG}")));
         assert_eq!(default_checkout(&base, t22), tc.join(format!("libcxx-{t22}")));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    /// A cross `KILN_LIBCXX_TARGET` takes the libc++ from the package tree
+    /// of its architecture, never the host's system install: without one
+    /// the error names where it looked; with one the link sees only its
+    /// static archives (spec/libcxx.md "Cross targets").
+    #[test]
+    fn cross_target_tree() {
+        let base = std::env::temp_dir().join(format!("kiln-libcxx-cross-{}", std::process::id()));
+        let other = if std::env::consts::ARCH == "x86_64" { "aarch64" } else { "x86_64" };
+        let target = format!("{other}-unknown-linux-gnu");
+        let oracle = crate::oracle::Oracle::parse(Some("22")).unwrap();
+        let root = base.join(".toolchain").join("libcxx-22-root");
+        let lib = root.join(format!("usr/lib/{other}-linux-gnu"));
+        let err = libcxx_install(&base, oracle, Some(&target)).unwrap_err();
+        assert!(err.starts_with(&format!("KILN_LIBCXX_TARGET={target}: no libc++ 22")), "{err}");
+        assert!(err.contains(&lib.display().to_string()), "{err}");
+        assert!(libcxx_install(&base, oracle, Some("x86_64-apple-darwin")).is_err());
+        let include = root.join("usr/lib/llvm-22/include/c++/v1");
+        std::fs::create_dir_all(&include).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libc++.a"), "").unwrap();
+        std::fs::write(lib.join("libc++.so"), "INPUT(libc++.so.1)").unwrap();
+        let tree = libcxx_install(&base, oracle, Some(&target)).unwrap().unwrap();
+        assert_eq!(tree, LibcxxTree { include: include.clone(), lib: lib.clone() });
+        let dir = base.join("run.libcxx");
+        let err = static_archives(&tree, &dir).unwrap_err();
+        assert!(err.ends_with("libc++abi.a"), "{err}");
+        std::fs::write(lib.join("libc++abi.a"), "").unwrap();
+        std::fs::write(lib.join("libc++experimental.a"), "").unwrap();
+        // Made twice (the links are replaced), the directory holds exactly
+        // the three archives, linked to the tree's.
+        static_archives(&tree, &dir).unwrap();
+        let linked = static_archives(&tree, &dir).unwrap();
+        assert_eq!(linked, LibcxxTree { include, lib: dir.clone() });
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, STATIC_ARCHIVES);
+        assert_eq!(std::fs::read_link(dir.join("libc++.a")).unwrap(), lib.join("libc++.a"));
         std::fs::remove_dir_all(&base).unwrap();
     }
 }
