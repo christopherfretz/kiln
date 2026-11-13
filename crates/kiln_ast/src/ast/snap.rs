@@ -32,7 +32,7 @@ use crate::class::{ClassCache, ClassVirtuals, CmpCategories, VTableLayout};
 use crate::consts::ConstStore;
 use crate::decl::DeclArena;
 use crate::expr::ExprArena;
-use crate::ids::{DeclId, StmtId};
+use crate::ids::{DeclId, StmtId, space};
 use crate::lists::IdLists;
 use crate::lookup::LookupTables;
 use crate::names::NameTable;
@@ -64,10 +64,81 @@ impl Ast {
         self.exprs.check_restored()?;
         self.stmts.check_restored()?;
         self.lists.check_restored()?;
+        self.decls.check_restored_bases(&self.lists)?;
+        self.exprs.check_restored_paths(&self.lists, self.decls.base_spec_count())?;
         if self.tu.index() as usize > self.decls.len() {
             return Err("translation unit declaration out of range");
         }
         Ok(())
+    }
+
+    /// The largest valid index of each id space ([`space`]), for the range
+    /// check of decoded ids. Call it on a checked AST (its arenas keep
+    /// their dummies).
+    fn id_bounds(&self) -> [usize; space::COUNT] {
+        let mut b = [0; space::COUNT];
+        let [names, nns, args, profiles] = self.types.max_table_ids();
+        b[space::DECL] = self.decls.len();
+        b[space::EXPR] = self.exprs.len();
+        b[space::STMT] = self.stmts.len();
+        b[space::ATTR] = self.attrs.max_index();
+        b[space::LIST] = self.lists.count() + 1;
+        b[space::CONST_VALUE] = self.consts.len();
+        // Never handed out (the constant store keeps no blob pool yet).
+        b[space::BLOB] = 0;
+        b[space::REFLECTION] = self.reflections.len();
+        // Data member descriptions index the Oven's `DmsTable`, which the
+        // AST's copy mirrors only after codegen (spec/ast.md "Snapshots",
+        // links out of the AST): not checked here.
+        b[space::DMS] = usize::MAX;
+        b[space::ANN] = self.annots.len();
+        b[space::STRING_LIT] = self.strings.len();
+        b[space::REDECL_GROUP] = self.redecls.max_index();
+        b[space::LAMBDA] = self.exprs.lambdas.max_index();
+        b[space::TYPE] = self.types.len();
+        b[space::TEMPLATE_NAME] = names;
+        b[space::NNS] = nns;
+        b[space::ARG_LIST] = args;
+        b[space::PROFILE] = profiles;
+        b[space::TEMPLATE_PARAM_LIST] = self.templates.max_param_list();
+        b
+    }
+
+    /// The range check of the typed ids `r` has decoded so far
+    /// (spec/ast.md "Snapshots"): every id read is at most the largest
+    /// index of the arena it indexes. [`Ast`]'s decoder runs it on the AST
+    /// itself; a root decoded after it from the same reader that holds ids
+    /// into it (the Oven's and `Sema`'s state) runs it again once decoded.
+    ///
+    /// # Errors
+    /// Which id space has an id out of range.
+    pub fn check_ids(&self, r: &Reader<'_>) -> Result<(), &'static str> {
+        const NAMES: [&str; space::COUNT] = [
+            "declaration id out of range",
+            "expression id out of range",
+            "statement id out of range",
+            "attribute id out of range",
+            "id list id out of range",
+            "constant value id out of range",
+            "blob id out of range",
+            "reflection id out of range",
+            "data member description id out of range",
+            "annotation id out of range",
+            "string literal id out of range",
+            "redeclaration group id out of range",
+            "lambda id out of range",
+            "type id out of range",
+            "template name id out of range",
+            "nested-name-specifier id out of range",
+            "template argument list id out of range",
+            "expression profile id out of range",
+            "template parameter list id out of range",
+        ];
+        let bounds = self.id_bounds();
+        match (0..space::COUNT).find(|&s| r.id_max(s) as usize > bounds[s]) {
+            None => Ok(()),
+            Some(s) => Err(NAMES[s]),
+        }
     }
 }
 
@@ -182,7 +253,7 @@ impl Snap for Ast {
             symbols,
             inst,
         };
-        match ast.check_restored() {
+        match ast.check_restored().and_then(|()| ast.check_ids(r)) {
             Ok(()) => Ok(ast),
             Err(why) => Err(r.invalid::<Self>(why)),
         }

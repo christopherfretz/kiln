@@ -500,6 +500,12 @@ impl Default for TemplateTables {
 }
 
 impl TemplateTables {
+    /// The largest template parameter list index (the snapshot range
+    /// check).
+    pub(crate) fn max_param_list(&self) -> usize {
+        self.param_lists.len().saturating_sub(1)
+    }
+
     /// Template parameter list `l`.
     pub fn param_list(&self, l: TemplateParamListId) -> &TemplateParamList {
         &self.param_lists[l.index() as usize]

@@ -548,6 +548,41 @@ fn reader_and_writer_primitives() {
     assert_eq!(r.str().unwrap(), "ab");
     r.skip(2).unwrap();
     r.finish().unwrap();
+    let mut r = Reader::new(&[0, 0, 7]);
+    r.skip_zeros(2).unwrap();
+    let e = r.skip_zeros(1).unwrap_err();
+    assert_eq!(e.kind(), &ErrorKind::BadValue("nonzero padding"), "{e}");
+    assert_eq!(e.offset(), 2, "{e}");
+}
+
+/// Padding (a fixed-size enum's short variant, a fixed-size `None`) is
+/// checked on read: a nonzero pad byte is an error at that byte
+/// (spec/snap.md "Wire format", WP-1387).
+#[test]
+fn padding_bytes_are_checked() {
+    let pad = ErrorKind::BadValue("nonzero padding");
+    // `Fixed::Small` is the tag, one byte, then 11 bytes of padding.
+    let mut b = to_bytes(&Fixed::Small(5));
+    assert_eq!(b.len(), 13);
+    assert_eq!(from_bytes::<Fixed>(&b).unwrap(), Fixed::Small(5));
+    for i in 2..b.len() {
+        b[i] = 1;
+        let e = from_bytes::<Fixed>(&b).unwrap_err();
+        assert_eq!((e.kind(), e.offset()), (&pad, i), "{e}");
+        b[i] = 0;
+    }
+    // `Option<u32>::None`: the tag, then four zero bytes.
+    let mut b = to_bytes(&None::<u32>);
+    assert_eq!(b, [0, 0, 0, 0, 0]);
+    b[3] = 0x80;
+    let e = from_bytes::<Option<u32>>(&b).unwrap_err();
+    assert_eq!((e.kind(), e.offset()), (&pad, 3), "{e}");
+    // In the bulk path too (a fixed-size Vec).
+    let mut b = to_bytes(&vec![Fixed::None, Fixed::Small(1)]);
+    let last = b.len() - 1;
+    b[last] = 2;
+    let e = from_bytes::<Vec<Fixed>>(&b).unwrap_err();
+    assert_eq!((e.kind(), e.offset()), (&pad, last), "{e}");
 }
 
 // ----- schema hash (spec/snap.md "Schema hash") -------------------------

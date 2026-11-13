@@ -130,6 +130,7 @@ impl SyntaxJob<'_> {
         let job = &self.0;
         crate::pch_snapshot::phase("job setup");
         let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
+        let restored = sm.file_count();
         let mut engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
         engine.snap_restore(&mut restore.reader).map_err(|e| e.to_string())?;
         restore.timer.mark("DiagEngine");
@@ -152,6 +153,7 @@ impl SyntaxJob<'_> {
             return Err(why);
         }
         crate::pch_snapshot::prefix_reported(job.args, &job.stderr, &snap.pch, &engine);
+        crate::pch_snapshot::changed_files(&sm, restored, &snap.pch, &engine);
         engine.flush();
         if let Some(s) = engine.summary()
             && job.diag_opts.format == kiln_diag::Format::Text

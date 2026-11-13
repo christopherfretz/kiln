@@ -44,7 +44,7 @@ for cand in "$root/.toolchain" "$main/.toolchain" "$main/../.toolchain"; do
 done
 cases=("$@")
 if [ ${#cases[@]} -eq 0 ]; then
-  cases=(gnu mid lcx meta diag diag-once c17 gnu23 open-push-macro open-diag-push
+  cases=(gnu mid lcx meta diag diag-once c17 gnu23 oven oven-limits meta-oven open-push-macro open-diag-push
     open-pack open-visibility open-once open-fp-pragma open-weak open-weak-alias
     open-extname attr-region search-extra search-shadow search-has-include)
 fi

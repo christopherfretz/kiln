@@ -4237,8 +4237,22 @@ and options belong to the consumer's command line.
   assigned, so a refused snapshot leaves the Oven unchanged. The
   restored Oven must be attached to the AST restored from the same
   snapshot (it holds that AST's ids). Indices between the Oven's tables
-  are validated; the bytecode's operands and the pointers in static
-  memory are not (that needs a bytecode verifier).
+  are validated, and the bytecode is verified in one linear pass
+  (`kbc/verify.rs`, WP-1396; its module docs list the invariants): valid
+  opcodes on instruction boundaries ending at the end of the code,
+  registers at most the owning function's `nregs` (the owner: the
+  compiled function with the greatest entry at or below the pc), jump
+  targets on boundaries of the same function, function, global, type,
+  trap, step-location and origin operands in range (`New`'s a heap
+  origin; `PushCleanup`'s function slot may also hold the `EXC_FREE`
+  and `LIFE_CHECK` sentinels), nonzero AST operands; the `Unwind` pc,
+  call-site pcs and function entries on boundaries. `Builtin`'s operands
+  are not verified beyond its result register: their meaning depends on
+  the builtin kind (a raw `ConstValueId`, a call-site index); a known
+  gap (spec/snap.md "Threat model"). The AST ids of the tables and the code
+  are range-checked by the AST after the restore (spec/snap.md "Id
+  ranges"). The pointers in static memory are not validated: like any
+  pointer, each is checked at use (slot, generation, liveness, bounds).
 - **Equivalence** (`crates/kiln_driver/tests/oven_snap.rs`): after a
   restore, new evaluations on the original and the restored Oven give
   the same results, diagnostics, notes, counters and compiled code, and

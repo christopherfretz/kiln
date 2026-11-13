@@ -88,7 +88,8 @@ The contract an impl keeps (the derive keeps it by construction):
   variant's fields. When every variant's fields are fixed-size, every
   variant is zero-padded to the largest, so the enum is fixed-size
   (`SIZE = tag + max`). Padding (here and after `None`) is written as
-  zeros and skipped, not checked, on read.
+  zeros and checked on read (`Reader::skip_zeros`): a nonzero pad byte
+  is `BadValue("nonzero padding")` at that byte.
 - `Vec<T>`, `Box<[T]>`, `VecDeque<T>`, `[T; N]` (no length): length, then
   the items.
 - `Box<T>`: `T`, with `SIZE = None` (so recursive types terminate).
@@ -175,6 +176,24 @@ field (`SnapError::within`), so a corrupt snapshot reports e.g.
 SourceManager.kinds > ...)`. A root adds its own path elements the same
 way. Decoding never panics on any input (tests truncate at every byte and
 flip bits at every byte).
+
+### Id ranges
+
+A decoder can only check an index against a table it has already read,
+and the derive checks none: an id is a field like any other. The
+`Reader` therefore carries one running maximum per *id space*
+(`ID_SPACES` = 32): an id type's hand-written `get` calls
+`Reader::note_id(space, index)`, and the root that owns the space reads
+`Reader::id_max(space)` once its tables are decoded and refuses the
+snapshot (`Invalid`) when an id read so far exceeds them. A later root
+holding ids into an earlier one checks again after its own decode. The
+bulk path's per-item sub-reader carries the maxima through the block
+(with the streaming decode, from window block to window block). The id
+types' descriptor is one `id` item, and their `SCHEMA_HASH` folds that
+item and the type's name: the check is on decode, not in the encoding.
+Cost: one compare per id decoded (WP-1396: under the timer's noise on
+the libstdc++ prefix). The spaces in use are kiln_ast's (`ids::space`,
+0-18; spec/ast.md "Snapshots").
 
 ## Schema hash
 
@@ -493,10 +512,62 @@ Gaps the recipe does not cover (met in `kiln_ast`, WP-1380):
   write the string and resolve it against the list of known names on
   read (`kiln_ast::slot::ColdMap`).
 - **Records with ids as operands** are not range-checked by the derive;
-  validating them needs a per-kind walk the root has to write by hand.
+  typed ids are, through the id spaces ("Id ranges"); ids packed into
+  untyped integers need a per-kind walk the root has to write by hand.
 - **Links to state outside the root** (source locations, ids into
   another crate's tables) are not checked by the encoding: the consumer
   must put the roots they point into in the same snapshot.
+
+## Threat model
+
+A snapshot is a cache the same compiler build wrote, read back on the
+same machine: not an interchange format, and not a security boundary
+against an adversary who can write the PCH file (whoever can write it
+can also replace the compiler's inputs). What the decoders promise, in
+order of strength:
+
+1. **Never a panic, a hang or unbounded memory on any input.** Every
+   read is bounds-checked, every length is checked against the bytes
+   left before anything is allocated (`seq_len`), recursion follows the
+   type structure only, sharing cannot form cycles, padding is zeros. A
+   refusal is an error the driver turns into a replay (`-v` notes why).
+2. **Damage is detected before use.** The PCH record's checksums (the
+   image checksum and, with WP-1392, a per-block checksum) reject a file
+   damaged in storage before any decoder runs: the raw-corruption fuzzer
+   (`kiln_driver/tests/pch_snapshot_fuzz.rs`) sees only clean refusals.
+3. **A well-checksummed but inconsistent snapshot is refused at decode,
+   not at use** (the crafted model: damage behind recomputed checksums,
+   standing for a writer bug). Each root validates its cross-table
+   invariants (spec/source.md, spec/ast.md, spec/oven.md "Snapshots"),
+   typed ids are range-checked per space (above), and the Oven's bytecode
+   is verified (`kiln_oven/src/kbc/verify.rs`). The section head's
+   lookup log has its directory indices checked (`LookupLog::validate`,
+   spec/driver.md "Lookup-tolerant search path"). Known gaps, which can
+   still reach a panic or a wrong result: ids in untyped `u32` slots of
+   the AST and the other per-kind operand words of its nodes (enum
+   tags, side-table indices; spec/ast.md "Snapshots"), links that form
+   a cycle under a recursive walk (a stack overflow), counts used after
+   the restore to size an allocation or a loop, the operands of the Oven's
+   `Builtin` instruction past its result register (spec/oven.md
+   "Snapshots"), the id-space sentinel `MAX_INDEX`
+   where a real id is expected, and values the tables agree on but that
+   no producer would write (a wrong type for an expression). The
+   crafted fuzzer counts these outcomes (an internal compiler error, a
+   `SIGABRT` abort, a hang) and prints them by site without failing,
+   since about 2% of crafted mutants reach them wherever the layout puts
+   the bytes. Any other signal fails, and every raw mutant must be a clean
+   error. `KILN_PCH_FUZZ_STRICT=1` fails the gap as well: the gate for
+   the work that closes it.
+4. **Out of scope**: a malicious producer. A snapshot whose every check
+   passes is trusted to be what the same build wrote; the compiler
+   evaluates whatever constant-evaluation code and state it holds.
+
+The inputs a snapshot depends on outside itself are checked by the
+consumer: the schema hash and the identity (spec/driver.md), every file
+the producer read (size and content, or with WP-1392 size and mtime),
+and, when a lazily re-read prefix buffer no longer matches its recorded
+length and hash, a fatal `drv_pch_file_modified` instead of compiling
+against blank text (spec/source.md "Snapshots").
 
 ## Performance
 

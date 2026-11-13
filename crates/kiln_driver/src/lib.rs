@@ -29,6 +29,8 @@ pub mod llvm;
 pub mod module_cache;
 mod pch;
 mod pch_check;
+#[doc(hidden)]
+pub mod pch_fuzz;
 mod pch_image;
 mod pch_snapshot;
 /// The `KILN_SNAP_TIMING` process phase timer (WP-1401): `main` marks its

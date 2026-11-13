@@ -315,8 +315,15 @@ derive it. The field classification tables are at the impls
   space with every link pointing below the entry, one macro name per macro
   entry, frontiers equal the table ends, sorted file kinds, and every
   index in range. The `phys_line` of a `#line` directive in a disk buffer
-  cannot be checked before the text is read; `presumed_line_col`
-  saturates instead of underflowing.
+  cannot be checked before the text is read: it is checked when the
+  buffer is read, and a directive that does not hold the physical line
+  of its offset makes the buffer unavailable, as a changed file does
+  (`presumed_line_col` also saturates instead of underflowing).
+- **A changed file is reported by its consumer.** A restored buffer whose
+  file no longer has the recorded length and hash is unavailable and is
+  listed by `lazy_fallbacks` (as `Unavailable`); the PCH snapshot
+  consumer turns that into a fatal error (spec/driver.md "PCH snapshot:
+  behaviour"), since the restored state was built from the old text.
 - `Interner` writes its strings in symbol order and restores them by
   interning in order into a fresh interner (refusing a duplicate), so
   every `Symbol` is unchanged; restore it before anything interns.

@@ -284,7 +284,10 @@ impl FileEntry {
 
     fn body(&self) -> &Body {
         self.body.get_or_init(|| match &self.origin {
-            Origin::Lazy { path, hash, copy } => resolve_lazy(path, self.len, *hash, copy.as_ref()),
+            Origin::Lazy { path, hash, copy } => {
+                let body = resolve_lazy(path, self.len, *hash, copy.as_ref());
+                self.check_directives(body)
+            }
             // Eager buffers set their body at creation.
             Origin::Disk | Origin::Virtual => Body {
                 text: String::new().into_boxed_str(),
@@ -292,6 +295,28 @@ impl FileEntry {
                 outcome: LazyOutcome::Unavailable,
             },
         })
+    }
+
+    /// The `#line` directives of a lazy buffer that was just read hold
+    /// the physical line of their offset, which a snapshot could not
+    /// check before the text was there (spec/source.md "Snapshots"): a
+    /// directive whose `phys_line` is not that line makes the buffer
+    /// unavailable, as a changed file does, so no wrong presumed line is
+    /// ever printed. The line starts computed for the check are kept.
+    fn check_directives(&self, body: Body) -> Body {
+        let dirs = self.line_directives.read().unwrap_or_else(PoisonError::into_inner);
+        if dirs.is_empty() || body.outcome == LazyOutcome::Unavailable {
+            return body;
+        }
+        let starts = compute_line_starts(&body.text);
+        let fits = dirs.iter().all(|d| {
+            d.offset as usize <= body.text.len() && line_col_in(&starts, d.offset).0 == d.phys_line
+        });
+        if !fits {
+            return unavailable(self.len);
+        }
+        let _ = self.lines.set(starts);
+        body
     }
 
     fn text(&self) -> &str {
@@ -304,7 +329,10 @@ impl FileEntry {
     }
 
     fn line_starts(&self) -> &[u32] {
-        self.lines.get_or_init(|| compute_line_starts(self.text()))
+        // The text first: reading a lazy buffer may fill `lines` itself
+        // (`check_directives`), which must not happen inside this init.
+        let text = self.text();
+        self.lines.get_or_init(|| compute_line_starts(text))
     }
 }
 
@@ -329,6 +357,13 @@ fn resolve_lazy(path: &Path, len: u32, hash: u64, copy: Option<&LazyCopy>) -> Bo
             outcome: LazyOutcome::Copy,
         };
     }
+    unavailable(len)
+}
+
+/// The text of a buffer whose recorded text could not be found: `len`
+/// spaces, marked unavailable (offsets stay in bounds, no line or column
+/// is reported).
+fn unavailable(len: u32) -> Body {
     Body {
         text: " ".repeat(len as usize).into_boxed_str(),
         report: LoadReport::default(),
@@ -814,6 +849,16 @@ impl SourceManager {
                     .then_some((FileId(i), o))
             })
             .collect()
+    }
+
+    /// The lazy buffers among the first `below` whose text was read so
+    /// far: their number and total length (what checking them against
+    /// their recorded hash cost; spec/source.md "Snapshots").
+    pub fn lazy_reads(&self, below: usize) -> (usize, u64) {
+        (0..self.files.len().min(u32::try_from(below).unwrap_or(u32::MAX)))
+            .filter_map(|i| self.files.get(i))
+            .filter(|f| matches!(f.origin, Origin::Lazy { .. }) && f.body.get().is_some())
+            .fold((0, 0), |(n, b), f| (n + 1, b + u64::from(f.len)))
     }
 
     /// True if `file`'s text has length `len` and [`content_hash`]
@@ -1487,9 +1532,8 @@ impl SourceManager {
         Some(PresumedLoc {
             file,
             file_name,
-            // `saturating_sub`: `phys_line` of a snapshot-restored disk
-            // buffer is checked only against its length (spec/source.md
-            // "Snapshots"); equal to `-` for every buffer built here.
+            // `phys_line` is the physical line of the directive: set here,
+            // or checked when a lazy buffer is read (`check_directives`).
             line: d.new_line.saturating_add(line.saturating_sub(d.phys_line)),
             col,
         })

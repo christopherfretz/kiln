@@ -3447,4 +3447,19 @@ impl ExprArena {
         }
         Ok(())
     }
+
+    /// The check of decoded cast paths: a cast's base path is a list of
+    /// base-specifier indices below `base_specs`. `lists` is checked.
+    pub(crate) fn check_restored_paths(
+        &self,
+        lists: &IdLists,
+        base_specs: usize,
+    ) -> Result<(), &'static str> {
+        let ok = self.nodes[1..].iter().filter(|n| n.kind.is_cast()).all(|n| {
+            ListId::from_raw(n.b).is_none_or(|l| {
+                lists.checked_get(l).is_some_and(|v| v.iter().all(|&i| (i as usize) < base_specs))
+            })
+        });
+        if ok { Ok(()) } else { Err("cast path out of range") }
+    }
 }

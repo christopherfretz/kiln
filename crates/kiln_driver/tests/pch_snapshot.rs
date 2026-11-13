@@ -196,8 +196,9 @@ mod product {
         set_mtime(&s, t0 + Duration::from_secs(5));
         assert_eq!(note(&ok(&d, &consume(&["-fkiln-pch-snapshot"]))), USED);
         // Same size, other text, the recorded time: `mtime` trusts it (as
-        // clang does; what the compile then does with the edited text is not
-        // pinned here), `content` does not.
+        // clang does; a compile that then reads the edited text ends with a
+        // fatal error: `behaviour::prefix_file_changed_after_the_check`),
+        // `content` does not.
         std::fs::write(&s, "#define V 2\n").unwrap();
         set_mtime(&s, t0);
         assert_eq!(note(&kiln(&d, &consume(&["-fkiln-pch-snapshot"]))), USED);
@@ -844,6 +845,64 @@ mod behaviour {
         assert!(!restored(&o), "{}", o.stderr);
         assert!(o.stderr.contains("'x.cppm' is a module unit"), "{}", o.stderr);
         assert!(o.stderr.contains("module declaration must occur at the start"), "{}", o.stderr);
+    }
+
+    /// A prefix file whose text changed after the PCH was built, in a way
+    /// neither check sees: a system header (the record's check skips system
+    /// files, as clang does) edited to the same size with its mtime put back
+    /// (the default `-fkiln-pch-validate=mtime` trusts it). The restored
+    /// source manager finds the mismatch when it first needs the text (the
+    /// note's caret line in `s.h`), and the compile ends with clang's fatal
+    /// error instead of rendering blank text ([cpp.include]; spec/driver.md
+    /// "PCH snapshot: behaviour"). WP-1396.
+    #[test]
+    fn prefix_file_changed_after_the_check() {
+        let d = scratch("stale");
+        std::fs::create_dir_all(d.join("sys")).unwrap();
+        let before = "inline int f(int a, int b) { return a + b; }\nstruct S { int a; };\n";
+        let after_ = "inline int f(int x, int y) { return x - y; }\nstruct S { int b; };\n";
+        assert_eq!(before.len(), after_.len());
+        write(
+            &d,
+            &[
+                ("sys/s.h", before),
+                ("p.h", "#include <s.h>\n"),
+                ("m.cpp", "int g() { return f(1); }\n"),
+            ],
+        );
+        let flags = ["-std=c++26", "-isystem", "sys"];
+        produce(&d, &flags, "c++-header", "p.h", "p.pch");
+        let path = d.join("sys/s.h");
+        let mtime = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, after_).unwrap();
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(mtime).unwrap();
+        let mut a: Vec<&str> = flags.to_vec();
+        a.extend([
+            "-include-pch",
+            "p.pch",
+            "-fkiln-pch-snapshot=load",
+            "-v",
+            "-c",
+            "m.cpp",
+            "-o",
+            "m.o",
+        ]);
+        let o = kiln(&d, &a);
+        assert!(restored(&o), "{}", o.stderr);
+        assert_eq!(o.code, 1, "{}", o.stderr);
+        assert!(
+            o.stderr.contains(
+                "s.h' has been modified since the precompiled header 'p.pch' was built: content changed"
+            ),
+            "{}",
+            o.stderr
+        );
+        assert!(
+            o.stderr.contains("m.cpp:1:18: error: no matching function for call to 'f'"),
+            "{}",
+            o.stderr
+        );
+        assert!(!d.join("m.o").exists());
     }
 
     /// WP-1395: a module whose global module fragment includes the prefix's

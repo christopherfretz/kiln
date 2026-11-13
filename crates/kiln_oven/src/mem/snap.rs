@@ -340,7 +340,7 @@ fn check_static(
     }
     let mut prev_end = 0;
     for &(b, l) in sholes {
-        if b < prev_end || l == 0 || b + l > stat.top {
+        if b < prev_end || l == 0 || b.checked_add(l).is_none_or(|e| e > stat.top) {
             return Err("static free ranges out of order or range");
         }
         prev_end = b + l;
