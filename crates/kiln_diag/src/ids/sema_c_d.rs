@@ -209,6 +209,8 @@ sema_convertvector_non_vector = Error (0) "first argument to __builtin_convertve
 sema_convertvector_non_vector_type = Error (0) "second argument to __builtin_convertvector must be of vector type";
 sema_copy_capture_with_copy_default = Error (0) "'&' must precede a capture when the capture default is '='";
 sema_copy_ctor_by_value = Error (0) "copy constructor must pass its first argument by reference";
+// [dcl.fct.def.coroutine]: kiln-specific, stricter than clang (WP-1374)
+sema_coroutine_dynamic_alloca = Error (1) "{0} in a coroutine is not supported: the coroutine frame cannot hold a dynamically sized stack allocation";
 sema_coroutine_handle_missing_member = Error (1) "std::coroutine_handle must have a member named '{0}'";
 sema_coroutine_invalid_func_context = Error (2) "'{1}' cannot be used in {0:a constructor|a destructor|the 'main' function|a constexpr function|a function with a deduced return type|a varargs function|a consteval function}";
 sema_coroutine_outside_function = Error (1) "'{0}' cannot be used outside a function";

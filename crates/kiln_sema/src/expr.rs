@@ -5584,6 +5584,11 @@ impl Sema<'_, '_> {
         {
             return self.recover_err(&kids, loc);
         }
+        if let Some(d) = named
+            && let Some(id) = self.ast.decls.builtin_id(d).or_else(|| self.ast.decls.lib_builtin(d))
+        {
+            self.note_dynamic_alloca(id, d, callee);
+        }
         if named.and_then(|d| self.ast.decls.builtin_id(d))
             == Some(kiln_ast::decl::builtin::PREFETCH)
             && !self.check_prefetch(callee, &conv_args, rparen)
