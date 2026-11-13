@@ -2159,3 +2159,39 @@ impl Sema<'_, '_> {
         self.templ.heads.last().is_some_and(|h| !h.taken)
     }
 }
+
+impl InstState {
+    /// The first transient part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"), by field name.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let open = [
+            ("meta_calls", !self.meta_calls.is_empty()),
+            ("sfinae", self.sfinae.try_borrow().map_or(true, |s| !s.is_empty())),
+            ("selecting", !self.selecting.is_empty()),
+            ("drain_capture", self.drain_capture.is_some()),
+            ("default_arg_uses", self.default_arg_uses.is_some()),
+            ("at_end_of_tu", self.at_end_of_tu),
+            ("deferring_init", self.deferring_init),
+            ("suppress_next_error", self.suppress_next_error.get()),
+            ("suppress_access", self.suppress_access.get()),
+            ("fatal", self.fatal),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
+    }
+}
+
+impl TemplState {
+    /// The first transient part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"): an open template head, expansion
+    /// statement or requires-clause context.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let open = [
+            ("heads", !self.heads.is_empty()),
+            ("expansions_open", !self.expansions_open.is_empty()),
+            ("req_ctx", !self.req_ctx.is_empty()),
+            ("explicit_depth", self.explicit_depth != 0),
+            ("entering_context", self.entering_context),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
+    }
+}

@@ -108,3 +108,10 @@ impl Substituter<'_, '_, '_> {
         Some(placeholder)
     }
 }
+
+impl AlignedFixups {
+    /// Nothing waits for a fix-up.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.pending.is_empty() && self.fixes.is_empty()
+    }
+}

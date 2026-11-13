@@ -1064,6 +1064,20 @@ fn decode(bytes: &[u8]) -> Res<Decoded> {
     Ok(Decoded { paths, insts, map })
 }
 
+impl BmiState {
+    /// No carried constants are recorded or installed and no declaration
+    /// image is recorded: a snapshot is not taken with them (spec/sema.md
+    /// "Snapshots").
+    pub(crate) fn is_at_rest(&self) -> bool {
+        self.recorder.is_none()
+            && self.tables.is_empty()
+            && self.hits == 0
+            && !self.record_image
+            && self.pch_ext_decls.is_none()
+            && self.pch_dedup.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

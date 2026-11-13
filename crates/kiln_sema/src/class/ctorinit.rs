@@ -1296,6 +1296,20 @@ fn initializer_exprs(init: &Initializer) -> Vec<ExprId> {
     out
 }
 
+impl MemInitState {
+    /// No constructor's mem-initializers are being analysed (a snapshot
+    /// point, spec/sema.md "Snapshots").
+    pub(crate) fn is_at_rest(&self) -> bool {
+        self.ctor.is_none()
+            && self.inits.is_empty()
+            && self.count == 0
+            && !self.any_errors
+            && !self.skip
+            && self.pattern.is_empty()
+            && !self.pattern_failed
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{OrderKey, out_of_order};

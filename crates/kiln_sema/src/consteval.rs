@@ -1483,3 +1483,32 @@ impl Sema<'_, '_> {
         q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
     }
 }
+
+impl ImmState {
+    /// The first per-full-expression part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"); `reasons` and `default_use_locs` are
+    /// state.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let p = &self.pending;
+        let open = [
+            (
+                "pending",
+                !(p.candidates.is_empty()
+                    && p.refs.is_empty()
+                    && p.const_eval == 0
+                    && p.var_init.is_none()
+                    && !p.var_defer
+                    && p.shared_var.is_none()
+                    && !p.default_init
+                    && p.default_uses.is_empty()
+                    && p.member_init.is_none()
+                    && p.prefolded.is_empty()),
+            ),
+            ("after_var", !self.after_var.is_empty()),
+            ("early", !self.early.is_empty()),
+            ("early_values", !self.early_values.is_empty()),
+            ("early_defaults", !self.early_defaults.is_empty()),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
+    }
+}
