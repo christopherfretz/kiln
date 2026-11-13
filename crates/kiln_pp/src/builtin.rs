@@ -11,7 +11,7 @@
 //! asked of a [`FeatureQueries`] implementation (WP-015).
 
 /// A builtin macro.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[allow(missing_docs)]
 pub enum Builtin {
     Line,

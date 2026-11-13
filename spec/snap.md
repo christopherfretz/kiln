@@ -4,7 +4,8 @@ The snapshot encoding: how a crate's in-memory state is written to bytes
 and read back as an equal state, for the PCH snapshot (WP-1283: the
 compiler state after a prefix of a translation unit, restored by a later
 compilation instead of re-parsing the prefix). Status: prototype (WP-1377),
-piloted on `kiln_source`; nothing in the compiler calls it yet.
+piloted on `kiln_source`, extended to `kiln_diag`, `kiln_lex` and `kiln_pp`
+(WP-1379); nothing in the compiler calls it yet.
 
 `kiln_snap` is the runtime (trait, wire format, standard impls, errors,
 schema hash). `kiln_snap_derive` is the `#[derive(Snap)]` proc macro, on
@@ -222,6 +223,55 @@ The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
 `kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
 "Snapshots" states their behaviour.
 
+### Configured roots
+
+A root that borrows other roots or holds configuration that cannot be
+read from bytes (trait objects, closures, a sink, options from the
+consumer's command line) is **configured**: it is not `Snap`. The
+consumer builds it from its own command line, exactly as without a
+snapshot, and the snapshot is applied to it. It has four inherent
+methods, named so in every crate:
+
+```rust
+pub fn snap_ready(&self) -> Result<(), String>;
+pub fn snap_put(&self, w: &mut Writer) -> Result<(), String>;
+pub fn snap_restore(&mut self, r: &mut Reader<'_>) -> Result<(), SnapError>;
+pub fn snap_schema(s: &mut Schema);   // associated, no `self`
+```
+
+- `snap_ready` is the **quiescence check**: it inspects every field
+  classified transient-at-rest and returns `Err("Type.field: why")` for
+  the first one that is not at its resting value (an open stack, a
+  queued item, a flag set mid-operation). It never panics.
+- `snap_put` calls `snap_ready` and writes nothing when it fails;
+  otherwise it writes the state fields in a fixed order (the writer's
+  mode decides map order, so `Writer::canonical()` gives the bytes tests
+  compare). It starts with an exhaustive destructure of `self`.
+- `snap_restore` applies a snapshot to a **fresh** object (built, and
+  configured, but not used: the method defines what "used" means and
+  refuses it with `ErrorKind::Invalid`). It decodes and validates every
+  field first and assigns them only when all succeeded, so on an error
+  the object is unchanged. Fields classified rebuilt or configuration
+  keep what the consumer's constructor gave them; transient ones are
+  already at rest in a fresh object. It ends with an exhaustive
+  destructure (or assigns every state field by name).
+- `snap_schema` registers a `"configured root"` descriptor for the type
+  with its lifetimes `'static` (`Type<'static>`), naming every written
+  field (`Desc::field`), then recurses into each field type, as a
+  hand-written root's `schema` does. Its hash is
+  `{ let mut s = Schema::new(); Type::snap_schema(&mut s); s.hash() }`.
+- The **classification table** (rule 2 above, with "transient, at rest"
+  for what `snap_ready` checks) is at the impl, in a `snap` submodule.
+- **Restore order**: roots that others borrow are restored first; a
+  configured root is restored before anything borrows it mutably or
+  reads it. The interner before anything interns, the source manager
+  before any file is loaded, the diagnostics engine before the
+  preprocessor is built.
+
+The configured roots are `kiln_diag::DiagEngine` (`src/engine/snap.rs`,
+spec/diag.md §7.8) and `kiln_pp::Preprocessor` (`src/snap.rs`, spec/pp.md
+"Snapshots").
+
 ## Recipe: making a crate's types `Snap`
 
 1. Add `kiln_snap.workspace = true` to the crate's `[dependencies]`.
@@ -272,6 +322,11 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
   paths, every schema-hash change; `derive_errors` doc tests.
 - `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md
   "Snapshots").
+- `crates/kiln_diag/tests/snap.rs`, `crates/kiln_pp/tests/snap.rs`: the
+  configured roots; the round trip of all four preprocessor-side roots at
+  the end of a libstdc++ prefix, with the same main file read by the
+  original and the restored front end (tokens, diagnostics, dependencies
+  and canonical bytes equal); quiescence refusals; corruption.
 
 ## Open questions
 

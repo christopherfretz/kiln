@@ -19,6 +19,8 @@ use crate::policy::{Policy, Severity};
 use crate::pragma::{PragmaSnapshot, Pragmas};
 use crate::text::TextSink;
 
+mod snap;
+
 /// Where emitted diagnostics go. Sinks are called under the engine's lock,
 /// one diagnostic at a time, in emission order.
 pub trait DiagSink {

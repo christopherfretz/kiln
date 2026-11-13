@@ -3,6 +3,7 @@
 use std::fmt;
 use std::ops::{BitOr, BitOrAssign};
 
+use kiln_snap::Snap;
 use kiln_source::Span;
 
 use kiln_source::symbol::Symbol;
@@ -11,7 +12,7 @@ use kiln_source::symbol::Symbol;
 ///
 /// Tokens are small (`Copy`, 20 bytes) and carry no text: the spelling is
 /// recovered from the source through [`crate::spelling`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Snap)]
 pub struct Token {
     /// What kind of pp-token this is.
     pub kind: TokKind,
@@ -37,7 +38,7 @@ impl Token {
 
 /// The encoding prefix of a character or string literal ([lex.ccon],
 /// [lex.string]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Snap)]
 pub enum Encoding {
     /// No prefix.
     Ordinary,
@@ -76,7 +77,7 @@ impl Encoding {
 }
 
 /// The kind of a preprocessing token.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Snap)]
 pub enum TokKind {
     /// An identifier ([lex.name]). The symbol is the identifier with
     /// universal-character-names resolved (`é` and `é` are the same
@@ -140,7 +141,7 @@ impl TokKind {
 }
 
 /// Token flags (a `u8` bit set).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Snap)]
 pub struct TokFlags(u8);
 
 impl TokFlags {
@@ -238,7 +239,7 @@ macro_rules! puncts {
         /// The alternative tokens that are identifiers (`and`, `or`,
         /// `bitand`, ...) are not here: they lex as identifiers and are
         /// classified by later phases.
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Snap)]
         pub enum Punct {
             $($(#[$doc])* #[doc = concat!("`", $spelling, "`")] $variant,)*
         }
