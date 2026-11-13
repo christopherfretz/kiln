@@ -664,3 +664,77 @@ fn schema_descriptors_hold_names_only() {
     Tiny::schema(&mut s);
     assert_eq!(s.descriptors().len(), 4);
 }
+
+// ----- streaming reads (spec/snap.md "Streaming reads") -----------------
+
+/// A source that hands out at most `step` bytes per `read`, as a pipe or
+/// a short file read may.
+struct Trickle<'a> {
+    data: &'a [u8],
+    step: usize,
+}
+
+impl std::io::Read for Trickle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(self.step).min(self.data.len());
+        buf[..n].copy_from_slice(&self.data[..n]);
+        self.data = &self.data[n..];
+        Ok(n)
+    }
+}
+
+fn stream<T: Snap>(bytes: &[u8], len: usize, step: usize) -> Result<T, SnapError> {
+    let mut r = Reader::streaming(Trickle { data: bytes, step }, len, 0);
+    let v = T::get(&mut r)?;
+    r.finish()?;
+    Ok(v)
+}
+
+/// A value with fixed-size runs, strings, records and shared parts.
+type Mixed = (Vec<u64>, String, Vec<String>, Vec<Rec>, Vec<Rc<Vec<u32>>>);
+
+#[test]
+fn streaming_reader_decodes_what_a_slice_reader_does() {
+    // Fixed-size items spanning many windows (the batched fast path),
+    // strings longer than a window, and shared objects across windows.
+    let big: Vec<u64> = (0..200_000u64).map(|i| i.wrapping_mul(0x9e37_79b9)).collect();
+    let long = "x".repeat(kiln_snap::WINDOW * 2 + 17);
+    let words: Vec<String> = (0..5000).map(|i| format!("word{i}")).collect();
+    let rec = Rec {
+        id: Id(NonZeroU32::new(7).unwrap()),
+        parent: None,
+        flags: 3,
+        kind: Kind::C,
+        span: (1, 2),
+    };
+    let recs = vec![rec; 70_000];
+    let shared = Rc::new(vec![1u32, 2, 3]);
+    let v: Mixed = (big, long, words, recs, vec![Rc::clone(&shared), Rc::clone(&shared)]);
+    let bytes = to_bytes(&v);
+    for step in [1 << 20, 4093, 1] {
+        let got: Mixed = stream(&bytes, bytes.len(), step).unwrap();
+        assert_eq!(got.0, v.0);
+        assert_eq!(got.1, v.1);
+        assert_eq!(got.2, v.2);
+        assert_eq!(got.3, v.3);
+        assert!(Rc::ptr_eq(&got.4[0], &got.4[1]));
+        assert_eq!(*got.4[0], *shared);
+    }
+}
+
+#[test]
+fn streaming_reader_reports_a_short_source_and_trailing_bytes() {
+    let bytes = to_bytes(&vec![5u32; 100_000]);
+    // The source ends before the promised length: an I/O error, no panic.
+    let short = &bytes[..bytes.len() - 3];
+    let e = stream::<Vec<u32>>(short, bytes.len(), 1 << 16).unwrap_err();
+    assert!(matches!(e.kind(), ErrorKind::Io(_)), "{e}");
+    // A length shorter than the encoding: truncated, as a slice reader.
+    let e = stream::<Vec<u32>>(&bytes, bytes.len() - 3, 1 << 16).unwrap_err();
+    assert!(matches!(e.kind(), ErrorKind::LengthTooLarge(_) | ErrorKind::Truncated { .. }), "{e}");
+    // Bytes left over: trailing, with the count of the unread source.
+    let mut longer = bytes.clone();
+    longer.extend_from_slice(&[0; 9]);
+    let e = stream::<Vec<u32>>(&longer, longer.len(), 1 << 16).unwrap_err();
+    assert!(matches!(e.kind(), ErrorKind::TrailingBytes(9)), "{e}");
+}

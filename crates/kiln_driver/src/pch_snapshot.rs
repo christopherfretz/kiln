@@ -26,7 +26,9 @@
 //! - `KILN_SNAP_TIMING=1` prints the producer's encode time and the
 //!   consumer's per-root load split on standard error.
 
+use std::cell::RefCell;
 use std::fmt::Write as _;
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -38,7 +40,7 @@ use kiln_sema::Sema;
 use kiln_snap::{Reader, Schema, Snap, Writer};
 use kiln_source::SourceManager;
 
-use crate::args::{Args, PchSnapshotUse, PchValidate};
+use crate::args::{Args, PchSnapshotUse, PchValidate, SnapshotRoots};
 use crate::{SharedWriter, pch};
 
 /// The schema hash of every root the section holds, in one schema: a
@@ -404,13 +406,16 @@ pub(crate) fn find(
 ) -> Result<PchSnapshotUse, String> {
     let started = Instant::now();
     let Some(img) = &rec.image else { return Err("the PCH has no snapshot section".to_owned()) };
-    let sections = bmi::read_sections(img).map_err(|e| format!("{e} in its section block"))?;
-    let Some(s) = sections.into_iter().find(|s| s.tag == bmi::SECTION_SNAPSHOT) else {
+    // The block's sections where they are in the record's image (no copy
+    // of a section that may be tens of MB).
+    let sections = bmi::section_ranges(img).map_err(|e| format!("{e} in its section block"))?;
+    let Some((_, range)) = sections.into_iter().find(|s| s.0 == bmi::SECTION_SNAPSHOT) else {
         return Err("the PCH has no snapshot section".to_owned());
     };
+    let section = &img[range.clone()];
     let sections_done = started.elapsed();
-    let at = check_header(&s.bytes)?;
-    let mut r = Reader::new(&s.bytes[at..]);
+    let at = check_header(section)?;
+    let mut r = Reader::new(&section[at..]);
     let hash: u64 = r.get().map_err(|e| e.to_string())?;
     let ours = schema_hash();
     let hashed = started.elapsed();
@@ -423,6 +428,7 @@ pub(crate) fn find(
         return Err(why);
     }
     let start = at + r.offset();
+    drop(r);
     let checked = started.elapsed();
     // Every file the producer read must still be the one it read: the
     // restored source manager re-reads them lazily.
@@ -440,10 +446,56 @@ pub(crate) fn find(
             ms(checked.saturating_sub(hashed)),
             ms(validated.saturating_sub(checked)),
             rec.files.len(),
-            s.bytes.len()
+            section.len()
         );
     }
-    Ok(PchSnapshotUse { pch: pch.to_owned(), bytes: Arc::new(s.bytes), start, includes })
+    let roots =
+        file_roots(pch, img, range.clone(), start).unwrap_or_else(|| SnapshotRoots::Memory {
+            bytes: Arc::new(img[range.start + start..range.end].to_vec()),
+            start: 0,
+        });
+    Ok(PchSnapshotUse { pch: pch.to_owned(), roots, includes })
+}
+
+/// The roots of the snapshot section at `section` in the block `img`
+/// (its last section, ending the PCH file `pch`) from `start`, as a
+/// range of the file, or `None` when the file is not laid out so (the
+/// roots are then kept in memory).
+fn file_roots(
+    pch: &str,
+    img: &[u8],
+    section: std::ops::Range<usize>,
+    start: usize,
+) -> Option<SnapshotRoots> {
+    // The block ends with the snapshot section (the highest tag) and the
+    // block's 8-byte checksum.
+    let end = img.len().checked_sub(8)?;
+    if section.end != end {
+        return None;
+    }
+    let at = section.start;
+    let meta = std::fs::metadata(pch).ok()?;
+    let size = meta.len();
+    let img_at = size.checked_sub(img.len() as u64)?;
+    let mut sum = [0u8; 8];
+    sum.copy_from_slice(&img[end..]);
+    Some(SnapshotRoots::File {
+        path: std::path::PathBuf::from(pch),
+        block: img_at,
+        sum: u64::from_le_bytes(sum),
+        offset: img_at + (at + start) as u64,
+        len: (section.len() - start) as u64,
+        size,
+        modified: meta.modified().ok(),
+    })
+}
+
+/// The process's peak RSS (`VmHWM` of `/proc/self/status`), where the
+/// system has one, for `KILN_SNAP_TIMING`.
+fn peak_rss() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    Some(line["VmHWM:".len()..].trim().to_owned())
 }
 
 fn ms(d: Duration) -> f64 {
@@ -462,6 +514,10 @@ impl Timer {
     pub(crate) fn new() -> Timer {
         let now = Instant::now();
         let _ = kiln_ast::types::take_rebuild_time();
+        if timing() {
+            kiln_ast::ast::set_field_timing(true);
+            let _ = kiln_ast::ast::take_field_times();
+        }
         Timer { last: now, started: now, parts: Vec::new() }
     }
 
@@ -488,7 +544,25 @@ impl Timer {
             ms(rebuild),
             ms(self.last.saturating_duration_since(self.started))
         );
+        if let Some(hwm) = peak_rss() {
+            let _ = write!(line, ", peak RSS so far {hwm}");
+        }
         eprintln!("{line}");
+        kiln_ast::ast::set_field_timing(false);
+        let mut fields = kiln_ast::ast::take_field_times();
+        fields.sort_by_key(|f| std::cmp::Reverse(f.1));
+        let mut line = String::from("snapshot-timing: ast fields");
+        for (n, d, bytes) in fields.iter().filter(|f| f.1 >= Duration::from_micros(100)) {
+            let _ = write!(
+                line,
+                " {} {:.2} ms ({}.{} MB),",
+                n.trim_start_matches("Ast."),
+                ms(*d),
+                bytes / 1_000_000,
+                bytes / 100_000 % 10
+            );
+        }
+        eprintln!("{}", line.trim_end_matches(','));
     }
 }
 
@@ -503,6 +577,9 @@ pub(crate) struct Restore<'r> {
     /// Why the restore failed (the job then replays), set by the job.
     pub failed: Option<String>,
     pub timer: Timer,
+    /// A streamed section block's checksum (compared once every root is
+    /// decoded).
+    verify: Option<BlockCheck>,
 }
 
 /// Opens a snapshot: the source manager and the interner, restored
@@ -512,12 +589,83 @@ pub(crate) fn open(
     s: &PchSnapshotUse,
 ) -> Result<(SourceManager, Arc<Interner>, Restore<'_>), String> {
     let mut timer = Timer::new();
-    let mut reader = Reader::new(&s.bytes[s.start..]);
+    let (mut reader, verify) = match &s.roots {
+        SnapshotRoots::Memory { bytes, start } => (Reader::new(&bytes[*start..]), None),
+        SnapshotRoots::File { path, block, sum, offset, len, size, modified } => {
+            let (r, check) = stream_roots(path, *block, *sum, *offset, *len, *size, *modified)?;
+            (r, Some(check))
+        }
+    };
     let sm: SourceManager = reader.get().map_err(|e| e.to_string())?;
     timer.mark("SourceManager");
     let interner: Arc<Interner> = reader.get().map_err(|e| e.to_string())?;
     timer.mark("Interner");
-    Ok((sm, interner, Restore { reader, includes: &s.includes, failed: None, timer }))
+    Ok((sm, interner, Restore { reader, includes: &s.includes, failed: None, timer, verify }))
+}
+
+/// A streamed section block's checksum as it is read, and the checksum
+/// the block must have.
+#[derive(Debug)]
+struct BlockCheck {
+    sum: Rc<RefCell<bmi::BlockChecksum>>,
+    want: u64,
+}
+
+impl BlockCheck {
+    /// Whether the bytes read so far are the checked block.
+    fn matches(&self) -> bool {
+        self.sum.borrow().finish() == self.want
+    }
+}
+
+/// A reader of the `len` bytes of roots at `offset` in `path` (the file
+/// still `size` bytes long and last modified at `modified`), which end the
+/// section block at `block` whose checksum is `want`. The whole block
+/// goes through the checksum: what comes before the roots (the other
+/// sections and the snapshot's head) is read past here, the roots as they
+/// are decoded. The caller compares the [`BlockCheck`] once every byte is
+/// read, before anything restored is used (`restore_front`).
+#[allow(clippy::too_many_arguments)]
+fn stream_roots(
+    path: &std::path::Path,
+    block: u64,
+    want: u64,
+    offset: u64,
+    len: u64,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+) -> Result<(Reader<'static>, BlockCheck), String> {
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let meta = f.metadata().map_err(|e| e.to_string())?;
+    if meta.len() != size || meta.modified().ok() != modified {
+        return Err("the PCH file changed".to_owned());
+    }
+    std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(block)).map_err(|e| e.to_string())?;
+    let n = usize::try_from(len).map_err(|_| "the snapshot is too large".to_owned())?;
+    let skip = offset.checked_sub(block).ok_or("the snapshot is outside its block")?;
+    let sum = Rc::new(RefCell::new(bmi::BlockChecksum::new()));
+    let mut src = Checked { inner: std::io::Read::take(f, skip + len), sum: Rc::clone(&sum) };
+    let skipped = std::io::copy(&mut std::io::Read::take(&mut src, skip), &mut std::io::sink())
+        .map_err(|e| e.to_string())?;
+    if skipped != skip {
+        return Err("the PCH file changed".to_owned());
+    }
+    // Offsets in errors count from the roots, as a memory reader's.
+    Ok((Reader::streaming(src, n, 0), BlockCheck { sum, want }))
+}
+
+/// A source that adds every byte read to a [`bmi::BlockChecksum`].
+struct Checked<R> {
+    inner: R,
+    sum: Rc<RefCell<bmi::BlockChecksum>>,
+}
+
+impl<R: std::io::Read> std::io::Read for Checked<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.sum.borrow_mut().update(&buf[..n]);
+        Ok(n)
+    }
 }
 
 /// The consumer's own `<built-in>` buffer reduced to its `-include`s
@@ -614,33 +762,232 @@ impl crate::pp_cmd::Job<'_> {
             restore.failed = Some(format!("{} trailing bytes", restore.reader.remaining()));
             return None;
         }
+        // Every byte of a streamed block has been read: it must be the
+        // block whose checksum was checked (spec/snap.md "Streaming
+        // reads"), or nothing restored is used.
+        if restore.verify.as_ref().is_some_and(|c| !c.matches()) {
+            restore.failed = Some("the section block read does not match its checksum".to_owned());
+            return None;
+        }
         Some((sema, pp, deps, popts))
     }
 }
 
-/// The producer's section for `header` (EXPERIMENTAL, WP-1383): a second
-/// pass over an empty main file with the producer's `-include`s, then the
+/// What the producer's snapshot pass made (WP-1393): the section, or why
+/// there is none, and, when the pass stood in for the header pass, the
+/// header pass's result (spec/snap.md "The producer's single pass").
+#[derive(Debug)]
+pub(crate) struct Produced {
+    pub section: Result<Vec<u8>, String>,
+    pub result: Option<crate::pp_cmd::JobResult>,
+}
+
+/// A single pass's gate (WP-1393): the header, and the producer's
+/// diagnostics output, counted instead of shown.
+#[derive(Debug)]
+pub(crate) struct Single<'h> {
+    header: &'h str,
+    written: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Single<'_> {
+    /// Nothing was written to the pass's diagnostics output.
+    pub(crate) fn quiet(&self) -> bool {
+        self.written.load(std::sync::atomic::Ordering::Relaxed) == 0
+    }
+}
+
+/// A writer that counts the bytes written to it.
+struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+impl std::io::Write for Counted {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.fetch_add(buf.len(), std::sync::atomic::Ordering::Relaxed);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Whether the producer may try a single pass (WP-1393): `KILN_PCH_SNAPSHOT_PASSES=2`
+/// is not set and the producer's command line asks for nothing the
+/// header pass writes besides its diagnostics and dependencies (no
+/// `-v`, `-verify`, time trace, declaration image, report, dump or
+/// module file, no `-MG`), and the header is not C (`std.c`): C's
+/// main-file-only diagnostics (an internal declaration used in an extern
+/// inline function is quiet in a main file, `kiln_sema` `c_decl.rs`) are
+/// not among those [`stands_in`] rules out, so a C header takes two
+/// passes.
+pub(crate) fn single_pass_allowed(args: &Args, std: crate::toolchain::LangStd) -> bool {
+    std.c.is_none()
+        && std::env::var_os("KILN_PCH_SNAPSHOT_PASSES").is_none_or(|v| v != "2")
+        && !args.verbose
+        && args.verify.is_none()
+        && crate::time_trace::settings(args).ok().flatten().is_none()
+        && args.pch.image == crate::args::PchImage::Off
+        && !args.memory_report
+        && args.dump_ast.is_none()
+        && !args.dump_record_layouts
+        && !args.dump_vtable_layouts
+        && !args.dump_cfg
+        && !args.cfg_stats
+        && !args.bmi_image_census
+        && !args.bmi_image_census_all
+        && args.constexpr.report.is_none()
+        && !args.constexpr.profiling()
+        && !args.deps.missing_generated
+}
+
+/// The header pass's result, from a single pass that ended without an
+/// error or any output (WP-1393), or `None` when the header pass could
+/// still differ from it. The two passes read the same files in the same
+/// order and differ only in the header's place: the main file of one, the
+/// last `-include` of an empty main file in the other. So they report the
+/// same diagnostics except those only a main file gets (spec/snap.md
+/// "The producer's single pass"), which are ruled out here:
+///
+/// - `#include_next`, `#pragma system_header` and module or import lines
+///   in the header (warned of, or different, in a main file), and
+///   `#pragma ... diagnostic` in it (which could turn on the next item
+///   for the header alone);
+/// - unused internal declarations of the main file (`-Wunused-variable`
+///   and its kin, clang `isMainFileLoc`): the warnings are off, or the
+///   header holds directives and comments only;
+/// - `__INCLUDE_LEVEL__` and `__BASE_FILE__` in any file read (they
+///   expand differently);
+/// - a header found as a system header, or not listed under its own
+///   name.
+///
+/// The dependency list is then the header pass's: the header moved to the
+/// front, where the main file is listed (`<stdin>` is never listed).
+pub(crate) fn stands_in(
+    single: &Single<'_>,
+    sm: &SourceManager,
+    engine: &DiagEngine<'_>,
+    deps: Option<crate::pp_cmd::SharedDeps>,
+) -> Option<crate::pp_cmd::JobResult> {
+    let deps = deps?;
+    let header = std::path::Path::new(single.header);
+    let text = sm.text(sm.loaded_file(header)?);
+    if header_main_differs(text) {
+        return None;
+    }
+    let unused = [
+        kiln_diag::DiagId::sema_unused_variable,
+        kiln_diag::DiagId::sema_unused_const_variable,
+        kiln_diag::DiagId::sema_unneeded_internal_decl,
+        kiln_diag::DiagId::sema_unused_variable_template,
+    ];
+    if unused.iter().any(|&id| engine.is_enabled(id)) && !directives_only(text) {
+        return None;
+    }
+    {
+        let list = deps.borrow();
+        for name in list.files() {
+            let f = sm.loaded_file(std::path::Path::new(name))?;
+            let t = sm.text(f);
+            if t.contains("__INCLUDE_LEVEL__") || t.contains("__BASE_FILE__") {
+                return None;
+            }
+        }
+    }
+    if !deps.borrow_mut().move_to_front(single.header) {
+        return None;
+    }
+    Some(crate::pp_cmd::JobResult { dep_list: Some(deps), ..Default::default() })
+}
+
+/// Whether the header's text has a line a main file treats differently
+/// from an included file (see [`stands_in`]). Conservative: a match in a
+/// comment counts.
+fn header_main_differs(text: &str) -> bool {
+    text.lines().any(|l| {
+        let l = l.trim_start();
+        let directive = l.starts_with('#')
+            && ["include_next", "system_header", "diagnostic"].iter().any(|w| l.contains(w));
+        let module = ["module", "import", "export"].iter().any(|w| l.starts_with(w));
+        directive || module || l.contains("__INCLUDE_LEVEL__") || l.contains("__BASE_FILE__")
+    })
+}
+
+/// Whether `text` holds only preprocessing directives, comments and
+/// blank lines (so it declares nothing itself). Conservative.
+fn directives_only(text: &str) -> bool {
+    let mut in_comment = false;
+    let mut continued = false;
+    for l in text.lines() {
+        let mut l = l.trim();
+        if continued {
+            continued = l.ends_with('\\');
+            continue;
+        }
+        if in_comment {
+            let Some(end) = l.find("*/") else { continue };
+            l = l[end + 2..].trim();
+            in_comment = false;
+        }
+        if l.is_empty() || l.starts_with("//") {
+            continue;
+        }
+        if l.starts_with('#') {
+            continued = l.ends_with('\\');
+            if l.contains("/*") && !l.contains("*/") {
+                in_comment = true;
+            }
+            continue;
+        }
+        if let Some(rest) = l.strip_prefix("/*") {
+            match rest.find("*/") {
+                Some(end) if rest[end + 2..].trim().is_empty() => continue,
+                Some(_) => return false,
+                None => {
+                    in_comment = true;
+                    continue;
+                }
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// The producer's section for `header` (EXPERIMENTAL, WP-1383): a pass
+/// over an empty main file with the producer's `-include`s, then the
 /// header, parsed to the end of the last one (`kiln_parse::parse_prefix`)
-/// and written root by root. Its diagnostics are dropped: the header
-/// itself was just checked. `Err`: why the PCH has no snapshot.
+/// and written root by root. Its diagnostics are not shown: the header
+/// pass shows them.
+///
+/// With `single` (WP-1393, [`single_pass_allowed`]), the pass runs
+/// before the header pass and goes on to the end of the translation
+/// unit; when [`stands_in`] holds, [`Produced::result`] is the header
+/// pass's result and the producer skips that pass.
 pub(crate) fn produce(
     args: &Args,
     tc: &crate::toolchain::Toolchain,
     std: crate::toolchain::LangStd,
     header: &str,
     diag_opts: &kiln_diag::DiagOptions,
-) -> Result<Vec<u8>, String> {
+    single: bool,
+) -> Produced {
     let mut a = args.clone();
     a.action = crate::args::Action::SyntaxOnly;
     a.includes.push(header.to_owned());
     a.deps.only = None;
-    a.deps.side = None;
+    a.deps.side = single.then_some(crate::args::DepHeaders::All);
     a.deps.cdb_fragment = None;
     a.output = None;
     a.verbose = false;
     a.pch.header_main = false;
     a.pch.producing = false;
     a.pch.image = crate::args::PchImage::Off;
+    let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gate = Single { header, written: Arc::clone(&written) };
+    let stderr = if single {
+        SharedWriter::new(Counted(written))
+    } else {
+        SharedWriter::new(std::io::sink())
+    };
     let job = crate::pp_cmd::Job {
         args: &a,
         toolchain: tc,
@@ -648,11 +995,16 @@ pub(crate) fn produce(
         path: "-",
         stdin_text: Some(String::new()),
         diag_opts,
-        stderr: SharedWriter::new(std::io::sink()),
+        stderr,
         asm: false,
     };
-    let roots = crate::syntax_cmd::SyntaxJob(job).snapshot()?;
-    Ok(section(args, tc, std, diag_opts, &roots))
+    let (roots, result) = crate::syntax_cmd::SyntaxJob(job).snapshot(single.then_some(&gate));
+    if single && timing() {
+        let how =
+            if result.is_some() { "stands in for the header pass" } else { "header pass needed" };
+        eprintln!("snapshot-timing: producer single pass: {how}");
+    }
+    Produced { section: roots.map(|r| section(args, tc, std, diag_opts, &r)), result }
 }
 
 /// A standard error that keeps what is written (`=check`'s runs).
@@ -808,6 +1160,67 @@ pub(crate) fn report_mismatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WP-1393: a streamed block is checked as it is read: the bytes the
+    /// roots reader hands out, and those before them, must be the block
+    /// whose checksum was checked; a file changed in place (same size and
+    /// modification time) is seen once the roots are read.
+    #[test]
+    fn a_streamed_block_is_checked_as_it_is_read() {
+        let path = std::env::temp_dir().join(format!("kiln-wp1393-stream-{}", std::process::id()));
+        let block: Vec<u8> = (0..5000u32).map(|i| (i * 7 % 253) as u8).collect();
+        let mut file = b"head".to_vec();
+        file.extend_from_slice(&block);
+        file.extend_from_slice(b"checksum");
+        std::fs::write(&path, &file).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let (size, modified) = (meta.len(), meta.modified().ok());
+        let want = bmi::block_checksum(&block);
+        let read = |want: u64| {
+            let (mut r, check) =
+                stream_roots(&path, 4, want, 4 + 1000, 4000, size, modified).unwrap();
+            let roots = r.bytes(4000).unwrap().to_vec();
+            assert_eq!(r.remaining(), 0);
+            (roots == block[1000..], check.matches())
+        };
+        assert_eq!(read(want), (true, true));
+        assert_eq!(read(want ^ 1), (true, false));
+        // A byte changed in place before the roots (only the checksum sees
+        // it), then one inside them.
+        for (at, roots_same) in [(500, true), (3000, false)] {
+            let mut changed = file.clone();
+            changed[4 + at] ^= 1;
+            std::fs::write(&path, &changed).unwrap();
+            let f = std::fs::File::options().write(true).open(&path).unwrap();
+            f.set_modified(modified.unwrap()).unwrap();
+            drop(f);
+            assert_eq!(read(want), (roots_same, false), "byte {at}");
+        }
+        std::fs::write(&path, b"short").unwrap();
+        assert!(stream_roots(&path, 4, want, 1004, 4000, size, modified).is_err());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_header_of_directives_and_comments_declares_nothing() {
+        assert!(directives_only("#include <vector>\n// c\n/* a\n b */\n#define X \\\n  1\n\n"));
+        assert!(directives_only("/* one line */\n#pragma once\n"));
+        assert!(!directives_only("#include <vector>\nstatic int x;\n"));
+        assert!(!directives_only("/* c */ int x;\n"));
+        assert!(!directives_only("#define M(x) x\nM(int y;)\n"));
+    }
+
+    #[test]
+    fn lines_a_main_file_treats_differently_are_seen() {
+        assert!(!header_main_differs("#include <vector>\n#pragma once\nint x;\n"));
+        assert!(header_main_differs("#include_next <map>\n"));
+        assert!(header_main_differs("#  pragma GCC system_header\n"));
+        assert!(header_main_differs("#pragma clang diagnostic warning \"-Wunused\"\n"));
+        assert!(header_main_differs("#if __INCLUDE_LEVEL__ == 0\n#endif\n"));
+        assert!(header_main_differs("const char *f = __BASE_FILE__;\n"));
+        assert!(header_main_differs("export module m;\n"));
+        assert!(header_main_differs("import std;\n"));
+    }
 
     /// The identity of `kiln++ <argv>` for a C++ input.
     fn id(argv: &[&str]) -> Vec<(String, String)> {

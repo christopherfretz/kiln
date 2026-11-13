@@ -170,16 +170,35 @@ impl Writer {
     }
 }
 
-/// Reads encoded values from a byte slice. Every read is bounds-checked;
-/// no read panics.
+/// Reads encoded values from a byte slice, or from a stream
+/// ([`Reader::streaming`]). Every read is bounds-checked; no read panics.
 pub struct Reader<'a> {
+    /// The input of a slice reader; empty for a streaming one.
     buf: &'a [u8],
+    /// The next byte, in [`Self::data`].
     pos: usize,
-    /// Absolute offset of `buf[0]` (a sub-reader of a fixed-size block).
+    /// Absolute offset of `data()[0]` (a sub-reader of a fixed-size block,
+    /// or the window of a streaming reader).
     base: usize,
     /// Shared (`Rc`/`Arc`) objects by index: `None` while being decoded.
     shared: Vec<Option<Box<dyn Any>>>,
+    /// Whether this is a streaming reader (spec/snap.md "Streaming
+    /// reads"): the bytes not yet read stay in `src`, the window `win`
+    /// holds at most [`WINDOW`] of them beyond the longest single read,
+    /// and bytes already decoded are dropped, so decoding needs no copy of
+    /// the whole input. Kept inline (not boxed) so that a read's choice
+    /// between `buf` and `win` needs no extra load.
+    streaming: bool,
+    /// A streaming reader's window: bytes `base..base + win.len()`.
+    win: Vec<u8>,
+    /// A streaming reader's source.
+    src: Option<Box<dyn std::io::Read + 'a>>,
+    /// Input bytes still in `src`.
+    left: usize,
 }
+
+/// The bytes a streaming reader reads from its source at a time.
+pub const WINDOW: usize = 1 << 20;
 
 impl fmt::Debug for Reader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -187,6 +206,7 @@ impl fmt::Debug for Reader<'_> {
             .field("offset", &self.offset())
             .field("remaining", &self.remaining())
             .field("shared", &self.shared.len())
+            .field("streaming", &self.streaming)
             .finish()
     }
 }
@@ -194,7 +214,98 @@ impl fmt::Debug for Reader<'_> {
 impl<'a> Reader<'a> {
     /// A reader over `bytes`, at offset 0.
     pub fn new(bytes: &'a [u8]) -> Self {
-        Reader { buf: bytes, pos: 0, base: 0, shared: Vec::new() }
+        Reader::sub(bytes, 0)
+    }
+
+    /// A slice reader whose first byte has the absolute offset `base`.
+    #[inline]
+    fn sub(bytes: &'a [u8], base: usize) -> Self {
+        Reader {
+            buf: bytes,
+            pos: 0,
+            base,
+            shared: Vec::new(),
+            streaming: false,
+            win: Vec::new(),
+            src: None,
+            left: 0,
+        }
+    }
+
+    /// A reader of the next `len` bytes of `src`, whose first byte has the
+    /// absolute offset `base` (for errors). The bytes are read [`WINDOW`]
+    /// at a time and dropped once decoded; a source that ends early, or
+    /// fails, is [`ErrorKind::Io`] at the offset it was needed.
+    pub fn streaming(src: impl std::io::Read + 'a, len: usize, base: usize) -> Self {
+        Reader {
+            buf: &[],
+            pos: 0,
+            base,
+            shared: Vec::new(),
+            streaming: true,
+            win: Vec::new(),
+            src: Some(Box::new(src)),
+            left: len,
+        }
+    }
+
+    /// The bytes in hand: the input of a slice reader, a streaming
+    /// reader's window.
+    #[inline]
+    fn data(&self) -> &[u8] {
+        if self.streaming { &self.win } else { self.buf }
+    }
+
+    /// Makes `n` bytes available at `pos`, reading from a streaming
+    /// reader's source; `Ok(false)` when the input has fewer left.
+    #[inline]
+    fn ensure(&mut self, n: usize) -> Result<bool, SnapError> {
+        if self.data().len() - self.pos >= n {
+            return Ok(true);
+        }
+        self.refill(n)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn refill(&mut self, n: usize) -> Result<bool, SnapError> {
+        let at = self.offset();
+        let pos = self.pos;
+        let have = self.data().len() - pos;
+        let Some(src) = self.src.as_deref_mut() else { return Ok(false) };
+        if have + self.left < n {
+            return Ok(false);
+        }
+        let win = &mut self.win;
+        // Drop the decoded bytes; keep the window's allocation unless one
+        // long read grew it.
+        win.drain(..pos);
+        if win.capacity() > 4 * WINDOW && n <= WINDOW {
+            win.shrink_to(WINDOW);
+        }
+        let want = (n - have).max(WINDOW.min(self.left)).min(self.left);
+        // `read_to_end` appends into the spare capacity (no zero fill).
+        win.reserve(want);
+        let old = win.len();
+        let got = std::io::Read::read_to_end(&mut std::io::Read::take(&mut *src, want as u64), win);
+        if let Err(e) = got.and_then(|got| {
+            if got == want {
+                Ok(())
+            } else {
+                Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+            }
+        }) {
+            win.truncate(old);
+            self.left = 0;
+            self.src = None;
+            self.base += pos;
+            self.pos = 0;
+            return Err(SnapError::new(ErrorKind::Io(e.to_string()), "snapshot", at));
+        }
+        self.left -= want;
+        self.base += pos;
+        self.pos = 0;
+        Ok(true)
     }
 
     /// The absolute offset of the next byte.
@@ -204,7 +315,7 @@ impl<'a> Reader<'a> {
 
     /// Bytes left.
     pub fn remaining(&self) -> usize {
-        self.buf.len() - self.pos
+        self.data().len() - self.pos + self.left
     }
 
     /// Reads `v` (its [`Snap::get`]).
@@ -259,25 +370,28 @@ impl<'a> Reader<'a> {
         &mut self,
         ty: &'static str,
     ) -> Result<[u8; N], SnapError> {
-        match self.buf.get(self.pos..).and_then(<[u8]>::first_chunk::<N>) {
-            Some(a) => {
-                self.pos += N;
-                Ok(*a)
-            }
-            None => Err(self.truncated(N, ty)),
+        if let Some(a) = self.data().get(self.pos..).and_then(<[u8]>::first_chunk::<N>) {
+            let a = *a;
+            self.pos += N;
+            return Ok(a);
         }
+        if self.ensure(N)? {
+            return self.array_of(ty);
+        }
+        Err(self.truncated(N, ty))
     }
 
     /// Reads one byte.
     #[inline]
     pub fn u8(&mut self) -> Result<u8, SnapError> {
-        match self.buf.get(self.pos) {
-            Some(&b) => {
-                self.pos += 1;
-                Ok(b)
-            }
-            None => Err(self.truncated(1, "u8")),
+        if let Some(&b) = self.data().get(self.pos) {
+            self.pos += 1;
+            return Ok(b);
         }
+        if self.ensure(1)? {
+            return self.u8();
+        }
+        Err(self.truncated(1, "u8"))
     }
 
     /// Reads a little-endian `u16`.
@@ -304,15 +418,16 @@ impl<'a> Reader<'a> {
         self.array_of("u128").map(u128::from_le_bytes)
     }
 
-    /// The next `n` bytes, borrowed from the input.
+    /// The next `n` bytes, borrowed from the reader (valid until its next
+    /// read).
     #[inline]
-    pub fn bytes(&mut self, n: usize) -> Result<&'a [u8], SnapError> {
-        if n > self.remaining() {
+    pub fn bytes(&mut self, n: usize) -> Result<&[u8], SnapError> {
+        if !self.ensure(n)? {
             return Err(self.truncated(n, "bytes"));
         }
-        let s = &self.buf[self.pos..self.pos + n];
+        let at = self.pos;
         self.pos += n;
-        Ok(s)
+        Ok(&self.data()[at..at + n])
     }
 
     /// Skips `n` bytes (padding of fixed-size encodings).
@@ -348,9 +463,10 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Reads a string written by [`Writer::str`], borrowed from the input.
+    /// Reads a string written by [`Writer::str`], borrowed from the reader
+    /// (valid until its next read).
     #[inline]
-    pub fn str(&mut self) -> Result<&'a str, SnapError> {
+    pub fn str(&mut self) -> Result<&str, SnapError> {
         let n = self.seq_len::<u8>()?;
         let at = self.offset();
         let b = self.bytes(n)?;
@@ -380,9 +496,11 @@ impl<'a> Reader<'a> {
     /// Reads `n` elements of `T` (a count from [`Reader::seq_len`]) and
     /// hands each to `push`, in order.
     ///
-    /// The fixed-size fast path: when `T::SIZE` is `Some(s)`, the `n * s`
-    /// bytes are taken with one bounds check and each element is decoded
-    /// from its own `s`-byte chunk (`chunks_exact`).
+    /// The fixed-size fast path: when `T::SIZE` is `Some(s)`, the bytes
+    /// are taken a block at a time (the whole `n * s` from a slice reader,
+    /// at most a [`WINDOW`] from a streaming one) with one bounds check,
+    /// and each element is decoded from its own `s`-byte chunk
+    /// (`chunks_exact`).
     #[inline]
     pub fn seq_items<T: Snap>(
         &mut self,
@@ -391,22 +509,27 @@ impl<'a> Reader<'a> {
     ) -> Result<(), SnapError> {
         match T::SIZE {
             Some(s) if s > 0 => {
-                let start = self.offset();
-                let Some(total) = n.checked_mul(s) else {
+                if n.checked_mul(s).is_none() {
                     return Err(self.error::<T>(ErrorKind::LengthTooLarge(n as u64)));
-                };
-                let block = self.bytes(total)?;
-                for (i, chunk) in block.chunks_exact(s).enumerate() {
-                    let mut sub =
-                        Reader { buf: chunk, pos: 0, base: start + i * s, shared: Vec::new() };
-                    push(T::get(&mut sub)?);
-                    debug_assert_eq!(
-                        sub.pos,
-                        s,
-                        "{}::get read {} bytes of its SIZE {s}",
-                        type_name::<T>(),
-                        sub.pos
-                    );
+                }
+                let per = if self.streaming { (WINDOW / s).max(1) } else { n.max(1) };
+                let mut left = n;
+                while left > 0 {
+                    let k = left.min(per);
+                    let start = self.offset();
+                    let block = self.bytes(k * s)?;
+                    for (i, chunk) in block.chunks_exact(s).enumerate() {
+                        let mut sub = Reader::sub(chunk, start + i * s);
+                        push(T::get(&mut sub)?);
+                        debug_assert_eq!(
+                            sub.pos,
+                            s,
+                            "{}::get read {} bytes of its SIZE {s}",
+                            type_name::<T>(),
+                            sub.pos
+                        );
+                    }
+                    left -= k;
                 }
             }
             _ => {

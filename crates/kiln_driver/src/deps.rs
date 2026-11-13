@@ -145,6 +145,21 @@ impl DepList {
     pub fn files(&self) -> &[String] {
         &self.files
     }
+
+    /// Moves the listed, non-system `name` (as [`DepList::add`] spells it)
+    /// to the front, where a main file is listed: the producer's single
+    /// pass read the header as an `-include` (WP-1393). `false` when it is
+    /// not listed so.
+    pub(crate) fn move_to_front(&mut self, name: &str) -> bool {
+        let name = remove_dots(name);
+        let Some(i) = self.files.iter().position(|f| *f == name) else { return false };
+        if self.system_files.contains(&name) {
+            return false;
+        }
+        let f = self.files.remove(i);
+        self.files.insert(0, f);
+        true
+    }
 }
 
 /// `<built-in>`, `<command line>`, `<stdin>`, ...

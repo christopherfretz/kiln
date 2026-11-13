@@ -933,14 +933,35 @@ pub enum PchValidate {
 pub struct PchSnapshotUse {
     /// The PCH file, for `-v` notes.
     pub pch: String,
-    /// The snapshot section's bytes.
-    pub bytes: std::sync::Arc<Vec<u8>>,
-    /// Where the restored roots start in [`Self::bytes`] (after the
-    /// identity).
-    pub start: usize,
+    /// Where the restored roots are read from.
+    pub roots: SnapshotRoots,
     /// The consumer's `-include`s after the PCH (those the producer did
     /// not have).
     pub includes: Vec<String>,
+}
+
+/// Where a [`PchSnapshotUse`]'s roots (the section after its identity)
+/// are read from: streamed from the PCH file, so no copy of the section
+/// is held while the compile runs (spec/snap.md "Streaming reads"), or
+/// kept in memory when the file cannot be located.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotRoots {
+    /// `len` bytes at `offset` in `path`, which still has the `size` and
+    /// modification time it had when the section was checked. They end
+    /// the section block that starts at `block`, whose checksum (checked
+    /// when the PCH was read) is `sum`: the restore checks the block again
+    /// as it streams it.
+    File {
+        path: std::path::PathBuf,
+        block: u64,
+        sum: u64,
+        offset: u64,
+        len: u64,
+        size: u64,
+        modified: Option<std::time::SystemTime>,
+    },
+    /// The section's bytes from `start`.
+    Memory { bytes: std::sync::Arc<Vec<u8>>, start: usize },
 }
 
 /// The arguments a `load` consumer differs in from replay's.

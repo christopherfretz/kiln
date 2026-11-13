@@ -207,7 +207,8 @@ where
     fn get(r: &mut kiln_snap::Reader<'_>) -> Result<Self, kiln_snap::SnapError> {
         let written = r.str().map_err(|e| e.within("ColdMap.name"))?;
         let Some(&name) = COLD_MAP_NAMES.iter().find(|&&n| n == written) else {
-            return Err(r.invalid::<Self>(format!("unknown cold map name `{written}`")));
+            let why = format!("unknown cold map name `{written}`");
+            return Err(r.invalid::<Self>(why));
         };
         let map = r.get().map_err(|e| e.within("ColdMap.map"))?;
         Ok(ColdMap { name, map })

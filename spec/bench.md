@@ -187,6 +187,7 @@ declaration image") against clang's on fixed header sets
   | `gnu` | `<bits/stdc++.h>` (libstdc++ 14) | `-std=c++26` |
   | `lcx` | the 106 public libc++ 19 headers of docs/status/pch-image-census.md, one `#include` each | `-std=c++26 -stdlib=libc++` |
   | `mid` | `<algorithm>`, `<map>`, `<string>`, `<vector>` (libstdc++ 14) | `-std=c++26` |
+  | `meta` | `<meta>` and six containers (GCC 16's libstdc++); the unit reflects over its own types | `-std=c++26 --gcc-toolchain=<GCC 16>` (`KILN_GCC`'s installation, written `$GCC16` on the page); clang 19 has no `<meta>`, so the case has kiln's rows only |
   | `c` | `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<zlib.h>` | `-std=c17`, a C header (`-x c-header`) and a C unit (`-x c`) |
 
 - **Variants.** Each case has the entries `pch/<case>/<variant>`. The
@@ -202,6 +203,18 @@ declaration image") against clang's on fixed header sets
   | `load-obj` | `obj` | `-fkiln-pch-image=load -include-pch <pch> -O0 -c -o <obj>` | `-include-pch <pch> -O0 -c -o <obj>` |
   | `replay-syntax` | `syntax` | `-fno-kiln-pch-image -include-pch <pch> -fsyntax-only` | none |
   | `replay-obj` | `obj` | `-fno-kiln-pch-image -include-pch <pch> -O0 -c -o <obj>` | none |
+  | `snap-build` | `pch-build` | `-fkiln-pch-snapshot=write -O0 -x c++-header <case>.h -o <snap-pch>` | none |
+  | `snap-syntax` | `syntax` | `-fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -fsyntax-only` | none |
+  | `snap-obj` | `obj` | `-fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -c -o <obj>` | none |
+
+  Each consumer variant (`none`, `load`, `replay`, `snap`) also runs with
+  an empty main file (`bench/pch/empty.cpp`, `empty.c` for C) in place of
+  the unit: `<variant>-empty`, e.g. `snap-syntax-empty`. That isolates
+  the cost of the PCH itself from the unit's. The snapshot variants
+  (WP-1393) are C++ only and kiln only; they add `-O0` to the build and to
+  `-fsyntax-only` because the snapshot's identity keeps `-O0` (so every
+  snapshot command line matches its producer's). `<snap-pch>` is
+  `<case>.kiln-snap.pch`.
 
   Every command starts with the case's flags and ends with the unit (the
   build ends with `-o <pch>`). `<pch>` is `<case>.<kind>.pch` and `<obj>`
@@ -212,8 +225,11 @@ declaration image") against clang's on fixed header sets
   bench entry's `mode:` directive cannot name it. A consumer selected
   without its build (`--filter`) builds the PCH once, unmeasured.
 - **Measurement.** As any entry (`--runs`, default 5, median; the memory
-  cap). No constexpr or instantiation reports are requested. The 1-minute
-  load average is sampled at the start of the run and of each case.
+  cap), but interleaved (WP-1393): each round runs every variant of a case
+  once with each compiler, and the medians are taken over the rounds, so
+  a change in the host's load hits every variant alike. No constexpr or
+  instantiation reports are requested. The 1-minute load average is
+  sampled at the start of the run and of each case.
 - **Accounted memory.** After kiln's measured runs of a `none` variant,
   one more compile of the same command, unmeasured, adds
   `-fkiln-memory-report` before the input (spec/driver.md). Its
@@ -231,6 +247,11 @@ declaration image") against clang's on fixed header sets
     replay the header: <why>`);
   - `load-syntax` with `-v`, for the consumer's note (`declaration image
     (N records)` or `is replayed: <why>`).
+
+  With the snapshot variants, two more: the snapshot build with `-v`, to
+  a separate PCH (`snapshot written` or `snapshot not written: <why>`),
+  and `snap-syntax` with `-v` (`snapshot matches; restoring it` or why
+  not); the second gives the snapshot path, `snapshot` or `replay`.
 
   The consumer's note gives the path: `image`, `replay`, or `unknown` when
   there is no note. When the image is taken, `-fkiln-pch-image=check` is
@@ -274,8 +295,10 @@ declaration image") against clang's on fixed header sets
     record with both compilers' runs, plus a `pch` key:
     - `label` and `commit` (`git rev-parse --short=9 HEAD` of the root);
     - `cases.<case>`: `load_avg_1m`, `pch_bytes_kiln`, `pch_bytes_clang`,
-      `path`, `producer_note`, `consumer_note`, and `check`, which is
-      `null` when not run, `"equal"`, or the first error.
+      `pch_bytes_kiln_snapshot`, `path`, `producer_note`,
+      `consumer_note`, `snapshot_path`, `snapshot_producer_note`,
+      `snapshot_consumer_note`, and `check`, which is `null` when not run,
+      `"equal"`, or the first error.
 
     Readers of results ignore the key ("Records").
   - `--record` writes kiln's baselines into `bench/baselines/pch.json`.
@@ -299,14 +322,15 @@ declaration image") against clang's on fixed header sets
   commit, the clang version, the host, the run count, the RSS source and
   each case's load average. Then, per case:
   - the path line with both notes and the check result;
-  - both PCH file sizes;
-  - a table of every variant in page order (none, build, load, replay),
-    with kiln and clang seconds and MiB and the kiln/clang time and memory
-    ratios;
-  - the wall time of PCH load relative to no PCH, for each compiler;
+  - the PCH file sizes (kiln, clang, kiln with the snapshot);
+  - a table of every variant in page order (none, build, load, replay,
+    snapshot build, snapshot; then the empty-main consumers), with kiln
+    and clang seconds and MiB and the kiln/clang time and memory ratios;
+  - the wall time of PCH load relative to no PCH, for each compiler, and
+    of the kiln snapshot relative to replay and to clang's PCH;
   - the case's command lines.
-- **Cost.** About 3 minutes at 5 runs on the shared aarch64 host, and about
-  40 seconds at `--runs 1`. It is not part of `cargo xtask ci` and runs in
+- **Cost.** About 8 minutes at 5 runs on the shared aarch64 host, and
+  about 2 minutes at `--runs 1`. It is not part of `cargo xtask ci` and runs in
   no CI workflow. Run it by hand when the PCH writer or consumer changes,
   and before a release:
 

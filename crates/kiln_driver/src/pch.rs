@@ -209,6 +209,27 @@ impl Record {
 
     /// Parses a record.
     pub(crate) fn parse(bytes: &[u8]) -> Result<Record, ReadError> {
+        let (mut r, image_at) = Self::parse_text(bytes)?;
+        if let Some(at) = image_at {
+            r.image = Some(bytes[at..].to_vec());
+        }
+        Ok(r)
+    }
+
+    /// [`Record::parse`] of a record read into `bytes`, whose image keeps
+    /// the buffer (WP-1393: no copy of an image that may be tens of MB).
+    pub(crate) fn parse_owned(mut bytes: Vec<u8>) -> Result<Record, ReadError> {
+        let (mut r, image_at) = Self::parse_text(&bytes)?;
+        if let Some(at) = image_at {
+            bytes.drain(..at);
+            r.image = Some(bytes);
+        }
+        Ok(r)
+    }
+
+    /// The record's text, parsed, and where its image starts in `bytes`
+    /// once the image line has checked it.
+    fn parse_text(bytes: &[u8]) -> Result<(Record, Option<usize>), ReadError> {
         if bytes.starts_with(&bmi::CLANG_MAGIC) {
             return Err(ReadError::Clang);
         }
@@ -241,6 +262,7 @@ impl Record {
             return Err(corrupt("checksum mismatch"));
         }
         let mut r = Record::default();
+        let mut image_at = None;
         let mut seen_kiln = false;
         for line in body[..end_at].lines().skip(1) {
             let bad = || corrupt(&format!("bad line '{line}'"));
@@ -263,13 +285,13 @@ impl Record {
                 }
                 ("macro", 3) if f[0] == "D" => r.macros.push((u(1)?, Some(u(2)?))),
                 ("macro", 2) if f[0] == "U" => r.macros.push((u(1)?, None)),
-                ("image", 2) if r.image.is_none() => {
+                ("image", 2) if image_at.is_none() => {
                     let len: usize = f[0].parse().map_err(|_| bad())?;
                     let sum = u64::from_str_radix(f[1], 16).map_err(|_| bad())?;
                     if tail.len() != len || bmi::block_checksum(tail) != sum {
                         return Err(corrupt("image checksum mismatch"));
                     }
-                    r.image = Some(tail.to_vec());
+                    image_at = Some(text_len);
                 }
                 ("file", 6) => r.files.push(FileEntry {
                     size: f[0].parse().map_err(|_| bad())?,
@@ -285,10 +307,10 @@ impl Record {
         if !seen_kiln || r.main.is_empty() {
             return Err(corrupt("missing fields"));
         }
-        if r.image.is_none() && !tail.is_empty() {
+        if image_at.is_none() && !tail.is_empty() {
             return Err(corrupt("trailing bytes"));
         }
-        Ok(r)
+        Ok((r, image_at))
     }
 }
 
@@ -1008,7 +1030,7 @@ fn load(pch: &str, preprocess: bool) -> Result<Record, Vec<PchDiag>> {
             return Err(d);
         }
     };
-    Record::parse(&bytes).map_err(|err| match err {
+    Record::parse_owned(bytes).map_err(|err| match err {
         ReadError::NotPch if preprocess => vec![one(DiagId::drv_pch_not_pch, &[pch])],
         ReadError::NotPch => {
             vec![one(DiagId::drv_pch_not_pch, &[pch]), one(DiagId::drv_pch_invalid, &[pch])]
@@ -1234,11 +1256,25 @@ fn produce_one(
         let path = crate::time_trace::path(args, Some(phase), &input.path, &out);
         crate::time_trace::InputTrace::start(s, path)
     });
-    let r = {
+    // EXPERIMENTAL (WP-1383, WP-1393): with `-fkiln-pch-snapshot=write`
+    // the snapshot pass runs first when it may stand in for the header
+    // pass (`pch_snapshot::produce`); otherwise after it, in `write_pch`.
+    let mut snapshot = None;
+    let mut single = None;
+    if args.pch.snapshot == crate::args::PchSnapshot::Write
+        && crate::pch_snapshot::single_pass_allowed(args, std)
+    {
+        let p = crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts, true);
+        single = p.result;
+        snapshot = Some(p.section);
+    }
+    let r = if let Some(r) = single {
+        r
+    } else {
         let _frontend = trace.as_ref().map(|_| kiln_source::trace::Scope::new("Frontend"));
         syntax_only(&check_args, tc, std, &input.path, stdin, diag_opts, io)
     };
-    let errors = write_pch(args, tc, input, std, r, &out, diag_opts, io);
+    let errors = write_pch(args, tc, input, std, r, snapshot, &out, diag_opts, io);
     if let Some(mut t) = trace.take() {
         t.failed = errors > 0;
         if let Err((path, e)) = t.finish(&args.program) {
@@ -1250,7 +1286,8 @@ fn produce_one(
 }
 
 /// Writes the PCH record of the checked header (`r`, its job's result)
-/// to `out`, then the `-MD` file. The errors.
+/// to `out`, then the `-MD` file. The errors. `snapshot`: the snapshot
+/// section already made (`-fkiln-pch-snapshot=write`), if any.
 #[allow(clippy::too_many_arguments)]
 fn write_pch(
     args: &Args,
@@ -1258,6 +1295,7 @@ fn write_pch(
     input: &Input,
     std: LangStd,
     r: crate::pp_cmd::JobResult,
+    snapshot: Option<Result<Vec<u8>, String>>,
     out: &str,
     diag_opts: &DiagOptions,
     io: &mut Io,
@@ -1295,11 +1333,13 @@ fn write_pch(
     if args.pch.snapshot.writes() {
         // EXPERIMENTAL (WP-1383): the snapshot section, next to the
         // record (which replay still uses) and the image.
-        let made =
-            crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts).and_then(|s| {
-                crate::pch_snapshot::add_section(image.take(), s)
-                    .map_err(|e| format!("the section block: {e}"))
-            });
+        let section = snapshot.unwrap_or_else(|| {
+            crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts, false).section
+        });
+        let made = section.and_then(|s| {
+            crate::pch_snapshot::add_section(image.take(), s)
+                .map_err(|e| format!("the section block: {e}"))
+        });
         match made {
             Ok(block) => {
                 crate::pch_snapshot::note(args, &io.stderr, out, "written");

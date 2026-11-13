@@ -163,18 +163,34 @@ impl SyntaxJob<'_> {
     /// and the header; it is parsed to its end without the
     /// end-of-translation-unit work, closed, and every root written, in
     /// restore order. `Err`: why there is no snapshot.
-    pub(crate) fn snapshot(self) -> Result<Vec<u8>, String> {
+    ///
+    /// With `single` (WP-1393, `crate::pch_snapshot::produce`), the pass
+    /// then goes on as a consumer with an empty main file would: the main
+    /// file entered again and the end-of-translation-unit work done. The
+    /// second result is then the header pass's own result, when this pass
+    /// shows that the header pass would add nothing to it
+    /// ([`crate::pch_snapshot::stands_in`]).
+    pub(crate) fn snapshot(
+        self,
+        single: Option<&crate::pch_snapshot::Single<'_>>,
+    ) -> (Result<Vec<u8>, String>, Option<JobResult>) {
         let job = &self.0;
         let sm = SourceManager::new();
         let interner = Arc::new(Interner::new());
         let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
-        let mut out = Err("the preprocessor could not be built".to_owned());
+        let mut out = (Err("the preprocessor could not be built".to_owned()), None);
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
-                out = self.snapshot_parse(&sm, &engine, &interner, inputs);
+                out = self.snapshot_parse(&sm, &engine, &interner, inputs, single);
             }
         });
         engine.flush();
+        if out.1.is_some()
+            && let Some(single) = single
+            && !single.quiet()
+        {
+            out.1 = None;
+        }
         out
     }
 
@@ -184,22 +200,78 @@ impl SyntaxJob<'_> {
         engine: &DiagEngine<'sm>,
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
-    ) -> Result<Vec<u8>, String> {
+        single: Option<&crate::pch_snapshot::Single<'_>>,
+    ) -> (Result<Vec<u8>, String>, Option<JobResult>) {
+        let (bytes, (p, deps, target, popts)) =
+            match self.snapshot_encode(sm, engine, interner, inputs) {
+                Ok(x) => x,
+                Err(why) => return (Err(why), None),
+            };
+        let Some(single) = single else { return (Ok(bytes), None) };
+        engine.flush();
+        if !single.quiet() {
+            return (Ok(bytes), None);
+        }
+        let kiln_parse::ParsedPrefix { sema, mut pp, .. } = p;
+        let Some(main) = pp.main_file() else { return (Ok(bytes), None) };
+        if pp.enter_next_main_file(main).is_err() {
+            return (Ok(bytes), None);
+        }
+        let (tu, mut pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
+        // As `after_parse` with a dependency list: the preprocessor lexes
+        // on to the end after a fatal error.
+        while !pp.next().is_eof() {}
+        drop(pp);
+        engine.flush();
+        if engine.error_count() > 0 || !tu.inst_report.is_empty() || !tu.cfg_dump.is_empty() {
+            return (Ok(bytes), None);
+        }
+        let r = crate::pch_snapshot::stands_in(single, sm, engine, deps);
+        (Ok(bytes), r)
+    }
+
+    /// The snapshot pass's prefix and its encoding, with the parts a
+    /// single pass goes on with.
+    #[allow(clippy::type_complexity)]
+    fn snapshot_encode<'sm, 'd>(
+        &self,
+        sm: &'sm SourceManager,
+        engine: &'d DiagEngine<'sm>,
+        interner: &'sm Arc<Interner>,
+        inputs: PpInputs,
+    ) -> Result<
+        (
+            Vec<u8>,
+            (
+                kiln_parse::ParsedPrefix<'d, 'sm>,
+                Option<crate::pp_cmd::SharedDeps>,
+                Target,
+                ParseOptions,
+            ),
+        ),
+        String,
+    > {
         let job = &self.0;
         let a = job.args;
         let Some(target) = self.target(engine) else {
             return Err("the target is not supported".to_owned());
         };
-        let Some((pp, _deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
+        let Some((pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
             return Err("the preprocessor could not be built".to_owned());
         };
         let popts = self.parse_options(None);
         let limits = a.constexpr.limits();
         let started = std::time::Instant::now();
-        let mut p =
-            kiln_parse::parse_prefix(pp, Arc::clone(interner), engine, target, &popts, limits);
+        let mut p = kiln_parse::parse_prefix(
+            pp,
+            Arc::clone(interner),
+            engine,
+            target.clone(),
+            &popts,
+            limits,
+        );
         let parsed = started.elapsed();
-        p.ready?;
+        std::mem::replace(&mut p.ready, Ok(()))?;
         if engine.error_count() > 0 {
             return Err(format!("the prefix has {} error(s)", engine.error_count()));
         }
@@ -220,7 +292,7 @@ impl SyntaxJob<'_> {
                 bytes.len()
             );
         }
-        Ok(bytes)
+        Ok((bytes, (p, deps, target, popts)))
     }
 
     /// The target of the job's triple, or `None` once the error is

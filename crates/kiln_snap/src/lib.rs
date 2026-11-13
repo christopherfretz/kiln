@@ -28,7 +28,7 @@ mod wire;
 pub use error::{ErrorKind, SnapError};
 pub use kiln_snap_derive::Snap;
 pub use schema::{Desc, Schema, schema_hash};
-pub use wire::{Reader, Writer};
+pub use wire::{Reader, WINDOW, Writer};
 
 /// A type that can be written to a snapshot and read back.
 ///

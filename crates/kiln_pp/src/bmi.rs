@@ -323,26 +323,94 @@ pub fn checksum(bytes: &[u8]) -> u64 {
 /// Module files keep [`checksum`]: changing it would change their format.
 #[must_use]
 pub fn block_checksum(bytes: &[u8]) -> u64 {
+    let mut c = BlockChecksum::new();
+    c.update(bytes);
+    c.finish()
+}
+
+/// [`block_checksum`] of bytes given a piece at a time (WP-1393: a PCH
+/// consumer that streams its snapshot from the file checks the block as
+/// it reads it): after [`update`](Self::update)s with pieces whose
+/// concatenation is `b`, [`finish`](Self::finish) is `block_checksum(b)`.
+#[derive(Clone, Debug)]
+pub struct BlockChecksum {
+    lanes: [u64; 4],
+    /// The bytes after the last whole 32-byte group so far.
+    carry: [u8; 32],
+    carried: usize,
+    len: u64,
+}
+
+impl Default for BlockChecksum {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BlockChecksum {
     const K: u64 = 0x9e37_79b9_7f4a_7c15;
-    let step = |l: u64, w: u64| (l ^ w).wrapping_mul(K).rotate_left(29);
-    let mut lanes: [u64; 4] = [
-        0x243f_6a88_85a3_08d3,
-        0x1319_8a2e_0370_7344,
-        0xa409_3822_299f_31d0,
-        0x082e_fa98_ec4e_6c89,
-    ];
-    let (groups, rest) = bytes.as_chunks::<32>();
-    for g in groups {
-        let (words, _) = g.as_chunks::<8>();
-        for (l, w) in lanes.iter_mut().zip(words) {
-            *l = step(*l, u64::from_le_bytes(*w));
+
+    /// The checksum of no bytes so far.
+    #[must_use]
+    pub fn new() -> Self {
+        BlockChecksum {
+            lanes: [
+                0x243f_6a88_85a3_08d3,
+                0x1319_8a2e_0370_7344,
+                0xa409_3822_299f_31d0,
+                0x082e_fa98_ec4e_6c89,
+            ],
+            carry: [0; 32],
+            carried: 0,
+            len: 0,
         }
     }
-    let mut h = fnv(FNV_OFFSET ^ bytes.len() as u64, rest);
-    for l in lanes {
-        h = step(h, l);
+
+    #[inline]
+    fn step(l: u64, w: u64) -> u64 {
+        (l ^ w).wrapping_mul(Self::K).rotate_left(29)
     }
-    h ^ (h >> 31)
+
+    #[inline]
+    fn group(lanes: &mut [u64; 4], g: &[u8; 32]) {
+        let (words, _) = g.as_chunks::<8>();
+        for (l, w) in lanes.iter_mut().zip(words) {
+            *l = Self::step(*l, u64::from_le_bytes(*w));
+        }
+    }
+
+    /// Adds the next `bytes`.
+    pub fn update(&mut self, mut bytes: &[u8]) {
+        self.len += bytes.len() as u64;
+        if self.carried > 0 {
+            let k = (32 - self.carried).min(bytes.len());
+            self.carry[self.carried..self.carried + k].copy_from_slice(&bytes[..k]);
+            self.carried += k;
+            bytes = &bytes[k..];
+            if self.carried < 32 {
+                return;
+            }
+            let g = self.carry;
+            Self::group(&mut self.lanes, &g);
+            self.carried = 0;
+        }
+        let (groups, rest) = bytes.as_chunks::<32>();
+        for g in groups {
+            Self::group(&mut self.lanes, g);
+        }
+        self.carry[..rest.len()].copy_from_slice(rest);
+        self.carried = rest.len();
+    }
+
+    /// The checksum of every byte added.
+    #[must_use]
+    pub fn finish(&self) -> u64 {
+        let mut h = fnv(FNV_OFFSET ^ self.len, &self.carry[..self.carried]);
+        for l in self.lanes {
+            h = Self::step(h, l);
+        }
+        h ^ (h >> 31)
+    }
 }
 
 /// True if `bytes` starts with the kiln magic.
@@ -663,27 +731,60 @@ pub fn write_sections(sections: &[Section]) -> Vec<u8> {
 /// [`BmiError::Corrupt`] for a truncated block, an unknown or repeated
 /// tag, trailing bytes or a checksum mismatch.
 pub fn read_sections(bytes: &[u8]) -> Result<Vec<Section>, BmiError> {
+    Ok(section_ranges(bytes)?
+        .into_iter()
+        .map(|(tag, at)| Section { tag, bytes: bytes[at].to_vec() })
+        .collect())
+}
+
+/// [`read_sections`] without copying (WP-1393): each section's tag and
+/// where its bytes are in `bytes`, after the same checks (the checksum
+/// first, over the whole block).
+///
+/// # Errors
+/// As [`read_sections`].
+pub fn section_ranges(bytes: &[u8]) -> Result<Vec<(u32, std::ops::Range<usize>)>, BmiError> {
     let Some(body_len) = bytes.len().checked_sub(8) else { return corrupt("truncated") };
     let mut t = [0u8; 8];
     t.copy_from_slice(&bytes[body_len..]);
     if u64::from_le_bytes(t) != block_checksum(&bytes[..body_len]) {
         return corrupt("checksum mismatch");
     }
-    // The checksum is checked once, over the whole block, first: the
-    // reader's running FNV sum would hash it a second time, byte by byte.
-    let mut src = &bytes[..body_len];
-    let mut r = R {
-        kind: KIND_SECTIONS,
-        src: &mut src,
-        left: body_len as u64,
-        sum: FNV_OFFSET,
-        track: false,
+    let body = &bytes[..body_len];
+    let mut at = 0usize;
+    let u32_at = |at: &mut usize| -> Res<u32> {
+        let Some(w) = body.get(*at..*at + 4) else { return corrupt("truncated") };
+        *at += 4;
+        Ok(u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
     };
-    let sections = sections(&mut r)?;
-    if r.left != 0 {
+    // A count or length is checked against what is left, as `R::count`.
+    let n = u32_at(&mut at)? as usize;
+    if (n as u64).saturating_mul(8) > (body_len - at) as u64 {
+        return corrupt("length exceeds the file");
+    }
+    if n == 0 {
+        return corrupt("a kind-2 file without sections");
+    }
+    let mut out: Vec<(u32, std::ops::Range<usize>)> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let tag = u32_at(&mut at)?;
+        if tag == 0 || tag > SECTION_MAX {
+            return corrupt("unknown section");
+        }
+        if out.last().is_some_and(|s| s.0 >= tag) {
+            return corrupt("sections out of order");
+        }
+        let len = u32_at(&mut at)? as usize;
+        if len > body_len - at {
+            return corrupt("length exceeds the file");
+        }
+        out.push((tag, at..at + len));
+        at += len;
+    }
+    if at != body_len {
         return corrupt("trailing bytes");
     }
-    Ok(sections)
+    Ok(out)
 }
 
 /// Reads a section block ([`section_block`]).
@@ -1295,6 +1396,26 @@ mod tests {
     /// The section-block checksum (WP-1392): pinned, length-sensitive,
     /// and any one flipped bit of a block (in a whole 32-byte group or in
     /// the tail) changes it, so `read_sections` reports it as damage.
+    /// [`BlockChecksum`] (WP-1393) over any split of a block is
+    /// [`block_checksum`] of the whole, and both keep the values written
+    /// PCHs carry (pinned from the one-pass definition).
+    #[test]
+    fn block_checksum_by_pieces_is_the_whole() {
+        let data: Vec<u8> = (0..101u32).map(|i| (i * 37 % 251) as u8).collect();
+        assert_eq!(block_checksum(b""), 0xf959_3e91_de54_6f77);
+        assert_eq!(block_checksum(&data), 0x96bb_e995_0df2_a5a5);
+        for cut in [1, 7, 31, 32, 33, 64, 100] {
+            for step in [1, 3, 32, 50, 101] {
+                let mut c = BlockChecksum::new();
+                c.update(&data[..cut]);
+                for piece in data[cut..].chunks(step) {
+                    c.update(piece);
+                }
+                assert_eq!(c.finish(), block_checksum(&data), "cut {cut} step {step}");
+            }
+        }
+    }
+
     #[test]
     fn block_checksum_catches_every_flip() {
         assert_eq!(block_checksum(b""), block_checksum(b""));

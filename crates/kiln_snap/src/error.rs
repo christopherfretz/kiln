@@ -31,6 +31,9 @@ pub enum ErrorKind {
     /// A hand-written decoder rejected the data (an index out of range, an
     /// inconsistent table).
     Invalid(String),
+    /// A streaming reader's source failed or ended early
+    /// ([`Reader::streaming`](crate::Reader::streaming)).
+    Io(String),
 }
 
 impl fmt::Display for ErrorKind {
@@ -45,6 +48,7 @@ impl fmt::Display for ErrorKind {
             ErrorKind::SharedCycle => f.write_str("shared index refers to an unfinished object"),
             ErrorKind::TrailingBytes(n) => write!(f, "{n} trailing bytes"),
             ErrorKind::Invalid(why) => f.write_str(why),
+            ErrorKind::Io(why) => write!(f, "read error: {why}"),
         }
     }
 }

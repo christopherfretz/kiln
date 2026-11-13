@@ -94,7 +94,8 @@ the median of 5 runs, for `-c` at `-O0`.
 | meta (GCC 16 `<meta>`) | 0.94 s | 0.94 s | 0.58 s | 205 ms | 28 ms | 0.23 s | 0.84 s | 0.77 s | 0.38 s |
 
 **Peak RSS (empty).** RSS is higher with the snapshot because the whole
-section stays in memory while it is decoded (W6, streaming decode).
+section stays in memory while it is decoded (W6, streaming decode;
+done by WP-1393, below).
 
 | prefix | textual | replay | snapshot |
 |---|---|---|---|
@@ -224,9 +225,10 @@ the `pch:` tests. Every prefix ended at rest.
   - The validation costs 3× the restore: a word-wise checksum, the schema
     hash as a build constant, and mtime file checks are worth about
     150 ms on gnu.
-  - The section is held whole (+24–35 MB RSS).
+  - The section is held whole (+24–35 MB RSS). Done by WP-1393.
   - The producer's second parse doubles the write time; reusing the
     first parse would mean making the header job stop at the prefix.
+    Done by WP-1393 for headers whose two shapes cannot differ.
 - **W7** (corpus and gates) is unchanged. It also needs a harness
   producer that mirrors the consumer's flags, for module tests.
 - **W8** (spec) is unchanged; the restore order is now written down in
@@ -246,3 +248,146 @@ The net is about 6 product WPs instead of 8.
   `block_checksum`), schema hash 1.7-2.1 ms (once per process), identity
   1.0-1.4 ms, file check 1.0-1.2 ms (mtime first): about 8.5 ms. Wall
   320-348 ms.
+
+## WP-1393: one producer pass, streaming decode (2026-11-13)
+
+Still behind `-fkiln-pch-snapshot=write|load`; the default is unchanged
+and replay stays the fallback. The bench rows are in
+[pch.md](pch.md), regions `wp-1393-before`, `wp-1393-after` and
+`wp-1393-merged` (after the merge with WP-1392 and WP-1394); the first two ran
+40 minutes apart under different load (16 and 20), so the table below is
+an interleaved A/B of the old and the new binary instead: both release
+builds, median of 7, each round runs every row with both binaries, load
+17–20, wall s / peak RSS MB, `-O0`.
+
+| prefix | build | syntax main | `-c` main | syntax empty | `-c` empty | replay empty |
+|---|---|---|---|---|---|---|
+| gnu before | 2.79 / 139 | 0.51 / 115 | 0.63 / 117 | 0.50 / 114 | 0.54 / 115 | 1.45 / 86 |
+| gnu after | **1.60** / 124 | 0.49 / **84** | 0.62 / 86 | 0.45 / **81** | 0.51 / 82 | 1.46 / 87 |
+| lcx before | 2.37 / 155 | 0.41 / 120 | 0.55 / 121 | 0.38 / 117 | 0.46 / 117 | 1.22 / 86 |
+| lcx after | **1.36** / 127 | 0.39 / **87** | 0.53 / 87 | 0.34 / **87** | 0.43 / 87 | 1.20 / 86 |
+| mid before | 0.61 / 52 | 0.15 / 43 | 0.24 / 53 | 0.12 / 41 | 0.13 / 47 | 0.33 / 33 |
+| mid after | **0.35** / 49 | 0.13 / **36** | 0.21 / 53 | 0.11 / **35** | 0.13 / 47 | 0.32 / 33 |
+| meta before | 1.32 / 59 | 0.31 / 48 | 0.41 / 53 | 0.28 / 46 | 0.32 / 48 | 0.60 / 37 |
+| meta after | **0.79** / 56 | 0.33 / **39** | 0.42 / 53 | 0.29 / **38** | 0.34 / 47 | 0.62 / 37 |
+
+PCH sizes are unchanged: gnu 36.6 MB, lcx 41.2 MB, mid 8.8 MB, meta
+10.9 MB. Replay rows are the control (no change expected).
+
+**After merging WP-1392 and WP-1394** (block checksum, mtime file
+check, C headers, diagnostics policy), the same binary interleaved with
+textual kiln, replay and clang 19 (`-include-pch`), median of 7, load
+21.8–24.7, wall s / peak RSS MB, `-O0`. This is the final table.
+
+| prefix | build | syntax main | syntax empty | `-c` main | replay main | textual main | clang build | clang PCH main | clang PCH empty | clang textual main |
+|---|---|---|---|---|---|---|---|---|---|---|
+| gnu | 1.40 / 124 | **0.35** / 82 | 0.31 / 82 | 0.47 / 85 | 1.34 / 89 | 1.32 / 88 | 1.52 / 273 | 0.38 / 162 | 0.35 / 157 | 1.40 / 233 |
+| lcx | 1.21 / 127 | **0.24** / 83 | 0.20 / 81 | 0.37 / 84 | 1.16 / 89 | 1.16 / 88 | 1.51 / 258 | 0.20 / 146 | 0.13 / 134 | 1.25 / 213 |
+| mid | 0.38 / 48 | **0.09** / 35 | 0.08 / 34 | 0.18 / 50 | 0.35 / 34 | 0.33 / 32 | 0.34 / 134 | 0.09 / 107 | 0.04 / 98 | 0.29 / 122 |
+| meta | 0.56 / 56 | **0.13** / 40 | 0.09 / 39 | 0.21 / 50 | 0.48 / 38 | 0.45 / 37 | — | — | — | — |
+
+(clang 19 cannot compile GCC 16's `<meta>`.)
+
+**What changed.**
+- **The producer parses once** when it can (spec/snap.md "The
+  producer's single pass"). The snapshot pass (the header as an
+  `-include` of an empty main) runs first; when nothing a main file
+  alone gets could differ, its end of TU stands in for the header pass,
+  so `syntax_only` over the header as main file is skipped. Build time
+  falls 40–45% on every prefix. What differs between the two shapes,
+  and how each is handled:
+  - the SourceManager layout and include chain, `__BASE_FILE__`,
+    `__INCLUDE_LEVEL__`, `pp.main_file`: the PCH record and the
+    snapshot are written from the snapshot pass in both modes; a
+    header (or any file it includes) that spells `__INCLUDE_LEVEL__` or
+    `__BASE_FILE__` takes two passes;
+  - the `-MD` order (the main file first): the header is moved to the
+    front of the dependency list;
+  - main-file-only diagnostics: `#include_next` in the primary file,
+    `#pragma GCC system_header` in the main file, and the unused-declaration warnings
+    (`-Wunused-variable`, `-Wunused-const-variable`,
+    `-Wunneeded-internal-declaration`, unused variable templates) that
+    apply to main-file declarations only: two passes when the header has
+    any of them (an unused-declaration warning that is enabled, unless
+    the header declares nothing);
+  - any diagnostic at all from the snapshot pass, `-v`, `-verify`, a
+    time trace, dumps, reports, `-MG` or an image mode: two passes, as
+    before. A header with errors therefore costs one extra pass
+    (+0.1–0.2 s) before the fallback; that is the price of keeping the
+    header pass's own diagnostics and exit status.
+  - `KILN_PCH_SNAPSHOT_PASSES=2` forces the old two passes; the test
+    `kiln_driver/tests/pch_snapshot_producer.rs` compares both modes on
+    exit status, diagnostics, the `-MD` file and the PCH record, and the
+    consumer IR. 26 hand cases (the four prefixes with and without
+    `-Wall -Wextra`, the diag case, nine small headers with and without
+    `-Wall`) gave identical output. (`#pragma once` in a header compiled
+    as main is already silent, so it does not differ.)
+- **The decode streams.** The consumer no longer reads the section into
+  memory: `open` reads it from the file through `kiln_snap::Reader::
+  streaming`, a 1 MiB window that drops decoded bytes (no copy of the
+  whole section, no zero fill). Peak RSS falls 30–33 MB on gnu and lcx
+  and 6–8 MB on mid and meta, to within 3 MB of replay's (gnu 81 vs 87,
+  lcx 87 vs 86, mid 35 vs 33, meta 38 vs 37). The PCH's size and mtime
+  are checked again at open, so a file changed after the check falls
+  back to replay. A PCH read from memory (no file) keeps the slice
+  reader.
+- **The type store decodes arena by arena** instead of through its
+  derived `get`, which measured three times slower (14 ms against 5 ms
+  for gnu's 5 MB store).
+- **No copies of the section block on load.** `pch::load` keeps the
+  file buffer as the image (`Record::parse_owned`) and
+  `bmi::section_ranges` locates the sections in place; the block is
+  checksummed once (WP-1392's `bmi::block_checksum`).
+- **The streamed block is verified during the stream.** The streaming
+  reader re-reads the block from the file through `bmi::BlockChecksum`
+  (the prefix sections are read into the sum and dropped); the sum is
+  compared after the last root is decoded and before anything restored
+  is used, so a mismatch refuses the snapshot and falls back to replay.
+- **C headers take two passes**: C's main-file-only diagnostics are not
+  in the single-pass list (`single_pass_allowed`).
+
+**Per-root split** (`KILN_SNAP_TIMING=1`, gnu, empty main, before →
+after): SourceManager 5.3 → 8 ms, Interner 4.4 → 3.9 ms, Preprocessor 9
+→ 4–7 ms, **Ast 36–38 → 42 ms** (with the streaming reads, which now
+fall inside the decode timers: about 8 ms of file reading moved in from
+the section search), Oven 3.3 → 5 ms, Sema 3.5 → 5 ms (load 20–30; ±20%).
+Ast by field, after: types 16.7 ms (7.9 MB; store 5.1 ms, intern-table
+rebuild 5.6 ms, template arguments 3.8 ms), decls 5.7 ms (7.2 MB), exprs
+5.1 ms (7.0 MB), templates 3.2 ms, lists 1.9 ms, lookup 1.3 ms, stmts
+0.8 ms, redecls 0.7 ms, the rest under 0.3 ms. Decode runs at 0.5–1.5
+GB/s per field; the rebuilds of the intern tables (6–7 ms) are the
+largest single item left, and are what keeps hash order out of the
+format.
+
+**End of TU on an empty main.** `continue` after a gnu restore costs
+190–220 ms. Of that, 191.5 ms is `perform_pending_instantiations`
+([temp.point]/7: the implicit instantiations the prefix requested, done
+at the end of the translation unit); the walks after it (unused
+declarations, deferred checks) take 2–4 ms. Textual kiln pays the same
+(gnu `-fsyntax-only` with an empty main: 1.41 s, of which the same
+instantiations are about 0.2 s); clang 19 pays 278 ms for them textually
+and its PCH consumer, which re-runs them, takes 0.53 s on the same empty
+main. Nothing here is removable without changing which instantiations a
+consumer performs, so this WP removed nothing. The lever is clang's
+`-fpch-instantiate-templates`: instantiate in the producer and carry the
+results in the snapshot. It needs an owner decision (it changes where
+instantiation diagnostics appear).
+
+**Gap to clang 19's PCH** (final table, `-fsyntax-only`):
+- gnu: main 0.35 s against clang's 0.38 s, empty 0.31 s against 0.35 s,
+  at 0.51x clang's memory: kiln is ahead.
+- lcx: main 0.24 s against 0.20 s, empty 0.20 s against 0.13 s: clang
+  is ahead by 40–70 ms, at 0.57x of its memory.
+- mid: main level (0.09 s), empty 0.08 s against 0.04 s.
+- meta: 0.13 s against 0.48 s for replay and 0.45 s textual.
+- What remains of a gnu consumer (`KILN_SNAP_TIMING=1`, after the
+  merge): validation before any decode is about 27 ms (sections 2.5 ms,
+  schema hash 21 ms, identity 2 ms, mtime file check 1.2 ms); restore
+  about 75 ms (Ast 47–51 ms); end of TU 209–247 ms, the instantiations
+  clang pays too.
+
+**Follow-ups.**
+- The identity's schema hash is recomputed on every load (about 21 ms
+  on gnu, `kiln_driver/src/pch_snapshot.rs` `identity`); a build-time
+  constant would remove it.
+- Pre-instantiation in the producer (above).
