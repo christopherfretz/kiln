@@ -197,7 +197,7 @@ throw-away instrumented build, one run each:
   templates_wide; `llvm-as-19` alone (parsing the text) goes from 0.44
   to 1.13 s and from 0.02 to 0.39 s. On format-test's `-S -emit-llvm`
   path the two `opt-19` runs add about 1.1 s with `-g`. That is the
-  text round trip (perf-reference-workload.md F4), not front-end work.
+  text round trip (perf-reflection.md F4), not front-end work.
 
 **What changed.** Static node names and field keys (`&'static str`), so
 a node allocates only its field list; hash-once interning into a
@@ -306,7 +306,7 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   text by `llc-19`, and twice by the two `opt-19` runs of an
   `always_inline` module's `-S -emit-llvm`
   (`kiln_driver/src/codegen_cmd.rs` `ir_passes`); a bitcode writer or a
-  single `opt` run would cut it (perf-reference-workload.md F4).
+  single `opt` run would cut it (perf-reflection.md F4).
 - Call-site declaration subprograms above `-O0` (the call site DIE gap).
 - The D items under "Gaps", in roughly this order: structured bindings,
   `DIImportedEntity`, global-initializer subprograms, alias templates,

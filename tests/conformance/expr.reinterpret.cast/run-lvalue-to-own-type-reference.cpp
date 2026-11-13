@@ -4,7 +4,7 @@
 // object. So T2 may be T1 itself ([expr.reinterpret.cast]/2), T1 with more
 // cv-qualifiers, another object type, a function type for a function, and
 // the reference an rvalue reference, or an lvalue reference to an xvalue
-// (clang accepts any glvalue). The shape of the reference workload source file:
+// (clang accepts any glvalue). The shape of a downstream source file:
 // `template<class U> F(const U& u) : v(reinterpret_cast<const T&>(u))` with
 // T = U.
 //@ expect: run

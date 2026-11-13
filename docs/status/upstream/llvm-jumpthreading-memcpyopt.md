@@ -1,7 +1,7 @@
 # Upstream report: JumpThreading is super-linear on one long chain of invokes
 
 Status: draft, **not filed**. It is the issue text for the LLVM issue
-tracker (F22 in docs/status/perf-reference-workload.md). It is
+tracker (F22 in docs/status/perf-reflection.md). It is
 clean-room: the reproducer is public and written for this report, and
 every number below comes from clang's own IR, so the report does not
 depend on kiln. Kiln works around the shape by outlining (WP-641,

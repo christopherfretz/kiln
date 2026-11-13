@@ -6,7 +6,7 @@
 // deduces a pointer-to-function P. The one member that does deduce is
 // the argument, which must agree with the other arguments' deductions.
 // The set formed in a template is resolved at instantiation. Reduced
-// from the reference workload's field-extraction header (extract_from over
+// from a downstream field-extraction header (extract_from over
 // the overloaded getters of an internal namespace handles). Matches clang 21.
 //@ expect: compile-fail
 //@ strict-diags

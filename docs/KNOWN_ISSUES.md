@@ -155,8 +155,8 @@ current figure. What is not done yet:
   `members_of`, but not for the equal `^^C<2>::f`. The standard
   instantiates nothing here (the value is an `info`, and no expression
   names the function), so kiln keeps its behavior; a member whose body is
-  ill-formed for the specialization stays uninstantiated. Found by the
-  reference workload; decided in 1.0.1
+  ill-formed for the specialization stays uninstantiated. Found in
+  downstream code; decided in 1.0.1
   ([WP-1252](../spec/landed/reflection/WP-1252.md)).
 
 ## Uninitialized variables at C++26

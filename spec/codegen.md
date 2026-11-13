@@ -4582,8 +4582,8 @@ No lowering changed; the new forms reach codegen as existing AST.
   lane, splat, narrowing and permute builtins with the type-code and
   alignment rules (spec/landed/codegen/WP-628.md "NEON load/store
   builtins"; a load or store takes the pointer operand's known
-  alignment, not always `align 1`), and the arithmetic builtins the
-  reference workload reaches (WP-628.md "NEON arithmetic builtins":
+  alignment, not always `align 1`), and the arithmetic builtins that
+  real scanner and linear-algebra code reaches (WP-628.md "NEON arithmetic builtins":
   `vpadd`, `vqsub`, `vmax`, `vmin`, `vabs`, `vsqrt`, `vfma`, `vbsl`,
   `vtst` as `sext (icmp ne (and a, b), zeroinitializer)`, `vcvt`, the
   `v{max,min,add}v` reductions, `vmull_p64`; and every other builtin an

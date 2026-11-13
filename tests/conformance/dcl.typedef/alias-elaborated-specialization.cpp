@@ -1,7 +1,7 @@
 // [dcl.type.elab], [dcl.typedef]/2: in an alias-declaration's type-id,
 // `struct X<A>` followed by the declaration's `;` refers to the
 // specialization; it declares nothing, so no `template<>` is needed
-// (the reference workload's `using Traits = struct TypeTraits<CodeSet>;`).
+// (as in real code: `using Traits = struct TypeTraits<CodeSet>;`).
 //@ strict-diags
 template <class T> struct TT;
 template <> struct TT<int> { static const int v = 1; };

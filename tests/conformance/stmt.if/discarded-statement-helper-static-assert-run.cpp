@@ -1,4 +1,4 @@
-// [stmt.if]/2, [temp.inst]/8: the reference workload's field-access macro
+// [stmt.if]/2, [temp.inst]/8: a downstream field-access macro
 // (its exception header) in an ordinary member
 // function picks, by `if constexpr` on the destination type, one of two
 // accessor lambdas and passes it to the helper template `impl`, whose

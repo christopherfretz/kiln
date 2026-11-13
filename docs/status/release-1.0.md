@@ -16,7 +16,7 @@ different number, update those pages in the same change.
   lowering, reflection (`extract`, `^^` of operator and conversion
   template-ids, `members_of` and `display_string_of`) and the Oven's
   uncaught-exception note. A section re-run on `ae54fd2fa` says so.
-- Reference workload: the reference workload's maintainers verified
+- Downstream build: the maintainers of a large reflection-heavy codebase verified
   `e6199e693`: PASS, and `ae54fd2fa`: PASS. On `ae54fd2fa` its cold
   build exits 0, 2081 of 2081 unit tests pass, and its diagnostics lane
   passes 941 of 947 with no new failures (922 on the first RC). The one

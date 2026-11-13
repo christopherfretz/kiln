@@ -3,7 +3,7 @@
 // it is a boolean conversion ([conv.bool]: nonzero is `true`), not a
 // truncation to one bit (clang `CK_IntegralToBoolean`). [expr.static.cast]/9,
 // [conv.prom]/4: the enumeration converts back, and an unscoped one
-// promotes, through `bool` (0 or 1). The shape is the reference workload's
+// promotes, through `bool` (0 or 1). The shape is real code's
 // `enum class Policy : bool`.
 //@ expect: run
 //@ stdout: 1 1 0 1 1 0

@@ -144,7 +144,7 @@ impl Sema<'_, '_> {
     /// reference type `ty` to `r` (yielding a `vk`): [expr.reinterpret.cast]/11,
     /// `*reinterpret_cast<r*>(&e)`, so any `et` whose pointer casts to
     /// `r*` ([expr.reinterpret.cast]/7), its own type and a more
-    /// cv-qualified one included (the reference workload's source file:
+    /// cv-qualified one included (found in real code:
     /// `reinterpret_cast<const T&>(u)` for a `const U& u` with `T` = `U`),
     /// but not one that casts away constness ([expr.reinterpret.cast]/2,
     /// [expr.const.cast]/8, at any level), nor a bit-field (clang

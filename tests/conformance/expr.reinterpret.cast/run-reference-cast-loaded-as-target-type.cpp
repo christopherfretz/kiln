@@ -3,7 +3,7 @@
 // ([conv.lval]/3) reads a T from that object, i.e. reinterprets the bytes
 // through memory. kiln's codegen took the value of the operand instead (a
 // `u32` where a `float` was wanted: "call argument 0: expected float,
-// found i32"). The shape of the reference workload source file's
+// found i32"). The shape of a downstream source file's
 // `s << reinterpret_cast<const float&>(f.val_)` in a friend of a class
 // template. Also: of a reference parameter, an array element, a function's
 // and an overloaded operator's reference result, an xvalue, in arithmetic,

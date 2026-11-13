@@ -7,7 +7,7 @@
 // a call through a marked function-pointer variable does not (clang 19
 // honoured neither, hence the version gate). BDE's bsls_annotation.h
 // defines BSLS_ANNOTATION_ANALYZER_NORETURN as it under clang, and the
-// reference workload builds with -Werror, so the attribute must be known
+// code that uses it builds with -Werror, so the attribute must be known
 // (not -Wunknown-attributes). The ill-formed spellings are in
 // analyzer-noreturn-diagnostics.cpp.
 //@ expect: compile-ok

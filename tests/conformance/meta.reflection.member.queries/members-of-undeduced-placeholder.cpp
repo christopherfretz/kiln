@@ -44,7 +44,7 @@ consteval bool throws_params(info r) {
   try { (void)parameters_of(r); return false; } catch (exception&) { return true; }
 }
 
-// The reference workload's gate: 10 * functions reported + 1 when type_of
+// The downstream gate: 10 * functions reported + 1 when type_of
 // of `spin` succeeds, 2 when it throws. 10: spin is not reported.
 struct Gizmo {
   auto spin();

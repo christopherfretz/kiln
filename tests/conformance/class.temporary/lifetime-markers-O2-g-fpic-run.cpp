@@ -2,14 +2,14 @@
 // full-expression unless bound to a reference, which extends it to the
 // reference's lifetime), [except.ctor]/1-2 (automatic objects are
 // destroyed when a throw leaves their scope): with the flags of
-// the reference workload's release build (`-O2 -g -fPIC`; its `-march`
+// a downstream release build (`-O2 -g -fPIC`; its `-march`
 // is irrelevant here and omitted so the test runs on every host) the
 // lifetime markers of materialized temporaries,
 // lifetime-extended temporaries and of variables whose scope a throw
 // leaves (the llvm.lifetime.end in the EH cleanup) must use the
 // signature of the backend's LLVM: kiln emitted LLVM 22's sizeless
 // `llvm.lifetime.start.p0(ptr)` for an LLVM 21 `opt`, which rejected the
-// module. The shapes are the workload's: a guard object with a destructor around
+// module. The shapes are that build's: a guard object with a destructor around
 // a call that may throw, `const T&` bound to a returned aggregate, and a
 // temporary argument.
 //@ expect: run

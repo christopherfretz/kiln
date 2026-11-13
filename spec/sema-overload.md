@@ -1714,7 +1714,7 @@ types first (interface PR, docs/AGENTS.md); 068b starts from that.
 | **068b** operators | `overload/{oper,builtin,arrow,alloc}.rs`; `expr.rs` one dispatch call per binary/unary/subscript site; `decl.rs` `check_operator_decl`; operator ids | §2.4–2.5, §5, §6, surrogates, memoized built-in tables | `over.match.oper`, `over.built`, `over.call.object`, `over.oper`, `over.ref`, `class.compare` (rewrites), `expr.new` (lookup); 144/121-note relational ambiguity per target; `__float128` per target |
 
 Shared `expr.rs` edits are disjoint (068b: one dispatch call per site), as
-are the diag-id blocks. **Bench** `bench/overload/` (reference-workload-style): 200
+are the diag-id blocks. **Bench** `bench/overload/` (shaped like real binding code): 200
 overloads × 1000 calls, a 50-deep `->` chain, 10k class `a < b`; records
 `ovl.*`, wall time, peak memory (spec/bench.md gates).
 

@@ -3,7 +3,7 @@
 // their cv-qualifiers, so `__attribute__((vector_size(16))) double const *p`
 // points to a const vector of two doubles, not to a vector of const double
 // (clang `processTypeAttrs` on the decl-spec type, then `ConvertDeclSpecToType`'s
-// qualifiers). The shape is the one reduced from the reference workload build
+// qualifiers). The shape is the one reduced from a downstream build
 // triage (the originating header was not located).
 //@ expect: compile-fail
 //@ strict-diags
