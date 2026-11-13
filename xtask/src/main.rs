@@ -497,7 +497,8 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     let bmi2_name = format!("kiln --bmi-kind 2{shard}");
     let pch_load_name = format!("kiln --pch-diff load{shard}");
     let pch_replay_name = format!("kiln --pch-diff replay{shard}");
-    let pch_snapshot_name = format!("kiln --pch-diff snapshot --pch-diff-require-restore{shard}");
+    let pch_snapshot_name =
+        format!("kiln --pch-diff snapshot --pch-diff-require-restore --pch-diff-extra-dir{shard}");
     let runs = [
         (self_check_name.as_str(), self_check),
         (kiln_name.as_str(), kiln_mode),
@@ -581,7 +582,8 @@ const PCH_DIFF_SLICE: [&str; 2] =
     ["tests/conformance/cpp.include", "tests/conformance/module.interface"];
 
 /// `cargo xtask test --compiler <kiln> --pch-diff <mode>` over
-/// [`PCH_DIFF_SLICE`]; `snapshot` with `--pch-diff-require-restore`.
+/// [`PCH_DIFF_SLICE`]; `snapshot` with `--pch-diff-require-restore` and
+/// `--pch-diff-extra-dir` (WP-1403).
 fn ci_pch_diff(
     kiln: &std::path::Path,
     mode: util::pch_diff::PchDiff,
@@ -593,7 +595,7 @@ fn ci_pch_diff(
         "xtask ci: cargo xtask test --compiler {} --pch-diff {}{} {}{shard_flag}",
         kiln.display(),
         mode.as_str(),
-        if require { " --pch-diff-require-restore" } else { "" },
+        if require { " --pch-diff-require-restore --pch-diff-extra-dir" } else { "" },
         PCH_DIFF_SLICE.join(" ")
     );
     let root = test::repo_root();
@@ -601,6 +603,7 @@ fn ci_pch_diff(
         compiler: Some(kiln.to_path_buf()),
         pch_diff: Some(mode),
         pch_require_restore: require,
+        pch_extra_dir: require,
         shard,
         paths: PCH_DIFF_SLICE.iter().map(|d| root.join(d)).collect(),
         ..test::Options::default()

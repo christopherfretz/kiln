@@ -35,6 +35,19 @@ Planned as 1.2.0.
 
 ### Changed
 
+- The experimental PCH snapshot (`-fkiln-pch-snapshot`, WP-1403): a
+  consumer whose include search path differs from the producer's (an
+  extra `-I`, another order) now restores the snapshot when every header
+  lookup the prefix made finds the same file, as a user or system header,
+  as before; the producer records those lookups in the PCH (section
+  format version 2; a version 1 snapshot is refused and replayed). A
+  prefix built from absolute paths restores from any working directory,
+  and `-nostdinc*` are compared through the search list they build. A
+  snapshot refused for its configuration now warns once (`warning:
+  precompiled header 'p.pch' was built with a different configuration
+  (<why>); the header is processed again [-Wpch-snapshot-unused]`, on by
+  default) and replays; `-v` names the first lookup that changed.
+  spec/driver.md "Lookup-tolerant search path".
 - `-g` (the default limited kind) describes a class this unit never
   required complete as a declaration, as clang does
   (`isCompleteDefinitionRequired`, WP-1389): a class used only through

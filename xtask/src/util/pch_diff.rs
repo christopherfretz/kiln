@@ -91,10 +91,43 @@ pub fn snapshot_path(producer: &str, with: &str) -> String {
         .lines()
         .filter_map(|l| l.strip_prefix("snapshot-timing: note: "))
         .rfind(|w| !w.starts_with("matches;") && !w.starts_with("restored;"));
-    match why {
+    match why.or_else(|| with.lines().find_map(unused_warning)) {
         Some(w) => format!("replay: consumer: {}", w.strip_prefix("not used: ").unwrap_or(w)),
         None => "replay: consumer: (no reason given)".to_owned(),
     }
+}
+
+/// Whether a restored consumer's `snapshot-timing: find` line says it
+/// repeated the snapshot's lookups (its search list differs from the
+/// producer's, WP-1403).
+pub fn lookups_repeated(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|l| l.starts_with("snapshot-timing: find ") && l.contains(", lookups repeated "))
+}
+
+/// The group of the warning a consumer gives when it does not use a
+/// snapshot for its configuration (WP-1403, spec/driver.md "Snapshots").
+pub const UNUSED_WARNING_GROUP: &str = "pch-snapshot-unused";
+
+/// The reason of a `-Wpch-snapshot-unused` warning line: `precompiled
+/// header 'p.pch' was built with a different configuration (<why>); the
+/// header is processed again [-Wpch-snapshot-unused]`. That replay is
+/// counted with the reason (as its `snapshot-timing: note:` line, which
+/// a consumer without [`SNAPSHOT_TIMING_ENV`] does not print, gives it).
+pub fn unused_warning(line: &str) -> Option<&str> {
+    if !is_unused_warning(line) {
+        return None;
+    }
+    let (_, rest) = line.split_once(" was built with a different configuration (")?;
+    let (why, _) = rest.rsplit_once("); the header is processed again")?;
+    Some(why)
+}
+
+/// Whether `line` is the first line of a `-Wpch-snapshot-unused` warning
+/// (or of the error `-Werror` makes of it).
+fn is_unused_warning(line: &str) -> bool {
+    line.ends_with(&format!("-W{UNUSED_WARNING_GROUP}]"))
 }
 
 /// The replay reason of a [`snapshot_path`] (`None` for [`RESTORED`] and
@@ -357,7 +390,10 @@ pub fn diag_lines(stderr: &str) -> Vec<&str> {
                 || l.starts_with("                 from ")
                 || l.ends_with(" generated.")
                 || l.starts_with("note: precompiled header '")
-                || l.starts_with("snapshot-timing: "))
+                || l.starts_with("snapshot-timing: ")
+                // A replay the snapshot refused says so (WP-1403); the
+                // reason is counted by the accounting, not compared.
+                || is_unused_warning(l))
         })
         .collect()
 }
@@ -491,6 +527,16 @@ mod tests {
             p,
             "replay: consumer: the command line differs: '-DA' (producer) vs '-DB' (here)"
         );
+        // WP-1403: the warning of a refused snapshot gives the reason
+        // when there is no note, and is not a diagnostic to compare.
+        let w = "kiln++: warning: precompiled header '/t/p.pch' was built with a different configuration (include search path: lookup of <a.h> now finds '/x/a.h' (was '/y/a.h')); the header is processed again [-Wpch-snapshot-unused]\n";
+        assert_eq!(
+            snapshot_path("", w),
+            "replay: consumer: include search path: lookup of <a.h> now finds '/x/a.h' (was '/y/a.h')"
+        );
+        assert_eq!(diag_lines(&format!("{w}t.cpp:1:1: error: e\n")), ["t.cpp:1:1: error: e"]);
+        assert!(same_diags("t.cpp:1:1: error: e\n", "", &format!("{w}t.cpp:1:1: error: e\n")));
+        assert_eq!(unused_warning("t.cpp:1:1: warning: x [-Wshadow]"), None);
         assert_eq!(replay_reason(RESTORED), None);
         assert_eq!(
             replay_reason("replay: consumer: '/a/b.h' changed, 12 files").as_deref(),

@@ -37,7 +37,7 @@ pub enum DirGroup {
 
 /// How a directory (and the headers found in it) is classified (clang
 /// `SrcMgr::CharacteristicKind`), ordered `User < System < ExternCSystem`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, kiln_snap::Snap)]
 pub enum Characteristic {
     /// A user header.
     #[default]
@@ -176,6 +176,33 @@ impl SearchList {
         s.push_str("End of search list.\n");
         s
     }
+
+    /// [`verbose_text`](Self::verbose_text) with each directory's
+    /// characteristic: equal text is an equal list (`-v` prints a
+    /// directory given as `-I` and as `-isystem` alike). The PCH
+    /// snapshot's identity (WP-1403).
+    pub fn identity_text(&self) -> String {
+        let mut s = String::new();
+        for (i, d) in self.dirs.iter().enumerate() {
+            if i == self.angled_start {
+                s.push_str("<...>:\n");
+            }
+            let kind = match d.characteristic {
+                Characteristic::User => "user",
+                Characteristic::System => "system",
+                Characteristic::ExternCSystem => "extern-c-system",
+            };
+            s.push(' ');
+            s.push_str(&d.path);
+            s.push_str(" (");
+            s.push_str(kind);
+            s.push_str(")\n");
+        }
+        if self.angled_start >= self.dirs.len() {
+            s.push_str("<...>:\n");
+        }
+        s
+    }
 }
 
 /// clang `RemoveDuplicates` over `list[first..]`: a later duplicate is
@@ -293,6 +320,13 @@ pub trait HeaderFs {
         self.dir_identity(path).is_some()
     }
 
+    /// Whether `path` names a regular file (a `stat`, nothing read): what
+    /// [`LookupLog::check`](crate::LookupLog::check) asks. The default
+    /// reads it.
+    fn is_file(&mut self, path: &str) -> bool {
+        self.read(path).is_some()
+    }
+
     /// The names of the entries of the directory `path` (not `.` and
     /// `..`), or `None` if it cannot be read. Header search reads a
     /// directory after repeated misses in it and answers further misses
@@ -302,6 +336,13 @@ pub trait HeaderFs {
         None
     }
 
+    /// [`list_dir`](Self::list_dir) of each of `paths`, in order. The
+    /// default lists them one after another; [`RealFs`] reads them on a
+    /// few threads, since each read waits on the file system.
+    fn list_dirs(&mut self, paths: &[&str]) -> Vec<Option<Vec<String>>> {
+        paths.iter().map(|p| self.list_dir(p)).collect()
+    }
+
     /// Loads the regular file at `path` into `sm` (the buffer is named
     /// `path`; the same file reached by another path is the same buffer),
     /// or `None` if there is no such file.
@@ -309,6 +350,15 @@ pub trait HeaderFs {
 
     /// The bytes of the regular file at `path` (`#embed`).
     fn read(&mut self, path: &str) -> Option<Vec<u8>>;
+}
+
+/// The entry names of the directory `path`, or `None`.
+fn read_names(path: &str) -> Option<Vec<String>> {
+    let mut names = Vec::new();
+    for e in std::fs::read_dir(path).ok()? {
+        names.push(e.ok()?.file_name().to_string_lossy().into_owned());
+    }
+    Some(names)
 }
 
 /// The real file system. Relative paths are relative to the process's
@@ -332,12 +382,34 @@ impl HeaderFs for RealFs {
         std::fs::metadata(path).is_ok_and(|m| m.is_dir())
     }
 
+    fn is_file(&mut self, path: &str) -> bool {
+        std::fs::metadata(path).is_ok_and(|m| m.is_file())
+    }
+
     fn list_dir(&mut self, path: &str) -> Option<Vec<String>> {
-        let mut names = Vec::new();
-        for e in std::fs::read_dir(path).ok()? {
-            names.push(e.ok()?.file_name().to_string_lossy().into_owned());
+        read_names(path)
+    }
+
+    fn list_dirs(&mut self, paths: &[&str]) -> Vec<Option<Vec<String>>> {
+        /// At most this many reads at once.
+        const THREADS: usize = 8;
+        if paths.len() < 2 {
+            return paths.iter().map(|p| read_names(p)).collect();
         }
-        Some(names)
+        let chunk = paths.len().div_ceil(THREADS.min(paths.len()));
+        std::thread::scope(|s| {
+            let parts: Vec<_> = paths
+                .chunks(chunk)
+                .map(|c| s.spawn(move || c.iter().map(|p| read_names(p)).collect::<Vec<_>>()))
+                .collect();
+            // A thread that panicked (it cannot: `read_names` only
+            // returns) lists nothing for its part.
+            parts
+                .into_iter()
+                .zip(paths.chunks(chunk))
+                .flat_map(|(h, c)| h.join().unwrap_or_else(|_| vec![None; c.len()]))
+                .collect()
+        })
     }
 
     fn open(&mut self, sm: &SourceManager, path: &str) -> Option<FileId> {
@@ -490,6 +562,11 @@ impl HeaderFs for MemoryFs {
 
     fn read(&mut self, path: &str) -> Option<Vec<u8>> {
         self.files.get(&normalize(path)).cloned()
+    }
+
+    fn is_file(&mut self, path: &str) -> bool {
+        self.stats += 1;
+        self.files.contains_key(&normalize(path))
     }
 }
 

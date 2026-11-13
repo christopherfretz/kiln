@@ -483,6 +483,12 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
         self.resolver = r;
     }
 
+    /// The lookups the resolver recorded so far, if it records them
+    /// (WP-1403, spec/pp.md "Lookup log").
+    pub fn take_lookup_log(&mut self) -> Option<crate::LookupLog> {
+        self.resolver.take_lookup_log()
+    }
+
     /// Installs the `#if` evaluator (default: [`IfEval::default`], the
     /// x86-64 Linux character types).
     pub fn set_if_evaluator(&mut self, e: Box<dyn IfEvaluator + 'd>) {

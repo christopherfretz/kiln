@@ -24,6 +24,7 @@ cargo xtask test [options] [paths...]
 | `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
 | `--pch-diff load\|replay\|check\|snapshot` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036; `snapshot` WP-1383/WP-1395. |
 | `--pch-diff-require-restore` | With `--pch-diff snapshot` (else a usage error): a test whose consumer replayed the header for a reason `tests/pch-snapshot-replay-allow.txt` does not allow FAILs (see "PCH differential"). WP-1395. |
+| `--pch-diff-extra-dir` | With `--pch-diff snapshot` (else a usage error): every other test's consumer (by a hash of its name) also gets `-I` of an empty directory, so its search list differs from the producer's; it must still restore, and must say it repeated the snapshot's lookups, or the test FAILs (see "PCH differential"). WP-1403. |
 | `--pch-diff-synthetic` | With `--pch-diff` (else a usage error): a test with no `#include` line gets the synthetic prefix `#include <bits/stdc++.h>` (see "PCH differential"). WP-1395. |
 | `--external <dir>` | Instead of the corpus, the never-crash run of a directory outside the repository (see "External corpora"). |
 | `--filter <substr>` | Keep only tests whose name (repo-relative path) contains `<substr>`. |
@@ -972,12 +973,25 @@ over the corpus it costs about an hour of CPU.
 restore. A test's reason is `snapshot` (restored), `replay: producer:
 <why>` (the producer's `-v` note: the PCH has no snapshot) or `replay:
 consumer: <why>` (the consumer's last note: the snapshot was not used).
+A consumer that refused the snapshot for its configuration also warns
+(`-Wpch-snapshot-unused`, WP-1403): the warning gives the reason when
+there is no note, and it is not a diagnostic difference (it is dropped
+before the comparison, as the notes are).
 A FAIL keeps the reason too. With `--pch-diff-require-restore`, a test
 whose consumer replayed FAILs unless a line of
 `tests/pch-snapshot-replay-allow.txt` allows it: `<pattern> ::
 <justification>`, both non-empty, `#` comments; the pattern is a
 substring of the reason after `replay: `. A malformed or missing file is
 an infrastructure error.
+
+**A consumer with another search path** (`--pch-diff-extra-dir`,
+WP-1403). Every other test's consumer (the hash of its name is even) gets
+`-I <scratch>/consumer-only`, an empty directory the producer does not
+have, after its other options. The snapshot must restore all the same
+(spec/driver.md "Lookup-tolerant search path"): a restored consumer
+whose `snapshot-timing: find` line does not say `lookups repeated` is a
+FAIL, and so is a replay under `--pch-diff-require-restore`. The other
+half keeps the fast path (equal search lists).
 
 **The accounting lines.** After the summary, every `--pch-diff` run
 prints `pch-diff <how>: N consumers ran[: R restored, P replayed]; F
@@ -1011,7 +1025,8 @@ PCH that does not build when the plain build fails too; a PCH that does
 not build when the test compiles, a crash, or any difference is a
 **FAIL** showing it.
 
-`ci` runs `load`, `replay` and `snapshot --pch-diff-require-restore`
+`ci` runs `load`, `replay` and `snapshot --pch-diff-require-restore
+--pch-diff-extra-dir`
 over `tests/conformance/cpp.include` and
 `tests/conformance/module.interface` (run 6 under "CI"). `cargo xtask
 libcxx --pch-diff <how>` is the same comparison over libc++ tests

@@ -16,6 +16,14 @@
 # pch-snapshot-diff/consumer-only.awk), -fdump-ast of the main file's
 # declarations, the IR at -O0 and with -g, and the -MD list. Every
 # output stays in <out-dir>/<case>/ for the classification.
+#
+# WP-1403, a consumer whose search path differs: a case may also have
+# `consumer-flags` (one per line, put before `flags` in the three
+# compiles of the main file, not in the producer's), a `files/` tree
+# copied beside the prefix (the directories those flags name), and
+# `expect-replay` (one line: the reason the snapshot must be refused
+# for, as the -Wpch-snapshot-unused warning gives it; the snapshot then
+# replays, and the warning is the one line its diagnostics may add).
 set -u
 if [ $# -lt 2 ]; then
   echo "usage: $0 <kiln> <out-dir> [case...]" >&2
@@ -37,7 +45,8 @@ done
 cases=("$@")
 if [ ${#cases[@]} -eq 0 ]; then
   cases=(gnu mid lcx meta diag diag-once c17 gnu23 open-push-macro open-diag-push
-    open-pack open-visibility open-once open-fp-pragma open-weak)
+    open-pack open-visibility open-once open-fp-pragma open-weak
+    search-extra search-shadow search-has-include)
 fi
 status=0
 for c in "${cases[@]}"; do
@@ -47,10 +56,19 @@ for c in "${cases[@]}"; do
   # A C case has `main.c` (its header is then `-x c-header`).
   if [ -e "$src/main.c" ]; then mainf=main.c hx=c-header; else mainf=main.cpp hx=c++-header; fi
   cp "$src/prefix.h" "$src/$mainf" "$d/"
+  [ -d "$src/files" ] && cp -R "$src/files/." "$d/"
   flags=()
   while IFS= read -r f; do
     [ -n "$f" ] && flags+=("${f//@GCC16@/$gcc16}")
   done <"$src/flags"
+  cflags=()
+  if [ -e "$src/consumer-flags" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && cflags+=("${f//@GCC16@/$gcc16}")
+    done <"$src/consumer-flags"
+  fi
+  expect=
+  [ -e "$src/expect-replay" ] && expect=$(cat "$src/expect-replay")
   (
     cd "$d" || exit 1
     "$kiln" "${flags[@]}" -fkiln-pch-snapshot=write -v -x "$hx" prefix.h \
@@ -64,13 +82,20 @@ for c in "${cases[@]}"; do
       esac
       rm -f $v.ll $v.g.ll $v.d
       env KILN_SNAP_TIMING=$([ $v = snapshot ] && echo 1 || echo 0) \
-        "$kiln" "${flags[@]}" "${pre[@]}" -S -emit-llvm "$mainf" -o $v.ll \
+        "$kiln" ${cflags[@]+"${cflags[@]}"} "${flags[@]}" "${pre[@]}" -S -emit-llvm "$mainf" -o $v.ll \
         -MD -MF $v.d -MT main.o 2>$v.err
       echo $? >$v.rc
-      "$kiln" "${flags[@]}" "${pre[@]}" -g -S -emit-llvm "$mainf" -o $v.g.ll 2>/dev/null
-      "$kiln" "${flags[@]}" "${pre[@]}" -fsyntax-only -fdump-ast=locs "$mainf" \
+      "$kiln" ${cflags[@]+"${cflags[@]}"} "${flags[@]}" "${pre[@]}" -g -S -emit-llvm "$mainf" -o $v.g.ll 2>/dev/null
+      "$kiln" ${cflags[@]+"${cflags[@]}"} "${flags[@]}" "${pre[@]}" -fsyntax-only -fdump-ast=locs "$mainf" \
         >$v.ast 2>/dev/null
-      grep -v -e '^snapshot-timing: ' $v.err >$v.diag
+      # The warning of a refused snapshot (WP-1403) is checked below,
+      # and the summary line it adds to.
+      if [ -n "$expect" ]; then
+        grep -v -e '^snapshot-timing: ' -e '\[-Wpch-snapshot-unused\]$' -e ' generated\.$' $v.err >$v.diag
+      else
+        grep -v -e '^snapshot-timing: ' $v.err >$v.diag
+      fi
+      grep -e '\[-Wpch-snapshot-unused\]$' $v.err >$v.unused
     done
     # The snapshot does not show the header's own diagnostics again
     # (clang's PCH policy); replay does. `replay.cdiag` is replay's
@@ -97,7 +122,22 @@ for c in "${cases[@]}"; do
     fi
   }
   echo "$c: producer exit $(cat "$d/produce.rc"); $(grep -h "snapshot \(written\|not written\)" "$d/produce.err")"
-  if grep -q '^snapshot-timing: restore ' "$d/snapshot.err"; then
+  if [ -n "$expect" ]; then
+    want="warning: precompiled header 'prefix.pch' was built with a different configuration ($expect); the header is processed again [-Wpch-snapshot-unused]"
+    if grep -q '^snapshot-timing: restore ' "$d/snapshot.err"; then
+      echo "$c: snapshot restored, expected a replay ($expect)"
+      status=1
+    elif [ "$(cat "$d/snapshot.unused")" = "$want" ]; then
+      echo "$c: snapshot replayed as expected ($expect)"
+    else
+      echo "$c: snapshot replayed without the expected warning: $(cat "$d/snapshot.unused")"
+      status=1
+    fi
+  elif grep -q '^snapshot-timing: restore ' "$d/snapshot.err"; then
+    if [ ${#cflags[@]} -gt 0 ] && ! grep -q '^snapshot-timing: find .*lookups repeated' "$d/snapshot.err"; then
+      echo "$c: snapshot restored without repeating its lookups"
+      status=1
+    fi
     echo "$c: snapshot restored"
   else
     echo "$c: snapshot NOT restored (replayed)"

@@ -65,6 +65,11 @@ options:
   --pch-diff-require-restore
                       with --pch-diff snapshot: a consumer that replays for a
                       reason not in tests/pch-snapshot-replay-allow.txt FAILs
+  --pch-diff-extra-dir
+                      with --pch-diff snapshot: every other consumer also gets
+                      -I of an empty directory, so its search list differs
+                      from the producer's and the snapshot's lookups are
+                      repeated (it must still restore)
   --pch-diff-synthetic
                       with --pch-diff: a test without #includes gets the prefix
                       #include <bits/stdc++.h> when kiln's result with it as an
@@ -201,6 +206,9 @@ pub struct Options {
     /// with a PCH of [`crate::util::pch_diff::SYNTHETIC_HEADER`] when that
     /// header does not change its result.
     pub pch_synthetic: bool,
+    /// `--pch-diff-extra-dir`: with `--pch-diff snapshot`, every other
+    /// consumer also gets `-I` of an empty directory (WP-1403).
+    pub pch_extra_dir: bool,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -241,6 +249,7 @@ impl Default for Options {
             pch_diff: None,
             pch_require_restore: false,
             pch_synthetic: false,
+            pch_extra_dir: false,
             external: None,
             filter: None,
             shard: None,
@@ -287,6 +296,7 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             }
             "--pch-diff-require-restore" => o.pch_require_restore = true,
             "--pch-diff-synthetic" => o.pch_synthetic = true,
+            "--pch-diff-extra-dir" => o.pch_extra_dir = true,
             "--bmi-kind" => {
                 let v = value("--bmi-kind")?;
                 o.bmi_kind = Some(match v.as_str() {
@@ -512,6 +522,9 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     if opts.pch_require_restore && opts.pch_diff != Some(crate::util::pch_diff::PchDiff::Snapshot) {
         return Err("--pch-diff-require-restore needs --pch-diff snapshot".into());
     }
+    if opts.pch_extra_dir && opts.pch_diff != Some(crate::util::pch_diff::PchDiff::Snapshot) {
+        return Err("--pch-diff-extra-dir needs --pch-diff snapshot".into());
+    }
     if opts.pch_synthetic && opts.pch_diff.is_none() {
         return Err("--pch-diff-synthetic needs --pch-diff".into());
     }
@@ -578,6 +591,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         pch_diff: opts.pch_diff,
         pch_require_restore,
         pch_synthetic: opts.pch_synthetic.then(runner::SyntheticPchs::default),
+        pch_extra_dir: opts.pch_extra_dir,
     };
     let jobs = opts
         .jobs
