@@ -527,6 +527,12 @@ impl<'a, 'sm> Parser<'a, 'sm> {
             ("in_stmt_expr", *in_stmt_expr),
         ];
         match open.iter().find(|o| o.1) {
+            Some(("depth", _)) => {
+                let [paren, square, brace] = *depth;
+                Err(format!(
+                    "Parser.depth: the prefix ends inside {brace} '{{', {paren} '(', {square} '[' (an open namespace, linkage specification, class or expression)"
+                ))
+            }
             Some((name, _)) => Err(format!("Parser.{name}: not at rest")),
             None => Ok(()),
         }

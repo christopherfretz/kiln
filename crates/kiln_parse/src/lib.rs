@@ -599,7 +599,7 @@ pub fn parse_prefix<'a, 'sm>(
     drop(phase);
     let ready = match refused {
         Some(why) => Err(why.to_owned()),
-        None => p.snapshot_ready().and_then(|()| p.s.snapshot_ready()),
+        None => p.s.snapshot_ready().and_then(|()| p.snapshot_ready()),
     };
     let (sema, src) = p.finish();
     ParsedPrefix { sema, pp: src.into_preprocessor(), ready }
