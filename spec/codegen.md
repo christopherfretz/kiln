@@ -1471,7 +1471,9 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
 - under `-g`, also types (basic, pointer/reference, arrays, enums,
   typedefs, classes with members, bases, methods, vtable holders and
   template parameters; class definitions homed as clang's
-  `-fno-standalone-debug` does; an explicit instantiation definition of
+  `-fno-standalone-debug` does: a dynamic class is a definition only in
+  a unit that defines its vtable or a construction vtable for it, else a
+  declaration, spec/landed/codegen/WP-1372.md; an explicit instantiation definition of
   a class template specialization that is not a dynamic class completes
   the specialization's type and keeps it in the unit's retained types,
   clang's `completeTemplateDefinition`,
@@ -1859,7 +1861,13 @@ with no coverage flag the IR is unchanged, byte for byte.
   (`ir_norm::lifetime_markers_llvm22`; a no-op on text already in that
   form). kiln writes its backend's form (spec/driver.md "IR optimization",
   WP-783), and with an LLVM 19 backend `opt-22` would upgrade the calls
-  but leave the old declarations out of place. `KILN_CASE=<stem>`
+  but leave the old declarations out of place. Under oracle 19 kiln's
+  text drops `!coro.outside.frame` from a coroutine's parameter allocas
+  (`ir_norm::coro_params_clang19`, WP-1374): kiln marks them at every
+  compat level, as clang 22 does (§7o); the cases whose coroutines are
+  split there (`coro_aligned_alloc`, `coro_await_suspend`) also hold the
+  unused clones of those allocas in their resume and destroy functions,
+  so they compare only the ABI slice under oracle 19. `KILN_CASE=<stem>`
   prints both texts (in the oracle's mode); without `opt-N`/`clang++-N` it
   is skipped. Each pair is compared in three ways (WP-355,
   `crates/kiln_codegen/tests/ir_norm/mod.rs`), and the summary line counts
@@ -3870,6 +3878,59 @@ coro_only_destroy_when_complete.cpp`).
    `CoroDelete`), then `coro.ret`: `llvm.coro.end(ptr null, i1 false,
    token none)` and the return to the caller: `return __coro_gro;`
    converted, the return slot, or `ret void`.
+
+**Allocas outside the frame (WP-1374).** CoroSplit puts in the frame
+every alloca a use reaches across a suspend point, and every escaped one;
+an alloca with `!coro.outside.frame` stays on the ramp's stack (and is
+only cloned, unused, into the clones). The ramp frees the frame when a
+coroutine completes inside it (both suspends `suspend_never`), so ramp
+code that runs after `coro.end` must not read the frame. kiln marks
+exactly:
+
+- the `__coro_gro` alloca (item 3, clang);
+- each parameter's own alloca in a coroutine (`func.rs`, the prologue;
+  clang 22 `EmitParmDecl`, at every `-fclang-compat` level although clang
+  19 marks none): the alloca of a parameter passed directly or coerced
+  (scalars, a reference's pointer, small and empty classes, a
+  `[[clang::trivial_abi]]` class), not the pointer spill of one passed
+  indirectly (which is caller memory itself), not `this`, the VTT or a
+  `pass_object_size` size. **Precondition** (why this is not a
+  miscompile): after `coro.begin` the coroutine names only the parameter
+  copies (item 5; sema builds a copy of every parameter of non-dependent
+  type, and an instantiation rebuilds them with the instantiated types),
+  so an original parameter alloca is read only (a) by the allocation
+  call's arguments and a precondition before `coro.begin`, (b) by the
+  copies' initialization before the initial suspend, and (c) after
+  `coro.end` in the ramp: a callee-destroyed parameter's destructor (on
+  the normal return, and on the unwind out of a throwing copy
+  construction, which first frees the frame) and a postcondition naming
+  a reference parameter. The resume and destroy clones end at `coro.end`
+  and the clones' unwind path leaves through the `CoroEnd` cleanup
+  before reaching the parameter destructors, so no clone reads one. The
+  one exception is the explicit object parameter of a lambda capturing
+  `*this`: the lambda's prologue takes `this` inside that parameter once,
+  so it stays unmarked (in the frame);
+- the return slot of a coroutine with a checked postcondition that names
+  the result (`post(r: ...)`; `emit_coroutine_body`): the postcondition
+  takes its address after `coro.end`. Without one the slot is not
+  escaped and its only read follows `coro.end`, where LLVM's crossing
+  analysis stops, so it stays on the stack unmarked, as in clang (which
+  has no contracts). A `sret` return slot is caller memory.
+
+The exception-object and selector slots are not marked (clang neither):
+a ramp whose `get_return_object` throws frees the frame and then reads
+them there, an LLVM defect (docs/KNOWN_ISSUES.md "LLVM code generator
+bugs").
+
+**No dynamic allocas.** CoroSplit aborts on a non-constant `alloca`
+("Coroutines cannot handle non static allocas yet"). Sema rejects a
+variable length array written in a coroutine and a `__builtin_alloca`
+call in one (sema.md "Coroutines"); as a backstop codegen reports an
+error, never a crash, for a variable length array or a dynamic `alloca`
+it would emit in a coroutine (`Cg::in_split_coroutine`), so no
+`llvm.stacksave` or dynamic `alloca` reaches a coroutine body. The bounds
+of a variably modified parameter are evaluated in the prologue, before
+`llvm.coro.id`: plain values, no allocation.
 
 **Suspend points (`emit_suspend`, clang `emitSuspendExpression`).**
 `await_ready()` branches to `<kind>.ready` when true, else to

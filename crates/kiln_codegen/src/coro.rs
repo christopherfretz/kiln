@@ -77,6 +77,22 @@ pub(crate) enum Got {
     Lv(LV),
 }
 
+/// The parameter allocas of a coroutine kept out of its frame
+/// ([`Cg::coro_param_allocas`]).
+#[derive(Clone, Copy)]
+pub(crate) struct CoroParams {
+    /// The one parameter that stays in the frame (the explicit object
+    /// parameter of a lambda capturing `*this`).
+    pub(crate) in_frame: Option<DeclId>,
+}
+
+impl CoroParams {
+    /// Whether parameter `p`'s own alloca is kept out of the frame.
+    pub(crate) fn outside(self, p: DeclId) -> bool {
+        self.in_frame != Some(p)
+    }
+}
+
 impl Cg<'_> {
     fn null_ptr(&mut self) -> V {
         V::C(self.m.const_null(LTy::PTR))
@@ -176,6 +192,18 @@ impl Cg<'_> {
             Some(d) => Some(self.emit_gro_alloca(d)?),
             None => None,
         };
+        // WP-1374: a postcondition naming the result takes the return
+        // slot's address after `coro.end`; escaped, the slot would go to
+        // the frame, which a coroutine that completed in the ramp has
+        // already freed. Unescaped (no such postcondition), LLVM keeps it
+        // on the ramp's stack: its only read follows `coro.end`, as in
+        // clang, which has no contracts. A sret slot is the caller's.
+        if let Some(fd) = self.f.decl
+            && let Some(slot) = self.f.ret_slot
+            && self.post_names_result(fd)
+        {
+            self.mark_coro_outside_frame(slot.v);
+        }
 
         let cleanup_jd = self.jump_dest_to(ret_bb);
         self.coro_data().cleanup_jd = Some(cleanup_jd);
@@ -316,6 +344,69 @@ impl Cg<'_> {
         None
     }
 
+    /// Whether the function being emitted is a coroutine that LLVM's
+    /// `CoroSplit` will split (not a hand-written `__builtin_coro_id`):
+    /// its frame has a fixed size, so no dynamic `alloca` (WP-1374).
+    pub(crate) fn in_split_coroutine(&self) -> bool {
+        self.f.coro.as_deref().is_some_and(|c| !c.hand_written)
+    }
+
+    /// Attaches `!coro.outside.frame` to the alloca `a` (LLVM's
+    /// `CoroSplit` keeps it out of the coroutine frame; spec/codegen.md
+    /// §7o "Allocas outside the frame").
+    pub(crate) fn mark_coro_outside_frame(&mut self, a: V) {
+        let V::I(i) = a else { return };
+        if !matches!(self.f.fir.op(i), Op::Alloca { .. }) {
+            return;
+        }
+        let kind = self.m.md_kind("coro.outside.frame");
+        let md = self.m.md_tuple(&[]);
+        self.f.fir.add_md(i, kind, md);
+    }
+
+    /// Whether the parameter allocas of function `d` (body `body`) are
+    /// coroutine parameters kept outside the frame (WP-1374, clang 22
+    /// `EmitParmDecl`): `None` when `d` is not a coroutine; else which
+    /// parameter, if any, must stay in the frame.
+    ///
+    /// After `coro.begin` the coroutine body names the parameter copies
+    /// ([dcl.fct.def.coroutine]/13, `emit_coroutine_body`), so the
+    /// original allocas are read only by ramp code: the allocation call's
+    /// arguments, the copies' initialization (both before the initial
+    /// suspend) and, after `coro.end`, a callee-destroyed parameter's
+    /// destructor. The exception is an explicit object parameter of a
+    /// lambda that captures `*this`: `lambda_prolog` takes the captured
+    /// object's address inside that parameter once, at entry, and the
+    /// body uses it as `this`.
+    pub(crate) fn coro_param_allocas(
+        &self,
+        d: DeclId,
+        body: Option<StmtId>,
+        thunk: bool,
+    ) -> Option<CoroParams> {
+        let ast = self.ast;
+        let b = body?;
+        if thunk
+            || ast.closure_thunk(d).is_some()
+            || ast.stmts.get(b).kind() != kiln_ast::stmt::StmtKind::CoroutineBodyStmt
+        {
+            return None;
+        }
+        let skip = ast.call_op_lambda(d).and_then(|l| {
+            let star_this = ast
+                .exprs
+                .lambdas
+                .get(l)
+                .this_capture()
+                .is_some_and(|c| c.kind == kiln_ast::lambda::CaptureKind::StarThis);
+            let fd = ast.decls.function(d)?;
+            (star_this && self.is_explicit_object_method(d))
+                .then(|| ast.lists.iter::<DeclId>(fd.params).next())
+                .flatten()
+        });
+        Some(CoroParams { in_frame: skip })
+    }
+
     /// `GetReturnObjectManager::EmitGroAlloca`: the `__coro_gro`
     /// variable (outside the frame), its destructor guarded by the
     /// `gro.active` flag.
@@ -330,9 +421,7 @@ impl Cg<'_> {
         let ty = self.mty(q);
         let align = self.var_align(d);
         let a = self.f.fir.alloca(ty, align);
-        let kind = self.m.md_kind("coro.outside.frame");
-        let md = self.m.md_tuple(&[]);
-        self.f.fir.add_md(Fir::last_inst(a), kind, md);
+        self.mark_coro_outside_frame(a);
         let addr = Addr { v: a, ty, align };
         self.f.locals.insert(d, addr);
         self.var_lifetime(d, a, ty);

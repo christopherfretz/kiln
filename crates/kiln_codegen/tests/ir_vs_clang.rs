@@ -173,6 +173,15 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // `opt-19` CoroEarly pass kiln runs (private; LLVM 22: internal).
     ("coro_builtins", "aarch64-unknown-linux-gnu", "22", Allow::Structure),
     ("coro_builtins", "x86_64-unknown-linux-gnu", "22", Allow::Structure),
+    // WP-1374: kiln keeps a coroutine's parameter allocas out of the frame
+    // at every compat level (clang 22's marking; clang 19 reads freed
+    // memory), so its split resume/destroy functions hold their unused
+    // clones where clang 19's have none. The ramp's own marks are
+    // normalized away (`ir_norm::coro_params_clang19`); these cases split.
+    ("coro_aligned_alloc", "aarch64-unknown-linux-gnu", "19", Allow::Abi),
+    ("coro_aligned_alloc", "x86_64-unknown-linux-gnu", "19", Allow::Abi),
+    ("coro_await_suspend", "aarch64-unknown-linux-gnu", "19", Allow::Abi),
+    ("coro_await_suspend", "x86_64-unknown-linux-gnu", "19", Allow::Abi),
     // clang 22 emits `insertelement <8 x i1> .., i8 1, ..` for a bool
     // vector element store, which opt-22 rejects.
     ("vector_ops", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),
@@ -280,6 +289,11 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
     // `llvm.coro.end` (WP-941) forms; compare in the oracle's.
     if oracle_version() == "22" {
         return Ok(ir_norm::coro_end_llvm22(&ir_norm::lifetime_markers_llvm22(&out.contents())));
+    }
+    // WP-1374: kiln keeps a coroutine's parameter allocas out of the
+    // frame at every compat level (clang 22's marking); clang 19 does not.
+    if oracle_version() == "19" {
+        return Ok(ir_norm::coro_params_clang19(&out.contents()));
     }
     Ok(out.contents())
 }

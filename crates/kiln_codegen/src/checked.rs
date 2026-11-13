@@ -254,6 +254,17 @@ impl Cg<'_> {
         let Some(&n) = args.first() else {
             return err(self.loc_of(e), "__builtin_alloca needs a size");
         };
+        if self.in_split_coroutine() {
+            // Sema rejects it (`sema_coroutine_dynamic_alloca`); WP-1374.
+            let name = id::info(b).map_or("__builtin_alloca", |i| i.name);
+            return err(
+                self.loc_of(e),
+                format!(
+                    "a call to '{name}' in a coroutine is not supported: the coroutine frame \
+                     cannot hold a dynamically sized stack allocation"
+                ),
+            );
+        }
         let count = self.emit_scalar(n)?;
         let align = if matches!(b, id::ALLOCA_WITH_ALIGN | id::ALLOCA_WITH_ALIGN_UNINITIALIZED) {
             let Some(&a) = args.get(1) else {
