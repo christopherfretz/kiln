@@ -441,6 +441,28 @@ macro_rules! root_impl {
                 Ok(())
             }
 
+            /// The encoded size of each part [`Self::snap_put`] writes, in
+            /// write order (`ast`, `oven`, then each state field): what a
+            /// snapshot's size is made of. Normal mode.
+            pub fn snap_sizes(&self) -> Vec<(&'static str, usize)> {
+                let Sema { $($s,)* $($c: _,)* $($t: _,)* $($x: _,)* $($b: _,)* $($f: _,)* $($o: _,)* } = self;
+                let mut out = Vec::new();
+                let mut w = Writer::new();
+                put_ast(&self.ast, &mut w);
+                out.push(("ast", w.position()));
+                let mut w = Writer::new();
+                if let Some(o) = &self.oven {
+                    put_oven(o, &mut w);
+                }
+                out.push(("oven", w.position()));
+                $(
+                    let mut w = Writer::new();
+                    w.put($s);
+                    out.push((stringify!($s), w.position()));
+                )*
+                out
+            }
+
             /// Registers the snapshot's descriptor (the fields
             /// [`Self::snap_put`] writes besides the AST and the Oven) and
             /// those of the types it encodes.
