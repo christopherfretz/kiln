@@ -389,5 +389,184 @@ instantiation diagnostics appear).
 **Follow-ups.**
 - The identity's schema hash is recomputed on every load (about 21 ms
   on gnu, `kiln_driver/src/pch_snapshot.rs` `identity`); a build-time
-  constant would remove it.
+  constant would remove it. Done in WP-1401 (below).
 - Pre-instantiation in the producer (above).
+
+## Speed, second pass (WP-1401, 2026-11-13)
+
+Still behind `-fkiln-pch-snapshot=write|load`. Nothing changes the
+output: the 15 cases of `scripts/pch-snapshot-diff.sh` are identical to
+replay, and the corpus slice (`cpp.include`, `module.interface`) gives 89
+passed, 0 failed and 138 skipped, as before. PCH sizes change by a few
+bytes (the schema hash in the record; lcx +1.1 KB from the WP-1236
+merge, 0.003%).
+
+**Profile** (`KILN_SNAP_TIMING=1`, which now also marks the process
+phases; release build, 5+ runs, load 24–29, medians in ms). Every part
+over 2 ms:
+- mid, empty main, about 58 in all:
+  - record read 4.5, record check 1.5;
+  - find 5 (schema hash 2, identity 1.3–3);
+  - restore 31 (Ast 10.6, of which types 4.5; Preprocessor 3.4–6;
+    SourceManager 1.9; Interner 1.3; Sema 1.2);
+  - end of unit 11.5, teardown 2.2–2.7, exit 1.
+- mid with its main file: continue 42 (main file 23, end of unit 18).
+- lcx, empty main:
+  - record read 17.4;
+  - find 11 (sections 2.6, schema hash 1.9, identity 2, file check
+    2.7–3.6 for 1142 files);
+  - SourceManager 22–25 (expansions 12 ms for 8.8 MB, macro names 6,
+    `by_path` 3, check 2), Interner 3.4, Preprocessor 7–10;
+  - Ast 32–34 (types 14.4, decls 5, exprs 5, intern-table rebuilds
+    4–5.5), Oven 3, Sema 5;
+  - end of unit 40–52, teardown 4.6.
+- lcx with its main file: continue 95 (end of unit 63).
+
+**Where the 40 ms (mid) and 70 ms (lcx) gaps to clang's PCH come from.**
+- Part of each gap is where the binary lives, not kiln's work. The
+  154 MB release binary on the shared virtiofs mount costs 40–60 ms of
+  page faults before `main`. Copied to a local disk it costs 0–10 ms,
+  which is clang's floor (10–20 ms). The schema hash looked like
+  16–30 ms in earlier profiles only because its code was paged in from
+  that mount; its own cost was about 2 ms. All the numbers below run
+  both compilers from local disk.
+- The rest is eager restore against lazy deserialization. clang's
+  `ReadAST` takes 0.75 ms (mid) and 1.85 ms (lcx) and loads
+  declarations on demand. kiln restores everything up front: about 31 ms
+  (mid) and 75 ms (lcx).
+- kiln's end of unit is the cheaper one (next item).
+
+**What changed.**
+- **The schema hash is a build-time constant.** It used to be
+  recomputed on every load: about 2 ms warm, 31 ms cold on lcx, now
+  0.00 ms.
+  - Every `Snap` type has `const SCHEMA_HASH`, folded at compile time
+    by `SchemaHash` const fns over its kind, name and fields. The
+    snapshot's identity uses `pch_snapshot::SCHEMA_HASH`, the fold of
+    its five roots.
+  - A cycle of types (`InitList` ↔ `InitValue`) cannot fold its own
+    constant (E0391). The field that closes the cycle is marked
+    `#[snap(cycle)]` (or names `Self`) and folds the type's
+    `SHAPE_HASH`, a second constant that folds field types by spelling.
+  - `Schema::unfolded()` lists, per root, every reached type not
+    folded into the root's constant.
+- **How the test catches a change of a type that leaves the hash
+  alone.**
+  - `kiln_driver` `pch_snapshot::tests::schema_constants_cover_every_type`
+    walks the descriptors of every type the snapshot reaches (the same
+    walk that used to compute the hash at run time). It asserts three
+    things: every type carries a constant; the constants are injective
+    over distinct descriptors; and `unfolded()` is empty.
+  - A field added, removed, renamed, reordered or retyped therefore
+    changes a constant. If a type ever escapes the fold (a hand-written
+    `Snap` impl that forgets a field in `SCHEMA_HASH`, or a field
+    reached only through `SHAPE_HASH`), its descriptor differs while its
+    constant does not, or it shows in `unfolded()`, and the test fails.
+  - `kiln_snap/tests/snap.rs` `schema_constant_sees_every_field_change`
+    and `schema_constant_of_a_cycle_of_types` check the derive itself on
+    hand variants.
+- **The record is read as a stream** (`pch::Record::read_streaming`).
+  The text part is read whole. The image is read in 64 KiB pieces that
+  are summed and dropped: one `BlockChecksum` pass gives the block's own
+  checksum and the record's. The image stays in the file
+  (`ImageAt`), and the section table is read from the file.
+  - lcx record read: 17.4 → about 12 ms.
+  - Section search: 2.3 → 0.05 ms.
+  - Peak RSS: 1–4 MB lower.
+  - The piece buffer is reused. A 1 MiB buffer raised glibc's mmap
+    threshold and cost 4 MB of peak RSS.
+  - The image and check modes (`PchImage::Check | Load`) still keep the
+    image in memory.
+- **Tried and dropped:**
+  - Bulk decode of `AppendVec` and the expansion table: about 12 ms
+    with or without it.
+  - A lazy `by_path` rebuild: the main file's own include lookups need
+    the table, so nothing is saved.
+- **Teardown was left as it is** (2–4.6 ms). The driver skips no
+  destructors on the textual path either: its only exit is
+  `std::process::exit` in `kiln_driver/src/main.rs` `main`, after
+  everything has been dropped.
+
+**Re-measured.** Interleaved A/B, release builds copied to local disk,
+median of 7, load 17.7–23.0, wall ms / peak RSS MB, `-O0`. `base` is the
+consumer before this WP (`39cc32bd3`, WP-1393, where the branch starts), `new` is this WP after the
+merge with main. Replay, textual kiln and clang 19 (`-include-pch`) ran
+in the same rounds. The build column and the clang build are from the
+recorded bench region `wp-1401` in [pch.md](pch.md) (median of 7, kiln
+snapshot build / clang PCH build, s / MiB).
+
+| prefix | snapshot build | clang build | syntax main base → new | syntax empty base → new | `-c` main base → new | `-c` empty base → new | replay main | textual main | clang PCH main | clang PCH empty |
+|---|---|---|---|---|---|---|---|---|---|---|
+| gnu | 1.65 / 125 | 1.96 / 270 | 297 / 85 → 300 / 84 | 264 / 82 → 267 / 81 | 471 / 86 → **428** / 85 | 357 / 83 → 351 / 83 | 1327 / 88 | 1325 / 90 | 418 / 160 | 360 / 155 |
+| lcx | 1.50 / 127 | 1.65 / 254 | 205 / 84 → **187** / 84 | 168 / 82 → **157** / 81 | 368 / 85 → 364 / 84 | 248 / 82 → **237** / 81 | 1113 / 89 | 1093 / 89 | 211 / 144 | 149 / 133 |
+| mid | 0.32 / 48 | 0.39 / 132 | 73 / 36 → 76 / **34** | 44 / 35 → **40** / **31** | 153 / 62 → 147 / 62 | 62 / 56 → 59 / 56 | 302 / 34 | 308 / 34 | 95 / 106 | 50 / 97 |
+| meta | 0.61 / 56 | — | 148 / 40 → **139** / **37** | 102 / 39 → **92** / **35** | 202 / 63 → 193 / 63 | 97 / 56 → **84** / 56 | 613 / 37 | 616 / 37 | — | — |
+
+- Each step's gain, from the phase timer on lcx:
+  - schema hash constant: 1.8 → 0.00 ms (31 ms cold);
+  - section search from the file: 2.3 → 0.05 ms;
+  - streamed record read: 17.4 → 12 ms, and 1–4 MB of peak RSS.
+  - Together that is 8–17 ms on lcx and meta and 3–4 ms on mid. gnu's
+    syntax rows moved within noise (±3 ms); its `-c` main row dropped
+    43 ms in this run, a gain an earlier run did not show.
+- An earlier A/B run (load 22–23) gave:
+  - mid main 66.1 → 62.2 ms and empty 42.5 → 36.6 ms;
+  - lcx main 192.0 → 186.7 ms and empty 156.7 → 143.7 ms.
+- Against clang 19's PCH:
+  - gnu is ahead: 0.30 s against 0.42 s, at 0.52x clang's memory.
+  - mid is ahead with a main file (76 ms against 95) and level on an
+    empty one (40 against 50).
+  - lcx is level with a main file (187 against 211) and 9 ms behind on
+    an empty one (157 against 149).
+  - At `-c` clang leads on lcx (364 against 279 ms) and is level on mid.
+  - meta: 0.14 s against 0.61 s for replay.
+- Non-PCH compiles do not move: textual mid at `-c` 62.4 / 62.3 MB and
+  syntax 34.0 / 33.7 MB (base / new, interleaved). The
+  `-fkiln-memory-report` output of the C case is byte-identical between
+  the two binaries.
+- The recorded bench flags "regressions" in peak RSS on non-PCH rows.
+  They are drift since its baseline (`bench/baselines/pch.json`, 11-11),
+  which this WP does not re-record.
+
+**End of unit on an empty main: clang 19 is not cheaper.** Measured
+with `clang++-19 -ftime-trace` and `-print-stats` on its own PCH:
+- mid: 0.04–0.05 s in all. `ReadAST` takes 0.75 ms;
+  `PerformPendingInstantiations` takes 27.5 ms (223 function
+  instantiations).
+- lcx: 0.13 s in all. `ReadAST` 1.85 ms; pending instantiations
+  103 ms (398 functions, 336 classes).
+- kiln's end of unit on the same prefixes is 11.5 ms (mid) and
+  40–52 ms (lcx).
+
+Both compilers redo the prefix's pending implicit instantiations at the
+consumer's end of unit ([temp.point]/7). clang's advantage is lazy
+deserialization, not its end of unit.
+
+clang's lever is `-fpch-instantiate-templates`, which instantiates in
+the producer. With it, clang's empty-main consume falls to 0.035 s on
+mid (from 0.045) and 0.07 s on lcx (from 0.13), RSS 137 → 109 MB. lcx
+`ReadAST` rises to 12.9 ms while pending instantiations fall to 1.9 ms.
+The kiln equivalent would carry the instantiated bodies in the snapshot.
+It changes where instantiation diagnostics appear (in the producer, not
+each consumer), so it is **an owner decision**, not done here: worth
+about 10 ms on mid and 40–50 ms on lcx per consumer.
+
+**Follow-ups.**
+- `by_path` is rebuilt by a second `stat` of every on-disk buffer
+  (`kiln_source/src/manager/snap.rs`, `SourceManager::get`) right after
+  the file check has `stat`ed the same paths
+  (`kiln_driver/src/pch_snapshot.rs`, the file check's
+  `std::fs::metadata`). Reusing the check's result: about 3 ms on lcx.
+- Intern tables in built form (deliverable 4, not started). The
+  remaining large decode costs on lcx:
+  - types 14.5 ms;
+  - intern-table rebuilds 5.5 ms (kept so that hash order stays out of
+    the format);
+  - expansions 12 ms (0.7 GB/s).
+
+  Storing the tables built needs a hash that is the same on every host,
+  and every arena must stay range-checkable in one linear pass.
+- `stream_roots` reads the block twice: once through the decoder and
+  once through `BlockChecksum` (`kiln_driver/src/pch_snapshot.rs`
+  `stream_roots`). One read feeding both would save about one file pass.
+- Pre-instantiation in the producer (above; owner decision).

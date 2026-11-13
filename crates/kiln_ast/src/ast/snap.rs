@@ -23,7 +23,7 @@
 
 use std::sync::Arc;
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::symbol::Interner;
 
 use super::{Ast, InstantiationMeter};
@@ -44,60 +44,17 @@ use crate::strings::StringPool;
 use crate::templates::TemplateTables;
 use crate::types::{LayoutCache, TypeContext};
 
-/// Adds `field` to a decoding error's path.
-fn at<T>(field: &'static str, r: Result<T, SnapError>) -> Result<T, SnapError> {
-    r.map_err(|e| e.within(field))
-}
-
-/// Runs `f`, a named part of a decode that reads no bytes (a table
-/// rebuild), adding its time to [`take_field_times`] while
-/// [`set_field_timing`] is on.
-#[inline]
-pub(crate) fn timed_part<T>(part: &'static str, f: impl FnOnce() -> T) -> T {
-    if !FIELD_TIMING.with(std::cell::Cell::get) {
-        return f();
-    }
-    let started = std::time::Instant::now();
-    let v = f();
-    let row = (part, started.elapsed(), 0);
-    FIELD_TIMES.with(|t| t.borrow_mut().push(row));
-    v
-}
-
-/// Reads the field `field`, adding its decode time and size to the
-/// thread's [`take_field_times`] while [`set_field_timing`] is on.
+/// Reads the field `field` through the snapshot load timer
+/// ([`kiln_snap::timing::timed`]).
 #[inline]
 pub(crate) fn timed<T: Snap>(r: &mut Reader<'_>, field: &'static str) -> Result<T, SnapError> {
-    if !FIELD_TIMING.with(std::cell::Cell::get) {
-        return at(field, r.get());
-    }
-    let started = std::time::Instant::now();
-    let from = r.offset();
-    let v = at(field, r.get());
-    let row = (field, started.elapsed(), r.offset() - from);
-    FIELD_TIMES.with(|t| t.borrow_mut().push(row));
-    v
+    kiln_snap::timing::timed(r, field)
 }
 
-thread_local! {
-    /// Whether [`Ast`]'s decode records each field's time (the snapshot
-    /// load timer, `KILN_SNAP_TIMING`): instrumentation, no semantic state.
-    static FIELD_TIMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static FIELD_TIMES: std::cell::RefCell<Vec<(&'static str, std::time::Duration, usize)>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Turns the per-field decode timer of [`Ast`] on or off for this thread.
-pub fn set_field_timing(on: bool) {
-    FIELD_TIMING.with(|c| c.set(on));
-}
-
-/// Each [`Ast`] field decoded on this thread since the last call while
-/// [`set_field_timing`] was on: its name, decode time and encoded size.
-#[must_use]
-pub fn take_field_times() -> Vec<(&'static str, std::time::Duration, usize)> {
-    FIELD_TIMES.with(|t| std::mem::take(&mut *t.borrow_mut()))
-}
+pub(crate) use kiln_snap::timing::timed_part;
+/// The snapshot load timer's switch and rows, shared by every root
+/// (`kiln_snap::timing`).
+pub use kiln_snap::timing::{set_field_timing, take_field_times};
 
 impl Ast {
     /// The cross-arena checks of a decoded AST (see the module docs and
@@ -231,8 +188,36 @@ impl Snap for Ast {
         }
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "Ast")
+        .field::<Arc<Interner>>("symbols")
+        .field::<TypeContext>("types")
+        .field::<DeclArena>("decls")
+        .field::<ExprArena>("exprs")
+        .field::<StmtArena>("stmts")
+        .field::<AttrArena>("attrs")
+        .field::<crate::annot::AnnotArena>("annots")
+        .field::<IdLists>("lists")
+        .field::<StringPool>("strings")
+        .field::<NameTable>("names")
+        .field::<LookupTables>("lookup")
+        .field::<RedeclTable>("redecls")
+        .field::<TemplateTables>("templates")
+        .field::<ConstStore>("consts")
+        .field::<ReflectionTable>("reflections")
+        .field::<LayoutCache>("layouts")
+        .field::<ClassCache<ClassVirtuals>>("virtuals")
+        .field::<ClassCache<VTableLayout>>("vtables")
+        .field::<CmpCategories>("cmp_categories")
+        .field::<DeclId>("tu")
+        .field::<crate::modules::ModuleTable>("modules")
+        .field::<ContractSemantic>("contract_semantic")
+        .field::<bool>("lang_c")
+        .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
+        .field::<InstantiationMeter>("inst")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<Arc<Interner>>("symbols")
             .field::<TypeContext>("types")
             .field::<DeclArena>("decls")

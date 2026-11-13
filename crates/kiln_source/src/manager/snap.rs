@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::{Mutex, OnceLock, RwLock};
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 use super::{
     Alloc, Body, Entry, FILE_SPACE_END, FileEntry, FileKind, FileRange, LazyOutcome, LineDirective,
@@ -138,8 +138,20 @@ impl Snap for FileEntry {
         })
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "FileEntry")
+        .note("FileEntry: tag 0 text | tag 1 path hash | tag 2 path hash text")
+        .field::<u32>("start")
+        .field::<Box<str>>("name")
+        .field::<u32>("len")
+        .field::<PathBuf>("path")
+        .field::<u64>("hash")
+        .field::<String>("text")
+        .skip("lines", "OnceLock<Box<[u32]>>")
+        .field::<RwLock<Vec<LineDirective>>>("line_directives")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .note("FileEntry: tag 0 text | tag 1 path hash | tag 2 path hash text")
             .field::<u32>("start")
             .field::<Box<str>>("name")
@@ -158,11 +170,6 @@ impl Snap for FileEntry {
             RwLock::<Vec<LineDirective>>::schema(s);
         }
     }
-}
-
-/// Adds `field` to a decoding error's path.
-fn at<T>(field: &'static str, r: Result<T, SnapError>) -> Result<T, SnapError> {
-    r.map_err(|e| e.within(field))
 }
 
 /// The source manager as a snapshot root (spec/source.md "Snapshots");
@@ -200,15 +207,16 @@ impl Snap for SourceManager {
     }
 
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
-        let presumed_names = at("SourceManager.presumed_names", r.get())?;
-        let files: super::AppendVec<FileEntry> = at("SourceManager.files", r.get())?;
-        let ranges: super::AppendVec<FileRange> = at("SourceManager.ranges", r.get())?;
-        let expansions: super::AppendVec<Entry> = at("SourceManager.expansions", r.get())?;
-        let macro_names = at("SourceManager.macro_names", r.get())?;
-        let kinds = at("SourceManager.kinds", r.get())?;
-        let guarded: Mutex<HashMap<FileId, Box<str>>> = at("SourceManager.guarded", r.get())?;
-        let gcc_names: Mutex<HashMap<FileId, Box<str>>> = at("SourceManager.gcc_names", r.get())?;
-        let alloc: Mutex<Alloc> = at("SourceManager.alloc", r.get())?;
+        use kiln_snap::timing::timed;
+        let presumed_names = timed(r, "SourceManager.presumed_names")?;
+        let files: super::AppendVec<FileEntry> = timed(r, "SourceManager.files")?;
+        let ranges: super::AppendVec<FileRange> = timed(r, "SourceManager.ranges")?;
+        let expansions: super::AppendVec<Entry> = timed(r, "SourceManager.expansions")?;
+        let macro_names = timed(r, "SourceManager.macro_names")?;
+        let kinds = timed(r, "SourceManager.kinds")?;
+        let guarded: Mutex<HashMap<FileId, Box<str>>> = timed(r, "SourceManager.guarded")?;
+        let gcc_names: Mutex<HashMap<FileId, Box<str>>> = timed(r, "SourceManager.gcc_names")?;
+        let alloc: Mutex<Alloc> = timed(r, "SourceManager.alloc")?;
         let sm = SourceManager {
             files,
             ranges,
@@ -226,15 +234,29 @@ impl Snap for SourceManager {
             source_path_style: OnceLock::new(),
             gcc_names,
         };
-        if let Err(why) = sm.check_restored() {
+        if let Err(why) =
+            kiln_snap::timing::timed_part("SourceManager check", || sm.check_restored())
+        {
             return Err(r.invalid::<Self>(why));
         }
-        sm.rebuild_by_path();
+        kiln_snap::timing::timed_part("SourceManager by_path rebuild", || sm.rebuild_by_path());
         Ok(sm)
     }
 
+    const SCHEMA_HASH: u64 = SchemaHash::new("root", "SourceManager")
+        .field::<super::AppendVec<Box<str>>>("presumed_names")
+        .field::<super::AppendVec<FileEntry>>("files")
+        .field::<super::AppendVec<FileRange>>("ranges")
+        .field::<super::AppendVec<Entry>>("expansions")
+        .field::<super::AppendVec<(Loc, Span)>>("macro_names")
+        .field::<RwLock<Vec<(u32, FileKind)>>>("kinds")
+        .field::<Mutex<HashMap<FileId, Box<str>>>>("guarded")
+        .field::<Mutex<HashMap<FileId, Box<str>>>>("gcc_names")
+        .field::<Mutex<Alloc>>("alloc")
+        .finish();
     fn schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .field::<super::AppendVec<Box<str>>>("presumed_names")
             .field::<super::AppendVec<FileEntry>>("files")
             .field::<super::AppendVec<FileRange>>("ranges")

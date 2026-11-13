@@ -23,19 +23,21 @@ extern crate self as kiln_snap;
 mod error;
 mod impls;
 mod schema;
+pub mod timing;
 mod wire;
 
 pub use error::{ErrorKind, SnapError};
 pub use kiln_snap_derive::Snap;
-pub use schema::{Desc, Schema, schema_hash};
+pub use schema::{Desc, Schema, SchemaHash, schema_hash};
 pub use wire::{Reader, WINDOW, Writer};
 
 /// A type that can be written to a snapshot and read back.
 ///
 /// Implement it with `#[derive(Snap)]` (spec/snap.md "The derive"), or by
 /// hand for a root that holds locks, caches or references (spec/snap.md
-/// "Hand-written roots"). Only [`put`](Snap::put), [`get`](Snap::get) and
-/// [`schema`](Snap::schema) are required.
+/// "Hand-written roots"). Only [`SCHEMA_HASH`](Snap::SCHEMA_HASH),
+/// [`put`](Snap::put), [`get`](Snap::get) and [`schema`](Snap::schema)
+/// are required.
 ///
 /// Contract:
 /// - `get` reads exactly the bytes `put` wrote and returns an equal value;
@@ -44,8 +46,23 @@ pub use wire::{Reader, WINDOW, Writer};
 ///   bytes and the encoding holds no shared (`Rc`/`Arc`) object. If it is
 ///   `None`, every `put` writes at least one byte.
 /// - `schema` registers the type's descriptor once and recurses into the
-///   types it encodes (see [`Schema::register`]).
+///   types it encodes (see [`Schema::register`]); `SCHEMA_HASH` folds the
+///   same items ([`SchemaHash`]).
 pub trait Snap: Sized + 'static {
+    /// The type's schema hash, a constant (spec/snap.md "Schema hash"):
+    /// [`SchemaHash`] over the type's description and its encoded field
+    /// types' constants, so it changes with any change of the encoding of
+    /// the type or of anything it reaches.
+    const SCHEMA_HASH: u64;
+
+    /// The type's own items without what its fields reach: what a field
+    /// that closes a cycle of types folds instead of
+    /// [`SCHEMA_HASH`](Snap::SCHEMA_HASH), which would depend on itself
+    /// ([`SchemaHash::cycle`]). A derived type folds its fields' spelled
+    /// types; a container folds its elements' `SHAPE_HASH`. The default,
+    /// `SCHEMA_HASH`, suits every type that holds no other type.
+    const SHAPE_HASH: u64 = Self::SCHEMA_HASH;
+
     /// The constant encoded size in bytes, if every value has one.
     /// Sequences of such types take the bulk path
     /// ([`Reader::seq_items`]).

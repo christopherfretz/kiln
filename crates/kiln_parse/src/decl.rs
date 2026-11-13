@@ -126,8 +126,10 @@ impl Parser<'_, '_> {
 
     /// translation-unit ([basic.link]): declarations to end of file.
     pub fn parse_translation_unit(&mut self) {
-        self.parse_top_level_declarations();
-        self.end_translation_unit();
+        kiln_snap::timing::timed_part("main file", || self.parse_top_level_declarations());
+        // The snapshot load timer (`KILN_SNAP_TIMING`) names the end of
+        // the unit apart from the main file's declarations.
+        kiln_snap::timing::timed_part("end of unit", || self.end_translation_unit());
     }
 
     /// The declarations of a translation unit to the end of the main

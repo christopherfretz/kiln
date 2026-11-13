@@ -751,11 +751,29 @@ pub fn section_ranges(bytes: &[u8]) -> Result<Vec<(u32, std::ops::Range<usize>)>
         return corrupt("checksum mismatch");
     }
     let body = &bytes[..body_len];
+    section_table(body_len, |at| body.get(at..at + 4).map(|w| [w[0], w[1], w[2], w[3]]))
+}
+
+/// The section table of a block whose body (the block less its 8-byte
+/// checksum) is `body_len` bytes, its words read by `word(offset)`
+/// (`None` past the end): [`section_ranges`] after its checksum, for a
+/// block whose checksum was checked as it was read and whose bytes stay
+/// in the file (WP-1401). Reads only the count and each section's tag
+/// and length.
+///
+/// # Errors
+/// As [`read_sections`], but for the checksum.
+pub fn section_table(
+    body_len: usize,
+    mut word: impl FnMut(usize) -> Option<[u8; 4]>,
+) -> Result<Vec<(u32, std::ops::Range<usize>)>, BmiError> {
     let mut at = 0usize;
-    let u32_at = |at: &mut usize| -> Res<u32> {
-        let Some(w) = body.get(*at..*at + 4) else { return corrupt("truncated") };
+    let mut u32_at = |at: &mut usize| -> Res<u32> {
+        let Some(w) = word(*at).filter(|_| *at + 4 <= body_len) else {
+            return corrupt("truncated");
+        };
         *at += 4;
-        Ok(u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        Ok(u32::from_le_bytes(w))
     };
     // A count or length is checked against what is left, as `R::count`.
     let n = u32_at(&mut at)? as usize;

@@ -28,7 +28,7 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::fx::FxHashMap;
 
 use super::{
@@ -251,8 +251,26 @@ impl Memory {
     }
 
     /// Registers the encoding of [`Memory::snap_put`].
+    /// The constant schema hash of the root ([`Self::snap_schema`]).
+    pub(crate) const SNAP_SCHEMA_HASH: u64 = SchemaHash::new("root", "Memory")
+        .field::<Space>("stat")
+        .field::<Vec<Alloc>>("statics")
+        .field::<Vec<u32>>("sfree")
+        .field::<Vec<(u64, u64)>>("sholes")
+        .field::<u64>("stat_peak")
+        .field::<u64>("heap_ops")
+        .field::<FxHashMap<UKey, u32>>("unions")
+        .field::<FxHashMap<UKey, u64>>("union_alts")
+        .field::<u64>("union_epoch")
+        .field::<Vec<OTy>>("vtags")
+        .skip("vtag_ix", "FxHashMap<OTy, u8>")
+        .field::<FxHashMap<u64, OTy>>("vspill")
+        .field::<u64>("tu_arena_peak")
+        .field::<u32>("serial")
+        .finish();
     pub(crate) fn snap_schema(s: &mut Schema) {
         let d = Desc::new("root")
+            .hash(Self::SNAP_SCHEMA_HASH)
             .field::<Space>("stat")
             .field::<Vec<Alloc>>("statics")
             .field::<Vec<u32>>("sfree")

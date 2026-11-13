@@ -102,8 +102,9 @@ impl Designator {
 pub enum InitValue {
     /// An assignment-expression.
     Expr(ExprId),
-    /// A nested braced-init-list.
-    List(InitList),
+    /// A nested braced-init-list (`cycle`: `InitList` reaches
+    /// `InitValue` again, spec/snap.md "Schema hash").
+    List(#[snap(cycle)] InitList),
 }
 
 impl InitValue {

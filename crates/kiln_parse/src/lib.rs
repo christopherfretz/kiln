@@ -488,7 +488,7 @@ pub fn parse_preprocessed<'a, 'sm>(
     }
     p.parse_translation_unit();
     drop(phase);
-    finish_tu(p, main_id, &main, opts)
+    kiln_snap::timing::timed_part("finish unit", || finish_tu(p, main_id, &main, opts))
 }
 
 /// The end of [`parse_preprocessed`] and [`continue_preprocessed`]: the
@@ -639,5 +639,5 @@ pub fn continue_preprocessed<'a, 'sm>(
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.parse_translation_unit();
     drop(phase);
-    finish_tu(p, main_id, &main, opts)
+    kiln_snap::timing::timed_part("finish unit", || finish_tu(p, main_id, &main, opts))
 }

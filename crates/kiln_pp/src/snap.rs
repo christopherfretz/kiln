@@ -41,7 +41,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use kiln_lex::{Symbol, TokKind};
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 use kiln_source::{FileId, Loc, Span};
 
 use crate::Preprocessor;
@@ -479,8 +479,32 @@ impl Preprocessor<'_, '_> {
 
     /// Registers the snapshot's descriptor (the fields
     /// [`Self::snap_put`] writes) and those of the types it encodes.
+    /// The constant schema hash of the root ([`Self::snap_schema`]).
+    pub const SNAP_SCHEMA_HASH: u64 = SchemaHash::new("configured root", "Preprocessor")
+        .field::<MacroTable>("macros")
+        .field::<SymMap<Vec<Option<Rc<MacroDef>>>>>("pushed")
+        .field::<SymMap<Span>>("poisoned")
+        .field::<HashSet<FileId>>("once_files")
+        .field::<HashMap<FileId, Symbol>>("guards")
+        .field::<HashSet<FileId>>("entered")
+        .field::<HashMap<Box<str>, FileId>>("scratch")
+        .field::<HashSet<FileId>>("embed_bufs")
+        .field::<HashMap<Box<str>, bool>>("gcc_dirs")
+        .field::<u32>("counter")
+        .field::<bool>("include_limit_reached")
+        .field::<Option<Loc>>("unit_first_hash")
+        .field::<bool>("unit_pre_directive")
+        .field::<Option<FileId>>("main_file")
+        .field::<Option<FileId>>("predef_file")
+        .field::<u32>("diag_pushes")
+        .field::<Vec<AttrMacro>>("attr_macros")
+        .field::<SymMap<usize>>("attr_live")
+        .field::<u32>("attr_macro_gen")
+        .field::<Option<FileId>>("modules.builtin_file")
+        .finish();
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
+            .hash(Self::SNAP_SCHEMA_HASH)
             .field::<MacroTable>("macros")
             .field::<SymMap<Vec<Option<Rc<MacroDef>>>>>("pushed")
             .field::<SymMap<Span>>("poisoned")

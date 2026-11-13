@@ -214,8 +214,14 @@ where
         Ok(ColdMap { name, map })
     }
 
+    const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("root", "ColdMap")
+        .note("ColdMap: name as a string, then the map")
+        .field::<String>("name")
+        .field::<FxHashMap<K, V>>("map")
+        .finish();
     fn schema(s: &mut kiln_snap::Schema) {
         let d = kiln_snap::Desc::new("root")
+            .hash(Self::SCHEMA_HASH)
             .note("ColdMap: name as a string, then the map")
             .field::<String>("name")
             .field::<FxHashMap<K, V>>("map");

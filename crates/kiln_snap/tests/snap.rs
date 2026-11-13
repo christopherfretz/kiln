@@ -639,6 +639,136 @@ fn schema_hash_sees_every_field_change() {
     assert_ne!(schema_hash::<base::Root>(), schema_hash::<same::Root>());
 }
 
+/// WP-1401: the compile-time `Snap::SCHEMA_HASH` sees the same changes
+/// as the descriptor walk: a field added, removed, renamed, reordered or
+/// retyped (in the root or in a nested type), a field skipped, a variant
+/// reordered or renumbered, a `with` codec, a container's element type.
+/// The constant names types by their own name, not their module path,
+/// so two identical copies in different modules agree.
+#[test]
+fn schema_constant_sees_every_field_change() {
+    const BASE: u64 = <base::Root as Snap>::SCHEMA_HASH;
+    #[derive(Snap)]
+    #[allow(dead_code, reason = "only the schema is read")]
+    struct Plain {
+        shifted: u32,
+    }
+    mod coded {
+        #[derive(kiln_snap::Snap)]
+        #[allow(dead_code, reason = "only the schema is read")]
+        pub struct Plain {
+            #[snap(with = "crate::plus_one")]
+            pub shifted: u32,
+        }
+    }
+    let h = |m: &str| match m {
+        "base" => <base::Root as Snap>::SCHEMA_HASH,
+        "same" => <same::Root as Snap>::SCHEMA_HASH,
+        "added" => <added::Root as Snap>::SCHEMA_HASH,
+        "removed" => <removed::Root as Snap>::SCHEMA_HASH,
+        "renamed" => <renamed::Root as Snap>::SCHEMA_HASH,
+        "reordered" => <reordered::Root as Snap>::SCHEMA_HASH,
+        "retyped" => <retyped::Root as Snap>::SCHEMA_HASH,
+        "root_retyped" => <root_retyped::Root as Snap>::SCHEMA_HASH,
+        "skipped" => <skipped::Root as Snap>::SCHEMA_HASH,
+        _ => unreachable!(),
+    };
+    assert_eq!(h("base"), h("same"));
+    for m in ["added", "removed", "renamed", "reordered", "retyped", "root_retyped", "skipped"] {
+        assert_ne!(h("base"), h(m), "{m}");
+    }
+    assert_ne!(<enum_a::E as Snap>::SCHEMA_HASH, <enum_b::E as Snap>::SCHEMA_HASH);
+    assert_ne!(<enum_a::E as Snap>::SCHEMA_HASH, <enum_c::E as Snap>::SCHEMA_HASH);
+
+    assert_ne!(<Plain as Snap>::SCHEMA_HASH, <coded::Plain as Snap>::SCHEMA_HASH);
+
+    // Containers fold their element types and their own kind.
+    let c = [
+        <Vec<u32> as Snap>::SCHEMA_HASH,
+        <Vec<u64> as Snap>::SCHEMA_HASH,
+        <Box<[u32]> as Snap>::SCHEMA_HASH,
+        <Option<u32> as Snap>::SCHEMA_HASH,
+        <[u32; 2] as Snap>::SCHEMA_HASH,
+        <[u32; 3] as Snap>::SCHEMA_HASH,
+        <(u32, u64) as Snap>::SCHEMA_HASH,
+        <(u64, u32) as Snap>::SCHEMA_HASH,
+        <BTreeMap<u32, String> as Snap>::SCHEMA_HASH,
+        <HashMap<u32, String> as Snap>::SCHEMA_HASH,
+        <Rc<u32> as Snap>::SCHEMA_HASH,
+        <Arc<u32> as Snap>::SCHEMA_HASH,
+    ];
+    for (i, a) in c.iter().enumerate() {
+        for b in &c[i + 1..] {
+            assert_ne!(a, b, "container {i}");
+        }
+    }
+    // The constant is usable in const context.
+    assert_eq!(BASE, h("base"));
+}
+
+/// Two copies of a cycle of types (`A` reaches `B`, which reaches `A`
+/// again through a `#[snap(cycle)]` field), differing in `m`.
+macro_rules! cycle_variant {
+    ($m:ident $n:ty) => {
+        #[allow(dead_code, reason = "only the schema is read")]
+        mod $m {
+            use kiln_snap::Snap;
+            #[derive(Snap)]
+            pub struct A {
+                pub b: Vec<B>,
+                pub n: $n,
+            }
+            #[derive(Snap)]
+            pub enum B {
+                Leaf(u32),
+                Back(#[snap(cycle)] A),
+            }
+            #[derive(Snap)]
+            pub struct Node {
+                pub kids: Vec<Node>,
+                pub a: A,
+            }
+            /// Reaches the cycle only through its closing field.
+            #[derive(Snap)]
+            pub struct Partial {
+                pub b: B,
+            }
+        }
+    };
+}
+
+cycle_variant!(cycle_a u8);
+cycle_variant!(cycle_b u16);
+
+/// WP-1401: a cycle of types closed by `#[snap(cycle)]` (or a type that
+/// names itself) has a constant; a change inside the cycle changes the
+/// constant of a root that enters the cycle on a folded path; and
+/// [`Schema::unfolded`] names what a root entering it only through the
+/// closing field misses.
+#[test]
+fn schema_constant_of_a_cycle_of_types() {
+    assert_ne!(<cycle_a::A as Snap>::SCHEMA_HASH, <cycle_b::A as Snap>::SCHEMA_HASH);
+    assert_ne!(<cycle_a::Node as Snap>::SCHEMA_HASH, <cycle_b::Node as Snap>::SCHEMA_HASH);
+    let unfolded = |f: fn(&mut Schema)| {
+        let mut s = Schema::new();
+        f(&mut s);
+        let mut u: Vec<(&str, &str)> = s.unfolded();
+        u.sort_unstable();
+        u
+    };
+    assert_eq!(unfolded(cycle_a::A::schema), []);
+    assert_eq!(unfolded(cycle_a::Node::schema), []);
+    // `Partial` folds `A`'s own items (its shape, the fields by their
+    // spelling) but not the items of `Vec<B>` or `u8`, which only `A`'s
+    // fields reach: the cycle is closed at the wrong place for this root
+    // (a change of how `Vec` or `u8` is encoded would not change its
+    // constant).
+    let p = std::any::type_name::<cycle_a::Partial>();
+    let mut want = vec![(p, std::any::type_name::<Vec<cycle_a::B>>()), (p, "u8")];
+    want.sort_unstable();
+    assert_eq!(unfolded(cycle_a::Partial::schema), want);
+}
+
 #[test]
 fn schema_descriptors_hold_names_only() {
     #[derive(Snap)]

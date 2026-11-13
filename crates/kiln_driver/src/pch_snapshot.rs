@@ -29,7 +29,7 @@
 use std::cell::RefCell;
 use std::fmt::Write as _;
 use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kiln_diag::DiagEngine;
@@ -37,26 +37,80 @@ use kiln_lex::Interner;
 use kiln_pp::Preprocessor;
 use kiln_pp::bmi;
 use kiln_sema::Sema;
-use kiln_snap::{Reader, Schema, Snap, Writer};
+use kiln_snap::{Reader, Writer};
 use kiln_source::SourceManager;
 
 use crate::args::{Args, PchSnapshotUse, PchValidate, SnapshotRoots};
 use crate::{SharedWriter, pch};
 
-/// The schema hash of every root the section holds, in one schema: a
-/// snapshot is read only by the build that wrote it. Computed once per
-/// process (it walks every type the roots reach).
-pub(crate) fn schema_hash() -> u64 {
-    static HASH: OnceLock<u64> = OnceLock::new();
-    *HASH.get_or_init(|| {
-        let mut s = Schema::new();
-        SourceManager::schema(&mut s);
-        Arc::<Interner>::schema(&mut s);
-        DiagEngine::snap_schema(&mut s);
-        Preprocessor::snap_schema(&mut s);
-        Sema::snap_schema(&mut s);
-        s.hash()
-    })
+/// The schema hash of every root the section holds: a snapshot is read
+/// only by the build that wrote it. A constant (WP-1401): each root's
+/// [`kiln_snap::SchemaHash`], folded at compile time from its fields'
+/// constants, so a load walks nothing.
+pub(crate) const SCHEMA_HASH: u64 = kiln_snap::SchemaHash::new("snapshot", "roots")
+    .field::<SourceManager>("source manager")
+    .field::<Arc<Interner>>("interner")
+    .root_field("diagnostics engine", DiagEngine::SNAP_SCHEMA_HASH)
+    .root_field("preprocessor", Preprocessor::SNAP_SCHEMA_HASH)
+    .root_field("sema", Sema::SNAP_SCHEMA_HASH)
+    .finish();
+
+/// The descriptor walk of the same roots ([`SCHEMA_HASH`]'s readable
+/// form): the descriptors and the constants their types declare, for
+/// the cross-check of the two (`schema_constants_cover_every_type`).
+#[cfg(test)]
+pub(crate) fn schema() -> kiln_snap::Schema {
+    use kiln_snap::Snap as _;
+    let mut s = kiln_snap::Schema::new();
+    SourceManager::schema(&mut s);
+    Arc::<Interner>::schema(&mut s);
+    DiagEngine::snap_schema(&mut s);
+    Preprocessor::snap_schema(&mut s);
+    Sema::snap_schema(&mut s);
+    s
+}
+
+/// The process's phase marks for `KILN_SNAP_TIMING` (WP-1401): each
+/// [`phase`] call while the timer is on adds the time since the previous
+/// mark under its name; [`phase_report`] prints the line.
+static PHASES: Mutex<Vec<(&'static str, Instant)>> = Mutex::new(Vec::new());
+
+/// Marks the start of the process for the phase timer (`main`, before
+/// anything else runs). A no-op unless `KILN_SNAP_TIMING` is set.
+pub fn process_started() {
+    if timing() {
+        phase("start");
+    }
+}
+
+/// Ends the phase `name` of the process (`KILN_SNAP_TIMING`).
+pub(crate) fn phase(name: &'static str) {
+    if timing() {
+        PHASES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((name, Instant::now()));
+    }
+}
+
+/// Prints the process's phases (`snapshot-timing: process ...`), each the
+/// time since the previous mark, then the total since the first. Called
+/// once, just before the process exits.
+pub fn phase_report() {
+    if !timing() {
+        return;
+    }
+    phase("exit");
+    let marks =
+        std::mem::take(&mut *PHASES.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let Some(&(_, first)) = marks.first() else { return };
+    let mut line = String::from("snapshot-timing: process");
+    for w in marks.windows(2) {
+        let _ = write!(line, " {} {:.2} ms,", w[1].0, ms(w[1].1 - w[0].1));
+    }
+    let last = marks.last().map_or(first, |m| m.1);
+    let _ = write!(line, " total {:.2} ms", ms(last - first));
+    eprintln!("{line}");
 }
 
 /// The section's magic: its first 8 bytes.
@@ -283,7 +337,7 @@ fn head(id: &[(String, String)]) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     let mut w = Writer::new();
-    w.put(&schema_hash());
+    w.put(&SCHEMA_HASH);
     w.put(&id.to_vec());
     out.extend_from_slice(&w.into_bytes());
     out
@@ -411,30 +465,43 @@ pub(crate) fn find(
     includes: Vec<String>,
 ) -> Result<PchSnapshotUse, String> {
     let started = Instant::now();
-    let Some(img) = &rec.image else { return Err("the PCH has no snapshot section".to_owned()) };
+    let no_section = || "the PCH has no snapshot section".to_owned();
     // The block's sections where they are in the record's image (no copy
-    // of a section that may be tens of MB).
-    let sections = bmi::section_ranges(img).map_err(|e| format!("{e} in its section block"))?;
-    let Some((_, range)) = sections.into_iter().find(|s| s.0 == bmi::SECTION_SNAPSHOT) else {
-        return Err("the PCH has no snapshot section".to_owned());
+    // of a section that may be tens of MB), or in the file when the
+    // record left the image there (WP-1401).
+    let (sections, img_len) = match (&rec.image, &rec.image_at) {
+        (Some(img), _) => (bmi::section_ranges(img).map_err(|e| e.to_string()), img.len()),
+        (None, Some(at)) => (at.sections(pch), at.len),
+        (None, None) => return Err(no_section()),
     };
-    let section = &img[range.clone()];
+    let sections = sections.map_err(|e| format!("{e} in its section block"))?;
+    let Some((_, range)) = sections.into_iter().find(|s| s.0 == bmi::SECTION_SNAPSHOT) else {
+        return Err(no_section());
+    };
+    // The section's start: all of it in memory, or from the file what the
+    // header and the identity take (the whole section if they take more).
+    let head;
+    let section: &[u8] = match (&rec.image, &rec.image_at) {
+        (Some(img), _) => &img[range.clone()],
+        (None, Some(at)) => {
+            head =
+                at.read(pch, range.start, range.len().min(1 << 16)).map_err(|e| e.to_string())?;
+            &head
+        }
+        (None, None) => return Err(no_section()),
+    };
     let sections_done = started.elapsed();
-    let at = check_header(section)?;
-    let mut r = Reader::new(&section[at..]);
-    let hash: u64 = r.get().map_err(|e| e.to_string())?;
-    let ours = schema_hash();
-    let hashed = started.elapsed();
-    if hash != ours {
-        return Err("written by another build (schema hash)".to_owned());
-    }
-    let id: Vec<(String, String)> = r.get().map_err(|e| e.to_string())?;
-    let mine = identity(args, tc, std, diag_opts);
-    if let Some(why) = first_difference(&id, &mine) {
-        return Err(why);
-    }
-    let start = at + r.offset();
-    drop(r);
+    let (start, hashed) = match snapshot_head(args, tc, std, diag_opts, section, started) {
+        // A decoding error in a part of the section: read all of it.
+        Err((_, true)) if section.len() < range.len() => {
+            let whole = rec.image_at.as_ref().map_or_else(
+                || Ok(Vec::new()),
+                |at| at.read(pch, range.start, range.len()).map_err(|e| e.to_string()),
+            )?;
+            snapshot_head(args, tc, std, diag_opts, &whole, started).map_err(|e| e.0)?
+        }
+        r => r.map_err(|e| e.0)?,
+    };
     let checked = started.elapsed();
     // Every file the producer read must still be the one it read: the
     // restored source manager re-reads them lazily.
@@ -452,39 +519,80 @@ pub(crate) fn find(
             ms(checked.saturating_sub(hashed)),
             ms(validated.saturating_sub(checked)),
             rec.files.len(),
-            section.len()
+            range.len()
         );
     }
-    let roots =
-        file_roots(pch, img, range.clone(), start).unwrap_or_else(|| SnapshotRoots::Memory {
-            bytes: Arc::new(img[range.start + start..range.end].to_vec()),
+    let block_sum = match (&rec.image, &rec.image_at) {
+        (Some(img), _) => img.get(img_len.saturating_sub(8)..).and_then(|t| t.try_into().ok()),
+        (None, Some(at)) => Some(at.block_sum),
+        (None, None) => None,
+    };
+    let roots = match file_roots(pch, img_len, block_sum, range.clone(), start) {
+        Some(r) => r,
+        None => SnapshotRoots::Memory {
+            bytes: Arc::new(match (&rec.image, &rec.image_at) {
+                (Some(img), _) => img[range.start + start..range.end].to_vec(),
+                (None, Some(at)) => at
+                    .read(pch, range.start + start, range.len() - start)
+                    .map_err(|e| e.to_string())?,
+                (None, None) => return Err(no_section()),
+            }),
             start: 0,
-        });
+        },
+    };
     Ok(PchSnapshotUse { pch: pch.to_owned(), roots, includes })
 }
 
-/// The roots of the snapshot section at `section` in the block `img`
-/// (its last section, ending the PCH file `pch`) from `start`, as a
-/// range of the file, or `None` when the file is not laid out so (the
-/// roots are then kept in memory).
+/// The snapshot section's header, schema hash and identity, checked
+/// against this build and command line: where the roots start in
+/// `section`, and when the schema hash was read. An error says why, and
+/// whether it is one of decoding (which a part of the section may give
+/// where the whole would not).
+fn snapshot_head(
+    args: &Args,
+    tc: &crate::toolchain::Toolchain,
+    std: crate::toolchain::LangStd,
+    diag_opts: &kiln_diag::DiagOptions,
+    section: &[u8],
+    started: Instant,
+) -> Result<(usize, Duration), (String, bool)> {
+    let at = check_header(section).map_err(|e| (e, false))?;
+    let mut r = Reader::new(&section[at..]);
+    let hash: u64 = r.get().map_err(|e| (e.to_string(), true))?;
+    let hashed = started.elapsed();
+    if hash != SCHEMA_HASH {
+        return Err(("written by another build (schema hash)".to_owned(), false));
+    }
+    let id: Vec<(String, String)> = r.get().map_err(|e| (e.to_string(), true))?;
+    let mine = identity(args, tc, std, diag_opts);
+    if let Some(why) = first_difference(&id, &mine) {
+        return Err((why, false));
+    }
+    Ok((at + r.offset(), hashed))
+}
+
+/// The roots of the snapshot section at `section` in the block of
+/// `img_len` bytes whose checksum is `sum` (its last section, ending the
+/// PCH file `pch`) from `start`, as a range of the file, or `None` when
+/// the file is not laid out so (the roots are then kept in memory).
 fn file_roots(
     pch: &str,
-    img: &[u8],
+    img_len: usize,
+    sum: Option<[u8; 8]>,
     section: std::ops::Range<usize>,
     start: usize,
 ) -> Option<SnapshotRoots> {
     // The block ends with the snapshot section (the highest tag) and the
     // block's 8-byte checksum.
-    let end = img.len().checked_sub(8)?;
+    let end = img_len.checked_sub(8)?;
     if section.end != end {
         return None;
     }
     let at = section.start;
     let meta = std::fs::metadata(pch).ok()?;
     let size = meta.len();
-    let img_at = size.checked_sub(img.len() as u64)?;
-    let mut sum = [0u8; 8];
-    sum.copy_from_slice(&img[end..]);
+    let img_at = size.checked_sub(img_len as u64)?;
+    let sum = sum?;
     Some(SnapshotRoots::File {
         path: std::path::PathBuf::from(pch),
         block: img_at,
@@ -557,7 +665,7 @@ impl Timer {
         kiln_ast::ast::set_field_timing(false);
         let mut fields = kiln_ast::ast::take_field_times();
         fields.sort_by_key(|f| std::cmp::Reverse(f.1));
-        let mut line = String::from("snapshot-timing: ast fields");
+        let mut line = String::from("snapshot-timing: fields");
         for (n, d, bytes) in fields.iter().filter(|f| f.1 >= Duration::from_micros(100)) {
             let _ = write!(
                 line,
@@ -1015,7 +1123,7 @@ pub(crate) fn produce(
 
 /// A standard error that keeps what is written (`=check`'s runs).
 #[derive(Clone, Default)]
-struct Capture(Arc<std::sync::Mutex<Vec<u8>>>);
+struct Capture(Arc<Mutex<Vec<u8>>>);
 
 impl std::io::Write for Capture {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -1166,6 +1274,78 @@ pub(crate) fn report_mismatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WP-1401: the compile-time [`SCHEMA_HASH`] keeps the runtime walk's
+    /// property that any change of a snapshot type changes the hash. The
+    /// walk is the oracle: every type it reaches (each field, element and
+    /// variant type, by `type_name`, with its encoding attributes) must
+    /// declare a constant, and two types whose descriptors differ must
+    /// declare different constants. A hand impl that forgot its constant,
+    /// or whose constant ignores a field, a type parameter or an
+    /// attribute the descriptor names, fails here; a constant that misses
+    /// a change no descriptor shows is caught by the derive's mutation
+    /// tests (`kiln_snap/tests/snap.rs`). And every type the roots reach
+    /// must be folded into their constant: a field that closes a cycle of
+    /// types folds only its type's own items ([`kiln_snap::Schema::unfolded`]).
+    #[test]
+    fn schema_constants_cover_every_type() {
+        let s = schema();
+        let all = s.hashes();
+        assert!(all.len() > 100, "the walk reached only {} types", all.len());
+        // The constant names a type without its module (two copies of a
+        // type in two modules encode alike), and a map's hasher does not
+        // change its encoding: descriptors are compared without either.
+        let no_paths = |d: &str| {
+            let mut out = String::with_capacity(d.len());
+            let mut ident = String::new();
+            let mut chars = d.chars().peekable();
+            while let Some(c) = chars.next() {
+                if c.is_alphanumeric() || c == '_' {
+                    ident.push(c);
+                } else if c == ':' && chars.peek() == Some(&':') && !ident.is_empty() {
+                    chars.next();
+                    ident.clear();
+                } else {
+                    out.push_str(&ident);
+                    ident.clear();
+                    out.push(c);
+                }
+            }
+            out + &ident
+        };
+        let no_hasher = |d: &str| {
+            let mut d = d.replace(", std::hash::random::RandomState", "");
+            while let Some(at) = d.find(", core::hash::BuildHasherDefault<") {
+                let mut depth = 0;
+                let end = d[at..]
+                    .char_indices()
+                    .find_map(|(i, c)| {
+                        match c {
+                            '<' => depth += 1,
+                            '>' if depth == 1 => return Some(at + i + 1),
+                            '>' => depth -= 1,
+                            _ => {}
+                        }
+                        None
+                    })
+                    .unwrap_or(d.len());
+                d.replace_range(at..end, "");
+            }
+            no_paths(&d)
+        };
+        let mut by_hash: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+        for (desc, hash) in all {
+            let hash = hash.unwrap_or_else(|| panic!("no schema constant for {desc}"));
+            let desc = no_hasher(desc);
+            if let Some(other) = by_hash.get(&hash) {
+                assert_eq!(*other, desc, "two descriptors share the schema constant {hash:#x}");
+            }
+            by_hash.insert(hash, desc);
+        }
+        // Every type a root reaches is folded into the root's constant
+        // (only a `#[snap(cycle)]` field can leave one out).
+        assert_eq!(s.unfolded(), [], "types the schema constant does not fold");
+    }
 
     /// WP-1393: a streamed block is checked as it is read: the bytes the
     /// roots reader hands out, and those before them, must be the block

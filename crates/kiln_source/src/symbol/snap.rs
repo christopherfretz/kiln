@@ -9,7 +9,7 @@
 
 use std::sync::atomic::Ordering;
 
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 use super::{Arena, Interner};
 
@@ -43,8 +43,11 @@ impl Snap for Interner {
         Ok(interner)
     }
 
+    const SCHEMA_HASH: u64 =
+        SchemaHash::new("root", "Interner").field::<Vec<String>>("strings").finish();
     fn schema(s: &mut Schema) {
-        if s.register::<Self>(Desc::new("root").field::<Vec<String>>("strings")) {
+        let d = Desc::new("root").hash(Self::SCHEMA_HASH).field::<Vec<String>>("strings");
+        if s.register::<Self>(d) {
             Vec::<String>::schema(s);
         }
     }

@@ -11,6 +11,8 @@
 //! ```text
 //! impl<T: ::kiln_snap::Snap> ::kiln_snap::Snap for S<T> {
 //!     const SIZE = sum(&[<A as Snap>::SIZE, <T as Snap>::SIZE]);
+//!     const SCHEMA_HASH = SchemaHash::new("struct", "S").field::<A>("a").field::<T>("b").finish();
+//!     const SHAPE_HASH = SchemaHash::new("struct", "S").spelled("a", "A").spelled("b", "T").finish();
 //!     fn put(&self, w) { let Self { a: f0, b: f1 } = self; f0.put(w); f1.put(w); }
 //!     fn get(r) { let f0 = A::get(r)?; let f1 = T::get(r)?; Ok(Self { a: f0, b: f1 }) }
 //!     fn schema(s) { if s.register::<Self>(desc) { A::schema(s); T::schema(s); } }
@@ -31,7 +33,10 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenSt
 /// - on a field: `#[snap(skip)]` (not written; restored as
 ///   `Default::default()`), `#[snap(with = "path::module")]` (encoded by
 ///   `module::put(&T, &mut Writer)` and `module::get(&mut Reader) ->
-///   Result<T, SnapError>`);
+///   Result<T, SnapError>`), `#[snap(cycle)]` (the field's type reaches
+///   this type again: the schema constant folds the field type's own
+///   items, `SHAPE_HASH`, not its `SCHEMA_HASH`, which would depend on
+///   itself; a field whose type names this type is so already);
 /// - on the type: `#[snap(bound = "T: Trait, ...")]` replaces the
 ///   automatic `T: Snap` bound on every type parameter.
 #[proc_macro_derive(Snap, attributes(snap))]
@@ -123,6 +128,8 @@ struct Field {
     name: Option<Ident>,
     ty: TokenStream,
     how: How,
+    /// `#[snap(cycle)]`.
+    cycle: bool,
 }
 
 /// How a field is encoded.
@@ -255,6 +262,7 @@ struct Attrs {
     skip: bool,
     with: Option<(TokenStream, String)>,
     bound: Option<TokenStream>,
+    cycle: bool,
 }
 
 /// Consumes outer attributes, interpreting `#[snap(...)]` for `site`.
@@ -289,7 +297,7 @@ fn attrs(c: &mut Cursor, site: Site) -> Result<Attrs, Error> {
 }
 
 fn snap_arg(mut a: Cursor, site: Site, out: &mut Attrs) -> Result<(), Error> {
-    let key = a.ident("`skip`, `with` or `bound`")?;
+    let key = a.ident("`skip`, `with`, `cycle` or `bound`")?;
     let k = key.to_string();
     let value = |a: &mut Cursor| -> Result<(String, Span), Error> {
         a.punct('=')?;
@@ -304,6 +312,7 @@ fn snap_arg(mut a: Cursor, site: Site, out: &mut Attrs) -> Result<(), Error> {
     };
     match (k.as_str(), site) {
         ("skip", Site::Field) => out.skip = true,
+        ("cycle", Site::Field) => out.cycle = true,
         ("with", Site::Field) => {
             let (path, span) = value(&mut a)?;
             let Ok(ts) = path.parse::<TokenStream>() else {
@@ -318,7 +327,9 @@ fn snap_arg(mut a: Cursor, site: Site, out: &mut Attrs) -> Result<(), Error> {
             };
             out.bound = Some(respan(ts, span));
         }
-        ("skip" | "with", _) => return fail(key.span(), format!("`{k}` applies to a field")),
+        ("skip" | "with" | "cycle", _) => {
+            return fail(key.span(), format!("`{k}` applies to a field"));
+        }
         ("bound", _) => return fail(key.span(), "`bound` applies to the type"),
         _ => return fail(key.span(), format!("unknown snap attribute `{k}`")),
     }
@@ -327,6 +338,9 @@ fn snap_arg(mut a: Cursor, site: Site, out: &mut Attrs) -> Result<(), Error> {
     }
     if out.skip && out.with.is_some() {
         return fail(key.span(), "a field is either `skip` or `with`, not both");
+    }
+    if out.cycle && (out.skip || out.with.is_some()) {
+        return fail(key.span(), "`cycle` applies to a field encoded by its type");
     }
     Ok(())
 }
@@ -521,7 +535,7 @@ fn fields(g: &Group, named: bool) -> Result<Vec<Field>, Error> {
             (false, Some((path, text))) => How::With(path, text),
             (false, None) => How::Snap,
         };
-        out.push(Field { name, ty, how });
+        out.push(Field { name, ty, how, cycle: a.cycle });
     }
     Ok(out)
 }
@@ -783,25 +797,57 @@ fn construct(path: &TokenStream, fields: &Fields) -> TokenStream {
 }
 
 /// `.field::<T>("a")` / `.skip::<T>("b")` / `.with::<T>("c", "path")` for
-/// the descriptor, and the schema calls of the encoded field types.
-fn schema_parts(fields: &Fields) -> (TokenStream, TokenStream) {
+/// the descriptor, the schema calls of the encoded field types, and the
+/// same items for the constant [`SchemaHash`] (`kiln_snap`): an encoded
+/// field folds its type's `SCHEMA_HASH`, except a field that closes a
+/// cycle (its type names the type being derived, `self_name` or `Self`,
+/// or it is marked `#[snap(cycle)]`), which folds the type's
+/// `SHAPE_HASH` (its constant would depend on itself); and the items of
+/// the type's own `SHAPE_HASH`, which folds every field by its spelling.
+fn schema_parts(fields: &Fields, self_name: &str) -> [TokenStream; 4] {
     let mut desc = TokenStream::new();
     let mut recurse = TokenStream::new();
+    let mut hash = TokenStream::new();
+    let mut shape = TokenStream::new();
     for (i, f) in fields.list().iter().enumerate() {
         let label = lit_str(&field_label(f, i));
+        let spelled = lit_str(&f.ty.to_string());
         match &f.how {
             How::Snap => {
-                desc.extend(q(".field::<$t>($l)", &[("t", &f.ty), ("l", &label)]));
+                let how = if f.cycle || mentions(&f.ty, self_name) { "cycle" } else { "field" };
+                let item = q(&format!(".{how}::<$t>($l)"), &[("t", &f.ty), ("l", &label)]);
+                desc.extend(item.clone());
+                hash.extend(item);
                 recurse.extend(q("<$t as ::kiln_snap::Snap>::schema(s);", &[("t", &f.ty)]));
+                shape.extend(q(".spelled($l, $s)", &[("l", &label), ("s", &spelled)]));
             }
-            How::Skip => desc.extend(q(".skip::<$t>($l)", &[("t", &f.ty), ("l", &label)])),
-            How::With(_, text) => desc.extend(q(
-                ".with::<$t>($l, $p)",
-                &[("t", &f.ty), ("l", &label), ("p", &lit_str(text))],
-            )),
+            How::Skip => {
+                desc.extend(q(".skip::<$t>($l)", &[("t", &f.ty), ("l", &label)]));
+                hash.extend(q(".skip($l, $s)", &[("l", &label), ("s", &spelled)]));
+                shape.extend(q(".skip($l, $s)", &[("l", &label), ("s", &spelled)]));
+            }
+            How::With(_, text) => {
+                let path = lit_str(text);
+                desc.extend(q(".with::<$t>($l, $p)", &[("t", &f.ty), ("l", &label), ("p", &path)]));
+                let item = q(".with($l, $p, $s)", &[("l", &label), ("p", &path), ("s", &spelled)]);
+                hash.extend(item.clone());
+                shape.extend(item);
+            }
         }
     }
-    (desc, recurse)
+    [desc, recurse, hash, shape]
+}
+
+/// Whether the type `ty` names `name` or `Self` anywhere in its tokens.
+fn mentions(ty: &TokenStream, name: &str) -> bool {
+    ty.clone().into_iter().any(|t| match t {
+        TokenTree::Ident(i) => {
+            let i = i.to_string();
+            i == name || i == "Self"
+        }
+        TokenTree::Group(g) => mentions(&g.stream(), name),
+        _ => false,
+    })
 }
 
 fn struct_items(type_name: &str, fields: &Fields) -> TokenStream {
@@ -811,9 +857,13 @@ fn struct_items(type_name: &str, fields: &Fields) -> TokenStream {
     let put = puts(fields);
     let get = gets(fields, type_name);
     let value = construct(&this, fields);
-    let (desc, recurse) = schema_parts(fields);
+    let [desc, recurse, hash, shape] = schema_parts(fields, type_name);
     let mut items = q(
         "const SIZE: ::core::option::Option<usize> = $size;
+         const SCHEMA_HASH: u64 =
+             ::kiln_snap::SchemaHash::new(\"struct\", $name) $hash .finish();
+         const SHAPE_HASH: u64 =
+             ::kiln_snap::SchemaHash::new(\"struct\", $name) $shape .finish();
          #[inline]
          #[allow(unused_variables)]
          fn put(&self, w: &mut ::kiln_snap::Writer) {
@@ -828,10 +878,14 @@ fn struct_items(type_name: &str, fields: &Fields) -> TokenStream {
              ::core::result::Result::Ok($value)
          }
          fn schema(s: &mut ::kiln_snap::Schema) {
-             let d = ::kiln_snap::Desc::new(\"struct\") $desc;
+             let d = ::kiln_snap::Desc::new(\"struct\")
+                 .hash(<Self as ::kiln_snap::Snap>::SCHEMA_HASH) $desc;
              if s.register::<Self>(d) { $recurse }
          }",
         &[
+            ("name", &lit_str(type_name)),
+            ("hash", &hash),
+            ("shape", &shape),
             ("size", &size),
             ("pat", &pat),
             ("put", &put),
@@ -868,6 +922,28 @@ fn struct_items(type_name: &str, fields: &Fields) -> TokenStream {
     items
 }
 
+/// The schema items of an enum: its description, the recursion into its
+/// field types, and the folds of its `SCHEMA_HASH` and `SHAPE_HASH`, each
+/// variant opened by `.variant(name, discriminant)`.
+fn enum_schema(type_name: &str, vs: &[Variant]) -> [TokenStream; 4] {
+    let mut out: [TokenStream; 4] = Default::default();
+    for v in vs {
+        let [d, r, h, sh] = schema_parts(&v.fields, type_name);
+        let variant = q(
+            ".variant($n, $d)",
+            &[("n", &lit_str(&v.name.to_string())), ("d", &lit_str(&v.disc))],
+        );
+        out[0].extend(variant.clone());
+        out[0].extend(d);
+        out[1].extend(r);
+        out[2].extend(variant.clone());
+        out[2].extend(h);
+        out[3].extend(variant);
+        out[3].extend(sh);
+    }
+    out
+}
+
 fn enum_items(type_name: &str, vs: &[Variant]) -> TokenStream {
     // The tag is the variant's index in declaration order, in the
     // narrowest unsigned type that holds it.
@@ -887,8 +963,7 @@ fn enum_items(type_name: &str, vs: &[Variant]) -> TokenStream {
     let sizes = comma(vs.iter().map(|v| fields_size(&v.fields)));
     let mut put_arms = TokenStream::new();
     let mut get_arms = TokenStream::new();
-    let mut desc = TokenStream::new();
-    let mut recurse = TokenStream::new();
+    let [desc, recurse, hash, shape] = enum_schema(type_name, vs);
     for (i, v) in vs.iter().enumerate() {
         let path = q("Self::$v", &[("v", &ts(v.name.clone()))]);
         let vsize = fields_size(&v.fields);
@@ -922,13 +997,6 @@ fn enum_items(type_name: &str, vs: &[Variant]) -> TokenStream {
                 ("value", &construct(&path, &v.fields)),
             ],
         ));
-        let (d, r) = schema_parts(&v.fields);
-        desc.extend(q(
-            ".variant($n, $d)",
-            &[("n", &lit_str(&v.name.to_string())), ("d", &lit_str(&v.disc))],
-        ));
-        desc.extend(d);
-        recurse.extend(r);
     }
     let put_body = if vs.is_empty() {
         q("match *self {}", &[])
@@ -938,6 +1006,10 @@ fn enum_items(type_name: &str, vs: &[Variant]) -> TokenStream {
     q(
         "const SIZE: ::core::option::Option<usize> =
              ::kiln_snap::__private::enum_size($tn, &[$sizes]);
+         const SCHEMA_HASH: u64 =
+             ::kiln_snap::SchemaHash::new(\"enum\", $name) $hash .finish();
+         const SHAPE_HASH: u64 =
+             ::kiln_snap::SchemaHash::new(\"enum\", $name) $shape .finish();
          #[inline]
          #[allow(unused_variables)]
          fn put(&self, w: &mut ::kiln_snap::Writer) {
@@ -953,10 +1025,14 @@ fn enum_items(type_name: &str, vs: &[Variant]) -> TokenStream {
              }
          }
          fn schema(s: &mut ::kiln_snap::Schema) {
-             let d = ::kiln_snap::Desc::new(\"enum\") $desc;
+             let d = ::kiln_snap::Desc::new(\"enum\")
+                 .hash(<Self as ::kiln_snap::Snap>::SCHEMA_HASH) $desc;
              if s.register::<Self>(d) { $recurse }
          }",
         &[
+            ("name", &lit_str(type_name)),
+            ("hash", &hash),
+            ("shape", &shape),
             ("tn", &tag_n),
             ("sizes", &sizes),
             ("put_body", &put_body),

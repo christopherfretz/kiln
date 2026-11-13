@@ -85,7 +85,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use kiln_ast::Ast;
-use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+use kiln_snap::{Desc, Reader, Schema, SchemaHash, Snap, SnapError, Writer};
 
 use crate::Sema;
 
@@ -307,6 +307,16 @@ fn reg<T: Snap>(
     d.field::<T>(name)
 }
 
+/// [`reg`] for the constant hash: folds `name` and the constant of the
+/// type `field` returns.
+const fn reg_hash<T: Snap>(
+    h: SchemaHash,
+    name: &str,
+    _field: for<'x> fn(&'x Sema<'static, 'static>) -> &'x T,
+) -> SchemaHash {
+    h.field::<T>(name)
+}
+
 fn recurse<T: Snap>(s: &mut Schema, _field: for<'x> fn(&'x Sema<'static, 'static>) -> &'x T) {
     T::schema(s);
 }
@@ -481,11 +491,26 @@ macro_rules! root_impl {
                 out
             }
 
+            /// The constant schema hash of the root ([`Self::snap_schema`],
+            /// item for item).
+            pub const SNAP_SCHEMA_HASH: u64 = {
+                let mut h = SchemaHash::new("configured root", "Sema")
+                    .field::<Ast>("ast")
+                    .root_field("oven", kiln_oven::Oven::SNAP_SCHEMA_HASH);
+                $( h = reg_hash(h, stringify!($s), |x| &x.$s); )*
+                $( h = h.skip(stringify!($c), "()"); )*
+                $( h = h.skip(stringify!($t), "()"); )*
+                $( h = h.skip(stringify!($x), "()"); )*
+                $( h = h.skip(stringify!($b), "()"); )*
+                h.finish()
+            };
+
             /// Registers the snapshot's descriptor (the fields
             /// [`Self::snap_put`] writes besides the AST and the Oven) and
             /// those of the types it encodes.
             pub fn snap_schema(s: &mut Schema) {
                 let mut d = Desc::new("configured root")
+                    .hash(Self::SNAP_SCHEMA_HASH)
                     .field::<Ast>("ast")
                     .field::<kiln_oven::Oven>("oven");
                 $( d = reg(d, stringify!($s), |x| &x.$s); )*

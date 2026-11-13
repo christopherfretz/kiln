@@ -104,6 +104,62 @@ pub(crate) struct Record {
     /// module-file section block (spec/modules.md §11.13) after the
     /// text, its length and checksum on the text's `image` line.
     pub image: Option<Vec<u8>>,
+    /// Where the image is in the file instead, when [`load`] checked it
+    /// as a stream without keeping it (WP-1401); `image` is then `None`.
+    pub image_at: Option<ImageAt>,
+}
+
+/// A record's image left in its file ([`Record::read_streaming`]): its
+/// record checksum, and the block's own checksum, were checked as it was
+/// read; a reader of its bytes checks the file again ([`ImageAt::read`]
+/// keeps no promise that the file is unchanged since).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ImageAt {
+    /// The image's offset in the file.
+    pub offset: u64,
+    /// The image's length.
+    pub len: usize,
+    /// The block's last 8 bytes, its checksum.
+    pub block_sum: [u8; 8],
+    /// Whether the block's checksum matched the rest of the block
+    /// ([`bmi::section_ranges`]'s first check).
+    pub block_ok: bool,
+}
+
+impl ImageAt {
+    /// `len` bytes at `at` in the image of the file `pch`.
+    pub(crate) fn read(&self, pch: &str, at: usize, len: usize) -> std::io::Result<Vec<u8>> {
+        use std::io::{Read as _, Seek as _};
+        let mut f = std::fs::File::open(pch)?;
+        f.seek(std::io::SeekFrom::Start(self.offset + at as u64))?;
+        let mut out = Vec::new();
+        f.take(len as u64).read_to_end(&mut out)?;
+        if out.len() != len {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
+        Ok(out)
+    }
+
+    /// The block's sections, as [`bmi::section_ranges`] finds them in a
+    /// block in memory: the checksum's verdict from the read, then the
+    /// section table read from the file.
+    pub(crate) fn sections(&self, pch: &str) -> Result<Vec<(u32, std::ops::Range<usize>)>, String> {
+        use std::io::{Read as _, Seek as _};
+        let Some(body_len) = self.len.checked_sub(8) else {
+            return Err(bmi::BmiError::Corrupt("truncated".into()).to_string());
+        };
+        if !self.block_ok {
+            return Err(bmi::BmiError::Corrupt("checksum mismatch".into()).to_string());
+        }
+        let mut f = std::fs::File::open(pch).map_err(|e| e.to_string())?;
+        bmi::section_table(body_len, |at| {
+            let mut w = [0u8; 4];
+            f.seek(std::io::SeekFrom::Start(self.offset + at as u64)).ok()?;
+            f.read_exact(&mut w).ok()?;
+            Some(w)
+        })
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// Why a file is not a readable PCH record.
@@ -209,7 +265,7 @@ impl Record {
 
     /// Parses a record.
     pub(crate) fn parse(bytes: &[u8]) -> Result<Record, ReadError> {
-        let (mut r, image_at) = Self::parse_text(bytes)?;
+        let (mut r, image_at) = Self::parse_text_in(bytes)?;
         if let Some(at) = image_at {
             r.image = Some(bytes[at..].to_vec());
         }
@@ -219,7 +275,7 @@ impl Record {
     /// [`Record::parse`] of a record read into `bytes`, whose image keeps
     /// the buffer (WP-1393: no copy of an image that may be tens of MB).
     pub(crate) fn parse_owned(mut bytes: Vec<u8>) -> Result<Record, ReadError> {
-        let (mut r, image_at) = Self::parse_text(&bytes)?;
+        let (mut r, image_at) = Self::parse_text_in(&bytes)?;
         if let Some(at) = image_at {
             bytes.drain(..at);
             r.image = Some(bytes);
@@ -227,9 +283,117 @@ impl Record {
         Ok(r)
     }
 
+    /// [`Record::parse_owned`] of the file `f`, streamed (WP-1401): the
+    /// text is read and parsed, the image after it read in pieces through
+    /// both checksums (the record's, and the block's own) and left in the
+    /// file ([`Record::image_at`]). The same checks, in the same order, as
+    /// a parse of the whole file; a file read in fewer bytes than its
+    /// length (it shrank) fails the image's checksum.
+    fn read_streaming(mut f: std::fs::File) -> std::io::Result<Result<Record, ReadError>> {
+        use std::io::Read as _;
+        let size = f.metadata()?.len();
+        let mut head = Vec::new();
+        let mut piece = vec![0u8; 1 << 16];
+        let mut eof = false;
+        // Until the `end` line's newline is in `head` (the text is what
+        // precedes it, as `parse_text` finds it).
+        loop {
+            let from = head.len().saturating_sub(5);
+            let n = f.read(&mut piece)?;
+            head.extend_from_slice(&piece[..n]);
+            if n == 0 {
+                eof = true;
+                break;
+            }
+            if let Some(at) = head[from..].windows(5).position(|w| w == b"\nend ").map(|p| from + p)
+                && head[at + 1..].contains(&b'\n')
+            {
+                break;
+            }
+        }
+        if eof {
+            return Ok(Self::parse_owned(head));
+        }
+        let mut stream = None;
+        let mut sum = |text_len: usize, len: usize| -> std::io::Result<u64> {
+            // The block's own checksum covers its body, the record's the
+            // whole image: one pass, the body's state carried on.
+            let mut body = bmi::BlockChecksum::new();
+            let body_len = len.saturating_sub(8);
+            let mut seen = 0usize;
+            let mut block_sum = [0u8; 8];
+            let mut add = |b: &[u8], seen: &mut usize| {
+                let body_part = body_len.saturating_sub(*seen).min(b.len());
+                body.update(&b[..body_part]);
+                // The bytes of `b` at block offsets `body_len..len`.
+                let from = body_len.saturating_sub(*seen).min(b.len());
+                let to = len.saturating_sub(*seen).min(b.len());
+                for (i, &x) in b[from..to.max(from)].iter().enumerate() {
+                    block_sum[*seen + from + i - body_len] = x;
+                }
+                *seen += b.len();
+            };
+            add(&head[text_len..], &mut seen);
+            // Pieces of 64 KiB, as the text's: a buffer of 1 MiB would be
+            // a mapping of its own whose release raises the allocator's
+            // threshold for those, which costs the restore after it some
+            // megabytes of peak RSS.
+            loop {
+                let n = f.read(&mut piece)?;
+                if n == 0 {
+                    break;
+                }
+                add(&piece[..n], &mut seen);
+            }
+            let body_sum = body.clone().finish();
+            let mut whole = body;
+            whole.update(&block_sum[..len.min(8)]);
+            stream = Some(ImageAt {
+                offset: text_len as u64,
+                len,
+                block_sum,
+                block_ok: seen == len && len >= 8 && u64::from_le_bytes(block_sum) == body_sum,
+            });
+            // A file that is not the length it had is not the image the
+            // line describes.
+            Ok(if seen == len { whole.finish() } else { !whole.finish() })
+        };
+        let mut io_err = None;
+        let parsed = Self::parse_text(&head, size, &mut |at, len| match sum(at, len) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                io_err = Some(e);
+                None
+            }
+        });
+        if let Some(e) = io_err {
+            return Err(e);
+        }
+        Ok(parsed.map(|(mut r, image_at)| {
+            if image_at.is_some() {
+                r.image_at = stream;
+            }
+            r
+        }))
+    }
+
     /// The record's text, parsed, and where its image starts in `bytes`
     /// once the image line has checked it.
-    fn parse_text(bytes: &[u8]) -> Result<(Record, Option<usize>), ReadError> {
+    fn parse_text_in(bytes: &[u8]) -> Result<(Record, Option<usize>), ReadError> {
+        Self::parse_text(bytes, bytes.len() as u64, &mut |at, _| {
+            Some(bmi::block_checksum(&bytes[at..]))
+        })
+    }
+
+    /// The record's text, parsed from `bytes` (the file's first bytes, at
+    /// least through the text, of a file of `size` bytes), and where its
+    /// image starts once the image line has checked it: `image_sum(at,
+    /// len)` is the checksum of the `len` bytes after the text at `at`.
+    fn parse_text(
+        bytes: &[u8],
+        size: u64,
+        image_sum: &mut dyn FnMut(usize, usize) -> Option<u64>,
+    ) -> Result<(Record, Option<usize>), ReadError> {
         if bytes.starts_with(&bmi::CLANG_MAGIC) {
             return Err(ReadError::Clang);
         }
@@ -245,7 +409,7 @@ impl Record {
             .position(|w| w == b"\nend ")
             .and_then(|at| bytes[at + 1..].iter().position(|&b| b == b'\n').map(|n| at + 2 + n))
             .unwrap_or(bytes.len());
-        let (bytes, tail) = bytes.split_at(text_len);
+        let bytes = &bytes[..text_len];
         let text = std::str::from_utf8(bytes).map_err(|_| corrupt("not UTF-8"))?;
         let first = text.lines().next().unwrap_or("");
         let ver: u32 = first[head.len()..].parse().map_err(|_| corrupt("bad format version"))?;
@@ -288,7 +452,9 @@ impl Record {
                 ("image", 2) if image_at.is_none() => {
                     let len: usize = f[0].parse().map_err(|_| bad())?;
                     let sum = u64::from_str_radix(f[1], 16).map_err(|_| bad())?;
-                    if tail.len() != len || bmi::block_checksum(tail) != sum {
+                    if size.checked_sub(text_len as u64) != Some(len as u64)
+                        || image_sum(text_len, len) != Some(sum)
+                    {
                         return Err(corrupt("image checksum mismatch"));
                     }
                     image_at = Some(text_len);
@@ -307,7 +473,7 @@ impl Record {
         if !seen_kiln || r.main.is_empty() {
             return Err(corrupt("missing fields"));
         }
-        if image_at.is_none() && !tail.is_empty() {
+        if image_at.is_none() && size > text_len as u64 {
             return Err(corrupt("trailing bytes"));
         }
         Ok((r, image_at))
@@ -471,7 +637,8 @@ pub(crate) fn consumer(
         pch
     };
     let preprocess = args.action == Action::Preprocess || args.deps.only.is_some();
-    let rec = match load(pch, preprocess) {
+    let keep_image = matches!(args.pch.image, PchImage::Check | PchImage::Load);
+    let rec = match load(pch, preprocess, keep_image) {
         Ok(rec) => rec,
         Err(diags) if preprocess => {
             // clang `-E` reports the PCH in each job and preprocesses
@@ -486,6 +653,7 @@ pub(crate) fn consumer(
             return Err(());
         }
     };
+    crate::pch_snapshot::phase("pch record read");
     let here = cwd();
     let resolve = |spelled: &str| {
         if Path::new(spelled).is_absolute() || here == Path::new(&rec.cwd) {
@@ -499,6 +667,7 @@ pub(crate) fn consumer(
         finish(e);
         return Err(());
     };
+    crate::pch_snapshot::phase("pch image sections");
     let load = args.pch.image == PchImage::Load;
     // `load` stands the record (and for a compile the declaration image)
     // in for the header, so the header must be the one it was built
@@ -581,10 +750,12 @@ pub(crate) fn consumer(
         finish(e);
         return Ok(Some(out));
     }
+    crate::pch_snapshot::phase("pch stale-file check");
     if !checked && !args.pch.no_validate && !check(args, tc, std, pch, &rec, &e) {
         finish(e);
         return Err(());
     }
+    crate::pch_snapshot::phase("pch record check");
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
     if args.pch.snapshot.loads() && args.pch.image != PchImage::Check {
         // EXPERIMENTAL (WP-1383): the snapshot stands in for the
@@ -1013,9 +1184,17 @@ pub(crate) type PchDiag = (DiagId, Vec<String>);
 /// (`ASTReader::getOriginalSourceFile`), reports a file it cannot read
 /// (`unable to read PCH file`) or one that is not a PCH (`input is not a
 /// PCH file`) and goes on (WP-1153).
-fn load(pch: &str, preprocess: bool) -> Result<Record, Vec<PchDiag>> {
+fn load(pch: &str, preprocess: bool, keep_image: bool) -> Result<Record, Vec<PchDiag>> {
     let one = |id: DiagId, args: &[&str]| (id, args.iter().map(|&a| a.to_owned()).collect());
-    let bytes = match std::fs::read(pch) {
+    // WP-1401: an image only the snapshot path reads stays in the file
+    // (no read of tens of MB into memory, no move of it, one checksum
+    // pass instead of two before the restore).
+    let read = if keep_image {
+        std::fs::read(pch).map(Record::parse_owned)
+    } else {
+        std::fs::File::open(pch).and_then(Record::read_streaming)
+    };
+    let parsed = match read {
         Ok(b) => b,
         Err(err) => {
             let why = if err.kind() == std::io::ErrorKind::NotFound {
@@ -1030,7 +1209,7 @@ fn load(pch: &str, preprocess: bool) -> Result<Record, Vec<PchDiag>> {
             return Err(d);
         }
     };
-    Record::parse_owned(bytes).map_err(|err| match err {
+    parsed.map_err(|err| match err {
         ReadError::NotPch if preprocess => vec![one(DiagId::drv_pch_not_pch, &[pch])],
         ReadError::NotPch => {
             vec![one(DiagId::drv_pch_not_pch, &[pch]), one(DiagId::drv_pch_invalid, &[pch])]
@@ -1382,6 +1561,7 @@ fn write_pch(
         macros: macros(args),
         files,
         image,
+        image_at: None,
     };
     let write_ast = kiln_source::trace::Scope::with_detail("WriteAST", || out.to_owned());
     if let Err(err) = bmi::write_file(Path::new(out), &rec.write()) {
@@ -1429,6 +1609,7 @@ mod tests {
                 abs: "/w d/p.hpp".into(),
             }],
             image: None,
+            image_at: None,
         }
     }
 
@@ -1457,6 +1638,75 @@ mod tests {
         assert_eq!(Record::parse(b"hello"), Err(ReadError::NotPch));
         assert_eq!(Record::parse(b"KILNPCH 3\n"), Err(ReadError::Newer));
         assert_eq!(Record::parse(b"KILNPCH 1\n"), Err(ReadError::Older));
+    }
+
+    /// WP-1401: a record read as a stream, its image left in the file,
+    /// is the record read whole, with the same verdict on every damage
+    /// (a flipped byte anywhere, a truncation, trailing bytes), and its
+    /// image read back from the file is the image; the block's own
+    /// checksum is checked as it is read.
+    #[test]
+    fn streamed_record_reads_as_a_whole_one() {
+        let path = std::env::temp_dir().join(format!("kiln-wp1401-rec-{}", std::process::id()));
+        let streamed = |b: &[u8]| {
+            std::fs::write(&path, b).unwrap();
+            Record::read_streaming(std::fs::File::open(&path).unwrap()).unwrap()
+        };
+        let whole = |b: &[u8]| {
+            Record::parse_owned(b.to_vec()).map(|mut r| {
+                r.image = None;
+                r
+            })
+        };
+        let same = |b: &[u8], what: &str| {
+            let s = streamed(b).map(|mut r| {
+                r.image_at = None;
+                r
+            });
+            assert_eq!(s, whole(b), "{what}");
+        };
+        let mut r = sample();
+        same(&r.write(), "no image");
+        // A block: one section, its body's checksum last.
+        let mut block = Vec::new();
+        block.extend_from_slice(&1u32.to_le_bytes());
+        block.extend_from_slice(&1u32.to_le_bytes());
+        block.extend_from_slice(&5u32.to_le_bytes());
+        block.extend_from_slice(b"\nend ");
+        let sum = bmi::block_checksum(&block);
+        block.extend_from_slice(&sum.to_le_bytes());
+        r.image = Some(block.clone());
+        let with = r.write();
+        same(&with, "image");
+        let at = streamed(&with).unwrap().image_at.unwrap();
+        assert_eq!(at.len, block.len());
+        assert!(at.block_ok);
+        assert_eq!(at.block_sum, sum.to_le_bytes());
+        assert_eq!(at.read(path.to_str().unwrap(), 0, at.len).unwrap(), block);
+        assert_eq!(at.sections(path.to_str().unwrap()), Ok(vec![(1, 12..17)]));
+        for i in 0..with.len() {
+            let mut b = with.clone();
+            b[i] ^= 0x41;
+            same(&b, &format!("byte {i}"));
+        }
+        for n in 0..with.len() {
+            same(&with[..n], &format!("first {n} bytes"));
+        }
+        let mut trailing = with.clone();
+        trailing.push(0);
+        same(&trailing, "trailing byte");
+        // The record's checksum covers a block whose own one is wrong.
+        let mut bad = block.clone();
+        let last = bad.len() - 1;
+        bad[last] ^= 1;
+        r.image = Some(bad.clone());
+        let at = streamed(&r.write()).unwrap().image_at.unwrap();
+        assert!(!at.block_ok);
+        assert_eq!(
+            at.sections(path.to_str().unwrap()).unwrap_err(),
+            bmi::section_ranges(&bad).unwrap_err().to_string()
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// clang `collectMacroDefinitions` (WP-1023).
