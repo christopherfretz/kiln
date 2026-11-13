@@ -262,6 +262,9 @@ impl Sema<'_, '_> {
         }
         let c = self.act_on_constant_full_expr(c);
         match self.eval_const(c, EvalContext::converted(at)) {
+            // [temp.arg.nontype]/6 for each pointer and reference
+            // subobject of the value.
+            Ok(v) if self.invalid_template_arg_base(v, false, at) => Err(()),
             Ok(v) => {
                 self.builder().template_param_object(cty, v);
                 Ok(TemplateArg::value(canon, v))
@@ -288,6 +291,20 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// clang `CheckConvertedConstantExpression`: a reference never binds
+    /// to a bit-field in a converted constant expression
+    /// ([dcl.init.ref]/5.4: a `const T&` would bind a temporary, a `T&`
+    /// not at all). `Err` after the diagnostic at `at` when `e` names one.
+    fn ref_arg_not_bitfield(&self, e: ExprId, at: Loc, ploc: Option<Loc>) -> Result<(), ()> {
+        if crate::conv::source_bit_field(self, e).is_none() {
+            return Ok(());
+        }
+        let d = self.diag(DiagId::sema_cce_ref_binds_bitfield, at);
+        let d = self.note_nttp_param(d, ploc);
+        self.emit(d);
+        Err(())
+    }
+
     /// Converts argument `e` of a reference-typed non-type template
     /// parameter `pty` ([temp.arg.nontype]/2): the reference is bound as
     /// in copy-initialization and the result must be a constant
@@ -307,6 +324,7 @@ impl Sema<'_, '_> {
         let canon = self.ast.types.canonical(pty);
         // clang `CheckConvertedConstantExpression`: the conversion must
         // exist and must not bind the reference to a temporary.
+        self.ref_arg_not_bitfield(e, at, ploc)?;
         let info = self.arg_info(e);
         let ety = self.ety(e);
         let ics = self.try_implicit_conversion(&info, pty, IcsOptions::NONE);

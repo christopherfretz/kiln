@@ -84,6 +84,20 @@ Planned as 1.2.0.
   remains: when `get_return_object()` throws, LLVM can keep the ramp's
   exception slots in the freed frame
   ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)).
+- A class-type (or array) non-type template argument with a pointer or
+  reference subobject designating a string literal, `__func__`, a
+  temporary or a `typeid` result (`X<T{"x"}>`, at any depth: members,
+  bases, array elements, a union's active member) is now rejected, as
+  [temp.arg.nontype]/6 requires and clang and GCC do (WP-1362; a
+  `fixed_string` holding a `char[N]` copy stays valid). A top-level
+  `__func__` argument is named "predefined '__func__' variable", as
+  clang does.
+- An error in a non-type template argument of a template-id formed by an
+  instantiation is reported at the argument, not at a stale location of
+  another template-id or at the template name (WP-1362).
+- A reference template argument naming a bit-field is reported as
+  "reference cannot bind to bit-field in converted constant expression"
+  (clang's wording) instead of as binding a temporary (WP-1362).
 
 ## [1.1.0] - 2026-11-12
 

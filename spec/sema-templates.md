@@ -1569,8 +1569,11 @@ the running `Substituter` instead.
      template argument used here" at the template-id's `>` (clang
      `CheckTemplateArgumentList`; the substitution frame has ended). The
      parser hands the `>` over with the argument locations
-     (`set_template_arg_locs`); a template-id formed by substitution
-     points at its name instead (clang: its `>`; follow-up). Defaults
+     (`set_template_arg_locs`, tagged with the instantiation depth; only
+     a template-id formed at that depth takes them,
+     `take_template_arg_locs`); a template-id formed by substitution
+     points at its name instead (clang: its `>`; follow-up), and locates
+     each expression argument at its substituted expression (WP-1362). Defaults
      used by deduction are checked inside their substitution frame
      (`tests/conformance/temp.arg.general/default-argument-checking-and-narrowing.cpp`);
    - converts NTTP args (converted constant expressions, evaluated by the
@@ -5513,20 +5516,30 @@ The `SpecKind` transitions are those of §4.5.
   value is the built-in `&` of the bound glvalue, re-interned at the
   reference type so it prints as `T<gi>`.
 - **Disallowed bases** ([temp.arg.nontype]/6, `args.rs`
-  `invalid_template_arg_base`): a pointer argument, or the address a
-  reference argument binds, whose base is a string literal, a `typeid`
-  result or a temporary is an error, "{pointer|reference} to
-  [subobject of ]{string literal|type_info object|temporary object} is
-  not allowed in a template argument" (clang
-  `err_constexpr_invalid_template_arg`); "subobject of" when the value
-  is not the whole object (a decayed literal, a non-zero offset). For an
+  `invalid_template_arg_base`): a pointer argument, the address a
+  reference argument binds, and every pointer or reference subobject of
+  a class-type argument's value (`nttp.rs` `convert_class_nttp_arg`; at
+  any depth, through members, bases, array elements and a union's active
+  member: the relocations of the frozen image), whose base is a string
+  literal, a predefined `__func__` variable, a `typeid` result or a
+  temporary is an error, "{pointer|reference} to [subobject of
+  ]{string literal|predefined '__func__' variable|type_info
+  object|temporary object} is not allowed in a template argument"
+  (clang `err_constexpr_invalid_template_arg`), once per argument (the
+  first such subobject in layout order), at the argument; "subobject
+  of" when the value is not the whole object (a decayed literal, a
+  non-zero offset, one past the end, a pointer of another type than a
+  temporary, `&tmp.first`). A reference subobject's value has the
+  reference type (WP-1362). For an
   explicitly-specified argument of a function template the error is
   deduction's invalid-argument failure, so `make<"ab">` drops a
   `template <auto p>` candidate and picks one whose parameter is a class
   type (WP-792; `temp.arg.nontype/string-literal-typeid-argument.cpp`,
-  `string-literal-argument-sfinae-run.cpp`). Gap: clang words a
-  `__func__` argument "predefined '__func__' variable"; kiln says
-  "string literal".
+  `string-literal-argument-sfinae-run.cpp`; class subobjects:
+  `string-literal-class-subobjects.cpp`,
+  `temporary-bitfield-class-subobjects{,-19}.cpp`, the valid neighbours
+  `string-copy-class-argument-run.cpp` and
+  `tests/mangle/class_nttp_string_copy.cpp`).
 - **Oven.** `var_info` treats the object as a usable constant whose value
   is its `ConstValueId`; `lv()` addresses it as a global.
 - **Codegen.** `param_object_global`: a `linkonce_odr dso_local constant`
