@@ -42,6 +42,7 @@
 mod float;
 pub mod fltstr;
 mod print;
+mod snap;
 mod value;
 
 pub use float::{format_float, format_float_gcc};

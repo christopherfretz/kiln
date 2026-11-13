@@ -3406,3 +3406,45 @@ impl ExprArena {
         (n.aux() != 0).then(|| DeclId::new(n.b))
     }
 }
+
+impl ExprArena {
+    /// The checks of a decoded arena (spec/ast.md "Snapshots"): every side
+    /// array keeps its dummy, and every header's side index is inside its
+    /// side array.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let ExprArena {
+            nodes,
+            cond_arms,
+            declref_extras,
+            compound_assigns,
+            init_lists,
+            news,
+            lambdas: _,
+            cold: _,
+        } = self;
+        let side = [
+            cond_arms.len(),
+            declref_extras.len(),
+            compound_assigns.len(),
+            init_lists.len(),
+            news.len(),
+        ];
+        if nodes.is_empty() || nodes.len() > ExprId::MAX_INDEX as usize + 1 || side.contains(&0) {
+            return Err("expression arena without its dummies");
+        }
+        for n in &nodes[1..] {
+            let (i, len) = match n.kind {
+                ExprKind::DeclRefExpr => (n.b, declref_extras.len()),
+                ExprKind::CompoundAssignOperator => (n.b, compound_assigns.len()),
+                ExprKind::ConditionalOperator | ExprKind::ChooseExpr => (n.b, cond_arms.len()),
+                ExprKind::InitListExpr => (n.b, init_lists.len()),
+                ExprKind::CXXNewExpr => (n.a, news.len()),
+                _ => continue,
+            };
+            if i as usize >= len {
+                return Err("expression side index out of range");
+            }
+        }
+        Ok(())
+    }
+}

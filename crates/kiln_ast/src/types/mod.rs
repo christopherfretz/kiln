@@ -29,6 +29,7 @@ mod profile;
 mod profile_expr;
 #[cfg(test)]
 mod query_tests;
+mod snap;
 pub use profile_expr::EquivScratch;
 
 pub use args::{ArgKind, ArgView, TemplateArg};

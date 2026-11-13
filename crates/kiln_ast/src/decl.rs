@@ -6900,3 +6900,77 @@ pub mod builtin {
         }
     }
 }
+
+impl DeclArena {
+    /// The checks of a decoded arena (spec/ast.md "Snapshots"): every
+    /// payload arena keeps its dummy, the per-function minimum argument
+    /// counts parallel the functions, and every declaration's payload index
+    /// is inside the arena of its kind's payload class.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let DeclArena {
+            nodes,
+            functions,
+            min_args,
+            vars,
+            records,
+            fields,
+            enums,
+            enumerators,
+            params,
+            typedefs,
+            namespaces,
+            scopes,
+            static_asserts,
+            base_specs,
+            lets,
+            ctor_inits,
+            completed_records: _,
+            top_level_ends: _,
+            fn_def_insts: _,
+            cold: _,
+            ty_journal: _,
+        } = self;
+        let len = |c: PayloadClass| match c {
+            PayloadClass::None => usize::MAX,
+            PayloadClass::Function => functions.len(),
+            PayloadClass::Var => vars.len(),
+            PayloadClass::Record => records.len(),
+            PayloadClass::Field => fields.len(),
+            PayloadClass::Enum => enums.len(),
+            PayloadClass::Enumerator => enumerators.len(),
+            PayloadClass::Param => params.len(),
+            PayloadClass::Typedef => typedefs.len(),
+            PayloadClass::Namespace => namespaces.len(),
+            PayloadClass::Scope => scopes.len(),
+            PayloadClass::StaticAssert => static_asserts.len(),
+            PayloadClass::Let => lets.len(),
+        };
+        let dummies = [
+            nodes.len(),
+            functions.len(),
+            vars.len(),
+            records.len(),
+            fields.len(),
+            enums.len(),
+            enumerators.len(),
+            params.len(),
+            typedefs.len(),
+            namespaces.len(),
+            scopes.len(),
+            static_asserts.len(),
+            base_specs.len(),
+            lets.len(),
+            ctor_inits.len(),
+        ];
+        if dummies.contains(&0) || nodes.len() > DeclId::MAX_INDEX as usize + 1 {
+            return Err("declaration arena without its dummies");
+        }
+        if functions.len() != min_args.len() {
+            return Err("function payloads and minimum argument counts differ in length");
+        }
+        if nodes[1..].iter().any(|n| n.data as usize >= len(n.kind.payload())) {
+            return Err("declaration payload index out of range");
+        }
+        Ok(())
+    }
+}

@@ -103,6 +103,48 @@ impl InternTable {
         }
     }
 
+    /// The ids in `1..len` that are NOT in the table, ascending: what a
+    /// snapshot writes so that [`Self::rebuild`] restores exactly this
+    /// membership (spec/ast.md "Snapshots").
+    pub(crate) fn absent(&self, len: usize) -> Vec<u32> {
+        let mut present = vec![false; len];
+        let mut mark = |id: u32| {
+            if let Some(p) = present.get_mut(id as usize) {
+                *p = true;
+            }
+        };
+        #[cfg(not(feature = "std-intern"))]
+        self.table.iter().for_each(|&id| mark(id));
+        #[cfg(feature = "std-intern")]
+        for &head in self.heads.values() {
+            let mut cur = head;
+            while cur != 0 {
+                mark(cur);
+                cur = self.next_same_hash.get(cur as usize).copied().unwrap_or(0);
+            }
+        }
+        (1..len).filter(|&i| !present[i]).map(|i| i as u32).collect()
+    }
+
+    /// The table holding every id of `1..len` except `absent` (ascending,
+    /// in range: the caller checked), inserted in id order with the hash
+    /// `hash` gives (a snapshot's restore, spec/ast.md "Snapshots").
+    pub(crate) fn rebuild(len: usize, absent: &[u32], hash: impl Fn(u32) -> u64) -> InternTable {
+        let mut t = InternTable::default();
+        #[cfg(not(feature = "std-intern"))]
+        {
+            t.table.reserve(len.saturating_sub(1 + absent.len()), |&i| hash(i));
+        }
+        let mut skip = absent.iter().copied().peekable();
+        for id in 1..len as u32 {
+            if skip.next_if_eq(&id).is_some() {
+                continue;
+            }
+            t.insert(hash(id), id, &hash);
+        }
+        t
+    }
+
     /// Bytes of heap held by the table (allocation, not just entries).
     pub(crate) fn heap_bytes(&self) -> u64 {
         #[cfg(not(feature = "std-intern"))]
@@ -172,7 +214,7 @@ pub(crate) struct KeyedEntry {
 #[derive(Debug)]
 pub(crate) struct KeyedTable {
     pub(crate) entries: Vec<KeyedEntry>,
-    intern: InternTable,
+    pub(super) intern: InternTable,
 }
 
 impl KeyedTable {
