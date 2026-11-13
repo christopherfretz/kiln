@@ -1,7 +1,7 @@
 // [meta.syn] (P2996R13 and the papers GCC 16.1 adopts with it): libstdc++
 // 16.1's real <meta>, through --gcc-toolchain, with only <vector>,
-// <string_view>, <array> and <ranges> beside it. Every name the reference
-// workload uses most (dealias, display_string_of, is_type, type_of, ...,
+// <string_view>, <array> and <ranges> beside it. Every name reflection-heavy
+// code uses most (dealias, display_string_of, is_type, type_of, ...,
 // define_static_string, define_static_array) evaluates as GCC 16.1 does:
 // string_view, vector<info>, access_context, std::strong_ordering
 // (type_order), std::meta::exception, source_location and the range

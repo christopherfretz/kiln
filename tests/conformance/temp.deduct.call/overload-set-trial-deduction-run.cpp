@@ -10,7 +10,7 @@
 // ([temp.deduct.call]/4.2). The set is formed in a template and resolved
 // at instantiation too. A template-id set takes the specialization each
 // template's explicit arguments name (clang `ResolveOverloadForDeduction`).
-// Reduced from the reference workload's field-extraction header, whose
+// Reduced from a downstream field-extraction header, whose
 // extract_from/extract_to_buffer take the getters of an internal namespace
 // handles, overloaded as `bool getX(T*) const noexcept` and
 // `T getX() const noexcept`. Matches clang 21.

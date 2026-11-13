@@ -9,7 +9,7 @@
 // definition of a C1 or D1) and the strong ones run; K's weak structors,
 // which nothing overrides, are used. A weak member of a class template
 // (an implicit instantiation, otherwise `linkonce_odr`) is weak too and
-// keeps its C1 alias, which the other unit overrides alone. The reference workload's
+// keeps its C1 alias, which the other unit overrides alone. A downstream
 // source file defines `__attribute__((weak))
 // Flag::Flag(...)` and is linked
 // --whole-archive beside a GCC-built copy of itself.

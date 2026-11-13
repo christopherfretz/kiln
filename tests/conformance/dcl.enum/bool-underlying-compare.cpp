@@ -2,7 +2,7 @@
 // type is `bool` has the values of `bool`; clang represents it as `bool`
 // (an `i8` object, an `i1` value: `hasBooleanRepresentation`), so a loaded
 // member compares, switches and orders as an `i1` against its `i1`
-// enumerators. The shape is the reference workload's Handler (a
+// enumerators. The shape is a downstream Handler (a
 // `const enum class Policy : bool` member tested with `==` in
 // out-of-line member functions).
 //@ expect: run

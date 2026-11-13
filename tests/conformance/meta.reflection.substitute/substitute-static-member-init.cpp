@@ -32,7 +32,7 @@ constexpr int tripled = I * 3;
 
 constexpr std::meta::info kinds[] = {^^char, ^^short, ^^int, ^^long long};
 
-// The reference workload's shape S5 (bench/reflect/s5.cpp), reduced.
+// Shape S5 (bench/reflect/s5.cpp), reduced.
 consteval int round_trips(int lo, int hi) {
   int sum = 0;
   for (int i = lo; i < hi; ++i) {

@@ -6,7 +6,7 @@
 // an rvalue), the function templates named without explicit template
 // arguments are not deduced at all, so a signature that would be a hard error
 // to substitute (`bad<T>::type`) is never instantiated. The shape of
-// the reference workload ranking-traits header: `rank(BooleanYesNo)`
+// a downstream ranking-traits header: `rank(BooleanYesNo)`
 // beside `template<class T> enable_if<is_unsigned<T>, ...> rank(T)`, where
 // boost::is_unsigned<enum> is ill-formed. For calls (lvalue-to-rvalue,
 // array-to-pointer and function-to-pointer conversions are identities;

@@ -5,7 +5,7 @@
 // initializer, or a constexpr object whose value is emitted; an atomic
 // load or store of it (`__atomic_load_n` of an unscoped one, `__atomic_load`
 // of a scoped one, as `std::atomic<E>` does) goes through the same byte.
-// The shape is the reference workload's `enum class Policy : bool`.
+// The shape is a downstream `enum class Policy : bool`.
 //@ expect: run
 //@ stdout: 1 0 1 1 0 1
 //@ stdout: 5 1 9 0 7 1

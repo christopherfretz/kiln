@@ -365,7 +365,7 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 
 ## [1.0.2] - 2026-11-11
 
-A bug-fix release: fixes found while building the reference workload,
+A bug-fix release: fixes found while building downstream code,
 each with a test. Nothing in it changes what
 [docs/STABILITY.md](docs/STABILITY.md) promises.
 

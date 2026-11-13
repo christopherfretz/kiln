@@ -2,7 +2,7 @@
 // lists its members in an unspecified order; kiln gives GCC 16.1's, the
 // creation order of each entity's first declaration (gcc/cp/reflect.cc
 // members_cmp sorts by DECL_UID; spec/reflection-members.md). An operator
-// first declared as a friend inside its class (the reference workload's record header
+// first declared as a friend inside its class (a downstream record header
 // declares operator+/operator- as friends, then redeclares them with the
 // comparisons after the class) comes where the friend declaration is. A
 // binding generator emits a namespace's free operators in this order.

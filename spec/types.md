@@ -1130,7 +1130,7 @@ stores ids.
   is fine, the former is no code motion.
 - **T3 `SubstTemplateTypeParm` sugar** costs one node per (parameter,
   argument, instantiation) and inflates heavily-instantiating TUs (the
-  the reference workload case). *Recommend* keep it (diagnostics like clang's
+  reflection-heavy case). *Recommend* keep it (diagnostics like clang's
   "with T = int" and the dump need it), interned so repeats are free, and
   measure on the M7 corpus; a driver flag `-fno-subst-sugar` may drop it
   (types then print as the replacement only).

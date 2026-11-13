@@ -1,7 +1,7 @@
 // [over.match.best], [temp.deduct]/8: before clang 21 every function
 // template candidate is deduced, beside a non-template candidate that is a
 // perfect match too, so substituting a signature that is a hard error
-// (`bad<T>::type`, as boost::is_unsigned<enum> for the reference workload's
+// (`bad<T>::type`, as boost::is_unsigned<enum> for a downstream
 // ranking-traits header) is reported even though the
 // non-template would be chosen (run-perfect-match-skips-templates.cpp is the
 // clang 21+ behaviour).

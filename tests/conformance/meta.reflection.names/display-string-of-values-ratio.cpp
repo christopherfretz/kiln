@@ -3,7 +3,7 @@
 // arguments of std::ratio<86400, 7> print as their decimal values, so a
 // template-id rebuilt from template_of and template_arguments_of spells
 // the same type as display_string_of of the type itself
-// (spec/reflection.md §3.9, WP-564; the reference workload writes such
+// (spec/reflection.md §3.9, WP-564; binding generators write such
 // template-ids into generated source). Compared with GCC 16.1
 // (spec/harness.md "GCC oracle").
 //@ expect: compile-ok

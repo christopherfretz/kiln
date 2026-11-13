@@ -1,6 +1,6 @@
 # M6 — C++26 reflection: plan and decisions
 
-Supervisor-owned plan for ROADMAP M6, derived from the WP-267 spike review on
+Plan for ROADMAP M6, derived from the WP-267 spike review on
 2026-11-03. Work packages are BACKLOG WP-470..485 (the M6-NN labels below map
 1:1, M6-01 = WP-470). `spec/reflection.md` (WP-470) is the normative contract;
 this file is the rationale and the dependency graph.
@@ -12,7 +12,7 @@ this file is the rationale and the dependency graph.
   `scripts/env.sh` exports it as `KILN_GCC`) and goes into the CI path:
   `oracle: gcc` tests (spec/harness.md "GCC oracle") and the deterministic
   reflection counter gates (`oven:` budgets) run in merge-queue CI. The
-  vs-GCC perf table, the `--scaling` sweeps and the private corpora stay
+  vs-GCC perf table, the `--scaling` sweeps and the external corpora stay
   off the queue (manual or nightly on the dev host). CI wall time must not
   grow for it: the GCC-bearing image is adopted only when it pays for its
   own pull (docs/status/perf-history.md "CI time"); until then CI leaves `KILN_GCC`
@@ -201,7 +201,6 @@ Size: S ≈ 1–2 days, M ≈ 3–5 days, L ≈ one week-long slot (< ~2k lines 
 Every WP follows the same rules:
 - tests are `oracle: none` goldens written from the IS text (`skip(clang)` implies none)
 - every test names its standard section
-- the brief header carries the reference-workload naming rule
 - new diagnostic ids go in kiln_diag area files
 
 **M6-01 — spec/reflection.md + dispatch skeleton (M).**
@@ -335,12 +334,12 @@ Every WP follows the same rules:
 
 **M6-14 — validation and perf infrastructure (M).**
 - *Scope:*
-  - `cargo xtask gen-reflect`: a Rust generator for the §3.8 S1–S6 shapes in `bench/reflect/`, the clean-room WP-030 port; nothing copied from the reference workload
+  - `cargo xtask gen-reflect`: a Rust generator for the §3.8 S1–S6 shapes in `bench/reflect/`, the clean-room WP-030 port; nothing copied from downstream code
   - `--scaling` mode and the new `-fconstexpr-report` counters wired into `xtask bench`
   - harness:
     - an `oracle-advisory` outcome (crash or unsupported never fails kiln; WP-102 policy)
     - a `gcc` compiler kind plus `skip(gcc)` and `oracle: gcc` once a GCC 16.1 path is configured (`KILN_GCC=`)
-    - `cargo xtask test --external <dir>` for a private corpus that lives outside the public repo (the WP-103 ICE minimizations, kept under kiln-helper), with `never-crash` semantics
+    - `cargo xtask test --external <dir>` for a corpus that lives outside the repo (such as the WP-103 ICE minimizations), with `never-crash` semantics
 - *Deps:* none. *Parallel:* wave 1.
 - *Tests:* xtask fixtures for each new outcome; the generated S-tier entries recorded as baselines, xfail(kiln) until their families land.
 
@@ -370,7 +369,7 @@ wave 2:        06   07(01,03)  08(01)  05(03)  16(03)
                 |
 wave 3:        09(01,03,06,12)  10(01,03,06)  11(01,02,04,06)  13(01,03,05,06)
                 \_______________ all ______________/
-wave 4:        15 (needs GCC 16.1 headers)  + cluster WPs from GCC differential / reference workload
+wave 4:        15 (needs GCC 16.1 headers)  + cluster WPs from GCC differential / downstream builds
 ```
 
 | Stage | Runnable at once |
@@ -380,7 +379,7 @@ wave 4:        15 (needs GCC 16.1 headers)  + cluster WPs from GCC differential 
 | 06 merged | 09, 10, 11, 13 (+ 07/08 tails) |
 | families merged | 15 + clusters |
 
-Total is about 11–13 week-long slots, against the spike's estimate of 20–30. The estimate drops because P3068 is done, P1306 is done, and the dispatch skeleton makes the families mechanical. The reference-workload bring-up adds cluster WPs at wave 4 that cannot be sized yet.
+Total is about 11–13 week-long slots, against the spike's estimate of 20–30. The estimate drops because P3068 is done, P1306 is done, and the dispatch skeleton makes the families mechanical. Bringing up large downstream code adds cluster WPs at wave 4 that cannot be sized yet.
 
 ## 5. Validation strategy
 
@@ -390,7 +389,7 @@ Total is about 11–13 week-long slots, against the spike's estimate of 20–30.
 3. The p2996 fork is advisory only: spot checks of AST shape and diagnostics; its crashes count as "advisory: oracle crashed" (M6-14).
 4. clang 22 still checks everything that is not reflection (traits RHS, layouts, IR of the generated code where a splice-free twin exists).
 
-**Private corpora:** the WP-103 ICE minimizations (≈20 GCC 16.1 cases and any clang/p2996 cases) and the reference workload itself live under kiln-helper (never in kiln/). The supervisor runs them with `cargo xtask test --external` and `xtask bench --external`; only counts and synthetic reductions reach the public repo. The rule is never crash, never overflow, never exceed the budget. A reflection case that is not yet implemented is `xfail(kiln)` with the owning WP.
+**External corpora:** the WP-103 ICE minimizations (≈20 GCC 16.1 cases and any clang/p2996 cases) and large downstream code run with `cargo xtask test --external` and `xtask bench --external`. The rule is never crash, never overflow, never exceed the budget. A reflection case that is not yet implemented is `xfail(kiln)` with the owning WP.
 
 **Header differential:** every reflection test that uses only IS names also runs through libstdc++ `<meta>` (M6-15). Different outcomes are a bug in one of the two shims.
 
@@ -398,24 +397,24 @@ Total is about 11–13 week-long slots, against the spike's estimate of 20–30.
 - the reflection conformance dirs in kiln mode, with their `oracle: gcc` comparisons: a bounded set, each test compiled once by GCC 16.1 (no run-twice shapes), when the CI image carries GCC (D1)
 - the deterministic reflection counter gates: the `oven:` budgets of the `bench/reflect` shapes (§3.8) once their `xfail(kiln)` markers go, and the stress cases with `oven:` budgets
 
-The vs-GCC perf table, the `--scaling` sweeps and the private corpora stay off the merge queue: manual or nightly on the dev host. GCC is never built from source in CI.
+The vs-GCC perf table, the `--scaling` sweeps and the external corpora stay off the merge queue: manual or nightly on the dev host. GCC is never built from source in CI.
 
 **M6 exit measures:**
-- (a) the reference workload builds and its tests pass under kiln with libstdc++ 16.1 `<meta>`
+- (a) large real-world reflection-heavy code builds and its tests pass under kiln with libstdc++ 16.1 `<meta>`
 - (b) compile wall time and peak RSS recorded against GCC 16.1 on it and on S1–S6, with kiln ≤ GCC on both and the §3.8 targets met or a written reason given
-- (c) the private ICE corpus at 0 crashes
+- (c) the ICE corpus at 0 crashes
 - (d) every reflection row in STANDARD_SUPPORT.md `done`
 - (e) the GCC differential green on the public reflection corpus, or each divergence triaged with an IS citation
 - (f) scaling gate passes for S1–S6. **Met (WP-638, 2026-11-05):** S1–S6 compile on libstdc++ 16.1 and all six sweeps pass.
   4N/N growth for kiln (time, RSS) is S1 1.88x, 1.95x; S2 2.42x, 2.38x; S3 1.91x, 1.09x; S4 1.82x, 1.91x; S5 1.18x, 1.27x; S6 1.19x, 1.01x.
   `peak_arena` is flat on S1, S2, S4 and S5. S7/S8 were already green.
   At the bench N, kiln/GCC is 0.20x–0.94x in time and 0.08x–0.34x in memory.
-  The tables are in docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
+  The tables are in docs/status/perf-reflection.md "kiln vs GCC 16.1".
 
 **M6 exit record (2026-11-05):**
-- (a) Met. The reference workload: all 49 slugs of its harness generate, compile and run their tests under kiln with libstdc++ 16.1 `<meta>` (private harness, supervisor-measured 2026-11-05).
-- (b) Met with one written reason. 48 slugs are measurable on both compilers: generator stage wall 619 s (kiln) vs 1277 s (g++ 16.1), 0.48x; peak RSS sum 29.6 GiB vs 88.7 GiB, 0.33x, kiln lower on every slug; whole-harness wall 1831 s vs 2493 s, 0.73x; production-compile stage 1.04x overall, with one outlier (one wide binding TU: 264 s vs 76 s) (private harness, supervisor-measured 2026-11-05). The written reason is docs/status/perf-reference-workload.md "`synth_accessor_god` production TU (WP-633)": kiln's frontend takes 14 s of it, and the rest is LLVM's JumpThreading and MemCpyOpt on one 92k-instruction registration function; clang 19 on the same IR shape takes 432 s. The §3.8 target of 115 s for that TU is carried into M7 (WP-641, WP-642). The S1–S6 ratios are in (f).
-- (c) Met. The private ICE corpus (36 reproducer sources): kiln has 0 crashes and 0 timeouts, and every diagnosis matches the finding's expectation; g++ 16.1 ICEs on 6 of them (supervisor-measured 2026-11-05).
+- (a) Met. A large reflection-heavy codebase: all 49 slugs of its harness generate, compile and run their tests under kiln with libstdc++ 16.1 `<meta>` (measured 2026-11-05).
+- (b) Met with one written reason. 48 slugs are measurable on both compilers: generator stage wall 619 s (kiln) vs 1277 s (g++ 16.1), 0.48x; peak RSS sum 29.6 GiB vs 88.7 GiB, 0.33x, kiln lower on every slug; whole-harness wall 1831 s vs 2493 s, 0.73x; production-compile stage 1.04x overall, with one outlier (one wide binding TU: 264 s vs 76 s) (measured 2026-11-05). The written reason is docs/status/perf-reflection.md "`synth_accessor_god` production TU (WP-633)": kiln's frontend takes 14 s of it, and the rest is LLVM's JumpThreading and MemCpyOpt on one 92k-instruction registration function; clang 19 on the same IR shape takes 432 s. The §3.8 target of 115 s for that TU is carried into M7 (WP-641, WP-642). The S1–S6 ratios are in (f).
+- (c) Met. The ICE corpus (36 reproducer sources): kiln has 0 crashes and 0 timeouts, and every diagnosis matches the finding's expectation; g++ 16.1 ICEs on 6 of them (measured 2026-11-05).
 - (d) Met (WP-639): every row of docs/STANDARD_SUPPORT.md "C++26 reflection" is `done`. The paper row P3394R4 stays `partial` and lists what is missing (base-specifier annotations, a parameter pack's annotations, string-literal pointers; spec/annotations.md §9).
 - (e) Met. 98 conformance files run `oracle: gcc` (88 of them reflection tests) and are green in merge-queue CI; one triaged divergence, recorded with its IS citation in docs/status/deviations.md "GCC 16.1 reflection divergences".
 - (f) Recorded above.

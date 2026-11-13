@@ -86,7 +86,7 @@ the builder is one forward walk; temporaries' destructors come from the
   clang). Drop it before the next function. The three `Vec`s live in a
   per-`Sema` scratch that is `clear()`ed, not freed. Steady-state memory
   is then bounded by the largest body, not by the TU, and template
-  instantiation (the reference workload's hot path) never allocates
+  instantiation (the hot path of reflection-heavy code) never allocates
   per function.
 - Budgets: block and element counts are O(AST nodes in the body) with
   small constants (roughly 16 B/elem, 24 B/block). A hard cap

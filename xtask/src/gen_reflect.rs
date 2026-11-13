@@ -1,7 +1,7 @@
 //! `cargo xtask gen-reflect`: writes the reflection perf shapes S1–S6 of
-//! `docs/plans/m6-reflection.md` §3.8, and the reference-workload shapes S7
+//! `docs/plans/m6-reflection.md` §3.8, and the binding shapes S7
 //! (a binding generator) and S8 (the bindings it prints, compiled) of
-//! `docs/status/perf-reference-workload.md`, and S9 and S10
+//! `docs/status/perf-reflection.md`, and S9 and S10
 //! (reflection-keyed instantiations, the mangler's load, S10 on deep
 //! template-ids: spec/reflection.md §8.3), as bench
 //! entries under `bench/reflect/` (`spec/bench.md` "Reflection shapes").
@@ -144,7 +144,7 @@ pub const SHAPES: [Shape; 10] = [
         what: "a binding generator: N annotated classes walked by members_of + \
                annotations_of_with_type, each binding built as a std::string and printed \
                from a template for that splices the bound members",
-        source: "docs/status/perf-reference-workload.md",
+        source: "docs/status/perf-reflection.md",
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
@@ -158,7 +158,7 @@ pub const SHAPES: [Shape; 10] = [
         step: 1,
         what: "the bindings S7 prints, compiled: N class_<T> instantiations of a \
                nanobind-style binding library (casters, call thunks, constexpr signatures)",
-        source: "docs/status/perf-reference-workload.md",
+        source: "docs/status/perf-reflection.md",
         owner: "WP-551",
         needs: "a libstdc++ with <meta> (GCC 16.1)",
         libstdcxx: true,
@@ -992,7 +992,7 @@ pub const USAGE: &str = "\
 usage: cargo xtask gen-reflect [--shape s1..s10] [--n <N>] [--out <dir>] [--check]
 
 Writes the reflection perf shapes S1-S6 (docs/plans/m6-reflection.md §3.8) and
-the reference-workload shapes S7-S8 (docs/status/perf-reference-workload.md) and
+the binding shapes S7-S8 (docs/status/perf-reflection.md) and
 the reflection-mangling shapes S9 and S10 (spec/reflection.md §8.3) as bench entries. Without --n each shape is written at its committed default N
 into bench/reflect/; a different N needs --out (the sweeps of `cargo xtask
 bench --scaling` build their own). --check writes nothing and fails when a
