@@ -26,7 +26,7 @@ use crate::Sema;
 /// One definition of an object-like macro whose replacement list starts
 /// `[ [`, as recorded by the preprocessor (`kiln_pp::AttrMacro`; the
 /// parser copies the history in with [`Sema::sync_attr_macros`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct AttrMacro {
     /// The macro name.
     pub name: Box<str>,

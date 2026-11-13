@@ -20,7 +20,7 @@ use crate::templ::pack::PackOperand;
 /// template, [temp.friend]/1.3; clang's
 /// `DependentFunctionTemplateSpecializationInfo`): matched when its class
 /// is instantiated.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct FriendSpec {
     /// The name the declarator-id's template-id names.
     pub(crate) name: DeclName,

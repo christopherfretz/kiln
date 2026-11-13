@@ -456,7 +456,7 @@ impl Sema<'_, '_> {
 
 /// The defaulted-comparison state of [`Sema`] (spec/sema-class.md §8.3),
 /// kept in [`crate::class::SpecialState`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct CompareState {
     /// The defaulted comparison whose subobject comparisons are being
     /// analyzed or synthesized, with the context they are resolved in:

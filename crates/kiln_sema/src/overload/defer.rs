@@ -31,7 +31,7 @@ use crate::conv::{RefBinding, StandardConversion};
 
 /// A function template candidate whose deduction is deferred: what the
 /// adding context needs to add it later, exactly as it would have.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) enum Deferred {
     /// `add_template_candidate(ft, found, None, kind, first_opts, loc)`
     /// with the deduction's point of instantiation `poi`; `adl_only`

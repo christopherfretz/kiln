@@ -32,7 +32,7 @@ pub(crate) enum AddrCtx {
 /// signatures ([`OverloadScratch::template_id_numbers`]).
 ///
 /// [`OverloadScratch::template_id_numbers`]: crate::overload::OverloadScratch::template_id_numbers
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kiln_snap::Snap)]
 pub(crate) struct IdNumber {
     key: (DeclId, String),
     /// The last number given before the early resolution.

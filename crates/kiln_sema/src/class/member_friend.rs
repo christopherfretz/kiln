@@ -29,7 +29,7 @@ use crate::templ::stack::FrameKind;
 use crate::templ::subst::Substituter;
 
 /// One [temp.friend]/5 friend declaration.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct MemberFriend {
     /// The written nested-name-specifier (`A<T>::`, `A<T>::X::`).
     pub(crate) nns: NnsId,
@@ -65,7 +65,7 @@ pub(crate) struct MemberFriend {
 }
 
 /// Whether a member is befriended by a [`MemberFriend`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum Grant {
     No,
     Yes,
@@ -76,7 +76,7 @@ pub(crate) enum Grant {
 }
 
 /// The [temp.friend]/5 friends of the translation unit.
-#[derive(Default, Debug)]
+#[derive(Default, Debug, kiln_snap::Snap)]
 pub(crate) struct MemberFriends {
     /// Keyed by their `FriendDecl`.
     pub(crate) by_friend: FxHashMap<DeclId, MemberFriend>,

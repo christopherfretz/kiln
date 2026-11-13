@@ -21,7 +21,7 @@ use crate::templ::stack::FrameKind;
 /// The `substitute` memo (spec/reflection.md §3.3): the reflection of
 /// each successful substitution, keyed by the template name and the
 /// argument reflections' Oven values.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct SubstMemo {
     map: FxHashMap<Box<[u64]>, ReflectionId>,
     /// The key scratch (its capacity is reused).

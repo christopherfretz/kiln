@@ -35,7 +35,7 @@ use crate::Sema;
 use crate::conv::{RefBinding, StandardConversion};
 
 /// What a candidate set resolves (spec/sema-overload.md §10.1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub(crate) enum SetKind {
     /// A call ([over.match.call]) or constructor call ([over.match.ctor]).
     #[default]
@@ -65,7 +65,7 @@ pub(crate) enum SetKind {
 
 /// The kind of a candidate (spec/sema-overload.md §10.1; `Surrogate`,
 /// `Builtin` and `DeductionGuide` are WP-068b and S3T).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum CandidateKind {
     /// A non-member function (or a static member called without an
     /// object).
@@ -86,7 +86,7 @@ pub(crate) enum CandidateKind {
 }
 
 /// Why a candidate is not viable.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub(crate) enum CandidateFailure {
     /// Viable.
     #[default]
@@ -145,7 +145,7 @@ pub(crate) enum CandidateFailure {
 
 /// A rewritten comparison candidate's form ([over.match.oper]/3.4;
 /// clang `OverloadCandidateRewriteKind`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub(crate) enum Rewrite {
     /// Not rewritten.
     #[default]
@@ -175,7 +175,7 @@ impl Rewrite {
 }
 
 /// One candidate function (spec/sema-overload.md §10.1).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct Candidate {
     /// The function (`None` for built-in candidates, WP-068b).
     pub decl: Option<DeclId>,
@@ -187,6 +187,7 @@ pub(crate) struct Candidate {
     pub kind: CandidateKind,
     /// The candidate's conversion sequences in the set's `ics`: the
     /// object slot first when the set has an object argument.
+    #[snap(with = "range_u32")]
     pub ics: Range<u32>,
     /// Viable ([over.match.viable]).
     pub viable: bool,
@@ -264,7 +265,7 @@ impl Candidate {
 
 /// A set of candidate functions for one resolution
 /// (spec/sema-overload.md §10.1). Pooled: see [`OverloadScratch`].
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent per-set flags, not a state machine")]
 pub(crate) struct OverloadCandidateSet {
     /// What is resolved.
@@ -408,7 +409,7 @@ impl OverloadCandidateSet {
 }
 
 /// Bench counters (spec/bench.md `ovl.*`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub struct OverloadStats {
     /// Candidate sets resolved.
     pub sets: u64,
@@ -424,8 +425,10 @@ pub struct OverloadStats {
 
 /// The pool of candidate sets (spec/sema-overload.md §1.4): nested
 /// resolutions take one each; pool depth = nesting depth.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct OverloadScratch {
+    /// Not in a snapshot: scratch: pooled candidate sets, cleared before each use.
+    #[snap(skip)]
     pool: Vec<OverloadCandidateSet>,
     /// Braced-init-list arguments being resolved (an [`ArgInfo::list`]
     /// indexes here).
@@ -499,7 +502,7 @@ pub(crate) struct OverloadScratch {
 
 /// An overloaded member access `b.f` / `b->f` / implicit `this->f`
 /// (spec/sema-overload.md §2.3).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct OvlMember {
     /// The member name (an identifier, operator-function-id,
     /// conversion-function-id, ..., [expr.ref]/1).
@@ -532,7 +535,7 @@ pub(crate) struct OvlMember {
 
 /// The lookup details of an `UnresolvedLookupExpr` its decl list does not
 /// record.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct UleFound {
     /// Parallel to the ULE's decls: the declaration lookup found (clang's
     /// `FoundDecl`).
@@ -774,4 +777,22 @@ impl Sema<'_, '_> {
 /// ([over.match.funcs]/4): never compared.
 pub(crate) fn ignored_object(ty: QualType) -> Ics {
     Ics::Standard(StandardConversion::identity(ty, ty, RefBinding::IGNORED))
+}
+
+/// `#[snap(with)]` for a `Range<u32>` field: its two ends.
+mod range_u32 {
+    use std::ops::Range;
+
+    use kiln_snap::{Reader, Snap, SnapError, Writer};
+
+    pub(super) fn put(v: &Range<u32>, w: &mut Writer) {
+        v.start.put(w);
+        v.end.put(w);
+    }
+
+    pub(super) fn get(r: &mut Reader<'_>) -> Result<Range<u32>, SnapError> {
+        let start = u32::get(r)?;
+        let end = u32::get(r)?;
+        Ok(start..end)
+    }
 }

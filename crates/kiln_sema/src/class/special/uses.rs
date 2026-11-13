@@ -25,7 +25,7 @@ use crate::class::{DeletedAs, DiagSites, InitStyle as CtorStyle};
 
 /// A call of a deleted non-member function by its unqualified name,
 /// diagnosed at the call unless the call stays dependent.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct PendingDeleted {
     /// The callee `DeclRefExpr`.
     pub expr: ExprId,

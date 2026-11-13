@@ -34,7 +34,7 @@ pub(crate) mod entity {
 }
 
 /// An initializer as written ([dcl.init.general]/1).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub enum Initializer {
     /// `= expr`, or a single expression.
     Expr(ExprId),
@@ -45,7 +45,7 @@ pub enum Initializer {
 }
 
 /// A braced-init-list.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct InitList {
     /// The initializer-clauses.
     pub items: Vec<InitItem>,
@@ -56,7 +56,7 @@ pub struct InitList {
 }
 
 /// One initializer-clause, possibly designated ([dcl.init.aggr]/3).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct InitItem {
     /// `.x` / `[i]` designators (outermost first); empty when not
     /// designated.
@@ -66,7 +66,7 @@ pub struct InitItem {
 }
 
 /// A designator.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, kiln_snap::Snap)]
 pub enum Designator {
     /// `.name`.
     Field(Symbol, Loc),
@@ -98,7 +98,7 @@ impl Designator {
 }
 
 /// An initializer-clause.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub enum InitValue {
     /// An assignment-expression.
     Expr(ExprId),

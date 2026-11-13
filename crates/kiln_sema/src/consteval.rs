@@ -26,7 +26,7 @@ use crate::class::CleanupState;
 
 /// Why an escalated function is immediate (clang's
 /// `DiagnoseImmediateEscalatingReason`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Escalation {
     /// The call or the reference in its body.
     loc: Loc,
@@ -99,8 +99,10 @@ pub(crate) struct ImmPending {
 }
 
 /// [`Sema`]'s immediate-invocation state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ImmState {
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pending: ImmPending,
     /// The escalated functions and why.
     reasons: HashMap<DeclId, Escalation>,
@@ -113,6 +115,8 @@ pub(crate) struct ImmState {
     /// full-expression evaluated before its trial folds
     /// ([`Sema::evaluate_immediates_early`]), consumed by
     /// [`Sema::finish_immediate_invocations`] (WP-1129).
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     early: Vec<(ExprId, Result<ConstValueId, EvalFailure>)>,
     /// The scalar prvalue calls of those that succeeded, with their
     /// values: a trial fold that strips the wrapper (`strip_impcast`)
@@ -125,6 +129,8 @@ pub(crate) struct ImmState {
     /// with the results of their immediate invocations in
     /// [`Sema::default_invocations`] order up to the first failure
     /// (WP-1171): consumed by [`Sema::finish_immediate_invocations`].
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     early_defaults: Vec<(ExprId, Option<DefaultResults>)>,
     /// Where each default argument or default member initializer whose
     /// consteval-only leaf is being checked is used: it has no first token

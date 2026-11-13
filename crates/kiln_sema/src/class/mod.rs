@@ -59,7 +59,7 @@ pub struct BaseSpecInfo {
 }
 
 /// The mem-initializer-id of one mem-initializer ([class.base.init]/2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum MemInitId {
     /// An identifier: a non-static data member, else a base or the class
     /// itself named by an injected-class-name or typedef (lookup decides).
@@ -71,7 +71,7 @@ pub enum MemInitId {
 
 /// One mem-initializer as parsed, the input of
 /// [`Sema::act_on_mem_initializers`] (spec/sema-class.md §4.9).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct MemInitInfo {
     /// What is initialized.
     pub id: MemInitId,
@@ -174,7 +174,7 @@ pub mod implicit {
 
 /// One access check delayed until the declaration it belongs to exists
 /// (spec/sema-class.md §2.4, [class.access]/7; WP-066b).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct AccessCheck {
     /// The member found.
     pub member: DeclId,
@@ -193,7 +193,7 @@ pub struct AccessCheck {
 /// Whether the current full-expression needs an `ExprWithCleanups`
 /// (spec/sema-class.md §5.3; WP-067b). Saved and reset on entering each
 /// full-expression context, restored on exit.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub struct CleanupState {
     /// A temporary with a non-trivial destructor was bound.
     pub needs: bool,
@@ -203,7 +203,7 @@ pub struct CleanupState {
 
 /// The NRVO state of a local scope (spec/sema-class.md §5.5; clang 19
 /// `Scope::ReturnSlots` / `Scope::NRVO`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub struct NrvoState {
     /// The variables declared in this scope that may still occupy the
     /// return slot (clang `ReturnSlots`; parameters are never added).

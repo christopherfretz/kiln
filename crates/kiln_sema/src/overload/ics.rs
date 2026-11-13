@@ -23,7 +23,7 @@ use crate::init::{InitItem, InitList, InitValue};
 
 /// One argument of a candidate set: what an implicit conversion sequence
 /// is computed from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) struct ArgInfo {
     /// The argument's type.
     pub ty: QualType,
@@ -48,7 +48,7 @@ impl ArgInfo {
 }
 
 /// Restrictions on an implicit conversion sequence ([over.best.ics]/4).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct IcsOptions(u8);
 
 impl IcsOptions {
@@ -105,7 +105,7 @@ impl IcsOptions {
 }
 
 /// How a user-defined conversion converts.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum UdcVia {
     /// A converting constructor ([class.conv.ctor]).
     Ctor,
@@ -117,7 +117,7 @@ pub(crate) enum UdcVia {
 }
 
 /// A user-defined conversion sequence ([over.ics.user]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) struct UserConv {
     /// The standard conversion before the user-defined conversion.
     pub before: StandardConversion,
@@ -133,7 +133,7 @@ pub(crate) struct UserConv {
 
 /// Why there is no implicit conversion sequence (for the candidate
 /// notes, spec/sema-overload.md §9.1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum BadKind {
     /// "no known conversion from 'X' to 'Y'".
     NoConversion,
@@ -150,7 +150,7 @@ pub(crate) enum BadKind {
 }
 
 /// A failed implicit conversion sequence.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) struct BadConv {
     /// Why.
     pub kind: BadKind,
@@ -161,7 +161,7 @@ pub(crate) struct BadConv {
 }
 
 /// An implicit conversion sequence ([over.best.ics]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum Ics {
     /// A standard conversion sequence (with its reference binding).
     Standard(StandardConversion),

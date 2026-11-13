@@ -31,7 +31,7 @@ mod explain;
 mod special;
 
 /// Why a quietly evaluated trait failed ([`Sema::quiet_trait`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub(crate) enum TraitFailure {
     /// An operand that must be complete is not (the type named).
     Incomplete(QualType),
@@ -44,7 +44,7 @@ pub(crate) enum TraitFailure {
 
 /// The engine's per-TU state: whether trait diagnostics are being
 /// recorded instead of emitted, and the first failure recorded so far.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct TraitState {
     pub(crate) quiet: bool,
     pub(crate) failure: Option<TraitFailure>,

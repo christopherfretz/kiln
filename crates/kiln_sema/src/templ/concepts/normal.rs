@@ -8,11 +8,11 @@ use kiln_ast::ids::ArgListId;
 use kiln_source::fx::FxHashMap;
 
 /// A hash-consed normal-form node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct NormId(u32);
 
 /// A normal-form node ([temp.constr.normal]/1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub enum NormNode {
     /// An atomic constraint: its expression (as written, in the concept
     /// or template that declares it) and its parameter mapping (the
@@ -48,7 +48,7 @@ pub enum NormNode {
 
 /// The interned normal forms: equal nodes share an id, so atomic
 /// constraint identity is an id comparison (§8.5).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct NormTable {
     nodes: Vec<NormNode>,
     map: FxHashMap<NormNode, NormId>,

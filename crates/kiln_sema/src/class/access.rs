@@ -40,6 +40,7 @@ fn merge_access(path: Access, decl: Access) -> Access {
 
 /// The classes and functions whose members and friends the current
 /// context is (clang `EffectiveContext`), first declarations.
+#[derive(kiln_snap::Snap)]
 struct EffectiveContext {
     records: Vec<DeclId>,
     functions: Vec<DeclId>,
@@ -1522,6 +1523,7 @@ impl Sema<'_, '_> {
 
 /// A reusable effective context for repeated access checks from one
 /// point ([`Sema::set_access_scope`]).
+#[derive(kiln_snap::Snap)]
 pub(crate) struct AccessScope {
     ec: EffectiveContext,
     from: Option<DeclId>,

@@ -18,7 +18,7 @@ use kiln_source::Loc;
 use crate::Sema;
 
 /// The kind of statement whose body is checked.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum EmptyBodyStmt {
     /// `if (c) ;` without `else`.
     If,

@@ -22,7 +22,7 @@ use crate::templ::stack::{FrameKind, SfinaeState};
 use crate::templ::subst::Substituter;
 
 /// A failed deduction (clang's `DeductionFailureInfo`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct DeductionFailure {
     /// Why.
     pub tdk: Tdk,

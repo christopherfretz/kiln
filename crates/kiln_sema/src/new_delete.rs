@@ -70,7 +70,7 @@ pub struct NewPlacement {
 
 /// The implicitly declared global allocation functions (clang's
 /// `DeclareGlobalNewDelete`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct GlobalOps {
     declared: bool,
     pub(crate) align_val_t: Option<QualType>,

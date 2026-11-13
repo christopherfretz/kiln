@@ -30,7 +30,7 @@ pub struct ConvertedArgs {
 }
 
 /// What a template parameter level does under substitution (§5.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub enum LevelMode {
     /// The level's parameters are replaced by `args`.
     Substitute,
@@ -41,7 +41,7 @@ pub enum LevelMode {
 }
 
 /// One template parameter level (§5.1).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct Level {
     /// The level's arguments ([`ArgListId::EMPTY`] for a retained level).
     pub args: ArgListId,
@@ -66,7 +66,7 @@ pub enum ArgLookup {
 
 /// The template arguments of every enclosing level, outermost first,
 /// indexed by depth (clang's `MultiLevelTemplateArgumentList`, §5.1).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct MultiLevelArgs {
     /// `levels[d]` is depth `d`.
     pub levels: Vec<Level>,

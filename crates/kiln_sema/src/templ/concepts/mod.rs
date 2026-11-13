@@ -18,12 +18,12 @@ use kiln_source::fx::FxHashMap;
 pub use normal::{NormId, NormNode, NormTable};
 
 /// A recorded satisfaction (index into [`ConceptState::sats`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub struct SatId(u32);
 
 /// The result of checking a constraint (§8.3): `records` explain a
 /// failure, in clang's note order.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub struct Satisfaction {
     /// Satisfied.
     pub ok: bool,
@@ -34,7 +34,7 @@ pub struct Satisfaction {
 /// One note of a §8.7 chain. Notes whose text starts with
 /// "because"/"and" take the position flag as their first argument
 /// (`select`); `nested` is a concept's own satisfaction printed after it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct SatRecord {
     /// The note.
     pub id: DiagId,
@@ -49,7 +49,7 @@ pub struct SatRecord {
 }
 
 /// Counters for the instantiation report (§11.3).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 pub struct SatCounters {
     /// Satisfaction checks computed.
     pub count: u64,
@@ -68,7 +68,7 @@ pub struct SatCounters {
 pub(crate) type AtomKey = (ExprId, Vec<ArgListId>);
 
 /// The concept engine's state (§11.2).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct ConceptState {
     pub(crate) sats: Vec<Satisfaction>,
     /// `(entity or concept, canonical args) -> SatId`.

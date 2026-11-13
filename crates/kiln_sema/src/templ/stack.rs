@@ -227,7 +227,7 @@ pub struct InstFrame {
 
 /// The depth and backtrace limits (`-ftemplate-depth=`,
 /// `-ftemplate-backtrace-limit=`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct InstLimits {
     /// Maximum instantiation depth (clang's default 1024).
     pub depth: u32,
@@ -242,8 +242,10 @@ impl Default for InstLimits {
 }
 
 /// The frames, innermost last (§10.1).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct InstantiationStack {
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pub(crate) frames: Vec<InstFrame>,
     /// Frames that are not instantiations.
     pub(crate) non_inst: u32,
