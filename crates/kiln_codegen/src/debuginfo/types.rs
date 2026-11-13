@@ -109,7 +109,7 @@ impl Cg<'_> {
         self.di_scope(d).filter(|&s| s != cu)
     }
 
-    fn di_namespace(&mut self, first: DeclId) -> MetadataId {
+    pub(crate) fn di_namespace(&mut self, first: DeclId) -> MetadataId {
         if let Some(&n) = self.di.as_deref().and_then(|d| d.namespaces.get(&first)) {
             return n;
         }
@@ -405,9 +405,17 @@ impl Cg<'_> {
     /// clang `CreateType(const ArrayType *)`: nested array types are one
     /// composite with a subrange each.
     fn di_array(&mut self, q: QualType) -> Option<MetadataId> {
+        self.di_array_counted(q, false)
+    }
+
+    /// [`Self::di_array`]; `one`: an incomplete array `T[]` is described
+    /// as `T[1]` (clang `collectVarDeclProps`: codegen turns `int[]` into
+    /// `int[1]`), uncached.
+    pub(crate) fn di_array_counted(&mut self, q: QualType, one: bool) -> Option<MetadataId> {
         let ty = &self.ast.types;
         let size = match ty.view(q.ty()) {
             TypeView::ConstantArray(_) => self.size_align(q).0 * 8,
+            TypeView::IncompleteArray(e) if one => self.size_align(e).0 * 8,
             _ => 0,
         };
         let mut subs = Vec::new();
@@ -415,6 +423,7 @@ impl Cg<'_> {
         loop {
             let (count, next) = match self.ast.types.view(el.ty()) {
                 TypeView::ConstantArray(c) => (i64::try_from(c.size).unwrap_or(-1), c.elem),
+                TypeView::IncompleteArray(e) if one && subs.is_empty() => (1, e),
                 TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => (-1, e),
                 _ => break,
             };
