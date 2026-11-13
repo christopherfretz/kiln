@@ -18,6 +18,12 @@ Planned as 1.2.0.
   `--hod=`, `KILN_HOD`, next to `llc`, or on `PATH`), with `opt` + `llc`
   as the fallback whenever hod declines or fails. The default stays
   `llvm`. spec/driver.md "Back-end selection".
+- `-g`: imported entities (WP-1365, reported by hod). Using-directives,
+  using-declarations and namespace aliases, at namespace and block scope,
+  get clang's `DW_TAG_imported_module` / `DW_TAG_imported_declaration`, so
+  gdb and lldb resolve names reached through them. Nothing changes at
+  `-gline-tables-only` or without `-g`.
+  spec/landed/codegen/WP-1365.md.
 
 ### Changed
 
@@ -78,6 +84,20 @@ Planned as 1.2.0.
   remains: when `get_return_object()` throws, LLVM can keep the ramp's
   exception slots in the freed frame
   ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)).
+- A class-type (or array) non-type template argument with a pointer or
+  reference subobject designating a string literal, `__func__`, a
+  temporary or a `typeid` result (`X<T{"x"}>`, at any depth: members,
+  bases, array elements, a union's active member) is now rejected, as
+  [temp.arg.nontype]/6 requires and clang and GCC do (WP-1362; a
+  `fixed_string` holding a `char[N]` copy stays valid). A top-level
+  `__func__` argument is named "predefined '__func__' variable", as
+  clang does.
+- An error in a non-type template argument of a template-id formed by an
+  instantiation is reported at the argument, not at a stale location of
+  another template-id or at the template name (WP-1362).
+- A reference template argument naming a bit-field is reported as
+  "reference cannot bind to bit-field in converted constant expression"
+  (clang's wording) instead of as binding a temporary (WP-1362).
 
 ## [1.1.0] - 2026-11-12
 
@@ -365,7 +385,7 @@ measurements are in [docs/status/c-mode.md](docs/status/c-mode.md).
 
 ## [1.0.2] - 2026-11-11
 
-A bug-fix release: fixes found while building the reference workload,
+A bug-fix release: fixes found while building downstream code,
 each with a test. Nothing in it changes what
 [docs/STABILITY.md](docs/STABILITY.md) promises.
 

@@ -3,8 +3,8 @@
 The release gate for 1.0.1, a bug-fix release
 ([../../CHANGELOG.md](../../CHANGELOG.md)). Every release runs the same
 gate before its tag: the release archive, the full libc++ suite on
-aarch64 and x86_64, the full open-source corpus, and the reference
-workload. The commands are those of [release-1.0.md](release-1.0.md),
+aarch64 and x86_64, the full open-source corpus, and a downstream
+reflection-heavy build. The commands are those of [release-1.0.md](release-1.0.md),
 with `1.0.0` replaced by `1.0.1`; the 1.0.0 results there are the
 baseline. A check passes when it shows no regression against that
 baseline.
@@ -91,9 +91,9 @@ Flakes, each checked against a clang 19 build of the same project:
   runs (eight copies at a time) with both compilers.
 
 
-## Reference workload
+## Downstream build
 
-The reference workload's maintainers build and test the RC: its cold
+The maintainers of a large reflection-heavy codebase build and test the RC: its cold
 build, its unit tests, and its diagnostics lane.
 
 | | result |

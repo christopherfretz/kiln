@@ -13,7 +13,7 @@
 // `OdrUseContext::FormallyUsed`). A nested `if constexpr` keeps the
 // discarded state, whichever branch it takes; a lambda body inside a
 // discarded statement does not (see discarded-statement-still-instantiates).
-// The shape is the reference workload's field-access macro
+// The shape is a downstream field-access macro
 // (its exception header): an `if constexpr` in an
 // ordinary member function whose discarded branch calls a helper template
 // that static_asserts for its arguments. kiln instantiated them all.

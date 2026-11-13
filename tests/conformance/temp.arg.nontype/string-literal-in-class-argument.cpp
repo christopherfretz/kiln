@@ -6,9 +6,8 @@
 // reject it.
 //@ expect: compile-fail
 //@ oracle: gcc
-//@ xfail(kiln): accepts a string-literal pointer as a constituent of a class-type template argument (found by WP-1328, follow-up row pending)
-//@ diag: 15:9 error "no matching function for call to 'f'"
-//@ diag: 14:19 note "invalid explicitly-specified argument for template parameter 't'"
+//@ diag: 14:9 error "no matching function for call to 'f'"
+//@ diag: 13:19 note "invalid explicitly-specified argument for template parameter 't'"
 
 struct T { const char* p; };
 template<T t> int f() { return 0; }

@@ -3,7 +3,7 @@
 //!
 //! - `-fconstexpr-steps=N`: statements one top-level evaluation may execute
 //!   (clang's flag and default, 1048576); GCC's `-fconstexpr-ops-limit=N`
-//!   (which the reference workload's generator compile passes) sets the same budget;
+//!   (which real reflection-heavy builds pass) sets the same budget;
 //! - `-fconstexpr-depth=N`: nested calls (clang's, 512);
 //! - `-fconstexpr-memory=N[k|m|g]`: live abstract-memory bytes (kiln's,
 //!   256 MiB; the suffixes are binary);

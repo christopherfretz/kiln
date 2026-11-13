@@ -629,7 +629,7 @@ answers as of that point.
 - The reflection bench shapes (`bench/reflect/` S1–S10, spec/bench.md
   "Reflection shapes") and the 4N scaling gate are WP-483's; their
   results are in docs/status/perf-history.md "WP-483" and
-  docs/status/perf-reference-workload.md "kiln vs GCC 16.1".
+  docs/status/perf-reflection.md "kiln vs GCC 16.1".
 
 ### 3.9 The names family
 - [meta.reflection.names] (P2996R13) as implemented by

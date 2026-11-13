@@ -42,6 +42,7 @@ pub mod print;
 mod profile;
 mod resolver;
 mod search;
+mod snap;
 pub mod state;
 mod tok;
 

@@ -106,6 +106,7 @@ sema_caught_by_earlier_handler = Warning [Exceptions] (1) "exception of type {0}
 sema_cce_conversion_not_allowed = Error (2) "conversion from {0} to {1} is not allowed in a converted constant expression";
 sema_cce_narrowing_value = WarningError [Cxx11Narrowing] (3) "{0} evaluates to {1}, which cannot be narrowed to type {2}";
 sema_cce_not_implicitly_convertible = Error (2) "value of type {0} is not implicitly convertible to {1}";
+sema_cce_ref_binds_bitfield = Error (0) "reference cannot bind to bit-field in converted constant expression";
 sema_cce_ref_binds_temporary = Error (2) "conversion from {0} to {1} in converted constant expression would bind reference to a temporary";
 // clang `err_cconv_change` / `warn_cconv_unsupported` (WP-808)
 sema_cconv_change = Error (2) "function declared '{0}' here was previously declared {1}";

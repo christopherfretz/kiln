@@ -723,6 +723,35 @@ engine MAY be shared by parallel workers (scoped threads). Counters are
 atomics; the sink and dedup set are under a mutex. Exactly one
 too-many-errors fatal is produced however emitters interleave.
 
+### 7.8 Snapshots (WP-1379)
+
+`DiagEngine` is a configured root (spec/snap.md "Configured roots";
+prototype, not called by the compiler yet; classification table at
+`src/engine/snap.rs`). `Diag` and its parts, `Diagnostic`, `Level`,
+`Severity` and the pragma state derive `Snap`; `DiagId` is written as
+its `u16` index, and its schema descriptor hashes the id table's names.
+
+- **State**: the `#pragma clang diagnostic` transition points, states and
+  `push` stack (validated on restore: indices in range, points sorted),
+  and the deduplication set (a diagnostic the prefix printed is a
+  duplicate in the consumer).
+- **Consumer-supplied**: the source manager, the policy built from its
+  `-W` options, `-ferror-limit=`, `-fclang-compat=` and the sink.
+- **Counts are not carried.** The error, warning, uncompilable and
+  unrecoverable counts are per-compilation output: the restored engine
+  keeps the consumer's own (its options diagnostics), so the summary
+  line and the exit status count what the consumer printed, as clang's
+  do with a PCH. Sema reads `uncompilable_error_count() > 0` and
+  `unrecoverable_error_count()` to skip analyses after an error and
+  `error_count()` deltas around speculative work; all agree with the
+  producer only if the producer had no error, so a prefix with an error
+  must not be snapshotted (the consumer-side decision, WP-1383).
+- **Quiescence** (`snap_ready`): no `hold()` open, nothing held, no
+  fatal error; `snap_put` refuses otherwise and names the field.
+- **Restore** (`snap_restore`) needs a fresh engine (no pragma, nothing
+  deduplicated) and must happen before the preprocessor that borrows the
+  engine is built.
+
 ## 8. Layout (macro backtraces)
 
 A record is laid out into a sequence of entries: the diagnostic, its

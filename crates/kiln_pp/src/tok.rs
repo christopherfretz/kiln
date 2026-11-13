@@ -2,10 +2,11 @@
 //! the preprocessor needs.
 
 use kiln_lex::{Punct, Symbol, TokFlags, TokKind, Token};
+use kiln_snap::Snap;
 
 /// Preprocessor-private token flags (clang keeps these in `Token::Flags`
 /// or in the token kind; `kiln_lex::TokFlags` cannot be extended).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Snap)]
 pub(crate) struct PpFlags(u8);
 
 impl PpFlags {
@@ -50,7 +51,7 @@ impl PpFlags {
 }
 
 /// A token with preprocessor flags.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub(crate) struct PpTok {
     pub(crate) tok: Token,
     pub(crate) pf: PpFlags,

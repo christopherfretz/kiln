@@ -1,6 +1,6 @@
 //@ args: -fconstexpr-steps=100000000
 // Oven struct-of-arrays (spec/oven.md "Class benchmarks"): the shape of
-// the reference workload's compile-time binding tables. A table of 4096 member records
+// compile-time binding tables in real reflection code. A table of 4096 member records
 // is kept as parallel column objects (ids, offsets, sizes, flags) inside
 // one class; it is filled through member functions, sorted by key with an
 // index permutation, queried by binary search, and folded into a checksum.

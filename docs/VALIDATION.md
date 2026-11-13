@@ -22,7 +22,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
 | Reflection perf | `bench/reflect/` (shapes S1-S6 from `cargo xtask gen-reflect`; named explicitly), `cargo xtask bench --scaling <shape>` (spec/bench.md "Reflection shapes", "Scaling sweeps"); manual/nightly on the dev host, not part of `ci` | The §3.8 budgets of docs/plans/m6-reflection.md: `peak_arena` independent of N, linear wall time and RSS, kiln vs GCC 16.1 |
-| External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: private crash reproducers and the reference workload compile or fail cleanly; counts only reach the repo |
+| External corpora | `cargo xtask test --external <dir>` / `cargo xtask bench --external <dir>` on directories outside the repo (spec/harness.md "External corpora"); manual, never in `ci` | Never crash: crash reproducers and large downstream code compile or fail cleanly |
 | OSS builds | real open-source projects (`scripts/oss/projects.toml`) built through their own build systems and test suites with kiln as the C++ compiler (`scripts/oss/`, spec/landed/harness/WP-666.md); manual, needs the network, never in `ci`; status in `docs/status/oss.md` | Real code bases build and pass their tests at parity with clang-19 (ROADMAP M8) |
 
 **What runs where.** Merge-queue CI (`cargo xtask ci`, both jobs) runs the
@@ -658,13 +658,13 @@ The sweep is run by hand, not in CI: the clang-only symbols that remain
 are calls clang 19 emits and kiln does not (spec/abi.md §8.29), so the
 expected output is not empty. A change to the mangler, to template
 instantiation or to attribute inheritance should not add lines. Add a
-TU when a library area the reference workload uses is not covered. Every
+TU when a library area that real code uses is not covered. Every
 mismatch fixed gets a reduced test under `tests/mangle/` (or
 `tests/codegen/` when it is about emission).
 
 ### GCC 16.1 header sweep
 
-The reference workload needs GCC 16.1's libstdc++ (its `<meta>`). CI has
+Real reflection code needs GCC 16.1's libstdc++ (its `<meta>`). CI has
 no GCC 16 tree, so this sweep is run by hand. `KILN_GCC16_ROOT` is the root
 of an unpacked GCC 16.1 image: headers under
 `$KILN_GCC16_ROOT/usr/local/include/c++/16.1.0`, the installation under
@@ -676,8 +676,8 @@ The driver finds it with clang's `--gcc-toolchain=` (spec/driver.md
 
 ```sh
 GCC16=--gcc-toolchain=$KILN_GCC16_ROOT/usr/local
-# the probe: one TU including every standard header the reference
-# workload uses (<algorithm> ... <vector>, <cxxabi.h>, <meta>)
+# the probe: one TU including every standard header that reflection-heavy
+# code commonly uses (<algorithm> ... <vector>, <cxxabi.h>, <meta>)
 kiln++ $GCC16 -std=c++26 -freflection -fsyntax-only probe.cpp
 # the same with a main that instantiates (std::meta::is_type(^^int),
 # std::vector<int>{1}.size()), and a TU that instantiates std::format,
@@ -697,7 +697,7 @@ moves them. The WP-525 baseline and result are in
 ### Header-differential mode (real `<meta>`)
 
 kiln's reflection tests include `tests/support/kiln_meta.h`, kiln's own
-declarations of `std::meta`. The reference workload includes libstdc++
+declarations of `std::meta`. Real code includes libstdc++
 16.1's `<meta>`, whose library code (`access_context`, `exception`,
 `define_static_array`, the `vector<info>` and `string_view` results)
 calls kiln's intrinsics in ways kiln's header does not. The

@@ -2,7 +2,7 @@
 // reference type is a load of the cast's type from the operand's object
 // ([conv.lval]), as run-reference-cast-of-reference-call-converted.cpp and
 // expr.reinterpret.cast/run-reference-cast-loaded-as-target-type.cpp check
-// at -O0; here optimized. The shapes of the reference workload's source file
+// at -O0; here optimized. The shapes of a downstream source file
 // (`reinterpret_cast<const float&>(f.val_)` passed by value) and of boost
 // optional's `assign(optional<U>&&)` (`static_cast<U&&>(rhs.get())`
 // converted to another arithmetic type).

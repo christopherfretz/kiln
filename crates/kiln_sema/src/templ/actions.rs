@@ -1266,7 +1266,7 @@ impl Sema<'_, '_> {
         match self.kind_of(d) {
             // spec/sema-templates.md §9.3.
             DeclKind::BuiltinTemplate => {
-                let locs = std::mem::take(&mut self.templ.arg_locs);
+                let locs = self.take_template_arg_locs();
                 self.builtin_template_id(name, d, args, &locs, l)
             }
             DeclKind::ClassTemplate | DeclKind::TemplateTemplateParm => {
@@ -1276,7 +1276,7 @@ impl Sema<'_, '_> {
                 } else if dep_args {
                     self.check_dependent_template_args(d, args, l)?;
                 } else {
-                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let locs = self.take_template_arg_locs();
                     let t = self.class_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
@@ -1303,7 +1303,7 @@ impl Sema<'_, '_> {
                 // the expansion and substitution re-forms it (clang's
                 // `CheckTemplateArgumentList` + `SubstTemplateTypeParmPack`).
                 if self.alias_args_substitutable(d, args) {
-                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let locs = self.take_template_arg_locs();
                     let t = self.alias_template_type(name, d, args, &locs, l)?;
                     return Ok(TemplateIdRef::Type(t));
                 }
@@ -1319,7 +1319,7 @@ impl Sema<'_, '_> {
                 if !dep_args && !args.iter().any(|&a| self.is_pack_expansion_arg(a)) {
                     // [temp.names]/1, [temp.inst]/7: names the
                     // specialization (§4.7).
-                    let locs = std::mem::take(&mut self.templ.arg_locs);
+                    let locs = self.take_template_arg_locs();
                     let v = self.get_var_spec(d, args, &locs, l)?;
                     let extra = kiln_ast::expr::DeclRefExtra {
                         qualifier: None,
@@ -1357,7 +1357,7 @@ impl Sema<'_, '_> {
                 Ok(TemplateIdRef::Overload(e))
             }
             DeclKind::Concept => {
-                let locs = std::mem::take(&mut self.templ.arg_locs);
+                let locs = self.take_template_arg_locs();
                 let e = self.build_concept_id(d, list, &locs, l)?;
                 Ok(TemplateIdRef::Value(e))
             }

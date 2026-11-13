@@ -26,7 +26,7 @@ struct S {
   constexpr auto generic(int r) const { return [r](auto x) { return r + x; }; }
   constexpr auto dflt_copy(int r) const { return [=] { return r; }; }
   constexpr auto dflt_ref(NL &n) const { return [&] { return n.v + 9; }; }
-  // The reference workload's shape: a static member forwarding a
+  // The shape found in real code: a static member forwarding a
   // reference to a non-literal type into the closure.
   static constexpr auto mv(NL &&from) { return [&from](int &p) { p = from.v + 10; }; }
 };

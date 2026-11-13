@@ -3,7 +3,7 @@
 // AArch64, as clang lowers it), through direct calls, function pointers,
 // virtual calls and by reference; a variadic argument of an unscoped one
 // is promoted to `int`, a scoped one is not promoted and is read back with
-// `va_arg` as itself. The shape is the reference workload's
+// `va_arg` as itself. The shape is real code's
 // `enum class Policy : bool` constructor parameter with a default.
 //@ expect: run
 //@ stdout: 1 0 1 1

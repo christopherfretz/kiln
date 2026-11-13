@@ -3201,8 +3201,8 @@ address-taken pre-scan); a 262144-term chain costs 34 MB end to end (was
 **Counters and benchmarks.** No new counters: construction is `calls`
 and `steps`, heap objects are `allocs`. Entries `bench/oven/class-churn`
 (10000 heap objects per round with owning destructors, 8 rounds) and
-`bench/oven/soa` (a 4096-row struct-of-arrays table, the reference workload's
-binding-table shape); gated copies `tests/conformance/class.dtor/
+`bench/oven/soa` (a 4096-row struct-of-arrays table, the shape of real
+binding tables); gated copies `tests/conformance/class.dtor/
 churn-objects.cpp` and `class.mem/soa-table.cpp` carry `oven:` budgets.
 The class ops must not tax evaluations that do not use them: the VM
 dispatch decodes an opcode by matching its discriminant (no table base

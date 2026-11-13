@@ -3,6 +3,7 @@
 
 use std::fmt::Display;
 
+use kiln_snap::Snap;
 use kiln_source::{Loc, Span};
 
 use crate::engine::DiagEngine;
@@ -10,7 +11,7 @@ use crate::ids::DiagId;
 use crate::template;
 
 /// The level a diagnostic is rendered with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub enum Level {
     /// A note attached to another diagnostic.
     Note,
@@ -50,7 +51,7 @@ impl Level {
 
 /// A secondary span: underlined with `~` in text output, carried with its
 /// label in JSON output.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
 pub struct Label {
     /// The highlighted range.
     pub span: Span,
@@ -60,7 +61,7 @@ pub struct Label {
 
 /// A suggested edit: replace `span` by `text`. Stored and rendered (the
 /// insertion line under the caret, JSON `fixits`); never applied.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
 pub struct FixIt {
     /// The range to remove; empty for a pure insertion.
     pub span: Span,
@@ -87,7 +88,7 @@ impl FixIt {
 
 /// The message of a note added with [`Diag::note`]: an id taking no
 /// arguments, or free text.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
 pub enum NoteMsg {
     /// A note id with no arguments.
     Id(DiagId),
@@ -126,7 +127,7 @@ impl From<String> for NoteMsg {
 /// pass ranges to underline with [`span`](Self::span) or
 /// [`range`](Self::range) (clang's `^~~~` is `.range(span)` on the
 /// primary span).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Snap)]
 #[must_use = "a diagnostic does nothing until it is emitted"]
 pub struct Diag {
     pub(crate) id: Option<DiagId>,
@@ -362,7 +363,7 @@ impl Diag {
 }
 
 /// An emitted diagnostic, as sinks receive it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
 pub struct Diagnostic {
     /// The id; `None` for free-text notes.
     pub id: Option<DiagId>,

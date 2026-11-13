@@ -1,5 +1,5 @@
 //@ args: -fconstexpr-steps=900000000
-// Oven wide-class reads (WP-642, F23 of docs/status/perf-reference-workload.md):
+// Oven wide-class reads (WP-642, F23 of docs/status/perf-reflection.md):
 // the companion of wide-struct-store.cpp without unions. One class with
 // 2^WIDE_LOG2 members (4,096 here) of a small class type is stored once,
 // member by member, and then read member by member, 1,024 times over, in a constexpr loop.

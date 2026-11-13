@@ -3,7 +3,7 @@
 // returning the next by value, the last a raw pointer, so every `p->m`
 // resolves fifty `operator->` calls (each one an operator overload
 // resolution over the class's members plus the chain's cycle check).
-// 12,000 member accesses through the chain (600,000 `operator->` calls). Mirrors the reference workload's
+// 12,000 member accesses through the chain (600,000 `operator->` calls). Mirrors real-world
 // handle/proxy layers. Measures the `->` loop, member operator candidate
 // sets and temporary materialization. No library headers.
 

@@ -3,7 +3,7 @@
 // enclosing class precedes the parsing of the template's default member
 // initializers (at the end of the outermost class); a constructor or
 // aggregate initialization using one later still instantiates it. Reduced
-// from the reference workload: a `Field<bool>` whose user-provided
+// from real code: a `Field<bool>` whose user-provided
 // constructor left the `bool isPresent_{false}` member uninitialized.
 //@ expect: run
 //@ stdout: 0 0 7 5
