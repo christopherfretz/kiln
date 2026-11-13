@@ -10,6 +10,7 @@ license.workspace = true
 kiln_source.workspace = true
 kiln_diag.workspace = true
 kiln_lex.workspace = true
+kiln_snap.workspace = true
 
 [features]
 # Counters and phase timers printed with KILN_PP_PROFILE=1 (WP-056).

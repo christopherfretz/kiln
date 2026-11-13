@@ -6,6 +6,7 @@ use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
 use kiln_lex::{Punct, Symbol, TokKind, Token};
+use kiln_snap::Snap;
 use kiln_source::{Loc, Span};
 
 use crate::Preprocessor;
@@ -38,7 +39,7 @@ impl Hasher for SymHasher {
 pub(crate) type SymMap<V> = HashMap<Symbol, V, BuildHasherDefault<SymHasher>>;
 
 /// One macro definition.
-#[derive(Debug)]
+#[derive(Debug, Snap)]
 pub struct MacroDef {
     pub(crate) name: Symbol,
     pub(crate) name_span: Span,
@@ -113,7 +114,7 @@ impl MacroDef {
 }
 
 /// The macro table: name to current definition.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Snap)]
 pub struct MacroTable {
     pub(crate) map: SymMap<Rc<MacroDef>>,
 }
@@ -155,7 +156,7 @@ impl MacroTable {
 /// definitions so a later diagnostic can name the macro a user would
 /// write in a fix-it (clang `Preprocessor::getLastMacroWithSpelling`, used
 /// by `-Wimplicit-fallthrough`'s note).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Snap)]
 pub struct AttrMacro {
     /// The macro name.
     pub name: Box<str>,

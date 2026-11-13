@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use kiln_snap::Snap;
 use kiln_source::{Loc, SourceManager};
 
 use crate::groups::{Flavor, group_members};
@@ -44,7 +45,7 @@ pub struct PragmaSnapshot {
     pub stack: Vec<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Snap)]
 pub(crate) struct Pragmas {
     /// Index 0 is the command-line state (no overrides).
     states: Vec<Arc<Overrides>>,
@@ -67,6 +68,26 @@ impl Pragmas {
             stack: Vec::new(),
             enabled: vec![false; DiagId::ALL.len()],
         }
+    }
+
+    /// The invariants the queries rely on without a check, for a decoded
+    /// state (spec/snap.md "Hand-written roots", rule 3): every state
+    /// index in range, the points sorted by location, one `enabled` flag
+    /// per id.
+    pub(crate) fn check(&self) -> Result<(), &'static str> {
+        let n = self.states.len();
+        let ok = |s: u32| (s as usize) < n;
+        if n == 0 || !ok(self.cur) || !self.stack.iter().all(|&s| ok(s)) {
+            return Err("pragma state index out of range");
+        }
+        if self.points.windows(2).any(|p| p[0].0 >= p[1].0) || !self.points.iter().all(|p| ok(p.1))
+        {
+            return Err("pragma transition points out of order or range");
+        }
+        if self.enabled.len() != DiagId::ALL.len() {
+            return Err("pragma enabled flags of the wrong length");
+        }
+        Ok(())
     }
 
     /// Whether any pragma changed the state (otherwise every location is
