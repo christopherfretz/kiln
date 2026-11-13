@@ -11442,14 +11442,14 @@ table and the module docs give each non-state field its reason.
   and must be at rest. *Scratch* buffers and *rebuilt* caches
   (`spare_oven`, `classify_memo`) are not written. The diagnostics engine
   is a *reference*; the AST and the Oven are *owned roots*, written by
-  their crates' roots (the Oven is a TEMPORARY no-op until WP-1381).
+  their crates' roots.
 - **Snapshot point.** The end of a prefix's main file, at top level,
   before the end-of-translation-unit work (pending instantiations,
   `act_on_end_of_translation_unit`): `kiln_parse::parse_prefix`.
 - **Quiescence.** `Sema::snapshot_ready` refuses, naming the field: a
   declaration context other than the translation unit; more than the
   translation unit's scope; any transient field not as a fresh `Sema`
-  has it; an Oven on loan; a running instantiation, an open template
+  has it; an Oven on loan or not at rest (`Oven::snap_ready`); a running instantiation, an open template
   head or pending immediate invocations; declaration-image or carried
   recording on. An open `#pragma pack(push)` is state, not a refusal: the
   main file packs with it, as it would after an `#include`.
