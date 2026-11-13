@@ -111,6 +111,7 @@ dependencies = [
  "kiln_lex",
  "kiln_pp",
  "kiln_sema",
+ "kiln_snap",
  "kiln_source",
 ]
 
