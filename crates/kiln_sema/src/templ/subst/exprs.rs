@@ -1110,7 +1110,13 @@ impl Substituter<'_, '_, '_> {
                         let u = self.expr(o);
                         self.sema.exit_typeid_operand();
                         let u = u?;
-                        if self.sema.is_polymorphic_glvalue(u) { Ok(self.expr(o)?) } else { Ok(u) }
+                        if self.sema.is_polymorphic_glvalue(u) {
+                            // The unevaluated form is discarded.
+                            self.sema.drop_typeid_invocations(u);
+                            Ok(self.expr(o)?)
+                        } else {
+                            Ok(u)
+                        }
                     }
                 };
                 Ok(self.sema.act_on_typeid(operand, loc, end))

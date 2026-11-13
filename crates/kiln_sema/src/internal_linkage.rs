@@ -10,6 +10,7 @@ use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, TemplLinkKind};
 use kiln_ast::{AttrId, DeclId};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use crate::Sema;
 
@@ -129,8 +130,13 @@ impl Sema<'_, '_> {
     /// on the new declaration, none on `prev`'s chain); C23's
     /// `[[noreturn]]` and `_Noreturn` and the GNU spelling may appear on
     /// any declaration (WP-1311). `prev` is the declaration immediately
-    /// before the one carrying `attrs` (clang's `Old`).
-    pub(crate) fn check_noreturn_on_first_decl(&mut self, prev: DeclId, attrs: &[AttrId]) {
+    /// before the one carrying `attrs` (clang's `Old`), noted at `prev_at`.
+    pub(crate) fn check_noreturn_on_first_decl(
+        &mut self,
+        prev: DeclId,
+        prev_at: Loc,
+        attrs: &[AttrId],
+    ) {
         if self.is_c() {
             return;
         }
@@ -147,8 +153,7 @@ impl Sema<'_, '_> {
         }
         let node = *self.ast.attrs.get(a);
         let name = format!("'{}'", self.attr_shown(&node, "noreturn"));
-        let prev_note =
-            self.diag(DiagId::note_previous_declaration, self.ast.decls.get(prev).loc());
+        let prev_note = self.diag(DiagId::note_previous_declaration, prev_at);
         let msg = self
             .diag(DiagId::sema_attribute_missing_on_first_decl, node.loc)
             .arg(name)

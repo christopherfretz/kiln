@@ -2333,11 +2333,15 @@ fn is_access_error(id: DiagId) -> bool {
 /// [temp.deduct.general]/8). Outside one they are ordinary warnings.
 /// The extension for a regular-vs-reversed rewritten-operator tie
 /// ([over.match.best.general]/2, [over.match.oper]/3.4) is ill-formed
-/// C++20 that clang and GCC accept only outside SFINAE (WP-1322).
+/// C++20 that clang and GCC accept only outside SFINAE (WP-1322); so are
+/// a rewritten `operator==` not returning `bool`, too many braces around a
+/// scalar initializer and brace elision in a designated initializer
+/// (clang 19 marks each `SFINAEFailure`, WP-1236).
 fn is_sfinae_failure(id: DiagId) -> bool {
     matches!(
         id,
         DiagId::sema_cce_narrowing_value
+            | DiagId::sema_designated_init_brace_elision
             | DiagId::sema_designated_init_reordered
             | DiagId::sema_init_list_constant_narrowing
             | DiagId::sema_init_list_constant_narrowing_const_reference
@@ -2347,6 +2351,8 @@ fn is_sfinae_failure(id: DiagId) -> bool {
             | DiagId::sema_init_list_variable_narrowing_const_reference
             | DiagId::sema_initializer_overrides
             | DiagId::sema_initializer_union_overrides
+            | DiagId::sema_many_braces_around_scalar
             | DiagId::sema_ovl_ambiguous_reversed_operator
+            | DiagId::sema_ovl_rewrite_equalequal_not_bool_ext
     )
 }

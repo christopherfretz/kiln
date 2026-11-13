@@ -685,6 +685,12 @@ impl Sema<'_, '_> {
             self.empty_undeduced_packs(lb.params, &mut d);
         }
         let mut ok = ok && d.first_undeduced().is_none();
+        // [temp.deduct.type]/20: a non-type parameter of `b`'s deduced
+        // from a synthesized argument of another type fails, so `b` typed
+        // `int E` does not deduce from `a`'s synthesized `auto E`.
+        if ok && self.deduced_nttp_type_mismatch(&pb, lb, &d.args, loc) {
+            ok = false;
+        }
         if ok {
             // [temp.deduct.partial]/12 via [temp.deduct.type]/1 (clang
             // `FinishTemplateArgumentDeduction` with `IsPartialOrdering`):
@@ -881,6 +887,18 @@ impl Sema<'_, '_> {
         false
     }
 
+    /// Whether non-type template argument `a` is a value or names a
+    /// non-type template parameter (as a synthesized argument does).
+    fn names_nttp(&self, a: TemplateArg) -> bool {
+        match a.view() {
+            ArgView::Expr { expr, .. } => self.nttp_decl_of_expr(expr).is_some(),
+            ArgView::Profile(pr) => {
+                self.ast.types.profile_expr(pr).is_some_and(|x| self.nttp_decl_of_expr(x).is_some())
+            }
+            _ => true,
+        }
+    }
+
     /// The type of non-type template argument `a` (`None` for another
     /// kind, or an erroneous one).
     fn nttp_arg_type(&self, a: TemplateArg) -> Option<QualType> {
@@ -1028,6 +1046,13 @@ impl Sema<'_, '_> {
                 if !self.nttp_placeholder_matches(pt, at) {
                     return true;
                 }
+                continue;
+            }
+            // An argument expression other than a (synthesized) parameter
+            // has the parameter's type once converted
+            // (`template<bool c> X<M, when<c>>` deduces from `X<T,
+            // when<f<T>::value && g<T>::value>>`; WP-1236).
+            if !self.names_nttp(a) {
                 continue;
             }
             let pt = if self.ast.types.is_dependent(pt) {
@@ -1351,6 +1376,11 @@ impl Sema<'_, '_> {
         // packs need not share an index.
         d.expansions = true;
         d.ordering = true;
+        // [temp.deduct.type]/20: `template<int E> f(V<E>)` does not deduce
+        // from a synthesized `auto E` (its unique type is not `int`).
+        d.nttp_types = true;
+        d.params =
+            self.ast.template_info(b).map(|i| self.ast.templates.param_list(i.params).params);
         let mut ok = true;
         let mut ai = 0;
         for (pi, p) in pb.iter().enumerate() {
@@ -1393,6 +1423,9 @@ impl Sema<'_, '_> {
             if pack && matches!(d.args.get(at).map(TemplateArg::view), Some(ArgView::Null)) {
                 d.args[at] = TemplateArg::pack(self.ast.types.arg_list(&[]));
             }
+        }
+        if d.nttp_mismatch.is_some() {
+            ok = false;
         }
         if ok && d.first_undeduced().is_some() && !self.undeduced_params_unused(b, &d, pb) {
             ok = false;

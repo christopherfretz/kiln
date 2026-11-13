@@ -1205,8 +1205,8 @@ impl Sema<'_, '_> {
 
     /// The new declaration of an explicit specialization `s` (of a
     /// function template, or a member function of a class template
-    /// specialization) with its parameters and its own annotations
-    /// ([dcl.attr.annotation]/1).
+    /// specialization) with its parameters, its own annotations
+    /// ([dcl.attr.annotation]/1) and its own attributes.
     fn declare_explicit_spec(
         &mut self,
         s: DeclId,
@@ -1225,8 +1225,19 @@ impl Sema<'_, '_> {
         if self.kind_of(lexical) == DeclKind::CXXRecord {
             self.set_member_access(f);
         }
+        // Its own attributes ([dcl.attr]; clang `ProcessDeclAttributes` on
+        // the specialization's declaration), on top of those its first
+        // declaration took from the template (clang 19 merges the
+        // specialization with that declaration: a `[[deprecated]]` or
+        // `[[nodiscard]]` primary still applies; WP-1221).
         let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
         self.take_annotations(f, &mut attrs);
+        if !attrs.is_empty() {
+            self.check_decl_attrs(f, &mut attrs);
+        }
+        if !attrs.is_empty() {
+            let _ = self.builder().attach_attrs(f, &attrs);
+        }
         f
     }
 

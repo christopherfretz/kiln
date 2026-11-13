@@ -1582,12 +1582,17 @@ impl Sema<'_, '_> {
             let tag = self.ast.types.as_record(t).or_else(|| self.ast.types.as_enum(t));
             tag.and_then(|d| self.find_attr(d, AttrKind::NODISCARD))
         };
-        if let Some(a) = by_type.or_else(|| self.find_attr(f, AttrKind::NODISCARD)) {
+        // The latest declaration's, an explicit specialization's own
+        // included (clang `getUnusedResultAttr` on the most recent one).
+        let by_callee = || self.find_attr(self.ast.latest(f), AttrKind::NODISCARD);
+        if let Some(a) = by_type.or_else(by_callee) {
             // clang appends the attribute's message
             // ([dcl.attr.nodiscard]/4).
             let attr = *self.ast.attrs.get(a);
             let text = ExprId::from_raw(attr.a).and_then(|m| self.string_msg(m));
-            let name = "'nodiscard'".to_owned();
+            // clang names the spelling: `warn_unused_result` for the GNU
+            // forms.
+            let name = format!("'{}'", crate::decl_attrs::attr_name(&attr).unwrap_or("nodiscard"));
             // clang 22 `warn_unused_return_type`: a nodiscard
             // type is named, under -Wunused-value.
             if by_type.is_some() && self.clang_compat >= 22 {

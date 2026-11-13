@@ -177,6 +177,32 @@ impl Sema<'_, '_> {
     /// `diagnose_if` conditions the call checks with its arguments.
     pub(crate) fn warn_deprecated_use(&mut self, d: DeclId, loc: Loc) {
         let Some((a, owner)) = self.deprecation_of(d) else { return };
+        self.warn_availability(d, a, owner, None, loc);
+    }
+
+    /// [`Sema::warn_deprecated_use`] of member function template `t`
+    /// named by an overloaded operator call (clang `CreateFunctionRefExpr`
+    /// calls `DiagnoseUseOfDecl` on the found template and then on the
+    /// specialization): the template is deprecated when its pattern is,
+    /// and the note is at the template itself (clang 19 and 22 warn
+    /// `'operator()'` and `'operator()<int>'` for a generic lambda).
+    pub(crate) fn warn_deprecated_template_use(&mut self, t: DeclId, loc: Loc) {
+        let Some(pattern) = self.pattern_of(t) else { return };
+        let Some((a, _)) = self.deprecation_of(pattern) else { return };
+        let at = self.ast.decls.get(t).loc();
+        self.warn_availability(t, a, t, Some(at), loc);
+    }
+
+    /// The warning of a use at `loc` of `d`, whose availability attribute
+    /// `a` is on `owner`; the note at `note_at` or else at the attribute.
+    fn warn_availability(
+        &mut self,
+        d: DeclId,
+        a: AttrId,
+        owner: DeclId,
+        note_at: Option<Loc>,
+        loc: Loc,
+    ) {
         let attr = *self.ast.attrs.get(a);
         let unavail = attr.kind == AttrKind::UNAVAILABLE;
         let name = self.name_for_diagnostic(d);
@@ -197,9 +223,14 @@ impl Sema<'_, '_> {
             let at = self.ast.decls.get(self.ast.latest(owner)).loc();
             self.diag(DiagId::note_marked_unavailable, at)
         } else {
-            self.diag(DiagId::note_marked_deprecated, attr.loc)
+            self.diag(DiagId::note_marked_deprecated, note_at.unwrap_or(attr.loc))
         };
-        let msg = msg.with_note(note.arg(self.name_for_diagnostic(owner)));
+        let mut msg = msg.with_note(note.arg(self.name_for_diagnostic(owner)));
+        if note_at.is_some() {
+            // The template's warning shares the specialization's id and
+            // location; both print.
+            msg = msg.allow_duplicate();
+        }
         if self.inst.stack.is_empty() && self.depr_points.last() == Some(&self.ctx) {
             let level = self.depr_points.len();
             self.delayed_deprecations.push((level, msg, unavail));

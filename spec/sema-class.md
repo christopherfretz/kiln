@@ -2172,7 +2172,16 @@ conversion functions, lambda call operators, implicit special members,
 temporaries' destructors) are odr-used, so defined or instantiated
 ([basic.def.odr]/4, [temp.inst]/5), and its temporaries belong to the
 enclosing full-expression (`mark_typeid_operand_evaluated`, WP-1322). A
-non-polymorphic operand stays unevaluated: nothing in it is odr-used.
+non-polymorphic operand stays unevaluated: nothing in it is odr-used. Its
+immediate invocations ([expr.const]/16) are wrapped in a `ConstantExpr` as
+it is built, as in an evaluated context, whenever the `typeid` operand is
+the only reason the context is unevaluated (`in_typeid_operand_only`), so
+a polymorphic operand's are evaluated at the end of the full-expression and
+never called at run time; for an operand that stays unevaluated (or the
+unevaluated first substitution of a polymorphic one) they are taken off
+the pending list again and their wrappers elided
+(`drop_typeid_invocations`; WP-1236,
+`tests/conformance/expr.typeid/polymorphic-operand-immediate-invocation-run.cpp`).
 
 ## 6. Record layout (`kiln_abi`, abi.md §8)
 

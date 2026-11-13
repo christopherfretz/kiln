@@ -559,6 +559,7 @@ impl Sema<'_, '_> {
         d.loc = loc;
         d.params =
             self.ast.template_info(ft).map(|i| self.ast.templates.param_list(i.params).params);
+        d.nttp_types = true;
         let name_loc = self.ast.decls.get(templated).loc();
         // The warnings the phases before the specialization is formed
         // hold back (§5.7): kept with it on success, else dropped.
@@ -1063,6 +1064,16 @@ impl Sema<'_, '_> {
             {
                 originals.push((i, p, self.adjusted_call_arg(p, a, d.depth)));
             }
+        }
+        // [temp.deduct.type]/20: a fixed-type non-type parameter deduced
+        // from a template-id's argument of another type (clang
+        // `ConvertDeducedTemplateArgument`).
+        if let Some((at, pt)) = d.nttp_mismatch {
+            let (x, y) = self.ty_diff(at, pt);
+            let diag = self.diag(DiagId::sema_deduced_nttp_type_mismatch, loc).arg(x).arg(y);
+            let mut f = DeductionFailure::new(Tdk::SubstitutionFailure, d);
+            f.diag = Some(diag);
+            return Err(f);
         }
         stat_step!("defaults");
         // §6.1 step 3: defaults, then completeness.

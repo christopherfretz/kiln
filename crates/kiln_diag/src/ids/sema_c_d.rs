@@ -313,6 +313,7 @@ sema_decomp_decl_unbindable_type_19 = Error (2) "cannot decompose {0:union|non-c
 sema_decomp_decl_wrong_number_bindings = Error (3) "type {0} binds to {1}, but {2} provided";
 sema_decomp_decl_wrong_number_bindings_19 = Error (3) "type {0} decomposes into {1}, but {2} provided";
 sema_decrement_bool = Error (0) "cannot decrement expression of type bool";
+sema_deduced_nttp_type_mismatch = Error (2) "deduced non-type template argument does not have the same type as the corresponding template parameter ({0} vs {1})";
 sema_deduced_return_type_cxx14 = Error (0) "deduced return types are a C++14 extension";
 sema_deduction_guide_not_deducible = Error (1) "deduction guide template contains {0:a template parameter|template parameters} that cannot be deduced";
 sema_deep_exception_specs_differ = Error (1) "exception specifications of {0:return|argument} types differ";

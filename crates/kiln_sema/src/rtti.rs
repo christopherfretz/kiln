@@ -85,6 +85,7 @@ impl Sema<'_, '_> {
             && !evaluated
         {
             self.check_unevaluated_side_effects(e);
+            self.drop_typeid_invocations(e);
         }
         if let Ok(e) = operand
             && evaluated
