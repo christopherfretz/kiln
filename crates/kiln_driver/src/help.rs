@@ -102,6 +102,12 @@ TARGET AND TOOLCHAIN:
 
 CODE GENERATION:
   -O<level>               Optimization level: 0, 1, 2, 3, s, z, g or fast
+  -fkiln-backend=<backend>
+                          [kiln] Object code back end: llvm (default) or hod
+                          (tried first at -O0, llc if it declines; default:
+                          $KILN_BACKEND)
+  --hod=<file>            [kiln] The hod executable (default: $KILN_HOD, else
+                          hod next to llc, else on PATH)
   -fpic, -fPIC, -fpie, -fPIE, -fno-pic
                           Relocation model (default -fPIE)
   -flto[=<kind>]          Link-time optimization: full (default) or thin
@@ -319,6 +325,7 @@ mod tests {
     fn sample(form: &str, ph: &str) -> &'static str {
         match ph {
             "file" => "f.txt",
+            "backend" => "hod",
             "dir" => "/d",
             "language" => "c++",
             "standard" => "c++26",
@@ -434,6 +441,8 @@ mod tests {
             "-fcontract-evaluation-semantic=<semantic>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",
+            "-fkiln-backend=<backend>",
+            "--hod=<file>",
             "-fconstexpr-memory=<size>",
             "-fkiln-instantiation-report[=<format>]",
             "-fconstexpr-stats",
@@ -447,6 +456,7 @@ mod tests {
                 f.starts_with("-fkiln-")
                     || [
                         "--llvm-dir=",
+                        "--hod=",
                         "-fclang-compat=",
                         "-fconstexpr-memory=",
                         "-fconstexpr-report=",
