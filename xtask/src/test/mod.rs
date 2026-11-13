@@ -62,6 +62,13 @@ options:
                       experimental -fkiln-pch-snapshot); the exit status,
                       diagnostics, IR and run must agree; no oracles, xfail
                       ignored (spec/harness.md \"PCH differential\")
+  --pch-diff-require-restore
+                      with --pch-diff snapshot: a consumer that replays for a
+                      reason not in tests/pch-snapshot-replay-allow.txt FAILs
+  --pch-diff-synthetic
+                      with --pch-diff: a test without #includes gets the prefix
+                      #include <bits/stdc++.h> when kiln's result with it as an
+                      -include is the result without it
   --external <dir>    run every .c/.cpp under <dir> (outside the repo) as
                       never-crash: counts only, nothing written (spec/harness.md)
   --filter <substr>   only tests whose path contains <substr>
@@ -186,6 +193,14 @@ pub struct Options {
     /// `--pch-diff load|replay|check`: the PCH differential
     /// (`spec/harness.md` "PCH differential").
     pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
+    /// `--pch-diff-require-restore`: with `--pch-diff snapshot`, a
+    /// consumer that replays for a reason not in
+    /// [`crate::util::pch_diff::ALLOW_LIST`] FAILs.
+    pub pch_require_restore: bool,
+    /// `--pch-diff-synthetic`: a test without `#include`s is compiled
+    /// with a PCH of [`crate::util::pch_diff::SYNTHETIC_HEADER`] when that
+    /// header does not change its result.
+    pub pch_synthetic: bool,
     /// `--external <dir>`: the never-crash run of [`external`].
     pub external: Option<PathBuf>,
     pub filter: Option<String>,
@@ -224,6 +239,8 @@ impl Default for Options {
             bmi_kind: None,
             bmi_image: false,
             pch_diff: None,
+            pch_require_restore: false,
+            pch_synthetic: false,
             external: None,
             filter: None,
             shard: None,
@@ -268,6 +285,8 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
                         format!("bad --pch-diff `{v}` (load|replay|check|snapshot)")
                     })?);
             }
+            "--pch-diff-require-restore" => o.pch_require_restore = true,
+            "--pch-diff-synthetic" => o.pch_synthetic = true,
             "--bmi-kind" => {
                 let v = value("--bmi-kind")?;
                 o.bmi_kind = Some(match v.as_str() {
@@ -490,6 +509,23 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
             return Err("--pch-diff does not combine with another variant".into());
         }
     }
+    if opts.pch_require_restore && opts.pch_diff != Some(crate::util::pch_diff::PchDiff::Snapshot) {
+        return Err("--pch-diff-require-restore needs --pch-diff snapshot".into());
+    }
+    if opts.pch_synthetic && opts.pch_diff.is_none() {
+        return Err("--pch-diff-synthetic needs --pch-diff".into());
+    }
+    let pch_require_restore = if opts.pch_require_restore {
+        let path = root.join(crate::util::pch_diff::ALLOW_LIST);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        Some(
+            crate::util::pch_diff::AllowList::parse(&text)
+                .map_err(|e| format!("{}: {e}", path.display()))?,
+        )
+    } else {
+        None
+    };
     let (oracle, oracle_kind, oracle_clang) =
         if opts.no_oracle || opts.meta_header || opts.debug_sweep || opts.pch_diff.is_some() {
             (None, CompilerKind::Other, None)
@@ -540,6 +576,8 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         bmi_kind: opts.bmi_kind,
         bmi_image: opts.bmi_image,
         pch_diff: opts.pch_diff,
+        pch_require_restore,
+        pch_synthetic: opts.pch_synthetic.then(runner::SyntheticPchs::default),
     };
     let jobs = opts
         .jobs
@@ -574,6 +612,9 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     }
     let counts = report::Counts::of(&results);
     text.push_str(&report::format_summary(&counts, results.len(), start.elapsed()));
+    if let Some(mode) = opts.pch_diff {
+        text.push_str(&report::format_pch_accounting(mode, &results));
+    }
     print!("{text}");
     if let Some(path) = &opts.report_parity {
         let path = if path.is_absolute() { path.clone() } else { cfg.root.join(path) };

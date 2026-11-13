@@ -2291,7 +2291,11 @@ hidden; spec/snap.md
 These are the consumer's rules; every refusal is a silent replay with
 `-v` `note: precompiled header 'p.pch': snapshot not used: <why>` (or
 `snapshot not used (<why>); the header is replayed` when the restore
-itself gives up). Tests: kiln_driver `tests/pch_snapshot.rs` and the
+itself gives up). With the environment variable `KILN_SNAP_TIMING=1`
+the same note is also printed, without `-v`, as `snapshot-timing:
+note: <what>` next to the timing lines; the harness reads it to count
+restores and replays by reason (spec/harness.md "Snapshot
+accounting"). Tests: kiln_driver `tests/pch_snapshot.rs` and the
 cases of `scripts/pch-snapshot-diff/`.
 
 - **Diagnostics (clang's policy).** The header's own diagnostics are

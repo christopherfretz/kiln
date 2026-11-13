@@ -58,7 +58,7 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
                          detail, first cluster key, wall seconds)
   --shard <K/N>          run only every N-th selected test, starting at the K-th
                          (1-based; the N shards are disjoint and cover the selection)
-  --pch-diff load|replay|check
+  --pch-diff load|replay|check|snapshot
                          each pass test that opens with #includes is compiled
                          with -include-pch of a PCH of them, read by that
                          consumer path (spec/libcxx.md \"PCH differential\")
@@ -318,11 +318,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--shard" => o.shard = Some(parse_shard(&value("--shard")?)?),
             "--pch-diff" => {
                 let v = value("--pch-diff")?;
-                o.pch_diff = Some(
-                    crate::util::pch_diff::PchDiff::parse(&v)
-                        .filter(|m| *m != crate::util::pch_diff::PchDiff::Snapshot)
-                        .ok_or_else(|| format!("bad --pch-diff `{v}` (load|replay|check)"))?,
-                );
+                o.pch_diff =
+                    Some(crate::util::pch_diff::PchDiff::parse(&v).ok_or_else(|| {
+                        format!("bad --pch-diff `{v}` (load|replay|check|snapshot)")
+                    })?);
             }
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;
@@ -1019,10 +1018,15 @@ fn execute(opts: &Options) -> Result<bool, String> {
 /// `--pch-diff`'s tally: how many tests read a PCH by each path (the
 /// producer's `-v` note: the image, or replay and why).
 fn pch_paths(mode: crate::util::pch_diff::PchDiff, results: &[TestResult]) -> String {
-    let mut paths: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut paths: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for r in results {
         if let Some(p) = &r.pch_path {
-            *paths.entry(p.as_str()).or_default() += 1;
+            // Under `snapshot`, replay reasons grouped (numbers and paths
+            // reduced).
+            let key = crate::util::pch_diff::replay_reason(p)
+                .filter(|_| mode == crate::util::pch_diff::PchDiff::Snapshot)
+                .map_or_else(|| p.clone(), |w| format!("replay: {w}"));
+            *paths.entry(key).or_default() += 1;
         }
     }
     let total: usize = paths.values().sum();

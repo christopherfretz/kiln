@@ -101,6 +101,27 @@ pub(crate) struct ModSema {
     /// declaration image's preamble, spec/modules.md §11.11 "Imports,
     /// partitions and using-declarations").
     preamble: (Option<u32>, bool),
+    /// The deduplication keys (spec/modules.md §6) of a snapshot prefix's
+    /// namespace-scope declarations, which its producer parsed without
+    /// module tracking: a consumer that activates modules records them
+    /// as its own unit's, as a replay of the prefix would have
+    /// ([`Sema::take_prefix_keys`], WP-1395).
+    prefix_keys: Vec<PrefixKey>,
+    /// [`Self::prefix_keys`] are being recorded (a snapshot producer's
+    /// prefix; off again at its end).
+    recording_prefix_keys: bool,
+}
+
+/// One namespace-scope declaration of a snapshot prefix: its first and
+/// last tokens, its token count and the declarations it made (`lo..hi`,
+/// [`DeclId`] indices).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub struct PrefixKey {
+    pub start: Loc,
+    pub end: Loc,
+    pub ntoks: u32,
+    pub lo: u32,
+    pub hi: u32,
 }
 
 impl ModSema {
@@ -160,6 +181,38 @@ impl Sema<'_, '_> {
             self.modules.frames.push(Frame::default());
             self.module_recompute();
         }
+    }
+
+    /// A snapshot producer's prefix starts: its namespace-scope
+    /// declarations are noted ([`Self::note_prefix_key`]) until
+    /// [`Self::end_prefix_keys`].
+    pub fn record_prefix_keys(&mut self) {
+        self.modules.recording_prefix_keys = true;
+    }
+
+    /// Whether the parser should note its namespace-scope declarations
+    /// ([`Self::note_prefix_key`]).
+    #[must_use]
+    pub fn records_prefix_keys(&self) -> bool {
+        self.modules.recording_prefix_keys
+    }
+
+    /// Notes a namespace-scope declaration of a snapshot prefix.
+    pub fn note_prefix_key(&mut self, k: PrefixKey) {
+        if self.modules.recording_prefix_keys {
+            self.modules.prefix_keys.push(k);
+        }
+    }
+
+    /// The prefix ends: nothing more is noted.
+    pub fn end_prefix_keys(&mut self) {
+        self.modules.recording_prefix_keys = false;
+    }
+
+    /// The keys of a restored snapshot's prefix, once, for the parser's
+    /// deduplication records when it activates modules.
+    pub fn take_prefix_keys(&mut self) -> Vec<PrefixKey> {
+        std::mem::take(&mut self.modules.prefix_keys)
     }
 
     /// True while modules are tracked.

@@ -70,6 +70,8 @@ fn cli_parsing() {
             bmi_kind: None,
             bmi_image: false,
             pch_diff: None,
+            pch_require_restore: false,
+            pch_synthetic: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);
@@ -1103,6 +1105,8 @@ fn pch_diff_option() {
     assert_eq!(o(&["--pch-diff=check"]), Some(PchDiff::Check));
     assert_eq!(o(&["--pch-diff=snapshot"]), Some(PchDiff::Snapshot));
     assert!(parse_args(strings(&["--pch-diff", "image"])).is_err());
+    let r = parse_args(strings(&["--pch-diff=snapshot", "--pch-diff-require-restore"]));
+    assert!(r.unwrap().unwrap().pch_require_restore);
 }
 
 #[test]

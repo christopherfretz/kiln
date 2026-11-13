@@ -67,19 +67,110 @@ pub const SNAPSHOT_PRODUCER_FLAG: &str = "-fkiln-pch-snapshot=write";
 /// `snapshot-timing: restore` line tells a restore from a replay.
 pub const SNAPSHOT_TIMING_ENV: &str = "KILN_SNAP_TIMING";
 
+/// What [`snapshot_path`] calls a consumer that restored the snapshot.
+pub const RESTORED: &str = "snapshot";
+
 /// Under [`PchDiff::Snapshot`], the path the consumer took (its stderr
-/// `with`, the producer's `producer`): `snapshot`, or why it replayed.
+/// `with`, the producer's `producer`): [`RESTORED`], or why it replayed:
+/// `replay: producer: <why>` when the producer wrote no snapshot (its
+/// `-v` note), else `replay: consumer: <why>` (the consumer's last
+/// `snapshot-timing: note:` line, printed under [`SNAPSHOT_TIMING_ENV`]),
+/// else `replay: consumer: (no reason given)`.
 pub fn snapshot_path(producer: &str, with: &str) -> String {
     if with.lines().any(|l| l.starts_with("snapshot-timing: restore ")) {
-        return "snapshot".to_owned();
+        return RESTORED.to_owned();
     }
     let why = producer.lines().find_map(|l| {
         let (_, rest) = l.split_once("': snapshot not written: ")?;
         Some(rest.to_owned())
     });
+    if let Some(w) = why {
+        return format!("replay: producer: {w}");
+    }
+    let why = with
+        .lines()
+        .filter_map(|l| l.strip_prefix("snapshot-timing: note: "))
+        .rfind(|w| !w.starts_with("matches;") && !w.starts_with("restored;"));
     match why {
-        Some(w) => format!("replay: no snapshot: {w}"),
-        None => "replay: the snapshot was not used".to_owned(),
+        Some(w) => format!("replay: consumer: {}", w.strip_prefix("not used: ").unwrap_or(w)),
+        None => "replay: consumer: (no reason given)".to_owned(),
+    }
+}
+
+/// The replay reason of a [`snapshot_path`] (`None` for [`RESTORED`] and
+/// for a path of another mode), with its numbers and paths reduced so a
+/// histogram groups like reasons: every run of digits is `N`, and a
+/// quoted path (`'...'`) is `'…'`.
+pub fn replay_reason(path: &str) -> Option<String> {
+    let why = path.strip_prefix("replay: ")?;
+    let mut out = String::with_capacity(why.len());
+    let mut chars = why.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_digit() {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+            out.push('N');
+        } else if c == '\'' {
+            let quoted: String = chars.by_ref().take_while(|&d| d != '\'').collect();
+            if quoted.contains('/') {
+                out.push_str("'…'");
+            } else {
+                out.push('\'');
+                out.push_str(&quoted);
+                out.push('\'');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
+/// One entry of the snapshot replay allow-list ([`AllowList`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Allowed {
+    /// A substring of the replay reason ([`snapshot_path`] without its
+    /// `replay: `).
+    pub pattern: String,
+    pub justification: String,
+}
+
+/// The allow-list of `--pch-diff-require-restore` (spec/harness.md "PCH
+/// differential"): the reasons a snapshot consumer may replay for.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AllowList(pub Vec<Allowed>);
+
+/// The allow-list's path, relative to the repository.
+pub const ALLOW_LIST: &str = "tests/pch-snapshot-replay-allow.txt";
+
+impl AllowList {
+    /// Parses the file's text: one `<pattern> :: <justification>` per
+    /// line (both non-empty), `#` comments and blank lines ignored.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let mut out = Vec::new();
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim();
+            if t.is_empty() || t.starts_with('#') {
+                continue;
+            }
+            let Some((p, j)) = t.split_once(" :: ") else {
+                return Err(format!("line {}: not `<pattern> :: <justification>`", n + 1));
+            };
+            let (p, j) = (p.trim(), j.trim());
+            if p.is_empty() || j.is_empty() {
+                return Err(format!("line {}: empty pattern or justification", n + 1));
+            }
+            out.push(Allowed { pattern: p.to_owned(), justification: j.to_owned() });
+        }
+        Ok(Self(out))
+    }
+
+    /// The entry that allows `path` ([`snapshot_path`]): `None` for a
+    /// replay no entry covers. A restore needs none.
+    pub fn allows(&self, path: &str) -> Option<&Allowed> {
+        let why = path.strip_prefix("replay: ")?;
+        self.0.iter().find(|a| why.contains(&a.pattern))
     }
 }
 
@@ -124,6 +215,23 @@ pub fn leading_includes(source: &str) -> Vec<(usize, &str)> {
     out
 }
 
+/// The prefix `--pch-diff-synthetic` gives a test without `#include`s
+/// (spec/harness.md "PCH differential"): libstdc++'s whole library, the
+/// largest realistic prefix.
+pub const SYNTHETIC_HEADER: &str = "#include <bits/stdc++.h>\n";
+
+/// Whether `source` has an `#include`-like directive anywhere (a line
+/// whose first non-blank character is `#` followed by `include` or
+/// `import`): such a test is not given the synthetic prefix.
+pub fn has_include(source: &str) -> bool {
+    source.lines().any(|l| {
+        l.trim_start().strip_prefix('#').is_some_and(|r| {
+            let r = r.trim_start();
+            r.starts_with("include") || r.starts_with("import")
+        })
+    })
+}
+
 /// The header of [`leading_includes`], one per line.
 pub fn header_text(includes: &[(usize, &str)]) -> String {
     let mut s = String::new();
@@ -166,6 +274,75 @@ pub fn path_note(stderr: &str) -> Option<String> {
         }
         rest.strip_prefix("replay the header: ").map(|why| format!("replay: {why}"))
     })
+}
+
+/// The IR of a compile with or without the PCH, after the corpus's
+/// `ir_normalize`, without what depends on the main file's bytes or on
+/// raw source locations rather than on the program (WP-1395): a `DIFile`'s
+/// `checksum:` (the PCH build's copy of the test has its `#include` lines
+/// emptied) and the values of an inline asm's `!srcloc` tuples
+/// (`!N = !{i64 M, ...}`, a raw location as clang's, which a PCH shifts
+/// in clang too).
+pub fn ir_pch_normalize(ir: &str) -> String {
+    let mut out = String::with_capacity(ir.len());
+    for line in ir.lines() {
+        if let Some((head, rest)) = line.split_once(" = !{i64 ")
+            && head.starts_with('!')
+            && rest.ends_with('}')
+            && rest[..rest.len() - 1].split(", i64 ").all(|w| w.parse::<i64>().is_ok())
+        {
+            out.push_str(head);
+            out.push_str(" = !{i64 …}\n");
+            continue;
+        }
+        match line.find("checksum: \"") {
+            Some(i) => {
+                let tail = &line[i + "checksum: \"".len()..];
+                let close = tail.find('"').map_or(tail.len(), |j| j + 1);
+                out.push_str(&line[..i]);
+                out.push_str("checksum: \"…\"");
+                out.push_str(&tail[close.min(tail.len())..]);
+            }
+            None => out.push_str(line),
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// A test binary's output without what differs between two runs of one
+/// program: its own path's file name (`plain.out`, `pch.out`,
+/// `textual.out`: a sanitizer report names the binary) made one, and a
+/// sanitizer report's process id (`==N==`), addresses (`0x...`) and
+/// `BuildId:` reduced (address-space layout is randomized).
+pub fn run_output_normalize(text: &str) -> String {
+    let text = text
+        .replace("/plain.out", "/test.out")
+        .replace("/textual.out", "/test.out")
+        .replace("/pch.out", "/test.out");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
+    while let Some(c) = rest.chars().next() {
+        let hex_run = |s: &str| s.bytes().take_while(u8::is_ascii_hexdigit).count();
+        if let Some(r) = rest.strip_prefix("0x") {
+            out.push_str("0x…");
+            rest = &r[hex_run(r)..];
+        } else if let Some(r) = rest.strip_prefix("BuildId: ") {
+            out.push_str("BuildId: …");
+            rest = &r[hex_run(r)..];
+        } else if let Some(r) = rest.strip_prefix("==")
+            && let n = r.bytes().take_while(u8::is_ascii_digit).count()
+            && n > 0
+            && r[n..].starts_with("==")
+        {
+            out.push_str("==N==");
+            rest = &r[n + 2..];
+        } else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
 }
 
 /// `stderr` without what may differ between a compile that includes its
@@ -263,6 +440,8 @@ mod tests {
         assert!(leading_includes("#include_next <x>\n").is_empty());
         assert!(leading_includes("#include MACRO\n").is_empty());
         assert_eq!(leading_includes("/* c */ #include <a>\n#if 1\n"), [(0, "#include <a>")]);
+        assert!(has_include("int x;\n  #  include_next <x>\n"));
+        assert!(!has_include("int x; // #include <x>\n"));
     }
 
     #[test]
@@ -302,7 +481,49 @@ mod tests {
     fn snapshot_paths() {
         assert_eq!(snapshot_path("", "snapshot-timing: restore Ast 1 ms\n"), "snapshot");
         let p = "note: precompiled header 'p.pch': snapshot not written: Sema.ctx: x\n";
-        assert_eq!(snapshot_path(p, ""), "replay: no snapshot: Sema.ctx: x");
-        assert_eq!(snapshot_path("", ""), "replay: the snapshot was not used");
+        assert_eq!(snapshot_path(p, ""), "replay: producer: Sema.ctx: x");
+        assert_eq!(snapshot_path("", ""), "replay: consumer: (no reason given)");
+        let c = "snapshot-timing: note: matches; restoring it\nsnapshot-timing: note: not used (x); the header is replayed\n";
+        assert_eq!(snapshot_path("", c), "replay: consumer: not used (x); the header is replayed");
+        let c = "snapshot-timing: note: not used: the command line differs: '-DA' (producer) vs '-DB' (here)\n";
+        let p = snapshot_path("", c);
+        assert_eq!(
+            p,
+            "replay: consumer: the command line differs: '-DA' (producer) vs '-DB' (here)"
+        );
+        assert_eq!(replay_reason(RESTORED), None);
+        assert_eq!(
+            replay_reason("replay: consumer: '/a/b.h' changed, 12 files").as_deref(),
+            Some("consumer: '…' changed, N files")
+        );
+    }
+
+    #[test]
+    fn pch_ir() {
+        let a = "!7 = !{i64 710, i64 12}\n!3 = !DIFile(filename: \"a\", checksumkind: CSK_MD5, checksum: \"14e3\")\n!8 = !{!\"auto-init\"}\n";
+        let b = "!7 = !{i64 692, i64 1}\n!3 = !DIFile(filename: \"a\", checksumkind: CSK_MD5, checksum: \"0e46\")\n!8 = !{!\"auto-init\"}\n";
+        assert_eq!(ir_pch_normalize(a), ir_pch_normalize(b));
+        assert!(ir_pch_normalize(a).contains("auto-init"));
+        assert_ne!(ir_pch_normalize("!1 = !{i32 7}\n"), ir_pch_normalize("!1 = !{i32 8}\n"));
+        assert_eq!(
+            run_output_normalize("#0 in f /x/t1/pch.out+0x1f"),
+            "#0 in f /x/t1/test.out+0x…"
+        );
+        assert_eq!(
+            run_output_normalize("==57824==ERROR: at pc 0xaaaa (BuildId: f844)\n=x="),
+            "==N==ERROR: at pc 0x… (BuildId: …)\n=x="
+        );
+    }
+
+    #[test]
+    fn allow_list() {
+        let l = AllowList::parse("# c\n\nproducer: the prefix has errors :: no state to save\n")
+            .unwrap();
+        assert_eq!(l.0.len(), 1);
+        assert!(l.allows("replay: producer: the prefix has errors (3)").is_some());
+        assert!(l.allows("replay: consumer: x").is_none());
+        assert!(l.allows(RESTORED).is_none());
+        assert!(AllowList::parse("x\n").is_err());
+        assert!(AllowList::parse("x :: \n").is_err());
     }
 }

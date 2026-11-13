@@ -988,7 +988,12 @@ fn pch_prefix(
     let iquote = ["-iquote".to_owned(), dir.display().to_string()];
     let mut c = Command::new(&cfg.kiln);
     crate::util::isolate_caches(&mut c);
-    c.args(cfg.base_compile_flags()).args(flags).args(&iquote).args(pch_diff::PRODUCER_FLAGS);
+    // The consumer's order ([`execute`]: the base flags, `-iquote`, then
+    // the test's): a snapshot's identity is the command line, in order.
+    c.args(cfg.base_compile_flags()).args(&iquote).args(flags).args(pch_diff::PRODUCER_FLAGS);
+    if mode == pch_diff::PchDiff::Snapshot {
+        c.arg(pch_diff::SNAPSHOT_PRODUCER_FLAG);
+    }
     c.args(["-x", "c++-header"]).arg(&header).arg("-o").arg(&pch);
     c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
     c.current_dir(scratch).env("TMPDIR", test_tmpdir(cfg, scratch));
@@ -1016,6 +1021,11 @@ fn pch_prefix(
     }
     r.pch_path = Some(match mode {
         pch_diff::PchDiff::Replay => mode.as_str().to_owned(),
+        // The producer's reason, if it wrote no snapshot; the consumer's
+        // compile step fills in its own ([`snapshot_consumer`]).
+        pch_diff::PchDiff::Snapshot => {
+            pch_diff::snapshot_path(&String::from_utf8_lossy(&m.stderr), "")
+        }
         _ => pch_diff::path_note(&String::from_utf8_lossy(&m.stderr))
             .unwrap_or_else(|| "no declaration image".to_owned()),
     });
@@ -1023,6 +1033,12 @@ fn pch_prefix(
     with.push(mode.consumer_flag().to_owned());
     with.extend(iquote);
     Prefix::Pch(copy, with)
+}
+
+/// Whether a compile step is a `--pch-diff snapshot` consumer (`has_pch`:
+/// [`pch_prefix`] gave the test a PCH).
+fn snapshot_consumer(cfg: &Config, has_pch: bool) -> bool {
+    has_pch && cfg.pch_diff == Some(crate::util::pch_diff::PchDiff::Snapshot)
 }
 
 /// What [`pch_prefix`] made of a test.
@@ -1097,11 +1113,16 @@ fn execute(
 ) {
     let obj = scratch.join("t.o");
     let exe = scratch.join("t.exe");
+    let r_has_pch = r.pch_path.is_some();
     let compile = |extra: &[&str]| {
         let mut c = Command::new(&cfg.kiln);
         crate::util::isolate_caches(&mut c);
         c.args(cfg.base_compile_flags()).args(flags).args(extra).arg(src);
         c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
+        if snapshot_consumer(cfg, r_has_pch) {
+            // The `snapshot-timing:` lines tell a restore from a replay.
+            c.env(crate::util::pch_diff::SNAPSHOT_TIMING_ENV, "1");
+        }
         c
     };
     let link = || {
@@ -1363,6 +1384,12 @@ fn attempt_step(
         r.max_rss_kb = r.max_rss_kb.max(m.max_rss_kb);
         if stage == Stage::Compile {
             r.compile_rss_kb = r.compile_rss_kb.max(m.max_rss_kb);
+            if snapshot_consumer(cfg, r.pch_path.is_some())
+                && !r.pch_path.as_deref().is_some_and(|p| p.starts_with("replay: producer: "))
+            {
+                let stderr = String::from_utf8_lossy(&m.stderr);
+                r.pch_path = Some(crate::util::pch_diff::snapshot_path("", &stderr));
+            }
         }
         verdict = judge(stage, &m, kind == Kind::Verify);
         if matches!(verdict, Step::Ok) {

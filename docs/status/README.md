@@ -88,6 +88,10 @@ Correctness and diagnostics:
 - `pch-image-census.md`: how much of every libc++ header the module
   declaration image carries, by first fallback reason
   (`-fkiln-bmi-image-census`, WP-1070).
+- `pch-snapshot-gates.md`: the snapshot PCH's gates: restore/replay
+  accounting over the corpus (with the synthetic `<bits/stdc++.h>`
+  prefix) and libc++, the refusal reasons, the fixes they found, the CI
+  lane (WP-1395).
 - `pp-parity.md`: `kiln -E` against `clang -E` on the preprocessor corpus
   (ROADMAP M1).
 - `accepts-invalid.md`: clang 22's `clang/test/{CXX,SemaCXX}` negative

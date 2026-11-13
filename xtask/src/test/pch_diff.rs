@@ -8,11 +8,13 @@
 //! and a test's own expectations are not checked: the variant asks only
 //! whether the PCH changes the result.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex, OnceLock};
 
-use super::{Expect, Lang, Output, Problem, Status, Test, TestCase, TestSpec};
+use super::{Expect, Lang, Output, PchConsumer, Problem, Status, Test, TestCase, TestSpec};
 use super::{indent, ir_normalize, line_diff};
 use crate::util::pch_diff::{self, PchDiff};
 
@@ -27,7 +29,12 @@ fn compared(expect: Expect) -> bool {
 }
 
 /// Why `--pch-diff` leaves a test out, or `None` when it runs it.
-pub(super) fn pch_diff_skip(spec: &TestSpec, source: &str, case: &TestCase) -> Option<String> {
+pub(super) fn pch_diff_skip(
+    spec: &TestSpec,
+    source: &str,
+    case: &TestCase,
+    synthetic: bool,
+) -> Option<String> {
     const MODE: &str = "pch-diff";
     if case.lang == Lang::C || case.is_header {
         return Some(format!("{MODE}: not a C++ source file"));
@@ -42,9 +49,31 @@ pub(super) fn pch_diff_skip(spec: &TestSpec, source: &str, case: &TestCase) -> O
         return Some(format!("{MODE}: `args:` select an -include, -E, -M or -x"));
     }
     if pch_diff::leading_includes(source).is_empty() {
+        if synthetic && !pch_diff::has_include(source) {
+            return None;
+        }
         return Some(format!("{MODE}: does not open with an #include"));
     }
     None
+}
+
+/// Under `--pch-diff-synthetic`, the PCHs of [`pch_diff::SYNTHETIC_HEADER`]
+/// built so far, by producer command line: one per distinct set of
+/// flags, shared by the run's tests (spec/harness.md "PCH differential").
+#[derive(Debug, Default)]
+pub struct SyntheticPchs {
+    built: Mutex<HashMap<String, Arc<OnceLock<SyntheticPch>>>>,
+}
+
+/// A synthetic PCH and its producer's stderr, or why it does not build.
+type SyntheticPch = Result<(PathBuf, String), String>;
+
+/// Whether two runs of the test binary agree: exit status, stdout and
+/// stderr, with the binary's own name made one
+/// ([`pch_diff::run_output_normalize`]).
+fn same_run(a: &Output, b: &Output) -> bool {
+    let norm = |o: &[u8]| pch_diff::run_output_normalize(&String::from_utf8_lossy(o));
+    a.code() == b.code() && norm(&a.stdout) == norm(&b.stdout) && norm(&a.stderr) == norm(&b.stderr)
 }
 
 /// One build of the test: the IR compile and, for a `run` test, the
@@ -72,11 +101,16 @@ impl Test<'_> {
         source: &str,
         mode: PchDiff,
     ) -> (Status, Option<String>, String) {
-        match self.pch_diff_check(spec, source, mode) {
+        self.pch_path = None;
+        let r = self.pch_diff_check(spec, source, mode);
+        let path = self.pch_path.take();
+        match r {
             Ok(Ok(path)) => (Status::Pass, Some(path), String::new()),
             Ok(Err(why)) => (Status::Skip, Some(format!("pch-diff: {why}")), String::new()),
-            Err(Problem::Fail(d)) => (Status::Fail, None, d),
-            Err(Problem::Broken(d)) => (Status::Error, None, d),
+            // The path the consumer took, when it got that far: the
+            // accounting counts failures by path too.
+            Err(Problem::Fail(d)) => (Status::Fail, path, d),
+            Err(Problem::Broken(d)) => (Status::Error, path, d),
             Err(Problem::Killed { mib, details }) => {
                 (Status::Killed, Some(format!("memory limit {mib} MiB")), details)
             }
@@ -95,13 +129,9 @@ impl Test<'_> {
         let includes = pch_diff::leading_includes(source);
         let copy_dir = dir.join("src");
         let copy = copy_dir.join(Path::new(&self.case.name).file_name().unwrap_or_default());
-        let write = |path: &Path, text: &str| {
-            fs::write(path, text)
-                .map_err(|e| Problem::Broken(format!("cannot write {}: {e}", path.display())))
-        };
         fs::create_dir_all(&copy_dir)
             .map_err(|e| Problem::Broken(format!("cannot create {}: {e}", copy_dir.display())))?;
-        write(&copy, source)?;
+        write_file(&copy, source)?;
         self.pch_src = Some(copy.clone());
         let plain = self.pch_diff_build(spec, "plain");
         self.pch_src = None;
@@ -109,87 +139,157 @@ impl Test<'_> {
             Err(Problem::Fail(d)) => return Ok(Err(format!("kiln fails without a PCH: {d}"))),
             r => r?,
         };
-        let header = dir.join("pchdiff.h");
-        let pch = dir.join("pchdiff.pch");
-        write(&header, &pch_diff::header_text(&includes))?;
-        let producer = self.pch_diff_produce(spec, &header, &pch)?;
-        if !producer.success() {
-            if !plain.compile.success() {
-                return Ok(Err("the leading #includes do not compile".to_owned()));
+        let synthetic = includes.is_empty();
+        let (plain, producer, pch) = if synthetic {
+            match self.pch_diff_synthetic(spec, &dir, &copy, &plain)? {
+                Ok(r) => r,
+                Err(why) => return Ok(Err(why)),
             }
-            return Err(Problem::Fail(format!(
-                "kiln compiles the test but not a PCH of its leading #includes ({})\n{}",
-                producer.describe_end(),
-                indent(&producer.stderr_str())
-            )));
-        }
+        } else {
+            let header = dir.join("pchdiff.h");
+            let pch = dir.join("pchdiff.pch");
+            write_file(&header, &pch_diff::header_text(&includes))?;
+            let producer = self.pch_diff_produce(spec, &header, &pch, true)?;
+            if !producer.success() {
+                if !plain.compile.success() {
+                    return Ok(Err("the leading #includes do not compile".to_owned()));
+                }
+                return Err(Problem::Fail(format!(
+                    "kiln compiles the test but not a PCH of its leading #includes ({})\n{}",
+                    producer.describe_end(),
+                    indent(&producer.stderr_str())
+                )));
+            }
+            write_file(&copy, &pch_diff::without_includes(source, &includes))?;
+            (plain, producer.stderr_str(), pch)
+        };
         let mut path = match mode {
             PchDiff::Replay | PchDiff::Snapshot => mode.as_str().to_owned(),
-            _ => pch_diff::path_note(&producer.stderr_str())
-                .unwrap_or_else(|| "no declaration image".to_owned()),
+            _ => {
+                pch_diff::path_note(&producer).unwrap_or_else(|| "no declaration image".to_owned())
+            }
         };
-        write(&copy, &pch_diff::without_includes(source, &includes))?;
         self.pch_flags =
             vec!["-include-pch".into(), pch.into_os_string(), mode.consumer_flag().into()];
         self.pch_src = Some(copy);
-        self.pch_snapshot_timing = mode == PchDiff::Snapshot;
+        self.pch_consumer =
+            PchConsumer { snapshot_timing: mode == PchDiff::Snapshot, iquote: !synthetic };
         let with = self.pch_diff_build(spec, "pch");
         (self.pch_src, self.pch_flags) = (None, Vec::new());
-        self.pch_snapshot_timing = false;
+        self.pch_consumer = PchConsumer::default();
         let with = with?;
         if mode == PchDiff::Snapshot {
-            path = pch_diff::snapshot_path(&producer.stderr_str(), &with.compile.stderr_str());
+            path = pch_diff::snapshot_path(&producer, &with.compile.stderr_str());
         }
-        let what = format!("with -include-pch of the leading #includes ({})", mode.consumer_flag());
-        let (p, w) = (plain.compile.stderr_str(), with.compile.stderr_str());
-        if plain.compile.success() != with.compile.success() {
+        self.pch_path = Some(path.clone());
+        let what = if synthetic {
+            format!("with -include-pch of the synthetic prefix ({})", mode.consumer_flag())
+        } else {
+            format!("with -include-pch of the leading #includes ({})", mode.consumer_flag())
+        };
+        compare(&plain, &with, &producer, &what)?;
+        if let Some(allow) = &self.cfg.pch_require_restore
+            && path != pch_diff::RESTORED
+            && allow.allows(&path).is_none()
+        {
             return Err(Problem::Fail(format!(
-                "kiln {} without a PCH but {} {what}\n--- without ---\n{}--- with ---\n{}",
-                if plain.compile.success() { "succeeds" } else { "fails" },
-                if with.compile.success() { "succeeds" } else { "fails" },
-                indent(&p),
-                indent(&w)
+                "the consumer replayed the header instead of restoring the snapshot ({path}), \
+                 and {} allows no such reason (--pch-diff-require-restore)",
+                pch_diff::ALLOW_LIST
             )));
-        }
-        if !pch_diff::same_diags(&p, &producer.stderr_str(), &w) {
-            return Err(Problem::Fail(format!(
-                "the diagnostics differ {what}\n--- diff (-without +with) ---\n{}",
-                indent(&line_diff(&p, &w))
-            )));
-        }
-        if let (Some(a), Some(b)) = (&plain.ir, &with.ir) {
-            let (a, b) = (ir_normalize(a), ir_normalize(b));
-            if a != b {
-                return Err(Problem::Fail(format!(
-                    "the LLVM IR differs {what}\n--- diff (-without +with) ---\n{}",
-                    indent(&line_diff(&a, &b))
-                )));
-            }
-        }
-        if let (Some(a), Some(b)) = (&plain.run, &with.run) {
-            let same = a.code() == b.code() && a.stdout == b.stdout && a.stderr == b.stderr;
-            if !same {
-                return Err(Problem::Fail(format!(
-                    "the test binary's run differs {what}: {} vs {}\n--- stdout without ---\n{}--- stdout with ---\n{}",
-                    a.describe_end(),
-                    b.describe_end(),
-                    indent(&a.stdout_str()),
-                    indent(&b.stdout_str())
-                )));
-            }
         }
         Ok(Ok(path))
     }
 
+    /// `--pch-diff-synthetic` (a test without `#include`s): the
+    /// reference is the test with the synthetic header as an `-include`,
+    /// provided that changes nothing kiln reports. `Ok(Ok((reference,
+    /// producer stderr, pch)))`, or `Ok(Err(why))` to skip the test.
+    fn pch_diff_synthetic(
+        &mut self,
+        spec: &TestSpec,
+        dir: &Path,
+        copy: &Path,
+        plain: &Build,
+    ) -> Result<Result<(Build, String, PathBuf), String>, Problem> {
+        let header = dir.join("pchdiff.h");
+        write_file(&header, pch_diff::SYNTHETIC_HEADER)?;
+        self.pch_flags = vec!["-include".into(), header.into_os_string()];
+        self.pch_src = Some(copy.to_path_buf());
+        self.pch_consumer.iquote = false;
+        let textual = self.pch_diff_build(spec, "textual");
+        (self.pch_src, self.pch_flags) = (None, Vec::new());
+        self.pch_consumer = PchConsumer::default();
+        let textual = match textual {
+            Err(Problem::Fail(_)) => {
+                return Ok(Err("kiln fails with the synthetic prefix".to_owned()));
+            }
+            // The test's memory cap is sized for the test alone.
+            Err(Problem::Killed { mib, .. }) => {
+                return Ok(Err(format!(
+                    "the synthetic prefix exceeds the test's memory limit ({mib} MiB)"
+                )));
+            }
+            r => r?,
+        };
+        let (p, t) = (plain.compile.stderr_str(), textual.compile.stderr_str());
+        // Where a stack guard fires depends on how deep the compiler's
+        // own frames are when the main file starts, which a restore
+        // changes by a few frames: the depth is not a property of the
+        // prefix.
+        if p.contains("stack exhausted") {
+            return Ok(
+                Err("the test measures the stack depth, which the prefix shifts".to_owned()),
+            );
+        }
+        let same_run = match (&plain.run, &textual.run) {
+            (Some(a), Some(b)) => same_run(a, b),
+            (a, b) => a.is_none() == b.is_none(),
+        };
+        if plain.compile.success() != textual.compile.success()
+            || pch_diff::diag_lines(&p) != pch_diff::diag_lines(&t)
+            || !same_run
+        {
+            return Ok(Err("the synthetic prefix changes the test's result".to_owned()));
+        }
+        Ok(self.synthetic_pch(spec).map(|(pch, producer)| (textual, producer, pch)))
+    }
+
     /// The PCH of `header`: the test's flags, the producer's
     /// ([`pch_diff::PRODUCER_FLAGS`]), and the test's directory for its
-    /// quoted `#include`s (the header is in the scratch directory).
+    /// quoted `#include`s (the header is in the scratch directory). The
+    /// test's own flags come in the consumer's order ([`Self::command`]):
+    /// a snapshot's identity is the command line in order, so the
+    /// producer also gets the `-fmodule-file=` flags of its `module:`
+    /// lines (WP-1395).
     fn pch_diff_produce(
         &mut self,
         spec: &TestSpec,
         header: &Path,
         pch: &Path,
+        iquote: bool,
     ) -> Result<Output, Problem> {
+        let c = self.pch_diff_producer(spec, header, pch, iquote);
+        let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
+        if o.code().is_none() || o.stderr_str().contains("panicked at") {
+            return Err(Problem::Fail(format!(
+                "kiln crashed building the PCH ({})\n{}",
+                o.describe_end(),
+                indent(&o.stderr_str())
+            )));
+        }
+        Ok(o)
+    }
+
+    /// The command of [`Self::pch_diff_produce`] (`iquote`: with the
+    /// test's directory as `-iquote`).
+    fn pch_diff_producer(
+        &self,
+        spec: &TestSpec,
+        header: &Path,
+        pch: &Path,
+        iquote: bool,
+    ) -> Command {
         let program = self.cfg.compiler.clone();
         let mut c = Command::new(&program);
         crate::util::isolate_caches(&mut c);
@@ -206,21 +306,61 @@ impl Test<'_> {
             c.args(self.meta_header_flags(true));
         }
         c.args(self.args_for(&program, spec));
-        c.arg("-iquote").arg(self.test_dir());
+        c.args(self.module_flags(&program, spec, spec.modules.len()));
+        if iquote {
+            c.arg("-iquote").arg(self.test_dir());
+        }
         c.args(pch_diff::PRODUCER_FLAGS);
         if self.cfg.pch_diff == Some(PchDiff::Snapshot) {
             c.arg(pch_diff::SNAPSHOT_PRODUCER_FLAG);
         }
         c.args(["-x", "c++-header"]).arg(header).arg("-o").arg(pch);
-        let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
-        if o.code().is_none() || o.stderr_str().contains("panicked at") {
-            return Err(Problem::Fail(format!(
-                "kiln crashed building the PCH ({})\n{}",
-                o.describe_end(),
-                indent(&o.stderr_str())
-            )));
-        }
-        Ok(o)
+        c
+    }
+
+    /// The PCH of [`pch_diff::SYNTHETIC_HEADER`] for `spec`'s flags and
+    /// the producer's stderr, built once per distinct producer command
+    /// line in the run ([`SyntheticPchs`]); `Err(why)` when it does not
+    /// build (the test is skipped).
+    fn synthetic_pch(&mut self, spec: &TestSpec) -> SyntheticPch {
+        let cfg = self.cfg;
+        let Some(cache) = &cfg.pch_synthetic else {
+            return Err("no synthetic prefix in this run".to_owned());
+        };
+        // The key: the command line without the header and the output.
+        let probe = self.pch_diff_producer(spec, Path::new("H"), Path::new("O"), false);
+        let key = format!("{:?}", probe.get_args().collect::<Vec<_>>());
+        let slot = {
+            let mut m = cache.built.lock().expect("no worker panics while holding the lock");
+            let n = m.len();
+            let slot = Arc::clone(m.entry(key).or_default());
+            (slot, n)
+        };
+        let (slot, n) = slot;
+        let built = slot.get_or_init(|| {
+            let dir = self.cfg.scratch.join("synthetic-pch").join(n.to_string());
+            let (header, pch) = (dir.join("pchdiff.h"), dir.join("pchdiff.pch"));
+            let made = fs::create_dir_all(&dir)
+                .and_then(|()| fs::write(&header, pch_diff::SYNTHETIC_HEADER));
+            if let Err(e) = made {
+                return Err(format!("cannot write {}: {e}", header.display()));
+            }
+            match self.pch_diff_produce(spec, &header, &pch, false) {
+                Ok(o) if o.success() => Ok((pch, o.stderr_str())),
+                Ok(o) => Err(format!(
+                    "the synthetic prefix does not build a PCH with the test's flags ({})",
+                    o.describe_end()
+                )),
+                Err(Problem::Fail(d) | Problem::Broken(d)) => Err(format!(
+                    "the synthetic prefix's PCH failed: {}",
+                    d.lines().next().unwrap_or("")
+                )),
+                Err(Problem::Killed { mib, .. }) => {
+                    Err(format!("the synthetic prefix's PCH hit the memory limit ({mib} MiB)"))
+                }
+            }
+        });
+        built.clone()
     }
 
     /// One build (`tag` names its files): for a `run` test a binary (in
@@ -242,6 +382,58 @@ impl Test<'_> {
         let ir = if compile.success() { fs::read_to_string(&ll).ok() } else { None };
         Ok(Build { compile, ir, run })
     }
+}
+
+/// The PCH differential's verdict on the two builds: the same success,
+/// the same diagnostics (the replay's first ones being the header's,
+/// [`pch_diff::same_diags`]), the same LLVM IR and the same run.
+fn compare(plain: &Build, with: &Build, producer: &str, what: &str) -> Result<(), Problem> {
+    let (p, w) = (plain.compile.stderr_str(), with.compile.stderr_str());
+    if plain.compile.success() != with.compile.success() {
+        return Err(Problem::Fail(format!(
+            "kiln {} without a PCH but {} {what}\n--- without ---\n{}--- with ---\n{}",
+            if plain.compile.success() { "succeeds" } else { "fails" },
+            if with.compile.success() { "succeeds" } else { "fails" },
+            indent(&p),
+            indent(&w)
+        )));
+    }
+    if !pch_diff::same_diags(&p, producer, &w) {
+        return Err(Problem::Fail(format!(
+            "the diagnostics differ {what}\n--- diff (-without +with) ---\n{}",
+            indent(&line_diff(&p, &w))
+        )));
+    }
+    if let (Some(a), Some(b)) = (&plain.ir, &with.ir) {
+        let (a, b) = (
+            pch_diff::ir_pch_normalize(&ir_normalize(a)),
+            pch_diff::ir_pch_normalize(&ir_normalize(b)),
+        );
+        if a != b {
+            return Err(Problem::Fail(format!(
+                "the LLVM IR differs {what}\n--- diff (-without +with) ---\n{}",
+                indent(&line_diff(&a, &b))
+            )));
+        }
+    }
+    if let (Some(a), Some(b)) = (&plain.run, &with.run)
+        && !same_run(a, b)
+    {
+        return Err(Problem::Fail(format!(
+            "the test binary's run differs {what}: {} vs {}\n--- stdout without ---\n{}--- stdout with ---\n{}",
+            a.describe_end(),
+            b.describe_end(),
+            indent(&a.stdout_str()),
+            indent(&b.stdout_str())
+        )));
+    }
+    Ok(())
+}
+
+/// Writes `text` to `path`; a failure is [`Problem::Broken`].
+fn write_file(path: &Path, text: &str) -> Result<(), Problem> {
+    fs::write(path, text)
+        .map_err(|e| Problem::Broken(format!("cannot write {}: {e}", path.display())))
 }
 
 #[cfg(test)]

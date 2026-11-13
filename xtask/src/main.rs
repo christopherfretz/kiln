@@ -486,6 +486,9 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     };
     let (pch_load, pch_replay) =
         (pch_diff(util::pch_diff::PchDiff::Load), pch_diff(util::pch_diff::PchDiff::Replay));
+    // The snapshot (WP-1395), with `--pch-diff-require-restore`: a
+    // consumer that stops restoring fails CI.
+    let pch_snapshot = pch_diff(util::pch_diff::PchDiff::Snapshot);
 
     let shard = args.shard.map_or_else(String::new, |s| format!(", shard {s}"));
     let self_check_name = format!("{corpus_compiler} self-check{shard}");
@@ -494,6 +497,7 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     let bmi2_name = format!("kiln --bmi-kind 2{shard}");
     let pch_load_name = format!("kiln --pch-diff load{shard}");
     let pch_replay_name = format!("kiln --pch-diff replay{shard}");
+    let pch_snapshot_name = format!("kiln --pch-diff snapshot --pch-diff-require-restore{shard}");
     let runs = [
         (self_check_name.as_str(), self_check),
         (kiln_name.as_str(), kiln_mode),
@@ -501,6 +505,7 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         (bmi2_name.as_str(), bmi2),
         (pch_load_name.as_str(), pch_load),
         (pch_replay_name.as_str(), pch_replay),
+        (pch_snapshot_name.as_str(), pch_snapshot),
     ];
     for (name, run) in &runs {
         eprintln!("xtask ci: corpus ({name}): {}", run.line());
@@ -576,23 +581,26 @@ const PCH_DIFF_SLICE: [&str; 2] =
     ["tests/conformance/cpp.include", "tests/conformance/module.interface"];
 
 /// `cargo xtask test --compiler <kiln> --pch-diff <mode>` over
-/// [`PCH_DIFF_SLICE`].
+/// [`PCH_DIFF_SLICE`]; `snapshot` with `--pch-diff-require-restore`.
 fn ci_pch_diff(
     kiln: &std::path::Path,
     mode: util::pch_diff::PchDiff,
     shard: Option<test::Shard>,
 ) -> test::CorpusOutcome {
     let shard_flag = shard.map_or_else(String::new, |s| format!(" --shard {s}"));
+    let require = mode == util::pch_diff::PchDiff::Snapshot;
     eprintln!(
-        "xtask ci: cargo xtask test --compiler {} --pch-diff {} {}{shard_flag}",
+        "xtask ci: cargo xtask test --compiler {} --pch-diff {}{} {}{shard_flag}",
         kiln.display(),
         mode.as_str(),
+        if require { " --pch-diff-require-restore" } else { "" },
         PCH_DIFF_SLICE.join(" ")
     );
     let root = test::repo_root();
     let opts = test::Options {
         compiler: Some(kiln.to_path_buf()),
         pch_diff: Some(mode),
+        pch_require_restore: require,
         shard,
         paths: PCH_DIFF_SLICE.iter().map(|d| root.join(d)).collect(),
         ..test::Options::default()

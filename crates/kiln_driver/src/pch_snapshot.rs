@@ -321,7 +321,13 @@ pub(crate) fn add_section(image: Option<Vec<u8>>, snapshot: Vec<u8>) -> Result<V
 }
 
 /// `-v`: a note about the snapshot of `pch` (producer or consumer).
+/// `KILN_SNAP_TIMING` also prints it as `snapshot-timing: note: <what>`,
+/// so the differential can tell why a consumer replayed without `-v`'s
+/// banner (WP-1395, spec/harness.md "PCH differential").
 pub(crate) fn note(args: &Args, stderr: &SharedWriter, pch: &str, what: &str) {
+    if timing() {
+        eprintln!("snapshot-timing: note: {what}");
+    }
     if args.verbose {
         let mut err = stderr.clone();
         let _ = std::io::Write::write_fmt(

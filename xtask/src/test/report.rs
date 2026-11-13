@@ -81,6 +81,92 @@ pub fn format_result(r: &TestResult, verbose: bool) -> String {
     s
 }
 
+/// `--pch-diff`'s accounting (`spec/harness.md` "PCH differential"),
+/// printed after the summary: of the tests whose consumer ran, how many
+/// took each path (under `snapshot`: restored, or replayed and why, with
+/// [`crate::util::pch_diff::replay_reason`]'s grouping), how many of
+/// those failed, and the skips by reason.
+pub fn format_pch_accounting(
+    mode: crate::util::pch_diff::PchDiff,
+    results: &[TestResult],
+) -> String {
+    use crate::util::pch_diff::{RESTORED, replay_reason};
+    let mut paths: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut skips: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unreached = 0;
+    for r in results {
+        match (r.status, &r.reason) {
+            (Status::Skip, why) => {
+                *skips.entry(skip_key(why.as_deref().unwrap_or("(no reason)"))).or_default() += 1;
+            }
+            (Status::Pass | Status::Fail | Status::Error, Some(p))
+                if r.status == Status::Pass || is_pch_path(p) =>
+            {
+                let key = replay_reason(p).map_or_else(|| p.clone(), |w| format!("replay: {w}"));
+                let e = paths.entry(key).or_default();
+                e.0 += 1;
+                e.1 += usize::from(r.status != Status::Pass);
+            }
+            _ => unreached += 1,
+        }
+    }
+    let ran: usize = paths.values().map(|v| v.0).sum();
+    let skipped: usize = skips.values().sum();
+    let mut s = format!("pch-diff {}: {ran} consumers ran", mode.as_str());
+    if mode == crate::util::pch_diff::PchDiff::Snapshot {
+        let restored = paths.get(RESTORED).map_or(0, |v| v.0);
+        let _ = write!(s, ": {restored} restored, {} replayed", ran - restored);
+    }
+    let _ = writeln!(s, "; {unreached} failed before the consumer ran; {skipped} skipped");
+    for (p, (n, failed)) in &paths {
+        let f = if *failed > 0 { format!(" ({failed} failed)") } else { String::new() };
+        let _ = writeln!(s, "  {n:>5}  {p}{f}");
+    }
+    if !skips.is_empty() {
+        let _ = writeln!(s, "  skipped:");
+        for (why, n) in &skips {
+            let _ = writeln!(s, "  {n:>5}  {why}");
+        }
+    }
+    s
+}
+
+/// Whether `reason` is a PCH path (not a skip's or a killed test's reason).
+fn is_pch_path(reason: &str) -> bool {
+    reason == crate::util::pch_diff::RESTORED
+        || reason.starts_with("replay")
+        || reason.starts_with("image (")
+        || reason == "no declaration image"
+        || reason == "check"
+}
+
+/// A skip reason reduced for [`format_pch_accounting`]'s histogram: its
+/// first line, without the `pch-diff: ` prefix, cut after `kiln fails
+/// without a PCH` (whose detail is the failure), numbers as `N`.
+fn skip_key(why: &str) -> String {
+    let first = why.lines().next().unwrap_or("");
+    let first = first.strip_prefix("pch-diff: ").unwrap_or(first);
+    for cut in ["kiln fails without a PCH", "requires: "] {
+        if first.starts_with(cut) {
+            return cut.trim_end_matches(": ").to_owned();
+        }
+    }
+    let mut out = String::new();
+    let mut digits = false;
+    for c in first.chars() {
+        if c.is_ascii_digit() {
+            if !digits {
+                out.push('N');
+            }
+            digits = true;
+        } else {
+            digits = false;
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// The final summary line; `A advisory; ` appears before the total only
 /// when a GCC comparison was dropped.
 pub fn format_summary(counts: &Counts, total: usize, elapsed: Duration) -> String {
