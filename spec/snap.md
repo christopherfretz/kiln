@@ -110,6 +110,24 @@ by the remaining bytes and each item is read in turn. A crate-local
 sequence type (`kiln_source`'s `AppendVec`) implements `Snap` with
 `put_seq`/`seq_len`/`seq_items` and gets the same path.
 
+### Streaming reads
+
+`Reader::new(&[u8])` reads a slice. `Reader::streaming(src, len, base)`
+reads the next `len` bytes of any `std::io::Read` with the same results
+and errors, so a large snapshot is decoded without a copy of it in
+memory (WP-1393: the PCH consumer streams the roots from the PCH file).
+The reader keeps a window of the source: a read needing more than the
+window holds drops the bytes already decoded and reads at least
+`WINDOW` (1 MiB) more, or what the read needs. `bytes` and `str`
+borrow the reader (valid until its next read), so no read may hold on to
+the input; the fixed-size bulk path takes at most a window's worth of
+items per bounds check. `remaining` counts the bytes still in the
+source, so the length checks of `seq_len` are the same in both modes. A
+source that fails or ends before `len` bytes is `ErrorKind::Io` at the
+offset the bytes were needed; it never panics. The window is kept inline
+in the reader, so a slice reader's reads cost one select more than
+before, not an indirection.
+
 ### Sharing
 
 An `Rc`/`Arc` is written as a LEB128 reference: `0` followed by the
@@ -145,7 +163,8 @@ an error in both modes.
 
 `SnapError` is one boxed word: an `ErrorKind` (`Truncated`, `BadTag`,
 `BadValue`, `LengthTooLarge`, `SharedOutOfRange`, `SharedWrongType`,
-`SharedCycle`, `TrailingBytes`, `Invalid(String)`; non-exhaustive), the
+`SharedCycle`, `TrailingBytes`, `Invalid(String)`, `Io(String)` of a
+streaming reader; non-exhaustive), the
 type being read, the absolute byte offset, and the field path. The derive
 adds `Type.field` / `Enum::Variant.field` to the path of an error from a
 field (`SnapError::within`), so a corrupt snapshot reports e.g.
@@ -354,7 +373,57 @@ restore built, and the job starts again by replaying the header; the
 error is reported only by `-v`. The section is used only when its head
 matches: its magic and format version, the schema hash of all five
 roots, and the configuration fingerprint (spec/driver.md "Snapshots",
-the identity table).
+the identity table). The consumer streams the
+roots from the PCH file ("Streaming reads"): the section block is
+located and its checksum checked when the PCH is read, and only the
+roots' offset is kept, so the compile holds no copy of it. The restore
+checks the file's size and modification time again when it opens it,
+and reads the whole block again through the same checksum
+(`bmi::BlockChecksum`, incremental `bmi::block_checksum`): the bytes
+before the roots when it opens, the roots as they are decoded. Once the
+last root is decoded, and before anything restored is used (the main
+file is not yet parsed), the checksum must be the block's; otherwise, as
+for any other change, the compile replays.
+
+### The producer's single pass
+
+The producer also checks the header as clang does: a pass with the
+header as the main file (its diagnostics, its errors, its dependency
+list). That pass and the snapshot pass read the same files in the same
+order; they differ only in the header's place. So when the command line
+asks for nothing beyond diagnostics and dependencies
+(`pch_snapshot::single_pass_allowed`: no `-v`, `-verify`, time trace,
+declaration image, report, dump, module output or `-MG`, and a C++
+header: a C header takes two passes, since C has a main-file-only
+diagnostic, an internal declaration used in an extern inline function,
+that the list below does not cover), the snapshot
+pass runs first, with its diagnostics counted instead of shown, and goes
+on as a consumer with an empty main file would (`enter_next_main_file`,
+then `continue_preprocessed`: the end-of-translation-unit work). If it
+ends with no error and nothing written, and nothing a main file alone
+gets could differ (`pch_snapshot::stands_in`), it stands in for the
+header pass: its dependency list, with the header moved to the front,
+is the header pass's. What a main file alone gets, and how each is ruled
+out:
+
+- `#include_next` in the primary file and `#pragma system_header` in
+  the main file are warned of, and module or import lines are read only
+  in a main file: no such line in the header;
+- unused internal declarations are warned of in the main file only
+  (`-Wunused-variable`, `-Wunused-const-variable`,
+  `-Wunneeded-internal-declaration`, `-Wunused-template`): those
+  warnings off, or a header of directives and comments only; and no
+  `#pragma ... diagnostic` in the header;
+- `__INCLUDE_LEVEL__` and `__BASE_FILE__` expand differently: in no
+  file read;
+- the dependency list names the main file first and never as a system
+  header: the header listed under its own name, not as a system header.
+
+Otherwise the header pass runs as before (its output is the only one
+shown), and the snapshot already made is used. A failed snapshot pass
+(an error in the prefix, a prefix not at rest) is the same as before: no
+section, and the header pass reports. `KILN_PCH_SNAPSHOT_PASSES=2`
+forces the two passes, for comparison.
 
 ## Recipe: making a crate's types `Snap`
 
@@ -418,7 +487,9 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
 - `crates/kiln_snap/tests/snap.rs`: every derive shape, enum tags, fixed
   sizes and the flat bulk layout, standard impls, maps in both modes,
   sharing and its errors, truncation at every byte, bit flips, error
-  paths, every schema-hash change; `derive_errors` doc tests.
+  paths, every schema-hash change; streaming reads (decoded as from a
+  slice over every source chunking, short sources, trailing bytes);
+  `derive_errors` doc tests.
 - `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md
   "Snapshots").
 - `crates/kiln_diag/tests/snap.rs`, `crates/kiln_pp/tests/snap.rs`: the

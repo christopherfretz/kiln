@@ -285,29 +285,42 @@ impl Snap for TypeContext {
     }
 
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
-        let store: Store = at("TypeContext.store", r.get())?;
+        // Field by field (the encoding `#[derive(Snap)]` on `Store` writes,
+        // read without its derived `get`): the derived one measured about
+        // three times slower on large stores (WP-1393, 14 ms against 5 ms
+        // for a 5 MB store), and each arena gets its own timer row.
+        let store = Store {
+            nodes: crate::ast::timed(r, "TypeContext.store.nodes")?,
+            canon: crate::ast::timed(r, "TypeContext.store.canon")?,
+            protos: crate::ast::timed(r, "TypeContext.store.protos")?,
+            type_lists: crate::ast::timed(r, "TypeContext.store.type_lists")?,
+            pairs: crate::ast::timed(r, "TypeContext.store.pairs")?,
+            triples: crate::ast::timed(r, "TypeContext.store.triples")?,
+            arrays: crate::ast::timed(r, "TypeContext.store.arrays")?,
+        };
         if let Err(why) = store.check_restored() {
             return Err(r.invalid::<Self>(why));
         }
         let absent = at("TypeContext.intern", get_absent::<Self>(r, store.nodes.len()))?;
-        let names = at("TypeContext.names", r.get())?;
-        let name_decls = at("TypeContext.name_decls", r.get())?;
-        let dependent_templates = at("TypeContext.dependent_templates", r.get())?;
-        let first_dtst_names = at("TypeContext.first_dtst_names", r.get())?;
-        let dtst_first_spelling = at("TypeContext.dtst_first_spelling", r.get())?;
-        let exc_protos = at("TypeContext.exc_protos", r.get())?;
-        let arg_origins = at("TypeContext.arg_origins", r.get())?;
-        let expr_origins = at("TypeContext.expr_origins", r.get())?;
-        let alias_converted = at("TypeContext.alias_converted", r.get())?;
-        let nns = at("TypeContext.nns", r.get())?;
-        let args = at("TypeContext.args", r.get())?;
-        let profiles = at("TypeContext.profiles", r.get())?;
-        let target = at("TypeContext.target", r.get())?;
-        let opts = at("TypeContext.opts", r.get())?;
-        let exhausted = at("TypeContext.exhausted", r.get())?;
-        let vla_star_bound = at("TypeContext.vla_star_bound", r.get())?;
-        let intern =
-            InternTable::rebuild(store.nodes.len(), &absent, |i| fx_hash(&store.key_of(i)));
+        let names = crate::ast::timed(r, "TypeContext.names")?;
+        let name_decls = crate::ast::timed(r, "TypeContext.name_decls")?;
+        let dependent_templates = crate::ast::timed(r, "TypeContext.dependent_templates")?;
+        let first_dtst_names = crate::ast::timed(r, "TypeContext.first_dtst_names")?;
+        let dtst_first_spelling = crate::ast::timed(r, "TypeContext.dtst_first_spelling")?;
+        let exc_protos = crate::ast::timed(r, "TypeContext.exc_protos")?;
+        let arg_origins = crate::ast::timed(r, "TypeContext.arg_origins")?;
+        let expr_origins = crate::ast::timed(r, "TypeContext.expr_origins")?;
+        let alias_converted = crate::ast::timed(r, "TypeContext.alias_converted")?;
+        let nns = crate::ast::timed(r, "TypeContext.nns")?;
+        let args = crate::ast::timed(r, "TypeContext.args")?;
+        let profiles = crate::ast::timed(r, "TypeContext.profiles")?;
+        let target = crate::ast::timed(r, "TypeContext.target")?;
+        let opts = crate::ast::timed(r, "TypeContext.opts")?;
+        let exhausted = crate::ast::timed(r, "TypeContext.exhausted")?;
+        let vla_star_bound = crate::ast::timed(r, "TypeContext.vla_star_bound")?;
+        let intern = crate::ast::timed_part("TypeContext.intern rebuild", || {
+            InternTable::rebuild(store.nodes.len(), &absent, |i| fx_hash(&store.key_of(i)))
+        });
         Ok(TypeContext {
             store,
             intern,

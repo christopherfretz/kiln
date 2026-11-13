@@ -1,6 +1,8 @@
 //! The [`Ast`]: every arena of a translation unit (spec/ast.md §2.2).
 
 mod snap;
+pub use snap::{set_field_timing, take_field_times};
+pub(crate) use snap::{timed, timed_part};
 
 use std::sync::Arc;
 

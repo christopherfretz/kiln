@@ -49,6 +49,56 @@ fn at<T>(field: &'static str, r: Result<T, SnapError>) -> Result<T, SnapError> {
     r.map_err(|e| e.within(field))
 }
 
+/// Runs `f`, a named part of a decode that reads no bytes (a table
+/// rebuild), adding its time to [`take_field_times`] while
+/// [`set_field_timing`] is on.
+#[inline]
+pub(crate) fn timed_part<T>(part: &'static str, f: impl FnOnce() -> T) -> T {
+    if !FIELD_TIMING.with(std::cell::Cell::get) {
+        return f();
+    }
+    let started = std::time::Instant::now();
+    let v = f();
+    let row = (part, started.elapsed(), 0);
+    FIELD_TIMES.with(|t| t.borrow_mut().push(row));
+    v
+}
+
+/// Reads the field `field`, adding its decode time and size to the
+/// thread's [`take_field_times`] while [`set_field_timing`] is on.
+#[inline]
+pub(crate) fn timed<T: Snap>(r: &mut Reader<'_>, field: &'static str) -> Result<T, SnapError> {
+    if !FIELD_TIMING.with(std::cell::Cell::get) {
+        return at(field, r.get());
+    }
+    let started = std::time::Instant::now();
+    let from = r.offset();
+    let v = at(field, r.get());
+    let row = (field, started.elapsed(), r.offset() - from);
+    FIELD_TIMES.with(|t| t.borrow_mut().push(row));
+    v
+}
+
+thread_local! {
+    /// Whether [`Ast`]'s decode records each field's time (the snapshot
+    /// load timer, `KILN_SNAP_TIMING`): instrumentation, no semantic state.
+    static FIELD_TIMING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FIELD_TIMES: std::cell::RefCell<Vec<(&'static str, std::time::Duration, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Turns the per-field decode timer of [`Ast`] on or off for this thread.
+pub fn set_field_timing(on: bool) {
+    FIELD_TIMING.with(|c| c.set(on));
+}
+
+/// Each [`Ast`] field decoded on this thread since the last call while
+/// [`set_field_timing`] was on: its name, decode time and encoded size.
+#[must_use]
+pub fn take_field_times() -> Vec<(&'static str, std::time::Duration, usize)> {
+    FIELD_TIMES.with(|t| std::mem::take(&mut *t.borrow_mut()))
+}
+
 impl Ast {
     /// The cross-arena checks of a decoded AST (see the module docs and
     /// spec/ast.md "Snapshots").
@@ -123,31 +173,31 @@ impl Snap for Ast {
     }
 
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
-        let symbols = at("Ast.symbols", r.get())?;
-        let types = at("Ast.types", r.get())?;
-        let decls = at("Ast.decls", r.get())?;
-        let exprs = at("Ast.exprs", r.get())?;
-        let stmts = at("Ast.stmts", r.get())?;
-        let attrs = at("Ast.attrs", r.get())?;
-        let annots = at("Ast.annots", r.get())?;
-        let lists = at("Ast.lists", r.get())?;
-        let strings = at("Ast.strings", r.get())?;
-        let names = at("Ast.names", r.get())?;
-        let lookup = at("Ast.lookup", r.get())?;
-        let redecls = at("Ast.redecls", r.get())?;
-        let templates = at("Ast.templates", r.get())?;
-        let consts = at("Ast.consts", r.get())?;
-        let reflections = at("Ast.reflections", r.get())?;
-        let layouts = at("Ast.layouts", r.get())?;
-        let virtuals = at("Ast.virtuals", r.get())?;
-        let vtables = at("Ast.vtables", r.get())?;
-        let cmp_categories = at("Ast.cmp_categories", r.get())?;
-        let tu = at("Ast.tu", r.get())?;
-        let modules = at("Ast.modules", r.get())?;
-        let contract_semantic = at("Ast.contract_semantic", r.get())?;
-        let lang_c = at("Ast.lang_c", r.get())?;
-        let contract_sites = at("Ast.contract_sites", r.get())?;
-        let inst = at("Ast.inst", r.get())?;
+        let symbols = timed(r, "Ast.symbols")?;
+        let types = timed(r, "Ast.types")?;
+        let decls = timed(r, "Ast.decls")?;
+        let exprs = timed(r, "Ast.exprs")?;
+        let stmts = timed(r, "Ast.stmts")?;
+        let attrs = timed(r, "Ast.attrs")?;
+        let annots = timed(r, "Ast.annots")?;
+        let lists = timed(r, "Ast.lists")?;
+        let strings = timed(r, "Ast.strings")?;
+        let names = timed(r, "Ast.names")?;
+        let lookup = timed(r, "Ast.lookup")?;
+        let redecls = timed(r, "Ast.redecls")?;
+        let templates = timed(r, "Ast.templates")?;
+        let consts = timed(r, "Ast.consts")?;
+        let reflections = timed(r, "Ast.reflections")?;
+        let layouts = timed(r, "Ast.layouts")?;
+        let virtuals = timed(r, "Ast.virtuals")?;
+        let vtables = timed(r, "Ast.vtables")?;
+        let cmp_categories = timed(r, "Ast.cmp_categories")?;
+        let tu = timed(r, "Ast.tu")?;
+        let modules = timed(r, "Ast.modules")?;
+        let contract_semantic = timed(r, "Ast.contract_semantic")?;
+        let lang_c = timed(r, "Ast.lang_c")?;
+        let contract_sites = timed(r, "Ast.contract_sites")?;
+        let inst = timed(r, "Ast.inst")?;
         let ast = Ast {
             types,
             decls,
