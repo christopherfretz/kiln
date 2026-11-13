@@ -47,6 +47,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `locals.cpp` | file:line breakpoint, `bt`, a parameter, a local, a struct member, a scoped enumerator, a reference, a class template member | pass | pass |
   | `step_finish.cpp` | `step` into a method, `finish` with its return value, `next` over a call | pass | pass |
   | `globals_lambda.cpp` | a namespace-scope variable, a static data member, a lambda's by-copy and by-reference captures, `up` | pass | pass |
+  | `vtable_home.cpp` (WP-1372) | `print *this`, `ptype` and members through a virtual base in methods of dynamic classes with no key function in a namespace | pass | pass |
   | `reflection.cpp` (WP-910) | a `define_aggregate` class, a `Holder<^^int>` specialization, a `constexpr std::meta::info` | pass | skip (no P2996) |
 
   Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
@@ -287,6 +288,17 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   `extraData`.
 - D: no call-site declaration subprograms above `-O0` (the call site
   DIE gap above).
+- D: a thunk's `DISubprogram` has a `scopeLine` (clang: none), its `this`
+  reload has no location and its `ret` is at the method's line (clang:
+  line 0 throughout, `generateThunk`'s artificial location)
+  (`debuginfo/func.rs:130`, `di_prologue_end`). Found by WP-1372; its
+  tests avoid thunks.
+- D: no `!heapallocsite` on the call of a `new` expression's allocation
+  function (clang `addHeapAllocSiteMetadata`). Found by WP-1372.
+- D (clang 22 only): no `_vtable$` static member and no
+  `DIGlobalVariableExpression` attached to a vtable (clang 21's vtable
+  debug info); the clang-22 IR lane drops metadata, and gdb shows the
+  same values. Found by WP-1372.
 
 ## Follow-ups
 

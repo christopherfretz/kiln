@@ -47,12 +47,22 @@ fn kiln_ir_for(src: &str, llvm_major: u32) -> Result<String, String> {
 
 /// [`kiln_ir_for`] at `-fclang-compat=<clang_compat>`.
 fn kiln_ir_compat(src: &str, llvm_major: u32, clang_compat: u32) -> Result<String, String> {
+    kiln_ir_arch(src, Arch::AArch64, llvm_major, clang_compat)
+}
+
+/// [`kiln_ir_compat`] for target `arch`.
+fn kiln_ir_arch(
+    src: &str,
+    arch: Arch,
+    llvm_major: u32,
+    clang_compat: u32,
+) -> Result<String, String> {
     let sm = SourceManager::new();
     let file = sm.add_virtual("t.cpp", src.to_owned()).expect("location space");
     let interner = Arc::new(Interner::new());
     let sink = MemorySink::new();
     let engine = DiagEngine::new(&sm, &DiagOptions::default(), sink.clone());
-    let target = Target::for_arch(Arch::AArch64);
+    let target = Target::for_arch(arch);
     let mut tu = parse_tu(
         &sm,
         &interner,
@@ -147,6 +157,113 @@ fn hand_written_coro_id() {
                  __builtin_coro_id(0, nullptr, nullptr, nullptr); }";
     let e = kiln_ir(twice).expect_err("second coro.id");
     assert!(e.contains("only one __builtin_coro_id can be used in a function"), "{e}");
+}
+
+/// A coroutine library and parameters of each ABI kind for the
+/// `!coro.outside.frame` tests (WP-1374).
+const CORO_PARAMS: &str = "\
+namespace std {\n\
+template <class R, class...> struct coroutine_traits { using promise_type = typename R::promise_type; };\n\
+template <class P = void> struct coroutine_handle {\n\
+  void* p;\n\
+  static coroutine_handle from_address(void* a) noexcept { return {a}; }\n\
+  void* address() const noexcept { return p; }\n\
+};\n\
+struct suspend_always {\n\
+  bool await_ready() const noexcept { return false; }\n\
+  template <class H> void await_suspend(H) const noexcept {}\n\
+  void await_resume() const noexcept {}\n\
+};\n\
+}\n\
+struct task {\n\
+  struct promise_type {\n\
+    task get_return_object() { return {}; }\n\
+    std::suspend_always initial_suspend() noexcept { return {}; }\n\
+    std::suspend_always final_suspend() noexcept { return {}; }\n\
+    void return_void() {}\n\
+    void unhandled_exception() {}\n\
+  };\n\
+};\n\
+struct NT { int x; NT(int); NT(NT&&); ~NT(); };\n\
+struct [[clang::trivial_abi]] TA { long x; TA(long); TA(TA&&); ~TA(); };\n\
+struct TC { int a, b; };\n\
+struct Big { long a, b, c, d, e; };\n\
+struct E {};\n\
+void use(int);\n\
+task f(NT n, TA t, TC c, int i, int& r, Big b, E e, double d, int&& rr) {\n\
+  co_await std::suspend_always{}; use(n.x + t.x + c.a + i + r + b.a + d + rr); }\n\
+struct S { int m; task mem(int i) { co_await std::suspend_always{}; use(m + i); } };\n\
+task S_inst(S& s) { return s.mem(1); }\n\
+auto lam = [k = 5](int i) -> task { co_await std::suspend_always{}; use(k + i); };\n\
+task lam_inst() { return lam(2); }\n\
+auto lam2 = [k = 5](this auto self, int i) -> task { co_await std::suspend_always{}; use(k + i); };\n\
+task lam2_inst() { return lam2(2); }\n\
+struct T { int m; task star() { return [*this](this auto self) -> task {\n\
+  co_await std::suspend_always{}; use(m); }(); } };\n\
+task T_inst(T& t) { return t.star(); }\n\
+int plain(TA t, int i) { return i; }\n\
+";
+
+/// The types of function `name`'s allocas that carry `!coro.outside.frame`.
+fn outside_frame(ir: &str, name: &str) -> Vec<String> {
+    let start = ir
+        .lines()
+        .position(|l| l.starts_with("define ") && l.contains(&format!("@{name}(")))
+        .unwrap_or_else(|| panic!("no definition of {name}: {ir}"));
+    ir.lines()
+        .skip(start + 1)
+        .take_while(|l| *l != "}")
+        .filter(|l| l.contains(" = alloca ") && l.contains("!coro.outside.frame"))
+        .map(|l| {
+            let t = l.split(" = alloca ").nth(1).unwrap_or("");
+            t.split(',').next().unwrap_or("").to_owned()
+        })
+        .collect()
+}
+
+/// [dcl.fct.def.coroutine]/13 (WP-1374): a coroutine's own parameter
+/// allocas stay outside its frame, as clang 22 marks them (clang 19
+/// marks none; kiln marks them at every compat level): each parameter
+/// passed directly or coerced (including a reference's pointer and a
+/// callee-destroyed `trivial_abi` class), not the spill of one passed
+/// indirectly, not `this`, not an ordinary function's, and not the
+/// explicit object parameter of a lambda capturing `*this` (its body
+/// reaches the captured object through it). Both targets: on x86-64 `Big`
+/// is `byval` (no alloca), on `AArch64` it is a pointer whose spill stays
+/// in the frame.
+#[test]
+fn coroutine_parameter_allocas_outside_the_frame() {
+    let direct = ["%struct.TA", "%struct.TC", "%struct.E", "i32", "ptr", "double", "ptr"];
+    for arch in [Arch::AArch64, Arch::X86_64] {
+        for compat in [19, 22] {
+            let ir = kiln_ir_arch(CORO_PARAMS, arch, CodegenOptions::default().llvm_major, compat)
+                .expect("lowers");
+            let at = format!("{arch:?} compat {compat}");
+            assert_eq!(outside_frame(&ir, "_Z1f2NT2TA2TCiRi3Big1EdOi"), direct, "{at}: {ir}");
+            assert_eq!(outside_frame(&ir, "_ZN1S3memEi"), ["i32"], "{at}: {ir}");
+            assert_eq!(outside_frame(&ir, "\"_ZNK3$_0clEi\""), ["i32"], "{at}: {ir}");
+            assert_eq!(
+                outside_frame(&ir, "\"_ZNH3$_1clIS_EE4taskT_i\""),
+                ["%class.anon.0", "i32"],
+                "{at}: {ir}"
+            );
+            for none in ["_Z5plain2TAi", "_Z6S_instR1S"] {
+                assert!(outside_frame(&ir, none).is_empty(), "{at} {none}: {ir}");
+            }
+            let star = ir
+                .lines()
+                .find(|l| {
+                    l.starts_with("define ")
+                        && l.contains("ZZN1T4starEv")
+                        && l.contains("clI")
+                        && !l.contains("wrapper")
+                })
+                .and_then(|l| l.split('@').nth(1))
+                .and_then(|l| l.split('(').next())
+                .unwrap_or_else(|| panic!("the *this lambda: {ir}"));
+            assert!(outside_frame(&ir, star).is_empty(), "{at}: {ir}");
+        }
+    }
 }
 
 /// `-moutline-atomics`: clang 19 enables the feature by default only when

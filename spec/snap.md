@@ -218,18 +218,23 @@ fields, or configuration owned by the consumer's command line. A root:
    the ids and locations that adding the same content to the original
    would.
 
-The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
-`kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
-"Snapshots" states their behaviour.
+The roots so far:
 
-Roots so far: the pilots; `kiln_diag::DiagEngine` and
-`kiln_pp::Preprocessor` (configured, WP-1379); `kiln_ast::Ast` with
-`TypeContext`, `ConstStore` and `StringPool` (WP-1380); `kiln_oven::Oven`
-(WP-1381); `kiln_sema::Sema` (configured, WP-1382, spec/sema.md §8b).
-A *configured* root borrows or is configured by the consumer: it is not
-`Snap`, but has `snap_put(&self, &mut Writer)`, `snap_restore(&mut self,
-&mut Reader)` applied to a fresh object the consumer built, and
-`snap_schema`; it also says when it is at rest (`snapshot_ready`).
+- `kiln_source::SourceManager` (`src/manager/snap.rs`) and
+  `kiln_source::symbol::Interner` (`src/symbol/snap.rs`), the pilots;
+  spec/source.md "Snapshots" states their behaviour.
+- `kiln_ast::Ast` (`src/ast/snap.rs`) with `TypeContext` and its
+  `KeyedTable`, `ArgTable`, `ProfileTable` (`src/types/snap.rs`),
+  `ConstStore` (`src/consts/snap.rs`), `StringPool` (`src/strings.rs`)
+  and `ColdMap` (`src/slot.rs`); spec/ast.md §17 states their behaviour.
+  `kiln_abi`'s target and layout types derive `Snap` (no root).
+
+- `kiln_sema::Sema` (`src/snap.rs`), a *configured* root (WP-1382;
+  spec/sema.md §8b): it borrows the diagnostics engine and holds the
+  consumer's options, so it is not `Snap` but has `snap_put(&self, &mut
+  Writer)`, `snap_restore(&mut self, &mut Reader)` applied to a fresh
+  object the consumer built, `snap_schema`, and a quiescence check
+  (`snapshot_ready`). Its AST and Oven are written by their own roots.
 
 What the Sema root (WP-1382) added to the recipe:
 
@@ -276,6 +281,21 @@ What the Sema root (WP-1382) added to the recipe:
 6. Do not call the encoding from the compiler until the snapshot
    container (WP-1283 later phases) wires it in.
 
+Gaps the recipe does not cover (met in `kiln_ast`, WP-1380):
+
+- **A `hashbrown::HashTable` of ids** whose keys live in other arenas
+  has no impl: its owner writes nothing for it and rebuilds it. When not
+  every id is in the table (reserved slots, uninterned nodes), write the
+  list of absent ids so that membership is exact after the rebuild.
+- **`&'static str` fields** (names of compiled-in tables) have no impl:
+  write the string and resolve it against the list of known names on
+  read (`kiln_ast::slot::ColdMap`).
+- **Records with ids as operands** are not range-checked by the derive;
+  validating them needs a per-kind walk the root has to write by hand.
+- **Links to state outside the root** (source locations, ids into
+  another crate's tables) are not checked by the encoding: the consumer
+  must put the roots they point into in the same snapshot.
+
 ## Performance
 
 Hand-run (`cargo run --release -p kiln_snap --example snap_bench`), best
@@ -303,6 +323,11 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
   prefixes and a `<meta>` prefix: encode, decode, encode; the original and
   the restored state continue a main file identically; quiescence;
   corruption.
+- `crates/kiln_driver/src/snap_tests.rs`: the AST of real prefixes
+  (`bench/pch` mid, gnu, lcx; a GCC 16 `<meta>` prefix) round-trips with
+  the same `-fdump-ast`, canonical bytes and interning; truncations and
+  bit flips of the mid snapshot never panic. The test-only hook is in
+  `syntax_cmd.rs`.
 
 ## Open questions
 

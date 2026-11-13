@@ -663,9 +663,16 @@ impl Cg<'_> {
             }
             a
         });
+        // WP-1374: a coroutine's own parameter allocas stay outside the
+        // coroutine frame (clang 22 `EmitParmDecl`; clang 19 marks none).
+        let coro_params = self.coro_param_allocas(d, body, thunk.is_some());
         for (&p, val) in param_decls.iter().zip(vals) {
             let pq = ast.decls.get(p).ty().expect("param type");
             dn += 1;
+            let direct_alloca = matches!(
+                val,
+                ParamVal::Direct(_) | ParamVal::Indirect(Addr { v: V::I(_), .. }, false)
+            );
             let (addr, slot) = match val {
                 ParamVal::Indirect(a, spill) => {
                     let mut slot = VarSlot { addr: a.v, arg: Some(dn), deref: false };
@@ -685,6 +692,9 @@ impl Cg<'_> {
                     (addr, VarSlot { addr: a, arg: Some(dn), deref: false })
                 }
             };
+            if direct_alloca && coro_params.is_some_and(|c| c.outside(p)) {
+                self.mark_coro_outside_frame(addr.v);
+            }
             if declare {
                 self.di_declare_var(p, slot);
             }

@@ -273,6 +273,8 @@ impl SyntaxJob<'_> {
         }
         result.output.push_str(&tu.cfg_dump);
         let ast = tu.ast;
+        #[cfg(test)]
+        let ast = crate::snap_tests::observe(ast, sm, main_id);
         if a.dump_record_layouts {
             // clang prints each class as Sema completes it, before any
             // AST dump at the end of the translation unit.

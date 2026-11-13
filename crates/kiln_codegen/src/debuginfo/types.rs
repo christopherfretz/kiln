@@ -494,6 +494,9 @@ impl Cg<'_> {
         Some(self.di_fn_type(fp, this))
     }
 
+    /// clang `getTypeIdentifier`: none for a dynamic class whose vtable
+    /// has LLVM `external` linkage (`needsTypeIdentifier`), whether this
+    /// unit defines it (key function here) or only declares it.
     fn di_type_ident(&mut self, rd: Option<DeclId>, q: QualType) -> String {
         let ast = self.ast;
         let q = QualType::unqual(q.ty());
@@ -503,7 +506,10 @@ impl Cg<'_> {
         if let Some(rd) = rd
             && self.class_def(rd).is_some()
             && self.is_dynamic(rd)
-            && self.vtable_linkage(rd) == crate::vtable::VtLinkage::External
+            && matches!(
+                self.vtable_linkage(rd),
+                crate::vtable::VtLinkage::External | crate::vtable::VtLinkage::Strong
+            )
         {
             return String::new();
         }
