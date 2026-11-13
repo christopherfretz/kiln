@@ -10,7 +10,7 @@ use crate::ids::{DeclId, ExprId, ProfileId, QualType};
 /// regparm(3)`
 /// (spec/types.md §5.4). Built with the
 /// `with_*` methods.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct FuncInfo(u16);
 
 impl FuncInfo {
@@ -195,7 +195,7 @@ impl fmt::Debug for FuncInfo {
 
 /// A list of types in the context's `type_lists` arena (dynamic exception
 /// specifications), made by `TypeContext::type_list`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TypeList {
     pub(crate) start: u32,
     pub(crate) len: u32,
@@ -219,7 +219,7 @@ impl TypeList {
 }
 
 /// The evaluated value of a `noexcept(expr)` operand.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum NoexceptValue {
     /// `noexcept(false)`: potentially throwing.
     False,
@@ -230,7 +230,7 @@ pub enum NoexceptValue {
 }
 
 /// An exception specification (spec/types.md §5.4), decoded.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 pub enum ExcSpec {
     /// Potentially throwing (no specification; the canonical form of
     /// `noexcept(false)` and of pre-C++17 specifications).
@@ -286,7 +286,7 @@ impl ExcSpec {
 }
 
 /// A function prototype's side record: 16 bytes (spec/types.md §5.4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct FuncProto {
     pub(crate) ret: QualType,
     pub(crate) params: u32,

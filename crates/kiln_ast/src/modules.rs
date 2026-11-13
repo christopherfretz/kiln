@@ -8,7 +8,7 @@ use kiln_source::fx::FxHashMap;
 use crate::ids::DeclId;
 
 /// The kind of a translation unit or imported unit ([module.unit]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
 pub enum UnitKind {
     /// A translation unit with no module declaration.
     #[default]
@@ -38,7 +38,7 @@ impl UnitKind {
 }
 
 /// One unit: the main file (unit 0) or an imported unit.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub struct UnitInfo {
     /// The key the preprocessor gave the unit (module name, `M:P`, or `"`
     /// and a header path); empty for unit 0.
@@ -57,7 +57,7 @@ pub struct UnitInfo {
 }
 
 /// The owner of a declaration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
 pub struct Owner {
     /// The unit (index into [`ModuleTable::units`]).
     pub unit: u16,
@@ -68,7 +68,7 @@ pub struct Owner {
 }
 
 /// Units and declaration ownership.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub struct ModuleTable {
     /// The units; unit 0 is the main file.
     pub units: Vec<UnitInfo>,

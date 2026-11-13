@@ -16,7 +16,7 @@ impl ArgListId {
 }
 
 /// The kind of a template argument.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ArgKind {
     /// No argument (placeholder in partially deduced lists).
@@ -42,7 +42,7 @@ pub enum ArgKind {
 }
 
 /// One template argument: 12 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TemplateArg {
     pub(crate) kind: ArgKind,
     pub(crate) a: u32,
@@ -137,20 +137,20 @@ impl TemplateArg {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ListEntry {
-    start: u32,
-    len: u32,
-    canon: u32,
-    flags: TypeFlags,
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
+pub(super) struct ListEntry {
+    pub(super) start: u32,
+    pub(super) len: u32,
+    pub(super) canon: u32,
+    pub(super) flags: TypeFlags,
 }
 
 /// The argument arena and the list intern table.
 #[derive(Debug)]
 pub(crate) struct ArgTable {
-    args: Vec<TemplateArg>,
-    lists: Vec<ListEntry>,
-    intern: InternTable,
+    pub(super) args: Vec<TemplateArg>,
+    pub(super) lists: Vec<ListEntry>,
+    pub(super) intern: InternTable,
 }
 
 impl ArgTable {

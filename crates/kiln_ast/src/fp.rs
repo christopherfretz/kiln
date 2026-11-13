@@ -10,7 +10,7 @@
 
 /// When `a * b + c` may be fused ([expr.pre]/6, C23 7.12.2;
 /// `-ffp-contract=`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, kiln_snap::Snap)]
 pub enum FpContract {
     /// Never (`off`).
     Off,
@@ -24,7 +24,7 @@ pub enum FpContract {
 /// The FP semantics in effect (clang `FPOptions`, the fields kiln
 /// implements; the FENV ones are rejected, spec/codegen.md). The default
 /// is clang's for C++ on Linux: `fp_contract(on)` and `errno`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "LLVM's fast-math flags")]
 pub struct FpOptions {
     /// Contraction.
@@ -75,7 +75,7 @@ pub mod fp_bit {
 /// Some [`FpOptions`] fields set by pragmas (clang `FPOptionsOverride`):
 /// the fields in `mask` take their value from `vals`, the others the
 /// command line's.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, kiln_snap::Snap)]
 pub struct FpOverride {
     /// The [`fp_bit`]s set.
     pub mask: u16,

@@ -1303,3 +1303,47 @@ whose function name changes per specialization (sema, §5.8).
 a `DeclRefExpr` to a variable captured by copy in a lambda whose
 explicit object parameter has a dependent type ([temp.dep.expr]/3;
 sema-lambda.md §4.4).
+
+## 17. Snapshots (WP-1380)
+
+`Ast` is a `kiln_snap` root (spec/snap.md "Hand-written roots"); the
+encoding is not called by the compiler yet. `crates/kiln_ast/src/ast/snap.rs`,
+`types/snap.rs`, `consts/snap.rs` and `strings.rs` hold the hand-written
+impls and their classification tables; every other table derives `Snap`.
+
+- **State** (written as data): every arena and side table of
+  `DeclArena`, `ExprArena`, `StmtArena`, `AttrArena`, `AnnotArena`,
+  `IdLists`; the type context's node, canonical, side and name arenas,
+  argument lists and expression profiles; the constant pools; the string
+  bytes and entries; names, lookup sets, redeclarations, templates,
+  reflections, modules, contract sites, the instantiation meter, the
+  journals; the shared `Arc<Interner>`. Hash maps are written as entries.
+  **Every cache is state**: record layouts, class virtuals, vtable
+  layouts and comparison categories are recomputable, but `-fdump-ast`
+  prints cached layouts only and the categories record a check already
+  diagnosed, so dropping them is observable.
+- **Rebuilt** on read: the type context's intern tables (types,
+  template names, nested-name-specifiers, argument lists, profiles) from
+  the arenas plus the list of ids that were never interned (reserved
+  nodes, VLA types), inserted in id order; the constant store's intern
+  table; the string pool's table. A later intern of existing content
+  returns the old id, and new content gets the id it would have got in
+  the original.
+- **Transient**: `TypeContext.profile_scratch` (reset).
+- **Validated** on read (an `Invalid` error, never a panic): arena
+  lengths agree (dummies present, `functions`/`min_args` paired), every
+  node's payload or side index is inside the table it indexes, type
+  lists and canonical links are in range, node kinds are known, every
+  constant decodes and passes the interning checks, string entries lie
+  in the byte pool. Ids stored inside records as operands are not
+  range-checked yet: a query that follows one out of range panics.
+- **Links out of the AST**: `Loc`, `Span` and `FileId` into the
+  `SourceManager` (a separate root, which must be in the same snapshot);
+  `Reflectee::DataMemberSpec(DmsId)` into the Oven's `DmsTable` (the
+  `ReflectionTable.dms` copy exists only after codegen's `set_dms`);
+  builtin ids in the cold decl maps into the compiled-in builtin tables
+  (same binary only); the journals' readers are sema's side indexes.
+
+Tests: `crates/kiln_driver/src/snap_tests.rs` (round trips of the
+`bench/pch` prefixes and a GCC 16 `<meta>` prefix, corruption), and
+`largest_records_are_fixed_size` in `types/snap.rs`.

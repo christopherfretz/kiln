@@ -9,7 +9,7 @@ use crate::ids::{QualType, TypeId};
 
 /// The "fast" cv-qualifiers carried in a [`QualType`]'s low bits
 /// (spec/types.md §2). `RESTRICT` is GNU `__restrict`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct Quals(u8);
 
 impl Quals {
@@ -143,7 +143,7 @@ impl QualType {
 
 /// Per-node flags, computed at construction as the union over operands
 /// plus the node's own contribution (spec/types.md §6).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
 pub struct TypeFlags(u8);
 
 impl TypeFlags {
@@ -279,7 +279,7 @@ impl fmt::Debug for TypeFlags {
 }
 
 /// The kind of a type node (spec/types.md §5). `u8`-sized.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum TypeKind {
     /// Index 0 of the node arena; never handed out.
@@ -456,7 +456,7 @@ macro_rules! builtins {
         /// The builtin types, pre-interned at fixed ids 1..=90 in this
         /// order (spec/types.md §5.1). The discriminant is the `TypeId`
         /// index.
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, kiln_snap::Snap)]
         #[repr(u8)]
         pub enum BuiltinType {
             $($(#[$doc])* $variant = $id,)*
@@ -830,7 +830,7 @@ impl BuiltinType {
 }
 
 /// The keyword of an elaborated or dependent type name.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum TagKeyword {
     /// No keyword written.
@@ -879,7 +879,7 @@ impl TagKeyword {
 }
 
 /// The flavor of a vector type.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum VectorKind {
     /// GNU `vector_size`.
@@ -918,7 +918,7 @@ impl VectorKind {
 }
 
 /// The keyword of a placeholder type.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum AutoKeyword {
     /// `auto`.
@@ -953,7 +953,7 @@ macro_rules! unary_transforms {
     ($($variant:ident = $v:literal, $name:literal;)*) => {
         /// The clang unary type-transform builtins (`__underlying_type`,
         /// `__remove_cvref`, ...), which libc++ 19 uses when available.
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
         #[repr(u8)]
         pub enum UnaryTransformKind {
             $(#[doc = concat!("`", $name, "`.")] $variant = $v,)*
@@ -996,7 +996,7 @@ unary_transforms! {
 /// conventions written through attributes produce anything but `Default`;
 /// conventions a target ignores (clang's "calling convention is not
 /// supported for this target" warning) stay `Default` (spec/types.md §5.4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum CallConv {
     /// The target's default convention.
@@ -1082,7 +1082,7 @@ impl CallConv {
 }
 
 /// A method's ref-qualifier.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum RefQual {
     /// None written.
@@ -1095,7 +1095,7 @@ pub enum RefQual {
 }
 
 /// Type attributes kept as `Attributed` sugar.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u16)]
 pub enum TypeAttrKind {
     /// `_Nonnull`.

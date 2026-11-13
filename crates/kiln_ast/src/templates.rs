@@ -31,7 +31,7 @@ use crate::types::{ArgView, TemplateArg, TypeFlags, TypeKind};
 
 /// A template parameter list ([temp.pre]/1): `template < params >
 /// requires-clause?`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct TemplateParamList {
     /// The `template` keyword.
     pub template_loc: Loc,
@@ -53,7 +53,7 @@ pub struct TemplateParamList {
 /// `VarTemplate`, `TypeAliasTemplate`, `Concept`) templates. Indexed by
 /// the template decl's inline payload and its pattern's
 /// [`TemplLink::Pattern`] index.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct TemplateInfo {
     /// The template decl itself.
     pub decl: DeclId,
@@ -66,7 +66,7 @@ pub struct TemplateInfo {
 }
 
 /// A template parameter's position and form ([temp.param]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct TemplateParmInfo {
     /// The depth (number of enclosing non-empty template parameter lists).
     pub depth: u16,
@@ -89,7 +89,7 @@ pub struct TemplateParmInfo {
 /// The kind of a template template parameter ([temp.param]/1): a
 /// type-tt-parameter (`class`/`typename`), a variable-tt-parameter
 /// (`auto`) or a concept-tt-parameter (`concept`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub enum TtpKind {
     /// `template <...> class P` ([temp.param]/1 type-tt-parameter).
     #[default]
@@ -101,7 +101,7 @@ pub enum TtpKind {
 }
 
 /// A requirement of a requires-expression ([expr.prim.req]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum Requirement {
     /// `expr ;` ([expr.prim.req.simple]).
     Simple(ExprId),
@@ -124,7 +124,7 @@ pub enum Requirement {
 }
 
 /// A requires-expression's body and requirements.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct RequiresData {
     /// The `RequiresExprBody` decl holding the parameters.
     pub body: DeclId,
@@ -136,7 +136,7 @@ pub struct RequiresData {
 
 /// How a specialization came to be (spec/ast.md §8.2, clang's
 /// `TemplateSpecializationKind`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum SpecKind {
     /// Named (`X<int>`) but neither instantiated nor explicitly
@@ -155,7 +155,7 @@ pub enum SpecKind {
 /// A class, function or variable template specialization (24 bytes,
 /// spec/ast.md §8.2). Indexed by the specialization's
 /// [`TemplLink::Specialization`] payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct SpecInfo {
     /// The primary template (its first declaration).
     pub template: DeclId,
@@ -182,7 +182,7 @@ pub struct SpecInfo {
 /// A member of a class template specialization (12 bytes, clang's
 /// `MemberSpecializationInfo`). Indexed by the member's
 /// [`TemplLink::MemberOfSpecialization`] payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct MemberSpecInfo {
     /// The member of the pattern it was instantiated from.
     pub instantiated_from: DeclId,
@@ -195,7 +195,7 @@ pub struct MemberSpecInfo {
 /// The prefilter shape of one argument of a partial specialization
 /// (sema-templates.md §4.4), computed when the partial is declared: a
 /// candidate whose argument does not fit is skipped without deduction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum ArgShape {
     /// Any argument (a dependent one, or one at or after a pack
     /// expansion).
@@ -257,7 +257,7 @@ impl ArgShape {
 /// [`TemplLinkKind::PartialSpecialization`] link to this record. It has
 /// no template decl of its own (as clang: `getDescribedClassTemplate` is
 /// null), so [`Ast::described_template`] is `None` for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct PartialSpecInfo {
     /// The partial specialization's record (its first declaration).
     pub partial: DeclId,
@@ -277,7 +277,7 @@ pub struct PartialSpecInfo {
 }
 
 /// Template tables (spec/ast.md §8, M3).
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct TemplateTables {
     param_lists: Vec<TemplateParamList>,
     infos: Vec<TemplateInfo>,

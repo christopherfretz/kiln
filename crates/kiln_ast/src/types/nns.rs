@@ -11,7 +11,7 @@ use crate::ids::{DeclId, ExprId, NnsId, QualType, RawId};
 use kiln_source::symbol::Symbol;
 
 /// One component of a nested-name-specifier.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum Nns {
     /// `::`
     Global,
@@ -52,7 +52,7 @@ pub enum Nns {
 }
 
 /// The kind of an [`Nns`] component.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs)]
 pub enum NnsKind {

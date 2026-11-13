@@ -25,7 +25,7 @@ use props::max_align_attr;
 pub use subobject::{MAX_SUBOBJECTS, subobjects};
 
 /// Size and alignment of a type, in bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TypeLayout {
     /// `sizeof` (0 for incomplete arrays, `void` and functions).
     pub size: u64,
@@ -45,7 +45,7 @@ impl Info {
 }
 
 /// What a field contributes to the empty-subobject map.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum FieldTarget {
     /// Not a class or array of class (or a bit-field).
     None,
@@ -56,7 +56,7 @@ pub(crate) enum FieldTarget {
 }
 
 /// Everything computed for one class.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent class facts")]
 pub(crate) struct RecordFacts {
     pub layout: RecordLayout,
@@ -128,7 +128,7 @@ impl RecordFacts {
 /// it for complete classes only (a complete class's layout, and that of
 /// every class it contains by value, is final for the rest of the
 /// translation unit).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct LayoutCache {
     records: FxHashMap<DeclId, RecordFacts>,
 }

@@ -7,7 +7,7 @@ use crate::ids::{ListId, RawId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 
 /// The list arena. Index 0 is the dummy; index 1 is [`ListId::EMPTY`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kiln_snap::Snap)]
 pub struct IdLists {
     spans: Vec<(u32, u32)>,
     data: Vec<u32>,
@@ -111,6 +111,21 @@ impl HeapSize for IdLists {
         r.push(MemRow::of_vec("spans", &self.spans));
         r.push(MemRow::of_vec("data", &self.data));
         r
+    }
+}
+
+impl IdLists {
+    /// The checks of decoded lists (spec/ast.md "Snapshots"): the two
+    /// reserved spans present and every span inside the data.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let IdLists { spans, data } = self;
+        if spans.len() < 2
+            || spans.len() > ListId::MAX_INDEX as usize + 1
+            || spans.iter().any(|&(s, l)| u64::from(s) + u64::from(l) > data.len() as u64)
+        {
+            return Err("id list out of range");
+        }
+        Ok(())
     }
 }
 

@@ -1,5 +1,7 @@
 //! The [`Ast`]: every arena of a translation unit (spec/ast.md §2.2).
 
+mod snap;
+
 use std::sync::Arc;
 
 use kiln_source::symbol::Interner;
@@ -93,7 +95,7 @@ pub struct Ast {
 
 /// Bytes appended to the AST node arenas while instantiating (spec/ast.md
 /// §13 Q6, §15): reported as the `instantiation.retained` row.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 struct InstantiationMeter {
     depth: u32,
     start: u64,

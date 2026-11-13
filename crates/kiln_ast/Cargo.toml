@@ -10,6 +10,7 @@ license.workspace = true
 kiln_source.workspace = true
 kiln_diag.workspace = true
 hashbrown.workspace = true
+kiln_snap.workspace = true
 
 [features]
 # Selects the std-only fallback `InternTable` for type interning instead of

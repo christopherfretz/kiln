@@ -4,7 +4,7 @@
 #![warn(missing_docs)]
 
 /// A set of sanitizers: one bit per [`SANITIZERS`] entry.
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct SanitizerSet(pub u64);
 
 macro_rules! sanitizers {

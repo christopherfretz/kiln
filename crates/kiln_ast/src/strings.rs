@@ -22,7 +22,7 @@ use crate::ids::StringLitId;
 use crate::mem::{HeapSize, MemReport, MemRow};
 
 /// The encoding (and code-unit width) of a string literal.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum StringEncoding {
     /// `"..."`: ordinary literal, 1-byte `char` units (execution charset).
@@ -61,7 +61,7 @@ impl StringEncoding {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Entry {
     start: u32,
     len: u32,
@@ -290,6 +290,57 @@ impl HeapSize for StringPool {
             self.table.allocation_size() as u64,
         ));
         r
+    }
+}
+
+/// The string pool as a snapshot root (spec/ast.md "Snapshots"):
+///
+/// | field | class | how |
+/// |---|---|---|
+/// | `bytes`, `entries` | state | as data |
+/// | `table` | rebuilt | every literal is interned: re-inserted in id order, so a later intern of existing bytes returns the old id |
+///
+/// Validation on read: every entry's bytes inside the pool and a whole
+/// number of code units.
+impl kiln_snap::Snap for StringPool {
+    fn put(&self, w: &mut kiln_snap::Writer) {
+        let StringPool { bytes, entries, table: _ } = self;
+        bytes.put(w);
+        entries.put(w);
+    }
+
+    fn get(r: &mut kiln_snap::Reader<'_>) -> Result<Self, kiln_snap::SnapError> {
+        let bytes: Vec<u8> = r.get().map_err(|e| e.within("StringPool.bytes"))?;
+        let entries: Vec<Entry> = r.get().map_err(|e| e.within("StringPool.entries"))?;
+        let bad = entries.len() >= StringLitId::MAX_INDEX as usize
+            || entries.iter().any(|e| {
+                u64::from(e.start) + u64::from(e.len) > bytes.len() as u64
+                    || !e.len.is_multiple_of(e.enc.unit_bytes())
+            });
+        if bad {
+            return Err(r.invalid::<Self>("string literal outside the pool"));
+        }
+        let slice = |e: &Entry| &bytes[e.start as usize..e.start as usize + e.len as usize];
+        let mut table = HashTable::with_capacity(entries.len());
+        for (i, e) in entries.iter().enumerate() {
+            let id = StringLitId::new(i as u32 + 1);
+            table.insert_unique(hash(e.enc, slice(e)), id, |&id| {
+                let e = &entries[id.index() as usize - 1];
+                hash(e.enc, slice(e))
+            });
+        }
+        Ok(StringPool { bytes, entries, table })
+    }
+
+    fn schema(s: &mut kiln_snap::Schema) {
+        let d = kiln_snap::Desc::new("root")
+            .field::<Vec<u8>>("bytes")
+            .field::<Vec<Entry>>("entries")
+            .skip::<HashTable<StringLitId>>("table");
+        if s.register::<Self>(d) {
+            <Vec<u8> as kiln_snap::Snap>::schema(s);
+            <Vec<Entry> as kiln_snap::Snap>::schema(s);
+        }
     }
 }
 

@@ -12,7 +12,7 @@
 #![warn(missing_docs)]
 
 /// A bounded event log, off until [`Journal::start`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kiln_snap::Snap)]
 pub struct Journal<T> {
     on: bool,
     overflowed: bool,

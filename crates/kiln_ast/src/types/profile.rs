@@ -13,20 +13,20 @@ use super::kinds::TypeFlags;
 use crate::ids::{ExprId, ProfileId};
 use crate::mem::{MemReport, MemRow};
 
-#[derive(Clone, Copy, Debug)]
-struct ProfileEntry {
-    start: u32,
-    len: u32,
-    first_expr: Option<ExprId>,
-    flags: TypeFlags,
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
+pub(super) struct ProfileEntry {
+    pub(super) start: u32,
+    pub(super) len: u32,
+    pub(super) first_expr: Option<ExprId>,
+    pub(super) flags: TypeFlags,
 }
 
 /// The profile arena and its intern table.
 #[derive(Debug)]
 pub(crate) struct ProfileTable {
-    words: Vec<u32>,
-    entries: Vec<ProfileEntry>,
-    intern: InternTable,
+    pub(super) words: Vec<u32>,
+    pub(super) entries: Vec<ProfileEntry>,
+    pub(super) intern: InternTable,
 }
 
 impl ProfileTable {

@@ -119,3 +119,108 @@ impl<K: Copy + Eq + Hash, V> ColdMap<K, V> {
         MemRow::of_map(self.name, &self.map)
     }
 }
+
+/// The name of every [`ColdMap`] of the AST: a decoded map gets its
+/// `&'static str` back from here (spec/ast.md "Snapshots"). A map whose
+/// name is missing still encodes; decoding it is an error, which the
+/// round trip of an empty `Ast` in the snapshot tests reports.
+const COLD_MAP_NAMES: &[&str] = &[
+    "alignment",
+    "annot_bases",
+    "annot_decls",
+    "array_trait",
+    "asm_label",
+    "begin_loc",
+    "binding_decomp",
+    "binding_expr",
+    "binding_var",
+    "builtin_id",
+    "cast_written",
+    "compound_literal",
+    "contract_sites",
+    "contracts",
+    "conversion_spec_target",
+    "ctor_inits",
+    "ctor_shadow_nominated",
+    "decl_attrs",
+    "declarator_end",
+    "decomp_bindings",
+    "default_arg_rewritten",
+    "default_imm",
+    "delete_message",
+    "deprecation",
+    "designators",
+    "dtor_delete",
+    "dtor_delete_this",
+    "end_loc",
+    "explicit_expr",
+    "expr_begin",
+    "expr_nns",
+    "expr_targs",
+    "friends",
+    "gnu_lib_twin",
+    "hidden_shadow",
+    "inherited_ctor",
+    "inheriting_ctor",
+    "injection_point",
+    "instantiated_from",
+    "key_function",
+    "lexical_ctx",
+    "lib_builtin",
+    "member_extra",
+    "member_like_friend",
+    "member_op_loc",
+    "offsetof_pattern",
+    "overrides",
+    "pack_index_origin",
+    "pseudo_dtor_first",
+    "pseudo_dtor_name",
+    "record_pack",
+    "requires_clause",
+    "size_of_pack_origin",
+    "source_loc",
+    "splice_args",
+    "syntactic_list",
+    "template_defaults",
+    "template_inherited_defaults",
+    "template_kw",
+    "trailing_requires",
+    "trait_rhs_loc",
+    "ttp_owner",
+    "typedef_for_anon",
+    "union_field",
+];
+
+/// A cold map is its name and its entries (spec/ast.md "Snapshots"): the
+/// name is written as a string and read back as the matching entry of
+/// [`COLD_MAP_NAMES`].
+impl<K: 'static, V: 'static> kiln_snap::Snap for ColdMap<K, V>
+where
+    FxHashMap<K, V>: kiln_snap::Snap,
+{
+    fn put(&self, w: &mut kiln_snap::Writer) {
+        let ColdMap { name, map } = self;
+        w.str(name);
+        map.put(w);
+    }
+
+    fn get(r: &mut kiln_snap::Reader<'_>) -> Result<Self, kiln_snap::SnapError> {
+        let written = r.str().map_err(|e| e.within("ColdMap.name"))?;
+        let Some(&name) = COLD_MAP_NAMES.iter().find(|&&n| n == written) else {
+            return Err(r.invalid::<Self>(format!("unknown cold map name `{written}`")));
+        };
+        let map = r.get().map_err(|e| e.within("ColdMap.map"))?;
+        Ok(ColdMap { name, map })
+    }
+
+    fn schema(s: &mut kiln_snap::Schema) {
+        let d = kiln_snap::Desc::new("root")
+            .note("ColdMap: name as a string, then the map")
+            .field::<String>("name")
+            .field::<FxHashMap<K, V>>("map");
+        if s.register::<Self>(d) {
+            String::schema(s);
+            <FxHashMap<K, V> as kiln_snap::Snap>::schema(s);
+        }
+    }
+}

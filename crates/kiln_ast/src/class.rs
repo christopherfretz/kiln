@@ -21,7 +21,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 /// in declaration order, then each virtual base (once) in Itanium
 /// inheritance-graph order with its non-virtual subtree (spec/sema-class.md
 /// §3.5). The shared currency of sema, the Oven and codegen.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default, kiln_snap::Snap)]
 pub struct SubobjectId(pub u16);
 
 impl SubobjectId {
@@ -35,7 +35,7 @@ impl SubobjectId {
 }
 
 /// One node of the subobject graph.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct Subobject {
     /// The class of this subobject.
     pub class: DeclId,
@@ -51,7 +51,7 @@ pub struct Subobject {
 
 /// The subobjects and final overriders of a most-derived polymorphic class
 /// ([class.virtual]/2–3).
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct ClassVirtuals {
     /// The subobject graph, indexed by [`SubobjectId`].
     pub subobjects: Vec<Subobject>,
@@ -82,7 +82,7 @@ impl ClassVirtuals {
 }
 
 /// One vtable slot (Itanium C++ ABI §2.5.2).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum VTableComponent {
     /// A vcall offset.
     VCallOffset(i64),
@@ -104,7 +104,7 @@ pub enum VTableComponent {
 }
 
 /// A `this`/return adjustment thunk (Itanium §2.7; clang `ThunkInfo`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 pub struct Thunk {
     /// `this` adjustment: (non-virtual offset, vcall-offset offset; 0 =
     /// none).
@@ -130,7 +130,7 @@ impl Thunk {
 }
 
 /// An Itanium vtable group of a dynamic class (spec/sema-class.md §3.5).
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct VTableLayout {
     /// The slots of the primary and all secondary vtables.
     pub components: Vec<VTableComponent>,
@@ -171,7 +171,7 @@ impl VTableLayout {
 /// One VTT entry (Itanium §2.6.2): the address point of `base`'s vtable in
 /// vtable `vtable_index` (0 = the class's own vtable group, `i > 0` = the
 /// `i`-th construction vtable group).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct VttComponent {
     /// Which vtable group.
     pub vtable_index: u32,
@@ -180,7 +180,7 @@ pub struct VttComponent {
 }
 
 /// An insert-only per-class cache (`Ast::virtuals`, `Ast::vtables`).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct ClassCache<T> {
     map: FxHashMap<DeclId, Box<T>>,
 }
@@ -269,7 +269,7 @@ mod tests {
 /// A comparison category type of `<compare>` ([cmp.categories]), clang's
 /// `ComparisonCategoryType`; ordered from weakest to strongest so that the
 /// common comparison category ([class.spaceship]/4) is the minimum.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, kiln_snap::Snap)]
 pub enum CmpCategory {
     /// `std::partial_ordering`.
     Partial = 0,
@@ -309,7 +309,7 @@ impl CmpCategory {
 }
 
 /// A value of a comparison category type, clang's `ComparisonCategoryResult`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum CmpResult {
     /// `equal`.
     Equal = 0,
@@ -339,7 +339,7 @@ impl CmpResult {
 /// A validated comparison category class (clang's
 /// `ComparisonCategoryInfo`), recorded by sema the first time it is
 /// needed; the Oven and codegen read it to evaluate a builtin `<=>`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CmpCategoryInfo {
     /// The category.
     pub kind: CmpCategory,
@@ -383,7 +383,7 @@ impl CmpCategoryInfo {
 }
 
 /// The validated comparison category classes of the translation unit.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub struct CmpCategories {
     infos: [Option<CmpCategoryInfo>; 3],
 }

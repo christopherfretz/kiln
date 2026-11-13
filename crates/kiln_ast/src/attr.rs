@@ -9,7 +9,7 @@ use crate::slot::ColdMap;
 
 /// An attribute kind. A newtype over `u16` so the list grows without
 /// renumbering; unknown attributes are diagnosed and never stored.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct AttrKind(pub u16);
 
 #[allow(missing_docs, reason = "each constant is named after the attribute it denotes")]
@@ -531,7 +531,7 @@ pub const CC_ATTR_SPELLINGS: [&str; 19] = [
 ];
 
 /// What a loop hint controls (clang `LoopHintAttr::OptionType`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs, reason = "named after clang's options")]
 pub enum LoopHintOption {
@@ -600,7 +600,7 @@ impl LoopHintOption {
 }
 
 /// A loop hint's state (clang `LoopHintAttr::LoopHintState`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs, reason = "named after clang's states")]
 pub enum LoopHintState {
@@ -626,7 +626,7 @@ impl LoopHintState {
 }
 
 /// How a loop hint was spelled (clang's `LoopHintAttr` spellings).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum LoopHintSpelling {
     /// `#pragma clang loop`.
@@ -658,7 +658,7 @@ impl LoopHintSpelling {
 }
 
 /// The `b` word of a [`AttrKind::LOOP_HINT`] attribute.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct LoopHint {
     /// The option.
     pub option: LoopHintOption,
@@ -709,7 +709,7 @@ pub fn attr_name_normalizes(syntax: AttrSyntax, scope: Option<&str>) -> bool {
 }
 
 /// Attribute syntax.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum AttrSyntax {
     /// `[[attr]]`.
@@ -726,7 +726,7 @@ pub enum AttrSyntax {
 }
 
 /// The 16-byte attribute node (spec/ast.md §7).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct AttrNode {
     /// The kind.
     pub kind: AttrKind,
@@ -793,7 +793,7 @@ impl AttrNode {
 }
 
 /// Attribute nodes and the declaration → attributes map.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct AttrArena {
     nodes: Vec<AttrNode>,
     /// The kinds among `nodes`, one bit per [`AttrKind`] (a node's kind

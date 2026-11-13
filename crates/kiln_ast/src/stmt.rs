@@ -11,7 +11,7 @@ use crate::mem::{HeapSize, MemReport, VecDims};
 
 /// Statement kinds (spec/ast.md §6; clang's class names). The numbering is
 /// stable.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs, reason = "named after clang's Stmt classes; see spec/ast.md §6")]
 pub enum StmtKind {
@@ -45,7 +45,7 @@ pub enum StmtKind {
 
 /// The kind of a contract assertion ([basic.contract.general], P2900;
 /// spec/contracts.md §4): `ContractAssertStmt.aux & ContractKind::MASK`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u16)]
 pub enum ContractKind {
     /// An assertion-statement, `contract_assert(p);` ([stmt.contract.assert]).
@@ -94,7 +94,7 @@ impl ContractKind {
 
 /// A contract evaluation semantic ([basic.contract.eval]/1, P2900;
 /// spec/contracts.md §6): `-fcontract-evaluation-semantic=`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub enum ContractSemantic {
     /// The predicate is not evaluated.
     Ignore,
@@ -129,7 +129,7 @@ impl ContractSemantic {
 /// Where a contract assertion is and what it says, for the
 /// `contract_violation` object codegen builds (spec/contracts.md §6.3):
 /// the `const char *` values point to frozen string literal objects.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub struct ContractSite {
     /// The presumed file name of the assertion's keyword.
     pub file: crate::ConstValueId,
@@ -144,7 +144,7 @@ pub struct ContractSite {
 }
 
 /// `IfStmt.aux`: the form of the `if` ([stmt.if]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u16)]
 pub enum IfKind {
     /// `if (c)`.
@@ -159,7 +159,7 @@ pub enum IfKind {
 }
 
 /// The 16-byte statement header (spec/ast.md §6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct StmtNode {
     kind: StmtKind,
     flags: u8,
@@ -202,7 +202,7 @@ impl StmtNode {
 
 /// Side record of an `IfStmt` (the dump's `has_init`, `has_var`,
 /// `has_else` come from the optional slots).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct IfData {
     /// The init-statement.
     pub init: Option<StmtId>,
@@ -217,7 +217,7 @@ pub struct IfData {
 }
 
 /// Side record of a `SwitchStmt`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct SwitchData {
     /// The init-statement.
     pub init: Option<StmtId>,
@@ -232,7 +232,7 @@ pub struct SwitchData {
 }
 
 /// Side record of a `CaseStmt`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CaseData {
     /// The label value (a `ConstantExpr` unless value-dependent).
     pub lhs: ExprId,
@@ -243,7 +243,7 @@ pub struct CaseData {
 }
 
 /// Side record of `WhileStmt`, `DoStmt` and `ForStmt`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct LoopData {
     /// `for` init-statement.
     pub init: Option<StmtId>,
@@ -260,7 +260,7 @@ pub struct LoopData {
 /// Side record of a `CXXForRangeStmt`: clang's desugaring of
 /// [stmt.ranged]/1, every slot kept. `begin`, `end`, `cond` and `inc`
 /// are `None` while the range is type-dependent (a template pattern).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct RangeForData {
     /// The C++20 init-statement.
     pub init: Option<StmtId>,
@@ -285,7 +285,7 @@ pub struct RangeForData {
 
 /// The form of an expansion statement ([stmt.expand]/3, P1306R5):
 /// `CXXExpansionStmt.aux & ExpansionForm::MASK`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u16)]
 pub enum ExpansionForm {
     /// Not known yet: the expansion-initializer is type-dependent.
@@ -332,7 +332,7 @@ impl ExpansionForm {
 /// pattern at the depth in the node's `b`; once expanded, `prelude` and
 /// `expansions` are the statement's code ([stmt.expand]/5) and the
 /// pattern parts are kept only for the dump.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ExpansionData {
     /// The init-statement.
     pub init: Option<StmtId>,
@@ -362,7 +362,7 @@ pub struct ExpansionData {
 /// clang's `CoroutineBodyStmt` slots): the function body as written and
 /// the statements and expressions Sema builds around it. Built only for
 /// a coroutine that is not a template pattern.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CoroutineBodyData {
     /// The function body as written.
     pub body: StmtId,
@@ -406,7 +406,7 @@ pub struct CoroutineBodyData {
 
 /// One operand of a `GCCAsmStmt` ([dcl.asm], GNU extended asm): an
 /// output or input `[name] "constraint" (expr)`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct AsmOperand {
     /// The symbolic name (`[name]`), if any.
     pub name: Option<Symbol>,
@@ -421,7 +421,7 @@ pub struct AsmOperand {
 /// Side record of a `GCCAsmStmt` (GNU extended asm; `aux` bit 0 =
 /// `volatile`, bit 1 = `goto`, bit 2 = `inline`, bit 3 = basic asm
 /// without any `:`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct AsmData {
     /// The assembler template (an ordinary literal).
     pub string: StringLitId,
@@ -459,7 +459,7 @@ pub mod asm_bits {
 }
 
 /// Statement headers and side records. Index 0 of every vector is a dummy.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct StmtArena {
     nodes: Vec<StmtNode>,
     ifs: Vec<IfData>,
@@ -882,5 +882,61 @@ impl HeapSize for StmtArena {
             r.push(row.row());
         }
         r
+    }
+}
+
+impl StmtArena {
+    /// The checks of a decoded arena (spec/ast.md "Snapshots"): every side
+    /// array keeps its dummy, and every header's side index (and every asm
+    /// statement's operand range) is inside its side array.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let StmtArena {
+            nodes,
+            ifs,
+            switches,
+            cases,
+            loops,
+            range_fors,
+            expansions,
+            asms,
+            asm_operands,
+            coros,
+            fp_overrides,
+        } = self;
+        let side = [ifs.len(), switches.len(), cases.len(), loops.len(), range_fors.len()];
+        if nodes.is_empty()
+            || nodes.len() > StmtId::MAX_INDEX as usize + 1
+            || side.contains(&0)
+            || expansions.is_empty()
+            || asms.is_empty()
+            || coros.is_empty()
+            || fp_overrides.is_empty()
+        {
+            return Err("statement arena without its dummies");
+        }
+        if asms.iter().any(|d| {
+            u64::from(d.operands) + u64::from(d.num_outputs) + u64::from(d.num_inputs)
+                > asm_operands.len() as u64
+        }) {
+            return Err("asm operands out of range");
+        }
+        for n in &nodes[1..] {
+            let (i, len) = match n.kind {
+                StmtKind::IfStmt => (n.a, ifs.len()),
+                StmtKind::SwitchStmt => (n.a, switches.len()),
+                StmtKind::CaseStmt => (n.a, cases.len()),
+                StmtKind::WhileStmt | StmtKind::DoStmt | StmtKind::ForStmt => (n.a, loops.len()),
+                StmtKind::CXXForRangeStmt => (n.a, range_fors.len()),
+                StmtKind::CXXExpansionStmt => (n.a, expansions.len()),
+                StmtKind::CoroutineBodyStmt => (n.a, coros.len()),
+                StmtKind::GCCAsmStmt => (n.a, asms.len()),
+                StmtKind::CompoundStmt => (u32::from(n.aux), fp_overrides.len()),
+                _ => continue,
+            };
+            if i as usize >= len {
+                return Err("statement side index out of range");
+            }
+        }
+        Ok(())
     }
 }

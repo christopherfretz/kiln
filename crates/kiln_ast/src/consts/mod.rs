@@ -42,6 +42,7 @@
 mod float;
 pub mod fltstr;
 mod print;
+mod snap;
 mod value;
 
 pub use float::{format_float, format_float_gcc};
@@ -62,7 +63,7 @@ use crate::ids::{ConstValueId, DeclId, QualType, ReflectionId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 
 /// A stored value's fixed-size header.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Node {
     ty: QualType,
     /// Bits 0..4: kind; 4..8: flags; 8..32: `extra` (24 bits).
@@ -120,7 +121,7 @@ impl Node {
 
 /// Per-aggregate pool starts. `aggs[i + 1]` (always present: the vector
 /// ends with a sentinel) gives the ends.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, kiln_snap::Snap)]
 struct AggRec {
     bytes: u32,
     relocs: u32,
@@ -131,7 +132,7 @@ struct AggRec {
 
 /// The pools (everything but the intern table, so the table's rehash
 /// closure can borrow them while the table is borrowed mutably).
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 struct Pools {
     pointer_bytes: u8,
     nodes: Vec<Node>,
