@@ -211,6 +211,46 @@ impl Sema<'_, '_> {
             || self.func.as_ref().is_some_and(|s| self.is_consteval_kind(s.decl))
     }
 
+    /// Whether the expression being built is exempt from the immediate
+    /// invocation checks only because it is in the operand of `typeid`
+    /// (unevaluated until the operand turns out to be a glvalue of
+    /// polymorphic class type, [expr.typeid]/3): its invocations are
+    /// wrapped as in an evaluated context, and [`Sema::act_on_typeid`]
+    /// drops them again when the operand stays unevaluated (clang
+    /// re-transforms the operand instead, `TransformToPotentiallyEvaluated`).
+    fn in_typeid_operand_only(&self) -> bool {
+        self.unevaluated > 0
+            && self.immediate == 0
+            && self.imm.pending.const_eval == 0
+            && !self.func.as_ref().is_some_and(|s| self.is_consteval_kind(s.decl))
+            && self.evaluated_but_for_typeid()
+    }
+
+    /// The operand `e` of a `typeid` that is not evaluated
+    /// ([expr.typeid]/3): the immediate invocations wrapped in it
+    /// ([`Sema::in_typeid_operand_only`]) are no longer pending, and their
+    /// wrappers are hidden as clang never forms them.
+    pub(crate) fn drop_typeid_invocations(&mut self, e: ExprId) {
+        if self.imm.pending.candidates.is_empty() {
+            return;
+        }
+        let mut stack = self.take_walk_stack(e);
+        while let Some(x) = stack.pop() {
+            match self.ast.exprs.get(x).kind() {
+                ExprKind::LambdaExpr => continue,
+                ExprKind::ConstantExpr => {
+                    if let Some(i) = self.imm.pending.candidates.iter().position(|&(c, _)| c == x) {
+                        self.imm.pending.candidates.remove(i);
+                        self.ast.exprs.set_constant_elided(x);
+                    }
+                }
+                _ => {}
+            }
+            self.ast.exprs.children_into(x, &self.ast.lists, &mut stack);
+        }
+        self.put_walk_stack(stack);
+    }
+
     /// Enters a manifestly constant-evaluated context ([expr.const]/22):
     /// a constant-expression (`static_assert`, an array bound, a template
     /// argument, `if constexpr`). Its invocations are not wrapped.
@@ -817,7 +857,9 @@ impl Sema<'_, '_> {
         if let Some(r) = callee_ref {
             self.forget_immediate_ref(r);
         }
-        if self.immediate_exempt() || self.has_errors_in(call) || self.expr_is_value_dependent(call)
+        if (self.immediate_exempt() && !self.in_typeid_operand_only())
+            || self.has_errors_in(call)
+            || self.expr_is_value_dependent(call)
         {
             return call;
         }

@@ -8,6 +8,7 @@
 
 use kiln_ast::attr::{AttrKind, AttrNode, AttrSyntax};
 use kiln_ast::decl::{DeclKind, EnumData, TagKind};
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{ExcSpec, FuncInfo, NoexceptValue, TagKeyword, TypeView};
 use kiln_ast::{AttrId, DeclId, QualType, StmtId};
 use kiln_diag::DiagId;
@@ -409,7 +410,21 @@ impl Sema<'_, '_> {
         if self.kind_of(d).is_function()
             && let Some(prev) = self.ast.prev(d)
         {
-            self.check_noreturn_on_first_decl(prev, attrs);
+            // The first declaration of an explicit specialization is the
+            // one formed from the template: clang gives it the location of
+            // the specialization's first declaration (WP-1236).
+            let formed = self.ast.prev(prev).is_none()
+                && (self
+                    .ast
+                    .spec_info(prev)
+                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+                    || self
+                        .ast
+                        .member_spec_info(prev)
+                        .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization));
+            let at =
+                if formed { self.ast.decls.get(d).loc() } else { self.ast.decls.get(prev).loc() };
+            self.check_noreturn_on_first_decl(prev, at, attrs);
         }
         self.check_tls_model_attrs(d, attrs);
         self.check_visibility_attrs(d, attrs);

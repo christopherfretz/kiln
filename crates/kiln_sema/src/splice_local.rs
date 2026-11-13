@@ -39,7 +39,7 @@ impl Sema<'_, '_> {
     /// effect of every enclosing `typeid` were disregarded: each
     /// unevaluated level of the current lambda body is a `typeid`
     /// operand.
-    fn evaluated_but_for_typeid(&self) -> bool {
+    pub(crate) fn evaluated_but_for_typeid(&self) -> bool {
         let mut u = self.unevaluated;
         let depth = self.lambdas.len();
         for &(l, at) in self.typeid_operands.iter().rev() {

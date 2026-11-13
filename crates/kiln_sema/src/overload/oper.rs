@@ -1160,6 +1160,13 @@ impl Sema<'_, '_> {
         if self.check_undeduced_use(f, loc) {
             return None;
         }
+        // [dcl.attr.deprecated]/4: clang `CreateFunctionRefExpr`
+        // (`DiagnoseUseOfDecl` of the found template, then of the
+        // specialization): a lambda's `[[deprecated]]` call operator too.
+        if self.kind_of(found) == DeclKind::FunctionTemplate {
+            self.warn_deprecated_template_use(found, loc);
+        }
+        self.warn_deprecated_use(f, loc);
         let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
         let proto = self.sugared_proto(fty)?;
         let method = self.kind_of(f) == DeclKind::CXXMethod;

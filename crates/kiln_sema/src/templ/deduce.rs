@@ -178,6 +178,17 @@ pub struct DeducedArgs {
     /// (`template <class T, same_as<T> auto V>`): its type is not this
     /// template's (WP-1217).
     pub params: Option<ListId>,
+    /// Deducing a function template (a call, an address, a declaration,
+    /// or partial ordering): a non-type parameter of a fixed type deduced
+    /// from the argument of a template-id must have that argument's type
+    /// ([temp.deduct.type]/20: `template<int i> void f(A<i>)` does not
+    /// deduce from `A<3ul>`; clang `ConvertDeducedTemplateArgument`,
+    /// `err_deduced_non_type_template_arg_type_mismatch`). The first such
+    /// mismatch, (the argument's type, the parameter's), is recorded in
+    /// `nttp_mismatch` and fails the deduction when it is finished.
+    pub nttp_types: bool,
+    /// See `nttp_types`.
+    pub nttp_mismatch: Option<(QualType, QualType)>,
     /// Where the deduction was requested (the call, the declaration, the
     /// alias template): the location of a diagnostic issued from a step
     /// that has none of its own.
@@ -199,6 +210,8 @@ impl DeducedArgs {
             converted_values: false,
             self_deduce: false,
             params: None,
+            nttp_types: false,
+            nttp_mismatch: None,
             loc: Loc::INVALID,
         }
     }
@@ -751,6 +764,9 @@ impl Sema<'_, '_> {
         match a.view() {
             ArgView::Value { .. } | ArgView::Expr { .. } | ArgView::Profile(_) => {
                 let r = self.record_deduction(parm.index, parm.pack, a, d);
+                if r == Tdk::Success && d.nttp_types && d.nttp_mismatch.is_none() {
+                    d.nttp_mismatch = self.fixed_nttp_type_mismatch(e, a, d);
+                }
                 if r != Tdk::Success || parm.pack {
                     return r;
                 }
@@ -806,6 +822,79 @@ impl Sema<'_, '_> {
         self.deduce_ty(pt, at, TdfFlags::SKIP_NON_DEPENDENT, d, 0)
     }
 
+    /// [`DeducedArgs::nttp_types`]: the (argument's, parameter's) types
+    /// when the non-type parameter `e` names has a type that is neither
+    /// dependent, a placeholder nor a reference, and `a` (its deduction
+    /// from a template-id's argument) has another one: a type that is not
+    /// the parameter's once cv-qualifiers are dropped, or the unique type
+    /// of a synthesized placeholder-typed parameter (partial ordering).
+    /// An argument of a dependent type is not checked.
+    fn fixed_nttp_type_mismatch(
+        &mut self,
+        e: Option<ExprId>,
+        a: TemplateArg,
+        d: &DeducedArgs,
+    ) -> Option<(QualType, QualType)> {
+        let decl = self.deduced_nttp_decl(self.nttp_decl_of_expr(e?)?, d);
+        let pt = self.ast.decls.get(decl).ty()?;
+        let pt = match self.ast.types.canonical_view(pt) {
+            TypeView::PackExpansion { pattern, .. } => pattern,
+            _ => pt,
+        };
+        let t = &self.ast.types;
+        if pt == QualType::ERROR
+            || t.is_dependent(pt)
+            || t.is_reference(pt)
+            || self.nttp_type_has_placeholder(pt)
+        {
+            return None;
+        }
+        let a = self.arg_expansion_pattern(a).unwrap_or(a);
+        // A value has its parameter's type; an expression is checked only
+        // when it names a non-type parameter (a synthesized argument of
+        // partial ordering), whose declared type it has: another one (a
+        // dependent `1` in `ie<I, 1>`) is converted to the parameter's
+        // type only when substituted.
+        let named = |s: &Self, x: ExprId| s.nttp_decl_of_expr(x).map(|_| s.ast.exprs.get(x).ty());
+        let at = match a.view() {
+            ArgView::Expr { expr, .. } => named(self, expr)?,
+            ArgView::Profile(pr) => named(self, self.ast.types.profile_expr(pr)?)?,
+            ArgView::Value { ty, .. } => ty,
+            _ => return None,
+        };
+        if at == QualType::ERROR {
+            return None;
+        }
+        if self.nttp_type_has_placeholder(at) || self.names_dependent_placeholder(at) {
+            return Some((at, pt));
+        }
+        let t = &self.ast.types;
+        if t.is_dependent(at) || t.is_reference(at) {
+            return None;
+        }
+        let (cp, ca) = (t.canonical(pt), t.canonical(at));
+        (!t.same_unqualified(cp, ca)).then_some((at, pt))
+    }
+
+    /// Whether `q` is or points to a placeholder deduced as dependent: the
+    /// type of a reference to a parameter declared `auto` (`auto *`,
+    /// `auto Q::*`) in its own template, as in a synthesized argument of
+    /// partial ordering.
+    fn names_dependent_placeholder(&self, q: QualType) -> bool {
+        let mut cur = q;
+        for _ in 0..256 {
+            match self.ast.types.canonical_view(cur) {
+                TypeView::Auto { .. } | TypeView::DeducedTemplateSpecialization { .. } => {
+                    return true;
+                }
+                TypeView::Pointer(p) | TypeView::LValueRef(p) | TypeView::RValueRef(p) => cur = p,
+                TypeView::MemberPointer { pointee, .. } => cur = pointee,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     /// The parameter of the template being deduced (`d.params`) at
     /// `decl`'s index, else `decl`: the parameter a canonical argument's
     /// expression names may belong to another template ([`DeducedArgs::params`]).
@@ -824,7 +913,7 @@ impl Sema<'_, '_> {
 
     /// The non-type template parameter declaration `e` names (as
     /// [`Self::nttp_of_expr`]).
-    fn nttp_decl_of_expr(&self, mut e: ExprId) -> Option<DeclId> {
+    pub(super) fn nttp_decl_of_expr(&self, mut e: ExprId) -> Option<DeclId> {
         let ex = &self.ast.exprs;
         loop {
             match ex.get(e).kind() {

@@ -1876,7 +1876,15 @@ Out-of-class partial specializations of a member template (WP-150):
   int N> B<T, N>` of `template<class T, T N> B` and `template<bool B> V<int,
   B>` of `template<class T, T> V` are not (WP-1105,
   `tests/conformance/temp.spec.partial.general/placeholder-typed-primary-not-more-specialized.cpp`,
-  `.../param-typed-primary-converted-arg-not-more-specialized.cpp`). Under
+  `.../param-typed-primary-converted-arg-not-more-specialized.cpp`). The
+  ordering of two partial specializations applies the same check to the
+  deduced arguments (`partial_at_least_as_specialized` calls
+  `deduced_nttp_type_mismatch` before `partial_args_match`), so
+  `template<int E> os<E>` is more specialized than `template<auto E>
+  os<E>`, as for `decltype(auto)`, `auto...` and `template<class T, T E>`
+  (WP-1236,
+  `tests/conformance/temp.spec.partial.order/typed-nttp-more-specialized-than-auto-run.cpp`,
+  `.../typed-nttp-more-specialized-than-auto-mirror-run.cpp`). Under
   `-fclang-compat=19` the partial's arguments for a primary parameter
   typed by another one are first converted to that type, as clang 19
   converted them (`DeducedArgs::converted_values`, `converted_values_fit`:
@@ -3966,6 +3974,24 @@ out-of-line definition that follows `A<int> a;` adds nothing to
 Tests: `tests/codegen/member_template_late_attrs.cpp` (IR),
 `dcl.attr.nodiscard/member-template-late-definition.cpp`.
 
+An explicit specialization ([temp.expl.spec]) is a declaration of its
+own: its attributes are checked and attached to it (`declare_explicit_spec`
+runs `check_decl_attrs` + `attach_attrs`), never taken from the primary
+template, so `[[deprecated]]`, `[[nodiscard]]` / GNU `warn_unused_result`,
+`[[noreturn]]` and `__attribute__((deprecated))` on `f<int>` warn for
+`f<int>` alone, for member and class-template-member specializations too.
+A use finds them on the latest declaration (`unused_call_result` looks at
+`latest(f)`; the warning names the attribute's spelling). A `noreturn`
+missing on the first declaration notes the specialization's first
+declaration, as clang (WP-1236,
+`tests/conformance/temp.expl.spec/explicit-spec-own-attributes.cpp`,
+`.../explicit-spec-noreturn-not-first.cpp`). An overloaded operator call,
+a lambda's included, diagnoses the use of the found member template and
+then of its specialization (clang `CreateFunctionRefExpr`), so a generic
+`[[deprecated]]` lambda warns `'operator()'` and `'operator()<int>'`
+(`warn_deprecated_template_use`;
+`tests/conformance/dcl.attr.deprecated/lambda-call-operator.cpp`).
+
 ### 5.7 SFINAE
 
 ```rust
@@ -3991,7 +4017,11 @@ impl Sema<'_, '_> {
   (`is_sfinae_failure`): the designated-initializer order/override
   ExtWarns (spec/sema.md), the regular-vs-reversed rewritten-operator
   tie (`-Wambiguous-reversed-operator`, spec/sema-overload.md §5.3;
-  WP-1322) and the narrowing ones, `-Wc++11-narrowing`
+  WP-1322), a rewritten `operator==` not returning `bool`
+  (`-Wrewrite-not-bool`), too many braces around a scalar initializer and
+  brace elision in a designated initializer (`-Wc99-designator`; WP-1236,
+  `tests/conformance/temp.deduct.general/sfinae-extension-warnings.cpp`)
+  and the narrowing ones, `-Wc++11-narrowing`
   in a list-initialization or a converted constant expression
   ([dcl.init.list]/3.7, [expr.const]), so a trait probing `T{v}` under
   `#pragma GCC diagnostic ignored "-Wnarrowing"` or `-Wno-narrowing`
@@ -4702,6 +4732,31 @@ success for `Type::Auto`; the constraint is checked when the arguments
 are substituted. The copy deduction candidate of such a class template
 and function templates over its specializations deduce (WP-1235,
 tests/conformance/temp.deduct.type/constrained-placeholder-nttp-prior-param-run.cpp).
+
+A deduced non-type parameter whose declared type is fixed (neither
+dependent, a placeholder nor a reference), deduced from an argument of a
+template-id in `P` (`<i>`), must have that argument's type
+([temp.deduct.type]/20, second sentence): function template deduction
+(`DeducedArgs::nttp_types`, set by `deduce_spec_steps`) records the first
+mismatch (`fixed_nttp_type_mismatch`) and fails before the defaults are
+substituted, with clang's `ConvertDeducedTemplateArgument` note
+(`sema_deduced_nttp_type_mismatch`, "deduced non-type template argument
+does not have the same type as the corresponding template parameter
+('unsigned long' vs 'int')"): `template<int i> f(A<i>)` against `A<3ul>`,
+`template<int i> g(V<i>)` (`template<auto> struct V`) against `V<'c'>`. An
+array bound deduces a value already of the parameter's type. Function
+template partial ordering (§8, `fn_at_least_as_specialized`) applies the
+same rule, a synthesized argument of a placeholder-typed parameter having
+a unique type (the reference to `auto E` is typed as `auto` deduced as
+dependent, `names_dependent_placeholder`), so `template<int E> f(V<E>)`
+is more specialized than `template<auto E> f(V<E>)` (and
+`decltype(auto)`), as for class partial specializations; clang 19 and 22
+call those calls ambiguous, GCC 16.1 agrees with kiln (WP-1236,
+tests/conformance/temp.deduct.type/nttp-deduced-type-mismatch.cpp,
+tests/conformance/temp.func.order/typed-nttp-more-specialized-than-auto-run.cpp).
+Class partial specialization matching does not check it, as clang (whose
+`os<'c'>` matches `template<int E> os<E>` of `template<auto...> os`; GCC's
+does not).
 
 **Consistency.** Two deductions of the same param must be canonically
 equal. For NTTPs, the values must be equal after conversion to the
