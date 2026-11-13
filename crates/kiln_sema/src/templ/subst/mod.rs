@@ -940,7 +940,10 @@ impl<'s, 'a, 'sm> Substituter<'s, 'a, 'sm> {
         }
         if self.sema.kind_of(inst_parent) == DeclKind::CXXRecord {
             let ty = self.sema.tag_type(inst_parent);
-            let _ = self.sema.require_complete_silent(ty, loc);
+            // clang's `RequireCompleteType` here marks the class required
+            // (WP-1389); a class still being defined is not complete and
+            // stays unmarked, as clang's `isBeingDefined` check skips it.
+            let _ = self.sema.require_complete_reported(ty, loc);
         } else {
             self.sema.require_member_enum(inst_parent, loc);
         }

@@ -1263,6 +1263,13 @@ impl DefinitionBits {
     pub const NONTRIVIAL_COPY_ASSIGN: DefinitionBits = DefinitionBits(1 << 60);
     /// clang `hasNonTrivialMoveAssignment`; see `NONTRIVIAL_DEFAULT_CTOR`.
     pub const NONTRIVIAL_MOVE_ASSIGN: DefinitionBits = DefinitionBits(1 << 61);
+    /// The unit required this class to be complete (clang
+    /// `isCompleteDefinitionRequired`, set by `Sema::RequireCompleteType`):
+    /// limited `-g` describes a class without it as a declaration
+    /// (spec/codegen.md §5.1 "Declarations and definitions"). Unlike the
+    /// other bits it is set after `}` too
+    /// ([`DeclArena::set_complete_definition_required`]).
+    pub const COMPLETE_DEFINITION_REQUIRED: DefinitionBits = DefinitionBits(1 << 62);
 
     /// No bits.
     pub const fn empty() -> Self {
@@ -2893,6 +2900,16 @@ impl DeclArena {
             "class properties are frozen at `}}`"
         );
         d.defn = d.defn.with(bits);
+    }
+
+    /// Records that the unit required class definition `r` to be complete
+    /// ([`DefinitionBits::COMPLETE_DEFINITION_REQUIRED`]; monotone, also
+    /// after `}`). A no-op on a declaration that is not a record.
+    pub fn set_complete_definition_required(&mut self, r: DeclId) {
+        if self.record(r).is_some() {
+            let d = self.record_mut(r);
+            d.defn = d.defn.with(DefinitionBits::COMPLETE_DEFINITION_REQUIRED);
+        }
     }
 
     /// Sets the base-specifiers of a class being defined (once).

@@ -362,6 +362,10 @@ impl Sema<'_, '_> {
         // definition's context note), so the default member initializers
         // it instantiates note the exception-specification evaluation.
         self.resolve_exception_spec(f, loc);
+        // clang's `DefineImplicit*` complete the class (a trivial `x = y`
+        // of a class with an implicit assignment operator describes it in
+        // full under limited `-g`).
+        self.note_complete_required(self.tag_type(class));
         let saved = self.push_synth(f, SynthKind::Special(kind), loc);
         if matches!(kind, SpecialKind::CopyCtor | SpecialKind::CopyAssign)
             && self.std >= kiln_lex::Std::Cxx11
@@ -1122,6 +1126,12 @@ impl Sema<'_, '_> {
         sites: DiagSites,
     ) -> Option<ExprId> {
         let named = self.ctor_diag_ty.take().unwrap_or(ty);
+        // Every constructor initialization follows a `RequireCompleteType`
+        // of the class in clang (the variable, the `T(...)`, the
+        // argument, the `new`): one place for all of them.
+        if let Some(q) = self.ast.decls.get(class).ty() {
+            self.note_complete_required(q);
+        }
         match sel {
             Selected::Found(m) => {
                 if call.reject_explicit && self.fn_spec(m).is_explicit() {

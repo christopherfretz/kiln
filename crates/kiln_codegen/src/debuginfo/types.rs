@@ -10,6 +10,7 @@ use kiln_ast::decl::{
 use kiln_ast::dump::AstNames;
 use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclNameView;
+use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
     ArgView, BuiltinType as T, FuncProto, RefQual, TemplateArg, TypeView, write_arg_list_debug,
 };
@@ -632,8 +633,13 @@ impl Cg<'_> {
         p
     }
 
-    /// clang `shouldOmitDefinition` (a definition is always taken as
-    /// required: kiln does not track `isCompleteDefinitionRequired`).
+    /// clang `shouldOmitDefinition`: limited debug information describes
+    /// a class as a declaration when the unit never required it complete
+    /// (`isCompleteDefinitionRequired`, [`B::COMPLETE_DEFINITION_REQUIRED`]
+    /// set by sema), when it is dynamic (its vtable's unit defines it),
+    /// when it is an explicit instantiation declaration with a member
+    /// defined in the class template, or when constructor homing leaves
+    /// it to the unit that emits a constructor. C keeps every definition.
     /// `[[clang::standalone_debug]]` on any redeclaration keeps the
     /// definition, as `-fstandalone-debug` does for every class.
     fn di_omit(&self, rd: DeclId) -> bool {
@@ -641,10 +647,38 @@ impl Cg<'_> {
         if k >= DebugInfoKind::Full || self.has_fn_attr(rd, AttrKind::STANDALONE_DEBUG) {
             return false;
         }
-        if self.class_def(rd).is_none() || self.is_dynamic(rd) {
+        let Some(def) = self.class_def(rd) else { return true };
+        if self.ast.lang_c {
+            return false;
+        }
+        if !self.class_bits(rd).contains(B::COMPLETE_DEFINITION_REQUIRED) || self.is_dynamic(rd) {
+            return true;
+        }
+        if self
+            .ast
+            .spec_info(def)
+            .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDeclaration)
+            && self.di_explicit_member_definition(def)
+        {
             return true;
         }
         k == DebugInfoKind::Constructor && self.di_can_home(rd)
+    }
+
+    /// clang `hasExplicitMemberDefinition`: a method of the class was
+    /// instantiated from a member function the class template defines
+    /// (and is not explicitly specialized).
+    fn di_explicit_member_definition(&self, def: DeclId) -> bool {
+        let ast = self.ast;
+        ast.decls.members(def).any(|m| {
+            ast.decls.get(m).kind().is_function()
+                && ast.instantiated_from(m).is_some_and(|p| {
+                    !ast.decls.get(p).has(DeclFlags::IMPLICIT) && ast.definition(p) == Some(p)
+                })
+                && !ast
+                    .member_spec_info(m)
+                    .is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization)
+        })
     }
 
     /// clang `canUseCtorHoming`.

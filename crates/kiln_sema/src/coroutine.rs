@@ -382,7 +382,7 @@ impl Sema<'_, '_> {
         else {
             return None;
         };
-        if !self.require_complete_silent(traits, kw_loc) {
+        if !self.require_complete_reported(traits, kw_loc) {
             let d = self
                 .diag(DiagId::sema_coroutine_type_missing_specialization, kw_loc)
                 .arg(self.ty_arg(traits));
@@ -420,7 +420,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return None;
         }
-        if !self.require_complete_silent(promise_ty, floc) {
+        if !self.require_complete_reported(promise_ty, floc) {
             let d = self
                 .diag(DiagId::sema_coroutine_promise_type_incomplete, floc)
                 .arg(self.ty_arg(elab));
@@ -547,7 +547,7 @@ impl Sema<'_, '_> {
             else {
                 return None;
             };
-            if !self.require_complete_silent(t, loc) {
+            if !self.require_complete_reported(t, loc) {
                 let d = self
                     .diag(DiagId::sema_coroutine_type_missing_specialization, loc)
                     .arg(self.ty_arg(t));

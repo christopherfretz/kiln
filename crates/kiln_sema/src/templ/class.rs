@@ -672,10 +672,46 @@ impl Sema<'_, '_> {
     /// template specialization it names ([temp.inst]/2: a complete type
     /// is required). Errors in the instantiation are diagnosed.
     pub fn require_complete(&mut self, q: QualType, loc: Loc) -> bool {
+        let complete = self.require_complete_unnoted(q, loc);
+        self.note_complete_required(q);
+        complete
+    }
+
+    /// As [`Sema::require_complete`], but the class is not noted as
+    /// required: clang's `isCompleteType` followed, only for an
+    /// incomplete type, by `RequireCompleteType` for its diagnostic
+    /// (`lookupStdTypeTraitMember`, the `std::tuple_size` and
+    /// `std::tuple_element` of a structured binding).
+    pub(crate) fn require_complete_unnoted(&mut self, q: QualType, loc: Loc) -> bool {
         if let Some(r) = self.undefined_spec(q) {
             let _ = self.instantiate_class(r, loc, true);
         }
         self.is_complete(q)
+    }
+
+    /// Records that the unit required the class `q` names (through sugar,
+    /// not through arrays) to be complete: clang's `RequireCompleteType`
+    /// sets `setCompleteDefinitionRequired` on the type's declaration,
+    /// which `-g` reads (limited debug information describes a class
+    /// never required complete as a declaration; spec/codegen.md §5.1).
+    /// Called by kiln's forms of `RequireCompleteType` only:
+    /// [`Sema::require_complete`], [`Sema::require_complete_reported`],
+    /// [`Sema::instantiation_fails`], the
+    /// nested-name-specifier checks ([`Sema::require_complete_nns`],
+    /// [`Sema::require_complete_nns_ctx`]), `use_ctor` (every constructor
+    /// initialization), a call of a class object, an anonymous union or
+    /// struct member and a closure type (always);
+    /// `require_complete_silent` is clang's `isCompleteType`, which does
+    /// not set it. A class that is not complete here (being defined,
+    /// never defined) is left alone, as clang's `RequireCompleteType`
+    /// fails for it.
+    pub(crate) fn note_complete_required(&mut self, q: QualType) {
+        if let Some(r) = self.ast.types.as_record(q)
+            && let Some(def) = self.ast.definition(r)
+            && self.is_complete(q)
+        {
+            self.ast.decls.set_complete_definition_required(def);
+        }
     }
 
     /// Whether this use of `q` instantiates a class template
@@ -684,16 +720,22 @@ impl Sema<'_, '_> {
     /// invalidity, so the use that instantiated it fails quietly (`A<int>
     /// a;` is an invalid variable, `p->g()` builds no call and so does not
     /// instantiate `g`); later uses find the class complete.
+    ///
+    /// Every caller is one of clang's `RequireCompleteType` sites (a
+    /// member access, a base, a field, a variable or parameter
+    /// definition, a construction), so a class found complete is noted
+    /// as required ([`Sema::note_complete_required`]).
     pub(crate) fn instantiation_fails(&mut self, q: QualType, loc: Loc) -> bool {
-        let Some(r) = self.undefined_spec(q) else { return false };
-        if self.instantiate_class(r, loc, true)
-            || !self.ast.decls.get(r).has(DeclFlags::INVALID)
-            || self.ast.definition(r).is_none()
+        if let Some(r) = self.undefined_spec(q)
+            && !self.instantiate_class(r, loc, true)
+            && self.ast.decls.get(r).has(DeclFlags::INVALID)
+            && self.ast.definition(r).is_some()
         {
-            return false;
+            self.inst.undefined_diagnosed.set(None);
+            return true;
         }
-        self.inst.undefined_diagnosed.set(None);
-        true
+        self.note_complete_required(q);
+        false
     }
 
     /// As [`Sema::require_complete`], but an undefined template is not
@@ -703,6 +745,16 @@ impl Sema<'_, '_> {
             let _ = self.instantiate_class(r, loc, false);
         }
         self.is_complete(q)
+    }
+
+    /// As [`Sema::require_complete_silent`] for a caller that is clang's
+    /// `RequireCompleteType` with its own diagnostic (the coroutine
+    /// library types): a complete class is noted as required
+    /// ([`Sema::note_complete_required`]).
+    pub(crate) fn require_complete_reported(&mut self, q: QualType, loc: Loc) -> bool {
+        let complete = self.require_complete_silent(q, loc);
+        self.note_complete_required(q);
+        complete
     }
 
     /// Instantiates class `d` at `loc` if it is an undefined class
@@ -734,6 +786,7 @@ impl Sema<'_, '_> {
         if let Some(r) = self.undefined_spec(q) {
             let poi = self.nns_poi(loc);
             if self.instantiate_class(r, poi, true) {
+                self.note_complete_required(q);
                 return true;
             }
             // A declared, never defined explicit specialization
@@ -771,6 +824,7 @@ impl Sema<'_, '_> {
             self.emit(d);
             return false;
         }
+        self.note_complete_required(q);
         true
     }
 
@@ -786,6 +840,11 @@ impl Sema<'_, '_> {
     pub fn require_complete_nns_ctx(&mut self, ctx: DeclId, loc: Loc) -> bool {
         if !self.nns_ctx_incomplete(ctx) {
             self.nns_start = None;
+            if self.kind_of(ctx) == DeclKind::CXXRecord
+                && let Some(q) = self.ast.decls.get(ctx).ty()
+            {
+                self.note_complete_required(q);
+            }
             return true;
         }
         let kind = self.kind_of(ctx);
