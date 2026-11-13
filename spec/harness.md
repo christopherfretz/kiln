@@ -955,8 +955,8 @@ compiled with `-include pchdiff.h` (that one line), and it must give the
 plain build's success, diagnostics (as compared below) and run, or the
 test is a SKIP ("the synthetic prefix changes the test's result"; most
 often a name the test declares that the library declares too, or a
-diagnostic count). It is also a SKIP when the reference build exceeds
-the test's memory cap ("the synthetic prefix exceeds the test's memory
+diagnostic count). It is also a SKIP when the reference build or the PCH build
+exceeds the test's memory cap ("the synthetic prefix exceeds the test's memory
 limit"), and when the plain build reports `stack exhausted` ("the test
 measures the stack depth, which the prefix shifts": where a stack guard
 fires depends on how deep the compiler's own frames are when the main
