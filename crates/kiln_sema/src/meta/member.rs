@@ -26,7 +26,7 @@ use crate::conv::bases::{is_derived_from, same_class};
 /// checked from.
 #[derive(Default, kiln_snap::Snap)]
 pub(crate) struct MemberState {
-    /// Not in a snapshot: TEMPORARY until `kiln_oven::MemberCache` is `Snap` (WP-1381): starts empty, so lists are built again on first use.
+    /// Not in a snapshot: rebuilt: member lists are built again on first use (`kiln_oven::MemberCache` is a cache; its `builds` counter is test evidence only).
     #[snap(skip)]
     pub(crate) cache: MemberCache,
     pub(crate) scope: AccessScope,

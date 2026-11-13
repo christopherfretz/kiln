@@ -34,8 +34,8 @@
 //!
 //! | field | class | why |
 //! |---|---|---|
-//! | `ast` | owned root | `kiln_ast`'s root (WP-1380) |
-//! | `oven` | owned root | `kiln_oven`'s root (WP-1381); TEMPORARY: not written yet, the consumer's fresh Oven is kept (see [`put_oven`]) |
+//! | `ast` | owned root | `kiln_ast`'s root (WP-1380); must share the consumer's interner |
+//! | `oven` | owned root | `kiln_oven`'s root (WP-1381), applied to the consumer's fresh Oven |
 //! | `diags` | reference | the consumer's engine (its state is `kiln_diag`'s root) |
 //! | `target`, `abi` | configuration | the target (`--target`, `-march`), [`Sema::for_target`] |
 //! | `exceptions` | configuration | `-f[no-]exceptions` |
@@ -333,18 +333,16 @@ fn get_ast(r: &mut Reader<'_>, into: &mut Ast) -> Result<(), SnapError> {
     Ok(())
 }
 
-/// TEMPORARY until `kiln_oven`'s root lands (WP-1381): the Oven is not
-/// written, and a restore keeps the consumer's fresh one (configured by
-/// [`Sema::set_constexpr_limits`]). What a fresh Oven loses: compiled
-/// functions (recompiled on demand), the evaluation memo, data member
-/// descriptions (`std::meta::data_member_spec`) and the reflection and
-/// memory counters that budget charging reads.
-fn put_oven(_oven: &kiln_oven::Oven, _w: &mut Writer) {}
+/// Writes the Oven through its own root (`kiln_oven`, spec/oven.md
+/// "Snapshots"); [`Sema::snapshot_ready`] has checked it is at rest.
+fn put_oven(oven: &kiln_oven::Oven, w: &mut Writer) -> Result<(), String> {
+    oven.snap_put(w)
+}
 
-/// TEMPORARY, see [`put_oven`].
-#[allow(clippy::unnecessary_wraps, reason = "TEMPORARY, the signature of the real one")]
-fn get_oven(_r: &mut Reader<'_>, _into: &mut kiln_oven::Oven) -> Result<(), SnapError> {
-    Ok(())
+/// Applies the Oven [`put_oven`] wrote to `into`, the consumer's fresh
+/// Oven (configured by [`Sema::set_constexpr_limits`]).
+fn get_oven(r: &mut Reader<'_>, into: &mut kiln_oven::Oven) -> Result<(), SnapError> {
+    into.snap_restore(r)
 }
 
 macro_rules! root_impl {
@@ -381,8 +379,9 @@ macro_rules! root_impl {
                         return Err(concat!("Sema.", stringify!($t), ": not at rest").to_owned());
                     }
                 )*
-                if self.oven.is_none() {
-                    return Err("Sema.oven: an evaluation is running".to_owned());
+                match &self.oven {
+                    None => return Err("Sema.oven: an evaluation is running".to_owned()),
+                    Some(o) => o.snap_ready().map_err(|why| format!("Sema.oven > {why}"))?,
                 }
                 self.state_ready()
             }
@@ -398,7 +397,7 @@ macro_rules! root_impl {
                 let Sema { $($s,)* $($c: _,)* $($t: _,)* $($x: _,)* $($b: _,)* $($f: _,)* $($o: _,)* } = self;
                 put_ast(&self.ast, w);
                 if let Some(o) = &self.oven {
-                    put_oven(o, w);
+                    put_oven(o, w)?;
                 }
                 $( w.put($s); )*
                 Ok(())
@@ -452,7 +451,9 @@ macro_rules! root_impl {
                 out.push(("ast", w.position()));
                 let mut w = Writer::new();
                 if let Some(o) = &self.oven {
-                    put_oven(o, &mut w);
+                    // At rest when `snapshot_ready` is; else nothing is
+                    // written and the size is 0.
+                    let _ = put_oven(o, &mut w);
                 }
                 out.push(("oven", w.position()));
                 $(
@@ -467,7 +468,9 @@ macro_rules! root_impl {
             /// [`Self::snap_put`] writes besides the AST and the Oven) and
             /// those of the types it encodes.
             pub fn snap_schema(s: &mut Schema) {
-                let mut d = Desc::new("configured root").field::<Ast>("ast");
+                let mut d = Desc::new("configured root")
+                    .field::<Ast>("ast")
+                    .field::<kiln_oven::Oven>("oven");
                 $( d = reg(d, stringify!($s), |x| &x.$s); )*
                 $( d = d.skip::<()>(stringify!($c)); )*
                 $( d = d.skip::<()>(stringify!($t)); )*
@@ -475,6 +478,7 @@ macro_rules! root_impl {
                 $( d = d.skip::<()>(stringify!($b)); )*
                 if s.register::<Sema<'static, 'static>>(d) {
                     Ast::schema(s);
+                    kiln_oven::Oven::snap_schema(s);
                     $( recurse(s, |x| &x.$s); )*
                 }
             }
