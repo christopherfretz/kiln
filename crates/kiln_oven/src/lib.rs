@@ -50,6 +50,7 @@ mod notes;
 pub mod profile;
 mod reclaim;
 pub mod report;
+mod snap;
 mod softfloat;
 mod stats;
 #[cfg(feature = "op-stats")]
@@ -490,7 +491,7 @@ pub(crate) const CTOR_STEP_ELEM: u32 = 1 << 30;
 pub(crate) const CTOR_STEP_RECORD: u32 = 1 << 29;
 
 /// One construction step of a constructor ([`Oven::ctor_steps`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct CtorStep {
     /// The first instruction of the step.
     pub(crate) pc: u32,

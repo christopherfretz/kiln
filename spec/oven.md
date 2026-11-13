@@ -4205,6 +4205,45 @@ their `*-siblings*.cpp`,
 `ub-checks-valid-near-misses.cpp`,
 `dcl.constexpr/extern-constexpr-declaration.cpp`.
 
+### Snapshots — Landed (WP-1381, prototype)
+The Oven is a configured snapshot root (spec/snap.md "Hand-written
+roots"; `src/snap.rs`, `src/mem/snap.rs`). It is not `Snap`: its limits
+and options belong to the consumer's command line.
+
+- **State** (written): the type table, the bytecode and its side tables
+  (sites, step locations, origins, traps), the function table and its
+  maps (a function compiled before the snapshot is not compiled again),
+  the thunks, the globals and the static memory their values live in
+  (bytes, init/pointer/lifetime maps, slots, free lists, void-pointer
+  tags), the memo, member pointers, the subobject and virtual-call
+  tables, the reflection call sites and charges, the data member
+  descriptions, and the cumulative counters that allocate ids
+  (`heap_ops`, the frame serial, the last thunk). The per-table sizes
+  are `Oven::snap_sizes`.
+- **Configuration** (the consumer's, set on the fresh Oven before the
+  restore): `Oven::new(budget)` — the memo capacity must equal the
+  snapshot's — the backtrace limit, `clang_compat`, `cxx_year`, the
+  trace and profile hooks.
+- **Not written**: per-evaluation buffers and registers (reset), the
+  union-path memo (refilled on demand), the evaluation records of
+  `-fconstexpr-stats` (reset: the consumer reports its own evaluations).
+- **Quiescence** (`Oven::snap_ready`, checked by `Oven::snap_put`): no
+  evaluation running (a bridge callback asking is refused), no call
+  frame, frame object, heap allocation, exception, open checkpoint or
+  pending memoizable call; no caller option for the next evaluation
+  still set; no function being compiled.
+- **Restore** (`Oven::snap_restore`): only into an Oven that has not
+  been used; every field is decoded and validated before any is
+  assigned, so a refused snapshot leaves the Oven unchanged. The
+  restored Oven must be attached to the AST restored from the same
+  snapshot (it holds that AST's ids). Indices between the Oven's tables
+  are validated; the bytecode's operands and the pointers in static
+  memory are not (that needs a bytecode verifier).
+- **Equivalence** (`crates/kiln_driver/tests/oven_snap.rs`): after a
+  restore, new evaluations on the original and the restored Oven give
+  the same results, diagnostics, notes, counters and compiled code, and
+  both Ovens encode to the same canonical bytes.
+
 ## Interface — amended 2026-10-28 per spec/ast.md Q2
 The Oven holds **no** borrow of the AST across calls: sema mutates the AST
 (instantiation on demand, `define_aggregate`, interning constants) while

@@ -68,16 +68,19 @@ pub(crate) struct Exc {
 }
 
 /// The exception state of the Oven.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Excs {
     /// Thrown, not yet caught: the innermost last.
+    #[snap(skip)]
     pub inflight: Vec<Exc>,
     /// Handled by an active handler: the innermost last.
+    #[snap(skip)]
     pub caught: Vec<Exc>,
     /// The lengths of the two stacks when the innermost evaluation began:
     /// the exceptions below belong to enclosing evaluations, which a
     /// nested one does not see ([expr.const]: each is a separate
     /// evaluation).
+    #[snap(skip)]
     pub base: (usize, usize),
     /// The pc of the Oven's `Op::Unwind`, once emitted.
     unwind_pc: Option<u32>,

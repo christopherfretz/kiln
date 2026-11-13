@@ -101,6 +101,7 @@ dependencies = [
  "kiln_abi",
  "kiln_ast",
  "kiln_diag",
+ "kiln_snap",
  "kiln_source",
 ]
 

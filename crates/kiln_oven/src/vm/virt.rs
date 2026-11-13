@@ -22,7 +22,7 @@ use crate::mem::{MemFault, Origin, Ptr};
 use crate::ty::{OTy, TyKind};
 
 /// One subobject of a class (indexed by [`SubobjectId`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Sub {
     /// Byte offset in the complete object.
     pub off: u64,
@@ -46,7 +46,7 @@ pub(crate) struct Sub {
 }
 
 /// The subobject graph of a class with offsets.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct PolyInfo {
     /// The class (first declaration; `None` for a non-class).
     pub decl: Option<DeclId>,
@@ -66,7 +66,7 @@ pub(crate) struct PolyInfo {
 }
 
 /// A resolved virtual call.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Target {
     func: u32,
     /// The overrider's subobject offset minus the called subobject's.
@@ -85,7 +85,7 @@ struct Target {
 type RelKey = (OTy, i64, DeclId, OTy, u32, u64);
 
 /// A resolved call through a [`REL`] word.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct RelTarget {
     t: Target,
     /// The overrider's subobject (index in the running class's graph).
@@ -122,7 +122,7 @@ pub(crate) fn cov_adj(w: u128) -> CovAdj {
 
 /// The Oven's per-class caches (insert-only: the class graph of a
 /// complete class never changes).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct Virt {
     map: FxHashMap<OTy, u32>,
     infos: Vec<PolyInfo>,
@@ -140,6 +140,31 @@ pub(crate) struct Virt {
     /// `AddrLabelExpr`: an unbacked static allocation, so one expression
     /// is one address and two are two (clang 22).
     labels: FxHashMap<ExprId, u64>,
+}
+
+impl Virt {
+    /// The invariants of decoded class caches (`crate::snap`): every
+    /// class names a subobject graph, every resolved call a compiled
+    /// function and a subobject of its graph.
+    pub(crate) fn check_restored(&self, nfuncs: usize) -> Result<(), &'static str> {
+        let n = self.infos.len() as u32;
+        if self.map.values().any(|&i| i >= n) {
+            return Err("class cache names an unknown subobject graph");
+        }
+        for p in &self.infos {
+            let subs = p.subs.len();
+            if p.subs.iter().any(|s| s.parent as usize >= subs || s.top as usize >= subs.max(1))
+                || p.vvptrs.iter().any(|&k| k as usize >= subs)
+            {
+                return Err("subobject graph links out of range");
+            }
+        }
+        let fine = |t: &Target| (t.func as usize) < nfuncs;
+        if !self.dispatch.values().all(fine) || !self.rel_dispatch.values().all(|r| fine(&r.t)) {
+            return Err("resolved virtual call of an unknown function");
+        }
+        Ok(())
+    }
 }
 
 impl Virt {
