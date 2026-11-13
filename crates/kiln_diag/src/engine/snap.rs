@@ -19,6 +19,7 @@
 //! | `pragmas` | state | `#pragma clang diagnostic` transition points, states and `push` stack, validated on restore |
 //! | `has_pragmas` | rebuilt | from `pragmas` |
 //! | `errors`, `uncompilable`, `unrecoverable`, `warnings` | transient | per-compilation output counts: not written; the consumer counts its own diagnostics (spec/diag.md "Snapshots") |
+//! | `prefix_reported` | state | written as the producer's `warnings + errors` (its own value is 0 there): what the prefix reported, which a `-verify` consumer needs (it replays when not 0) |
 //! | `fatal` | transient, at rest | must be false: a snapshot after a fatal error is refused |
 //! | `holding`, `held`, `held_counts` | transient, at rest | must be 0, empty, 0: a snapshot inside a [`DiagEngine::hold`] is refused |
 
@@ -117,12 +118,18 @@ impl DiagEngine<'_> {
             holding: _,
             held: _,
             held_counts: _,
+            prefix_reported,
         } = self;
         let st = state.lock().unwrap_or_else(PoisonError::into_inner);
         let State { sink: _, seen } = &*st;
         seen.put(w);
         drop(st);
         pragmas.read().unwrap_or_else(PoisonError::into_inner).put(w);
+        // A restored engine's own prefix counts too (a snapshot of a
+        // snapshot consumer).
+        let reported =
+            prefix_reported.saturating_add(self.warning_count()).saturating_add(self.error_count());
+        w.put(&reported);
         Ok(())
     }
 
@@ -147,6 +154,7 @@ impl DiagEngine<'_> {
         if let Err(why) = pragmas.check() {
             return Err(r.invalid::<Self>(why).within("DiagEngine.pragmas"));
         }
+        let reported: u32 = at("DiagEngine.prefix_reported", r.get())?;
         let DiagEngine {
             sm: _,
             policy: _,
@@ -163,7 +171,9 @@ impl DiagEngine<'_> {
             holding: _,
             held: _,
             held_counts: _,
+            prefix_reported,
         } = self;
+        *prefix_reported = reported;
         state.get_mut().unwrap_or_else(PoisonError::into_inner).seen = seen;
         has_pragmas.store(!pragmas.is_empty(), Ordering::Release);
         *my_pragmas.get_mut().unwrap_or_else(PoisonError::into_inner) = pragmas;
@@ -175,7 +185,8 @@ impl DiagEngine<'_> {
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
             .field::<HashSet<(DiagId, Span, u64)>>("seen")
-            .field::<Pragmas>("pragmas");
+            .field::<Pragmas>("pragmas")
+            .field::<u32>("prefix_reported");
         if s.register::<DiagEngine<'static>>(d) {
             HashSet::<(DiagId, Span, u64)>::schema(s);
             Pragmas::schema(s);

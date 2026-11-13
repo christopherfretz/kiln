@@ -546,16 +546,17 @@ pub(crate) fn consumer(
         return Err(());
     }
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
-    if args.pch.snapshot == crate::args::PchSnapshot::Load
-        && args.verify.is_none()
-        && args.pch.image != PchImage::Check
-    {
+    if args.pch.snapshot == crate::args::PchSnapshot::Load && args.pch.image != PchImage::Check {
         // EXPERIMENTAL (WP-1383): the snapshot stands in for the
         // producer's `-include`s and the header; the replay arguments
         // below stay the fallback.
         let extras: Vec<String> =
             args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
-        match crate::pch_snapshot::find(args, pch, &rec, extras) {
+        let found = match snapshot_refused(args, &rec, inputs) {
+            Some(why) => Err(why),
+            None => crate::pch_snapshot::find(args, pch, &rec, extras),
+        };
+        match found {
             Ok(u) => {
                 crate::pch_snapshot::note(args, stderr, pch, "matches; restoring it");
                 out.pch.snapshot_use = Some(u);
@@ -650,6 +651,84 @@ fn replay_name(spelled: &str) -> String {
 }
 
 /// The name of `f` when its text is no longer the one recorded.
+/// Why a consumer of `rec` does not take its snapshot (WP-1394,
+/// spec/driver.md "PCH snapshot: behaviour"), before the snapshot is looked at, or
+/// `None`.
+/// - A module unit (an input whose first declaration is a module
+///   declaration): a replay puts the header before it, which is an error
+///   (spec/driver.md, "a declaration it adds before `module;` is an
+///   error there"); a restore would accept it, as clang's PCH does, so
+///   the two would differ.
+/// - A `-verify` consumer whose header has a file that may hold a
+///   directive of one of its prefixes: a replay lexes the header, and its
+///   directives count; a restore does not.
+fn snapshot_refused(args: &Args, rec: &Record, inputs: &[&Input]) -> Option<String> {
+    if let Some(i) = inputs.iter().find(|i| {
+        std::fs::read(&i.path).is_ok_and(|t| starts_as_module_unit(&String::from_utf8_lossy(&t)))
+    }) {
+        return Some(format!(
+            "'{}' is a module unit, which a replay compiles with the header before its module declaration",
+            i.path
+        ));
+    }
+    let v = args.verify.as_ref()?;
+    rec.files.iter().find_map(|f| {
+        let text = std::fs::read(&f.abs).ok()?;
+        has_verify_directive(&text, &v.prefixes).then(|| {
+            format!("'{}' may hold -verify directives, which a restore does not see", f.spelled)
+        })
+    })
+}
+
+/// `s` after the word `w` it starts with, if it does.
+fn word<'t>(s: &'t str, w: &str) -> Option<&'t str> {
+    s.strip_prefix(w).filter(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// Whether the first thing in `text`, after white space, comments and
+/// preprocessing directives, is `module` or `export module` (a module
+/// unit's module declaration or global module fragment). A line
+/// continuation inside a directive is followed.
+fn starts_as_module_unit(text: &str) -> bool {
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start();
+        if let Some(r) = rest.strip_prefix("//") {
+            rest = r.split_once('\n').map_or("", |(_, r)| r);
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.split_once("*/").map_or("", |(_, r)| r);
+        } else if rest.starts_with('#') {
+            let mut end = 0;
+            let b = rest.as_bytes();
+            while end < b.len() && (b[end] != b'\n' || (end > 0 && b[end - 1] == b'\\')) {
+                end += 1;
+            }
+            rest = &rest[end..];
+        } else {
+            break;
+        }
+    }
+    word(rest, "module").is_some()
+        || word(rest, "export").is_some_and(|r| word(r.trim_start(), "module").is_some())
+}
+
+/// Whether `text` holds `<prefix>-` for one of `prefixes` that does not
+/// continue a longer word (clang's directive names are `<prefix>-<kind>`).
+/// Conservative: a match in code or a string also counts.
+fn has_verify_directive(text: &[u8], prefixes: &[String]) -> bool {
+    prefixes.iter().any(|p| {
+        let pat = format!("{p}-");
+        let pat = pat.as_bytes();
+        text.windows(pat.len()).enumerate().any(|(i, w)| {
+            w == pat
+                && (i == 0 || {
+                    let c = text[i - 1];
+                    !(c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+                })
+        })
+    })
+}
+
 fn stale_file(f: &FileEntry) -> Option<&str> {
     let ok = std::fs::read(&f.abs)
         .is_ok_and(|b| b.len() as u64 == f.size && bmi::checksum(&b) == f.hash);
@@ -1328,5 +1407,33 @@ mod tests {
             macros(&a),
             [("A".into(), None), ("B".into(), Some("3".into())), ("C".into(), Some("x".into()))]
         );
+    }
+
+    /// spec/driver.md "PCH snapshot: behaviour": a module unit consumer replays.
+    #[test]
+    fn module_units() {
+        assert!(starts_as_module_unit("export module m;\n"));
+        assert!(starts_as_module_unit(
+            "// c\n/* d */ #include <x> \\\n y\nmodule;\n#include <y>\nexport module m;"
+        ));
+        assert!(starts_as_module_unit("module m:part;"));
+        assert!(!starts_as_module_unit("int module;"));
+        assert!(!starts_as_module_unit("import m;\nint x;"));
+        assert!(!starts_as_module_unit("modules_t x;"));
+        assert!(!starts_as_module_unit("export int f();"));
+        assert!(!starts_as_module_unit(""));
+    }
+
+    /// spec/driver.md "PCH snapshot: behaviour": what makes a `-verify` consumer
+    /// replay instead of restoring.
+    #[test]
+    fn verify_directives() {
+        let p = ["expected".to_owned(), "v1".to_owned()];
+        assert!(has_verify_directive(b"// expected-warning {{x}}", &p));
+        assert!(has_verify_directive(b"int x; /*v1-note@+1 {{y}}*/", &p));
+        assert!(has_verify_directive(b"expected-no-diagnostics", &p));
+        assert!(!has_verify_directive(b"// unexpected-thing, my_expected-x, a-expected-b", &p));
+        assert!(!has_verify_directive(b"expected warning", &p));
+        assert!(!has_verify_directive(b"", &p));
     }
 }

@@ -67,6 +67,13 @@ fn engine_round_trip_answers_alike() {
     assert!(sink.take().is_empty());
     // Counts are not carried (spec/diag.md "Snapshots").
     assert_eq!((r.warning_count(), e.warning_count()), (0, 1));
+    // What the prefix reported is carried for `-verify` (spec/driver.md
+    // "PCH snapshot: behaviour"), and adds up through a second snapshot.
+    assert_eq!((r.prefix_reported(), e.prefix_reported()), (1, 0));
+    Diag::new(DiagId::pp_macro_redefined, Span::empty(locs[4])).arg("M").emit(&r);
+    let mut again = DiagEngine::new(&sm, &DiagOptions::default(), MemorySink::new());
+    again.snap_restore(&mut Reader::new(&put(&r, false))).unwrap();
+    assert_eq!(again.prefix_reported(), 2);
 }
 
 /// A restore needs a fresh engine; a snapshot never lands in a used one.

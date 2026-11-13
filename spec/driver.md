@@ -2130,6 +2130,83 @@ only whole, and every doubt replays the header.
   The harness differential runs `--pch-diff load|replay` over the
   corpus slice in `cargo xtask ci` and over libc++ (spec/libcxx.md).
 
+### PCH snapshot: behaviour (EXPERIMENTAL, WP-1394)
+
+The snapshot (`-fkiln-pch-snapshot=write|load`, hidden; spec/snap.md
+"Whole-compiler restore order") stands in for a replay of the header.
+These are the consumer's rules; every refusal is a silent replay with
+`-v` `note: precompiled header 'p.pch': snapshot not used: <why>` (or
+`snapshot not used (<why>); the header is replayed` when the restore
+itself gives up). Tests: kiln_driver `tests/pch_snapshot.rs` and the
+cases of `scripts/pch-snapshot-diff/`.
+
+- **Diagnostics (clang's policy).** The header's own diagnostics are
+  shown when the PCH is built and not again when it is used. The
+  restored engine counts only the consumer's, so the summary line is
+  clang's (`1 warning and 4 errors generated.` for the `diag` case, as
+  clang 19 prints with its PCH). `-v` says how many were not shown
+  (`snapshot restored; the N warning(s) and error(s) its header reported
+  when it was built are not shown again`). A replay still shows them
+  (spec above, "Deviations"); the differential compares the snapshot
+  with the replay's consumer-only diagnostics: the replay's first N
+  warnings and errors are the header's.
+- **State that affects later diagnostics is carried**: the `#pragma
+  clang/GCC diagnostic` mappings and an open `push` (the main file's
+  `pop` pops it), and the deduplication set (spec/diag.md §7.4: a
+  diagnostic the prefix printed at a place is not printed again for the
+  same place and context). Warnings kiln gives once per entity keep
+  their tables in `Sema` (spec/sema.md "Snapshots"); as with replay, a
+  template the main file instantiates again warns again at the same
+  place with the new context, an undefined internal function used in
+  the prefix is reported once at the end of the unit, at its first use,
+  and a deprecated entity is reported at each use. Each matches clang
+  19's PCH output (`diag-once` case). `-Werror`, `-Wfatal-errors`,
+  `-ferror-limit=`'s effect on the prefix and
+  `-ftemplate-backtrace-limit=` are options: they are in the identity
+  (or cannot matter, spec/snap.md) and stay the consumer's.
+- **Producer.** A header with warnings gets a snapshot; one with errors
+  (with `-Werror`, its warnings are errors) gets no PCH at all.
+- **`-verify`.** A `-verify` consumer restores, and the verifier sees
+  the main file's (and the later `-include`s') comments and the
+  consumer's diagnostics. It replays when the header reported any
+  warning or error when it was built (a directive expecting one, e.g.
+  `expected-warning@p.h:1`, could not be satisfied by a restore, while
+  replay satisfies it) or when a file of the header holds
+  `<prefix>-` for one of the `-verify` prefixes (its directives count in
+  a replay, which lexes it). The results are therefore replay's.
+  clang 19 instead never sees the header's diagnostics or directives
+  with `-include-pch`: `expected-warning@p.h:2 {{pw}}` fails there
+  ("expected but not seen"). `-verify`, `-verify=` and
+  `-verify-ignore-unexpected` are not part of the identity.
+- **C headers** (`-x c-header`) get a snapshot like C++ ones: tentative
+  definitions, K&R definitions, `_Static_assert`, `#pragma pack`, VLA
+  typedefs in the main file (cases `c17`, `gnu23`).
+- **Prefixes that end with open state.** Carried, identical to replay:
+  `#pragma push_macro` without its pop, `#pragma clang diagnostic push`
+  without its pop, `#pragma pack(push)`, `#pragma GCC visibility push`,
+  `#pragma once` in the header (the main file's `#include` of it is
+  skipped), `#pragma STDC FP_CONTRACT`, a pending `#pragma weak`.
+  Refused at the producer (`-v`: `snapshot not written: Parser.mods:
+  not at rest`): a header that ends in a global module fragment's
+  `module;`. A header ending inside `#if` is an error (no PCH).
+  `#pragma STDC FENV_ACCESS ON`, `#pragma weak a = b`, `#pragma
+  redefine_extname` and `#pragma clang attribute` are not supported
+  yet: they are errors in any header, so there is no PCH to restore.
+- **`-MD`.** The list is the same as replay's: the PCH's input files,
+  then the main file and its headers, as clang lists them with
+  `-include-pch` (clang 19: `m.o: <abs>/p.h <abs>/inner.h m.cpp m.h`;
+  kiln spells the PCH's files as recorded, relative to the producer's
+  directory). With `-include p.h` the main file comes first (`m.o:
+  m.cpp p.h inner.h m.h`), as clang's.
+- **Chained and module consumers.** A PCH built with another
+  `-include-pch` (a chain) gets a snapshot of the whole prefix, and its
+  consumer restores. A consumer with `-fmodule-file=` restores when the
+  producer had the same options (they are in the identity). A module
+  unit (an input whose first declaration, after comments and
+  directives, is `module` or `export module`) replays: a replay puts the
+  header before its module declaration, which is an error ("Deviations"
+  below), while a restore would accept it as clang's PCH does.
+
 ### Deviations
 
 - A touch that leaves the content unchanged is accepted. A same-size edit

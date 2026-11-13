@@ -63,6 +63,10 @@ pub struct DiagEngine<'sm> {
     /// What the held diagnostics will count, in the order `errors`,
     /// `uncompilable`, `unrecoverable`, `warnings`.
     held_counts: [AtomicU32; 4],
+    /// The warnings and errors the prefix of a restored snapshot
+    /// reported when it was built ([`Self::prefix_reported`]); 0 for an
+    /// engine that was not restored.
+    prefix_reported: u32,
 }
 
 /// A diagnostic [`DiagEngine::hold`] keeps back.
@@ -110,6 +114,7 @@ impl<'sm> DiagEngine<'sm> {
             holding: AtomicU32::new(0),
             held: Mutex::new(Vec::new()),
             held_counts: Default::default(),
+            prefix_reported: 0,
         };
         for od in opts.pending.iter().chain(&reports) {
             let mut d = Diag::new(od.id, Span::INVALID);
@@ -125,6 +130,15 @@ impl<'sm> DiagEngine<'sm> {
             Format::Text => DiagEngine::new(sm, opts, TextSink::new(io::stderr(), opts)),
             Format::Json => DiagEngine::new(sm, opts, JsonSink::new(io::stderr(), opts)),
         }
+    }
+
+    /// How many warnings and errors the prefix of the snapshot this
+    /// engine was restored from reported when it was built (spec/diag.md
+    /// "Snapshots"); they are not shown again, nor counted. 0 for an
+    /// engine that was not restored. A `-verify` consumer replays
+    /// instead when it is not 0 (spec/driver.md "PCH snapshot: behaviour").
+    pub fn prefix_reported(&self) -> u32 {
+        self.prefix_reported
     }
 
     /// The source manager diagnostics refer to.

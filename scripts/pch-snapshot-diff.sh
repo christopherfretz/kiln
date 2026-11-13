@@ -6,13 +6,14 @@
 #
 # Each case under scripts/pch-snapshot-diff/<case>/ is a prefix header
 # (`prefix.h`, built into a PCH with -fkiln-pch-snapshot=write), a main
-# file (`main.cpp`) and the compile's flags (`flags`, one per line;
+# file (`main.cpp`, or `main.c` for a C case) and the compile's flags (`flags`, one per line;
 # `@GCC16@` is $KILN_GCC16, else .toolchain/gcc-16.1.0-image/usr/local in
 # the checkout or beside it, as scripts/env.sh finds .toolchain). The main file is
 # compiled three ways, `plain` (-include prefix.h, the judge), `replay`
 # (-include-pch) and `snapshot` (-include-pch -fkiln-pch-snapshot=load),
 # and snapshot is compared with replay (and replay with plain) on: the
-# exit status, the diagnostics, -fdump-ast of the main file's
+# exit status, the diagnostics (snapshot vs replay: the consumer's only,
+# pch-snapshot-diff/consumer-only.awk), -fdump-ast of the main file's
 # declarations, the IR at -O0 and with -g, and the -MD list. Every
 # output stays in <out-dir>/<case>/ for the classification.
 set -u
@@ -35,21 +36,24 @@ for cand in "$root/.toolchain" "$main/.toolchain" "$main/../.toolchain"; do
 done
 cases=("$@")
 if [ ${#cases[@]} -eq 0 ]; then
-  cases=(gnu mid lcx meta diag)
+  cases=(gnu mid lcx meta diag diag-once c17 gnu23 open-push-macro open-diag-push
+    open-pack open-visibility open-once open-fp-pragma open-weak)
 fi
 status=0
 for c in "${cases[@]}"; do
   src=$here/pch-snapshot-diff/$c
   d=$out/$c
   mkdir -p "$d"
-  cp "$src/prefix.h" "$src/main.cpp" "$d/"
+  # A C case has `main.c` (its header is then `-x c-header`).
+  if [ -e "$src/main.c" ]; then mainf=main.c hx=c-header; else mainf=main.cpp hx=c++-header; fi
+  cp "$src/prefix.h" "$src/$mainf" "$d/"
   flags=()
   while IFS= read -r f; do
     [ -n "$f" ] && flags+=("${f//@GCC16@/$gcc16}")
   done <"$src/flags"
   (
     cd "$d" || exit 1
-    "$kiln" "${flags[@]}" -fkiln-pch-snapshot=write -v -x c++-header prefix.h \
+    "$kiln" "${flags[@]}" -fkiln-pch-snapshot=write -v -x "$hx" prefix.h \
       -o prefix.pch >produce.out 2>produce.err
     echo $? >produce.rc
     for v in plain replay snapshot; do
@@ -60,21 +64,29 @@ for c in "${cases[@]}"; do
       esac
       rm -f $v.ll $v.g.ll $v.d
       env KILN_SNAP_TIMING=$([ $v = snapshot ] && echo 1 || echo 0) \
-        "$kiln" "${flags[@]}" "${pre[@]}" -S -emit-llvm main.cpp -o $v.ll \
+        "$kiln" "${flags[@]}" "${pre[@]}" -S -emit-llvm "$mainf" -o $v.ll \
         -MD -MF $v.d -MT main.o 2>$v.err
       echo $? >$v.rc
-      "$kiln" "${flags[@]}" "${pre[@]}" -g -S -emit-llvm main.cpp -o $v.g.ll 2>/dev/null
-      "$kiln" "${flags[@]}" "${pre[@]}" -fsyntax-only -fdump-ast=locs main.cpp \
+      "$kiln" "${flags[@]}" "${pre[@]}" -g -S -emit-llvm "$mainf" -o $v.g.ll 2>/dev/null
+      "$kiln" "${flags[@]}" "${pre[@]}" -fsyntax-only -fdump-ast=locs "$mainf" \
         >$v.ast 2>/dev/null
       grep -v -e '^snapshot-timing: ' $v.err >$v.diag
     done
+    # The snapshot does not show the header's own diagnostics again
+    # (clang's PCH policy); replay does. `replay.cdiag` is replay's
+    # without them, which the snapshot must equal.
+    n=$(sed -n 's/^snapshot-timing: the header reported \([0-9]*\) diagnostic.*/\1/p' snapshot.err)
+    awk -v n="${n:-0}" -f "$here/pch-snapshot-diff/consumer-only.awk" replay.diag >replay.cdiag
   )
   verdict() {
     local a=$1 b=$2 what=$3 diffs=()
     for x in rc diag ast ll g.ll d; do
       # A failed compile writes no IR on either side.
-      if [ -e "$d/$a.$x" ] || [ -e "$d/$b.$x" ]; then
-        cmp -s "$d/$a.$x" "$d/$b.$x" || diffs+=("$x")
+      local bx=$x
+      # Snapshot vs replay: consumer-only diagnostics.
+      [ "$a" = snapshot ] && [ "$x" = diag ] && bx=cdiag
+      if [ -e "$d/$a.$x" ] || [ -e "$d/$b.$bx" ]; then
+        cmp -s "$d/$a.$x" "$d/$b.$bx" || diffs+=("$x")
       fi
     done
     if [ ${#diffs[@]} -eq 0 ]; then
