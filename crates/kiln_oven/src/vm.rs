@@ -163,6 +163,13 @@ pub(crate) struct RunState {
 }
 
 impl RunState {
+    /// No memoizable call is in progress (`Oven::snap_ready`).
+    pub(crate) fn at_rest(&self) -> bool {
+        self.pending.is_empty()
+    }
+}
+
+impl RunState {
     /// Heap bytes held (see `Oven::footprint`).
     pub(crate) fn footprint(&self) -> usize {
         self.pending.capacity() * size_of::<Pending>()

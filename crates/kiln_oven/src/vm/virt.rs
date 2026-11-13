@@ -143,6 +143,31 @@ pub(crate) struct Virt {
 }
 
 impl Virt {
+    /// The invariants of decoded class caches (`crate::snap`): every
+    /// class names a subobject graph, every resolved call a compiled
+    /// function and a subobject of its graph.
+    pub(crate) fn check_restored(&self, nfuncs: usize) -> Result<(), &'static str> {
+        let n = self.infos.len() as u32;
+        if self.map.values().any(|&i| i >= n) {
+            return Err("class cache names an unknown subobject graph");
+        }
+        for p in &self.infos {
+            let subs = p.subs.len();
+            if p.subs.iter().any(|s| s.parent as usize >= subs || s.top as usize >= subs.max(1))
+                || p.vvptrs.iter().any(|&k| k as usize >= subs)
+            {
+                return Err("subobject graph links out of range");
+            }
+        }
+        let fine = |t: &Target| (t.func as usize) < nfuncs;
+        if !self.dispatch.values().all(fine) || !self.rel_dispatch.values().all(|r| fine(&r.t)) {
+            return Err("resolved virtual call of an unknown function");
+        }
+        Ok(())
+    }
+}
+
+impl Virt {
     /// The subobject graph of the class with [`PolyInfo`] index `i`.
     pub(crate) fn subs(&self, i: usize) -> &[Sub] {
         &self.infos[i].subs

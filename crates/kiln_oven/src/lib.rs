@@ -50,6 +50,7 @@ mod notes;
 pub mod profile;
 mod reclaim;
 pub mod report;
+mod snap;
 mod softfloat;
 mod stats;
 #[cfg(feature = "op-stats")]

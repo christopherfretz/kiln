@@ -285,6 +285,57 @@ pub(crate) fn float_kind(b: BuiltinType, long_double: FloatFormat) -> Option<Flo
 }
 
 impl Types {
+    /// The invariants of a decoded type table (`crate::snap`): every
+    /// type, field and union position a table entry names is in range,
+    /// and the offset index rows exist.
+    pub(crate) fn check_restored(&self) -> Result<(), &'static str> {
+        let n = self.infos.len();
+        let ok = |t: OTy| (t.0 as usize) < n;
+        for i in &self.infos {
+            let fine = match i.kind {
+                TyKind::Ptr(t)
+                | TyKind::Array { elem: t, .. }
+                | TyKind::BoolVec { elem: t, .. } => ok(t),
+                TyKind::Record { first, count, .. } => {
+                    u64::from(first) + u64::from(count) <= self.fields.len() as u64
+                }
+                _ => true,
+            };
+            if !fine || i.upos.0 > i.upos.1 || i.upos.1 as usize > self.union_pos.len() {
+                return Err("type table entry out of range");
+            }
+        }
+        if !self.fields.iter().all(|f| ok(f.ty))
+            || !self.union_pos.iter().all(|&(_, t)| ok(t))
+            || !self.map.values().all(|&t| ok(t))
+            || !self.arrays.values().chain(self.const_arrays.values()).all(|&t| ok(t))
+            || !self.provisional.values().chain(self.provisional_slots.iter()).all(|&t| ok(t))
+            || !self.nv_views.iter().chain(self.nv_class.iter()).all(|(&a, &b)| ok(a) && ok(b))
+            || !self.empty_bases.iter().all(|(&t, v)| ok(t) && v.iter().all(|&(b, _)| ok(b)))
+            || !self.data_sizes.keys().all(|&t| ok(t))
+        {
+            return Err("type table map names an unknown type");
+        }
+        if self.idx_order.len() != self.idx_reach.len() {
+            return Err("type offset index rows inconsistent");
+        }
+        for (&t, &s) in &self.idx_start {
+            let rows = match self.infos.get(t.0 as usize).map(|i| i.kind) {
+                Some(TyKind::Record { count, .. }) => count as usize,
+                _ => return Err("offset index of a non-record type"),
+            };
+            if s as usize + rows > self.idx_order.len() {
+                return Err("offset index rows out of range");
+            }
+        }
+        if self.idx_order.iter().any(|&i| i as usize >= self.fields.len()) {
+            return Err("offset index names an unknown field");
+        }
+        Ok(())
+    }
+}
+
+impl Types {
     pub fn info(&self, t: OTy) -> &TyInfo {
         &self.infos[t.0 as usize]
     }

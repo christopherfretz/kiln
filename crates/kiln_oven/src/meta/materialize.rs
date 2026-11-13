@@ -80,6 +80,23 @@ pub(crate) enum Recipe {
     Whole,
 }
 
+impl Recipe {
+    /// The types it names (`crate::snap`).
+    pub(crate) fn types(&self) -> impl Iterator<Item = OTy> {
+        let (a, b, c, d) = match *self {
+            Recipe::Span { ptr, len } => (Some(ptr.ty), Some(len.ty), None, None),
+            Recipe::Vector { begin, end, cap, elem } => {
+                (Some(begin.ty), Some(end.ty), Some(cap.ty), Some(elem))
+            }
+            Recipe::Ptr(l) => (Some(l.ty), None, None, None),
+            Recipe::Pair(x, y) => (Some(x.ty), Some(y.ty), None, None),
+            Recipe::Inline { elem, .. } => (Some(elem), None, None, None),
+            Recipe::Whole => (None, None, None, None),
+        };
+        [a, b, c, d].into_iter().flatten()
+    }
+}
+
 /// The exception path of a call site (spec/reflection.md §8.2): the
 /// register the VM sets when the call throws, and the recipes of the
 /// `std::meta::exception` constructor's message and location parameters.

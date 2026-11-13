@@ -35,6 +35,8 @@ use kiln_source::fx::FxHashMap;
 
 use crate::ty::{OTy, TyKind, Types};
 
+mod snap;
+
 pub(crate) const GRAN: u64 = 8;
 const OFF_MASK: u64 = 0xFFFF_FFFF;
 pub(crate) const PAST: u64 = 1 << 32;

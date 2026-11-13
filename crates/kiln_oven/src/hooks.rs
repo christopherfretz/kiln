@@ -42,6 +42,13 @@ pub(crate) struct Hooks {
     pub(crate) prof: Option<Box<Profile>>,
 }
 
+impl Hooks {
+    /// No call or evaluation mark is open (`Oven::snap_ready`).
+    pub(crate) fn at_rest(&self) -> bool {
+        self.marks.is_empty()
+    }
+}
+
 /// [`CallMark::func`] of an evaluation's mark: its depth is 0, so no
 /// call's end closes it.
 const EVAL: u32 = u32::MAX;

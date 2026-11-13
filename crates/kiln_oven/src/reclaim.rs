@@ -39,6 +39,17 @@ pub(crate) struct LastThunk {
     after: Tables,
 }
 
+impl LastThunk {
+    /// Whether its index and table lengths lie within tables of `code`
+    /// words and `funcs` functions (`crate::snap`).
+    pub(crate) fn fits(&self, code: usize, funcs: usize) -> bool {
+        (self.idx as usize) < funcs
+            && self.after.code <= code
+            && self.after.padded <= code
+            && self.after.funcs <= funcs
+    }
+}
+
 impl Oven {
     /// The current lengths of the code tables.
     pub(crate) fn tables(&self) -> Tables {

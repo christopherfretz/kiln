@@ -94,6 +94,26 @@ pub(crate) struct FrameState {
     stubs: FxHashMap<(ExprId, FrameHow), FrameStubs>,
 }
 
+impl FrameState {
+    /// No potential-constant frame job runs and no frame object is
+    /// tracked (`Oven::snap_ready`): what Sema holds between the
+    /// constant-expression checks of function bodies.
+    pub(crate) fn snap_ready(&self) -> Result<(), &'static str> {
+        if self.how.is_some() || !self.binds.is_empty() {
+            return Err("frame: a potential-constant frame job is running");
+        }
+        if self.bytes != 0 {
+            return Err("frame: potential-constant frame objects are live");
+        }
+        Ok(())
+    }
+
+    /// The function indices of the compiled stubs (`crate::snap`).
+    pub(crate) fn stub_funcs(&self) -> impl Iterator<Item = u32> + '_ {
+        self.stubs.values().flatten().map(|&(_, f)| f)
+    }
+}
+
 impl Oven {
     /// Starts tracking local variable `d` of a `constexpr` function body
     /// in a potential-constant frame (WP-1150): its object, initialized
