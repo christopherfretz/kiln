@@ -72,8 +72,8 @@ Performance:
   by hand), and the 1.0 release measurements.
 - `perf-history.md`: the per-work-package measurements made by hand
   before 1.0 (WP-313 to WP-1171), moved verbatim from `perf.md`.
-- `perf-reference-workload.md`: the reference workload under kiln
-  (WP-551).
+- `perf-reflection.md`: a large reflection-heavy codebase under
+  kiln, and the perf work packages that followed (WP-551).
 - `header-search-syscalls.md`: file-system system calls per TU against
   clang 19 (WP-820).
 - `bench-regressions-WP-798.md`: triage of one bench regression report.

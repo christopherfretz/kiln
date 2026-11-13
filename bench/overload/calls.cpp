@@ -6,7 +6,7 @@
 // reference binding that tries (and rejects) the parameter class's
 // converting constructors, which is where a naive [over.match.ref] /
 // [over.match.copy] walk spends its time. Mirrors the shape of
-// the reference workload's generated binding tables (one `bind` overload per bound
+// generated binding tables in real code (one `bind` overload per bound
 // type). Measures candidate-set reuse (§1.4), ICS computation and the
 // best-viable scan. No library headers.
 

@@ -9357,7 +9357,7 @@ Goldens mask `*_us`.
 - `fold_big.cpp` (a fold over 4096 elements);
 - `libcxx_m3.cpp` (includes the 8 exit headers and instantiates their
   typical uses);
-- the reference-workload synthetic corpus, when WP-030 delivers it.
+- the synthetic reflection corpus, when WP-030 delivers it.
 
 *Landed (WP-086).* `cargo xtask bench` passes kiln
 `-fkiln-instantiation-report=json` for every entry of the `frontend`

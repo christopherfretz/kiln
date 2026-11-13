@@ -4,7 +4,7 @@ The release gate for 1.1.0, the release that adds C mode
 ([../../CHANGELOG.md](../../CHANGELOG.md)), cut from `main` onto the
 `release/1.1` branch. Every release runs the same gate before its tag:
 the release archive, the full libc++ suite on aarch64 and x86_64, the
-full open-source corpus, and the reference workload. The commands are
+full open-source corpus, and a downstream reflection-heavy build. The commands are
 those of [release-1.0.md](release-1.0.md), with `1.0.0` replaced by
 `1.1.0`; the 1.0.2 results in [release-1.0.2.md](release-1.0.2.md) are
 the baseline. A check passes when it shows no regression against that
@@ -162,12 +162,12 @@ The known failures that did not change: glaze 100/102 (`cbor_test` and
 `io_uring` tests), folly 725/726 translation units, folly_coro 616/618
 (the same two tests as at 1.0.2).
 
-## Reference workload
+## Downstream build
 
-The reference workload's maintainers build and test the RC: its cold
+The maintainers of a large reflection-heavy codebase build and test the RC: its cold
 build, its unit tests, and its diagnostics lane.
 
 | | result |
 |---|---|
 | verdict on `1d3f41331` | pass: cold build 217/217 in 333 s at 3.26 GiB peak (1.0.2: 316 s, 3.24 GiB; on this shared host the first candidate's build took 357 s beside another build), unit tests 2104 and harness 159 all pass, diagnostics lane 945/945, the same three build warnings as 1.0.2 |
-| first candidate `ec6413a0a` | pass on the same lane, and on the workload's second, larger lane (cold build, 1843 test runs with no new failure, diagnostics 208/208). The second lane was not repeated on `1d3f41331`: the two candidates differ in one C-only code path and a docs change |
+| first candidate `ec6413a0a` | pass on the same lane, and on the codebase's second, larger lane (cold build, 1843 test runs with no new failure, diagnostics 208/208). The second lane was not repeated on `1d3f41331`: the two candidates differ in one C-only code path and a docs change |

@@ -1,4 +1,4 @@
-// The -Wno- spellings the reference workload passes silence the C++20 deprecations,
+// The -Wno- spellings that real builds pass silence the C++20 deprecations,
 // through clang's group nesting too (`-Wno-enum-conversion` covers
 // `deprecated-enum-enum-conversion` and `deprecated-enum-float-conversion`).
 //@ std: c++20

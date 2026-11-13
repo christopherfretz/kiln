@@ -5,7 +5,7 @@
 // deduced pack `Us` and recurses on `Ts`; the parameters of `ts` and `us`
 // must keep to their own packs at every step, including when a tuple is
 // empty (`Is` and the next step's `Ts` empty). The real case is
-// the reference workload's log-once helper: `tuple_cat(tuple<E>, tuple<int>,
+// a downstream log-once helper: `tuple_cat(tuple<E>, tuple<int>,
 // tuple<vector<int>>, tuple<>)`.
 // Verified against clang 21.
 //@ expect: run

@@ -151,13 +151,11 @@ library surface (M4's feature table covers the language). Track pass rate in `do
   not-a-kiln-bug and does not block M5 (operator decision, 2026-11-03).
 - Stretch: build libc++ itself with kiln and run the suite against it.
 
-## M6 — C++26 reflection and the reference workload
-*The reference workload* is a private, reflection-heavy downstream C++26
-codebase that motivates kiln; it is referred to only by that name here.
+## M6 — C++26 reflection
 P2996 reflection, `std::meta` runtime in the Oven, splicing, annotations
 (P3394), `define_aggregate`, expansion statements (P1306), plus whichever of
 token injection makes it into the IS. Reference compiler: **GCC 16.1.0**
-(it builds the reference workload; the Bloomberg p2996 clang fork does not and is used
+(the production implementation of `<meta>`; the Bloomberg p2996 clang fork is used
 only as an advisory oracle for AST/diagnostic spot checks — see BACKLOG
 WP-102). Reflection tests default to `oracle: none` with goldens written
 from the P2996 text.
@@ -166,16 +164,16 @@ from the P2996 text.
   Oven (`std::meta::info` as a native value, splices, annotations,
   `define_aggregate`) behind two thin intrinsic shims, the p2996 fork's
   `__metafunction(...)` for its `<experimental/meta>` (to get off the ground and
-  run the fork's tests and the reference workload early) and GCC 16.1's for libstdc++'s
+  run the fork's tests and real reflection code early) and GCC 16.1's for libstdc++'s
   production `<meta>`. The same reflection programs run through both headers as
   a differential check. A kiln-owned `<meta>` is a fallback only. The maturity
   bar for the compiler is consuming BOTH libc++ (M4/M5 gates) and libstdc++
-  (consumption track from M4, WP-188; the reference workload under GCC uses it).
+  (consumption track from M4, WP-188; reflection code built with GCC uses it).
   libstdc++ header status: `docs/status/libstdcxx.md` (`cargo xtask libstdcxx`).
 - Plan and decisions: `docs/plans/m6-reflection.md` (16 work packages,
   WP-470..485; GCC 16.1.0 provisioned on the dev host 2026-11-03; libstdc++
   16.1 `<meta>` is the production header, the test header until then).
-- Exit: the reference workload builds
+- Exit: large real-world reflection-heavy C++26 code builds
   and its tests pass; its compile time and peak memory with kiln are recorded
   against GCC 16.1 (whose constexpr memory growth is the problem kiln exists
   to fix). Exit recorded 2026-11-05 (docs/plans/m6-reflection.md §5); the
@@ -184,7 +182,7 @@ from the P2996 text.
 
 ## M7 — Performance campaign
 With correctness pinned by M5/M6, optimize the Oven and the frontend against
-the `bench/` corpus: template-heavy code, the reflection-heavy reference workload, and
+the `bench/` corpus: template-heavy code, large reflection-heavy code, and
 synthetic constexpr workloads. Publish the numbers.
 
 ## M8 — Robustness: real-world open-source builds

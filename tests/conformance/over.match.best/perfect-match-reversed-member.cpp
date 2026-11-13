@@ -2,7 +2,7 @@
 // reversed form is a unique perfect match (the rewritten candidate of the
 // same function does not make it ambiguous), so the function template is
 // not deduced and its hard-error signature is not reported. kiln deduces
-// it (the reference-workload series treated the two as rival perfect
+// it (the downstream report series treated the two as rival perfect
 // candidates); BACKLOG WP-635.
 //@ expect: compile-ok
 //@ requires: clang>=22

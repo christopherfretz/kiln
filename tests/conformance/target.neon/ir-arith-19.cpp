@@ -1,4 +1,4 @@
-// [driver] The NEON arithmetic builtins the reference workload's scanner
+// [driver] The NEON arithmetic builtins that real scanner
 // and linear-algebra code reach lower as clang 19's
 // `EmitAArch64BuiltinExpr`, for every type the type code allows: `vpadd`,
 // `vqsub` (bitcast to the declared type), `vmax`, `vmin`, `vabs`, `vsqrt`,

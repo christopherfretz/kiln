@@ -6,7 +6,7 @@
 // ([dcl.link]/6). The shape is libstdc++'s <type_traits> (`declval`
 // declared, then defined) and <bits/move.h> (`swap`) reached after `std`
 // was first opened by <cstdlib> under a user's `extern "C" { #include
-// <stdlib.h> }` (the reference workload's vendored headers).
+// <stdlib.h> }` (as vendored headers in real code do).
 //@ expect: run
 //@ strict-diags
 //@ exit: 9

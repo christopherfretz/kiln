@@ -21,11 +21,6 @@ WPs are sized so that one subagent finishes in a single session with a
 reviewable diff (roughly: one module, one spec section, < ~2k lines).
 
 ## Rules for implementers
-- **Never name private downstream codebases.** This repository is public. The
-  motivating reflection-heavy project is called only "the reference workload"
-  here (docs/ROADMAP.md M6); never write its real name, repository URL or file
-  contents into code, comments, tests, docs, commit messages, branch names or
-  PR text. Synthetic reproductions of its shapes (`bench/`) are fine.
 - **Never `git stash` in a worktree.** `refs/stash` belongs to the repository,
   not the worktree: two agents stashing concurrently pop each other's changes
   (WP-213/WP-215, 2026-11-01). Commit work in progress, or use `git diff >
