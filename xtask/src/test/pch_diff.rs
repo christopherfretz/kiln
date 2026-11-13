@@ -123,8 +123,8 @@ impl Test<'_> {
                 indent(&producer.stderr_str())
             )));
         }
-        let path = match mode {
-            PchDiff::Replay => mode.as_str().to_owned(),
+        let mut path = match mode {
+            PchDiff::Replay | PchDiff::Snapshot => mode.as_str().to_owned(),
             _ => pch_diff::path_note(&producer.stderr_str())
                 .unwrap_or_else(|| "no declaration image".to_owned()),
         };
@@ -132,9 +132,14 @@ impl Test<'_> {
         self.pch_flags =
             vec!["-include-pch".into(), pch.into_os_string(), mode.consumer_flag().into()];
         self.pch_src = Some(copy);
+        self.pch_snapshot_timing = mode == PchDiff::Snapshot;
         let with = self.pch_diff_build(spec, "pch");
         (self.pch_src, self.pch_flags) = (None, Vec::new());
+        self.pch_snapshot_timing = false;
         let with = with?;
+        if mode == PchDiff::Snapshot {
+            path = pch_diff::snapshot_path(&producer.stderr_str(), &with.compile.stderr_str());
+        }
         let what = format!("with -include-pch of the leading #includes ({})", mode.consumer_flag());
         let (p, w) = (plain.compile.stderr_str(), with.compile.stderr_str());
         if plain.compile.success() != with.compile.success() {
@@ -195,9 +200,17 @@ impl Test<'_> {
         if let Some(n) = self.clang_compat(&program, spec) {
             c.arg(format!("-fclang-compat={n}"));
         }
+        if self.cfg.pch_diff == Some(PchDiff::Snapshot) {
+            // The consumer's order (`Self::compile`): the snapshot's
+            // identity is the command line, in order.
+            c.args(self.meta_header_flags(true));
+        }
         c.args(self.args_for(&program, spec));
         c.arg("-iquote").arg(self.test_dir());
         c.args(pch_diff::PRODUCER_FLAGS);
+        if self.cfg.pch_diff == Some(PchDiff::Snapshot) {
+            c.arg(pch_diff::SNAPSHOT_PRODUCER_FLAG);
+        }
         c.args(["-x", "c++-header"]).arg(header).arg("-o").arg(pch);
         let o = self.exec("the compiler", &c, self.cfg.compile_timeout)?;
         if o.code().is_none() || o.stderr_str().contains("panicked at") {

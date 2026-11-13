@@ -15,6 +15,11 @@ pub enum PchDiff {
     /// `-fkiln-pch-image=check`: kiln compiles with the image and with
     /// replay and reports the first difference itself.
     Check,
+    /// EXPERIMENTAL (WP-1383): `-fkiln-pch-snapshot=load`, the
+    /// whole-compiler snapshot the producer wrote with
+    /// `-fkiln-pch-snapshot=write` ([`SNAPSHOT_PRODUCER_FLAG`]), else the
+    /// replay it falls back to.
+    Snapshot,
 }
 
 impl PchDiff {
@@ -24,6 +29,7 @@ impl PchDiff {
             "load" => Some(Self::Load),
             "replay" => Some(Self::Replay),
             "check" => Some(Self::Check),
+            "snapshot" => Some(Self::Snapshot),
             _ => None,
         }
     }
@@ -33,6 +39,7 @@ impl PchDiff {
             Self::Load => "load",
             Self::Replay => "replay",
             Self::Check => "check",
+            Self::Snapshot => "snapshot",
         }
     }
 
@@ -43,6 +50,7 @@ impl PchDiff {
             Self::Load => "-fkiln-pch-image=load",
             Self::Replay => "-fno-kiln-pch-image",
             Self::Check => "-fkiln-pch-image=check",
+            Self::Snapshot => "-fkiln-pch-snapshot=load",
         }
     }
 }
@@ -50,6 +58,30 @@ impl PchDiff {
 /// The producer's flags beyond the test's own: the image and the `-v`
 /// note that names the path a consumer takes ([`path_note`]).
 pub const PRODUCER_FLAGS: [&str; 2] = ["-fkiln-pch-image", "-v"];
+
+/// [`PchDiff::Snapshot`]'s producer flag, beyond [`PRODUCER_FLAGS`].
+pub const SNAPSHOT_PRODUCER_FLAG: &str = "-fkiln-pch-snapshot=write";
+
+/// The environment variable that makes a snapshot consumer print its
+/// `snapshot-timing:` lines: under [`PchDiff::Snapshot`] the
+/// `snapshot-timing: restore` line tells a restore from a replay.
+pub const SNAPSHOT_TIMING_ENV: &str = "KILN_SNAP_TIMING";
+
+/// Under [`PchDiff::Snapshot`], the path the consumer took (its stderr
+/// `with`, the producer's `producer`): `snapshot`, or why it replayed.
+pub fn snapshot_path(producer: &str, with: &str) -> String {
+    if with.lines().any(|l| l.starts_with("snapshot-timing: restore ")) {
+        return "snapshot".to_owned();
+    }
+    let why = producer.lines().find_map(|l| {
+        let (_, rest) = l.split_once("': snapshot not written: ")?;
+        Some(rest.to_owned())
+    });
+    match why {
+        Some(w) => format!("replay: no snapshot: {w}"),
+        None => "replay: the snapshot was not used".to_owned(),
+    }
+}
 
 /// The `#include` lines that open `source`, before its first line that
 /// is neither blank, a comment, nor an `#include <...>`/`#include "..."`
@@ -147,7 +179,8 @@ pub fn diag_lines(stderr: &str) -> Vec<&str> {
             !(l.starts_with("In file included from ")
                 || l.starts_with("                 from ")
                 || l.ends_with(" generated.")
-                || l.starts_with("note: precompiled header '"))
+                || l.starts_with("note: precompiled header '")
+                || l.starts_with("snapshot-timing: "))
         })
         .collect()
 }
@@ -213,5 +246,14 @@ mod tests {
             "In file included from p.h:1:\nh.h:1:5: warning: w\nt.cpp:3:1: error: e\n"
         ));
         assert!(!same_diags(plain, producer, "t.cpp:3:2: error: e\n"));
+        assert!(same_diags(plain, producer, "snapshot-timing: restore x\nt.cpp:3:1: error: e\n"));
+    }
+
+    #[test]
+    fn snapshot_paths() {
+        assert_eq!(snapshot_path("", "snapshot-timing: restore Ast 1 ms\n"), "snapshot");
+        let p = "note: precompiled header 'p.pch': snapshot not written: Sema.ctx: x\n";
+        assert_eq!(snapshot_path(p, ""), "replay: no snapshot: Sema.ctx: x");
+        assert_eq!(snapshot_path("", ""), "replay: the snapshot was not used");
     }
 }

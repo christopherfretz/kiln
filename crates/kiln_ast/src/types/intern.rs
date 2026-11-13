@@ -130,6 +130,10 @@ impl InternTable {
     /// in range: the caller checked), inserted in id order with the hash
     /// `hash` gives (a snapshot's restore, spec/ast.md "Snapshots").
     pub(crate) fn rebuild(len: usize, absent: &[u32], hash: impl Fn(u32) -> u64) -> InternTable {
+        timed_rebuild(|| Self::rebuild_untimed(len, absent, hash))
+    }
+
+    fn rebuild_untimed(len: usize, absent: &[u32], hash: impl Fn(u32) -> u64) -> InternTable {
         let mut t = InternTable::default();
         #[cfg(not(feature = "std-intern"))]
         {
@@ -263,4 +267,28 @@ impl KeyedTable {
             self.intern.heap_bytes(),
         ));
     }
+}
+
+thread_local! {
+    /// The time this thread spent in [`InternTable::rebuild`] since the
+    /// last [`take_rebuild_time`]: instrumentation of the snapshot
+    /// prototype's load timer (WP-1383), no semantic state.
+    static REBUILD_TIME: std::cell::Cell<std::time::Duration> =
+        const { std::cell::Cell::new(std::time::Duration::ZERO) };
+}
+
+/// Runs `f`, a hash-consing table's rebuild from a snapshot, adding its
+/// time to the thread's [`take_rebuild_time`] (WP-1383 load timer).
+pub(crate) fn timed_rebuild<T>(f: impl FnOnce() -> T) -> T {
+    let started = std::time::Instant::now();
+    let t = f();
+    REBUILD_TIME.with(|c| c.set(c.get() + started.elapsed()));
+    t
+}
+
+/// The time this thread spent rebuilding hash-consing tables from a
+/// snapshot since the last call, and resets it (WP-1383 load timer).
+#[must_use]
+pub fn take_rebuild_time() -> std::time::Duration {
+    REBUILD_TIME.with(|c| c.replace(std::time::Duration::ZERO))
 }

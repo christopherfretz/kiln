@@ -546,6 +546,33 @@ pub(crate) fn consumer(
         return Err(());
     }
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
+    if args.pch.snapshot == crate::args::PchSnapshot::Load
+        && args.verify.is_none()
+        && args.pch.image != PchImage::Check
+    {
+        // EXPERIMENTAL (WP-1383): the snapshot stands in for the
+        // producer's `-include`s and the header; the replay arguments
+        // below stay the fallback.
+        let extras: Vec<String> =
+            args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
+        match crate::pch_snapshot::find(args, pch, &rec, extras) {
+            Ok(u) => {
+                crate::pch_snapshot::note(args, stderr, pch, "matches; restoring it");
+                out.pch.snapshot_use = Some(u);
+                finish(e);
+                let mut includes: Vec<String> = rec.includes.iter().map(|i| resolve(i)).collect();
+                includes.push(resolve(&rec.main));
+                includes
+                    .extend(args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned());
+                out.includes = includes;
+                return Ok(Some(out));
+            }
+            Err(why) => {
+                let why = format!("not used: {why}");
+                crate::pch_snapshot::note(args, stderr, pch, &why);
+            }
+        }
+    }
     // WP-1036: the record and the declaration image stand in for the
     // producer's `-include`s and the header, or neither does (`check`:
     // the compile is also run so, and compared with replay).
@@ -1166,6 +1193,25 @@ fn write_pch(
             ),
             None => Ok(()),
         };
+    }
+    let mut image = image;
+    if args.pch.snapshot == crate::args::PchSnapshot::Write {
+        // EXPERIMENTAL (WP-1383): the snapshot section, next to the
+        // record (which replay still uses) and the image.
+        let made =
+            crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts).and_then(|s| {
+                crate::pch_snapshot::add_section(image.take(), s)
+                    .map_err(|e| format!("the section block: {e}"))
+            });
+        match made {
+            Ok(block) => {
+                crate::pch_snapshot::note(args, &io.stderr, out, "written");
+                image = Some(block);
+            }
+            Err(why) => {
+                crate::pch_snapshot::note(args, &io.stderr, out, &format!("not written: {why}"));
+            }
+        }
     }
     let Some(list) = r.dep_list else { return 0 };
     let list = list.borrow();

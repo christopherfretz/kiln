@@ -18,7 +18,7 @@ mod args;
 mod canon;
 mod context;
 mod func;
-mod intern;
+pub(crate) mod intern;
 mod kinds;
 mod layout;
 mod names;
@@ -30,6 +30,7 @@ mod profile_expr;
 #[cfg(test)]
 mod query_tests;
 mod snap;
+pub use intern::take_rebuild_time;
 pub use profile_expr::EquivScratch;
 
 pub use args::{ArgKind, ArgView, TemplateArg};

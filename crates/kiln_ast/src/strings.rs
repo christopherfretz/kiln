@@ -321,14 +321,17 @@ impl kiln_snap::Snap for StringPool {
             return Err(r.invalid::<Self>("string literal outside the pool"));
         }
         let slice = |e: &Entry| &bytes[e.start as usize..e.start as usize + e.len as usize];
-        let mut table = HashTable::with_capacity(entries.len());
-        for (i, e) in entries.iter().enumerate() {
-            let id = StringLitId::new(i as u32 + 1);
-            table.insert_unique(hash(e.enc, slice(e)), id, |&id| {
-                let e = &entries[id.index() as usize - 1];
-                hash(e.enc, slice(e))
-            });
-        }
+        let table = crate::types::intern::timed_rebuild(|| {
+            let mut table = HashTable::with_capacity(entries.len());
+            for (i, e) in entries.iter().enumerate() {
+                let id = StringLitId::new(i as u32 + 1);
+                table.insert_unique(hash(e.enc, slice(e)), id, |&id| {
+                    let e = &entries[id.index() as usize - 1];
+                    hash(e.enc, slice(e))
+                });
+            }
+            table
+        });
         Ok(StringPool { bytes, entries, table })
     }
 

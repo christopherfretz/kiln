@@ -121,11 +121,14 @@ impl Snap for ConstStore {
         if let Err(why) = pools.check_restored() {
             return Err(r.invalid::<Self>(why));
         }
-        let mut table = HashTable::with_capacity(pools.nodes.len());
-        for i in 1..=pools.nodes.len() as u32 {
-            let id = ConstValueId::new(i);
-            table.insert_unique(pools.hash_of(id), id, |&id| pools.hash_of(id));
-        }
+        let table = crate::types::intern::timed_rebuild(|| {
+            let mut table = HashTable::with_capacity(pools.nodes.len());
+            for i in 1..=pools.nodes.len() as u32 {
+                let id = ConstValueId::new(i);
+                table.insert_unique(pools.hash_of(id), id, |&id| pools.hash_of(id));
+            }
+            table
+        });
         Ok(ConstStore { pools, table })
     }
 

@@ -43,9 +43,13 @@ pub const SECTION_IMAGE: u32 = 2;
 /// The preprocessor-state record (spec/modules.md §11.13; encoded by
 /// [`crate::state`]).
 pub const SECTION_PP: u32 = 3;
+/// The whole-front-end snapshot of a precompiled header (WP-1383, an
+/// experimental prototype: `-fkiln-pch-snapshot`, spec/snap.md
+/// "Whole-compiler restore order"). Valid only for the same build.
+pub const SECTION_SNAPSHOT: u32 = 4;
 /// The highest section tag this reader knows. Tags above it are reserved
 /// for later parts of the serialised AST (§11.11, "Sections").
-pub const SECTION_MAX: u32 = SECTION_PP;
+pub const SECTION_MAX: u32 = SECTION_SNAPSHOT;
 /// The includer index of the predefines buffer (`<built-in>`).
 pub const INCLUDER_BUILTIN: u32 = u32::MAX;
 /// The includer index of a request without an includer.

@@ -417,13 +417,29 @@ macro_rules! root_impl {
             /// A corrupt snapshot ([`SnapError`], never a panic), or a
             /// `Sema` that is not fresh (`ErrorKind::Invalid`).
             pub fn snap_restore(&mut self, r: &mut Reader<'_>) -> Result<(), SnapError> {
+                self.snap_restore_split(r, &mut |_| {})
+            }
+
+            /// [`Self::snap_restore`], calling `mark` after each part is
+            /// decoded (`"ast"`, `"oven"`, `"fields"`): the per-root load
+            /// timer of the snapshot prototype (WP-1383).
+            ///
+            /// # Errors
+            /// As [`Self::snap_restore`].
+            pub fn snap_restore_split(
+                &mut self,
+                r: &mut Reader<'_>,
+                mark: &mut dyn FnMut(&'static str),
+            ) -> Result<(), SnapError> {
                 if self.snapshot_ready().is_err() || !self.is_fresh() {
                     return Err(r.invalid::<Self>("restore into a used Sema"));
                 }
                 at("Sema.ast", get_ast(r, &mut self.ast))?;
+                mark("ast");
                 if let Some(o) = &mut self.oven {
                     at("Sema.oven", get_oven(r, o))?;
                 }
+                mark("oven");
                 $( let $s = at(concat!("Sema.", stringify!($s)), r.get())?; )*
                 let limits = self.inst.limits;
                 let report_format = self.inst.report.format;
@@ -437,6 +453,7 @@ macro_rules! root_impl {
                 if let Err(why) = self.check_restored() {
                     return Err(r.invalid::<Self>(why));
                 }
+                mark("fields");
                 Ok(())
             }
 
