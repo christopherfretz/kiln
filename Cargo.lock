@@ -147,6 +147,9 @@ version = "1.1.0"
 [[package]]
 name = "kiln_source"
 version = "1.1.0"
+dependencies = [
+ "kiln_snap",
+]
 
 [[package]]
 name = "libc"

@@ -1,0 +1,285 @@
+# spec: kiln_snap, kiln_snap_derive
+
+The snapshot encoding: how a crate's in-memory state is written to bytes
+and read back as an equal state, for the PCH snapshot (WP-1283: the
+compiler state after a prefix of a translation unit, restored by a later
+compilation instead of re-parsing the prefix). Status: prototype (WP-1377),
+piloted on `kiln_source`; nothing in the compiler calls it yet.
+
+`kiln_snap` is the runtime (trait, wire format, standard impls, errors,
+schema hash). `kiln_snap_derive` is the `#[derive(Snap)]` proc macro, on
+the compiler's own `proc_macro` API with no dependency. `kiln_snap`
+re-exports the derive, so a crate depends on `kiln_snap` only.
+
+## Model
+
+A snapshot is the bytes of one value: a tree of plain data written field
+by field, in declaration order, with no field names, padding or alignment.
+Every cross-reference in kiln state is a `u32` arena index (`FileId`,
+`Symbol`, AST ids), so the encoding of an index is the index: no pointer
+fix-up and no identity table. The writer and the reader are the same build
+(the schema hash checks this), so the format has no versioning and no
+optional fields.
+
+Restoring is not "read some bytes and continue": a type whose state is
+more than its data (locks, caches keyed by machine state, closures,
+derived lookup tables) is a **root**, and its encoding is written by hand
+(below). Everything else derives.
+
+## The trait
+
+```rust
+pub trait Snap: Sized + 'static {
+    const SIZE: Option<usize> = None;
+    const OPTION_SIZE: Option<usize> = /* SIZE + 1 */;
+    fn put(&self, w: &mut Writer);
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapError>;
+    fn schema(s: &mut Schema);
+    fn put_option(v: Option<&Self>, w: &mut Writer);         // default: tag + value
+    fn get_option(r: &mut Reader<'_>) -> Result<Option<Self>, SnapError>;
+}
+pub fn to_bytes<T: Snap>(v: &T) -> Vec<u8>;
+pub fn to_bytes_canonical<T: Snap>(v: &T) -> Vec<u8>;
+pub fn from_bytes<T: Snap>(bytes: &[u8]) -> Result<T, SnapError>; // all bytes consumed
+pub fn put_seq<'x, T: Snap>(w: &mut Writer, len: usize, items: impl IntoIterator<Item = &'x T>);
+pub fn schema_hash<T: Snap>() -> u64;
+```
+
+The contract an impl keeps (the derive keeps it by construction):
+
+- `get` reads exactly what `put` wrote and returns a value equal to the
+  one written, for every value, in both modes.
+- `get` never panics, never allocates more than the input can justify
+  (a length is checked against the remaining bytes before any
+  allocation), and reports bad input as a [`SnapError`](#errors).
+- `SIZE = Some(n)`: every `put` writes exactly `n` bytes, and the type
+  holds no `Rc`/`Arc` (the bulk path decodes items out of order of the
+  sharing table). `SIZE = None`: every `put` writes at least one byte
+  (this bounds a sequence's length by the remaining bytes).
+- `schema` registers the type once and recurses into every type it
+  encodes ([Schema hash](#schema-hash)).
+- `put` takes `&self`: encoding requires quiescence (no other thread
+  appending; a `RefCell` mutably borrowed during `put` panics, documented
+  at its impl; held locks are waited for).
+
+## Wire format
+
+- Integers: fixed width, little-endian. `usize`/`isize` are 8 bytes on
+  every target. Floats: their bits. `bool`: one byte, 0 or 1. `char`:
+  4 bytes, a valid scalar value.
+- Lengths (sequences, strings, maps, sharing references): unsigned LEB128.
+- `String`/`str`: length, then UTF-8 (checked on read). `PathBuf`: the
+  raw OS bytes (Unix).
+- `Option<T>`: one tag byte (0 `None`, 1 `Some`), then the value; when `T`
+  has a fixed size, `None` is followed by `SIZE` zero bytes, so
+  `Option<T>` is fixed-size too. A type with a niche overrides
+  `put_option`/`get_option` and `OPTION_SIZE`: `NonZero*` writes 0 for
+  `None`, so `Option<NonZeroU32>` is 4 bytes, and a derived single-field
+  newtype forwards to its field, so `Option<Id>` for `struct Id(NonZeroU32)`
+  is 4 bytes as well.
+- Structs and tuples: the fields in order. `SIZE` is the sum when every
+  field is fixed, else `None`.
+- Enums: the tag is the variant's **index in declaration order** (not its
+  discriminant), `u8` up to 256 variants, then `u16`, `u32`; then the
+  variant's fields. When every variant's fields are fixed-size, every
+  variant is zero-padded to the largest, so the enum is fixed-size
+  (`SIZE = tag + max`). Padding (here and after `None`) is written as
+  zeros and skipped, not checked, on read.
+- `Vec<T>`, `Box<[T]>`, `VecDeque<T>`, `[T; N]` (no length): length, then
+  the items.
+- `Box<T>`: `T`, with `SIZE = None` (so recursive types terminate).
+- `Cell`, `RefCell`, `Mutex`, `RwLock` (poison ignored), atomics
+  (`Relaxed`): the inner value. `OnceCell`/`OnceLock`: as `Option`.
+- `Rc`/`Arc` of `T`, `[T]`, `str`: [sharing](#sharing).
+- Hash maps and sets (std and `hashbrown`, any `BuildHasher: Default`):
+  [maps](#hash-maps). `BTreeMap`/`BTreeSet`: length, then entries in
+  order; a duplicate key on read is an error.
+- Not provided: references and lifetimes (a snapshot owns its data),
+  `Weak`, raw pointers, `hashbrown::HashTable` (it stores no hasher: its
+  owner writes the entries and rebuilds it).
+
+### The bulk path
+
+`put_seq` and `Reader::seq_items` are how every sequence is written and
+read. For `T::SIZE = Some(s)` the reader checks `n * s` bytes once and
+decodes each `s`-byte chunk from a sub-reader with no per-field bounds
+check that can fail (the derive's `get` still runs, so invalid values
+such as a bad `bool` are still errors). For `SIZE = None`, `n` is bounded
+by the remaining bytes and each item is read in turn. A crate-local
+sequence type (`kiln_source`'s `AppendVec`) implements `Snap` with
+`put_seq`/`seq_len`/`seq_items` and gets the same path.
+
+### Sharing
+
+An `Rc`/`Arc` is written as a LEB128 reference: `0` followed by the
+pointee for the first occurrence of an allocation, `i + 1` for a later
+occurrence of the `i`-th shared allocation written (numbered in pre-order
+across the whole snapshot, keyed by address and pointer type). The reader
+hands out clones of one new allocation, so `Rc::ptr_eq` holds after the
+restore exactly where it held before. A cycle (an `Rc` reachable from its
+own pointee) encodes but is refused on read (`SharedCycle`); state with
+cycles is a root and breaks them by index.
+
+### Hash maps
+
+Normal mode writes the capacity, the length and the entries in iteration
+order; the reader allocates `min(capacity, remaining bytes)` (at least the
+length) and inserts in that order. With the same hasher this usually
+reproduces the iteration order, but it is **not guaranteed** (a slot freed
+by a removal can take an entry earlier than its original probe did; the
+group width is per target): measured on `FxHashMap<u32, u32>` with every
+third key removed, 10 to 100,000 entries, the order was equal in every
+case (`crates/kiln_source/tests/snap.rs`). Code whose output depends on
+map order already sorts or uses an ordered map; snapshots do not change
+that rule.
+
+**Canonical mode** (`Writer::canonical`, `to_bytes_canonical`) writes
+maps and sets sorted by each entry's encoded bytes, with the length in
+place of the capacity: two equal states give equal bytes whatever their
+history. It is for tests and for content hashing, not for the snapshot
+file (it costs one scratch encode per entry). A duplicate key on read is
+an error in both modes.
+
+## Errors
+
+`SnapError` is one boxed word: an `ErrorKind` (`Truncated`, `BadTag`,
+`BadValue`, `LengthTooLarge`, `SharedOutOfRange`, `SharedWrongType`,
+`SharedCycle`, `TrailingBytes`, `Invalid(String)`; non-exhaustive), the
+type being read, the absolute byte offset, and the field path. The derive
+adds `Type.field` / `Enum::Variant.field` to the path of an error from a
+field (`SnapError::within`), so a corrupt snapshot reports e.g.
+`snapshot: bad tag 7 reading `kiln_source::FileKind` at byte 1234 (in
+SourceManager.kinds > ...)`. A root adds its own path elements the same
+way. Decoding never panics on any input (tests truncate at every byte and
+flip bits at every byte).
+
+## Schema hash
+
+`T::schema` registers a descriptor per type reachable from `T`:
+`"{type_name} = {kind} {field}:{field type} ... | {Variant}={disc} ..."`,
+with `skip` and `with(path)` marked. `schema_hash::<T>()` is FNV-1a over
+the sorted descriptors. Descriptors hold only names, so the hash is equal
+across builds of the same sources and changes when any reachable field is
+added, removed, renamed, reordered or retyped, a variant changes, or an
+attribute changes the encoding. A snapshot stores the hash of its root and
+is refused, never misread, by a build with another. A hand-written impl
+whose encoding changes without a field change bumps its `Desc::note`.
+
+## The derive
+
+`#[derive(Snap)]` on named, tuple and unit structs and on enums (unit,
+tuple and struct variants, explicit discriminants, any `repr`), with type
+and const generics and `where` clauses. It adds `T: Snap` to every type
+parameter. It generates `put` as one exhaustive destructure (`let Self {
+a, b, c } = self;`, no `..`) and `get` as a full struct literal, so adding
+a field to a derived type without deciding how it is snapshotted is
+impossible: the field is either encoded (it needs `Snap`) or marked.
+
+Attributes:
+
+- `#[snap(skip)]` on a field: not written; read back as
+  `Default::default()`. Use for caches that refill on demand.
+- `#[snap(with = "path::module")]` on a field: written by
+  `module::put(&T, &mut Writer)`, read by `module::get(&mut Reader<'_>) ->
+  Result<T, SnapError>` (the field's size becomes `None`).
+- `#[snap(bound = "T: Trait, ...")]` on the type: replaces the automatic
+  `T: Snap` bounds (for a parameter used only in `PhantomData`, or behind
+  an associated type).
+
+Errors are `compile_error!` at the offending token: a lifetime parameter,
+a union, an unknown or misplaced attribute (`skip`/`with` on the type or a
+variant, `bound` on a field), `skip` together with `with`; a field type
+without `Snap` is the ordinary trait error at the field. The cases are
+doc tests in `kiln_snap` (`derive_errors`).
+
+## Hand-written roots
+
+A type is a root when restoring it is more than reading its fields back:
+it holds locks or atomics that are hints, caches keyed by machine state
+(inode numbers, addresses), closures, lookup tables derived from other
+fields, or configuration owned by the consumer's command line. A root:
+
+1. Starts its `put` with an exhaustive destructure of `self` and builds
+   its value in `get` with a full struct literal, as the derive does, so a
+   new field is a compile error in the root until it is classified.
+2. Classifies **every** field in a comment table at the impl, as one of
+   - **state**: written, as data;
+   - **rebuilt**: not written; recomputed in `get` from the state (a hash
+     map from strings to ids, a path index from `stat`), or on first use;
+   - **transient**: not written; reset (lookup hints, thread-local
+     caches);
+   - **configuration**: not written; set by the consumer from its own
+     options, which the snapshot's configuration fingerprint covers.
+3. Validates in `get` every cross-table invariant the type's queries rely
+   on without a check (ids in range, tables tiling their index space,
+   links pointing backwards), so that a decoded value can be queried
+   without a panic; a failure is `ErrorKind::Invalid` with a short reason.
+4. Keeps its id allocation identical: restoring then adding content gives
+   the ids and locations that adding the same content to the original
+   would.
+
+The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
+`kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
+"Snapshots" states their behaviour.
+
+## Recipe: making a crate's types `Snap`
+
+1. Add `kiln_snap.workspace = true` to the crate's `[dependencies]`.
+2. `use kiln_snap::Snap;` and add `Snap` to the `#[derive(...)]` of every
+   plain data type: ids, nodes, enums, tables of ids. Build: every field
+   type without `Snap` is an error at that field. For each, derive it on
+   that type too, or decide the field is a cache (`#[snap(skip)]`) or needs
+   a custom encoding (`#[snap(with = ...)]`).
+3. Wrap ids in `NonZeroU32` where a `None` is common: `Option<Id>` is then
+   as small as `Id`. Keep plain records free of `Box`, `String` and `Rc`
+   where you can: a fixed-size record type takes the bulk path.
+4. Find the roots (a type with locks, atomics, interior caches, closures,
+   or fields that depend on the machine). Write their impls by hand in a
+   `snap` submodule following [Hand-written roots](#hand-written-roots):
+   destructure, classification table, validation, `within("Type.field")`
+   on each field's error, a `schema` that registers a descriptor naming
+   every encoded field (`Desc::field`) and every rebuilt one
+   (`Desc::skip`), then recurses into each encoded field type.
+5. Test (see `crates/kiln_source/tests/snap.rs`): build a populated value
+   through the crate's public API; round-trip it; compare **every query**
+   of the public API before and after; add the same content to both and
+   compare the ids; compare `to_bytes_canonical` before and after;
+   truncate at every byte and flip bits, asserting an error or a value
+   whose queries do not panic.
+6. Do not call the encoding from the compiler until the snapshot
+   container (WP-1283 later phases) wires it in.
+
+## Performance
+
+Hand-run (`cargo run --release -p kiln_snap --example snap_bench`), best
+of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
+
+- 1M 16-byte records: fast path encode ~2,000-2,300 MB/s, decode
+  ~4,400-4,800 MB/s; general path (same records, `SIZE = None`) encode
+  ~3,000-4,500 MB/s, decode ~4,100-4,300 MB/s. Encoding this size is
+  bound by the allocator and page faults of the output buffer (the
+  ranking flips with `MALLOC_MMAP_THRESHOLD_`), not by the per-item code.
+- 100k short strings: encode ~2,000-3,600 MB/s, decode ~570 MB/s (one
+  allocation per string).
+- `FxHashMap<u32, u32>`, 100k entries: encode ~1,500-5,900 MB/s, decode
+  ~1,200-2,000 MB/s.
+
+## Tests
+
+- `crates/kiln_snap/tests/snap.rs`: every derive shape, enum tags, fixed
+  sizes and the flat bulk layout, standard impls, maps in both modes,
+  sharing and its errors, truncation at every byte, bit flips, error
+  paths, every schema-hash change; `derive_errors` doc tests.
+- `crates/kiln_source/tests/snap.rs`: the pilots (see spec/source.md
+  "Snapshots").
+
+## Open questions
+
+1. **Order of hash maps.** Normal mode keeps iteration order in practice
+   but not by guarantee. If a consumer turns out to depend on it, the
+   choice is carrying the table layout (hashbrown's raw API) or making
+   that consumer sort.
+2. **Encoding speed for the fixed path.** The bulk path's encode writes
+   item by item; a `bytemuck`-style memcpy needs `unsafe` or a layout
+   guarantee the language does not give for `repr(Rust)`. Not needed at
+   the measured rates.

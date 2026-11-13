@@ -6,9 +6,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::{error, fmt, fs, io};
 
+use kiln_snap::Snap;
+
 use crate::arena::AppendVec;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
+
+mod snap;
 
 /// Exclusive end of the file-location space (`[1, 2^31)`).
 const FILE_SPACE_END: u64 = 1 << 31;
@@ -70,7 +74,7 @@ impl From<LocSpaceExhausted> for LoadError {
 }
 
 /// One maximal invalid UTF-8 sequence replaced by U+FFFD at load time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Snap)]
 pub struct Replacement {
     /// Byte offset of the U+FFFD (3 bytes) in the decoded text.
     pub offset: u32,
@@ -80,7 +84,7 @@ pub struct Replacement {
 
 /// What happened while decoding a buffer, returned as data so that
 /// `kiln_diag` can render it (this crate has no diagnostics dependency).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Snap)]
 pub struct LoadReport {
     /// Invalid UTF-8 sequences in file order. Each maximal invalid
     /// subsequence (as defined by [`std::str::Utf8Chunk`]) became one U+FFFD.
@@ -95,7 +99,7 @@ impl LoadReport {
 }
 
 /// A physical line/column position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Snap)]
 pub struct LineCol {
     /// The buffer.
     pub file: FileId,
@@ -122,7 +126,7 @@ pub struct PresumedLoc<'a> {
 }
 
 /// What an expansion entry represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Snap)]
 pub enum ExpansionKind {
     /// Tokens produced by expanding a macro: its replacement list, or the
     /// result of a builtin macro, `#` or `##`. `name` is the span of the
@@ -143,7 +147,7 @@ pub enum ExpansionKind {
 ///
 /// Location `base + n` (for `n <= len`) is spelled at `spelling + n` and
 /// was produced by the invocation covering `expansion`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Snap)]
 pub struct ExpansionInfo {
     /// First location of the entry's range `[base, base + len]`.
     pub base: Loc,
@@ -167,7 +171,7 @@ const MACRO_KIND: u32 = 1 << 31;
 /// public view). The macro-name span of a [`ExpansionKind::Macro`] entry
 /// lives in [`SourceManager::macro_names`]: argument entries, which
 /// dominate deep expansions, do not need one.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Snap)]
 struct Entry {
     base: Loc,
     /// `len` | [`MACRO_KIND`].
@@ -194,7 +198,7 @@ impl Entry {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Snap)]
 struct LineDirective {
     /// Offset of the first byte of the line the directive renumbers.
     offset: u32,
@@ -212,7 +216,7 @@ struct LineDirective {
 pub type LazyCopy = Box<dyn Fn() -> Option<String> + Send + Sync>;
 
 /// How a lazy buffer's text was found ([`SourceManager::lazy_fallbacks`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Snap)]
 pub enum LazyOutcome {
     /// The file on disk had the recorded length and content hash.
     Disk,
@@ -350,7 +354,7 @@ pub enum LazyFile {
 /// One range of file location space: a buffer's own range (created with
 /// the buffer) or one inclusion of it ([`SourceManager::add_inclusion`]).
 /// Every range of a buffer spells the same text.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Snap)]
 struct FileRange {
     /// Raw value of the range's first location.
     start: u32,
@@ -365,7 +369,7 @@ struct FileRange {
 
 /// Whether a location is in a user or a system header (clang
 /// `SrcMgr::CharacteristicKind`). Ordered: `User < System < ExternCSystem`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Snap)]
 pub enum FileKind {
     /// An ordinary source file.
     #[default]
@@ -385,7 +389,7 @@ impl FileKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Snap)]
 struct Alloc {
     next_file: u64,
     next_macro: u64,
@@ -446,7 +450,7 @@ pub struct SourceManager {
 /// `std::meta::source_location_of` spell a file
 /// ([`SourceManager::presumed_file_name`]; `-fkiln-source-path-style=`,
 /// spec/driver.md). `__FILE__` keeps clang's spelling under both.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Snap)]
 pub enum SourcePathStyle {
     /// clang's: the presumed name as written (`SourceLocExpr::EvaluateInContext`).
     #[default]
@@ -1483,7 +1487,10 @@ impl SourceManager {
         Some(PresumedLoc {
             file,
             file_name,
-            line: d.new_line.saturating_add(line - d.phys_line),
+            // `saturating_sub`: `phys_line` of a snapshot-restored disk
+            // buffer is checked only against its length (spec/source.md
+            // "Snapshots"); equal to `-` for every buffer built here.
+            line: d.new_line.saturating_add(line.saturating_sub(d.phys_line)),
             col,
         })
     }

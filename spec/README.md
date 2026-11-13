@@ -11,6 +11,7 @@ say which in the PR. A spec change without tests is incomplete.
 | Spec | Crate | Status |
 |---|---|---|
 | [source.md](source.md) | kiln_source | draft |
+| [snap.md](snap.md) | kiln_snap, kiln_snap_derive | prototype (WP-1377) |
 | [diag.md](diag.md) | kiln_diag | draft |
 | [lex.md](lex.md) | kiln_lex | draft |
 | [pp.md](pp.md) | kiln_pp | draft |

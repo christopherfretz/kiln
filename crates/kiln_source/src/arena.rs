@@ -11,6 +11,8 @@ use std::fmt;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use kiln_snap::{Desc, Reader, Schema, Snap, SnapError, Writer};
+
 /// log2 of the first chunk's size.
 const FIRST_CHUNK_BITS: u32 = 6;
 /// Enough chunks to address every `u32` index: chunk `k` holds
@@ -103,6 +105,34 @@ fn chunk_start(k: usize) -> u32 {
 impl<T> fmt::Debug for AppendVec<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AppendVec").field("len", &self.len()).finish_non_exhaustive()
+    }
+}
+
+/// As a `Vec<T>` (spec/snap.md): the length, then the elements in index
+/// order (the bulk path for a fixed-size `T`); read back by pushing them
+/// into a new vector, so every index is unchanged.
+impl<T: Snap> Snap for AppendVec<T> {
+    fn put(&self, w: &mut Writer) {
+        let n = self.len();
+        kiln_snap::put_seq(w, n as usize, (0..n).filter_map(|i| self.get(i)));
+    }
+
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapError> {
+        let n = r.seq_len::<T>()?;
+        if u32::try_from(n).is_err() {
+            return Err(r.invalid::<Self>("more than u32::MAX elements"));
+        }
+        let v = AppendVec::new();
+        r.seq_items::<T>(n, |x| {
+            v.push(x);
+        })?;
+        Ok(v)
+    }
+
+    fn schema(s: &mut Schema) {
+        if s.register::<Self>(Desc::new("seq").field::<T>("item")) {
+            T::schema(s);
+        }
     }
 }
 

@@ -48,6 +48,8 @@ established and `docs/ROADMAP.md` for sequencing.
 ## Pipeline and crate layout
 
 ```
+  kiln_snap       snapshot encoding (Snap trait + derive in kiln_snap_derive):
+                  state to bytes and back for the PCH snapshot (spec/snap.md)
 source text
   │  kiln_source   SourceManager, FileId, Span, SourceLoc (incl. macro expansion locs)
   │  kiln_diag     diagnostics, severities, rendering, -Werror/-Wno-* policy

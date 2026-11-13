@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use kiln_snap::Snap;
+
 /// Bit set on every macro-expansion location. File locations live in
 /// `[1, MACRO_BIT)`, expansion locations in `[MACRO_BIT, 2^32)`.
 pub(crate) const MACRO_BIT: u32 = 1 << 31;
@@ -12,7 +14,7 @@ pub(crate) const MACRO_BIT: u32 = 1 << 31;
 ///
 /// Ids are dense indices in creation order. A `FileId` is only meaningful
 /// for the `SourceManager` that created it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Snap)]
 pub struct FileId(pub(crate) u32);
 
 impl FileId {
@@ -36,7 +38,7 @@ impl FileId {
 ///
 /// Locations order by their raw value: within one buffer (or one expansion
 /// entry) that is source order.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Snap)]
 pub struct Loc(pub(crate) u32);
 
 impl Loc {
@@ -100,7 +102,7 @@ impl fmt::Debug for Loc {
 /// Both ends lie in the same buffer or the same expansion entry for spans
 /// produced by the lexer; spans covering a macro invocation (expansion
 /// ranges) may have ends in different entries.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Snap)]
 pub struct Span {
     /// First byte of the range.
     pub lo: Loc,
