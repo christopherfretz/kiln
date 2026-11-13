@@ -15,8 +15,9 @@
 //! - `locale.<name>` for each locale `locale -a` lists ([`locale_features`]);
 //! - `has-no-zdump` when `zdump --version` fails (the tzdata validation
 //!   tests compare against `zdump`);
-//! - from the target triple ([`target_triple`], kiln's default target: the
-//!   harness passes no `--target`) and the host ([`target_features`]):
+//! - from the target triple ([`target_triple`]: `$KILN_LIBCXX_TARGET`, else
+//!   kiln's default target, for which the harness passes no `--target`) and
+//!   the host ([`target_features`]):
 //!   `target=<triple>` (`params.py` `target_triple`), `linux` (`__linux__`
 //!   among the compiler's macros) and `buildhost=<os>` (`sys.platform`);
 //! - the thread API `__config` settles on ([`thread_api_features`]):
@@ -59,11 +60,103 @@ use std::path::Path;
 pub const STD: &str = "c++26";
 
 /// The target triple the suite is compiled for (the `target=<triple>`
-/// feature): kiln's default target, `<host arch>-unknown-linux-gnu`
-/// (`kiln_driver` `Target`, spec/driver.md "Toolchain"), since the harness
-/// passes no `--target`.
+/// feature): `$KILN_LIBCXX_TARGET` ([`cross_target`]) when set, else
+/// kiln's default target, `<host arch>-unknown-linux-gnu` (`kiln_driver`
+/// `Target`, spec/driver.md "Toolchain"), for which the harness passes no
+/// `--target`.
 pub fn target_triple() -> String {
+    cross_target().unwrap_or_else(host_triple)
+}
+
+/// kiln's default target on this host, `<host arch>-unknown-linux-gnu`.
+pub fn host_triple() -> String {
     format!("{}-unknown-linux-gnu", std::env::consts::ARCH)
+}
+
+/// The environment variable naming the target the suite is compiled for,
+/// when it is not the host's default: every compile and link of the run
+/// gets `--target=<it>`, the `target=` and thread-API features follow it,
+/// and the libc++ package tree's library directory is its
+/// [`multiarch_dir`] (spec/libcxx.md "Cross targets").
+pub const TARGET_ENV: &str = "KILN_LIBCXX_TARGET";
+
+/// The environment variable naming the executor of a test binary
+/// (`%{exec}`, lit's `executor`): whitespace-separated words put before
+/// the binary, e.g. `qemu-x86_64 -L /usr/x86_64-linux-gnu`.
+pub const EXEC_ENV: &str = "KILN_LIBCXX_EXEC";
+
+/// The environment variable scaling both run-step limits (`--timeout` and
+/// `--run-timeout-long`), for an executor that is slower than the host
+/// (spec/libcxx.md "Cross targets").
+pub const TIMEOUT_SCALE_ENV: &str = "KILN_LIBCXX_TIMEOUT_SCALE";
+
+/// `$KILN_LIBCXX_TARGET` ([`parse_target`]).
+pub fn cross_target() -> Option<String> {
+    parse_target(std::env::var(TARGET_ENV).ok().as_deref())
+}
+
+/// A `KILN_LIBCXX_TARGET` value: `None` when unset, empty or blank, else
+/// the value without surrounding whitespace.
+pub fn parse_target(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned)
+}
+
+/// The words of `$KILN_LIBCXX_EXEC` ([`split_executor`]; empty: run the
+/// binary directly).
+pub fn executor() -> Vec<String> {
+    split_executor(&std::env::var(EXEC_ENV).unwrap_or_default())
+}
+
+/// A `KILN_LIBCXX_EXEC` value split at whitespace. No shell quoting: a
+/// word that needs a space needs a wrapper script.
+pub fn split_executor(raw: &str) -> Vec<String> {
+    raw.split_whitespace().map(str::to_owned).collect()
+}
+
+/// `$KILN_LIBCXX_TIMEOUT_SCALE` ([`parse_timeout_scale`]; unset: 1).
+pub fn timeout_scale() -> Result<f64, String> {
+    std::env::var(TIMEOUT_SCALE_ENV).map_or(Ok(1.0), |v| parse_timeout_scale(&v))
+}
+
+/// A `KILN_LIBCXX_TIMEOUT_SCALE` value: a finite number greater than 0
+/// (blank: 1).
+pub fn parse_timeout_scale(raw: &str) -> Result<f64, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(1.0);
+    }
+    match raw.parse::<f64>() {
+        Ok(n) if n.is_finite() && n > 0.0 => Ok(n),
+        _ => Err(format!("{TIMEOUT_SCALE_ENV}: expected a number greater than 0, got `{raw}`")),
+    }
+}
+
+/// The Debian multiarch directory name (`usr/lib/<it>`) of a Linux target
+/// triple: `<arch>-linux-<env>` without the vendor, the environment
+/// defaulting to `gnu`, `i[3-6]86` spelled `i386` and `arm*` spelled
+/// `arm` (`x86_64-unknown-linux-gnu` -> `x86_64-linux-gnu`,
+/// `armv7-unknown-linux-gnueabihf` -> `arm-linux-gnueabihf`). `None` for
+/// a triple that names no Linux OS.
+pub fn multiarch_dir(triple: &str) -> Option<String> {
+    let parts: Vec<&str> = triple.split('-').collect();
+    let at = parts.iter().position(|p| p.starts_with("linux"))?;
+    if at == 0 {
+        return None;
+    }
+    let arch = match parts[0] {
+        "i386" | "i486" | "i586" | "i686" => "i386",
+        a if a.starts_with("arm") && !a.starts_with("arm64") => "arm",
+        a => a,
+    };
+    let env = parts.get(at + 1).copied().unwrap_or("gnu");
+    Some(format!("{arch}-linux-{env}"))
+}
+
+/// Whether `triple` needs another library directory than the host's
+/// default target: its [`multiarch_dir`] differs from
+/// [`host_triple`]'s. `KILN_LIBCXX_TARGET=<the host triple>` is not cross.
+pub fn is_cross(triple: &str) -> bool {
+    multiarch_dir(triple) != multiarch_dir(&host_triple())
 }
 
 /// Every static feature, sorted (see [`all`]).
@@ -225,6 +318,9 @@ pub const LOCALES: &[&str] = &[
 /// [`all`], the [`config_site_features`] and [`thread_api_features`] of
 /// `include/__config_site`, `has-no-zdump` when `zdump --version` fails, and
 /// `locale.<name>` for each of [`LOCALES`] that `locale -a` lists.
+/// `locale -a` and `zdump` are the host's: with `$KILN_LIBCXX_EXEC` the
+/// test binary is taken to see the host's file system (qemu user
+/// emulation does), so its locales and time zones are the host's too.
 pub fn detect(include: &Path) -> Vec<String> {
     let listed = std::process::Command::new("locale")
         .arg("-a")
@@ -451,8 +547,53 @@ mod tests {
             target_features("x86_64-pc-windows-msvc", "linux"),
             ["buildhost=linux", "target=x86_64-pc-windows-msvc"]
         );
-        let t = target_triple();
+        let t = host_triple();
         assert!(t.ends_with("-unknown-linux-gnu") && t.starts_with(std::env::consts::ARCH));
+    }
+
+    /// `KILN_LIBCXX_TARGET`, `KILN_LIBCXX_EXEC` and
+    /// `KILN_LIBCXX_TIMEOUT_SCALE` values (spec/libcxx.md "Cross targets").
+    #[test]
+    fn cross_target_environment() {
+        assert_eq!(parse_target(None), None);
+        assert_eq!(parse_target(Some("")), None);
+        assert_eq!(parse_target(Some("  ")), None);
+        assert_eq!(
+            parse_target(Some(" x86_64-unknown-linux-gnu\n")).as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(split_executor(""), Vec::<String>::new());
+        assert_eq!(split_executor(" \t"), Vec::<String>::new());
+        assert_eq!(
+            split_executor("qemu-x86_64  -L\t/usr/x86_64-linux-gnu "),
+            ["qemu-x86_64", "-L", "/usr/x86_64-linux-gnu"]
+        );
+        assert_eq!(parse_timeout_scale(""), Ok(1.0));
+        assert_eq!(parse_timeout_scale(" 10 "), Ok(10.0));
+        assert_eq!(parse_timeout_scale("2.5"), Ok(2.5));
+        for bad in ["0", "-1", "x", "inf", "NaN"] {
+            assert!(parse_timeout_scale(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// Debian's multiarch directory of a target triple.
+    #[test]
+    fn multiarch_directories() {
+        let m = |t: &str| multiarch_dir(t);
+        assert_eq!(m("x86_64-unknown-linux-gnu").as_deref(), Some("x86_64-linux-gnu"));
+        assert_eq!(m("aarch64-linux-gnu").as_deref(), Some("aarch64-linux-gnu"));
+        assert_eq!(m("riscv64-unknown-linux-gnu").as_deref(), Some("riscv64-linux-gnu"));
+        assert_eq!(m("i686-pc-linux-gnu").as_deref(), Some("i386-linux-gnu"));
+        assert_eq!(m("armv7-unknown-linux-gnueabihf").as_deref(), Some("arm-linux-gnueabihf"));
+        assert_eq!(m("x86_64-linux").as_deref(), Some("x86_64-linux-gnu"));
+        assert_eq!(m("x86_64-unknown-linux-musl").as_deref(), Some("x86_64-linux-musl"));
+        assert_eq!(m("arm64-apple-macosx14.0"), None);
+        assert_eq!(m("linux-gnu"), None);
+        assert_eq!(m(""), None);
+        assert!(!is_cross(&host_triple()));
+        assert!(!is_cross(&format!("{}-pc-linux-gnu", std::env::consts::ARCH)));
+        let other = if std::env::consts::ARCH == "x86_64" { "aarch64" } else { "x86_64" };
+        assert!(is_cross(&format!("{other}-unknown-linux-gnu")));
     }
 
     /// libc++ 19 leaves the thread API to `__config` (`/* #undef ... */`),

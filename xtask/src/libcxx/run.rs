@@ -60,6 +60,12 @@ pub struct Config {
     pub keep: bool,
     /// `--pch-diff` ([`pch_prefix`]); never in clang mode.
     pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
+    /// `$KILN_LIBCXX_TARGET`: every compile and link gets `--target=<it>`
+    /// (`None`: no flag, kiln's default target).
+    pub target: Option<String>,
+    /// `$KILN_LIBCXX_EXEC`: the words the run step and `%{exec}` put
+    /// before the test binary (empty: run it directly).
+    pub exec: Vec<String>,
 }
 
 /// An extracted libc++ package tree (spec/libcxx.md "Toolchain"): its
@@ -85,6 +91,9 @@ impl Config {
     /// The flags every compile gets, before the test's own.
     pub fn base_compile_flags(&self) -> Vec<String> {
         let mut v: Vec<String> = vec![format!("-std={}", features::STD), "-stdlib=libc++".into()];
+        if let Some(t) = &self.target {
+            v.push(format!("--target={t}"));
+        }
         if !self.clang {
             v.extend(["-resource-dir".to_owned(), self.resource_dir.display().to_string()]);
         }
@@ -152,11 +161,27 @@ impl Config {
         share.join("std.cppm").is_file().then_some(share)
     }
 
+    /// The run step of the binary `exe`: `$KILN_LIBCXX_EXEC`'s words
+    /// (lit's executor) followed by `exe`, else `exe` itself.
+    pub fn run_command(&self, exe: &Path) -> Command {
+        match self.exec.split_first() {
+            Some((prog, words)) => {
+                let mut c = Command::new(prog);
+                c.args(words).arg(exe);
+                c
+            }
+            None => Command::new(exe),
+        }
+    }
+
     /// The flags of the link step, after the object. With a package tree,
     /// its archives are linked statically and `--as-needed` drops the
     /// driver's own trailing `-lc++`.
     pub fn link_flags(&self) -> Vec<String> {
         let mut v: Vec<String> = ["-stdlib=libc++", "-pthread"].map(str::to_owned).into();
+        if let Some(t) = &self.target {
+            v.push(format!("--target={t}"));
+        }
         match &self.libcxx {
             None => v.extend(["-lc++experimental", "-lc++abi"].map(str::to_owned)),
             Some(t) => {
@@ -1100,7 +1125,7 @@ fn execute(
             (Stage::Link, link(), false),
         ],
         _ => {
-            let mut run = Command::new(&exe);
+            let mut run = cfg.run_command(&exe);
             // lit does not pass `TZ` to tests: the local zone is the
             // system's `/etc/localtime` (spec/libcxx.md "Commands").
             run.current_dir(scratch).env_remove("TZ");
@@ -1250,6 +1275,7 @@ fn execute_script(
             &cfg.kiln,
             compile_flags,
             &link_flags,
+            &cfg.exec,
             script.cfg_subst,
             src,
             scratch,
@@ -1512,6 +1538,8 @@ mod tests {
             tmp: "/tmp".into(),
             keep: false,
             pch_diff: None,
+            target: None,
+            exec: Vec::new(),
         };
         let kiln = cfg.base_compile_flags().join(" ");
         assert!(kiln.contains("-resource-dir /res") && kiln.contains("-fclang-compat=22"));
@@ -1570,6 +1598,79 @@ mod tests {
             Err("driver: MODULE_DEPENDENCIES without libc++ module sources".into())
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// With `KILN_LIBCXX_TARGET` and `KILN_LIBCXX_EXEC` unset the compile,
+    /// link and run commands are exactly those of the runner before the two
+    /// variables existed; set, `--target=<t>` follows `-stdlib=libc++`
+    /// (compile) and `-pthread` (link) and the executor's words precede
+    /// the binary (spec/libcxx.md "Cross targets").
+    #[test]
+    fn target_and_executor_commands() {
+        let mut cfg = Config {
+            kiln: "kiln++".into(),
+            clang: false,
+            libcxx_include: "/llvm/include/c++/v1".into(),
+            checkout: "/co".into(),
+            tag: String::new(),
+            llvm_dir: "/llvm".into(),
+            clang_compat: 19,
+            libcxx: None,
+            resource_dir: "/res".into(),
+            features: Vec::new(),
+            libcxx_version: None,
+            compile_timeout: Duration::from_secs(1),
+            run_timeout: Duration::from_secs(1),
+            long_run_timeout: Duration::from_secs(1),
+            mem: None,
+            probe: RssProbe::Unavailable,
+            warning_flags: vec!["-Werror".into()],
+            scratch: "/s".into(),
+            tmp: "/tmp".into(),
+            keep: false,
+            pch_diff: None,
+            target: None,
+            exec: Vec::new(),
+        };
+        let compile_before = "-std=c++26 -stdlib=libc++ -resource-dir /res -pthread \
+                              -ferror-limit=0 -D_LIBCPP_ENABLE_EXPERIMENTAL -fclang-compat=19 \
+                              -fno-crash-diagnostics -I /co/libcxx/test/support -Werror \
+                              -D_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER";
+        assert_eq!(cfg.base_compile_flags().join(" "), compile_before);
+        assert_eq!(
+            cfg.link_flags().join(" "),
+            "-stdlib=libc++ -pthread -lc++experimental -lc++abi"
+        );
+        let tree = LibcxxTree { include: "/tree/inc".into(), lib: "/tree/lib".into() };
+        cfg.libcxx = Some(tree);
+        let tree_link = "-stdlib=libc++ -pthread -L/tree/lib -Wl,--as-needed -Wl,-Bstatic \
+                         -lc++experimental -lc++ -lc++abi -Wl,-Bdynamic";
+        assert_eq!(cfg.link_flags().join(" "), tree_link);
+        let run = cfg.run_command(Path::new("/s/t0/t.exe"));
+        assert_eq!(run.get_program(), "/s/t0/t.exe");
+        assert_eq!(run.get_args().count(), 0);
+
+        cfg.target = Some("x86_64-unknown-linux-gnu".into());
+        let compile = cfg.base_compile_flags().join(" ");
+        assert!(compile.starts_with(
+            "-std=c++26 -stdlib=libc++ --target=x86_64-unknown-linux-gnu -resource-dir /res "
+        ));
+        assert_eq!(
+            compile.replace(" --target=x86_64-unknown-linux-gnu", ""),
+            compile_before.replacen("-I /co", "-nostdinc++ -isystem /tree/inc -I /co", 1)
+        );
+        assert_eq!(
+            cfg.link_flags().join(" "),
+            tree_link.replacen("-pthread", "-pthread --target=x86_64-unknown-linux-gnu", 1)
+        );
+        cfg.clang = true;
+        assert!(cfg.base_compile_flags().contains(&"--target=x86_64-unknown-linux-gnu".into()));
+
+        cfg.exec = ["qemu-x86_64", "-L", "/usr/x86_64-linux-gnu"].map(str::to_owned).into();
+        let run = cfg.run_command(Path::new("/s/t0/t.exe"));
+        assert_eq!(run.get_program(), "qemu-x86_64");
+        let args: Vec<_> = run.get_args().collect();
+        assert_eq!(args, ["-L", "/usr/x86_64-linux-gnu", "/s/t0/t.exe"]);
     }
 
     /// A `lit.local.cfg` that adds a feature satisfies `REQUIRES:` below
@@ -1882,6 +1983,8 @@ mod tests {
             tmp: base.join("tmp"),
             keep: false,
             pch_diff: None,
+            target: None,
+            exec: Vec::new(),
         };
         let scratch = base.join("s");
         std::fs::create_dir_all(&scratch).unwrap();
@@ -1941,6 +2044,8 @@ mod tests {
             tmp: base.join("t"),
             keep: false,
             pch_diff: None,
+            target: None,
+            exec: Vec::new(),
         };
         let args = |name: &str, text: &str| {
             let path = base.join(name);

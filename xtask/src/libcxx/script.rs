@@ -11,9 +11,10 @@ use std::path::Path;
 use super::run::VERIFY_FLAGS;
 
 /// The `%{name}` substitutions the driver defines (`format.py` and
-/// `params.py` of libc++ 19). `%{exec}` is empty: tests run locally with
-/// the scratch directory as the working directory, as lit's `run.py`
-/// executor does with `--execdir %T`.
+/// `params.py` of libc++ 19). `%{exec}` is `$KILN_LIBCXX_EXEC`'s words
+/// (`Config::exec`), empty when unset: tests run with the scratch
+/// directory as the working directory, as lit's `run.py` executor does
+/// with `--execdir %T`.
 const BUILTIN: &[&str] = &[
     "%{build}",
     "%{compile_flags}",
@@ -68,13 +69,14 @@ pub struct Substitutions {
 
 impl Substitutions {
     /// `cxx` is the compiler, `compile_flags` the base flags followed by
-    /// the test's `ADDITIONAL_COMPILE_FLAGS`, `cfg` the resolved
-    /// `lit.local.cfg` substitutions. `%T` is `scratch`, `%t` is
-    /// `scratch/t`.
+    /// the test's `ADDITIONAL_COMPILE_FLAGS`, `exec` the executor's words
+    /// (`%{exec}`, each shell-quoted), `cfg` the resolved `lit.local.cfg`
+    /// substitutions. `%T` is `scratch`, `%t` is `scratch/t`.
     pub fn new(
         cxx: &Path,
         compile_flags: &[String],
         link_flags: &[String],
+        exec: &[String],
         cfg: &[(String, String)],
         src: &Path,
         scratch: &Path,
@@ -91,7 +93,7 @@ impl Substitutions {
                 ("%{flags}", String::new()),
                 ("%{compile_flags}", join(compile_flags)),
                 ("%{link_flags}", join(link_flags)),
-                ("%{exec}", String::new()),
+                ("%{exec}", join(exec)),
                 ("%{build}", "%{cxx} %s %{flags} %{compile_flags} %{link_flags} -o %t.exe".into()),
                 ("%{run}", "%{exec} %t.exe".into()),
                 ("%{verify}", verify),
@@ -225,6 +227,7 @@ mod tests {
             Path::new("/k/kiln++"),
             &["-std=c++26".into(), "-I".into(), "%t.1".into()],
             &["-lc++abi".into()],
+            &[],
             &[("%{x}".into(), "%{cxx} -v".into())],
             Path::new("/src/a.sh.cpp"),
             Path::new("/s/t3"),
@@ -249,11 +252,38 @@ mod tests {
             Path::new("c"),
             &[],
             &[],
+            &[],
             &[("%{a}".into(), "%{a}x".into())],
             Path::new("s"),
             Path::new("t"),
         );
         assert!(looping.expand("%{a}").is_err());
+    }
+
+    /// `%{exec}` and `%{run}` with `KILN_LIBCXX_EXEC` words (spec/libcxx.md
+    /// "Cross targets"): each word shell-quoted, before the binary.
+    #[test]
+    fn exec_expansion() {
+        let exec: Vec<String> =
+            ["qemu-x86_64", "-L", "/usr/x86_64-linux-gnu", "a b"].map(str::to_owned).into();
+        let s = Substitutions::new(
+            Path::new("/k/kiln++"),
+            &[],
+            &[],
+            &exec,
+            &[],
+            Path::new("/src/a.sh.cpp"),
+            Path::new("/s/t3"),
+        );
+        assert_eq!(s.expand("%{exec}").unwrap(), "qemu-x86_64 -L /usr/x86_64-linux-gnu 'a b'");
+        assert_eq!(
+            s.expand("%{run} 1").unwrap(),
+            "qemu-x86_64 -L /usr/x86_64-linux-gnu 'a b' /s/t3/t.exe 1"
+        );
+        assert_eq!(
+            s.expand("%{exec} %t.exe > %t.actual").unwrap(),
+            "qemu-x86_64 -L /usr/x86_64-linux-gnu 'a b' /s/t3/t.exe > /s/t3/t.actual"
+        );
     }
 
     #[test]
