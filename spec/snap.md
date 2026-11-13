@@ -222,6 +222,14 @@ The pilots are `kiln_source::SourceManager` (`src/manager/snap.rs`) and
 `kiln_source::symbol::Interner` (`src/symbol/snap.rs`); spec/source.md
 "Snapshots" states their behaviour.
 
+`kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`)
+is a **configured** root: its limits and options are the consumer's, so
+it is not `Snap`. The consumer builds the Oven as it would without a
+snapshot and applies one to it: `snap_ready` (the quiescence check),
+`snap_put` (refused unless ready; writes nothing then), `snap_restore`
+(into an unused Oven; validates everything before assigning anything)
+and `snap_schema`. spec/oven.md "Snapshots" states its behaviour.
+
 ## Recipe: making a crate's types `Snap`
 
 1. Add `kiln_snap.workspace = true` to the crate's `[dependencies]`.
