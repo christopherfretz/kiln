@@ -21,7 +21,7 @@ use crate::slot::{AlreadySet, ColdMap, set_once};
 
 /// The kind of a declaration (spec/ast.md §4.2). Names are clang's
 /// (`<Kind>Decl` in the dump). The numbering is stable.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum DeclKind {
     // scopes
@@ -161,7 +161,7 @@ pub enum DeclKind {
 }
 
 /// Which payload arena a kind's `data` indexes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum PayloadClass {
     /// No payload (`data` is 0) or an inline payload documented on the kind.
     None,
@@ -337,7 +337,7 @@ impl DeclKind {
 // ---------------------------------------------------------------------------
 
 /// `DeclNode.flags` (spec/ast.md §4.1).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct DeclFlags(u8);
 
 impl DeclFlags {
@@ -386,7 +386,7 @@ impl DeclFlags {
 }
 
 /// Access of a member ([class.access]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum Access {
     /// Not a member (or not yet known).
@@ -401,7 +401,7 @@ pub enum Access {
 }
 
 /// Friend status (clang's `FriendObjectKind`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum FriendKind {
     /// Not a friend.
@@ -416,7 +416,7 @@ pub enum FriendKind {
 }
 
 /// Module ownership of a declaration ([module.reach], M4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ModuleOwnership {
     /// Not owned by a named module.
@@ -442,7 +442,7 @@ pub enum ModuleOwnership {
 /// ([`crate::Ast::definition`] returns it). Clear means "ask the
 /// redeclaration group". A head's bits are ignored by
 /// [`DeclArena::push`], which computes them.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct DeclMisc(u16);
 
 impl DeclMisc {
@@ -551,7 +551,7 @@ impl DeclMisc {
 }
 
 /// The 28-byte declaration header (spec/ast.md §4.1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct DeclNode {
     kind: DeclKind,
     flags: DeclFlags,
@@ -613,7 +613,7 @@ impl DeclNode {
 
 /// The redeclaration link at the start of every redeclarable payload
 /// (spec/ast.md §4.2, §4.4).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct Redecl {
     /// The previous declaration of the same entity.
     pub prev: Option<DeclId>,
@@ -623,7 +623,7 @@ pub struct Redecl {
 
 /// The member list of a context: appended in O(1) through
 /// `DeclNode.next`.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug, kiln_snap::Snap)]
 pub struct Members {
     /// The first member.
     pub first: Option<DeclId>,
@@ -633,11 +633,11 @@ pub struct Members {
 
 /// `TemplLink` (spec/ast.md §8.2): 0 = none, else a 3-bit tag
 /// (bits 29..=31) and a 29-bit index into the template tables (M3).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct TemplLink(u32);
 
 /// The tag of a [`TemplLink`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum TemplLinkKind {
     /// The decl is the pattern of a template decl.
@@ -685,7 +685,7 @@ impl TemplLink {
 }
 
 /// Storage class of a function ([dcl.stc]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum FnStorage {
     /// None written.
@@ -698,7 +698,7 @@ pub enum FnStorage {
 }
 
 /// `constexpr` / `consteval` ([dcl.constexpr]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ConstexprKind {
     /// Neither.
@@ -711,7 +711,7 @@ pub enum ConstexprKind {
 }
 
 /// Defaulted status ([dcl.fct.def.default]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum Defaulted {
     /// Not defaulted.
@@ -729,7 +729,7 @@ pub enum Defaulted {
 /// has_contracts(1) is_coroutine(1) escalated(1) variadic(1) override(1)
 /// final(1) explicit_object(1) virtual_written(1) storage_inherited(1)
 /// not_selected(1)`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct FnSpec(u32);
 
 macro_rules! bit_accessors {
@@ -889,7 +889,7 @@ bit_accessors!(FnSpec:
 );
 
 /// Hot payload of function kinds (24 bytes, spec/ast.md §4.2).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct FunctionData {
     /// Redeclaration link.
     pub redecl: Redecl,
@@ -904,7 +904,7 @@ pub struct FunctionData {
 }
 
 /// Storage class of a variable ([dcl.stc]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum VarStorage {
     /// None written.
@@ -919,7 +919,7 @@ pub enum VarStorage {
 }
 
 /// Thread-local kind.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum TlsKind {
     /// Not thread-local.
@@ -937,7 +937,7 @@ pub enum TlsKind {
 
 /// Initialization syntax ([dcl.init]); the dump prints `cinit`,
 /// `callinit`, `listinit`, `parenlistinit`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum InitStyle {
     /// `= e` (or no initializer).
@@ -953,7 +953,7 @@ pub enum InitStyle {
 
 /// `VarData.spec`: `storage(3) tls(2) init_style(2) constexpr(1)
 /// constinit(1) inline(1) nrvo(1) exception_var(1) cxx_for_range(1)`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct VarSpec(u32);
 
 impl VarSpec {
@@ -1036,11 +1036,11 @@ bit_accessors!(VarSpec:
 /// The state of a variable's constant evaluation (spec/ast.md §9.2), 4
 /// bytes: `0` `NotEvaluated`, `u32::MAX` `Evaluating`, `u32::MAX − 1`
 /// `NotConstant`, else a `ConstValueId`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct VarEval(u32);
 
 /// A decoded [`VarEval`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum VarEvalState {
     /// Not evaluated yet.
     NotEvaluated,
@@ -1072,7 +1072,7 @@ impl VarEval {
 }
 
 /// Hot payload of variable kinds (24 bytes, spec/ast.md §4.2).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct VarData {
     /// Redeclaration link.
     pub redecl: Redecl,
@@ -1087,7 +1087,7 @@ pub struct VarData {
 }
 
 /// struct / class / union ([class.pre]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum TagKind {
     /// `struct`.
@@ -1112,7 +1112,7 @@ impl TagKind {
 
 /// `RecordData.defn`: definition state plus clang's `DefinitionData`
 /// property flags, computed by sema while the class is defined.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct DefinitionBits(u64);
 
 impl DefinitionBits {
@@ -1299,7 +1299,7 @@ impl DefinitionBits {
 }
 
 /// Hot payload of record kinds (40 bytes, spec/ast.md §4.2).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct RecordData {
     /// Redeclaration link.
     pub redecl: Redecl,
@@ -1319,7 +1319,7 @@ pub struct RecordData {
 }
 
 /// One base-specifier ([class.derived]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct BaseSpec {
     /// The base type as written.
     pub ty: QualType,
@@ -1334,7 +1334,7 @@ pub struct BaseSpec {
 }
 
 /// Payload of `Field` (12 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct FieldData {
     /// The bit-field width (a `ConstantExpr` unless value-dependent).
     pub bit_width: Option<ExprId>,
@@ -1378,7 +1378,7 @@ impl FieldData {
 }
 
 /// Payload of `Enum` (32 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct EnumData {
     /// Redeclaration link.
     pub redecl: Redecl,
@@ -1420,7 +1420,7 @@ impl EnumData {
 }
 
 /// Payload of `EnumConstant` (8 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct EnumeratorData {
     /// The value (`None` while value-dependent).
     pub value: Option<ConstValueId>,
@@ -1429,7 +1429,7 @@ pub struct EnumeratorData {
 }
 
 /// Payload of `ParmVar` (12 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ParamData {
     /// The default argument (write-once; in-class member functions'
     /// default arguments are parsed late).
@@ -1480,7 +1480,7 @@ impl ParamData {
 }
 
 /// Payload of `Typedef` / `TypeAlias` (16 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct TypedefData {
     /// Redeclaration link.
     pub redecl: Redecl,
@@ -1491,7 +1491,7 @@ pub struct TypedefData {
 }
 
 /// Payload of `Namespace` (20 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct NamespaceData {
     /// Redeclaration link (namespaces reopen: each `namespace N {}` is a
     /// redeclaration of the first).
@@ -1515,7 +1515,7 @@ impl NamespaceData {
 }
 
 /// Language of a linkage specification.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum LinkageLang {
     /// `extern "C"`.
@@ -1526,7 +1526,7 @@ pub enum LinkageLang {
 
 /// Payload of non-redeclarable contexts (TU, `LinkageSpec`, `Export`,
 /// `RequiresExprBody`), 12 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ScopeData {
     /// Lexical members.
     pub members: Members,
@@ -1553,7 +1553,7 @@ impl ScopeData {
 }
 
 /// Payload of `StaticAssert` (8 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct StaticAssertData {
     /// The condition (not wrapped in a `ConstantExpr`, §5.5).
     pub cond: ExprId,
@@ -1562,7 +1562,7 @@ pub struct StaticAssertData {
 }
 
 /// What a `Friend` declaration befriends ([class.friend]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum FriendTarget {
     /// A function or function template (its declaration, whose lexical
     /// context is the class).
@@ -1584,7 +1584,7 @@ pub enum FriendTarget {
 /// Payload of `LifetimeExtendedTemporary` (12 bytes, spec/sema-class.md
 /// §5.1): a temporary whose lifetime is extended by a reference
 /// ([class.temporary]/6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct LetData {
     /// The variable (or field) whose reference binding extends it.
     pub extending: DeclId,
@@ -1597,7 +1597,7 @@ pub struct LetData {
 }
 
 /// What a ctor-initializer initializes (`CtorInit::kind`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum CtorInitKind {
     /// A direct non-virtual base: `target` is the base type's raw
@@ -1617,7 +1617,7 @@ pub enum CtorInitKind {
 
 /// One ctor-initializer ([class.base.init], 16 bytes): written or implicit
 /// (`written_index == CtorInit::IMPLICIT`), in initialization order.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CtorInit {
     /// The initialized subobject (see [`CtorInitKind`]).
     pub target: u32,
@@ -1650,7 +1650,7 @@ impl CtorInit {
 
 /// Cold per-declaration data (spec/ast.md §4.2), each an insert-only
 /// sparse map.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct ColdDeclData {
     /// The lexical context when it differs from `ctx` (`HAS_LEXICAL_CTX`).
     pub lexical_ctx: ColdMap<DeclId, DeclId>,
@@ -1845,7 +1845,7 @@ impl ColdDeclData {
 /// Index 0 of every vector is a dummy. Reads take `&self`; the only
 /// mutations are the write-once / monotone setters of §2.4. Nodes are
 /// appended by the `AstBuilder`.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct DeclArena {
     nodes: Vec<DeclNode>,
     functions: Vec<FunctionData>,
@@ -1983,7 +1983,7 @@ impl Default for DeclArena {
 }
 
 /// A kind-specific payload, passed to [`DeclArena::push`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum Payload {
     /// No payload (or the inline `data` documented on the kind).
     None(u32),

@@ -7,7 +7,7 @@
 //! `AArch64TargetInfo::getTargetDefines`.
 
 /// Which functions sign their return address (`-msign-return-address=`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub enum SignScope {
     /// No function (`none`, the default).
     #[default]
@@ -39,7 +39,7 @@ impl SignScope {
 
 /// A parsed branch protection spec (clang `BranchProtectionInfo`).
 #[allow(clippy::struct_excessive_bools, reason = "independent protections")]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub struct BranchProtection {
     /// Return address signing.
     pub scope: SignScope,

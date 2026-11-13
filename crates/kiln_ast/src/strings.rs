@@ -22,7 +22,7 @@ use crate::ids::StringLitId;
 use crate::mem::{HeapSize, MemReport, MemRow};
 
 /// The encoding (and code-unit width) of a string literal.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum StringEncoding {
     /// `"..."`: ordinary literal, 1-byte `char` units (execution charset).
@@ -61,7 +61,7 @@ impl StringEncoding {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Entry {
     start: u32,
     len: u32,

@@ -25,7 +25,7 @@ const CONSTANT_VALUE_HIDDEN: u8 = 2;
 /// Expression kinds (spec/ast.md §5.3; clang's class names without the
 /// `Expr`/`Operator` suffix where the dump adds it). The numbering is
 /// stable.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs, reason = "named after clang's Stmt classes; see spec/ast.md §5.3")]
 pub enum ExprKind {
@@ -171,7 +171,7 @@ pub enum ExprKind {
 }
 
 /// The controlling operand of a `GenericSelectionExpr`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, kiln_snap::Snap)]
 pub enum GenericControl {
     /// An expression, as written (sema lvalue-converts a copy for the
     /// match; the written operand is kept, unevaluated).
@@ -182,7 +182,7 @@ pub enum GenericControl {
 
 /// One association of a `GenericSelectionExpr`: `ty` is `None` for
 /// `default`; `ty_loc` is the type's (or the `default` keyword's) location.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, kiln_snap::Snap)]
 pub struct GenericAssoc {
     /// The association type; `None` for `default`.
     pub ty: Option<QualType>,
@@ -215,7 +215,7 @@ impl ExprKind {
 }
 
 /// Value category ([basic.lval]), 2 bits of `ExprNode.bits`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ValueCategory {
     /// prvalue (not printed by the dump).
@@ -235,7 +235,7 @@ impl ValueCategory {
 }
 
 /// Object kind (2 bits of `ExprNode.bits`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ObjectKind {
     /// An ordinary object.
@@ -248,7 +248,7 @@ pub enum ObjectKind {
 }
 
 /// The 4 per-kind flag bits of `ExprNode.bits` (bits 4..=7).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct ExprFlags(u8);
 
 impl ExprFlags {
@@ -306,7 +306,7 @@ impl ExprFlags {
 
 /// Expression dependence (spec/ast.md §5.1; [temp.dep.expr],
 /// [temp.dep.constexpr]).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct ExprDeps(u8);
 
 impl ExprDeps {
@@ -371,7 +371,7 @@ impl std::ops::BitOrAssign for ExprDeps {
 macro_rules! u8_enum {
     ($(#[$m:meta])* $name:ident { $($(#[$vm:meta])* $v:ident = $s:literal,)* }) => {
         $(#[$m])*
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
         #[repr(u8)]
         pub enum $name { $($(#[$vm])* $v,)* }
         impl $name {
@@ -935,7 +935,7 @@ impl TypeTrait {
 /// `zeroing`, bit 5 `immediate_escalating`. "Had multiple candidates" is
 /// [`ExprFlags::HAD_MULTIPLE_CANDIDATES`]. There is no `elidable` flag
 /// (C++17 guaranteed elision).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent flags mirroring clang's dump keys")]
 pub struct ConstructInfo {
     /// What is constructed.
@@ -985,7 +985,7 @@ impl ConstructInfo {
 }
 
 /// The operand of a `CXXTypeidExpr`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum TypeidOperand {
     /// `typeid(T)`.
     Type(QualType),
@@ -994,7 +994,7 @@ pub enum TypeidOperand {
 }
 
 /// The 20-byte expression header (spec/ast.md §5.1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ExprNode {
     kind: ExprKind,
     bits: u8,
@@ -1105,7 +1105,7 @@ impl ExprNode {
 
 /// Side record of a `DeclRefExpr` with a qualifier, explicit template
 /// arguments or a found declaration different from the referenced one.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct DeclRefExtra {
     /// The nested-name-specifier as written.
     pub qualifier: Option<NnsId>,
@@ -1116,7 +1116,7 @@ pub struct DeclRefExtra {
 }
 
 /// Side record of a `CompoundAssignOperator` (spec/ast.md §5.3).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CompoundAssignExtra {
     /// The right operand.
     pub rhs: ExprId,
@@ -1128,7 +1128,7 @@ pub struct CompoundAssignExtra {
 
 /// One designator of a `DesignatedInitExpr` ([dcl.init.aggr]/3.1;
 /// clang's `DesignatedInitExpr::Designator`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum Designator {
     /// `.name`; `loc` is the name.
     Field {
@@ -1161,7 +1161,7 @@ pub enum Designator {
 /// `Sema::OffsetOfComponent`). A value-dependent `OffsetOfExpr` keeps
 /// its operand type and designator as written for instantiation
 /// ([`ColdExprData::offsetof_pattern`]).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub enum OffsetofComponent {
     /// A member name: the leading identifier (`start` = `end` = its
     /// location) or `.identifier` (`start` is the `.`).
@@ -1187,7 +1187,7 @@ pub enum OffsetofComponent {
 /// The meaning of the accessor of an ext-vector element access `v.xyzw`
 /// (clang `CheckExtVectorComponent` and
 /// `ExtVectorElementExpr::getEncodedElementAccess`; spec/sema.md §5.8).
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum ExtVectorAccess {
     /// A valid accessor: the selected lanes in order (a lane of `hi` or
     /// `odd` on an odd-sized vector may be past its end and is then
@@ -1280,7 +1280,7 @@ pub fn ext_vector_access(name: &str, count: u32) -> ExtVectorAccess {
 }
 
 /// Side record of an `InitListExpr` (semantic form, §5.6).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct InitListExtra {
     /// Initializer for the elements past the explicit ones.
     pub array_filler: Option<ExprId>,
@@ -1292,7 +1292,7 @@ pub struct InitListExtra {
 
 /// How a `CXXNewExpr`'s initializer was written (its `aux`; clang's
 /// `CXXNewInitializationStyle`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum NewInitStyle {
     /// No initializer: default-initialization.
@@ -1316,7 +1316,7 @@ impl NewInitStyle {
 }
 
 /// Side record of a `CXXNewExpr` (spec/ast.md §5.7; [expr.new]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct NewExtra {
     /// The allocated type: the type of the created object, or for an array
     /// new the element type (`int[4]` for `new int[n][4]`; clang's
@@ -1340,7 +1340,7 @@ pub struct NewExtra {
 }
 
 /// Cold per-expression data.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct ColdExprData {
     /// The closing token of kinds that end in one and have no room for it
     /// (`CallExpr` `)`, `UnaryExprOrTypeTraitExpr` `)`, `CStyleCastExpr`
@@ -1409,7 +1409,7 @@ pub struct ColdExprData {
 
 /// The predefined identifier a `PredefinedExpr` names ([dcl.fct.def.general]/8
 /// and the GNU spellings; clang `PredefinedIdentKind`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum PredefinedKind {
     /// `__func__`: the function's unqualified name.
@@ -1441,7 +1441,7 @@ impl PredefinedKind {
 }
 
 /// The builtin a `SourceLocExpr` names (clang `SourceLocIdentKind`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum SourceLocKind {
     /// `__builtin_FILE()`: `const char *`.
@@ -1491,7 +1491,7 @@ impl SourceLocKind {
 /// interned [`Scalar::Pointer`](crate::consts::Scalar) values into string
 /// literal objects (and, for `location`, into the frozen
 /// `std::source_location::__impl` object).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct SourceLocValues {
     /// `__builtin_FILE()`.
     pub file: ConstValueId,
@@ -1513,7 +1513,7 @@ pub struct SourceLocValues {
 }
 
 /// The cold record of an `ArrayTypeTraitExpr` (§9.4).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub struct ArrayTraitExtra {
     /// The converted dimension of `__array_extent(T, I)`.
     pub dim: Option<ExprId>,
@@ -1543,7 +1543,7 @@ impl Default for ColdExprData {
 
 /// Expression headers and side records (spec/ast.md §5). Index 0 of every
 /// vector is a dummy.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct ExprArena {
     nodes: Vec<ExprNode>,
     cond_arms: Vec<[ExprId; 2]>,
@@ -3229,7 +3229,7 @@ impl HeapSize for ExprArena {
 /// The resolved parts of a `CoawaitExpr`/`CoyieldExpr` (clang's
 /// `CoroutineSuspendExpr`): `common` is the awaiter, bound by `opaque`
 /// (an lvalue `OpaqueValueExpr`) in the three calls.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct CoawaitParts {
     /// The operand as written (for `co_yield`, the yielded expression).
     pub operand: ExprId,
@@ -3246,7 +3246,7 @@ pub struct CoawaitParts {
 }
 
 /// The form of a suspend expression ([expr.await]/5.1).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum SuspendKind {
     /// `await_suspend(h)` returns `void`: always suspends.
     Void,

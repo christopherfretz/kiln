@@ -8,7 +8,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use kiln_source::fx::FxHashMap;
 
 /// A floating-point representation.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, kiln_snap::Snap)]
 pub enum FloatFormat {
     /// IEEE 754 binary16.
     IeeeHalf,
@@ -31,7 +31,7 @@ pub enum FloatFormat {
 /// `kiln_abi::target(triple)`. The `Default` value describes an unknown
 /// target (all sizes 0); it is only for tests and for ASTs that are never
 /// laid out.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct TargetTypes {
     /// `(size in bytes, alignment in bytes)` per builtin id 1..=90 (index
     /// 0 unused).
@@ -81,7 +81,7 @@ impl TargetTypes {
 
 /// The Itanium layout of one class; all offsets are from the start of
 /// the object.
-#[derive(Clone, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, PartialEq, Eq, Debug, Default, kiln_snap::Snap)]
 pub struct RecordLayout {
     /// `sizeof`.
     pub size: u64,
@@ -125,7 +125,7 @@ impl RecordLayout {
 
 /// Write-once cache of record layouts keyed by the class's first
 /// declaration (`Ast::layouts`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct LayoutCache {
     map: FxHashMap<DeclId, Box<RecordLayout>>,
 }

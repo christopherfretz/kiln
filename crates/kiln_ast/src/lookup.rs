@@ -23,7 +23,7 @@ const VIA_INLINE: u32 = LookupFlags::VIA_INLINE.0;
 const FLAG_MASK: u32 = LookupFlags::VIA_INLINE.0 | LookupFlags::ADL_ONLY.0;
 
 /// Per-entry flags of a lookup-table entry.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default, Debug, kiln_snap::Snap)]
 pub struct LookupFlags(u32);
 
 impl LookupFlags {
@@ -58,11 +58,11 @@ impl LookupFlags {
 
 /// A table entry: top bit clear = one `DeclId`, set = an overload-set
 /// index.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct LookupEntry(u32);
 
 /// The tables.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct LookupTables {
     map: FxHashMap<(DeclId, DeclName), LookupEntry>,
     sets: Vec<Vec<u32>>,

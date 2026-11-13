@@ -160,7 +160,7 @@ mod tests {
 
 /// One entry of a [`KeyedTable`]: a four-word key, the entry's canonical
 /// id and its flags.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct KeyedEntry {
     pub(crate) key: [u32; 4],
     pub(crate) canon: u32,

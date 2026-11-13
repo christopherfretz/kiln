@@ -30,7 +30,7 @@ pub trait RawId: Copy {
 macro_rules! define_id {
     ($(#[$doc:meta])* $name:ident, $max:expr, $what:literal) => {
         $(#[$doc])*
-        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
         pub struct $name(NonZeroU32);
 
         impl $name {
@@ -191,7 +191,7 @@ impl ListId {
 /// only the bit encoding; adding qualifiers is `TypeContext::qualify`
 /// (because of the array rule, types.md §2.1), and the `Quals` flag type is
 /// the type layer's.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub struct QualType(NonZeroU32);
 
 impl QualType {

@@ -13,7 +13,7 @@ use super::kinds::TypeFlags;
 use crate::ids::{ExprId, ProfileId};
 use crate::mem::{MemReport, MemRow};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct ProfileEntry {
     start: u32,
     len: u32,

@@ -7,7 +7,7 @@ use crate::ids::{ListId, RawId};
 use crate::mem::{HeapSize, MemReport, MemRow};
 
 /// The list arena. Index 0 is the dummy; index 1 is [`ListId::EMPTY`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, kiln_snap::Snap)]
 pub struct IdLists {
     spans: Vec<(u32, u32)>,
     data: Vec<u32>,

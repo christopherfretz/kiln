@@ -16,7 +16,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use kiln_source::symbol::Symbol;
 
 /// Language options that change which types are distinct.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TypeOptions {
     /// The exception specification is part of the function type (C++17
     /// and later, [except.spec]/13 history). Before C++17 every canonical
@@ -32,7 +32,7 @@ impl Default for TypeOptions {
 
 /// An expression operand of a type: the expression as written (sugar) or
 /// the canonical profile (spec/types.md §7.2).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum ExprOperand {
     /// The expression as written.
     Expr(ExprId),
@@ -42,7 +42,7 @@ pub enum ExprOperand {
 }
 
 /// The operand of a `typeof`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum TypeOfOperand {
     /// `typeof(expr)`.
     Expr(ExprId),

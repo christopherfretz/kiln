@@ -7,7 +7,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::slot::AlreadySet;
 
 /// One entity's declarations: shared by all of them (12 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct RedeclGroup {
     /// The first declaration (types and template keys refer to it).
     pub first: DeclId,
@@ -18,7 +18,7 @@ pub struct RedeclGroup {
 }
 
 /// All redeclaration groups. Index 0 is a dummy.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct RedeclTable {
     groups: Vec<RedeclGroup>,
     /// The declaration that stopped being its group's latest, at every

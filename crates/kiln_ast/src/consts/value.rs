@@ -161,7 +161,7 @@ impl fmt::Debug for IntBits<'_> {
 /// A binary floating-point format. Values are stored as their exact bit
 /// pattern in this format, never rounded through `f64` (so `-0.0`, NaN
 /// payloads and `long double` precision are preserved).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum FloatKind {
     /// IEEE binary16 (`_Float16`, `__fp16`).
@@ -217,7 +217,7 @@ impl FloatKind {
 
 /// The kind of a null pointer value; it determines how many bytes the value
 /// occupies inside an aggregate image ([`ConstStore::reloc_width`](super::ConstStore::reloc_width)).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum NullKind {
     /// A null object or function pointer, a `std::nullptr_t` value.
@@ -230,7 +230,7 @@ pub enum NullKind {
 
 /// Whether a pointer to member designates a data member or a member
 /// function.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum MemberKind {
     /// Pointer to data member (`&S::x`).
     Data,
@@ -243,7 +243,7 @@ pub enum MemberKind {
 /// Pointers are `(base, byte offset)` as in the Oven's memory model
 /// (spec/oven.md "Abstract memory"): the designator path is recovered from
 /// the base's type and the offset through the record layout, never stored.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum PtrBase {
     /// A variable or template parameter object (the first declaration).
     Decl(DeclId),
@@ -493,7 +493,7 @@ impl Scalar<'_> {
 }
 
 /// A half-open byte range `[start, start + len)` of an image.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct ByteRange {
     /// First byte.
     pub start: u32,
@@ -513,7 +513,7 @@ impl ByteRange {
 /// [`Scalar::MemberPtr`] or [`Scalar::Reflection`]). The image bytes it
 /// covers ([`ConstStore::reloc_width`](super::ConstStore::reloc_width)) are
 /// zero.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct Reloc {
     /// Byte offset in the image.
     pub at: u32,
@@ -522,7 +522,7 @@ pub struct Reloc {
 }
 
 /// The active member of the union subobject at byte `at`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct UnionMember {
     /// Byte offset of the union subobject in the image.
     pub at: u32,
@@ -585,7 +585,7 @@ impl ConstValue<'_> {
 }
 
 /// The discriminant of a stored value.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum ValueKind {
     /// [`Scalar::Int`].
     Int,
@@ -606,7 +606,7 @@ pub enum ValueKind {
 }
 
 /// What a run of image bytes holds ([`ConstStore::shadow`](super::ConstStore::shadow)).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum ShadowKind {
     /// Initialized scalar bytes (the bytes are the value).
     Value,
@@ -619,7 +619,7 @@ pub enum ShadowKind {
 
 /// A maximal run of image bytes with one [`ShadowKind`]; a `Pointer` run
 /// is exactly one relocation.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ShadowRun {
     /// The bytes.
     pub range: ByteRange,

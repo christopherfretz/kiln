@@ -18,7 +18,7 @@ const TAG_SHIFT: u32 = 29;
 const PAYLOAD_MASK: u32 = (1 << TAG_SHIFT) - 1;
 
 /// The kind of a [`DeclName`] (its tag).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum DeclNameKind {
     /// An identifier, or the empty name (unnamed entities).
@@ -44,7 +44,7 @@ pub enum DeclNameKind {
 /// operators store their [`OverloadedOperator`]; literal operators the
 /// suffix's `Symbol::index()`; the other kinds an index into
 /// `NameTable`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, kiln_snap::Snap)]
 pub struct DeclName(u32);
 
 impl DeclName {
@@ -166,7 +166,7 @@ pub enum DeclNameView {
 
 /// Overloadable operators ([over.oper]), clang's `OverloadedOperatorKind`
 /// order.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 #[repr(u8)]
 #[allow(missing_docs, reason = "each variant is named after its spelling")]
 pub enum OverloadedOperator {
@@ -326,7 +326,7 @@ impl OverloadedOperator {
 
 /// Interned operands of constructor, destructor, conversion and
 /// deduction-guide names (spec/ast.md §3 `names.special`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct NameTable {
     special: Vec<(DeclNameKind, u32)>,
     index: FxHashMap<(DeclNameKind, u32), u32>,

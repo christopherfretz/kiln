@@ -30,7 +30,7 @@ use kiln_source::fx::FxHashMap;
 
 /// The entity a reflection designates (spec/reflection.md §2.2,
 /// spec/reflection-repr.md §1).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum Reflectee {
     /// The null reflection (a value-initialized `std::meta::info`).
     Null,
@@ -164,7 +164,7 @@ impl Reflectee {
 }
 
 /// Interned reflections (spec/reflection.md §2.2).
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct ReflectionTable {
     items: Vec<Reflectee>,
     /// Reflections not found through `by_decl`.
@@ -183,7 +183,7 @@ pub struct ReflectionTable {
 /// A data member description (the evaluator's `Dms`, which lives in the
 /// Oven) as the mangler reads it (spec/reflection.md §8.3: `ds`). Codegen
 /// copies the Oven's table in before mangling.
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct DmsDesc {
     /// The member type.
     pub ty: QualType,
@@ -201,7 +201,7 @@ pub struct DmsDesc {
 
 /// [`ReflectionTable::intern`] of a new reflection into a full table: the
 /// caller diagnoses it (`sema_too_many_reflections`), never a panic.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ReflectionTableFull {
     /// The table's capacity (null included).
     pub limit: usize,

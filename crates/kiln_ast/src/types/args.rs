@@ -16,7 +16,7 @@ impl ArgListId {
 }
 
 /// The kind of a template argument.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord, kiln_snap::Snap)]
 #[repr(u8)]
 pub enum ArgKind {
     /// No argument (placeholder in partially deduced lists).
@@ -42,7 +42,7 @@ pub enum ArgKind {
 }
 
 /// One template argument: 12 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TemplateArg {
     pub(crate) kind: ArgKind,
     pub(crate) a: u32,
@@ -137,7 +137,7 @@ impl TemplateArg {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct ListEntry {
     start: u32,
     len: u32,

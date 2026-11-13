@@ -8,7 +8,7 @@ use kiln_source::symbol::Symbol;
 /// A set of function templates named by an unresolved template-id
 /// (`f<int>` before overload resolution). Stored in the name table's
 /// declaration pool; see [`TypeContext::name_decls`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct DeclSet {
     pub(crate) start: u32,
     pub(crate) len: u32,
@@ -30,7 +30,7 @@ impl DeclSet {
 }
 
 /// What a template name refers to.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum TemplateName {
     /// A class, alias, variable, function or concept template
     /// (the first declaration).

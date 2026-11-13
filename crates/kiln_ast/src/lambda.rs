@@ -12,7 +12,7 @@ use crate::ids::{DeclId, LambdaId, ListId, StmtId};
 use crate::mem::MemRow;
 
 /// The capture-default of a lambda-introducer ([expr.prim.lambda.capture]/1).
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub enum CaptureDefault {
     /// None written.
     #[default]
@@ -24,7 +24,7 @@ pub enum CaptureDefault {
 }
 
 /// How one entity is captured ([expr.prim.lambda.capture]).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum CaptureKind {
     /// `this` (the closure holds the pointer).
     This,
@@ -38,7 +38,7 @@ pub enum CaptureKind {
 
 /// One capture of a lambda, in closure member order: the explicit captures
 /// as written, then the implicit ones in order of first odr-use.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct LambdaCapture {
     /// How it is captured.
     pub kind: CaptureKind,
@@ -61,7 +61,7 @@ pub struct LambdaCapture {
 
 /// The mangling context of a closure type ([basic.def.odr]/14, Itanium
 /// ABI §5.1.8; clang's `getCurrentMangleNumberContext`).
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, kiln_snap::Snap)]
 pub struct LambdaMangling {
     /// The 1-based discriminator among the closures of the same context
     /// with the same call-operator signature (`Ul..E_` is 1, `Ul..E0_` is
@@ -76,7 +76,7 @@ pub struct LambdaMangling {
 }
 
 /// The side record of a lambda ([expr.prim.lambda]).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent syntactic facts")]
 pub struct LambdaData {
     /// The closure type (`CXXRecordDecl`, `DefinitionBits::LAMBDA`).
@@ -147,7 +147,7 @@ impl LambdaData {
 }
 
 /// The lambda side records. Index 0 is a dummy.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct LambdaArena {
     records: Vec<LambdaData>,
 }
@@ -200,7 +200,7 @@ impl LambdaArena {
 /// A member of a closure type that has no body of its own: evaluation and
 /// code generation synthesize it (clang `isLambdaStaticInvoker` and the
 /// conversion's `EmitLambdaToBlockPointerBody`/`EmitLambdaStaticInvokeBody`).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum ClosureThunk {
     /// The conversion function to pointer to function
     /// ([expr.prim.lambda.closure]/8): returns `target`, the static invoker

@@ -12,7 +12,7 @@ use kiln_ast::TypeId;
 use kiln_ast::types::{BuiltinType, FloatFormat, TargetTypes};
 
 /// A CPU architecture kiln can target.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub enum Arch {
     /// x86-64 (System V psABI).
     X86_64,
@@ -32,7 +32,7 @@ impl Arch {
 
 /// A parsed target triple. Only `<arch>[-<vendor>]-linux-gnu` is
 /// supported in M2.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct Triple {
     /// The architecture.
     pub arch: Arch,
@@ -102,7 +102,7 @@ impl fmt::Display for Triple {
 /// Everything the frontend knows about a target (spec/abi.md §2).
 ///
 /// Sizes and alignments are in bytes unless the field name says bits.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent target facts, as clang's TargetInfo")]
 pub struct Target {
     /// The triple.

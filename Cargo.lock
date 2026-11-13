@@ -23,6 +23,7 @@ name = "kiln_abi"
 version = "1.1.0"
 dependencies = [
  "kiln_ast",
+ "kiln_snap",
  "kiln_source",
 ]
 
@@ -32,6 +33,7 @@ version = "1.1.0"
 dependencies = [
  "hashbrown",
  "kiln_diag",
+ "kiln_snap",
  "kiln_source",
 ]
 

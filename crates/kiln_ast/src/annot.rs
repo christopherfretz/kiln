@@ -21,7 +21,7 @@ use crate::mem::{HeapSize, MemReport, MemRow};
 use crate::slot::ColdMap;
 
 /// One annotation (20 bytes).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct Annotation {
     /// The declaration it was written on (not the first declaration of
     /// the entity; [`AnnotArena::of_entity`] gathers those).
@@ -44,7 +44,7 @@ pub struct Annotation {
 }
 
 /// All annotations and the declaration → annotations map.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub struct AnnotArena {
     nodes: Vec<Annotation>,
     /// The annotations written on each declaration that has any.

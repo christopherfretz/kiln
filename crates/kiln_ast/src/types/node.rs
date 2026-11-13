@@ -6,7 +6,7 @@ use super::kinds::{TypeFlags, TypeKind};
 use crate::ids::{ExprId, QualType, TypeId};
 
 /// One type node: 8 bytes, align 4 (spec/types.md §4).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct TypeNode {
     pub(crate) kind: u8,
     pub(crate) flags: u8,
@@ -41,7 +41,7 @@ impl TypeNode {
 }
 
 /// The side record of a `ConstantArray`: 16 bytes.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct ConstArray {
     /// The element type (carries the array's cv-qualifiers, §2.1).
     pub elem: QualType,
@@ -150,7 +150,7 @@ impl Key<'_> {
 /// The node arena and its side arenas. A separate struct from the intern
 /// table so that probing (which reads keys back from here) and inserting
 /// borrow disjoint fields.
-#[derive(Debug)]
+#[derive(Debug, kiln_snap::Snap)]
 pub(crate) struct Store {
     pub(crate) nodes: Vec<TypeNode>,
     pub(crate) canon: Vec<QualType>,
