@@ -1128,6 +1128,53 @@ spec/modules.md §11.13.
     and 22 define none of them, so `-dM -E` output has them in addition
     to clang's.
 
+## Snapshots (WP-1379)
+
+`Preprocessor` is a configured root (spec/snap.md "Configured roots";
+prototype, not called by the compiler yet; classification table at
+`src/snap.rs`). `MacroDef`, `MacroTable`, `AttrMacro`, `Builtin`, the
+preprocessor's token and kiln_lex's `Token`, `TokKind`, `TokFlags`,
+`Punct` and `Encoding` derive `Snap`. The record of "Preprocessor-state
+record" is separate and unchanged: a snapshot keeps every id as it is,
+with no baseline and no remapping.
+
+- **The snapshot point** is the end of the producer's main file (the
+  header, read as `-emit-pch` reads it): `end_main_file()` closes it as
+  the end of an included file would (its include guard is recorded), so
+  no file is open. `enter_next_main_file(file)` then enters another main
+  file without reading the predefines again (they are state); the
+  `#pragma clang diagnostic` state of the end of the prefix continues at
+  its start, as it does in an includer after an `-include`.
+- **State**: the macro table (builtins included), `push_macro` stacks
+  (sharing the table's `Rc<MacroDef>`, which `Rc::ptr_eq` checks rely
+  on), poisoned names, include guards, `#pragma once` files, entered
+  files, scratch and `#embed` buffers, GCC directory spellings,
+  `__COUNTER__`, the depth-limit flag, the module-directive bookkeeping
+  of the main file, the main and predefines buffers, `diag_pushes`, the
+  attribute-macro history and, with modules on, the predefines buffer of
+  the module state.
+- **Consumer-supplied**: the options, the include resolver (its caches
+  refill: the restored source manager gives the same `FileId` for the
+  same path), the `#if` evaluator, the feature queries, the callbacks,
+  the comment handler and the replay record's hooks. Rebuilt: the
+  pre-interned symbols and directive table (by `new` from the restored
+  interner), `__DATE__`/`__TIME__` (on first use), `module_lines`.
+- **Quiescence** (`snap_ready`, called by `snap_put`): no file or macro
+  expansion open, no marker queued and no token pending or read ahead,
+  no conditional open, no directive, macro argument or `#if` being read,
+  no macro being expanded, the declaration-image gate off, and no module
+  state beyond the predefines buffer (a prefix that imports or declares
+  a module is refused). The error names the first field not at rest.
+- **Restore** (`snap_restore`) applies the state to a preprocessor
+  built with `new` over the restored source manager, interner and
+  engine, before its main file is entered, after validating every
+  symbol and file id and each macro definition (parameters consistent,
+  replacement-list locations inside one allocated entry).
+- **Dependencies.** The producer's dependency list is not part of the
+  state; `entered` and the source manager's buffers name every file the
+  prefix read (the consumer seeds its `-M` list from its PCH record, as
+  today).
+
 ## Error recovery
 
 After an error in a directive, the rest of the line is skipped and

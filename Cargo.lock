@@ -56,6 +56,7 @@ dependencies = [
 name = "kiln_diag"
 version = "1.1.0"
 dependencies = [
+ "kiln_snap",
  "kiln_source",
 ]
 
@@ -81,6 +82,7 @@ dependencies = [
 name = "kiln_lex"
 version = "1.1.0"
 dependencies = [
+ "kiln_snap",
  "kiln_source",
 ]
 
@@ -120,6 +122,7 @@ version = "1.1.0"
 dependencies = [
  "kiln_diag",
  "kiln_lex",
+ "kiln_snap",
  "kiln_source",
 ]
 

@@ -2,12 +2,14 @@
 //! section "Policy"). A transcription of clang's `ProcessWarningOptions`
 //! and `DiagnosticIDs::getDiagnosticSeverity`.
 
+use kiln_snap::Snap;
+
 use crate::groups::{Flavor, group_members, nearest_group};
 use crate::ids::{DiagClass, DiagId};
 use crate::options::{DiagOptions, OptionDiag};
 
 /// How a diagnostic is treated, from least to most severe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Snap)]
 pub enum Severity {
     /// Not emitted.
     Ignored,
@@ -22,7 +24,7 @@ pub enum Severity {
 }
 
 /// Per-id mapping state (clang's `DiagnosticMapping`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Snap)]
 pub(crate) struct Mapping {
     pub(crate) severity: Severity,
     /// Set by an option or a pragma (as opposed to the default).
