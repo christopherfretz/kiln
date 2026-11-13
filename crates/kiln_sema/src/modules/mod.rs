@@ -46,7 +46,7 @@ pub enum Directive<'s> {
 }
 
 /// Where the current unit is in its preamble ([module.unit]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
 enum Phase {
     /// Before any module directive.
     #[default]
@@ -60,7 +60,7 @@ enum Phase {
 }
 
 /// The parse state of one unit being read.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 struct Frame {
     unit: u16,
     phase: Phase,
@@ -79,7 +79,7 @@ struct Frame {
 }
 
 /// Module state of [`Sema`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ModSema {
     /// The units being read, innermost last; `frames[0]` is the main file.
     frames: Vec<Frame>,

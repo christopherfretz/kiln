@@ -12,7 +12,7 @@ use super::stack::FrameKind;
 use crate::Sema;
 
 /// What a report row aggregates.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, kiln_snap::Snap)]
 pub enum RowKind {
     /// Class template specializations.
     Class,
@@ -79,7 +79,7 @@ impl RowKind {
 }
 
 /// One row: every instantiation of `template` of one kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct InstRow {
     /// The primary template, or the member's pattern.
     pub template: DeclId,
@@ -98,7 +98,7 @@ pub struct InstRow {
 }
 
 /// The report's output format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
 pub enum ReportFormat {
     /// No report.
     #[default]
@@ -112,7 +112,7 @@ pub enum ReportFormat {
 }
 
 /// The per-template counters (always on; cheap).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct InstReport {
     /// What `-fkiln-instantiation-report` asked for.
     pub format: ReportFormat,

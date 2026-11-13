@@ -24,7 +24,7 @@ use crate::type_diff::DiffArgs as _;
 
 /// The conversion targets of one complete class (clang
 /// `getVisibleConversionFunctions`, templates skipped).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ConvTargets {
     /// Each conversion function's canonical result type, and whether it
     /// is `explicit`.

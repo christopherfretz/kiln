@@ -26,7 +26,7 @@ use crate::class::CleanupState;
 
 /// Why an escalated function is immediate (clang's
 /// `DiagnoseImmediateEscalatingReason`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct Escalation {
     /// The call or the reference in its body.
     loc: Loc,
@@ -99,8 +99,10 @@ pub(crate) struct ImmPending {
 }
 
 /// [`Sema`]'s immediate-invocation state.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ImmState {
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pending: ImmPending,
     /// The escalated functions and why.
     reasons: HashMap<DeclId, Escalation>,
@@ -113,6 +115,8 @@ pub(crate) struct ImmState {
     /// full-expression evaluated before its trial folds
     /// ([`Sema::evaluate_immediates_early`]), consumed by
     /// [`Sema::finish_immediate_invocations`] (WP-1129).
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     early: Vec<(ExprId, Result<ConstValueId, EvalFailure>)>,
     /// The scalar prvalue calls of those that succeeded, with their
     /// values: a trial fold that strips the wrapper (`strip_impcast`)
@@ -125,6 +129,8 @@ pub(crate) struct ImmState {
     /// with the results of their immediate invocations in
     /// [`Sema::default_invocations`] order up to the first failure
     /// (WP-1171): consumed by [`Sema::finish_immediate_invocations`].
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     early_defaults: Vec<(ExprId, Option<DefaultResults>)>,
     /// Where each default argument or default member initializer whose
     /// consteval-only leaf is being checked is used: it has no first token
@@ -1475,5 +1481,34 @@ impl Sema<'_, '_> {
         let ty = self.ast.decls.get(v).ty().unwrap_or(QualType::ERROR);
         let q = self.ast.types.effective_quals(ty);
         q.is_const() && !q.is_volatile() && self.is_integral_or_enum(ty)
+    }
+}
+
+impl ImmState {
+    /// The first per-full-expression part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"); `reasons` and `default_use_locs` are
+    /// state.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let p = &self.pending;
+        let open = [
+            (
+                "pending",
+                !(p.candidates.is_empty()
+                    && p.refs.is_empty()
+                    && p.const_eval == 0
+                    && p.var_init.is_none()
+                    && !p.var_defer
+                    && p.shared_var.is_none()
+                    && !p.default_init
+                    && p.default_uses.is_empty()
+                    && p.member_init.is_none()
+                    && p.prefolded.is_empty()),
+            ),
+            ("after_var", !self.after_var.is_empty()),
+            ("early", !self.early.is_empty()),
+            ("early_values", !self.early_values.is_empty()),
+            ("early_defaults", !self.early_defaults.is_empty()),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
     }
 }

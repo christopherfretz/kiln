@@ -42,7 +42,7 @@ pub(crate) const MAX_TYS: usize = 4;
 /// depth, the (sugared) explicit argument list of that level, the
 /// template's function type when the whole type is substituted, and the
 /// parameter types substituted into.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) struct ExplicitKey {
     pub ft: DeclId,
     pub depth: u16,
@@ -82,7 +82,7 @@ impl ExplicitKey {
 
 /// A kept substitution: the key and the substituted parameter types,
 /// whole function type and count of expanded non-trailing packs.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 struct Entry {
     key: ExplicitKey,
     n: u8,
@@ -92,7 +92,7 @@ struct Entry {
 }
 
 /// The memo (see the module documentation).
-#[derive(Default, Debug)]
+#[derive(Default, Debug, kiln_snap::Snap)]
 pub(crate) struct ExplicitMemo {
     slots: Vec<Option<Entry>>,
 }

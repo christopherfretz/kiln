@@ -10,7 +10,7 @@ use kiln_source::Loc;
 use crate::Sema;
 
 /// A definition whose instantiation is required (§4.4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub struct PendingInst {
     /// The member declaration of the specialization.
     pub decl: DeclId,

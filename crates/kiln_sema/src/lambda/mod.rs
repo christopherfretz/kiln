@@ -88,7 +88,7 @@ pub struct LambdaSpecifiers {
 
 /// What decides a closure type's mangling number (clang
 /// `getCurrentMangleNumberContext`, `ItaniumNumberingContext`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct ManglingState {
     /// The variable whose initializer may be being parsed (set when it is
     /// declared, cleared at its initializer's end).

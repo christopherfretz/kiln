@@ -237,6 +237,39 @@ The roots so far:
   (into an unused Oven; validates everything before assigning anything)
   and `snap_schema`; spec/oven.md "Snapshots" states its behaviour.
 
+- `kiln_sema::Sema` (`src/snap.rs`), a *configured* root (WP-1382;
+  spec/sema.md §8b): it borrows the diagnostics engine and holds the
+  consumer's options, so it is not `Snap` but has `snap_put(&self, &mut
+  Writer)`, `snap_restore(&mut self, &mut Reader)` applied to a fresh
+  object the consumer built, `snap_schema`, and a quiescence check
+  (`snapshot_ready`). Its AST and Oven are written by their own roots.
+
+What the Sema root (WP-1382) added to the recipe:
+
+- More classes than the four above: *scratch* (a reused buffer),
+  *reference* (a borrowed object, the consumer's) and *owned root*
+  (another crate's root inside this one). A root with a hundred fields
+  names them in one `macro_rules!` list per class, from which the
+  destructure, the writes, the schema and the at-rest checks are
+  generated.
+- A transient field is checked, not assumed: the quiescence check names
+  the first one not as a fresh object has it.
+- Configuration inside a state field (a limit inside a state struct) is
+  saved from the consumer's object before the restore and put back.
+- A field type from a crate the WP may not touch (`Range<u32>`) gets a
+  `#[snap(with = ...)]` module, not an impl.
+- A shared `Arc` (the interner) is restored as the same allocation only
+  when every holder is in the same stream after its first writer; a root
+  that needs the consumer's allocation checks `ptr_eq` and refuses.
+
+`kiln_oven::Oven` (`src/snap.rs`, with `Memory` in `src/mem/snap.rs`)
+is a **configured** root: its limits and options are the consumer's, so
+it is not `Snap`. The consumer builds the Oven as it would without a
+snapshot and applies one to it: `snap_ready` (the quiescence check),
+`snap_put` (refused unless ready; writes nothing then), `snap_restore`
+(into an unused Oven; validates everything before assigning anything)
+and `snap_schema`. spec/oven.md "Snapshots" states its behaviour.
+
 ### Configured roots
 
 A root that borrows other roots or holds configuration that cannot be
@@ -361,6 +394,10 @@ of 7, single-threaded, aarch64 container (shared host), 2026-11-12:
   the same `-fdump-ast`, canonical bytes and interning; truncations and
   bit flips of the mid snapshot never panic. The test-only hook is in
   `syntax_cmd.rs`.
+- `crates/kiln_parse/tests/snap.rs`: `Sema` at the end of the pch bench
+  prefixes and a `<meta>` prefix: encode, decode, encode; the original and
+  the restored state continue a main file identically; quiescence;
+  corruption.
 
 ## Open questions
 

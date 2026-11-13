@@ -151,6 +151,34 @@ WP-1290 completes the table:
 
 Tests: `tests/c/lex/`, `tests/c/parse/`, `tests/c/expr/builtin-types-compatible*.c`.
 
+### Snapshots
+A translation unit can be split at a *snapshot point* (spec/sema.md §8b;
+WP-1382): the end of a prefix's main file, at top level, before the
+end-of-translation-unit work.
+
+- `new_sema(interner, diags, target, opts, limits)` builds and configures
+  the `Sema` every translation unit starts from; `parse_preprocessed`
+  uses it, and a snapshot is restored into one.
+- Entry (a), `parse_prefix(pp, interner, diags, target, opts, limits)`:
+  parses to the end of the main file (`parse_top_level_declarations`),
+  handles the events after the last token and the file-scope FP pragmas
+  queued there, and returns `ParsedPrefix { sema, pp, ready }` without
+  pending instantiations or end-of-TU checks. `ready` is `Sema`'s
+  `snapshot_ready`, then the parser's: no bracket open (a prefix ending
+  inside a namespace, `extern "C" {` or a class is refused: the parser
+  closes the declaration context at end of file with an error, but its
+  bracket depth stays open), no token replay, late-parsed members,
+  pending FP pragmas or attributes, no module unit. Recording a module
+  image, a PCH image or carried constants, or loading a PCH, is refused.
+- Entry (b), `continue_preprocessed(sema, pp, target, opts)`: a new
+  parser over `pp` (its main file entered) continues `sema` to the end,
+  end-of-TU work included, and finishes as `parse_preprocessed` does.
+- No field of `Parser` is state (the table at `Parser::snapshot_ready`):
+  the consumer builds a new parser over its own token source.
+- Nothing in the driver calls either entry point yet (WP-1383).
+
+Tests: `crates/kiln_parse/tests/snap.rs`.
+
 ## 2. Token source (`tokens.rs`, `pragma.rs`)
 
 The parser reads phase-4 tokens ([lex.phases]/1.4: macro-expanded, with

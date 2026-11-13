@@ -67,7 +67,7 @@ impl TdfFlags {
 }
 
 /// The result of a deduction (clang's `TemplateDeductionResult`, §10.4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, kiln_snap::Snap)]
 pub enum Tdk {
     /// Deduction succeeded.
     Success,
@@ -107,7 +107,7 @@ pub enum Tdk {
 }
 
 /// What a failed deduction reports (clang's `TemplateDeductionInfo`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, kiln_snap::Snap)]
 pub struct DeductionInfo {
     /// The template parameter the failure is about (its index at the
     /// deduced depth).
@@ -125,7 +125,7 @@ pub struct DeductionInfo {
 
 /// The arguments deduced so far for the parameters of one template
 /// (one depth, §6.2). An undeduced parameter holds [`TemplateArg::NULL`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent deduction modes")]
 pub struct DeducedArgs {
     /// The depth of the parameters being deduced.

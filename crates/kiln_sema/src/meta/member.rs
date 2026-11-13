@@ -24,8 +24,10 @@ use crate::conv::bases::{is_derived_from, same_class};
 
 /// The member queries' state: the cache and the access scope last
 /// checked from.
-#[derive(Default)]
+#[derive(Default, kiln_snap::Snap)]
 pub(crate) struct MemberState {
+    /// Not in a snapshot: rebuilt: member lists are built again on first use (`kiln_oven::MemberCache` is a cache; its `builds` counter is test evidence only).
+    #[snap(skip)]
     pub(crate) cache: MemberCache,
     pub(crate) scope: AccessScope,
 }

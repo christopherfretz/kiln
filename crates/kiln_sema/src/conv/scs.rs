@@ -17,7 +17,7 @@ use crate::Sema;
 
 /// The first conversion of a standard conversion sequence ([conv.lval],
 /// [conv.array], [conv.func]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum FirstStep {
     /// None.
     Identity,
@@ -31,7 +31,7 @@ pub enum FirstStep {
 
 /// The second conversion: a promotion or conversion ([over.ics.scs]
 /// table 19).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum SecondStep {
     /// None.
     Identity,
@@ -71,7 +71,7 @@ pub enum SecondStep {
 }
 
 /// The third conversion ([conv.fctptr], [conv.qual]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum ThirdStep {
     /// None.
     Identity,
@@ -97,7 +97,7 @@ pub enum ConvRank {
 
 /// How an unscoped enumeration with a fixed underlying type was promoted
 /// ([over.ics.rank]/4.2).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub enum FixedEnumPromotion {
     /// Not such a promotion.
     None,
@@ -109,7 +109,7 @@ pub enum FixedEnumPromotion {
 
 /// How a standard conversion sequence binds a reference
 /// ([over.ics.ref]; clang's `StandardConversionSequence` binding bits).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, kiln_snap::Snap)]
 pub struct RefBinding(u8);
 
 impl RefBinding {
@@ -145,7 +145,7 @@ impl RefBinding {
 }
 
 /// A standard conversion sequence ([over.ics.scs]).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct StandardConversion {
     /// The first conversion.
     pub first: FirstStep,
@@ -175,7 +175,7 @@ pub struct StandardConversion {
 /// The array a list-initialization sequence converts to: its element
 /// type, the number of elements it initializes (an array of unknown bound
 /// gets one per initializer) and whether the bound was unknown.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub struct ListArray {
     /// The element type.
     pub elem: QualType,

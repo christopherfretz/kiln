@@ -28,7 +28,7 @@ use super::fail;
 use crate::Sema;
 
 /// The names family's caches (a `Sema` field).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct NameCache {
     /// (reflection, [`Text`] kind) to the frozen string and its length.
     strs: FxHashMap<(ReflectionId, u8), (ConstValueId, u64)>,
@@ -36,6 +36,8 @@ pub(crate) struct NameCache {
     locs: FxHashMap<ReflectionId, ConstValueId>,
     /// The `std::meta::exception` constructor once found, and whether its
     /// message parameter is a `u8string_view` (`recipe.rs`).
+    /// Not in a snapshot: rebuilt: found again by lookup on first use (a pure cache).
+    #[snap(skip)]
     pub(super) exc: Option<(ExcCtor, bool)>,
 }
 

@@ -180,7 +180,7 @@ impl SpecialKind {
 }
 
 /// The special-member state of [`Sema`] (spec/sema-class.md §8.3).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct SpecialState {
     /// Explicitly defaulted special members declared in a class being
     /// defined, with the `default` keyword: checked at the class's `}`.

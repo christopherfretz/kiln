@@ -2942,7 +2942,7 @@ impl Sema<'_, '_> {
 
 /// Per-TU state of the source-location builtins (clang
 /// `StdSourceLocationImplDecl` and `UniqueStringLiterals`).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct SrcLocCache {
     /// `std::source_location::__impl` once found and checked.
     impl_decl: Option<DeclId>,

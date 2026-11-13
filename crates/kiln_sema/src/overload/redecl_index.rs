@@ -54,7 +54,7 @@ const NIL: u32 = u32::MAX;
 const TEMPLATE_BIT: u64 = 1 << 1;
 
 /// One indexed overload set: positions `0..keys.len()` are keyed.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 struct SetIndex {
     /// The key of each position.
     keys: Vec<u64>,
@@ -115,7 +115,7 @@ impl SetIndex {
 
 /// The index: the indexed sets, and which positions read which
 /// declaration (to re-key them when the journals name it).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub(crate) struct RedeclIndex {
     sets: FxHashMap<u32, SetIndex>,
     /// Source declaration → one `(set << 32) | pos` reading it.

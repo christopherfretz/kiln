@@ -62,7 +62,7 @@ enum DtorQual {
 /// A name of a non-static member whose meaning depends on the operand it
 /// appears in (spec/sema-class.md §2.6): `&C::m` forms a pointer to
 /// member; anything else needs an object.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub(crate) struct MemberRef {
     /// The member.
     pub(crate) decl: DeclId,

@@ -42,7 +42,7 @@ pub(crate) struct WrittenScope {
 }
 
 /// A dependent entity whose written locations are recorded.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub(crate) enum WrittenKey {
     /// A dependent type (`typename T::type`, `X<T>`).
     Type(QualType),

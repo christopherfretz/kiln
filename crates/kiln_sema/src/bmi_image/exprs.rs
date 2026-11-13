@@ -630,6 +630,19 @@ impl Sema<'_, '_> {
     }
 }
 
+impl TexprState {
+    /// No declaration image is being built (a snapshot point,
+    /// spec/sema.md "Snapshots").
+    pub(crate) fn is_at_rest(&self) -> bool {
+        self.locs.is_none()
+            && self.built.is_empty()
+            && self.params.is_empty()
+            && self.req_params.is_empty()
+            && self.partial_sels.is_empty()
+            && self.aligned.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

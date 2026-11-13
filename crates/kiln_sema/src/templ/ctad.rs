@@ -32,7 +32,7 @@ mod inherit;
 
 /// How the object whose type is a deduced class template specialization
 /// is initialized ([over.match.class.deduct]/1, /3).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum CtadInit {
     /// `T x(a...)`, `T(a...)`, `new T(a...)`, `T x;`.
     Direct,
@@ -46,7 +46,7 @@ pub(crate) enum CtadInit {
 
 /// What an implicit deduction guide was formed from
 /// ([over.match.class.deduct]/1, [over.match.best.general]/2.10-2.13).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, kiln_snap::Snap)]
 pub(crate) enum GuideOrigin {
     /// A non-template constructor, or the hypothetical `C()`.
     Ctor,
@@ -61,7 +61,7 @@ pub(crate) enum GuideOrigin {
 /// A guide formed from a guide of a base class template whose
 /// constructors a class template inherits ([over.match.class.deduct]/1,
 /// P2582; spec/sema-templates.md §6.6.1).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, kiln_snap::Snap)]
 pub(crate) struct InheritedGuide {
     /// The inheriting class template.
     pub(crate) class: DeclId,

@@ -12,7 +12,7 @@ use kiln_source::symbol::Symbol;
 use crate::class::NrvoState;
 
 /// What kind of region a [`Scope`] is.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum ScopeKind {
     /// The translation unit.
     TranslationUnit,
@@ -47,7 +47,7 @@ pub enum ScopeKind {
 }
 
 /// One entry of the scope stack.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub struct Scope {
     /// The kind of region.
     pub kind: ScopeKind,
@@ -96,7 +96,7 @@ pub struct Scope {
 }
 
 /// The name space (C's "tag" vs "ordinary" split) of a local entry.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, kiln_snap::Snap)]
 pub enum Ns {
     /// Variables, functions, typedefs, enumerators.
     Ordinary,

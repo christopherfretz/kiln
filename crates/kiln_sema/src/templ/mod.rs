@@ -62,7 +62,7 @@ pub type TypeConstraint = (DeclId, Vec<TemplateArg>);
 /// A template parameter list being parsed or waiting for its
 /// declaration (one per `ScopeKind::TemplateParams` scope, plus invented
 /// heads of abbreviated function templates).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, kiln_snap::Snap)]
 pub(crate) struct HeadBuild {
     template_loc: Loc,
     l_angle: Loc,
@@ -176,7 +176,7 @@ impl HeadBuild {
 
 /// The template state of [`Sema`] (spec/sema-templates.md §11.2; the
 /// engine's `InstState` is WP-070's).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, kiln_snap::Snap)]
 #[allow(clippy::struct_excessive_bools, reason = "independent parse-state flags")]
 pub struct TemplState {
     pub(crate) heads: Vec<HeadBuild>,
@@ -373,7 +373,7 @@ pub struct TemplState {
 
 /// The class an object expression names for the lookup of the first
 /// component of a member access's qualifier.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, kiln_snap::Snap)]
 pub(crate) enum MemberScope {
     /// The object's (complete) class.
     Class(DeclId),
@@ -388,7 +388,7 @@ pub(crate) enum MemberScope {
 pub(crate) type DefaultArgUses = (Option<DeclId>, Vec<(DeclId, Loc)>);
 
 /// The instantiation engine's state (spec/sema-templates.md §11.2).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, kiln_snap::Snap)]
 pub struct InstState {
     /// The active instantiations, innermost last (§10.1).
     pub(crate) stack: stack::InstantiationStack,
@@ -397,6 +397,8 @@ pub struct InstState {
     /// the paused evaluation. An error in an instantiation the call
     /// required ends its context with the evaluation's call frames
     /// (§10.2, WP-1248).
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pub(crate) meta_calls: Vec<(usize, kiln_oven::FrameMark)>,
     /// `-ftemplate-depth=` / `-ftemplate-backtrace-limit=`.
     pub limits: stack::InstLimits,
@@ -404,6 +406,8 @@ pub struct InstState {
     /// where it could not run (§4.4), drained at end of TU.
     pub(crate) pending: std::collections::VecDeque<pending::PendingInst>,
     /// One entry per active SFINAE context: the errors it captured (§5.7).
+    /// Not in a snapshot: transient, empty at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pub(crate) sfinae: std::cell::RefCell<Vec<stack::SfinaeState>>,
     /// Errors reported by function definition instantiations so far
     /// (nested ones counted once): a statement whose substitution only
@@ -439,6 +443,8 @@ pub struct InstState {
     /// the stack depth it started at, and the last frame popped back to
     /// that depth (the definition's own), which the drain keeps active
     /// while the instantiations it required run (§4.4).
+    /// Not in a snapshot: transient, `None` at a snapshot point (`Sema::snapshot_ready`).
+    #[snap(skip)]
     pub(crate) drain_capture: Option<(usize, Option<stack::InstFrame>)>,
     /// While a default argument is converted to its parameter's type:
     /// the function whose body was current then, and the member
@@ -516,6 +522,8 @@ pub struct InstState {
     pub(crate) eval_loc: Option<Loc>,
     /// The thread's stack guard (P4 (c)): the one installed when the
     /// state was created.
+    /// Not in a snapshot: the consumer's (this thread's stack bounds); `Sema::snap_restore` keeps it.
+    #[snap(skip)]
     pub(crate) guard: crate::stack_guard::StackGuard,
     /// The guard tripped: its fatal error was emitted, and every later
     /// check fails so the recursion unwinds.
@@ -2165,5 +2173,41 @@ impl Sema<'_, '_> {
     /// heads (the next declaration consumes it).
     pub fn has_pending_head(&self) -> bool {
         self.templ.heads.last().is_some_and(|h| !h.taken)
+    }
+}
+
+impl InstState {
+    /// The first transient part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"), by field name.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let open = [
+            ("meta_calls", !self.meta_calls.is_empty()),
+            ("sfinae", self.sfinae.try_borrow().map_or(true, |s| !s.is_empty())),
+            ("selecting", !self.selecting.is_empty()),
+            ("drain_capture", self.drain_capture.is_some()),
+            ("default_arg_uses", self.default_arg_uses.is_some()),
+            ("at_end_of_tu", self.at_end_of_tu),
+            ("deferring_init", self.deferring_init),
+            ("suppress_next_error", self.suppress_next_error.get()),
+            ("suppress_access", self.suppress_access.get()),
+            ("fatal", self.fatal),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
+    }
+}
+
+impl TemplState {
+    /// The first transient part not at rest at a snapshot point
+    /// (spec/sema.md "Snapshots"): an open template head, expansion
+    /// statement or requires-clause context.
+    pub(crate) fn not_at_rest(&self) -> Option<&'static str> {
+        let open = [
+            ("heads", !self.heads.is_empty()),
+            ("expansions_open", !self.expansions_open.is_empty()),
+            ("req_ctx", !self.req_ctx.is_empty()),
+            ("explicit_depth", self.explicit_depth != 0),
+            ("entering_context", self.entering_context),
+        ];
+        open.iter().find(|o| o.1).map(|o| o.0)
     }
 }

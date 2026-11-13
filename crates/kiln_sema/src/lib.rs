@@ -118,6 +118,7 @@ mod selectany;
 mod self_ref;
 mod shadow;
 mod side_effects;
+mod snap;
 mod splice;
 mod splice_local;
 mod splice_object;
@@ -174,6 +175,7 @@ pub use never_constant::BuiltinQuery;
 pub use pragma_state::{PragmaState, fp_bits, fp_from_bits};
 pub use range_for::{RangeCollect, RangeForHead, RangeInit};
 pub use scope::ScopeKind;
+pub use snap::{FieldClass, SNAPSHOT_FIELDS};
 pub use template_id_typo::TemplateIdTypo;
 pub use vector_ops::LaxVectorConversions;
 

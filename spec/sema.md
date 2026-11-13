@@ -11423,6 +11423,44 @@ Specified in **`spec/reflection.md`**:
 
 Everything is gated on `Sema::reflection` (driver `-freflection`).
 
+## 8b. Snapshots (`snap.rs`)
+`Sema` is a configured root of the snapshot encoding (spec/snap.md
+"Hand-written roots"; WP-1382). Its fields are listed once, in
+`sema_fields!`, in exactly one class each; `SNAPSHOT_FIELDS` exports the
+table and the module docs give each non-state field its reason.
+
+- **Classification rule.** *State* (written) is the default when in
+  doubt: anything that accumulates or lingers after its construct ends
+  (end-of-TU lists, "already warned" tables, pragma stacks, memos whose
+  hits suppress a diagnostic, counters that number things).
+  *Configuration* (32 fields: the target, `-std=`, the language switches
+  `kiln_parse`'s `configure` sets) is not written; the consumer sets it
+  and WP-1383's fingerprint covers it. `inst.limits` and
+  `inst.report.format` inside the state `inst`, and the thread's stack
+  guard `inst.guard`, are kept from the consumer's `Sema` on restore.
+  *Transient* fields (construct stacks, per-call flags) are not written
+  and must be at rest. *Scratch* buffers and *rebuilt* caches
+  (`spare_oven`, `classify_memo`) are not written. The diagnostics engine
+  is a *reference*; the AST and the Oven are *owned roots*, written by
+  their crates' roots.
+- **Snapshot point.** The end of a prefix's main file, at top level,
+  before the end-of-translation-unit work (pending instantiations,
+  `act_on_end_of_translation_unit`): `kiln_parse::parse_prefix`.
+- **Quiescence.** `Sema::snapshot_ready` refuses, naming the field: a
+  declaration context other than the translation unit; more than the
+  translation unit's scope; any transient field not as a fresh `Sema`
+  has it; an Oven on loan or not at rest (`Oven::snap_ready`); a running instantiation, an open template
+  head or pending immediate invocations; declaration-image or carried
+  recording on. An open `#pragma pack(push)` is state, not a refusal: the
+  main file packs with it, as it would after an `#include`.
+- **Write and restore.** `snap_put` writes the AST, the Oven, then each
+  state field. `snap_restore` applies a snapshot to a fresh `Sema` built
+  by `kiln_parse::new_sema` from the consumer's options; the decoded
+  AST must share the consumer's interner (read earlier in the same
+  stream, so its `Arc` is a back-reference), else the restore is
+  refused. Errors are `SnapError`s, never panics. `snap_sizes` reports
+  the encoded size of each part.
+
 ## 9. Target (`target.rs`)
 - `pub use kiln_abi::{Arch, Target}`.
 - `target_for_types` maps `TargetTypes` to a layout target.
