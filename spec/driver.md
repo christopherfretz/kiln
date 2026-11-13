@@ -2043,6 +2043,8 @@ only whole, and every doubt replays the header.
   declaration of the consumer depends on, also means no image:
   - `a #pragma weak naming an undeclared identifier`: the pragma makes
     the consumer's definition weak.
+  - `a #pragma redefine_extname naming an undeclared identifier`: the
+    pragma renames the consumer's declaration (WP-1399).
   The census does not report this sema state.
   A C header gets no image at all (`a C header`,
   `bmi_image/pch.rs`): a C PCH is always replayed. So the shared `[*]`
@@ -2455,13 +2457,17 @@ cases of `scripts/pch-snapshot-diff/`.
   `#pragma push_macro` without its pop, `#pragma clang diagnostic push`
   without its pop, `#pragma pack(push)`, `#pragma GCC visibility push`,
   `#pragma once` in the header (the main file's `#include` of it is
-  skipped), `#pragma STDC FP_CONTRACT`, a pending `#pragma weak`.
+  skipped), `#pragma STDC FP_CONTRACT`, a pending `#pragma weak` (the
+  alias form too), a pending `#pragma redefine_extname` (WP-1399:
+  `Sema::weak_pending`, `extname_pending` and `pragma_attrs` are snapshot
+  state). A header that ends inside a `#pragma clang attribute push` is
+  `unterminated '#pragma clang attribute push' at end of file` at the
+  producer, as in clang, so there is no PCH.
   Refused at the producer (`-v`: `snapshot not written: Parser.mods:
   not at rest`): a header that ends in a global module fragment's
   `module;`. A header ending inside `#if` is an error (no PCH).
-  `#pragma STDC FENV_ACCESS ON`, `#pragma weak a = b`, `#pragma
-  redefine_extname` and `#pragma clang attribute` are not supported
-  yet: they are errors in any header, so there is no PCH to restore.
+  `#pragma STDC FENV_ACCESS ON` is not supported yet: it is an error
+  in any header, so there is no PCH to restore.
 - **`-MD`.** The list is the same as replay's: the PCH's input files,
   then the main file and its headers, as clang lists them with
   `-include-pch` (clang 19: `m.o: <abs>/p.h <abs>/inner.h m.cpp m.h`;

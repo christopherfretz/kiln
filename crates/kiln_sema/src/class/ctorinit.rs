@@ -1162,6 +1162,10 @@ impl Sema<'_, '_> {
         // (a default member initializer, a default argument).
         let pending = std::mem::take(&mut self.volatile_assigns);
         self.warn_volatile_assigns(pending);
+        // clang `DiagnoseUnterminatedPragmaAttribute`, then the `#pragma
+        // weak` identifiers never declared.
+        self.diagnose_unterminated_pragma_attr();
+        self.diagnose_pending_weak();
         self.check_delegating_cycles();
         self.c_complete_tentative_definitions();
         self.diagnose_undefined_used();

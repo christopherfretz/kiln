@@ -388,6 +388,7 @@ sema_vm_decl_in_file_scope = Error (0) "variably modified type declaration not a
 sema_vm_func_decl = Error (0) "function declaration cannot have variably modified type";
 sema_void_only_param = Error (0) "'void' must be the first and only parameter if specified";
 sema_void_var = Error (1) "variable has incomplete type {0}";
+sema_weak_identifier_undeclared = Warning (1) "weak identifier '{0}' never declared";
 sema_x86_builtin_32_bit_only = Error (0) "this builtin is only available on 32-bit targets";
 sema_x86_invalid_rounding = Error (0) "invalid rounding argument";
 sema_x86_invalid_scale = Error (0) "scale argument must be 1, 2, 4, or 8";

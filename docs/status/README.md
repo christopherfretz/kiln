@@ -97,6 +97,8 @@ Correctness and diagnostics:
 - `accepts-invalid.md`: clang 22's `clang/test/{CXX,SemaCXX}` negative
   tests through kiln (`cargo xtask clang-neg`, WP-912), with triage
   clusters and repros.
+- `floating-point.md`: the FP-environment pragmas kiln rejects, and the
+  analysis and size estimate of `#pragma STDC FENV_ACCESS ON` (WP-1399).
 - `silent-drops.md`: the WP-805 audit of constructs kiln ignored instead
   of implementing or rejecting.
 - `deviations.md`: deliberate deviations from the oracle where kiln

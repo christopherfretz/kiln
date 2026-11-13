@@ -2264,6 +2264,9 @@ impl Sema<'_, '_> {
         attrs.extend(d.attrs.iter().copied());
         // [dcl.align]/1: not on a function parameter.
         self.reject_alignas(&mut attrs, 0);
+        if !nttp {
+            self.add_pragma_param_attrs(ty, &mut attrs);
+        }
         ty = self.apply_vector_attrs(ty, &mut attrs, false, VectorAttrPos::Decl);
         // A `mode` left in `attrs` is on a dependent type: kept on the
         // parameter, applied when it is substituted (clang
@@ -3733,6 +3736,7 @@ impl Sema<'_, '_> {
             let dn = self.ast.decls.get(decl).name();
             self.check_using_shadow_conflict(templ.unwrap_or(decl), dn);
         }
+        self.add_pragma_attrs(decl, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
@@ -3831,6 +3835,7 @@ impl Sema<'_, '_> {
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
         attrs.retain(|&a| !self.ast.attrs.get(a).kind.is_fn_type_attr());
+        self.add_pragma_attrs(decl, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(decl, &mut attrs);
         }
@@ -3888,6 +3893,8 @@ impl Sema<'_, '_> {
                 node.flags |= 2;
                 let id = self.ast.attrs.push(node);
                 attrs.insert(0, id);
+            } else {
+                self.apply_pragma_extname(decl, attrs);
             }
             return;
         };
@@ -4495,6 +4502,7 @@ impl Sema<'_, '_> {
             self.set_member_access(t);
         }
         self.check_using_shadow_conflict(td, DeclName::ident(name));
+        self.add_pragma_attrs(td, &mut attrs);
         if !attrs.is_empty() {
             // The declarator's subject table ([dcl.attr], spec/sema.md
             // §4.5): an alias-declaration declares a typedef-name.
@@ -10341,8 +10349,9 @@ impl Sema<'_, '_> {
             if access != kiln_ast::decl::Access::None {
                 self.ast.decls.set_access(d, access);
             }
+            let mut attrs = attrs.to_vec();
+            self.add_pragma_attrs(d, &mut attrs);
             if !attrs.is_empty() {
-                let mut attrs = attrs.to_vec();
                 self.take_annotations(d, &mut attrs);
                 let _ = self.builder().attach_attrs(d, &attrs);
             }
@@ -10403,8 +10412,9 @@ impl Sema<'_, '_> {
                 _ => Some(vty),
             }
         };
+        let mut attrs = attrs.to_vec();
+        self.add_pragma_attrs(d, &mut attrs);
         if !attrs.is_empty() {
-            let mut attrs = attrs.to_vec();
             self.take_annotations(d, &mut attrs);
             let _ = self.builder().attach_attrs(d, &attrs);
         }
@@ -13250,6 +13260,9 @@ impl Sema<'_, '_> {
     pub fn act_on_tag_attrs(&mut self, d: DeclId, attrs: &[AttrId], use_: TagUse) {
         let mut attrs = attrs.to_vec();
         let transparent = self.transparent_union_head(d, &mut attrs, use_);
+        if matches!(use_, TagUse::Declaration | TagUse::Definition) {
+            self.add_pragma_attrs(d, &mut attrs);
+        }
         if !attrs.is_empty() {
             self.check_decl_attrs(d, &mut attrs);
         }

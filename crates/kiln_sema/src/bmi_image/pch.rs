@@ -81,13 +81,17 @@ impl Sema<'_, '_> {
     /// Sema state the header leaves behind that the image does not carry
     /// and a later declaration of the consumer depends on: a `#pragma
     /// weak` naming nothing declared yet (it makes the consumer's
-    /// definition weak). The image of such a header would differ from
+    /// definition weak), or a `#pragma redefine_extname` likewise (it
+    /// renames the consumer's declaration). The image of such a header would differ from
     /// replay, so it is not written. The header's block-scope `extern`
     /// and function declarations ([`Sema::local_externs`]) are carried
     /// (WP-1293, `localexterns.rs`).
     fn pch_uncarried_state(&self) -> Option<&'static str> {
         if !self.weak_pending.is_empty() {
             return Some("a #pragma weak naming an undeclared identifier");
+        }
+        if !self.extname_pending.is_empty() {
+            return Some("a #pragma redefine_extname naming an undeclared identifier");
         }
         None
     }

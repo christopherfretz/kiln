@@ -94,6 +94,9 @@ note_pp_meta_gcc = Note (3) "'<meta>' is provided by GCC 16.1's libstdc++; kiln 
 note_pp_meta_libcxx = Note (1) "libc++ does not provide '<meta>'; it is provided by GCC 16.1's libstdc++: pass -stdlib=libstdc++ --gcc-toolchain=<prefix of a GCC 16.1 installation>{0}";
 note_pp_meta_no_gcc = Note (1) "'<meta>' is provided by GCC 16.1's libstdc++, but kiln found no GCC installation; pass --gcc-toolchain=<prefix of a GCC 16.1 installation>{0}";
 note_pp_poisoned_here = Note (0) "poisoned here";
+note_pragma_attribute_namespace_on_attribute = Note (0) "omit the namespace to add attributes to the most-recently pushed attribute group";
+note_pragma_attribute_region_ends_here = Note (0) "'#pragma clang attribute push' regions ends here";
+note_pragma_attribute_use_attribute_kw = Note (0) "use the GNU '__attribute__' syntax";
 note_pragma_loop_invalid_vectorize_option = Note (0) "vectorize_width loop hint malformed; use vectorize_width(X, fixed) or vectorize_width(X, scalable) where X is an integer, or vectorize_width('fixed' or 'scalable')";
 note_previous_attribute = Note (0) "previous attribute is here";
 note_previous_binding_pack = Note (0) "previous binding pack specified here";

@@ -25,14 +25,14 @@ const IGNORED: &[&str] = &["comment", "unused", "omp"];
 
 /// Pragmas clang knows that change the meaning of the translation unit
 /// and that kiln does not implement yet.
-const UNSUPPORTED: &[&str] = &["align", "options", "redefine_extname"];
+const UNSUPPORTED: &[&str] = &["align", "options"];
 
 /// `#pragma clang ...` pragmas accepted without effect.
 const CLANG_IGNORED: &[&str] =
     &["diagnostic", "optimize", "max_tokens_here", "max_tokens_total", "__debug"];
 
 /// `#pragma clang ...` pragmas kiln does not implement yet.
-const CLANG_UNSUPPORTED: &[&str] = &["attribute", "section"];
+const CLANG_UNSUPPORTED: &[&str] = &["section"];
 
 /// The `#pragma STDC` pragmas ([cpp.pragma]/2; C23 7.12.2, 7.6.1,
 /// 7.3.4, 7.6.2).
@@ -105,6 +105,7 @@ pub(crate) fn classify(
                 ("GCC", "nounroll") => unroll_hint(cx, "nounroll", start, loc, &rest[1..], end),
                 ("clang", "loop") => clang_loop(cx, start, loc, &rest[1..], end),
                 ("clang", "fp") => crate::fp_pragma::clang_fp(cx, loc, &rest[1..], end),
+                ("clang", "attribute") => crate::attr_pragma::classify(cx, loc, &rest[1..], end),
                 // Validated and applied by the preprocessor, which records
                 // the warning state per location in the diagnostic engine.
                 ("GCC", "diagnostic") => None,
@@ -130,6 +131,7 @@ pub(crate) fn classify(
         },
         "float_control" => crate::fp_pragma::float_control(cx, loc, rest, end),
         "weak" => weak(cx, loc, rest, end),
+        "redefine_extname" => redefine_extname(cx, rest, end),
         "ms_struct" => ms_struct(cx, rest, end),
         "unroll" => unroll_hint(cx, "unroll", start, loc, rest, end),
         "nounroll" => unroll_hint(cx, "nounroll", start, loc, rest, end),
@@ -162,24 +164,57 @@ fn pack(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Eve
     Some(Event::PragmaPack { loc, args })
 }
 
-/// `#pragma weak name` (clang's `PragmaWeakHandler`); `loc` is the
-/// `weak` token. A missing identifier, or tokens after it, are ignored
-/// with a warning; the alias form `#pragma weak name = alias` is not
-/// supported yet.
-fn weak(cx: &PragmaCx<'_, '_>, loc: Loc, rest: &[Token], end: Loc) -> Option<Event> {
+/// `#pragma weak name` and `#pragma weak name = target` (clang's
+/// `PragmaWeakHandler`); `loc` is the `weak` token. A missing
+/// identifier, or tokens after the pragma, are ignored with a warning.
+fn weak(cx: &PragmaCx<'_, '_>, _loc: Loc, rest: &[Token], end: Loc) -> Option<Event> {
     let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
-    let Some(TokKind::Identifier(name)) = rest.first().map(|t| t.kind) else {
+    let ident = |i: usize| match rest.get(i).map(|t| t.kind) {
+        Some(TokKind::Identifier(s)) => Some((s, at(i))),
+        _ => None,
+    };
+    let Some((name, name_loc)) = ident(0) else {
         cx.report_what(DiagId::parse_pragma_expected_identifier, "weak", at(0));
         return None;
     };
+    let mut next = 1;
+    let mut target = None;
     if rest.get(1).is_some_and(|t| t.kind == TokKind::Punct(Punct::Equal)) {
-        return Some(Event::UnsupportedPragma { what: "weak name = alias".to_owned(), loc });
+        let Some(t) = ident(2) else {
+            cx.report_what(DiagId::parse_pragma_expected_identifier, "weak", at(2));
+            return None;
+        };
+        target = Some(t);
+        next = 3;
     }
-    if rest.len() > 1 {
-        cx.report_what(DiagId::parse_pragma_extra_tokens, "weak", at(1));
+    if rest.len() > next {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, "weak", at(next));
         return None;
     }
-    Some(Event::PragmaWeak { name, loc: rest[0].span.lo })
+    Some(Event::PragmaWeak { name, loc: name_loc, target })
+}
+
+/// `#pragma redefine_extname old new` (clang's
+/// `PragmaRedefineExtnameHandler`): a missing identifier, or tokens
+/// after the pragma, are ignored with a warning.
+fn redefine_extname(cx: &PragmaCx<'_, '_>, rest: &[Token], end: Loc) -> Option<Event> {
+    const WHAT: &str = "redefine_extname";
+    let at = |i: usize| rest.get(i).map_or(end, |t| t.span.lo);
+    let ident = |i: usize| {
+        if let Some(TokKind::Identifier(s)) = rest.get(i).map(|t| t.kind) {
+            Some((s, at(i)))
+        } else {
+            cx.report_what(DiagId::parse_pragma_expected_identifier, WHAT, at(i));
+            None
+        }
+    };
+    let old = ident(0)?;
+    let new = ident(1)?;
+    if rest.len() > 2 {
+        cx.report_what(DiagId::parse_pragma_extra_tokens, WHAT, at(2));
+        return None;
+    }
+    Some(Event::RedefineExtname { old, new })
 }
 
 /// `#pragma ms_struct on|off|reset` (clang's `PragmaMSStructHandler`):
@@ -415,7 +450,12 @@ impl Parser<'_, '_> {
                 }
             }
             Event::Visibility { loc, push: None } => self.s.act_on_pragma_visibility(None, loc),
-            Event::PragmaWeak { name, loc } => self.s.act_on_pragma_weak(name, loc),
+            Event::PragmaWeak { name, loc, target: None } => self.s.act_on_pragma_weak(name, loc),
+            Event::PragmaWeak { name, loc, target: Some(t) } => {
+                self.s.act_on_pragma_weak_alias((name, loc), t);
+            }
+            Event::RedefineExtname { old, new } => self.s.act_on_pragma_redefine_extname(old, new),
+            Event::PragmaAttribute(p) => self.act_on_attr_pragma(p),
         }
     }
 }

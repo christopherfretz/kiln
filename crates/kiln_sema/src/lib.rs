@@ -104,6 +104,8 @@ mod nullability;
 mod oven_bridge;
 pub mod overload;
 mod packed;
+pub mod pragma_attr;
+mod pragma_names;
 mod pragma_state;
 mod predefined;
 mod qualified_decl;
@@ -590,10 +592,16 @@ pub struct Sema<'a, 'sm> {
     pub(crate) vis_stack: Vec<Option<(u32, Loc)>>,
     /// The open namespace definitions that pushed a `None` entry.
     pub(crate) vis_namespaces: Vec<DeclId>,
-    /// The names of `#pragma weak` pragmas that preceded any declaration
-    /// of them, with the name's location (clang
-    /// `WeakUndeclaredIdentifiers`).
-    pub(crate) weak_pending: Vec<(kiln_source::symbol::Symbol, Loc)>,
+    /// The `#pragma weak` pragmas that preceded any declaration of their
+    /// identifier (clang `WeakUndeclaredIdentifiers`).
+    pub(crate) weak_pending: Vec<pragma_names::WeakPending>,
+    /// The `#pragma redefine_extname` pragmas that preceded any
+    /// declaration of their identifier (clang
+    /// `ExtnameUndeclaredIdentifiers`).
+    pub(crate) extname_pending: Vec<pragma_names::ExtnamePending>,
+    /// The `#pragma clang attribute push` groups, innermost last (clang
+    /// `PragmaAttributeStack`).
+    pub(crate) pragma_attrs: Vec<pragma_attr::PragmaAttrGroup>,
     /// Functions declared with a parameter that needed the missing-
     /// `typename` recovery: no qualified redeclaration matches them
     /// (spec/sema-templates.md, clang's invalid declaration).
@@ -1451,6 +1459,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             vis_stack: Vec::new(),
             vis_namespaces: Vec::new(),
             weak_pending: Vec::new(),
+            extname_pending: Vec::new(),
+            pragma_attrs: Vec::new(),
             missing_typename_fns: kiln_source::fx::FxHashSet::default(),
             extern_c: kiln_source::fx::FxHashMap::default(),
             split_greaters: kiln_source::fx::FxHashSet::default(),

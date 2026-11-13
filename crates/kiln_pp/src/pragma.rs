@@ -241,7 +241,8 @@ impl Preprocessor<'_, '_> {
                             let expand = self.opts.parser_pragmas
                                 && matches!(
                                     (ns, sub),
-                                    ("GCC", Some("unroll" | "nounroll")) | ("clang", Some("loop"))
+                                    ("GCC", Some("unroll" | "nounroll"))
+                                        | ("clang", Some("loop" | "attribute"))
                                 );
                             self.rest_of_pragma(&mut toks, expand);
                         }

@@ -252,10 +252,11 @@ impl Sema<'_, '_> {
     /// only while that definition is the latest. On an unnamed namespace
     /// `[[deprecated]]` is ignored with a warning, as clang does.
     pub fn act_on_namespace_attrs(&mut self, ns: DeclId, attrs: &[AttrId]) {
+        let mut attrs = attrs.to_vec();
+        self.add_pragma_attrs(ns, &mut attrs);
         if attrs.is_empty() {
             return;
         }
-        let mut attrs = attrs.to_vec();
         self.take_annotations(ns, &mut attrs);
         self.check_internal_linkage_attrs(ns, &mut attrs);
         self.check_tls_model_attrs(ns, &mut attrs);

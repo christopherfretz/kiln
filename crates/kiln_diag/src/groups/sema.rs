@@ -149,6 +149,7 @@ PointerIntegerCompare = "pointer-integer-compare" [];
 PointerSign = "pointer-sign" [];
 PointerTypeMismatch = "pointer-type-mismatch" [];
 PotentiallyEvaluatedExpression = "potentially-evaluated-expression" [];
+PragmaClangAttribute = "pragma-clang-attribute" [];
 PredefinedIdentifierOutsideFunction = "predefined-identifier-outside-function" [];
 // ----- WP-191 (vexing parse, null dereference, empty body)
 RedeclaredClassMember = "redeclared-class-member" [];
