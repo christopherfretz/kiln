@@ -4647,7 +4647,13 @@ impl Writer<'_, '_, '_> {
         // overload resolution) are carried as implicit records in id order,
         // and the importer declares them again on the completed class
         // (WP-1292).
-        let bits = b.without(DefinitionBits::COMPLETE).bits();
+        // `COMPLETE_DEFINITION_REQUIRED` (limited -g's declaration rule,
+        // WP-1389) is this unit's use, not a property of the class: it is
+        // not carried, and the importing unit marks its own uses.
+        let bits = b
+            .without(DefinitionBits::COMPLETE)
+            .without(DefinitionBits::COMPLETE_DEFINITION_REQUIRED)
+            .bits();
         // An anonymous class keeps its bit (WP-1345, `anon.rs`).
         let closure = if rd.lambda.is_some() { lambdas::CLOSURE_BITS } else { 0 };
         if bits & !(DEF_BITS | anon::ANON_BIT | DefinitionBits::HAS_INHERITED_CTOR.bits() | closure)

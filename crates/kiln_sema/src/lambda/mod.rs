@@ -301,6 +301,10 @@ impl Sema<'_, '_> {
         data.rbracket = intro.rbracket;
         let id = self.ast.exprs.lambdas.push(data);
         self.ast.decls.set_closure(closure, id);
+        // clang describes every closure type in full under limited `-g`
+        // (even one only named by `decltype`): the lambda-expression
+        // creates its object.
+        self.ast.decls.set_complete_definition_required(closure);
         self.lambdas.push(LambdaScope {
             id,
             closure,

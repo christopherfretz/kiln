@@ -1471,7 +1471,22 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
 - under `-g`, also types (basic, pointer/reference, arrays, enums,
   typedefs, classes with members, bases, methods, vtable holders and
   template parameters; class definitions homed as clang's
-  `-fno-standalone-debug` does: a dynamic class is a definition only in
+  `-fno-standalone-debug` does: at the reduced kinds (`-g`'s default
+  `Constructor` and `-fno-standalone-debug`'s `Limited`) a C++ class this
+  unit never required complete is a `DIFlagFwdDecl` declaration even when
+  defined here (clang's `isCompleteDefinitionRequired`: one bit per class
+  definition, `DefinitionBits::COMPLETE_DEFINITION_REQUIRED`, set by sema
+  where clang's `RequireCompleteType` succeeds, including `FindInstantiatedDecl`'s
+  class completion, implicit special member definitions and every closure
+  type; never set by a mere completeness query, so a class named only
+  through a pointer, a reference or a typedef stays a declaration), and so
+  is a required class that is an explicit instantiation declaration
+  with an explicitly defined member (`hasExplicitMemberDefinition`),
+  spec/landed/codegen/WP-1389.md;
+  `-fstandalone-debug`, `-fno-limit-debug-info` and
+  `[[clang::standalone_debug]]` keep every definition, and in C a
+  defined struct is always a definition; constructor homing (`Constructor`
+  only) and the rule below still apply to required classes; a dynamic class is a definition only in
   a unit that defines its vtable or a construction vtable for it, else a
   declaration, spec/landed/codegen/WP-1372.md; an explicit instantiation definition of
   a class template specialization that is not a dynamic class completes
@@ -1487,6 +1502,12 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   naming a definition or a declaration-only node), in the compile unit's
   `imports:` at namespace scope and in the subprogram's `retainedNodes`
   (scoped to the innermost lexical block) at block scope; a
+  using-declaration of a function whose return type is deduced from a
+  later definition gets an entity only when that definition is in the
+  same top-level declaration or an earlier one than the point clang emits
+  it at: the using-declaration's top-level declaration at namespace scope,
+  the enclosing function's at block scope, the end of the unit for a
+  deferred (inline, internal or instantiated) body (WP-1389); a
   line-tables-only unit has no `globals:`, `retainedTypes:`, `enums:`,
   `imports:` and no variable records;
 - statement and expression locations with clang's `EmitStopPoint`,

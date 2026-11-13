@@ -190,11 +190,15 @@ impl Cg<'_> {
 
     /// clang `EmitUsingDecl`'s skip: function `t` has a return type to
     /// deduce that is not deduced yet where clang emits the
-    /// using-declaration `using` (when its top-level declaration ends, or
-    /// when its function body is emitted). Approximated by declaration
-    /// order: the definition is after the using-declaration; a body that
-    /// clang defers (an inline or internal function, a template
-    /// instantiation) sees every definition of the unit.
+    /// using-declaration `using`. clang hands codegen a whole top-level
+    /// declaration (a namespace, a linkage specification, a function)
+    /// once it is parsed, so a namespace-scope using-declaration is
+    /// emitted at the end of its top-level declaration, and a block-scope
+    /// one when its function is: at the end of the function's top-level
+    /// declaration, or at the end of the unit for a body clang defers (an
+    /// inline or internal function, a template instantiation). The type
+    /// is deduced by then if `t`'s definition is in that top-level
+    /// declaration or an earlier one.
     fn undeduced_at(&self, t: DeclId, using: DeclId, local: bool) -> bool {
         let ast = self.ast;
         if !ast.decls.get(t).kind().is_function() || !self.declared_auto_return(t) {
@@ -204,10 +208,26 @@ impl Cg<'_> {
         if def == t {
             return false;
         }
-        if local && self.f.decl.is_some_and(|f| self.body_deferred(f)) {
-            return false;
+        let point = match self.f.decl {
+            Some(f) if local && self.body_deferred(f) => return false,
+            Some(f) if local => f,
+            _ => using,
+        };
+        self.top_level(def) > self.top_level(point)
+    }
+
+    /// The top-level declaration (a member of the unit, through lexical
+    /// contexts) that contains `d`, or `d` itself.
+    fn top_level(&self, d: DeclId) -> DeclId {
+        let ast = self.ast;
+        let mut cur = d;
+        for _ in 0..256 {
+            match ast.decls.lexical_ctx(cur) {
+                Some(p) if p != ast.tu => cur = p,
+                _ => break,
+            }
         }
-        def > using
+        cur
     }
 
     /// The return type as declared by `t` is a placeholder (`auto f();`;

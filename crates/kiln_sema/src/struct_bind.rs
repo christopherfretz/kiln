@@ -620,7 +620,7 @@ impl Sema<'_, '_> {
             return Err(false);
         };
         let complete = if complain {
-            self.require_complete(t, loc)
+            self.require_complete_unnoted(t, loc)
         } else {
             self.require_complete_silent(t, loc)
         };

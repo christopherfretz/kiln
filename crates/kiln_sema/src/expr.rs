@@ -5416,6 +5416,8 @@ impl Sema<'_, '_> {
         if self.ast.types.as_record(self.ety(callee)).is_some()
             && self.member_overload(callee).is_none()
         {
+            // clang `BuildCallToObjectOfClassType`'s `RequireCompleteType`.
+            self.note_complete_required(self.ety(callee));
             let mut ops = vec![callee];
             ops.extend_from_slice(args);
             let mut br = vec![None];

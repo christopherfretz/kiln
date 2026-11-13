@@ -11250,6 +11250,9 @@ impl Sema<'_, '_> {
             self.check_union_default_inits(ctx, loc);
         }
         let ty = self.tag_type(rec);
+        // The unnamed member (or object) is a field like any other: clang
+        // `ActOnFields`' `RequireCompleteSizedType` covers it.
+        self.note_complete_required(ty);
         let h = DeclHead::new(ctx, DeclName::EMPTY, ds.loc).flags(DeclFlags::IMPLICIT);
         let obj = if in_class {
             // The unnamed member has the access in effect

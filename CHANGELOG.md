@@ -35,6 +35,16 @@ Planned as 1.2.0.
 
 ### Changed
 
+- `-g` (the default limited kind) describes a class this unit never
+  required complete as a declaration, as clang does
+  (`isCompleteDefinitionRequired`, WP-1389): a class used only through
+  pointers, references or typedefs is completed by the debugger from the
+  unit that requires it. Standard-library units shrink to clang's
+  size (`<string>`: 16784 -> 15042 bytes of `.debug_info`, clang 19
+  15126). A using-declaration of a function with a deduced return type
+  now follows clang's emission point. Nothing changes without `-g`.
+  spec/landed/codegen/WP-1389.md.
+
 - Consteval-only values follow P4101R1 (the working draft's value-based
   model) instead of P2996R13's consteval-only types (WP-1328, first
   part). What is ill-formed is now decided by value: an immediate

@@ -16,7 +16,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   debug flag kiln does not implement is a hard error naming it.
 - `nodebug`, `artificial` and `[[clang::standalone_debug]]` shape the
   output as in clang (`standalone_debug` keeps a class's full definition,
-  `di_omit`, `debuginfo/types.rs:614`).
+  `di_omit`, `debuginfo/types.rs:645`).
 - `-g0`, the default, builds no debug metadata and records no locations
   (see "Cost at `-g0`").
 - Since WP-910 `-g` is total: at any level it compiles every program kiln
@@ -26,7 +26,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
 
 ## Evidence
 
-- `tests/codegen/debug_*.cpp`: 34 cases, byte-exact against clang 19 on
+- `tests/codegen/debug_*.cpp`: 48 cases (WP-1389), byte-exact against clang 19 on
   aarch64 and x86_64 (`crates/kiln_codegen/tests/ir_vs_clang.rs`).
 - `llvm-dwarfdump-19 --verify` is clean on all 60 `-g` objects from
   `tests/codegen` and `tests/debuginfo`.
@@ -48,6 +48,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `step_finish.cpp` | `step` into a method, `finish` with its return value, `next` over a call | pass | pass |
   | `globals_lambda.cpp` | a namespace-scope variable, a static data member, a lambda's by-copy and by-reference captures, `up` | pass | pass |
   | `vtable_home.cpp` (WP-1372) | `print *this`, `ptype` and members through a virtual base in methods of dynamic classes with no key function in a namespace | pass | pass |
+  | `class_decl_two_units.cpp` (WP-1389) | `ptype` and `print *w` of a class this unit declares (defined in a shared header, only used through a pointer) and another unit defines | pass | pass |
   | `reflection.cpp` (WP-910) | a `define_aggregate` class, a `Holder<^^int>` specialization, a `constexpr std::meta::info` | pass | skip (no P2996) |
 
   Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
@@ -251,6 +252,78 @@ The bench entries `bench/frontend/templates-wide-g.cpp` and
 `bench/frontend/format-like-g.cpp` (`mode: emit-llvm`, `args: -g`)
 track the front-end cost from now on.
 
+## Class declarations and definitions (WP-1389)
+
+Limited `-g` (the default) describes a class as a `DIFlagFwdDecl`
+declaration unless the unit required it complete: kiln tracks clang's
+`isCompleteDefinitionRequired` as one bit per class definition
+(`DefinitionBits::COMPLETE_DEFINITION_REQUIRED`), set by sema where clang's
+`RequireCompleteType` succeeds (spec/codegen.md §5.1,
+spec/landed/codegen/WP-1389.md). The bit costs no work without `-g`: the
+`-g0` IR of the six units below is byte-identical before and after, and
+the `-g` compile time and peak RSS did not move (fastest of 3, before ->
+after: u1 0.02 -> 0.02 s, u2 0.23 -> 0.23 s, u3 0.17 -> 0.17 s, u4 0.59
+-> 0.59 s, u5 0.21 -> 0.20 s, u6 0.69 -> 0.69 s; peak RSS within 0.5%,
+55-57 MB).
+
+Six standard-library units at `-g -O0` (aarch64, `-std=c++26`):
+u1 `<cstdio>` `fopen`, u2 `<string>`, u3 `<vector>`, u4 `<iostream>` +
+`<sstream>` `ostringstream`, u5 `<map>`, u6 `<memory>` `make_shared`.
+Class definitions / declarations / `.debug_info` bytes:
+
+| unit | clang 19 | clang 22 | kiln before | kiln after |
+|---|---|---|---|---|
+| u1 | 0 / 3 / 1478 | 0 / 3 / 1478 | 5 / 3 / 1944 | 0 / 3 / 1442 |
+| u2 | 23 / 12 / 15126 | 23 / 12 / 15162 | 33 / 7 / 16784 | 24 / 12 / 15042 |
+| u3 | 23 / 4 / 6475 | 23 / 4 / 6580 | 23 / 4 / 6356 | 23 / 4 / 6356 |
+| u4 | 22 / 12 / 16433 | 22 / 12 / 16487 | 29 / 8 / 17372 | 22 / 12 / 16365 |
+| u5 | 42 / 9 / 13193 | 42 / 9 / 13346 | 42 / 9 / 13086 | 42 / 9 / 13086 |
+| u6 | 37 / 7 / 14306 | 37 / 7 / 14458 | 42 / 5 / 15125 | 37 / 7 / 14264 |
+| total | 147 / 47 / 67011 | 147 / 47 / 67511 | 174 / 36 / 70667 | 148 / 47 / 66555 |
+
+The same set of classes is defined and declared as by clang 19 apart from
+u2's extra `enable_if<true, std::allocator<char> >` (the `templateParams`
+item under "Gaps"); the remaining byte differences are the class-name
+spellings under "Gaps". The 48 `tests/codegen/debug_*.cpp` objects:
+clang 19 62 / 9 / 10990, clang 22 62 / 9 / 11169, kiln before 65 / 6 /
+11041, kiln after 62 / 9 / 10990, the same classes per file as clang 19.
+Over all of `tests/codegen` at `-g`, the files whose defined/declared
+class names differ from clang 19 went from 36 to 8, none of them caused
+by this rule: `anon_union_global`, `asm_label_structors_vbases`,
+`convertvector_const_fold`, `lvalue_pointer_alignment` and `vla`
+(clang describes types kiln does not), `discarded_member_call_on_temporary`
+and `std_builtin_fold` (kiln describes classes clang does not), and
+`coro_await_suspend_o1` (the LLVM 22 back end's coroutine frame types).
+
+## Key instructions (clang 22 at `-O1` and above): not implemented
+
+clang 22 enables key instructions by default when optimizing with `-g`:
+`keyInstructions: true` on each `DISubprogram` and `atomGroup:` /
+`atomRank:` on the `DILocation`s of the instructions that make up one
+source "atom". kiln emits neither; its line table follows clang 19's
+model, which LLVM 22 still accepts. WP-1389 scoped the work and found it
+larger than its budget:
+
+- clang assigns atoms in `CodeGenFunction` per statement and expression
+  (`ApplyAtomGroup`, `addInstToCurrentSourceAtom`): the store of every
+  assignment, initialization and compound assignment, the condition
+  branch of `if`/`while`/`for`/`do`/`switch` and of `&&`, `||`, `?:`,
+  every `ret` and its value, the backedge of each loop, and calls; ranks
+  order the instructions inside one atom. kiln's statement, store,
+  branch and return emission (`kiln_codegen` `stmt.rs`, `expr.rs`,
+  `debuginfo/stmt.rs`) would each need the same groups and ranks.
+- The output must stay byte-exact with clang 19 (which has no key
+  instructions) on the existing lane, so the emission is conditional on
+  the clang 22 model and needs its own byte-exact lane: today
+  `ir_vs_clang` compares only structure under clang 22 (metadata
+  stripped, `ir_norm::structural`).
+- LLVM 19's `llc` and `opt` (still a supported back end) reject the
+  `atomGroup` fields, so the driver must drop them, or never emit them,
+  when the back end is LLVM 19.
+
+The debugger-visible effect is stepping at `-O1` and above: lines are
+stepped in clang 19's order instead of clang 22's `is_stmt` placement.
+
 ## Gaps
 
 Every gap is a documented difference from clang 19 (D). Since WP-910
@@ -272,21 +345,28 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   (`crates/kiln_ast/src/types/print.rs:472`, called from
   `crates/kiln_codegen/src/debuginfo/types.rs:584`).
 - D: no `defaulted: true` on template parameters (`types.rs:1178`).
-- D (WP-1365): a using-declaration of a function with a deduced return
-  type is skipped when its definition follows the declaration (or, at
-  block scope, when the enclosing body is not deferred); clang decides by
-  when the type is deduced relative to its emission point
-  (`debuginfo/imported.rs` `undeduced_at`). With `-include-pch`, the
-  header's using-directives, using-declarations and aliases get entities
-  in kiln (they reach the top-level walk) and none in clang, whose AST
-  reader hands them to no consumer.
-- D: a class is defined wherever limited `-g` does not omit it
-  (`types.rs:633` `di_omit`); kiln does not track clang's
-  `isCompleteDefinitionRequired`, so a class reached only through a
-  pointer or a typedef (`FILE`'s `_IO_FILE`, `allocator<char>`) is
-  defined where clang declares it. The standard library's
-  using-declarations (WP-1365) reach more of them: `<iostream>` +
-  `<sstream>` gets about 6% more `.debug_info` than clang 19.
+- D (WP-1365): with `-include-pch`, the header's using-directives,
+  using-declarations and aliases get entities in kiln (they reach the
+  top-level walk) and none in clang, whose AST reader hands them to no
+  consumer. (The deduced-return-type part of this item was closed by
+  WP-1389, see "Class declarations and definitions".)
+- D: class names in debug info elide default template arguments
+  (`basic_string<char>`, clang `basic_string<char, std::char_traits<char>,
+  std::allocator<char> >`), drop an inline namespace inside a template
+  argument (`std::basic_string` for `std::__cxx11::basic_string`) and
+  print a non-type enumeration argument as its enumerator
+  (`__gnu_cxx::_S_atomic`, clang `(__gnu_cxx::_Lock_policy)2`)
+  (`crates/kiln_ast/src/types/print.rs:497` `write_arg_list_debug`).
+- D: a function template specialization's `templateParams` keep the
+  sugar of a defaulted type argument (`__enable_if_t<..., _Alloc>`, so
+  `enable_if<true, std::allocator<char> >` is described), where clang
+  uses the converted, canonical argument (`allocator<char>`)
+  (`types.rs:1223` `di_template_params`). It is the one class `<string>`
+  describes that clang does not.
+- D: a block-scope anonymous union is one artificial unnamed variable;
+  clang also emits an artificial `DILocalVariable` per member (`i`,
+  `fl`) at the same address (`debuginfo/func.rs:333` `di_declare_var`).
+  Found by WP-1389.
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
   atexit stubs.
 - D: no `DILocalVariable` for structured bindings or variable-length
