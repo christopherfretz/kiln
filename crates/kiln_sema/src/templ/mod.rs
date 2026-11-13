@@ -225,6 +225,10 @@ pub struct TemplState {
     /// Where each argument of the template-id being parsed starts (set by
     /// the parser right before `act_template_id`; consumed there).
     pub(crate) arg_locs: Vec<Loc>,
+    /// The instantiation depth `arg_locs` were set at: a template-id an
+    /// instantiation forms does not take them (they belong to the
+    /// template-id being parsed, or are stale).
+    pub(crate) arg_locs_depth: usize,
     /// The `>` of that template-id, keyed by its first argument's location
     /// (read by the first argument check after the parse; the "while
     /// checking a default template argument used here" note points there).
@@ -562,6 +566,18 @@ impl Sema<'_, '_> {
     pub fn set_template_arg_locs(&mut self, locs: Vec<Loc>, r_angle: Loc) {
         self.templ.r_angle = Some((locs.first().copied(), r_angle));
         self.templ.arg_locs = locs;
+        self.templ.arg_locs_depth = self.inst.stack.len();
+    }
+
+    /// Takes the argument locations the parser recorded for the
+    /// template-id being formed: none for one an instantiation forms
+    /// (its arguments are located at their substituted expressions,
+    /// [`Sema::check_template_args`]), which leaves the parser's in place.
+    pub(crate) fn take_template_arg_locs(&mut self) -> Vec<Loc> {
+        if self.templ.arg_locs_depth != self.inst.stack.len() {
+            return Vec::new();
+        }
+        std::mem::take(&mut self.templ.arg_locs)
     }
 
     /// The depth the next template parameter list gets: the number of

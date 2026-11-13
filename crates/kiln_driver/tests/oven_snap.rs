@@ -449,6 +449,21 @@ constexpr std::size_t slen() { std::string s = "abc"; s += "defgh"; return s.siz
 static_assert(slen() == 8);
 constexpr std::optional<int> opt = 3;
 constexpr std::string_view sv = "hello, world";
+// Heap-allocated results reduced to frozen arrays.
+constexpr auto squares = [] {
+    std::vector<int> v;
+    for (int i = 1; i <= 8; ++i) v.push_back(i * i);
+    std::array<int, 8> a{};
+    std::copy(v.begin(), v.end(), a.begin());
+    return a;
+}();
+constexpr auto word = [] {
+    std::string s = "snap";
+    s += "shot";
+    std::array<char, 8> a{};
+    std::copy(s.begin(), s.end(), a.begin());
+    return a;
+}();
 "#;
 
 const STDCXX_PROBES: &str = r"
@@ -459,6 +474,7 @@ int probe_3() { return *opt + sorted[2]; }
 std::size_t probe_4() { return [] { std::map<int, int> m; for (int i = 0; i < 50; ++i) m[i] = i * i; return m.size(); }(); }
 int probe_5() { return [] { std::vector<int> v; return v.at(3); }(); }
 std::size_t probe_6() { return [] { std::string s(100, 'x'); return std::ranges::count(s, 'x'); }(); }
+int probe_7() { return squares[7] + word[4] + std::accumulate(squares.begin(), squares.end(), 0); }
 ";
 
 #[test]

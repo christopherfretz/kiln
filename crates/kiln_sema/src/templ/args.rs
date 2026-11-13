@@ -235,9 +235,31 @@ impl Sema<'_, '_> {
         loc: Loc,
     ) -> Result<ConvertedArgs, ()> {
         let saved = self.inst.template_id_loc.replace(loc);
+        // A template-id an instantiation forms has no recorded locations:
+        // an expression argument is located at its (substituted)
+        // expression, as clang's `TemplateArgumentLoc` of the transformed
+        // argument; any other at the template name.
+        let substituted: Vec<Loc> = if arg_locs.is_empty() {
+            written.iter().map(|&a| self.substituted_arg_loc(a, loc)).collect()
+        } else {
+            Vec::new()
+        };
+        let arg_locs = if arg_locs.is_empty() { &substituted[..] } else { arg_locs };
         let r = self.check_template_args_at(tmpl, written, arg_locs, loc);
         self.inst.template_id_loc = saved;
         r
+    }
+
+    /// Where a template argument with no recorded location starts: an
+    /// expression argument's begin location, else `loc`.
+    fn substituted_arg_loc(&self, a: TemplateArg, loc: Loc) -> Loc {
+        match a.view() {
+            ArgView::Expr { expr, .. } => {
+                let b = self.begin_loc(expr);
+                if b.is_valid() { b } else { loc }
+            }
+            _ => loc,
+        }
     }
 
     fn check_template_args_at(
@@ -1442,33 +1464,30 @@ impl Sema<'_, '_> {
     }
 
     /// [temp.arg.nontype]/6: a pointer argument `v` (or the address a
-    /// `reference` argument binds) must not point to a
-    /// string literal, the result of a `typeid` expression or a temporary
-    /// object (or a subobject of one).
+    /// `reference` argument binds), and every pointer or reference
+    /// subobject of a class-type (or array) argument `v` at any depth
+    /// (bases, members, array elements, a union's active member), must
+    /// not point to a string literal, the result of a `typeid`
+    /// expression, a predefined `__func__` variable or a temporary object
+    /// (or a subobject of one).
     /// Diagnosed at `at` as clang's `err_constexpr_invalid_template_arg`
     /// ("pointer to subobject of string literal is not allowed in a
-    /// template argument"); in a deduction it is the substitution
-    /// failure of the explicitly specified argument.
+    /// template argument"), once, for the first such subobject in layout
+    /// order (clang `CheckEvaluationResult` stops at the first); in a
+    /// deduction it is the substitution failure of the explicitly
+    /// specified argument.
     pub(crate) fn invalid_template_arg_base(
         &mut self,
         v: kiln_ast::ids::ConstValueId,
         reference: bool,
         at: Loc,
     ) -> bool {
-        use kiln_ast::consts::{PtrBase, Scalar};
-        let Some(Scalar::Pointer { ty, base, offset, .. }) = self.ast.consts.scalar(v) else {
-            return false;
+        let found = match self.ast.consts.aggregate(v) {
+            Some(img) => img.relocs.iter().find_map(|r| self.invalid_arg_pointer(r.value, false)),
+            None => self.invalid_arg_pointer(v, reference),
         };
-        let t = &self.ast.types;
-        let to_array = t.pointee(ty).is_some_and(|p| t.is_array(p));
-        let (what, sub) = match base {
-            // Gap: `__func__` designates its string literal, so it is
-            // named "string literal" here, not "predefined '__func__'
-            // variable" (clang).
-            PtrBase::StringLit { .. } => ("string literal", !to_array),
-            PtrBase::TypeInfo(_) => ("type_info object", offset != 0),
-            PtrBase::Temporary(_) => ("temporary object", offset != 0),
-            _ => return false,
+        let Some((reference, sub, what)) = found else {
+            return false;
         };
         let d = self
             .diag(DiagId::sema_constexpr_invalid_template_arg, at)
@@ -1477,6 +1496,64 @@ impl Sema<'_, '_> {
             .arg(what);
         self.emit(d);
         true
+    }
+
+    /// Whether the pointer or reference value `v` points to an object a
+    /// template argument may not designate ([temp.arg.nontype]/6): the
+    /// diagnostic's `(reference, subobject, what)` when it does. A
+    /// reference subobject's value has the reference type.
+    fn invalid_arg_pointer(
+        &self,
+        v: kiln_ast::ids::ConstValueId,
+        reference: bool,
+    ) -> Option<(bool, bool, String)> {
+        use kiln_ast::consts::{PtrBase, Scalar};
+        let Some(Scalar::Pointer { ty, base, offset, past, .. }) = self.ast.consts.scalar(v) else {
+            return None;
+        };
+        let t = &self.ast.types;
+        let reference = reference || t.is_reference(ty);
+        let pointee = t.pointee(ty).map(|p| t.canonical(p).without_quals());
+        let to_array = pointee.is_some_and(|p| t.is_array(p));
+        // A subobject when the designator path is not empty (clang
+        // "subobject of"): the pointer is offset, past the end, or of
+        // another type than the complete object (`&tmp.first`).
+        let whole = |obj: Option<QualType>| {
+            offset == 0
+                && !past
+                && obj.is_some_and(|o| Some(t.canonical(o).without_quals()) == pointee)
+        };
+        let (what, sub) = match base {
+            PtrBase::StringLit { origin, .. } => {
+                let what = match self.predefined_of(origin) {
+                    Some(k) => format!("predefined '{}' variable", k.spelling()),
+                    None => "string literal".to_owned(),
+                };
+                (what, !to_array || offset != 0 || past)
+            }
+            PtrBase::TypeInfo(_) => ("type_info object".to_owned(), offset != 0 || past),
+            PtrBase::Temporary(d) => {
+                ("temporary object".to_owned(), !whole(self.ast.decls.get(d).ty()))
+            }
+            _ => return None,
+        };
+        Some((reference, sub, what))
+    }
+
+    /// The kind of the `PredefinedExpr` (`__func__`) whose value is the
+    /// `StringLiteral` `lit`, if any: [`Sema::act_on_predefined_expr`]
+    /// builds the literal immediately before its `PredefinedExpr`.
+    fn predefined_of(&self, lit: ExprId) -> Option<kiln_ast::expr::PredefinedKind> {
+        use kiln_ast::expr::ExprKind;
+        use kiln_ast::ids::RawId;
+        let next = ExprId::from_raw(lit.raw().checked_add(1)?)?;
+        if next.raw() as usize > self.ast.exprs.len()
+            || self.ast.exprs.get(next).kind() != ExprKind::PredefinedExpr
+            || self.ast.exprs.predefined_name(next) != Some(lit)
+        {
+            return None;
+        }
+        Some(self.ast.exprs.predefined_kind(next))
     }
 
     /// The value of `c`, a converted argument of member pointer type
