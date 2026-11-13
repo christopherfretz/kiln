@@ -130,7 +130,8 @@ impl Memo {
                 return Err("memo map names the wrong entry");
             }
         }
-        if self.entries.iter().any(|e| e.key.func as usize >= nfuncs) {
+        // The key's top two bits are the evaluation context (vm.rs).
+        if self.entries.iter().any(|e| (e.key.func & !(3 << 30)) as usize >= nfuncs) {
             return Err("memo entry of an unknown function");
         }
         let (mut i, mut prev, mut seen) = (self.head, NONE, 0usize);

@@ -181,6 +181,30 @@ impl Oven {
     /// [`Oven::snap_ready`]'s.
     pub fn snap_put(&self, w: &mut Writer) -> Result<(), String> {
         self.snap_ready()?;
+        self.put_state(w, &mut |_, _| {});
+        Ok(())
+    }
+
+    /// The encoded size of each state field ([`Oven::snap_put`]'s
+    /// order), in bytes: what a snapshot of this Oven spends where.
+    ///
+    /// # Errors
+    /// [`Oven::snap_ready`]'s.
+    pub fn snap_sizes(&self) -> Result<Vec<(&'static str, usize)>, String> {
+        self.snap_ready()?;
+        let mut w = Writer::new();
+        let mut sizes = Vec::new();
+        let mut last = 0;
+        self.put_state(&mut w, &mut |field, end| {
+            sizes.push((field, end - last));
+            last = end;
+        });
+        Ok(sizes)
+    }
+
+    /// Writes the state fields, calling `mark` with each field's name and
+    /// the writer's position after it.
+    fn put_state(&self, w: &mut Writer, mark: &mut dyn FnMut(&'static str, usize)) {
         let Oven {
             budget: _,
             backtrace_limit: _,
@@ -252,44 +276,46 @@ impl Oven {
             dms,
             hooks: _,
         } = self;
-        types.put(w);
-        code.put(w);
-        padded.put(w);
-        sites.put(w);
-        step_locs.put(w);
-        origins.put(w);
-        traps.put(w);
-        funcs.put(w);
-        func_map.put(w);
-        base_funcs.put(w);
-        ctor_steps.put(w);
-        volatile_decls.put(w);
-        volatile_exprs.put(w);
-        thunks.put(w);
-        thunks_at.put(w);
-        last_thunk.put(w);
-        globals.put(w);
-        global_map.put(w);
-        provisional.put(w);
-        provisional_objs.put(w);
-        addr_int_disps.put(w);
-        synth.put(w);
-        label_diffs.put(w);
-        label_diff_cells.put(w);
-        lit_exprs.put(w);
-        thawed.put(w);
-        lets.put(w);
-        unknowns.put(w);
-        frame.put(w);
+        macro_rules! put {
+            ($($f:ident),*) => {$(
+                $f.put(w);
+                mark(stringify!($f), w.position());
+            )*};
+        }
+        put!(
+            types,
+            code,
+            padded,
+            sites,
+            step_locs,
+            origins,
+            traps,
+            funcs,
+            func_map,
+            base_funcs,
+            ctor_steps,
+            volatile_decls,
+            volatile_exprs,
+            thunks,
+            thunks_at,
+            last_thunk,
+            globals,
+            global_map,
+            provisional,
+            provisional_objs,
+            addr_int_disps,
+            synth,
+            label_diffs,
+            label_diff_cells,
+            lit_exprs,
+            thawed,
+            lets,
+            unknowns,
+            frame
+        );
         mem.snap_put(w);
-        exc.put(w);
-        memo.put(w);
-        mp.put(w);
-        virt.put(w);
-        meta.put(w);
-        refl_seen.put(w);
-        dms.put(w);
-        Ok(())
+        mark("mem", w.position());
+        put!(exc, memo, mp, virt, meta, refl_seen, dms);
     }
 
     /// Whether nothing was compiled, interned, allocated or evaluated
