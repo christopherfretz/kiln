@@ -868,9 +868,14 @@ pub struct PchArgs {
     /// image: what a `load` consumer compiles with, run next to the
     /// replay and compared with it (WP-1036; set by `crate::pch`).
     pub check_load: Option<Box<PchCheckLoad>>,
-    /// EXPERIMENTAL, undocumented (WP-1383 prototype): the last of
-    /// `-f[no-]kiln-pch-snapshot[=write|load]`. Not in `--help`.
+    /// The last of `-f[no-]kiln-pch-snapshot[=write|load|check]`
+    /// (spec/driver.md "Snapshots"). Not in `--help` until it is the
+    /// default.
     pub snapshot: PchSnapshot,
+    /// The last `-fkiln-pch-validate=content|mtime`: how a snapshot
+    /// consumer checks the files the PCH read (spec/driver.md
+    /// "Snapshots"). Not in `--help`.
+    pub validate: PchValidate,
     /// The `-include-pch` file's whole-front-end snapshot, when
     /// `-fkiln-pch-snapshot=load` found a usable one (set by
     /// `crate::pch`). The rest of the arguments are replay's, the
@@ -878,19 +883,49 @@ pub struct PchArgs {
     pub snapshot_use: Option<PchSnapshotUse>,
 }
 
-/// EXPERIMENTAL (WP-1383 prototype, spec/snap.md "Whole-compiler restore
-/// order"): `-fkiln-pch-snapshot`'s mode.
+/// `-fkiln-pch-snapshot`'s mode (spec/driver.md "Snapshots", spec/snap.md
+/// "Whole-compiler restore order").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PchSnapshot {
-    /// No snapshot is written or read.
+    /// `-fno-kiln-pch-snapshot`: no snapshot is written or read.
     #[default]
     Off,
-    /// The producer also writes the front end's state at the end of the
-    /// header as one more PCH section.
+    /// `=write`: the producer also writes the front end's state at the
+    /// end of the header as one more PCH section; a consumer replays.
     Write,
-    /// The consumer restores that state instead of replaying the header,
-    /// and replays on any mismatch.
+    /// `=load`: the consumer restores that state instead of replaying
+    /// the header, and replays on any mismatch; a producer writes none.
     Load,
+    /// `-fkiln-pch-snapshot`: write when producing, load when consuming.
+    Both,
+    /// `=check`: write when producing; a consumer restores the snapshot
+    /// and also replays, compares the two, and reports a difference as
+    /// an error (the replay's results are the job's).
+    Check,
+}
+
+impl PchSnapshot {
+    /// Whether a producer writes the snapshot section.
+    pub fn writes(self) -> bool {
+        matches!(self, Self::Write | Self::Both | Self::Check)
+    }
+
+    /// Whether a consumer looks for the snapshot section.
+    pub fn loads(self) -> bool {
+        matches!(self, Self::Load | Self::Both | Self::Check)
+    }
+}
+
+/// `-fkiln-pch-validate=`: how a snapshot consumer checks that the files
+/// the PCH read are unchanged (spec/driver.md "Snapshots").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PchValidate {
+    /// `mtime`: a file with the recorded size and modification time is
+    /// unchanged; one with another time is hashed (clang's check).
+    #[default]
+    Mtime,
+    /// `content`: every file is read and hashed.
+    Content,
 }
 
 /// A snapshot a consumer job restores (`crate::pch_snapshot`).
@@ -1624,10 +1659,15 @@ impl Args {
             "-fkiln-pch-image=check" => self.pch.image = PchImage::Check,
             "-fkiln-pch-image=load" => self.pch.image = PchImage::Load,
             "-fno-kiln-pch-image" => self.pch.image = PchImage::Off,
-            // EXPERIMENTAL (WP-1383): deliberately not in `--help`.
+            // Deliberately not in `--help` until the snapshot is the
+            // default (spec/driver.md "Snapshots").
+            "-fkiln-pch-snapshot" => self.pch.snapshot = PchSnapshot::Both,
             "-fkiln-pch-snapshot=write" => self.pch.snapshot = PchSnapshot::Write,
             "-fkiln-pch-snapshot=load" => self.pch.snapshot = PchSnapshot::Load,
+            "-fkiln-pch-snapshot=check" => self.pch.snapshot = PchSnapshot::Check,
             "-fno-kiln-pch-snapshot" => self.pch.snapshot = PchSnapshot::Off,
+            "-fkiln-pch-validate=mtime" => self.pch.validate = PchValidate::Mtime,
+            "-fkiln-pch-validate=content" => self.pch.validate = PchValidate::Content,
             "-fcrash-diagnostics" | "-fcrash-diagnostics=compiler" | "-fcrash-diagnostics=all" => {
                 self.no_crash_diagnostics = false;
             }
@@ -1664,6 +1704,8 @@ impl Args {
                 } else if let Some(v) = arg.strip_prefix("-fkiln-pch-image=") {
                     self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
                 } else if let Some(v) = arg.strip_prefix("-fkiln-pch-snapshot=") {
+                    self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
+                } else if let Some(v) = arg.strip_prefix("-fkiln-pch-validate=") {
                     self.errors.push(ArgError::InvalidFlagValue(arg.to_owned(), v.to_owned()));
                 } else if let Some(v) = arg.strip_prefix("-fkiln-bmi-kind=") {
                     match v {

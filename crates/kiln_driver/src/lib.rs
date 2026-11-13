@@ -484,6 +484,28 @@ pub(crate) fn syntax_only(
     diag_opts: &DiagOptions,
     io: &Io,
 ) -> JobResult {
+    // `-fkiln-pch-snapshot=check` (WP-1392): the job's results are
+    // replay's, after the comparison.
+    if let Some(replay) = pch_snapshot::check_replay(args) {
+        let diff =
+            pch_snapshot::check_difference(args, tc, std, path, stdin_text.as_deref(), diag_opts);
+        let job = Job {
+            args: &replay,
+            toolchain: tc,
+            std,
+            path,
+            stdin_text,
+            diag_opts,
+            stderr: io.stderr.clone(),
+            asm: false,
+        };
+        let mut r = SyntaxJob(job).run();
+        if let Some(d) = diff {
+            pch_snapshot::report_mismatch(args, diag_opts, &io.stderr, &d);
+            r.errors += 1;
+        }
+        return r;
+    }
     // `-fkiln-pch-image=check` (WP-1036).
     let input = pch_check::Input { tc, std, path, stdin_text, diag_opts, stderr: &io.stderr };
     if let Some(r) = pch_check::syntax_only(args, &input) {

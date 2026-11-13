@@ -154,7 +154,7 @@ fn cmake_producer_and_consumer() {
     let p = producer_args(&d);
     ok(&d, &strs(&p));
     let rec = read(&d, "p.pch");
-    assert!(rec.starts_with("KILNPCH 1\nkiln "), "{rec}");
+    assert!(rec.starts_with("KILNPCH 2\nkiln "), "{rec}");
     assert!(rec.contains("\nopt b\tC++17\t1\n") && rec.contains("\nend "), "{rec}");
     let dir = d.display();
     let pdeps = read(&d, "p.pch.d");
@@ -216,14 +216,14 @@ fn producer_outputs() {
     std::fs::write(d.join("x.inc"), "int x();\n").unwrap();
     std::fs::write(d.join("s.cpp"), "int s();\n").unwrap();
     ok(&d, &["inc/h.hpp"]);
-    assert!(read(&d, "inc/h.hpp.pch").starts_with("KILNPCH 1\n"));
+    assert!(read(&d, "inc/h.hpp.pch").starts_with("KILNPCH 2\n"));
     ok(&d, &["inc/h.hpp", "-o", "a.pch"]);
     ok(&d, &["-c", "inc/h.hpp", "-o", "b.pch"]);
     ok(&d, &["-x", "c++-header", "x.inc", "-o", "c.pch"]);
     ok(&d, &["-Xclang", "-emit-pch", "-c", "s.cpp"]);
-    assert!(read(&d, "s.o").starts_with("KILNPCH 1\n"));
+    assert!(read(&d, "s.o").starts_with("KILNPCH 2\n"));
     for f in ["a.pch", "b.pch", "c.pch"] {
-        assert!(read(&d, f).starts_with("KILNPCH 1\n"), "{f}");
+        assert!(read(&d, f).starts_with("KILNPCH 2\n"), "{f}");
     }
     ok(&d, &["-fsyntax-only", "-x", "c++-header", "x.inc"]);
     assert!(!d.join("x.inc.pch").exists());
@@ -446,7 +446,7 @@ fn stale_missing_and_foreign() {
         check_case("-fclang-compat=19", &d, &[], "new.pch"),
         "error: PCH file uses a newer PCH format that cannot be read\n1 error generated.\n"
     );
-    std::fs::write(d.join("cut.pch"), "KILNPCH 1\nkiln x\n").unwrap();
+    std::fs::write(d.join("cut.pch"), "KILNPCH 2\nkiln x\n").unwrap();
     assert!(
         check_case("-fclang-compat=19", &d, &[], "cut.pch")
             .starts_with("fatal error: malformed or corrupted AST file: '")
@@ -469,7 +469,7 @@ fn preprocess_unreadable_pch() {
     std::fs::write(d.join("m.cpp"), "int a;\n#error boom\nint b;\n").unwrap();
     std::fs::write(d.join("bad.pch"), "garbage\n").unwrap();
     std::fs::write(d.join("new.pch"), "KILNPCH 9\n").unwrap();
-    std::fs::write(d.join("cut.pch"), "KILNPCH 1\nkiln x\n").unwrap();
+    std::fs::write(d.join("cut.pch"), "KILNPCH 2\nkiln x\n").unwrap();
     std::fs::write(d.join("clang.pch"), b"CPCH\x01\x02").unwrap();
     let boom = "m.cpp:2:2: error: boom\n    2 | #error boom\n      |  ^\n2 errors generated.\n";
     for (compat, pch, err) in [

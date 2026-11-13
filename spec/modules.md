@@ -5554,8 +5554,15 @@ first read (the driver then reports the record unusable).
 
 **In a precompiled header.** The section block of a kind-2 file
 (§11.3: the count, each section's tag and bytes) followed by its
-FNV-1a 64 checksum (`bmi::write_sections`), after the `KILNPCH` text
-(spec/driver.md "Format").
+`bmi::block_checksum` (`bmi::write_sections`), after the `KILNPCH` text
+(spec/driver.md "Format"). That checksum is word-wise (four lanes of
+8-byte words, each step a bijection of the lane and of the word, the
+tail bytes through FNV-1a, the lanes folded in one at a time), so any
+one changed byte still changes it, at memory speed: a PCH snapshot
+section is tens of megabytes, where FNV-1a's byte-at-a-time multiply
+took 96 ms per pass (WP-1392). Module files keep FNV-1a, their format
+unchanged. `bmi::read_sections` checks the checksum once, before it
+decodes the block.
 
 **Header units.** A header unit's exported macros are written to a
 record with the unit's file as entry 0, read back and materialized,

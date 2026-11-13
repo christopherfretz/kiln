@@ -205,7 +205,9 @@ impl Job<'_> {
         specs
     }
 
-    fn predefines(&self, engine: &DiagEngine<'_>) -> Option<String> {
+    /// The predefines buffer (`<built-in>`) of this job; `None` after
+    /// reporting an error.
+    pub(crate) fn predefines(&self, engine: &DiagEngine<'_>) -> Option<String> {
         let path = self.toolchain.predefines_path(&self.std);
         let base = match std::fs::read_to_string(&path) {
             Ok(b) => b,
@@ -420,6 +422,17 @@ impl Job<'_> {
         result
     }
 
+    /// The header search list of this job (`-I`, the environment's
+    /// `CPATH`-style lists, the sysroot, the GCC installation, the
+    /// standard library and the resource directory, resolved).
+    pub(crate) fn search_list(&self) -> SearchList {
+        let cplusplus = self.std.cplusplus;
+        let header_sysroot =
+            self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
+        let specs = Self::search_specs(self.args, self.toolchain, header_sysroot, cplusplus);
+        SearchList::build(&specs, cplusplus, &mut RealFs)
+    }
+
     /// The search list (printed for `-v`), the main file and the
     /// predefines of this input; `None` after reporting an error.
     pub(crate) fn pp_inputs(
@@ -429,11 +442,7 @@ impl Job<'_> {
     ) -> Option<PpInputs> {
         // The ICE breadcrumb (spec/driver.md "Internal compiler errors").
         let _phase = activity::enter(Phase::Preprocess, Loc::INVALID);
-        let cplusplus = self.std.cplusplus;
-        let header_sysroot =
-            self.args.isysroot.as_deref().or(self.args.sysroot.as_deref()).unwrap_or("");
-        let specs = Self::search_specs(self.args, self.toolchain, header_sysroot, cplusplus);
-        let list = SearchList::build(&specs, cplusplus, &mut RealFs);
+        let list = self.search_list();
         if self.args.verbose {
             let mut err = self.stderr.clone();
             let _ = write!(
@@ -515,6 +524,52 @@ impl Job<'_> {
         Some((pp, deps))
     }
 
+    /// The `__has_feature`-style answers of this job (`None`: a target
+    /// the tables do not cover).
+    pub(crate) fn clang_features(&self) -> Option<ClangFeatures> {
+        let a = self.args;
+        let triple = self.toolchain.target.triple;
+        // `from_args` sees the GNU dialect only through `-std=`; the
+        // effective dialect (clang's default is GNU) goes last so it wins.
+        // WP-675: `__has_feature(address_sanitizer)` and friends answer
+        // from the resolved `-fsanitize=` set, not the raw arguments.
+        let mut fargs: Vec<String> = a
+            .argv
+            .iter()
+            .filter(|s| !s.starts_with("-fsanitize=") && !s.starts_with("-fno-sanitize="))
+            .cloned()
+            .collect();
+        fargs.extend(a.sanitize(!self.toolchain.target.is_aarch64(), triple).0.feature_args());
+        fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
+        let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
+            .map(|f| f.with_compat(a.predef.clang_compat));
+        if let Some(c) = self.std.c {
+            features = features.map(|f| f.with_c(c, self.std.gnu));
+        }
+        if self.toolchain.target.is_aarch64() {
+            // WP-558: the NEON builtins answer from the enabled features.
+            let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();
+            features = features.map(|f| {
+                f.with_target_builtins(kiln_pp::TargetBuiltins {
+                    prefix: kiln_ast::decl::builtin::neon::PREFIX,
+                    required: kiln_ast::decl::builtin::neon::required_features,
+                    enabled,
+                })
+            });
+        } else {
+            // WP-630: and the x86 ones.
+            let enabled = crate::features::resolve(a, &self.toolchain.target).0.x86_enabled();
+            features = features.map(|f| {
+                f.with_target_builtins(kiln_pp::TargetBuiltins {
+                    prefix: kiln_ast::decl::builtin::x86::PREFIX,
+                    required: kiln_ast::decl::builtin::x86::required_features,
+                    enabled,
+                })
+            });
+        }
+        features
+    }
+
     /// [`Self::build_preprocessor`] without entering the main input (and
     /// without the `-fkiln-pch-image` hooks): the preprocessor a
     /// restored PCH snapshot is applied to (`crate::pch_snapshot`).
@@ -569,44 +624,7 @@ impl Job<'_> {
             ifeval = IfEval::new(params);
         }
         pp.set_if_evaluator(Box::new(ifeval));
-        // `from_args` sees the GNU dialect only through `-std=`; the
-        // effective dialect (clang's default is GNU) goes last so it wins.
-        // WP-675: `__has_feature(address_sanitizer)` and friends answer
-        // from the resolved `-fsanitize=` set, not the raw arguments.
-        let mut fargs: Vec<String> = a
-            .argv
-            .iter()
-            .filter(|s| !s.starts_with("-fsanitize=") && !s.starts_with("-fno-sanitize="))
-            .cloned()
-            .collect();
-        fargs.extend(a.sanitize(!self.toolchain.target.is_aarch64(), triple).0.feature_args());
-        fargs.push(if self.std.gnu { "-std=gnu++" } else { "-std=c++" }.to_owned());
-        let mut features = ClangFeatures::from_args(triple, self.std.lex, &fargs)
-            .map(|f| f.with_compat(a.predef.clang_compat));
-        if let Some(c) = self.std.c {
-            features = features.map(|f| f.with_c(c, self.std.gnu));
-        }
-        if self.toolchain.target.is_aarch64() {
-            // WP-558: the NEON builtins answer from the enabled features.
-            let enabled = crate::features::resolve(a, &self.toolchain.target).0.enabled();
-            features = features.map(|f| {
-                f.with_target_builtins(kiln_pp::TargetBuiltins {
-                    prefix: kiln_ast::decl::builtin::neon::PREFIX,
-                    required: kiln_ast::decl::builtin::neon::required_features,
-                    enabled,
-                })
-            });
-        } else {
-            // WP-630: and the x86 ones.
-            let enabled = crate::features::resolve(a, &self.toolchain.target).0.x86_enabled();
-            features = features.map(|f| {
-                f.with_target_builtins(kiln_pp::TargetBuiltins {
-                    prefix: kiln_ast::decl::builtin::x86::PREFIX,
-                    required: kiln_ast::decl::builtin::x86::required_features,
-                    enabled,
-                })
-            });
-        }
+        let features = self.clang_features();
         let Some(features) = features else {
             // No silent fallback to `NoFeatures` (unreachable today:
             // `Target` only has triples the tables cover).

@@ -54,6 +54,61 @@ pub(crate) struct Policy {
     warnings: Vec<String>,
 }
 
+impl DiagOptions {
+    /// The warning policy these options build, as text (the PCH
+    /// snapshot's fingerprint, spec/driver.md "Snapshots"): the policy's
+    /// flags, every id whose command-line mapping is not its default, and
+    /// for each group a `-W` option names, whether the last of
+    /// `-W<group>`/`-Wno-<group>` was positive. That is everything a
+    /// [`Policy`] holds except the order of its `-W` options, which only
+    /// [`Policy::group_flag`] reads, and only through that last sign; so
+    /// two option lists give the same text exactly when they build
+    /// policies no diagnostic can tell apart (`-Wa -Wb` and `-Wb -Wa`
+    /// when the groups are disjoint, for example).
+    #[must_use]
+    pub fn policy_fingerprint(&self) -> String {
+        use std::fmt::Write as _;
+        let (p, _) = Policy::new(self);
+        let mut out = format!(
+            "ignore_all={} werror={} fatal_errors={} everything={} extensions={:?} \
+             system_headers={} compat={}\n",
+            p.ignore_all,
+            p.warnings_as_errors,
+            p.errors_as_fatal,
+            p.enable_all,
+            p.ext_behavior,
+            !p.suppress_system,
+            p.compat
+        );
+        for (&id, m) in DiagId::ALL.iter().zip(&p.map) {
+            let no_werror = id.kind() == crate::DiagKind::WarningNoWerror;
+            if m.severity != id.default_severity()
+                || m.user
+                || m.no_werror != no_werror
+                || m.no_fatal
+            {
+                let _ = writeln!(
+                    out,
+                    "{} {:?} user={} no_werror={} no_fatal={}",
+                    id.name(),
+                    m.severity,
+                    m.user,
+                    m.no_werror,
+                    m.no_fatal
+                );
+            }
+        }
+        let mut groups: Vec<&str> =
+            p.warnings.iter().map(|w| w.strip_prefix("no-").unwrap_or(w)).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        for g in groups {
+            let _ = writeln!(out, "-W{g}: {:?}", p.group_flag(g));
+        }
+        out
+    }
+}
+
 impl Policy {
     /// Builds the policy from `opts`. Returns it with the diagnostics the
     /// options themselves produce (unknown groups and specifiers), in
@@ -330,5 +385,34 @@ fn unknown_specifier(option: &str, orig: &str) -> OptionDiag {
     OptionDiag {
         id: DiagId::diag_unknown_warning_specifier,
         args: vec![option.to_string(), format!("-W{orig}")],
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use crate::options::DiagOptions;
+
+    fn fp(warnings: &[&str]) -> String {
+        let opts = DiagOptions {
+            warnings: warnings.iter().map(|&w| w.to_owned()).collect(),
+            ..DiagOptions::default()
+        };
+        opts.policy_fingerprint()
+    }
+
+    /// WP-1392: the snapshot fingerprint sees the policy, not the option
+    /// order: disjoint groups commute, overlapping ones do not.
+    #[test]
+    fn policy_fingerprint_order() {
+        assert_eq!(fp(&["unused-variable", "shadow"]), fp(&["shadow", "unused-variable"]));
+        assert_ne!(fp(&["all", "no-unused-variable"]), fp(&["no-unused-variable", "all"]));
+        assert_ne!(fp(&[]), fp(&["error"]));
+        assert_ne!(fp(&[]), fp(&["unused-variable"]));
+        assert_eq!(fp(&["shadow", "shadow"]), fp(&["shadow"]));
+        // `-Wno-x -Wx` and `-Wx` map alike but differ in the last sign
+        // of `x` only if the order flips it: here it does not.
+        assert_eq!(fp(&["no-shadow", "shadow"]), fp(&["shadow"]));
+        let none = DiagOptions { error_limit: 3, show_colors: true, ..DiagOptions::default() };
+        assert_eq!(none.policy_fingerprint(), fp(&[]), "display options are not policy");
     }
 }

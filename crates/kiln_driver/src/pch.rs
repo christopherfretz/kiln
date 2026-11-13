@@ -33,8 +33,10 @@ use crate::{Io, SharedWriter, input_std, make_engine, report_output_error, synta
 
 /// The record's first word.
 pub(crate) const MAGIC: &str = "KILNPCH";
-/// The record format version this kiln writes and reads.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+/// The record format version this kiln writes and reads (2: the `file`
+/// lines' modification time and the image's word-wise checksum,
+/// WP-1392).
+pub(crate) const FORMAT_VERSION: u32 = 2;
 
 /// One recorded option value.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +63,11 @@ enum Compat {
 pub(crate) struct FileEntry {
     /// Size in bytes when the PCH was built.
     pub size: u64,
+    /// The modification time when the PCH was built, in nanoseconds
+    /// since the Unix epoch (taken before the file was read; 0 when the
+    /// file system has none): a snapshot consumer hashes the file only
+    /// when this differs ([`mtime_ns`], `crate::pch_snapshot`).
+    pub mtime: u64,
     /// `bmi::checksum` of the contents.
     pub hash: u64,
     /// Found as a system header (not checked, as clang does not check
@@ -181,8 +188,9 @@ impl Record {
         for f in &self.files {
             let _ = writeln!(
                 s,
-                "file {}\t{:016x}\t{}\t{}\t{}",
+                "file {}\t{}\t{:016x}\t{}\t{}\t{}",
                 f.size,
+                f.mtime,
                 f.hash,
                 u8::from(f.system),
                 esc(&f.spelled),
@@ -190,7 +198,7 @@ impl Record {
             );
         }
         if let Some(img) = &self.image {
-            let _ = writeln!(s, "image {}\t{:016x}", img.len(), bmi::checksum(img));
+            let _ = writeln!(s, "image {}\t{:016x}", img.len(), bmi::block_checksum(img));
         }
         let sum = bmi::checksum(s.as_bytes());
         let _ = writeln!(s, "end {sum:016x}");
@@ -258,17 +266,18 @@ impl Record {
                 ("image", 2) if r.image.is_none() => {
                     let len: usize = f[0].parse().map_err(|_| bad())?;
                     let sum = u64::from_str_radix(f[1], 16).map_err(|_| bad())?;
-                    if tail.len() != len || bmi::checksum(tail) != sum {
+                    if tail.len() != len || bmi::block_checksum(tail) != sum {
                         return Err(corrupt("image checksum mismatch"));
                     }
                     r.image = Some(tail.to_vec());
                 }
-                ("file", 5) => r.files.push(FileEntry {
+                ("file", 6) => r.files.push(FileEntry {
                     size: f[0].parse().map_err(|_| bad())?,
-                    hash: u64::from_str_radix(f[1], 16).map_err(|_| bad())?,
-                    system: f[2] == "1",
-                    spelled: u(3)?,
-                    abs: u(4)?,
+                    mtime: f[1].parse().map_err(|_| bad())?,
+                    hash: u64::from_str_radix(f[2], 16).map_err(|_| bad())?,
+                    system: f[3] == "1",
+                    spelled: u(4)?,
+                    abs: u(5)?,
                 }),
                 _ => return Err(bad()),
             }
@@ -379,6 +388,15 @@ pub(crate) fn macros(args: &Args) -> Vec<(String, Option<String>)> {
         }
     }
     out
+}
+
+/// `meta`'s modification time in nanoseconds since the Unix epoch, 0
+/// when there is none (the [`FileEntry::mtime`] of the record).
+pub(crate) fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
 fn cwd() -> PathBuf {
@@ -546,7 +564,7 @@ pub(crate) fn consumer(
         return Err(());
     }
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
-    if args.pch.snapshot == crate::args::PchSnapshot::Load && args.pch.image != PchImage::Check {
+    if args.pch.snapshot.loads() && args.pch.image != PchImage::Check {
         // EXPERIMENTAL (WP-1383): the snapshot stands in for the
         // producer's `-include`s and the header; the replay arguments
         // below stay the fallback.
@@ -554,7 +572,7 @@ pub(crate) fn consumer(
             args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
         let found = match snapshot_refused(args, &rec, inputs) {
             Some(why) => Err(why),
-            None => crate::pch_snapshot::find(args, pch, &rec, extras),
+            None => crate::pch_snapshot::find(args, tc, std, diag_opts, pch, &rec, extras),
         };
         match found {
             Ok(u) => {
@@ -1274,7 +1292,7 @@ fn write_pch(
         };
     }
     let mut image = image;
-    if args.pch.snapshot == crate::args::PchSnapshot::Write {
+    if args.pch.snapshot.writes() {
         // EXPERIMENTAL (WP-1383): the snapshot section, next to the
         // record (which replay still uses) and the image.
         let made =
@@ -1300,9 +1318,13 @@ fn write_pch(
         .iter()
         .filter_map(|name| {
             let abs = here.join(name);
+            // The time first: a file changed while it is read gets a
+            // newer time than the one recorded, so it is hashed again.
+            let mtime = std::fs::metadata(&abs).map_or(0, |m| mtime_ns(&m));
             let bytes = std::fs::read(&abs).ok()?;
             Some(FileEntry {
                 size: bytes.len() as u64,
+                mtime,
                 hash: bmi::checksum(&bytes),
                 system: list.is_system(name),
                 spelled: name.clone(),
@@ -1360,6 +1382,7 @@ mod tests {
             macros: vec![("A".into(), Some("1".into())), ("B".into(), None)],
             files: vec![FileEntry {
                 size: 3,
+                mtime: 1_700_000_000_123_456_789,
                 hash: 0xabc,
                 system: false,
                 spelled: "p\nh.hpp".into(),
@@ -1392,8 +1415,8 @@ mod tests {
         assert!(Record::parse(&with[..with.len() - 1]).is_err());
         assert_eq!(Record::parse(b"CPCH...."), Err(ReadError::Clang));
         assert_eq!(Record::parse(b"hello"), Err(ReadError::NotPch));
-        assert_eq!(Record::parse(b"KILNPCH 2\n"), Err(ReadError::Newer));
-        assert_eq!(Record::parse(b"KILNPCH 0\n"), Err(ReadError::Older));
+        assert_eq!(Record::parse(b"KILNPCH 3\n"), Err(ReadError::Newer));
+        assert_eq!(Record::parse(b"KILNPCH 1\n"), Err(ReadError::Older));
     }
 
     /// clang `collectMacroDefinitions` (WP-1023).

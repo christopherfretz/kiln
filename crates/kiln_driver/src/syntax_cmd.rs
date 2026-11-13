@@ -119,7 +119,10 @@ impl SyntaxJob<'_> {
     /// snapshot restored in place of a replay of its header
     /// (`crate::pch_snapshot`); `Err` (nothing reported) when it cannot
     /// be restored, and the caller replays.
-    fn run_restored(&self, snap: &crate::args::PchSnapshotUse) -> Result<JobResult, String> {
+    pub(crate) fn run_restored(
+        &self,
+        snap: &crate::args::PchSnapshotUse,
+    ) -> Result<JobResult, String> {
         use std::io::Write as _;
         let job = &self.0;
         let (sm, interner, mut restore) = crate::pch_snapshot::open(snap)?;
