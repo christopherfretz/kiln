@@ -1051,6 +1051,73 @@ impl Sema<'_, '_> {
         }
     }
 
+    // -- dynamic stack allocations -------------------------------------------------
+
+    /// A variable length array type written in the current function's
+    /// body (clang `FunctionScopeInfo::setHasVLA`, from `BuildArrayType`):
+    /// the first is remembered for [`Sema::check_coroutine_dynamic_allocas`].
+    ///
+    /// clang does not diagnose one an instantiation forms (and then fails
+    /// in its back end); kiln does, with its own wording (WP-1374).
+    pub(crate) fn note_vla_type(&mut self, loc: Loc) {
+        let parsed = self.inst.stack.is_empty();
+        let Some(st) = self.func.as_mut() else { return };
+        if parsed && st.first_vla.is_none() {
+            st.first_vla = Some(loc);
+        } else if !parsed && st.first_dyn_alloca.is_none() {
+            st.first_dyn_alloca =
+                Some((loc, "a variable length array instantiated from a template".to_owned()));
+        }
+    }
+
+    /// A call of builtin `id` at `callee`: the first evaluated call of a
+    /// `__builtin_alloca` form in the current body is remembered for
+    /// [`Sema::check_coroutine_dynamic_allocas`].
+    pub(crate) fn note_dynamic_alloca(&mut self, id: u32, f: DeclId, callee: ExprId) {
+        use kiln_ast::decl::builtin;
+        if !matches!(
+            id,
+            builtin::ALLOCA
+                | builtin::ALLOCA_WITH_ALIGN
+                | builtin::ALLOCA_UNINITIALIZED
+                | builtin::ALLOCA_WITH_ALIGN_UNINITIALIZED
+        ) || self.unevaluated > 0
+        {
+            return;
+        }
+        // The called name: `alloca` is a library builtin (a `__builtin_` twin).
+        let name = self.decl_name_str(self.ast.decls.get(f).name());
+        let at = self.begin_loc(callee);
+        if let Some(st) = self.func.as_mut()
+            && st.first_dyn_alloca.is_none()
+        {
+            st.first_dyn_alloca = Some((at, format!("a call to '{name}'")));
+        }
+    }
+
+    /// The frame of a coroutine has a fixed size, so its body cannot
+    /// allocate on the stack dynamically (LLVM's `CoroSplit` rejects a
+    /// non-constant `alloca`): a variable length array type written in
+    /// the body is an error as in clang (`err_vla_in_coroutine_unsupported`,
+    /// at the first); a `__builtin_alloca` call is one too, which clang
+    /// accepts and then fails in its back end (kiln-specific, WP-1374,
+    /// docs/status/deviations.md). Codegen rejects any other dynamic
+    /// `alloca` in a coroutine (an instantiated array bound).
+    fn check_coroutine_dynamic_allocas(
+        &mut self,
+        vla: Option<Loc>,
+        dyn_alloca: Option<(Loc, String)>,
+    ) {
+        if let Some(l) = vla {
+            let d = self.diag(DiagId::sema_vla_in_coroutine_unsupported, l);
+            self.emit(d);
+        }
+        if let Some((l, name)) = dyn_alloca {
+            let d = self.diag(DiagId::sema_coroutine_dynamic_alloca, l).arg(name);
+            self.emit(d);
+        }
+    }
+
     // -- the body end --------------------------------------------------------------
 
     /// clang `CheckCompletedCoroutineBody`: wraps the body of a
@@ -1061,6 +1128,8 @@ impl Sema<'_, '_> {
         let f = st.decl;
         let Some(coro) = st.coro.as_deref() else { return body };
         let first_return = st.first_return;
+        let (first_vla, first_dyn_alloca) = (st.first_vla, st.first_dyn_alloca.clone());
+        let has_promise = coro.promise.is_some();
         if coro.first.is_none() {
             return body;
         }
@@ -1070,6 +1139,9 @@ impl Sema<'_, '_> {
                 d = d.with_note(n);
             }
             self.emit(d);
+        }
+        if has_promise {
+            self.check_coroutine_dynamic_allocas(first_vla, first_dyn_alloca);
         }
         if self.in_template() {
             return body;

@@ -52,6 +52,24 @@ Planned as 1.2.0.
   default argument holding a consteval-only value is reported at the
   call that uses it.
 
+### Fixed
+
+- Coroutine fixes (WP-1374, found by the hod project). A coroutine's own
+  parameter objects are kept out of the coroutine frame, as clang 22
+  does, so a parameter the ramp destroys after the frame is freed (a
+  `trivial_abi` class, or one whose copy into the frame throws) no
+  longer reads freed memory. The return object is kept out of the frame
+  when a postcondition names it, so `post(r: ...)` checks it after the
+  coroutine completed in its ramp. A variable length array in a
+  coroutine is the error "variable length arrays in a coroutine are not
+  supported" (as clang), and a call to `__builtin_alloca`, `alloca` or
+  their aligned forms in a coroutine is an error too (stricter than
+  clang, whose sema accepts it); both used to stop the build in LLVM
+  ("Coroutines cannot handle non static allocas yet"). One LLVM bug
+  remains: when `get_return_object()` throws, LLVM can keep the ramp's
+  exception slots in the freed frame
+  ([docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md)).
+
 ## [1.1.0] - 2026-11-12
 
 C mode, and the fixes made since 1.0.2. The gate results are in

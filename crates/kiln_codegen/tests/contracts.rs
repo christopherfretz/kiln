@@ -261,3 +261,37 @@ fn coroutine_precondition_and_postcondition() {
     let ir = lower(&post, ContractSemantic::Ignore).expect("nothing to check under ignore");
     assert!(!body(&ir, "_Z1cRKi").contains(HANDLER), "{ir}");
 }
+
+/// The `alloca` lines of function `name` that carry `!coro.outside.frame`
+/// (`marked`) and the others.
+fn allocas<'a>(ir: &'a str, name: &str) -> (Vec<&'a str>, Vec<&'a str>) {
+    body(ir, name)
+        .lines()
+        .filter(|l| l.contains(" = alloca "))
+        .partition(|l| l.contains("!coro.outside.frame"))
+}
+
+// [dcl.fct.def.coroutine]/7, P2900R14 §3.5.2 (WP-1374): a postcondition
+// naming the result reads the return slot in the ramp after `coro.end`,
+// when a coroutine that completed in the ramp has freed its frame, so the
+// slot is kept outside the frame. Without such a postcondition the slot
+// is unescaped and LLVM keeps it on the ramp's stack: unmarked, as clang
+// emits it.
+#[test]
+fn coroutine_return_slot_outside_the_frame_under_a_result_postcondition() {
+    let lib = CORO.replace("struct task {\n", "struct task {\n  long v;\n");
+    let src = format!(
+        "{lib}task c() post(r: r.v == 0) {{ co_return; }}\n\
+         task d() post(true) {{ co_return; }}\n\
+         task e() {{ co_return; }}\n"
+    );
+    let ir = lower(&src, ContractSemantic::Enforce).expect("lowers");
+    let (marked, _) = allocas(&ir, "_Z1cv");
+    assert_eq!(marked.len(), 1, "the return slot only: {ir}");
+    assert!(marked[0].contains("alloca %struct.task"), "{ir}");
+    for f in ["_Z1dv", "_Z1ev"] {
+        assert!(allocas(&ir, f).0.is_empty(), "{f}: {ir}");
+    }
+    let ir = lower(&src, ContractSemantic::Ignore).expect("lowers");
+    assert!(allocas(&ir, "_Z1cv").0.is_empty(), "nothing reads it under ignore: {ir}");
+}

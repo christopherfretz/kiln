@@ -57,6 +57,16 @@ impl Cg<'_> {
         ast.lists.iter::<StmtId>(l).filter(|&s| ast.stmts.contract_kind(s) == kind).collect()
     }
 
+    /// Whether a checked postcondition of `d` names its result (and so
+    /// takes the return slot's address after the body).
+    pub(crate) fn post_names_result(&self, d: DeclId) -> bool {
+        self.ast.contract_semantic.checks()
+            && self
+                .contracts_of(d, ContractKind::Post)
+                .into_iter()
+                .any(|s| self.ast.stmts.contract_result_name(s).is_some())
+    }
+
     /// The preconditions of function `d`, at entry: after the parameters
     /// (and `this`, the VTT, a lambda's captures) and before the body or
     /// a constructor's mem-initializers ([dcl.contract.func]/1).

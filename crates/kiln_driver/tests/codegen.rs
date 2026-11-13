@@ -6,6 +6,12 @@
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
+
+// The IR-diff normalizations of `ir_vs_clang` (only `coro_params_clang19`
+// is used here).
+#[allow(dead_code)]
+#[path = "../../kiln_codegen/tests/ir_norm/mod.rs"]
+mod ir_norm;
 use std::process::{Command, Output, Stdio};
 
 /// The `kiln++` beside the `kiln` binary under test (`kiln_driver`'s build
@@ -658,7 +664,10 @@ fn coro_wrappers_before_passes_match_clang19() {
     assert_eq!(k.status.code(), Some(0), "{}", text(&k.stderr));
     let c = Command::new("clang++-19").args(&args).current_dir(&d).output().unwrap();
     assert_eq!(c.status.code(), Some(0), "{}", text(&c.stderr));
-    let (k, c) = (ir_body(&text(&k.stdout)), ir_body(&text(&c.stdout)));
+    // WP-1374: kiln keeps the coroutine's parameter allocas out of the
+    // frame at every compat level (clang 22's marking).
+    let k = ir_norm::coro_params_clang19(&text(&k.stdout));
+    let (k, c) = (ir_body(&k), ir_body(&text(&c.stdout)));
     assert!(k.contains("__await_suspend_wrapper__init"), "{k}");
     assert_eq!(k, c);
 }

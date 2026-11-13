@@ -135,6 +135,14 @@ pub struct FnState {
     /// The first `return` statement (an error in a coroutine,
     /// [stmt.return.coroutine]/1).
     pub(crate) first_return: Option<Loc>,
+    /// The first variable length array type written in the body (clang
+    /// `FunctionScopeInfo::FirstVLALoc`): an error in a coroutine
+    /// (WP-1374, [`Sema::note_vla_type`]).
+    pub(crate) first_vla: Option<Loc>,
+    /// The first other dynamic stack allocation of the body (a
+    /// `__builtin_alloca` call, an instantiated variable length array) and
+    /// its description: an error in a coroutine (kiln-specific, WP-1374).
+    pub(crate) first_dyn_alloca: Option<(Loc, String)>,
     /// The parameters assigned with `=` or whose address was taken so
     /// far (clang `ModifiedNonNullParams`): a `nonnull` one is no longer
     /// known non-null (spec/sema.md §5.27).
@@ -188,6 +196,8 @@ impl FnState {
             discarded: 0,
             coro: None,
             first_return: None,
+            first_vla: None,
+            first_dyn_alloca: None,
             modified_params: Vec::new(),
             volatile_assigns: Vec::new(),
             expr_start: 0,
