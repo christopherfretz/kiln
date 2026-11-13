@@ -177,7 +177,19 @@ impl Test<'_> {
         let with = self.pch_diff_build(spec, "pch");
         (self.pch_src, self.pch_flags) = (None, Vec::new());
         self.pch_consumer = PchConsumer::default();
-        let with = with?;
+        let with = match with {
+            // As for the reference build: a test's memory cap is sized for
+            // the test alone, and with the synthetic prefix both builds sit
+            // at its edge (`contracts-many.cpp`: the restore needs about
+            // 1296 MiB of address space, the `-include` build 1342 MiB,
+            // the cap is 1280 MiB), so which one is killed varies.
+            Err(Problem::Killed { mib, .. }) if synthetic => {
+                return Ok(Err(format!(
+                    "the synthetic prefix exceeds the test's memory limit ({mib} MiB)"
+                )));
+            }
+            r => r?,
+        };
         if mode == PchDiff::Snapshot {
             path = pch_diff::snapshot_path(&producer, &with.compile.stderr_str());
         }

@@ -2,7 +2,11 @@
 
 WP-1395, 2026-11-13. These are the gates for the snapshot PCH product
 (`-fkiln-pch-snapshot=write|load`, still hidden; spec/driver.md "PCH
-snapshot: behaviour"). Nothing here changes a default. They are:
+snapshot: behaviour"). Nothing here changes a default. The tables are
+from the tree that ships: main with the single-parse producer and
+streaming decode (WP-1393) and this package, `ba5d00e5b` plus the one
+harness fix below (runs 5 and libc++ second pair; runs 1 to 4 and the
+first libc++ pair were on the tree before WP-1393). They are:
 
 - the restore/replay accounting of `cargo xtask test --pch-diff
   snapshot`, and `--pch-diff-require-restore` with its allow-list
@@ -24,7 +28,8 @@ and "Synthetic prefix"; spec/libcxx.md `--pch-diff`.
 - libc++ (llvmorg-19.1.7; std/utilities, containers, algorithms,
   ranges, strings, language.support): 3894 tests compiled with a
   snapshot PCH, all 3894 restored, 0 replayed, and 0 outcome
-  differences from the no-PCH baseline of the same session.
+  differences from the no-PCH baseline of the same session, on both
+  trees.
 
 ## Accounting
 
@@ -87,15 +92,19 @@ follow one another; each run has the previous run's fixes.
 | 1: before the fixes | 904 | 6 | 6135 | 894 | 16 | 174 s |
 | 2: `ir` without an oracle compared | 957 | 16 | 6072 | 957 | 16 | 424 s |
 | 3: `--pch-diff-synthetic` | 5684 | 3 (+1 killed) | 1357 | 5686 | 1 | 3212 s |
-| 4: after the fixes, on current main | 5686 | 0 | 1361 | 5685 | 1 (allowed) | 3326 s |
+| 4: after the fixes, before WP-1393 | 5686 | 0 | 1361 | 5685 | 1 (allowed) | 3326 s |
+| 5: shipping tree (with WP-1393) | 5694 | 0 (+1 killed, now a skip) | 1360 | 5693 | 1 (allowed) | 3835 s |
 
-Run 4 is the same command as run 3 after the fixes below and a merge of
-main (7047 tests). Its accounting:
+Runs 4 and 5 are the same command as run 3 after the fixes below (7047
+and 7055 tests). Run 5's one KILLED is `contracts-many.cpp` again, now
+on the PCH build rather than the reference (below); with the fix it is a
+skip, so run 5 is 5693 consumers, 5692 restored, 1 allowed replay, 0
+failures. Run 5's accounting as printed:
 
 ```
-pch-diff snapshot: 5686 consumers ran: 5685 restored, 1 replayed; 0 failed before the consumer ran; 1361 skipped
+pch-diff snapshot: 5694 consumers ran: 5693 restored, 1 replayed; 1 failed before the consumer ran; 1360 skipped
       1  replay: consumer: '…' is a module unit, which a replay compiles with the header before its module declaration
-   5685  snapshot
+   5693  snapshot
 ```
 
 ### Coverage of each prefix rule
@@ -106,8 +115,8 @@ pch-diff snapshot: 5686 consumers ran: 5685 restored, 1 replayed; 0 failed befor
   no `#include` at all): the PCH is `#include <bits/stdc++.h>`, one
   per set of flags, shared by the tests. It is used only when the test,
   given the header as an `-include`, reports exactly what it reports
-  alone (success, diagnostics, run output). Run 4's other consumers,
-  about 4713 (5686 less the 973; run 4 has 2 tests more than run 2). It is not used
+  alone (success, diagnostics, run output). Run 5's other consumers,
+  about 4720 (5693 less the 973; run 5 has 10 tests more than run 2). It is not used
   for:
   - 253 tests whose result the header changes. In a sample: the test
     defines its own `std::nothrow_t` or `std::destroying_delete_t`
@@ -164,6 +173,15 @@ Classes: (a) snapshot bug, (b) replay bug, (c) harness artefact.
 - **(c) run 3: `contracts-many.cpp` killed under its 256 MiB cap**
   with the header as an `-include`; the two stack-guard tests (fatal
   error depth). Skipped with the synthetic prefix, as above.
+- **(c) run 5: `contracts-many.cpp` killed again, this time in the PCH
+  build.** Both builds sit at the edge of the cap (256 MiB plus the
+  1024 MiB stack reservation, 1280 MiB of address space). Measured with
+  `ulimit -v`, the restore needs about 1296 MiB and the `-include` build
+  1342 MiB, the same with `KILN_PCH_SNAPSHOT_PASSES=2`. So this is not
+  a restore or single-pass producer problem, and which build is killed
+  varies. A PCH build killed under the cap is now a skip with the
+  synthetic prefix as well (spec/harness.md). The two-pass whole-corpus
+  sweep was not needed: run 5 has no failure or new replay otherwise.
 - **Allowed: `module.private.frag/private-without-module.cpp`** with
   the synthetic prefix replays, because it is a module unit (above).
 
@@ -175,14 +193,18 @@ No (b) was found.
 [--pch-diff snapshot]` over std/utilities, std/containers,
 std/algorithms, std/ranges, std/strings and std/language.support of
 llvmorg-19.1.7 (4299 tests), the baseline first, then the snapshot run,
-in the same session with the same binary.
+in the same session with the same binary. The pair was run on both
+trees.
 
 | run | tests | pass | fail | xfail | unsupported | with a PCH | restored | replayed | wall |
 |---|---|---|---|---|---|---|---|---|---|
-| no PCH | 4299 | 4261 | 1 | 1 | 36 | - | - | - | 861 s |
-| `--pch-diff snapshot` | 4299 | 4261 | 1 | 1 | 36 | 3894 | 3894 | 0 | 1881 s |
+| no PCH, shipping tree | 4299 | 4261 | 1 | 1 | 36 | - | - | - | 2249 s |
+| `--pch-diff snapshot`, shipping tree | 4299 | 4261 | 1 | 1 | 36 | 3894 | 3894 | 0 | 2329 s |
+| no PCH, before WP-1393 | 4299 | 4261 | 1 | 1 | 36 | - | - | - | 861 s |
+| `--pch-diff snapshot`, before WP-1393 | 4299 | 4261 | 1 | 1 | 36 | 3894 | 3894 | 0 | 1881 s |
 
-- **Differences: none.** Every test has the same outcome in both runs.
+- **Differences: none.** Every test has the same outcome in both runs
+  of each pair, and the two pairs agree.
   The one FAIL is the same in both and is not about PCHs
   (`unique.ptr.special/io.verify.cpp`: an expected "invalid operands to
   binary expression" is not seen).
@@ -192,8 +214,11 @@ in the same session with the same binary.
   `-include`/`-x`.
 - **Time.** The snapshot run builds one PCH per test (the prefix is the
   test's own `#include`s), so its wall time (the sum of the tests'
-  times goes from 3209 s to 5390 s) measures the producer, not the
-  consumer. It is not a speed result.
+  times goes from 3209 s to 5390 s before WP-1393, and from 4587 s to
+  6901 s on the shipping tree) measures the producer, not the consumer.
+  The shipping-tree pair ran on a host about twice as loaded (load
+  average 25 to 40), so its wall times compare with neither each other
+  closely nor the first pair. It is not a speed result.
 
 Scratch directories of both runs were removed after the run.
 
