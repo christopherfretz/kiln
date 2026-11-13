@@ -587,6 +587,9 @@ impl Job<'_> {
         // (spec/modules.md §11.12); `-E`/`-M` import nothing.
         let cache_key = staged.then(|| (predefines.clone(), list.verbose_text()));
         let mut search = HeaderSearch::new(RealFs, list).with_embed_dirs(a.embed_dirs.clone());
+        if a.pch.record_lookups {
+            search.record_lookups();
+        }
         let deps = DepList::for_args(a).map(|l| Rc::new(RefCell::new(l)));
         if let Some(d) = &deps {
             let d2 = Rc::clone(d);

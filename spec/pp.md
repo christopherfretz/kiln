@@ -207,6 +207,42 @@ needs but the `FileChange` callbacks do not see:
 - `SearchEvent::Embed { path }` for each `#embed` / `__has_embed` that
   finds a resource.
 
+**Lookup log (WP-1403).** `HeaderSearch::record_lookups()` makes header
+search record what the PCH snapshot's lookup-tolerant search path needs
+(spec/driver.md "Snapshots"); `IncludeResolver::take_lookup_log` (default
+`None`) and `Preprocessor::take_lookup_log` hand it over. A
+`LookupLog` holds a table of directory names and, in the order first
+seen, one `Lookup` per distinct key, and the search list the lookups
+used (`list`, `angled_start`):
+
+- the key: the name; the form (`Include` for `#include`, `#import`,
+  `__has_include`, and an `_next` form that starts from the beginning;
+  `Next` for an `_next` form that continues after a directory; `Embed`
+  for `#embed` and `__has_embed`); `<...>` or not; the includer's
+  directory where the form tries it (`"..."` includes and embeds); the
+  directory a `Next` continues after;
+- the result (`Found`): `Missing`; `Includer` (found relative to the
+  includer; it inherits the includer's characteristic, which an earlier
+  lookup fixed); `Dir { dir, characteristic }` (found in that search
+  directory); `Embed { path }` (the path an `#embed` read).
+
+A result is a function of the key, the search list (and the
+`--embed-dir` list) and the file system; the header's characteristic as
+header search last found it (`HeaderFileInfo::DirInfo`) is not part of
+it, because it follows from earlier results. Lookups of absolute names
+are not recorded. `LookupLog::check(list, embed_dirs, fs, known,
+same_cwd)` repeats every lookup in order over another list and file
+system and returns the first whose result differs, named for `-v`. A
+directory of the recorded list that the lookup searched before its
+result (and the includer's directory of a `"..."` lookup found
+elsewhere) is taken to miss again without a query; a relative one only
+when `same_cwd`. It asks
+`HeaderFs::is_file` (a `stat`, no read) and, after four misses in one
+directory, reads that directory's listing once (`HeaderFs::list_dir`);
+`known` names files that are known to exist (the record's file list),
+which are not asked about. `MemoryFs` counts its queries, which the
+tests pin.
+
 For `#embed` the core parses `limit`, `prefix`, `suffix`, `if_empty` and
 their `clang::` / `__x__` spellings. It evaluates `limit` and
 `clang::offset` with `IfEvaluator::eval_value`. The resolver returns the

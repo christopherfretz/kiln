@@ -881,6 +881,10 @@ pub struct PchArgs {
     /// `crate::pch`). The rest of the arguments are replay's, the
     /// fallback.
     pub snapshot_use: Option<PchSnapshotUse>,
+    /// The job's header search records its lookups (the producer's
+    /// snapshot pass, WP-1403; set by `crate::pch_snapshot`, never by an
+    /// option).
+    pub record_lookups: bool,
 }
 
 /// `-fkiln-pch-snapshot`'s mode (spec/driver.md "Snapshots", spec/snap.md

@@ -225,7 +225,7 @@ Scratch directories of both runs were removed after the run.
 ## CI lane
 
 `cargo xtask ci` runs `kiln --pch-diff snapshot
---pch-diff-require-restore` over the slice `cpp.include` +
+--pch-diff-require-restore --pch-diff-extra-dir` (WP-1403) over the slice `cpp.include` +
 `module.interface`, next to the image and replay lanes. A consumer that
 replays for a reason not on the allow-list fails CI.
 
@@ -238,6 +238,47 @@ Cost, from the merged branch's `cargo xtask ci` (debug kiln, 8 jobs):
 The snapshot lane is the slowest of the three: each test builds its
 own PCH with `-fkiln-pch-snapshot=write`, whose producer runs a second
 job for the snapshot (spec/snap.md) besides the image.
+
+## Search path
+
+WP-1403, 2026-11-13. A consumer whose search list differs from the
+producer's repeats the prefix's recorded lookups (spec/driver.md
+"Lookup-tolerant search path"). Measured with a release kiln on this
+host's workspace file system (virtiofs, where one directory read takes
+about 1.4 ms and a failed `stat` about 0.6 ms), each consumer adding
+empty `-I` directories before the producer's, three runs each,
+`snapshot-timing: find ... lookups repeated`:
+
+| prefix | lookups | files | +1 dir | +5 dirs | +20 dirs |
+|---|---|---|---|---|---|
+| `<bits/stdc++.h>` | 517 | 508 | 1.1-1.7 ms | 2.5-3.0 ms | 7.1-13.2 ms |
+| `<bits/stdc++.h>` + 300 headers in 2 `-I` dirs | 817 | 808 | 1.6-2.2 ms | 2.4-3.7 ms | 5.6-6.2 ms |
+
+The 1 and 5 directory rows are the target case (under 5 ms) and meet
+it. The 20 directory row is above 5 ms on this file system; it is
+recorded as measured and accepted.
+
+Equal lists take the fast path (nothing repeated, 0 ms). The cost is one
+read of each directory the producer did not have, read together on up
+to 8 threads, plus a hash probe per lookup and directory; a directory
+the producer already searched is not asked again. With 20 directories
+the reads themselves (three rounds of 1.4 ms here) are most of it; on
+a local disk a directory read is tens of microseconds. For scale, the
+whole `-fsyntax-only` compile of an empty main file with the
+`<bits/stdc++.h>` PCH and one extra directory takes 0.51 s restored and
+1.73 s replayed here.
+
+The lookup log adds 18.3 KB to the `<bits/stdc++.h>` PCH (517 lookups,
+13 directory names; 0.05% of the 36.9 MB section) and 25.7 KB to the
+817-lookup prefix.
+
+The differential: `cargo xtask test --pch-diff snapshot
+--pch-diff-require-restore --pch-diff-extra-dir` over the CI slice
+restores all 89 compared tests (about half with the extra directory),
+and `scripts/pch-snapshot-diff.sh` has three search-path cases:
+`search-extra` (restores), `search-shadow` and `search-has-include`
+(refused with the expected warning; the replay equals the plain
+compile).
 
 ## Remaining differences
 

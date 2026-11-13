@@ -1,0 +1,1 @@
+include search path: lookup of <a.h> now finds 'extra/a.h' (was 'inc/a.h')

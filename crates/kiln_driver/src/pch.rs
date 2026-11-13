@@ -764,7 +764,7 @@ pub(crate) fn consumer(
         let extras: Vec<String> =
             args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
         let found = match snapshot_refused(args, &rec, inputs) {
-            Some(why) => Err(why),
+            Some(why) => Err(crate::pch_snapshot::Refusal::quiet(why)),
             None => crate::pch_snapshot::find(args, tc, std, diag_opts, pch, &rec, extras),
         };
         match found {
@@ -779,9 +779,22 @@ pub(crate) fn consumer(
                 out.includes = includes;
                 return Ok(Some(out));
             }
-            Err(why) => {
-                let why = format!("not used: {why}");
-                crate::pch_snapshot::note(args, stderr, pch, &why);
+            Err(refusal) => {
+                crate::pch_snapshot::note(args, stderr, pch, &format!("not used: {}", refusal.why));
+                // WP-1403: a snapshot refused for its configuration is
+                // visible by default (`=check` reports its own way).
+                if refusal.configuration && args.pch.snapshot != crate::args::PchSnapshot::Check {
+                    Diag::new(DiagId::drv_pch_snapshot_unused, Span::INVALID)
+                        .arg(pch)
+                        .arg(&refusal.why)
+                        .emit(&e);
+                    // Promoted (`-Werror`): the compile stops, as for
+                    // any rejected PCH.
+                    if e.error_count() > 0 {
+                        finish(e);
+                        return Err(());
+                    }
+                }
             }
         }
     }
@@ -1435,17 +1448,24 @@ fn produce_one(
         let path = crate::time_trace::path(args, Some(phase), &input.path, &out);
         crate::time_trace::InputTrace::start(s, path)
     });
-    // EXPERIMENTAL (WP-1383, WP-1393): with `-fkiln-pch-snapshot=write`
-    // the snapshot pass runs first when it may stand in for the header
-    // pass (`pch_snapshot::produce`); otherwise after it, in `write_pch`.
+    // EXPERIMENTAL (WP-1383, WP-1393): in every mode that writes a
+    // snapshot (`-fkiln-pch-snapshot`, `=write`, `=check`) the snapshot
+    // pass runs first when it may stand in for the header pass
+    // (`pch_snapshot::produce`); otherwise after it, in `write_pch`.
     let mut snapshot = None;
     let mut single = None;
-    if args.pch.snapshot == crate::args::PchSnapshot::Write
-        && crate::pch_snapshot::single_pass_allowed(args, std)
-    {
-        let p = crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts, true);
-        single = p.result;
-        snapshot = Some(p.section);
+    if args.pch.snapshot.writes() {
+        match crate::pch_snapshot::single_pass_blocker(args, std) {
+            None => {
+                let p = crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts, true);
+                single = p.result;
+                snapshot = Some(p.section);
+            }
+            Some(why) if crate::pch_snapshot::timing() => {
+                eprintln!("snapshot-timing: producer single pass: not attempted ({why})");
+            }
+            Some(_) => {}
+        }
     }
     let r = if let Some(r) = single {
         r

@@ -86,7 +86,14 @@ fn both(name: &str, header: &str, flags: &[&str], single: bool) -> PathBuf {
     assert_eq!(one.2, two.2, "{name}: record");
     let stood_in = one.0.timing.contains("producer single pass: stands in");
     assert_eq!(stood_in, single, "{name}: single pass taken\n{}", one.0.timing);
-    assert!(!two.0.timing.contains("producer single pass"), "{name}: forced two passes");
+    // WP-1403: the forced two passes say why the single pass was not
+    // tried.
+    assert!(
+        two.0.timing.contains("producer single pass: not attempted (")
+            && !two.0.timing.contains("producer single pass: stands in"),
+        "{name}: forced two passes\n{}",
+        two.0.timing
+    );
     d
 }
 

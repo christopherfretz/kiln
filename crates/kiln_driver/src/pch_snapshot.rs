@@ -118,7 +118,8 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// The section's format version (bytes 8..12, little-endian): the layout
 /// of the head ([`head`]). It is independent of kiln's version; the
 /// roots' layout is the schema hash's business.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+/// Version 2 (WP-1403) added the lookup log to the head.
+pub(crate) const FORMAT_VERSION: u32 = 2;
 /// The length of the magic and the format version.
 const HEADER_LEN: usize = 12;
 
@@ -194,6 +195,17 @@ fn excluded(args: &Args) -> Args {
         dirs: d.dirs,
         sysroot: d.sysroot,
         isysroot: d.isysroot,
+        // WP-1403: these only drop directories from the search list
+        // (and the `<meta>` hint after a lookup that failed, which a
+        // prefix with a snapshot has not had); `-stdlib=` also reaches
+        // sema and stays in `options`.
+        nostdinc: d.nostdinc,
+        nostdincxx: d.nostdincxx,
+        nostdlibinc: d.nostdlibinc,
+        nobuiltininc: d.nobuiltininc,
+        // WP-1403: compared by the prefix's `#embed` / `__has_embed`
+        // lookups, which are repeated with the consumer's list.
+        embed_dirs: d.embed_dirs,
         resource_dir: d.resource_dir,
         gcc_toolchain: d.gcc_toolchain,
         gcc_install_dir: d.gcc_install_dir,
@@ -214,10 +226,27 @@ pub(crate) fn identity(
     std: crate::toolchain::LangStd,
     diag_opts: &kiln_diag::DiagOptions,
 ) -> Vec<(String, String)> {
+    identity_and_list(args, tc, std, diag_opts).0
+}
+
+/// The name of the identity component of the search list, compared by
+/// the prefix's lookups when its text differs (WP-1403).
+pub(crate) const SEARCH_PATH: &str = "include search path";
+/// The name of the identity component of the working directory, left
+/// out when the prefix does not depend on it (WP-1403).
+pub(crate) const WORKING_DIRECTORY: &str = "working directory";
+
+/// [`identity`] and the search list it describes.
+fn identity_and_list(
+    args: &Args,
+    tc: &crate::toolchain::Toolchain,
+    std: crate::toolchain::LangStd,
+    diag_opts: &kiln_diag::DiagOptions,
+) -> (Vec<(String, String)>, kiln_pp::SearchList) {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut add = |name: &str, text: String| out.push((name.to_owned(), text));
     add("kiln build", format!("kiln {} {}", bmi::KILN_VERSION, bmi::kiln_sha()));
-    add("working directory", std::env::current_dir().unwrap_or_default().display().to_string());
+    add(WORKING_DIRECTORY, std::env::current_dir().unwrap_or_default().display().to_string());
     add("language", format!("{std:?}"));
     let (features, _) = crate::features::resolve(args, &tc.target);
     add("target", format!("{}\n{features:?}", tc.target.triple));
@@ -225,7 +254,14 @@ pub(crate) fn identity(
     // The search list and the feature queries from the options as given
     // (`argv`, the directories).
     let full = probe_job(args, tc, std, diag_opts);
-    add("include search path", full.search_list().verbose_text());
+    let list = full.search_list();
+    // The `--embed-dir` list is part of it (the `#embed` lookups are
+    // repeated with it), so equal text is still the fast path.
+    let mut search = list.identity_text();
+    for d in &args.embed_dirs {
+        let _ = writeln!(search, "--embed-dir={d}");
+    }
+    add(SEARCH_PATH, search);
     let macros: String = args
         .macros
         .iter()
@@ -259,7 +295,7 @@ pub(crate) fn identity(
         format!("{:?}", crate::time::reproducible_epoch(args.reproducible_time)),
     );
     add("options", format!("{rest:#?}"));
-    out
+    (out, list)
 }
 
 /// A job of `args` with no input, for what [`identity`] computes.
@@ -333,12 +369,13 @@ pub(crate) fn first_difference(
 /// The section's head: the magic and format version, then, in a stream
 /// of their own (so the roots' sharing table starts with the roots), the
 /// schema hash and the identity.
-fn head(id: &[(String, String)]) -> Vec<u8> {
+fn head(id: &[(String, String)], lookups: &kiln_pp::LookupLog) -> Vec<u8> {
     let mut out = MAGIC.to_vec();
     out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     let mut w = Writer::new();
     w.put(&SCHEMA_HASH);
     w.put(&id.to_vec());
+    w.put(lookups);
     out.extend_from_slice(&w.into_bytes());
     out
 }
@@ -348,18 +385,38 @@ pub(crate) fn timing() -> bool {
     std::env::var_os("KILN_SNAP_TIMING").is_some_and(|v| !v.is_empty() && v != "0")
 }
 
-/// The producer's section: [`head`] with the producer's identity, and
-/// the roots `roots` (the stream `syntax_cmd` wrote at the end of the
-/// prefix).
+/// What the producer's snapshot pass wrote at the end of the prefix: the
+/// roots' stream and the prefix's header lookups (WP-1403).
+#[derive(Debug)]
+pub(crate) struct Roots {
+    pub bytes: Vec<u8>,
+    pub lookups: kiln_pp::LookupLog,
+}
+
+/// The producer's section: [`head`] with the producer's identity and
+/// lookup log, and the roots (the stream `syntax_cmd` wrote at the end
+/// of the prefix).
 pub(crate) fn section(
     args: &Args,
     tc: &crate::toolchain::Toolchain,
     std: crate::toolchain::LangStd,
     diag_opts: &kiln_diag::DiagOptions,
-    roots: &[u8],
+    roots: &Roots,
 ) -> Vec<u8> {
-    let mut out = head(&identity(args, tc, std, diag_opts));
-    out.extend_from_slice(roots);
+    let mut out = head(&identity(args, tc, std, diag_opts), &roots.lookups);
+    if timing() {
+        eprintln!(
+            "snapshot-timing: producer lookup log: {} lookups, {} directories, {} bytes",
+            roots.lookups.lookups.len(),
+            roots.lookups.dirs.len(),
+            {
+                let mut w = Writer::new();
+                w.put(&roots.lookups);
+                w.into_bytes().len()
+            }
+        );
+    }
+    out.extend_from_slice(&roots.bytes);
     out
 }
 
@@ -452,6 +509,40 @@ pub(crate) fn prefix_reported(
     }
 }
 
+/// Why a consumer does not use a PCH's snapshot (it replays the header).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    /// The `-v` note's reason.
+    pub why: String,
+    /// A configuration reason (another kiln build, an identity component,
+    /// a lookup or a recorded file that changed): the compile warns
+    /// (`-Wpch-snapshot-unused`, spec/driver.md "Snapshots"). The other
+    /// refusals are by design or a section that cannot be read: `-v` only.
+    pub configuration: bool,
+}
+
+impl Refusal {
+    /// A refusal noted under `-v` only.
+    pub(crate) fn quiet(why: impl Into<String>) -> Refusal {
+        Refusal { why: why.into(), configuration: false }
+    }
+
+    /// A configuration refusal (warned of).
+    fn configuration(why: impl Into<String>) -> Refusal {
+        Refusal { why: why.into(), configuration: true }
+    }
+}
+
+/// `components` without those named in `skip`.
+fn without<'c>(components: &'c [(String, String)], skip: &[&str]) -> Vec<&'c (String, String)> {
+    components.iter().filter(|(n, _)| !skip.contains(&n.as_str())).collect()
+}
+
+/// The text of the component `name` of `components`.
+fn component<'c>(components: &'c [(String, String)], name: &str) -> Option<&'c str> {
+    components.iter().find(|(n, _)| n == name).map(|(_, t)| t.as_str())
+}
+
 /// The consumer's snapshot of `pch` (whose record is `rec`), or why
 /// there is none usable (the compile then replays).
 #[allow(clippy::too_many_arguments)]
@@ -463,9 +554,9 @@ pub(crate) fn find(
     pch: &str,
     rec: &pch::Record,
     includes: Vec<String>,
-) -> Result<PchSnapshotUse, String> {
+) -> Result<PchSnapshotUse, Refusal> {
     let started = Instant::now();
-    let no_section = || "the PCH has no snapshot section".to_owned();
+    let no_section = || Refusal::quiet("the PCH has no snapshot section");
     // The block's sections where they are in the record's image (no copy
     // of a section that may be tens of MB), or in the file when the
     // record left the image there (WP-1401).
@@ -474,7 +565,7 @@ pub(crate) fn find(
         (None, Some(at)) => (at.sections(pch), at.len),
         (None, None) => return Err(no_section()),
     };
-    let sections = sections.map_err(|e| format!("{e} in its section block"))?;
+    let sections = sections.map_err(|e| Refusal::quiet(format!("{e} in its section block")))?;
     let Some((_, range)) = sections.into_iter().find(|s| s.0 == bmi::SECTION_SNAPSHOT) else {
         return Err(no_section());
     };
@@ -484,41 +575,69 @@ pub(crate) fn find(
     let section: &[u8] = match (&rec.image, &rec.image_at) {
         (Some(img), _) => &img[range.clone()],
         (None, Some(at)) => {
-            head =
-                at.read(pch, range.start, range.len().min(1 << 16)).map_err(|e| e.to_string())?;
+            head = at
+                .read(pch, range.start, range.len().min(1 << 16))
+                .map_err(|e| Refusal::quiet(e.to_string()))?;
             &head
         }
         (None, None) => return Err(no_section()),
     };
     let sections_done = started.elapsed();
-    let (start, hashed) = match snapshot_head(args, tc, std, diag_opts, section, started) {
+    let head = match snapshot_head(args, tc, std, diag_opts, section, started, rec) {
         // A decoding error in a part of the section: read all of it.
         Err((_, true)) if section.len() < range.len() => {
             let whole = rec.image_at.as_ref().map_or_else(
                 || Ok(Vec::new()),
-                |at| at.read(pch, range.start, range.len()).map_err(|e| e.to_string()),
+                |at| {
+                    at.read(pch, range.start, range.len())
+                        .map_err(|e| Refusal::quiet(e.to_string()))
+                },
             )?;
-            snapshot_head(args, tc, std, diag_opts, &whole, started).map_err(|e| e.0)?
+            snapshot_head(args, tc, std, diag_opts, &whole, started, rec).map_err(|e| e.0)?
         }
         r => r.map_err(|e| e.0)?,
     };
+    let Head { start, hashed, lookups, list, same_cwd, same_list } = head;
     let checked = started.elapsed();
     // Every file the producer read must still be the one it read: the
     // restored source manager re-reads them lazily.
     if let Some((f, why)) =
         rec.files.iter().find_map(|f| file_changed(f, args.pch.validate).map(|w| (f, w)))
     {
-        return Err(format!("'{}' {why}", f.spelled));
+        return Err(Refusal::configuration(format!("'{}' {why}", f.spelled)));
+    }
+    let validated = started.elapsed();
+    // WP-1403: another search list (or working directory) gives the same
+    // prefix when every lookup the prefix performed finds what it found.
+    if !same_list {
+        let known: std::collections::HashSet<&str> =
+            rec.files.iter().map(|f| f.spelled.as_str()).collect();
+        let checked = lookups.check(
+            &list,
+            &args.embed_dirs,
+            &mut kiln_pp::RealFs,
+            &|p| known.contains(p),
+            same_cwd,
+        );
+        if let Err(why) = checked {
+            return Err(Refusal::configuration(format!("{SEARCH_PATH}: {why}")));
+        }
     }
     if timing() {
-        let validated = started.elapsed();
+        let looked = started.elapsed();
         eprintln!(
-            "snapshot-timing: find sections {:.2} ms, schema hash {:.2} ms, identity {:.2} ms, file check {:.2} ms ({} files), section {} bytes",
+            "snapshot-timing: find sections {:.2} ms, schema hash {:.2} ms, identity {:.2} ms, file check {:.2} ms ({} files), lookups {} ({} lookups), section {} bytes",
             ms(sections_done),
             ms(hashed.saturating_sub(sections_done)),
             ms(checked.saturating_sub(hashed)),
             ms(validated.saturating_sub(checked)),
             rec.files.len(),
+            if same_list {
+                "not repeated (the same search list)".to_owned()
+            } else {
+                format!("repeated {:.2} ms", ms(looked.saturating_sub(validated)))
+            },
+            lookups.lookups.len(),
             range.len()
         );
     }
@@ -534,7 +653,7 @@ pub(crate) fn find(
                 (Some(img), _) => img[range.start + start..range.end].to_vec(),
                 (None, Some(at)) => at
                     .read(pch, range.start + start, range.len() - start)
-                    .map_err(|e| e.to_string())?,
+                    .map_err(|e| Refusal::quiet(e.to_string()))?,
                 (None, None) => return Err(no_section()),
             }),
             start: 0,
@@ -543,9 +662,26 @@ pub(crate) fn find(
     Ok(PchSnapshotUse { pch: pch.to_owned(), roots, includes })
 }
 
-/// The snapshot section's header, schema hash and identity, checked
-/// against this build and command line: where the roots start in
-/// `section`, and when the schema hash was read. An error says why, and
+/// What [`snapshot_head`] read and decided.
+struct Head {
+    /// Where the roots start in the section.
+    start: usize,
+    /// When the schema hash was read.
+    hashed: Duration,
+    /// The prefix's lookups (WP-1403).
+    lookups: kiln_pp::LookupLog,
+    /// This compile's search list.
+    list: kiln_pp::SearchList,
+    /// The working directory is the producer's.
+    same_cwd: bool,
+    /// The search list and the working directory are the producer's: the
+    /// lookups need not be repeated.
+    same_list: bool,
+}
+
+/// The snapshot section's header, schema hash, identity and lookup log,
+/// checked against this build and command line (the search list is
+/// compared by the lookups afterwards, WP-1403). An error says why, and
 /// whether it is one of decoding (which a part of the section may give
 /// where the whole would not).
 fn snapshot_head(
@@ -555,20 +691,37 @@ fn snapshot_head(
     diag_opts: &kiln_diag::DiagOptions,
     section: &[u8],
     started: Instant,
-) -> Result<(usize, Duration), (String, bool)> {
-    let at = check_header(section).map_err(|e| (e, false))?;
+    rec: &pch::Record,
+) -> Result<Head, (Refusal, bool)> {
+    let decode = |e: kiln_snap::SnapError| (Refusal::quiet(e.to_string()), true);
+    let at = check_header(section).map_err(|why| {
+        // Another format version is another kiln build; the rest cannot
+        // be read.
+        let configuration = why.contains("format version");
+        (Refusal { why, configuration }, false)
+    })?;
     let mut r = Reader::new(&section[at..]);
-    let hash: u64 = r.get().map_err(|e| (e.to_string(), true))?;
+    let hash: u64 = r.get().map_err(decode)?;
     let hashed = started.elapsed();
     if hash != SCHEMA_HASH {
-        return Err(("written by another build (schema hash)".to_owned(), false));
+        return Err((Refusal::configuration("written by another build (schema hash)"), false));
     }
-    let id: Vec<(String, String)> = r.get().map_err(|e| (e.to_string(), true))?;
-    let mine = identity(args, tc, std, diag_opts);
-    if let Some(why) = first_difference(&id, &mine) {
-        return Err((why, false));
+    let id: Vec<(String, String)> = r.get().map_err(decode)?;
+    let lookups: kiln_pp::LookupLog = r.get().map_err(decode)?;
+    let (mine, list) = identity_and_list(args, tc, std, diag_opts);
+    // WP-1403: the search list is compared by the prefix's lookups, and
+    // the working directory only when the prefix names a file relatively
+    // (spec/driver.md "Lookup-tolerant search path").
+    let anywhere = lookups.absolute() && rec.files.iter().all(|f| f.spelled.starts_with('/'));
+    let skip: &[&str] = if anywhere { &[SEARCH_PATH, WORKING_DIRECTORY] } else { &[SEARCH_PATH] };
+    let (theirs, ours) = (without(&id, skip), without(&mine, skip));
+    let owned = |v: Vec<&(String, String)>| v.into_iter().cloned().collect::<Vec<_>>();
+    if let Some(why) = first_difference(&owned(theirs), &owned(ours)) {
+        return Err((Refusal::configuration(why), false));
     }
-    Ok((at + r.offset(), hashed))
+    let same_cwd = component(&id, WORKING_DIRECTORY) == component(&mine, WORKING_DIRECTORY);
+    let same_list = component(&id, SEARCH_PATH) == component(&mine, SEARCH_PATH) && same_cwd;
+    Ok(Head { start: at + r.offset(), hashed, lookups, list, same_cwd, same_list })
 }
 
 /// The roots of the snapshot section at `section` in the block of
@@ -896,6 +1049,10 @@ pub(crate) struct Produced {
     pub result: Option<crate::pp_cmd::JobResult>,
 }
 
+/// What a single pass gives the producer: the header pass's result, or
+/// why the header pass is still needed (`KILN_SNAP_TIMING`).
+pub(crate) type StandIn = Result<crate::pp_cmd::JobResult, String>;
+
 /// A single pass's gate (WP-1393): the header, and the producer's
 /// diagnostics output, counted instead of shown.
 #[derive(Debug)]
@@ -908,6 +1065,11 @@ impl Single<'_> {
     /// Nothing was written to the pass's diagnostics output.
     pub(crate) fn quiet(&self) -> bool {
         self.written.load(std::sync::atomic::Ordering::Relaxed) == 0
+    }
+
+    /// The bytes written to the pass's diagnostics output.
+    pub(crate) fn written(&self) -> usize {
+        self.written.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -924,33 +1086,41 @@ impl std::io::Write for Counted {
     }
 }
 
-/// Whether the producer may try a single pass (WP-1393): `KILN_PCH_SNAPSHOT_PASSES=2`
-/// is not set and the producer's command line asks for nothing the
-/// header pass writes besides its diagnostics and dependencies (no
-/// `-v`, `-verify`, time trace, declaration image, report, dump or
-/// module file, no `-MG`), and the header is not C (`std.c`): C's
-/// main-file-only diagnostics (an internal declaration used in an extern
-/// inline function is quiet in a main file, `kiln_sema` `c_decl.rs`) are
-/// not among those [`stands_in`] rules out, so a C header takes two
-/// passes.
-pub(crate) fn single_pass_allowed(args: &Args, std: crate::toolchain::LangStd) -> bool {
-    std.c.is_none()
-        && std::env::var_os("KILN_PCH_SNAPSHOT_PASSES").is_none_or(|v| v != "2")
-        && !args.verbose
-        && args.verify.is_none()
-        && crate::time_trace::settings(args).ok().flatten().is_none()
-        && args.pch.image == crate::args::PchImage::Off
-        && !args.memory_report
-        && args.dump_ast.is_none()
-        && !args.dump_record_layouts
-        && !args.dump_vtable_layouts
-        && !args.dump_cfg
-        && !args.cfg_stats
-        && !args.bmi_image_census
-        && !args.bmi_image_census_all
-        && args.constexpr.report.is_none()
-        && !args.constexpr.profiling()
-        && !args.deps.missing_generated
+/// Why the producer may not try a single pass (WP-1393), or `None` when
+/// it may: `KILN_PCH_SNAPSHOT_PASSES=2` is set, or the producer's command
+/// line asks for something the header pass writes besides its
+/// diagnostics and dependencies (`-v`, `-verify`, a time trace, a
+/// declaration image, a report, a dump or a module file, `-MG`), or the
+/// header is C (`std.c`): C's main-file-only diagnostics (an internal
+/// declaration used in an extern inline function is quiet in a main file,
+/// `kiln_sema` `c_decl.rs`) are not among those [`stands_in`] rules out,
+/// so a C header takes two passes.
+pub(crate) fn single_pass_blocker(
+    args: &Args,
+    std: crate::toolchain::LangStd,
+) -> Option<&'static str> {
+    let blockers = [
+        (std.c.is_some(), "a C header"),
+        (
+            std::env::var_os("KILN_PCH_SNAPSHOT_PASSES").is_some_and(|v| v == "2"),
+            "KILN_PCH_SNAPSHOT_PASSES=2",
+        ),
+        (args.verbose, "-v"),
+        (args.verify.is_some(), "-verify"),
+        (crate::time_trace::settings(args).ok().flatten().is_some(), "a time trace"),
+        (args.pch.image != crate::args::PchImage::Off, "-fkiln-pch-image"),
+        (args.memory_report, "-fkiln-memory-report"),
+        (args.dump_ast.is_some(), "-fdump-ast"),
+        (args.dump_record_layouts, "-fdump-record-layouts"),
+        (args.dump_vtable_layouts, "-fdump-vtable-layouts"),
+        (args.dump_cfg, "-fkiln-dump-cfg"),
+        (args.cfg_stats, "-fkiln-cfg-stats"),
+        (args.bmi_image_census || args.bmi_image_census_all, "-fkiln-bmi-image-census"),
+        (args.constexpr.report.is_some(), "-fconstexpr-report"),
+        (args.constexpr.profiling(), "constexpr profiling"),
+        (args.deps.missing_generated, "-MG"),
+    ];
+    blockers.iter().find(|b| b.0).map(|b| b.1)
 }
 
 /// The header pass's result, from a single pass that ended without an
@@ -980,12 +1150,17 @@ pub(crate) fn stands_in(
     sm: &SourceManager,
     engine: &DiagEngine<'_>,
     deps: Option<crate::pp_cmd::SharedDeps>,
-) -> Option<crate::pp_cmd::JobResult> {
-    let deps = deps?;
+) -> Result<crate::pp_cmd::JobResult, String> {
+    let deps = deps.ok_or("the pass has no dependency list")?;
     let header = std::path::Path::new(single.header);
-    let text = sm.text(sm.loaded_file(header)?);
-    if header_main_differs(text) {
-        return None;
+    let Some(file) = sm.loaded_file(header) else {
+        return Err(format!("the header '{}' is not a loaded file", single.header));
+    };
+    let text = sm.text(file);
+    if let Some(line) = header_main_differs(text) {
+        return Err(format!(
+            "line {line} of the header is read differently in a main file (include_next, system_header, diagnostic pragma, module line, __INCLUDE_LEVEL__ or __BASE_FILE__)"
+        ));
     }
     let unused = [
         kiln_diag::DiagId::sema_unused_variable,
@@ -994,35 +1169,103 @@ pub(crate) fn stands_in(
         kiln_diag::DiagId::sema_unused_variable_template,
     ];
     if unused.iter().any(|&id| engine.is_enabled(id)) && !directives_only(text) {
-        return None;
+        return Err(
+            "an unused-declaration warning is on and the header declares something".to_owned()
+        );
     }
     {
         let list = deps.borrow();
         for name in list.files() {
-            let f = sm.loaded_file(std::path::Path::new(name))?;
+            let Some(f) = sm.loaded_file(std::path::Path::new(name)) else {
+                return Err(format!("dependency '{name}' is not a loaded file"));
+            };
             let t = sm.text(f);
             if t.contains("__INCLUDE_LEVEL__") || t.contains("__BASE_FILE__") {
-                return None;
+                return Err(format!("dependency '{name}' uses __INCLUDE_LEVEL__ or __BASE_FILE__"));
             }
         }
     }
     if !deps.borrow_mut().move_to_front(single.header) {
-        return None;
+        return Err(format!(
+            "the header '{}' is not listed under its own name in the dependencies",
+            single.header
+        ));
     }
-    Some(crate::pp_cmd::JobResult { dep_list: Some(deps), ..Default::default() })
+    Ok(crate::pp_cmd::JobResult { dep_list: Some(deps), ..Default::default() })
 }
 
-/// Whether the header's text has a line a main file treats differently
-/// from an included file (see [`stands_in`]). Conservative: a match in a
-/// comment counts.
-fn header_main_differs(text: &str) -> bool {
-    text.lines().any(|l| {
-        let l = l.trim_start();
+/// The first line (1-based) of the header's text that a main file treats
+/// differently from an included file (see [`stands_in`]). The directive
+/// and module-line rules skip comments (a line of a block comment that
+/// starts with `import` is not a module line), unless the text has a raw
+/// string literal, whose contents the scan cannot tell from code; the
+/// `__INCLUDE_LEVEL__` / `__BASE_FILE__` rule counts any occurrence.
+fn header_main_differs(text: &str) -> Option<usize> {
+    let skip_comments = !text.contains("R\"");
+    let mut in_comment = false;
+    for (i, raw) in text.lines().enumerate() {
+        let code = if skip_comments { code_of(raw, &mut in_comment) } else { raw.to_owned() };
+        let l = code.trim_start();
         let directive = l.starts_with('#')
             && ["include_next", "system_header", "diagnostic"].iter().any(|w| l.contains(w));
         let module = ["module", "import", "export"].iter().any(|w| l.starts_with(w));
-        directive || module || l.contains("__INCLUDE_LEVEL__") || l.contains("__BASE_FILE__")
-    })
+        if directive || module || raw.contains("__INCLUDE_LEVEL__") || raw.contains("__BASE_FILE__")
+        {
+            return Some(i + 1);
+        }
+    }
+    None
+}
+
+/// The line `line` with its comments replaced by a space (`in_comment`:
+/// inside a block comment at its start; updated for the next line).
+/// String and character literals are kept whole, so a `/*` in one does
+/// not start a comment.
+fn code_of(line: &str, in_comment: &mut bool) -> String {
+    let bytes = line.as_bytes();
+    let mut out = String::with_capacity(line.len());
+    let mut at = 0;
+    let mut quote: Option<u8> = None;
+    let mut from = 0;
+    while at < bytes.len() {
+        if *in_comment {
+            if bytes[at] == b'*' && bytes.get(at + 1) == Some(&b'/') {
+                *in_comment = false;
+                out.push(' ');
+                at += 2;
+                from = at;
+            } else {
+                at += 1;
+            }
+            continue;
+        }
+        match (quote, bytes[at]) {
+            (Some(_), b'\\') => at += 2,
+            (Some(q), c) if c == q => {
+                quote = None;
+                at += 1;
+            }
+            (None, c @ (b'"' | b'\'')) => {
+                quote = Some(c);
+                at += 1;
+            }
+            (None, b'/') if bytes.get(at + 1) == Some(&b'*') => {
+                out.push_str(&line[from..at]);
+                *in_comment = true;
+                at += 2;
+            }
+            (None, b'/') if bytes.get(at + 1) == Some(&b'/') => {
+                out.push_str(&line[from..at]);
+                return out;
+            }
+            // Inside a literal, or code.
+            _ => at += 1,
+        }
+    }
+    if !*in_comment {
+        out.push_str(&line[from.min(line.len())..]);
+    }
+    out
 }
 
 /// Whether `text` holds only preprocessing directives, comments and
@@ -1094,6 +1337,7 @@ pub(crate) fn produce(
     a.verbose = false;
     a.pch.header_main = false;
     a.pch.producing = false;
+    a.pch.record_lookups = true;
     a.pch.image = crate::args::PchImage::Off;
     let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let gate = Single { header, written: Arc::clone(&written) };
@@ -1114,10 +1358,16 @@ pub(crate) fn produce(
     };
     let (roots, result) = crate::syntax_cmd::SyntaxJob(job).snapshot(single.then_some(&gate));
     if single && timing() {
-        let how =
-            if result.is_some() { "stands in for the header pass" } else { "header pass needed" };
-        eprintln!("snapshot-timing: producer single pass: {how}");
+        match &result {
+            Ok(_) => {
+                eprintln!("snapshot-timing: producer single pass: stands in for the header pass");
+            }
+            Err(why) => {
+                eprintln!("snapshot-timing: producer single pass: header pass needed ({why})");
+            }
+        }
     }
+    let result = result.ok();
     Produced { section: roots.map(|r| section(args, tc, std, diag_opts, &r)), result }
 }
 
@@ -1398,14 +1648,26 @@ mod tests {
 
     #[test]
     fn lines_a_main_file_treats_differently_are_seen() {
-        assert!(!header_main_differs("#include <vector>\n#pragma once\nint x;\n"));
-        assert!(header_main_differs("#include_next <map>\n"));
-        assert!(header_main_differs("#  pragma GCC system_header\n"));
-        assert!(header_main_differs("#pragma clang diagnostic warning \"-Wunused\"\n"));
-        assert!(header_main_differs("#if __INCLUDE_LEVEL__ == 0\n#endif\n"));
-        assert!(header_main_differs("const char *f = __BASE_FILE__;\n"));
-        assert!(header_main_differs("export module m;\n"));
-        assert!(header_main_differs("import std;\n"));
+        assert_eq!(header_main_differs("#include <vector>\n#pragma once\nint x;\n"), None);
+        assert_eq!(header_main_differs("#include_next <map>\n"), Some(1));
+        assert_eq!(header_main_differs("#  pragma GCC system_header\n"), Some(1));
+        assert_eq!(
+            header_main_differs("int a;\n#pragma clang diagnostic warning \"-Wunused\"\n"),
+            Some(2)
+        );
+        assert_eq!(header_main_differs("#if __INCLUDE_LEVEL__ == 0\n#endif\n"), Some(1));
+        assert_eq!(header_main_differs("const char *f = __BASE_FILE__;\n"), Some(1));
+        assert_eq!(header_main_differs("export module m;\n"), Some(1));
+        assert_eq!(header_main_differs("import std;\n"), Some(1));
+        // WP-1403: comments do not count; a directive after one does; a
+        // `/*` in a string does not open one.
+        assert_eq!(header_main_differs("/* license\nimport this\nexport that */\nint x;\n"), None);
+        assert_eq!(header_main_differs("// import x\n#define A 1 // module\n"), None);
+        assert_eq!(header_main_differs("/* a */ #include_next <x.h>\n"), Some(1));
+        assert_eq!(header_main_differs("const char *s = \"/*\";\nimport m;\n"), Some(2));
+        assert_eq!(header_main_differs("/* __BASE_FILE__ */\n"), Some(1));
+        // A raw string: comments are not skipped.
+        assert_eq!(header_main_differs("auto s = R\"(/*)\";\n/*\nimport m;\n*/\n"), Some(3));
     }
 
     /// The identity of `kiln++ <argv>` for a C++ input.
@@ -1568,6 +1830,6 @@ mod tests {
         assert!(check_header(&foreign).unwrap_err().contains("bad magic"));
         let mut old = MAGIC.to_vec();
         old.extend_from_slice(&0u32.to_le_bytes());
-        assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 1");
+        assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 2");
     }
 }

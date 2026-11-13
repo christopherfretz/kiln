@@ -72,6 +72,7 @@ fn cli_parsing() {
             pch_diff: None,
             pch_require_restore: false,
             pch_synthetic: false,
+            pch_extra_dir: false,
         }
     );
     assert_eq!(parse_args(strings(&["--help"])).unwrap(), None);

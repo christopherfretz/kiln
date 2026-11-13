@@ -2181,13 +2181,15 @@ note says why (`snapshot not written: <why>`), for a header with errors, or a pr
 from the quiescence checks).
 
 **Section layout.** `KILNSNAP` (8 bytes), the section's format version
-(u32, little-endian, now 1; independent of kiln's version), then a
-`kiln_snap` stream with the schema hash of the five roots (u64) and the
-identity (the components below), then the roots' stream. A section
-shorter than 12 bytes, with another magic or another format version is
-refused before anything is decoded (`its section is truncated (no
-header)`, `... is not a kiln snapshot (bad magic)`, `... has format
-version N, expected 1`).
+(u32, little-endian, now 2; independent of kiln's version), then a
+`kiln_snap` stream with the schema hash of the five roots (u64), the
+identity (the components below) and the prefix's lookup log
+(`kiln_pp::LookupLog`, "Lookup-tolerant search path" below), then the
+roots' stream. A section shorter than 12 bytes, with another magic or
+another format version is refused before anything is decoded (`its
+section is truncated (no header)`, `... is not a kiln snapshot (bad
+magic)`, `... has format version N, expected 2`). Version 1 (before
+WP-1403) had no lookup log.
 
 **Identity.** The consumer computes the same components and compares
 them in this order. The first that differs refuses the snapshot, and
@@ -2202,10 +2204,10 @@ spellings that reach the same state agree:
 |---|---|---|
 | (schema hash) | checked first, before the identity is decoded | the layout of every root |
 | kiln build | `kiln <version> <commit>` | the build that wrote it |
-| working directory | the current directory | relative paths: the header, `-I`, `__FILE__` |
+| working directory | the current directory; not compared when the prefix does not depend on it (below) | relative paths: the header, `-I`, `__FILE__` |
 | language | the resolved standard (`LangStd`: C or C++, the standard, GNU or not; a C header's snapshot is refused by a C++ consumer and by another C standard) | `-std=`, `-ansi`, `-x`, the driver mode's default |
 | target | the triple and the resolved target features | `--target`, `-march`, `-mcpu`, `-m<feature>`, `-target-feature` |
-| include search path | the resolved search list, as `-v` prints it | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem`, `CPATH`, `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `--sysroot`, `-isysroot`, `--gcc-toolchain`, `--gcc-install-dir`, the GCC installation found, `-stdlib`, `--llvm-dir`, `-resource-dir`, `-nostdinc*` |
+| include search path | the resolved search list (each directory with its characteristic: `-v`'s text does not tell `-I` from `-isystem`) and the `--embed-dir` list; equal text is the fast path, other text is compared by the prefix's lookups (below) | `-I`, `-iquote`, `-isystem`, `-idirafter`, `-cxx-isystem`, `CPATH`, `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH`, `--sysroot`, `-isysroot`, `--gcc-toolchain`, `--gcc-install-dir`, the GCC installation found, `-stdlib`, `--llvm-dir`, `-resource-dir`, `-nostdinc*` |
 | -D/-U list | `-D`/`-U` in order | the command-line macros |
 | predefined macros | the predefines buffer without the `-D`/`-U`s and the `-include`s | everything that makes a predefined macro (`-O`, `-f[no-]exceptions`, `-fsanitize=`, `-fclang-compat=`, ...) |
 | feature queries | the `__has_feature`/`__has_extension` flags in effect and the compat level | the raw `-f` options those read |
@@ -2222,6 +2224,110 @@ reads the order of its `-W` options only to find the last sign of a
 group). So `-Wshadow -Wunused-variable` and `-Wunused-variable -Wshadow`
 match; `-Wall -Wno-unused-variable` and `-Wno-unused-variable -Wall` do
 not. Every other list stays in order.
+
+**Lookup-tolerant search path (WP-1403).** Build systems give each
+translation unit its own `-I` list: the PCH is built once, and each
+consumer adds its own directory (some put one first). clang does not
+require equal search lists for a PCH, and neither does the snapshot.
+The producer records every header lookup the prefix performed, in the
+lookup log (spec/pp.md "Lookup log"): for each `#include`,
+`#include_next`, `#import`, `__has_include`, `__has_include_next`,
+`#embed` and `__has_embed` evaluated (nothing is looked up in a skipped
+group), its key (the spelling, `"..."` or `<...>`, the includer's
+directory where the form tries it, and for the `_next` forms the
+directory the search continues after) and its result (not found; found
+relative to the includer; or found in search directory `D` with `D`'s
+characteristic, user, system or `extern "C"` system). A lookup of an
+absolute name does not use the search list and is not recorded (its
+file is in the record's file list). Equal keys are recorded once.
+
+The consumer compares the `include search path` component by text
+first: equal (and the working directory equal) is the fast path, and
+nothing more is checked. Otherwise, after the file check, it repeats
+each recorded lookup in order with its own search list (and its own
+`--embed-dir` list, working directory and file system) and compares the
+results: all equal restores; the first that differs refuses the
+snapshot, and `-v` names it: `include search path: lookup of <vector>
+now finds '/w/shadow/vector' (was '/usr/include/c++/14/vector')`, or
+`(was not found)`, `now finds nothing`, `now finds '/w/inc/h' as a system
+header (was a user header)`. An `#include_next` that continues
+after a directory the consumer's list does not have is a difference
+(`... continues after '/d', which is not in the search list`).
+
+*Soundness.* (1) The prefix's tokens depend on the search path only
+through its lookups' results (the predefines and the feature queries,
+which also read options, are components of their own); a result fixes
+the file, the name it is known by, whether it is a system header, and
+where an `#include_next` in it continues. (2) A result is a function of
+its key, the search list and the file system; a key is a function of
+earlier results (the includer's name, the directory it was found in).
+(3) So, by induction over the producer's lookups in order, a consumer
+whose search list gives every recorded key the recorded result performs
+the same lookups with the same results, reads the same files (checked
+by the file check) and reaches the same prefix.
+
+*Repeating a lookup* asks the file system whether a path is a regular
+file, without reading it, and asks only where the producer did not look:
+a directory the producer's lookup searched without finding the name (its
+list from where the lookup started to its result, and the includer's
+directory of a `"..."` lookup found elsewhere) is not asked again, nor is
+the file a lookup found when the record's file list has it (the file
+check has just seen it). This takes the file system to be the
+producer's except for the files the record lists, which is what the
+fast path (equal lists, nothing repeated) takes too; it holds for a
+relative directory only in the producer's working directory, so from
+another one those are asked. A consumer that adds one directory pays
+for that directory's misses, and a directory that misses four times is
+read once as a listing (spec/pp.md "Lookup caching"). The cost is
+measured in docs/status/pch-snapshot-gates.md ("Search path").
+
+*Corner cases* (kiln_driver `tests/pch_snapshot_search.rs`):
+
+| consumer | result |
+|---|---|
+| adds a directory that holds none of the prefix's headers (first, last, between) | restores |
+| reorders directories so that every lookup finds the same file | restores |
+| adds a directory that shadows a prefix header | refused: `now finds '<dir>/<h>'` |
+| adds a directory that makes a failing `__has_include` succeed | refused: `now finds ... (was not found)` |
+| gives a prefix directory as `-isystem` instead of `-I` (or back) | refused: the characteristic is part of the result |
+| `-iquote` | as `-I`, for `"..."` lookups only |
+| `-idirafter` | a system directory searched last |
+| `-isysroot`, `--sysroot`, `--gcc-toolchain`, `-resource-dir` | through the search list they build |
+| `-nostdinc`, `-nostdinc++`, `-nostdlibinc`, `-nobuiltininc` | through the search list they build (they only drop directories) |
+| `-stdlib=` | in `options` too (it also selects sema's library builtins), so it still refuses there |
+| `CPATH`, `C_INCLUDE_PATH`, `CPLUS_INCLUDE_PATH` | kiln does not read them (no effect on either side) |
+| a relative `-I` with the same text in another working directory | the working directory refuses, unless the prefix does not depend on it (below), and then the lookup is repeated in the consumer's directory |
+| `#include_next` in the prefix | continues after the same directory in the consumer's list |
+| `#embed` in the prefix, `--embed-dir` | repeated with the consumer's `--embed-dir` list (left out of `options`: the lookups compare it) |
+
+*Working directory.* The prefix does not depend on the working directory
+when every file the record lists and every result of the lookup log
+(the includer's directory of a relative hit, the search directory of a
+hit, an `#embed` resource's path) is an absolute path: file names,
+`__FILE__`, the restored source manager's lazy reads and the
+diagnostics' paths are then the same from any directory. The consumer
+then leaves the `working directory` component out, and repeats the
+lookups when its directory differs (a relative directory of its own is
+searched from its directory). A prefix that names any file relatively
+(for example a header given as `-include h.h` or built as `h.h`) keeps
+the component.
+
+**Refused snapshots are visible.** When the PCH has a snapshot section
+and the consumer cannot use it for a configuration reason (another kiln
+build, by the format version or the schema hash; an identity component
+that differs; a lookup that changed; a file the record lists that
+changed), the compile warns once, before the job, and replays:
+`warning: precompiled header 'p.pch' was built with a different
+configuration (<why>); the header is processed again
+[-Wpch-snapshot-unused]` (`drv_pch_snapshot_unused`, on by default,
+`-Wno-pch-snapshot-unused` turns it off, `-Werror` promotes it, and
+the compile then stops as for a rejected PCH; the promoting option is
+itself a warning-policy difference, so it names that). The
+cases that replay by design keep their `-v` note and do not warn: a PCH
+without a snapshot section, `-fno-kiln-pch-snapshot` and `=write`,
+`=check`, the consumers that always replay (`-E`/`-M`, module units,
+the `-verify` cases), a section that cannot be read (bad magic,
+truncated, a decode error) and a restore that gives up during the job.
 
 Left out of the identity, because they cannot change the state at the
 end of the prefix:

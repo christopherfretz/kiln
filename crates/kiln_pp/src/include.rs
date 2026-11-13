@@ -121,6 +121,12 @@ pub trait IncludeResolver {
         None
     }
 
+    /// The lookups recorded so far, if this resolver records them
+    /// (WP-1403, spec/pp.md "Lookup log"); the default records none.
+    fn take_lookup_log(&mut self) -> Option<crate::LookupLog> {
+        None
+    }
+
     /// The header name, `<...>` or `"..."`, to suggest in a diagnostic
     /// asking for `file` to be included, given the main file's directory
     /// (clang `suggestPathToFileForDiagnostics`). The default suggests

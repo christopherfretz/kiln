@@ -178,23 +178,25 @@ impl SyntaxJob<'_> {
     pub(crate) fn snapshot(
         self,
         single: Option<&crate::pch_snapshot::Single<'_>>,
-    ) -> (Result<Vec<u8>, String>, Option<JobResult>) {
+    ) -> (Result<crate::pch_snapshot::Roots, String>, crate::pch_snapshot::StandIn) {
         let job = &self.0;
         let sm = SourceManager::new();
         let interner = Arc::new(Interner::new());
         let engine = make_engine(&sm, job.diag_opts, job.stderr.clone(), None);
-        let mut out = (Err("the preprocessor could not be built".to_owned()), None);
+        let none = "the preprocessor could not be built";
+        let mut out: (Result<crate::pch_snapshot::Roots, String>, crate::pch_snapshot::StandIn) =
+            (Err(none.to_owned()), Err(none.to_owned()));
         crate::crash::catching(job.path, job.stdin_text.as_deref(), &sm, || {
             if let Some(inputs) = job.pp_inputs(&sm, &engine) {
                 out = self.snapshot_parse(&sm, &engine, &interner, inputs, single);
             }
         });
         engine.flush();
-        if out.1.is_some()
+        if out.1.is_ok()
             && let Some(single) = single
             && !single.quiet()
         {
-            out.1 = None;
+            out.1 = Err(format!("the pass wrote {} byte(s) of diagnostics", single.written()));
         }
         out
     }
@@ -206,21 +208,27 @@ impl SyntaxJob<'_> {
         interner: &'sm Arc<Interner>,
         inputs: PpInputs,
         single: Option<&crate::pch_snapshot::Single<'_>>,
-    ) -> (Result<Vec<u8>, String>, Option<JobResult>) {
+    ) -> (Result<crate::pch_snapshot::Roots, String>, crate::pch_snapshot::StandIn) {
         let (bytes, (p, deps, target, popts)) =
             match self.snapshot_encode(sm, engine, interner, inputs) {
                 Ok(x) => x,
-                Err(why) => return (Err(why), None),
+                Err(why) => {
+                    let stand = Err(format!("no snapshot: {why}"));
+                    return (Err(why), stand);
+                }
             };
-        let Some(single) = single else { return (Ok(bytes), None) };
+        let Some(single) = single else { return (Ok(bytes), Err("two passes".to_owned())) };
         engine.flush();
         if !single.quiet() {
-            return (Ok(bytes), None);
+            let why = format!("the prefix wrote {} byte(s) of diagnostics", single.written());
+            return (Ok(bytes), Err(why));
         }
         let kiln_parse::ParsedPrefix { sema, mut pp, .. } = p;
-        let Some(main) = pp.main_file() else { return (Ok(bytes), None) };
-        if pp.enter_next_main_file(main).is_err() {
-            return (Ok(bytes), None);
+        let Some(main) = pp.main_file() else {
+            return (Ok(bytes), Err("the prefix has no main file".to_owned()));
+        };
+        if let Err(e) = pp.enter_next_main_file(main) {
+            return (Ok(bytes), Err(format!("the main file cannot be entered again: {e}")));
         }
         let (tu, mut pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
         // As `after_parse` with a dependency list: the preprocessor lexes
@@ -228,8 +236,13 @@ impl SyntaxJob<'_> {
         while !pp.next().is_eof() {}
         drop(pp);
         engine.flush();
-        if engine.error_count() > 0 || !tu.inst_report.is_empty() || !tu.cfg_dump.is_empty() {
-            return (Ok(bytes), None);
+        let after = [
+            (engine.error_count() > 0, "errors"),
+            (!tu.inst_report.is_empty(), "an instantiation report"),
+            (!tu.cfg_dump.is_empty(), "a CFG dump"),
+        ];
+        if let Some((_, what)) = after.iter().find(|a| a.0) {
+            return (Ok(bytes), Err(format!("the end of the translation unit gave {what}")));
         }
         let r = crate::pch_snapshot::stands_in(single, sm, engine, deps);
         (Ok(bytes), r)
@@ -246,7 +259,7 @@ impl SyntaxJob<'_> {
         inputs: PpInputs,
     ) -> Result<
         (
-            Vec<u8>,
+            crate::pch_snapshot::Roots,
             (
                 kiln_parse::ParsedPrefix<'d, 'sm>,
                 Option<crate::pp_cmd::SharedDeps>,
@@ -281,6 +294,12 @@ impl SyntaxJob<'_> {
             return Err(format!("the prefix has {} error(s)", engine.error_count()));
         }
         p.pp.end_main_file()?;
+        // The prefix's header lookups (WP-1403): a consumer with another
+        // search list repeats them. A pass that did not record them gets
+        // no snapshot.
+        let Some(lookups) = p.pp.take_lookup_log() else {
+            return Err("the prefix's header lookups were not recorded".to_owned());
+        };
         let started = std::time::Instant::now();
         let mut w = kiln_snap::Writer::new();
         w.put(sm);
@@ -297,7 +316,7 @@ impl SyntaxJob<'_> {
                 bytes.len()
             );
         }
-        Ok((bytes, (p, deps, target, popts)))
+        Ok((crate::pch_snapshot::Roots { bytes, lookups }, (p, deps, target, popts)))
     }
 
     /// The target of the job's triple, or `None` once the error is

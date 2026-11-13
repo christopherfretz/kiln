@@ -146,6 +146,9 @@ mod product {
         used(&[]);
         used(&["-g", "-MD", "-MF", "t.d", "-ferror-limit=2", "-fcolor-diagnostics"]);
         used(&["-fdump-ast=locs", "-fkiln-pch-validate=content", "-include", "sys/s.h"]);
+        // WP-1403: another search list restores when every lookup finds
+        // what it found (tests/pch_snapshot_search.rs has the rest).
+        used(&["-I", "."]);
         // The `-W` options commute: the policy is the same.
         let swapped = consume(&["-Wunused-variable", "-Wshadow", "-fkiln-pch-snapshot"]);
         assert_eq!(note(&ok(&d, &swapped)), USED);
@@ -162,7 +165,6 @@ mod product {
             "-D/-U list differs at line 1: '<end>' (producer) vs '-DNEW=1' (here)",
         );
         refused(&["-Wextra"], "warning policy differs");
-        refused(&["-I", "."], "include search path differs");
         refused(&["-fmacro-prefix-map=/x=/y"], "prefix maps differ");
         refused(&["-fkiln-source-path-style=gcc"], "source path style differs");
         refused(&["-fconstexpr-steps=12345"], "options differ at line");
@@ -265,7 +267,7 @@ mod product {
                 Box::new(|b: &[u8]| [b"FOREIGN!".as_slice(), &b[8..]].concat()),
             ),
             (
-                "its section has format version 0, expected 1",
+                "its section has format version 0, expected 2",
                 Box::new(|b: &[u8]| [&b[..8], &[0, 0, 0, 0][..], &b[12..]].concat()),
             ),
         ];

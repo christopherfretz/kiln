@@ -171,6 +171,16 @@ impl Test<'_> {
         };
         self.pch_flags =
             vec!["-include-pch".into(), pch.into_os_string(), mode.consumer_flag().into()];
+        // WP-1403: a consumer with one more (empty) `-I` directory than
+        // its producer, so the snapshot's lookups are repeated.
+        let extra =
+            mode == PchDiff::Snapshot && self.cfg.pch_extra_dir && extra_dir_case(&self.case.name);
+        if extra {
+            let d = dir.join("consumer-only");
+            fs::create_dir_all(&d)
+                .map_err(|e| Problem::Broken(format!("cannot create {}: {e}", d.display())))?;
+            self.pch_flags.extend(["-I".into(), d.into_os_string()]);
+        }
         self.pch_src = Some(copy);
         self.pch_consumer =
             PchConsumer { snapshot_timing: mode == PchDiff::Snapshot, iquote: !synthetic };
@@ -200,6 +210,15 @@ impl Test<'_> {
             format!("with -include-pch of the leading #includes ({})", mode.consumer_flag())
         };
         compare(&plain, &with, &producer, &what)?;
+        if extra
+            && path == pch_diff::RESTORED
+            && !pch_diff::lookups_repeated(&with.compile.stderr_str())
+        {
+            return Err(Problem::Fail(
+                "the consumer with an extra -I directory restored without repeating the snapshot's lookups (--pch-diff-extra-dir)"
+                    .to_owned(),
+            ));
+        }
         if let Some(allow) = &self.cfg.pch_require_restore
             && path != pch_diff::RESTORED
             && allow.allows(&path).is_none()
@@ -440,6 +459,13 @@ fn compare(plain: &Build, with: &Build, producer: &str, what: &str) -> Result<()
         )));
     }
     Ok(())
+}
+
+/// Whether `--pch-diff-extra-dir` gives the test `name` the extra
+/// directory: every other test, by its name, so the slice runs both the
+/// tolerant path and the fast path.
+fn extra_dir_case(name: &str) -> bool {
+    name.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b))) % 2 == 0
 }
 
 /// Writes `text` to `path`; a failure is [`Problem::Broken`].

@@ -31,6 +31,7 @@ mod expand;
 mod features;
 mod ifeval;
 mod include;
+mod lookups;
 mod macros;
 mod modules;
 mod name_gate;
@@ -61,6 +62,7 @@ pub use include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, MemoryResolver,
     NoIncludes, ResolvedInclude,
 };
+pub use lookups::{Found, Lookup, LookupForm, LookupLog};
 pub use macros::{AttrMacro, MacroDef, MacroTable};
 pub use modules::{
     DirectiveKind, ImageImport, ModuleDirective, ModuleOptions, StdModuleCache, StdModuleFile,

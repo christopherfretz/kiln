@@ -23,6 +23,7 @@ use kiln_source::{FileId, SourceManager};
 use crate::include::{
     EmbedData, EmbedRequest, IncludeKind, IncludeRequest, IncludeResolver, ResolvedInclude,
 };
+use crate::lookups::{Found, Lookup, LookupForm, LookupLog, Recorder};
 use crate::search::{
     Characteristic, HeaderFs, SearchList, join_path, parent_dir, suggest_include_name,
 };
@@ -70,6 +71,8 @@ pub struct HeaderSearch<F: HeaderFs> {
     /// clang `HeaderFileInfo::DirInfo`: how each header was last found.
     dir_info: HashMap<FileId, Characteristic>,
     observer: Option<SearchObserver>,
+    /// The lookup log being recorded ([`Self::record_lookups`]).
+    recorder: Option<Recorder>,
 }
 
 impl<F: HeaderFs> std::fmt::Debug for HeaderSearch<F> {
@@ -91,6 +94,7 @@ impl<F: HeaderFs> HeaderSearch<F> {
             listings: HashMap::new(),
             dir_info: HashMap::new(),
             observer: None,
+            recorder: None,
         }
     }
 
@@ -105,6 +109,67 @@ impl<F: HeaderFs> HeaderSearch<F> {
     /// Installs an observer for `__has_include` and `#embed` lookups.
     pub fn set_observer(&mut self, o: SearchObserver) {
         self.observer = Some(o);
+    }
+
+    /// Records every lookup from now on in a [`LookupLog`] (WP-1403,
+    /// spec/pp.md "Lookup log"), which
+    /// [`IncludeResolver::take_lookup_log`] hands over.
+    pub fn record_lookups(&mut self) {
+        let mut r = Recorder::default();
+        r.start(&self.list);
+        self.recorder = Some(r);
+    }
+
+    /// Records the lookup `req` and its result `r` (an absolute name is
+    /// not recorded: it does not use the search list).
+    fn record(&mut self, sm: &SourceManager, req: &IncludeRequest, r: Option<&ResolvedInclude>) {
+        let Some(rec) = self.recorder.as_mut() else { return };
+        if req.name.starts_with('/') {
+            return;
+        }
+        let next = matches!(req.kind, IncludeKind::IncludeNext | IncludeKind::HasIncludeNext);
+        let from = if next { req.lookup_from } else { None };
+        let after = from.and_then(|i| self.list.dirs().get(i as usize)).map(|d| rec.dir(&d.path));
+        let includer = (!req.angled && from.is_none())
+            .then(|| rec.dir(req.includer.map_or(".", |f| parent_dir(sm.file_name(f)))));
+        let found = match r {
+            None => Found::Missing,
+            Some(r) => match r.lookup_index.and_then(|i| self.list.dirs().get(i as usize)) {
+                Some(d) => Found::Dir { dir: rec.dir(&d.path), characteristic: d.characteristic },
+                None => Found::Includer,
+            },
+        };
+        let form = if after.is_some() { LookupForm::Next } else { LookupForm::Include };
+        rec.add(Lookup {
+            name: req.name.clone(),
+            form,
+            angled: req.angled,
+            includer,
+            after,
+            found,
+        });
+    }
+
+    /// Records the embed lookup `req` and the path it read, if any.
+    fn record_embed(&mut self, sm: &SourceManager, req: &EmbedRequest, path: Option<&str>) {
+        let Some(rec) = self.recorder.as_mut() else { return };
+        if req.name.starts_with('/') {
+            return;
+        }
+        let includer = if req.angled {
+            None
+        } else {
+            req.includer.map(|f| rec.dir(parent_dir(sm.file_name(f))))
+        };
+        let found = path.map_or(Found::Missing, |p| Found::Embed { path: p.to_owned() });
+        rec.add(Lookup {
+            name: req.name.clone(),
+            form: LookupForm::Embed,
+            angled: req.angled,
+            includer,
+            after: None,
+            found,
+        });
     }
 
     /// The file system it searches.
@@ -205,12 +270,7 @@ impl<F: HeaderFs> HeaderSearch<F> {
         listing.misses += 1;
         if listing.misses == LIST_AFTER_MISSES {
             let dir = if parent.len() > 1 { &parent[..parent.len() - 1] } else { parent };
-            listing.entries = self.fs.list_dir(dir).and_then(|names| {
-                names
-                    .iter()
-                    .all(|n| n.is_ascii())
-                    .then(|| names.into_iter().map(|n| n.to_ascii_lowercase()).collect())
-            });
+            listing.entries = Listing::read(&mut self.fs, dir);
         }
     }
 
@@ -294,24 +354,41 @@ impl<F: HeaderFs> HeaderSearch<F> {
 /// Misses in one directory after which its listing is read: from then on
 /// a name it does not have is a miss without a system call (reading a
 /// directory costs about as much as four failed `open`s).
-const LIST_AFTER_MISSES: u32 = 4;
+pub(crate) const LIST_AFTER_MISSES: u32 = 4;
 
 /// What header search knows of a directory's entries.
 #[derive(Debug, Default)]
-struct Listing {
+pub(crate) struct Listing {
     /// Failed opens in it so far.
-    misses: u32,
+    pub(crate) misses: u32,
     /// Its entry names, ASCII-lowercased, once read: a name not among
     /// them (compared ignoring ASCII case, so that a case-insensitive file
     /// system still finds `Foo.h` as `foo.h`) is not there. `None` until
     /// read, and for good when it could not be read or has a non-ASCII
     /// name (Unicode case folding and normalization are left to `open`).
-    entries: Option<HashSet<String>>,
+    pub(crate) entries: Option<HashSet<String>>,
+}
+
+impl Listing {
+    /// The entries of the directory `dir`, ASCII-lowercased, or `None`
+    /// when it cannot be read or has a non-ASCII name.
+    pub(crate) fn read(fs: &mut dyn HeaderFs, dir: &str) -> Option<HashSet<String>> {
+        Listing::of(fs.list_dir(dir))
+    }
+
+    /// [`read`](Self::read) from the names a listing gave.
+    pub(crate) fn of(names: Option<Vec<String>>) -> Option<HashSet<String>> {
+        let names = names?;
+        names
+            .iter()
+            .all(|n| n.is_ascii())
+            .then(|| names.into_iter().map(|n| n.to_ascii_lowercase()).collect())
+    }
 }
 
 /// Whether `leaf` may be looked up in the listing of `parent`: a plain
 /// ASCII name (not `.`, `..` or empty) in a named directory.
-fn listable(parent: &str, leaf: &str) -> bool {
+pub(crate) fn listable(parent: &str, leaf: &str) -> bool {
     parent.ends_with('/') && !leaf.is_empty() && leaf != "." && leaf != ".." && leaf.is_ascii()
 }
 
@@ -332,7 +409,9 @@ fn resolved(
 
 impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
     fn resolve(&mut self, sm: &SourceManager, req: &IncludeRequest) -> Option<ResolvedInclude> {
-        let r = self.lookup(sm, req)?;
+        let r = self.lookup(sm, req);
+        self.record(sm, req, r.as_ref());
+        let r = r?;
         if matches!(req.kind, IncludeKind::HasInclude | IncludeKind::HasIncludeNext)
             && let Some(o) = self.observer.as_mut()
         {
@@ -344,7 +423,9 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
     }
 
     fn resolve_embed(&mut self, sm: &SourceManager, req: &EmbedRequest) -> Option<EmbedData> {
-        let (path, all) = self.lookup_embed(sm, req)?;
+        let found = self.lookup_embed(sm, req);
+        self.record_embed(sm, req, found.as_ref().map(|f| f.0.as_str()));
+        let (path, all) = found?;
         if let Some(o) = self.observer.as_mut() {
             o(sm, SearchEvent::Embed { path: &path });
         }
@@ -354,6 +435,10 @@ impl<F: HeaderFs> IncludeResolver for HeaderSearch<F> {
             .limit
             .map_or(rest.len(), |l| usize::try_from(l).unwrap_or(usize::MAX).min(rest.len()));
         Some(EmbedData { bytes: rest[..len].to_vec() })
+    }
+
+    fn take_lookup_log(&mut self) -> Option<LookupLog> {
+        self.recorder.as_mut().map(Recorder::take)
     }
 
     fn suggest_include(

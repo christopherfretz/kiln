@@ -97,6 +97,9 @@ drv_pch_older = Error (1) "PCH file '{0}' uses an older format that is no longer
 // WP-1392: `-fkiln-pch-snapshot=check` restores the snapshot and also
 // replays the header, and compares the two.
 drv_pch_snapshot_mismatch = Error (2) "the snapshot of precompiled header '{0}' differs from replaying the header: {1}";
+// WP-1403: a snapshot the consumer cannot use for its configuration
+// (the header is replayed).
+drv_pch_snapshot_unused = Warning [PchSnapshotUnused] (2) "precompiled header '{0}' was built with a different configuration ({1}); the header is processed again";
 drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";

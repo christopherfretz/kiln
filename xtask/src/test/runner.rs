@@ -102,6 +102,9 @@ pub struct Config {
     /// `--pch-diff-synthetic`: a test without `#include`s gets the
     /// synthetic prefix, its PCHs shared by the run.
     pub pch_synthetic: Option<SyntheticPchs>,
+    /// `--pch-diff-extra-dir` (WP-1403): every other snapshot consumer
+    /// also gets `-I` of an empty directory.
+    pub pch_extra_dir: bool,
 }
 
 /// The debug-info sweep's configuration.
