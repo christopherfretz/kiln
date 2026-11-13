@@ -94,6 +94,12 @@ impl Cg<'_> {
     pub(crate) fn emit_vla_var(&mut self, d: DeclId, q: QualType, init: Option<ExprId>) -> R<()> {
         let ast = self.ast;
         let loc = Some(ast.decls.get(d).loc());
+        if self.in_split_coroutine() {
+            // Sema rejects a variable length array written in a coroutine
+            // (`sema_vla_in_coroutine_unsupported`); one an instantiation
+            // produced stops here, not in LLVM's `CoroSplit` (WP-1374).
+            return err(loc, "variable length arrays in a coroutine are not supported");
+        }
         self.emit_vla_bounds(q)?;
         self.ensure_insert_point();
         let mut elem = q;

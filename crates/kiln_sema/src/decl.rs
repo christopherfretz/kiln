@@ -1737,6 +1737,7 @@ impl Sema<'_, '_> {
                                 ) =>
                             {
                                 self.error(self.vla_ext_id(), *loc);
+                                self.note_vla_type(*loc);
                                 self.ast.types.variable_array(ty, *e)
                             }
                             Some(Ok(0)) => {
@@ -1746,7 +1747,10 @@ impl Sema<'_, '_> {
                                 self.ast.types.constant_array(ty, 0, None)
                             }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
-                            Some(Err(size)) => self.ast.types.variable_array(ty, size),
+                            Some(Err(size)) => {
+                                self.note_vla_type(*loc);
+                                self.ast.types.variable_array(ty, size)
+                            }
                             None => fail!(),
                         },
                     };

@@ -33,6 +33,9 @@
 //!   leave the old declarations in a different place.
 //! - [`coro_end_llvm22`] likewise gives an unlowered coroutine's
 //!   `llvm.coro.end` LLVM 22's form (a `-disable-llvm-passes` case).
+//! - [`coro_params_clang19`] drops the `!coro.outside.frame` kiln puts on
+//!   a coroutine's parameter allocas at every compat level (WP-1374,
+//!   clang 22's marking; clang 19 has none and reads freed memory).
 
 use std::fmt::Write as _;
 
@@ -611,6 +614,108 @@ pub fn coro_end_llvm22(ir: &str) -> String {
     out
 }
 
+/// The textual IR `ir` without `!coro.outside.frame` on a coroutine's
+/// parameter allocas, as clang 19 writes it (WP-1374: kiln marks them at
+/// every compat level, as clang 22 does; spec/codegen.md §7o). Only a
+/// coroutine has marked allocas; a parameter alloca is one that an
+/// argument (`%N` of the `define` line) is stored to, directly or through
+/// a `getelementptr` of it (a coerced aggregate). Other marked allocas
+/// (`__coro_gro`) keep it.
+pub fn coro_params_clang19(ir: &str) -> String {
+    const MD: &str = ", !coro.outside.frame !";
+    if !ir.contains(MD) {
+        return ir.to_owned();
+    }
+    let lines: Vec<&str> = ir.split_inclusive('\n').collect();
+    let mut out = String::with_capacity(ir.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if !line.starts_with("define ") {
+            out.push_str(line);
+            i += 1;
+            continue;
+        }
+        let end = lines[i..].iter().position(|l| l.starts_with('}')).map_or(lines.len(), |k| i + k);
+        let args: Vec<&str> = line
+            .split(['(', ',', ')'])
+            .filter_map(|a| a.split_whitespace().last())
+            .filter(|a| a.starts_with('%'))
+            .collect();
+        let body = &lines[i + 1..end];
+        let mut base: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        let mut slots: Vec<&str> = Vec::new();
+        for l in body {
+            let t = l.trim();
+            if let Some((def, rhs)) = t.split_once(" = getelementptr ")
+                && let Some(p) = rhs.split(", ").find_map(|o| o.strip_prefix("ptr "))
+            {
+                let _ = base.insert(def, p);
+            }
+            if let Some(rest) = t.strip_prefix("store ")
+                && let Some((val, dst)) = rest.split_once(", ptr ")
+                && val.split_whitespace().last().is_some_and(|v| args.contains(&v))
+            {
+                let dst = dst.split([',', ' ']).next().unwrap_or("");
+                slots.push(base.get(dst).copied().unwrap_or(dst));
+            }
+        }
+        out.push_str(line);
+        for l in body {
+            let t = l.trim_start();
+            let is_slot = t.split_once(" = alloca ").is_some_and(|(def, _)| slots.contains(&def));
+            match l.find(MD) {
+                Some(at) if is_slot => {
+                    let tail = &l[at + MD.len()..];
+                    let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+                    out.push_str(&l[..at]);
+                    out.push_str(&tail[digits..]);
+                }
+                _ => out.push_str(l),
+            }
+        }
+        i = end;
+    }
+    drop_unused_empty_md(&out)
+}
+
+/// `ir` without its `!K = !{}` node when nothing references `!K` any more,
+/// the later numbered nodes renumbered down by one (as `opt` would print
+/// kiln's text; clang 19 has no such node when it marks nothing).
+fn drop_unused_empty_md(ir: &str) -> String {
+    let Some(k) =
+        ir.lines().find_map(|l| l.strip_prefix('!')?.strip_suffix(" = !{}")?.parse::<u32>().ok())
+    else {
+        return ir.to_owned();
+    };
+    let refs = |ir: &str| md_refs(ir).filter(|&(_, n, _)| n == k).count();
+    if refs(ir) > 1 {
+        return ir.to_owned();
+    }
+    let def = format!("!{k} = !{{}}\n");
+    let ir = ir.replacen(&def, "", 1);
+    let mut out = String::with_capacity(ir.len());
+    let mut last = 0;
+    for (at, n, len) in md_refs(&ir) {
+        if n > k {
+            out.push_str(&ir[last..at]);
+            let _ = write!(out, "!{}", n - 1);
+            last = at + len;
+        }
+    }
+    out.push_str(&ir[last..]);
+    out
+}
+
+/// Each numbered metadata reference `!N` in `ir`: its offset, `N` and length.
+fn md_refs(ir: &str) -> impl Iterator<Item = (usize, u32, usize)> + '_ {
+    ir.match_indices('!').filter_map(move |(at, _)| {
+        let digits = ir[at + 1..].bytes().take_while(u8::is_ascii_digit).count();
+        let n = ir.get(at + 1..at + 1 + digits)?.parse().ok()?;
+        Some((at, n, digits + 1))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -645,6 +750,39 @@ mod tests {
              declare i1 @llvm.coro.is_in_ramp() #2\n"
         );
         assert_eq!(coro_end_llvm22(&up), up);
+    }
+
+    #[test]
+    fn coro_params_clang19_keeps_the_gro() {
+        let ir = "define void @f(i32 noundef %0, i64 %1) #0 {\n  \
+                  %3 = alloca i32, align 4, !coro.outside.frame !6\n  \
+                  %4 = alloca %struct.T, align 8, !coro.outside.frame !6\n  \
+                  %5 = alloca %struct.G, align 1, !coro.outside.frame !6\n  \
+                  store i32 %0, ptr %3, align 4\n  \
+                  %6 = getelementptr inbounds nuw %struct.T, ptr %4, i32 0, i32 0\n  \
+                  store i64 %1, ptr %6, align 8\n  ret void\n}\n";
+        let down = coro_params_clang19(ir);
+        assert_eq!(
+            down,
+            "define void @f(i32 noundef %0, i64 %1) #0 {\n  \
+             %3 = alloca i32, align 4\n  \
+             %4 = alloca %struct.T, align 8\n  \
+             %5 = alloca %struct.G, align 1, !coro.outside.frame !6\n  \
+             store i32 %0, ptr %3, align 4\n  \
+             %6 = getelementptr inbounds nuw %struct.T, ptr %4, i32 0, i32 0\n  \
+             store i64 %1, ptr %6, align 8\n  ret void\n}\n"
+        );
+        assert_eq!(coro_params_clang19(&down), down);
+        let ir = "  %3 = alloca i32, align 4, !coro.outside.frame !6\n  \
+                  store i32 %0, ptr %3, align 4, !tbaa !7\n\
+                  !6 = !{}\n!7 = !{!8, !8, i64 0}\n!8 = !{!\"int\"}\n";
+        let ir = format!("define void @f(i32 %0) {{\n{ir}");
+        assert_eq!(
+            coro_params_clang19(&ir),
+            "define void @f(i32 %0) {\n  %3 = alloca i32, align 4\n  \
+             store i32 %0, ptr %3, align 4, !tbaa !6\n\
+             !6 = !{!7, !7, i64 0}\n!7 = !{!\"int\"}\n"
+        );
     }
 
     #[test]

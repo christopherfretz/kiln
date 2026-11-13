@@ -376,6 +376,8 @@ sema_vla_cxx_extension_gnu = Extension [VlaCxxExtension] (0) "variable length ar
 sema_vla_decl_in_file_scope = Error (0) "variable length array declaration not allowed at file scope";
 sema_vla_extern_linkage = Error (0) "variable length array declaration cannot have 'extern' linkage";
 sema_vla_folded_to_constant = ExtWarn [GnuFoldingConstant] (0) "variable length array folded to constant array as an extension";
+// [dcl.fct.def.coroutine] (clang `err_vla_in_coroutine_unsupported`; WP-1374)
+sema_vla_in_coroutine_unsupported = Error (0) "variable length arrays in a coroutine are not supported";
 sema_vla_no_init = Error (0) "variable-sized object may not be initialized";
 sema_vla_static_storage = Error (0) "variable length array declaration cannot have 'static' storage duration";
 sema_vla_unsupported = Error (0) "variable length arrays are not supported yet";
