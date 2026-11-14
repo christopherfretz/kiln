@@ -83,6 +83,18 @@ a 1.2.1 patch release.
   two copies of its body, each with its own debug subprogram, so at `-g`
   LLVM rejected the debug info and dropped it for the whole object file.
   The second copy could not run, so the generated code was not wrong.
+- A member declaration whose declarator is a parenthesized name after the
+  class name is no longer read as a constructor (WP-1423): `friend S
+  (::g)(int);`, `friend constexpr S (::operator""_s)(const char *,
+  std::size_t);`, `S (N::g)(int);`, `S (S::*pm)(int);` and `S (f)(int);`
+  in class `S` declare `::g`, the literal operator, the member pointer
+  and the member function, as in clang and GCC. Before, such a friend was
+  rejected, so it did not grant access. `S ((int));` is now clang's error.
+- At `-g`, a class-type template argument reached only through a local
+  variable's debug record (`auto w = nf<n::ic<bool, false>{}>();`) no
+  longer makes the backend reject the module with "invalid type for
+  undef constant" (WP-1424): the class's IR type is now defined in the
+  module. libc++'s `std::not_fn<f>` tests failed to compile with `-g`.
 
 ## [1.2.0] - 2026-11-14
 

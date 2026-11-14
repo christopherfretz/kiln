@@ -1552,7 +1552,11 @@ at any level compiles every program kiln compiles without it. A
 construct it cannot describe degrades the way clang's does. A type with
 no `DIType` leaves out the field or node that refers to it. A template
 value argument with no IR constant keeps its parameter with `value:
-null`. A template template argument with no template declaration leaves
+null`. A class-type template value argument's `value:` is clang's
+`emitAbstract` constant of the class's struct type (`%struct.P { i32 1,
+ptr @gi }`; `undef` for an empty class, `{ float } { ... }` for a union),
+and the struct's definition is printed even when the class is only
+constant-evaluated (spec/llvm.md §2.1, WP-1424). A template template argument with no template declaration leaves
 its parameter out. `std::meta::info` is a pointer-sized `DIBasicType` of
 that name. SVE types are clang's `VG`-scaled vector arrays. The
 remaining differences from clang are listed in docs/status/debuginfo.md

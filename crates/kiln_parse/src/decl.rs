@@ -3266,6 +3266,16 @@ impl Parser<'_, '_> {
             self.parse_declarator_id_attrs(d);
         } else if abstract_ok && d.abstract_at.is_none() {
             d.abstract_at = Some(self.loc());
+        } else if d.grouping
+            && d.ctx == DeclaratorContext::Member
+            && !d.invalid
+            && let Some(r) = self.member_ds_range
+        {
+            // A member declarator in grouping parentheses with no
+            // declarator-id (`S((int));`): clang's `ParseDirectDeclarator`
+            // says so here, before the `)` it then expects.
+            self.error_expected_member_name(r);
+            d.invalid = true;
         }
         self.parse_declarator_suffixes(d, abstract_ok);
         self.s.act_on_exit_declarator_scope(entered);

@@ -186,6 +186,13 @@ const DEVIATIONS: &[(&str, &str, &str, Allow)] = &[
     // vector element store, which opt-22 rejects.
     ("vector_ops", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),
     ("vector_ops", "x86_64-unknown-linux-gnu", "22", Allow::OracleInvalid),
+    // WP-1424: a class-type template argument reached only from a
+    // `#dbg_declare` record; LLVM's printer leaves its struct undefined
+    // in clang's text (`use of undefined type named 'struct.n::ic'`).
+    ("debug_template_class_value_local", "aarch64-unknown-linux-gnu", "19", Allow::OracleInvalid),
+    ("debug_template_class_value_local", "x86_64-unknown-linux-gnu", "19", Allow::OracleInvalid),
+    ("debug_template_class_value_local", "aarch64-unknown-linux-gnu", "22", Allow::OracleInvalid),
+    ("debug_template_class_value_local", "x86_64-unknown-linux-gnu", "22", Allow::OracleInvalid),
 ];
 
 /// Flags given to both compilers ahead of a case's own, to pin target

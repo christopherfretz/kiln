@@ -885,7 +885,8 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     declarator in its declaration (clang `!isFirstDeclarator()`)
   - a special declarator-id (`Declarator::special`, `SpecialName`):
     a constructor (the class's own name in member context, or `C::C`
-    out of line, followed by `(`), `~C` (`expected a class name after
+    out of line, followed by `(` that opens a parameter-declaration-clause;
+    see below), `~C` (`expected a class name after
     '~' to name a destructor`), `operator @` (every overloadable
     operator, `new[]`/`delete[]`, `()`, `[]`, `co_await`), and
     `operator conversion-type-id` (its declarator takes only `*`, `&`,
@@ -894,6 +895,24 @@ quadratic in `N` (2,000 levels took 1.4 s in release).
     recognised at namespace and class scope only; a decl-specifier-seq
     with no type is allowed before a constructor, destructor or
     conversion function.
+  - constructor or declarator ([class.ctor.general]/1, [dcl.ambig.res]/1,
+    [dcl.decl.general]/4; clang's `isConstructorDeclarator`, WP-1423):
+    after the class name and `(`, the name is a constructor only when the
+    next tokens are `)`, `...)`, `[[`, a decl-specifier (a keyword, a type
+    trait transform, a type name, a name after a dependent qualifier;
+    `this` before one), or a name that is not a type followed by anything
+    but `(`, `[`, `::` or `)` (`S(X y)`, a parameter of an unknown type).
+    After `S(X)` the name is a constructor before `:` or `try`, and, in
+    its own class, before `;` or `{` (`S (a);` is "unknown type name 'a'",
+    as in clang 19). Everything else is a parenthesized declarator whose
+    declarator-id follows the class name used as the decl-specifier:
+    `friend S (::g)(int);`, `S (N::g)(int);`,
+    `S (::operator""_s)(const char *, std::size_t);`, `S (*p)(int);`,
+    `S (&r)(int);`, `S (S::*pm)(int);`, `S (f)(int);` (a member function
+    `f`) and `S ((int));` (clang's "expected member name or ';' after
+    declaration specifiers"). The decl-specifier check
+    (`at_special_declarator`) and the declarator-id
+    (`names_constructor`) use the same rule (`ctor_params_follow`).
   - an attribute-specifier-seq right after the declarator-id
     (`declarator-id attribute-specifier-seq(opt)`, [dcl.decl.general]/4),
     for every kind of declarator-id: an identifier or qualified-id

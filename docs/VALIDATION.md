@@ -748,7 +748,22 @@ reflection directories take 83 s and the whole corpus 5 min 25 s (5192
 tests: 2539 swept and clean, 2431 not swept by kind, 76 that do not
 compile to an object without `-g`, the rest skipped by `requires`; peak
 RSS 253 MB). Every breakage it finds gets a reduced `-g` run test under
-`tests/conformance` (spec/landed/codegen/WP-910.md).
+`tests/conformance` (spec/landed/codegen/WP-910.md). On 2026-11-14
+(WP-1424, load about 35) the whole corpus took 17 min: 6548 tests, 3091
+swept and clean, 2964 not swept by kind, 243 that do not compile to an
+object without `-g`, the rest skipped by `requires`.
+
+What else checks `-g` IR: every `tests/codegen/debug_*.cpp` case goes
+through `opt-N -passes=verify` in `ir_vs_clang` (kiln's IR always, the
+oracle's unless a deviation lists it as invalid), and a `run` test with
+`//@ args: -g` hands its text to the backend, which parses it. The
+printer defines every identified struct that any printed metadata
+constant names (spec/llvm.md §2.1), so a type reached only through
+debug information cannot be left undefined again; before WP-1424 one
+reached only from a `#dbg_declare` record was (a class-type template
+argument of a local's class, `libcxx/test/std/utilities/function.objects/
+func.not_fn/not_fn.nttp.pass.cpp` with `-g`), and no corpus test had
+that shape.
 
 ## Performance tracking
 
