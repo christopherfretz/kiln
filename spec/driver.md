@@ -187,6 +187,8 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-mbranch-protection=<spec>`, `-msign-return-address=none\|non-leaf\|all` (AArch64; WP-846) | `CodegenOptions::branch_protection` (`kiln_abi::BranchProtection`, clang 19 `CollectARMPACBTIOptions` and `ARM::parseBranchProtection`): the last of the two wins. `<spec>` is `none`, `standard` (`pac-ret+bti+gcs`) or a `+`-separated list of `bti`, `gcs` and `pac-ret` followed by any of `leaf`, `b-key`, `pc`; `-msign-return-address=` signs with the A key only. Every definition, declaration and call site gets clang's `"sign-return-address"`/`"sign-return-address-key"`, `"branch-target-enforcement"`, `"branch-protection-pauth-lr"` and `"guarded-control-stack"` attributes, the module gets the matching `Min` flags (value 1; 2 at `-fclang-compat=22`, as clang 22), and the predefines gain `__ARM_FEATURE_PAC_DEFAULT` (bit 0 A key, 1 B key, 2 leaf, 3 PAuth-LR), `__ARM_FEATURE_BTI_DEFAULT` and `__ARM_FEATURE_GCS_DEFAULT` (spec/pp.md "AArch64 target macros"). `__attribute__((target("branch-protection=<spec>")))` replaces the function's attributes (an invalid spec is `invalid or misplaced branch protection specification '<item>'`; off AArch64 the attribute is ignored with `unsupported 'branch-protection' in the 'target' attribute string`). An invalid spec is `unsupported argument '<item>' to option '-mbranch-protection='`; off AArch64 `-mbranch-protection=` is `unsupported option '-mbranch-protection=' for target '<triple>'` and `-msign-return-address=` is unused. kiln models no `-march=` extension enabling PAuth-LR, so `standard` never adds `pc` (spec/landed/codegen/WP-846.md) |
 | `-fstack-clash-protection`, `-fno-stack-clash-protection`, `-mstack-probe-size=<n>` (WP-1411) | the last of the pair wins: `"probe-stack"="inline-asm"` on every definition (thunks and initialization functions too; clang 19 `StartFunction`), on both targets, as clang 19 does on AArch64 and x86-64. `-mstack-probe-size=<n>` (the last one) adds `"stack-probe-size"="<n>"` to every definition, with or without clash protection, unless `n` is 0 (also an empty value) or the default 4096 (clang `addStackProbeTargetAttributes`). The module gets the matching flags, as clang `CodeGenModule::Release`: `!{i32 4, !"probe-stack", !"inline-asm"}` and `!{i32 8, !"stack-probe-size", i32 <n>}` (the 32 bits read as `i32`), after the branch protection flags; `n` is read as LLVM's `getAsInteger` radix 0 reads it (`0x` hex, `0b` binary, `0o` or a leading `0` octal) into 32 bits, anything else is clang's `-cc1` error `invalid integral value '<v>' in '-mstack-probe-size=<v>'`. Neither is a hod route trigger: hod accepts the attributes on both targets. Tests: `tests/codegen/stack_clash_protection*.cpp`, `crates/kiln_driver/tests/hod_backend.rs` `stack_clash_protection_is_offered`, `hardening.rs` `stack_probe_size_values` |
 | `-mtls-dialect=gnu\|gnu2` (x86-64; WP-1411) | the last one: `gnu2` (TLS descriptors) passes `llc -enable-tlsdesc` (clang's `-cc1 -enable-tlsdesc`, `TargetOptions::EnableTLSDESC`; the IR is unchanged), and with `-flto` the link gets `-mtls-dialect=gnu2` (clang turns it into `-plugin-opt=-enable-tlsdesc`); `gnu`, the default, adds nothing. Another value is clang 19's `unsupported argument '<v>' to option '-mtls-dialect=' for target '<normalized triple>'`; on AArch64 the option itself is `unsupported option '-mtls-dialect=' for target 'aarch64-unknown-linux-gnu'` (clang 19 and 22 accept it only on x86, RISC-V and LoongArch; AArch64's general-dynamic TLS is always descriptors). hod receives `llc`'s arguments: it declines `-enable-tlsdesc` as an unknown option, so a `gnu2` unit takes the LLVM route. Test: `crates/kiln_driver/tests/hardening.rs` `tls_dialect` |
+| `-ftls-model=global-dynamic\|local-dynamic\|initial-exec\|local-exec` (WP-1422) | `CodegenOptions::tls_model`: the model of every thread-local variable without a `tls_model` attribute (the attribute wins), of its guard variable and of `__tls_guard` (clang 19 `setTLSMode` / `GetDefaultTLSModel`), the last value winning; `global-dynamic` is the default and is written without a model, as clang's. An invalid last value (an earlier one is overridden, as clang's) is clang 19's cc1 error `invalid value '<v>' in '-ftls-model=<v>'` (no driver prefix), in clang's order among the other value errors (after `-mfunction-return=`, before `-fzero-call-used-regs=`). hod receives the IR's models as clang's. Test: `crates/kiln_driver/tests/hardening.rs` `tls_model_values` |
+| `-moutline`, `-mno-outline` (WP-1422) | the last one: `llc -enable-machine-outliner` / `-enable-machine-outliner=never` (clang 19 `addMachineOutlinerArgs`; `=never` on x86-64 too). `-moutline` on x86-64 is clang's `'x86_64' does not support '-moutline'; flag ignored [-Woption-ignored]`, once per source input and in every mode, and adds nothing. Neither reaches `llc` at `-O0` (LLVM runs no outliner there, so the object is the same; hod, which takes only `-O0`, never sees the option). With `-flto` the link gets the flag (clang's `-plugin-opt=-enable-machine-outliner[=never]`); a non-LTO link nothing. Without either, LLVM's default (AArch64 outlines `minsize` functions at `-O1` and above). Test: `crates/kiln_driver/tests/hardening.rs` `machine_outliner_flags` |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
@@ -288,17 +290,27 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
   as given. Without debug information (`-g0`, or no `-g`) there is no
   compile unit and nothing is recorded. Test:
   `crates/kiln_driver/tests/driver.rs` `record_command_line_in_the_compile_unit`.
+- **Pubnames** (WP-1422, clang 19 `RenderDebugOptions`): the last of
+  `-ggnu-pubnames`, `-gno-gnu-pubnames`, `-gpubnames` and
+  `-gno-pubnames` decides the compile unit's `nameTableKind`:
+  `-ggnu-pubnames` gives `GNU` (`.debug_gnu_pubnames` /
+  `.debug_gnu_pubtypes`), `-gpubnames` the default (the field omitted:
+  `.debug_names` under DWARF 5), a negative `None`. With none of them,
+  `-gsplit-dwarf` gives `GNU`, as clang's; otherwise `None`, the
+  default. Test: `crates/kiln_driver/tests/driver.rs`
+  `pubnames_name_table_kind`, `debug_flags.rs`
+  `pubnames_name_table_kind`.
 - **Accepted with no effect** (each spells clang's Linux default):
   `-gcolumn-info`, `-gdwarf32`, `-gno-embed-source`, `-gno-codeview`,
-  `-gno-pubnames`, `-gno-gnu-pubnames`, `-ggnu-pubnames-none`,
+  `-ggnu-pubnames-none`,
   `-gno-simple-template-names`, `-gno-strict-dwarf`, `-gno-modules`,
   `-gno-inline-line-tables`, `-gno-template-alias`,
   `-feliminate-unused-debug-types`, `-fno-debug-macro`,
   `-fno-debug-types-section`, `-fno-split-dwarf-inlining`,
   `-f[no-]dwarf-directory-asm`.
 - **Rejected** with `'<flag>' is not supported by kiln` (exit 1):
-  `-gembed-source`, `-gcodeview`, `-gcodeview-ghash`, `-gpubnames`,
-  `-ggnu-pubnames`, `-gsimple-template-names[=simple|mangled]`,
+  `-gembed-source`, `-gcodeview`, `-gcodeview-ghash`,
+  `-gsimple-template-names[=simple|mangled]`,
   `-gstrict-dwarf`,
   `-gdwarf64`, `-gmodules`, `-glldb`, `-gsce`, `-gdbx`,
   `-gtemplate-alias`, `-ginline-line-tables`, `-gsplit-dwarf=single`,

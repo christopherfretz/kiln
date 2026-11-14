@@ -533,3 +533,102 @@ fn tls_dialect() {
     assert!(r.iter().any(|l| l.contains("R_X86_64_GOTPC32_TLSDESC")), "{r:?}");
     assert_eq!(r, relocs(&clang_obj));
 }
+
+/// `-ftls-model=` (WP-1422): the default model of every thread-local
+/// variable without a `tls_model` attribute (the attribute wins), the
+/// last value winning; an invalid value is clang 19's error. The
+/// `thread_local` IR lines, C `__thread` included, are clang 19's.
+#[test]
+fn tls_model_values() {
+    let dir = scratch("tls-model");
+    let cpp = "thread_local int t;\nstatic thread_local int s = 1;\n\
+               __attribute__((tls_model(\"local-exec\"))) thread_local int a;\n\
+               struct D { D(); };\nthread_local D d;\n\
+               int g() { return t + s + a; }\n";
+    std::fs::write(dir.join("t.cpp"), cpp).unwrap();
+    std::fs::write(dir.join("t.c"), "__thread int t;\nint g(void) { return t; }\n").unwrap();
+    for (args, want) in [
+        // clang's cc1 error, with no driver prefix.
+        (&["-ftls-model=bad"][..], "error: invalid value 'bad' in '-ftls-model=bad'\n"),
+        (
+            &["-ftls-model=initial-exec", "-ftls-model="],
+            "error: invalid value '' in '-ftls-model='\n",
+        ),
+    ] {
+        let o = run(&kilnpp(), &dir, &[args, &["-c", "t.cpp", "-o", "e.o"]].concat());
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(1), want), "{args:?}");
+    }
+    let o = run(
+        &kilnpp(),
+        &dir,
+        &["-ftls-model=bad", "-ftls-model=initial-exec", "-fsyntax-only", "t.cpp"],
+    );
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    if !tools(&[]) {
+        return;
+    }
+    let tls = |p: &Path| {
+        let s = std::fs::read_to_string(p).unwrap();
+        s.lines().filter(|l| l.contains("thread_local")).map(str::to_owned).collect::<Vec<_>>()
+    };
+    for model in ["global-dynamic", "local-dynamic", "initial-exec", "local-exec"] {
+        let flag = format!("-ftls-model={model}");
+        for (src, pic) in [("t.cpp", "-fPIC"), ("t.cpp", "-fno-pic"), ("t.c", "-fPIC")] {
+            let lang: &[&str] = if src == "t.c" { &["-x", "c"] } else { &[] };
+            let args =
+                [lang, &["-S", "-emit-llvm", "--target=x86_64-linux-gnu", pic, flag.as_str()]]
+                    .concat();
+            let out = format!("{model}{pic}.{src}.ll");
+            let (k, c) = both(&dir, src, &out, &args);
+            let (k, c) = (tls(&k), tls(&c));
+            assert!(!k.is_empty());
+            assert_eq!(k, c, "{model} {pic} {src}");
+        }
+    }
+}
+
+/// `-moutline` / `-mno-outline` (WP-1422): llc's machine outliner, as
+/// clang 19 passes it (`-enable-machine-outliner[=never]`, `=never` on
+/// x86 too); never at `-O0` (LLVM runs no outliner there); `-moutline` on
+/// x86 is clang's warning, once per source; an LTO link gets the flag.
+#[test]
+fn machine_outliner_flags() {
+    let dir = scratch("outline");
+    std::fs::write(dir.join("t.cpp"), "int g(int a) { return a * 3; }\n").unwrap();
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let x86 = "--target=x86_64-unknown-linux-gnu";
+    let llc = |args: &[&str]| {
+        let o = run(&kilnpp(), &dir, &[args, &["-###", "-c", "t.cpp"]].concat());
+        assert_eq!(o.status.code(), Some(0), "{args:?}: {}", text(&o.stderr));
+        let all = text(&o.stderr);
+        let l = all.lines().find(|l| l.contains("llc")).unwrap_or_default().to_owned();
+        l.split(' ').filter(|a| a.contains("outliner")).map(str::to_owned).collect::<Vec<_>>()
+    };
+    assert_eq!(llc(&[a64, "-O2", "-moutline"]), ["\"-enable-machine-outliner\""]);
+    assert_eq!(llc(&[a64, "-O2", "-mno-outline"]), ["\"-enable-machine-outliner=never\""]);
+    assert_eq!(llc(&[a64, "-O2", "-mno-outline", "-moutline"]), ["\"-enable-machine-outliner\""]);
+    assert_eq!(llc(&[x86, "-O2", "-mno-outline"]), ["\"-enable-machine-outliner=never\""]);
+    assert!(llc(&[x86, "-O2", "-moutline"]).is_empty());
+    assert!(llc(&[a64, "-O2"]).is_empty());
+    assert!(llc(&[a64, "-O0", "-moutline"]).is_empty());
+    let warn =
+        "kiln++: warning: 'x86_64' does not support '-moutline'; flag ignored [-Woption-ignored]\n";
+    for args in [
+        &[x86, "-moutline", "-fsyntax-only", "t.cpp"][..],
+        &[x86, "-moutline", "-E", "t.cpp", "-o", "t.ii"],
+    ] {
+        let o = run(&kilnpp(), &dir, args);
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), warn), "{args:?}");
+    }
+    let o = run(&kilnpp(), &dir, &[x86, "-moutline", "-mno-outline", "-fsyntax-only", "t.cpp"]);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    for (flag, want) in [("-moutline", " \"-moutline\""), ("-mno-outline", " \"-mno-outline\"")] {
+        let o = run(&kilnpp(), &dir, &[a64, "-###", "-O2", "-flto", flag, "t.cpp"]);
+        let all = text(&o.stderr);
+        let link = all.lines().last().unwrap_or_default();
+        assert!(link.contains(" \"-flto\"") && link.contains(want), "{link}");
+        let o = run(&kilnpp(), &dir, &[a64, "-###", "-O2", flag, "t.cpp"]);
+        let all = text(&o.stderr);
+        assert!(!all.lines().last().unwrap_or_default().contains("outline"), "{all}");
+    }
+}

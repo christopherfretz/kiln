@@ -214,6 +214,7 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
         code_model: f.code_model,
+        tls_model: f.tls_model(),
         hardening: f.hardening(x86),
         reflection_mangling: a.reflection_mangling,
         outline_expansions: a
@@ -1541,6 +1542,17 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     if args.codegen.tls_desc(!tc.target.is_aarch64()) {
         cmd.arg("-enable-tlsdesc");
     }
+    // WP-1422: clang 19's `-mllvm -enable-machine-outliner[=never]` for
+    // `-moutline` / `-mno-outline` (`addMachineOutlinerArgs`). LLVM adds
+    // the outliner at optimization levels above `-O0` only (on `AArch64`
+    // by default, for `minsize` functions), so at `-O0` the option changes
+    // nothing and is left out: hod, which declines an `llc` option it does
+    // not know, keeps such a module.
+    if let Some(o) = args.codegen.outliner_arg(tc.target.is_aarch64())
+        && llc_opt_level(args.opt_flag.as_deref()) != "-O0"
+    {
+        cmd.arg(o);
+    }
     // spec/driver.md "Debug information": clang's debugger tuning, and
     // `-gsplit-dwarf`'s `.dwo` file.
     if args.debug.kind() != kiln_codegen::DebugInfoKind::None {
@@ -1628,6 +1640,12 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
     // dialect on as `-plugin-opt=-enable-tlsdesc`.
     if args.codegen.lto.is_some() && args.codegen.tls_desc(!tc.target.is_aarch64()) {
         cmd.arg("-mtls-dialect=gnu2");
+    }
+    // WP-1422: the LTO link's code generator gets the outliner setting
+    // (clang turns it into `-plugin-opt=-enable-machine-outliner[=never]`;
+    // `-moutline` off `AArch64` was already warned about and dropped).
+    if args.codegen.lto.is_some() && args.codegen.outliner_arg(tc.target.is_aarch64()).is_some() {
+        cmd.arg(if args.codegen.outline == Some(true) { "-moutline" } else { "-mno-outline" });
     }
     // WP-941: clang links the profile runtime for coverage.
     for f in args.coverage.link_flags() {

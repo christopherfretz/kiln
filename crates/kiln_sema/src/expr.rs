@@ -7067,6 +7067,13 @@ impl Sema<'_, '_> {
         {
             return self.recover(ty, &[e], loc);
         }
+        // C: a cast of an `_Atomic` structure to its structure type casts
+        // its value (clang's `DefaultLvalueConversion`, `AtomicToNonAtomic`).
+        let e = if self.is_c() && self.ast.types.as_record(ty).is_some() {
+            conv::c_atomic_record_value(self, e)
+        } else {
+            e
+        };
         // [expr.static.cast]/4 with a class target: direct-initialization
         // of a temporary from an object of the same or a derived class
         // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).

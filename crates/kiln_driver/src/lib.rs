@@ -547,6 +547,9 @@ fn driver_warnings(
 ) -> bool {
     let promoted = args.promoted_inputs(inputs);
     let ignored = args.outline_atomics.filter(|_| !tc.target.is_aarch64());
+    // WP-1422: clang 19 `addMachineOutlinerArgs` warns about `-moutline`
+    // (the last of it and `-mno-outline`) off `AArch64`, once per job.
+    let no_outline = args.codegen.outline == Some(true) && !tc.target.is_aarch64();
     // WP-813: XRay's options without `-fxray-instrument` (clang claims
     // them only with it).
     let mut unused_xray =
@@ -581,6 +584,7 @@ fn driver_warnings(
     let image = args.pch.image_ignored.as_deref();
     if promoted.is_empty()
         && ignored.is_none()
+        && !no_outline
         && unused_xray.is_empty()
         && no_3dnow.is_empty()
         && image.is_none()
@@ -603,6 +607,14 @@ fn driver_warnings(
             Diag::new(DiagId::drv_option_ignored, Span::INVALID)
                 .arg(tc.target.arch)
                 .arg(flag)
+                .emit(&e);
+        }
+    }
+    if no_outline {
+        for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+            Diag::new(DiagId::drv_option_ignored, Span::INVALID)
+                .arg(tc.target.arch)
+                .arg("-moutline")
                 .emit(&e);
         }
     }

@@ -302,6 +302,27 @@ pub fn lvalue_to_rvalue(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
     }
 }
 
+/// C17 6.3.2.1p2: the value of a glvalue of type `_Atomic(T)`, `T` a
+/// structure or union, is a `T` (clang's `DefaultLvalueConversion` in C:
+/// `LValueToRValue` to the atomic type, then `AtomicToNonAtomic`). A
+/// record value has no lvalue-to-rvalue conversion of its own in kiln, so
+/// the C copy paths (initialization, assignment, arguments, return) load
+/// an atomic one here first. Identity on anything else.
+pub(crate) fn c_atomic_record_value(s: &mut Sema<'_, '_>, e: ExprId) -> ExprId {
+    let n = *s.ast.exprs.get(e);
+    let t = n.ty();
+    let Some(v) = s.ast.types.as_atomic(t) else {
+        return e;
+    };
+    if !s.is_c() || !n.value_category().is_glvalue() || s.ast.types.as_record(v).is_none() {
+        return e;
+    }
+    let to = strip_cv(s, t);
+    let r = raw_cast(s, CastKind::LValueToRValue, e, to, ValueCategory::PRValue, None);
+    let v = strip_cv(s, v);
+    raw_cast(s, CastKind::AtomicToNonAtomic, r, v, ValueCategory::PRValue, None)
+}
+
 /// The array-to-pointer ([conv.array]) and function-to-pointer
 /// ([conv.func]) conversions, else the lvalue-to-rvalue conversion
 /// (clang's `DefaultFunctionArrayLvalueConversion`).

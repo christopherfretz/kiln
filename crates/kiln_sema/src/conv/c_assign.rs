@@ -462,11 +462,89 @@ fn insertion_fixits(s: &Sema<'_, '_>, e: ExprId, op: &str) -> Vec<kiln_diag::Fix
 /// a pointer target, a pointer source of integer target, and a structure
 /// or union on either side. `None` leaves the conversion to the standard
 /// conversion path (arithmetic conversions).
-#[allow(clippy::too_many_lines, reason = "clang's CheckAssignmentConstraints cases in its order")]
 pub(crate) fn convert(
     s: &mut Sema<'_, '_>,
     e: ExprId,
     to: QualType,
+    ctx: ConvCtx,
+) -> Option<Result<ExprId, ConvError>> {
+    action(ctx)?;
+    let orig = ty(s, e);
+    let e = super::c_atomic_record_value(s, e);
+    let from = ty(s, e);
+    let r = if let Some(v) = s.ast.types.as_atomic(to)
+        && s.ast.types.as_atomic(from).is_none()
+    {
+        convert_to_atomic(s, e, to, v, ctx)
+    } else {
+        convert_shown(s, e, to, to, ctx)
+    };
+    // A loaded atomic structure is diagnosed under its own type (clang
+    // `DiagnoseAssignmentResult` names the operand's type as written).
+    if from != orig
+        && let Some(Err(mut err)) = r
+    {
+        let (loaded, shown) = (s.ty_arg(from), s.ty_arg(orig));
+        for a in &mut err.args {
+            if *a == loaded {
+                a.clone_from(&shown);
+            }
+        }
+        return Some(Err(err));
+    }
+    r
+}
+
+/// An atomic target (C23 6.5.17.2p2, 6.7.11p11: the constraints are those
+/// of simple assignment to the unqualified, non-atomic version of the
+/// type; clang `CheckSingleAssignmentConstraints` /
+/// `CheckAssignmentConstraints` on an `AtomicType` LHS). A null pointer
+/// constant converts by one `NullToPointer` to the atomic pointer type
+/// (clang tests `LHSType.getAtomicUnqualifiedType()` first); any other
+/// operand is checked and converted against the value type `v`, then by
+/// `NonAtomicToAtomic`. The diagnostics name the atomic type. `None`
+/// leaves the arithmetic conversions to the standard conversion path.
+fn convert_to_atomic(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    v: QualType,
+    ctx: ConvCtx,
+) -> Option<Result<ExprId, ConvError>> {
+    let to_u = super::strip_cv(s, to);
+    let v = super::strip_cv(s, v);
+    if s.ast.types.is_pointer(v)
+        && let Some(literal) = null_pointer_constant(s, e)
+    {
+        let x = decay(s, e);
+        let x = cast_to(s, CastKind::NullToPointer, x, to_u, None);
+        if !literal {
+            let at = s.ast.exprs.get(e).loc();
+            let d = s.diag(DiagId::sema_c_non_literal_null, at).arg(s.ty_arg(to));
+            let d = d.range(s.expr_range(e));
+            s.emit(d);
+        }
+        return Some(Ok(x));
+    }
+    let wrap =
+        |s: &mut Sema<'_, '_>, x: ExprId| cast_to(s, CastKind::NonAtomicToAtomic, x, to_u, None);
+    Some(match convert_shown(s, e, v, to, ctx)? {
+        Ok(x) => Ok(wrap(s, x)),
+        Err(mut err) => {
+            err.recovered = err.recovered.map(|x| wrap(s, x));
+            Err(err)
+        }
+    })
+}
+
+/// [`convert`] to `to`, the diagnostics naming `shown` (the atomic type
+/// whose value type `to` is, or `to` itself).
+#[allow(clippy::too_many_lines, reason = "clang's CheckAssignmentConstraints cases in its order")]
+fn convert_shown(
+    s: &mut Sema<'_, '_>,
+    e: ExprId,
+    to: QualType,
+    shown: QualType,
     ctx: ConvCtx,
 ) -> Option<Result<ExprId, ConvError>> {
     let act = action(ctx)?;
@@ -493,7 +571,12 @@ pub(crate) fn convert(
             // the target, C17 6.5.2.5p4), never built in place over it.
             let mut e = e;
             if !s.ast.exprs.get(e).value_category().is_glvalue() {
-                if !matches!(ctx, ConvCtx::Assignment) {
+                // An atomic load ([`super::c_atomic_record_value`]) is
+                // already a copy, stored straight into the target (clang
+                // `EmitAtomicLoad` into the assignment's slot).
+                let loaded = s.ast.exprs.get(e).kind() == ExprKind::ImplicitCastExpr
+                    && s.ast.exprs.cast_kind(e) == CastKind::AtomicToNonAtomic;
+                if !matches!(ctx, ConvCtx::Assignment) || loaded {
                     return Some(Ok(e));
                 }
                 e = s.materialize_temporary(e, from, false);
@@ -509,7 +592,7 @@ pub(crate) fn convert(
         {
             return Some(Ok(x));
         }
-        let err = error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some("0"));
+        let err = error(s, DiagId::sema_c_assign_incompatible, e, from, shown, act, Some("0"));
         return Some(Err(err));
     }
     let from_d = decayed_type(s, e);
@@ -560,11 +643,11 @@ pub(crate) fn convert(
                     (DiagId::sema_c_assign_pointer_sign, Some(sel))
                 }
                 PtrCheck::FunctionPointer => {
-                    let h = fix_hint(s, e, from, to);
+                    let h = fix_hint(s, e, from, shown);
                     (DiagId::sema_c_assign_incompatible_function_pointer, Some(h))
                 }
                 PtrCheck::Incompatible => {
-                    let h = fix_hint(s, e, from, to);
+                    let h = fix_hint(s, e, from, shown);
                     // clang 22 makes `-Wincompatible-pointer-types` an
                     // error by default; clang 19 warns (WP-1285).
                     let id = if s.clang_compat >= 22 {
@@ -575,35 +658,53 @@ pub(crate) fn convert(
                     (id, Some(h))
                 }
             };
-            let mut err = error(s, id, e, from, to, act, hint);
+            let mut err = error(s, id, e, from, shown, act, hint);
             err.recovered = Some(x);
             return Some(Err(err));
         }
         if from_int {
-            let h = fix_hint(s, e, from, to);
+            let h = fix_hint(s, e, from, shown);
             let x = decay(s, e);
             let x = cast_to(s, CastKind::IntegralToPointer, x, to, None);
-            let mut err = error(s, DiagId::sema_c_assign_int_to_pointer, e, from, to, act, Some(h));
+            let mut err =
+                error(s, DiagId::sema_c_assign_int_to_pointer, e, from, shown, act, Some(h));
             err.recovered = Some(x);
             return Some(Err(err));
         }
-        let h = fix_hint(s, e, from, to);
-        return Some(Err(error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some(h))));
+        let h = fix_hint(s, e, from, shown);
+        return Some(Err(error(
+            s,
+            DiagId::sema_c_assign_incompatible,
+            e,
+            from,
+            shown,
+            act,
+            Some(h),
+        )));
     }
     if from_ptr {
         if to_int {
-            let h = fix_hint(s, e, from, to);
+            let h = fix_hint(s, e, from, shown);
             let x = decay(s, e);
             let x = cast_to(s, CastKind::PointerToIntegral, x, to, None);
-            let mut err = error(s, DiagId::sema_c_assign_pointer_to_int, e, from, to, act, Some(h));
+            let mut err =
+                error(s, DiagId::sema_c_assign_pointer_to_int, e, from, shown, act, Some(h));
             err.recovered = Some(x);
             return Some(Err(err));
         }
         if s.ast.types.builtin(to) == Some(BuiltinType::Bool) {
             return None;
         }
-        let h = fix_hint(s, e, from, to);
-        return Some(Err(error(s, DiagId::sema_c_assign_incompatible, e, from, to, act, Some(h))));
+        let h = fix_hint(s, e, from, shown);
+        return Some(Err(error(
+            s,
+            DiagId::sema_c_assign_incompatible,
+            e,
+            from,
+            shown,
+            act,
+            Some(h),
+        )));
     }
     None
 }

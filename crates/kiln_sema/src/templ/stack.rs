@@ -639,8 +639,19 @@ impl Sema<'_, '_> {
             {
                 DiagId::note_template_static_data_member_def_here
             }
+            FrameKind::ConstraintsCheck if self.constrains_plain_function(f) => {
+                DiagId::note_checking_constraints_for_function_here
+            }
             k => k.note(),
         }
+    }
+
+    /// Whether constraints frame `f` checks a function that is not a
+    /// template (a member of a class template specialization): clang
+    /// `PrintInstantiationStack` names a `FunctionDecl` entity by its
+    /// unqualified name in `note_checking_constraints_for_function_here`.
+    fn constrains_plain_function(&self, f: &InstFrame) -> bool {
+        self.kind_of(f.entity).is_function() && self.ast.template_info(f.entity).is_none()
     }
 
     /// Whether the note of variable template specialization frame `f`
@@ -705,6 +716,9 @@ impl Sema<'_, '_> {
                 let name = if name.is_empty() { String::new() } else { format!(" '{name}'") };
                 let with = f.args.map(|l| self.template_args_desc(f.template, l));
                 format!("non-type template parameter{name} {}", with.unwrap_or_default())
+            }
+            FrameKind::ConstraintsCheck if self.constrains_plain_function(f) => {
+                self.decl_name(f.entity)
             }
             FrameKind::ConstraintsCheck | FrameKind::ConceptCheck => match f.args {
                 Some(l) => self.spec_name(f.template, l),

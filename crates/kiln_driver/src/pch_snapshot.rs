@@ -126,8 +126,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// versioning"; the `format_record` test). It is independent of kiln's
 /// version. Version 2 (WP-1403) added the lookup log to the head;
 /// version 3 (WP-1411) is a new diagnostic id (`DiagId`'s schema hash);
-/// version 4 (WP-1417) two more ids and two new `Sema` options.
-pub(crate) const FORMAT_VERSION: u32 = 4;
+/// version 4 (WP-1417) two more ids and two new `Sema` options;
+/// version 5 (WP-1422) a new note id.
+pub(crate) const FORMAT_VERSION: u32 = 5;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -1879,7 +1880,8 @@ mod tests {
         assert!(check_header(&foreign).unwrap_err().contains("bad magic"));
         let mut old = MAGIC.to_vec();
         old.extend_from_slice(&0u32.to_le_bytes());
-        assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 4");
+        let want = format!("its section has format version 0, expected {FORMAT_VERSION}");
+        assert_eq!(check_header(&old).unwrap_err(), want);
     }
 
     /// The checked-in format record (spec/pch.md "Format versioning").

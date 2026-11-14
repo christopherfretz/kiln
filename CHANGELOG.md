@@ -24,15 +24,26 @@ a 1.2.1 patch release.
 - `-mtls-dialect=` follows clang (WP-1411): x86 accepts `gnu` and
   `gnu2`, where `gnu2` enables TLS descriptors, and AArch64 rejects the
   option.
+- `-moutline` and `-mno-outline` turn LLVM's machine outliner on or off
+  at `-O1` and above, as clang 19 (WP-1422); on x86-64 `-moutline` is
+  clang's `-Woption-ignored` warning.
+- `-ftls-model=global-dynamic|local-dynamic|initial-exec|local-exec`
+  sets the TLS model of thread-local variables without a `tls_model`
+  attribute (WP-1422); an invalid value is clang's error.
+- `-ggnu-pubnames`, `-gno-gnu-pubnames`, `-gpubnames` and
+  `-gno-pubnames` set the compile unit's name-table kind as clang 19
+  does, and `-gsplit-dwarf` now gives GNU pubnames as clang's (WP-1422).
+  `-gpubnames` and `-ggnu-pubnames` were rejected before.
 - `-fmerge-all-constants` and `-fno-merge-all-constants` are accepted
   (WP-1417). They have no effect: a constant `const` local array or
   class is still copied to the stack, where clang makes it a static.
 
 ### Changed
 
-- The PCH snapshot format is 4 (WP-1411 and WP-1417; new diagnostics
-  and options changed the schema). Rebuild a PCH built by kiln 1.2.0;
-  until then it is not misread, as [spec/pch.md](spec/pch.md) describes.
+- The PCH snapshot format is 5 (WP-1411, WP-1417 and WP-1422; new
+  diagnostics and options changed the schema). Rebuild a PCH built by
+  kiln 1.2.0; until then it is not misread, as [spec/pch.md](spec/pch.md)
+  describes.
 
 ### Fixed
 
@@ -75,6 +86,19 @@ a 1.2.1 patch release.
   read the function attributes themselves, not the module text
   (WP-1411): a unit that only mentions such a name in a string constant
   or a quoted symbol name is no longer sent to `llc` for it.
+- An explicit instantiation of a class template no longer instantiates
+  members whose trailing `requires` clause the arguments do not satisfy
+  ([temp.explicit]/10; WP-1422), also in nested classes and with
+  `extern template`; the emitted symbols are clang 19's. Found building
+  an open-source linker.
+- C: an `_Atomic` object takes the initializers, assigned values and
+  arguments that its non-atomic type takes (WP-1422): `_Atomic(int *)`
+  from `NULL`, `(void *)0`, `0` or `nullptr`, `_Atomic(struct S)` from a
+  `struct S`, in braced, designated, nested and compound-literal
+  initializers. An `_Atomic` structure is read by its value when it
+  initializes, is assigned, passed, returned or cast. A C structure with
+  an `_Atomic` member has clang's layout, and atomic accesses use the
+  atomic type's alignment. Found building an open-source allocator.
 - An explicit instantiation definition that is the first declaration of
   a namespace block (`namespace n { template class X<int>; }`, typically
   after `extern template class X<int>;`), or the first declaration after

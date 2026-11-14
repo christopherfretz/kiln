@@ -54,6 +54,10 @@ pub struct DebugOptions {
     /// The compile unit's `flags:` (`-grecord-command-line`: the
     /// command line, clang's `-dwarf-debug-flags`; WP-1411).
     pub flags: Option<String>,
+    /// The compile unit's `nameTableKind:` (`None` by default, `GNU` for
+    /// `-ggnu-pubnames`); `None` leaves the field out, LLVM's `Default`
+    /// (`-gpubnames`; WP-1422).
+    pub name_table_kind: Option<&'static str>,
 }
 
 impl Default for DebugOptions {
@@ -69,6 +73,7 @@ impl Default for DebugOptions {
             main_id: None,
             language: "DW_LANG_C_plus_plus_14",
             flags: None,
+            name_table_kind: Some("None"),
         }
     }
 }
@@ -294,7 +299,10 @@ impl<'a> Cg<'a> {
         if let Some(dwo) = &o.split_dwarf_file {
             f = f.s("splitDebugFilename", dwo);
         }
-        f = f.raw("emissionKind", kind).b("splitDebugInlining", false).raw("nameTableKind", "None");
+        f = f.raw("emissionKind", kind).b("splitDebugInlining", false);
+        if let Some(k) = o.name_table_kind {
+            f = f.raw("nameTableKind", k);
+        }
         let cu = self.m.md_specialized("DICompileUnit", true, f.0);
         self.m.add_named_metadata("llvm.dbg.cu", &[cu]);
         let dbg = self.m.md_kind("dbg");

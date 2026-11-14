@@ -9194,6 +9194,28 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   `conv/c_assign.rs`). It is a warning at `-fclang-compat=19` and an
   error by default (still `-Wincompatible-pointer-types`, so
   `-Wno-error=` demotes it) at 22, as each clang release.
+- **Atomic objects** (C23 6.5.17.2p1, 6.7.11p11, C17 6.3.2.1p2;
+  `conv/c_assign.rs`, WP-1422). The initializer of, or the value
+  assigned or passed to, an `_Atomic(T)` meets the simple-assignment
+  constraints of `T` (clang `CheckSingleAssignmentConstraints` on the
+  atomic-unqualified type), in every form: a variable, a braced, union,
+  array-element, designated or nested member, a compound literal,
+  static or automatic, assignment, an argument and `return`. A null
+  pointer constant (`NULL`, `(void *)0`, `0`, C23 `nullptr`) for an
+  `_Atomic(T *)` is one `NullToPointer` to the atomic pointer type;
+  any other operand converts to `T`, then `NonAtomicToAtomic`
+  (`convert_to_atomic`). A violation is the C assignment diagnostic
+  naming the atomic type. An `_Atomic` structure or union operand is
+  used by its value (`conv::c_atomic_record_value`: `LValueToRValue`,
+  then `AtomicToNonAtomic`): it initializes or is assigned, passed,
+  returned or cast to its structure type, and in a braced list it
+  initializes a member of that type whole (clang `CheckSubElementType`);
+  its diagnostics name the atomic type. The C++ class initialization of
+  an atomic class (WP-165) is not used in C. Codegen: a C record has no
+  data size apart from its size (`kiln_abi` `layout/record.rs`), and the
+  initializing store, the implicit zero of an atomic member, and atomic
+  loads, stores and compare-exchange use the atomic type's alignment,
+  as clang's `AtomicInfo`. Tests: `tests/c/conv/atomic-init-*.c`.
 - **Tags in type names** (C17 6.7.2.3). A `struct`, `union` or `enum`
   may be defined in a cast, `sizeof`, `_Alignof`, `_Generic` association,
   `__builtin_offsetof` or a function's result type; C has no base clause,

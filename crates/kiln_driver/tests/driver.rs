@@ -2186,6 +2186,59 @@ fn debug_info_flags_reach_the_ir() {
     assert_eq!(o.stderr, "kiln++: error: '-gcodeview' is not supported by kiln\n");
 }
 
+/// spec/driver.md "Debug information flags" (WP-1422): the compile
+/// unit's `nameTableKind` follows the last of `-ggnu-pubnames`,
+/// `-gno-gnu-pubnames`, `-gpubnames` and `-gno-pubnames`, and
+/// `-gsplit-dwarf` (GNU pubnames unless negated), as clang 19's on Linux;
+/// compared with clang++-19 when it is installed.
+#[test]
+fn pubnames_name_table_kind() {
+    let src = "int f(int a) { return a; }\n";
+    let kind = |line: &str| {
+        line.split(", ")
+            .find_map(|f| f.strip_prefix("nameTableKind: "))
+            .map(|k| k.trim_end_matches(')').to_owned())
+    };
+    let cases: [&[&str]; 9] = [
+        &["-g"],
+        &["-g", "-ggnu-pubnames"],
+        &["-g", "-gno-gnu-pubnames"],
+        &["-g", "-ggnu-pubnames", "-gno-gnu-pubnames"],
+        &["-g", "-gpubnames"],
+        &["-g", "-gpubnames", "-ggnu-pubnames"],
+        &["-g", "-ggnu-pubnames", "-gno-pubnames"],
+        &["-g", "-gsplit-dwarf"],
+        &["-g", "-gsplit-dwarf", "-gno-gnu-pubnames"],
+    ];
+    for flags in cases {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-x", "c++"];
+        args.extend_from_slice(flags);
+        args.push("-");
+        let o = kiln(&args, src);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{flags:?}");
+        let line = o.stdout.lines().find(|l| l.contains("DICompileUnit(")).unwrap().to_owned();
+        let want = match flags.last() {
+            Some(&"-ggnu-pubnames" | &"-gsplit-dwarf") => Some("GNU"),
+            Some(&"-gpubnames") => None,
+            _ => Some("None"),
+        };
+        assert_eq!(kind(&line).as_deref(), want, "{flags:?}: {line}");
+        let Ok(c) = std::process::Command::new("clang++-19")
+            .args(&args[..args.len() - 1])
+            .arg("/dev/null")
+            .output()
+        else {
+            continue;
+        };
+        let theirs = String::from_utf8_lossy(&c.stdout);
+        let cl = theirs.lines().find(|l| l.contains("DICompileUnit(")).unwrap_or_default();
+        assert_eq!(kind(cl).as_deref(), want, "clang++-19 {flags:?}: {cl}");
+    }
+    let o = kiln(&["-g0", "-ggnu-pubnames", "-S", "-emit-llvm", "-o", "-", "-x", "c++", "-"], src);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    assert!(!o.stdout.contains("DICompileUnit"), "{}", o.stdout);
+}
+
 /// spec/driver.md "Debug information flags" (WP-1411): under `-g`,
 /// `-grecord-gcc-switches` / `-grecord-command-line` put the command line
 /// in the compile unit's `flags:` (clang's `-dwarf-debug-flags`: the

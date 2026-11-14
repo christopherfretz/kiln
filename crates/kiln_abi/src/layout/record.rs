@@ -327,8 +327,12 @@ pub(super) fn layout_record(lay: &mut Layouter<'_>, def: DeclId) -> RecordFacts 
     b.size = align_to(b.size, b.align);
 
     let size = b.size / 8;
+    // A C record has no data size apart from its size (clang
+    // `getASTRecordLayout` builds a non-C++ layout with `DataSize` =
+    // `Size`), even with an `_Atomic` member, which makes a C++ class
+    // non-POD.
     let (data_size, nv_size) =
-        if is_pod { (size, size) } else { (b.data_size / 8, nv_size_bits / 8) };
+        if is_pod || ast.lang_c { (size, size) } else { (b.data_size / 8, nv_size_bits / 8) };
     let align = u32::try_from(b.align / 8).unwrap_or(u32::MAX);
     let nv_align = u32::try_from(nv_align_bits / 8).unwrap_or(u32::MAX);
     let unadjusted_align = u32::try_from(b.unadjusted / 8).unwrap_or(u32::MAX);
