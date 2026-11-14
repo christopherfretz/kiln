@@ -219,6 +219,8 @@ pub(crate) struct Cg<'a> {
     pub unnamed_consts: FxHashMap<DeclId, GlobalId>,
     /// [`Cg::no_runtime_object`] of each variable asked about.
     pub no_object: FxHashMap<DeclId, bool>,
+    /// [`Cg::var_align`] of each variable asked about.
+    pub var_aligns: FxHashMap<DeclId, u64>,
     /// Static locals emitted per (function, name), for discriminators.
     pub static_local_names: FxHashMap<(Option<DeclId>, String), u32>,
     /// `void *`, used to classify implicit object parameters.
@@ -411,6 +413,7 @@ impl<'a> Cg<'a> {
             static_locals: FxHashMap::default(),
             unnamed_consts: FxHashMap::default(),
             no_object: FxHashMap::default(),
+            var_aligns: FxHashMap::default(),
             static_local_names: FxHashMap::default(),
             void_ptr,
             sfns: FxHashMap::default(),
@@ -3166,13 +3169,26 @@ impl<'a> Cg<'a> {
     /// The alignment of the storage of variable `d` (clang
     /// `getDeclAlign(D)`): its `alignas`/`aligned` attribute, else
     /// [`Self::global_align`] of its type ([dcl.align]/5).
+    ///
+    /// Cached per variable: `decl_align` lays the type out afresh on every
+    /// call (a new `Layouter`), and a global is named once per use, so a
+    /// function naming a global of a class with N fields M times cost
+    /// O(M * N) (found in downstream code: a generated function with about
+    /// five thousand stores to members of one global, 2.5 s of IR
+    /// emission). Code generation runs after Sema, so the answer cannot
+    /// change.
     pub fn var_align(&mut self, d: DeclId) -> u64 {
+        if let Some(&a) = self.var_aligns.get(&d) {
+            return a;
+        }
         // clang 19 `tryEmitGlobalCompoundLiteral` aligns a file-scope
         // compound literal to its type alignment (no x86-64 large-array
         // bump); clang 22 uses the variable rule.
         let literal_type_align =
             self.opts.clang_compat < 22 && self.ast.decls.compound_literal_of(d).is_some();
-        kiln_abi::layout::decl_align(self.ast, d, self.target, literal_type_align)
+        let a = kiln_abi::layout::decl_align(self.ast, d, self.target, literal_type_align);
+        self.var_aligns.insert(d, a);
+        a
     }
 
     /// The symbol of namespace-scope or static data member variable
