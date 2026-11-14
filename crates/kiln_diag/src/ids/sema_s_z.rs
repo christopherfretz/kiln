@@ -117,6 +117,7 @@ sema_sve_bits_unsupported = Error (1) "{0} is only supported when '-msve-vector-
 sema_sve_fixed_sizeless_ambiguous = Error (2) "cannot combine fixed-length and sizeless SVE vectors in expression, result is ambiguous ({0} and {1})";
 sema_sve_gnu_ambiguous = Error (2) "cannot combine GNU and SVE vectors in expression, result is ambiguous ({0} and {1})";
 sema_sve_invalid_type = Error (2) "{0} attribute applied to non-SVE type {1}";
+sema_sve_type_non_streaming = Error (1) "SVE vector type {0} cannot be used in a non-streaming function";
 sema_sve_type_without_sve = Error (1) "SVE vector type {0} cannot be used in a target without sve";
 sema_switch_bool_condition = Warning [SwitchBool] (0) "switch condition has boolean value";
 sema_switch_def_missing_case = WarningOff [SwitchEnum] (5) "{0:enumeration value {1} not explicitly handled in switch|enumeration values {1} and {2} not explicitly handled in switch|enumeration values {1}, {2}, and {3} not explicitly handled in switch|{4} enumeration values not explicitly handled in switch: {1}, {2}, {3}...}";

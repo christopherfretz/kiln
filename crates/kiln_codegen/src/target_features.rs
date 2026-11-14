@@ -109,14 +109,14 @@ impl Cg<'_> {
         f
     }
 
-    /// The name clang's `checkTargetFeatures` diagnostics print for `d`.
+    /// The name clang's `checkTargetFeatures` diagnostics print for `d`
+    /// (`FunctionDecl::getDeclName`, unqualified): an identifier,
+    /// `operator==`, `operator()` for a lambda's call operator, the class
+    /// name for a constructor, `~S`, `operator int`.
     fn feature_diag_name(&self, d: DeclId) -> String {
-        let ast = self.ast;
-        ast.decls
-            .get(d)
-            .name()
-            .as_ident()
-            .map_or_else(String::new, |n| ast.symbols().as_str(n).to_owned())
+        let mut out = String::new();
+        kiln_ast::dump::AstNames::new(self.ast).write_name(d, &mut out);
+        out
     }
 
     /// clang `checkTargetFeatures` for the call `e` of NEON builtin `b`

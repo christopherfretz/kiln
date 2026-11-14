@@ -51,6 +51,7 @@
 //! | `cf_protection_branch` | configuration | `-fcf-protection=` |
 //! | `sve`, `sve_vector_bits` | configuration | `-march=...+sve`, `-msve-vector-bits=` |
 //! | `aarch64_cpu_valid` | configuration | the driver's CPU table (a `fn`) |
+//! | `target_features`, `target_attr_features` | configuration | `-march`/`-mcpu`/`-target-feature`, the driver's `target("...")` parser (a `fn`) |
 //! | `gnu_lib_builtins` | configuration | `-stdlib=libstdc++` |
 //! | `no_builtin`, `no_builtin_fns`, `freestanding` | configuration | `-fno-builtin[-name]`, `-ffreestanding` |
 //! | `sized_deallocation` | configuration | `-f[no-]sized-deallocation` |
@@ -147,6 +148,7 @@ macro_rules! sema_fields {
             configuration: [target, abi, exceptions, rtti, reflection, coro_aligned_allocation,
                 lax_vector_conversions, range_lifetime_extension, gnu, gnu89_inline, c,
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
+                target_features, target_attr_features,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, sized_deallocation,
                 char8, lib_builtin_name, clang_constexpr_builtin, math_errno, cfg_dump,
                 cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],

@@ -337,6 +337,16 @@ impl Sema<'_, '_> {
                 if !mutable && !self.ast.types.is_reference(cap) {
                     rf = self.ast.types.qualify(rf, Quals::CONST);
                 }
+                // clang `captureInLambda` (`RequireCompleteSizedType`): a
+                // by-copy capture needs a sized type; an SVE vector has
+                // none (a closure member of it would be a sizeless field).
+                if build && self.ast.types.is_sizeless(cap) {
+                    let msg = self
+                        .diag(DiagId::sema_capture_of_sizeless_type, loc)
+                        .arg(self.decl_arg(d))
+                        .arg(self.ty_arg(cap));
+                    self.emit(msg);
+                }
             }
             if build {
                 let c = LambdaCapture {

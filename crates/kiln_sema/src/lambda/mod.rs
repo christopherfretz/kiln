@@ -595,6 +595,11 @@ impl Sema<'_, '_> {
         let defaults = self.lambda_default_args(&params);
         self.create_params(f, &params, &defaults);
         let mut attrs: Vec<AttrId> = specs.attrs.iter().chain(&d.attrs).copied().collect();
+        // clang `ActOnStartOfLambdaDefinition` -> `ProcessDeclAttributes`:
+        // the call operator takes the pushed `#pragma clang attribute`
+        // attributes (a pushed `target` applies to it, not inherited from
+        // the enclosing function).
+        self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {
             // Nothing here an annotation appertains to ([dcl.attr.annotation]/1).
             self.reject_annotations(&mut attrs, Some("a lambda call operator"));
@@ -992,9 +997,15 @@ impl Sema<'_, '_> {
                 let b = self.end_function_body(b, rbrace);
                 if let Some(f) = top.call_op {
                     // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`
-                    // (the deduced return type included).
+                    // (the deduced return type included), run after the
+                    // call operator's context is popped: against the
+                    // enclosing function's features when the lambda is in
+                    // one, else the call operator's.
                     if let Some(fty) = self.ast.decls.get(f).ty() {
-                        self.check_sve_support(fty, self.ast.decls.get(f).loc());
+                        let outer = top.saved_ctx;
+                        let by =
+                            if self.ast.decls.get(outer).kind().is_function() { outer } else { f };
+                        self.check_sve_support_in(Some(by), fty, self.ast.decls.get(f).loc());
                     }
                     let _ = self.builder().set_body(f, b);
                     // [dcl.constexpr]/3 before C++23 (constexpr_body.rs).

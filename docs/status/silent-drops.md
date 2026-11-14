@@ -433,6 +433,9 @@ Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); `-fcf-prote
   clears IBT/SHSTK for the whole linked binary (security hardening). **Fixed in WP-813**: the
   `cf-protection-branch`/`-return` module flags and `nocf_check`, as clang (spec/driver.md).
 - `-fstack-usage`: no `.su` output.
+- `-f[no-]merge-all-constants` (WP-1417): a constant-initialized `const` local aggregate stays an
+  `alloca` copied from a private `__const.*` global; clang makes it an internal static
+  (`@_ZZ1fiE1a`). Less constant data is shared; no behaviour a conforming program sees differs.
 - `-march=native` on x86 (features.rs:428-433): only `-mcpu=native` to llc; no feature list, no
   `__AVX2__`-style macros (possible ABI difference for 256/512-bit vector by-value args — not
   verified).

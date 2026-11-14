@@ -125,7 +125,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 3)
+u32 FORMAT_VERSION                      little-endian (now 4)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -134,7 +134,7 @@ kiln_snap stream: the roots
   anything is decoded: a section shorter than 12 bytes is `its section
   is truncated (no header)`, another magic `its section is not a kiln
   snapshot (bad magic)`, another version `its section has format version
-  N, expected 3` (`src/pch_snapshot.rs` `tests::section_header`;
+  N, expected 4` (`src/pch_snapshot.rs` `tests::section_header`;
   `tests/pch_snapshot.rs` `section_header`, `cross_version`).
 - The head's stream holds `pch_snapshot::SCHEMA_HASH` (u64), the
   identity (a list of `(component, text)` pairs, "Identity" below) and
@@ -151,7 +151,9 @@ kiln_snap stream: the roots
 
 Version 1 (WP-1392) had no lookup log; version 2 (WP-1403) added it;
 version 3 (WP-1411) is a new diagnostic id, which changes `DiagId`'s
-schema hash.
+schema hash; version 4 (WP-1417) is two more diagnostic ids and the
+`Sema` target-feature configuration (`target_features`,
+`target_attr_features`).
 
 ### SCHEMA_HASH and SHAPE_HASH
 

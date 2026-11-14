@@ -29,7 +29,8 @@
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; WP-982: `-f[no-]modules-reduced-bmi`;
-//!    spec/driver.md "Codegen flags");
+//!    WP-1417: `-f[no-]merge-all-constants`; spec/driver.md "Codegen
+//!    flags");
 //! 3. rejected with "'<flag>' is not supported by kiln": `-fshort-enums`
 //!    and `-ffat-lto-objects`, and, only with `-fxray-instrument`, the
 //!    other `-fxray-*` options ([`CodegenFlags::xray_errors`]; without it
@@ -208,6 +209,14 @@ const IGNORED: &[&str] = &[
     // is already as small as a reduced BMI gets (spec/modules.md §11.9).
     "-fmodules-reduced-bmi",
     "-fno-modules-reduced-bmi",
+    // WP-1417: clang's `CodeGenOptions::MergeAllConstants` (default off)
+    // emits a constant-initialized `const` local aggregate as an internal
+    // static `_ZZ...` global instead of a stack copy of a private
+    // `__const.*` one; kiln keeps the stack copy, which is what a
+    // conforming program observes anyway (distinct objects, distinct
+    // addresses). The `-fno-` form is the default.
+    "-fmerge-all-constants",
+    "-fno-merge-all-constants",
 ];
 
 /// Flags rejected (class 3), exactly as written.
@@ -787,6 +796,8 @@ mod tests {
             "-fcf-protection=full",
             "-fno-common",
             "-fstack-usage",
+            "-fmerge-all-constants",
+            "-fno-merge-all-constants",
             "-mtune=native",
             "-ffunction-sections",
             "-fdata-sections",

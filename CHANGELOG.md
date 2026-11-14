@@ -24,15 +24,34 @@ a 1.2.1 patch release.
 - `-mtls-dialect=` follows clang (WP-1411): x86 accepts `gnu` and
   `gnu2`, where `gnu2` enables TLS descriptors, and AArch64 rejects the
   option.
+- `-fmerge-all-constants` and `-fno-merge-all-constants` are accepted
+  (WP-1417). They have no effect: a constant `const` local array or
+  class is still copied to the stack, where clang makes it a static.
 
 ### Changed
 
-- The PCH snapshot format is 3 (WP-1411; a new diagnostic changed the
-  schema). Rebuild a PCH built by kiln 1.2.0; until then it is not
-  misread, as [spec/pch.md](spec/pch.md) describes.
+- The PCH snapshot format is 4 (WP-1411 and WP-1417; new diagnostics
+  and options changed the schema). Rebuild a PCH built by kiln 1.2.0;
+  until then it is not misread, as [spec/pch.md](spec/pch.md) describes.
 
 ### Fixed
 
+- `#pragma clang attribute push(..., apply_to = function)` now reaches
+  friend functions defined or declared in a class (hidden friends of
+  class templates too), lambdas' call operators, explicit
+  specializations of function and variable templates, deduction guides,
+  and structured binding and exception variables, as in clang (WP-1417).
+  A pushed `target("avx2")` over a SIMD wrapper's hidden friend
+  operators no longer fails with an `always_inline` target-feature
+  error, and that error now names an operator or lambda caller
+  (`'operator=='`, `'operator()'`) instead of printing an empty name.
+- On AArch64, a function whose `target` attribute, written or pushed,
+  enables SVE (`sve`, `+sve`, `sve2`, `arch=armv9-a`, an SVE CPU) may use
+  the SVE types in its signature and body without `+sve` on the command
+  line (WP-1417). A lambda inside such a function gets the features of
+  its own call operator, as in clang. With `sme` but no `sve` the error
+  is clang's non-streaming one. A by-copy capture of an SVE variable is
+  now the clang error instead of a crash in code generation.
 - **ABI fix, x86-64 (WP-1418).** x86-64 code built with AVX enabled that
   passes or returns 256-bit (512-bit with AVX-512) vectors by value
   across a boundary with code built by another compiler, or by an older

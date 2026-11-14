@@ -328,6 +328,13 @@ impl Sema<'_, '_> {
             let _ = self.ast.decls.cold.explicit_expr.insert(f, e);
         }
         self.create_params(f, &params, &defaults);
+        // clang `ActOnFunctionDeclarator` -> `ProcessDeclAttributes`: a
+        // guide is a function a pushed `#pragma clang attribute` selects.
+        let mut pushed = Vec::new();
+        self.add_pragma_attrs(f, &mut pushed);
+        if !pushed.is_empty() {
+            let _ = self.builder().attach_attrs(f, &pushed);
+        }
         if let Some(r) = d.trailing_requires {
             self.act_on_trailing_requires(f, r);
         }

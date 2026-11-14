@@ -364,6 +364,19 @@ pub struct Sema<'a, 'sm> {
     /// a `target("...")` attribute (WP-1187; set by the driver from its
     /// CPU table, every name by default).
     pub aarch64_cpu_valid: fn(&str, bool) -> bool,
+    /// The `AArch64` module's target features beyond the base
+    /// `+fp-armv8,+neon,+v8a`, as `+name`/`-name` (the driver's
+    /// `-march`/`-mcpu`/`-target-feature` result, codegen's
+    /// `target_features`): the base a function's `target("...")`
+    /// attribute applies to in the SVE type check ([`Sema::sve_features_of`],
+    /// spec/sema.md "SVE").
+    pub target_features: Vec<String>,
+    /// The features of an `AArch64` `target("...")` string over the
+    /// module's features (`+name`/`-name`, the last naming a feature
+    /// wins) at the clang 22 level or not: the driver's attribute parser,
+    /// the one codegen uses (clang `getFunctionFeatureMap`). The default
+    /// gives none.
+    pub target_attr_features: fn(&str, &[String], bool) -> Vec<String>,
     /// The begin of the nested-name-specifier whose component the parser
     /// is acting on (set around each `act_on_nested_name_*` call): clang
     /// 22's point of instantiation for a class or enumeration completed
@@ -1401,6 +1414,8 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             sve: false,
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
+            target_features: Vec::new(),
+            target_attr_features: |_, _, _| Vec::new(),
             nns_start: None,
             gnu_lib_builtins: false,
             no_builtin: false,

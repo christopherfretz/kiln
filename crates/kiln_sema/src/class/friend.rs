@@ -333,6 +333,10 @@ impl Sema<'_, '_> {
         }
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
+        // clang `ProcessDeclAttributes` -> `AddPragmaAttributes`: a friend
+        // function declaration (a hidden friend included) takes the pushed
+        // `#pragma clang attribute` attributes as any function does.
+        self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {
             if !def {
                 // [dcl.attr.annotation]/1.

@@ -286,7 +286,7 @@ mod product {
                 Box::new(|b: &[u8]| [b"FOREIGN!".as_slice(), &b[8..]].concat()),
             ),
             (
-                "its section has format version 0, expected 3",
+                "its section has format version 0, expected 4",
                 Box::new(|b: &[u8]| [&b[..8], &[0, 0, 0, 0][..], &b[12..]].concat()),
             ),
         ];
@@ -343,14 +343,14 @@ mod product {
         // build whose snapshotted types differ): the configuration
         // differs, so the consumer warns and replays.
         let version: Box<Edit> =
-            Box::new(|b: &[u8]| [&b[..8], &[4, 0, 0, 0][..], &b[12..]].concat());
+            Box::new(|b: &[u8]| [&b[..8], &[5, 0, 0, 0][..], &b[12..]].concat());
         let schema: Box<Edit> = Box::new(|b: &[u8]| {
             let mut b = b.to_vec();
             b[12] ^= 0x5a;
             b
         });
         for (name, edit, why) in [
-            ("v4.pch", version, "its section has format version 4, expected 3"),
+            ("v5.pch", version, "its section has format version 5, expected 4"),
             ("schema.pch", schema, "written by another build (schema hash)"),
         ] {
             std::fs::write(d.join(name), with_section(&pch, edit)).unwrap();

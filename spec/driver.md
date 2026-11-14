@@ -205,7 +205,14 @@ them is valid, only less optimized). Each is a deviation from clang's IR
 for that flag (WP-873 follow-ups). WP-982: `-f[no-]modules-reduced-bmi`
 (clang 18+ writes a smaller BMI; kiln's module file has one form, the
 source capsule, spec/modules.md §11.9). WP-873: `-fno-fat-lto-objects`
-(the default; an LTO object is bitcode only). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
+(the default; an LTO object is bitcode only). WP-1417:
+`-f[no-]merge-all-constants` (clang `CodeGenOptions::MergeAllConstants`,
+default off: with it clang 19 emits a constant-initialized `const` local
+array or class, not an NRVO candidate, as an internal static global named
+like a static local, `@_ZZ1fiE1a`, in place of an `alloca` copied from a
+private `unnamed_addr` `__const.<fn>.<var>` global; kiln always emits the
+copy, so distinct objects keep distinct addresses, as without the flag;
+found building open-source SIMD libraries). An empty `-mtune=` is `unsupported argument '<v>' to option '<opt>'`.
 (`-fexcess-precision=`, `-f[no-]math-errno` and `-ffp-model=` are in
 "Floating-point flags", WP-806.)
 
