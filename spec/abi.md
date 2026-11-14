@@ -888,8 +888,10 @@ sizes.
 ### 8.12 Landed (WP-171): `va_arg` classification
 `call::classify_va_arg(tys, q) -> VaArgInfo { kind, needed_int,
 needed_sse }`: on aarch64 the parameter classification (`aarch64_arg`;
-the register counts are unused), on x86_64 `x86_arg(q, 0)` with its
-GPR/SSE counts (both zero means the argument is read from memory).
+the register counts are unused), on x86_64 `x86_arg(q, 0, named =
+false)` with its GPR/SSE counts (both zero means the argument is read
+from memory; an unnamed vector wider than 128 bits always is, at every
+AVX level, spec/landed/abi/WP-1418.md).
 On aarch64 the register-offset and stack round-up of `va_arg` use the
 unadjusted alignment, as the classification does (WP-583).
 

@@ -166,6 +166,24 @@ Planned as 1.2.0.
 
 ### Fixed
 
+- **ABI fix, x86-64 (WP-1418).** x86-64 code built with AVX enabled that
+  passes or returns 256-bit (512-bit with AVX-512) vectors by value
+  across a boundary with code built by another compiler, or by an older
+  kiln, changes its calling convention to the standard one. With `avx`
+  in the translation unit's features (`-mavx`, `-mavx2`, `-march=haswell`,
+  `-march=x86-64-v3`, ...), a named 256-bit vector argument or return
+  value, and a struct, union or one-element array whose only member is
+  such a vector, now goes in a `ymm` register as the psABI, clang and GCC
+  do, not on the stack and through a hidden return pointer; with
+  `avx512f` the same holds for 512-bit vectors in `zmm` registers.
+  Earlier kiln releases used the no-AVX convention whatever the
+  features. kiln objects built before and after this fix do not mix for
+  such functions: rebuild every object that defines or calls one. As
+  in clang 21 and later, at the default `-fclang-compat=22` a class with
+  a base narrower than itself (`struct D : Empty { __m256 v; }`) stays
+  in memory; at `-fclang-compat=19` it goes in a register, as in clang 19.
+  Vectors passed through `...`, code built without AVX, `ms_abi`
+  functions and AArch64 are unchanged.
 - PCH snapshot hardening (WP-1396, WP-1399). A prefix file that changes
   after the consumer's check (a same-size edit with its time put back,
   or any edit under `-fno-validate-pch`) ends the compile with `fatal
