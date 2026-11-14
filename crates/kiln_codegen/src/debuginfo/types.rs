@@ -1096,9 +1096,16 @@ impl Cg<'_> {
     }
 
     /// The type of member function `m` (clang `getOrCreateMethodType`).
+    /// A member declared through a function typedef (`static Fn f;`) has
+    /// the typedef as its type; clang's `castAs<FunctionProtoType>` sees
+    /// through all top-level sugar to the prototype, keeping the sugar of
+    /// its return and parameter types, and so does this. Stopping at the
+    /// typedef made the declaration's `type:` a `DW_TAG_typedef`, which
+    /// LLVM's verifier rejects ("invalid subroutine type"), dropping the
+    /// module's debug information.
     pub(crate) fn di_method_type(&mut self, m: DeclId) -> Option<MetadataId> {
         let ast = self.ast;
-        let q = self.di_unwrap(ast.decls.get(m).ty()?);
+        let q = self.di_unwrap(ast.types.desugar_top(ast.decls.get(m).ty()?));
         let TypeView::Function(fp) = ast.types.view(q.ty()) else { return self.di_type(q) };
         if self.is_static_method(m) || self.is_explicit_object_method(m) {
             return Some(self.di_fn_type(&fp, None));
@@ -1145,7 +1152,8 @@ impl Cg<'_> {
         if spec(FnSpec::is_deleted) {
             sp.push("DISPFlagDeleted");
         }
-        let fp = match ast.types.view(self.di_unwrap(n.ty()?).ty()) {
+        // Through a function typedef too, as `di_method_type`.
+        let fp = match ast.types.view(self.di_unwrap(ast.types.desugar_top(n.ty()?)).ty()) {
             TypeView::Function(fp) => Some(fp),
             _ => None,
         };
