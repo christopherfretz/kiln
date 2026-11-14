@@ -62,6 +62,9 @@ pub struct DebugFlags {
     pub split_dwarf: bool,
     /// The last `-gz[=<type>]`.
     pub compress: Option<DebugCompression>,
+    /// The last of `-ggnu-pubnames`, `-gno-gnu-pubnames`, `-gpubnames`
+    /// and `-gno-pubnames`, as written (WP-1422; [`Self::name_table_kind`]).
+    pub pubnames: Option<&'static str>,
 }
 
 /// Flags accepted with no effect: each spells clang's default on Linux.
@@ -70,8 +73,6 @@ const DEFAULTS: &[&str] = &[
     "-gdwarf32",
     "-gno-embed-source",
     "-gno-codeview",
-    "-gno-pubnames",
-    "-gno-gnu-pubnames",
     "-gno-simple-template-names",
     "-gno-strict-dwarf",
     "-gno-modules",
@@ -92,8 +93,6 @@ const REJECTED: &[&str] = &[
     "-gembed-source",
     "-gcodeview",
     "-gcodeview-ghash",
-    "-gpubnames",
-    "-ggnu-pubnames",
     "-gsimple-template-names",
     "-gsimple-template-names=simple",
     "-gsimple-template-names=mangled",
@@ -150,6 +149,10 @@ impl DebugFlags {
                 self.record_command_line = false;
             }
             "-gz" => self.compress = Some(DebugCompression::Zlib),
+            "-ggnu-pubnames" => self.pubnames = Some("-ggnu-pubnames"),
+            "-gno-gnu-pubnames" => self.pubnames = Some("-gno-gnu-pubnames"),
+            "-gpubnames" => self.pubnames = Some("-gpubnames"),
+            "-gno-pubnames" => self.pubnames = Some("-gno-pubnames"),
             _ if DEFAULTS.contains(&arg) => {}
             _ if REJECTED.contains(&arg) => {
                 return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
@@ -252,6 +255,21 @@ impl DebugFlags {
         self.parse_default_version().err().into_iter().collect()
     }
 
+    /// The compile unit's `nameTableKind` (WP-1422), as clang 19 on Linux
+    /// (debugger tuning gdb): `RenderDebugOptions` passes `-cc1
+    /// -ggnu-pubnames` under `-gsplit-dwarf` or with the last of the four
+    /// pubnames options, unless that is `-gno-gnu-pubnames` or
+    /// `-gno-pubnames`, and `-gpubnames` when that is the last; `-cc1`
+    /// makes them `GNU` and `Default` (`None` here: the field is left
+    /// out), and anything else `None`.
+    pub fn name_table_kind(&self, split: bool) -> Option<&'static str> {
+        let negated = matches!(self.pubnames, Some("-gno-gnu-pubnames" | "-gno-pubnames"));
+        if !(split || self.pubnames.is_some()) || negated {
+            return Some("None");
+        }
+        if self.pubnames == Some("-gpubnames") { None } else { Some("GNU") }
+    }
+
     /// The codegen options: `cwd` is the compilation directory unless
     /// `-fdebug-compilation-dir=` names one; `split_file` is the `.dwo`
     /// name under `-gsplit-dwarf`.
@@ -267,6 +285,7 @@ impl DebugFlags {
             prefix_map: self.prefix_map.clone(),
             comp_dir: self.comp_dir.clone().unwrap_or_else(|| cwd.to_owned()),
             split_dwarf_file: split_file.filter(|_| on && self.split_dwarf),
+            name_table_kind: self.name_table_kind(on && self.split_dwarf),
             ..DebugOptions::default()
         }
     }
@@ -417,9 +436,31 @@ mod tests {
         );
     }
 
+    /// WP-1422: clang 19 `RenderDebugOptions` and `-cc1`'s
+    /// `DebugNameTable` on Linux.
+    #[test]
+    fn pubnames_name_table_kind() {
+        let k = |a: &[&str]| {
+            let (f, r) = parse(a);
+            assert!(r.iter().all(|x| *x == Some(Ok(()))), "{a:?}");
+            f.options("/w", Some("t.dwo".into())).name_table_kind
+        };
+        assert_eq!(k(&["-g"]), Some("None"));
+        assert_eq!(k(&["-g", "-ggnu-pubnames"]), Some("GNU"));
+        assert_eq!(k(&["-g", "-ggnu-pubnames", "-gno-gnu-pubnames"]), Some("None"));
+        assert_eq!(k(&["-g", "-gno-gnu-pubnames"]), Some("None"));
+        assert_eq!(k(&["-g", "-gpubnames"]), None);
+        assert_eq!(k(&["-g", "-gpubnames", "-ggnu-pubnames"]), Some("GNU"));
+        assert_eq!(k(&["-g", "-ggnu-pubnames", "-gno-pubnames"]), Some("None"));
+        // Split DWARF turns GNU pubnames on unless they are negated.
+        assert_eq!(k(&["-g", "-gsplit-dwarf"]), Some("GNU"));
+        assert_eq!(k(&["-g", "-gsplit-dwarf", "-gno-gnu-pubnames"]), Some("None"));
+        assert_eq!(k(&["-g", "-gsplit-dwarf", "-gpubnames"]), None);
+    }
+
     #[test]
     fn rejected_and_unknown() {
-        for a in ["-gembed-source", "-gcodeview", "-gpubnames", "-ggnu-pubnames", "-fdebug-macro"] {
+        for a in ["-gembed-source", "-gcodeview", "-fdebug-macro"] {
             assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         }
         assert_eq!(

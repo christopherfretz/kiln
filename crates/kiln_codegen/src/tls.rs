@@ -36,13 +36,16 @@ impl Cg<'_> {
     }
 
     /// The TLS model of thread-local variable `d` (clang `setTLSMode`):
-    /// its GNU `tls_model`'s, else general dynamic.
+    /// its GNU `tls_model`'s, else `-ftls-model=`'s (general dynamic by
+    /// default, `GetDefaultLLVMTLSModel`). A guard variable takes its
+    /// variable's; `__tls_guard` the default.
     pub(crate) fn tls_model(&self, d: DeclId) -> TlsModel {
         match self.ast.inherited_attr(d, kiln_ast::attr::AttrKind::TLS_MODEL).map(|n| n.a) {
+            Some(1) => TlsModel::GeneralDynamic,
             Some(2) => TlsModel::LocalDynamic,
             Some(3) => TlsModel::InitialExec,
             Some(4) => TlsModel::LocalExec,
-            _ => TlsModel::GeneralDynamic,
+            _ => self.opts.tls_model,
         }
     }
 
@@ -262,7 +265,7 @@ impl Cg<'_> {
             let gm = self.m.global_mut(guard);
             gm.linkage = Linkage::Internal;
             gm.align = Some(1);
-            gm.thread_local = Some(TlsModel::GeneralDynamic);
+            gm.thread_local = Some(self.opts.tls_model);
             self.emit_guarded_init_fn(f, guard, &ordered)?;
             tls_init = Some(f);
         }

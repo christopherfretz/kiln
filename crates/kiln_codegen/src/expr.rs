@@ -4922,6 +4922,13 @@ impl Cg<'_> {
             let size = self.size_align(lv.q).0;
             return self.emit_null_init(lv.addr, lv.q, size);
         }
+        if lv.bf.is_none()
+            && let Some(vq) = self.ast.types.as_atomic(lv.q)
+        {
+            let z = V::C(self.null_const(vq)?);
+            self.atomic_init_scalar(z, lv);
+            return Ok(());
+        }
         let z = V::C(self.null_const(lv.q)?);
         if lv.bf.is_some() {
             self.store_lv(z, lv, false);

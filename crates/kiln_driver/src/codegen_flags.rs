@@ -20,7 +20,8 @@
 //!    and WP-1032's `-ftrapv`, `-fno-trapv` (a kiln spelling: clang has
 //!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`; WP-1411's
 //!    `-f[no-]stack-clash-protection`, `-mstack-probe-size=` and
-//!    `-mtls-dialect=` (x86-64: `llc -enable-tlsdesc` for `gnu2`)), the
+//!    `-mtls-dialect=` (x86-64: `llc -enable-tlsdesc` for `gnu2`); WP-1422's
+//!    `-ftls-model=` and `-m[no-]outline`), the
 //!    target checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]common`, `-fstack-usage`, the defaults
@@ -165,6 +166,13 @@ pub struct CodegenFlags {
     /// The last `-mtls-dialect=<v>`'s value, checked against the target by
     /// [`Self::tls_dialect_error`] (WP-1411).
     pub tls_dialect: Option<String>,
+    /// The last of `-moutline` (true) / `-mno-outline` (WP-1422): the
+    /// backend's machine outliner ([`Self::outliner_arg`]).
+    pub outline: Option<bool>,
+    /// The last `-ftls-model=<v>` (argument as written, value; WP-1422):
+    /// the default TLS model ([`Self::tls_model`]), its value checked by
+    /// [`Self::invocation_errors`].
+    pub tls_model: Option<(String, String)>,
 }
 
 /// clang's `-fzero-call-used-regs=` values.
@@ -291,6 +299,8 @@ impl CodegenFlags {
             "-finstrument-function-entry-bare" => self.instrument_function_entry_bare = true,
             "-fstack-clash-protection" => self.stack_clash_protection = true,
             "-fno-stack-clash-protection" => self.stack_clash_protection = false,
+            "-moutline" => self.outline = Some(true),
+            "-mno-outline" => self.outline = Some(false),
             "-fxray-instrument" => self.xray_instrument = true,
             "-fno-xray-instrument" => self.xray_instrument = false,
             "-fxray-ignore-loops" => self.xray_ignore_loops = true,
@@ -337,6 +347,9 @@ impl CodegenFlags {
             "-mstack-probe-size" => self.stack_probe_size = Some((arg.to_owned(), v.to_owned())),
             // WP-1411: checked against the target ([`Self::tls_dialect_error`]).
             "-mtls-dialect" => self.tls_dialect = Some(v.to_owned()),
+            // WP-1422: clang's driver passes the last one to `-cc1`, which
+            // checks it ([`Self::invocation_errors`]).
+            "-ftls-model" => self.tls_model = Some((arg.to_owned(), v.to_owned())),
             "-mtune" => {
                 if v.is_empty() {
                     return unsupported();
@@ -575,6 +588,33 @@ impl CodegenFlags {
         }
     }
 
+    /// The default TLS model of thread-local variables (clang 19's
+    /// `-cc1 -ftls-model=`, `CodeGenOpts::DefaultTLSModel`; WP-1422):
+    /// general dynamic without the option or with an invalid value (an
+    /// error, [`Self::invocation_errors`]).
+    pub fn tls_model(&self) -> kiln_codegen::TlsModel {
+        use kiln_codegen::TlsModel;
+        match self.tls_model.as_ref().map(|(_, v)| v.as_str()) {
+            Some("local-dynamic") => TlsModel::LocalDynamic,
+            Some("initial-exec") => TlsModel::InitialExec,
+            Some("local-exec") => TlsModel::LocalExec,
+            _ => TlsModel::GeneralDynamic,
+        }
+    }
+
+    /// The `llc` option of the last `-moutline` / `-mno-outline` (clang 19
+    /// `addMachineOutlinerArgs`, which passes `-mllvm` options to the
+    /// backend; WP-1422): `-enable-machine-outliner` on `AArch64` (off it
+    /// clang warns and ignores `-moutline`, `crate::driver_warnings`),
+    /// `-enable-machine-outliner=never` on every target.
+    pub fn outliner_arg(&self, aarch64: bool) -> Option<&'static str> {
+        match self.outline? {
+            true if aarch64 => Some("-enable-machine-outliner"),
+            true => None,
+            false => Some("-enable-machine-outliner=never"),
+        }
+    }
+
     /// `nocf_check` is kept: `-fcf-protection=branch` or `full` on x86
     /// (clang `CodeGenOpts.CFProtectionBranch`).
     pub fn cf_protection_branch(&self, x86: bool) -> bool {
@@ -583,19 +623,30 @@ impl CodegenFlags {
 
     /// The errors of the `-cc1` command line, in clang 19's
     /// `CompilerInvocation` order: the invalid values of the marshalled
-    /// `-mfunction-return=` and `-fzero-call-used-regs=`, then of
-    /// `-fcf-protection=`, then `ParseCodeGenArgs`'s own
+    /// `-mfunction-return=`, `-ftls-model=` (WP-1422) and
+    /// `-fzero-call-used-regs=`, the integer `-mstack-probe-size=`, then
+    /// the invalid `-fcf-protection=`, then `ParseCodeGenArgs`'s own
     /// `-mfunction-return=` check (off x86 "not allowed with", on x86
     /// the invalid value again). The job then stops with no error count.
     pub fn invocation_errors(&self, x86: bool, triple: &str) -> Vec<TargetError> {
         let invalid = |(a, x): &(String, String)| TargetError::InvalidValue(a.clone(), x.clone());
-        let mut v: Vec<TargetError> = self.invalid_values.iter().flatten().map(invalid).collect();
+        let mut v: Vec<TargetError> = self.invalid_values[0].iter().map(invalid).collect();
+        if let Some(m) = &self.tls_model
+            && !matches!(
+                m.1.as_str(),
+                "global-dynamic" | "local-dynamic" | "initial-exec" | "local-exec"
+            )
+        {
+            v.push(invalid(m));
+        }
+        v.extend(self.invalid_values[1].iter().map(invalid));
         // WP-1411: `-cc1`'s integer `-mstack-probe-size=`.
         if let Some((a, x)) = &self.stack_probe_size
             && self.probe_size().is_none()
         {
             v.push(TargetError::InvalidInt(a.clone(), x.clone()));
         }
+        v.extend(self.invalid_values[2].iter().map(invalid));
         if self.function_return_given && !x86 {
             v.push(TargetError::NotAllowedWith("-mfunction-return=", triple.to_owned()));
         } else if let Some(e) = &self.invalid_values[0] {

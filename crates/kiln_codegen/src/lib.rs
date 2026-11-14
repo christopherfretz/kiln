@@ -87,7 +87,7 @@ pub use debuginfo::{DebugInfoKind, DebugOptions};
 use kiln_abi::Target;
 use kiln_ast::Ast;
 use kiln_llvm::Module;
-pub use kiln_llvm::Visibility;
+pub use kiln_llvm::{TlsModel, Visibility};
 use kiln_oven::Oven;
 use kiln_source::Loc;
 
@@ -121,6 +121,10 @@ pub struct CodegenOptions {
     /// functions' `target-features`; `None` names neither (clang
     /// `getAArch64TargetFeatures`). Ignored on x86-64.
     pub outline_atomics: Option<bool>,
+    /// The TLS model of a thread-local variable without a `tls_model`
+    /// attribute, and of `__tls_guard` (clang `-ftls-model=`,
+    /// `GetDefaultLLVMTLSModel`; general dynamic by default, WP-1422).
+    pub tls_model: TlsModel,
     /// On `AArch64`, the `+name`/`-name` target features beyond the base
     /// set (`-march=armv8-a+sve`, `-target-feature`; one per name), merged
     /// into the functions' `target-features`. On x86-64, the module's
@@ -727,6 +731,7 @@ impl Default for CodegenOptions {
             rtti: true,
             ident: String::new(),
             outline_atomics: Some(true),
+            tls_model: TlsModel::GeneralDynamic,
             target_features: Vec::new(),
             target_cpu_features: Vec::new(),
             target_features_written: Vec::new(),

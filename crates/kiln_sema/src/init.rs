@@ -925,9 +925,21 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// C: an `_Atomic` structure initializes a structure by its value
+    /// (other targets load it in `conv::c_assign`, which names the atomic
+    /// type in its diagnostics).
+    fn c_record_init_operand(&mut self, ty: QualType, e: ExprId) -> ExprId {
+        if self.ast.types.as_record(ty).is_some() {
+            conv::c_atomic_record_value(self, e)
+        } else {
+            e
+        }
+    }
+
     /// A failed conversion is reported at `at`, the entity's location
     /// (clang's `InitializationKind::getLocation`).
     fn init_from_expr(&mut self, ty: QualType, e: ExprId, ctx: ConvCtx, at: Loc) -> ExprId {
+        let e = self.c_record_init_operand(ty, e);
         let ety = self.ast.exprs.get(e).ty();
         if self.is_error_type(ety) {
             return e;
@@ -1053,6 +1065,11 @@ impl Sema<'_, '_> {
         ctx: ConvCtx,
         at: Loc,
     ) -> Option<ExprId> {
+        // C: simple-assignment constraints on the value type
+        // (`conv::c_assign`), no class initialization.
+        if self.is_c() {
+            return None;
+        }
         let v = self.ast.types.as_atomic(ty)?;
         let vr = self.ast.types.as_record(v)?;
         let er = self.ast.types.as_record(self.ety(e))?;
@@ -2313,7 +2330,15 @@ impl Sema<'_, '_> {
             }
             InitValue::Expr(e) => {
                 let e = *e;
-                let ety = self.ast.exprs.get(e).ty();
+                let mut ety = self.ast.exprs.get(e).ty();
+                // C: an `_Atomic` structure initializes the member by its
+                // value (clang `CheckSubElementType`'s lvalue conversion).
+                if self.is_c()
+                    && let Some(v) = self.ast.types.as_atomic(ety)
+                    && self.ast.types.as_record(v).is_some()
+                {
+                    ety = v;
+                }
                 let elide = if self.ast.types.is_array(ty) {
                     let elem = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
                     self.string_lit_of(e)

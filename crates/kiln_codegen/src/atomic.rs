@@ -650,6 +650,16 @@ impl Cg<'_> {
         self.atomic_libcall(name, vec![n, lv.addr.v, tmp, o], &params, false);
     }
 
+    /// The alignment of an access to the `_Atomic` lvalue `lv` through
+    /// clang's `AtomicInfo` (loads, stores, compare-exchange): the atomic
+    /// type's (`getAtomicAddress` uses `AtomicAlign`, so a member at an
+    /// offset the enclosing object aligns better is still accessed with
+    /// its type's alignment), unless the lvalue is less aligned than that.
+    fn atomic_lv_align(&mut self, lv: &LV) -> u64 {
+        let a = self.size_align(lv.q).1;
+        if lv.addr.align >= a { a } else { lv.addr.align }
+    }
+
     /// clang `EmitAtomicLoad` of the `_Atomic` lvalue `lv` (`seq_cst`).
     pub(crate) fn atomic_load_lv(&mut self, lv: LV, vq: QualType) -> V {
         if self.atomic_lv_libcall(lv.q) {
@@ -662,7 +672,7 @@ impl Cg<'_> {
         let size = self.size_align(lv.q).0;
         let ty = self.mty(vq);
         let at = self.atomic_access_ty(ty, size, false);
-        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
         // `EmitAtomicLoadOp` decorates the load with the lvalue's tag.
         self.tbaa_mark(v, lv.q, lv.tb);
@@ -692,7 +702,7 @@ impl Cg<'_> {
         let vol = self.is_volatile(lv.q);
         let size = self.size_align(lv.q).0;
         let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
-        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let v = self.f.fir.push(Op::Load { ty: at, ptr: lv.addr.v, mem }, at);
         self.tbaa_mark(v, lv.q, lv.tb);
         let slot_vol = std::mem::take(&mut self.f.slot_volatile);
@@ -710,7 +720,7 @@ impl Cg<'_> {
         let size = self.size_align(lv.q).0;
         let at = self.m.types.int(u32::try_from(size * 8).unwrap_or(8));
         let v = self.load(at, src.v, src.align, false);
-        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let st = self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
         self.tbaa_mark(st, lv.q, lv.tb);
     }
@@ -776,16 +786,20 @@ impl Cg<'_> {
         let asize = self.size_align(lv.q).0;
         let padded = self.size_align(vq).0 != asize;
         let vty = self.mty(vq);
+        // `AtomicInfo::projectValue` / the padding memset go through
+        // `getAtomicAddress` (the atomic type's alignment).
+        let align = self.atomic_lv_align(&lv);
+        let whole = Addr { align, ..lv.addr };
         let project = |cg: &mut Self| {
             let v = if padded { cg.struct_gep(lv.addr.ty, lv.addr.v, 0) } else { lv.addr.v };
-            Addr { v, ty: vty, align: lv.addr.align }
+            Addr { v, ty: vty, align }
         };
         if self.is_aggregate(vq) {
             if ast.types.as_atomic(ast.exprs.get(init).ty()).is_some() {
                 return self.emit_agg(init, lv.addr, false);
             }
             if padded {
-                self.memset(lv.addr, 0, asize, false);
+                self.memset(whole, 0, asize, false);
             }
             let dest = project(self);
             return self.emit_agg(init, dest, padded);
@@ -794,14 +808,29 @@ impl Cg<'_> {
             Some(c) => V::C(self.const_scalar_value(c, vq)?),
             None => self.emit_scalar(init)?,
         };
+        self.atomic_init_scalar(v, lv);
+        Ok(())
+    }
+
+    /// The initializing store of scalar `v` to the `_Atomic` object `lv`
+    /// (clang `AtomicInfo::emitCopyIntoMemory`): its padding zeroed, the
+    /// value stored at the atomic type's alignment. Also the zero of an
+    /// implicitly initialized atomic member (`EmitNullInitializationToLValue`
+    /// through `EmitStoreThroughLValue`'s `EmitAtomicStore(isInit)`).
+    pub(crate) fn atomic_init_scalar(&mut self, v: V, lv: LV) {
+        let vq = self.ast.types.as_atomic(lv.q).unwrap_or(lv.q);
+        let asize = self.size_align(lv.q).0;
+        let padded = self.size_align(vq).0 != asize;
+        let vty = self.mty(vq);
+        let align = self.atomic_lv_align(&lv);
         if padded || self.mem_bits(lv.q) != asize * 8 {
-            self.memset(lv.addr, 0, asize, false);
+            self.memset(Addr { align, ..lv.addr }, 0, asize, false);
         }
-        let dest = project(self);
+        let v_addr = if padded { self.struct_gep(lv.addr.ty, lv.addr.v, 0) } else { lv.addr.v };
+        let dest = Addr { v: v_addr, ty: vty, align };
         // `emitCopyIntoMemory` stores through the `_Atomic` lvalue's tag.
         let st = self.store_scalar_tb(v, dest, vq, Tb::None);
         self.tbaa_mark(st, lv.q, lv.tb);
-        Ok(())
     }
 
     /// clang `AtomicInfo::materializeRValue`: `v` in a temporary of the
@@ -842,7 +871,7 @@ impl Cg<'_> {
             self.store(v, t.v, t.align, false);
             self.load(at, t.v, t.align, false)
         };
-        let mem = amem(lv.addr.align, vol, Ordering::SeqCst, SyncScope::SYSTEM);
+        let mem = amem(self.atomic_lv_align(&lv), vol, Ordering::SeqCst, SyncScope::SYSTEM);
         let st = self.f.fir.push(Op::Store { val: v, ptr: lv.addr.v, mem }, LTy::VOID);
         // `EmitAtomicStore` decorates the store with the lvalue's tag.
         self.tbaa_mark(st, lv.q, lv.tb);
@@ -888,7 +917,7 @@ impl Cg<'_> {
             (self.cast(CastOp::BitCast, exp, at), self.cast(CastOp::BitCast, des, at))
         };
         let opts = CmpXchgOpts {
-            align: lv.addr.align,
+            align: self.atomic_lv_align(&lv),
             success: Ordering::SeqCst,
             failure: Ordering::SeqCst,
             weak: false,

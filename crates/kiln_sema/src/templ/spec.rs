@@ -1223,6 +1223,20 @@ impl Sema<'_, '_> {
                 | DeclKind::CXXConversion
                     if !declaration =>
                 {
+                    // [temp.explicit]/10: only a member whose constraints
+                    // are satisfied by the template arguments is
+                    // instantiated; an unsatisfied one is skipped silently,
+                    // and one whose check is ill-formed is skipped after
+                    // that diagnostic (clang `InstantiateClassMembers`:
+                    // `CheckFunctionConstraints(..) || !IsSatisfied`, with
+                    // no usage location: a note names the member's).
+                    if self.ast.templates.trailing_requires.get(m).is_some()
+                        && self
+                            .check_function_constraints(m, n.loc())
+                            .is_some_and(|s| !self.sat_ok(s))
+                    {
+                        continue;
+                    }
                     self.instantiate_function_definition(m, loc);
                 }
                 DeclKind::Var if !declaration => {

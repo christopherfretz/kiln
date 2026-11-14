@@ -783,6 +783,20 @@ class-head-name (or variable declarator-id) is a template-id:
   An explicit instantiation declaration alone therefore needs another
   translation unit's explicit instantiation definition to link, as with
   clang.
+- Constrained members ([temp.explicit]/10, WP-1422): an explicit
+  instantiation of a class (definition or `extern template`) instantiates
+  only the members whose trailing *requires-clause*, if any, is satisfied
+  by the class's arguments; the others are skipped, with no diagnostic
+  and no symbol, also in nested member classes (clang
+  `InstantiateClassMembers`: `CheckFunctionConstraints` then
+  `IsSatisfied`). A satisfaction check that is ill-formed (an atomic
+  constraint not of type `bool`) is its error, with the note "while
+  checking constraint satisfaction for function 'f' required here" at
+  the member, and the member is skipped. An explicit instantiation of an
+  unsatisfied member by itself (`template void A<int>::f();`) is the
+  error of [temp.explicit]/4 with the unsatisfied-constraint notes, as
+  clang's. The emitted `weak_odr` set is clang 19's. Tests:
+  `tests/conformance/temp.explicit/constraints-*.cpp`.
 
 **One declarator.** [temp.pre]/5: the declaration of a template head,
 `template<>` or an explicit instantiation has at most one declarator.
