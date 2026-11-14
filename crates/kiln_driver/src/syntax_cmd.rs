@@ -118,7 +118,7 @@ impl SyntaxJob<'_> {
         result
     }
 
-    /// EXPERIMENTAL (WP-1383): the job with the `-include-pch` file's
+    /// WP-1383: the job with the `-include-pch` file's
     /// snapshot restored in place of a replay of its header
     /// (`crate::pch_snapshot`); `Err` (nothing reported) when it cannot
     /// be restored, and the caller replays.
@@ -165,7 +165,7 @@ impl SyntaxJob<'_> {
         Ok(result)
     }
 
-    /// EXPERIMENTAL (WP-1383): the producer's snapshot pass. The job's
+    /// WP-1383: the producer's snapshot pass. The job's
     /// input is an empty main file whose `-include`s are the producer's
     /// and the header; it is parsed to its end without the
     /// end-of-translation-unit work, closed, and every root written, in
@@ -380,6 +380,7 @@ impl SyntaxJob<'_> {
             image_census: a.bmi_image_census,
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
             record_pch: a.pch.producing && a.pch.image != crate::args::PchImage::Off,
+            prefix: a.pch.producing || a.pch.record_lookups,
             pch,
             ..job.std.parse_options()
         }
@@ -389,7 +390,7 @@ impl SyntaxJob<'_> {
     /// diagnostics are buffered, the comments scanned as the
     /// preprocessor lexes them, and only the verifier's report printed.
     ///
-    /// With `snap` (EXPERIMENTAL, WP-1394) the `-include-pch` file's
+    /// With `snap` (WP-1394) the `-include-pch` file's
     /// snapshot is restored instead of a replay of its header; `Err`
     /// (nothing reported) when it cannot be, or when the header reported
     /// diagnostics when it was built: those are not shown again, so a
@@ -514,7 +515,7 @@ impl SyntaxJob<'_> {
         };
         let Some(target) = self.target(engine) else { return };
         if let Some(restore) = restore {
-            // EXPERIMENTAL (WP-1383): the prefix's state restored.
+            // WP-1383: the prefix's state restored.
             let Some(parts) =
                 job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
                     self.parse_options(o)

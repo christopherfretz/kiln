@@ -189,7 +189,7 @@ milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 | libc++ 22 / libc++ 19 / libstdc++ 14 | 99.4% / 98.3% / every header | [COMPATIBILITY.md](docs/COMPATIBILITY.md#standard-libraries) |
 | Debug info, sanitizers, gcov and source coverage | supported; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md) |
 | Modules | supported, with module files and CMake dependency scanning; no header-unit module files yet; the declaration image (`-fkiln-bmi-image`) is experimental and off by default | [USER_GUIDE.md](docs/USER_GUIDE.md#modules) |
-| Precompiled headers | supported (C++ and C), checked and replayed, so not faster than `-include`; the serialized image (`-fkiln-pch-image`) is experimental and off by default | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#precompiled-headers) |
+| Precompiled headers | supported (C++ and C); since 1.2.0 a consumer restores a snapshot of the header's state (`<bits/stdc++.h>`: 0.57 s against 0.67 s for clang 19's PCH) and replays the header when it cannot; `-fno-kiln-pch-snapshot` turns it off | [USER_GUIDE.md](docs/USER_GUIDE.md#language-modes), [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#precompiled-headers) |
 | C89 to C23 and GNU C (`kiln`) | supported since 1.1.0; gaps listed | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#c-mode), [status/c-mode.md](docs/status/c-mode.md) |
 | Platforms | Linux aarch64, Linux x86_64 | [KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md#platforms) |
 

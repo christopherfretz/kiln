@@ -57,7 +57,9 @@ fn ok(dir: &Path, args: &[&str]) -> Out {
 }
 
 fn read(dir: &Path, f: &str) -> String {
-    std::fs::read_to_string(dir.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"))
+    // Lossy: a PCH carries its binary snapshot section (WP-1404).
+    let b = std::fs::read(dir.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    String::from_utf8_lossy(&b).into_owned()
 }
 
 /// A header with neither a guard nor `#pragma once`: including it twice
@@ -264,7 +266,20 @@ fn replay_order_and_cwd() {
     );
     let pch = d.join("h.pch").display().to_string();
     let c = d.join("c.h").display().to_string();
-    ok(&d.join("sub"), &["-include-pch", &pch, "-include", &c, "-fsyntax-only", "../m.cpp"]);
+    // Another working directory is another snapshot identity (a
+    // `-Wpch-snapshot-unused` warning by design); the replay is under test.
+    ok(
+        &d.join("sub"),
+        &[
+            "-fno-kiln-pch-snapshot",
+            "-include-pch",
+            &pch,
+            "-include",
+            &c,
+            "-fsyntax-only",
+            "../m.cpp",
+        ],
+    );
     // -E does not check the PCH: the header, then the -includes.
     let o = ok(&d, &["-E", "-P", "-include-pch", "h.pch", "-include", "c.h", "m.cpp"]);
     assert!(o.stdout.trim_start().starts_with("struct T {};\n"), "{}", o.stdout);
@@ -349,10 +364,12 @@ fn option_mismatches() {
                  1 error generated.\n"
             );
         }
-        // A missing or extra -D and a different -I are fine.
+        // A missing or extra -D and a different -I are fine (to the
+        // record checks; the snapshot would warn and replay, by design).
         ok(
             &d,
             &[
+                "-fno-kiln-pch-snapshot",
                 compat,
                 a64,
                 "-include-pch",
@@ -404,6 +421,8 @@ fn stale_missing_and_foreign() {
         ok(
             &d,
             &[
+                // The snapshot would warn (changed input) and replay.
+                "-fno-kiln-pch-snapshot",
                 compat,
                 "-Xclang",
                 "-fno-validate-pch",

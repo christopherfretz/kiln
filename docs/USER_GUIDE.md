@@ -200,11 +200,35 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   [KNOWN_ISSUES.md](KNOWN_ISSUES.md#c-mode), and its measurements in
   [status/c-mode.md](status/c-mode.md).
 - **Precompiled headers**: `-x c++-header` (or `-x c-header`) writes a
-  PCH and `-include-pch` uses it, with clang's flags. The PCH is checked
-  and its header replayed, so it does not make a build faster; the
-  serialized form behind `-fkiln-pch-image` is experimental and off by
-  default ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#precompiled-headers),
-  [COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)).
+  PCH and `-include-pch` uses it, with clang's flags (CMake's
+  `target_precompile_headers` works). Since 1.2.0 the PCH carries a
+  snapshot of the compiler's state at the end of the header, and a
+  consumer restores it instead of processing the header again: on
+  `<bits/stdc++.h>` a `-fsyntax-only` consumer takes 0.57 s, against
+  1.48 s without the snapshot and 0.67 s with clang 19's PCH
+  ([status/pch.md](status/pch.md)). The file is larger (35.2 MB for
+  `<bits/stdc++.h>`, clang's is 26.7 MB). A restored consumer does
+  not repeat the header's warnings.
+  - When the snapshot cannot be used, the consumer checks the PCH and
+    processes the header again (replay), so the build still succeeds.
+    It says so once with `-Wpch-snapshot-unused` when the configuration
+    differs (another `-std`, target, `-D` list or warning options, a
+    changed input file, another kiln build): rebuild the PCH with the
+    consumer's flags, or silence it with `-Wno-pch-snapshot-unused`.
+    Other cases (`-E`, module units, a PCH without a snapshot) replay
+    silently; `-v` gives the reason.
+  - A header whose state cannot be saved still gets its PCH, with the
+    warning `cannot carry a snapshot (<why>)`; its consumers replay.
+  - A PCH is a trusted build artifact, as clang's: it is tied to the
+    exact kiln binary that wrote it and to its input files, which kiln
+    checks (`-fkiln-pch-validate=mtime`, the default, compares size and
+    time and then content; `=content` always compares content). Do not
+    use a PCH from an untrusted source.
+  - `-fno-kiln-pch-snapshot` gives the 1.1 behaviour (always replay);
+    `-fkiln-pch-snapshot=write|load|check` select one side, or compare
+    both (`--help`, spec/driver.md "Snapshots";
+    [KNOWN_ISSUES.md](KNOWN_ISSUES.md#precompiled-headers),
+    [COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)).
 
 ### Modules
 
@@ -533,11 +557,13 @@ The full list is spec/driver.md, "Options".
 | `-fconstexpr-stats`, `-fconstexpr-profile[=text\|json\|<file>]`, `-fconstexpr-profile-limit=N` | constexpr profile (above) |
 | `-f[no-]kiln-module-cache` | use the `std` module cache (default on; see [The `std` module cache](#the-std-module-cache)) |
 | `-fkiln-source-path-style=clang\|gcc` | how `__builtin_FILE()` and `std::source_location` spell a file name: as clang does (default) or as GCC does |
+| `-f[no-]kiln-pch-snapshot[=write\|load\|check]` | the PCH snapshot (default on; see [Language modes](#language-modes), "Precompiled headers") |
+| `-fkiln-pch-validate=mtime\|content` | how a PCH's input files are checked (default `mtime`: size and time, then content) |
 | `-f[no-]kiln-bmi-image` | experimental, off by default: write and use the declaration image in module files (see [Modules](#modules)) |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |
 | `-fkiln-outline-expansions=N`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=N` | internal tuning and debugging of the codegen CFG |
 
-All `-fkiln-*` flags are experimental.
+All `-fkiln-*` flags are experimental, except the PCH snapshot and validation flags (1.2.0).
 
 ### Flags that behave differently from clang
 

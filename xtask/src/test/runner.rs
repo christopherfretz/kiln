@@ -26,7 +26,7 @@ mod gcc;
 mod oracle_retry;
 #[path = "pch_diff.rs"]
 mod pch_diff;
-pub use pch_diff::SyntheticPchs;
+pub use pch_diff::{ProducerShapes, SyntheticPchs};
 
 /// Everything a worker needs; shared read-only between threads.
 #[derive(Debug)]
@@ -105,6 +105,9 @@ pub struct Config {
     /// `--pch-diff-extra-dir` (WP-1403): every other snapshot consumer
     /// also gets `-I` of an empty directory.
     pub pch_extra_dir: bool,
+    /// Under `--pch-diff snapshot`, the shapes the run's producers took
+    /// (WP-1404, [`crate::util::pch_diff::producer_shape`]).
+    pub pch_producers: ProducerShapes,
 }
 
 /// The debug-info sweep's configuration.

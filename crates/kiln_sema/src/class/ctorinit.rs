@@ -1165,11 +1165,17 @@ impl Sema<'_, '_> {
         // clang `DiagnoseUnterminatedPragmaAttribute`, then the `#pragma
         // weak` identifiers never declared.
         self.diagnose_unterminated_pragma_attr();
-        self.diagnose_pending_weak();
+        // A prefix (a precompiled header) leaves these warnings to the
+        // unit that includes it, as clang's `TU_Prefix` return does.
+        if !self.tu_prefix {
+            self.diagnose_pending_weak();
+        }
         self.check_delegating_cycles();
         self.c_complete_tentative_definitions();
-        self.diagnose_undefined_used();
-        self.diagnose_unused_file_scope_vars();
+        if !self.tu_prefix {
+            self.diagnose_undefined_used();
+            self.diagnose_unused_file_scope_vars();
+        }
         self.reject_self_typed_var_specs();
         self.report_no_builtin_declarations();
     }

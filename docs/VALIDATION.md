@@ -794,7 +794,8 @@ growth from N to 4N (4N/N above 4.6x on wall or RSS fails; a growing
 both are off-queue, because a ratio of wall times needs a quiet host. The
 `pch` group (`cargo xtask bench bench/pch`, selected only when named, about
 3 minutes) measures kiln's precompiled headers against clang 19's on four
-header sets: no PCH, PCH build, PCH load and forced replay. It reports the
+header sets: no PCH, PCH build and PCH load on the default path (the
+snapshot), and replay (`-fno-kiln-pch-snapshot`). It reports the
 path kiln's consumer took and judges kiln on memory only against
 `bench/baselines/pch.json`. `--record` regenerates the numbers in
 `docs/status/pch.md`. It runs by hand after a PCH change and before a
@@ -808,6 +809,16 @@ regressions), differential, libc++ pass-rate not lower than the previous RC,
 bench within thresholds, and the x86_64 sweep (`.github/workflows/sweep.yml`,
 "x86_64 sweep" above) on the RC commit shows no x86_64-only failure. The
 supervisor agent signs off in `docs/status/`.
+
+The PCH snapshot, kiln's default PCH path since 1.2.0 (WP-1404), has its
+own part of the gate, run by hand on the RC binary because it needs a
+large scratch area: `scripts/pch-release-gate.sh <kiln++> <out-dir>`
+runs the whole corpus with `--pch-diff snapshot --pch-diff-require-restore
+--pch-diff-synthetic` (0 failures, every replay on the allow-list) and the
+libc++ pair (six `std/` directories without and with `--pch-diff
+snapshot`, the same outcome for every test). The corpus sweep needs about
+50 GB of scratch and the script refuses to start it with less than 90 GB
+free (exit 2). The last results are in `docs/status/pch-snapshot-gates.md`.
 
 ### Patch releases
 

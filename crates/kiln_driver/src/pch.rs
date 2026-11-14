@@ -758,9 +758,9 @@ pub(crate) fn consumer(
     crate::pch_snapshot::phase("pch record check");
     out.pch.deps = rec.files.iter().map(|f| (resolve(&f.spelled), f.system)).collect();
     if args.pch.snapshot.loads() && args.pch.image != PchImage::Check {
-        // EXPERIMENTAL (WP-1383): the snapshot stands in for the
-        // producer's `-include`s and the header; the replay arguments
-        // below stay the fallback.
+        // WP-1383 (the default since WP-1404): the snapshot stands in
+        // for the producer's `-include`s and the header; the replay
+        // arguments below stay the fallback.
         let extras: Vec<String> =
             args.includes.iter().filter(|i| !rec.includes.contains(i)).cloned().collect();
         let found = match snapshot_refused(args, &rec, inputs) {
@@ -1448,8 +1448,8 @@ fn produce_one(
         let path = crate::time_trace::path(args, Some(phase), &input.path, &out);
         crate::time_trace::InputTrace::start(s, path)
     });
-    // EXPERIMENTAL (WP-1383, WP-1393): in every mode that writes a
-    // snapshot (`-fkiln-pch-snapshot`, `=write`, `=check`) the snapshot
+    // WP-1383, WP-1393: in every mode that writes a snapshot (the
+    // default, `-fkiln-pch-snapshot`, `=write`, `=check`) the snapshot
     // pass runs first when it may stand in for the header pass
     // (`pch_snapshot::produce`); otherwise after it, in `write_pch`.
     let mut snapshot = None;
@@ -1482,6 +1482,37 @@ fn produce_one(
         }
     }
     errors
+}
+
+/// The section block to write after the snapshot was made or not
+/// (`made`), with `-v`'s note. WP-1404: a PCH whose prefix cannot carry
+/// a snapshot is still written, without the section (its consumers
+/// replay, silently); the build says why, once, in
+/// `-Wpch-snapshot-unused`. `Err`: the error count when that warning is
+/// promoted (`-Werror`): no PCH is written, as for any error.
+fn snapshot_outcome(
+    args: &Args,
+    diag_opts: &DiagOptions,
+    io: &Io,
+    out: &str,
+    made: Result<Vec<u8>, String>,
+) -> Result<Option<Vec<u8>>, u32> {
+    let why = match made {
+        Ok(block) => {
+            crate::pch_snapshot::note(args, &io.stderr, out, "written");
+            return Ok(Some(block));
+        }
+        Err(why) => why,
+    };
+    crate::pch_snapshot::note(args, &io.stderr, out, &format!("not written: {why}"));
+    let sm = SourceManager::new();
+    let e = make_engine(&sm, diag_opts, io.stderr.clone(), None);
+    Diag::new(DiagId::drv_pch_snapshot_not_written, Span::INVALID).arg(out).arg(&why).emit(&e);
+    e.flush();
+    match e.error_count() {
+        0 => Ok(None),
+        n => Err(n),
+    }
 }
 
 /// Writes the PCH record of the checked header (`r`, its job's result)
@@ -1530,8 +1561,8 @@ fn write_pch(
     }
     let mut image = image;
     if args.pch.snapshot.writes() {
-        // EXPERIMENTAL (WP-1383): the snapshot section, next to the
-        // record (which replay still uses) and the image.
+        // WP-1383: the snapshot section, next to the record (which
+        // replay still uses) and the image.
         let section = snapshot.unwrap_or_else(|| {
             crate::pch_snapshot::produce(args, tc, std, &input.path, diag_opts, false).section
         });
@@ -1539,14 +1570,9 @@ fn write_pch(
             crate::pch_snapshot::add_section(image.take(), s)
                 .map_err(|e| format!("the section block: {e}"))
         });
-        match made {
-            Ok(block) => {
-                crate::pch_snapshot::note(args, &io.stderr, out, "written");
-                image = Some(block);
-            }
-            Err(why) => {
-                crate::pch_snapshot::note(args, &io.stderr, out, &format!("not written: {why}"));
-            }
+        match snapshot_outcome(args, diag_opts, io, out, made) {
+            Ok(block) => image = block,
+            Err(errors) => return errors,
         }
     }
     let Some(list) = r.dep_list else { return 0 };

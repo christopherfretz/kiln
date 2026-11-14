@@ -59,6 +59,7 @@
 //! | `math_errno` | configuration | `-f[no-]math-errno` |
 //! | `cfg_dump`, `cfg_stats`, `cfg_max_elems` | configuration | `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=` |
 //! | `full_deduction`, `full_redecl_scan` | configuration | test hooks of `ParseOptions` |
+//! | `tu_prefix` | configuration | `ParseOptions::prefix` (a header being precompiled) |
 //! | `permissive` | configuration | `-fpermissive` |
 //! | `std` | configuration | `-std=` (set by the parser) |
 //! | `inst.limits`, `inst.report.format` (inside the state `inst`) | configuration | `-ftemplate-depth=`, `-ftemplate-backtrace-limit=`, `-fkiln-instantiation-report=`: kept from the consumer's `Sema` |
@@ -148,7 +149,7 @@ macro_rules! sema_fields {
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
                 gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, sized_deallocation,
                 char8, lib_builtin_name, clang_constexpr_builtin, math_errno, cfg_dump,
-                cfg_stats, full_deduction, full_redecl_scan, permissive, cfg_max_elems, std],
+                cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],
             // `ctx` first: the most telling refusal (a prefix ending inside
             // a namespace or `extern "C" {`); then the construct stacks.
             transient: [ctx, classes, func, lambdas, enums, defining, synth, fn_saved,

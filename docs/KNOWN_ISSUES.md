@@ -222,10 +222,23 @@ missing (spec/modules.md §11.10):
 ## Precompiled headers
 
 PCHs work (`-x c++-header`, `-x c-header`, `-emit-pch`, `-include-pch`;
-[COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)), but they do not
-make a build faster. The shipped path checks the PCH and then replays
-the header's tokens, so a PCH build costs what the same build with
-`-include` costs.
+[COMPATIBILITY.md](COMPATIBILITY.md#precompiled-headers)). Since 1.2.0 a
+consumer restores the PCH's snapshot (spec/driver.md "Snapshots"); the
+limits are:
+
+- A consumer whose configuration differs from the producer's in any way
+  the snapshot records (including an extra `-D`, which clang accepts
+  silently, or another working directory for a prefix named by a
+  relative path) replays the header and warns once per compile with
+  `-Wpch-snapshot-unused`; under `-Werror` that warning is an error.
+  Rebuild the PCH with the consumers' flags, or pass
+  `-Wno-pch-snapshot-unused`.
+- A snapshot PCH is larger than clang's (35.2 MB against 26.7 MB for
+  `<bits/stdc++.h>`), and is tied to the exact kiln binary.
+- Module units, `-E` and `-M` always replay the header.
+- The producer's single pass is not used for a C header, with `-v` or
+  `-verify`, or when the header writes diagnostics; those builds run the
+  header twice ([status/pch-snapshot-gates.md](status/pch-snapshot-gates.md)).
 
 - The serialized form (`-fkiln-pch-image`, spec/driver.md "The
   declaration image") is experimental and off by default. It carries
@@ -233,7 +246,8 @@ the header's tokens, so a PCH build costs what the same build with
   headers and 29 of 109 libstdc++ 14 headers, each alone), so a
   realistic prefix such as `<bits/stdc++.h>` is still replayed
   ([status/pch.md](status/pch.md); [WP-1314](BACKLOG.md),
-  [WP-1320](BACKLOG.md)). It is planned as the default for 1.2.0.
+  [WP-1320](BACKLOG.md)). The snapshot replaced it as the default path in
+  1.2.0.
 - A C header never gets a declaration image and is always replayed
   ([WP-1316](BACKLOG.md)).
 

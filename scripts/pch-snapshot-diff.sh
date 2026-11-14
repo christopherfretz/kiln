@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
-# EXPERIMENTAL (WP-1383): the PCH snapshot differential over the
-# bench/pch prefixes (docs/status/pch-snapshot-prototype.md).
+# The PCH snapshot differential over the bench/pch prefixes
+# (docs/status/pch-snapshot-gates.md). It runs the default path: since
+# WP-1404 a PCH build writes the snapshot and a consumer restores it with
+# no PCH option at all.
 #
 #   scripts/pch-snapshot-diff.sh <kiln> <out-dir> [case...]
 #
 # Each case under scripts/pch-snapshot-diff/<case>/ is a prefix header
-# (`prefix.h`, built into a PCH with -fkiln-pch-snapshot=write), a main
-# file (`main.cpp`, or `main.c` for a C case) and the compile's flags (`flags`, one per line;
-# `@GCC16@` is $KILN_GCC16, else .toolchain/gcc-16.1.0-image/usr/local in
-# the checkout or beside it, as scripts/env.sh finds .toolchain). The main file is
+# (`prefix.h`, built into a PCH with the case's flags and no PCH option,
+# as a user would), a main file (`main.cpp`, or `main.c` for a C case)
+# and the compile's flags (`flags`, one per line; `@GCC16@` is
+# $KILN_GCC16, else .toolchain/gcc-16.1.0-image/usr/local in the checkout
+# or beside it, as scripts/env.sh finds .toolchain). The main file is
 # compiled three ways, `plain` (-include prefix.h, the judge), `replay`
-# (-include-pch) and `snapshot` (-include-pch -fkiln-pch-snapshot=load),
-# and snapshot is compared with replay (and replay with plain) on: the
-# exit status, the diagnostics (snapshot vs replay: the consumer's only,
-# pch-snapshot-diff/consumer-only.awk), -fdump-ast of the main file's
-# declarations, the IR at -O0 and with -g, and the -MD list. Every
-# output stays in <out-dir>/<case>/ for the classification.
+# (-include-pch -fno-kiln-pch-snapshot) and `snapshot` (-include-pch, the
+# default), and snapshot is compared with replay (and replay with plain)
+# on: the exit status, the diagnostics (snapshot vs replay: the
+# consumer's only, pch-snapshot-diff/consumer-only.awk), -fdump-ast of
+# the main file's declarations, the IR at -O0 and with -g, and the -MD
+# list. Every output stays in <out-dir>/<case>/ for the classification.
+#
+# The producer's shape (WP-1404): it runs with KILN_SNAP_TIMING=1 and
+# without -v (which would rule out the single pass), so its
+# `snapshot-timing: producer single pass:` line says whether the one pass
+# stood in for the header pass (`single`) or the header took two
+# (`two`). A case's `expect-shape` (one word, `single` or `two`) is
+# checked against it; `producer-env` (one VAR=value per line) is put in
+# the producer's environment (`KILN_PCH_SNAPSHOT_PASSES=2` forces two).
 #
 # WP-1403, a consumer whose search path differs: a case may also have
 # `consumer-flags` (one per line, put before `flags` in the three
@@ -46,7 +57,7 @@ cases=("$@")
 if [ ${#cases[@]} -eq 0 ]; then
   cases=(gnu mid lcx meta diag diag-once c17 gnu23 oven oven-limits meta-oven open-push-macro open-diag-push
     open-pack open-visibility open-once open-fp-pragma open-weak open-weak-alias
-    open-extname attr-region search-extra search-shadow search-has-include)
+    open-extname attr-region search-extra search-shadow search-has-include mid-two-pass)
 fi
 status=0
 for c in "${cases[@]}"; do
@@ -69,16 +80,22 @@ for c in "${cases[@]}"; do
   fi
   expect=
   [ -e "$src/expect-replay" ] && expect=$(cat "$src/expect-replay")
+  penv=()
+  if [ -e "$src/producer-env" ]; then
+    while IFS= read -r f; do
+      [ -n "$f" ] && penv+=("$f")
+    done <"$src/producer-env"
+  fi
   (
     cd "$d" || exit 1
-    "$kiln" "${flags[@]}" -fkiln-pch-snapshot=write -v -x "$hx" prefix.h \
-      -o prefix.pch >produce.out 2>produce.err
+    env KILN_SNAP_TIMING=1 ${penv[@]+"${penv[@]}"} \
+      "$kiln" "${flags[@]}" -x "$hx" prefix.h -o prefix.pch >produce.out 2>produce.err
     echo $? >produce.rc
     for v in plain replay snapshot; do
       case $v in
         plain) pre=(-include prefix.h) ;;
-        replay) pre=(-include-pch prefix.pch) ;;
-        snapshot) pre=(-include-pch prefix.pch -fkiln-pch-snapshot=load) ;;
+        replay) pre=(-include-pch prefix.pch -fno-kiln-pch-snapshot) ;;
+        snapshot) pre=(-include-pch prefix.pch) ;;
       esac
       rm -f $v.ll $v.g.ll $v.d
       env KILN_SNAP_TIMING=$([ $v = snapshot ] && echo 1 || echo 0) \
@@ -121,7 +138,22 @@ for c in "${cases[@]}"; do
       [ "$a" = snapshot ] && status=1
     fi
   }
-  echo "$c: producer exit $(cat "$d/produce.rc"); $(grep -h "snapshot \(written\|not written\)" "$d/produce.err")"
+  wrote=$(sed -n 's/^snapshot-timing: note: \(written\|not written.*\)/snapshot \1/p' "$d/produce.err")
+  shape=$(sed -n 's/^snapshot-timing: producer single pass: //p' "$d/produce.err")
+  case $shape in
+    "stands in"*) got=single ;;
+    "") got=none ;;
+    *) got=two ;;
+  esac
+  echo "$c: producer exit $(cat "$d/produce.rc"); ${wrote:-no snapshot note}; shape $got${shape:+ ($shape)}"
+  if [ -e "$src/expect-shape" ] && [ "$(cat "$src/expect-shape")" != "$got" ]; then
+    echo "$c: producer took shape $got, expected $(cat "$src/expect-shape")"
+    status=1
+  fi
+  if [ "$got" = single ] && grep -q '^warning: \|: warning: ' "$d/produce.err"; then
+    echo "$c: a single-pass producer printed a warning"
+    status=1
+  fi
   if [ -n "$expect" ]; then
     want="warning: precompiled header 'prefix.pch' was built with a different configuration ($expect); the header is processed again [-Wpch-snapshot-unused]"
     if grep -q '^snapshot-timing: restore ' "$d/snapshot.err"; then

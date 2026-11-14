@@ -106,17 +106,36 @@ mod product {
 
     const USED: &str = "matches; restoring it";
 
-    /// The modes: bare (both sides), `=write` and `=load` (one side each),
-    /// `-fno-` (neither), the last one winning.
+    /// The modes: the default and bare (both sides), `=write` and `=load`
+    /// (one side each), `-fno-` (neither), the last one winning.
     #[test]
     fn modes() {
         let d = built("modes", &[]);
         assert_eq!(note(&ok(&d, &consume(&["-fkiln-pch-snapshot"]))), USED);
         assert_eq!(note(&ok(&d, &consume(&["-fkiln-pch-snapshot=load"]))), USED);
         assert!(notes(&ok(&d, &consume(&["-fkiln-pch-snapshot=write"]))).is_empty());
-        assert!(notes(&ok(&d, &consume(&[]))).is_empty());
+        // WP-1404: no option is `-fkiln-pch-snapshot`.
+        assert_eq!(note(&ok(&d, &consume(&[]))), USED);
         let off = ["-fkiln-pch-snapshot", "-fno-kiln-pch-snapshot"];
         assert!(notes(&ok(&d, &consume(&off))).is_empty());
+        assert!(notes(&ok(&d, &consume(&["-fno-kiln-pch-snapshot"]))).is_empty());
+        // The default producer writes the section; `-fno-` writes none,
+        // and the default consumer of that PCH replays with a `-v` note
+        // only.
+        let producer = |extra: &[&str], out: &str| {
+            let mut a = vec!["-std=c++20", "-isystem", "sys", "-v"];
+            a.extend_from_slice(extra);
+            a.extend_from_slice(&["-x", "c++-header", "h.h", "-o", out]);
+            ok(&d, &a)
+        };
+        assert_eq!(note(&producer(&[], "dflt.pch")), "written");
+        let o = producer(&["-fno-kiln-pch-snapshot"], "none.pch");
+        assert!(notes(&o).is_empty(), "{}", o.stderr);
+        let mut c = consume(&[]);
+        c[4] = "none.pch";
+        let o = ok(&d, &c);
+        assert_eq!(note(&o), "not used: the PCH has no snapshot section", "{}", o.stderr);
+        assert!(!o.stderr.contains("warning:"), "{}", o.stderr);
         // A producer with `=load` writes no section.
         let o = ok(
             &d,
@@ -444,14 +463,17 @@ mod behaviour {
         o
     }
 
-    /// The consumer's compile of `main` with `pch`, by replay and by
-    /// snapshot: (replay, snapshot). `extra` comes after `-include-pch`.
+    /// The consumer's compile of `main` with `pch`, by replay
+    /// (`-fno-kiln-pch-snapshot`) and by snapshot (the default, WP-1404):
+    /// (replay, snapshot). `extra` comes after `-include-pch`.
     fn both(d: &Path, flags: &[&str], pch: &str, extra: &[&str]) -> (Out, Out) {
         let mut a: Vec<&str> = flags.to_vec();
         a.extend(["-include-pch", pch]);
         a.extend(extra);
-        let replay = kiln(d, &a);
-        a.extend(["-fkiln-pch-snapshot=load", "-v"]);
+        let mut r = a.clone();
+        r.push("-fno-kiln-pch-snapshot");
+        let replay = kiln(d, &r);
+        a.push("-v");
         let snap = kiln(d, &a);
         (replay, snap)
     }
@@ -662,22 +684,23 @@ mod behaviour {
         let r = run_with(
             &c,
             &d,
-            &["-std=c17", "-include-pch", "p.pch", "-S", "-emit-llvm", "m.c", "-o", "r.ll"],
-        );
-        let s = run_with(
-            &c,
-            &d,
             &[
                 "-std=c17",
                 "-include-pch",
                 "p.pch",
-                "-fkiln-pch-snapshot=load",
+                "-fno-kiln-pch-snapshot",
                 "-S",
                 "-emit-llvm",
                 "m.c",
                 "-o",
-                "s.ll",
+                "r.ll",
             ],
+        );
+        // The default consumer restores (WP-1404).
+        let s = run_with(
+            &c,
+            &d,
+            &["-std=c17", "-include-pch", "p.pch", "-S", "-emit-llvm", "m.c", "-o", "s.ll"],
         );
         assert!(restored(&s), "{}", s.stderr);
         assert_eq!((r.code, s.code), (0, 0), "{}", s.stderr);
@@ -726,10 +749,10 @@ mod behaviour {
             a.extend(extra);
             let o = kiln(&d, &a);
             assert_eq!(o.code, 0, "{}", o.stderr);
-            assert_eq!(restored(&o), !extra.is_empty(), "{}", o.stderr);
+            assert_eq!(restored(&o), extra.is_empty(), "{}", o.stderr);
             std::fs::read_to_string(d.join(f)).unwrap()
         };
-        let (rl, sl) = (out(&[], "r.ll"), out(&["-fkiln-pch-snapshot=load"], "s.ll"));
+        let (rl, sl) = (out(&["-fno-kiln-pch-snapshot"], "r.ll"), out(&[], "s.ll"));
         assert_eq!(sl, rl);
         assert!(sl.contains("define hidden noundef i32 @_Z9hidden_fnv()"), "{sl}");
         assert!(sl.contains("ret i32 2"), "{sl}");

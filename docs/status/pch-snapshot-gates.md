@@ -1,8 +1,10 @@
 # PCH snapshot: gates
 
 WP-1395, 2026-11-13. These are the gates for the snapshot PCH product
-(`-fkiln-pch-snapshot=write|load`, still hidden; spec/driver.md "PCH
-snapshot: behaviour"). Nothing here changes a default. The tables are
+(spec/driver.md "PCH snapshot: behaviour"). WP-1395 ran them with the
+then hidden `-fkiln-pch-snapshot=write|load`; since WP-1404 the snapshot
+is the default, and "Default path (WP-1404)" below re-runs them with no
+option on either side. The tables are
 from the tree that ships: main with the single-parse producer and
 streaming decode (WP-1393) and this package, `ba5d00e5b` plus the one
 harness fix below (runs 5 and libc++ second pair; runs 1 to 4 and the
@@ -279,6 +281,60 @@ and `scripts/pch-snapshot-diff.sh` has three search-path cases:
 `search-extra` (restores), `search-shadow` and `search-has-include`
 (refused with the expected warning; the replay equals the plain
 compile).
+
+## Default path (WP-1404)
+
+2026-11-13, the WP-1404 branch (kiln built from `a61c44269`, release), with
+`scripts/pch-release-gate.sh`, which the release gate now runs
+(docs/VALIDATION.md "Release candidates"). Producer and consumer have no
+snapshot option: the producer is the default build (single pass where
+it may, no `-v`), the consumer the default `-include-pch`.
+
+Whole corpus, `cargo xtask test --compiler <kiln++> --pch-diff snapshot
+--pch-diff-require-restore --pch-diff-synthetic` (7071 tests, 8 jobs,
+4367 s, 152 GB free at the start, scratch removed by the harness):
+
+| pass | fail | skip | restored | replayed | failed before the consumer |
+|---|---|---|---|---|---|
+| 5707 | 0 | 1364 | 5706 | 1 (allowed: the module unit) | 0 |
+
+The producers, by shape (`pch-diff snapshot producers:`; the synthetic
+prefix's PCH is built once per flag set and shared, so there are fewer
+producers than consumers):
+
+| producers | single pass | two passes |
+|---|---|---|
+| 1419 | 1409 | 10 (all: the prefix wrote diagnostics) |
+
+No test needed a C header or another two-pass reason here; the forced
+shapes are covered by `scripts/pch-snapshot-diff.sh` (`c17`, `gnu23`: a
+C header; `diag`, `diag-once`: diagnostics; `open-diag-push`: a line
+read differently in a main file; `mid-two-pass`:
+`KILN_PCH_SNAPSHOT_PASSES=2`), whose 20 cases all restore or replay as
+expected, with the shape each case's `expect-shape` names (13 single
+pass, 7 two passes).
+
+libc++ pair, `cargo xtask libcxx --compiler <kiln++> --no-fail -j 4
+[--pch-diff snapshot] --results <file>` over the six directories above
+(llvmorg-19.1.7):
+
+| run | tests | pass | fail | xfail | unsupported | with a PCH | restored | replayed | wall |
+|---|---|---|---|---|---|---|---|---|---|
+| no PCH | 4299 | 4261 | 1 | 1 | 36 | - | - | - | 1583 s |
+| `--pch-diff snapshot`, default path | 4299 | 4261 | 1 | 1 | 36 | 3894 | 3894 | 0 | 1445 s |
+
+**Differences: none** (the script compares the outcome of every test in
+the two `--results` files). The one FAIL is the same
+`unique.ptr.special/io.verify.cpp` as above, in both runs.
+
+Two projects that use `target_precompile_headers`, built with the default
+path: reflect-cpp `v0.27.1` (5 PCHs, 266 consumers, 327/327 TUs, 484/484
+tests, as in the 1.0 run; a sample of 8 consumers re-run with `-v` all
+say `snapshot matches; restoring it`; no `-Wpch-snapshot-unused`), and
+the CMake demo of `scripts/oss/selftest.sh` (PASS, and with `-Werror`
+by hand: every consumer restored, no warning). Glaze `v9.1.0`, listed
+with PCH, has no `target_precompile_headers` at that tag (100/102 tests,
+the same 2 TUs failing as under clang).
 
 ## Remaining differences
 

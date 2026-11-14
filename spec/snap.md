@@ -381,7 +381,7 @@ spec/diag.md §7.8) and `kiln_pp::Preprocessor` (`src/snap.rs`, spec/pp.md
 
 ### Whole-compiler restore order
 
-The experimental PCH snapshot (WP-1383, `kiln_driver/src/pch_snapshot.rs`,
+The PCH snapshot (WP-1383, the default PCH path since WP-1404, `kiln_driver/src/pch_snapshot.rs`,
 docs/status/pch-snapshot-prototype.md) writes the whole front end at the
 end of a prefix as one stream, so `Arc<Interner>` sharing between the
 roots is kept. The producer parses an empty main file whose `-include`s

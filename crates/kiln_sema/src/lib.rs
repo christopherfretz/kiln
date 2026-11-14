@@ -443,6 +443,12 @@ pub struct Sema<'a, 'sm> {
     /// either way.
     #[doc(hidden)]
     pub full_redecl_scan: bool,
+    /// The unit is a prefix: a header being precompiled, or the PCH
+    /// producer's snapshot pass that stands in for it (clang
+    /// `TU_Prefix`). The end of the unit skips the checks clang leaves
+    /// to the unit that includes the header
+    /// ([`Self::act_on_end_of_translation_unit`]).
+    pub tu_prefix: bool,
     /// The redeclaration index (WP-658).
     pub(crate) redecl_index: overload::redecl_index::RedeclIndex,
     /// The explicit-argument substitution memo of deduction step 1
@@ -1413,6 +1419,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             cfg_stats: false,
             full_deduction: false,
             full_redecl_scan: false,
+            tu_prefix: false,
             redecl_index: overload::redecl_index::RedeclIndex::default(),
             explicit_memo: templ::explicit_memo::ExplicitMemo::default(),
             permissive: false,

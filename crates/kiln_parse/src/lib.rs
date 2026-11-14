@@ -143,6 +143,9 @@ pub struct ParseOptions {
     /// ([`ParsedTu::pch_image`], WP-1036). With [`Self::image_census`],
     /// the census is the header's.
     pub record_pch: bool,
+    /// The unit is a prefix ([`kiln_sema::Sema::tu_prefix`]): a header
+    /// being precompiled, or the PCH producer's snapshot pass.
+    pub prefix: bool,
     /// A precompiled header's declarations, built into the unit before
     /// its first token in place of replaying the header (WP-1036).
     pub pch: Option<PchLoad>,
@@ -172,6 +175,7 @@ impl Default for ParseOptions {
             record_image: false,
             image_census: false,
             record_pch: false,
+            prefix: false,
             pch: None,
             exceptions: true,
             rtti: true,
@@ -391,6 +395,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.ast.lang_c = opts.c.is_some();
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
+    s.tu_prefix = opts.prefix;
     s.range_lifetime_extension = opts.std >= Std::Cxx23;
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
@@ -637,6 +642,8 @@ pub fn continue_preprocessed<'a, 'sm>(
     let mut src = TokenSource::new(pp, diags);
     src.keep_all(opts.keep_tokens);
     let mut p = Parser::new(sema, src, lit_opts);
+    // A restored snapshot's unit is its consumer's, not the producer's.
+    p.s.tu_prefix = opts.prefix;
     let phase = activity::enter(Phase::Parse, Loc::INVALID);
     p.parse_translation_unit();
     drop(phase);

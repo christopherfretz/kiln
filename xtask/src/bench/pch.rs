@@ -7,9 +7,10 @@
 //! entry `pch/<case>/<variant>`, measured like any other entry
 //! (`super::sample`), judged against `bench/baselines/pch.json` on memory
 //! only by default, and, with `--record`, written as a generated region of
-//! `docs/status/pch.md`. The run also reports which path kiln's `load`
-//! consumer took (the declaration image or replay) and, when it replayed,
-//! the producer's reason.
+//! `docs/status/pch.md`. kiln's build and load are the default path (the
+//! snapshot, WP-1404); its replay row reads the same PCH with
+//! `-fno-kiln-pch-snapshot`. The run also reports which path kiln's
+//! consumer took (the snapshot or replay) and, when it replayed, why.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -110,11 +111,6 @@ impl Case {
     pub fn compared(&self) -> bool {
         !self.gcc16
     }
-
-    /// Whether `v` is measured for this case: the snapshot is C++ only.
-    pub fn has(&self, v: Variant) -> bool {
-        !(self.c && v.snapshot())
-    }
 }
 
 /// How one compile of a case gets its header set.
@@ -122,17 +118,14 @@ impl Case {
 pub enum Via {
     /// `-include <case>.h` (textual inclusion, no PCH).
     Textual,
-    /// The PCH build (kiln with `-fkiln-pch-image`).
+    /// The PCH build (no PCH option: kiln writes its snapshot).
     Build,
-    /// `-include-pch` (kiln with `-fkiln-pch-image=load`; clang's PCH).
+    /// `-include-pch` (no PCH option: kiln restores the snapshot; clang's
+    /// PCH).
     Load,
-    /// kiln only: `-fno-kiln-pch-image -include-pch`, the replay.
+    /// kiln only: `-fno-kiln-pch-snapshot -include-pch` of the same PCH,
+    /// the replay.
     Replay,
-    /// kiln only: the PCH build with `-fkiln-pch-snapshot=write`.
-    SnapBuild,
-    /// kiln only: `-fkiln-pch-snapshot=load -include-pch` of the
-    /// [`Via::SnapBuild`] PCH: the restored snapshot.
-    Snap,
 }
 
 /// One measured compile of a case: how it gets the header set, whether it
@@ -151,26 +144,22 @@ const fn variant(via: Via, obj: bool, empty: bool) -> Variant {
 
 impl Variant {
     pub const BUILD: Self = variant(Via::Build, false, false);
-    pub const SNAP_BUILD: Self = variant(Via::SnapBuild, false, false);
     pub const NONE_SYNTAX: Self = variant(Via::Textual, false, false);
     pub const NONE_OBJ: Self = variant(Via::Textual, true, false);
     pub const LOAD_SYNTAX: Self = variant(Via::Load, false, false);
     pub const LOAD_OBJ: Self = variant(Via::Load, true, false);
     pub const REPLAY_SYNTAX: Self = variant(Via::Replay, false, false);
     pub const REPLAY_OBJ: Self = variant(Via::Replay, true, false);
-    pub const SNAP_SYNTAX: Self = variant(Via::Snap, false, false);
-    pub const SNAP_OBJ: Self = variant(Via::Snap, true, false);
 
     /// The consumers, in page order within each main file.
-    const CONSUMERS: [Via; 4] = [Via::Textual, Via::Load, Via::Replay, Via::Snap];
+    const CONSUMERS: [Via; 3] = [Via::Textual, Via::Load, Via::Replay];
 
-    /// Run order: the builds first, since the consumers read their PCHs.
-    pub const ALL: [Self; 18] = Self::all();
+    /// Run order: the build first, since the consumers read its PCH.
+    pub const ALL: [Self; 13] = Self::all();
 
-    const fn all() -> [Self; 18] {
-        let mut out = [Self::BUILD; 18];
-        out[1] = Self::SNAP_BUILD;
-        let mut n = 2;
+    const fn all() -> [Self; 13] {
+        let mut out = [Self::BUILD; 13];
+        let mut n = 1;
         let mut e = 0;
         while e < 2 {
             let mut c = 0;
@@ -185,9 +174,9 @@ impl Variant {
         out
     }
 
-    /// Page order: the case's unit (no PCH, the builds, the consumers),
+    /// Page order: the case's unit (no PCH, the build, the consumers),
     /// then the empty main file's consumers.
-    pub const SHOWN: [Self; 18] = [
+    pub const SHOWN: [Self; 13] = [
         Self::NONE_SYNTAX,
         Self::NONE_OBJ,
         Self::BUILD,
@@ -195,30 +184,23 @@ impl Variant {
         Self::LOAD_OBJ,
         Self::REPLAY_SYNTAX,
         Self::REPLAY_OBJ,
-        Self::SNAP_BUILD,
-        Self::SNAP_SYNTAX,
-        Self::SNAP_OBJ,
         variant(Via::Textual, false, true),
         variant(Via::Textual, true, true),
         variant(Via::Load, false, true),
         variant(Via::Load, true, true),
         variant(Via::Replay, false, true),
         variant(Via::Replay, true, true),
-        variant(Via::Snap, false, true),
-        variant(Via::Snap, true, true),
     ];
 
-    /// The entry id component: `build`, `snap-build`, else
-    /// `<none|load|replay|snap>-<syntax|obj>`, with `-empty` for the empty
-    /// main file.
+    /// The entry id component: `build`, else
+    /// `<none|load|replay>-<syntax|obj>`, with `-empty` for the empty main
+    /// file.
     pub fn name(self) -> String {
         let via = match self.via {
             Via::Build => return "build".to_owned(),
-            Via::SnapBuild => return "snap-build".to_owned(),
             Via::Textual => "none",
             Via::Load => "load",
             Via::Replay => "replay",
-            Via::Snap => "snap",
         };
         let what = if self.obj { "obj" } else { "syntax" };
         format!("{via}-{what}{}", if self.empty { "-empty" } else { "" })
@@ -227,11 +209,9 @@ impl Variant {
     fn label(self) -> String {
         let via = match self.via {
             Via::Build => return "PCH build".to_owned(),
-            Via::SnapBuild => return "PCH build with snapshot (kiln)".to_owned(),
             Via::Textual => "no PCH",
             Via::Load => "PCH load",
-            Via::Replay => "PCH replay (kiln)",
-            Via::Snap => "PCH snapshot (kiln)",
+            Via::Replay => "PCH replay (kiln, `-fno-kiln-pch-snapshot`)",
         };
         let what = if self.obj { "`-O0 -c`" } else { "`-fsyntax-only`" };
         format!("{via}, {what}{}", if self.empty { ", empty main" } else { "" })
@@ -248,18 +228,12 @@ impl Variant {
     }
 
     fn builds(self) -> bool {
-        matches!(self.via, Via::Build | Via::SnapBuild)
+        self.via == Via::Build
     }
 
-    /// Whether only kiln has this variant (clang has no replay switch and
-    /// no snapshot).
+    /// Whether only kiln has this variant (clang has no replay switch).
     pub fn kiln_only(self) -> bool {
-        matches!(self.via, Via::Replay | Via::SnapBuild | Via::Snap)
-    }
-
-    /// Whether the variant writes or reads the snapshot PCH.
-    pub fn snapshot(self) -> bool {
-        matches!(self.via, Via::SnapBuild | Via::Snap)
+        self.via == Via::Replay
     }
 
     /// Whether kiln's accounted memory is recorded and judged: the case's
@@ -269,19 +243,12 @@ impl Variant {
     }
 
     fn consumes(self) -> bool {
-        matches!(self.via, Via::Load | Via::Replay | Via::Snap)
-    }
-
-    /// The build whose PCH the variant reads.
-    fn build(self) -> Self {
-        if self.snapshot() { Self::SNAP_BUILD } else { Self::BUILD }
+        matches!(self.via, Via::Load | Via::Replay)
     }
 }
 
 /// Stands for the compiler's PCH file in [`args`] and the recorded flags.
 pub const PCH: &str = "<pch>";
-/// Stands for kiln's snapshot PCH file (the [`Via::SnapBuild`] output).
-pub const SNAP_PCH: &str = "<snap-pch>";
 /// Stands for the compiler's object file.
 pub const OBJ: &str = "<obj>";
 /// Stands for the GCC 16 installation prefix of a [`Case::gcc16`] case.
@@ -303,11 +270,9 @@ pub fn gcc16() -> Option<&'static Path> {
 }
 
 /// The arguments of one compile of `case`, the input last, with [`PCH`],
-/// [`SNAP_PCH`], [`OBJ`] and [`GCC16`] for the run's files (under the
-/// target directory, never `/dev/null`). `kiln` selects kiln's image and
-/// snapshot flags. The snapshot variants add `-O0` to the build and to
-/// `-fsyntax-only`, so that every snapshot command line is the producer's
-/// (the snapshot's identity keeps `-O0`).
+/// [`OBJ`] and [`GCC16`] for the run's files (under the target
+/// directory, never `/dev/null`). `kiln` selects kiln's replay flag; its
+/// build and load have no PCH option (the default path, WP-1404).
 pub fn args(case: &Case, v: Variant, kiln: bool) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     a.push(if case.c { "-std=c17" } else { "-std=c++26" }.into());
@@ -317,37 +282,23 @@ pub fn args(case: &Case, v: Variant, kiln: bool) -> Vec<String> {
     if case.gcc16 {
         a.push(format!("--gcc-toolchain={GCC16}"));
     }
-    if kiln {
-        match v.via {
-            Via::Build => a.push("-fkiln-pch-image".into()),
-            Via::Load => a.push("-fkiln-pch-image=load".into()),
-            Via::Replay => a.push("-fno-kiln-pch-image".into()),
-            Via::SnapBuild => a.push("-fkiln-pch-snapshot=write".into()),
-            Via::Snap => a.push("-fkiln-pch-snapshot=load".into()),
-            Via::Textual => {}
-        }
+    if kiln && v.via == Via::Replay {
+        a.push("-fno-kiln-pch-snapshot".into());
     }
-    let pch = if v.snapshot() { SNAP_PCH } else { PCH };
     match v.via {
-        Via::Build | Via::SnapBuild => {
+        Via::Build => {
             let x = if case.c { "c-header" } else { "c++-header" };
-            if v.snapshot() {
-                a.push("-O0".into());
-            }
-            a.extend(["-x".into(), x.into(), case.header(), "-o".into(), pch.into()]);
+            a.extend(["-x".into(), x.into(), case.header(), "-o".into(), PCH.into()]);
             return a;
         }
         Via::Textual => {
             a.extend(["-include".into(), case.header()]);
         }
-        _ => a.extend(["-include-pch".into(), pch.into()]),
+        _ => a.extend(["-include-pch".into(), PCH.into()]),
     }
     if v.mode() == Mode::Obj {
         a.extend(["-O0".into(), "-c".into(), "-o".into(), OBJ.into()]);
     } else {
-        if v.snapshot() {
-            a.push("-O0".into());
-        }
         a.push("-fsyntax-only".into());
     }
     if case.c {
@@ -399,30 +350,6 @@ pub fn split_inputs(bench_root: &Path, inputs: &[PathBuf]) -> Result<(bool, Vec<
     Ok((selected, rest))
 }
 
-/// The text after `precompiled header '<file>'` of the first `-v` note about
-/// a PCH in `stderr`: `: consumers use its declaration image (N records)`
-/// and `: consumers replay the header: <why>` from a producer, `:
-/// declaration image (N records)` and ` is replayed: <why>` from a
-/// consumer. The leading `: ` or space is dropped.
-pub fn image_note(stderr: &str) -> Option<String> {
-    const AT: &str = "note: precompiled header '";
-    stderr.lines().find_map(|l| {
-        let rest = &l[l.find(AT)? + AT.len()..];
-        let rest = &rest[rest.find('\'')? + 1..];
-        let rest = rest.strip_prefix(':').unwrap_or(rest).trim_start();
-        Some(rest.to_owned())
-    })
-}
-
-/// The path a `load` consumer took, from its note.
-pub fn path_of(consumer_note: Option<&str>) -> &'static str {
-    match consumer_note {
-        Some(n) if n.starts_with("declaration image") => "image",
-        Some(n) if n.starts_with("is replayed") => "replay",
-        _ => "unknown",
-    }
-}
-
 /// The text after `snapshot ` of the last `-v` note about a PCH's snapshot
 /// in `stderr`: `written` or `not written: <why>` from a producer,
 /// `matches; restoring it` or why it replays from a consumer (a restore
@@ -450,28 +377,18 @@ pub fn snapshot_path_of(consumer_note: Option<&str>) -> &'static str {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CaseInfo {
     pub load_avg_1m: Option<f64>,
-    /// PCH file sizes in bytes: kiln, clang, kiln with the snapshot.
-    pub pch_bytes: [Option<u64>; 3],
-    /// kiln's producer and consumer `-v` notes ([`image_note`]).
+    /// PCH file sizes in bytes: kiln (with its snapshot), clang.
+    pub pch_bytes: [Option<u64>; 2],
+    /// kiln's producer and consumer `-v` notes about the snapshot
+    /// ([`snapshot_note`]).
     pub producer_note: Option<String>,
     pub consumer_note: Option<String>,
-    /// kiln's snapshot producer and consumer `-v` notes
-    /// ([`snapshot_note`]); `None` for a case without the snapshot.
-    pub snap_producer_note: Option<String>,
-    pub snap_consumer_note: Option<String>,
-    /// `-fkiln-pch-image=check` at `-fsyntax-only` and `-O0 -c`, run only
-    /// when the image was taken: `Ok` when both agreed with replay, else
-    /// the first error.
-    pub check: Option<Result<(), String>>,
 }
 
 impl CaseInfo {
+    /// The path kiln's consumer took: `snapshot`, `replay` or `unknown`.
     pub fn path(&self) -> &'static str {
-        path_of(self.consumer_note.as_deref())
-    }
-
-    pub fn snapshot_path(&self) -> &'static str {
-        snapshot_path_of(self.snap_consumer_note.as_deref())
+        snapshot_path_of(self.consumer_note.as_deref())
     }
 
     fn to_json(&self) -> Json {
@@ -482,21 +399,9 @@ impl CaseInfo {
             ("load_avg_1m", Json::opt_num(self.load_avg_1m.map(|l| round_to(l, 2)))),
             ("pch_bytes_kiln", size(self.pch_bytes[0])),
             ("pch_bytes_clang", size(self.pch_bytes[1])),
-            ("pch_bytes_kiln_snapshot", size(self.pch_bytes[2])),
             ("path", Json::str(self.path())),
             ("producer_note", note(&self.producer_note)),
             ("consumer_note", note(&self.consumer_note)),
-            ("snapshot_path", Json::str(self.snapshot_path())),
-            ("snapshot_producer_note", note(&self.snap_producer_note)),
-            ("snapshot_consumer_note", note(&self.snap_consumer_note)),
-            (
-                "check",
-                match &self.check {
-                    None => Json::Null,
-                    Some(Ok(())) => Json::str("equal"),
-                    Some(Err(e)) => Json::str(e),
-                },
-            ),
         ])
     }
 }
@@ -504,7 +409,6 @@ impl CaseInfo {
 /// The run's files of one compiler for one case.
 struct Files {
     pch: PathBuf,
-    snap: PathBuf,
     obj: PathBuf,
 }
 
@@ -513,7 +417,6 @@ impl Files {
         let k = s.kind();
         Self {
             pch: scratch.join(format!("{}.{k}.pch", case.name)),
-            snap: scratch.join(format!("{}.{k}-snap.pch", case.name)),
             obj: scratch.join(format!("{}.{k}.o", case.name)),
         }
     }
@@ -524,7 +427,6 @@ impl Files {
         for a in args {
             match a.as_str() {
                 PCH => cmd.arg(&self.pch),
-                SNAP_PCH => cmd.arg(&self.snap),
                 OBJ => cmd.arg(&self.obj),
                 _ if a.contains(GCC16) => cmd.arg(a.replace(GCC16, &gcc16)),
                 _ => cmd.arg(a),
@@ -577,7 +479,7 @@ pub fn run(opts: &Options, layout: &Layout, compiler: &Path) -> Result<Report, S
 
 fn selected(opts: &Options, case: &Case, v: Variant) -> bool {
     let id = format!("{GROUP}/{}/{}", case.name, v.name());
-    case.has(v) && opts.filter.as_deref().is_none_or(|f| id.contains(f))
+    opts.filter.as_deref().is_none_or(|f| id.contains(f))
 }
 
 /// The hash of the variant's sources: the header set and the main file
@@ -650,7 +552,6 @@ fn run_in(
     let mut oracle_run = oracle.run_record();
     let mut entries = Vec::new();
     let mut infos: BTreeMap<&'static str, CaseInfo> = BTreeMap::new();
-    let mut check_failures = Vec::new();
     let total =
         CASES.iter().map(|c| Variant::ALL.iter().filter(|v| selected(opts, c, **v)).count());
     let total: usize = total.sum();
@@ -673,9 +574,8 @@ fn run_in(
             Files::of(&cx.layout.scratch, case, test),
             Files::of(&cx.layout.scratch, case, oracle),
         ];
-        // Whether each PCH exists: kiln's, clang's, kiln's snapshot PCH.
-        let mut built = [false, false, false];
-        let slot = |i: usize, v: Variant| if v.snapshot() { 2 } else { i };
+        // Whether each PCH exists: kiln's, clang's.
+        let mut built = [false, false];
         let subjects_of = |v: Variant| -> Vec<(usize, &Subject)> {
             if v.kiln_only() || !case.compared() {
                 vec![(0, test)]
@@ -711,10 +611,10 @@ fn run_in(
                     let a = args(case, *v, kiln);
                     // A consumer measured without its build (`--filter`)
                     // builds the PCH once, unmeasured.
-                    if v.consumes() && !built[slot(i, *v)] {
-                        let b = args(case, v.build(), kiln);
+                    if v.consumes() && !built[i] {
+                        let b = args(case, Variant::BUILD, kiln);
                         let cmd = files[i].command(s, &b, root);
-                        built[slot(i, *v)] = run_once(cx, s, &cmd, &b).is_ok();
+                        built[i] = run_once(cx, s, &cmd, &b).is_ok();
                     }
                     let cmd = files[i].command(s, &a, root);
                     if cx.verbose {
@@ -726,9 +626,8 @@ fn run_in(
                     let outcome =
                         super::sample(&one, &e, &spec, s, &cmd, cap, none, (flags, &hash));
                     if v.builds() && matches!(outcome, Outcome::Measured(_)) {
-                        built[slot(i, *v)] = true;
-                        let out = if v.snapshot() { &files[i].snap } else { &files[i].pch };
-                        info.pch_bytes[slot(i, *v)] = std::fs::metadata(out).ok().map(|m| m.len());
+                        built[i] = true;
+                        info.pch_bytes[i] = std::fs::metadata(&files[i].pch).ok().map(|m| m.len());
                     }
                     got.push(outcome);
                 }
@@ -756,53 +655,26 @@ fn run_in(
             }
             entries.push(e);
         }
-        if built[2] {
-            // The snapshot's notes: the producer's (its own PCH) and the
-            // path the measured snapshot PCH's consumer takes.
-            let spch = cx.layout.scratch.join(format!("{}.kiln-v-snap.pch", case.name));
-            let mut b = args(case, Variant::SNAP_BUILD, true);
-            b.insert(b.len() - 5, "-v".into());
-            let cmd = Files { pch: spch.clone(), snap: spch, obj: files[0].obj.clone() }
-                .command(test, &b, root);
-            info.snap_producer_note =
-                run_once(cx, test, &cmd, &b).ok().and_then(|s| snapshot_note(&s));
-            let mut l = args(case, Variant::SNAP_SYNTAX, true);
-            l.insert(l.len() - 1, "-v".into());
-            let cmd = files[0].command(test, &l, root);
-            info.snap_consumer_note =
-                run_once(cx, test, &cmd, &l).ok().and_then(|s| snapshot_note(&s));
-            eprintln!(
-                "  {GROUP}/{}: kiln's snapshot path: {} ({})",
-                case.name,
-                info.snapshot_path(),
-                info.snap_consumer_note.as_deref().unwrap_or("no note")
-            );
-        }
-        // kiln's notes: the producer's reason (its own PCH, so the measured
-        // one is untouched) and the path the `load` consumer takes.
+        // kiln's notes: the producer's (its own PCH, so the measured one
+        // is untouched; `-v` takes the producer's two passes, which writes
+        // the same snapshot) and the path the measured PCH's consumer
+        // takes.
         let vpch = cx.layout.scratch.join(format!("{}.kiln-v.pch", case.name));
         let mut b = args(case, Variant::BUILD, true);
         b.insert(b.len() - 5, "-v".into());
-        let mut cmd = Files { pch: vpch.clone(), snap: vpch, obj: files[0].obj.clone() }
-            .command(test, &b, root);
-        info.producer_note = run_once(cx, test, &cmd, &b).ok().and_then(|s| image_note(&s));
+        let mut cmd = Files { pch: vpch, obj: files[0].obj.clone() }.command(test, &b, root);
+        info.producer_note = run_once(cx, test, &cmd, &b).ok().and_then(|s| snapshot_note(&s));
         if built[0] {
             let mut l = args(case, Variant::LOAD_SYNTAX, true);
             l.insert(l.len() - 1 - usize::from(case.c) * 2, "-v".into());
             cmd = files[0].command(test, &l, root);
-            info.consumer_note = run_once(cx, test, &cmd, &l).ok().and_then(|s| image_note(&s));
-            if info.path() == "image" {
-                info.check = Some(check(cx, test, case, &files[0]));
-                if let Some(Err(why)) = &info.check {
-                    check_failures.push(format!("{GROUP}/{} (kiln): {why}", case.name));
-                }
-            }
+            info.consumer_note = run_once(cx, test, &cmd, &l).ok().and_then(|s| snapshot_note(&s));
         }
         eprintln!(
-            "  {GROUP}/{}: kiln's load path: {}{}",
+            "  {GROUP}/{}: kiln's load path: {} ({})",
             case.name,
             info.path(),
-            info.producer_note.as_deref().map_or_else(String::new, |n| format!(" ({n})"))
+            info.consumer_note.as_deref().unwrap_or("no note")
         );
         infos.insert(case.name, info);
     }
@@ -812,10 +684,6 @@ fn run_in(
 
     let (mut report, files) = judge(opts, cx, &entries, test, &test_run, &oracle_run)?;
     print_ratios(&entries, &test_run, &oracle_run);
-    for f in &check_failures {
-        report.failed += 1;
-        println!("\nimage/replay difference: {f}");
-    }
 
     let rec = RunRecord {
         timestamp: stamp.clone(),
@@ -1118,20 +986,6 @@ fn print_ratios(entries: &[Entry], test_run: &CompilerRun, oracle_run: &Compiler
     }
 }
 
-/// `-fkiln-pch-image=check` at `-fsyntax-only` and at `-O0 -c`: both
-/// paths in one process, compared (spec/driver.md "The declaration image").
-fn check(cx: &Ctx<'_>, s: &Subject, case: &Case, files: &Files) -> Result<(), String> {
-    for v in [Variant::LOAD_SYNTAX, Variant::LOAD_OBJ] {
-        let a: Vec<String> = args(case, v, true)
-            .into_iter()
-            .map(|a| if a == "-fkiln-pch-image=load" { "-fkiln-pch-image=check".into() } else { a })
-            .collect();
-        let cmd = files.command(s, &a, &cx.layout.root);
-        run_once(cx, s, &cmd, &a).map_err(|why| format!("{}: {why}", v.name()))?;
-    }
-    Ok(())
-}
-
 /// `git rev-parse --short=9 HEAD` of `root`, when it is a checkout.
 fn git_head(root: &Path) -> Option<String> {
     let out = Command::new("git")
@@ -1249,13 +1103,11 @@ fn measured<'a>(run: &'a CompilerRun, case: &Case, v: Variant) -> Option<&'a rec
 pub fn command_line(compiler: &str, case: &Case, v: Variant, kiln: bool) -> String {
     let a = args(case, v, kiln);
     let pch = format!("$T/{}.{}.pch", case.name, if kiln { "kiln" } else { "clang" });
-    let snap = format!("$T/{}.kiln-snap.pch", case.name);
     let obj = format!("$T/{}.o", case.name);
     let a: Vec<String> = a
         .into_iter()
         .map(|x| match x.as_str() {
             PCH => pch.clone(),
-            SNAP_PCH => snap.clone(),
             OBJ => obj.clone(),
             _ => x.replace(GCC16, "$GCC16"),
         })
@@ -1318,41 +1170,18 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
         let path = info.path();
         let _ = write!(s, "Path: {path}.");
         if let Some(n) = &info.producer_note {
-            let _ = write!(s, " The producer's `-v` says `{n}`.");
+            let _ = write!(s, " The producer's `-v` says `snapshot {n}`.");
         }
         if let Some(n) = &info.consumer_note {
-            let _ = write!(s, " The consumer's says `{n}`.");
-        }
-        match &info.check {
-            Some(Ok(())) => {
-                let _ = write!(s, " `-fkiln-pch-image=check` finds the image equal to replay.");
-            }
-            Some(Err(why)) => {
-                let first = why.lines().find(|l| l.contains("error")).unwrap_or(why);
-                let _ = write!(s, " **`-fkiln-pch-image=check` differs**: `{}`.", first.trim());
-            }
-            None => {}
-        }
-        if case.has(Variant::SNAP_BUILD) {
-            let _ = write!(s, " Snapshot path: {}.", info.snapshot_path());
-            if let Some(n) = &info.snap_producer_note {
-                let _ = write!(s, " The snapshot producer's `-v` says `snapshot {n}`.");
-            }
-            if let Some(n) = &info.snap_consumer_note {
-                let _ = write!(s, " Its consumer's says `snapshot {n}`.");
-            }
+            let _ = write!(s, " The consumer's says `snapshot {n}`.");
         }
         let _ = writeln!(s, "\n");
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "PCH file: kiln {}, clang {}",
+            "PCH file: kiln {}, clang {}.\n",
             size(info.pch_bytes[0]),
             size(info.pch_bytes[1])
         );
-        if case.has(Variant::SNAP_BUILD) {
-            let _ = write!(s, ", kiln with the snapshot {}", size(info.pch_bytes[2]));
-        }
-        let _ = writeln!(s, ".\n");
         if !case.compared() {
             let _ = writeln!(s, "clang 19 has no `<meta>`: kiln's rows only.\n");
         }
@@ -1416,22 +1245,23 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
                 buys(cx.oracle_run)
             );
         }
-        if case.has(Variant::SNAP_BUILD) {
-            // The snapshot against replay and against clang's PCH, for the
-            // unit and the empty main file.
+        {
+            // kiln's load against its replay and against clang's PCH, for
+            // the unit and the empty main file.
             let k = |v| wall(measured(cx.test_run, case, v));
             let o = |v| wall(measured(cx.oracle_run, case, v));
             let row = |obj: bool, empty: bool| {
-                let snap = variant(Via::Snap, obj, empty);
-                format!(
-                    "{} vs replay, {} vs clang's PCH",
-                    ratio(k(snap), k(variant(Via::Replay, obj, empty))),
-                    ratio(k(snap), o(variant(Via::Load, obj, empty)))
-                )
+                let load = variant(Via::Load, obj, empty);
+                let mut r =
+                    format!("{} vs replay", ratio(k(load), k(variant(Via::Replay, obj, empty))));
+                if case.compared() {
+                    let _ = write!(r, ", {} vs clang's PCH", ratio(k(load), o(load)));
+                }
+                r
             };
             let _ = writeln!(
                 s,
-                "\nWall time of the kiln snapshot: `-fsyntax-only` {}; `-O0 -c` {}; empty main, \
+                "\nWall time of kiln's PCH load: `-fsyntax-only` {}; `-O0 -c` {}; empty main, \
                  `-fsyntax-only` {}; empty main, `-O0 -c` {}.",
                 row(false, false),
                 row(true, false),
@@ -1444,7 +1274,7 @@ pub fn render_region(cx: &RegionContext<'_>) -> String {
             "\n<details><summary>Command lines (from the repo root, `T=$(mktemp -d)`)</summary>\n"
         );
         let _ = writeln!(s, "```sh");
-        for v in Variant::SHOWN.into_iter().filter(|v| case.has(*v)) {
+        for v in Variant::SHOWN {
             let _ = writeln!(s, "{}", command_line("kiln++", case, v, true));
             if !v.kiln_only() && case.compared() {
                 let _ = writeln!(s, "{}", command_line(oracle_name, case, v, false));
@@ -1464,21 +1294,18 @@ mod tests {
     fn args_name_the_pch_and_never_dev_null() {
         let gnu = &CASES[0];
         let build = args(gnu, Variant::BUILD, true);
-        assert_eq!(
-            build.join(" "),
-            "-std=c++26 -fkiln-pch-image -x c++-header bench/pch/gnu.h -o <pch>"
-        );
+        assert_eq!(build.join(" "), "-std=c++26 -x c++-header bench/pch/gnu.h -o <pch>");
         assert_eq!(
             args(gnu, Variant::BUILD, false).join(" "),
             "-std=c++26 -x c++-header bench/pch/gnu.h -o <pch>"
         );
         assert_eq!(
             args(gnu, Variant::LOAD_OBJ, true).join(" "),
-            "-std=c++26 -fkiln-pch-image=load -include-pch <pch> -O0 -c -o <obj> bench/pch/gnu.cpp"
+            "-std=c++26 -include-pch <pch> -O0 -c -o <obj> bench/pch/gnu.cpp"
         );
         assert_eq!(
             args(&CASES[1], Variant::REPLAY_SYNTAX, true).join(" "),
-            "-std=c++26 -stdlib=libc++ -fno-kiln-pch-image -include-pch <pch> -fsyntax-only \
+            "-std=c++26 -stdlib=libc++ -fno-kiln-pch-snapshot -include-pch <pch> -fsyntax-only \
              bench/pch/lcx.cpp"
         );
         assert_eq!(
@@ -1487,7 +1314,7 @@ mod tests {
         );
         assert_eq!(
             args(&CASES[4], Variant::BUILD, true).join(" "),
-            "-std=c17 -fkiln-pch-image -x c-header bench/pch/c.h -o <pch>"
+            "-std=c17 -x c-header bench/pch/c.h -o <pch>"
         );
         for c in CASES {
             for v in Variant::ALL {
@@ -1496,7 +1323,7 @@ mod tests {
                     assert!(!a.iter().any(|x| x.contains("/dev/null")), "{a:?}");
                     if v.mode() != Mode::Syntax {
                         let o = a.iter().position(|x| x == "-o").expect("an output");
-                        assert!([PCH, SNAP_PCH, OBJ].contains(&a[o + 1].as_str()), "{a:?}");
+                        assert!([PCH, OBJ].contains(&a[o + 1].as_str()), "{a:?}");
                     }
                 }
             }
@@ -1525,29 +1352,26 @@ mod tests {
         assert!((compare::ACCT_PCT - 2.0).abs() < f64::EPSILON);
     }
 
-    /// The snapshot variants carry the producer's flags (`-O0` on every
-    /// one), the empty ones compile the shared empty unit, and the `meta`
-    /// case names GCC 16 by placeholder.
+    /// The load and replay rows read the build's PCH (replay with
+    /// `-fno-kiln-pch-snapshot`, kiln only), the empty ones compile the
+    /// shared empty unit, and the `meta` case names GCC 16 by placeholder.
     #[test]
-    fn snapshot_and_empty_variants() {
+    fn replay_and_empty_variants() {
         let gnu = &CASES[0];
         assert_eq!(
-            args(gnu, Variant::SNAP_BUILD, true).join(" "),
-            "-std=c++26 -fkiln-pch-snapshot=write -O0 -x c++-header bench/pch/gnu.h -o <snap-pch>"
-        );
-        assert_eq!(
-            args(gnu, Variant::SNAP_SYNTAX, true).join(" "),
-            "-std=c++26 -fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -fsyntax-only \
-             bench/pch/gnu.cpp"
-        );
-        assert_eq!(
-            args(gnu, variant(Via::Snap, true, true), true).join(" "),
-            "-std=c++26 -fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -c -o <obj> \
+            args(gnu, variant(Via::Replay, true, true), true).join(" "),
+            "-std=c++26 -fno-kiln-pch-snapshot -include-pch <pch> -O0 -c -o <obj> \
              bench/pch/empty.cpp"
         );
+        assert!(Variant::REPLAY_SYNTAX.kiln_only() && !Variant::LOAD_SYNTAX.kiln_only());
         assert_eq!(
             args(gnu, variant(Via::Load, false, true), false).join(" "),
             "-std=c++26 -include-pch <pch> -fsyntax-only bench/pch/empty.cpp"
+        );
+        assert_eq!(
+            args(gnu, variant(Via::Load, false, true), true),
+            args(gnu, variant(Via::Load, false, true), false),
+            "kiln's load is the default path"
         );
         let meta = CASES.iter().find(|c| c.gcc16).expect("a meta case");
         assert_eq!(
@@ -1556,8 +1380,6 @@ mod tests {
              bench/pch/meta.cpp"
         );
         assert!(!meta.compared());
-        let c = &CASES[4];
-        assert!(c.c && !c.has(Variant::SNAP_SYNTAX) && c.has(Variant::REPLAY_OBJ));
         // Every variant has its own name, and the names map back.
         let names: std::collections::BTreeSet<String> =
             Variant::ALL.iter().map(|v| v.name()).collect();
@@ -1609,26 +1431,6 @@ mod tests {
     }
 
     #[test]
-    fn notes_give_the_path() {
-        let producer = "kiln -cc1 version 1.0.1\nnote: precompiled header '/t/x.pch': consumers \
-                        replay the header: a type the image does not carry\n";
-        assert_eq!(
-            image_note(producer).as_deref(),
-            Some("consumers replay the header: a type the image does not carry")
-        );
-        let replayed = "note: precompiled header 'p.pch' is replayed: it has no declaration image";
-        assert_eq!(
-            image_note(replayed).as_deref(),
-            Some("is replayed: it has no declaration image")
-        );
-        assert_eq!(path_of(image_note(replayed).as_deref()), "replay");
-        let image = "note: precompiled header 'p.pch': declaration image (162 records)";
-        assert_eq!(path_of(image_note(image).as_deref()), "image");
-        assert_eq!(path_of(None), "unknown");
-        assert_eq!(image_note("warning: nothing\n"), None);
-    }
-
-    #[test]
     fn time_is_advisory_unless_asked() {
         let t = thresholds(&ThresholdOverrides::default());
         assert!(t.time_pct.is_infinite());
@@ -1661,7 +1463,7 @@ mod tests {
         );
         assert_eq!(
             command_line("kiln++", &CASES[2], Variant::BUILD, true),
-            "kiln++ -std=c++26 -fkiln-pch-image -x c++-header bench/pch/mid.h -o $T/mid.kiln.pch"
+            "kiln++ -std=c++26 -x c++-header bench/pch/mid.h -o $T/mid.kiln.pch"
         );
     }
 
