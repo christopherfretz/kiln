@@ -177,12 +177,6 @@ pub(crate) struct BmiState {
     /// The main unit's declaration image is wanted
     /// ([`Sema::record_module_image`], spec/modules.md §11.11 "Part 2a").
     pub(crate) record_image: bool,
-    /// WP-1353: the producer's namespace-scope declarations, for a
-    /// precompiled header's deduplication keys (`Some` when recorded).
-    pub(crate) pch_ext_decls: Option<Vec<crate::bmi_image::ExtDecl>>,
-    /// WP-1353: the keys of the precompiled header the consumer loaded
-    /// from its image, until the parser takes them.
-    pub(crate) pch_dedup: Vec<crate::bmi_image::ExtDecl>,
 }
 
 impl std::fmt::Debug for BmiState {
@@ -1069,12 +1063,7 @@ impl BmiState {
     /// image is recorded: a snapshot is not taken with them (spec/sema.md
     /// "Snapshots").
     pub(crate) fn is_at_rest(&self) -> bool {
-        self.recorder.is_none()
-            && self.tables.is_empty()
-            && self.hits == 0
-            && !self.record_image
-            && self.pch_ext_decls.is_none()
-            && self.pch_dedup.is_empty()
+        self.recorder.is_none() && self.tables.is_empty() && self.hits == 0 && !self.record_image
     }
 }
 

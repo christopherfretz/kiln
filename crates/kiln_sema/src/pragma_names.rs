@@ -175,8 +175,8 @@ impl Sema<'_, '_> {
     /// a function or variable, that `weak` does not apply to it. The
     /// pragmas are grouped by identifier, in the order each identifier
     /// was first named.
-    /// The pending list is kept: a precompiled header's image check
-    /// (`pch_uncarried_state`) reads it after the end of the unit.
+    /// The pending list is kept: a precompiled header's snapshot carries
+    /// it (`Sema::weak_pending`).
     pub(crate) fn diagnose_pending_weak(&mut self) {
         let pending = self.weak_pending.clone();
         let mut names: Vec<Symbol> = Vec::new();

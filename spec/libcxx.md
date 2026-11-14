@@ -148,7 +148,7 @@ cargo xtask libcxx [options] [<dir>...]
 | `--report <file.md>` | Write the generated region of a status page (see "Report"). |
 | `--results <file.tsv>` | Write one line per test (see "Results file"). |
 | `--shard <K/N>` | Run only shard K of N (1 ≤ K ≤ N; anything else is a usage error): of the sorted selection (after `--filter`), the tests whose 0-based index is K − 1 modulo N. Round robin, so the shards of one selection are disjoint, cover it, and get a similar mix of directories. The start line is preceded by `xtask libcxx: shard K/N: <n> of <total> tests`. The x86_64 sweep (`.github/workflows/sweep.yml`, WP-961) runs the full suite as 6 shards. |
-| `--pch-diff load\|replay\|check\|snapshot` | Compile each pass test's leading `#include`s into a PCH and the test with `-include-pch` of it (see "PCH differential"). kiln only: with a clang `--compiler` it is a usage error, as is any other value. |
+| `--pch-diff replay\|snapshot` | Compile each pass test's leading `#include`s into a PCH and the test with `-include-pch` of it (see "PCH differential"). kiln only: with a clang `--compiler` it is a usage error, as is any other value. |
 | `--keep` | Keep the scratch directories under `<target>/xtask-libcxx/` and the run's `TMPDIR` root `<temp>/kiln-tmp-<pid>-<nanos>/` (see "Commands"). |
 | `--no-fail` | Exit 0 even when the run has failures. |
 | `-v` | Print every result, with the tail of the failing step's stderr. |
@@ -201,14 +201,14 @@ Every other test runs as without the option. For one that applies:
    `src/<file>`. kiln builds the PCH with the base flags, `-iquote <test
    dir>` (for its quoted `#include`s), the test's compile flags (the
    consumer's order: a snapshot is used only when the command lines
-   match) and `-fkiln-pch-image -v -fno-kiln-pch-snapshot` (`snapshot`:
-   nothing, the default path since WP-1404, with `KILN_SNAP_TIMING=1`), under the same memory limit and compile
+   match) and the mode's producer flags (`replay`:
+   `-fno-kiln-pch-snapshot`; `snapshot`: nothing, the default path since
+   WP-1404, with `KILN_SNAP_TIMING=1`), under the same memory limit and compile
    timeout as a compile step. If that fails, the test fails at
    `compile`, with `the PCH of the leading #includes does not build`.
 2. **The test** compiles the copy with `-include-pch <pch>`, the mode's
-   consumer flags (`load`: `-fkiln-pch-image=load`; `replay`:
-   `-fno-kiln-pch-image`; `check`: `-fkiln-pch-image=check`; each with
-   `-fno-kiln-pch-snapshot`; `snapshot`: none, with `KILN_SNAP_TIMING=1`) and
+   consumer flags (`replay`: `-fno-kiln-pch-snapshot`; `snapshot`: none,
+   with `KILN_SNAP_TIMING=1`) and
    `-iquote <test dir>`. Its outcome is judged as without the option.
    So a gate is green under `--pch-diff` exactly when it is green
    without it.
@@ -225,12 +225,9 @@ without a PCH is two runs with `--results` (WP-1395's sweep is in
 docs/status/pch-snapshot-gates.md).
 
 **Measured** (m3 gate, libc++ 19, `-j 4`, harness profile,
-2026-11-11): `load` and `replay` both give 636 pass and 6 unsupported,
-as without the option. 575 tests get a PCH, and all of them replay:
-the image carries no libc++ header yet. The reasons are a type the
-image does not carry (217), a member function template (157), a
-template argument the image does not carry (104), an explicit or
-partial specialization (94), and a declaration in a template (3).
+2026-11-11): `replay` gives 636 pass and 6 unsupported, as without the
+option, and 575 tests get a PCH. The `snapshot` numbers are in
+docs/status/pch-snapshot-gates.md.
 
 ## Build profiles
 

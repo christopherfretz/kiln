@@ -1,7 +1,7 @@
 // [basic.link]/6, [basic.link]/11, [cpp.include]: a block-scope
 // declaration in the test file redeclares the entity an included header's
 // block-scope declaration names, so the types must agree. With
-// `--pch-diff`, the header's precompiled image gives the same errors
+// `--pch-diff`, the header's snapshot gives the same errors
 // (WP-1293).
 //@ expect: compile-fail
 //@ strict-diags

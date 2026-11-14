@@ -1,7 +1,7 @@
 // [dcl.type.decltype], [temp.type]/4: `decltype(e)` of a non-dependent
 // operand and of a type-dependent one, as a return type (with SFINAE,
 // [temp.deduct]/8), a member typedef and an alias template. With
-// `--pch-diff`, the header's image carries each operand (WP-1300).
+// `--pch-diff`, the header's snapshot carries each operand (WP-1300).
 //@ expect: run
 #include "Inputs/expr_decltype.h"
 

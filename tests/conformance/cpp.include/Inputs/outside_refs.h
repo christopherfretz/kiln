@@ -1,4 +1,4 @@
-// Forms a precompiled header's image carries (WP-1360): bodies and types
+// Forms a precompiled header's snapshot carries (WP-1360): bodies and types
 // that name a declaration the walk records later.
 #ifndef OUTSIDE_REFS_H
 #define OUTSIDE_REFS_H

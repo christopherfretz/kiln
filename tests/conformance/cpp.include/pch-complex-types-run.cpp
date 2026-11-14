@@ -1,6 +1,6 @@
 // [basic.fundamental] (GNU extension: complex types): `_Complex` and
 // `__complex__` types in a header's declarations and bodies. With
-// `--pch-diff`, the header's precompiled image carries them (WP-1320).
+// `--pch-diff`, the header's snapshot carries them (WP-1320).
 //@ expect: run
 #include "Inputs/complex_types.h"
 

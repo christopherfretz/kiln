@@ -1,4 +1,4 @@
-// Forms a precompiled header's image carries (WP-1368): overloaded member
+// Forms a precompiled header's snapshot carries (WP-1368): overloaded member
 // accesses in dependent calls, with their whole candidate sets.
 #ifndef OVL_MEMBERS_H
 #define OVL_MEMBERS_H

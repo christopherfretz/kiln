@@ -5,7 +5,7 @@
 // from an included header (the shapes of <__locale_t.h>,
 // <__stddef_max_align_t.h>, <limits>, <__type_traits/is_integral.h>,
 // <cstdarg> and <cstdio>). With `--pch-diff`, the header's precompiled
-// image carries them (WP-1310).
+// snapshot carries them (WP-1310).
 //@ expect: run
 #include "Inputs/predef_aligned.h"
 

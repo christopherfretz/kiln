@@ -2,7 +2,7 @@
 // unqualified and class-qualified calls of member function templates
 // (`pick<T>(t)`, `holder::pick(t)`, `impl::test<T>(0)`) and a dependent
 // decltype base resolve at each instantiation. With `--pch-diff`, the
-// header's precompiled image carries the names with the members they
+// header's snapshot carries the names with the members they
 // found and their naming class (WP-1314).
 //@ expect: run
 #include "Inputs/member_names.h"

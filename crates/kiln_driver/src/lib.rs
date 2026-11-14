@@ -28,10 +28,8 @@ pub mod link;
 pub mod llvm;
 pub mod module_cache;
 mod pch;
-mod pch_check;
 #[doc(hidden)]
 pub mod pch_fuzz;
-mod pch_image;
 mod pch_snapshot;
 /// The `KILN_SNAP_TIMING` process phase timer (WP-1401): `main` marks its
 /// start and prints the report before it exits.
@@ -511,17 +509,12 @@ pub(crate) fn syntax_only(
         }
         return r;
     }
-    // `-fkiln-pch-image=check` (WP-1036).
-    let input = pch_check::Input { tc, std, path, stdin_text, diag_opts, stderr: &io.stderr };
-    if let Some(r) = pch_check::syntax_only(args, &input) {
-        return r;
-    }
     let job = Job {
         args,
         toolchain: tc,
         std,
         path,
-        stdin_text: input.stdin_text,
+        stdin_text,
         diag_opts,
         stderr: io.stderr.clone(),
         asm: false,
@@ -578,7 +571,14 @@ fn driver_warnings(
             no_3dnow.push(a);
         }
     }
-    if promoted.is_empty() && ignored.is_none() && unused_xray.is_empty() && no_3dnow.is_empty() {
+    // WP-1397: the retired `-fkiln-pch-image`, once per invocation.
+    let image = args.pch.image_ignored.as_deref();
+    if promoted.is_empty()
+        && ignored.is_none()
+        && unused_xray.is_empty()
+        && no_3dnow.is_empty()
+        && image.is_none()
+    {
         return false;
     }
     let sm = SourceManager::new();
@@ -599,6 +599,9 @@ fn driver_warnings(
                 .arg(flag)
                 .emit(&e);
         }
+    }
+    if let Some(flag) = image {
+        Diag::new(DiagId::drv_pch_image_ignored, Span::INVALID).arg(flag).emit(&e);
     }
     for x in unused_xray {
         Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(x).emit(&e);

@@ -1,7 +1,7 @@
 // [dcl.enum]/2-5, [temp.inst]/3, [temp.mem.enum]: the enumerations of a
 // class template in an included header get their enumerators' values
 // from each instantiation (the shape of <__type_traits/is_integral.h>).
-// With `--pch-diff`, the header's precompiled image carries them as
+// With `--pch-diff`, the header's snapshot carries them as
 // patterns (WP-1310).
 //@ expect: run
 #include "Inputs/member_enums.h"

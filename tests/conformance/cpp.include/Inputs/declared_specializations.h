@@ -1,4 +1,4 @@
-// Specialization forms a precompiled header's image carries (WP-1352).
+// Specialization forms a precompiled header's snapshot carries (WP-1352).
 #pragma once
 namespace d1 {
 template <class T> struct ch;

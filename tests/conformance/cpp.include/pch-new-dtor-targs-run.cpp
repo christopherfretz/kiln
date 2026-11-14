@@ -2,7 +2,7 @@
 // [basic.stc.dynamic.general]/2: new-expressions (also using the
 // implicitly declared allocation functions), pseudo-destructor calls and
 // calls with explicit template arguments in a header (the shapes of
-// <type_traits>). With `--pch-diff`, the header's precompiled image
+// <type_traits>). With `--pch-diff`, the header's snapshot
 // carries them (WP-1320).
 //@ expect: run
 #include "Inputs/new_dtor_targs.h"

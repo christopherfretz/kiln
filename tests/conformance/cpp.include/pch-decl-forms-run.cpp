@@ -6,7 +6,7 @@
 // using-enum-declaration, explicit(expr) constructors of a specialization
 // the header completed, an abbreviated function template and a literal
 // operator behave the same through a precompiled header. With
-// `--pch-diff`, the header's image carries them (WP-1345).
+// `--pch-diff`, the header's snapshot carries them (WP-1345).
 //@ expect: run
 #include "Inputs/decl_forms.h"
 

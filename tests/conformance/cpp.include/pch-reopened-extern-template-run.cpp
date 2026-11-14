@@ -1,7 +1,7 @@
 // [temp.explicit]/2, /10, [namespace.def.general]/2: explicit
 // instantiations written in a later block of a namespace than the one
 // that first named the specialization (the shape of <bits/basic_ios.tcc>).
-// With `--pch-diff`, the header's precompiled image carries them in
+// With `--pch-diff`, the header's snapshot carries them in
 // source order after the walk (WP-1320).
 //@ expect: run
 //@ stdout: 12 81

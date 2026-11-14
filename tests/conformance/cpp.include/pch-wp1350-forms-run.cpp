@@ -3,7 +3,7 @@
 // its member typedef named in a member alias template, and its uses of a
 // function template specialization's default arguments behave the same
 // through a precompiled header; the unit uses the same specializations'
-// defaults again. With `--pch-diff`, the header's image carries them
+// defaults again. With `--pch-diff`, the header's snapshot carries them
 // (WP-1350).
 //@ expect: run
 #include "Inputs/wp1350_forms.h"

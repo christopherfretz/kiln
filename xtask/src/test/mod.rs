@@ -57,9 +57,9 @@ options:
                       oracles, xfail ignored (spec/harness.md \"Debug-info sweep\")
   --pch-diff <how>    PCH differential: kiln compiles each test that opens with
                       #includes without a PCH and with -include-pch of a PCH of
-                      them, read by `load` (the declaration image, or its
-                      fallback), `replay`, `check` or `snapshot` (the
-                      default path, no PCH option); the exit status,
+                      them, read by `replay` (-fno-kiln-pch-snapshot) or
+                      `snapshot` (the default path, no PCH option); the exit
+                      status,
                       diagnostics, IR and run must agree; no oracles, xfail
                       ignored (spec/harness.md \"PCH differential\")
   --pch-diff-require-restore
@@ -195,7 +195,7 @@ pub struct Options {
     /// and reads the declaration image (`-fkiln-bmi-image`,
     /// spec/modules.md §11.11 "Part 2a").
     pub bmi_image: bool,
-    /// `--pch-diff load|replay|check`: the PCH differential
+    /// `--pch-diff replay|snapshot`: the PCH differential
     /// (`spec/harness.md` "PCH differential").
     pub pch_diff: Option<crate::util::pch_diff::PchDiff>,
     /// `--pch-diff-require-restore`: with `--pch-diff snapshot`, a
@@ -289,10 +289,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--bmi-image" => o.bmi_image = true,
             "--pch-diff" => {
                 let v = value("--pch-diff")?;
-                o.pch_diff =
-                    Some(crate::util::pch_diff::PchDiff::parse(&v).ok_or_else(|| {
-                        format!("bad --pch-diff `{v}` (load|replay|check|snapshot)")
-                    })?);
+                o.pch_diff = Some(
+                    crate::util::pch_diff::PchDiff::parse(&v)
+                        .ok_or_else(|| format!("bad --pch-diff `{v}` (replay|snapshot)"))?,
+                );
             }
             "--pch-diff-require-restore" => o.pch_require_restore = true,
             "--pch-diff-synthetic" => o.pch_synthetic = true,

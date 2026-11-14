@@ -385,8 +385,8 @@ pub struct TestResult {
     /// line)`, so an audit can spot a wrong-reason failure (spec/libcxx.md
     /// ".compile.fail.cpp").
     pub first_error: Option<String>,
-    /// Under `--pch-diff`, the path the test's PCH was read by (`image (N
-    /// records)`, `replay: <why>`, `replay`); `None` without a PCH.
+    /// Under `--pch-diff`, the path the test's PCH was read by (`snapshot`,
+    /// `replay: <why>`, `replay`); `None` without a PCH.
     pub pch_path: Option<String>,
 }
 
@@ -1027,8 +1027,6 @@ fn pch_prefix(
         pch_diff::PchDiff::Snapshot => {
             pch_diff::snapshot_path(&String::from_utf8_lossy(&m.stderr), "")
         }
-        _ => pch_diff::path_note(&String::from_utf8_lossy(&m.stderr))
-            .unwrap_or_else(|| "no declaration image".to_owned()),
     });
     let mut with = vec!["-include-pch".to_owned(), pch.display().to_string()];
     with.extend(mode.consumer_flags().iter().map(|f| (*f).to_owned()));

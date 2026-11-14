@@ -1,6 +1,6 @@
 // [temp.variadic]/5, [temp.alias]/2: pack expansions of a known length
 // in alias templates' underlying types and a return type. With
-// `--pch-diff`, the header's image carries each expansion (WP-1300).
+// `--pch-diff`, the header's snapshot carries each expansion (WP-1300).
 //@ expect: run
 #include "Inputs/expr_pack.h"
 

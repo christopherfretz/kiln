@@ -209,7 +209,7 @@ needs but the `FileChange` callbacks do not see:
 
 **Lookup log (WP-1403).** `HeaderSearch::record_lookups()` makes header
 search record what the PCH snapshot's lookup-tolerant search path needs
-(spec/driver.md "Snapshots"); `IncludeResolver::take_lookup_log` (default
+(spec/pch.md); `IncludeResolver::take_lookup_log` (default
 `None`) and `Preprocessor::take_lookup_log` hand it over. A
 `LookupLog` holds a table of directory names and, in the order first
 seen, one `Lookup` per distinct key, and the search list the lookups

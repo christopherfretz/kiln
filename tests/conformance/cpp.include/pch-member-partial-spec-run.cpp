@@ -1,6 +1,6 @@
 // [temp.spec.partial.general]/7: a member template's partial
 // specializations are declared in its class; access to them is the
-// class's. With `--pch-diff`, the header's precompiled image carries
+// class's. With `--pch-diff`, the header's snapshot carries
 // them (WP-1342).
 //@ expect: run
 #include "Inputs/member_partial_specs.h"

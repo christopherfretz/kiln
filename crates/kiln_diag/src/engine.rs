@@ -136,7 +136,7 @@ impl<'sm> DiagEngine<'sm> {
     /// engine was restored from reported when it was built (spec/diag.md
     /// "Snapshots"); they are not shown again, nor counted. 0 for an
     /// engine that was not restored. A `-verify` consumer replays
-    /// instead when it is not 0 (spec/driver.md "PCH snapshot: behaviour").
+    /// instead when it is not 0 (spec/pch.md "Consumer").
     pub fn prefix_reported(&self) -> u32 {
         self.prefix_reported
     }

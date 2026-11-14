@@ -2,7 +2,7 @@
 // in a namespace names the entity of the same name an included header
 // declares with C language linkage in another namespace, and conflicts
 // with a header's global variable of that name. With `--pch-diff`, the
-// header's precompiled image gives the same errors (WP-1293: a `load`
+// header's snapshot gives the same errors (WP-1293: a `load`
 // consumer accepted both).
 //@ expect: compile-fail
 //@ strict-diags

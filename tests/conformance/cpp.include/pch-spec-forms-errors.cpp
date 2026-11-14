@@ -1,5 +1,5 @@
 // [temp.spec.partial.match]/2, [temp.mem]/1, [temp.mem.func]/1: wrong
-// assertions about the specializations the header's precompiled image
+// assertions about the specializations the header's snapshot
 // carries (WP-1358) still fail, as without a precompiled header.
 //@ expect: compile-fail
 //@ diag: 12:15 error "static assertion failed due to requirement"

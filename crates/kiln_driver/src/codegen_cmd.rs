@@ -329,9 +329,8 @@ impl CodegenJob<'_> {
         Ok((if errors == 0 { module } else { None }, errors, deps))
     }
 
-    /// The parser's options of the job (`pch`: a declaration image to
-    /// load).
-    fn parse_options(&self, pch: Option<kiln_parse::PchLoad>) -> ParseOptions {
+    /// The parser's options of the job.
+    fn parse_options(&self) -> ParseOptions {
         let job = &self.0;
         let a = job.args;
         let x86 = !job.toolchain.target.is_aarch64();
@@ -365,7 +364,6 @@ impl CodegenJob<'_> {
                 && job.module_output_path().is_some(),
             image_census: a.bmi_image_census,
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
-            pch,
             ..job.std.parse_options()
         }
     }
@@ -415,8 +413,8 @@ impl CodegenJob<'_> {
         let (mut tu, mut pp, deps, main_id) = if let Some(restore) = restore {
             // WP-1383: the prefix's state restored.
             let (sema, pp, deps, popts) =
-                job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
-                    self.parse_options(o)
+                job.restore_front(sm, engine, interner, inputs, restore, &target, || {
+                    self.parse_options()
                 })?;
             let main_id = pp.main_file();
             let (tu, pp) = kiln_parse::continue_preprocessed(sema, pp, &target, &popts);
@@ -426,8 +424,7 @@ impl CodegenJob<'_> {
         } else {
             let (pp, deps) = job.build_preprocessor(sm, engine, interner, inputs, true)?;
             let main_id = pp.main_file();
-            let pch = crate::pch_image::sema_load(a, &pp, sm, engine).ok()?;
-            let popts = self.parse_options(pch);
+            let popts = self.parse_options();
             let limits = a.constexpr.limits();
             let (tu, pp) = parse_preprocessed(
                 pp,
@@ -443,7 +440,6 @@ impl CodegenJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
-        crate::pch_image::finish(a, &mut pp, sm, interner, engine, None);
         *deps_out = crate::pp_cmd::finish_deps(pp, deps);
         let mut module = None;
         if engine.error_count() == 0 {
@@ -2048,23 +2044,8 @@ fn frontend(
         Some(replay) => Job { args: replay, ..job },
         None => job,
     };
-    let checked = crate::pch_check::codegen(
-        args,
-        &crate::pch_check::Input {
-            tc,
-            std,
-            path: &input.path,
-            stdin_text: job.stdin_text.clone(),
-            diag_opts,
-            stderr: &io.stderr,
-        },
-    );
-    let (mut ir, deps) = if let Some(r) = checked {
-        r
-    } else {
-        let (module, _, deps) = CodegenJob(job).run();
-        (module.map(print_ir), deps)
-    };
+    let (module, _, deps) = CodegenJob(job).run();
+    let mut ir = module.map(print_ir);
     if let Some(d) = snap_diff {
         crate::pch_snapshot::report_mismatch(args, diag_opts, &io.stderr, &d);
         ir = None;

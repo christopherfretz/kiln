@@ -310,7 +310,7 @@ pub fn checksum(bytes: &[u8]) -> u64 {
     fnv(FNV_OFFSET, bytes)
 }
 
-/// The checksum of a precompiled header's section block and image
+/// The checksum of a precompiled header's section block
 /// ([`write_sections`]; spec/modules.md §11.13 "In a precompiled
 /// header"): word-wise, four independent lanes of 8-byte words, so it
 /// runs at memory speed where FNV-1a 64 ([`checksum`]) is one multiply

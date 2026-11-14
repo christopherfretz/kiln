@@ -5,7 +5,7 @@
 // dependent specializations of the builtin templates, and a default
 // template argument that reads a static data member while a member of
 // a completed specialization names it. With `--pch-diff`, the header's
-// precompiled image carries them (WP-1344).
+// snapshot carries them (WP-1344).
 //@ expect: run
 #include "Inputs/specializations_carried.h"
 

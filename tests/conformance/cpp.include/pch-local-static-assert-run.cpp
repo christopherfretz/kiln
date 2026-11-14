@@ -2,7 +2,7 @@
 // block-scope static assertions are checked again by each instantiation
 // of their function, and a call through explicit template arguments
 // (`pick<int>(3)`) names the same specialization. With `--pch-diff`, the
-// header's precompiled image carries the assertions as local
+// header's snapshot carries the assertions as local
 // declarations and the names with their written arguments (WP-1314).
 //@ expect: run
 #include "Inputs/local_static_assert.h"

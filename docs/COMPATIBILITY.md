@@ -240,7 +240,47 @@ passes `-Xclang -emit-pch`, `-Xclang -include-pch` and `-Xclang -include`.
 
 | feature | status | notes |
 |---|---|---|
-| PCH (`-x c++-header`, `-x c-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; a restored PCH is 0.4x to 0.6x of a replay (1.2.0)** | kiln's PCH is a record (the header path, the hash of every file it read, and the options that change meaning) plus, by default since 1.2.0, a snapshot of the front end's state at the end of the header. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then restores the snapshot; when it cannot (another configuration: one `-Wpch-snapshot-unused` warning), it processes the header again as if `-include`d. On `<bits/stdc++.h>` a restored `-fsyntax-only` consumer takes 0.86x of clang 19's PCH time; on smaller prefixes and on libc++ it takes up to 1.6x, mostly reading the larger file ([status/pch.md](status/pch.md)). `-fno-kiln-pch-snapshot` always replays. clang's `.pch` files are refused, and vice versa. Same-size edits are found by content, not mtime. The first `-include foo.h` uses `foo.h.pch` (or `foo.h.gch`) when one exists, as in clang. The serialized form that shares the module-file format (`-fkiln-pch-image`) is experimental and off by default; a C header never gets that image, but does get the snapshot ([KNOWN_ISSUES.md](KNOWN_ISSUES.md#precompiled-headers), [status/pch.md](status/pch.md)). |
+| PCH (`-x c++-header`, `-x c-header`, `-emit-pch`, `-include-pch`, `-fpch-*`, `-Winvalid-pch`) | **works; a restored PCH is 0.4x to 0.6x of a replay (1.2.0)** | kiln's PCH is a record (the header path, the hash of every file it read, and the options that change meaning) plus, by default since 1.2.0, a snapshot of the front end's state at the end of the header. The consumer checks the record with clang's diagnostics (stale file, mismatched `-std`/target/macros) and then restores the snapshot; when it cannot, it processes the header again as if `-include`d. On `<bits/stdc++.h>` a restored `-fsyntax-only` consumer takes 0.86x of clang 19's PCH time; on smaller prefixes and on libc++ it takes up to 1.6x, mostly reading the larger file ([status/pch.md](status/pch.md)). `-fno-kiln-pch-snapshot` always replays. The first `-include foo.h` uses `foo.h.pch` (or `foo.h.gch`) when one exists, as in clang. The differences from clang's PCH are below. |
+
+Differences from clang's PCH (spec/pch.md "Deviations from clang"):
+
+- **The file.** A kiln PCH is not a clang PCH, and neither compiler reads
+  the other's (`fatal error: file 'p.pch' is a precompiled header built
+  by clang; kiln reads only its own precompiled headers`). It is larger
+  (35.2 MB against 26.7 MB for `<bits/stdc++.h>`), read whole rather than
+  mapped, and not byte-identical between two builds.
+- **Another configuration.** clang rejects a PCH whose configuration
+  differs with an error. kiln checks clang's record items with clang's
+  errors (language options, target, `-D` values, stale files), and for
+  everything else the snapshot records (the `-D` list itself, warning
+  options, other options, the working directory, include-path results)
+  it processes the header again, with one `-Wpch-snapshot-unused`
+  warning; plain `-Werror` does not promote it. An extra `-I` directory
+  that changes no lookup of the header is accepted, as in clang.
+- **Changed files.** A touch that leaves a file's content unchanged is
+  accepted, and a same-size edit is reported as `content changed`;
+  clang compares modification times (`mtime changed (was N, now M)`)
+  and can miss an edit made within the same second.
+- **The header's diagnostics** are not repeated by a consumer that
+  restores, as in clang; one that replays repeats them.
+- **`-verify`** consumers replay when the header reported diagnostics or
+  may hold `expected-*` directives, so those directives count; clang
+  never sees the header's diagnostics or directives with `-include-pch`.
+- **Module units** always replay, and a module unit kiln builds
+  in-process for `-fmodule-file=M=a.cppm` also gets the importer's PCH.
+- **Accepted, no effect:** `-f[no-]pch-instantiate-templates`,
+  `-fpch-codegen`, `-fpch-debuginfo` (a PCH is not an object) and
+  `-f[no-]pch-validate-input-files-content` (kiln compares content
+  anyway). `-fpch-preprocess` is an unknown argument.
+- **`-E`** with a clang PCH reports it and goes on without it; clang
+  reads the header name from its own PCH.
+- **The `.gch` probe** accepts kiln's and clang's PCH magic, not an
+  object file with a `__clangast` section, and also probes
+  `-Wp,-include,<h>`.
+- **kiln-only options:** `-f[no-]kiln-pch-snapshot[=write|load|check]`
+  and `-fkiln-pch-validate=mtime|content`. `-fkiln-pch-image` (kiln
+  1.1's experimental declaration image) is accepted and ignored with a
+  warning since 1.2.0.
 
 ## Libraries and applications
 

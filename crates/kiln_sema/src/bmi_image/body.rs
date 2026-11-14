@@ -2748,9 +2748,8 @@ impl Writer<'_, '_, '_> {
         Ok(w)
     }
 
-    /// A record for local variable or label `d`, or (in a precompiled
-    /// header) block-scope function or `extern` declaration `d`
-    /// ([`Writer::local_extern_rec`]).
+    /// A record for local variable or label `d`, or for a block-scope
+    /// function declaration in a template pattern.
     #[allow(clippy::too_many_lines)] // one branch per local kind
     pub(super) fn local_rec(&mut self, d: DeclId) -> W<u32> {
         let ast = &self.s.ast;
@@ -2759,7 +2758,7 @@ impl Writer<'_, '_, '_> {
         // A block-scope function declaration in a template pattern, which
         // sema keeps out of `local_externs` (WP-1345).
         let dep_fn = kind == DeclKind::Function && n.has(DeclFlags::DEPENDENT_CTX);
-        let local_fn = kind == DeclKind::Function && self.carries_local_extern(d) || dep_fn;
+        let local_fn = dep_fn;
         if !local_fn
             && !matches!(
                 kind,
@@ -2824,7 +2823,7 @@ impl Writer<'_, '_, '_> {
         }
         let prev = match ast.decls.redecl(d).and_then(|r| r.prev) {
             None => NONE,
-            Some(p) if dep_fn || self.carries_local_extern(d) => self.local_extern_prev(p)?,
+            Some(p) if dep_fn => self.local_extern_prev(p)?,
             Some(_) => return Err("a local redeclaration"),
         };
         let name = match n.name() {

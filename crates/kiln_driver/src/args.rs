@@ -855,21 +855,16 @@ pub struct PchArgs {
     /// as clang's `-E` does (set by `crate::pch`, never by an option;
     /// WP-1153).
     pub unread: Vec<(kiln_diag::DiagId, Vec<String>)>,
-    /// The last of `-f[no-]kiln-pch-image[=write|check|load]` (WP-1280,
-    /// spec/driver.md "Precompiled headers").
-    pub image: PchImage,
+    /// The last of `-f[no-]kiln-pch-image[=write|check|load]`, when it is
+    /// a positive form: the retired image path's option, accepted and
+    /// ignored with `drv_pch_image_ignored` (WP-1397, spec/pch.md
+    /// "Options").
+    pub image_ignored: Option<String>,
     /// The job precompiles its input (set by `crate::pch` on its
     /// producer's copy of the arguments).
     pub producing: bool,
-    /// The `-include-pch` file's preprocessor-state record, for
-    /// `-fkiln-pch-image=check`/`load` (set by `crate::pch`).
-    pub image_use: Option<PchImageUse>,
-    /// `-fkiln-pch-image=check` for a compile whose PCH has a declaration
-    /// image: what a `load` consumer compiles with, run next to the
-    /// replay and compared with it (WP-1036; set by `crate::pch`).
-    pub check_load: Option<Box<PchCheckLoad>>,
     /// The last of `-f[no-]kiln-pch-snapshot[=write|load|check]`
-    /// (spec/driver.md "Snapshots"); on (`Both`) by default.
+    /// (spec/pch.md); on (`Both`) by default.
     pub snapshot: PchSnapshot,
     /// The last `-fkiln-pch-validate=content|mtime`: how a snapshot
     /// consumer checks the files the PCH read (spec/driver.md
@@ -886,7 +881,7 @@ pub struct PchArgs {
     pub record_lookups: bool,
 }
 
-/// `-fkiln-pch-snapshot`'s mode (spec/driver.md "Snapshots", spec/snap.md
+/// `-fkiln-pch-snapshot`'s mode (spec/pch.md, spec/snap.md
 /// "Whole-compiler restore order"). The default is [`Self::Both`]
 /// (WP-1404): every PCH build writes a snapshot and every consumer
 /// restores it, replaying the header on any refusal.
@@ -923,7 +918,7 @@ impl PchSnapshot {
 }
 
 /// `-fkiln-pch-validate=`: how a snapshot consumer checks that the files
-/// the PCH read are unchanged (spec/driver.md "Snapshots").
+/// the PCH read are unchanged (spec/pch.md).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PchValidate {
     /// `mtime`: a file with the recorded size and modification time is
@@ -969,86 +964,6 @@ pub enum SnapshotRoots {
     /// The section's bytes from `start`.
     Memory { bytes: std::sync::Arc<Vec<u8>>, start: usize },
 }
-
-/// The arguments a `load` consumer differs in from replay's.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PchCheckLoad {
-    /// The `-include`s left after the PCH's.
-    pub includes: Vec<String>,
-    /// The record installed and the declaration image built.
-    pub image_use: PchImageUse,
-}
-
-impl Args {
-    /// The `load` consumer's arguments of a `-fkiln-pch-image=check`
-    /// compile (spec/driver.md "Precompiled headers").
-    #[must_use]
-    pub fn pch_load_variant(&self) -> Option<Args> {
-        let c = self.pch.check_load.as_deref()?;
-        let mut a = self.clone();
-        a.includes.clone_from(&c.includes);
-        a.pch.image_use = Some(c.image_use.clone());
-        a.pch.check_load = None;
-        Some(a)
-    }
-}
-
-/// `-fkiln-pch-image`'s mode (spec/driver.md "Precompiled headers").
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum PchImage {
-    /// No record is written; a record in the `-include-pch` file is
-    /// ignored.
-    #[default]
-    Off,
-    /// `-emit-pch` writes the preprocessor-state record (spec/modules.md
-    /// §11.13) next to the fingerprint.
-    Write,
-    /// As `Write`; the consumer replays the header and compares the
-    /// state replay reached with the record's; a compile also builds the
-    /// declaration image and compares the two (WP-1036).
-    Check,
-    /// As `Write`; the consumer installs the record and builds the
-    /// declaration image instead of replaying the header (`-E`/`-M`
-    /// install the record only), or replays it when the image is
-    /// missing, refused or stale (WP-1036).
-    Load,
-}
-
-/// The record a consumer job checks against or installs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PchImageUse {
-    /// The PCH file, for diagnostics.
-    pub pch: String,
-    /// The record's bytes (the `SECTION_PP` section).
-    pub bytes: std::sync::Arc<Vec<u8>>,
-    /// Install the record (`-E`/`-M` with `load`) rather than compare.
-    pub install: bool,
-    /// The state point replay reaches the end of the header at: the
-    /// producer's `-include`s, then the header.
-    pub checkpoint: u32,
-    /// A compile's declaration image (WP-1036), built in place of the
-    /// header with the record installed.
-    pub decls: Option<PchDeclsUse>,
-    /// With `install`: the precompiled `-include`s and header, which the
-    /// predefines keep a line for each of ([`kiln_pp::PCH_LINE`]).
-    pub lines: u32,
-}
-
-/// A decoded PCH declaration image, shared by the jobs (equal when it
-/// is the same one), and the name replay gives the header.
-#[derive(Clone, Debug)]
-pub struct PchDeclsUse {
-    pub image: std::sync::Arc<kiln_sema::PchDecls>,
-    pub header: String,
-}
-
-impl PartialEq for PchDeclsUse {
-    fn eq(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.image, &other.image) && self.header == other.header
-    }
-}
-
-impl Eq for PchDeclsUse {}
 
 /// Where the last `-include-pch` sits against the probed `-include`s
 /// (WP-1037; clang's frontend uses the last `-include-pch` it sees).
@@ -1682,12 +1597,13 @@ impl Args {
                 self.bmi_image_census = true;
                 self.bmi_image_census_all = true;
             }
-            "-fkiln-pch-image" | "-fkiln-pch-image=write" => self.pch.image = PchImage::Write,
-            "-fkiln-pch-image=check" => self.pch.image = PchImage::Check,
-            "-fkiln-pch-image=load" => self.pch.image = PchImage::Load,
-            "-fno-kiln-pch-image" => self.pch.image = PchImage::Off,
+            "-fkiln-pch-image"
+            | "-fkiln-pch-image=write"
+            | "-fkiln-pch-image=check"
+            | "-fkiln-pch-image=load" => self.pch.image_ignored = Some(arg.to_owned()),
+            "-fno-kiln-pch-image" => self.pch.image_ignored = None,
             // Deliberately not in `--help` until the snapshot is the
-            // default (spec/driver.md "Snapshots").
+            // default (spec/pch.md).
             "-fkiln-pch-snapshot" => self.pch.snapshot = PchSnapshot::Both,
             "-fkiln-pch-snapshot=write" => self.pch.snapshot = PchSnapshot::Write,
             "-fkiln-pch-snapshot=load" => self.pch.snapshot = PchSnapshot::Load,
@@ -2286,6 +2202,24 @@ mod tests {
 
     fn parse(s: &str) -> Args {
         Args::parse(&s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+    }
+
+    /// WP-1397: the retired `-fkiln-pch-image` forms are accepted and only
+    /// remembered for the warning; the last of them and `-fno-` wins, and
+    /// another value is still an error (spec/pch.md "Options").
+    #[test]
+    fn retired_pch_image_option() {
+        assert_eq!(parse("t.cpp").pch.image_ignored, None);
+        for f in ["-fkiln-pch-image", "-fkiln-pch-image=write", "-fkiln-pch-image=check"] {
+            let a = parse(&format!("{f} t.cpp"));
+            assert_eq!((a.pch.image_ignored.as_deref(), a.errors.len()), (Some(f), 0));
+        }
+        let a = parse("-fkiln-pch-image=load -fno-kiln-pch-image t.cpp");
+        assert_eq!(a.pch.image_ignored, None);
+        let a = parse("-fno-kiln-pch-image -fkiln-pch-image=load t.cpp");
+        assert_eq!(a.pch.image_ignored.as_deref(), Some("-fkiln-pch-image=load"));
+        assert_eq!(a.pch.snapshot, parse("t.cpp").pch.snapshot);
+        assert_eq!(parse("-fkiln-pch-image=sometimes t.cpp").errors.len(), 1);
     }
 
     #[test]

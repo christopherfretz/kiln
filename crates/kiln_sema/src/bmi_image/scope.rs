@@ -247,11 +247,11 @@ impl Writer<'_, '_, '_> {
         let ast = &self.s.ast;
         let sd = ast.decls.scope(d).ok_or("a malformed linkage specification")?;
         let lang = sd.linkage_lang().ok_or("a malformed linkage specification")?;
-        if lang == LinkageLang::C && !self.pch && !global_scope(self.s, d) {
+        if lang == LinkageLang::C && !global_scope(self.s, d) {
             // [dcl.link]/6: a C function or variable in a namespace is the
-            // same entity as one of its name at global scope. A precompiled
-            // header's reader records them in the consumer's extern C
-            // context (`image_extern_c`, WP-1310); a module's does not.
+            // same entity as one of its name at global scope; a module's
+            // reader does not record them in the importer's extern C
+            // context.
             return Err("a C linkage specification in a namespace");
         }
         let braceless = sd.aux & ScopeData::LINKAGE_BRACELESS != 0;

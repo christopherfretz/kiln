@@ -1,7 +1,7 @@
 // [basic.link]/6, [cpp.include]: a block-scope declaration in the test
 // file names the entity that an included header declares, at namespace
 // scope or at block scope. With `--pch-diff`, the header's precompiled
-// image links them the same way (WP-1293).
+// snapshot links them the same way (WP-1293).
 //@ expect: run
 #include "Inputs/local_extern.h"
 

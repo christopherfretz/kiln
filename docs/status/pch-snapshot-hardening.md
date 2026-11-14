@@ -62,7 +62,7 @@ and what it costs.
   The lazy buffer's own hash then fails when the text is first read, and
   the compile ends with clang's fatal error `file '...' has been modified
   since the precompiled header '...' was built` instead of compiling
-  against blank text (spec/driver.md "PCH snapshot: behaviour").
+  against blank text (spec/pch.md "Consumer").
 - **Lookup log** (WP-1403's part of the section head, read after the
   block checksum has passed): its counts are bounded by the bytes left,
   like every sequence. `LookupLog::validate` checks every directory

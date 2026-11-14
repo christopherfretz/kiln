@@ -1,7 +1,7 @@
 //! The lookup log (WP-1403, spec/pp.md "Lookup log"): the header lookups
 //! a prefix performed, recorded by [`HeaderSearch`](crate::HeaderSearch)
 //! and repeated by a PCH snapshot's consumer over its own search list
-//! ([`LookupLog::check`], spec/driver.md "Snapshots", "Lookup-tolerant
+//! ([`LookupLog::check`], spec/pch.md, "Lookup-tolerant
 //! search path").
 //!
 //! A lookup's result is a function of its key (the name, the form, the
@@ -222,7 +222,7 @@ impl LookupLog {
 
     /// Repeats every lookup, in order, over `list` (and `embed_dirs`) and
     /// `fs`, and names the first whose result differs from the recorded
-    /// one (spec/driver.md "Lookup-tolerant search path"). `known(path)`
+    /// one (spec/pch.md "Lookup-tolerant search path"). `known(path)`
     /// says that a file is known to exist (the PCH record's file list,
     /// just checked), so it is not asked about. A directory the
     /// producer's lookup already searched without finding the name (one

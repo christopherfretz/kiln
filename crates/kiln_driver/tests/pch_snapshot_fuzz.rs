@@ -775,7 +775,7 @@ fn framing_and_streamed_body_damage() {
 }
 
 /// The section's lookup log (WP-1403), read from the file and repeated by
-/// a consumer whose search list differs (spec/driver.md "Lookup-tolerant
+/// a consumer whose search list differs (spec/pch.md "Lookup-tolerant
 /// search path"; spec/snap.md "Threat model"): damage to it is a clean
 /// outcome ([cpp.include]). Bytes of the log are flipped as written
 /// (raw: the block checksum catches every one, a clean error) and with

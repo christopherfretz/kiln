@@ -1,7 +1,7 @@
 //! WP-1023: precompiled headers end to end through `kiln++`
-//! (spec/driver.md "Precompiled headers"). A kiln PCH is a textual
-//! record; `-include-pch` checks it with clang's diagnostics and then
-//! replays the header as an `-include` ([cpp.include]). Covered: `CMake`'s
+//! (spec/driver.md "Precompiled headers", spec/pch.md). `-include-pch`
+//! checks the record with clang's diagnostics and then restores its
+//! snapshot or replays the header as an `-include` ([cpp.include]). Covered: `CMake`'s
 //! `target_precompile_headers` command lines (producer and consumer), the
 //! double-include rule with a header that has no guard, the dependency
 //! files (byte-compared with clang++-19 where installed), stale, missing,
@@ -756,4 +756,80 @@ fn include_probes_for_pch() {
             assert_eq!(kr, cr, "kiln++ (left) and clang++-19 (right) differ");
         }
     }
+}
+
+/// WP-1397: `-fkiln-pch-image[=write|check|load]`, the retired image
+/// path's option, is accepted and ignored with one `-Woption-ignored`
+/// warning per invocation (spec/pch.md "Options"); the last of it and
+/// `-fno-kiln-pch-image` wins, `-fno-` is silent, an unknown value is
+/// still an error. The PCH is the one written without the option.
+#[test]
+fn retired_image_option_is_ignored() {
+    let d = scratch("image-option");
+    std::fs::write(d.join("h.h"), "struct S { int a; };\n").unwrap();
+    std::fs::write(d.join("t.cpp"), "int main() { S s{0}; return s.a; }\n").unwrap();
+    ok(&d, &["-x", "c++-header", "h.h", "-o", "plain.pch"]);
+    let warning = |flag: &str| {
+        format!(
+            "kiln++: warning: '{flag}' is ignored: the precompiled header snapshot replaced it \
+             [-Woption-ignored]\n"
+        )
+    };
+    for flag in ["-fkiln-pch-image", "-fkiln-pch-image=write", "-fkiln-pch-image=load"] {
+        let o = kiln(&d, &[flag, "-x", "c++-header", "h.h", "-o", "img.pch"]);
+        assert_eq!((o.code, o.stderr.clone()), (0, warning(flag)), "{flag}");
+        // The record up to its section line is the plain one (the
+        // snapshot's own bytes are not reproducible run to run), and the
+        // PCH carries a snapshot its consumer restores.
+        let record = |p: &str| {
+            let bytes = std::fs::read(d.join(p)).unwrap();
+            let at = bytes.windows(7).position(|w| w == b"\nimage ").expect("a section");
+            bytes[..at].to_vec()
+        };
+        assert_eq!(record("img.pch"), record("plain.pch"), "{flag}");
+        let o = kiln(&d, &["-v", "-include-pch", "img.pch", "-fsyntax-only", "t.cpp"]);
+        assert!(o.stderr.contains("'img.pch': snapshot matches; restoring it"), "{}", o.stderr);
+    }
+    let check = "-fkiln-pch-image=check";
+    let o = kiln(&d, &[check, "-include-pch", "plain.pch", "-fsyntax-only", "t.cpp"]);
+    assert_eq!((o.code, o.stderr.clone()), (0, warning(check)));
+    // Once for two inputs; the last one written is named.
+    let o = kiln(
+        &d,
+        &[
+            "-fkiln-pch-image",
+            check,
+            "-include-pch",
+            "plain.pch",
+            "-fsyntax-only",
+            "t.cpp",
+            "t.cpp",
+        ],
+    );
+    assert_eq!((o.code, o.stderr.clone()), (0, warning(check)));
+    ok(
+        &d,
+        &[
+            "-fkiln-pch-image",
+            "-fno-kiln-pch-image",
+            "-include-pch",
+            "plain.pch",
+            "-fsyntax-only",
+            "t.cpp",
+        ],
+    );
+    // `-Wno-option-ignored` silences it (without the PCH: another warning
+    // policy is another configuration, spec/pch.md "Identity").
+    std::fs::write(d.join("u.cpp"), "int main() {}\n").unwrap();
+    ok(&d, &["-Wno-option-ignored", "-fkiln-pch-image", "-fsyntax-only", "u.cpp"]);
+    let o = kiln(&d, &["-Werror", "-fkiln-pch-image", "-fsyntax-only", "u.cpp"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("[-Werror,-Woption-ignored]"), "{}", o.stderr);
+    let o = kiln(&d, &["-fkiln-pch-image=sometimes", "-fsyntax-only", "u.cpp"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(
+        o.stderr.contains("invalid value 'sometimes' in '-fkiln-pch-image=sometimes'"),
+        "{}",
+        o.stderr
+    );
 }

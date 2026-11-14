@@ -61,7 +61,7 @@ impl SyntaxJob<'_> {
         let job = &self.0;
         if let Some(v) = &job.args.verify {
             if let Some(s) = &job.args.pch.snapshot_use {
-                // spec/driver.md "PCH snapshot: behaviour": a `-verify` consumer
+                // spec/pch.md "Consumer": a `-verify` consumer
                 // restores when the header reported nothing.
                 match self.run_verify_inner(v.clone(), Some(s)) {
                     Ok(r) => return r,
@@ -279,7 +279,7 @@ impl SyntaxJob<'_> {
         let Some((pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true) else {
             return Err("the preprocessor could not be built".to_owned());
         };
-        let popts = self.parse_options(None);
+        let popts = self.parse_options();
         let limits = a.constexpr.limits();
         let started = std::time::Instant::now();
         let mut p = kiln_parse::parse_prefix(
@@ -342,9 +342,8 @@ impl SyntaxJob<'_> {
         Some(target)
     }
 
-    /// The parser's options of the job (`pch`: a declaration image to
-    /// load).
-    fn parse_options(&self, pch: Option<kiln_parse::PchLoad>) -> ParseOptions {
+    /// The parser's options of the job.
+    fn parse_options(&self) -> ParseOptions {
         let job = &self.0;
         let a = job.args;
         let x86 = !job.toolchain.target.is_aarch64();
@@ -379,9 +378,7 @@ impl SyntaxJob<'_> {
             record_image: a.bmi_image && writes_kind2,
             image_census: a.bmi_image_census,
             gnu89_inline: a.predef.gnu89_inline_for(&job.std),
-            record_pch: a.pch.producing && a.pch.image != crate::args::PchImage::Off,
             prefix: a.pch.producing || a.pch.record_lookups,
-            pch,
             ..job.std.parse_options()
         }
     }
@@ -395,7 +392,7 @@ impl SyntaxJob<'_> {
     /// (nothing reported) when it cannot be, or when the header reported
     /// diagnostics when it was built: those are not shown again, so a
     /// directive expecting one could not be satisfied, and the caller
-    /// replays (spec/driver.md "PCH snapshot: behaviour"). Without `snap` it is
+    /// replays (spec/pch.md "Consumer"). Without `snap` it is
     /// always `Ok`.
     fn run_verify_inner(
         &self,
@@ -517,8 +514,8 @@ impl SyntaxJob<'_> {
         if let Some(restore) = restore {
             // WP-1383: the prefix's state restored.
             let Some(parts) =
-                job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
-                    self.parse_options(o)
+                job.restore_front(sm, engine, interner, inputs, restore, &target, || {
+                    self.parse_options()
                 })
             else {
                 return;
@@ -535,9 +532,7 @@ impl SyntaxJob<'_> {
             restore.timer.mark("continue");
             restore.timer.report();
             crate::pch_snapshot::phase("restore and main file with end of unit");
-            self.after_parse(
-                sm, engine, interner, tu, pp, deps, main_id, verify, dump_opts, &target, result,
-            );
+            self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
             return;
         }
         let Some((mut pp, deps)) = job.build_preprocessor(sm, engine, interner, inputs, true)
@@ -548,15 +543,12 @@ impl SyntaxJob<'_> {
             let v = Rc::clone(v);
             pp.set_comment_handler(Box::new(move |c| v.borrow_mut().handle_comment(c, engine)));
         }
-        let Ok(pch) = crate::pch_image::sema_load(a, &pp, sm, engine) else { return };
-        let popts = self.parse_options(pch);
+        let popts = self.parse_options();
         let limits = a.constexpr.limits();
         let main_id = pp.main_file();
         let (tu, pp) =
             parse_preprocessed(pp, Arc::clone(interner), engine, target.clone(), &popts, limits);
-        self.after_parse(
-            sm, engine, interner, tu, pp, deps, main_id, verify, dump_opts, &target, result,
-        );
+        self.after_parse(sm, engine, tu, pp, deps, main_id, verify, dump_opts, &target, result);
     }
 
     /// The end of [`Self::parse`]: module and PCH output, reports and
@@ -566,7 +558,6 @@ impl SyntaxJob<'_> {
         &self,
         sm: &'sm SourceManager,
         engine: &DiagEngine<'sm>,
-        interner: &'sm Arc<Interner>,
         tu: kiln_parse::ParsedTu,
         mut pp: kiln_pp::Preprocessor<'sm, '_>,
         deps: Option<crate::pp_cmd::SharedDeps>,
@@ -582,9 +573,6 @@ impl SyntaxJob<'_> {
         if engine.error_count() == 0 {
             job.write_module_file(&mut pp, engine, tu.carried.as_ref(), tu.image.as_ref());
         }
-        let produced = main_id.map(|m| (m, &tu.pragmas, tu.pch_image.as_ref()));
-        result.pch_decls = tu.pch_image.as_ref().map(|d| d.fallback.map_or(Ok(d.decls), Err));
-        result.pch_image = crate::pch_image::finish(a, &mut pp, sm, interner, engine, produced);
         if verify.is_some() || deps.is_some() {
             // The parser stops at a fatal error; clang's preprocessor lexes
             // on to the end (its diagnostics suppressed), so every comment

@@ -6,7 +6,7 @@
 // unevaluated operand of a member's type, a function template
 // declared with a deduced return type before its definition, and a
 // member function template of a specialization in a dependent call. With
-// `--pch-diff`, the header's precompiled image carries them (WP-1360).
+// `--pch-diff`, the header's snapshot carries them (WP-1360).
 //@ expect: run
 #include "Inputs/outside_refs.h"
 

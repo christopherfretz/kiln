@@ -2640,7 +2640,7 @@ Tests: `pch-local-static-assert-*.cpp`, `pch-local-typedef-*.cpp`,
 `pch-member-names-*.cpp`, `image-member-names-run.cpp`,
 `pch-reopened-spec-run.cpp`, `image-reopened-spec-run.cpp`,
 `image-local-static-assert-*.cpp`, `image-local-typedef-run.cpp`,
-`local_static_asserts_and_explicit_args_take_the_image`.
+`local_static_asserts_and_explicit_args_cross`.
 
 **Smaller forms carried by WP-1310.** Attributes on block-scope
 declarations (libstdc++'s `void __terminate() noexcept
@@ -3343,7 +3343,7 @@ Tests: `qualified_template_names_are_carried`,
 `out_of_line_defaulted_members_are_carried`,
 `out_of_class_member_explicit_specializations_are_carried`,
 `diagnose_if_rechecks_follow_the_image`,
-`gmf_reinclusion_merges_with_image_declarations` (kiln_driver
+`gmf_reinclusion_merges_with_restored_declarations` (kiln_driver
 `pch_decls`); `kind2_declaration_image_wp1353_forms` (modules_bmi);
 `dependent_types_round_trip`, `rejects_corrupt_dependent_types`,
 `align_val_t_records`, `dedup_round_trip`, `rejects_corrupt_dedup`
@@ -5096,9 +5096,15 @@ is on and the gate passes. It then moves the section out of the capsule
 file is lexed. The unit's exported macros are none (a named module), so
 nothing else is lost.
 
-**Precompiled headers (WP-1036).** A PCH's declaration image
-(`bmi_image/pch.rs`; the driver side is spec/driver.md "The declaration
-image") is the same format with one difference: the module name is
+**Precompiled headers (WP-1036, retired by WP-1397).** kiln 1.1's PCH
+could carry a declaration image (`-fkiln-pch-image`). WP-1397 removed
+it: a PCH now carries the whole-front-end snapshot (spec/pch.md), and
+the option is accepted and ignored. This paragraph and the PCH remarks in
+the rest of §11.11 describe that image, which shared the module image's
+writer, as history; the `cpp.include/pch-*.cpp` tests named in them now
+compare the snapshot and the replay with the plain build under
+`--pch-diff` (spec/harness.md "PCH differential"). The image was the same
+format with one difference: the module name is
 empty and the module keyword, name and preamble words are `NONE`. A
 module name is never empty, so neither reader accepts the other's
 image. The producer writes the header's declarations as if the header
@@ -5456,13 +5462,11 @@ interface or `stdapp`'s source never rebuilds the std module.
 ### 11.13 The preprocessor-state record (WP-1280)
 
 The preprocessor state a header leaves behind, as a module-file section
-(`SECTION_PP` = 3, `kiln_pp::state`). It is the first piece of a real
-PCH (spec/driver.md "Precompiled headers", `-fkiln-pch-image`), and
-header units' exported macros go through it. Loading it replaces
-reading the header for everything the preprocessor keeps; Sema's state
-(the declarations, and the pragma state below, which is carried but
-installed with the declaration image of a PCH, §11.11 "Precompiled
-headers") is WP-1036's.
+(`SECTION_PP` = 3, `kiln_pp::state`). Header units' exported macros go
+through it. Loading it replaces reading the header for everything the
+preprocessor keeps. It was also the first piece of kiln 1.1's PCH image
+(`-fkiln-pch-image`, WP-1280), which WP-1397 retired: a PCH now carries
+the snapshot (spec/pch.md) and writes no record.
 
 **What it holds.** The difference between the state where the header
 begins (the *baseline*: the predefines and the command line read, no
@@ -5492,9 +5496,10 @@ begins (the *baseline*: the predefines and the command line read, no
   `PragmaSnapshot`); installed as the state at the point the record is
   loaded, so a diagnostic after it sees the header's mappings and
   `pop` returns to the state before.
-- **Sema pragma state** (the inventory; written by the producer from
-  `kiln_sema::PragmaState`, carried, and installed by a PCH's image
-  consumer, WP-1036; not compared by `check`):
+- **Sema pragma state** (the inventory; not compared by `check`). Only
+  the retired PCH image wrote and installed it; the field is kept so the
+  layout and every module file's bytes are unchanged, and a header unit's
+  record holds the default (no pack, no stacks, no override):
   the `#pragma pack` value and push stack (label, value), `#pragma
   ms_struct`, the `#pragma GCC visibility` stack (default, hidden,
   protected, or an attribute push, with its location) and the FP pragma
@@ -5507,9 +5512,9 @@ begins (the *baseline*: the predefines and the command line read, no
     and leave no state;
   - `clang deprecated`, `final` and `restrict_expansion` keep no state
     yet (spec/pp.md deviation 3);
-  - every other pragma reaches Sema as tokens. Sema state other than
-    the stacks above, such as a pending `#pragma weak`, is carried with
-    the declarations by WP-1036 only where the image carries it.
+  - every other pragma reaches Sema as tokens. A PCH's snapshot carries
+    all of Sema's pragma state, a pending `#pragma weak` included
+    (spec/pch.md "Consumer").
 
 **Compact tokens; no lexing on load.** A body token is its kind (a tag
 and a payload: the identifier's name index, the literal's encoding, the
@@ -5555,7 +5560,8 @@ first read (the driver then reports the record unusable).
 **In a precompiled header.** The section block of a kind-2 file
 (§11.3: the count, each section's tag and bytes) followed by its
 `bmi::block_checksum` (`bmi::write_sections`), after the `KILNPCH` text
-(spec/driver.md "Format"). That checksum is word-wise (four lanes of
+(spec/pch.md "File layout"; since WP-1397 it holds only the snapshot
+section). That checksum is word-wise (four lanes of
 8-byte words, each step a bijection of the lane and of the word, the
 tail bytes through FNV-1a, the lanes folded in one at a time), so any
 one changed byte still changes it, at memory speed: a PCH snapshot
@@ -5578,9 +5584,9 @@ poison, `__COUNTER__`, the diagnostic stack, totality, and the pp
 torture corpus (`tests/differential/pp/torture/*.cpp` each as the
 header, every `Inputs/` header included again after it), each comparing
 `-E`, `-dM -E` and diagnostics of replay with the installed record.
-`crates/kiln_driver/tests/pch_image.rs` covers the driver.
 
-**Measured** (harness build, aarch64, WP-1280; median of 5;
+**Measured** (kiln 1.1's PCH record, retired by WP-1397; harness build,
+aarch64, WP-1280; median of 5;
 `-std=c++26`, the PCH built with `-fkiln-pch-image`, then `-E -P` of a
 small TU with `-include-pch`):
 

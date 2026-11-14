@@ -1,5 +1,5 @@
 //! The PCH snapshot with a consumer whose include search path differs
-//! from the producer's (WP-1403, spec/driver.md "Lookup-tolerant search
+//! from the producer's (WP-1403, spec/pch.md "Lookup-tolerant search
 //! path" and "Refused snapshots are visible"), end to end through
 //! `kiln++`: the corner cases of the lookup comparison, the consumer's
 //! own search list in force after a restore, the warning a refused
@@ -394,8 +394,10 @@ fn the_consumers_list_is_in_force() {
     assert_eq!(sdeps, "m.o: p.h inc/v.h q.h src/m.cpp extra/only.h src/q.h extra/nx.h");
 }
 
-/// The warning: on by default (above), `-Wno-` turns it off, `-Werror`
-/// and `-Werror=` make it an error.
+/// The warning: on by default (above), `-Wno-` turns it off,
+/// `-Werror=pch-snapshot-unused` makes it an error, and a blanket
+/// `-Werror` does not (WP-1397: the group is exempt, spec/pch.md
+/// "Consumer").
 #[test]
 fn the_warning_is_controllable() {
     let mut files = PREFIX.to_vec();
@@ -420,8 +422,15 @@ fn the_warning_is_controllable() {
         o.stderr
     );
     let o = with(&["-Werror"]);
-    assert_ne!(o.code, 0, "{}", o.stderr);
-    assert_eq!(warnings(&o).len(), 1, "{}", o.stderr);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    let w = warnings(&o);
+    assert_eq!(w.len(), 1, "{}", o.stderr);
+    assert!(
+        w[0].starts_with("warning: precompiled header 'h.pch'")
+            && w[0].ends_with(" [-Wpch-snapshot-unused]"),
+        "{}",
+        o.stderr
+    );
 }
 
 /// The cases that replay by design do not warn.

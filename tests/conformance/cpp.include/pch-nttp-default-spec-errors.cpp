@@ -1,6 +1,6 @@
 // [temp.arg.general]/1, [temp.expl.spec]/1: the partial specialization
 // `promote<T, false>` that a non-integer default selects has no `type`
-// member; through the precompiled image the default still selects it
+// member; through the snapshot the default still selects it
 // (WP-1320).
 //@ expect: compile-fail
 //@ diag: 10:27 error "no type named 'type' in 'nds::promote<S>'"

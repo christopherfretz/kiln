@@ -3044,7 +3044,7 @@ impl DeclArena {
     }
 
     /// Replaces the template string of a file-scope `asm` declaration
-    /// (a precompiled header's declaration image builds it after the
+    /// (a module's declaration image builds it after the
     /// declaration, spec/modules.md §11.11, WP-1345).
     ///
     /// # Panics

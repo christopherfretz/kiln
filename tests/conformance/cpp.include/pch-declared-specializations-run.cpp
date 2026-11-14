@@ -4,7 +4,7 @@
 // implicit variable template specializations, a template argument naming
 // a class template inside a body, explicit specializations and explicit
 // instantiation declarations of function templates. With `--pch-diff`,
-// the header's precompiled image carries them (WP-1352).
+// the header's snapshot carries them (WP-1352).
 //@ expect: run
 #include "Inputs/declared_specializations.h"
 

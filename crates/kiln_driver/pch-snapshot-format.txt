@@ -1,0 +1,15 @@
+# The PCH snapshot section's format record (WP-1397, spec/pch.md
+# "Format versioning"): one line per snapshot format kiln has written,
+# oldest first, "<FORMAT_VERSION> <SCHEMA_HASH as 16 hex digits>".
+#
+# The last line must be this build's crates/kiln_driver/src/pch_snapshot.rs
+# FORMAT_VERSION and SCHEMA_HASH; the test
+# `pch_snapshot::tests::format_record` fails otherwise and says what to do.
+# When SCHEMA_HASH changes (any change of a type the snapshot reaches,
+# including the list of diagnostic ids, which the diagnostics engine's
+# root folds), bump FORMAT_VERSION and append a line; never edit or
+# remove a line.
+#
+# Versions 1 (WP-1392) and 2 (WP-1403, the lookup log) predate the record,
+# which starts with the schema 1.2.0 ships.
+2 2836b86fe96674a1

@@ -2,7 +2,7 @@
 // specialization in one namespace block and defines it in a later one
 // (libc++'s `char_traits<char>` in `<__fwd/string.h>` and
 // `<__string/char_traits.h>`). With `--pch-diff`, the header's
-// precompiled image carries the definitions and their members across the
+// snapshot carries the definitions and their members across the
 // reopened namespace (WP-1314).
 //@ expect: run
 #include "Inputs/reopened_spec.h"

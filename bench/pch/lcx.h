@@ -1,8 +1,7 @@
 // The pch group's `lcx` header set (spec/bench.md "The pch group"):
 // every public libc++ 19 header, one #include each, in the order of
 // `ls /usr/include/c++/v1 | grep -v '^__\|\.'` less `experimental` and
-// `ext`, plus <stdatomic.h>: the 106 headers of
-// docs/status/pch-image-census.md. Compiled with -stdlib=libc++.
+// `ext`, plus <stdatomic.h>: 106 headers. Compiled with -stdlib=libc++.
 #include <algorithm>
 #include <any>
 #include <array>
