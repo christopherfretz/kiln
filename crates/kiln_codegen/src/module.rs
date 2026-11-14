@@ -356,7 +356,9 @@ impl<'a> Cg<'a> {
         Cg {
             ast,
             folds,
-            tys: IrTypes::new(ast, target).with_clang_compat(opts.clang_compat),
+            tys: IrTypes::new(ast, target)
+                .with_clang_compat(opts.clang_compat)
+                .with_avx_level(avx_level(target, opts)),
             target,
             opts,
             m: {
@@ -3675,6 +3677,24 @@ impl<'a> Cg<'a> {
 /// Whether `ty` (or its array element type) is a class with a `mutable`
 /// member, directly or in a subobject: a `const` object of such a type
 /// is not emitted `constant` (clang `isTypeConstant`, `hasMutableFields`).
+/// The x86-64 AVX ABI level of the translation unit (clang
+/// `X86TargetInfo::getABI`, spec/landed/abi/WP-1418.md): from the module's
+/// feature map ([`CodegenOptions::target_features`], `-march=` and
+/// `-m<feature>` resolved by the driver), never a function's `target`
+/// attribute. `None` on `AArch64` and for the default `x86-64` map.
+fn avx_level(target: &Target, opts: &CodegenOptions) -> kiln_abi::call::AvxLevel {
+    if target.triple.arch != Arch::X86_64 {
+        return kiln_abi::call::AvxLevel::None;
+    }
+    kiln_abi::call::AvxLevel::from_features(|name| {
+        opts.target_features
+            .iter()
+            .rev()
+            .find(|e| e.get(1..) == Some(name))
+            .is_some_and(|e| e.starts_with('+'))
+    })
+}
+
 pub(crate) fn has_mutable(ast: &Ast, ty: QualType) -> bool {
     let mut t = ast.types.canonical(ty);
     while let Some(e) = ast.types.element(t) {

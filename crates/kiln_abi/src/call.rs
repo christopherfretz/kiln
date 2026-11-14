@@ -1,8 +1,9 @@
 //! Calling-convention lowering (clang `ABIInfo::computeInfo`) for the
 //! two supported targets: AAPCS64 (`AArch64ABIInfo`, kind AAPCS) and
-//! `SysV` x86-64 (`X86_64ABIInfo`, no AVX). The result says, for the
-//! return value and each argument, how its C++ type is passed in IR.
-//! See spec/codegen.md §5.
+//! `SysV` x86-64 (`X86_64ABIInfo`, at the translation unit's
+//! [`AvxLevel`]). The result says, for the return value and each argument,
+//! how its C++ type is passed in IR. See spec/codegen.md §5 and
+//! spec/landed/abi/WP-1418.md.
 // Mirrors clang's classification functions 1:1 (long functions, arms kept
 // separate as in clang, short type/offset names).
 #![allow(clippy::too_many_lines, clippy::many_single_char_names, clippy::match_same_arms)]
@@ -14,6 +15,47 @@ use kiln_ast::types::{BuiltinType, CallConv, TypeView, VectorKind};
 use crate::irtype::{IrType, IrTypes};
 use crate::layout::props;
 use crate::target::Arch;
+
+/// clang `X86AVXABILevel`: how wide a vector x86-64 passes and returns in
+/// one register (clang `getNativeVectorSizeForAVXABI`). clang derives it
+/// from the translation unit's target features (`TargetInfo::getABI()`:
+/// `"avx512"` with `avx512f`, `"avx"` with `avx`), never from a function's
+/// `target` attribute (spec/landed/abi/WP-1418.md).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AvxLevel {
+    /// No AVX: 128-bit vectors.
+    #[default]
+    None,
+    /// `avx`: 256-bit vectors.
+    Avx,
+    /// `avx512f`: 512-bit vectors.
+    Avx512,
+}
+
+impl AvxLevel {
+    /// The level of a translation unit from its x86-64 feature map: clang
+    /// `X86TargetInfo::getABI` (`SSELevel >= AVX512F`: `avx512f`; `>=
+    /// AVX`: `avx` or `avx2`, `handleTargetFeatures`). `on` says whether
+    /// a feature is enabled.
+    pub fn from_features(on: impl Fn(&str) -> bool) -> AvxLevel {
+        if on("avx512f") {
+            AvxLevel::Avx512
+        } else if on("avx") || on("avx2") {
+            AvxLevel::Avx
+        } else {
+            AvxLevel::None
+        }
+    }
+
+    /// clang `getNativeVectorSizeForAVXABI`, in bits.
+    pub const fn native_vector_bits(self) -> u64 {
+        match self {
+            AvxLevel::None => 128,
+            AvxLevel::Avx => 256,
+            AvxLevel::Avx512 => 512,
+        }
+    }
+}
 
 /// How one value crosses the call boundary (clang `ABIArgInfo`).
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -89,13 +131,12 @@ pub fn classify_call(
     cc: CallConv,
     variadic: bool,
 ) -> CallInfo {
-    let _ = n_required;
     let mut info = match t.target().arch() {
         Arch::AArch64 => aarch64(t, ret, args, cc == CallConv::Win64 && variadic),
         // clang `X86_64ABIInfo::computeInfo` delegates `ms_abi` to
         // `WinX86_64ABIInfo` (spec/abi.md §5.3).
         Arch::X86_64 if cc == CallConv::Win64 => win64(t, ret, args),
-        Arch::X86_64 => x86_64(t, ret, args, cc == CallConv::RegCall),
+        Arch::X86_64 => x86_64(t, ret, args, n_required, cc == CallConv::RegCall),
     };
     let ast = t.ast();
     let ret_void = matches!(ast.types.canonical_view(ret), TypeView::Builtin(BuiltinType::Void));
@@ -135,7 +176,8 @@ pub fn classify_va_arg(t: &mut IrTypes<'_>, q: QualType) -> VaArgInfo {
     match t.target().arch() {
         Arch::AArch64 => VaArgInfo { kind: aarch64_arg(t, q, false), needed_int: 0, needed_sse: 0 },
         Arch::X86_64 => {
-            let (kind, needed_int, needed_sse) = x86_arg(t, q, 0);
+            // clang `X86_64ABIInfo::EmitVAArg`: `isNamedArg` false.
+            let (kind, needed_int, needed_sse) = x86_arg(t, q, 0, false);
             VaArgInfo { kind, needed_int, needed_sse }
         }
     }
@@ -601,6 +643,13 @@ fn single_element(t: &mut IrTypes<'_>, q: QualType) -> Option<QualType> {
 fn byte_vector(t: &mut IrTypes<'_>, q: QualType) -> IrType {
     let q = single_element(t, q).unwrap_or(q);
     let ir = t.convert(q);
+    // `passInt128VectorsInMem` (Linux): a vector of `__int128` goes as
+    // `<N x i64>`, which the backend can legalize.
+    if let IrType::Vector(e, _) = &ir
+        && **e == IrType::Int(128)
+    {
+        return IrType::Vector(Box::new(IrType::Int(64)), type_bits(t, q) / 64);
+    }
     if matches!(ir, IrType::Vector(..) | IrType::Fp128) {
         return ir;
     }
@@ -800,7 +849,9 @@ fn post_merge(size: u64, lo: &mut Class, hi: &mut Class) {
     }
 }
 
-fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
+/// clang `X86_64ABIInfo::classify`; `named` is `isNamedArg` (false for an
+/// argument passed through `...` and for `va_arg`).
+fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64, named: bool) -> (Class, Class) {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     let mut lo = NoClass;
     let mut hi = NoClass;
@@ -837,7 +888,7 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             b if b.is_integral() => set_cur!(Integer),
             _ => {}
         },
-        TypeView::Enum(d) => return classify(t, enum_int(ast, d), off),
+        TypeView::Enum(d) => return classify(t, enum_int(ast, d), off, named),
         TypeView::Pointer(_)
         | TypeView::LValueRef(_)
         | TypeView::RValueRef(_)
@@ -887,8 +938,9 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 hi = lo;
             }
         }
-        // clang `X86_64ABIInfo::classify` for vectors (no AVX: the native
-        // vector size is 128 bits).
+        // clang `X86_64ABIInfo::classify` for vectors: a named one up to
+        // the native vector size (128, 256 with AVX, 512 with AVX-512) is
+        // SSE+SSEUP, one wider (or unnamed and wider than 128) MEMORY.
         TypeView::Vector { elem, .. } => {
             let size = type_bits(t, q);
             if matches!(size, 1 | 8 | 16 | 32) {
@@ -904,7 +956,12 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 if off != 0 && off != 64 {
                     hi = lo;
                 }
-            } else if size == 128 {
+            } else if size == 128 || (named && size <= t.avx_level().native_vector_bits()) {
+                // `passInt128VectorsInMem` (Linux): gcc passes 256- and
+                // 512-bit vectors of `__int128` in memory.
+                if size != 128 && is_int128(t, elem) {
+                    return (lo, hi);
+                }
                 lo = Sse;
                 hi = SseUp;
             }
@@ -919,16 +976,15 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
             }
             set_cur!(NoClass);
             let n = ast.types.array_size(q).unwrap_or(0);
-            // clang: `Size > 128 && (Size != elem size || Size > native
-            // vector size)`; without AVX the native vector size is 128, so
-            // the condition reduces to `Size > 128`.
-            if size > 128 {
+            // The only array wider than 128 bits passed in registers holds
+            // one vector of the native vector size or less.
+            let esize = type_bits(t, a.elem);
+            if size > 128 && (size != esize || size > t.avx_level().native_vector_bits()) {
                 return (lo, hi);
             }
-            let esize = type_bits(t, a.elem);
             let mut o = off;
             for _ in 0..n {
-                let (fl, fh) = classify(t, a.elem, o);
+                let (fl, fh) = classify(t, a.elem, o, named);
                 lo = merge(lo, fl);
                 hi = merge(hi, fh);
                 if lo == Memory || hi == Memory {
@@ -948,12 +1004,24 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 return (lo, hi);
             }
             let layout = t.layouter().record(def).clone();
+            let is_union = props::class_desc(ast, def).is_union;
+            let native = t.avx_level().native_vector_bits();
             set_cur!(NoClass);
             for (i, b) in ast.decls.bases(def, &ast.lists).enumerate() {
                 let boff = layout.bases.get(i).map_or(0, |x| x.1 * 8);
-                let (fl, fh) = classify(t, b.ty, off + boff);
+                let (fl, fh) = classify(t, b.ty, off + boff, named);
                 lo = merge(lo, fl);
                 hi = merge(hi, fh);
+                // clang 21+ `returnCXXRecordGreaterThan128InMem` (arguments
+                // too): a class wider than 128 bits with a base not as wide
+                // as itself, or wider than the native vector size, is
+                // MEMORY (an empty base beside a 256-bit vector member).
+                if t.clang_compat() >= 21
+                    && size > 128
+                    && (size != type_bits(t, b.ty) || size > native)
+                {
+                    lo = Memory;
+                }
                 if lo == Memory || hi == Memory {
                     post_merge(size, &mut lo, &mut hi);
                     return (lo, hi);
@@ -964,9 +1032,10 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                 if f.bit_width.is_some() && !f.named {
                     continue;
                 }
-                // clang: `Size > 128 && ((!IsUnion && Size != field size) ||
-                // Size > native vector size)`; 128 without AVX.
-                if size > 128 {
+                // The only class wider than 128 bits passed in registers
+                // holds one vector of the native vector size or less (a
+                // union: its every field is as wide as it).
+                if size > 128 && ((!is_union && size != type_bits(t, f.ty)) || size > native) {
                     lo = Memory;
                     post_merge(size, &mut lo, &mut hi);
                     return (lo, hi);
@@ -986,7 +1055,7 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
                         (Integer, if eb_hi != 0 { Integer } else { NoClass })
                     }
                 } else {
-                    classify(t, f.ty, foff)
+                    classify(t, f.ty, foff, named)
                 };
                 lo = merge(lo, fl);
                 hi = merge(hi, fh);
@@ -1004,7 +1073,13 @@ fn classify(t: &mut IrTypes<'_>, q: QualType, off: u64) -> (Class, Class) {
 /// `SysV` x86-64; `regcall` is clang's `IsRegCall` (Intel `regcall`:
 /// 11 integer and 16 SSE registers, classes classified by
 /// [`regcall_struct`]).
-fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], regcall: bool) -> CallInfo {
+fn x86_64(
+    t: &mut IrTypes<'_>,
+    ret: QualType,
+    args: &[QualType],
+    n_required: usize,
+    regcall: bool,
+) -> CallInfo {
     let mut free_int = if regcall { 11u32 } else { 6 };
     let mut free_sse = if regcall { 16u32 } else { 8 };
     let natural_indirect = |t: &mut IrTypes<'_>, q| ArgKind::Indirect {
@@ -1034,11 +1109,11 @@ fn x86_64(t: &mut IrTypes<'_>, ret: QualType, args: &[QualType], regcall: bool) 
         free_int -= 1;
     }
     let mut out = Vec::with_capacity(args.len());
-    for &q in args {
+    for (i, &q) in args.iter().enumerate() {
         let (mut k, ni, ns) = if regcall && is_struct_or_class(t, q) {
             regcall_struct(t, q, true).unwrap_or_else(|| (natural_indirect(t, q), 0, 0))
         } else {
-            x86_arg(t, q, free_int)
+            x86_arg(t, q, free_int, i < n_required)
         };
         if free_int >= ni && free_sse >= ns {
             free_int -= ni;
@@ -1106,7 +1181,7 @@ fn regcall_struct_impl(t: &mut IrTypes<'_>, q: QualType, ni: &mut u32, ns: &mut 
             }
             continue;
         }
-        let (k, li, ls) = x86_arg(t, f.ty, u32::MAX);
+        let (k, li, ls) = x86_arg(t, f.ty, u32::MAX, true);
         if matches!(k, ArgKind::Indirect { .. }) {
             return false;
         }
@@ -1185,10 +1260,14 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
-    // clang `IsIllegalVectorType`: at most 64 or over 128 bits (no AVX).
-    let illegal_vector = matches!(view(t, q), TypeView::Vector { .. }) && {
-        let s = type_bits(t, q);
-        s <= 64 || s > 128
+    // clang `IsIllegalVectorType`: at most 64 bits, wider than the native
+    // vector size, or (`passInt128VectorsInMem`) of `__int128`.
+    let illegal_vector = match view(t, q) {
+        TypeView::Vector { elem, .. } => {
+            let s = type_bits(t, q);
+            s <= 64 || s > t.avx_level().native_vector_bits() || is_int128(t, elem)
+        }
+        _ => false,
     };
     if !is_aggregate(t, q) && !illegal_vector && !matches!(view(t, q), TypeView::BitInt { .. }) {
         let q = strip_enum(t, q);
@@ -1204,10 +1283,12 @@ fn x86_indirect(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> ArgKind {
     ArgKind::Indirect { byval: true, align }
 }
 
-fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u32) {
+/// clang `X86_64ABIInfo::classifyArgumentType`: the lowering and the
+/// integer and SSE registers it needs; `named` is `isNamedArg`.
+fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32, named: bool) -> (ArgKind, u32, u32) {
     use Class::{ComplexX87, Integer, Memory, NoClass, Sse, SseUp, X87, X87Up};
     let q = first_field_if_transparent(t.ast(), q);
-    let (lo, hi) = classify(t, q, 0);
+    let (lo, hi) = classify(t, q, 0, named);
     let mut ni = 0;
     let mut ns = 0;
     let natural = t.convert(q);
@@ -1281,6 +1362,11 @@ fn x86_arg(t: &mut IrTypes<'_>, q: QualType, free_int: u32) -> (ArgKind, u32, u3
     (direct(res), ni, ns)
 }
 
+/// `__int128` or `unsigned __int128` (clang `isSpecificBuiltinType`).
+fn is_int128(t: &IrTypes<'_>, q: QualType) -> bool {
+    matches!(view(t, q), TypeView::Builtin(BuiltinType::Int128 | BuiltinType::UInt128))
+}
+
 /// A `_BitInt(N)` with `N > 128`, which x86-64 passes and returns in memory.
 fn is_wide_bit_int(t: &IrTypes<'_>, q: QualType) -> bool {
     matches!(view(t, q), TypeView::BitInt { width, .. } if width > 128)
@@ -1291,7 +1377,7 @@ fn x86_ret(t: &mut IrTypes<'_>, q: QualType) -> ArgKind {
     if is_indirect_record(t.ast(), q) {
         return ArgKind::Indirect { byval: false, align: t.layouter().type_layout(q).align };
     }
-    let (lo, hi) = classify(t, q, 0);
+    let (lo, hi) = classify(t, q, 0, true);
     let natural = t.convert(q);
     let mut res: Option<IrType> = None;
     match lo {
@@ -1701,5 +1787,25 @@ pub fn is_indirect_record(ast: &Ast, q: QualType) -> bool {
     match ast.types.canonical_view(q) {
         TypeView::Record(d) => !can_pass_in_registers(ast, d),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AvxLevel;
+
+    /// clang `X86TargetInfo::getABI`: `avx512f` wins, `avx` or `avx2`
+    /// gives AVX, anything else none (spec/landed/abi/WP-1418.md).
+    #[test]
+    fn avx_level_from_features() {
+        let level = |on: &[&str]| AvxLevel::from_features(|n| on.contains(&n));
+        assert_eq!(level(&[]), AvxLevel::None);
+        assert_eq!(level(&["sse4.2", "avx512bw"]), AvxLevel::None);
+        assert_eq!(level(&["avx"]), AvxLevel::Avx);
+        assert_eq!(level(&["avx2"]), AvxLevel::Avx);
+        assert_eq!(level(&["avx", "avx512f"]), AvxLevel::Avx512);
+        assert_eq!(AvxLevel::None.native_vector_bits(), 128);
+        assert_eq!(AvxLevel::Avx.native_vector_bits(), 256);
+        assert_eq!(AvxLevel::Avx512.native_vector_bits(), 512);
     }
 }

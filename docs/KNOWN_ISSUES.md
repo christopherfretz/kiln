@@ -17,19 +17,6 @@ If you hit something not listed here, please
   for other platforms is not planned.
 - **glibc 2.39 or newer** is needed to run the release binaries. Building
   them on an older-glibc image is [WP-943](BACKLOG.md).
-- **x86-64 with AVX enabled: 256-bit vectors by value use a different
-  calling convention from clang and GCC.** With `-mavx`, `-mavx2`, a
-  `-march=` that implies AVX, or `-mavx512f`, clang and GCC pass and
-  return a 256-bit vector (512-bit with AVX-512), and a class or union
-  that consists of exactly one, in a ymm/zmm register. kiln 1.2.0 and
-  every earlier release pass and return them in memory. Code built
-  entirely by kiln agrees with itself. A function that takes or returns
-  such a value by value across a boundary between kiln-built code and
-  code built by another compiler (for example a prebuilt SIMD library)
-  gets wrong data, with no diagnostic. 128-bit vectors, builds without
-  AVX, and AArch64 are not affected. Fixed on `main`
-  ([WP-1418](BACKLOG.md)) for the next release; objects built before
-  and after the fix do not mix for such functions.
 - **x86 function multiversioning** (`target_clones`, several
   `target("...")` versions of one function) is an error on x86-64:
   [WP-1059](BACKLOG.md). The `-m<feature>` flags and single
