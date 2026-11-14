@@ -3526,7 +3526,21 @@ Where the definitions are emitted (clang hands them to
 - A member explicit instantiation (`template void X<int>::f();`) or a
   member class (`[extern] template struct O<int>::I;`, [temp.explicit]/3):
   right after the declaration that precedes it lexically
-  (`TemplateTables::explicit_member_insts`). The member class gets the
+  (`TemplateTables::explicit_member_insts`). The same key places the
+  definition following an explicit instantiation declaration (above).
+  A namespace, linkage specification or export block as the key means
+  right after the block; in a block with no member yet the key is the
+  declaration before the block (recursively; the translation unit
+  itself only at its start), the same point of the walk
+  (`Sema::explicit_inst_anchor`). Each key is emitted once
+  (`Cg::emit_explicit_member_insts`), and a function's body is built
+  once: `gen_code_or_thunk` skips a function that already has one (a
+  debug assertion unless `cg_duplicate_mangled_name` was reported;
+  structor variants sharing an asm label are built into their one
+  symbol, as clang does).
+  Keying an empty block by itself read as both "at its start" and
+  "after it", which built every such definition twice into one IR
+  function (WP-1425, spec/landed/codegen/WP-1425.md). The member class gets the
   explicit kind in its member-spec info, so its members and vtable follow
   the table above; member templates are not instantiated
   ([temp.explicit]/10).

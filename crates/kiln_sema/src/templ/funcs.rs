@@ -1441,9 +1441,7 @@ impl Sema<'_, '_> {
             self.module_note_explicit_inst_def(m);
             // [temp.explicit]/10: clang hands the definition to codegen
             // where the explicit instantiation appears.
-            let lexical = self.ctx;
-            if let Some(list) = self.ast.decls.member_list(lexical) {
-                let after = list.last.unwrap_or(lexical);
+            if let Some(after) = self.explicit_inst_anchor() {
                 self.ast.templates.add_explicit_member_inst(after, m);
             }
             self.instantiate_function_definition(m, name_loc);

@@ -937,10 +937,9 @@ impl Sema<'_, '_> {
         let lexical = self.ctx;
         if first_explicit {
             self.builder().declare_spec_in(spec, lexical, name_loc);
-        } else if !declaration && let Some(list) = self.ast.decls.member_list(lexical) {
+        } else if !declaration && let Some(after) = self.explicit_inst_anchor() {
             // After an explicit instantiation declaration, clang hands
             // the members to codegen here, not at the declaration.
-            let after = list.last.unwrap_or(lexical);
             self.ast.templates.add_moved_class_inst(after, spec);
         }
         self.instantiate_members_of(spec, name_loc, declaration, 0);
@@ -1001,6 +1000,54 @@ impl Sema<'_, '_> {
             .with_note(note);
         self.emit(e);
         false
+    }
+
+    /// The key under which codegen defines what an explicit instantiation
+    /// definition written now instantiates (`TemplateTables::
+    /// explicit_member_insts`, spec/codegen.md "Explicit instantiation
+    /// definitions"): the last declaration of the current lexical
+    /// context, so "right after it".
+    ///
+    /// A namespace, linkage specification or export block as the key
+    /// means "right after the block" (codegen's walk asks for it after
+    /// the block's members). So in such a block that has no member yet
+    /// the key is the declaration before the block in its own context
+    /// (recursively, while the block is that context's first member),
+    /// which is the same point of the walk; only the translation unit's
+    /// start is keyed by the context itself. Keying the empty block by
+    /// itself read as both "at its start" and "after it", and codegen
+    /// built the definitions twice into one function (WP-1425).
+    pub(crate) fn explicit_inst_anchor(&self) -> Option<DeclId> {
+        let decls = &self.ast.decls;
+        let list = decls.member_list(self.ctx)?;
+        if let Some(last) = list.last {
+            return Some(last);
+        }
+        let mut k = self.ctx;
+        for _ in 0..1024 {
+            let block = matches!(
+                decls.get(k).kind(),
+                DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export
+            );
+            let Some(parent) = decls.lexical_ctx(k).filter(|_| block) else { return Some(k) };
+            let mut prev = None;
+            let mut found = false;
+            for m in decls.members(parent) {
+                if m == k {
+                    found = true;
+                    break;
+                }
+                prev = Some(m);
+            }
+            if !found {
+                return Some(k);
+            }
+            if let Some(p) = prev {
+                return Some(p);
+            }
+            k = parent;
+        }
+        Some(k)
     }
 
     /// The point of instantiation of the innermost instantiated class
@@ -1089,9 +1136,7 @@ impl Sema<'_, '_> {
         });
         if !declaration {
             self.module_note_explicit_inst_def(m);
-            let lexical = self.ctx;
-            if let Some(list) = self.ast.decls.member_list(lexical) {
-                let after = list.last.unwrap_or(lexical);
+            if let Some(after) = self.explicit_inst_anchor() {
                 self.ast.templates.add_explicit_member_inst(after, m);
             }
         }

@@ -276,6 +276,9 @@ pub(crate) struct Cg<'a> {
     /// definition is an imported unit's, emitted after the deferred
     /// definitions.
     pub imported_explicit_vtables: Vec<DeclId>,
+    /// The keys of `TemplateTables::explicit_member_insts` already
+    /// handed to [`Self::emit_explicit_member_insts`].
+    explicit_insts_done: FxHashSet<DeclId>,
     /// Vtables already defined.
     pub vt_emitted: FxHashSet<DeclId>,
     /// `_ZTI` definitions by mangled name.
@@ -430,6 +433,7 @@ impl<'a> Cg<'a> {
             opportunistic_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
             imported_explicit_vtables: Vec::new(),
+            explicit_insts_done: FxHashSet::default(),
             vt_emitted: FxHashSet::default(),
             rtti_globals: FxHashMap::default(),
             pending: Vec::new(),
@@ -569,7 +573,11 @@ impl<'a> Cg<'a> {
     fn emit_members(&mut self, ctx: DeclId) -> R<()> {
         let ast = self.ast;
         let members: Vec<DeclId> = ast.decls.members(ctx).collect();
-        self.emit_explicit_member_insts(ctx)?;
+        // A namespace, linkage specification or export block as the key
+        // means "after it" (see `TemplateTables::explicit_member_insts`).
+        if ctx == ast.tu {
+            self.emit_explicit_member_insts(ctx)?;
+        }
         let epochs = if ctx == ast.tu { self.member_epochs(&members) } else { Vec::new() };
         if let Some(&e) = epochs.first() {
             self.walk_epoch = e;
@@ -586,15 +594,15 @@ impl<'a> Cg<'a> {
             self.emit_ref_vars(d, false)?;
             if !ast.templates.is_late_explicit_inst(ast.first(d)) {
                 self.emit_member(d)?;
-                if !epochs.is_empty() {
-                    // The explicit instantiation definitions after `d` are
-                    // top-level declarations of their own, which the member
-                    // list does not hold: what was complete when the next
-                    // member ended is (at most a declaration later than clang).
-                    self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
-                }
-                self.emit_explicit_member_insts(d)?;
             }
+            if !epochs.is_empty() {
+                // The explicit instantiation definitions after `d` are
+                // top-level declarations of their own, which the member
+                // list does not hold: what was complete when the next
+                // member ended is (at most a declaration later than clang).
+                self.walk_epoch = epochs.get(i + 1).copied().unwrap_or(u32::MAX);
+            }
+            self.emit_explicit_member_insts(d)?;
             self.emit_ref_vars(d, true)?;
         }
         Ok(())
@@ -659,10 +667,17 @@ impl<'a> Cg<'a> {
     }
 
     /// The member functions and classes explicitly instantiated by a
-    /// definition right after `after` ([temp.explicit]/10).
+    /// definition right after `after` ([temp.explicit]/10), or at the
+    /// start of the translation unit. Each key is handed over once
+    /// (WP-1425: an empty namespace keyed itself, read both at its
+    /// start and after it).
     fn emit_explicit_member_insts(&mut self, after: DeclId) -> R<()> {
         let ast = self.ast;
-        for &m in ast.templates.explicit_member_insts_after(after) {
+        let insts = ast.templates.explicit_member_insts_after(after);
+        if insts.is_empty() || !self.explicit_insts_done.insert(after) {
+            return Ok(());
+        }
+        for &m in insts {
             if ast.templates.is_late_explicit_inst(ast.first(m)) {
                 continue;
             }
@@ -2796,7 +2811,8 @@ impl<'a> Cg<'a> {
     /// definition `d` into the defined function `f` whose representative
     /// declaration is another entity is `err_duplicate_mangled_name`
     /// (once: clang emits no later declaration after the error). The
-    /// body is still appended (its blocks unreachable), as clang does.
+    /// second body is dropped (`gen_code_or_thunk` builds a function's
+    /// body once); the translation unit has failed anyway.
     pub(crate) fn check_duplicate_def(&mut self, d: DeclId, f: FuncId) {
         if self.dup_reported || self.m.func(f).is_declaration() {
             return;
