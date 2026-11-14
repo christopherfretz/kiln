@@ -182,6 +182,12 @@ pub(crate) fn emit_arg_error(e: &ArgError, engine: &DiagEngine<'_>) {
         ArgError::UnsupportedForTarget(o, t) => {
             Diag::new(DiagId::drv_unsupported_opt_for_target, Span::INVALID).arg(o).arg(t)
         }
+        ArgError::UnsupportedValueForTarget(o, v, t) => {
+            Diag::new(DiagId::drv_unsupported_option_argument_for_target, Span::INVALID)
+                .arg(o)
+                .arg(v)
+                .arg(t)
+        }
         ArgError::UnsupportedByKiln(a) => {
             Diag::new(DiagId::drv_unsupported_flag, Span::INVALID).arg(a)
         }

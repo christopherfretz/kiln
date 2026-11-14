@@ -13,3 +13,4 @@
 # Versions 1 (WP-1392) and 2 (WP-1403, the lookup log) predate the record,
 # which starts with the schema 1.2.0 ships.
 2 2836b86fe96674a1
+3 f2e94bf403d8fea9

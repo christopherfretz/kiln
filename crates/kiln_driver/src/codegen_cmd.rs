@@ -509,6 +509,7 @@ impl CodegenJob<'_> {
                         job.std.lex >= kiln_lex::Std::Cxx11,
                         job.std.lex >= kiln_lex::Std::Cxx14,
                     ),
+                    flags: a.debug.record_command_line.then(|| recorded_command_line(a)),
                     ..a.debug.options(
                         &std::env::current_dir()
                             .map(|d| d.display().to_string())
@@ -587,6 +588,38 @@ impl CodegenJob<'_> {
         drop(tu);
         module
     }
+}
+
+/// The command line `-grecord-command-line` records in the compile unit
+/// (WP-1411), as clang's driver writes its `-dwarf-debug-flags`: the
+/// executable's path, then every argument, each with a space or a
+/// backslash escaped by a backslash. clang renders each argument from its
+/// option table (`-DX` becomes `-D X`, `-grecord-gcc-switches`
+/// `-grecord-command-line`); kiln writes the arguments as given.
+fn recorded_command_line(args: &Args) -> String {
+    fn escaped(out: &mut String, a: &str) {
+        for c in a.chars() {
+            if matches!(c, ' ' | '\\') {
+                out.push('\\');
+            }
+            out.push(c);
+        }
+    }
+    let exe =
+        std::env::current_exe().map_or_else(|_| args.program.clone(), |e| e.display().to_string());
+    let mut out = String::new();
+    escaped(&mut out, &exe);
+    // clang's driver puts the mode a `clang++` name implies on the
+    // command line it records (the executable is `clang`, as `kiln++` is
+    // `kiln`).
+    if DriverMode::from_program_name(&args.program) == DriverMode::Gxx {
+        out.push_str(" --driver-mode=g++");
+    }
+    for a in &args.argv {
+        out.push(' ');
+        escaped(&mut out, a);
+    }
+    out
 }
 
 /// Prints a module the codegen job returned, consuming it (its text and
@@ -1067,9 +1100,87 @@ pub(crate) fn code_part(ir: &str) -> &str {
 /// `llvm.coro.*` intrinsic (clang's `CoroConditionalWrapper` test,
 /// `coro::declaresAnyIntrinsic`). Every `presplitcoroutine` function
 /// calls `llvm.coro.id`; a `__builtin_coro_noop` alone needs it too
-/// (spec/driver.md "IR optimization").
+/// (spec/driver.md "IR optimization"). The declared name is the one
+/// after the line's first ` @` (no return type or attribute before the
+/// name holds one), and it is unquoted: a quoted name such as an asm
+/// label's `@"x @llvm.coro.y"` is not an intrinsic (WP-1411).
 pub fn needs_coro_lowering(ir: &str) -> bool {
-    ir.lines().any(|l| l.starts_with("declare ") && l.contains(" @llvm.coro."))
+    ir.lines().any(|l| {
+        l.strip_prefix("declare ")
+            .and_then(|r| r.split_once(" @"))
+            .is_some_and(|(_, name)| name.starts_with("llvm.coro."))
+    })
+}
+
+/// The attributes of an attribute group line `attributes #N = { ... }`
+/// (any other line: none), one item each: a keyword (`alwaysinline`,
+/// `memory(argmem: read)`, `allockind("alloc")`) or a string attribute
+/// (`"key"` or `"key"="value"`), as printed. A quoted string is one
+/// item whatever it holds (LLVM's printer escapes a `"` in it as `\22`,
+/// so the next `"` closes it), and a keyword's parentheses are part of
+/// it: a word inside a string value or an argument list is never an
+/// item of its own (WP-1411).
+pub(crate) fn group_attrs(line: &str) -> impl Iterator<Item = &str> {
+    let body = line
+        .strip_prefix("attributes #")
+        .and_then(|r| r.split_once(" = { "))
+        .and_then(|(_, r)| r.strip_suffix(" }").or_else(|| r.strip_suffix('}')))
+        .unwrap_or("");
+    let bytes = body.as_bytes();
+    let mut at = 0;
+    std::iter::from_fn(move || {
+        while at < bytes.len() && bytes[at] == b' ' {
+            at += 1;
+        }
+        if at >= bytes.len() {
+            return None;
+        }
+        let start = at;
+        let (mut quoted, mut depth) = (false, 0u32);
+        while at < bytes.len() {
+            match bytes[at] {
+                b'"' => quoted = !quoted,
+                b'(' if !quoted => depth += 1,
+                b')' if !quoted => depth = depth.saturating_sub(1),
+                b' ' if !quoted && depth == 0 => break,
+                _ => {}
+            }
+            at += 1;
+        }
+        Some(&body[start..at])
+    })
+}
+
+/// The key of a string attribute item of [`group_attrs`] (`"key"` or
+/// `"key"="value"`); `None` for a keyword.
+fn string_attr_key(item: &str) -> Option<&str> {
+    item.strip_prefix('"').and_then(|r| r.split_once('"')).map(|(k, _)| k)
+}
+
+/// Whether the IR has an attribute group holding the attribute item
+/// `pred` accepts (top-level `attributes #` lines only: a global's
+/// initializer, a string constant included, is on an `@` line, and a
+/// string's newline is escaped, so no constant reaches one).
+fn any_group_attr(ir: &str, pred: impl Fn(&str) -> bool) -> bool {
+    ir.lines().filter(|l| l.starts_with("attributes #")).any(|l| group_attrs(l).any(&pred))
+}
+
+/// The function attributes LLVM's `EntryExitInstrumenter` pass
+/// (`ee-instrument`, in the `-O0` pipeline) reads.
+const ENTRY_EXIT_ATTRS: [&str; 4] = [
+    "instrument-function-entry",
+    "instrument-function-entry-inlined",
+    "instrument-function-exit",
+    "instrument-function-exit-inlined",
+];
+
+/// Whether the IR has the entry or exit instrumentation attributes
+/// (`-finstrument-functions*`, `-finstrument-function-entry-bare`) on
+/// an attribute group, as a string attribute's key: a string constant
+/// or another attribute's value with the same text does not count
+/// (WP-1411).
+pub fn needs_entry_instrumentation(ir: &str) -> bool {
+    any_group_attr(ir, |a| string_attr_key(a).is_some_and(|k| ENTRY_EXIT_ATTRS.contains(&k)))
 }
 
 /// Whether the IR has an `alwaysinline` attribute group: on a definition
@@ -1079,10 +1190,11 @@ pub fn needs_coro_lowering(ir: &str) -> bool {
 /// pipeline (`AlwaysInlinerPass`) inlines every such call and every
 /// call to such a function, deleting a discardable one left unused,
 /// before `-emit-llvm` writes the module.
+/// The keyword must be an item of the group ([`group_attrs`]), not a
+/// word of a string attribute's value (`"dontcall-error"="... alwaysinline
+/// ..."`, WP-1411).
 pub fn needs_always_inline(ir: &str) -> bool {
-    ir.lines().any(|l| {
-        l.starts_with("attributes #") && l.split_ascii_whitespace().any(|w| w == "alwaysinline")
-    })
+    any_group_attr(ir, |a| a == "alwaysinline")
 }
 
 /// The `opt` runs between the frontend and the IR's consumer, if any:
@@ -1117,7 +1229,7 @@ fn ir_passes(args: &Args, tc: &Toolchain, ir: &str) -> Option<Vec<Command>> {
         None if needs_always_inline(ir) => "default<O0>",
         // WP-813: the O0 pipeline's `ee-instrument` turns the entry and
         // exit attributes into `__cyg_profile_func_*` calls.
-        None if ir.contains("\"instrument-function-entry") => "default<O0>",
+        None if needs_entry_instrumentation(ir) => "default<O0>",
         None if needs_coro_lowering(ir) => "coro-early,cgscc(coro-split),coro-cleanup,globaldce",
         None => return None,
     };
@@ -1140,7 +1252,7 @@ pub(crate) fn opt_triggers(args: &Args, tc: &Toolchain, ir: &str) -> Vec<&'stati
         ("sanitizer", sanitizer_passes(args, tc).is_some()),
         ("coverage", coverage_passes(args).is_some()),
         ("alwaysinline", needs_always_inline(ir)),
-        ("instrument-entry", ir.contains("\"instrument-function-entry")),
+        ("instrument-entry", needs_entry_instrumentation(ir)),
         ("coro", needs_coro_lowering(ir)),
     ];
     checks.into_iter().filter(|(_, on)| *on).map(|(n, _)| n).collect()
@@ -1161,7 +1273,9 @@ fn hod_planned(args: &Args, tc: &Toolchain) -> bool {
 /// log"), in this order: the output is not an object (`-c`, or the
 /// objects of a link): `output-kind`; an `-O` level above 0:
 /// `opt-level`; `-flto`: `lto`; a sanitizer: `sanitizer`; coverage:
-/// `coverage`; `-finstrument-functions*`, `-fxray-instrument` or
+/// `coverage`; `-finstrument-functions*`,
+/// `-finstrument-function-entry-bare` (WP-1411: before the module, so
+/// hod is not searched for), `-fxray-instrument` or
 /// `-fpatchable-function-entry=`: `instrument`. `None`: the route is
 /// planned.
 fn hod_static_skip(args: &Args, tc: &Toolchain) -> Option<&'static str> {
@@ -1178,6 +1292,7 @@ fn hod_static_skip(args: &Args, tc: &Toolchain) -> Option<&'static str> {
         Some("coverage")
     } else if c.instrument_functions
         || c.instrument_functions_after_inlining
+        || c.instrument_function_entry_bare
         || c.xray_instrument
         || c.patchable_function_entry.is_some()
     {
@@ -1196,7 +1311,8 @@ const HOD_TRIGGERS: [&str; 2] = ["alwaysinline", "coro"];
 /// The dynamic half of the hod route's predicate: the `opt` trigger
 /// set of the module ([`opt_triggers`], read from the text that goes to
 /// hod's standard input) is a subset of {`alwaysinline`, `coro`}. An
-/// instrumented module (`instrument-entry`) takes the LLVM route.
+/// instrumented module (`instrument-entry`: after [`hod_static_skip`],
+/// only an IR input carrying the attributes) takes the LLVM route.
 fn hod_takes(args: &Args, tc: &Toolchain, ir: &str) -> bool {
     opt_triggers(args, tc, ir).iter().all(|t| HOD_TRIGGERS.contains(t))
 }
@@ -1416,6 +1532,13 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     if args.codegen.branches_within_32b && !tc.target.is_aarch64() {
         cmd.arg("-x86-branches-within-32B-boundaries");
     }
+    // WP-1411: clang's `-cc1 -enable-tlsdesc` for x86-64's
+    // `-mtls-dialect=gnu2` (`TargetOptions::EnableTLSDESC`; the IR is
+    // the same). hod gets `llc`'s arguments and declines an option it
+    // does not know, so such a module keeps the LLVM route.
+    if args.codegen.tls_desc(!tc.target.is_aarch64()) {
+        cmd.arg("-enable-tlsdesc");
+    }
     // spec/driver.md "Debug information": clang's debugger tuning, and
     // `-gsplit-dwarf`'s `.dwo` file.
     if args.debug.kind() != kiln_codegen::DebugInfoKind::None {
@@ -1498,6 +1621,11 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
             cmd.arg("-flto");
         }
         None => {}
+    }
+    // WP-1411: an LTO link generates the code; clang passes the TLS
+    // dialect on as `-plugin-opt=-enable-tlsdesc`.
+    if args.codegen.lto.is_some() && args.codegen.tls_desc(!tc.target.is_aarch64()) {
+        cmd.arg("-mtls-dialect=gnu2");
     }
     // WP-941: clang links the profile runtime for coverage.
     for f in args.coverage.link_flags() {
@@ -2092,6 +2220,38 @@ mod tests {
         assert!(needs_coro_lowering("declare ptr @llvm.coro.noop() #1\n"));
         assert!(!needs_coro_lowering("define void @\"llvm.coro.id\"() {\n}\n"));
         assert!(!needs_coro_lowering("declare void @f() #0\n"));
+        // WP-1411: an asm label holding the text is a quoted name.
+        assert!(!needs_coro_lowering("declare void @\"x @llvm.coro.id\"() #0\n"));
+        assert!(!needs_coro_lowering("@s = constant [16 x i8] c\"declare @llvm.coro.\""));
+    }
+
+    /// WP-1411: the triggers read attribute groups item by item; the
+    /// attribute names as string constants or as words of another
+    /// attribute's value do not count.
+    #[test]
+    fn attribute_triggers_ignore_strings() {
+        let items: Vec<&str> = group_attrs(
+            "attributes #3 = { alwaysinline memory(argmem: read) \"a b\"=\"c d\" \"k\" }",
+        )
+        .collect();
+        assert_eq!(items, ["alwaysinline", "memory(argmem: read)", "\"a b\"=\"c d\"", "\"k\""]);
+        assert_eq!(group_attrs("define void @f() #0 {").count(), 0);
+        let instr = "attributes #0 = { noinline \"instrument-function-entry-inlined\"=\"__cyg_profile_func_enter_bare\" }\n";
+        assert!(needs_entry_instrumentation(instr));
+        let instr =
+            "attributes #0 = { \"instrument-function-entry\"=\"__cyg_profile_func_enter\" }\n";
+        assert!(needs_entry_instrumentation(instr));
+        for ir in [
+            "@.str = private unnamed_addr constant [26 x i8] c\"instrument-function-entry\\00\", align 1\n",
+            "@.str = private unnamed_addr constant [27 x i8] c\"\\22instrument-function-entry\\00\", align 1\n",
+            "attributes #0 = { \"dontcall-error\"=\"\\22instrument-function-entry\" }\n",
+            "attributes #0 = { \"dontcall-warn\"=\"no alwaysinline here\" noinline }\n",
+            "  call void @f(ptr @\"instrument-function-entry\")\n",
+        ] {
+            assert!(!needs_entry_instrumentation(ir), "{ir}");
+            assert!(!needs_always_inline(ir), "{ir}");
+        }
+        assert!(needs_always_inline("attributes #9 = { \"dontcall-warn\"=\"x\" alwaysinline }"));
     }
 
     #[test]

@@ -94,7 +94,7 @@ impl IrCounts {
         // Attribute groups follow the functions; read them first.
         let mut inline_groups: Vec<u32> = Vec::new();
         for l in code.lines().filter(|l| l.starts_with("attributes #")) {
-            if l.split_ascii_whitespace().any(|w| w == "alwaysinline")
+            if crate::codegen_cmd::group_attrs(l).any(|a| a == "alwaysinline")
                 && let Some(n) = group_refs(l).next()
             {
                 inline_groups.push(n);

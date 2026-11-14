@@ -129,6 +129,18 @@ int main() {
 const HANDLE: &str =
     "void resume(void *p) { if (!__builtin_coro_done(p)) __builtin_coro_resume(p); }\n";
 
+/// WP-1411: a unit that holds the trigger attributes' names only as
+/// string constants (found while building LLVM with kiln: a compiler's
+/// own source writes these names): no `opt` trigger, so it is offered
+/// to hod and, declined, gets no `opt` run. (An attribute value with the
+/// same words is `codegen_cmd`'s unit test `attribute_triggers_ignore_strings`.)
+const NAMES: &str = r#"const char *names[] = {
+  "instrument-function-entry", "\"instrument-function-entry-inlined\"=\"x\"",
+  "alwaysinline", "attributes #0 = { alwaysinline }", "declare void @llvm.coro.id()",
+};
+int f() { return names[0][0]; }
+"#;
+
 /// What [`GEN`] prints.
 const GEN_OUT: &str = "0 1 1 2 3 5 8 13 21 34 | 88\n";
 
@@ -150,6 +162,7 @@ fn scratch(name: &str) -> PathBuf {
     std::fs::write(d.join("inline.cpp"), INLINE).unwrap();
     std::fs::write(d.join("coro.cpp"), CORO).unwrap();
     std::fs::write(d.join("handle.cpp"), HANDLE).unwrap();
+    std::fs::write(d.join("names.cpp"), NAMES).unwrap();
     let step = "inline int step(int a, int b) { return a + b; }";
     std::fs::write(d.join("gen.cpp"), GEN.replace("STEP", step)).unwrap();
     let step = format!("[[gnu::always_inline]] {step}");
@@ -684,7 +697,7 @@ fn stats_log_names_why_hod_was_skipped() {
     let log = d.join("s.jsonl");
     let flag = format!("--hod={}", hod.display());
     let env = [("KILN_STATS_LOG", log.to_str().unwrap()), ("KILN_BACKEND", "hod")];
-    let cases: [(&[&str], &str, &str); 13] = [
+    let cases: [(&[&str], &str, &str); 15] = [
         (&["-c"], "plain.cpp", "null"),
         (&["-c", "-std=c++20"], "gen_inline.cpp", "null"),
         (&["-S"], "plain.cpp", "\"output-kind\""),
@@ -697,11 +710,10 @@ fn stats_log_names_why_hod_was_skipped() {
         (&["-c", "--coverage"], "plain.cpp", "\"coverage\""),
         (&["-c", "-finstrument-functions"], "plain.cpp", "\"instrument\""),
         (&["-c", "-fpatchable-function-entry=2"], "plain.cpp", "\"instrument\""),
-        (
-            &["-c", "-std=c++20", "-finstrument-function-entry-bare"],
-            "coro.cpp",
-            "\"instrument-entry\"",
-        ),
+        // WP-1411: a static reason, before the module.
+        (&["-c", "-std=c++20", "-finstrument-function-entry-bare"], "coro.cpp", "\"instrument\""),
+        (&["-c", "-fstack-clash-protection"], "plain.cpp", "null"),
+        (&["-c"], "names.cpp", "null"),
     ];
     for (extra, src, _) in cases {
         let o = run(&d, &env, &[&[flag.as_str(), llvm.as_str(), src][..], extra].concat());
@@ -717,5 +729,90 @@ fn stats_log_names_why_hod_was_skipped() {
         assert!(l.ends_with(&format!(",\"hod_skip\":{want}}}")), "{extra:?}: {l}");
     }
     assert!(lines[cases.len()].ends_with(",\"hod_skip\":null}"), "{}", lines[cases.len()]);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1411: the attribute names as string constants (and in another
+/// attribute's value) are no `opt` trigger: the unit is offered to hod,
+/// and when hod declines, the LLVM route runs `llc` alone (no `opt`), as
+/// `-fkiln-backend=llvm` does. The real attribute still keeps a module
+/// on the LLVM route, with the `-O0` pipeline's `ee-instrument`:
+/// `-finstrument-function-entry-bare` is a static reason (hod is not
+/// even searched for).
+#[test]
+fn trigger_names_in_strings_are_not_triggers() {
+    let d = scratch("names");
+    let llvm = stub_llvm(&d);
+    let hod = d.join("hod");
+    fake_hod(&hod, &d, DECLINE);
+    let flag = format!("--hod={}", hod.display());
+    let o = run(&d, &[], &["-c", "-v", "-fkiln-backend=hod", &flag, &llvm, "names.cpp"]);
+    let err = text(&o.stderr);
+    assert!(o.status.success(), "{err}");
+    assert_eq!(text(&read(&d.join("hod.args"))).lines().count(), 1, "offered to hod");
+    let ir = text(&read(&d.join("hod.stdin")));
+    assert!(ir.contains("c\"instrument-function-entry\\00\""), "{ir}");
+    assert_eq!(text(&read(&d.join("llvm.ran"))), "llc\n", "{err}");
+    assert!(!err.contains("-passes="), "{err}");
+    std::fs::remove_file(d.join("llvm.ran")).unwrap();
+    let o = run(&d, &[], &["-c", &llvm, "names.cpp"]);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(text(&read(&d.join("llvm.ran"))), "llc\n");
+    std::fs::remove_file(d.join("llvm.ran")).unwrap();
+    // The real attribute: no hod anywhere, and none needed.
+    let nowhere = [("PATH", "/nonexistent-wp1411")];
+    let bare = ["-c", "-finstrument-function-entry-bare", "-fkiln-backend=hod", &llvm, "plain.cpp"];
+    let o = run(&d, &nowhere, &bare);
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(text(&read(&d.join("llvm.ran"))), "opt\nllc\n");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1411: `-fstack-clash-protection` writes `"probe-stack"="inline-asm"`,
+/// which hod accepts on both targets: no route trigger, the module is
+/// offered to hod with the attribute in it.
+#[test]
+fn stack_clash_protection_is_offered() {
+    let d = scratch("clash");
+    let llvm = stub_llvm(&d);
+    let hod = d.join("hod");
+    fake_hod(&hod, &d, OK);
+    let flag = format!("--hod={}", hod.display());
+    let o = run(
+        &d,
+        &[],
+        &["-c", "-fstack-clash-protection", "-fkiln-backend=hod", &flag, &llvm, "plain.cpp"],
+    );
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    assert_eq!(read(&d.join("plain.o")), b"FAKEOBJ");
+    assert!(!d.join("llvm.ran").exists());
+    assert!(text(&read(&d.join("hod.stdin"))).contains("\"probe-stack\"=\"inline-asm\""));
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1411: the statistics log's `hod_reason` for a failure is the
+/// reason hod's message names (`internal-error`, `internal-panic`), so
+/// the two are told apart; another failure keeps its status.
+#[test]
+fn stats_log_names_the_failure_reason() {
+    let d = scratch("stats-fail");
+    let llvm = stub_llvm(&d);
+    let hod = d.join("hod");
+    let log = d.join("s.jsonl");
+    let env = [("KILN_STATS_LOG", log.to_str().unwrap()), ("KILN_BACKEND", "hod")];
+    let flag = format!("--hod={}", hod.display());
+    for then in [FAIL, PANICKED, KILLED] {
+        fake_hod(&hod, &d, then);
+        let o = run(&d, &env, &["-c", &flag, &llvm, "plain.cpp"]);
+        assert!(o.status.success(), "{}", text(&o.stderr));
+    }
+    let lines = text(&read(&log));
+    let lines: Vec<&str> = lines.lines().collect();
+    assert_eq!(lines.len(), 3);
+    for (l, reason) in lines.iter().zip(["internal-error", "internal-panic", "signal 9"]) {
+        let want =
+            format!(",\"backend\":\"hod-failed\",\"hod_reason\":\"{reason}\",\"hod_skip\":null}}");
+        assert!(l.ends_with(&want), "{l}");
+    }
     let _ = std::fs::remove_dir_all(&d);
 }

@@ -384,7 +384,8 @@ impl Cg<'_> {
     /// `-mfunction-return=thunk-extern`), `no_profile_instrument_function`
     /// (`noprofile`) and `disable_sanitizer_instrumentation`; the
     /// patchable entry (`patchable_function_entry` over the flag), `XRay`
-    /// and `-finstrument-functions*` attributes.
+    /// and `-finstrument-functions*` attributes; `"probe-stack"` and
+    /// `"stack-probe-size"` (WP-1411).
     pub(crate) fn class_b_def_attrs(&self, a: &mut Vec<Attr>, start: StartDecl) {
         let d = start.decl();
         let has = |k| d.is_some_and(|d| self.has_fn_attr(d, k));
@@ -491,6 +492,15 @@ impl Cg<'_> {
             if offset != 0 {
                 a.push(Attr::string("patchable-function-prefix", &offset.to_string()));
             }
+        }
+        // WP-1411: `-fstack-clash-protection` (`StartFunction`) and
+        // `-mstack-probe-size=` (`addStackProbeTargetAttributes`), on every
+        // definition: thunks and initialization functions too.
+        if h.stack_clash_protection {
+            a.push(Attr::string("probe-stack", "inline-asm"));
+        }
+        if let Some(n) = h.stack_probe_size {
+            a.push(Attr::string("stack-probe-size", &n.to_string()));
         }
     }
 

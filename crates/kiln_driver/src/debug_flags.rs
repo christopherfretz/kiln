@@ -52,6 +52,10 @@ pub struct DebugFlags {
     /// `-fdebug-prefix-map=` and `-ffile-prefix-map=` entries, in order
     /// (`crate::args` adds the second, which also maps macros).
     pub prefix_map: Vec<(String, String)>,
+    /// The last of `-grecord-command-line` / `-grecord-gcc-switches` and
+    /// `-gno-record-command-line` / `-gno-record-gcc-switches` (WP-1411):
+    /// the compile unit's `flags:` hold the command line.
+    pub record_command_line: bool,
     /// The last `-fdebug-compilation-dir=` / `-ffile-compilation-dir=`.
     pub comp_dir: Option<String>,
     /// The last of `-gsplit-dwarf[=split]` / `-gno-split-dwarf`.
@@ -69,8 +73,6 @@ const DEFAULTS: &[&str] = &[
     "-gno-pubnames",
     "-gno-gnu-pubnames",
     "-gno-simple-template-names",
-    "-gno-record-command-line",
-    "-gno-record-gcc-switches",
     "-gno-strict-dwarf",
     "-gno-modules",
     "-gno-inline-line-tables",
@@ -95,8 +97,6 @@ const REJECTED: &[&str] = &[
     "-gsimple-template-names",
     "-gsimple-template-names=simple",
     "-gsimple-template-names=mangled",
-    "-grecord-command-line",
-    "-grecord-gcc-switches",
     "-gstrict-dwarf",
     "-gdwarf64",
     "-gmodules",
@@ -145,6 +145,10 @@ impl DebugFlags {
             "-feliminate-unused-debug-types" => self.unused_types = false,
             "-gsplit-dwarf" | "-gsplit-dwarf=split" => self.split_dwarf = true,
             "-gno-split-dwarf" => self.split_dwarf = false,
+            "-grecord-command-line" | "-grecord-gcc-switches" => self.record_command_line = true,
+            "-gno-record-command-line" | "-gno-record-gcc-switches" => {
+                self.record_command_line = false;
+            }
             "-gz" => self.compress = Some(DebugCompression::Zlib),
             _ if DEFAULTS.contains(&arg) => {}
             _ if REJECTED.contains(&arg) => {
@@ -424,6 +428,13 @@ mod tests {
         );
         assert_eq!(parse(&["-gno-pubnames", "-gcolumn-info"]).1, [Some(Ok(())), Some(Ok(()))]);
         assert_eq!(parse(&["-gfoo"]).1, [None]);
+        // WP-1411: the last of the record pair wins.
+        let (f, r) = parse(&["-grecord-gcc-switches", "-gno-record-command-line"]);
+        assert_eq!(r, [Some(Ok(())), Some(Ok(()))]);
+        assert!(!f.record_command_line);
+        assert!(
+            parse(&["-gno-record-gcc-switches", "-grecord-command-line"]).0.record_command_line
+        );
         assert_eq!(parse(&["-O2"]).1, [None]);
     }
 }

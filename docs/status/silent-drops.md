@@ -397,7 +397,7 @@ diagnostic pragmas are inert (they are not); spec/parse.md:403-405 say `pack` un
 
 Code: crates/kiln_driver/src/args.rs, codegen_flags.rs. Unknown flags are a hard error
 (`ArgError::Unknown`, args.rs:658; also for `-Xclang` args). Explicit ignore table
-codegen_flags.rs:60 (`-f[no-]stack-clash-protection`, `-fcf-protection[=]`, `-f[no-]common`,
+codegen_flags.rs:60 (`-fcf-protection[=]`, `-f[no-]common`,
 `-f[no-]math-errno`, `-fstack-usage`, `-gz[=]`, `-fno-short-enums`, `-m64`, `-pipe`)
 + `-fexcess-precision=` (:165). `-g*` and `-gz[=]` are implemented since WP-814
 (crates/kiln_driver/src/debug_flags.rs; each unimplemented debug flag is an error). Explicit reject tables
@@ -432,7 +432,6 @@ Owner: fast-math and `-fno-math-errno` implemented in WP-806 (#364); `-fcf-prote
 - `-fcf-protection[=...]` (codegen_flags.rs:62): no CET module flags/endbr -> one kiln object
   clears IBT/SHSTK for the whole linked binary (security hardening). **Fixed in WP-813**: the
   `cf-protection-branch`/`-return` module flags and `nocf_check`, as clang (spec/driver.md).
-- `-fstack-clash-protection`: no `probe-stack` attribute.
 - `-fstack-usage`: no `.su` output.
 - `-march=native` on x86 (features.rs:428-433): only `-mcpu=native` to llc; no feature list, no
   `__AVX2__`-style macros (possible ABI difference for 256/512-bit vector by-value args — not

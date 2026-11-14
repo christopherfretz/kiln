@@ -2186,6 +2186,43 @@ fn debug_info_flags_reach_the_ir() {
     assert_eq!(o.stderr, "kiln++: error: '-gcodeview' is not supported by kiln\n");
 }
 
+/// spec/driver.md "Debug information flags" (WP-1411): under `-g`,
+/// `-grecord-gcc-switches` / `-grecord-command-line` put the command line
+/// in the compile unit's `flags:` (clang's `-dwarf-debug-flags`: the
+/// executable, `--driver-mode=g++` for a `++` name, then each argument
+/// with spaces and backslashes escaped); the last of the pair and the
+/// `-gno-` spellings wins; without debug information nothing is recorded.
+#[test]
+fn record_command_line_in_the_compile_unit() {
+    let src = "int f(int a) { return a; }\n";
+    let cu = |argv0: Option<&str>, flags: &[&str]| {
+        let mut args = vec!["-S", "-emit-llvm", "-o", "-", "-x", "c++"];
+        args.extend_from_slice(flags);
+        args.push("-");
+        let o = kiln_named(argv0, &args, src);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{flags:?}");
+        o.stdout.lines().find(|l| l.contains("DICompileUnit(")).map(str::to_owned)
+    };
+    let line = cu(None, &["-g", "-grecord-gcc-switches", "-DA=x y\\z"]).unwrap();
+    let tail = " --driver-mode=g++ -S -emit-llvm -o - -x c++ -g -grecord-gcc-switches \
+                -DA=x\\\\ y\\\\\\\\z -\", runtimeVersion: 0,";
+    assert!(line.contains(tail), "{line}");
+    assert!(line.contains("isOptimized: false, flags: \"/"), "{line}");
+    let line = cu(Some("kiln"), &["-g", "-grecord-command-line"]).unwrap();
+    assert!(line.contains(" -S -emit-llvm -o - -x c++ -g -grecord-command-line -\""), "{line}");
+    assert!(!line.contains("--driver-mode"), "{line}");
+    for off in [
+        &["-g", "-grecord-command-line", "-gno-record-gcc-switches"][..],
+        &["-g", "-grecord-gcc-switches", "-gno-record-command-line"],
+        &["-g", "-gno-record-gcc-switches"],
+        &["-g"],
+    ] {
+        assert!(!cu(None, off).unwrap().contains("flags:"), "{off:?}");
+    }
+    assert_eq!(cu(None, &["-grecord-gcc-switches"]), None);
+    assert_eq!(cu(None, &["-g", "-grecord-gcc-switches", "-g0"]), None);
+}
+
 /// spec/driver.md "Debug information flags" (WP-1138): as clang 19/22's
 /// `getDwarfVersion`, the last `-fdebug-default-version=` counts, a
 /// `-gdwarf-N` wins over it in either order, and it is read (and checked)
