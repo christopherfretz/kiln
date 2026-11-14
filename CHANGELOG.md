@@ -8,7 +8,8 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
-Planned as 1.2.1.
+Planned as 1.3.0. The x86-64 ABI fix below is to be released first, in
+a 1.2.1 patch release.
 
 ### Added
 
