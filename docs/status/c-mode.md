@@ -615,14 +615,14 @@ Written by `cargo xtask gcc-torture --report docs/status/c-mode.md` on wp/1304 (
 
 GCC C torture suites (`gcc.c-torture`, `releases/gcc-16.1.0`), host target `aarch64-unknown-linux-gnu`.
 
-- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `1d3f41331`
-- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --compiler kiln-1.1.0-aarch64-unknown-linux-gnu/bin/kiln`
-- kiln: kiln version 1.1.0 (C++26 frontend, LLVM IR backend) (-fclang-compat=19)
+- tests: GCC `6afcc4f6da931eb93f3ab001a0dd9650ea71d1ea`; kiln `2c2e2d1bb`
+- command: `cargo xtask gcc-torture -j 4 --suite execute,ieee,builtins,compile --opt -O0,-O2 --compiler kiln-1.2.0-aarch64-unknown-linux-gnu/bin/kiln`
+- kiln: kiln version 1.2.0 (C++26 frontend, LLVM IR backend) (-fclang-compat=19)
 - gcc: gcc (GCC) 16.1.0
 - clang: Debian clang version 19.1.7 (3+b1)
 - option sets: -O0, -O2; -std=gnu23 first
 - limits: 2048 MiB address space per step (plus kiln's stack reservation); compile/link timeout 120 s, run timeout 10 s; -j 4
-- 3813 tests, 7572 cases run, 27 skip rows; wall 1652 s
+- 3813 tests, 7572 cases run, 27 skip rows; wall 3665 s
 
 ### Results by class (cases)
 
