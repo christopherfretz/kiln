@@ -144,6 +144,9 @@ pub struct IrTypes<'a> {
     /// The clang release whose call lowering to follow where releases
     /// differ (`-fclang-compat`; 22 by default, as the driver).
     clang_compat: u32,
+    /// The x86-64 vector ABI level (clang `X86AVXABILevel`); `None` on
+    /// other targets.
+    avx: crate::call::AvxLevel,
 }
 
 struct Member {
@@ -159,7 +162,26 @@ struct Member {
 impl<'a> IrTypes<'a> {
     /// A session over `ast` for `target`.
     pub fn new(ast: &'a Ast, target: &'a Target) -> Self {
-        IrTypes { lay: Layouter::new(ast, target), records: FxHashMap::default(), clang_compat: 22 }
+        IrTypes {
+            lay: Layouter::new(ast, target),
+            records: FxHashMap::default(),
+            clang_compat: 22,
+            avx: crate::call::AvxLevel::None,
+        }
+    }
+
+    /// Classify x86-64 calls at AVX ABI level `avx` (clang
+    /// `X86AVXABILevel`, from the translation unit's target features;
+    /// spec/landed/abi/WP-1418.md).
+    #[must_use]
+    pub fn with_avx_level(mut self, avx: crate::call::AvxLevel) -> Self {
+        self.avx = avx;
+        self
+    }
+
+    /// The x86-64 AVX ABI level calls are classified at.
+    pub fn avx_level(&self) -> crate::call::AvxLevel {
+        self.avx
     }
 
     /// Follow clang release `major`'s call lowering (`-fclang-compat`):

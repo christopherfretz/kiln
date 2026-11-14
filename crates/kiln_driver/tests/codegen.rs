@@ -1218,6 +1218,112 @@ fn x86_avx_calling_convention() {
     }
 }
 
+/// Shared declarations of [`x86_avx_abi_interop`]: vectors and their
+/// one-member wrappers that x86-64 passes in `ymm`/`zmm` registers under
+/// AVX / AVX-512, mixed aggregates that stay in memory, and varargs.
+#[cfg(target_arch = "x86_64")]
+const AVX_ABI_DECLS: &str = "\
+typedef float f8 __attribute__((vector_size(32)));\n\
+typedef double d4 __attribute__((vector_size(32)));\n\
+typedef long long l4 __attribute__((vector_size(32)));\n\
+typedef double d8 __attribute__((vector_size(64)));\n\
+struct W { f8 v; };\n\
+union U { d4 v; long long l[4]; };\n\
+struct A1 { l4 v[1]; };\n\
+struct W8 { d8 v; };\n\
+struct Mix { f8 v; int i; };\n\
+f8 lib_bare(f8 a, d4 b, int k);\n\
+struct W lib_wrap(struct W a, union U u, struct A1 x);\n\
+struct W8 lib_wide(d8 a, struct W8 b);\n\
+struct Mix lib_mix(struct Mix m, f8 a);\n\
+double lib_va(int n, ...);\n\
+f8 lib_many(double, double, double, double, double, double, double, double, f8 a, struct W w);\n";
+
+/// The definitions of [`AVX_ABI_DECLS`]'s functions.
+#[cfg(target_arch = "x86_64")]
+const AVX_ABI_LIB: &str = "\
+f8 lib_bare(f8 a, d4 b, int k) { f8 r = a; for (int i = 0; i < 8; i++) r[i] += (float)b[i % 4] * k; return r; }\n\
+struct W lib_wrap(struct W a, union U u, struct A1 x) { struct W r; for (int i = 0; i < 8; i++) r.v[i] = a.v[i] + (float)u.v[i % 4] + (float)x.v[0][i % 4]; return r; }\n\
+struct W8 lib_wide(d8 a, struct W8 b) { struct W8 r; r.v = a * 2 + b.v; return r; }\n\
+struct Mix lib_mix(struct Mix m, f8 a) { m.v += a; m.i += 1; return m; }\n\
+double lib_va(int n, ...) { __builtin_va_list ap; __builtin_va_start(ap, n); double s = 0;\n\
+  for (int k = 0; k < n; k++) { f8 v = __builtin_va_arg(ap, f8); struct W w = __builtin_va_arg(ap, struct W); d8 d = __builtin_va_arg(ap, d8);\n\
+    for (int i = 0; i < 8; i++) s += v[i] * (k + 1) + w.v[i] + d[i]; }\n\
+  __builtin_va_end(ap); return s; }\n\
+f8 lib_many(double a, double b, double c, double d, double e, double f, double g, double h, f8 x, struct W w) { return x * (float)(a + b + c + d + e + f + g + h) + w.v; }\n";
+
+/// The caller of [`AVX_ABI_LIB`]: prints every value round-tripped.
+#[cfg(target_arch = "x86_64")]
+const AVX_ABI_MAIN: &str = "\
+extern \"C\" int printf(const char *, ...);\n\
+static double sum(f8 v) { double s = 0; for (int i = 0; i < 8; i++) s += v[i] * (i + 1); return s; }\n\
+static double sumd(d8 v) { double s = 0; for (int i = 0; i < 8; i++) s += v[i] * (i + 1); return s; }\n\
+int main() {\n\
+  f8 a = {1, 2, 3, 4, 5, 6, 7, 8}; d4 b = {0.5, 1.5, 2.5, 3.5};\n\
+  struct W w = {{8, 7, 6, 5, 4, 3, 2, 1}}; union U u; u.v = b; struct A1 x = {{{1, 2, 3, 4}}};\n\
+  d8 wd = {1, 2, 3, 4, 5, 6, 7, 8}; struct W8 w8 = {wd * 3};\n\
+  struct Mix m = {a, 41};\n\
+  printf(\"%g\\n\", sum(lib_bare(a, b, 3)));\n\
+  printf(\"%g\\n\", sum(lib_wrap(w, u, x).v));\n\
+  printf(\"%g\\n\", sumd(lib_wide(wd, w8).v));\n\
+  struct Mix r = lib_mix(m, a); printf(\"%g %d\\n\", sum(r.v), r.i);\n\
+  printf(\"%g\\n\", lib_va(2, a, w, wd, w.v, w, wd * 2));\n\
+  printf(\"%g\\n\", sum(lib_many(1, 2, 3, 4, 5, 6, 7, 8, a, w)));\n\
+}\n";
+
+/// spec/landed/abi/WP-1418.md: objects built by kiln and by clang 19 at
+/// the same AVX level call each other correctly. One translation unit
+/// defines functions taking and returning 256- and 512-bit vectors and
+/// their wrappers, the other calls them; each is built once by kiln and
+/// once by `clang++-19` (both pairings), linked and run, and the output
+/// must equal the all-clang program's. Runs only on an x86-64 host, each
+/// AVX level only when the CPU has it.
+#[test]
+fn x86_avx_abi_interop() {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if !tools() {
+            return;
+        }
+        let mut levels: Vec<&[&str]> = vec![&[]];
+        if std::arch::is_x86_feature_detected!("avx2") {
+            levels.push(&["-mavx"]);
+            levels.push(&["-mavx2"]);
+        }
+        if std::arch::is_x86_feature_detected!("avx512f") {
+            levels.push(&["-mavx512f"]);
+        }
+        let d = scratch("avxabi");
+        std::fs::write(d.join("lib.cpp"), format!("{AVX_ABI_DECLS}{AVX_ABI_LIB}")).unwrap();
+        std::fs::write(d.join("main.cpp"), format!("{AVX_ABI_DECLS}{AVX_ABI_MAIN}")).unwrap();
+        let build = |kiln: bool, flags: &[&str], src: &str, obj: &str| {
+            let mut c = Command::new(if kiln { kilnpp() } else { PathBuf::from("clang++-19") });
+            c.current_dir(&d).args(flags).args(["-Wno-psabi", "-O1", "-c", src, "-o", obj]);
+            let o = c.output().unwrap();
+            assert_eq!(o.status.code(), Some(0), "{kiln} {flags:?} {src}: {}", text(&o.stderr));
+        };
+        let run = |objs: [&str; 2]| {
+            let o =
+                Command::new("clang++-19").current_dir(&d).args(objs).args(["-o", "p"]).output();
+            let o = o.unwrap();
+            assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+            let r = Command::new(d.join("p")).output().unwrap();
+            assert_eq!(r.status.code(), Some(0));
+            text(&r.stdout)
+        };
+        for flags in levels {
+            build(false, flags, "lib.cpp", "lib-c.o");
+            build(false, flags, "main.cpp", "main-c.o");
+            build(true, flags, "lib.cpp", "lib-k.o");
+            build(true, flags, "main.cpp", "main-k.o");
+            let want = run(["main-c.o", "lib-c.o"]);
+            assert_eq!(want.lines().count(), 6, "{want}");
+            assert_eq!(run(["main-k.o", "lib-c.o"]), want, "kiln calls clang, {flags:?}");
+            assert_eq!(run(["main-c.o", "lib-k.o"]), want, "clang calls kiln, {flags:?}");
+        }
+    }
+}
+
 /// spec/driver.md "Codegen flags" (WP-605): every honoured or ignored
 /// GCC/clang codegen flag compiles `int main(){}` to an object; every
 /// rejected one is the driver error "'<flag>' is not supported by kiln".
