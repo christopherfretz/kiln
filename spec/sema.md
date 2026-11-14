@@ -9167,7 +9167,8 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   are 1, under the same group (`check_trait_operand_named`;
   `Types::sizeof_value` in the Oven). In C++ all of these stay errors.
 - **Comparisons** (C17 6.5.8, 6.5.9; `c_pointer_comparison`). Two
-  pointers to incompatible types (qualifiers aside) warn
+  pointers to incompatible types (qualifiers aside, an array's element
+  qualifiers included, C23 6.7.3p9) warn
   `-Wcompare-distinct-pointer-types` (an equality operator with a `void *`
   operand is valid, except that a function pointer against a non-null
   `void *` is a pedantic extension). Ordered function pointers warn
@@ -9186,7 +9187,12 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   types give a pointer to their composite type (6.2.7p3: the bounded
   array, the prototyped function) carrying both qualifier sets; a pointer
   to `void` against an object pointer gives a pointer to `void` with both
-  qualifier sets. Incompatible pointers warn "pointer type mismatch"
+  qualifier sets. A pointed-to array's qualifiers are its element
+  type's (C23 6.7.3p9): `int (*)[3]` and `const int (*)[3]` give
+  `const int (*)[3]` silently, as assignment and comparison accept the
+  pair (WP-1427; clang 19 and 22 still warn here,
+  `tests/c/expr/conditional-array-pointer-qualifiers-*.c` is
+  `xfail(clang)`). Incompatible pointers warn "pointer type mismatch"
   (`-Wpointer-type-mismatch`) and give `void *`; a pointer and an integer
   warn "pointer/integer type mismatch in conditional expression"
   (`-Wconditional-type-mismatch`) and give the pointer type.

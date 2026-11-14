@@ -47,6 +47,18 @@ a 1.2.1 patch release.
 
 ### Fixed
 
+- C: a struct, union or enum tag and a typedef of the same name in one
+  scope no longer conflict (WP-1427). Tags and ordinary identifiers are
+  separate name spaces (C17 6.2.3), so `typedef enum {...} state;
+  struct state {...};` compiles in either order, and inside the struct
+  the bare name is the typedef. C++ still reports the conflict.
+- C: a pointer to an array of `T` converts to a pointer to an array of
+  `const T` without a diagnostic (WP-1427), as clang 19 and C23 6.7.3
+  allow. Before, kiln reported "incompatible pointer types" (an error
+  at the clang 22 level). The reverse conversion is now reported as
+  "discards qualifiers", comparing the two pointers no longer warns, and
+  `?:` gives the qualified pointer type where clang warns "pointer type
+  mismatch".
 - `#pragma clang attribute push(..., apply_to = function)` now reaches
   friend functions defined or declared in a class (hidden friends of
   class templates too), lambdas' call operators, explicit

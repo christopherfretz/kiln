@@ -923,6 +923,10 @@ impl Sema<'_, '_> {
         if own.is_empty()
             && self.ast.decls.get(def).name() == name
             && !matches!(kind, LookupKind::All | LookupKind::Namespace)
+            // C has no injected-class-name: inside `struct S { ... }` an
+            // ordinary `S` is a typedef or object of an enclosing scope
+            // (C17 6.2.3p1), only `struct S` the tag.
+            && (!self.is_c() || kind == LookupKind::Tag)
         {
             // The injected-class-name ([class.pre]/2).
             own.decls.push(def);
