@@ -42,6 +42,8 @@ Releases:
 - `release-1.2.0.md`: the 1.2.0 release gate (precompiled header
   snapshots): the same commands against the 1.1.0 results, plus the
   snapshot-against-replay sweeps.
+- `release-1.2.1.md`: the 1.2.1 release gate (the x86-64 AVX calling
+  convention fix): the same commands against the 1.2.0 results.
 
 Standard libraries:
 

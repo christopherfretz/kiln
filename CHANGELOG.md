@@ -6,9 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
-## [Unreleased]
+## [1.2.1] - 2026-11-14
 
-Planned as 1.2.1.
+A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.
+Nothing else differs from 1.2.0, and nothing in it changes what
+[docs/STABILITY.md](docs/STABILITY.md) promises. The gate results are in
+[docs/status/release-1.2.1.md](docs/status/release-1.2.1.md).
 
 ### Fixed
 
