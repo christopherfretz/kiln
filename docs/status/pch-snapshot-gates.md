@@ -336,6 +336,28 @@ by hand: every consumer restored, no warning). Glaze `v9.1.0`, listed
 with PCH, has no `target_precompile_headers` at that tag (100/102 tests,
 the same 2 TUs failing as under clang).
 
+## 1.2.0 release candidate
+
+2026-11-14, the 1.2.0 release candidate `2c2e2d1bb` (the release
+archive's `kiln++`), `scripts/pch-release-gate.sh <kiln++> <dir> all`,
+as part of the release gate ([release-1.2.0.md](release-1.2.0.md)).
+Verdict of the script: pass.
+
+Whole corpus (7087 tests, 2920 s):
+
+| pass | fail | skip | restored | replayed | failed before the consumer |
+|---|---|---|---|---|---|
+| 5720 | 0 | 1367 | 5719 | 1 (allowed: the module unit) | 0 |
+
+| producers | single pass | two passes |
+|---|---|---|
+| 1422 | 1412 | 10 |
+
+libc++ pair: 4299 tests in each run (4261 pass, 1 fail, 1 xfail, 36
+unsupported), 3894 compiled with a PCH in the snapshot run, no
+difference in any test's outcome. The one FAIL is the same
+`unique.ptr.special/io.verify.cpp` in both runs.
+
 ## Remaining differences
 
 - The stack guard fires a few frames earlier or later after a restore
