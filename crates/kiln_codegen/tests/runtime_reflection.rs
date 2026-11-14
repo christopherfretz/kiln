@@ -156,3 +156,42 @@ fn constexpr_null_holders_are_ordinary_objects() {
     .expect("codegen");
     assert!(ir.contains("@_ZL2gs = internal constant %struct.S { ptr null"), "gs:\n{ir}");
 }
+
+/// The lines of the definition of `name`, from its `define` to the closing
+/// `}`.
+fn body<'a>(ir: &'a str, name: &str) -> Vec<&'a str> {
+    let head = define_line(ir, name);
+    ir.lines().skip_while(|l| *l != head).take_while(|l| *l != "}").collect()
+}
+
+#[test]
+fn constexpr_locals_keep_storage_unless_immediate() {
+    // spec/codegen.md "Constexpr locals" (WP-1410): a block-scope
+    // `constexpr` local holding only null reflections is an ordinary
+    // automatic object, so at -O0 it has storage even when only consteval
+    // calls read it (clang's rule for every local). One holding a non-null
+    // reflection is an immediate object: no `alloca`, no `@__const`, in a
+    // plain function, a function template instance (the reads in a
+    // designated initializer) and a template whose parameter is a
+    // reflection.
+    let src = "consteval S mk(bool nn) { S s{}; s.n = 3; if (nn) s.r = ^^int; return s; }\n\
+               consteval int num(const S& s) { return s.n; }\n\
+               struct O { int x; int y; };\n\
+               int null_holder() { constexpr S s = mk(false); return num(s); }\n\
+               int immediate() { constexpr S s = mk(true); return num(s); }\n\
+               template <class T> O designated() {\n\
+                 constexpr S s = mk(true); return O{.x = num(s), .y = num(s) + 1}; }\n\
+               template <info R> int by_refl() { constexpr S s = mk(R != info{}); return num(s); }\n\
+               int use() { return designated<int>().y + by_refl<^^int>(); }\n";
+    for arch in [Arch::AArch64, Arch::X86_64] {
+        let ir = lower_for(src, arch).expect("codegen");
+        let null = body(&ir, "_Z11null_holderv");
+        assert!(null.iter().any(|l| l.contains("alloca %struct.S")), "{arch:?} null_holder:\n{ir}");
+        assert!(ir.contains("@__const._Z11null_holderv.s = "), "{arch:?} null_holder:\n{ir}");
+        for f in ["_Z9immediatev", "_Z10designatedIiE1Ov", "_Z7by_reflILDmtyiEEiv"] {
+            let b = body(&ir, f);
+            assert!(!b.iter().any(|l| l.contains("alloca %struct.S")), "{arch:?} {f}:\n{ir}");
+            assert!(!ir.contains(&format!("@__const.{f}")), "{arch:?} {f}:\n{ir}");
+        }
+    }
+}

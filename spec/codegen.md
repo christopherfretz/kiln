@@ -1377,6 +1377,32 @@ Tests: `conformance/target.acle/` (`ir-*-19.cpp` exact under oracle 19,
   for `break` and `return` (WP-793, `outline.rs`; the full rule is
   spec/landed/codegen/WP-793.md).
 
+- Constexpr locals (WP-1410; [dcl.constexpr]/6, [stmt.dcl]/2): a
+  block-scope `constexpr` variable that is not an immediate object (below)
+  is an automatic object like any other. At -O0 it gets its `alloca`, its
+  initialization ("Local initialization" above: a store, a `memset` when
+  its value is all zero, or a `memcpy` from `@__const.<fn>.<var>`) and,
+  under `-g`, its `DILocalVariable`, whether or not anything reads it at
+  run time: no use analysis decides it, as in clang's `EmitAutoVarDecl`.
+  Measured, clang 19 and 22 and GCC 16.1 all keep the storage of a local
+  that only consteval calls read (passed by reference to a consteval
+  function that is an immediate invocation folded to a constant, in a
+  function template instance, or read by consteval calls inside a
+  designated initializer), and of one used only in a discarded
+  statement; uses at run time (address taken, bound to a reference,
+  passed by reference to a non-consteval function, captured by reference
+  in a lambda that runs) need it anyway. This includes a local whose
+  reflections are all null (`constexpr S s = make();` of a class with
+  `std::meta::info` members): under P4101R1 it is not an immediate
+  object, so it is the same ordinary object, its `info` members `ptr
+  null` (WP-1361, f962fe44d). kiln 1.1.0 and GCC 16.1, which follow
+  P2996R13's consteval-only *types*, emit no storage for it
+  (docs/status/deviations.md). Tests:
+  `tests/conformance/dcl.constexpr/local-storage-consteval-reads-ir.cpp`
+  (the IR, against clang), `kiln_codegen` test
+  `constexpr_locals_keep_storage_unless_immediate`,
+  `tests/conformance/expr.const.const/p2-constexpr-local-storage-run.cpp`.
+
 - Consteval-only variables (WP-534, WP-1328, WP-1361; P4101R1, by
   value): `Cg::no_runtime_object(d)` (`module.rs`, memoized per
   variable) decides whether variable `d` gets a run-time object. An
