@@ -14,3 +14,4 @@
 # which starts with the schema 1.2.0 ships.
 2 2836b86fe96674a1
 3 f2e94bf403d8fea9
+4 7d0aefbab76681a8

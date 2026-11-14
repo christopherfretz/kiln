@@ -175,14 +175,75 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// The function whose target features a use in the current context
+    /// is checked against (clang `checkTypeSupport`'s `FD`: the current
+    /// lexical context when it is a function, a lambda body's call
+    /// operator included).
+    fn sve_context_fn(&self) -> Option<DeclId> {
+        Some(self.ctx).filter(|&c| self.ast.decls.get(c).kind().is_function())
+    }
+
+    /// Whether function `f`'s features (`None`: the translation unit's)
+    /// have `sve` and `sme` (clang `getFunctionFeatureMap`): the module's
+    /// ([`Sema::sve`], [`Sema::target_features`]), then those of the
+    /// `target("...")` attribute of `f` or a previous declaration, written
+    /// or pushed by `#pragma clang attribute` (an instantiation carries its
+    /// pattern's). `+sve2` and the architecture levels that include SVE
+    /// imply `+sve` through the parser's feature closure.
+    pub(crate) fn sve_features_of(&self, f: Option<DeclId>) -> (bool, bool) {
+        let state = |fs: &[String], name: &str| {
+            fs.iter().rev().find_map(|e| match e.split_at_checked(1) {
+                Some((sign, n)) if n == name => Some(sign == "+"),
+                _ => None,
+            })
+        };
+        let mut sve = self.sve;
+        let mut sme = state(&self.target_features, "sme").unwrap_or(false);
+        let attr = f.and_then(|f| self.find_attr(f, kiln_ast::attr::AttrKind::TARGET));
+        let attr = attr.map(|a| *self.ast.attrs.get(a));
+        if let Some(n) = attr
+            && let Some(lit) = <kiln_ast::StringLitId as kiln_ast::ids::RawId>::from_raw(n.a)
+        {
+            let text = String::from_utf8_lossy(self.ast.strings.bytes(lit)).into_owned();
+            let module: Vec<String> = ["+fp-armv8", "+neon", "+v8a"]
+                .into_iter()
+                .map(str::to_owned)
+                .chain(self.target_features.iter().cloned())
+                .collect();
+            let fs = (self.target_attr_features)(&text, &module, self.clang_compat >= 22);
+            sve = state(&fs, "sve").unwrap_or(sve);
+            sme = state(&fs, "sme").unwrap_or(sme);
+        }
+        (sve, sme)
+    }
+
     /// clang `err_sve_vector_in_non_sve_target` for each SVE type a use of
-    /// type `q` at `loc` needs; nothing with the `sve` target feature.
+    /// type `q` at `loc` needs, checked against the current function's
+    /// features ([`Sema::sve_features_of`]); nothing with `sve`.
     pub(crate) fn check_sve_support(&mut self, q: QualType, loc: Loc) {
-        if self.sve {
+        self.check_sve_support_in(self.sve_context_fn(), q, loc);
+    }
+
+    /// [`Sema::check_sve_support`] against function `f`'s features: with
+    /// `sme` but not `sve`, clang's `err_sve_vector_in_non_streaming_function`
+    /// (kiln has no streaming functions: the `__arm_streaming` keyword
+    /// attributes are not parsed).
+    pub(crate) fn check_sve_support_in(&mut self, f: Option<DeclId>, q: QualType, loc: Loc) {
+        let types = self.sve_types_of(q);
+        if types.is_empty() {
             return;
         }
-        for x in self.sve_types_of(q) {
-            let msg = self.diag(DiagId::sema_sve_type_without_sve, loc).arg(self.ty_arg(x));
+        let (sve, sme) = self.sve_features_of(f);
+        if sve {
+            return;
+        }
+        let id = if sme {
+            DiagId::sema_sve_type_non_streaming
+        } else {
+            DiagId::sema_sve_type_without_sve
+        };
+        for x in types {
+            let msg = self.diag(id, loc).arg(self.ty_arg(x));
             self.emit(msg.allow_duplicate());
         }
     }
@@ -205,20 +266,27 @@ impl Sema<'_, '_> {
     }
 
     /// A reference to `d`: its type must be supported by the target (also
-    /// at namespace scope: `auto p = &f;`). clang 19 checks parameters and
-    /// functions here (a local variable was diagnosed at its declaration),
-    /// and not in an unevaluated operand.
+    /// at namespace scope: `auto p = &f;`). clang 19 checks parameters,
+    /// variables and functions here (clang `DiagnoseUseOfDecl`), and not
+    /// in an unevaluated operand. A local variable without support was
+    /// diagnosed at its declaration and is invalid, so only one named in
+    /// a lambda whose call operator lacks the feature is reported here
+    /// (the capture's every use).
     pub(crate) fn check_sve_use(&mut self, d: DeclId, loc: Loc) {
         if self.unevaluated > 0
             || !matches!(
                 self.ast.decls.get(d).kind(),
-                DeclKind::ParmVar | DeclKind::Function | DeclKind::CXXMethod
+                DeclKind::ParmVar | DeclKind::Var | DeclKind::Function | DeclKind::CXXMethod
             )
         {
             return;
         }
         if let Some(t) = self.ast.decls.get(d).ty() {
-            self.check_sve_support(t, loc);
+            // clang's `FD`: the current function, else the referenced one.
+            let f = self
+                .sve_context_fn()
+                .or_else(|| Some(d).filter(|&d| self.ast.decls.get(d).kind().is_function()));
+            self.check_sve_support_in(f, t, loc);
         }
     }
 
@@ -235,7 +303,7 @@ impl Sema<'_, '_> {
             && !matches!(spec.storage(), VarStorage::Static | VarStorage::Extern)
             && spec.tls() == TlsKind::None;
         if automatic {
-            if self.sve {
+            if self.sve_features_of(self.sve_context_fn()).0 {
                 return;
             }
             self.check_sve_support(ty, n.loc());

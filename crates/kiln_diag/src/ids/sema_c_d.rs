@@ -88,6 +88,7 @@ sema_capture_class_member = Error (1) "class member '{0}' cannot appear in captu
 sema_capture_more_than_once = Error (1) "'{0}' can appear only once in a capture list";
 sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does not have automatic storage duration";
 sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
+sema_capture_of_sizeless_type = Error (2) "by-copy capture of variable {0} with sizeless type {1}";
 sema_carries_dependency_missing_on_first_decl = Error (1) "{0:function|parameter} declared '[[carries_dependency]]' after its first declaration";
 // WP-954: [dcl.attr.depend]: clang `err_carries_dependency_param_not_function_decl`,
 // `err_carries_dependency_missing_on_first_decl`,

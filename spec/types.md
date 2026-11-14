@@ -197,6 +197,30 @@ invalid: its uses build no operator diagnostics (clang's `RecoveryExpr`).
 A namespace-scope `auto` variable deduced as an SVE type is checked as a
 written one ("non-local variable with sizeless type").
 
+**Per-function features** (WP-1417, `sve.rs` `sve_features_of`, clang
+`checkTypeSupport` with `getFunctionFeatureMap`): "the `sve` target
+feature" above means the features of the function the use is in, the
+translation unit's (`Sema::sve`, `Sema::target_features`) with those of
+its `target("...")` attribute applied, written on it or on an earlier
+declaration or pushed by `#pragma clang attribute` (an instantiation
+carries its pattern's; the string is parsed by the driver's parser, the
+one codegen uses, so `+sve`, `sve2`, `arch=armv9-a` and SVE CPUs imply
+`sve`). The function is the current context when it is one: a lambda's
+call operator has only its own (pushed) attributes, so an SVE parameter,
+local or captured variable used in its body is an error inside a
+`target("sve")` function. A captured variable is checked at each use
+(clang `DiagnoseUseOfDecl` checks every variable; kiln's local variables
+without support are already invalid, so only captures report). A
+function definition's own signature is checked against its own features
+at the end of its body; a lambda's against the enclosing function's (the
+context clang has popped back to), or its own at namespace scope. With
+`sme` but no `sve` the error is clang's "SVE vector type T cannot be used
+in a non-streaming function" (`sema_sve_type_non_streaming`): kiln does
+not parse the `__arm_streaming` keyword attributes, so no function is
+streaming (follow-up). A by-copy capture of an SVE variable is "by-copy
+capture of variable 'v' with sizeless type T" at the capture (clang
+`captureInLambda`'s `RequireCompleteSizedType`), with or without `sve`.
+
 Operators (WP-435, `sve.rs` `sve_binary`, clang
 `CheckSizelessVectorOperands`): `+ - * /` take two vectors of one type or
 a vector and a scalar the vector's element type can hold without

@@ -282,6 +282,7 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-fno-fat-lto-objects` | accepted; with `-flto` objects are bitcode only anyway | — |
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
+| `-f[no-]merge-all-constants` | accepted; a `const` local array or class is still copied to the stack (clang makes it a static global), which only shares less constant data | WP-1417 |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
 | `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" (`-f[no-]common` takes effect in C, for tentative definitions) | — |
 
@@ -440,8 +441,6 @@ Attributes, calling conventions and extensions:
 - `dcl.attr.grammar/gnu-attribute-before-statement.cpp`: GNU attributes
   before a statement parse only when a declaration or `;` follows.
   WP-805.
-- `ext.arm.sve/target-attribute-sve-locals.cpp`: the SVE type check
-  ignores a function's `target("sve")`. WP-910.
 - `ext.clang.address_space/address-space-run.cpp`: `address_space(N)` is
   a hard error. WP-809.
 - `ext.multiversion/target-clones-x86.cpp`: x86-64 function

@@ -109,6 +109,10 @@ pub struct ParseOptions {
     pub sve_vector_bits: Option<u32>,
     /// The `AArch64` CPU names ([`kiln_sema::Sema::aarch64_cpu_valid`]).
     pub aarch64_cpu_valid: fn(&str, bool) -> bool,
+    /// The `AArch64` module features ([`kiln_sema::Sema::target_features`]).
+    pub target_features: Vec<String>,
+    /// The `target("...")` parser ([`kiln_sema::Sema::target_attr_features`]).
+    pub target_attr_features: fn(&str, &[String], bool) -> Vec<String>,
     /// `-fkiln-dump-cfg` ([`kiln_sema::Sema::cfg_dump`]).
     pub cfg_dump: bool,
     /// `-fkiln-cfg-stats` ([`kiln_sema::Sema::cfg_stats`]).
@@ -174,6 +178,8 @@ impl Default for ParseOptions {
             sve: false,
             sve_vector_bits: None,
             aarch64_cpu_valid: |_, _| true,
+            target_features: Vec::new(),
+            target_attr_features: |_, _, _| Vec::new(),
             cfg_dump: false,
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
@@ -357,6 +363,8 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.sve = opts.sve;
     s.sve_vector_bits = opts.sve_vector_bits;
     s.aarch64_cpu_valid = opts.aarch64_cpu_valid;
+    s.target_features.clone_from(&opts.target_features);
+    s.target_attr_features = opts.target_attr_features;
     s.cfg_dump = opts.cfg_dump;
     s.cfg_stats = opts.cfg_stats;
     s.cfg_max_elems = opts.cfg_max_elems;

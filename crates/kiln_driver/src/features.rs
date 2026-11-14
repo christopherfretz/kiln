@@ -785,6 +785,12 @@ pub fn target_attr_parser(
     target_attr_features(attr, m.features, m.v22)
 }
 
+/// The features of [`target_attr_features`] alone, for sema's SVE type
+/// check ([`kiln_sema::Sema::target_attr_features`]).
+pub fn target_attr_feature_list(attr: &str, module: &[String], v22: bool) -> Vec<String> {
+    target_attr_features(attr, module, v22).features
+}
+
 /// The CPU table row of a `target("cpu=<name>")` / `tune=<name>` CPU:
 /// case-sensitive (clang's `AArch64::parseCpu` on the attribute's text,
 /// an alias resolving to its CPU), the R-profile CPUs included.

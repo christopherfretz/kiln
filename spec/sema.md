@@ -3215,15 +3215,23 @@ instantiation unless stated.
   (`add_pragma_attrs`): declarators (variables, functions, fields,
   typedefs), special members, alias-declarations, class and enum heads
   that declare or define, enumerators, namespace definitions, and
-  function parameters (`void` excepted). Instantiations receive none
+  function parameters (`void` excepted); and (WP-1417, every
+  declaration clang's `ProcessDeclAttributes` handles) friend function
+  declarations and definitions (hidden friends of class templates too,
+  whose instantiations copy them), explicit specializations of function
+  and variable templates, a lambda's call operator
+  (`ActOnStartOfLambdaDefinition`: a pushed `target` applies to it, it
+  does not inherit the enclosing function's), deduction guides, the
+  variable of a structured binding declaration and an exception
+  declaration. Instantiations receive none
   (they copy the pattern's). A group still open at the end of the
   translation unit is `unterminated '#pragma clang attribute push' at end
-  of file` at its push. Not done (WP-1399 follow-ups): friend function
-  declarations, a nested namespace definition's outer namespaces, rule
+  of file` at its push. Not done (WP-1399 follow-ups): a nested namespace definition's outer namespaces, rule
   sets that differ in C, and the rules of an attribute's strict set that
   clang disables for the language (accepted silently by clang, reported
   by kiln). Tests: `tests/conformance/cpp.pragma/weak-alias-*.cpp`,
   `redefine-extname*.cpp`, `clang-attribute-*.cpp`,
+  `ir-clang-attribute-*.cpp`, `tests/conformance/ext.arm.sve/*target-attribute-sve*.cpp`,
   `tests/c/run/pragma-symbol-names.c`,
   `tests/c/linkage/pragma-symbol-names.c`. The attributes of an explicit
   instantiation of a function, variable or class template

@@ -530,6 +530,7 @@ impl Sema<'_, '_> {
         // (`own_deprecation`).
         let mut attrs = self.non_vector_attrs(&ds.attrs);
         attrs.extend(d.attrs.iter().copied());
+        self.add_pragma_attrs(v, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(v, &mut attrs);
         }

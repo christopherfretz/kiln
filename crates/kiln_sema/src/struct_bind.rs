@@ -308,6 +308,7 @@ impl Sema<'_, '_> {
         let _ = self.finish_template_pattern(v);
         let mut attrs = ds.attrs.clone();
         attrs.extend(d.attrs.iter().copied());
+        self.add_pragma_attrs(v, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(v, &mut attrs);
             let _ = self.builder().attach_attrs(v, &attrs);

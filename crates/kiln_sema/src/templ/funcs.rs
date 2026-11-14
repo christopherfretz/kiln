@@ -1232,6 +1232,7 @@ impl Sema<'_, '_> {
         // `[[nodiscard]]` primary still applies; WP-1221).
         let mut attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
         self.take_annotations(f, &mut attrs);
+        self.add_pragma_attrs(f, &mut attrs);
         if !attrs.is_empty() {
             self.check_decl_attrs(f, &mut attrs);
         }

@@ -8630,9 +8630,10 @@ impl Sema<'_, '_> {
         self.check_function_try_block(f, body);
         self.check_naked_body(f, body);
         let body = self.end_function_body(body, rbrace);
-        // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`.
+        // clang `ActOnFinishFunctionBody` -> `checkTypeSupport`, against
+        // `f`'s own features.
         if let Some(fty) = self.ast.decls.get(f).ty() {
-            self.check_sve_support(fty, self.ast.decls.get(f).loc());
+            self.check_sve_support_in(Some(f), fty, self.ast.decls.get(f).loc());
         }
         self.finish_source_locs(f);
         match self.ast.definition(f) {

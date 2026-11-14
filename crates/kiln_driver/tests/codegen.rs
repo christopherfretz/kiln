@@ -997,6 +997,59 @@ fn neon_bf16_call_without_feature() {
     }
 }
 
+/// WP-1417: the `always_inline` target-feature error names the caller as
+/// clang does (`FunctionDecl::getDeclName`): `operator==` for a friend
+/// operator, `operator()` for a lambda's call operator, never an empty
+/// name. Found building open-source SIMD libraries. Exact clang 19 stderr
+/// (checked against `clang++-19` when it is installed), on either host.
+#[test]
+fn target_feature_error_names_operators() {
+    let d = scratch("featname");
+    // `_mm256_cmpeq_epi8` is declared as <immintrin.h> declares it: the
+    // header reaches libc's <stdlib.h>, absent for a foreign --target.
+    let src = "typedef long long __m256i __attribute__((__vector_size__(32), __aligned__(32)));\n\
+               typedef char __v32qi __attribute__((__vector_size__(32)));\n\
+               static inline __attribute__((__always_inline__, __target__(\"avx2\"), \
+               __min_vector_width__(256)))\n\
+               __m256i _mm256_cmpeq_epi8(__m256i a, __m256i b) \
+               { return (__m256i)((__v32qi)a == (__v32qi)b); }\n\
+               struct M {\n  __m256i raw;\n  \
+               friend inline M operator==(M a, M b) { return M{_mm256_cmpeq_epi8(a.raw, b.raw)}; }\n};\n\
+               M h(M a, M b) { return a == b; }\n\
+               auto l = [](M a, M b) { return M{_mm256_cmpeq_epi8(a.raw, b.raw)}; };\n\
+               M k(M a, M b) { return l(a, b); }\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let args = ["--target=x86_64-unknown-linux-gnu", "-S", "-emit-llvm", "-o", "k.ll", "t.cpp"];
+    let o = kiln_in(&d, &args);
+    let err = text(&o.stderr);
+    let errors: Vec<&str> = err.lines().filter(|l| l.contains("error:")).collect();
+    assert_eq!(
+        errors,
+        [
+            "t.cpp:7:51: error: always_inline function '_mm256_cmpeq_epi8' requires target \
+             feature 'avx2', but would be inlined into function 'operator==' that is compiled \
+             without support for 'avx2'",
+            "t.cpp:7:51: error: AVX vector argument of type '__m256i' (vector of 4 'long long' \
+             values) without 'avx' enabled changes the ABI",
+            "t.cpp:10:34: error: always_inline function '_mm256_cmpeq_epi8' requires target \
+             feature 'avx2', but would be inlined into function 'operator()' that is compiled \
+             without support for 'avx2'",
+            "t.cpp:10:34: error: AVX vector argument of type '__m256i' (vector of 4 'long long' \
+             values) without 'avx' enabled changes the ABI",
+        ],
+        "{err}"
+    );
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args(["--target=x86_64-unknown-linux-gnu", "-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert_eq!(text(&c.stderr), err, "clang++-19");
+    }
+}
+
 /// spec/landed/codegen/WP-630.md "Target features" (WP-630): an x86
 /// builtin, or the `always_inline` `target("...")` header wrapper of one,
 /// called from a function without the feature it needs is a codegen error
@@ -1383,6 +1436,8 @@ fn codegen_flags_classes() {
         &["-fno-math-errno"],
         &["-fmath-errno"],
         &["-fstack-usage"],
+        &["-fmerge-all-constants"],
+        &["-fno-merge-all-constants"],
         &["-gz"],
         &["-gz=zlib"],
         &["-fno-short-enums"],
