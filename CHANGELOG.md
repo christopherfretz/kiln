@@ -12,6 +12,15 @@ Planned as 1.2.0.
 
 ### Added
 
+- The PCH options are documented and supported (WP-1404; `--help`,
+  "PRECOMPILED HEADERS"): `-fkiln-pch-snapshot` (the default) and
+  `-fno-kiln-pch-snapshot`, `-fkiln-pch-snapshot=write` (write the
+  snapshot, replay when consuming), `=load` (restore, write none),
+  `=check` (restore and replay, report the first difference), and
+  `-fkiln-pch-validate=mtime` (the default: an input file with the
+  recorded size and time is not read, one with another time is
+  compared by content) or `=content` (every input file is compared by
+  content). The release gate gains `scripts/pch-release-gate.sh`.
 - Experimental `-fkiln-backend=hod` (also `KILN_BACKEND=hod`; WP-1371):
   at `-O0`, an object's module is handed, before `opt`, to the hod back
   end (github.com/christopherfretz/hod, an external executable found with
@@ -42,6 +51,28 @@ Planned as 1.2.0.
 
 ### Changed
 
+- Precompiled headers are fast by default (WP-1404): a PCH now carries a
+  snapshot of the compiler's whole front-end state at the end of the
+  header, and a consumer restores it instead of processing the header
+  again. On `<bits/stdc++.h>` a `-fsyntax-only` consumer takes
+  0.57 s against 1.48 s for the replay and 0.67 s for clang 19's
+  PCH ([docs/status/pch.md](docs/status/pch.md)). Whenever the snapshot
+  cannot be used the consumer replays the header as before, so a build
+  never fails for it: silently (a `-v` note) for the cases that replay by
+  design, and with one `-Wpch-snapshot-unused` warning when the
+  configuration differs (another `-std`, target, `-D` list, warning
+  options, a changed input file, another kiln build). A restored
+  consumer does not repeat the header's warnings. A header whose state
+  at its end cannot be saved (an open global module fragment, for
+  example) still gets its PCH and one warning, `precompiled header
+  '<pch>' cannot carry a snapshot (<why>); its consumers process the
+  header again [-Wpch-snapshot-unused]`. The PCH is larger: 35.2 MB
+  for `<bits/stdc++.h>` (clang 19: 26.7 MB), 8.5 MB for four
+  common headers. A PCH is a trusted artifact: it is tied to the exact
+  kiln binary that wrote it and to its input files (both are checked,
+  and a mismatch replays or is rejected as in clang), and it is not
+  meant to be shared between builds of kiln. `-fno-kiln-pch-snapshot`
+  gives the 1.1 behaviour on either side. spec/driver.md "Snapshots".
 - The experimental PCH snapshot (`-fkiln-pch-snapshot`, WP-1403): a
   consumer whose include search path differs from the producer's (an
   extra `-I`, another order) now restores the snapshot when every header

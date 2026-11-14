@@ -440,7 +440,9 @@ fn by_design_replays_do_not_warn() {
         assert!(warnings(&o).is_empty(), "{extra:?}:\n{}", o.stderr);
         assert!(!restored(&o), "{extra:?}:\n{}", o.stderr);
     };
-    quiet(&["-fsyntax-only", "t.cpp"]);
+    // WP-1404: no option is the snapshot (it warns, above); `-fno-` is
+    // the replay by design.
+    quiet(&["-fno-kiln-pch-snapshot", "-fsyntax-only", "t.cpp"]);
     quiet(&["-fkiln-pch-snapshot", "-fno-kiln-pch-snapshot", "-fsyntax-only", "t.cpp"]);
     quiet(&["-fkiln-pch-snapshot=write", "-fsyntax-only", "t.cpp"]);
     quiet(&["-fkiln-pch-snapshot=check", "-fsyntax-only", "t.cpp"]);
@@ -456,8 +458,11 @@ fn by_design_replays_do_not_warn() {
         "-o",
         "m.pcm",
     ]);
-    // A PCH without a snapshot section.
-    let o = run(&d, &[STD, "-I", "inc", "-x", "c++-header", "p.h", "-o", "plain.pch"]);
+    // A PCH without a snapshot section (`-fno-` producer, WP-1404).
+    let o = run(
+        &d,
+        &[STD, "-fno-kiln-pch-snapshot", "-I", "inc", "-x", "c++-header", "p.h", "-o", "plain.pch"],
+    );
     assert_eq!(o.code, 0, "{}", o.stderr);
     let o = run(
         &d,

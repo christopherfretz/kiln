@@ -201,14 +201,14 @@ Every other test runs as without the option. For one that applies:
    `src/<file>`. kiln builds the PCH with the base flags, `-iquote <test
    dir>` (for its quoted `#include`s), the test's compile flags (the
    consumer's order: a snapshot is used only when the command lines
-   match) and `-fkiln-pch-image -v` (`snapshot`: also
-   `-fkiln-pch-snapshot=write`), under the same memory limit and compile
+   match) and `-fkiln-pch-image -v -fno-kiln-pch-snapshot` (`snapshot`:
+   nothing, the default path since WP-1404, with `KILN_SNAP_TIMING=1`), under the same memory limit and compile
    timeout as a compile step. If that fails, the test fails at
    `compile`, with `the PCH of the leading #includes does not build`.
 2. **The test** compiles the copy with `-include-pch <pch>`, the mode's
-   consumer flag (`load`: `-fkiln-pch-image=load`; `replay`:
-   `-fno-kiln-pch-image`; `check`: `-fkiln-pch-image=check`;
-   `snapshot`: `-fkiln-pch-snapshot=load`, with `KILN_SNAP_TIMING=1`) and
+   consumer flags (`load`: `-fkiln-pch-image=load`; `replay`:
+   `-fno-kiln-pch-image`; `check`: `-fkiln-pch-image=check`; each with
+   `-fno-kiln-pch-snapshot`; `snapshot`: none, with `KILN_SNAP_TIMING=1`) and
    `-iquote <test dir>`. Its outcome is judged as without the option.
    So a gate is green under `--pch-diff` exactly when it is green
    without it.

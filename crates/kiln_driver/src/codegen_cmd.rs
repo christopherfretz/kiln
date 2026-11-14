@@ -287,7 +287,7 @@ impl CodegenJob<'_> {
         (if errors == 0 { module } else { None }, errors, deps)
     }
 
-    /// EXPERIMENTAL (WP-1383): [`Self::run`] with the `-include-pch`
+    /// WP-1383: [`Self::run`] with the `-include-pch`
     /// file's snapshot restored in place of a replay of its header
     /// (`crate::pch_snapshot`); `Err` (nothing reported) when it cannot
     /// be restored, and the caller replays.
@@ -413,7 +413,7 @@ impl CodegenJob<'_> {
         inputs.skipped.clone_from(&skipped);
         let feats = crate::features::resolve(a, &job.toolchain.target).0;
         let (mut tu, mut pp, deps, main_id) = if let Some(restore) = restore {
-            // EXPERIMENTAL (WP-1383): the prefix's state restored.
+            // WP-1383: the prefix's state restored.
             let (sema, pp, deps, popts) =
                 job.restore_front(sm, engine, interner, inputs, restore, &target, |o| {
                     self.parse_options(o)

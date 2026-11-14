@@ -869,15 +869,14 @@ pub struct PchArgs {
     /// replay and compared with it (WP-1036; set by `crate::pch`).
     pub check_load: Option<Box<PchCheckLoad>>,
     /// The last of `-f[no-]kiln-pch-snapshot[=write|load|check]`
-    /// (spec/driver.md "Snapshots"). Not in `--help` until it is the
-    /// default.
+    /// (spec/driver.md "Snapshots"); on (`Both`) by default.
     pub snapshot: PchSnapshot,
     /// The last `-fkiln-pch-validate=content|mtime`: how a snapshot
     /// consumer checks the files the PCH read (spec/driver.md
-    /// "Snapshots"). Not in `--help`.
+    /// "Snapshots"); `mtime` by default.
     pub validate: PchValidate,
-    /// The `-include-pch` file's whole-front-end snapshot, when
-    /// `-fkiln-pch-snapshot=load` found a usable one (set by
+    /// The `-include-pch` file's whole-front-end snapshot, when a
+    /// loading mode (the default) found a usable one (set by
     /// `crate::pch`). The rest of the arguments are replay's, the
     /// fallback.
     pub snapshot_use: Option<PchSnapshotUse>,
@@ -888,11 +887,12 @@ pub struct PchArgs {
 }
 
 /// `-fkiln-pch-snapshot`'s mode (spec/driver.md "Snapshots", spec/snap.md
-/// "Whole-compiler restore order").
+/// "Whole-compiler restore order"). The default is [`Self::Both`]
+/// (WP-1404): every PCH build writes a snapshot and every consumer
+/// restores it, replaying the header on any refusal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PchSnapshot {
     /// `-fno-kiln-pch-snapshot`: no snapshot is written or read.
-    #[default]
     Off,
     /// `=write`: the producer also writes the front end's state at the
     /// end of the header as one more PCH section; a consumer replays.
@@ -900,7 +900,9 @@ pub enum PchSnapshot {
     /// `=load`: the consumer restores that state instead of replaying
     /// the header, and replays on any mismatch; a producer writes none.
     Load,
-    /// `-fkiln-pch-snapshot`: write when producing, load when consuming.
+    /// `-fkiln-pch-snapshot` and the default: write when producing,
+    /// load when consuming.
+    #[default]
     Both,
     /// `=check`: write when producing; a consumer restores the snapshot
     /// and also replays, compares the two, and reports a difference as

@@ -189,6 +189,27 @@ MODULES:
                           Remove module cache entries unused this long
                           (default 31 days; 0: never)
 
+PRECOMPILED HEADERS:
+  -include-pch <file>     Use the precompiled header <file> (built with
+                          -x c++-header or -x c-header)
+  -fkiln-pch-snapshot, -fno-kiln-pch-snapshot
+                          [kiln] Save the compiler's state at the end of
+                          the header in the PCH and restore it where the
+                          PCH is used (default on); off: the header is
+                          processed again
+  -fkiln-pch-snapshot=write
+                          [kiln] Save the snapshot; consumers process the
+                          header again
+  -fkiln-pch-snapshot=load
+                          [kiln] Restore a snapshot; save none
+  -fkiln-pch-snapshot=check
+                          [kiln] Restore and also process the header, and
+                          report a difference (slow, for debugging)
+  -fkiln-pch-validate=mtime, -fkiln-pch-validate=content
+                          [kiln] How a restore checks the header's files:
+                          by size and time, hashing a touched file
+                          (default), or by content
+
 LINKING:
   -fuse-ld=<linker>       Link with <linker> (bfd, gold, lld, ...)
   -l<lib>                 Link with the library <lib>
@@ -438,6 +459,10 @@ mod tests {
             "-fno-kiln-module-cache",
             "-fmodules-prune-interval=<seconds>",
             "-fmodules-prune-after=<seconds>",
+            "-include-pch <file>",
+            "-fno-kiln-pch-snapshot",
+            "-fkiln-pch-snapshot=check",
+            "-fkiln-pch-validate=content",
             "-fcontract-evaluation-semantic=<semantic>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",

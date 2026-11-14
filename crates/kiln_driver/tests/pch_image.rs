@@ -29,9 +29,17 @@ struct Out {
     stderr: String,
 }
 
+/// Every command runs without the snapshot (WP-1404: it is the default,
+/// and a consumer that restores it never reads the image these tests
+/// are about).
 fn kiln(dir: &Path, args: &[&str]) -> Out {
-    let o =
-        Command::new(kilnpp()).args(args).current_dir(dir).stdin(Stdio::null()).output().unwrap();
+    let o = Command::new(kilnpp())
+        .arg("-fno-kiln-pch-snapshot")
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
     assert!(!stderr.contains("panicked"), "kiln++ {args:?} panicked:\n{stderr}");
     Out {

@@ -179,3 +179,76 @@ fn the_header_pass_runs_when_a_main_file_could_differ() {
     // Asks for more than diagnostics and dependencies.
     both("verbose", "#include <vector>\n", &["-std=c++26", "-v"], false);
 }
+
+/// WP-1404: with no option, a PCH build whose prefix cannot be
+/// snapshotted (here a global module fragment left open) still writes the
+/// PCH and says why, once, in `-Wpch-snapshot-unused`; `-Werror` makes it
+/// an error and no PCH; `-Wno-pch-snapshot-unused` silences it. The
+/// consumer of that PCH replays the header with no warning (a `-v` note
+/// only). spec/driver.md "Snapshots".
+#[test]
+fn a_prefix_without_a_snapshot_still_gets_a_pch() {
+    let d = scratch("unsnap");
+    std::fs::write(d.join("gmf.h"), "module;\n#define X 1\n").unwrap();
+    std::fs::write(d.join("m.cpp"), "export module m;\nexport int f() { return X; }\n").unwrap();
+    let produce = |extra: &[&str], pch: &str| {
+        let mut a = vec!["-std=c++26", "-x", "c++-header", "gmf.h", "-o", pch];
+        a.extend(extra);
+        kiln(&d, "", &a)
+    };
+    let o = produce(&[], "gmf.pch");
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        o.stderr,
+        "warning: precompiled header 'gmf.pch' cannot carry a snapshot (Parser.mods: not at \
+         rest); its consumers process the header again [-Wpch-snapshot-unused]\n"
+    );
+    assert!(o.timing.contains("note: not written: Parser.mods: not at rest"), "{}", o.timing);
+    assert!(d.join("gmf.pch").exists());
+    let o = produce(&["-Werror"], "werror.pch");
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.starts_with("error: precompiled header 'werror.pch' cannot"), "{}", o.stderr);
+    assert!(o.stderr.contains("[-Werror,-Wpch-snapshot-unused]"), "{}", o.stderr);
+    assert!(!d.join("werror.pch").exists());
+    let o = produce(&["-Wno-pch-snapshot-unused"], "quiet.pch");
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    for v in [false, true] {
+        let mut a = vec!["-std=c++26", "-include-pch", "gmf.pch", "-fsyntax-only", "m.cpp"];
+        if v {
+            a.push("-v");
+        }
+        let o = kiln(&d, "", &a);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(!o.stderr.contains("warning"), "{}", o.stderr);
+        assert_eq!(o.stderr.contains("snapshot not used"), v, "{}", o.stderr);
+    }
+}
+
+/// A header being precompiled is a prefix (clang `TU_Prefix`): the
+/// `#pragma weak` identifiers it leaves undeclared and its unused
+/// file-scope variables are the including unit's to diagnose, so its
+/// producer is silent (and, for the pragma, takes the single pass). The
+/// same text as a main file warns.
+#[test]
+fn a_prefix_leaves_end_of_unit_warnings_to_its_consumer() {
+    let d = scratch("prefix-eot");
+    let text = "#pragma weak later_fn\nstatic int unused_x;\n";
+    std::fs::write(d.join("p.h"), text).unwrap();
+    std::fs::write(d.join("p.cpp"), text).unwrap();
+    std::fs::write(d.join("m.cpp"), "extern \"C\" int later_fn();\n").unwrap();
+    for extra in [&[][..], &["-fno-kiln-pch-snapshot"][..]] {
+        let mut a = vec!["-std=c++26", "-Wall", "-x", "c++-header", "p.h", "-o", "p.pch"];
+        a.extend(extra);
+        let o = kiln(&d, "", &a);
+        assert_eq!((o.code, o.stderr.as_str()), (0, ""), "{extra:?}");
+    }
+    // Without the unused variable (an unused-declaration warning on keeps
+    // the header pass), the single pass stands in.
+    std::fs::write(d.join("w.h"), "#pragma weak later_fn\n").unwrap();
+    let o = kiln(&d, "", &["-std=c++26", "-Wall", "-x", "c++-header", "w.h", "-o", "w.pch"]);
+    assert_eq!((o.code, o.stderr.as_str()), (0, ""));
+    assert!(o.timing.contains("single pass: stands in"), "{}", o.timing);
+    let o = kiln(&d, "", &["-std=c++26", "-Wall", "-fsyntax-only", "p.cpp"]);
+    assert!(o.stderr.contains("weak identifier 'later_fn' never declared"), "{}", o.stderr);
+    assert!(o.stderr.contains("unused variable 'unused_x'"), "{}", o.stderr);
+}

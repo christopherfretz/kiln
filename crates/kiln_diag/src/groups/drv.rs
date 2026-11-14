@@ -7,6 +7,6 @@ EagerLoadCxxNamedModules = "eager-load-cxx-named-modules" [];
 // WP-1037: a `<h>.gch` the driver's `-include` probe ignores.
 IgnoredGch = "ignored-gch" [];
 OptionIgnored = "option-ignored" [];
-// WP-1403: `drv_pch_snapshot_unused`.
+// WP-1403: `drv_pch_snapshot_unused`; WP-1404: `drv_pch_snapshot_not_written`.
 PchSnapshotUnused = "pch-snapshot-unused" [];
 UnusedCommandLineArgument = "unused-command-line-argument" [];

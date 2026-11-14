@@ -990,9 +990,10 @@ fn pch_prefix(
     crate::util::isolate_caches(&mut c);
     // The consumer's order ([`execute`]: the base flags, `-iquote`, then
     // the test's): a snapshot's identity is the command line, in order.
-    c.args(cfg.base_compile_flags()).args(&iquote).args(flags).args(pch_diff::PRODUCER_FLAGS);
+    c.args(cfg.base_compile_flags()).args(&iquote).args(flags).args(mode.producer_flags());
     if mode == pch_diff::PchDiff::Snapshot {
-        c.arg(pch_diff::SNAPSHOT_PRODUCER_FLAG);
+        // The default producer (WP-1404): why it wrote no snapshot.
+        c.env(pch_diff::SNAPSHOT_TIMING_ENV, "1");
     }
     c.args(["-x", "c++-header"]).arg(&header).arg("-o").arg(&pch);
     c.env("KILN_LLVM_DIR", &cfg.llvm_dir);
@@ -1030,7 +1031,7 @@ fn pch_prefix(
             .unwrap_or_else(|| "no declaration image".to_owned()),
     });
     let mut with = vec!["-include-pch".to_owned(), pch.display().to_string()];
-    with.push(mode.consumer_flag().to_owned());
+    with.extend(mode.consumer_flags().iter().map(|f| (*f).to_owned()));
     with.extend(iquote);
     Prefix::Pch(copy, with)
 }

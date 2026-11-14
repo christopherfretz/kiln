@@ -1,21 +1,25 @@
 //! The whole-front-end PCH snapshot (WP-1383, WP-1392; spec/driver.md
-//! "Snapshots", spec/snap.md "Whole-compiler restore order"). Not in
-//! `--help` and off unless `-fkiln-pch-snapshot[=write|load|check]` is
-//! given, until it becomes the default.
+//! "Snapshots", spec/snap.md "Whole-compiler restore order"). On by
+//! default since WP-1404: every PCH build writes it and every consumer
+//! restores it, replaying the header on any refusal;
+//! `-fno-kiln-pch-snapshot` turns it off on either side.
 //!
-//! - **Producer** (`-fkiln-pch-snapshot=write`): after the ordinary PCH
-//!   job (record, image, diagnostics and exit status unchanged), a second
-//!   front-end pass compiles an *empty* main file with the producer's
-//!   `-include`s and then the header as `-include`s, parses to the end of
-//!   that main file without the end-of-translation-unit work
-//!   (`kiln_parse::parse_prefix`), closes it (`end_main_file`), and
+//! - **Producer** (the default, `-fkiln-pch-snapshot[=write|check]`): a
+//!   single pass that stands in for the header pass where it may
+//!   ([`single_pass_blocker`], [`stands_in`]); otherwise, after the
+//!   ordinary PCH job (record, image, diagnostics and exit status
+//!   unchanged), a second front-end pass compiles an *empty* main file
+//!   with the producer's `-include`s and then the header as `-include`s,
+//!   parses to the end of that main file without the
+//!   end-of-translation-unit work (`kiln_parse::parse_prefix`), closes it (`end_main_file`), and
 //!   writes every root (source manager, interner, diagnostics engine,
 //!   preprocessor, `Sema` with its AST and Oven) as one section
 //!   (`bmi::SECTION_SNAPSHOT`) beside the record's others. Its
 //!   diagnostics are discarded (the first pass printed them). A prefix
-//!   with errors, or one whose state is not at rest, gets no section
-//!   (`-v` note naming the field).
-//! - **Consumer** (`-fkiln-pch-snapshot=load`): when the section is there,
+//!   with errors gets no PCH; one whose state is not at rest gets no
+//!   section, a `-v` note naming the field and one
+//!   `-Wpch-snapshot-unused` warning (WP-1404).
+//! - **Consumer** (the default, `-fkiln-pch-snapshot[=load]`): when the section is there,
 //!   its header ([`MAGIC`], [`FORMAT_VERSION`]) and schema hash are this
 //!   build's, its configuration fingerprint matches ([`identity`]) and
 //!   the files it read are unchanged ([`find`]), the compile job restores
@@ -210,6 +214,11 @@ fn excluded(args: &Args) -> Args {
         gcc_toolchain: d.gcc_toolchain,
         gcc_install_dir: d.gcc_install_dir,
         llvm_dir: d.llvm_dir,
+        // WP-1404: `-O0` is what no `-O` gives, to every reader of the
+        // field (the predefines, the sanitizers, code generation), so a
+        // PCH built without it matches a consumer with it. Other levels
+        // stay as spelled (their predefines are a component too).
+        opt_flag: args.opt_flag.clone().filter(|f| f != "-O0"),
         ..args.clone()
     }
 }
@@ -1343,7 +1352,7 @@ fn directives_only(text: &str) -> bool {
     true
 }
 
-/// The producer's section for `header` (EXPERIMENTAL, WP-1383): a pass
+/// The producer's section for `header` (WP-1383): a pass
 /// over an empty main file with the producer's `-include`s, then the
 /// header, parsed to the end of the last one (`kiln_parse::parse_prefix`)
 /// and written root by root. Its diagnostics are not shown: the header
@@ -1832,6 +1841,11 @@ mod tests {
         );
         // The same standard, spelled two ways.
         same(&["-std=c++2c", "t.cpp"], &["-std=c++26", "t.cpp"]);
+        // WP-1404: `-O0` is the default level (a PCH built without it,
+        // used with `-O0 -c`); another level still differs.
+        same(&["-std=c++20", "t.cpp"], &["-std=c++20", "-O0", "-c", "t.cpp"]);
+        same(&["-std=c++20", "-O0", "t.cpp"], &["-std=c++20", "t.cpp"]);
+        assert_ne!(diff(&["-std=c++20", "t.cpp"], &["-std=c++20", "-O2", "t.cpp"]), None);
         named(
             &["-std=c++20", "-Wall", "-Wno-unused-variable", "t.cpp"],
             &["-std=c++20", "-Wno-unused-variable", "-Wall", "t.cpp"],

@@ -2150,18 +2150,24 @@ manager, the interner, the diagnostics engine, the preprocessor and
 consumer that restores it does not process the header again. It is
 written as section 4 (`bmi::SECTION_SNAPSHOT`) of the record's section
 block, next to the `-fkiln-pch-image` sections; replay reads the same
-file. Until it becomes the default, the options below are hidden (not in
-`--help`).
+file. Since WP-1404 it is the default: with no option a PCH build writes
+the section and a consumer restores it, replaying the header whenever it
+cannot. The options below are listed in `--help` ("PRECOMPILED
+HEADERS"). A PCH is a trusted artifact tied to the exact kiln build that
+wrote it and to its input files: another build refuses the snapshot (and
+the record, see "Validation" above), a changed input refuses it, and
+nothing in it is checked beyond that.
 
 **Modes** (`-f[no-]kiln-pch-snapshot[=...]`, the last one wins):
 
 | option | producer | consumer |
 |---|---|---|
+| (none; the default since WP-1404) | writes the section | restores it |
 | `-fkiln-pch-snapshot` | writes the section | restores it |
 | `=write` | writes the section | replays |
 | `=load` | writes none | restores it |
 | `=check` | writes the section | restores it **and** replays, compares, reports a difference |
-| `-fno-kiln-pch-snapshot` (default) | writes none | replays |
+| `-fno-kiln-pch-snapshot` | writes none | replays (the behaviour before WP-1404) |
 
 `=check` compiles the main file to `-fdump-ast=locs` twice in the same
 process, once restored and once replaying, and compares (1) whether the
@@ -2176,11 +2182,23 @@ vs '<replay>' (replay)`, and the compile fails. The job's own results
 (diagnostics, dump, IR, `-MD` list) are replay's. It is the debugging
 mode, and it is slow: three front-end runs.
 
-**Producer conditions.** The section is written after the ordinary PCH
-job, by a second pass over an empty main file whose `-include`s are the
-producer's own followed by the header. There is no section, and a `-v`
-note says why (`snapshot not written: <why>`), for a header with errors, or a prefix whose state is not at rest (`Type.field: why`
-from the quiescence checks).
+**Producer conditions.** The section is the state after a pass over an
+empty main file whose `-include`s are the producer's own followed by the
+header; where nothing a main file alone gets could differ, that pass
+stands in for the header pass (single pass, WP-1393, spec/snap.md "The
+producer's single pass"), else it runs after the ordinary PCH job (two
+passes: a C header, `-v`, `-verify`, a time trace, `-fkiln-pch-image`,
+dumps and reports, `-MG`, or `KILN_PCH_SNAPSHOT_PASSES=2`). A header with
+errors gets no PCH, as before. A prefix whose state is not at rest
+(`Type.field: why` from the quiescence checks) still gets its PCH, with
+no section: the `-v` note says `snapshot not written: <why>`, and the
+build warns once, `warning: precompiled header 'p.pch' cannot carry
+a snapshot (<why>); its consumers process the header again
+[-Wpch-snapshot-unused]` (`drv_pch_snapshot_not_written`, WP-1404; the
+same group as the consumer's warning below: `-Wno-pch-snapshot-unused`
+turns it off, `-Werror` promotes it and then no PCH is written). The
+consumers of such a PCH replay with only a `-v` note (`snapshot not
+used: the PCH has no snapshot section`).
 
 **Section layout.** `KILNSNAP` (8 bytes), the section's format version
 (u32, little-endian, now 2; independent of kiln's version), then a
@@ -2218,6 +2236,10 @@ spellings that reach the same state agree:
 | source path style | `-fkiln-source-path-style=` | the same |
 | reproducible time | the fixed epoch, if any | `-fkiln-reproducible-time`, `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` |
 | options | every other parsed option (`Args`, pretty-printed, one field per line) | anything not listed here, including options added later |
+
+In the options component, `-O0` is no `-O` (WP-1404: every reader of the
+level treats them alike, so a PCH built without `-O` serves a `-O0 -c`
+consumer); other levels stay as spelled.
 
 The warning policy is the one component where option order can differ
 and still match: two `-W` lists give the same text exactly when the
@@ -2411,10 +2433,10 @@ prefix that warns, and with a difference. Unit tests: the language
 component tells C from C++ and C standards apart; `-verify` options do
 not refuse.
 
-### PCH snapshot: behaviour (EXPERIMENTAL, WP-1394)
+### PCH snapshot: behaviour (WP-1394)
 
-The snapshot (`-fkiln-pch-snapshot` and its modes, "Snapshots" above,
-hidden; spec/snap.md
+The snapshot (the default, and `-fkiln-pch-snapshot` and its modes,
+"Snapshots" above; spec/snap.md
 "Whole-compiler restore order") stands in for a replay of the header.
 These are the consumer's rules; every refusal is a silent replay with
 `-v` `note: precompiled header 'p.pch': snapshot not used: <why>` (or

@@ -65,6 +65,46 @@ pub struct SyntheticPchs {
     built: Mutex<HashMap<String, Arc<OnceLock<SyntheticPch>>>>,
 }
 
+/// Under `--pch-diff snapshot`, how many of the run's PCH builds took
+/// each producer shape ([`pch_diff::producer_shape`]: the single pass,
+/// or two passes and why), printed after the accounting (WP-1404). A
+/// shared synthetic PCH counts once.
+#[derive(Debug, Default)]
+pub struct ProducerShapes {
+    shapes: Mutex<std::collections::BTreeMap<String, usize>>,
+}
+
+impl ProducerShapes {
+    /// Counts the producer whose standard error is `stderr`.
+    fn add(&self, stderr: &str) {
+        let shape = pch_diff::producer_shape(stderr).unwrap_or_else(|| {
+            "no snapshot pass (the producer wrote no snapshot-timing line)".to_owned()
+        });
+        let mut m = self.shapes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        *m.entry(shape).or_default() += 1;
+    }
+
+    /// `pch-diff snapshot producers: N built: S single pass, T two
+    /// passes`, then each shape's count; empty when none was counted.
+    pub fn format(&self) -> String {
+        use std::fmt::Write as _;
+        let m = self.shapes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if m.is_empty() {
+            return String::new();
+        }
+        let total: usize = m.values().sum();
+        let single = m.get("single pass").copied().unwrap_or(0);
+        let mut s = format!(
+            "pch-diff snapshot producers: {total} built: {single} single pass, {} two passes\n",
+            total - single
+        );
+        for (shape, n) in m.iter() {
+            let _ = writeln!(s, "  {n:>5}  {shape}");
+        }
+        s
+    }
+}
+
 /// A synthetic PCH and its producer's stderr, or why it does not build.
 type SyntheticPch = Result<(PathBuf, String), String>;
 
@@ -169,8 +209,8 @@ impl Test<'_> {
                 pch_diff::path_note(&producer).unwrap_or_else(|| "no declaration image".to_owned())
             }
         };
-        self.pch_flags =
-            vec!["-include-pch".into(), pch.into_os_string(), mode.consumer_flag().into()];
+        self.pch_flags = vec!["-include-pch".into(), pch.into_os_string()];
+        self.pch_flags.extend(mode.consumer_flags().iter().map(Into::into));
         // WP-1403: a consumer with one more (empty) `-I` directory than
         // its producer, so the snapshot's lookups are repeated.
         let extra =
@@ -205,9 +245,9 @@ impl Test<'_> {
         }
         self.pch_path = Some(path.clone());
         let what = if synthetic {
-            format!("with -include-pch of the synthetic prefix ({})", mode.consumer_flag())
+            format!("with -include-pch of the synthetic prefix ({})", mode.consumer_label())
         } else {
-            format!("with -include-pch of the leading #includes ({})", mode.consumer_flag())
+            format!("with -include-pch of the leading #includes ({})", mode.consumer_label())
         };
         compare(&plain, &with, &producer, &what)?;
         if extra
@@ -287,7 +327,7 @@ impl Test<'_> {
     }
 
     /// The PCH of `header`: the test's flags, the producer's
-    /// ([`pch_diff::PRODUCER_FLAGS`]), and the test's directory for its
+    /// ([`PchDiff::producer_flags`]), and the test's directory for its
     /// quoted `#include`s (the header is in the scratch directory). The
     /// test's own flags come in the consumer's order ([`Self::command`]):
     /// a snapshot's identity is the command line in order, so the
@@ -308,6 +348,9 @@ impl Test<'_> {
                 o.describe_end(),
                 indent(&o.stderr_str())
             )));
+        }
+        if self.cfg.pch_diff == Some(PchDiff::Snapshot) && o.success() {
+            self.cfg.pch_producers.add(&o.stderr_str());
         }
         Ok(o)
     }
@@ -341,9 +384,12 @@ impl Test<'_> {
         if iquote {
             c.arg("-iquote").arg(self.test_dir());
         }
-        c.args(pch_diff::PRODUCER_FLAGS);
-        if self.cfg.pch_diff == Some(PchDiff::Snapshot) {
-            c.arg(pch_diff::SNAPSHOT_PRODUCER_FLAG);
+        let mode = self.cfg.pch_diff.unwrap_or(PchDiff::Replay);
+        c.args(mode.producer_flags());
+        if mode == PchDiff::Snapshot {
+            // The reason a producer writes no snapshot, and its shape
+            // ([`pch_diff::producer_shape`]).
+            c.env(pch_diff::SNAPSHOT_TIMING_ENV, "1");
         }
         c.args(["-x", "c++-header"]).arg(header).arg("-o").arg(pch);
         c

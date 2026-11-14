@@ -59,7 +59,7 @@ options:
                       #includes without a PCH and with -include-pch of a PCH of
                       them, read by `load` (the declaration image, or its
                       fallback), `replay`, `check` or `snapshot` (the
-                      experimental -fkiln-pch-snapshot); the exit status,
+                      default path, no PCH option); the exit status,
                       diagnostics, IR and run must agree; no oracles, xfail
                       ignored (spec/harness.md \"PCH differential\")
   --pch-diff-require-restore
@@ -592,6 +592,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
         pch_require_restore,
         pch_synthetic: opts.pch_synthetic.then(runner::SyntheticPchs::default),
         pch_extra_dir: opts.pch_extra_dir,
+        pch_producers: runner::ProducerShapes::default(),
     };
     let jobs = opts
         .jobs
@@ -628,6 +629,7 @@ pub fn execute(opts: &Options) -> Result<Vec<TestResult>, String> {
     text.push_str(&report::format_summary(&counts, results.len(), start.elapsed()));
     if let Some(mode) = opts.pch_diff {
         text.push_str(&report::format_pch_accounting(mode, &results));
+        text.push_str(&cfg.pch_producers.format());
     }
     print!("{text}");
     if let Some(path) = &opts.report_parity {

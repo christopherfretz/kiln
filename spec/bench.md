@@ -196,25 +196,24 @@ declaration image") against clang's on fixed header sets
 
   | Variant | Mode | kiln | clang |
   |---|---|---|---|
-  | `build` | `pch-build` | `-fkiln-pch-image -x c++-header <case>.h -o <pch>` | `-x c++-header <case>.h -o <pch>` |
+  | `build` | `pch-build` | `-x c++-header <case>.h -o <pch>` | the same |
   | `none-syntax` | `syntax` | `-include <case>.h -fsyntax-only` | the same |
   | `none-obj` | `obj` | `-include <case>.h -O0 -c -o <obj>` | the same |
-  | `load-syntax` | `syntax` | `-fkiln-pch-image=load -include-pch <pch> -fsyntax-only` | `-include-pch <pch> -fsyntax-only` |
-  | `load-obj` | `obj` | `-fkiln-pch-image=load -include-pch <pch> -O0 -c -o <obj>` | `-include-pch <pch> -O0 -c -o <obj>` |
-  | `replay-syntax` | `syntax` | `-fno-kiln-pch-image -include-pch <pch> -fsyntax-only` | none |
-  | `replay-obj` | `obj` | `-fno-kiln-pch-image -include-pch <pch> -O0 -c -o <obj>` | none |
-  | `snap-build` | `pch-build` | `-fkiln-pch-snapshot=write -O0 -x c++-header <case>.h -o <snap-pch>` | none |
-  | `snap-syntax` | `syntax` | `-fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -fsyntax-only` | none |
-  | `snap-obj` | `obj` | `-fkiln-pch-snapshot=load -include-pch <snap-pch> -O0 -c -o <obj>` | none |
+  | `load-syntax` | `syntax` | `-include-pch <pch> -fsyntax-only` | the same |
+  | `load-obj` | `obj` | `-include-pch <pch> -O0 -c -o <obj>` | the same |
+  | `replay-syntax` | `syntax` | `-fno-kiln-pch-snapshot -include-pch <pch> -fsyntax-only` | none |
+  | `replay-obj` | `obj` | `-fno-kiln-pch-snapshot -include-pch <pch> -O0 -c -o <obj>` | none |
 
-  Each consumer variant (`none`, `load`, `replay`, `snap`) also runs with
-  an empty main file (`bench/pch/empty.cpp`, `empty.c` for C) in place of
-  the unit: `<variant>-empty`, e.g. `snap-syntax-empty`. That isolates
-  the cost of the PCH itself from the unit's. The snapshot variants
-  (WP-1393) are C++ only and kiln only; they add `-O0` to the build and to
-  `-fsyntax-only` because the snapshot's identity keeps `-O0` (so every
-  snapshot command line matches its producer's). `<snap-pch>` is
-  `<case>.kiln-snap.pch`.
+  Since WP-1404 kiln's rows are the default path: the build writes the
+  snapshot and `load` restores it (a C header too: its build takes two
+  passes, its consumer restores). `replay` reads the same PCH and replays
+  the header, as every kiln PCH did before. Each consumer variant
+  (`none`, `load`, `replay`) also runs with an empty main file
+  (`bench/pch/empty.cpp`, `empty.c` for C) in place of the unit:
+  `<variant>-empty`, e.g. `load-syntax-empty`. That isolates the cost of
+  the PCH itself from the unit's. Before WP-1404 the rows were
+  `-fkiln-pch-image` builds and loads plus separate `snap-*` rows; the
+  image path is measured by docs/status/pch.md's older regions only.
 
   Every command starts with the case's flags and ends with the unit (the
   build ends with `-o <pch>`). `<pch>` is `<case>.<kind>.pch` and `<obj>`
@@ -243,22 +242,13 @@ declaration image") against clang's on fixed header sets
 - **The path taken.** After its variants, each case runs kiln twice more,
   unmeasured:
   - the build with `-v`, to a separate PCH, for the producer's note
-    (`consumers use its declaration image (N records)` or `consumers
-    replay the header: <why>`);
-  - `load-syntax` with `-v`, for the consumer's note (`declaration image
-    (N records)` or `is replayed: <why>`).
+    (`snapshot written` or `snapshot not written: <why>`);
+  - `load-syntax` with `-v`, for the consumer's note (`snapshot matches;
+    restoring it` or `snapshot not used: <why>`).
 
-  With the snapshot variants, two more: the snapshot build with `-v`, to
-  a separate PCH (`snapshot written` or `snapshot not written: <why>`),
-  and `snap-syntax` with `-v` (`snapshot matches; restoring it` or why
-  not); the second gives the snapshot path, `snapshot` or `replay`.
-
-  The consumer's note gives the path: `image`, `replay`, or `unknown` when
-  there is no note. When the image is taken, `-fkiln-pch-image=check` is
-  run at `-fsyntax-only` and at `-O0 -c`. It compiles both paths in one
-  process and fails on any difference, and that failure fails the run as
-  an image/replay difference, which is a bug in the image. This is a smoke
-  check of the measured cases only. The correctness check is the harness's
+  The consumer's note gives the path: `snapshot`, `replay`, or `unknown`
+  when there is no note. The region also gives each case's PCH file size,
+  kiln's and clang's. This is a report of the measured cases only. The correctness check is the harness's
   `--pch-diff` (spec/harness.md "PCH differential").
 - **Judged.** kiln's entries are judged against `bench/baselines/pch.json`
   as in "Regression policy", but wall time is not judged unless

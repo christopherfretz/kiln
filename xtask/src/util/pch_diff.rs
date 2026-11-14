@@ -10,15 +10,15 @@ pub enum PchDiff {
     /// `-fkiln-pch-image=load`: the declaration image where the producer
     /// wrote one, else the replay it falls back to.
     Load,
-    /// `-fno-kiln-pch-image`: the header is replayed (the fallback path).
+    /// `-fno-kiln-pch-image -fno-kiln-pch-snapshot`: the header is
+    /// replayed (the fallback path).
     Replay,
     /// `-fkiln-pch-image=check`: kiln compiles with the image and with
     /// replay and reports the first difference itself.
     Check,
-    /// EXPERIMENTAL (WP-1383): `-fkiln-pch-snapshot=load`, the
-    /// whole-compiler snapshot the producer wrote with
-    /// `-fkiln-pch-snapshot=write` ([`SNAPSHOT_PRODUCER_FLAG`]), else the
-    /// replay it falls back to.
+    /// The default path (WP-1404): producer and consumer have no PCH
+    /// option, so the producer writes the whole-compiler snapshot and the
+    /// consumer restores it, else replays.
     Snapshot,
 }
 
@@ -43,29 +43,64 @@ impl PchDiff {
         }
     }
 
-    /// The consumer's flag. The producer always writes the image
-    /// (`-fkiln-pch-image`), so `load` and `replay` read the same file.
-    pub fn consumer_flag(self) -> &'static str {
+    /// The consumer's flags. The image modes turn the snapshot off on
+    /// both sides (it is the default since WP-1404, and a consumer that
+    /// restores it never reads the image), so they test what they tested
+    /// before; `snapshot` adds none: it is the default path.
+    pub fn consumer_flags(self) -> &'static [&'static str] {
         match self {
-            Self::Load => "-fkiln-pch-image=load",
-            Self::Replay => "-fno-kiln-pch-image",
-            Self::Check => "-fkiln-pch-image=check",
-            Self::Snapshot => "-fkiln-pch-snapshot=load",
+            Self::Load => &["-fkiln-pch-image=load", "-fno-kiln-pch-snapshot"],
+            Self::Replay => &["-fno-kiln-pch-image", "-fno-kiln-pch-snapshot"],
+            Self::Check => &["-fkiln-pch-image=check", "-fno-kiln-pch-snapshot"],
+            Self::Snapshot => &[],
+        }
+    }
+
+    /// The producer's flags beyond the test's own. The image modes: the
+    /// image (so `load` and `replay` read the same file), the `-v` note
+    /// that names the path a consumer takes ([`path_note`]) and no
+    /// snapshot. `snapshot`: none, so the producer is the default one
+    /// (single pass where it may, spec/snap.md); its reasons come from
+    /// the `snapshot-timing:` lines ([`SNAPSHOT_TIMING_ENV`]).
+    pub fn producer_flags(self) -> &'static [&'static str] {
+        match self {
+            Self::Snapshot => &[],
+            _ => &["-fkiln-pch-image", "-v", "-fno-kiln-pch-snapshot"],
+        }
+    }
+
+    /// The consumer's flags as text, for messages (`default flags` for
+    /// none).
+    pub fn consumer_label(self) -> String {
+        match self.consumer_flags() {
+            [] => "default flags".to_owned(),
+            f => f.join(" "),
         }
     }
 }
 
-/// The producer's flags beyond the test's own: the image and the `-v`
-/// note that names the path a consumer takes ([`path_note`]).
-pub const PRODUCER_FLAGS: [&str; 2] = ["-fkiln-pch-image", "-v"];
-
-/// [`PchDiff::Snapshot`]'s producer flag, beyond [`PRODUCER_FLAGS`].
-pub const SNAPSHOT_PRODUCER_FLAG: &str = "-fkiln-pch-snapshot=write";
-
-/// The environment variable that makes a snapshot consumer print its
-/// `snapshot-timing:` lines: under [`PchDiff::Snapshot`] the
-/// `snapshot-timing: restore` line tells a restore from a replay.
+/// The environment variable that makes the driver print its
+/// `snapshot-timing:` lines, producer and consumer: under
+/// [`PchDiff::Snapshot`] the `snapshot-timing: restore` line tells a
+/// restore from a replay, and the producer's `snapshot-timing: producer
+/// single pass:` line its shape ([`producer_shape`]).
 pub const SNAPSHOT_TIMING_ENV: &str = "KILN_SNAP_TIMING";
+
+/// The shape a snapshot producer took, from its `snapshot-timing:` lines
+/// (printed under [`SNAPSHOT_TIMING_ENV`]): `single pass` when the
+/// snapshot pass stood in for the header pass, else `two passes (<why>)`
+/// (why the single pass was not attempted or did not stand in, numbers
+/// as `N`), or `None` when the producer printed no such line (it wrote
+/// no snapshot, or ran without the variable).
+pub fn producer_shape(stderr: &str) -> Option<String> {
+    let line =
+        stderr.lines().find_map(|l| l.strip_prefix("snapshot-timing: producer single pass: "))?;
+    if line.starts_with("stands in") {
+        return Some("single pass".to_owned());
+    }
+    let why = line.split_once('(').and_then(|(_, r)| r.strip_suffix(')')).unwrap_or(line);
+    Some(format!("two passes ({})", reduce(why)))
+}
 
 /// What [`snapshot_path`] calls a consumer that restored the snapshot.
 pub const RESTORED: &str = "snapshot";
@@ -81,6 +116,9 @@ pub fn snapshot_path(producer: &str, with: &str) -> String {
         return RESTORED.to_owned();
     }
     let why = producer.lines().find_map(|l| {
+        if let Some(rest) = l.strip_prefix("snapshot-timing: note: not written: ") {
+            return Some(rest.to_owned());
+        }
         let (_, rest) = l.split_once("': snapshot not written: ")?;
         Some(rest.to_owned())
     });
@@ -135,7 +173,11 @@ fn is_unused_warning(line: &str) -> bool {
 /// histogram groups like reasons: every run of digits is `N`, and a
 /// quoted path (`'...'`) is `'…'`.
 pub fn replay_reason(path: &str) -> Option<String> {
-    let why = path.strip_prefix("replay: ")?;
+    path.strip_prefix("replay: ").map(reduce)
+}
+
+/// `why` with its numbers and paths reduced ([`replay_reason`]).
+fn reduce(why: &str) -> String {
     let mut out = String::with_capacity(why.len());
     let mut chars = why.chars().peekable();
     while let Some(c) = chars.next() {
@@ -157,7 +199,7 @@ pub fn replay_reason(path: &str) -> Option<String> {
             out.push(c);
         }
     }
-    Some(out)
+    out
 }
 
 /// One entry of the snapshot replay allow-list ([`AllowList`]).

@@ -934,15 +934,19 @@ found) twice:
 - **with the PCH**: the copy with its leading `#include` lines emptied
   (every other line keeps its number, as a PCH user drops the includes it
   holds; an unguarded header would otherwise be read twice), and
-  `-include-pch pchdiff.pch` plus the consumer flag: `load`
-  `-fkiln-pch-image=load`, `replay` `-fno-kiln-pch-image`, `check`
-  `-fkiln-pch-image=check`, `snapshot` `-fkiln-pch-snapshot=load`.
+  `-include-pch pchdiff.pch` plus the consumer flags: `load`
+  `-fkiln-pch-image=load -fno-kiln-pch-snapshot`, `replay`
+  `-fno-kiln-pch-image -fno-kiln-pch-snapshot`, `check`
+  `-fkiln-pch-image=check -fno-kiln-pch-snapshot`, `snapshot` none (the
+  default path since WP-1404: the consumer restores the snapshot).
   `pchdiff.pch` is built from `pchdiff.h`, the leading `#include` lines,
   with the test's `-std`, `args`, the `-fmodule-file=` flags of its
-  `module:` lines, `-iquote <test dir>`, in the consumer's order, and the
-  producer's `-fkiln-pch-image -v -x c++-header` (so `load` and `replay`
-  read the same file; `snapshot` adds `-fkiln-pch-snapshot=write`, and
-  `-fclang-compat=` and the `kiln_meta.h` flags come first, as in the
+  `module:` lines, `-iquote <test dir>`, in the consumer's order, and
+  `-x c++-header`; the `load`, `replay` and `check` producers add
+  `-fkiln-pch-image -v -fno-kiln-pch-snapshot` (so they read the same
+  file), the `snapshot` producer adds nothing (the default path, with
+  `KILN_SNAP_TIMING=1`, single pass where it may) and its
+  `-fclang-compat=` and `kiln_meta.h` flags come first, as in the
   consumer: a snapshot is used only when the producer's command line
   is the consumer's, spec/driver.md). Neither build passes the report
   options an `oven:` or `inst-report:` test otherwise gets: no budget is
@@ -999,7 +1003,11 @@ failed before the consumer ran; S skipped`, then one line per path (the
 reason above, or `image (N records)` / `replay: <why>` for `load`) with
 its count and how many of those FAILed, and `skipped:` with one line per
 skip reason (numbers reduced to `N`; a replay reason's quoted paths to
-`'…'`).
+`'…'`). Under `snapshot` a last line counts the producers by shape,
+`pch-diff snapshot producers: N built: S single pass, T two passes`,
+then one line per shape (`single pass`, or `two passes (<why>)` with
+the producer's reason, from its `snapshot-timing: producer single
+pass:` line).
 
 Each build is `-S -emit-llvm` and, for a `run` test, first the binary and
 its run. A test with `module:` lines runs two-step (its units are built
