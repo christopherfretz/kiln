@@ -9163,6 +9163,12 @@ impl Sema<'_, '_> {
         opaque_enum: bool,
         nloc: Loc,
     ) -> bool {
+        // C17 6.2.3p1: tags and ordinary identifiers (typedef names
+        // included) are separate name spaces, and C has no templates or
+        // namespaces, so a tag conflicts with no other kind of name.
+        if self.is_c() {
+            return false;
+        }
         match use_ {
             TagUse::Reference if !opaque_enum => {
                 let o = self.lookup_name(n, LookupKind::Nested).decls;

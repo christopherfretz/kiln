@@ -132,6 +132,10 @@ impl Sema<'_, '_> {
         tag: DeclId,
         loc: Loc,
     ) -> bool {
+        // C17 6.2.3p1: a typedef name never hides a tag in C.
+        if self.is_c() {
+            return false;
+        }
         let found = self.lookup_name(name, LookupKind::Type).decls;
         let first = self.ast.first(tag);
         if found.is_empty() || found.iter().any(|&d| self.ast.first(d) == first) {

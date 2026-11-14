@@ -159,7 +159,7 @@ impl Sema<'_, '_> {
             if ordered && lf && rf {
                 warn(self, DiagId::sema_c_ordered_comparison_function_pointers);
             }
-            if c_assign::compatible(self, lpe.without_quals(), rpe.without_quals()) {
+            if c_assign::compatible_pointees(self, lpe, rpe) {
                 // C17 6.5.8p2: compatible object types, qualifiers aside;
                 // before C11 both complete or both incomplete (clang
                 // `ext_typecheck_compare_complete_incomplete_pointers`,
@@ -338,7 +338,12 @@ impl Sema<'_, '_> {
             let f3 = conv::cast_to(self, CastKind::NoOp, f, dest, None);
             return (t3, f3, dest);
         }
-        let (lu, ru) = (conv::strip_cv(self, lpe), conv::strip_cv(self, rpe));
+        // C23 6.7.3p9: a pointed-to array's element qualifiers are its own
+        // (as in assignment, `c_assign::check_pointers`).
+        let unqual = |s: &mut Self, p: QualType| {
+            if s.ast.types.is_array(p) { s.ast.types.unqualified(p) } else { conv::strip_cv(s, p) }
+        };
+        let (lu, ru) = (unqual(self, lpe), unqual(self, rpe));
         let ty = if c_assign::compatible(self, lu, ru) {
             let comp = self.c_composite(lu, ru);
             let comp = self.ast.types.qualify(comp, lq | rq);

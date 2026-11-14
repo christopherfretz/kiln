@@ -210,6 +210,27 @@ fn sign_insensitive(s: &mut Sema<'_, '_>, q: QualType) -> QualType {
     if super::rank::int_signed(s, base) { super::rank::unsigned_counterpart(s, base) } else { q }
 }
 
+/// Canonical pointee `p` without its qualifiers, those of an array's
+/// (nested) element type included (C23 6.7.3p9; clang's canonical split
+/// of an array type).
+fn unqualified_pointee(s: &mut Sema<'_, '_>, p: QualType) -> QualType {
+    if s.ast.types.is_array(p) {
+        let u = s.ast.types.unqualified(p);
+        s.ast.types.canonical(u)
+    } else {
+        p.without_quals()
+    }
+}
+
+/// Whether pointees `a` and `b` are qualified or unqualified versions of
+/// compatible types (C17 6.5.8p2, 6.5.9p2, 6.5.15p6), an array's element
+/// qualifiers counting as the array's (C23 6.7.3p9).
+pub(crate) fn compatible_pointees(s: &mut Sema<'_, '_>, a: QualType, b: QualType) -> bool {
+    let (a, b) = (s.ast.types.canonical(a), s.ast.types.canonical(b));
+    let (a, b) = (unqualified_pointee(s, a), unqualified_pointee(s, b));
+    compatible(s, a, b)
+}
+
 /// clang's `checkPointerTypesForAssignment` of `rhs` to `lhs`, both
 /// (canonical) pointer types.
 fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrCheck {
@@ -219,7 +240,14 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
     };
     let (lp, rp) = (types.canonical(lp), types.canonical(rp));
     let mut res = PtrCheck::Compatible;
-    if !lp.quals().contains(rp.quals()) {
+    // C23 6.7.3p9 (N2607): an array and its element type are identically
+    // qualified, so the qualifiers of a pointed-to array are its
+    // (innermost) element's: `T (*)[N]` to `const T (*)[N]` adds a
+    // qualifier, as for any pointee. clang's canonical array type carries
+    // its element's qualifiers, so clang 19 applies this in every C mode
+    // (silently, also before C23; GCC warns under -pedantic there).
+    let (lq, rq) = (types.effective_quals(lp), types.effective_quals(rp));
+    if !lq.contains(rq) {
         res = PtrCheck::DiscardsQualifiers;
     }
     // 6.5.16.1p1: a pointer to void and a pointer to an object type (a
@@ -227,7 +255,7 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
     if types.is_void(lp) || types.is_void(rp) {
         return res;
     }
-    let (lu, ru) = (lp.without_quals(), rp.without_quals());
+    let (lu, ru) = (unqualified_pointee(s, lp), unqualified_pointee(s, rp));
     if compatible(s, lu, ru) {
         return res;
     }
@@ -247,10 +275,12 @@ fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrChec
                 _ => break,
             }
         }
+        let (l, r) = (unqualified_pointee(s, l), unqualified_pointee(s, r));
         if l == r {
             return PtrCheck::NestedQualifiers;
         }
     }
+    let types = &s.ast.types;
     if types.is_function(lu) && types.is_function(ru) {
         return PtrCheck::FunctionPointer;
     }
