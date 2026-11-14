@@ -56,7 +56,7 @@ pub(crate) struct Policy {
 
 impl DiagOptions {
     /// The warning policy these options build, as text (the PCH
-    /// snapshot's fingerprint, spec/driver.md "Snapshots"): the policy's
+    /// snapshot's fingerprint, spec/pch.md): the policy's
     /// flags, every id whose command-line mapping is not its default, and
     /// for each group a `-W` option names, whether the last of
     /// `-W<group>`/`-Wno-<group>` was positive. That is everything a

@@ -1,5 +1,4 @@
-//! The PCH snapshot end to end through `kiln++` (spec/driver.md
-//! "Precompiled headers", "Snapshots" and "PCH snapshot: behaviour").
+//! The PCH snapshot end to end through `kiln++` (spec/pch.md).
 //!
 //! - [`product`] (WP-1392): the modes, the identity refusing with the
 //!   first differing component named (`-v`), options that cannot change
@@ -151,8 +150,8 @@ mod product {
     }
 
     /// Options that cannot change the prefix's state do not refuse it; each
-    /// that can is named, and the compile replays (spec/driver.md
-    /// "Snapshots", the identity table).
+    /// that can is named, and the compile replays (spec/pch.md
+    /// "Identity").
     #[test]
     fn identity_components() {
         let d = built("identity", &["-Wshadow", "-Wunused-variable"]);
@@ -242,7 +241,7 @@ mod product {
 
     /// `pch` with its snapshot section's bytes replaced by `edit(bytes)`:
     /// the section block, the record's `image` line and its `end` checksum
-    /// written again (spec/driver.md "Format").
+    /// written again (spec/pch.md "File layout").
     fn with_section(pch: &[u8], edit: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
         let at = pch.windows(5).position(|w| w == b"\nend ").unwrap();
         let text_end = at + 1 + pch[at + 1..].iter().position(|&b| b == b'\n').unwrap() + 1;
@@ -296,6 +295,146 @@ mod product {
             let o = ok(&d, &consume(&["-fkiln-pch-snapshot"]));
             assert_eq!(note(&o), format!("not used: {why}"));
         }
+    }
+
+    /// `pch` with its record text's lines rewritten by `edit` (a line it
+    /// maps to `None` is kept) and the `end` checksum written again; the
+    /// section block after the text is kept.
+    fn with_record_line(pch: &[u8], edit: impl Fn(&str) -> Option<String>) -> Vec<u8> {
+        let at = pch.windows(5).position(|w| w == b"\nend ").unwrap();
+        let text_end = at + 1 + pch[at + 1..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        let text = std::str::from_utf8(&pch[..=at]).unwrap();
+        let mut out = String::new();
+        for line in text.lines() {
+            out.push_str(&edit(line).unwrap_or_else(|| line.to_owned()));
+            out.push('\n');
+        }
+        let sum = bmi::checksum(out.as_bytes());
+        let _ = writeln!(out, "end {sum:016x}");
+        let mut bytes = out.into_bytes();
+        bytes.extend_from_slice(&pch[text_end..]);
+        bytes
+    }
+
+    /// WP-1397 (spec/pch.md "Format versioning"): a PCH from another
+    /// snapshot format version, another schema hash, with no snapshot
+    /// section (what 1.1.0 wrote), or from another kiln is never misread:
+    /// each compile ends as the replay's ([cpp.include]/2: as if the header
+    /// were included), with `-Wpch-snapshot-unused` where the configuration
+    /// is what differs, or in a clean error that the PCH must be rebuilt.
+    #[test]
+    fn cross_version() {
+        let d = built("xver", &[]);
+        let pch = std::fs::read(d.join("h.pch")).unwrap();
+        let compile = |file: &str, extra: &[&str]| {
+            let mut a = vec!["-std=c++20", "-isystem", "sys", "-include-pch", file, "-v"];
+            a.extend_from_slice(extra);
+            a.extend_from_slice(&["-S", "-emit-llvm", "t.cpp", "-o", "-"]);
+            kiln(&d, &a)
+        };
+        let replay = compile("h.pch", &["-fno-kiln-pch-snapshot"]);
+        assert_eq!(replay.code, 0, "{}", replay.stderr);
+        assert!(replay.stdout.contains("define"), "{}", replay.stdout);
+        let restored = compile("h.pch", &[]);
+        assert_eq!(note(&restored), USED, "{}", restored.stderr);
+        assert_eq!(restored.stdout, replay.stdout);
+        // Another snapshot format version (a newer kiln's; an older one
+        // is `section_header`'s version 0) and another schema hash (a
+        // build whose snapshotted types differ): the configuration
+        // differs, so the consumer warns and replays.
+        let version: Box<Edit> =
+            Box::new(|b: &[u8]| [&b[..8], &[3, 0, 0, 0][..], &b[12..]].concat());
+        let schema: Box<Edit> = Box::new(|b: &[u8]| {
+            let mut b = b.to_vec();
+            b[12] ^= 0x5a;
+            b
+        });
+        for (name, edit, why) in [
+            ("v3.pch", version, "its section has format version 3, expected 2"),
+            ("schema.pch", schema, "written by another build (schema hash)"),
+        ] {
+            std::fs::write(d.join(name), with_section(&pch, edit)).unwrap();
+            let o = compile(name, &[]);
+            assert_eq!(o.code, 0, "{name}: {}", o.stderr);
+            assert_eq!(note(&o), format!("not used: {why}"), "{name}");
+            assert!(
+                o.stderr.contains(&format!(
+                    "warning: precompiled header '{name}' was built with a different configuration ({why}); \
+                     the header is processed again [-Wpch-snapshot-unused]"
+                )),
+                "{name}: {}",
+                o.stderr
+            );
+            assert_eq!(o.stdout, replay.stdout, "{name}");
+        }
+        // No snapshot section (1.1.0's record, or `-fno-kiln-pch-snapshot`):
+        // a quiet replay, `-v` only.
+        let o = ok(
+            &d,
+            &["-std=c++20", "-isystem", "sys", "-fno-kiln-pch-snapshot", "-x", "c++-header"]
+                .into_iter()
+                .chain(["h.h", "-o", "none.pch"])
+                .collect::<Vec<_>>(),
+        );
+        assert!(notes(&o).is_empty(), "{}", o.stderr);
+        let o = compile("none.pch", &[]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert_eq!(note(&o), "not used: the PCH has no snapshot section");
+        assert!(!o.stderr.contains("warning:"), "{}", o.stderr);
+        assert_eq!(o.stdout, replay.stdout);
+        // Another kiln in the record: clang's "different branch" error,
+        // which a rebuild of the PCH fixes. With the record check off, the
+        // snapshot (which this build wrote: its identity is in the
+        // section, not the record) restores.
+        let other =
+            |l: &str| l.starts_with("kiln ").then(|| "kiln 0.9.0 - -fclang-compat=22".to_owned());
+        std::fs::write(d.join("old.pch"), with_record_line(&pch, other)).unwrap();
+        let o = compile("old.pch", &[]);
+        assert_eq!(o.code, 1, "{}", o.stderr);
+        assert!(
+            o.stderr.contains("error: PCH file built from a different branch (0.9.0 - "),
+            "{}",
+            o.stderr
+        );
+        assert!(o.stdout.is_empty(), "{}", o.stdout);
+        let o = compile("old.pch", &["-Xclang", "-fno-validate-pch"]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert_eq!(note(&o), "matches; restoring it", "{}", o.stderr);
+        assert_eq!(o.stdout, replay.stdout);
+        // Another kiln in the snapshot's identity (the same schema): the
+        // `kiln build` component refuses it with the warning, and the
+        // header is replayed.
+        let version = env!("CARGO_PKG_VERSION").as_bytes();
+        let needle = [b"kiln ", version].concat();
+        let other_build = move |s: &[u8]| {
+            let at = s.windows(needle.len()).position(|w| w == needle.as_slice()).unwrap();
+            let mut s = s.to_vec();
+            for b in &mut s[at + 5..at + 5 + version.len()] {
+                if b.is_ascii_digit() {
+                    *b = b'9';
+                }
+            }
+            s
+        };
+        std::fs::write(d.join("build.pch"), with_section(&pch, other_build)).unwrap();
+        let o = compile("build.pch", &[]);
+        assert_eq!(o.code, 0, "{}", o.stderr);
+        assert!(note(&o).starts_with("not used: kiln build differs"), "{}", o.stderr);
+        assert!(o.stderr.contains("[-Wpch-snapshot-unused]"), "{}", o.stderr);
+        assert_eq!(o.stdout, replay.stdout);
+        // An older record format (`KILNPCH 1`, before the section block):
+        // the error says the PCH is no longer supported.
+        let v1 = |l: &str| (l == "KILNPCH 2").then(|| "KILNPCH 1".to_owned());
+        std::fs::write(d.join("v1.pch"), with_record_line(&pch, v1)).unwrap();
+        let o = compile("v1.pch", &[]);
+        assert_eq!(o.code, 1, "{}", o.stderr);
+        assert!(
+            o.stderr.contains(
+                "error: PCH file 'v1.pch' uses an older format that is no longer supported"
+            ),
+            "{}",
+            o.stderr
+        );
     }
 
     /// `=check`: clean when the snapshot and replay agree; a system header
@@ -369,7 +508,7 @@ mod product {
             ],
         );
         assert!(!o.stderr.contains("differs from replaying"), "{}", o.stderr);
-        // The output is the replay's (spec/driver.md "Snapshots"), so the
+        // The output is the replay's (spec/pch.md), so the
         // prefix's warning is shown once, as without the option.
         assert_eq!(o.stderr.matches("warning: \"the prefix warns\"").count(), 1, "{}", o.stderr);
         assert_eq!(o.stderr.matches("warning: \"the main file warns\"").count(), 1, "{}", o.stderr);
@@ -590,7 +729,7 @@ mod behaviour {
         assert!(s.contains("p.h:1:12: warning: function 'internal_undefined'"), "{s}");
     }
 
-    /// `-verify` with a snapshot (spec/driver.md "PCH snapshot: behaviour"): restored
+    /// `-verify` with a snapshot (spec/pch.md "Consumer"): restored
     /// when the header reported nothing and holds no directive; a failed
     /// expectation is reported as by replay. Otherwise a silent replay with a
     /// `-v` note. clang 19 restores and does not see the header's
@@ -876,8 +1015,8 @@ mod behaviour {
     /// (the default `-fkiln-pch-validate=mtime` trusts it). The restored
     /// source manager finds the mismatch when it first needs the text (the
     /// note's caret line in `s.h`), and the compile ends with clang's fatal
-    /// error instead of rendering blank text ([cpp.include]; spec/driver.md
-    /// "PCH snapshot: behaviour"). WP-1396.
+    /// error instead of rendering blank text ([cpp.include]; spec/pch.md
+    /// "Consumer"). WP-1396.
     #[test]
     fn prefix_file_changed_after_the_check() {
         let d = scratch("stale");

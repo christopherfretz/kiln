@@ -4,7 +4,7 @@
 // (`meta<T>::template apply`) as an argument, and class template
 // argument deduction for a template template parameter
 // ([over.match.class.deduct]). With `--pch-diff`, the
-// header's precompiled image carries them (WP-1342).
+// header's snapshot carries them (WP-1342).
 //@ expect: run
 #include "Inputs/template_template_parms.h"
 

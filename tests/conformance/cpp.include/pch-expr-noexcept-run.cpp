@@ -1,7 +1,7 @@
 // [except.spec]/2, [except.spec]/13: `noexcept(e)` on a function type,
 // of a constant operand, of a value-dependent one, and of one naming the
 // function's own parameters (libstdc++'s `swap` overloads). With
-// `--pch-diff`, the header's image carries each operand (WP-1300).
+// `--pch-diff`, the header's snapshot carries each operand (WP-1300).
 //@ expect: run
 #include "Inputs/expr_noexcept.h"
 

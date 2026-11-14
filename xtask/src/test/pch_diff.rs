@@ -1,4 +1,4 @@
-//! `--pch-diff load|replay|check` (WP-1036, `spec/harness.md` "PCH
+//! `--pch-diff replay|snapshot` (WP-1036, `spec/harness.md` "PCH
 //! differential"): kiln compiles a copy of each test without a PCH, and
 //! again with its leading `#include`s emptied and `-include-pch` of a
 //! PCH of them, and the two must agree: the
@@ -203,12 +203,7 @@ impl Test<'_> {
             write_file(&copy, &pch_diff::without_includes(source, &includes))?;
             (plain, producer.stderr_str(), pch)
         };
-        let mut path = match mode {
-            PchDiff::Replay | PchDiff::Snapshot => mode.as_str().to_owned(),
-            _ => {
-                pch_diff::path_note(&producer).unwrap_or_else(|| "no declaration image".to_owned())
-            }
-        };
+        let mut path = mode.as_str().to_owned();
         self.pch_flags = vec!["-include-pch".into(), pch.into_os_string()];
         self.pch_flags.extend(mode.consumer_flags().iter().map(Into::into));
         // WP-1403: a consumer with one more (empty) `-I` directory than

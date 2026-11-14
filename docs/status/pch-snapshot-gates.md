@@ -1,7 +1,7 @@
 # PCH snapshot: gates
 
 WP-1395, 2026-11-13. These are the gates for the snapshot PCH product
-(spec/driver.md "PCH snapshot: behaviour"). WP-1395 ran them with the
+(spec/pch.md "Consumer"). WP-1395 ran them with the
 then hidden `-fkiln-pch-snapshot=write|load`; since WP-1404 the snapshot
 is the default, and "Default path (WP-1404)" below re-runs them with no
 option on either side. The tables are

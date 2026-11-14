@@ -1,4 +1,4 @@
-// Function body forms a precompiled header's image carries (WP-1343).
+// Function body forms a precompiled header's snapshot carries (WP-1343).
 #pragma once
 namespace std {
 class type_info {

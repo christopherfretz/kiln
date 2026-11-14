@@ -1,7 +1,7 @@
 // [basic.link]/6, [cpp.include]: block-scope function and `extern`
 // declarations in an included header name entities of their namespace,
 // and the test file's namespace-scope definitions define them. With
-// `--pch-diff`, the header's precompiled image links them the same way
+// `--pch-diff`, the header's snapshot links them the same way
 // (WP-1293).
 //@ expect: run
 #include "Inputs/local_extern.h"

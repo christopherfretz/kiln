@@ -1,4 +1,4 @@
-// Forms a precompiled header's image carries (WP-1369): functions
+// Forms a precompiled header's snapshot carries (WP-1369): functions
 // declared through a typedef, an alias template, decltype or __typeof;
 // a va_list passed on; bases and member classes of an implicit
 // instantiation.

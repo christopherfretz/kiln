@@ -1,4 +1,4 @@
-// Declaration forms a precompiled header's image carries (WP-1353).
+// Declaration forms a precompiled header's snapshot carries (WP-1353).
 #ifndef DECL_FOLLOWUPS_H
 #define DECL_FOLLOWUPS_H
 namespace std { typedef decltype(sizeof 0) size_t; }

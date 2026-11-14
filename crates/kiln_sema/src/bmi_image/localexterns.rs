@@ -1,19 +1,14 @@
-//! Block-scope `extern` and function declarations in a precompiled
-//! header's declaration image (spec/modules.md §11.11 "Precompiled
-//! headers", WP-1293).
+//! The `local_externs` section of a declaration image (spec/modules.md
+//! §11.11, WP-1293): block-scope `extern` and function declarations
+//! listed in [`Sema::local_externs`] order.
 //!
 //! A block-scope function or `extern` variable declaration names an
 //! entity of its enclosing namespace, which a later declaration in that
 //! namespace redeclares ([basic.link]/6, [dcl.meaning.general]/3.5).
 //! Sema finds it again through [`Sema::local_externs`], not through
-//! lookup. The image carries each one as a local record (its context
-//! the enclosing function), written in declaration order, so that a
-//! namespace-scope redeclaration in the header can name it as its
-//! previous declaration. The image also lists those records in
-//! `local_externs` order, so a consumer links its own declarations to
-//! them as replay does. The reader also re-records the header's
-//! C-linkage entities ([`Sema::extern_c`], [dcl.link]/6-7), the other
-//! namespace-crossing link a declaration makes outside lookup.
+//! lookup. The precompiled header's image wrote those records (WP-1397
+//! retired it); a module's image writes the section empty, and the
+//! reader still accepts and links a listed record.
 
 use super::body::is_local;
 use super::{Image, NONE, Payload, Rd, Res, W, Wr, Writer, bad};
@@ -28,52 +23,10 @@ pub(super) struct LocalExterns {
 }
 
 impl Writer<'_, '_, '_> {
-    /// Whether `d` is a block-scope declaration the image carries with
-    /// its link: an entry of `local_externs` in a precompiled header.
-    pub(super) fn carries_local_extern(&self, d: DeclId) -> bool {
-        self.pch && self.s.local_externs.iter().any(|&(_, _, x)| x == d)
-    }
-
     /// The previous declaration of block-scope declaration `d`: an
     /// earlier record, at namespace scope or block scope.
     pub(super) fn local_extern_prev(&self, p: DeclId) -> W<u32> {
         self.recs.get(&p).copied().ok_or("a redeclaration of an entity outside the image")
-    }
-
-    /// Local declaration `d` in declaration order: a block-scope
-    /// declaration the image carries gets its record now, before the
-    /// namespace-scope declarations that may redeclare it. Other locals
-    /// get theirs on first use in a body.
-    pub(super) fn local_in_order(&mut self, d: DeclId) -> W<()> {
-        // So is one in a template pattern, which a later block-scope
-        // declaration may name as its previous one (WP-1345).
-        let n = self.s.ast.decls.get(d);
-        let dep_fn = self.pch
-            && n.kind() == DeclKind::Function
-            && n.has(kiln_ast::decl::DeclFlags::DEPENDENT_CTX);
-        if (dep_fn || self.carries_local_extern(d)) && !self.recs.contains_key(&d) {
-            self.local_rec(d)?;
-        }
-        Ok(())
-    }
-
-    /// Lists the records of `local_externs` (after the records). In
-    /// census mode, one whose function the census counted is left out.
-    pub(super) fn local_externs(&mut self) -> W<()> {
-        if !self.pch {
-            return Ok(());
-        }
-        let s = self.s;
-        let mut out = Vec::with_capacity(s.local_externs.len());
-        for &(_, _, d) in &s.local_externs {
-            match self.recs.get(&d) {
-                Some(&r) => out.push(r),
-                None if self.census.is_some() => {}
-                None => return Err("a block-scope declaration outside the image"),
-            }
-        }
-        self.img.lexterns.recs = out;
-        Ok(())
     }
 }
 
@@ -159,46 +112,6 @@ impl Sema<'_, '_> {
             if let Some(ns) = ns {
                 let ns = self.ast.first(ns);
                 self.local_externs.push((ns, name, d));
-            }
-        }
-    }
-
-    /// Records the image's namespace-scope functions and variables with C
-    /// language linkage in the consumer's "extern C context"
-    /// ([`Sema::extern_c`], [dcl.link]/6-7), as their declarations did
-    /// in replay (`Sema::record_extern_c`), so a consumer's C-linkage
-    /// declaration in another namespace redeclares or conflicts with
-    /// them. A precompiled header's image only (WP-1293).
-    pub(super) fn image_extern_c(&mut self, img: &Image, ids: &[DeclId]) {
-        if !img.module.is_empty() {
-            return;
-        }
-        for (rec, &d) in img.decls.iter().zip(ids) {
-            if !matches!(rec.payload, Payload::Var { .. } | Payload::Function { kind: 0, .. }) {
-                continue;
-            }
-            let n = self.ast.decls.get(d);
-            let Some(name) = n.name().as_ident() else { continue };
-            let at_ns = n.ctx().is_some_and(|c| {
-                matches!(
-                    self.ast.decls.get(self.ast.redecl_context(c)).kind(),
-                    DeclKind::Namespace | DeclKind::TranslationUnit
-                )
-            });
-            if !at_ns
-                || self.ast.described_template(d).is_some()
-                || n.flags().contains(kiln_ast::decl::DeclFlags::INVALID)
-                || !kiln_abi::mangle::is_extern_c(&self.ast, d)
-                || kiln_abi::mangle::has_internal_linkage(&self.ast, d)
-                || !self.ast.pass_object_size_params(d).is_empty()
-            {
-                continue;
-            }
-            match self.extern_c.get(&name) {
-                Some(&old) if self.ast.first(old) != self.ast.first(d) => {}
-                _ => {
-                    self.extern_c.insert(name, d);
-                }
             }
         }
     }

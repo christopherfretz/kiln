@@ -2,7 +2,7 @@
 // [temp.inst]/3: functions declared through a typedef, an alias template,
 // decltype or __typeof, a va_list handed on, and a base and a member
 // class of an implicit instantiation. With `--pch-diff`, the header's
-// precompiled image carries them (WP-1369).
+// snapshot carries them (WP-1369).
 //@ expect: run
 //@ stdout: 8 9 12 10 10
 #include "Inputs/typedef_fns.h"

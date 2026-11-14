@@ -1,6 +1,6 @@
 // [dcl.pre]/10, [dcl.typedef]/2, [stmt.dcl]: block-scope static_assert
 // declarations, typedefs and alias declarations in a header's function
-// bodies. With `--pch-diff`, the header's precompiled image carries them
+// bodies. With `--pch-diff`, the header's snapshot carries them
 // (WP-1320).
 //@ expect: run
 #include "Inputs/local_decls.h"

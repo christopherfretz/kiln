@@ -1,4 +1,4 @@
-// Specializations a precompiled header's image carries (WP-1344).
+// Specializations a precompiled header's snapshot carries (WP-1344).
 #pragma once
 namespace r1 {
 template <class...> struct L {};

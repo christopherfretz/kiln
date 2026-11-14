@@ -1,6 +1,6 @@
 // [dcl.fct]/5: a function template's parameter of a dependent array type
 // is adjusted to a pointer. With `--pch-diff`, the header's precompiled
-// image carries the adjusted types (WP-1320).
+// snapshot carries the adjusted types (WP-1320).
 //@ expect: run
 #include "Inputs/dependent_array_params.h"
 

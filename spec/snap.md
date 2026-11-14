@@ -422,7 +422,7 @@ Any decoding or validation error before step 6 drops everything the
 restore built, and the job starts again by replaying the header; the
 error is reported only by `-v`. The section is used only when its head
 matches: its magic and format version, the schema hash of all five
-roots, and the configuration fingerprint (spec/driver.md "Snapshots",
+roots, and the configuration fingerprint (spec/pch.md,
 the identity table). The consumer streams the
 roots from the PCH file ("Streaming reads"): the section block is
 located and its checksum checked when the PCH is read, and only the
@@ -542,7 +542,7 @@ order of strength:
    typed ids are range-checked per space (above), and the Oven's bytecode
    is verified (`kiln_oven/src/kbc/verify.rs`). The section head's
    lookup log has its directory indices checked (`LookupLog::validate`,
-   spec/driver.md "Lookup-tolerant search path"). Known gaps, which can
+   spec/pch.md "Lookup-tolerant search path"). Known gaps, which can
    still reach a panic or a wrong result: ids in untyped `u32` slots of
    the AST and the other per-kind operand words of its nodes (enum
    tags, side-table indices; spec/ast.md "Snapshots"), links that form

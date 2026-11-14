@@ -1,12 +1,13 @@
-//! WP-1036: the PCH's declaration image end to end through `kiln++`
-//! (spec/driver.md "Precompiled headers"; the image is spec/modules.md
-//! §11.11). With `-fkiln-pch-image=load` a compile installs the
-//! preprocessor-state record and builds the header's declarations from
-//! the image instead of replaying it, and must behave as the `#include`
-//! does ([cpp.include]/2): the same diagnostics, byte for byte, and the
-//! same IR, including the header's definitions the unit odr-uses
-//! ([basic.def.odr]). A header the image cannot carry is replayed, with
-//! the reason under `-v`; `check` runs both and compares them.
+//! A PCH consumer through `kiln++` against the replay of the same PCH
+//! (spec/pch.md "Consumer"): the snapshot restore (the default) must
+//! behave as the `#include` does ([cpp.include]/2): the same diagnostics,
+//! byte for byte, and the same IR, including the header's definitions the
+//! unit odr-uses ([basic.def.odr]). `-fkiln-pch-snapshot=check` restores
+//! and replays in one compile and compares the two.
+//!
+//! WP-1397: these cases covered the retired declaration-image PCH
+//! (WP-1036 to WP-1384); each is kept where the snapshot must get the same
+//! behaviour right, now run as restore against replay.
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
@@ -29,24 +30,38 @@ struct Out {
     stderr: String,
 }
 
-/// Every command runs without the snapshot (WP-1404: it is the default,
-/// and a consumer that restores it never reads the image these tests
-/// are about).
-fn kiln(dir: &Path, args: &[&str]) -> Out {
+/// The line `KILN_SNAP_TIMING` prints when a consumer restored the
+/// snapshot.
+const RESTORED: &str = "snapshot-timing: restore ";
+
+/// Runs `kiln++` with `KILN_SNAP_TIMING` set; `restored` says whether a
+/// consumer restored the snapshot, and the `snapshot-timing:` lines are
+/// left out of `stderr`.
+fn run(dir: &Path, args: &[&str]) -> (Out, bool) {
     let o = Command::new(kilnpp())
-        .arg("-fno-kiln-pch-snapshot")
         .args(args)
+        .env("KILN_SNAP_TIMING", "1")
         .current_dir(dir)
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
-    assert!(!stderr.contains("panicked"), "kiln++ {args:?} panicked:\n{stderr}");
-    Out {
+    let all = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(!all.contains("panicked"), "kiln++ {args:?} panicked:\n{all}");
+    let restored = all.lines().any(|l| l.starts_with(RESTORED));
+    let mut stderr = String::new();
+    for l in all.split_inclusive('\n').filter(|l| !l.starts_with("snapshot-timing:")) {
+        stderr.push_str(l);
+    }
+    let out = Out {
         code: o.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
         stderr,
-    }
+    };
+    (out, restored)
+}
+
+fn kiln(dir: &Path, args: &[&str]) -> Out {
+    run(dir, args).0
 }
 
 fn ok(dir: &Path, args: &[&str]) -> Out {
@@ -55,31 +70,40 @@ fn ok(dir: &Path, args: &[&str]) -> Out {
     o
 }
 
-/// Builds `<name>.pch` from `<name>.h` (with the record and the image),
-/// returning the producer's `-v` note.
+/// Builds `<name>.pch` from `<name>.h`, returning the producer's `-v`
+/// notes (`...: snapshot written` when it carries the snapshot).
 fn produce(dir: &Path, name: &str, header: &str) -> String {
+    produce_with(dir, name, header, &[])
+}
+
+/// [`produce`] with `flags` too: a consumer restores only a PCH built
+/// with its own configuration (spec/pch.md "Identity"), so a consumer
+/// with `-Wall` or `-O1` needs a PCH built with them.
+fn produce_with(dir: &Path, name: &str, header: &str, flags: &[&str]) -> String {
     std::fs::write(dir.join(format!("{name}.h")), header).unwrap();
     let (h, pch) = (format!("{name}.h"), format!("{name}.pch"));
-    let o = ok(dir, &["-v", "-fkiln-pch-image", "-x", "c++-header", &h, "-o", &pch]);
+    let o = ok(dir, &[flags, &["-v", "-x", "c++-header", &h, "-o", &pch]].concat());
     o.stderr.lines().filter(|l| l.starts_with("note: precompiled header")).collect()
 }
 
-/// Compiles `tu` with the PCH replayed and with the image, and asserts
-/// the exit code, the diagnostics and the output are the same; returns
-/// the image run's.
+/// Compiles `tu` with the PCH replayed (`-fno-kiln-pch-snapshot`) and
+/// restored (the default, which must restore), and asserts the exit code,
+/// the diagnostics and the output are the same; returns the restore's.
 fn same(dir: &Path, pch: &str, mode: &[&str], tu: &str) -> Out {
-    let replay = kiln(dir, &[&["-include-pch", pch][..], mode, &[tu, "-o", "-"]].concat());
-    let load = ["-fkiln-pch-image=load", "-include-pch", pch];
-    let image = kiln(dir, &[&load[..], mode, &[tu, "-o", "-"]].concat());
-    assert_eq!(replay.code, image.code, "{mode:?}:\n{}\n---\n{}", replay.stderr, image.stderr);
-    assert_eq!(replay.stderr, image.stderr, "{mode:?}");
-    assert_eq!(replay.stdout, image.stdout, "{mode:?}");
-    image
+    let replay = ["-fno-kiln-pch-snapshot", "-include-pch", pch];
+    let replay = kiln(dir, &[&replay[..], mode, &[tu, "-o", "-"]].concat());
+    let (restore, restored) =
+        run(dir, &[&["-include-pch", pch][..], mode, &[tu, "-o", "-"]].concat());
+    assert!(restored, "{mode:?}: the consumer did not restore the snapshot:\n{}", restore.stderr);
+    assert_eq!(replay.code, restore.code, "{mode:?}:\n{}\n---\n{}", replay.stderr, restore.stderr);
+    assert_eq!(replay.stderr, restore.stderr, "{mode:?}");
+    assert_eq!(replay.stdout, restore.stdout, "{mode:?}");
+    restore
 }
 
 /// The `-v` note of a consumer of `pch`.
 fn path_note(dir: &Path, pch: &str, tu: &str) -> String {
-    let o = kiln(dir, &["-v", "-fkiln-pch-image=load", "-include-pch", pch, "-fsyntax-only", tu]);
+    let o = kiln(dir, &["-v", "-include-pch", pch, "-fsyntax-only", tu]);
     o.stderr.lines().filter(|l| l.starts_with("note: precompiled header")).collect()
 }
 
@@ -143,16 +167,17 @@ int main() {
 }
 ";
 
-/// A compile with the image matches replay: diagnostics, the IR (every
+/// A restored compile matches replay: diagnostics, the IR (every
 /// definition from the header the unit uses is emitted) and an object.
 #[test]
-fn image_matches_replay() {
+fn snapshot_matches_replay() {
     let d = scratch("rich");
     let note = produce(&d, "r", RICH);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("r.cpp"), RICH_TU).unwrap();
-    assert!(path_note(&d, "r.pch", "r.cpp").contains("': declaration image ("));
-    same(&d, "r.pch", &["-fsyntax-only", "-Wall"], "r.cpp");
+    assert!(path_note(&d, "r.pch", "r.cpp").contains("': snapshot matches; restoring it"));
+    assert!(produce_with(&d, "rw", RICH, &["-Wall"]).contains("': snapshot written"));
+    same(&d, "rw.pch", &["-fsyntax-only", "-Wall"], "r.cpp");
     let ir = same(&d, "r.pch", &["-S", "-emit-llvm", "-O0"], "r.cpp");
     for def in ["@_Z6defargii(", "@_Z3strv(", "@_ZN5outer2v13inlEv(", "@_ZL2sti("] {
         assert!(ir.stdout.lines().any(|l| l.starts_with("define") && l.contains(def)), "{def}");
@@ -160,7 +185,8 @@ fn image_matches_replay() {
     for var in ["@_ZN2SD1xE = ", "@tentative = ", "@_ZL8internal = ", "@ev = "] {
         assert!(ir.stdout.contains(var), "{var}");
     }
-    same(&d, "r.pch", &["-S", "-emit-llvm", "-O1"], "r.cpp");
+    assert!(produce_with(&d, "r1", RICH, &["-O1"]).contains("': snapshot written"));
+    same(&d, "r1.pch", &["-S", "-emit-llvm", "-O1"], "r.cpp");
 }
 
 /// Errors and notes into the header (overload candidates, a mismatched
@@ -195,13 +221,13 @@ long redecl(int);
 }
 
 /// The header's open `#pragma pack` and `clang diagnostic` pushes apply
-/// after it, from the record ([cpp.pragma]).
+/// after it ([cpp.pragma]).
 #[test]
 fn pragma_state_crosses_the_boundary() {
     let d = scratch("pragmas");
     let header = "struct P { char c; int i; };\n#pragma pack(push, 1)\n\
                   #pragma clang diagnostic push\n#pragma clang diagnostic ignored \"-Wunused-value\"\n";
-    assert!(produce(&d, "p", header).contains("declaration image"));
+    assert!(produce(&d, "p", header).contains("': snapshot written"));
     let tu = "\
 struct Q { char c; int i; };
 static_assert(sizeof(P) == 2 * sizeof(int));
@@ -214,24 +240,22 @@ int f(P p, Q q, R r) { 1; return p.i + q.i + r.i; }
 int g() { 2; return 0; }
 ";
     std::fs::write(d.join("p.cpp"), tu).unwrap();
-    assert!(path_note(&d, "p.pch", "p.cpp").contains("declaration image"));
+    assert!(path_note(&d, "p.pch", "p.cpp").contains("': snapshot matches; restoring it"));
     let o = same(&d, "p.pch", &["-S", "-emit-llvm"], "p.cpp");
     assert_eq!(o.stderr.matches("warning: expression result unused").count(), 1, "{}", o.stderr);
     assert!(o.stderr.contains("p.cpp:9:11"), "{}", o.stderr);
 }
 
-/// A header the image cannot carry is replayed whole, with the reason
-/// under `-v` on both sides.
+/// A local class a deduced return type names (the image could not carry
+/// it) crosses the PCH ([dcl.spec.auto]).
 #[test]
-fn uncarried_header_is_replayed() {
+fn local_class_return_type_crosses() {
     let d = scratch("fallback");
-    // WP-1350: a lambda is carried now; a local class a deduced return
-    // type names is not.
     let note = produce(&d, "l", "inline auto l() { struct R { int q = 0; }; return R{}; }\n");
-    assert!(note.contains("consumers replay the header: "), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("l.cpp"), "int main() { return l().q; }\n").unwrap();
     let note = path_note(&d, "l.pch", "l.cpp");
-    assert!(note.contains("'l.pch' is replayed: it has no declaration image"), "{note}");
+    assert!(note.contains("': snapshot matches; restoring it"), "{note}");
     same(&d, "l.pch", &["-S", "-emit-llvm"], "l.cpp");
 }
 
@@ -248,7 +272,7 @@ struct { int z; } anon_v = {3};
 inline int anon_sum() { return FE_A + FE_B + anon_v.z; }
 ";
     let note = produce(&d, "u", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("u.cpp"), "int main() { return anon_sum() + FE_B + anon_v.z; }\n")
         .unwrap();
     same(&d, "u.pch", &["-S", "-emit-llvm", "-O0"], "u.cpp");
@@ -290,7 +314,7 @@ template <class... Ts> struct tup { static constexpr unsigned long n = sizeof...
 template <class... Ts> using tup2 = tup<Ts..., Ts...>;
 ";
     let note = produce(&d, "x", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 int main() {
   nullptr_t z = np(); (void)z;
@@ -305,10 +329,11 @@ int main() {
 }
 ";
     std::fs::write(d.join("x.cpp"), tu).unwrap();
-    assert!(path_note(&d, "x.pch", "x.cpp").contains("': declaration image ("));
-    same(&d, "x.pch", &["-fsyntax-only", "-Wall"], "x.cpp");
+    assert!(path_note(&d, "x.pch", "x.cpp").contains("': snapshot matches; restoring it"));
+    assert!(produce_with(&d, "xw", header, &["-Wall"]).contains("': snapshot written"));
+    same(&d, "xw.pch", &["-fsyntax-only", "-Wall"], "x.cpp");
     same(&d, "x.pch", &["-S", "-emit-llvm", "-O0"], "x.cpp");
-    let check = ["-fkiln-pch-image=check", "-include-pch", "x.pch", "-S", "-emit-llvm"];
+    let check = ["-fkiln-pch-snapshot=check", "-include-pch", "x.pch", "-S", "-emit-llvm"];
     assert_eq!(ok(&d, &[&check[..], &["x.cpp", "-o", "-"]].concat()).stderr, "");
     // A substitution failure inside a carried expression is diagnosed as
     // replay diagnoses it.
@@ -324,15 +349,14 @@ int main() {
     assert!(o.stderr.contains("5 errors generated"), "{}", o.stderr);
 }
 
-/// Sema state the image does not carry and the consumer depends on (a
-/// pending `#pragma weak`) means no image: an image consumer made `f`
-/// strong.
+/// Sema state the consumer depends on (a pending `#pragma weak` naming a
+/// function the unit defines) crosses the PCH: `f` is weak (the retired
+/// declaration image could not carry it and made `f` strong).
 #[test]
-fn uncarried_sema_state_is_replayed() {
+fn pending_pragma_weak_crosses() {
     let d = scratch("sema-state");
     let note = produce(&d, "w", "#pragma weak f\nextern \"C\" int g(int);\n");
-    let why = "a #pragma weak naming an undeclared identifier";
-    assert!(note.contains(&format!("consumers replay the header: {why}")), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("w.cpp"), "extern \"C\" int f() { return g(1); }\n").unwrap();
     let ir = same(&d, "w.pch", &["-S", "-emit-llvm"], "w.cpp");
     assert!(ir.stdout.contains("define weak dso_local i32 @f("), "{}", ir.stdout);
@@ -344,7 +368,7 @@ fn uncarried_sema_state_is_replayed() {
 /// arguments ([temp.arg.explicit]/1) are carried; a failing assertion is
 /// diagnosed as replay diagnoses it.
 #[test]
-fn local_static_asserts_and_explicit_args_take_the_image() {
+fn local_static_asserts_and_explicit_args_cross() {
     let d = scratch("wp1314-lsa");
     let header = "\
 template <class T> int f(T t) { static_assert(sizeof(T) < 64, \"small\"); return int(t) + 1; }
@@ -355,16 +379,16 @@ inline int callpick() { return pick<int>(3) + pick<long>(4L); }
 template <class T> long td(T t) { typedef const T *P; using L = long; P p = &t; return L(*p); }
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(
         d.join("a.cpp"),
         "int main() { return f(3) + g(2) + S<int>::h() + callpick() + int(td(1)); }\n",
     )
     .unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -386,14 +410,14 @@ template <class T> long td(T t) { typedef const T *P; using L = long; P p = &t; 
 /// later namespace-scope declaration stays one entity with it. Before, an image consumer made `v` a second, undefined
 /// global.
 #[test]
-fn local_externs_take_the_image() {
+fn local_externs_cross() {
     let d = scratch("local-extern");
     let header = "inline int g() { extern int v; return v; }\n\
                   namespace n { inline void t() { void k(); k(); } }\nnamespace n { void k(); }\n\
                   namespace n { inline namespace i { inline long u() { extern long w; return w; } } }\n\
                   inline int h() { int f(int = 2); return f(); }\n";
     let note = produce(&d, "y", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "int v = 4;\nvoid n::k() {}\nnamespace n { inline namespace i { long w = 5; } }\nint f(int a) { return a; }\n\
               int main() { n::t(); return g() + v + int(n::u()) + h(); }\n";
     std::fs::write(d.join("y.cpp"), tu).unwrap();
@@ -404,7 +428,7 @@ fn local_externs_take_the_image() {
     for bad in ["@v.1", "@_ZN1n1kEv.1", "@_ZN1n1i1wE.1", "@_Z1fi.1"] {
         assert!(!ir.stdout.contains(bad), "{bad}\n{}", ir.stdout);
     }
-    let check = ["-fkiln-pch-image=check", "-include-pch", "y.pch", "-S", "-emit-llvm"];
+    let check = ["-fkiln-pch-snapshot=check", "-include-pch", "y.pch", "-S", "-emit-llvm"];
     let o = ok(&d, &[&check[..], &["y.cpp", "-o", "-"]].concat());
     assert_eq!(o.stderr, "");
     // A conflicting redeclaration is diagnosed as replay diagnoses it.
@@ -460,7 +484,7 @@ template <class T> struct Out { T v; Out(T); };
 template <class T> Out<T>::Out(T x) : v(x * 2) {}
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 void s::stop(int) noexcept { __builtin_abort(); }
 int main() {
@@ -471,11 +495,11 @@ int main() {
 }
 ";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     let ir = same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     assert!(ir.stdout.contains("cold noreturn"), "{}", ir.stdout);
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -513,7 +537,7 @@ template <class T> struct Pos {
 };
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 int main() {
   int *p = new int(3); int r = *p; delete p;
@@ -523,11 +547,11 @@ int main() {
 }
 ";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     let ir = same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     assert!(ir.stdout.contains("@_Znwm"), "{}", ir.stdout);
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -558,7 +582,7 @@ template <> struct Promote<float> { typedef float type; };
 template <> struct Promote<long double> { typedef long double type; };
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 int main() {
   Promote<int>::type x = 1.5; Promote<float>::type y = 2.5f;
@@ -566,23 +590,13 @@ int main() {
 }
 ";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
-    let refused = "\
-template <class T> struct IsI { static constexpr bool value = false; };
-template <class T, bool = IsI<T>::value> struct X { int a; };
-template <> struct X<long> { long b; };
-";
-    let note = produce(&d, "b", refused);
-    assert!(
-        note.contains("replay the header: an explicit specialization using a non-type default"),
-        "{note}"
-    );
 }
 
 /// WP-1320: a dependent `X<T>` completed with its defaults (its
@@ -602,7 +616,7 @@ template <class T, int N = sizeof(T)> struct Sz { typedef char type[N]; };
 template <class T> struct Hold { typename Sz<T>::type b; };
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 struct S {};
 int main() {
@@ -611,31 +625,30 @@ int main() {
 }
 ";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
 }
 
-/// WP-1342: `header` takes the image, and `tu` compiled against it
-/// agrees with replay (`-fkiln-pch-image=check`) for syntax and IR, and
-/// runs to exit code 0.
-fn image_agrees(name: &str, header: &str, tu: &str) {
+/// WP-1342: `header` carries a snapshot, and `tu` compiled against it
+/// agrees with replay (`same`, `-fkiln-pch-snapshot=check`) for syntax
+/// and IR, and runs to exit code 0.
+fn snapshot_agrees(name: &str, header: &str, tu: &str) {
     let d = scratch(name);
     std::fs::write(d.join("a.h"), header).unwrap();
-    let o =
-        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
-    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let o = ok(&d, &["-std=c++20", "-v", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    let load = ["-std=c++20", "-fkiln-pch-image=load", "-include-pch", "a.pch"];
+    let load = ["-std=c++20", "-include-pch", "a.pch"];
     let o = ok(&d, &[&load[..], &["-v", "-fsyntax-only", "a.cpp"]].concat());
-    assert!(o.stderr.contains("': declaration image ("), "{}", o.stderr);
+    assert!(o.stderr.contains("': snapshot matches; restoring it"), "{}", o.stderr);
     same(&d, "a.pch", &["-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-std=c++20", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -683,7 +696,7 @@ int main() {
        + int(sizeof(m.q.d) - sizeof(duo<char, long>)) + make<cell>(2).v - 2;
 }
 ";
-    image_agrees("wp1342a", header, tu);
+    snapshot_agrees("wp1342a", header, tu);
 }
 
 /// WP-1342: partial specializations with requires-clauses and
@@ -715,7 +728,7 @@ int main() {
   return pick<Big*, Big>::value;
 }
 ";
-    image_agrees("wp1342b", header, tu);
+    snapshot_agrees("wp1342b", header, tu);
 }
 
 /// WP-1342: partial specializations of member templates, of a class
@@ -751,7 +764,7 @@ int main() {
   return base::f() - 5;
 }
 ";
-    image_agrees("wp1342c", header, tu);
+    snapshot_agrees("wp1342c", header, tu);
 }
 
 /// WP-1342: calls in templates through using-declarations, and a
@@ -776,17 +789,7 @@ template <class T> T wrapped(T t) { return lib::cell(t).v; }
     let tu = "\
 int main() { return det::alt(-2) + det::holder<long>::go(-3) + det::wrapped(1) == 5 ? 0 : 1; }
 ";
-    image_agrees("wp1342d", header, tu);
-}
-
-/// [`image_agrees`], and the census of `header` refuses nothing.
-fn image_carries(name: &str, header: &str, tu: &str) {
-    let d = scratch(&format!("{name}-census"));
-    std::fs::write(d.join("a.h"), header).unwrap();
-    let args = ["-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
-    let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
-    assert!(!o.stderr.contains("refused: "), "{}", o.stderr);
-    image_agrees(name, header, tu);
+    snapshot_agrees("wp1342d", header, tu);
 }
 
 /// WP-1344: a pack in a specialization's argument list (`_List<unsigned
@@ -807,7 +810,7 @@ template <class T> struct pick {
     let tu = "\
 int main() { pick<int>::type x = 3; return sizeof(x) == 4 ? 0 : 1; }
 ";
-    image_carries("wp1344a", header, tu);
+    snapshot_agrees("wp1344a", header, tu);
 }
 
 /// WP-1344: a member typedef of a completed specialization of a partial
@@ -838,7 +841,7 @@ template <> struct mk<wchar_t> { using type = typename pick<wchar_t, false, true
     let tu = "\
 int main() { mk<wchar_t>::type x = 3; return sizeof(x) == sizeof(wchar_t) ? 0 : 1; }
 ";
-    image_carries("wp1344b", header, tu);
+    snapshot_agrees("wp1344b", header, tu);
 }
 
 /// WP-1344: specializations of constrained templates whose constraints
@@ -867,7 +870,7 @@ int main() {
   return use(b) - 5 + cs.v - 4 + o.f() - 1 + tw() - 6 + box<char>{1}.get() - 1;
 }
 ";
-    image_carries("wp1344c", header, tu);
+    snapshot_agrees("wp1344c", header, tu);
 }
 
 /// WP-1344: explicit and partial specializations whose arguments are
@@ -896,7 +899,7 @@ int main() {
   return get<0>::f() + get<1>::f() - 30 + mtx<single>::k + k1 - 5;
 }
 ";
-    image_carries("wp1344d", header, tu);
+    snapshot_agrees("wp1344d", header, tu);
 }
 
 /// WP-1344: a class template pattern whose base names its own template
@@ -914,7 +917,7 @@ template <class T> struct chain<T***> { static constexpr int depth = 3; };
     let tu = "\
 int main() { impl<int, char>::type x = 2; return x + chain<int>::depth - 5; }
 ";
-    image_carries("wp1344e", header, tu);
+    snapshot_agrees("wp1344e", header, tu);
 }
 
 /// WP-1344: a static data member's in-class initializer the importer
@@ -933,7 +936,7 @@ inline int d = sizeof(C<char>);
     let tu = "\
 int main() { return C<int>::t::v + C<char>::t::v == 3 ? 0 : 1; }
 ";
-    image_carries("wp1344f", header, tu);
+    snapshot_agrees("wp1344f", header, tu);
 }
 
 /// WP-1344: a non-type parameter pack's expansion in a partial
@@ -959,7 +962,7 @@ template <int... N, int K> struct add<seq<N...>, K> { using type = seq<N..., K>;
     let tu = "\
 int main() { add<seq<1, 2>, 3>::type s; (void)s; return au<2, char, int, short>::len == 4 ? 0 : 1; }
 ";
-    image_carries("wp1344g", header, tu);
+    snapshot_agrees("wp1344g", header, tu);
 }
 
 /// WP-1344: a member function template whose exception specification
@@ -981,7 +984,7 @@ inline constexpr sw swp{};
     let tu = "\
 int main() { int a[2] = {1, 2}, b[2] = {3, 4}; swp(a, b); int x = 1, y = 2; swp(x, y); return a[0] == 3 && x == 2 ? 0 : 1; }
 ";
-    image_carries("wp1344h", header, tu);
+    snapshot_agrees("wp1344h", header, tu);
 }
 
 /// WP-1344: dependent specializations of `__make_integer_seq` and
@@ -1003,7 +1006,7 @@ template <sz I, class... T> struct nth { using type = __type_pack_element<I, T..
     let tu = "\
 int main() { mk<3>::type t; (void)t; nth<1, char, int>::type x = 2; return make_seq<int, 4>::n == 4 && x == 2 ? 0 : 1; }
 ";
-    image_carries("wp1344i", header, tu);
+    snapshot_agrees("wp1344i", header, tu);
 }
 
 /// Block-scope `static_assert` declarations, typedefs and alias
@@ -1021,16 +1024,16 @@ inline int plain() { using I = int; static_assert(sizeof(I) == 4, \"int\"); I x 
 template <class T> constexpr bool nt = noexcept(dv<T>());
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "\
 static_assert(sz<int>() == 8 && nt<int>);
 int main() { return sz<char>() + plain() == 5 ? 0 : 1; }
 ";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -1046,13 +1049,13 @@ template <class T> T first2(const T a[2]) { return a[0] + a[1]; }
 template <class T> struct H { template <class U> T at(const U k[3]) const { return T(k[2]); } };
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "int main() { int a[2] = {1, 2}; short k[3] = {0, 0, 3}; return first2(a) + H<int>{}.at(k) == 6 ? 0 : 1; }\n";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -1070,26 +1073,26 @@ template <class T> struct Box { _Complex double v; T re() const { return T(__rea
 inline _Complex double twice(_Complex double z) { return z * 2.0; }
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("consumers use its declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "int main() { Box<int> b{twice(3.0)}; return b.re() == 6 && __imag__ mk(1, 2) == 2 ? 0 : 1; }\n";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
-    assert!(path_note(&d, "a.pch", "a.cpp").contains("': declaration image ("));
+    assert!(path_note(&d, "a.pch", "a.cpp").contains("': snapshot matches; restoring it"));
     same(&d, "a.pch", &["-S", "-emit-llvm", "-O0"], "a.cpp");
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
 }
 
-/// Reduced from `module.global.frag/gmf-floatn-limits.cpp` under
-/// `--pch-diff check` (WP-1320 deliverable 5, fixed by WP-1353): an
-/// imported module's GMF that includes the header the importer loaded
-/// from the image is skipped by position (spec/modules.md §6), as after a
-/// replay, instead of re-declaring `size_t` and redefining `lim`: the
-/// image carries the producer's deduplication keys (`dedup` section).
+/// Reduced from `module.global.frag/gmf-floatn-limits.cpp` under the
+/// retired image's `--pch-diff check` (WP-1320 deliverable 5, fixed by
+/// WP-1353): an imported module's GMF that includes the header the
+/// importer restored from the PCH is skipped by position (spec/modules.md
+/// §6), as after a replay, instead of re-declaring `size_t` and
+/// redefining `lim`.
 #[test]
-fn gmf_reinclusion_merges_with_image_declarations() {
+fn gmf_reinclusion_merges_with_restored_declarations() {
     let d = scratch("wp1320g");
     let header = "\
 #ifndef A_H
@@ -1100,69 +1103,74 @@ template <> struct lim<float> { static constexpr size_t d = 24; };
 #endif
 ";
     std::fs::write(d.join("a.h"), header).unwrap();
-    let o =
-        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
-    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let o = ok(&d, &["-std=c++20", "-v", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
     let m = "module;\n#include \"a.h\"\nexport module m;\nexport constexpr int get() { return lim<float>::d == 24; }\n";
     std::fs::write(d.join("m.cppm"), m).unwrap();
     ok(&d, &["-std=c++20", "--precompile", "-x", "c++-module", "m.cppm", "-o", "m.pcm"]);
     std::fs::write(d.join("t.cpp"), "import m;\nstatic_assert(get() == 1);\nint main() {}\n")
         .unwrap();
-    let check =
-        ["-std=c++20", "-fmodule-file=m=m.pcm", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+    let check = [
+        "-std=c++20",
+        "-fmodule-file=m=m.pcm",
+        "-fkiln-pch-snapshot=check",
+        "-include-pch",
+        "a.pch",
+    ];
     let o = kiln(&d, &[&check[..], &["-fsyntax-only", "t.cpp"]].concat());
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
 }
 
 /// A header template's definition-time warning is repeated by the replay
-/// and not by the image's consumer; `check` accepts that (WP-1320).
+/// and not by the restore (spec/pch.md "Diagnostics from the prefix");
+/// `check` accepts that (WP-1320).
 #[test]
 fn check_accepts_header_warnings() {
     let d = scratch("wp1320w");
     std::fs::write(d.join("w.h"), "template <class T> int f(T) { int unused; return 0; }\n")
         .unwrap();
-    let o = ok(&d, &["-Wall", "-fkiln-pch-image", "-x", "c++-header", "w.h", "-o", "w.pch"]);
+    let o = ok(&d, &["-Wall", "-x", "c++-header", "w.h", "-o", "w.pch"]);
     assert!(o.stderr.contains("unused variable"), "{}", o.stderr);
     std::fs::write(d.join("w.cpp"), "int main() { return f(1); }\n").unwrap();
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-Wall", "-fkiln-pch-image=check", "-include-pch", "w.pch"];
+        let check = ["-Wall", "-fkiln-pch-snapshot=check", "-include-pch", "w.pch"];
         let o = ok(&d, &[&check[..], mode, &["w.cpp", "-o", "-"]].concat());
         assert!(!o.stderr.contains("differs"), "{mode:?}: {}", o.stderr);
         assert!(o.stderr.contains("unused variable"), "{mode:?}: {}", o.stderr);
     }
 }
 
-/// `check` builds the image and replays, and finds them equal.
+/// `check` restores the snapshot and replays, and finds them equal.
 #[test]
 fn check_runs_both() {
     let d = scratch("check");
     produce(&d, "r", RICH);
     std::fs::write(d.join("r.cpp"), RICH_TU).unwrap();
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = ["-fkiln-pch-image=check", "-include-pch", "r.pch"];
+        let check = ["-fkiln-pch-snapshot=check", "-include-pch", "r.pch"];
         let o = ok(&d, &[&check[..], mode, &["r.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
 }
 
 /// A header edited after the PCH was built, its size kept, with the
-/// fingerprint check off: the image is not used (its text is not the
+/// fingerprint check off: the snapshot is not used (its text is not the
 /// header's) and the edited header is replayed.
 #[test]
-fn stale_image_is_replayed() {
+fn stale_header_is_replayed() {
     let d = scratch("stale");
     produce(&d, "s", "inline int v() { return 7; }\n");
     std::fs::write(d.join("s.h"), "inline int v() { return 9; }\n").unwrap();
     std::fs::write(d.join("s.cpp"), "int main() { return v(); }\n").unwrap();
-    let args = ["-v", "-Xclang", "-fno-validate-pch", "-fkiln-pch-image=load", "-include-pch"];
+    let args = ["-v", "-Xclang", "-fno-validate-pch", "-include-pch"];
     let o = ok(&d, &[&args[..], &["s.pch", "-S", "-emit-llvm", "-o", "-", "s.cpp"]].concat());
-    assert!(o.stderr.contains("'s.pch' is replayed: 's.h' changed"), "{}", o.stderr);
+    assert!(o.stderr.contains("'s.pch': snapshot not used: 's.h' changed"), "{}", o.stderr);
     assert!(o.stdout.contains("ret i32 9"), "{}", o.stdout);
 }
 
-/// A PCH whose image sections are damaged is an error, never a guess.
+/// A PCH whose section block is damaged is an error, never a guess.
 #[test]
-fn damaged_image_is_an_error() {
+fn damaged_section_block_is_an_error() {
     let d = scratch("damaged");
     produce(&d, "x", "int x();\n");
     let mut b = std::fs::read(d.join("x.pch")).unwrap();
@@ -1170,34 +1178,31 @@ fn damaged_image_is_an_error() {
     b[at] ^= 0xff;
     std::fs::write(d.join("x.pch"), b).unwrap();
     std::fs::write(d.join("x.cpp"), "int y = x();\n").unwrap();
-    let o = kiln(&d, &["-fkiln-pch-image=load", "-include-pch", "x.pch", "-fsyntax-only", "x.cpp"]);
+    let o = kiln(&d, &["-include-pch", "x.pch", "-fsyntax-only", "x.cpp"]);
     assert_eq!(o.code, 1, "{}", o.stderr);
     assert!(o.stderr.contains("malformed or corrupted precompiled file"), "{}", o.stderr);
 }
 
-/// WP-1343: `header` is carried whole by the image (in C++26), and
-/// `tu` compiles the same through it as through the replay, and
-/// `check` agrees.
+/// WP-1343: `header` carries a snapshot (in C++26), and `tu` compiles
+/// the same through it as through the replay, and `check` agrees.
 fn carried_1343(name: &str, header: &str, tu: &str) {
     let d = scratch(name);
     std::fs::write(d.join("a.h"), header).unwrap();
     std::fs::write(d.join("a.cpp"), tu).unwrap();
     let std = "-std=c++26";
-    let o = ok(&d, &[std, "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
-    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
-    let o = ok(
-        &d,
-        &[std, "-v", "-fkiln-pch-image=load", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"],
-    );
-    assert!(o.stderr.contains("': declaration image ("), "{}", o.stderr);
+    let o = ok(&d, &[std, "-v", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
+    let o = ok(&d, &[std, "-v", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"]);
+    assert!(o.stderr.contains("': snapshot matches; restoring it"), "{}", o.stderr);
     let ir = ["-S", "-emit-llvm", "-O0", "a.cpp", "-o", "-"];
-    let replay = ok(&d, &[&[std, "-include-pch", "a.pch"][..], &ir].concat());
-    let image =
-        ok(&d, &[&[std, "-fkiln-pch-image=load", "-include-pch", "a.pch"][..], &ir].concat());
-    assert_eq!(replay.stderr, image.stderr);
-    assert_eq!(replay.stdout, image.stdout);
+    let replay = ["-fno-kiln-pch-snapshot", std, "-include-pch", "a.pch"];
+    let replay = ok(&d, &[&replay[..], &ir].concat());
+    let (restore, restored) = run(&d, &[&[std, "-include-pch", "a.pch"][..], &ir].concat());
+    assert!(restored, "{}", restore.stderr);
+    assert_eq!(replay.stderr, restore.stderr);
+    assert_eq!(replay.stdout, restore.stdout);
     for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-        let check = [std, "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = [std, "-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
         assert_eq!(o.stderr, "", "{mode:?}");
     }
@@ -1368,7 +1373,7 @@ int main() { v4 x{}; w4 y{}; b4<int, 4>(x, nullptr);
   return a1<int, 4>(x) && a2<int, 4>(y) && a4<int>(y) ? 0 : 1; }\n";
     carried_1343("wp1350v", header, tu);
     let d = scratch_of("wp1350v");
-    let ir = ["-std=c++26", "-fkiln-pch-image=load", "-include-pch", "a.pch", "-S", "-emit-llvm"];
+    let ir = ["-std=c++26", "-include-pch", "a.pch", "-S", "-emit-llvm"];
     let o = ok(&d, &[&ir[..], &["a.cpp", "-o", "-"]].concat());
     for name in [
         "@_Z2a1IiLm4EEbDvT0__T_",
@@ -1413,11 +1418,10 @@ int main() { D<int, long> d; return d.v == 1 && (2.0 <=> 1.0) < 0 ? 1 : 0; }\n";
 /// naming a requires-expression parameter (`decltype(*i)` in a concept)
 /// is built after every record (`exprs::validate_ty_texprs`), and types
 /// are built in order, so a later body's local alias whose type is
-/// written after it fails the reader's check and the header is replayed
-/// ("an internal image inconsistency"). The fix writes such types after
-/// the records' types, or builds types on demand.
+/// written after it failed the image reader's check and the header was
+/// replayed ("an internal image inconsistency"). The snapshot carries it,
+/// and the consumer agrees with replay.
 #[test]
-#[ignore = "pre-existing: a local alias's type written after a requires-parameter type"]
 fn local_alias_after_requires_parameter_type() {
     let d = scratch("wp1350q");
     let header = "template <class T> concept deref = requires(T i) { typename decltype(*i)::x; };
@@ -1428,59 +1432,61 @@ template <class T> unsigned long g(T m) {
 }
 ";
     std::fs::write(d.join("q.h"), header).unwrap();
-    let o =
-        ok(&d, &["-std=c++26", "-v", "-fkiln-pch-image", "-x", "c++-header", "q.h", "-o", "q.pch"]);
-    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let o = ok(&d, &["-std=c++26", "-v", "-x", "c++-header", "q.h", "-o", "q.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
+    std::fs::write(d.join("q.cpp"), "int main() { return int(g(0)); }\n").unwrap();
+    same(&d, "q.pch", &["-std=c++26", "-S", "-emit-llvm"], "q.cpp");
 }
 
-/// WP-1350: the forms the image still refuses replay the header, with the
-/// reason: a lambda in a requires-expression (its context, the body, has
-/// no record), a local class named by a deduced return type (named
-/// before its function's record), a requires-expression in a type.
+/// WP-1350: the forms the image refused cross the PCH by the snapshot: a
+/// lambda in a requires-expression ([expr.prim.req]), a local class named
+/// by a deduced return type ([dcl.spec.auto]), a requires-expression in a
+/// type.
 #[test]
-fn uncarried_lambda_forms_are_refused() {
+fn lambda_forms_cross() {
     let d = scratch("wp1350r");
-    let named = "a closure or local class named before its context is recorded";
-    for (name, header, why) in [
+    for (name, header, tu) in [
         (
             "a",
             "template <class T> concept C = requires { [] {}; };\nstatic_assert(C<int>);\n",
-            named,
+            "static_assert(C<long>);\nint main() {}\n",
         ),
-        ("b", "inline auto lret() { struct R { int q = 11; }; return R{}; }\n", named),
+        (
+            "b",
+            "inline auto lret() { struct R { int q = 11; }; return R{}; }\n",
+            "int main() { return lret().q - 11; }\n",
+        ),
         (
             "c",
             "template <bool B, class X, class Y> struct cond { using type = X; };
 template <class F> using pick = typename cond<requires (F& f) { f(); }, int, long>::type;
 inline pick<void(*)()> v = 1;\n",
-            "an expression in a type naming a parameter or local declaration",
+            "int main() { return v - 1; }\n",
         ),
     ] {
         std::fs::write(d.join(format!("{name}.h")), header).unwrap();
-        let (h, pch) = (format!("{name}.h"), format!("{name}.pch"));
-        let o =
-            ok(&d, &["-std=c++26", "-v", "-fkiln-pch-image", "-x", "c++-header", &h, "-o", &pch]);
-        let want = format!("consumers replay the header: {why}");
-        assert!(o.stderr.contains(&want), "{}", o.stderr);
+        let (h, pch, cpp) = (format!("{name}.h"), format!("{name}.pch"), format!("{name}.cpp"));
+        let o = ok(&d, &["-std=c++26", "-v", "-x", "c++-header", &h, "-o", &pch]);
+        assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
+        std::fs::write(d.join(&cpp), tu).unwrap();
+        same(&d, &pch, &["-std=c++26", "-S", "-emit-llvm"], &cpp);
     }
 }
 
 /// Reduced from `cpp.include/pch-body-forms-errors.cpp` under `--pch-diff
 /// check` (found by WP-1343, not fixed; pre-existing: the 1.1.0 release
-/// candidate reproduces it under `-fkiln-pch-image=check` with
-/// `-fsyntax-only` or `-S -emit-llvm`, at every `-std`): a header's
-/// polymorphic class with a derived class, in a unit that never names
-/// either, has the base destructor's exception specification evaluated
-/// by the replay (`'void () noexcept'`) and still unevaluated from the
-/// image. The fix resolves the implicit `noexcept` the derived class's
-/// completion needs ([except.spec]/8) while the importer builds it.
+/// candidate reproduced it under the image's `check` with `-fsyntax-only`
+/// or `-S -emit-llvm`, at every `-std`): a header's polymorphic class with
+/// a derived class, in a unit that never names either, had the base
+/// destructor's exception specification evaluated by the replay
+/// (`'void () noexcept'`) and still unevaluated from the image
+/// ([except.spec]/8). The snapshot agrees with replay.
 #[test]
-#[ignore = "pre-existing (1.1.0): image leaves a base destructor's noexcept unevaluated"]
 fn virtual_dtor_noexcept_matches_replay() {
     let d = scratch("wp1343v");
     produce(&d, "a", "struct B { virtual ~B() {} };\nstruct D : B { int d = 2; };\n");
     std::fs::write(d.join("a.cpp"), "int main() { return 0; }\n").unwrap();
-    let check = ["-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    let check = ["-fkiln-pch-snapshot=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
     assert_eq!(ok(&d, &check).stderr, "");
 }
 
@@ -1516,7 +1522,7 @@ inline int use() { return tr<char>::twice(tr<char>::size()) + tr<short>().v; }
     let tu = "\
 int main() { return n::use() == 6 && n::tr<char>::eof() == -1 && peek(n::tr<char>()) == 7 ? 0 : 1; }
 ";
-    image_carries("wp1352a", header, tu);
+    snapshot_agrees("wp1352a", header, tu);
 }
 
 /// WP-1352: a partial specialization declared, then defined with a
@@ -1547,10 +1553,10 @@ int main() {
   return x + hsh<bits<3>>()(bits<3>()) - 8 + (int)elem<4, tup<>>::k - 4;
 }
 ";
-    image_carries("wp1352b", header, tu);
+    snapshot_agrees("wp1352b", header, tu);
     let d = scratch("wp1352b-redef");
     let note = produce(&d, "a", header);
-    assert!(note.contains("declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let tu = "template <sz M> struct hsh<bits<M>> {};\nint main() {}\n";
     std::fs::write(d.join("a.cpp"), tu).unwrap();
     let o = same(&d, "a.pch", &["-fsyntax-only"], "a.cpp");
@@ -1581,7 +1587,7 @@ inline int use() { return g_v<int> + int(e) + int(twice<double>()); }
 static_assert(n::e == 2.5 && n::sq == 4 && n::e_v<float> == 1.5f && n::e_v<long> == 2);
 int main() { return n::use() == 10 && n::sq_v<double> == 6.25 ? 0 : 1; }
 ";
-    image_carries("wp1352c", header, tu);
+    snapshot_agrees("wp1352c", header, tu);
 }
 
 /// WP-1352: a template named as an explicit argument in an expression a
@@ -1606,7 +1612,7 @@ inline yes (*addr())(int) { return &probe<ptr, int>; }
 template <class X> using cst = const X;
 int main() { return use() && addr() && valid<cst, int>::value && !valid<cst>::value ? 0 : 1; }
 ";
-    image_carries("wp1352d", header, tu);
+    snapshot_agrees("wp1352d", header, tu);
 }
 
 /// WP-1352: explicit instantiation declarations of function template
@@ -1632,10 +1638,10 @@ template int n::twice<int>(int);
 template n::os<char> &n::insert(n::os<char> &, const char *, long);
 int main() { return n::use() == 'b' + 4 && n::twice(3L) == 6 ? 0 : 1; }
 ";
-    image_carries("wp1352e", header, tu);
+    snapshot_agrees("wp1352e", header, tu);
     let d = scratch("wp1352e-redef");
     let note = produce(&d, "a", header);
-    assert!(note.contains("declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("b.cpp"), "namespace n { template <> int twice<int>(int); }\n").unwrap();
     let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
     let want = "explicit specialization of 'twice<int>' after instantiation";
@@ -1666,10 +1672,10 @@ template <> float n::conv<float>(const char *s, char **) { return 1.5f; }
 static_assert(n::pick(5L) == 10);
 int main() { return n::use() == 3.5 + 2 + 4 && n::conv<float>(\"\", nullptr) == 1.5f && n::pick('a') == 'a' ? 0 : 1; }
 ";
-    image_carries("wp1352f", header, tu);
+    snapshot_agrees("wp1352f", header, tu);
     let d = scratch("wp1352f-redef");
     let note = produce(&d, "a", header);
-    assert!(note.contains("declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let redef = "namespace n {\n\
 template <> inline double conv<double>(const char *, char **) { return 0; }\n}\n";
     std::fs::write(d.join("b.cpp"), redef).unwrap();
@@ -1707,10 +1713,10 @@ template int n::S<int>::get() const;
 template int n::S<int>::other() const;
 int main() { n::S<int> s; return n::use(s) + s.other() == 4 ? 0 : 1; }
 ";
-    image_carries("wp1352g", header, tu);
+    snapshot_agrees("wp1352g", header, tu);
     let d = scratch("wp1352g-spec");
     let note = produce(&d, "a", header);
-    assert!(note.contains("declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     let spec = "namespace n { template <> int S<int>::other() const { return 0; } }\n";
     std::fs::write(d.join("b.cpp"), spec).unwrap();
     let o = same(&d, "a.pch", &["-fsyntax-only"], "b.cpp");
@@ -1781,8 +1787,9 @@ template <class T> struct alignas(T) AT { char c; };
         "template <class T> struct hold { T t; };\nint main() { g(-1); hold<bs<char>> s; int x = s; return x; }\n",
     )
     .unwrap();
-    ok(&d, &["-std=c++26", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
-    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    ok(&d, &["-std=c++26", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    let args =
+        ["-std=c++26", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch", "-fsyntax-only"];
     let o = kiln(&d, &[&args[..], &["a.cpp"]].concat());
     assert_eq!(o.code, 1, "{}", o.stderr);
     assert!(o.stderr.contains("warning: negative"), "{}", o.stderr);
@@ -1981,7 +1988,8 @@ asm(\".globl wp1345_sym\\n.set wp1345_sym, 0\");
     // The private enumerator stays private.
     let d = scratch_of("wp1345p");
     std::fs::write(d.join("b.cpp"), "int z = int(te::x);\n").unwrap();
-    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let args =
+        ["-std=c++26", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch", "-fsyntax-only"];
     let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
     assert!(o.stderr.contains("error: 'x' is a private member of 'te'"), "{}", o.stderr);
     assert!(!o.stderr.contains("differs"), "{}", o.stderr);
@@ -2072,7 +2080,8 @@ int main() { sb<int> b; return b.get() + int(need(0).b) + int(f().b) - 5; }\n";
     let d = scratch_of("wp1345r");
     std::fs::write(d.join("b.cpp"), "pr<bool, long> z = true;\npr<bool, long> w = {'c', 2};\n")
         .unwrap();
-    let args = ["-std=c++26", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let args =
+        ["-std=c++26", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch", "-fsyntax-only"];
     let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
     assert!(
         o.stderr.contains("no viable conversion from 'bool' to 'pr<bool, long>'"),
@@ -2114,7 +2123,7 @@ template <class T> struct wrap { typename holder::template box<T> b; };
 static_assert(ptr_or_char<int>::value && ptrish<int *> && !ptrish<int>);
 int main() { wrap<int> w{{3}}; return w.b.v - 3; }
 ";
-    image_carries("wp1353q", header, tu);
+    snapshot_agrees("wp1353q", header, tu);
 }
 
 /// WP-1353: a header's `std::align_val_t` redeclares the enumeration sema
@@ -2134,7 +2143,7 @@ inline std::size_t align_of(std::align_val_t a) { return static_cast<std::size_t
     let tu = "\
 int main() { int *p = make(); int r = *p - 7; delete p; return r + int(align_of(std::align_val_t{2})) - 2; }
 ";
-    image_carries("wp1353a", header, tu);
+    snapshot_agrees("wp1353a", header, tu);
 }
 
 /// WP-1353: `__attribute__((__deprecated__))` on an explicit instantiation
@@ -2148,7 +2157,7 @@ template <class T> struct old { T v; int get() const { return int(v); } };
 extern template struct __attribute__((__deprecated__)) old<char>;
 ";
     let tu = "int main() { old<int> o{2}; return o.get() - 2; }\n";
-    image_carries("wp1353d", header, tu);
+    snapshot_agrees("wp1353d", header, tu);
 }
 
 /// WP-1353: non-dependent using-declarations of base members in a class
@@ -2177,10 +2186,11 @@ inline constexpr drop dr;
 static_assert(dr(2) == 3);
 int main() { B b; C c; B::L l = 3; return b.f(0) + b.f(0L) + b.v + c.f(0) + int(l) + dr(1, 2) - 15; }
 ";
-    image_carries("wp1353u", header, tu);
+    snapshot_agrees("wp1353u", header, tu);
     let d = scratch_of("wp1353u");
     std::fs::write(d.join("b.cpp"), "int g(C c) { return c.v; }\n").unwrap();
-    let args = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only"];
+    let args =
+        ["-std=c++20", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch", "-fsyntax-only"];
     let o = kiln(&d, &[&args[..], &["b.cpp"]].concat());
     assert!(o.stderr.contains("'v' is a private member of 'C'"), "{}", o.stderr);
     assert!(!o.stderr.contains("differs"), "{}", o.stderr);
@@ -2208,7 +2218,7 @@ private:
     let tu = "\
 int main() { outer::res<int> a; outer::res<int &> b; outer::res<void> c; return a.k() + b.k() + c.k() - 6; }
 ";
-    image_carries("wp1353f", header, tu);
+    snapshot_agrees("wp1353f", header, tu);
 }
 
 /// WP-1353: special members of a class that is not a template defaulted
@@ -2227,7 +2237,7 @@ constexpr P::P() = default;
 inline int use() { P p; M a; M b(static_cast<M &&>(a)); b = static_cast<M &&>(a); return p.m.x + b.x; }
 ";
     let tu = "int main() { M c; M d(static_cast<M &&>(c)); return use() + d.x - 6; }\n";
-    image_carries("wp1353o", header, tu);
+    snapshot_agrees("wp1353o", header, tu);
 }
 
 /// WP-1353: a call in a template definition of a function with an
@@ -2243,7 +2253,7 @@ inline int pos(int x) __attribute__((diagnose_if(x < 0, \"negative\", \"error\")
 template <class T> int call() { return pos(-1) + int(sizeof(T)); }
 ";
     let note = produce(&d, "a", header);
-    assert!(note.contains("declaration image"), "{note}");
+    assert!(note.contains("': snapshot written"), "{note}");
     std::fs::write(d.join("a.cpp"), "int main() { return call<char>(); }\n").unwrap();
     let o = same(&d, "a.pch", &["-fsyntax-only"], "a.cpp");
     assert!(o.stderr.contains("a.h:2:46: error: negative"), "{}", o.stderr);
@@ -2277,7 +2287,7 @@ static_assert(A<double*>::k == 2 && A<char*>::k == 3 && AI::k == 1 && A<char>::k
 static_assert(sizeof(X<char>) == 8 && sizeof(X<long>) == 4);
 int main() { return f() == 15 && g() == 12 ? 0 : 1; }
 ";
-    image_carries("wp1358a", header, tu);
+    snapshot_agrees("wp1358a", header, tu);
 }
 
 /// WP-1358: a specialization a declaration's record names that `prescan`
@@ -2305,7 +2315,7 @@ inline constexpr auto f = fn{};
 static_assert(n::f(1) == 2);
 int main() { return n::f(2) == 3 ? 0 : 1; }
 ";
-    image_carries("wp1358b", header, tu);
+    snapshot_agrees("wp1358b", header, tu);
 }
 
 /// WP-1358: specializations of member function templates of class
@@ -2334,7 +2344,7 @@ inline long in_mins(hours h) { return mins(h).count() + h.as<int>(); }
 static_assert(make_h(2).count() == 120);
 int main() { return in_mins(make_h(1)) == 3660 && make_h(1).as<long>() == 60 ? 0 : 1; }
 ";
-    image_carries("wp1358c", header, tu);
+    snapshot_agrees("wp1358c", header, tu);
 }
 
 /// WP-1358: a class specialization first named in a body
@@ -2352,7 +2362,11 @@ template <class R, int P = 1> struct dur {
 using hours = dur<long, 60>;
 inline long in_mins(hours h) { return dur<long>(h).count(); }
 ";
-    image_carries("wp1358j", header, "int main() { return in_mins(hours(2)) == 7200 ? 0 : 1; }\n");
+    snapshot_agrees(
+        "wp1358j",
+        header,
+        "int main() { return in_mins(hours(2)) == 7200 ? 0 : 1; }\n",
+    );
 }
 
 /// WP-1358: specializations of a partial specialization declared before
@@ -2373,7 +2387,7 @@ template <class T> struct tr2<T&> { static constexpr int k = 5; };
 inline constexpr int k2 = tr2<int&>::k;
 ";
     let tu = "int main() { return kk() == 3 && k2 == 5 && traits<int*>::k == 2 ? 0 : 1; }\n";
-    image_carries("wp1358d", header, tu);
+    snapshot_agrees("wp1358d", header, tu);
 }
 
 /// WP-1358: constrained variable templates and ones with (constrained)
@@ -2399,7 +2413,7 @@ inline constexpr int ks = k_v<char*> * 100 + k_v<long*> * 10 + k_v<int> + c_v<lo
 static_assert(e == 2.5 && ef == 2.5f && ks == 239 && k_v<double*> == 3 && e_v<double> == 2.5);
 int main() { return ks == 239 ? 0 : 1; }
 ";
-    image_carries("wp1358e", header, tu);
+    snapshot_agrees("wp1358e", header, tu);
 }
 
 /// WP-1358: dependent expressions as partial specialization arguments
@@ -2423,7 +2437,7 @@ inline bool f() { return is_seg<int>::value && !is_seg<long>::value && par<3>::k
 static_assert(is_seg<int>::value && !is_seg<char>::value);
 int main() { return f() && par<4>::k == 1 && par<5>::k == 0 ? 0 : 1; }
 ";
-    image_carries("wp1358f", header, tu);
+    snapshot_agrees("wp1358f", header, tu);
 }
 
 /// WP-1358: value and pack explicit template arguments of a name in a
@@ -2445,14 +2459,15 @@ inline long epoch() { return (378691210_s).n + pick<3, 'a'>(); }
 static_assert((12_s).n == 12);
 int main() { return epoch() == 378691210 + 100 ? 0 : 1; }
 ";
-    image_carries("wp1358g", header, tu);
+    snapshot_agrees("wp1358g", header, tu);
 }
 
 /// WP-1358: a completed specialization whose member function has a
 /// trailing requires-clause, or whose member template has constraints,
 /// gets them back after the image's constraints are in; overloads
 /// differing only in constraints, and a constrained member template's
-/// specializations the header makes, are still refused.
+/// specializations the header makes (which the image refused), cross by
+/// the snapshot ([temp.constr.decl]).
 #[test]
 fn constrained_members_of_completed_specializations() {
     let header = "\
@@ -2460,7 +2475,7 @@ template <class T> concept I = sizeof(T) == 4;
 template <class T> struct W { int f() const requires I<T> { return 1; } int g() const { return 0; } };
 inline int use() { return W<int>{}.f() + W<char>{}.g(); }
 ";
-    image_carries("wp1358h", header, "int main() { return use() == 1 ? 0 : 1; }\n");
+    snapshot_agrees("wp1358h", header, "int main() { return use() == 1 ? 0 : 1; }\n");
     // A constrained member template gets its constraints back (it was
     // declared without them, and its specializations in the consumer
     // mangled without `Tk`).
@@ -2471,9 +2486,8 @@ inline int use() { W<char> w; return w.g(); }
 ";
     let tu =
         "int main() { W<char> w(1, 0); return use() == 1 && w.h(2) == 100 && w.k == 2 ? 0 : 1; }\n";
-    image_carries("wp1358k", header, tu);
+    snapshot_agrees("wp1358k", header, tu);
     let d = scratch("wp1358i");
-    let why = "a specialization of a constrained template: completed, with a constrained member";
     for (n, h) in [
         "template <class T> struct A {\n  int f() requires (sizeof(T) > 1) { return 1; }\n  \
          int f() const { return 2; }\n};\ninline int g() { return sizeof(A<long>); }\n",
@@ -2487,25 +2501,27 @@ inline int use() { W<char> w; return w.g(); }
     {
         let (hf, pch) = (format!("h{n}.h"), format!("h{n}.pch"));
         std::fs::write(d.join(&hf), h).unwrap();
-        let o =
-            ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", &hf, "-o", &pch]);
-        assert!(o.stderr.contains(&format!("consumers replay the header: {why}")), "{}", o.stderr);
+        let o = ok(&d, &["-std=c++20", "-v", "-x", "c++-header", &hf, "-o", &pch]);
+        assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
+        let cpp = format!("h{n}.cpp");
+        std::fs::write(d.join(&cpp), "int main() { return use() == 1 ? 0 : 1; }\n").unwrap();
+        same(&d, &pch, &["-std=c++20", "-S", "-emit-llvm"], &cpp);
     }
     // A specialization of a constrained member template the header
     // makes: its mangled name has the instantiated head's constraints.
     std::fs::write(d.join("c.h"), "template <class T> concept I = sizeof(T) == 4;\ntemplate <class T> struct W { template <I U> static int h(U) { return 100; } int k; };\ninline int use() { W<char> w{}; return W<int>::h(1) + w.k; }\n").unwrap();
-    let o =
-        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "c.h", "-o", "c.pch"]);
-    let why = "a specialization of a constrained member template of a class specialization";
-    assert!(o.stderr.contains(&format!("consumers replay the header: {why}")), "{}", o.stderr);
+    let o = ok(&d, &["-std=c++20", "-v", "-x", "c++-header", "c.h", "-o", "c.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
+    std::fs::write(d.join("c.cpp"), "int main() { return use() == 100 ? 0 : 1; }\n").unwrap();
+    same(&d, "c.pch", &["-std=c++20", "-S", "-emit-llvm"], "c.cpp");
 }
 
 /// WP-1358 found (pre-existing, 1.1.0): a dependent concept-id in a
 /// member typedef of a specialization the importer completes while it
 /// reads the records is satisfied before the concept's constraint is
-/// patched in. The image is carried but its `X<char>::t` is `int`.
+/// patched in: the image's `X<char>::t` was `int`. The snapshot agrees
+/// with replay ([temp.names]/9).
 #[test]
-#[ignore = "pre-existing (1.1.0): record-time completion evaluates a concept-id before its constraint is in"]
 fn record_time_completion_concept_id_matches_replay() {
     let d = scratch("wp1358x");
     let header = "\
@@ -2516,19 +2532,25 @@ template <class T> struct X { using t = typename cond<Big<T>, int, char>::type; 
 inline int f() { X<char> x; return sizeof(x); }
 ";
     std::fs::write(d.join("a.h"), header).unwrap();
-    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    ok(&d, &["-std=c++20", "-x", "c++-header", "a.h", "-o", "a.pch"]);
     std::fs::write(d.join("a.cpp"), "static_assert(sizeof(X<char>) == 1);\nint main() {}\n")
         .unwrap();
-    let check =
-        ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    let check = [
+        "-std=c++20",
+        "-fkiln-pch-snapshot=check",
+        "-include-pch",
+        "a.pch",
+        "-fsyntax-only",
+        "a.cpp",
+    ];
     assert_eq!(ok(&d, &check).stderr, "");
 }
 
 /// WP-1358 found (pre-existing, 1.1.0): a variable template's value
 /// needed by a record-time completion (`cond<big_v<T>, ...>`) is
-/// evaluated before the initializers come with the bodies.
+/// evaluated before the initializers came with the bodies, through the
+/// image. The snapshot agrees with replay.
 #[test]
-#[ignore = "pre-existing (1.1.0): record-time completion needs a variable template initializer not yet in"]
 fn record_time_completion_variable_template_matches_replay() {
     let d = scratch("wp1358y");
     let header = "\
@@ -2539,11 +2561,17 @@ template <class T> struct X { using t = typename cond<big_v<T>, int, char>::type
 inline int g() { X<int> x; return sizeof(x); }
 ";
     std::fs::write(d.join("a.h"), header).unwrap();
-    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    ok(&d, &["-std=c++20", "-x", "c++-header", "a.h", "-o", "a.pch"]);
     std::fs::write(d.join("a.cpp"), "static_assert(sizeof(X<int>) == 4);\nint main() {}\n")
         .unwrap();
-    let check =
-        ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch", "-fsyntax-only", "a.cpp"];
+    let check = [
+        "-std=c++20",
+        "-fkiln-pch-snapshot=check",
+        "-include-pch",
+        "a.pch",
+        "-fsyntax-only",
+        "a.cpp",
+    ];
     assert_eq!(ok(&d, &check).stderr, "");
 }
 
@@ -2560,7 +2588,7 @@ inline int use() { box<int> a{1}, b{2}; a.swap(b); return plain{}.f() + a.v - 2;
     let tu = "static_assert(noexcept(box<int>{}.swap(*(box<int> *)0)));\n\
 static_assert(!noexcept(plain{}.f()));\n\
 int main() { return use() - 3; }\n";
-    image_carries("wp1360n", header, tu);
+    snapshot_agrees("wp1360n", header, tu);
 }
 
 /// WP-1360: a class whose base names the class itself (`struct D :
@@ -2575,7 +2603,7 @@ struct derived : base<derived> { int v() const { return 2; } };
 struct both : base<both>, tag<both *> { int v() const { return 1; } };
 ";
     let tu = "int main() { derived d; both b; base<derived> *p = &d; (void)p; return d.twice() + b.twice() - 6; }\n";
-    image_carries("wp1360c", header, tu);
+    snapshot_agrees("wp1360c", header, tu);
 }
 
 /// WP-1360: an implicit special member of a closed class named in a
@@ -2589,7 +2617,7 @@ struct fn { template <class T> static auto go(T a, T b) noexcept(noexcept(cmp()(
 ";
     let tu =
         "static_assert(!noexcept(fn::go(1, 2)));\nint main() { return fn::go(1, 2) ? 0 : 1; }\n";
-    image_carries("wp1360i", header, tu);
+    snapshot_agrees("wp1360i", header, tu);
 }
 
 /// WP-1360: a concept checked in the header (its satisfied
@@ -2610,7 +2638,7 @@ template <class T> auto conv_to(T t) { return t + 1; }
 ";
     let tu = "static_assert(testable<long>);\nstatic_assert(sizeof(holder{}.r) == sizeof(long));\n\
 int main() { return via(2) - 3; }\n";
-    image_carries("wp1360r", header, tu);
+    snapshot_agrees("wp1360r", header, tu);
 }
 
 /// WP-1360: a member function template of a class template
@@ -2629,7 +2657,7 @@ template <class I> constexpr int span(I f, I l) {
 ";
     let tu = "constexpr int a[3] = {};\nstatic_assert(span(a, a + 3) == 3);\n\
 int main() { return span(a, a + 2) - 2; }\n";
-    image_carries("wp1360m", header, tu);
+    snapshot_agrees("wp1360m", header, tu);
 }
 
 /// The overloaded member accesses of WP-1368's tests: implicit `this`
@@ -2697,7 +2725,7 @@ int main() {
   return int(dist_fn{}(v) + dist_fn{}.twice(v)) - 12 + dot(1L) - 2 + used(1.5) - 6 + int(g.run(1)) - 2;
 }
 ";
-    image_carries("wp1368a", OVL_MEMBERS, tu);
+    snapshot_agrees("wp1368a", OVL_MEMBERS, tu);
 }
 
 /// WP-1368: through the image, access checking still sees a private
@@ -2707,15 +2735,14 @@ int main() {
 fn overloaded_member_access_errors_match_replay() {
     let d = scratch("wp1368e");
     std::fs::write(d.join("a.h"), OVL_MEMBERS).unwrap();
-    let o =
-        ok(&d, &["-std=c++20", "-v", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
-    assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+    let o = ok(&d, &["-std=c++20", "-v", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    assert!(o.stderr.contains("': snapshot written"), "{}", o.stderr);
     std::fs::write(d.join("a.cpp"), "int a = callp(1);\nint b = used(1u);\n").unwrap();
     let o = same(&d, "a.pch", &["-std=c++20", "-fsyntax-only"], "a.cpp");
     assert_ne!(o.code, 0);
     assert!(o.stderr.contains("'p' is a private member of 'priv'"), "{}", o.stderr);
     assert!(o.stderr.contains("call to member function 'h' is ambiguous"), "{}", o.stderr);
-    let check = ["-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+    let check = ["-std=c++20", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
     let o = kiln(&d, &[&check[..], &["-fsyntax-only", "a.cpp"]].concat());
     assert!(!o.stderr.contains("differs"), "{}", o.stderr);
 }
@@ -2734,7 +2761,7 @@ namespace n { template <class T> struct it<T *> { using type = T; static constex
 ";
     let tu = "static_assert(n::it<long *>::k == sizeof(long));\n\
 int main() { n::it<int *>::type x = 0; return x; }\n";
-    image_carries("wp1368n", header, tu);
+    snapshot_agrees("wp1368n", header, tu);
 }
 
 /// WP-1368 (a pre-existing WP-1314 validator bug): an explicit
@@ -2753,7 +2780,7 @@ namespace s { inline namespace v { template <> struct tr<char> { using type = ch
 ";
     let tu = "static_assert(s::tr<char>::k == 1);\n\
 int main() { s::tr<char>::type c = 0; return c + s::tr<char>::f() - 2; }\n";
-    image_carries("wp1368s", header, tu);
+    snapshot_agrees("wp1368s", header, tu);
 }
 
 /// WP-1369, spec/modules.md §11.11 "Forms carried by WP-1369": functions
@@ -2797,7 +2824,7 @@ int main() {
        + use() + dk(0) + tk(0) + int(ul(1)) - 293;
 }
 ";
-    image_carries("wp1369t", header, tu);
+    snapshot_agrees("wp1369t", header, tu);
 }
 
 /// WP-1369: the predefined SVE typedefs (`__SVFloat32_t`, `__SVBool_t`,
@@ -2822,13 +2849,13 @@ inline int sz() { return 16; }
     std::fs::write(d.join("a.h"), header).unwrap();
     std::fs::write(d.join("a.cpp"), tu).unwrap();
     for target in ["--target=aarch64-linux-gnu", "--target=x86_64-linux-gnu"] {
-        let args = [target, "-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+        let args = [target, "-std=c++20", "-v"];
         let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
-        assert!(!o.stderr.contains("refused: "), "{target}: {}", o.stderr);
-        assert!(o.stderr.contains("consumers use its declaration image"), "{}", o.stderr);
+        assert!(o.stderr.contains("': snapshot written"), "{target}: {}", o.stderr);
         same(&d, "a.pch", &[target, "-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
         for mode in [&["-fsyntax-only"][..], &["-S", "-emit-llvm"]] {
-            let check = [target, "-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+            let check =
+                [target, "-std=c++20", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
             let o = ok(&d, &[&check[..], mode, &["a.cpp", "-o", "-"]].concat());
             assert_eq!(o.stderr, "", "{target} {mode:?}");
         }
@@ -2852,11 +2879,11 @@ int take(VL);
     std::fs::write(d.join("a.h"), header).unwrap();
     std::fs::write(d.join("a.cpp"), tu).unwrap();
     for target in ["--target=aarch64-linux-gnu", "--target=x86_64-linux-gnu"] {
-        let args = [target, "-std=c++20", "-v", "-fkiln-pch-image", "-fkiln-bmi-image-census=all"];
+        let args = [target, "-std=c++20", "-v"];
         let o = ok(&d, &[&args[..], &["-x", "c++-header", "a.h", "-o", "a.pch"]].concat());
-        assert!(!o.stderr.contains("refused: "), "{target}: {}", o.stderr);
+        assert!(o.stderr.contains("': snapshot written"), "{target}: {}", o.stderr);
         same(&d, "a.pch", &[target, "-std=c++20", "-S", "-emit-llvm", "-O0"], "a.cpp");
-        let check = [target, "-std=c++20", "-fkiln-pch-image=check", "-include-pch", "a.pch"];
+        let check = [target, "-std=c++20", "-fkiln-pch-snapshot=check", "-include-pch", "a.pch"];
         let o = ok(&d, &[&check[..], &["-fsyntax-only", "a.cpp"]].concat());
         assert_eq!(o.stderr, "", "{target}");
     }
@@ -2880,7 +2907,7 @@ inline int an() { any_ a{}; return sizeof(a.buf); }
     let tu = "\
 int main() { latch l{}; l.a.v = 5; l.cd(2); return int(l.get()) + an() - 3 - int(sizeof(void *)); }
 ";
-    image_carries("wp1369b", header, tu);
+    snapshot_agrees("wp1369b", header, tu);
 }
 
 /// WP-1369 found (pre-existing, 1.1.0) and fixed: a specialization the
@@ -2897,7 +2924,7 @@ template <unsigned L, unsigned A> struct st { alignas(A) unsigned char data[L]; 
 struct U { void *p; st<sizeof(p), alignof(void *)> buf; };
 ";
     std::fs::write(d.join("a.h"), header).unwrap();
-    ok(&d, &["-std=c++20", "-fkiln-pch-image", "-x", "c++-header", "a.h", "-o", "a.pch"]);
+    ok(&d, &["-std=c++20", "-x", "c++-header", "a.h", "-o", "a.pch"]);
     std::fs::write(
         d.join("a.cpp"),
         "int main() { U u{}; return int(sizeof(u)) - 2 * int(sizeof(void *)); }\n",
@@ -2905,7 +2932,7 @@ struct U { void *p; st<sizeof(p), alignof(void *)> buf; };
     .unwrap();
     let check = [
         "-std=c++20",
-        "-fkiln-pch-image=check",
+        "-fkiln-pch-snapshot=check",
         "-include-pch",
         "a.pch",
         "-S",
@@ -2932,5 +2959,5 @@ template <class T> struct S { int h(T t) { using namespace N; return g(t) + 1; }
 inline int u() { return f(1) + S<int>{}.h(2); }
 ";
     let tu = "int main() { return u() - 4; }\n";
-    image_carries("wp1369u", header, tu);
+    snapshot_agrees("wp1369u", header, tu);
 }

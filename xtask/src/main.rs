@@ -478,14 +478,13 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     };
     let (bmi1, bmi2) = (bmi_kind(1), bmi_kind(2));
     // The PCH differential's slice (spec/harness.md "PCH differential"):
-    // the image path and the replay fallback, kiln only.
+    // the replay fallback and the snapshot, kiln only.
     let pch_diff = |m: util::pch_diff::PchDiff| match &kiln {
         Some(kiln) if !args.oracle_only => ci_pch_diff(kiln, m, args.shard),
         Some(_) => test::CorpusOutcome::Skipped("--oracle-only".to_owned()),
         None => test::CorpusOutcome::Skipped("--step".to_owned()),
     };
-    let (pch_load, pch_replay) =
-        (pch_diff(util::pch_diff::PchDiff::Load), pch_diff(util::pch_diff::PchDiff::Replay));
+    let pch_replay = pch_diff(util::pch_diff::PchDiff::Replay);
     // The snapshot (WP-1395), with `--pch-diff-require-restore`: a
     // consumer that stops restoring fails CI.
     let pch_snapshot = pch_diff(util::pch_diff::PchDiff::Snapshot);
@@ -495,7 +494,6 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
     let kiln_name = format!("kiln{shard}");
     let bmi1_name = format!("kiln --bmi-kind 1{shard}");
     let bmi2_name = format!("kiln --bmi-kind 2{shard}");
-    let pch_load_name = format!("kiln --pch-diff load{shard}");
     let pch_replay_name = format!("kiln --pch-diff replay{shard}");
     let pch_snapshot_name =
         format!("kiln --pch-diff snapshot --pch-diff-require-restore --pch-diff-extra-dir{shard}");
@@ -504,7 +502,6 @@ fn ci(args: impl Iterator<Item = String>) -> ExitCode {
         (kiln_name.as_str(), kiln_mode),
         (bmi1_name.as_str(), bmi1),
         (bmi2_name.as_str(), bmi2),
-        (pch_load_name.as_str(), pch_load),
         (pch_replay_name.as_str(), pch_replay),
         (pch_snapshot_name.as_str(), pch_snapshot),
     ];

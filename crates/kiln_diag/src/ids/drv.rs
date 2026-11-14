@@ -66,9 +66,6 @@ drv_pch_config_value = Error (2) "{0} differs in precompiled file '{1}' vs. curr
 drv_pch_config_value_19 = Error (2) "{0} differs in PCH file{1:} vs. current file";
 drv_pch_corrupt = Fatal (1) "malformed or corrupted precompiled file: '{0}'";
 drv_pch_corrupt_19 = Fatal (1) "malformed or corrupted AST file: '{0}'";
-// WP-1036: `-fkiln-pch-image=check` compiles with the declaration image
-// and with replay and compares the two.
-drv_pch_decls_mismatch = Error (2) "the declaration image of precompiled header '{0}' differs from replaying the header: {1}";
 drv_pch_different_branch = Error (2) "PCH file built from a different branch ({0}) than the compiler ({1})";
 // WP-1037: clang's `-include-pch <dir>` finds no acceptable PCH in it.
 drv_pch_dir_no_pch = Error (1) "no suitable precompiled header file found in directory '{0}'";
@@ -76,12 +73,8 @@ drv_pch_file_modified = Fatal (3) "file '{0}' has been modified since the precom
 // WP-1037: clang's driver probe of `-include <h>` for `<h>.gch`.
 drv_pch_ignoring_gch_dir = Warning [IgnoredGch] (1) "precompiled header directory '{0}' was ignored because it contains no clang PCH files";
 drv_pch_ignoring_gch_file = Warning [IgnoredGch] (1) "precompiled header '{0}' was ignored because it is not a clang PCH file";
-// WP-1280: the preprocessor-state record of a PCH (spec/driver.md
-// "Precompiled headers", `-fkiln-pch-image`).
-drv_pch_image_load = Error (2) "cannot load the preprocessor-state record of precompiled header '{0}': {1}";
-drv_pch_image_mismatch = Error (2) "the preprocessor-state record of precompiled header '{0}' differs from replaying the header: {1}";
-drv_pch_image_not_written = Warning (2) "precompiled header '{0}' is written without its preprocessor-state record: {1}";
-drv_pch_image_unusable = Warning (2) "the preprocessor-state record of precompiled header '{0}' is not used ({1}); the header is replayed";
+// WP-1397: the retired image path's option (spec/pch.md "Options").
+drv_pch_image_ignored = Warning [OptionIgnored] (1) "'{0}' is ignored: the precompiled header snapshot replaced it";
 drv_pch_invalid = Fatal (1) "file '{0}' is not a valid PCH file: file doesn't start with precompiled file magic";
 drv_pch_invalid_19 = Fatal (1) "file '{0}' is not a valid precompiled PCH file: file doesn't start with AST file magic";
 drv_pch_macro_def_differs = Error (4) "definition of macro '{0}' differs between the precompiled file '{1}' ('{2}') and the command line ('{3}')";
@@ -98,11 +91,14 @@ drv_pch_older = Error (1) "PCH file '{0}' uses an older format that is no longer
 // replays the header, and compares the two.
 drv_pch_snapshot_mismatch = Error (2) "the snapshot of precompiled header '{0}' differs from replaying the header: {1}";
 // WP-1404: a PCH build whose prefix cannot be snapshotted (the PCH is
-// written without the section; its consumers replay the header).
-drv_pch_snapshot_not_written = Warning [PchSnapshotUnused] (2) "precompiled header '{0}' cannot carry a snapshot ({1}); its consumers process the header again";
+// written without the section; its consumers replay the header). Not
+// promoted by a blanket `-Werror` (WP-1397), only by
+// `-Werror=pch-snapshot-unused`.
+drv_pch_snapshot_not_written = WarningNoWerror [PchSnapshotUnused] (2) "precompiled header '{0}' cannot carry a snapshot ({1}); its consumers process the header again";
 // WP-1403: a snapshot the consumer cannot use for its configuration
-// (the header is replayed).
-drv_pch_snapshot_unused = Warning [PchSnapshotUnused] (2) "precompiled header '{0}' was built with a different configuration ({1}); the header is processed again";
+// (the header is replayed). As `drv_pch_snapshot_not_written` under
+// `-Werror`.
+drv_pch_snapshot_unused = WarningNoWerror [PchSnapshotUnused] (2) "precompiled header '{0}' was built with a different configuration ({1}); the header is processed again";
 drv_pch_target = Error (3) "precompiled file '{0}' was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_target_19 = Error (3) "PCH file{0:} was compiled for the target '{1}' but the current translation unit is being compiled for target '{2}'";
 drv_pch_unreadable = Error (2) "unable to read PCH file {0}: '{1}'";

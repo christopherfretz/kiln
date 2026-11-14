@@ -153,7 +153,7 @@ fn the_header_pass_runs_when_a_main_file_could_differ() {
     // Diagnostics: the header pass shows its own.
     let d = both("warn", "#include <vector>\n#warning \"hi\"\n", w, false);
     // The producer showed the header's warning; neither PCH's consumer
-    // shows it again (spec/driver.md "PCH snapshot: behaviour").
+    // shows it again (spec/pch.md "Consumer").
     consume_both(&d, w, "main.cpp", "int main() { std::vector<int> v{1}; return v[0] - 1; }\n");
     // A C header: two passes (spec/snap.md "The producer's single pass").
     let d = both(
@@ -182,10 +182,12 @@ fn the_header_pass_runs_when_a_main_file_could_differ() {
 
 /// WP-1404: with no option, a PCH build whose prefix cannot be
 /// snapshotted (here a global module fragment left open) still writes the
-/// PCH and says why, once, in `-Wpch-snapshot-unused`; `-Werror` makes it
-/// an error and no PCH; `-Wno-pch-snapshot-unused` silences it. The
-/// consumer of that PCH replays the header with no warning (a `-v` note
-/// only). spec/driver.md "Snapshots".
+/// PCH and says why, once, in `-Wpch-snapshot-unused`; a blanket `-Werror`
+/// leaves it a warning and the PCH is written (WP-1397: the group is
+/// exempt), `-Werror=pch-snapshot-unused` makes it an error and no PCH;
+/// `-Wno-pch-snapshot-unused` silences it. The consumer of that PCH
+/// replays the header with no warning (a `-v` note only). spec/pch.md
+/// "Producer".
 #[test]
 fn a_prefix_without_a_snapshot_still_gets_a_pch() {
     let d = scratch("unsnap");
@@ -206,10 +208,26 @@ fn a_prefix_without_a_snapshot_still_gets_a_pch() {
     assert!(o.timing.contains("note: not written: Parser.mods: not at rest"), "{}", o.timing);
     assert!(d.join("gmf.pch").exists());
     let o = produce(&["-Werror"], "werror.pch");
-    assert_eq!(o.code, 1, "{}", o.stderr);
-    assert!(o.stderr.starts_with("error: precompiled header 'werror.pch' cannot"), "{}", o.stderr);
-    assert!(o.stderr.contains("[-Werror,-Wpch-snapshot-unused]"), "{}", o.stderr);
-    assert!(!d.join("werror.pch").exists());
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(
+        o.stderr.starts_with("warning: precompiled header 'werror.pch' cannot"),
+        "{}",
+        o.stderr
+    );
+    assert!(o.stderr.ends_with(" [-Wpch-snapshot-unused]\n"), "{}", o.stderr);
+    assert!(d.join("werror.pch").exists());
+    for extra in [&["-Werror=pch-snapshot-unused"][..], &["-Werror", "-Werror=pch-snapshot-unused"]]
+    {
+        let o = produce(extra, "explicit.pch");
+        assert_eq!(o.code, 1, "{extra:?}: {}", o.stderr);
+        assert!(
+            o.stderr.starts_with("error: precompiled header 'explicit.pch' cannot"),
+            "{}",
+            o.stderr
+        );
+        assert!(o.stderr.contains("[-Werror,-Wpch-snapshot-unused]"), "{}", o.stderr);
+        assert!(!d.join("explicit.pch").exists());
+    }
     let o = produce(&["-Wno-pch-snapshot-unused"], "quiet.pch");
     assert_eq!((o.code, o.stderr.as_str()), (0, ""));
     for v in [false, true] {

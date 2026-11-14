@@ -22,7 +22,7 @@ cargo xtask test [options] [paths...]
 | `--debug-sweep` | The debug-info sweep: compile each positive test with and without `-g` instead of checking its expectations (see "Debug-info sweep"). Not with `--meta-header` (usage error). |
 | `--bmi-kind 1\|2` | The module-file kind variant: only the tests with `module:` lines, every one two-step, with kiln writing kind-`N` module files (see "Module-file kinds"). Needs kiln as the compiler (otherwise a usage error). WP-985. |
 | `--bmi-image` | With `--bmi-kind 2` (implied when no kind is given; with `--bmi-kind 1` a usage error): kiln's module-file builds and its importing compiles also get `-fkiln-bmi-image`, so units that qualify are imported through the declaration image (see "Module-file kinds"). WP-1048. |
-| `--pch-diff load\|replay\|check\|snapshot` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036; `snapshot` WP-1383/WP-1395. |
+| `--pch-diff replay\|snapshot` | The PCH differential: each test that opens with `#include`s is compiled again with a PCH of them, and the two results are compared instead of the test's expectations (see "PCH differential"). Needs kiln as the compiler (otherwise a usage error); no oracle runs; not with another variant (usage error). WP-1036; `snapshot` WP-1383/WP-1395; `load` and `check` retired with the declaration image (WP-1397). |
 | `--pch-diff-require-restore` | With `--pch-diff snapshot` (else a usage error): a test whose consumer replayed the header for a reason `tests/pch-snapshot-replay-allow.txt` does not allow FAILs (see "PCH differential"). WP-1395. |
 | `--pch-diff-extra-dir` | With `--pch-diff snapshot` (else a usage error): every other test's consumer (by a hash of its name) also gets `-I` of an empty directory, so its search list differs from the producer's; it must still restore, and must say it repeated the snapshot's lookups, or the test FAILs (see "PCH differential"). WP-1403. |
 | `--pch-diff-synthetic` | With `--pch-diff` (else a usage error): a test with no `#include` line gets the synthetic prefix `#include <bits/stdc++.h>` (see "PCH differential"). WP-1395. |
@@ -934,21 +934,20 @@ found) twice:
 - **with the PCH**: the copy with its leading `#include` lines emptied
   (every other line keeps its number, as a PCH user drops the includes it
   holds; an unguarded header would otherwise be read twice), and
-  `-include-pch pchdiff.pch` plus the consumer flags: `load`
-  `-fkiln-pch-image=load -fno-kiln-pch-snapshot`, `replay`
-  `-fno-kiln-pch-image -fno-kiln-pch-snapshot`, `check`
-  `-fkiln-pch-image=check -fno-kiln-pch-snapshot`, `snapshot` none (the
-  default path since WP-1404: the consumer restores the snapshot).
+  `-include-pch pchdiff.pch` plus the consumer flags: `replay`
+  `-fno-kiln-pch-snapshot`, `snapshot` none (the default path since
+  WP-1404: the consumer restores the snapshot). The modes `load` and
+  `check` read the declaration image WP-1397 retired, and are now a
+  usage error.
   `pchdiff.pch` is built from `pchdiff.h`, the leading `#include` lines,
   with the test's `-std`, `args`, the `-fmodule-file=` flags of its
   `module:` lines, `-iquote <test dir>`, in the consumer's order, and
-  `-x c++-header`; the `load`, `replay` and `check` producers add
-  `-fkiln-pch-image -v -fno-kiln-pch-snapshot` (so they read the same
-  file), the `snapshot` producer adds nothing (the default path, with
+  `-x c++-header`; the `replay` producer adds `-fno-kiln-pch-snapshot`,
+  the `snapshot` producer adds nothing (the default path, with
   `KILN_SNAP_TIMING=1`, single pass where it may) and its
   `-fclang-compat=` and `kiln_meta.h` flags come first, as in the
   consumer: a snapshot is used only when the producer's command line
-  is the consumer's, spec/driver.md). Neither build passes the report
+  is the consumer's, spec/pch.md "Identity"). Neither build passes the report
   options an `oven:` or `inst-report:` test otherwise gets: no budget is
   checked, and the option would be the consumer's alone.
 
@@ -992,7 +991,7 @@ an infrastructure error.
 WP-1403). Every other test's consumer (the hash of its name is even) gets
 `-I <scratch>/consumer-only`, an empty directory the producer does not
 have, after its other options. The snapshot must restore all the same
-(spec/driver.md "Lookup-tolerant search path"): a restored consumer
+(spec/pch.md "Lookup-tolerant search path"): a restored consumer
 whose `snapshot-timing: find` line does not say `lookups repeated` is a
 FAIL, and so is a replay under `--pch-diff-require-restore`. The other
 half keeps the fast path (equal search lists).
@@ -1017,23 +1016,22 @@ importer's `-include-pch`, as it reads its `-include`s, and anything before
 success or failure; the diagnostics, after dropping the include stack
 (`In file included from` lines), the `N warnings generated.` line and
 kiln's `note: precompiled header` notes, either equal or equal to the
-producer's diagnostics followed by the consumer's (a consumer that loads
-the image does not diagnose the header again; a restored snapshot's
-consumer does not either, and says how many the header reported, which
+producer's diagnostics followed by the consumer's (a restored snapshot's
+consumer does not diagnose the header again, and says how many the header reported, which
 are dropped from the front of the plain build's); the IR after the usual
 normalization ("IR tests"), and without DIFile checksums (the copy's
 bytes differ) and inline asm `!srcloc` values (raw locations, which a
 PCH shifts in clang too); and a run test's exit status, stdout and
 stderr, with the binary's name, a sanitizer report's process id,
 addresses and `BuildId` reduced (they differ between any two runs). An
-`ir` test needs no oracle here. Its reason is the path the producer's `-v` note names (`image
-(N records)` or `replay: <why>`; `replay` under `--pch-diff replay`). A
+`ir` test needs no oracle here. Its reason is the mode (`replay` or `snapshot`, with the producer's
+shape and, for a refused snapshot, why). A
 plain build that fails is a SKIP ("kiln fails without a PCH"), and so is a
 PCH that does not build when the plain build fails too; a PCH that does
 not build when the test compiles, a crash, or any difference is a
 **FAIL** showing it.
 
-`ci` runs `load`, `replay` and `snapshot --pch-diff-require-restore
+`ci` runs `replay` and `snapshot --pch-diff-require-restore
 --pch-diff-extra-dir`
 over `tests/conformance/cpp.include` and
 `tests/conformance/module.interface` (run 6 under "CI"). `cargo xtask
@@ -1561,7 +1559,7 @@ if the first fails, so one cannot hide the other:
    selected by `--step kiln`, take the same `--shard`, and are judged like
    it.
 6. **PCH differential** (WP-1036): `cargo xtask test --compiler <that
-   kiln> --pch-diff load`, then `--pch-diff replay`, then `--pch-diff
+   kiln> --pch-diff replay`, then `--pch-diff
    snapshot --pch-diff-require-restore` (WP-1395: a consumer that stops
    restoring its snapshot fails CI), over
    `tests/conformance/cpp.include` and `tests/conformance/module.interface`

@@ -1,7 +1,7 @@
 // [temp.arg.general]/1, [temp.param]/12, [temp.expl.spec]/1: explicit
 // specializations of a class template that take its non-type default
 // argument (the shape of <ext/type_traits.h> `__promote`). With
-// `--pch-diff`, the header's precompiled image carries the default as an
+// `--pch-diff`, the header's snapshot carries the default as an
 // expression and the specializations as written (WP-1320).
 //@ expect: run
 #include "Inputs/nttp_default_spec.h"

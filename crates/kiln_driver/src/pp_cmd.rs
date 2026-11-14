@@ -36,12 +36,6 @@ pub struct JobResult {
     pub dep_list: Option<SharedDeps>,
     /// Errors reported.
     pub errors: u32,
-    /// A precompiling job's preprocessor-state record, or why it could
-    /// not be written (`-fkiln-pch-image`, WP-1280).
-    pub pch_image: Option<Result<Vec<u8>, String>>,
-    /// The declaration image the record carries (its declaration count),
-    /// or why the header has none (WP-1036).
-    pub pch_decls: Option<Result<usize, &'static str>>,
 }
 
 /// The dependency list a preprocessor's callbacks fill (`-M`, `-MD`).
@@ -255,7 +249,6 @@ impl Job<'_> {
         cfg.no_inline = p.no_inline;
         cfg.gnu89_inline = p.gnu89_inline;
         cfg.implicit_includes.clone_from(&self.args.includes);
-        cfg.pch_lines = self.args.pch.image_use.as_ref().map_or(0, |u| u.lines);
         cfg.exceptions = p.exceptions.unwrap_or(cplusplus);
         cfg.rtti = p.rtti.unwrap_or(cplusplus);
         cfg.char8_t = p.char8_t;
@@ -512,7 +505,6 @@ impl Job<'_> {
     ) -> Option<(Preprocessor<'a, 'd>, Option<SharedDeps>)> {
         let (mut pp, deps, main) =
             self.configure_preprocessor(sm, engine, interner, inputs, staged)?;
-        crate::pch_image::start(self.args, &mut pp, sm, interner, engine);
         match main {
             MainInput::File(f) => pp.enter_main_file(f),
             MainInput::Capsule(bytes) => {
@@ -570,8 +562,8 @@ impl Job<'_> {
         features
     }
 
-    /// [`Self::build_preprocessor`] without entering the main input (and
-    /// without the `-fkiln-pch-image` hooks): the preprocessor a
+    /// [`Self::build_preprocessor`] without entering the main input: the
+    /// preprocessor a
     /// restored PCH snapshot is applied to (`crate::pch_snapshot`).
     pub(crate) fn configure_preprocessor<'a, 'd>(
         &self,
@@ -950,7 +942,6 @@ impl Job<'_> {
             };
             print_preprocessed(&mut pp, opts, &mut result.output);
         }
-        crate::pch_image::finish(a, &mut pp, sm, interner, engine, None);
         drop(pp);
         result.deps = deps.map(|d| d.borrow().files().to_vec());
     }

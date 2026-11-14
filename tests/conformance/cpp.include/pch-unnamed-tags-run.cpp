@@ -1,8 +1,8 @@
 // [dcl.enum]/2, [class.pre]/1, [cpp.include]: an unnamed unscoped
 // enumeration introduces only its enumerators, and an unnamed class
 // declares only the variables of its type. With `--pch-diff`, the
-// header's precompiled image carries both (WP-1293: `<cfenv>` replayed
-// with an internal image inconsistency).
+// header's snapshot carries both (WP-1293: `<cfenv>` replayed
+// once failed in the retired declaration image).
 //@ expect: run
 #include "Inputs/unnamed_tags.h"
 

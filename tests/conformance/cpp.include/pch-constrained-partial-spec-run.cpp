@@ -1,7 +1,7 @@
 // [temp.spec.partial.order], [temp.constr.order]: partial
 // specializations with requires-clauses and type-constraints are
 // selected by subsumption. With `--pch-diff`, the header's precompiled
-// image carries their constraints (WP-1342).
+// snapshot carries their constraints (WP-1342).
 //@ expect: run
 #include "Inputs/constrained_partial_specs.h"
 

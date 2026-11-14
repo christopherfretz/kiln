@@ -3,7 +3,7 @@
 // and a class template; libc++'s `partial_ordering`, `to_chars_result`)
 // compare the subobjects with the operators the `= default` found, and
 // their implicit exception specifications follow those operators. With
-// `--pch-diff`, the header's precompiled image carries them with their
+// `--pch-diff`, the header's snapshot carries them with their
 // `default` keywords and captured lookups (WP-1314).
 //@ expect: run
 #include "Inputs/defaulted_cmp.h"

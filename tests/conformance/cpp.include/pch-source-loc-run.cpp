@@ -1,7 +1,7 @@
 // [support.srcloc.cons]: the source-location builtins in an included
 // header's function bodies give the header's location and function; in
 // a default argument they give the call's. With `--pch-diff`, the
-// header's precompiled image carries the builtin calls and the importer
+// header's snapshot carries the builtin calls and the importer
 // computes their values again (WP-1310).
 //@ expect: run
 //@ std: c++20

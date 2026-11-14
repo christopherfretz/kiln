@@ -6,7 +6,7 @@
 // member template, an explicit specialization of a member class
 // template defined outside its class, special members defaulted
 // outside their class. With `--pch-diff`, the header's
-// precompiled image carries them (WP-1353).
+// snapshot carries them (WP-1353).
 //@ expect: run
 #include "Inputs/decl_followups.h"
 

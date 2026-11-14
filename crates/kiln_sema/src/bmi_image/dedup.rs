@@ -11,44 +11,20 @@
 //! so a module whose global module fragment includes the same header
 //! declared its entities again.
 //!
-//! The producer's parser notes each namespace-scope declaration it parses
-//! ([`Sema::pch_note_external_decl`]): its first and last tokens, its
-//! token count and the declarations it made. The writer keeps one entry
-//! per declaration with a token, first and last token locations as image
-//! locations and the declarations as the range of records made for them:
+//! The precompiled header's image (retired by WP-1397) wrote one entry
+//! per namespace-scope declaration its producer parsed: first and last
+//! token locations as image locations, the token count and the
+//! declarations as the range of records made for them. A module's image
+//! writes the section empty; the reader still accepts it:
 //!
 //! ```text
 //! dedup := n:u32 (start:u32 end:u32 ntoks:u32 lo:u32 hi:u32)*n
 //! ```
 //!
 //! in parse order, `lo <= hi <= ` the record count (`lo == hi`: no
-//! record). The consumer's sema turns each entry into the importer's
-//! locations and declaration range ([`Sema::take_pch_dedup`]) and its
-//! parser records them as the replay's parse would have.
+//! record).
 
-use kiln_ast::DeclId;
-use kiln_source::Loc;
-
-use super::{Image, Locs, Payload, Rd, Res, Wr, Writer, bad};
-use crate::Sema;
-
-/// One namespace-scope declaration the producer parsed: its first and
-/// last tokens, its token count and the declarations it made (`lo..hi`).
-/// On the consumer side, the importer's declarations made for its
-/// records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ExtDecl {
-    /// The first token.
-    pub start: Loc,
-    /// The last token.
-    pub end: Loc,
-    /// The number of tokens.
-    pub ntoks: u32,
-    /// The first declaration made (a [`DeclId`] index).
-    pub lo: u32,
-    /// Past the last declaration made (`lo == hi`: none).
-    pub hi: u32,
-}
+use super::{Image, Rd, Res, Wr, bad};
 
 /// The image's entries (the `dedup` section).
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -91,91 +67,6 @@ pub(super) fn validate_dedup(img: &Image) -> Res<()> {
         return bad("bad deduplication key");
     }
     Ok(())
-}
-
-/// Whether record `r` stands for a declaration of the importer's own (a
-/// builtin or implicit declaration's stub), which is no part of the
-/// header's range.
-fn own_stub(img: &Image, r: usize) -> bool {
-    matches!(img.decls[r].payload, Payload::Implicit { kind } if kind >= super::scope::BUILTIN_KIND)
-}
-
-impl Writer<'_, '_, '_> {
-    /// The `dedup` section of a precompiled header from the producer's
-    /// notes (after the records are written). A declaration whose tokens
-    /// the image cannot locate gets no entry.
-    pub(super) fn dedup_section(&mut self, notes: &[ExtDecl]) {
-        let mut entries = Vec::with_capacity(notes.len());
-        for x in notes {
-            let (Ok(start), Ok(end)) = (self.loc(x.start), self.loc(x.end)) else { continue };
-            let (mut lo, mut hi) = (u32::MAX, 0);
-            for i in x.lo..x.hi {
-                if let Some(&r) = self.recs.get(&DeclId::new(i)) {
-                    lo = lo.min(r);
-                    hi = hi.max(r + 1);
-                }
-            }
-            if lo > hi {
-                (lo, hi) = (0, 0);
-            }
-            entries.push(DedupRec { start, end, ntoks: x.ntoks, lo, hi });
-        }
-        self.img.dedup = Dedup { entries };
-    }
-}
-
-impl Sema<'_, '_> {
-    /// Notes the producer's namespace-scope declarations for the
-    /// precompiled header's deduplication keys (WP-1353).
-    pub fn record_pch_decl_keys(&mut self) {
-        self.bmi.pch_ext_decls = Some(Vec::new());
-    }
-
-    /// Whether the parser should note its namespace-scope declarations
-    /// ([`Self::pch_note_external_decl`]).
-    #[must_use]
-    pub fn records_pch_decl_keys(&self) -> bool {
-        self.bmi.pch_ext_decls.is_some()
-    }
-
-    /// Notes namespace-scope declaration `x`, just parsed by the producer
-    /// of a precompiled header.
-    pub fn pch_note_external_decl(&mut self, x: ExtDecl) {
-        if let Some(v) = &mut self.bmi.pch_ext_decls {
-            v.push(x);
-        }
-    }
-
-    /// The deduplication keys of the precompiled header the consumer
-    /// loaded from its image, once, in the importer's locations and
-    /// declarations.
-    pub fn take_pch_dedup(&mut self) -> Vec<ExtDecl> {
-        std::mem::take(&mut self.bmi.pch_dedup)
-    }
-
-    /// Turns the image's `dedup` section into the importer's keys, with
-    /// `ids` its records' declarations.
-    pub(super) fn image_dedup(&mut self, img: &Image, main: &Locs, ids: &[DeclId]) {
-        let mut out = Vec::with_capacity(img.dedup.entries.len());
-        for e in &img.dedup.entries {
-            let (start, end) = (main.get(e.start), main.get(e.end));
-            if !start.is_valid() || !end.is_valid() {
-                continue;
-            }
-            let mut range: Option<(u32, u32)> = None;
-            for r in e.lo as usize..e.hi as usize {
-                let Some(&d) = ids.get(r) else { continue };
-                if own_stub(img, r) {
-                    continue;
-                }
-                let i = d.index();
-                range = Some(range.map_or((i, i + 1), |(a, b)| (a.min(i), b.max(i + 1))));
-            }
-            let (lo, hi) = range.unwrap_or((0, 0));
-            out.push(ExtDecl { start, end, ntoks: e.ntoks, lo, hi });
-        }
-        self.bmi.pch_dedup = out;
-    }
 }
 
 #[cfg(test)]

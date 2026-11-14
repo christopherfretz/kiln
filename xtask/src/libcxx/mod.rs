@@ -58,7 +58,7 @@ relative to libcxx/test (default: --gate m3). Contract: spec/libcxx.md.
                          detail, first cluster key, wall seconds)
   --shard <K/N>          run only every N-th selected test, starting at the K-th
                          (1-based; the N shards are disjoint and cover the selection)
-  --pch-diff load|replay|check|snapshot
+  --pch-diff replay|snapshot
                          each pass test that opens with #includes is compiled
                          with -include-pch of a PCH of them, read by that
                          consumer path (spec/libcxx.md \"PCH differential\")
@@ -318,10 +318,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Option<Optio
             "--shard" => o.shard = Some(parse_shard(&value("--shard")?)?),
             "--pch-diff" => {
                 let v = value("--pch-diff")?;
-                o.pch_diff =
-                    Some(crate::util::pch_diff::PchDiff::parse(&v).ok_or_else(|| {
-                        format!("bad --pch-diff `{v}` (load|replay|check|snapshot)")
-                    })?);
+                o.pch_diff = Some(
+                    crate::util::pch_diff::PchDiff::parse(&v)
+                        .ok_or_else(|| format!("bad --pch-diff `{v}` (replay|snapshot)"))?,
+                );
             }
             "-j" | "--jobs" => {
                 let v = value("--jobs")?;

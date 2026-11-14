@@ -78,7 +78,7 @@
 //! | `explicit_conv`, `cast_ignores_base_access`, `speculative_friend`, `replaying_access`, `requires_access_replay`, `access_ctx`, `arith_warning` | transient | set around one conversion or access check |
 //! | `trailing_notes`, `diag_capture`, `delayed_typos`, `typo_delay`, `open_specs`, `spec_failures`, `spec_exempt` | transient | diagnostics held for the construct being built |
 //! | `nc_strict_only`, `pending_alias_vla`, `reverse_using_shadows`, `declarator_int_recovery`, `declarator_field`, `declarator_distant_exc`, `pattern_member_access`, `base_annotation_packs`, `friend_tag`, `friend_class_template`, `extraneous_tag_head`, `nested_tag`, `inst_enable_if`, `declspec_nulls` | transient | handed from one action to the next within a declaration |
-//! | `image_texprs`, `bmi` | transient | declaration-image and carried-constant recording (module files, the image PCH): a snapshot is not taken with them on |
+//! | `image_texprs`, `bmi` | transient | declaration-image and carried-constant recording (module files): a snapshot is not taken with them on |
 //!
 //! Every other field is **state**; [`sema_fields!`] lists them.
 

@@ -133,11 +133,7 @@ pub fn format_pch_accounting(
 
 /// Whether `reason` is a PCH path (not a skip's or a killed test's reason).
 fn is_pch_path(reason: &str) -> bool {
-    reason == crate::util::pch_diff::RESTORED
-        || reason.starts_with("replay")
-        || reason.starts_with("image (")
-        || reason == "no declaration image"
-        || reason == "check"
+    reason == crate::util::pch_diff::RESTORED || reason.starts_with("replay")
 }
 
 /// A skip reason reduced for [`format_pch_accounting`]'s histogram: its

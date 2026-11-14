@@ -322,8 +322,7 @@ derive it. The field classification tables are at the impls
 - **A changed file is reported by its consumer.** A restored buffer whose
   file no longer has the recorded length and hash is unavailable and is
   listed by `lazy_fallbacks` (as `Unavailable`); the PCH snapshot
-  consumer turns that into a fatal error (spec/driver.md "PCH snapshot:
-  behaviour"), since the restored state was built from the old text.
+  consumer turns that into a fatal error (spec/pch.md "Consumer"), since the restored state was built from the old text.
 - `Interner` writes its strings in symbol order and restores them by
   interning in order into a fresh interner (refusing a duplicate), so
   every `Symbol` is unchanged; restore it before anything interns.

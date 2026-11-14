@@ -1101,11 +1101,11 @@ fn bmi_kind_option() {
 fn pch_diff_option() {
     use crate::util::pch_diff::PchDiff;
     let o = |a: &[&str]| parse_args(strings(a)).unwrap().unwrap().pch_diff;
-    assert_eq!(o(&["--pch-diff", "load"]), Some(PchDiff::Load));
-    assert_eq!(o(&["--pch-diff=replay"]), Some(PchDiff::Replay));
-    assert_eq!(o(&["--pch-diff=check"]), Some(PchDiff::Check));
+    assert_eq!(o(&["--pch-diff", "replay"]), Some(PchDiff::Replay));
     assert_eq!(o(&["--pch-diff=snapshot"]), Some(PchDiff::Snapshot));
     assert!(parse_args(strings(&["--pch-diff", "image"])).is_err());
+    assert!(parse_args(strings(&["--pch-diff", "load"])).is_err());
+    assert!(parse_args(strings(&["--pch-diff", "check"])).is_err());
     let r = parse_args(strings(&["--pch-diff=snapshot", "--pch-diff-require-restore"]));
     assert!(r.unwrap().unwrap().pch_require_restore);
 }

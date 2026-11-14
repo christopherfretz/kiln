@@ -5,7 +5,7 @@
 // specializations, member function template specializations, literal
 // operator template arguments, a trailing requires-clause of a member
 // and a constrained member template. With `--pch-diff`, the header's
-// precompiled image carries them (WP-1358).
+// snapshot carries them (WP-1358).
 //@ expect: run
 //@ std: c++20
 #include "Inputs/spec_forms.h"

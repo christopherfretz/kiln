@@ -1,5 +1,5 @@
-//! The whole-front-end PCH snapshot (WP-1383, WP-1392; spec/driver.md
-//! "Snapshots", spec/snap.md "Whole-compiler restore order"). On by
+//! The whole-front-end PCH snapshot (WP-1383, WP-1392; spec/pch.md,
+//! spec/snap.md "Whole-compiler restore order"). On by
 //! default since WP-1404: every PCH build writes it and every consumer
 //! restores it, replaying the header on any refusal;
 //! `-fno-kiln-pch-snapshot` turns it off on either side.
@@ -7,7 +7,7 @@
 //! - **Producer** (the default, `-fkiln-pch-snapshot[=write|check]`): a
 //!   single pass that stands in for the header pass where it may
 //!   ([`single_pass_blocker`], [`stands_in`]); otherwise, after the
-//!   ordinary PCH job (record, image, diagnostics and exit status
+//!   ordinary PCH job (record, diagnostics and exit status
 //!   unchanged), a second front-end pass compiles an *empty* main file
 //!   with the producer's `-include`s and then the header as `-include`s,
 //!   parses to the end of that main file without the
@@ -120,15 +120,17 @@ pub fn phase_report() {
 /// The section's magic: its first 8 bytes.
 pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// The section's format version (bytes 8..12, little-endian): the layout
-/// of the head ([`head`]). It is independent of kiln's version; the
-/// roots' layout is the schema hash's business.
-/// Version 2 (WP-1403) added the lookup log to the head.
+/// of the head ([`head`]) and, since WP-1397, the schema: a change of
+/// [`SCHEMA_HASH`] bumps it, and `crates/kiln_driver/pch-snapshot-format.txt`
+/// records every (version, schema hash) pair (spec/pch.md "Format
+/// versioning"; the `format_record` test). It is independent of kiln's
+/// version. Version 2 (WP-1403) added the lookup log to the head.
 pub(crate) const FORMAT_VERSION: u32 = 2;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
 /// The fields of [`Args`] the fingerprint leaves out, reset to their
-/// defaults before the rest is compared (spec/driver.md "Snapshots", the
+/// defaults before the rest is compared (spec/pch.md, the
 /// identity table, gives the argument for each): they cannot change the
 /// front end's state at the end of the prefix, or they are compared by
 /// their effect in a component of their own ([`identity`]).
@@ -223,7 +225,7 @@ fn excluded(args: &Args) -> Args {
     }
 }
 
-/// The fingerprint of a compile (spec/driver.md "Snapshots"): named
+/// The fingerprint of a compile (spec/pch.md): named
 /// components, compared in order, the first difference refusing the
 /// snapshot. Each is derived from the parsed configuration (the
 /// toolchain resolved, the predefines built, the warning policy built),
@@ -496,7 +498,7 @@ fn file_changed(f: &pch::FileEntry, validate: PchValidate) -> Option<&'static st
 }
 
 /// After the diagnostics engine `engine` is restored from `pch`'s
-/// snapshot (WP-1394, spec/driver.md "PCH snapshot: behaviour"): the header's own
+/// snapshot (WP-1394, spec/pch.md "Consumer"): the header's own
 /// diagnostics are not shown again, nor counted; `-v` says how many
 /// there were, and `KILN_SNAP_TIMING` prints the count for the
 /// differential (`scripts/pch-snapshot-diff/consumer-only.awk`).
@@ -518,8 +520,7 @@ pub(crate) fn prefix_reported(
     }
 }
 
-/// After a restored compile (WP-1396, spec/driver.md "PCH snapshot:
-/// behaviour"): a file of the prefix (one of the first `restored`
+/// After a restored compile (WP-1396, spec/pch.md "Consumer"): a file of the prefix (one of the first `restored`
 /// buffers) whose text the compile read and that no longer holds the
 /// text the snapshot was built from ends the compile with a fatal error.
 /// An edit that keeps a file's size and modification time passes
@@ -556,7 +557,7 @@ pub(crate) struct Refusal {
     pub why: String,
     /// A configuration reason (another kiln build, an identity component,
     /// a lookup or a recorded file that changed): the compile warns
-    /// (`-Wpch-snapshot-unused`, spec/driver.md "Snapshots"). The other
+    /// (`-Wpch-snapshot-unused`, spec/pch.md). The other
     /// refusals are by design or a section that cannot be read: `-v` only.
     pub configuration: bool,
 }
@@ -754,7 +755,7 @@ fn snapshot_head(
     let (mine, list) = identity_and_list(args, tc, std, diag_opts);
     // WP-1403: the search list is compared by the prefix's lookups, and
     // the working directory only when the prefix names a file relatively
-    // (spec/driver.md "Lookup-tolerant search path").
+    // (spec/pch.md "Lookup-tolerant search path").
     let anywhere = lookups.absolute() && rec.files.iter().all(|f| f.spelled.starts_with('/'));
     let skip: &[&str] = if anywhere { &[SEARCH_PATH, WORKING_DIRECTORY] } else { &[SEARCH_PATH] };
     let (theirs, ours) = (without(&id, skip), without(&mine, skip));
@@ -1015,7 +1016,7 @@ impl crate::pp_cmd::Job<'_> {
         inputs: crate::pp_cmd::PpInputs,
         restore: &mut Restore<'_>,
         target: &kiln_sema::target::Target,
-        parse_options: impl FnOnce(Option<kiln_parse::PchLoad>) -> kiln_parse::ParseOptions,
+        parse_options: impl FnOnce() -> kiln_parse::ParseOptions,
     ) -> Option<(
         Sema<'d, 'a>,
         Preprocessor<'a, 'd>,
@@ -1048,7 +1049,7 @@ impl crate::pp_cmd::Job<'_> {
             restore.failed = Some(format!("Preprocessor: {e}"));
             return None;
         }
-        let popts = parse_options(None);
+        let popts = parse_options();
         let mut sema = kiln_parse::new_sema(
             Arc::clone(interner),
             engine,
@@ -1133,7 +1134,7 @@ impl std::io::Write for Counted {
 /// it may: `KILN_PCH_SNAPSHOT_PASSES=2` is set, or the producer's command
 /// line asks for something the header pass writes besides its
 /// diagnostics and dependencies (`-v`, `-verify`, a time trace, a
-/// declaration image, a report, a dump or a module file, `-MG`), or the
+/// report, a dump or a module file, `-MG`), or the
 /// header is C (`std.c`): C's main-file-only diagnostics (an internal
 /// declaration used in an extern inline function is quiet in a main file,
 /// `kiln_sema` `c_decl.rs`) are not among those [`stands_in`] rules out,
@@ -1151,7 +1152,6 @@ pub(crate) fn single_pass_blocker(
         (args.verbose, "-v"),
         (args.verify.is_some(), "-verify"),
         (crate::time_trace::settings(args).ok().flatten().is_some(), "a time trace"),
-        (args.pch.image != crate::args::PchImage::Off, "-fkiln-pch-image"),
         (args.memory_report, "-fkiln-memory-report"),
         (args.dump_ast.is_some(), "-fdump-ast"),
         (args.dump_record_layouts, "-fdump-record-layouts"),
@@ -1381,7 +1381,6 @@ pub(crate) fn produce(
     a.pch.header_main = false;
     a.pch.producing = false;
     a.pch.record_lookups = true;
-    a.pch.image = crate::args::PchImage::Off;
     let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let gate = Single { header, written: Arc::clone(&written) };
     let stderr = if single {
@@ -1436,7 +1435,7 @@ impl Capture {
     }
 }
 
-/// `-fkiln-pch-snapshot=check` (spec/driver.md "Snapshots"): the replay
+/// `-fkiln-pch-snapshot=check` (spec/pch.md): the replay
 /// arguments of a compile whose snapshot was found, which the job runs
 /// with after [`check_difference`]; `None` for any other compile.
 pub(crate) fn check_replay(args: &Args) -> Option<Args> {
@@ -1751,8 +1750,8 @@ mod tests {
         [BASE, extra].concat()
     }
 
-    /// WP-1392: each component refuses, named (spec/driver.md
-    /// "Snapshots", the identity table).
+    /// WP-1392: each component refuses, named (spec/pch.md
+    /// "Identity").
     #[test]
     fn each_component_is_named() {
         named(BASE, &["-std=c++23", "-c", "t.cpp"], "language differs");
@@ -1880,6 +1879,99 @@ mod tests {
         old.extend_from_slice(&0u32.to_le_bytes());
         assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 2");
     }
+
+    /// The checked-in format record (spec/pch.md "Format versioning").
+    const RECORD: &str = include_str!("../pch-snapshot-format.txt");
+    const RECORD_PATH: &str = "crates/kiln_driver/pch-snapshot-format.txt";
+
+    /// Whether the record `text` ends with (`version`, `hash`), or what
+    /// to do so it does: a schema hash that changed under the same
+    /// version needs a version bump and a line; a bumped version, a line.
+    /// The lines must be well formed, with versions increasing and no
+    /// hash given two versions.
+    fn check_format_record(text: &str, version: u32, hash: u64) -> Result<(), String> {
+        let mut lines = Vec::new();
+        for (n, l) in text.lines().enumerate() {
+            let l = l.trim();
+            if l.is_empty() || l.starts_with('#') {
+                continue;
+            }
+            let parsed = l.split_once(' ').filter(|(_, h)| h.len() == 16).and_then(|(v, h)| {
+                Some((v.parse::<u32>().ok()?, u64::from_str_radix(h, 16).ok()?))
+            });
+            let Some((v, h)) = parsed else {
+                return Err(format!(
+                    "{RECORD_PATH}:{}: not `<version> <16 hex digits>`: {l}",
+                    n + 1
+                ));
+            };
+            if lines.last().is_some_and(|&(pv, _)| pv >= v) {
+                return Err(format!("{RECORD_PATH}:{}: versions must increase", n + 1));
+            }
+            if lines.iter().any(|&(_, ph)| ph == h) {
+                return Err(format!(
+                    "{RECORD_PATH}:{}: hash {h:016x} already has a version",
+                    n + 1
+                ));
+            }
+            lines.push((v, h));
+        }
+        let line = format!("{version} {hash:016x}");
+        let Some(&(v, h)) = lines.last() else {
+            return Err(format!("{RECORD_PATH} has no line: append `{line}`"));
+        };
+        if (v, h) == (version, hash) {
+            return Ok(());
+        }
+        if v == version {
+            return Err(format!(
+                "the snapshot schema hash changed ({h:016x} -> {hash:016x}) without a format \
+                 version bump: set FORMAT_VERSION in crates/kiln_driver/src/pch_snapshot.rs to {} \
+                 and append `{} {hash:016x}` to {RECORD_PATH} (spec/pch.md \"Format versioning\")",
+                version + 1,
+                version + 1
+            ));
+        }
+        if v < version {
+            return Err(format!(
+                "FORMAT_VERSION is {version} but {RECORD_PATH} ends at {v}: append `{line}` to it \
+                 (spec/pch.md \"Format versioning\")"
+            ));
+        }
+        Err(format!(
+            "{RECORD_PATH} ends at version {v}, after this build's FORMAT_VERSION {version}: \
+             a record line is never removed; set FORMAT_VERSION to {} and append its line",
+            v + 1
+        ))
+    }
+
+    /// WP-1397: the record ends with this build's (`FORMAT_VERSION`,
+    /// `SCHEMA_HASH`). `SCHEMA_HASH` is folded from names only (spec/snap.md
+    /// "Schema hash"), so the line is the same on every host.
+    #[test]
+    fn format_record() {
+        if let Err(what) = check_format_record(RECORD, FORMAT_VERSION, SCHEMA_HASH) {
+            panic!("{what}");
+        }
+    }
+
+    /// The record check's messages.
+    #[test]
+    fn format_record_messages() {
+        let rec = "# c\n1 00000000000000aa\n2 00000000000000bb\n";
+        assert_eq!(check_format_record(rec, 2, 0xbb), Ok(()));
+        let e = check_format_record(rec, 2, 0xcc).unwrap_err();
+        assert!(e.starts_with("the snapshot schema hash changed (00000000000000bb -> 00000000000000cc) without a format version bump: set FORMAT_VERSION in crates/kiln_driver/src/pch_snapshot.rs to 3 and append `3 00000000000000cc`"), "{e}");
+        let e = check_format_record(rec, 3, 0xcc).unwrap_err();
+        assert!(e.starts_with("FORMAT_VERSION is 3 but crates/kiln_driver/pch-snapshot-format.txt ends at 2: append `3 00000000000000cc`"), "{e}");
+        assert!(check_format_record(rec, 1, 0xaa).unwrap_err().contains("never removed"));
+        assert!(check_format_record("", 1, 1).unwrap_err().contains("has no line"));
+        assert!(check_format_record("2 aa\n", 2, 0xaa).unwrap_err().contains("16 hex digits"));
+        let e = check_format_record("2 00000000000000aa\n1 00000000000000bb\n", 1, 0xbb);
+        assert!(e.unwrap_err().contains("versions must increase"));
+        let e = check_format_record("1 00000000000000aa\n2 00000000000000aa\n", 2, 0xaa);
+        assert!(e.unwrap_err().contains("already has a version"));
+    }
 }
 
 #[cfg(test)]
@@ -1893,8 +1985,8 @@ mod changed_file_tests {
     /// A restored prefix buffer whose file changed after the consumer's
     /// file check (same size) ends the compile with clang's fatal error
     /// once its text is read; a buffer not read yet, or past the restored
-    /// prefix, is not reported ([cpp.include]; spec/driver.md "PCH
-    /// snapshot: behaviour"). WP-1396.
+    /// prefix, is not reported ([cpp.include]; spec/pch.md
+    /// "Consumer"). WP-1396.
     #[test]
     fn a_prefix_file_changed_after_the_check_is_fatal() {
         let d = std::env::temp_dir().join(format!("kiln-wp1396-changed-{}", std::process::id()));

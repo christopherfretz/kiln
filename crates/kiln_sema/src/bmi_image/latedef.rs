@@ -152,7 +152,7 @@ impl Writer<'_, '_, '_> {
         let between = (d.raw() + 1..first.raw()).filter_map(DeclId::from_raw).any(|x| {
             let n = ast.decls.get(x);
             let o = ast.modules.owner(x);
-            (o.unit == 0 && (o.purview || self.pch && self.pch_own(x)))
+            (o.unit == 0 && o.purview)
                 && ns(n.ctx())
                 && !n.has(kiln_ast::decl::DeclFlags::IMPLICIT)
                 && !matches!(

@@ -12,6 +12,7 @@ say which in the PR. A spec change without tests is incomplete.
 |---|---|---|
 | [source.md](source.md) | kiln_source | draft |
 | [snap.md](snap.md) | kiln_snap, kiln_snap_derive | prototype (WP-1377) |
+| [pch.md](pch.md) | kiln_driver (`pch`, `pch_snapshot`), kiln_pp (`bmi` sections, lookup log) | implemented (1.2.0; WP-1397) |
 | [diag.md](diag.md) | kiln_diag | draft |
 | [lex.md](lex.md) | kiln_lex | draft |
 | [pp.md](pp.md) | kiln_pp | draft |

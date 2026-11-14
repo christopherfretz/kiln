@@ -2,7 +2,7 @@
 // namespace-scope declaration redeclares the entity an included header's
 // block-scope declaration names, so it must agree with it; a `static` one
 // follows the non-static one ([dcl.stc]/7). With `--pch-diff`, the
-// header's precompiled image gives the same errors (WP-1293).
+// header's snapshot gives the same errors (WP-1293).
 //@ expect: compile-fail
 //@ strict-diags
 //@ diag: 16:6 error "functions that differ only in their return type cannot be overloaded"

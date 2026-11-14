@@ -4,7 +4,7 @@
 // `.` and `->`, a static candidate, explicit template arguments, a
 // hidden base member, a using-declaration, a class template's
 // `this->f`) chooses at each instantiation the overload the source
-// does. With `--pch-diff`, the header's precompiled image carries the
+// does. With `--pch-diff`, the header's snapshot carries the
 // whole candidate set (WP-1368).
 //@ expect: run
 #include "Inputs/ovl_members.h"

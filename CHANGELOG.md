@@ -21,6 +21,16 @@ Planned as 1.2.0.
   recorded size and time is not read, one with another time is
   compared by content) or `=content` (every input file is compared by
   content). The release gate gains `scripts/pch-release-gate.sh`.
+- The PCH contract is spec/pch.md (WP-1397): the file layout, the
+  snapshot section and its versioning, the identity, the search-path
+  rule, the producer, the consumer's fallbacks and their warnings. Each
+  snapshot format is recorded with its schema hash in
+  `crates/kiln_driver/pch-snapshot-format.txt`, and a test fails, saying
+  what to bump, when the schema changes without a new format version. A
+  PCH from another kiln build is never misread: another snapshot format
+  or schema replays with `-Wpch-snapshot-unused`, another kiln version is
+  `PCH file built from a different branch`, and kiln 1.0 and 1.1 PCHs
+  are `uses an older format`; rebuild the PCH.
 - Experimental `-fkiln-backend=hod` (also `KILN_BACKEND=hod`; WP-1371):
   at `-O0`, an object's module is handed, before `opt`, to the hod back
   end (github.com/christopherfretz/hod, an external executable found with
@@ -72,9 +82,15 @@ Planned as 1.2.0.
   kiln binary that wrote it and to its input files (both are checked,
   and a mismatch replays or is rejected as in clang), and it is not
   meant to be shared between builds of kiln. `-fno-kiln-pch-snapshot`
-  gives the 1.1 behaviour on either side. spec/driver.md "Snapshots".
-- The experimental PCH snapshot (`-fkiln-pch-snapshot`, WP-1403): a
-  consumer whose include search path differs from the producer's (an
+  gives the 1.1 behaviour on either side. `-Wpch-snapshot-unused` only
+  reports lost time, so a plain `-Werror` leaves it a warning (WP-1397,
+  as clang's `DefaultWarnNoWerror`); `-Werror=pch-snapshot-unused` makes
+  it an error, and a producer that cannot save its snapshot then fails
+  and writes no PCH. The PCH differences from clang are in
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md#precompiled-headers).
+  spec/pch.md.
+- The PCH snapshot (WP-1403): a consumer whose include search path
+  differs from the producer's (an
   extra `-I`, another order) now restores the snapshot when every header
   lookup the prefix made finds the same file, as a user or system header,
   as before; the producer records those lookups in the PCH (section
@@ -85,7 +101,7 @@ Planned as 1.2.0.
   precompiled header 'p.pch' was built with a different configuration
   (<why>); the header is processed again [-Wpch-snapshot-unused]`, on by
   default) and replays; `-v` names the first lookup that changed.
-  spec/driver.md "Lookup-tolerant search path".
+  spec/pch.md "Lookup-tolerant search path".
 - `-g` (the default limited kind) describes a class this unit never
   required complete as a declaration, as clang does
   (`isCompleteDefinitionRequired`, WP-1389): a class used only through
@@ -136,8 +152,30 @@ Planned as 1.2.0.
   default argument holding a consteval-only value is reported at the
   call that uses it.
 
+### Removed
+
+- The experimental PCH declaration image (WP-1397). Its option,
+  `-fkiln-pch-image[=write|check|load]`, is accepted and ignored with
+  `warning: '-fkiln-pch-image' is ignored: the precompiled header
+  snapshot replaced it [-Woption-ignored]`; `-fno-kiln-pch-image` is
+  accepted silently. The snapshot covers everything the image carried,
+  and the PCH is the same with or without the option. The module-file
+  declaration image (`-fkiln-bmi-image`) is unchanged, and module files
+  are byte-identical. `cargo xtask test --pch-diff` keeps `replay` and
+  `snapshot`; `load` and `check` are gone with the image.
+
 ### Fixed
 
+- PCH snapshot hardening (WP-1396, WP-1399). A prefix file that changes
+  after the consumer's check (a same-size edit with its time put back,
+  or any edit under `-fno-validate-pch`) ends the compile with `fatal
+  error: file '<f>' has been modified since the precompiled header
+  '<pch>' was built` instead of compiling against text it did not check;
+  a damaged lookup log or section is refused and replayed, never
+  misread. A pending `#pragma weak` (also `weak alias = target`) and a
+  pending `#pragma redefine_extname` cross the PCH as they do with
+  `-include`; a header that ends inside `#pragma clang attribute push`
+  is an error, as in clang.
 - Sema correctness (WP-1405). In C++ a variable length array parameter
   keeps its type, so an out-of-line member definition, a redeclaration or
   a friend whose VLA parameter differs no longer matches (as in clang). A

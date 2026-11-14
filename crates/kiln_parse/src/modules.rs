@@ -62,24 +62,14 @@ impl Parser<'_, '_> {
         if self.mods.is_none() {
             self.mods = Some(Box::default());
             self.s.module_activate();
-            self.pch_image_keys();
+            self.prefix_keys();
         }
     }
 
-    /// Records the keys of the precompiled header's declarations that
-    /// sema loaded from its image, as parsing them in this unit would
-    /// have (WP-1353).
-    fn pch_image_keys(&mut self) {
-        let mut keys = self.s.take_pch_dedup();
-        // WP-1395: a restored snapshot's prefix, as a replay of it would
-        // have recorded its declarations.
-        keys.extend(self.s.take_prefix_keys().into_iter().map(|k| kiln_sema::ExtDecl {
-            start: k.start,
-            end: k.end,
-            ntoks: k.ntoks,
-            lo: k.lo,
-            hi: k.hi,
-        }));
+    /// Records the keys of a restored snapshot's prefix (WP-1395), as a
+    /// replay of it would have recorded its declarations.
+    fn prefix_keys(&mut self) {
+        let keys = self.s.take_prefix_keys();
         if keys.is_empty() {
             return;
         }
@@ -95,11 +85,11 @@ impl Parser<'_, '_> {
         }
     }
 
-    /// At a namespace-scope declaration's start in a precompiled header's
-    /// producer (WP-1353) or a snapshot prefix (WP-1395): its first
-    /// token's index and location, and the next declaration.
+    /// At a namespace-scope declaration's start in a snapshot prefix
+    /// (WP-1395): its first token's index and location, and the next
+    /// declaration.
     pub(crate) fn pch_key_start(&mut self) -> Option<(usize, Loc, DeclId)> {
-        let noted = self.s.records_pch_decl_keys() || self.s.records_prefix_keys();
+        let noted = self.s.records_prefix_keys();
         if !noted || self.at_eof() || self.in_replay() {
             return None;
         }
@@ -110,7 +100,7 @@ impl Parser<'_, '_> {
         Some((self.token_index(), t.span.lo, self.s.ast.decls.next_id()))
     }
 
-    /// After it: notes the declaration for the image's keys.
+    /// After it: notes the declaration for the prefix's keys.
     pub(crate) fn pch_key_end(&mut self, start: Option<(usize, Loc, DeclId)>) {
         let Some((pos0, at, first)) = start else { return };
         let pos = self.token_index();
@@ -120,7 +110,6 @@ impl Parser<'_, '_> {
         let Ok(ntoks) = u32::try_from(pos - pos0) else { return };
         let end = self.tok_at(pos - 1).span.lo;
         let (lo, hi) = (first.index(), self.s.ast.decls.next_id().index());
-        self.s.pch_note_external_decl(kiln_sema::ExtDecl { start: at, end, ntoks, lo, hi });
         self.s.note_prefix_key(kiln_sema::modules::PrefixKey { start: at, end, ntoks, lo, hi });
     }
 

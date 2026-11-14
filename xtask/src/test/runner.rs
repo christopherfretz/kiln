@@ -250,8 +250,8 @@ struct Test<'a> {
     /// The PCH differential's copy of the test file, which the compiler
     /// under test compiles in its place while it is set.
     pch_src: Option<PathBuf>,
-    /// The PCH differential's path once the consumer has run (`image (N
-    /// records)`, `snapshot`, `replay: <why>`), kept for a FAIL's reason.
+    /// The PCH differential's path once the consumer has run (`snapshot`,
+    /// `replay`, `replay: <why>`), kept for a FAIL's reason.
     pch_path: Option<String>,
     /// How the PCH differential's copy is compiled while `pch_src` is set.
     pch_consumer: PchConsumer,

@@ -2,7 +2,7 @@
 // [temp.res.general]: a header that redeclares the replaceable global
 // allocation functions (the shape of <new>) and directly initializes a
 // variable of a dependent type in a class template (the shape of
-// <bits/postypes.h>). With `--pch-diff`, the header's precompiled image
+// <bits/postypes.h>). With `--pch-diff`, the header's snapshot
 // links the redeclarations to the implicit functions and carries the
 // dependent initializer (WP-1320).
 //@ expect: run

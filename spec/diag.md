@@ -750,7 +750,7 @@ its `u16` index, and its schema descriptor hashes the id table's names.
   error count is written (`prefix_reported`, plus a restored engine's
   own, for a chain) and restored as `DiagEngine::prefix_reported`;
   the counts above stay the consumer's. A `-verify` consumer replays
-  when it is not 0 (spec/driver.md "PCH snapshot: behaviour").
+  when it is not 0 (spec/pch.md "Consumer").
 - **Quiescence** (`snap_ready`): no `hold()` open, nothing held, no
   fatal error; `snap_put` refuses otherwise and names the field.
 - **Restore** (`snap_restore`) needs a fresh engine (no pragma, nothing

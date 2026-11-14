@@ -169,7 +169,7 @@ end-of-translation-unit work.
   closes the declaration context at end of file with an error, but its
   bracket depth stays open), no token replay, late-parsed members,
   pending FP pragmas or attributes, no module unit. Recording a module
-  image, a PCH image or carried constants, or loading a PCH, is refused.
+  image or carried constants is refused.
 - Entry (b), `continue_preprocessed(sema, pp, target, opts)`: a new
   parser over `pp` (its main file entered) continues `sema` to the end,
   end-of-TU work included, and finishes as `parse_preprocessed` does.

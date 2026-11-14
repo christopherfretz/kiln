@@ -1,5 +1,5 @@
 # The consumer-only diagnostics of a replay compile (WP-1394,
-# spec/driver.md "PCH snapshot: behaviour"): the replay's stderr without the
+# spec/pch.md "Consumer"): the replay's stderr without the
 # header's own diagnostics, which a snapshot consumer does not show
 # again. A diagnostic is its primary line (`file:line:col:
 # warning|error|fatal error|remark:`), the include stack before it and

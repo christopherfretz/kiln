@@ -165,8 +165,7 @@ applies to these ids.
 
 ## The pch group
 
-`bench/pch` measures kiln's precompiled headers (spec/driver.md, "The
-declaration image") against clang's on fixed header sets
+`bench/pch` measures kiln's precompiled headers (spec/pch.md) against clang's on fixed header sets
 (`xtask/src/bench/pch.rs`, WP-1294). It is a run of its own:
 
 - **Selection.** Only an explicit `bench/pch` path selects it, and it must
@@ -185,7 +184,7 @@ declaration image") against clang's on fixed header sets
   | Case | Header set | Flags |
   |---|---|---|
   | `gnu` | `<bits/stdc++.h>` (libstdc++ 14) | `-std=c++26` |
-  | `lcx` | the 106 public libc++ 19 headers of docs/status/pch-image-census.md, one `#include` each | `-std=c++26 -stdlib=libc++` |
+  | `lcx` | the 106 public libc++ 19 headers, one `#include` each | `-std=c++26 -stdlib=libc++` |
   | `mid` | `<algorithm>`, `<map>`, `<string>`, `<vector>` (libstdc++ 14) | `-std=c++26` |
   | `meta` | `<meta>` and six containers (GCC 16's libstdc++); the unit reflects over its own types | `-std=c++26 --gcc-toolchain=<GCC 16>` (`KILN_GCC`'s installation, written `$GCC16` on the page); clang 19 has no `<meta>`, so the case has kiln's rows only |
   | `c` | `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<zlib.h>` | `-std=c17`, a C header (`-x c-header`) and a C unit (`-x c`) |
@@ -212,8 +211,8 @@ declaration image") against clang's on fixed header sets
   (`bench/pch/empty.cpp`, `empty.c` for C) in place of the unit:
   `<variant>-empty`, e.g. `load-syntax-empty`. That isolates the cost of
   the PCH itself from the unit's. Before WP-1404 the rows were
-  `-fkiln-pch-image` builds and loads plus separate `snap-*` rows; the
-  image path is measured by docs/status/pch.md's older regions only.
+  `-fkiln-pch-image` builds and loads plus separate `snap-*` rows; that
+  image path was retired by WP-1397.
 
   Every command starts with the case's flags and ends with the unit (the
   build ends with `-o <pch>`). `<pch>` is `<case>.<kind>.pch` and `<obj>`
@@ -337,8 +336,8 @@ scratch directory (`T=$(mktemp -d)`), and time each command with
 at `-O0 -c`:
 
 ```sh
-kiln++ -std=c++26 -fkiln-pch-image -x c++-header bench/pch/gnu.h -o $T/gnu.kiln.pch
-kiln++ -std=c++26 -fkiln-pch-image=load -include-pch $T/gnu.kiln.pch -O0 -c -o $T/gnu.o bench/pch/gnu.cpp
+kiln++ -std=c++26 -x c++-header bench/pch/gnu.h -o $T/gnu.kiln.pch
+kiln++ -std=c++26 -include-pch $T/gnu.kiln.pch -O0 -c -o $T/gnu.o bench/pch/gnu.cpp
 clang++-19 -std=c++26 -x c++-header bench/pch/gnu.h -o $T/gnu.clang.pch
 clang++-19 -std=c++26 -include-pch $T/gnu.clang.pch -O0 -c -o $T/gnu.o bench/pch/gnu.cpp
 ```

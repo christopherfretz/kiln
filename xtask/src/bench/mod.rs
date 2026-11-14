@@ -48,7 +48,7 @@ entries: every bench/<group>/<name>.cpp, plus, only when named explicitly,
                       baselines)
   bench/reflect:      the reflection shapes S1-S10 of `cargo xtask gen-reflect`
   bench/pch:          kiln's precompiled headers against clang's (a run of its
-                      own): no PCH, PCH build, PCH load (image) and replay, on
+                      own): no PCH, PCH build, PCH load (snapshot) and replay, on
                       four header sets, kiln and --compare-with (default
                       clang++-19); judged on memory only; --record writes
                       bench/baselines/pch.json and docs/status/pch.md

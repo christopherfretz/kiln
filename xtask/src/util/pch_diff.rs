@@ -7,15 +7,9 @@
 /// Which consumer path the PCH is read by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PchDiff {
-    /// `-fkiln-pch-image=load`: the declaration image where the producer
-    /// wrote one, else the replay it falls back to.
-    Load,
-    /// `-fno-kiln-pch-image -fno-kiln-pch-snapshot`: the header is
-    /// replayed (the fallback path).
+    /// `-fno-kiln-pch-snapshot`: the header is replayed (the fallback
+    /// path).
     Replay,
-    /// `-fkiln-pch-image=check`: kiln compiles with the image and with
-    /// replay and reports the first difference itself.
-    Check,
     /// The default path (WP-1404): producer and consumer have no PCH
     /// option, so the producer writes the whole-compiler snapshot and the
     /// consumer restores it, else replays.
@@ -23,12 +17,10 @@ pub enum PchDiff {
 }
 
 impl PchDiff {
-    /// `load`, `replay` or `check`.
+    /// `replay` or `snapshot`.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "load" => Some(Self::Load),
             "replay" => Some(Self::Replay),
-            "check" => Some(Self::Check),
             "snapshot" => Some(Self::Snapshot),
             _ => None,
         }
@@ -36,36 +28,29 @@ impl PchDiff {
 
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Load => "load",
             Self::Replay => "replay",
-            Self::Check => "check",
             Self::Snapshot => "snapshot",
         }
     }
 
-    /// The consumer's flags. The image modes turn the snapshot off on
-    /// both sides (it is the default since WP-1404, and a consumer that
-    /// restores it never reads the image), so they test what they tested
-    /// before; `snapshot` adds none: it is the default path.
+    /// The consumer's flags: `replay` turns the snapshot off (it is the
+    /// default since WP-1404); `snapshot` adds none: it is the default
+    /// path.
     pub fn consumer_flags(self) -> &'static [&'static str] {
         match self {
-            Self::Load => &["-fkiln-pch-image=load", "-fno-kiln-pch-snapshot"],
-            Self::Replay => &["-fno-kiln-pch-image", "-fno-kiln-pch-snapshot"],
-            Self::Check => &["-fkiln-pch-image=check", "-fno-kiln-pch-snapshot"],
+            Self::Replay => &["-fno-kiln-pch-snapshot"],
             Self::Snapshot => &[],
         }
     }
 
-    /// The producer's flags beyond the test's own. The image modes: the
-    /// image (so `load` and `replay` read the same file), the `-v` note
-    /// that names the path a consumer takes ([`path_note`]) and no
-    /// snapshot. `snapshot`: none, so the producer is the default one
-    /// (single pass where it may, spec/snap.md); its reasons come from
-    /// the `snapshot-timing:` lines ([`SNAPSHOT_TIMING_ENV`]).
+    /// The producer's flags beyond the test's own. `replay`: no snapshot.
+    /// `snapshot`: none, so the producer is the default one (single pass
+    /// where it may, spec/snap.md); its reasons come from the
+    /// `snapshot-timing:` lines ([`SNAPSHOT_TIMING_ENV`]).
     pub fn producer_flags(self) -> &'static [&'static str] {
         match self {
+            Self::Replay => &["-fno-kiln-pch-snapshot"],
             Self::Snapshot => &[],
-            _ => &["-fkiln-pch-image", "-v", "-fno-kiln-pch-snapshot"],
         }
     }
 
@@ -145,7 +130,7 @@ pub fn lookups_repeated(stderr: &str) -> bool {
 }
 
 /// The group of the warning a consumer gives when it does not use a
-/// snapshot for its configuration (WP-1403, spec/driver.md "Snapshots").
+/// snapshot for its configuration (WP-1403, spec/pch.md).
 pub const UNUSED_WARNING_GROUP: &str = "pch-snapshot-unused";
 
 /// The reason of a `-Wpch-snapshot-unused` warning line: `precompiled
@@ -339,18 +324,6 @@ pub fn without_includes(source: &str, includes: &[(usize, &str)]) -> String {
     out
 }
 
-/// The path the producer's `-v` note says a `load` consumer takes:
-/// `image (N records)` or `replay: <why>`; `None` without a note.
-pub fn path_note(stderr: &str) -> Option<String> {
-    stderr.lines().find_map(|l| {
-        let (_, rest) = l.split_once("': consumers ")?;
-        if let Some(n) = rest.strip_prefix("use its declaration image (") {
-            return Some(format!("image ({n}"));
-        }
-        rest.strip_prefix("replay the header: ").map(|why| format!("replay: {why}"))
-    })
-}
-
 /// The IR of a compile with or without the PCH, after the corpus's
 /// `ir_normalize`, without what depends on the main file's bytes or on
 /// raw source locations rather than on the program (WP-1395): a `DIFile`'s
@@ -449,7 +422,7 @@ pub fn diag_lines(stderr: &str) -> Vec<&str> {
 /// `KILN_SNAP_TIMING` how many warnings and errors the header reported
 /// when it was built ([`snapshot_prefix_reported`]); those come first
 /// in `plain`, and `with` must be `plain` without them (the
-/// consumer-only diagnostics, spec/driver.md "PCH snapshot: behaviour").
+/// consumer-only diagnostics, spec/pch.md "Consumer").
 pub fn same_diags(plain: &str, producer: &str, with: &str) -> bool {
     let n = snapshot_prefix_reported(with);
     let (plain, with) = (diag_lines(plain), diag_lines(with));
@@ -523,13 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_and_diags() {
-        let n =
-            "note: precompiled header 'p.pch': consumers use its declaration image (12 records)\n";
-        assert_eq!(path_note(n).as_deref(), Some("image (12 records)"));
-        let r = "note: precompiled header 'p.pch': consumers replay the header: a lambda\n";
-        assert_eq!(path_note(r).as_deref(), Some("replay: a lambda"));
-        assert_eq!(path_note("x\n"), None);
+    fn diags() {
         let plain = "In file included from t.cpp:1:\nh.h:1:5: warning: w\nt.cpp:3:1: error: e\n2 warnings generated.\n";
         let producer = "kiln version 1\n #include <...> search starts here:\n /usr/include\nEnd of search list.\nIn file included from p.h:1:\nh.h:1:5: warning: w\n1 warning generated.\n";
         assert!(same_diags(plain, producer, "t.cpp:3:1: error: e\n"));

@@ -33,9 +33,11 @@ use crate::tok::{PpFlags, PpTok};
 /// The record's layout version (the first `u32` of the section).
 pub const VERSION: u32 = 1;
 
-/// Sema's pragma state at the end of the header, carried by the record
-/// for the importer's Sema (spec/modules.md §11.13 "Sema pragma
-/// state"); the driver fills it from the parse.
+/// Sema's pragma state at the end of the header (spec/modules.md §11.13
+/// "Sema pragma state"). Only kiln 1.1's PCH declaration image filled
+/// it; since WP-1397 retired that image the field is kept so the record's
+/// layout (and every module file's bytes) is unchanged, and a header
+/// unit's record holds the default.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SemaPragmas {
     /// The `#pragma pack` value in effect (0: none).
@@ -89,8 +91,8 @@ pub struct PpState {
     pub(crate) attr: Vec<AttrMacro>,
     /// The `#pragma clang diagnostic` state.
     pub(crate) diag: PragmaSnapshot,
-    /// Sema's pragma state (written by the producer; not compared by
-    /// [`PpState::describe`]).
+    /// Sema's pragma state (always the default since WP-1397; not
+    /// compared by [`PpState::describe`]).
     pub sema: SemaPragmas,
 }
 
@@ -1108,9 +1110,8 @@ pub(crate) fn builtin_def(name: Symbol, b: Builtin) -> Rc<MacroDef> {
 // --- comparison ---------------------------------------------------------
 
 impl PpState {
-    /// The state as sorted canonical lines, for the self-check that
-    /// compares a record with replay (`-fkiln-pch-image=check`, spec/
-    /// driver.md): each macro with its parameters, its body's spellings
+    /// The state as sorted canonical lines, for a comparison of two
+    /// states: each macro with its parameters, its body's spellings
     /// and flags and its definition's place, the undefs, the
     /// `push_macro` stacks, the poisoned identifiers, the guards and
     /// `#pragma once` files by file name, the counter and the

@@ -1,6 +1,6 @@
 // [dcl.attr.grammar]/5, [class.temporary]/6: a header's
 // `[[clang::lifetimebound]]` parameters make the program's dangling
-// references diagnosed at the call. With `--pch-diff`, the image's
+// references diagnosed at the call. With `--pch-diff`, the snapshot's
 // parameter attributes give the same diagnostics, byte for byte
 // (WP-1314).
 //@ expect: compile-fail

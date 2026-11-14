@@ -2,7 +2,7 @@
 // as expressions, value-dependent (`!is_ptr<T>::value`, `sizeof(T)`,
 // `N * 2`) and not (`1 + 2`), substituted through alias templates as
 // libstdc++'s `integral_constant.h` does. With `--pch-diff`, the
-// header's image carries each argument's expression (WP-1300).
+// header's snapshot carries each argument's expression (WP-1300).
 //@ expect: run
 #include "Inputs/expr_nttp.h"
 

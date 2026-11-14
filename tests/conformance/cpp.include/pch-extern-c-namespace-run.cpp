@@ -1,7 +1,7 @@
 // [dcl.link]/6: two declarations of a function or variable with C
 // language linkage and the same name declare the same entity whatever
 // namespaces they are in, also when the earlier ones are in an included
-// header. With `--pch-diff`, the header's precompiled image carries the
+// header. With `--pch-diff`, the header's snapshot carries the
 // C linkage specification in its namespace (WP-1310).
 //@ expect: run
 #include "Inputs/extern_c_namespace.h"

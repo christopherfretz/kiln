@@ -55,7 +55,6 @@ mod constraints;
 mod constrspec;
 mod declocs;
 mod dedup;
-pub use dedup::ExtDecl;
 mod defcmp;
 mod deptypes;
 mod depusing;
@@ -71,16 +70,14 @@ mod localexterns;
 mod locs;
 mod members;
 mod membertempl;
+mod mtspec;
+mod named;
 mod oodefault;
 mod outerspec;
 mod outside;
 mod ovlmember;
 mod patinit;
-mod pch;
 mod predef;
-pub use pch::PchDecls;
-mod mtspec;
-mod named;
 mod protoparams;
 mod psel;
 pub(crate) use psel::PartialChoice;
@@ -3434,8 +3431,6 @@ struct Writer<'s, 'a, 'b> {
     usings: FxHashMap<(DeclId, DeclName, DeclId), u32>,
     /// `-fkiln-bmi-image-census`: record every refusal and go on.
     census: Option<Census>,
-    /// WP-1036: the image of a precompiled header ([`pch`]).
-    pch: bool,
     /// WP-1320: the implicit instantiations by point of instantiation
     /// ([`classtempl`]).
     poi: std::cell::OnceCell<FxHashMap<Loc, Vec<DeclId>>>,
@@ -4464,9 +4459,7 @@ impl Writer<'_, '_, '_> {
                 if st.get(b).kind() != StmtKind::CompoundStmt {
                     return Err("a function-try-block");
                 }
-                // A precompiled header's every body: each consumer emits
-                // the header's definitions (WP-1036).
-                if pattern || self.pch || Self::carries_body(spec) {
+                if pattern || Self::carries_body(spec) {
                     // Patched by `walk_roots`.
                     self.bs.roots.push(Root::Body(i, b));
                     if kind == 2 {
@@ -4783,9 +4776,7 @@ impl Writer<'_, '_, '_> {
         let ast = &s.ast;
         let mt = &ast.modules;
         let sm = s.diags.sm();
-        if !self.pch {
-            self.module_header()?;
-        }
+        self.module_header()?;
         self.img.main = sm.file_name(self.main).to_owned();
         let mut st = Pass::default();
         for d in self.collect_order() {
@@ -4900,7 +4891,6 @@ impl Writer<'_, '_, '_> {
         self.friend_lists()?;
         self.anon_typedefs()?;
         self.decl_locs()?;
-        self.local_externs()?;
         self.spec_implicit_members()?;
         for (i, k, f) in std::mem::take(&mut self.bs.init_fields) {
             let Some(&r) = self.recs.get(&f) else {
@@ -5147,14 +5137,11 @@ impl Writer<'_, '_, '_> {
             return Ok(());
         }
         let o = mt.owner(d);
-        if self.pch && (o.unit != 0 || o.purview) {
-            return Err("a module import or declaration in the header");
-        }
         if o.unit != 0 {
             // Imported, or replayed for an import of the preamble.
             return Ok(());
         }
-        if !(o.purview || self.pch && self.pch_own(d)) {
+        if !o.purview {
             // Predefined declarations have no location in a real
             // file; anything else is a global module fragment.
             let real = sm
@@ -5174,7 +5161,8 @@ impl Writer<'_, '_, '_> {
             return Ok(());
         }
         if self.local(d) && !self.in_lazy_write(d) {
-            return self.local_in_order(d);
+            // Locals get their records on first use in a body.
+            return Ok(());
         }
         if n.kind() == DeclKind::TranslationUnit {
             return Ok(());
@@ -5423,7 +5411,6 @@ impl<'s, 'a, 'b> Writer<'s, 'a, 'b> {
             keys: Vec::new(),
             usings: FxHashMap::default(),
             census: census.then(Census::default),
-            pch: false,
             poi: std::cell::OnceCell::new(),
             deferred: FxHashSet::default(),
             complete_specs: Vec::new(),
@@ -5662,8 +5649,8 @@ impl Sema<'_, '_> {
     fn build_image_records(&mut self, img: &Image, main: &Locs) {
         let lo = |_: &Self, o: u32| main.get(o);
         let (kw, name_loc) = (lo(self, img.kw), lo(self, img.name_loc));
-        // A precompiled header's image (no module name) is built in the
-        // translation unit's global module (WP-1036).
+        // An image without a module name (once a precompiled header's,
+        // WP-1036, retired by WP-1397) is built in the global module.
         if img.preamble == NONE && !img.module.is_empty() {
             self.act_on_module_directive(
                 kw,
@@ -6204,7 +6191,6 @@ impl Sema<'_, '_> {
         self.image_virtuals(img, &ids);
         self.image_decl_locs(img, &ids, |o| main.get(o));
         self.image_local_externs(img, &ids);
-        self.image_extern_c(img, &ids);
         // The requires-expression parameters, which the types of their
         // requirements may name (WP-1343); then every type before the
         // bodies: a type built while they are holds expressions of its own
@@ -6354,7 +6340,6 @@ impl Sema<'_, '_> {
             self.image_source_loc_use(e, at, ctx, location);
         }
         self.image_diagnose_if_rechecks(&built, img.bodies.exprs.len() as u32);
-        self.image_dedup(img, main, &ids);
         self.module_owner_changed();
     }
 

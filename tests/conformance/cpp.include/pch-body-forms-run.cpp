@@ -3,7 +3,7 @@
 // [over.match.oper] (rewritten candidates), [dcl.spec.auto.general]: a
 // header's function bodies with these forms, and pointer and class
 // constants, behave the same through a precompiled header. With
-// `--pch-diff`, the header's image carries them (WP-1343).
+// `--pch-diff`, the header's snapshot carries them (WP-1343).
 //@ expect: run
 #include "Inputs/body_forms.h"
 

@@ -5,7 +5,7 @@
 // initializers, default arguments and namespace-scope initializers) and
 // its local classes and enumerations behave the same through a
 // precompiled header, and a closure type is the same type in the header
-// and the unit. With `--pch-diff`, the header's image carries them
+// and the unit. With `--pch-diff`, the header's snapshot carries them
 // (WP-1350).
 //@ expect: run
 #include "Inputs/lambda_forms.h"

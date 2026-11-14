@@ -2,7 +2,7 @@
 // through a using-declaration names the declarations it introduces; a
 // later overload added to the nominated namespace is not among them
 // ([namespace.udecl]/11). With `--pch-diff`, the header's precompiled
-// image carries the using-declarations' shadows (WP-1342).
+// snapshot carries the using-declarations' shadows (WP-1342).
 //@ expect: run
 #include "Inputs/using_shadow_calls.h"
 
