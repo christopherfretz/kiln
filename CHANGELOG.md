@@ -6,9 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and kiln adheres to [Semantic Versioning](https://semver.org/). What a
 version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
-## [Unreleased]
+## [1.2.0] - 2026-11-14
 
-Planned as 1.2.0.
+Precompiled headers that are restored instead of parsed again, the
+experimental hod back end for `-O0`, and the fixes made since 1.1.0. The
+gate results are in
+[docs/status/release-1.2.0.md](docs/status/release-1.2.0.md).
 
 ### Added
 
