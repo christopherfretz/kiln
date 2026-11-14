@@ -352,8 +352,11 @@ pub struct TemplateTables {
     /// Members of class specializations explicitly instantiated by a
     /// definition (`template void X<int>::f();`), keyed by the
     /// declaration they follow in their lexical context (the context
-    /// itself when its member list was empty): codegen defines them at
-    /// that point, as clang's `HandleTopLevelDecl` does.
+    /// itself only for the translation unit with no member yet; in an
+    /// empty namespace, linkage specification or export block, the
+    /// declaration before the block, since the block as a key means
+    /// "after it", WP-1425): codegen defines them at that point, once, as
+    /// clang's `HandleTopLevelDecl` does.
     explicit_member_insts: FxHashMap<DeclId, Vec<DeclId>>,
     /// The definitions instantiated by the end-of-translation-unit drain
     /// ([temp.point]/7), in instantiation order: codegen hands them to

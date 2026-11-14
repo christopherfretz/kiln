@@ -56,6 +56,14 @@ a 1.2.1 patch release.
   read the function attributes themselves, not the module text
   (WP-1411): a unit that only mentions such a name in a string constant
   or a quoted symbol name is no longer sent to `llc` for it.
+- An explicit instantiation definition that is the first declaration of
+  a namespace block (`namespace n { template class X<int>; }`, typically
+  after `extern template class X<int>;`), or the first declaration after
+  a namespace (`namespace a { ... } template int X<int>::f();`), defines
+  each member function once (WP-1425). Each such function was built with
+  two copies of its body, each with its own debug subprogram, so at `-g`
+  LLVM rejected the debug info and dropped it for the whole object file.
+  The second copy could not run, so the generated code was not wrong.
 
 ## [1.2.0] - 2026-11-14
 

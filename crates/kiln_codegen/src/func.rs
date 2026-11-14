@@ -429,6 +429,18 @@ impl Cg<'_> {
         if body.is_none() && thunk.is_none() {
             return Ok(());
         }
+        // A function's body is built once (WP-1425): a second one would
+        // be appended after the first's `ret`, with its own subprogram.
+        // Only the definition of another entity under the same mangled
+        // name, already diagnosed (`check_duplicate_def`), gets here. The
+        // exception is clang's own: structor variants that an asm label
+        // gives one symbol are all built into it (the later ones
+        // unreachable; `tests/codegen/asm_label_structors_vbases.cpp`).
+        let shared_label = structor.is_some() && mangle::asm_label(ast, first).is_some();
+        if !shared_label && !self.m.func(f).is_declaration() {
+            debug_assert!(self.dup_reported, "second body for {} (WP-1425)", self.m.func(f).name());
+            return Ok(());
+        }
         let is_main = mangle::decl_name(ast, first) == "main"
             && ast.decls.get(first).ctx().is_some_and(|c| self.is_tu_level(c));
 

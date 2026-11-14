@@ -2366,3 +2366,94 @@ fn line_tables_only_has_no_variables() {
     assert!(ll.contains("imports:") && ll.contains("DW_TAG_imported_module"), "{ll}");
     assert!(ll.contains("name: \"inner\"") && ll.contains("#dbg_declare"), "{ll}");
 }
+
+/// An explicit instantiation definition after an explicit instantiation
+/// declaration, in a reopened namespace or right after a namespace,
+/// defines each member function once ([temp.explicit]/10): every
+/// `define` has one body (one `ret` here, one `DISubprogram`
+/// definition each at `-g`), and LLVM 19's and 22's verifiers accept the
+/// module with and without `-g` (two bodies, each with its own
+/// subprogram, were "!dbg attachment points at wrong subprogram", and
+/// the backend dropped the module's debug info; WP-1425,
+/// tests/conformance/temp.explicit/definition-in-reopened-namespace-*).
+#[test]
+fn explicit_instantiation_one_body_per_function() {
+    let src = "namespace n {\n\
+               template <class T> struct A {\n\
+                 A() {}\n\
+                 ~A() {}\n\
+                 virtual int v() { return 1; }\n\
+                 int f() { return 2; }\n\
+                 template <class U> int g(U) { return 3; }\n\
+                 static int s;\n\
+                 struct N { int h() { return 4; } };\n\
+               };\n\
+               template <class T> int A<T>::s = 5;\n\
+               template <class T> int ft(T) { return 6; }\n\
+               template <> inline int A<long>::f() { return 8; }\n\
+               extern template struct A<long>;\n\
+               extern template int ft<long>(long);\n\
+               }\n\
+               namespace n { template struct A<long>; }\n\
+               namespace n { template int ft<long>(long); }\n\
+               namespace n { template int A<int>::g<int>(int); }\n\
+               namespace n { template struct A<short>::N; }\n\
+               namespace m { int z() { return 9; } }\n\
+               template int n::A<short>::f();\n\
+               extern \"C++\" { namespace p {} }\n\
+               template struct n::A<int>;\n\
+               int use() { return n::A<long>().f(); }\n";
+    let d = scratch("explicit-one-body");
+    std::fs::write(d.join("e.cpp"), src).unwrap();
+    for major in [19, 22] {
+        let dir = PathBuf::from(format!("/usr/lib/llvm-{major}"));
+        if !dir.join("bin").join("opt").exists() {
+            eprintln!("skipping LLVM {major}: {} not found", dir.display());
+            continue;
+        }
+        for g in [false, true] {
+            let out = format!("e{major}{}.ll", if g { "g" } else { "" });
+            let mut args = vec!["-S", "-emit-llvm", "-O0", "e.cpp", "-o", &out];
+            if g {
+                args.push("-g");
+            }
+            let o = Command::new(kilnpp())
+                .args(&args)
+                .env("KILN_LLVM_DIR", &dir)
+                .current_dir(&d)
+                .output();
+            let o = o.unwrap();
+            assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+            let ll = std::fs::read_to_string(d.join(&out)).unwrap();
+            let mut defines = 0;
+            let mut name = None;
+            let mut rets = 0;
+            for line in ll.lines() {
+                if line.starts_with("define ") {
+                    defines += 1;
+                    name = line.split('@').nth(1).and_then(|s| s.split('(').next());
+                    rets = 0;
+                } else if line.starts_with("  ret ") {
+                    rets += 1;
+                } else if line == "}" {
+                    assert_eq!(rets, 1, "LLVM {major} -g={g}: {name:?} has {rets} bodies:\n{ll}");
+                }
+            }
+            assert!(defines >= 12, "LLVM {major}: {defines} definitions:\n{ll}");
+            if g {
+                let sps = ll.matches("DISPFlagDefinition").count();
+                assert_eq!(sps, defines, "LLVM {major}: one DISubprogram per definition:\n{ll}");
+            }
+            let v = Command::new(dir.join("bin").join("opt"))
+                .args(["-passes=verify", "-disable-output", &out])
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert_eq!(
+                (v.status.code(), text(&v.stderr).as_str()),
+                (Some(0), ""),
+                "opt-{major} -passes=verify, -g={g}"
+            );
+        }
+    }
+}
