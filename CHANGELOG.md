@@ -8,8 +8,7 @@ version number promises is in [docs/STABILITY.md](docs/STABILITY.md).
 
 ## [Unreleased]
 
-Planned as 1.3.0. The x86-64 ABI fix below is to be released first, in
-a 1.2.1 patch release.
+Planned as 1.3.0.
 
 ### Added
 
@@ -75,24 +74,6 @@ a 1.2.1 patch release.
   its own call operator, as in clang. With `sme` but no `sve` the error
   is clang's non-streaming one. A by-copy capture of an SVE variable is
   now the clang error instead of a crash in code generation.
-- **ABI fix, x86-64 (WP-1418).** x86-64 code built with AVX enabled that
-  passes or returns 256-bit (512-bit with AVX-512) vectors by value
-  across a boundary with code built by another compiler, or by an older
-  kiln, changes its calling convention to the standard one. With `avx`
-  in the translation unit's features (`-mavx`, `-mavx2`, `-march=haswell`,
-  `-march=x86-64-v3`, ...), a named 256-bit vector argument or return
-  value, and a struct, union or one-element array whose only member is
-  such a vector, now goes in a `ymm` register as the psABI, clang and GCC
-  do, not on the stack and through a hidden return pointer; with
-  `avx512f` the same holds for 512-bit vectors in `zmm` registers.
-  Earlier kiln releases used the no-AVX convention whatever the
-  features. kiln objects built before and after this fix do not mix for
-  such functions: rebuild every object that defines or calls one. As
-  in clang 21 and later, at the default `-fclang-compat=22` a class with
-  a base narrower than itself (`struct D : Empty { __m256 v; }`) stays
-  in memory; at `-fclang-compat=19` it goes in a register, as in clang 19.
-  Vectors passed through `...`, code built without AVX, `ms_abi`
-  functions and AArch64 are unchanged.
 - With `-fkiln-backend=hod`, the checks that send a unit to `llc`
   instead (function-entry instrumentation, `alwaysinline`, coroutines)
   read the function attributes themselves, not the module text
@@ -131,6 +112,34 @@ a 1.2.1 patch release.
   longer makes the backend reject the module with "invalid type for
   undef constant" (WP-1424): the class's IR type is now defined in the
   module. libc++'s `std::not_fn<f>` tests failed to compile with `-g`.
+
+## [1.2.1] - 2026-11-14
+
+A bug-fix release: one ABI fix for x86-64 code built with AVX enabled.
+Nothing else differs from 1.2.0, and nothing in it changes what
+[docs/STABILITY.md](docs/STABILITY.md) promises. The gate results are in
+[docs/status/release-1.2.1.md](docs/status/release-1.2.1.md).
+
+### Fixed
+
+- **ABI fix, x86-64 (WP-1418).** x86-64 code built with AVX enabled that
+  passes or returns 256-bit (512-bit with AVX-512) vectors by value
+  across a boundary with code built by another compiler, or by an older
+  kiln, changes its calling convention to the standard one. With `avx`
+  in the translation unit's features (`-mavx`, `-mavx2`, `-march=haswell`,
+  `-march=x86-64-v3`, ...), a named 256-bit vector argument or return
+  value, and a struct, union or one-element array whose only member is
+  such a vector, now goes in a `ymm` register as the psABI, clang and GCC
+  do, not on the stack and through a hidden return pointer; with
+  `avx512f` the same holds for 512-bit vectors in `zmm` registers.
+  Earlier kiln releases used the no-AVX convention whatever the
+  features. kiln objects built before and after this fix do not mix for
+  such functions: rebuild every object that defines or calls one. As
+  in clang 21 and later, at the default `-fclang-compat=22` a class with
+  a base narrower than itself (`struct D : Empty { __m256 v; }`) stays
+  in memory; at `-fclang-compat=19` it goes in a register, as in clang 19.
+  Vectors passed through `...`, code built without AVX, `ms_abi`
+  functions and AArch64 are unchanged.
 
 ## [1.2.0] - 2026-11-14
 
