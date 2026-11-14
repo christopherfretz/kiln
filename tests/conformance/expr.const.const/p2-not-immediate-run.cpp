@@ -1,9 +1,9 @@
 // [expr.const.const]/1-2 (P4101R1): an object whose reflections are all
 // null is not an immediate object, so its other members may be read at
-// run time; a `constexpr` one still gets no storage while codegen has no
-// run-time `std::meta::info` (spec/codegen.md "Consteval-only
-// variables"): each scalar member read folds, and a discarded name of it
-// emits nothing. kiln only: GCC 16.1 rejects the run-time reads under the
+// run time; a `constexpr` one is an ordinary constant object, its
+// `std::meta::info` members null at run time (spec/codegen.md "Constexpr
+// locals", "Run-time reflections"), and each scalar member read folds.
+// kiln only: GCC 16.1 rejects the run-time reads under the
 // P2996R13 type rule (docs/status/deviations.md).
 //@ expect: run
 //@ args: -freflection
