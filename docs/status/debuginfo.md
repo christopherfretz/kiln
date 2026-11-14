@@ -49,6 +49,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `globals_lambda.cpp` | a namespace-scope variable, a static data member, a lambda's by-copy and by-reference captures, `up` | pass | pass |
   | `vtable_home.cpp` (WP-1372) | `print *this`, `ptype` and members through a virtual base in methods of dynamic classes with no key function in a namespace | pass | pass |
   | `class_decl_two_units.cpp` (WP-1389) | `ptype` and `print *w` of a class this unit declares (defined in a shared header, only used through a pointer) and another unit defines | pass | pass |
+  | `template_names_anon_union.cpp` (WP-1400) | `whatis` of a class template specialization with a default argument in an inline namespace, `print` of a block-scope anonymous union member, `ptype` (gdb) / `image lookup` (lldb) of a function template instance by its debug name | pass | pass |
   | `reflection.cpp` (WP-910) | a `define_aggregate` class, a `Holder<^^int>` specialization, a `constexpr std::meta::info` | pass | skip (no P2996) |
 
   Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
@@ -282,9 +283,9 @@ Class definitions / declarations / `.debug_info` bytes:
 | total | 147 / 47 / 67011 | 147 / 47 / 67511 | 174 / 36 / 70667 | 148 / 47 / 66555 |
 
 The same set of classes is defined and declared as by clang 19 apart from
-u2's extra `enable_if<true, std::allocator<char> >` (the `templateParams`
-item under "Gaps"); the remaining byte differences are the class-name
-spellings under "Gaps". The 48 `tests/codegen/debug_*.cpp` objects:
+u2's extra `enable_if<true, std::allocator<char> >`, which WP-1400
+removed (see "Names, canonical arguments and anonymous unions"); the
+remaining byte differences were the class-name spellings WP-1400 fixed. The 48 `tests/codegen/debug_*.cpp` objects:
 clang 19 62 / 9 / 10990, clang 22 62 / 9 / 11169, kiln before 65 / 6 /
 11041, kiln after 62 / 9 / 10990, the same classes per file as clang 19.
 Over all of `tests/codegen` at `-g`, the files whose defined/declared
@@ -324,6 +325,83 @@ larger than its budget:
 The debugger-visible effect is stepping at `-O1` and above: lines are
 stepped in clang 19's order instead of clang 22's `is_stmt` placement.
 
+What clang 22 emits (checked on 11-13 with clang 22.1.8): at `-O1 -g`,
+`keyInstructions: true` on every `DISubprogram` and `atomGroup: N,
+atomRank: R` on the locations of an atom's instructions (for `int c = a
++ b; if (c > 3) return c; return a;`: the store of `c` rank 2, the
+condition branch rank 2, the `ret` rank 1); nothing at `-O0`, and
+nothing with `-gno-key-instructions`. A metadata lane against clang 22
+(WP-1400 scope note, not implemented) would need: debug cases compiled
+at `-O1 -Xclang -disable-llvm-passes` for both compilers; a byte-exact
+oracle 22 mode for those cases in `ir_vs_clang` (today oracle 22 strips
+all metadata, `ir_norm::structural`), with the clang 22-only fields
+(`keyInstructions`, `atomGroup`/`atomRank`, the vtable `_vtable$`
+member) normalized or emitted under `-fclang-compat=22`; and the driver
+dropping the fields before an LLVM 19 `opt`/`llc`. Until kiln emits
+them, comparing the rest of the metadata needs clang 22 run with
+`-gno-key-instructions`.
+
+## Names, canonical arguments and anonymous unions (WP-1400)
+
+- Class and function template specialization names follow clang's
+  debug-information printing policy (`CGDebugInfo::getPrintingPolicy`),
+  through `AstNames::for_debug_info` (a policy switch that diagnostics
+  never set): every converted argument, defaults included
+  (`basic_string<char, std::char_traits<char>, std::allocator<char> >`);
+  inline namespaces kept in the scope of a name inside the arguments
+  (`std::__cxx11::basic_string`); a non-type enumeration argument as a
+  cast (`(__gnu_cxx::_Lock_policy)2`, `UseEnumerators = false`); an
+  integral argument with its type (`arr<int, 3UL>`,
+  `AlwaysIncludeTypeForTemplateArgument`); no `preferred_name`; a
+  conversion function to a class by the class's bare name (`operator
+  basic_string_view`). clang 19 and clang 22 print all of these the same
+  way. `tests/codegen/debug_template_names.cpp`.
+- `templateParams` describe the canonical converted arguments, and a
+  substituted template parameter is its canonical replacement (clang
+  substitutes canonical arguments): `g<Int>` with `using Int = int` has
+  `T = int` and an `int` parameter, and libstdc++'s defaulted
+  `_RequireAllocator<_Alloc>` is `allocator<char>`, so `enable_if<true,
+  std::allocator<char> >` is no longer described.
+  `tests/codegen/debug_template_canonical_args.cpp`.
+- A block-scope anonymous union's unnamed variable is preceded by one
+  artificial `DILocalVariable` per member on the same storage (no file,
+  line 0; unnamed members skipped unless they are classes), as clang's
+  `EmitDeclare` does, so `print i` works.
+  `tests/codegen/debug_anon_union_local.cpp`.
+
+On the six standard-library units of "Class declarations and
+definitions" (aarch64, `-g -O0`), the `DICompositeType` and
+`DISubprogram` names that differ from clang 19's (sorted lists, `diff`
+lines): u1 0 -> 0, u2 21 -> 0, u3 5 -> 1, u4 20 -> 0, u5 22 -> 0, u6 36
+-> 0. The one left in u3 is a missing `max_size` subprogram, not a
+name. u2 now defines the same 23 classes and declares the same 12 as
+clang 19 (before: 24 / 12, the extra `enable_if`).
+
+Debugger check (`tests/debuginfo/template_names_anon_union.cpp`, gdb
+16.3 and lldb-19, `-O0 -g`, aarch64), the same output for kiln and
+clang++-19:
+
+```
+(gdb) print s
+$1 = {c = 97 'a'}
+(gdb) whatis s
+type = n::v1::str<char, n::v1::traits<char> >
+(gdb) print i
+$2 = 5
+(gdb) ptype pick<n::v1::str<char, n::v1::traits<char> >, n::v1::str<char, n::v1::traits<char> > >
+type = int (n::v1::str<char, n::v1::traits<char> >)
+(lldb) frame variable s i fl
+(n::str<char>) s = (c = 'a')
+(int) i = 5
+(float) fl = 7.00649232E-45
+(lldb) image lookup -r -n "^pick<"
+Summary: test.out`int pick<n::v1::str<char, n::v1::traits<char>>, n::v1::str<char, n::v1::traits<char>>>(n::v1::str<char, n::v1::traits<char>>) at template_names_anon_union.cpp:41
+```
+
+Before WP-1400, kiln's build printed `type = n::v1::str<char>` for
+`whatis s` and `No symbol "i" in current context.` (lldb: `error: no
+variable named 'i' found in this frame`).
+
 ## Gaps
 
 Every gap is a documented difference from clang 19 (D). Since WP-910
@@ -339,34 +417,22 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   `value: null` (no IR constant). lldb names `Holder<^^int>` as
   `Holder<unsigned long>`.
 - D: a floating-point template argument in a class name prints as
-  `T<1.5e0>` (clang: `T<1.500000e+00>`), and an integer argument of a
-  type other than `int` has no suffix (`Arr<int, 3>`; clang:
-  `Arr<int, 3UL>`), in `write_arg_list_debug`
-  (`crates/kiln_ast/src/types/print.rs:472`, called from
-  `crates/kiln_codegen/src/debuginfo/types.rs:584`).
-- D: no `defaulted: true` on template parameters (`types.rs:1178`).
+  `T<1.5e0>` (clang: `T<1.500000e+00>`), in `write_arg_list_debug`
+  (`crates/kiln_ast/src/types/print.rs:497`, called from
+  `crates/kiln_codegen/src/debuginfo/types.rs` `di_class_name`).
+- D: `defaulted: true` (WP-1400) marks only a class template
+  specialization's trailing arguments its name suppresses as defaults
+  (`SpecInfo::print_args`). clang's `TemplateArgument::getIsDefaulted`
+  also marks a non-trailing argument equal to its default (`cg<int,
+  char>` for `template <class T = int, class U = long>`: `T` is
+  defaulted) and the arguments of an explicit specialization; that needs
+  one bit per argument on `SpecInfo` (a `Snap` type), so it is left
+  (`types.rs` `di_template_params`).
 - D (WP-1365): with `-include-pch`, the header's using-directives,
   using-declarations and aliases get entities in kiln (they reach the
   top-level walk) and none in clang, whose AST reader hands them to no
   consumer. (The deduced-return-type part of this item was closed by
   WP-1389, see "Class declarations and definitions".)
-- D: class names in debug info elide default template arguments
-  (`basic_string<char>`, clang `basic_string<char, std::char_traits<char>,
-  std::allocator<char> >`), drop an inline namespace inside a template
-  argument (`std::basic_string` for `std::__cxx11::basic_string`) and
-  print a non-type enumeration argument as its enumerator
-  (`__gnu_cxx::_S_atomic`, clang `(__gnu_cxx::_Lock_policy)2`)
-  (`crates/kiln_ast/src/types/print.rs:497` `write_arg_list_debug`).
-- D: a function template specialization's `templateParams` keep the
-  sugar of a defaulted type argument (`__enable_if_t<..., _Alloc>`, so
-  `enable_if<true, std::allocator<char> >` is described), where clang
-  uses the converted, canonical argument (`allocator<char>`)
-  (`types.rs:1223` `di_template_params`). It is the one class `<string>`
-  describes that clang does not.
-- D: a block-scope anonymous union is one artificial unnamed variable;
-  clang also emits an artificial `DILocalVariable` per member (`i`,
-  `fl`) at the same address (`debuginfo/func.rs:333` `di_declare_var`).
-  Found by WP-1389.
 - D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
   atexit stubs.
 - D: no `DILocalVariable` for structured bindings or variable-length

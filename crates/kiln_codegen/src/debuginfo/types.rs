@@ -134,7 +134,10 @@ impl Cg<'_> {
 
     /// clang `UnwrapTypeForDebugInfo`: sugar other than typedefs is
     /// dropped, its qualifiers kept. Alias templates are unwrapped too
-    /// (clang names them as typedefs; docs/status/debuginfo.md).
+    /// (clang names them as typedefs; docs/status/debuginfo.md). A
+    /// substituted template parameter is its canonical replacement: clang
+    /// substitutes a specialization's canonical arguments, so `T` of
+    /// `g<Int>` (`using Int = int`) is `int`, not the typedef (WP-1400).
     fn di_unwrap(&self, q: QualType) -> QualType {
         let ty = &self.ast.types;
         let mut quals = q.quals_bits();
@@ -144,7 +147,6 @@ impl Cg<'_> {
                 TypeView::Paren(i)
                 | TypeView::Elaborated { named: i, .. }
                 | TypeView::Using { underlying: i, .. }
-                | TypeView::SubstTemplateTypeParm { replacement: i, .. }
                 | TypeView::Attributed { equivalent: i, .. }
                 | TypeView::Decltype { underlying: i, .. }
                 | TypeView::ExtQual { base: i, .. }
@@ -156,6 +158,7 @@ impl Cg<'_> {
                 | TypeView::PackIndexing { selected: Some(i), .. }
                 | TypeView::Splice { designated: Some(i), .. } => i,
                 TypeView::InjectedClassName { injected, .. } => ty.canonical(injected),
+                TypeView::SubstTemplateTypeParm { replacement, .. } => ty.canonical(replacement),
                 _ => break,
             };
             quals |= next.quals_bits();
@@ -601,13 +604,19 @@ impl Cg<'_> {
 
     // ---- classes ------------------------------------------------------
 
-    /// clang `getClassName`: the identifier, with the template arguments
-    /// of a specialization (split closers, canonical types).
+    /// clang `getClassName`: the identifier, with all the converted
+    /// template arguments of a specialization (defaults included), under
+    /// the debug-information printing policy ([`AstNames::for_debug_info`]:
+    /// split closers, canonical types, inline namespaces kept, enumeration
+    /// values as casts).
     fn di_class_name(&self, rd: DeclId) -> String {
         let ast = self.ast;
         let mut s = self.di_ident(rd);
-        if let Some(l) = ast.spec_print_args(rd) {
-            write_arg_list_debug(&ast.types, &AstNames::new(ast), l, &mut s);
+        if ast.spec_print_args(rd).is_some()
+            && let Some((_, si)) = ast.spec_info(rd)
+        {
+            let l = ast.types.canonical_args(si.args);
+            write_arg_list_debug(&ast.types, &AstNames::for_debug_info(ast), l, &mut s);
         }
         s
     }
@@ -1075,7 +1084,7 @@ impl Cg<'_> {
     /// a function template specialization.
     pub(crate) fn di_fn_name(&self, f: DeclId) -> String {
         let ast = self.ast;
-        let names = AstNames::new(ast);
+        let names = AstNames::for_debug_info(ast);
         let mut s = String::new();
         names.write_name(f, &mut s);
         if let Some((_, si)) = ast.spec_info(f)
@@ -1221,33 +1230,55 @@ impl Cg<'_> {
     }
 
     /// clang `CollectCXXTemplateParams` / `CollectFunctionTemplateParams`
-    /// for the specialization `d` (`None` otherwise).
+    /// for the specialization `d` (`None` otherwise). The arguments are
+    /// the canonical converted ones clang stores on a specialization: a
+    /// function template's deduced or defaulted argument keeps no sugar
+    /// (`allocator<char>`, not `__enable_if_t<..., _Alloc>`, whose
+    /// `enable_if<true, ...>` would otherwise be described; WP-1400).
+    ///
+    /// A class template specialization's trailing arguments that its
+    /// name suppresses as defaults (`print_args`, clang's
+    /// `TemplateArgument::getIsDefaulted`, which `CheckTemplateArgumentList`
+    /// sets for an argument taken from or equal to its default) are
+    /// `defaulted: true` (at every DWARF version: the back end drops it
+    /// before DWARF 5). A function template's never are
+    /// (clang's deduced arguments carry no such bit).
     pub(crate) fn di_template_params(&mut self, d: DeclId) -> Option<MetadataId> {
         let ast = self.ast;
         let (_, si) = ast.spec_info(d)?;
         let info = ast.template_info(si.template)?;
         let params: Vec<DeclId> =
             ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
-        let args: Vec<ArgView> = ast.types.args(si.args).iter().map(TemplateArg::view).collect();
+        let canon = ast.types.canonical_args(si.args);
+        let args: Vec<ArgView> = ast.types.args(canon).iter().map(TemplateArg::view).collect();
+        let first_default = ast.spec_print_args(d).map_or(usize::MAX, |l| ast.types.args(l).len());
         let mut ops = Vec::new();
         for (i, a) in args.into_iter().enumerate() {
             let name = params.get(i).map(|&p| self.di_ident(p)).unwrap_or_default();
-            if let Some(p) = self.di_template_arg(&name, a) {
+            let defaulted = i >= first_default && !matches!(a, ArgView::Pack(_));
+            if let Some(p) = self.di_template_arg(&name, a, defaulted) {
                 ops.push(Some(p));
             }
         }
         Some(self.m.md_tuple(&ops))
     }
 
-    fn di_template_arg(&mut self, name: &str, a: ArgView) -> Option<MetadataId> {
+    fn di_template_arg(&mut self, name: &str, a: ArgView, defaulted: bool) -> Option<MetadataId> {
         let mut f = Fields::default();
         if !name.is_empty() {
             f = f.s("name", name);
         }
+        // `defaulted:` follows the type (or the name of a template
+        // template parameter), before the value.
+        let dflt = |f: Fields| if defaulted { f.b("defaulted", true) } else { f };
         match a {
             ArgView::Type(t) => {
                 let t = self.di_type(t);
-                Some(self.m.md_specialized("DITemplateTypeParameter", false, f.nn("type", t).0))
+                Some(self.m.md_specialized(
+                    "DITemplateTypeParameter",
+                    false,
+                    dflt(f.nn("type", t)).0,
+                ))
             }
             // clang emits a null pointer argument as `i8 0`, a null
             // member function pointer included; a null data member
@@ -1260,13 +1291,13 @@ impl Cg<'_> {
                 Some(self.m.md_specialized(
                     "DITemplateValueParameter",
                     false,
-                    f.n("type", t).raw("value", "i8 0").0,
+                    dflt(f.n("type", t)).raw("value", "i8 0").0,
                 ))
             }
             ArgView::Value { ty, value } => {
                 let t = self.di_type(ty);
                 if let Some(c) = self.di_int(value) {
-                    let f = f.n("type", t).raw("value", Self::di_int_raw(c));
+                    let f = dflt(f.n("type", t)).raw("value", Self::di_int_raw(c));
                     return Some(self.m.md_specialized("DITemplateValueParameter", false, f.0));
                 }
                 // clang: the address of a variable or function, a member
@@ -1286,7 +1317,7 @@ impl Cg<'_> {
                 // null`, as clang's parameter does when its `ConstantEmitter`
                 // gives none (`CollectTemplateParams`; WP-910).
                 let v = v.ok().and_then(|v| self.m.md_const(v).ok());
-                let f = f.n("type", t).nn("value", v);
+                let f = dflt(f.n("type", t)).nn("value", v);
                 Some(self.m.md_specialized("DITemplateValueParameter", false, f.0))
             }
             ArgView::Pack(l) => {
@@ -1294,7 +1325,7 @@ impl Cg<'_> {
                     self.ast.types.args(l).iter().map(TemplateArg::view).collect();
                 let ops: Vec<_> = args
                     .into_iter()
-                    .filter_map(|a| self.di_template_arg("", a))
+                    .filter_map(|a| self.di_template_arg("", a, false))
                     .map(Some)
                     .collect();
                 let v = self.m.md_tuple(&ops);
@@ -1311,7 +1342,7 @@ impl Cg<'_> {
                 Some(self.m.md_specialized(
                     "DITemplateValueParameter",
                     false,
-                    f.n("value", Some(v)).0,
+                    dflt(f).n("value", Some(v)).0,
                 ))
             }
             // A template name that resolves to no template declaration
