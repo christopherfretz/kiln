@@ -407,6 +407,13 @@ pub struct Hardening {
     pub instrument_functions_after_inlining: bool,
     /// `-finstrument-function-entry-bare`.
     pub instrument_function_entry_bare: bool,
+    /// `-fstack-clash-protection`: `"probe-stack"="inline-asm"` on every
+    /// definition (clang `StartFunction`; WP-1411).
+    pub stack_clash_protection: bool,
+    /// `-mstack-probe-size=<n>` for an `n` other than 0 and clang's
+    /// default 4096: `"stack-probe-size"="<n>"` on every definition
+    /// (clang `addStackProbeTargetAttributes`; WP-1411).
+    pub stack_probe_size: Option<u32>,
     /// `-fcf-protection=branch` or `full` (x86).
     pub cf_protection_branch: bool,
     /// `-fcf-protection=return` or `full` (x86).

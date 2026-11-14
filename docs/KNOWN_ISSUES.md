@@ -283,7 +283,7 @@ These flags are the exceptions: they are accepted and have no effect.
 | `-f[no-]vectorize`, `-f[no-]slp-vectorize`, `-fstrict-vtable-pointers` | accepted; LLVM's defaults apply | [WP-900](BACKLOG.md) (deferred) |
 | `-fdiagnostics-show-template-tree` | accepted; diagnostics are printed without the tree | [WP-901](BACKLOG.md) (deferred) |
 | `-F <dir>` | warning; framework directories do not exist on Linux | — |
-| `-f[no-]stack-clash-protection`, `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" (`-f[no-]common` takes effect in C, for tentative definitions) | — |
+| `-fstack-usage`, `-m64`, `-pipe` and a few more | accepted silently; listed in spec/driver.md, "Codegen flags" (`-f[no-]common` takes effect in C, for tentative definitions) | — |
 
 `-ffat-lto-objects` is rejected: fat objects are [WP-899](BACKLOG.md).
 

@@ -475,6 +475,10 @@ pub enum ArgError {
     /// An option the target does not support: `(option, triple)`
     /// ("unsupported option '{opt}' for target '{triple}'").
     UnsupportedForTarget(String, String),
+    /// A value the target does not support: `(option, value, triple)`
+    /// ("unsupported argument '{v}' to option '{opt}' for target
+    /// '{triple}'"; `-mtls-dialect=`, WP-1411).
+    UnsupportedValueForTarget(String, String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
     /// implement (`-fshort-enums`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".

@@ -3611,6 +3611,16 @@ impl<'a> Cg<'a> {
         for f in h.branch_protection.module_flags().into_iter().filter(|_| !x86) {
             m.add_module_flag_i32(8, f, bp_value);
         }
+        // WP-1411: `-fstack-clash-protection` (`Override`) and a
+        // non-default `-mstack-probe-size=` (`Min`), as clang's `Release`.
+        if h.stack_clash_protection {
+            let v = m.md_string(b"inline-asm");
+            m.add_module_flag(4, "probe-stack", v);
+        }
+        if let Some(n) = h.stack_probe_size {
+            // clang's `uint32_t` overload: the bits, read as `i32`.
+            m.add_module_flag_i32(8, "stack-probe-size", i32::from_ne_bytes(n.to_ne_bytes()));
+        }
         match self.opts.reloc {
             RelocModel::Static => {}
             RelocModel::Pic(l) => m.add_module_flag_i32(8, "PIC Level", i32::from(l)),

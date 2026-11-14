@@ -152,12 +152,14 @@ impl Outcome {
         }
     }
 
-    /// The statistics log's `hod_reason` value.
+    /// The statistics log's `hod_reason` value: a decline's reason; for
+    /// a failure the reason its message names ([`failure_reason`]), else
+    /// its status.
     pub fn reason(&self) -> Option<&str> {
         match self {
             Outcome::Compiled => None,
             Outcome::Declined(r) => Some(r),
-            Outcome::Failed { status, .. } => Some(status),
+            Outcome::Failed { status, message } => Some(failure_reason(message).unwrap_or(status)),
         }
     }
 }
@@ -215,6 +217,24 @@ fn reason(line: &str) -> String {
     msg.to_owned()
 }
 
+/// The reason hod's failure line names (WP-1411), by hod's display of
+/// its `CompileError` (hod `crates/hod/src/lib.rs`): `hod: error:
+/// internal error: hod panicked: ...` is `internal-panic`, `internal
+/// error: ...` `internal-error`, `malformed input: ...`
+/// `malformed-input`, `invalid options: ...` `invalid-options`. Any
+/// other line (usage, I/O, the coverage log): `None`.
+pub fn failure_reason(line: &str) -> Option<&'static str> {
+    let msg = line.strip_prefix("hod: error: ")?;
+    [
+        ("internal error: hod panicked: ", "internal-panic"),
+        ("internal error: ", "internal-error"),
+        ("malformed input: ", "malformed-input"),
+        ("invalid options: ", "invalid-options"),
+    ]
+    .into_iter()
+    .find_map(|(p, r)| msg.starts_with(p).then_some(r))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +254,24 @@ mod tests {
         );
         assert_eq!(reason("something else"), "something else");
         assert_eq!(reason(""), "");
+    }
+
+    #[test]
+    fn failure_reasons_of_hod_lines() {
+        let r = |l: &str| failure_reason(l);
+        assert_eq!(r("hod: error: internal error: function 'f': x"), Some("internal-error"));
+        assert_eq!(
+            r("hod: error: internal error: hod panicked: oops (strict mode: no fallback)"),
+            Some("internal-panic")
+        );
+        assert_eq!(r("hod: error: malformed input: line 3:4: x"), Some("malformed-input"));
+        assert_eq!(r("hod: error: invalid options: x"), Some("invalid-options"));
+        assert_eq!(r("hod: error: cannot read '-': x"), None);
+        assert_eq!(r("internal error: boom"), None);
+        assert_eq!(r(""), None);
+        let failed = |m: &str| Outcome::Failed { status: "exit code 1".into(), message: m.into() };
+        assert_eq!(failed("hod: error: internal error: x").reason(), Some("internal-error"));
+        assert_eq!(failed("").reason(), Some("exit code 1"));
     }
 
     #[test]

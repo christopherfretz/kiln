@@ -51,6 +51,9 @@ pub struct DebugOptions {
     pub main_id: Option<kiln_source::FileId>,
     /// The `DW_LANG_*` of the compile unit.
     pub language: &'static str,
+    /// The compile unit's `flags:` (`-grecord-command-line`: the
+    /// command line, clang's `-dwarf-debug-flags`; WP-1411).
+    pub flags: Option<String>,
 }
 
 impl Default for DebugOptions {
@@ -65,6 +68,7 @@ impl Default for DebugOptions {
             main_file: String::new(),
             main_id: None,
             language: "DW_LANG_C_plus_plus_14",
+            flags: None,
         }
     }
 }
@@ -282,8 +286,11 @@ impl<'a> Cg<'a> {
             .raw("language", o.language)
             .n("file", Some(cu_file))
             .s("producer", &self.opts.ident)
-            .b("isOptimized", self.opts.opt_level > 0)
-            .u("runtimeVersion", 0);
+            .b("isOptimized", self.opts.opt_level > 0);
+        if let Some(flags) = &o.flags {
+            f = f.s("flags", flags);
+        }
+        f = f.u("runtimeVersion", 0);
         if let Some(dwo) = &o.split_dwarf_file {
             f = f.s("splitDebugFilename", dwo);
         }

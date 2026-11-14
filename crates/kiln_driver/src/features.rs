@@ -437,6 +437,11 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let mut errors = Vec::new();
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
+    // WP-1411: clang's `-mtls-dialect=` check, before the target's own;
+    // it names the normalized triple, not the `--target=` spelling.
+    if let Some(e) = args.codegen.tls_dialect_error(!target.is_aarch64(), target.triple) {
+        errors.push(e);
+    }
     if !target.is_aarch64() {
         resolve_x86(args, target, &mut f, &mut errors);
         return (f, errors);

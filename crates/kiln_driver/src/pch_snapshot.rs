@@ -124,8 +124,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// [`SCHEMA_HASH`] bumps it, and `crates/kiln_driver/pch-snapshot-format.txt`
 /// records every (version, schema hash) pair (spec/pch.md "Format
 /// versioning"; the `format_record` test). It is independent of kiln's
-/// version. Version 2 (WP-1403) added the lookup log to the head.
-pub(crate) const FORMAT_VERSION: u32 = 2;
+/// version. Version 2 (WP-1403) added the lookup log to the head;
+/// version 3 (WP-1411) is a new diagnostic id (`DiagId`'s schema hash).
+pub(crate) const FORMAT_VERSION: u32 = 3;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 
@@ -1877,7 +1878,7 @@ mod tests {
         assert!(check_header(&foreign).unwrap_err().contains("bad magic"));
         let mut old = MAGIC.to_vec();
         old.extend_from_slice(&0u32.to_le_bytes());
-        assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 2");
+        assert_eq!(check_header(&old).unwrap_err(), "its section has format version 0, expected 3");
     }
 
     /// The checked-in format record (spec/pch.md "Format versioning").

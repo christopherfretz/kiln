@@ -18,11 +18,12 @@
 //!    WP-961's `-mbranches-within-32B-boundaries` (x86-64); WP-873's
 //!    `-flto[=full|thin|auto|jobserver]`, `-fno-lto`, `-f[no-]split-lto-unit`;
 //!    and WP-1032's `-ftrapv`, `-fno-trapv` (a kiln spelling: clang has
-//!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`), the target
-//!    checks of which are [`CodegenFlags::target_errors`];
+//!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`; WP-1411's
+//!    `-f[no-]stack-clash-protection`, `-mstack-probe-size=` and
+//!    `-mtls-dialect=` (x86-64: `llc -enable-tlsdesc` for `gnu2`)), the
+//!    target checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
-//!    (`-f[no-]stack-clash-protection`,
-//!    `-f[no-]common`, `-fstack-usage`, the defaults
+//!    (`-f[no-]common`, `-fstack-usage`, the defaults
 //!    `-fno-short-enums` and `-m64`, and `-pipe`), or deliberately ignored
 //!    although clang honours it (WP-873: `-fdiagnostics-show-template-tree`,
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
@@ -154,6 +155,15 @@ pub struct CodegenFlags {
     /// The `-msign-return-address=` options as written (off `AArch64`,
     /// unused).
     pub sign_return_address_written: Vec<String>,
+    /// The last of `-fstack-clash-protection` /
+    /// `-fno-stack-clash-protection` (WP-1411).
+    pub stack_clash_protection: bool,
+    /// The last `-mstack-probe-size=<n>`: (argument as written, value),
+    /// checked by [`Self::invocation_errors`] (WP-1411).
+    pub stack_probe_size: Option<(String, String)>,
+    /// The last `-mtls-dialect=<v>`'s value, checked against the target by
+    /// [`Self::tls_dialect_error`] (WP-1411).
+    pub tls_dialect: Option<String>,
 }
 
 /// clang's `-fzero-call-used-regs=` values.
@@ -171,8 +181,6 @@ const ZERO_CALL_KINDS: &[&str] = &[
 
 /// Flags accepted and ignored (class 2), exactly as written.
 const IGNORED: &[&str] = &[
-    "-fstack-clash-protection",
-    "-fno-stack-clash-protection",
     "-fstack-usage",
     "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
@@ -272,6 +280,8 @@ impl CodegenFlags {
                 self.instrument_functions_after_inlining = true;
             }
             "-finstrument-function-entry-bare" => self.instrument_function_entry_bare = true,
+            "-fstack-clash-protection" => self.stack_clash_protection = true,
+            "-fno-stack-clash-protection" => self.stack_clash_protection = false,
             "-fxray-instrument" => self.xray_instrument = true,
             "-fno-xray-instrument" => self.xray_instrument = false,
             "-fxray-ignore-loops" => self.xray_ignore_loops = true,
@@ -313,6 +323,11 @@ impl CodegenFlags {
                 _ => return unsupported(),
             },
             "-ftrapv-handler" => self.trapv_handler = Some(v.to_owned()),
+            // WP-1411: clang's driver passes the last one to `-cc1`, which
+            // checks it ([`Self::invocation_errors`]).
+            "-mstack-probe-size" => self.stack_probe_size = Some((arg.to_owned(), v.to_owned())),
+            // WP-1411: checked against the target ([`Self::tls_dialect_error`]).
+            "-mtls-dialect" => self.tls_dialect = Some(v.to_owned()),
             "-mtune" => {
                 if v.is_empty() {
                     return unsupported();
@@ -467,6 +482,8 @@ impl CodegenFlags {
             instrument_functions: self.instrument_functions,
             instrument_functions_after_inlining: self.instrument_functions_after_inlining,
             instrument_function_entry_bare: self.instrument_function_entry_bare,
+            stack_clash_protection: self.stack_clash_protection,
+            stack_probe_size: self.probe_size().filter(|n| !matches!(n, 0 | 4096)),
             cf_protection_branch: x86 && matches!(cf, "full" | "branch"),
             cf_protection_return: x86 && matches!(cf, "full" | "return"),
             branch_protection: self.branch_protection(!x86).unwrap_or_default(),
@@ -494,6 +511,61 @@ impl CodegenFlags {
         BranchProtection::parse(v, false).map_err(|x| bad(&x))
     }
 
+    /// The `-mstack-probe-size=` value: clang's `-cc1` reads it as an
+    /// unsigned 32-bit integer in LLVM's `getAsInteger` radix 0 (`0x` hex,
+    /// `0b` binary, `0o` or a leading `0` octal); an empty value is 0.
+    /// `None` without the option or for a value that is not one
+    /// ([`Self::invocation_errors`]).
+    pub fn probe_size(&self) -> Option<u32> {
+        let v = self.stack_probe_size.as_ref()?.1.as_str();
+        if v.is_empty() {
+            return Some(0);
+        }
+        let lower = v.get(..2).map(str::to_ascii_lowercase);
+        let (radix, digits) = match lower.as_deref() {
+            Some("0x") => (16, &v[2..]),
+            Some("0b") => (2, &v[2..]),
+            Some("0o") => (8, &v[2..]),
+            _ if v.len() > 1 && v.starts_with('0') && v.as_bytes()[1].is_ascii_digit() => {
+                (8, &v[1..])
+            }
+            _ => (10, v),
+        };
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return None;
+        }
+        u32::from_str_radix(digits, radix).ok()
+    }
+
+    /// The TLS descriptor dialect is selected: x86-64's
+    /// `-mtls-dialect=gnu2` (clang's `-cc1 -enable-tlsdesc`, which kiln
+    /// passes to `llc`). The default `gnu`, and every value off x86-64,
+    /// select nothing (the latter are errors, [`Self::tls_dialect_error`]).
+    pub fn tls_desc(&self, x86: bool) -> bool {
+        x86 && self.tls_dialect.as_deref() == Some("gnu2")
+    }
+
+    /// clang 19's check of the last `-mtls-dialect=` (`Clang::ConstructJob`,
+    /// ELF targets): on x86-64 `gnu` or `gnu2`, else "unsupported
+    /// argument '<v>' to option '-mtls-dialect=' for target '<triple>'";
+    /// on `AArch64` the option itself is "unsupported option
+    /// '-mtls-dialect=' for target '<triple>'" (clang 19 and 22 accept it
+    /// only on x86, RISC-V and `LoongArch`).
+    pub fn tls_dialect_error(&self, x86: bool, triple: &str) -> Option<ArgError> {
+        let v = self.tls_dialect.as_deref()?;
+        if !x86 {
+            Some(ArgError::UnsupportedForTarget("-mtls-dialect=".to_owned(), triple.to_owned()))
+        } else if matches!(v, "gnu" | "gnu2") {
+            None
+        } else {
+            Some(ArgError::UnsupportedValueForTarget(
+                "-mtls-dialect=".to_owned(),
+                v.to_owned(),
+                triple.to_owned(),
+            ))
+        }
+    }
+
     /// `nocf_check` is kept: `-fcf-protection=branch` or `full` on x86
     /// (clang `CodeGenOpts.CFProtectionBranch`).
     pub fn cf_protection_branch(&self, x86: bool) -> bool {
@@ -509,6 +581,12 @@ impl CodegenFlags {
     pub fn invocation_errors(&self, x86: bool, triple: &str) -> Vec<TargetError> {
         let invalid = |(a, x): &(String, String)| TargetError::InvalidValue(a.clone(), x.clone());
         let mut v: Vec<TargetError> = self.invalid_values.iter().flatten().map(invalid).collect();
+        // WP-1411: `-cc1`'s integer `-mstack-probe-size=`.
+        if let Some((a, x)) = &self.stack_probe_size
+            && self.probe_size().is_none()
+        {
+            v.push(TargetError::InvalidInt(a.clone(), x.clone()));
+        }
         if self.function_return_given && !x86 {
             v.push(TargetError::NotAllowedWith("-mfunction-return=", triple.to_owned()));
         } else if let Some(e) = &self.invalid_values[0] {
@@ -600,6 +678,8 @@ pub enum TargetError {
     NotAllowedWith(&'static str, String),
     /// "option '{0}' cannot be specified on this target".
     NotValidOnTarget(&'static str),
+    /// "invalid integral value '{1}' in '{0}'" (`-mstack-probe-size=`).
+    InvalidInt(String, String),
 }
 
 impl TargetError {
@@ -616,6 +696,9 @@ impl TargetError {
             }
             TargetError::NotValidOnTarget(o) => {
                 Diag::new(DiagId::drv_opt_not_valid_on_target, Span::INVALID).arg(*o)
+            }
+            TargetError::InvalidInt(a, v) => {
+                Diag::new(DiagId::drv_invalid_int_value, Span::INVALID).arg(a).arg(v)
             }
         };
         d.emit(engine);

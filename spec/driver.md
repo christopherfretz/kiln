@@ -185,11 +185,12 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 | `-mbranches-within-32B-boundaries` (x86; WP-961) | `llc -x86-branches-within-32B-boundaries`, as clang 19's `addX86AlignBranchArgs`: the integrated assembler pads so no branch (fused, `jcc`, `jmp`) crosses or ends on a 32-byte boundary. Off x86, clang's driver error `unsupported option '-mbranches-within-32B-boundaries' for target '<triple>'`. There is no negative form (clang has none). Test: `crates/kiln_driver/tests/hardening.rs` `branches_within_32b_boundaries`, `flag_errors` |
 | `-flto`, `-flto=full\|thin\|auto\|jobserver`, `-fno-lto`, `-f[no-]split-lto-unit` (WP-873) | the last of `-flto[=...]` / `-fno-lto` decides (clang `getLTOMode`: `auto` and `jobserver` are full LTO; another value is `unsupported argument`). The module is an LTO unit (spec/codegen.md "LTO": the `ThinLTO` / `EnableSplitLTOUnit` module flags and vtable `!type` metadata); `opt` runs the level's pre-link pipeline (`lto-pre-link<Ox>` / `thinlto-pre-link<Ox>`, at `-O0` too) instead of `default<Ox>`. `-c` (and each compile before a link) writes a bitcode-only `.o` through `opt`: full LTO with `-module-summary`, thin LTO with `--thinlto-bc` (plus `--thinlto-split-lto-unit` under `-fsplit-lto-unit`, default off for thin, always on for full), as clang; `-S -emit-llvm` carries the summary too; `-S` alone writes textual IR as clang does. `-flto[=thin]` is passed on to the link (lld or the system linker with the LLVM gold plugin). `-disable-llvm-passes` runs no pipeline and writes no summary. `-ffat-lto-objects` is rejected, `'-ffat-lto-objects' is not supported by kiln` (class 3 below; fat objects are a WP-899 follow-up); `-fno-fat-lto-objects`, the default, is accepted and ignored (class 2) |
 | `-mbranch-protection=<spec>`, `-msign-return-address=none\|non-leaf\|all` (AArch64; WP-846) | `CodegenOptions::branch_protection` (`kiln_abi::BranchProtection`, clang 19 `CollectARMPACBTIOptions` and `ARM::parseBranchProtection`): the last of the two wins. `<spec>` is `none`, `standard` (`pac-ret+bti+gcs`) or a `+`-separated list of `bti`, `gcs` and `pac-ret` followed by any of `leaf`, `b-key`, `pc`; `-msign-return-address=` signs with the A key only. Every definition, declaration and call site gets clang's `"sign-return-address"`/`"sign-return-address-key"`, `"branch-target-enforcement"`, `"branch-protection-pauth-lr"` and `"guarded-control-stack"` attributes, the module gets the matching `Min` flags (value 1; 2 at `-fclang-compat=22`, as clang 22), and the predefines gain `__ARM_FEATURE_PAC_DEFAULT` (bit 0 A key, 1 B key, 2 leaf, 3 PAuth-LR), `__ARM_FEATURE_BTI_DEFAULT` and `__ARM_FEATURE_GCS_DEFAULT` (spec/pp.md "AArch64 target macros"). `__attribute__((target("branch-protection=<spec>")))` replaces the function's attributes (an invalid spec is `invalid or misplaced branch protection specification '<item>'`; off AArch64 the attribute is ignored with `unsupported 'branch-protection' in the 'target' attribute string`). An invalid spec is `unsupported argument '<item>' to option '-mbranch-protection='`; off AArch64 `-mbranch-protection=` is `unsupported option '-mbranch-protection=' for target '<triple>'` and `-msign-return-address=` is unused. kiln models no `-march=` extension enabling PAuth-LR, so `standard` never adds `pc` (spec/landed/codegen/WP-846.md) |
+| `-fstack-clash-protection`, `-fno-stack-clash-protection`, `-mstack-probe-size=<n>` (WP-1411) | the last of the pair wins: `"probe-stack"="inline-asm"` on every definition (thunks and initialization functions too; clang 19 `StartFunction`), on both targets, as clang 19 does on AArch64 and x86-64. `-mstack-probe-size=<n>` (the last one) adds `"stack-probe-size"="<n>"` to every definition, with or without clash protection, unless `n` is 0 (also an empty value) or the default 4096 (clang `addStackProbeTargetAttributes`). The module gets the matching flags, as clang `CodeGenModule::Release`: `!{i32 4, !"probe-stack", !"inline-asm"}` and `!{i32 8, !"stack-probe-size", i32 <n>}` (the 32 bits read as `i32`), after the branch protection flags; `n` is read as LLVM's `getAsInteger` radix 0 reads it (`0x` hex, `0b` binary, `0o` or a leading `0` octal) into 32 bits, anything else is clang's `-cc1` error `invalid integral value '<v>' in '-mstack-probe-size=<v>'`. Neither is a hod route trigger: hod accepts the attributes on both targets. Tests: `tests/codegen/stack_clash_protection*.cpp`, `crates/kiln_driver/tests/hod_backend.rs` `stack_clash_protection_is_offered`, `hardening.rs` `stack_probe_size_values` |
+| `-mtls-dialect=gnu\|gnu2` (x86-64; WP-1411) | the last one: `gnu2` (TLS descriptors) passes `llc -enable-tlsdesc` (clang's `-cc1 -enable-tlsdesc`, `TargetOptions::EnableTLSDESC`; the IR is unchanged), and with `-flto` the link gets `-mtls-dialect=gnu2` (clang turns it into `-plugin-opt=-enable-tlsdesc`); `gnu`, the default, adds nothing. Another value is clang 19's `unsupported argument '<v>' to option '-mtls-dialect=' for target '<normalized triple>'`; on AArch64 the option itself is `unsupported option '-mtls-dialect=' for target 'aarch64-unknown-linux-gnu'` (clang 19 and 22 accept it only on x86, RISC-V and LoongArch; AArch64's general-dynamic TLS is always descriptors). hod receives `llc`'s arguments: it declines `-enable-tlsdesc` as an unknown option, so a `gnu2` unit takes the LLVM route. Test: `crates/kiln_driver/tests/hardening.rs` `tls_dialect` |
 | `-Wp,<a>,<b>,...`, `-Xpreprocessor <arg>` | spliced into the argument list before parsing (`codegen_flags::splice_preprocessor_args`), as GCC: `-Wp,-MD,<f>` / `-Wp,-MMD,<f>` become `-MD -MF <f>` / `-MMD -MF <f>`, any other list is split at commas (empty pieces dropped), so `-Wp,-D_FORTIFY_SOURCE=2` is `-D_FORTIFY_SOURCE=2`; `-Xpreprocessor <arg>` is `<arg>` |
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
-do not add a diagnostic): `-f[no-]stack-clash-protection`,
-`-f[no-]common`, `-fstack-usage`,
+do not add a diagnostic): `-f[no-]common`, `-fstack-usage`,
 `-fno-short-enums`, `-m64` (every kiln target is 64-bit;
 `-m32` stays unknown) and `-pipe`.
 WP-677 (configure scripts and CMake probe them; clang 19 accepts them):
@@ -268,11 +269,22 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
   the link gets `-gz=<type>`; `.s` output is not compressed); `-gz=none` turns it off; another value is `unsupported
   argument`. Every `llc` run under `-g` gets `-debugger-tune=gdb`, as
   clang on Linux.
+- **`-grecord-command-line`, `-grecord-gcc-switches`** (WP-1411; the
+  last of these and `-gno-record-command-line` /
+  `-gno-record-gcc-switches` wins, off by default): the compile unit's
+  `flags:` field holds the command line, as clang's
+  `-dwarf-debug-flags`: the executable's path (`kiln` for `kiln++`, then
+  `--driver-mode=g++`, as clang writes `clang --driver-mode=g++`), then
+  each argument, a space or backslash escaped with a backslash. clang
+  re-renders each argument from its option table (`-DX` as `-D X`,
+  `-grecord-gcc-switches` as `-grecord-command-line`); kiln writes them
+  as given. Without debug information (`-g0`, or no `-g`) there is no
+  compile unit and nothing is recorded. Test:
+  `crates/kiln_driver/tests/driver.rs` `record_command_line_in_the_compile_unit`.
 - **Accepted with no effect** (each spells clang's Linux default):
   `-gcolumn-info`, `-gdwarf32`, `-gno-embed-source`, `-gno-codeview`,
   `-gno-pubnames`, `-gno-gnu-pubnames`, `-ggnu-pubnames-none`,
-  `-gno-simple-template-names`, `-gno-record-command-line`,
-  `-gno-record-gcc-switches`, `-gno-strict-dwarf`, `-gno-modules`,
+  `-gno-simple-template-names`, `-gno-strict-dwarf`, `-gno-modules`,
   `-gno-inline-line-tables`, `-gno-template-alias`,
   `-feliminate-unused-debug-types`, `-fno-debug-macro`,
   `-fno-debug-types-section`, `-fno-split-dwarf-inlining`,
@@ -280,7 +292,7 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
 - **Rejected** with `'<flag>' is not supported by kiln` (exit 1):
   `-gembed-source`, `-gcodeview`, `-gcodeview-ghash`, `-gpubnames`,
   `-ggnu-pubnames`, `-gsimple-template-names[=simple|mangled]`,
-  `-grecord-command-line`, `-grecord-gcc-switches`, `-gstrict-dwarf`,
+  `-gstrict-dwarf`,
   `-gdwarf64`, `-gmodules`, `-glldb`, `-gsce`, `-gdbx`,
   `-gtemplate-alias`, `-ginline-line-tables`, `-gsplit-dwarf=single`,
   `-fdebug-macro`, `-fdebug-types-section`, `-fsplit-dwarf-inlining`,
@@ -2183,7 +2195,9 @@ never sets `HOD_FALLBACK_LLC`/`--fallback`.
   output (`-c`, or each source of a link), at `-O0`, without `-flto`, a
   sanitizer (any `-fsanitize=`), coverage (`--coverage`,
   `-fprofile-instr-generate`), `-finstrument-functions[-after-inlining]`,
-  `-fxray-instrument` or `-fpatchable-function-entry=`, and when the
+  `-finstrument-function-entry-bare` (WP-1411: decided before the module,
+  so hod is not searched for), `-fxray-instrument` or
+  `-fpatchable-function-entry=`, and when the
   module's `opt` triggers ("Compile statistics log": read from the same
   printed text that becomes hod's standard input, no second print) are a
   subset of {`alwaysinline`, `coro`} (WP-1398: hod's "pre-opt modules",
@@ -2192,7 +2206,8 @@ never sets `HOD_FALLBACK_LLC`/`--fallback`.
   place of the always-inliner and the coroutine passes), the driver runs
   `hod --strict <the llc arguments, unchanged> -o <obj> -` with the module
   text before `opt` on its standard input. An instrumented module
-  (`instrument-entry`: `-finstrument-function-entry-bare`), `-S`,
+  (the `instrument-entry` trigger: the attributes on an attribute group;
+  after the static check above no module kiln writes reaches it), `-S`,
   `-emit-llvm`, any `-O` level above 0 and `-flto` take the LLVM route
   (the statistics log's `hod_skip` names which). `-disable-llvm-passes`
   keeps its meaning: `opt` never runs, and the module `llc` would get is
@@ -2258,7 +2273,7 @@ the IR.
 | `opt_level` | the `-O` level as written after `-O` (`"0"` when none, `"1"` for `-O`; `"2"`, `"s"`, `"fast"`, ...) |
 | `debug` | whether a `-g` debug-information kind is in effect |
 | `lto` | `"none"`, `"full"`, `"thin"` |
-| `triggers` | the conditions that made the driver schedule `opt` for this input's IR ("Code generation", IR optimization), each that holds, in this order: `opt-level` (`-O1` and above), `lto`, `sanitizer`, `coverage`, `alwaysinline` (an `alwaysinline` attribute group: a definition or a call site), `instrument-entry` (the `"instrument-function-entry` attribute), `coro` (a declared `llvm.coro.*` intrinsic). Any one alone schedules `opt`; `[]` when it does not run (also under `-disable-llvm-passes`, and for a job with no module) |
+| `triggers` | the conditions that made the driver schedule `opt` for this input's IR ("Code generation", IR optimization), each that holds, in this order: `opt-level` (`-O1` and above), `lto`, `sanitizer`, `coverage`, `alwaysinline` (an `alwaysinline` attribute group: a definition or a call site), `instrument-entry` (the `"instrument-function-entry"`, `-entry-inlined`, `-exit` or `-exit-inlined` attribute), `coro` (a declared `llvm.coro.*` intrinsic). WP-1411: the attribute triggers read the top-level `attributes #N = { ... }` lines item by item, a quoted string (a string attribute's key and value) or a keyword with its parenthesized arguments being one item, so the names in a string constant (an `@` line) or in another attribute's value never count; `coro` reads the unquoted name a `declare` line declares. Any one alone schedules `opt`; `[]` when it does not run (also under `-disable-llvm-passes`, and for a job with no module) |
 | `alwaysinline_defs` | `define`s whose function attribute group holds `alwaysinline` |
 | `alwaysinline_callsites` | `call` / `invoke` / `callbr` instructions whose attribute group holds `alwaysinline` |
 | `available_externally_defs` | `define available_externally` functions |
@@ -2270,8 +2285,8 @@ the IR.
 | `total_ms` | the job, from its start to its end |
 | `exit` | `0`, or `1` when a step of the job failed |
 | `backend` | the back end that made the job's code ("Back-end selection", WP-1371): `llvm` (`llc` ran), `hod`, `hod-declined`, `hod-failed`; `null` when neither ran (`-emit-llvm`, an error before code generation, the link) |
-| `hod_reason` | hod's reason when it declined, its status (`exit code 1`, `signal 9`) when it failed, else `null`; at most 128 bytes |
-| `hod_skip` | `null` unless hod is the selected back end ("Back-end selection") and the job was not offered to it; then the first of, in this order: `output-kind` (no object: `-S`, `-emit-llvm`, `-fsyntax-only`, `--precompile`), `opt-level` (an `-O` level above 0), `lto`, `sanitizer`, `coverage`, `instrument` (`-finstrument-functions[-after-inlining]`, `-fxray-instrument`, `-fpatchable-function-entry=`), else the first `opt` trigger outside {`alwaysinline`, `coro`} by its `triggers` name (today only `instrument-entry` reaches it); `null` on the link's line (WP-1398) |
+| `hod_reason` | hod's reason when it declined; when it failed, the reason its message names (WP-1411, hod's `CompileError` display: `internal error: hod panicked: ...` is `internal-panic`, `internal error: ...` `internal-error`, `malformed input: ...` `malformed-input`, `invalid options: ...` `invalid-options`), else its status (`exit code 1`, `signal 9`, `not started`); `null` otherwise; at most 128 bytes |
+| `hod_skip` | `null` unless hod is the selected back end ("Back-end selection") and the job was not offered to it; then the first of, in this order: `output-kind` (no object: `-S`, `-emit-llvm`, `-fsyntax-only`, `--precompile`), `opt-level` (an `-O` level above 0), `lto`, `sanitizer`, `coverage`, `instrument` (`-finstrument-functions[-after-inlining]`, `-finstrument-function-entry-bare` (WP-1411), `-fxray-instrument`, `-fpatchable-function-entry=`), else the first `opt` trigger outside {`alwaysinline`, `coro`} by its `triggers` name (only `instrument-entry` could, and after the static reasons no module kiln writes has it); `null` on the link's line (WP-1398) |
 | `truncated` | present (`true`) only when the input path was cut |
 
 The five counts are of the module the frontend produced, before `opt`,

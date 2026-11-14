@@ -412,3 +412,124 @@ fn branch_protection_flags() {
         );
     }
 }
+
+/// WP-1411: `-mstack-probe-size=` is read as clang 19's `-cc1` reads it
+/// (LLVM `getAsInteger`, radix 0, 32 bits; the last one counts) and
+/// written as `"stack-probe-size"` unless it is 0 or 4096; a value that is
+/// not one is `-cc1`'s error. Compared with clang++-19 (IR attribute
+/// groups, or the error line with the program name dropped).
+#[test]
+fn stack_probe_size_values() {
+    if !tools(&[]) {
+        return;
+    }
+    let d = scratch("probe");
+    std::fs::write(d.join("p.cpp"), "int f(int x) { return x; }\n").unwrap();
+    let outcome = |prog: &Path, args: &[&str]| {
+        let mut all = vec!["-S", "-emit-llvm", "-o", "-", "p.cpp"];
+        all.extend(args);
+        let o = run(prog, &d, &all);
+        let err = text(&o.stderr);
+        let err =
+            err.lines().map(|l| l.split_once("error: ").map_or(l, |x| x.1)).collect::<Vec<_>>();
+        let attrs = text(&o.stdout)
+            .lines()
+            .flat_map(|l| l.split(' '))
+            .filter(|w| w.starts_with("\"stack-probe-size\"") || w.starts_with("\"probe-stack\""))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        (o.status.code(), err.join("\n"), attrs)
+    };
+    for t in TRIPLES {
+        let target = format!("--target={t}");
+        for v in [
+            "8192",
+            "0x100",
+            "010",
+            "0b101",
+            "0",
+            "",
+            "4096",
+            "4294967295",
+            "4294967296",
+            "abc",
+            "-5",
+            "+5",
+            " 1",
+        ] {
+            let probe = format!("-mstack-probe-size={v}");
+            for extra in [&[][..], &["-fstack-clash-protection"], &["-mstack-probe-size=abc"]] {
+                let mut args = vec![target.as_str()];
+                args.extend(extra);
+                args.push(&probe);
+                let k = outcome(&kilnpp(), &[&args[..], &["-fclang-compat=19"]].concat());
+                assert_eq!(k, outcome(Path::new("clang++-19"), &args), "{args:?}");
+            }
+        }
+    }
+}
+
+/// WP-1411: `-mtls-dialect=` as clang 19's driver checks it: on x86-64
+/// `gnu` (the default) and `gnu2`, which passes `llc -enable-tlsdesc`
+/// (and, under `-flto`, `-mtls-dialect=gnu2` to the link, which clang
+/// turns into `-plugin-opt=-enable-tlsdesc`); another value is an
+/// unsupported argument for the target, and on `AArch64` the option itself
+/// is unsupported. The thread-local access then uses descriptors, as
+/// clang 19's object does.
+#[test]
+fn tls_dialect() {
+    let dir = scratch("tls");
+    std::fs::write(dir.join("t.cpp"), "thread_local int t;\nint g() { return t; }\n").unwrap();
+    let a64 = "--target=aarch64-unknown-linux-gnu";
+    let x86 = "--target=x86_64-linux-gnu";
+    for (args, want) in [
+        (
+            &[x86, "-mtls-dialect=bogus"][..],
+            "kiln++: error: unsupported argument 'bogus' to option '-mtls-dialect=' for target 'x86_64-unknown-linux-gnu'\n",
+        ),
+        (
+            &[x86, "-mtls-dialect=gnu2", "-mtls-dialect="],
+            "kiln++: error: unsupported argument '' to option '-mtls-dialect=' for target 'x86_64-unknown-linux-gnu'\n",
+        ),
+        (
+            &[x86, "-mtls-dialect=desc"],
+            "kiln++: error: unsupported argument 'desc' to option '-mtls-dialect=' for target 'x86_64-unknown-linux-gnu'\n",
+        ),
+        (
+            &[a64, "-mtls-dialect=desc"],
+            "kiln++: error: unsupported option '-mtls-dialect=' for target 'aarch64-unknown-linux-gnu'\n",
+        ),
+        (
+            &[a64, "-mtls-dialect=gnu"],
+            "kiln++: error: unsupported option '-mtls-dialect=' for target 'aarch64-unknown-linux-gnu'\n",
+        ),
+    ] {
+        let o = run(&kilnpp(), &dir, &[args, &["-c", "t.cpp", "-o", "e.o"]].concat());
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(1), want), "{args:?}");
+    }
+    let llc = |args: &[&str]| {
+        let o = run(&kilnpp(), &dir, &[args, &["-###", "-fPIC", "-c", "t.cpp"]].concat());
+        assert_eq!(o.status.code(), Some(0), "{args:?}: {}", text(&o.stderr));
+        text(&o.stderr).lines().filter(|l| l.contains("llc")).collect::<Vec<_>>().join("\n")
+    };
+    assert!(llc(&[x86, "-mtls-dialect=gnu2"]).contains(" \"-enable-tlsdesc\""));
+    assert!(llc(&[x86, "-mtls-dialect=bogus", "-mtls-dialect=gnu2"]).contains("-enable-tlsdesc"));
+    assert!(!llc(&[x86, "-mtls-dialect=gnu2", "-mtls-dialect=gnu"]).contains("tlsdesc"));
+    let o = run(&kilnpp(), &dir, &[x86, "-###", "-flto", "-mtls-dialect=gnu2", "t.cpp"]);
+    let link = text(&o.stderr);
+    let link = link.lines().last().unwrap_or_default();
+    assert!(link.contains(" \"-flto\"") && link.contains(" \"-mtls-dialect=gnu2\""), "{link}");
+    // The object: descriptors, as clang 19's.
+    if !tools(&["llvm-objdump-19"]) {
+        return;
+    }
+    let (kiln_obj, clang_obj) =
+        both(&dir, "t.cpp", "t.o", &[x86, "-fPIC", "-c", "-mtls-dialect=gnu2"]);
+    let relocs = |o: &Path| {
+        let r = run(Path::new("llvm-objdump-19"), &dir, &["-r", o.to_str().unwrap()]);
+        text(&r.stdout).lines().skip(2).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let r = relocs(&kiln_obj);
+    assert!(r.iter().any(|l| l.contains("R_X86_64_GOTPC32_TLSDESC")), "{r:?}");
+    assert_eq!(r, relocs(&clang_obj));
+}

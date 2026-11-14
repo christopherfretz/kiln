@@ -118,5 +118,7 @@ drv_unsupported_fpatchable_function_entry_argument = Error (0) "the second argum
 // WP-469: `-msve-vector-bits=` off AArch64.
 drv_unsupported_opt_for_target = Error (2) "unsupported option '{0}' for target '{1}'";
 drv_unsupported_option_argument = Error (2) "unsupported argument '{1}' to option '{0}'";
+// WP-1411: `-mtls-dialect=` with a value the target lacks.
+drv_unsupported_option_argument_for_target = Error (3) "unsupported argument '{1}' to option '{0}' for target '{2}'";
 drv_unsupported_target = Error (1) "unsupported target '{0}' (kiln supports aarch64 and x86_64 Linux)";
 drv_verify_prefix_spelling = Note (0) "-verify prefixes must start with a letter and contain only alphanumeric characters, hyphens, and underscores";
