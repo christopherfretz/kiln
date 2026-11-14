@@ -39,6 +39,9 @@ Releases:
   against the 1.0.1 results.
 - `release-1.1.0.md`: the 1.1.0 release gate (C mode): the same commands
   against the 1.0.2 results, plus the C projects and gcc.c-torture.
+- `release-1.2.0.md`: the 1.2.0 release gate (precompiled header
+  snapshots): the same commands against the 1.1.0 results, plus the
+  snapshot-against-replay sweeps.
 
 Standard libraries:
 
