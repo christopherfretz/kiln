@@ -63,8 +63,13 @@ packed), function types (with varargs), `label`, `metadata`, `token`.
   attachments reach (a class-type `DITemplateValueParameter` value in a
   `DISubprogram`), which LLVM's `TypeFinder` does not walk: LLVM's own
   text of such a module does not parse back (WP-910,
-  spec/landed/codegen/WP-910.md). Any module whose LLVM text parses
-  prints the same.
+  spec/landed/codegen/WP-910.md). Then the types of every other printed
+  metadata node, in numbering order: one reached only from a debug
+  record (`#dbg_declare` of a local whose class has a class-type template
+  argument, `value: %"struct.n::ic" undef`) or an instruction's `!dbg`
+  (LLVM 19's `TypeFinder` does not walk debug records; WP-1424). No
+  identified struct a printed constant names is left undefined. Any
+  module whose LLVM text parses prints the same.
 
 ### 2.2 Module header
 `Module::new(source_filename)` or `Module::with_target(name, spec)`;

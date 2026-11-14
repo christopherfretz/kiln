@@ -503,7 +503,7 @@ impl Parser<'_, '_> {
     /// "expected member name" at the current token, highlighting the
     /// decl-specifier-seq `ds_range` (clang's `DS.getSourceRange()`, from
     /// a leading attribute-specifier-seq).
-    fn error_expected_member_name(&mut self, ds_range: Span) {
+    pub(crate) fn error_expected_member_name(&mut self, ds_range: Span) {
         let e = self.s.diag(DiagId::parse_expected_member_name, self.loc()).range(ds_range);
         self.emit(e);
     }
@@ -1597,7 +1597,9 @@ impl Parser<'_, '_> {
                 self.parse_declarator_gnu_attr_seq(&mut d);
             }
             if !self.at(Punct::Colon) {
+                let saved = self.member_ds_range.replace(ds_range);
                 self.parse_declarator_in_group(&ds, &mut d);
+                self.member_ds_range = saved;
                 self.parse_trailing_requires(&mut d);
                 self.set_declarator_end(&mut d);
             }
@@ -1919,16 +1921,100 @@ impl Parser<'_, '_> {
         if i == self.pos() && self.deduction_guide_at(i).is_some() {
             return true;
         }
-        match last {
+        let named = match last {
             Some(q) => q == n,
-            None => {
-                ctx == DeclaratorContext::Member
-                    && self.current_class_name() == Some(n)
-                    && !matches!(
-                        Self::punct_of(self.tok_at(i + 2)),
-                        Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
-                    )
+            None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
+        };
+        named && self.ctor_params_follow(i + 1, last.is_none())
+    }
+
+    /// clang's `isConstructorDeclarator` after the constructor name: the
+    /// `(` at token `lp` opens a constructor's parameter-declaration-clause
+    /// ([class.ctor.general]/1) rather than a parenthesized declarator
+    /// whose declarator-id follows the class name used as a
+    /// decl-specifier ([dcl.ambig.res]/1, [dcl.decl.general]/4). A
+    /// constructor when what follows is `)`, `...)`, an attribute, a
+    /// decl-specifier (a keyword or a type name; `this` before one), or a
+    /// name that is not a type followed by anything but `(`, `[`, `::` or
+    /// `)`; after `X)` only a `:` or `try` (or, `unqualified`, a `;` or
+    /// `{`: a member of its own class type is ill-formed) says
+    /// constructor. So `S (::g)(int)`, `S (N::g)(int)`,
+    /// `S (::operator""_s)(...)`, `S (*p)(int)`, `S (&r)`,
+    /// `S (S::*pm)(int)`, `S (f)(int)` and `S ((int))` are declarators,
+    /// and `S (X);` with `X` not a type is a constructor whose parameter
+    /// type is unknown (clang 19).
+    pub(crate) fn ctor_params_follow(&self, lp: usize, unqualified: bool) -> bool {
+        let j = lp + 1;
+        let t = self.tok_at(j);
+        match Self::punct_of(t) {
+            Some(Punct::RParen) => return true,
+            Some(Punct::Ellipsis) => {
+                return Self::punct_of(self.tok_at(j + 1)) == Some(Punct::RParen);
             }
+            Some(Punct::LSquare) if Self::punct_of(self.tok_at(j + 1)) == Some(Punct::LSquare) => {
+                return true;
+            }
+            _ => {}
+        }
+        if self.kw_of(t) == Some(Kw::This) {
+            return self.ctor_decl_specifier_at(j + 1);
+        }
+        if self.ctor_decl_specifier_at(j) {
+            return true;
+        }
+        if self.ident_of(t).is_none() && Self::punct_of(t) != Some(Punct::ColonColon) {
+            return false;
+        }
+        // `X` or `N::X`, not a type: a parenthesized declarator-id, or a
+        // constructor parameter of an unknown type.
+        let Some((end, class, _)) = self.scan_name(j) else { return false };
+        // A name after a dependent qualifier is a type here (clang's
+        // `ImplicitTypenameContext::Yes`, [temp.res.general]/4.3.2:
+        // `C<T>::C(T::type) {}`).
+        if matches!(class, NameClass::Dependent) {
+            return true;
+        }
+        if self.ident_of(self.tok_at(end - 1)).is_none() {
+            return false;
+        }
+        match Self::punct_of(self.tok_at(end)) {
+            Some(Punct::LParen | Punct::LSquare | Punct::ColonColon) => false,
+            Some(Punct::RParen) => {
+                let mut k = end + 1;
+                while Self::punct_of(self.tok_at(k)) == Some(Punct::LSquare)
+                    && Self::punct_of(self.tok_at(k + 1)) == Some(Punct::LSquare)
+                {
+                    let Some(next) = self.skip_balanced(k) else { break };
+                    k = next;
+                }
+                let t = self.tok_at(k);
+                match Self::punct_of(t) {
+                    Some(Punct::Colon) => true,
+                    Some(Punct::Semi | Punct::LBrace) => unqualified,
+                    _ => self.kw_of(t) == Some(Kw::Try),
+                }
+            }
+            _ => true,
+        }
+    }
+
+    /// clang's `isDeclarationSpecifier` at token `i`, for
+    /// [`Parser::ctor_params_follow`]: a decl-specifier keyword, a type
+    /// trait transform, a (possibly qualified) type name or a
+    /// type-constraint before `auto`.
+    fn ctor_decl_specifier_at(&self, i: usize) -> bool {
+        let t = self.tok_at(i);
+        match self.kw_of(t) {
+            Some(k) => crate::decl::is_decl_specifier_kw(k),
+            None if self.transform_at(i).is_some() => true,
+            None if self.ident_of(t).is_some() || Self::punct_of(t) == Some(Punct::ColonColon) => {
+                // A type-constraint before `auto` or `decltype(auto)`
+                // ([dcl.spec.auto.general]/1: `subrange(N::C<T> auto i)`).
+                self.names_type_at(i)
+                    || matches!(self.scan_name(i), Some((end, NameClass::Concept(_), _))
+                        if matches!(self.kw_of(self.tok_at(end)), Some(Kw::Auto | Kw::Decltype)))
+            }
+            None => false,
         }
     }
 
@@ -1991,9 +2077,8 @@ impl Parser<'_, '_> {
 
     /// True if identifier `n`, which is at the current token, names a
     /// constructor: `C::C(` after a qualifier ending in `C`, or `C(` in
-    /// the member-specification of class `C` (clang's
-    /// `isConstructorDeclarator`, simplified: `C (*p)` and `C (&r)` are
-    /// data members).
+    /// the member-specification of class `C`, when a parameter list
+    /// follows ([`Parser::ctor_params_follow`]).
     pub(crate) fn names_constructor(
         &self,
         n: Symbol,
@@ -2003,17 +2088,11 @@ impl Parser<'_, '_> {
         if Self::punct_of(self.peek(1)) != Some(Punct::LParen) {
             return false;
         }
-        match last_qual {
+        let named = match last_qual {
             Some(q) => q == n,
-            None => {
-                ctx == DeclaratorContext::Member
-                    && self.current_class_name() == Some(n)
-                    && !matches!(
-                        Self::punct_of(self.peek(2)),
-                        Some(Punct::Star | Punct::Amp | Punct::AmpAmp)
-                    )
-            }
-        }
+            None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
+        };
+        named && self.ctor_params_follow(self.pos() + 1, last_qual.is_none())
     }
 
     /// A destructor or operator-function-id / conversion-function-id

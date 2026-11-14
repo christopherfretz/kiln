@@ -1171,7 +1171,7 @@ impl<'a> Printer<'a> {
             .copied()
             .filter(|&s| t.struct_name(s).is_some_and(str::is_empty))
             .collect();
-        let named = TypeFinder::run(self.m);
+        let named = TypeFinder::run(self.m, &self.md_order);
         if unnamed.is_empty() && named.is_empty() {
             return Ok(());
         }
@@ -1947,7 +1947,8 @@ struct TypeFinder<'a> {
 }
 
 impl<'a> TypeFinder<'a> {
-    fn run(m: &'a Module) -> Vec<TypeId> {
+    /// `printed`: every numbered metadata node the module text holds.
+    fn run(m: &'a Module, printed: &[MetadataId]) -> Vec<TypeId> {
         let mut t = TypeFinder {
             m,
             seen_ty: vec![false; m.types.len()],
@@ -1994,6 +1995,16 @@ impl<'a> TypeFinder<'a> {
         }
         for f in m.ordered_funcs() {
             f.md.iter().for_each(|&(_, n)| t.md(n));
+        }
+        // Then every other printed node: one reached only from a debug
+        // record (`#dbg_declare` of a local whose class type has a
+        // class-type template argument, `value: %"struct.n::ic" undef`)
+        // or an instruction's `!dbg`. LLVM 19's `TypeFinder` does not walk
+        // debug records, so clang's text of such a module names a struct
+        // type it never defines (WP-1424). No struct a printed constant
+        // names is left undefined.
+        for &n in printed {
+            t.md(n);
         }
         t.out
     }

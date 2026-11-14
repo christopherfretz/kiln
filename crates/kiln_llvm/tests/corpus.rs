@@ -1937,6 +1937,67 @@ fn debug_attachment_struct_constant() {
     common::llvm_accepts(&text);
 }
 
+/// §2.1: a struct type used only by a constant that a debug record's
+/// variable reaches (a local whose class has a class-type template
+/// argument, `value: %"struct.n::ic" undef`; WP-1424) still gets its
+/// definition: LLVM 19's `TypeFinder` does not walk debug records.
+#[test]
+fn debug_record_struct_constant() {
+    let mut m = aarch64();
+    let ic = m.types.named_struct("struct.n::ic");
+    m.types.set_body(ic, &[TypeId::I8], false).unwrap();
+    let u = m.const_undef(ic);
+    let v = m.md_const(u).unwrap();
+    let tp = m.md_specialized(
+        "DITemplateValueParameter",
+        false,
+        vec![("name", MdField::Str("F".into())), ("value", MdField::Node(Some(v)))],
+    );
+    let tps = m.md_tuple(&[Some(tp)]);
+    let ty = m.md_specialized(
+        "DICompositeType",
+        true,
+        vec![
+            ("tag", MdField::Raw("DW_TAG_structure_type".into())),
+            ("name", MdField::Str("W".into())),
+            ("templateParams", MdField::Node(Some(tps))),
+        ],
+    );
+    let sp = m.md_specialized("DISubprogram", true, vec![("name", MdField::Str("f".into()))]);
+    let var = m.md_specialized(
+        "DILocalVariable",
+        false,
+        vec![
+            ("name", MdField::Str("w".into())),
+            ("scope", MdField::Node(Some(sp))),
+            ("type", MdField::Node(Some(ty))),
+        ],
+    );
+    let loc = m.md_specialized(
+        "DILocation",
+        false,
+        vec![("line", MdField::UInt(2)), ("scope", MdField::Node(Some(sp)))],
+    );
+    let expr = m.md_specialized("DIExpression", false, vec![]);
+    let dbg = m.md_kind("dbg");
+    let mut b = define(&mut m, "f", TypeId::VOID, &[]);
+    let a = b.alloca(TypeId::I8, 1).unwrap();
+    let r = b.ret(None).unwrap();
+    let f = b.func();
+    f.add_metadata(dbg, sp);
+    f.add_debug_record(
+        r.as_inst().unwrap(),
+        DbgRecord { kind: DbgRecordKind::Declare, addr: a, var, expr, loc },
+    );
+    f.add_inst_metadata(r.as_inst().unwrap(), dbg, loc);
+    let text = m.to_text();
+    let d = text.find("%\"struct.n::ic\" = type { i8 }\n").expect(&text);
+    let f = text.find("define dso_local void @f() !dbg !").expect(&text);
+    assert!(d < f, "{text}");
+    assert!(text.contains("value: %\"struct.n::ic\" undef)"), "{text}");
+    common::llvm_accepts(&text);
+}
+
 /// §2.6: LLVM 19 debug records print on their own line before the
 /// instruction they are attached to, with the expression inline.
 #[test]
