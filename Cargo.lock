@@ -20,7 +20,7 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 
 [[package]]
 name = "kiln_abi"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_ast",
  "kiln_snap",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_ast"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "hashbrown",
  "kiln_diag",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_codegen"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_abi",
  "kiln_ast",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_diag"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_snap",
  "kiln_source",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_driver"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_abi",
  "kiln_ast",
@@ -80,7 +80,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_lex"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_snap",
  "kiln_source",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_llvm"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "hashbrown",
  "kiln_source",
@@ -96,7 +96,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_oven"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_abi",
  "kiln_ast",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_parse"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_ast",
  "kiln_diag",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_pp"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_diag",
  "kiln_lex",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_sema"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_abi",
  "kiln_ast",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "kiln_snap"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "hashbrown",
  "kiln_snap_derive",
@@ -151,11 +151,11 @@ dependencies = [
 
 [[package]]
 name = "kiln_snap_derive"
-version = "1.2.0"
+version = "1.2.1"
 
 [[package]]
 name = "kiln_source"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_snap",
 ]
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "kiln_abi",
  "kiln_lex",
