@@ -2,7 +2,7 @@
 //! `EmitDeclare`, `EmitGlobalVariable`).
 
 use kiln_ast::attr::AttrKind;
-use kiln_ast::decl::{DeclFlags, DeclKind};
+use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
 use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType, StmtId};
 use kiln_llvm::{FuncId, GlobalId, MdField, MetadataId};
@@ -343,7 +343,64 @@ impl Cg<'_> {
         }
         let name = self.di_ident(d);
         let ty = self.di_type(q);
+        if ty.is_some() && slot.arg.is_none() {
+            self.di_declare_anon_union_members(q, slot);
+        }
         self.di_declare(Some(d), &name, ty, slot, false);
+    }
+
+    /// clang `EmitDeclare` for a block-scope anonymous union's unnamed
+    /// variable: before the variable, an artificial `DILocalVariable` per
+    /// member on the same storage, so a debugger finds `i` by name
+    /// ([class.union.anon]/1; WP-1400). Unnamed members are skipped unless
+    /// they are classes. The union's variable is implicit, so the members
+    /// have no file and line 0, as it does.
+    fn di_declare_anon_union_members(&mut self, q: QualType, slot: VarSlot) {
+        let ast = self.ast;
+        let Some(rd) = ast.types.as_record(ast.types.canonical(q)) else { return };
+        let rd = ast.definition(rd).unwrap_or(rd);
+        let Some(r) = ast.decls.record(rd) else { return };
+        if r.tag != TagKind::Union || !r.defn.contains(DefinitionBits::ANONYMOUS) {
+            return;
+        }
+        let Some(scope) = self.f.fir.dbg.as_deref().map(FirDbg::scope) else { return };
+        let Some(empty) = self.di.as_deref().map(|x| x.empty_expr) else { return };
+        let fields: Vec<DeclId> =
+            ast.decls.members(rd).filter(|&m| ast.decls.get(m).kind() == DeclKind::Field).collect();
+        let opt = self.opts.opt_level > 0;
+        for m in fields {
+            let Some(fq) = ast.decls.get(m).ty() else { continue };
+            let name = self.di_ident(m);
+            let fty = self.di_type(fq);
+            if name.is_empty() && ast.types.as_record(ast.types.canonical(fq)).is_none() {
+                continue;
+            }
+            let Some(fty) = fty else { continue };
+            let mut f = Fields::default();
+            if !name.is_empty() {
+                f = f.s("name", &name);
+            }
+            f = f.n("scope", Some(scope)).n("type", Some(fty));
+            f = f.flags("flags", &["DIFlagArtificial"]);
+            let var = self.m.md_specialized("DILocalVariable", false, f.0);
+            let loc = self.di_location_at(0, 0, scope);
+            if let Some(x) = self.f.fir.dbg.as_deref_mut() {
+                x.tracked = true;
+                if opt {
+                    x.vars.push(var);
+                }
+            }
+            let expr = if slot.deref {
+                self.m.md_specialized(
+                    "DIExpression",
+                    false,
+                    vec![("", MdField::Raw("DW_OP_deref".into()))],
+                )
+            } else {
+                empty
+            };
+            self.f.fir.declare(DbgRec { addr: slot.addr, var, expr, loc });
+        }
     }
 
     /// The subprogram's `retainedNodes` once it has a variable (clang

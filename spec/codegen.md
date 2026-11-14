@@ -1510,6 +1510,13 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   deferred (inline, internal or instantiated) body (WP-1389); a
   line-tables-only unit has no `globals:`, `retainedTypes:`, `enums:`,
   `imports:` and no variable records;
+- class and function template specialization names under clang's
+  debug-information printing policy (every argument, inline namespaces
+  kept, enumeration values as casts, integral arguments typed),
+  `templateParams` and substituted types from the canonical arguments,
+  `defaulted: true` on a class specialization's suppressed trailing
+  defaults, and one artificial variable per member of a block-scope
+  anonymous union (WP-1400, spec/landed/codegen/WP-1400.md);
 - statement and expression locations with clang's `EmitStopPoint`,
   `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
   steps, breaks and finishes where it does in a clang build.

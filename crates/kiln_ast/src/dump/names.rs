@@ -30,6 +30,7 @@ const MAX_DEPTH: u32 = 64;
 /// `(unnamed struct at F:L:C)` spelling of unnamed tags; without it they
 /// print `(unnamed struct)`).
 #[derive(Clone, Copy)]
+#[allow(clippy::struct_excessive_bools, reason = "independent printing policy switches")]
 pub struct AstNames<'a> {
     /// The AST.
     pub ast: &'a Ast,
@@ -51,6 +52,16 @@ pub struct AstNames<'a> {
     /// with every name scoped (`C<N::X>::`), as clang prints the
     /// canonical arguments it stores (`__PRETTY_FUNCTION__`).
     pub scoped_spec_args: bool,
+    /// clang's debug-information printing policy (`CGDebugInfo::
+    /// getPrintingPolicy`), for the names of `DICompositeType` and
+    /// `DISubprogram` (spec/codegen.md §5.1, WP-1400): inline namespaces
+    /// stay in a scope (`SuppressInlineNamespace = false`), no
+    /// `preferred_name` (`UsePreferredNames = false`), an enumeration
+    /// value prints as a cast (`UseEnumerators = false`: `(n::E)2`), and
+    /// every value argument with its type
+    /// (`AlwaysIncludeTypeForTemplateArgument`: `3UL`). Never set for
+    /// diagnostics.
+    pub debug_info: bool,
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -69,6 +80,7 @@ impl<'a> AstNames<'a> {
             closure_as_lambda: false,
             scoped_nns: false,
             scoped_spec_args: false,
+            debug_info: false,
         }
     }
 
@@ -81,7 +93,14 @@ impl<'a> AstNames<'a> {
             closure_as_lambda: false,
             scoped_nns: false,
             scoped_spec_args: false,
+            debug_info: false,
         }
+    }
+
+    /// Names over `ast` under clang's debug-information printing policy
+    /// ([`Self::debug_info`]).
+    pub fn for_debug_info(ast: &'a Ast) -> Self {
+        AstNames { debug_info: true, ..AstNames::new(ast) }
     }
 
     /// These names, printing the types written in expressions canonical
@@ -131,6 +150,15 @@ impl<'a> AstNames<'a> {
             }
             DeclNameView::Conversion(q) => {
                 out.push_str("operator ");
+                // clang `DeclarationName::print`: a conversion to a class
+                // prints the class's bare name (`operator basic_string_view`),
+                // as the debug-information names keep it.
+                if self.debug_info
+                    && let Some(d) = self.ast.types.as_record(self.ast.types.canonical(q))
+                {
+                    self.write_decl_name_value(self.ast.decls.get(d).name(), out);
+                    return;
+                }
                 write_type(&self.ast.types, self, q, PrintOptions::SUGARED, out);
             }
             DeclNameView::LiteralOperator(s) => {
@@ -477,11 +505,12 @@ impl<'a> AstNames<'a> {
         self.append_scope(n.ctx(), depth + 1, out);
         match kind {
             DeclKind::Namespace => {
-                if self
-                    .ast
-                    .decls
-                    .namespace(ctx)
-                    .is_some_and(super::super::decl::NamespaceData::is_inline)
+                if !self.debug_info
+                    && self
+                        .ast
+                        .decls
+                        .namespace(ctx)
+                        .is_some_and(super::super::decl::NamespaceData::is_inline)
                 {
                     return;
                 }
@@ -1595,6 +1624,9 @@ impl TypeNames for AstNames<'_> {
     }
 
     fn preferred_name(&self, decl: DeclId) -> Option<QualType> {
+        if self.debug_info {
+            return None;
+        }
         self.ast.preferred_name_of(decl)
     }
 
@@ -1658,8 +1690,16 @@ impl TypeNames for AstNames<'_> {
     fn write_value(&self, _ty: QualType, value: ConstValueId, out: &mut String) {
         // A converted argument of a known parameter (clang's
         // `IncludeType` is false unless the parameter is `auto`; WP-071).
+        // The debug-information policy's
+        // `AlwaysIncludeTypeForTemplateArgument` types an integral
+        // argument (`3UL`, `(n::E)2`), not the members of a class value.
+        let integral = self.debug_info
+            && matches!(
+                self.ast.consts.scalar(value),
+                Some(Scalar::Int { .. } | Scalar::Bool { .. })
+            );
         let opts = ValueOptions {
-            include_type: false,
+            include_type: integral,
             ..ValueOptions::with_style(PrintStyle::TemplateArg)
         };
         self.ast.consts.print(value, &self.ast.strings, self, &opts, out);
@@ -1737,6 +1777,9 @@ impl PrintEnv for AstNames<'_> {
     }
 
     fn enumerator(&self, ty: QualType, bits: &IntBits<'_>, out: &mut String) -> bool {
+        if self.debug_info {
+            return false;
+        }
         let Some(e) = self.ast.types.as_enum(ty) else { return false };
         let e = self.ast.definition(e).unwrap_or(e);
         for m in self.ast.members(e) {

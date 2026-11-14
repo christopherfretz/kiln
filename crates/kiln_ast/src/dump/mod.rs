@@ -228,6 +228,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 closure_as_lambda: false,
                 scoped_nns: false,
                 scoped_spec_args: false,
+                debug_info: false,
             },
             opts,
             out,
