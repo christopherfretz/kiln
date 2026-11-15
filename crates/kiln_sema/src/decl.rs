@@ -3540,6 +3540,10 @@ impl Sema<'_, '_> {
                 };
                 invalid = self.diagnose_unexpanded_declarator(ty, "declaration type", d.name_loc());
             }
+            // A parameter of an unknown type (`U(a);`) makes the
+            // declaration invalid: clang checks no redeclaration for it
+            // (WP-1448).
+            invalid |= d.function_params().is_some_and(|ps| ps.iter().any(|p| p.invalid));
             return self.act_on_special_member_declarator(ds, ty, d, invalid);
         }
         if head.is_none() && !ds.is_typedef() && self.is_function_spec_declarator(d, ty) {
@@ -4213,7 +4217,7 @@ impl Sema<'_, '_> {
     /// `name` at `loc` with type `underlying`, the previous one being `p`
     /// (`alias_template`: both are alias template patterns). The previous
     /// declaration to chain to, `None` after a diagnostic.
-    fn check_typedef_redefinition(
+    pub(crate) fn check_typedef_redefinition(
         &mut self,
         p: DeclId,
         underlying: QualType,
@@ -9258,6 +9262,19 @@ impl Sema<'_, '_> {
         self.emit(self.diag(DiagId::sema_standalone_tag_qualifier, qual_loc).arg(kind));
     }
 
+    /// After an elaborated reference `struct n` in a block diagnosed as
+    /// naming a typedef-name, type alias or template ([dcl.type.elab]/2),
+    /// whether the invalid recovery tag is pushed on the block scope, as
+    /// clang pushes it on the current scope: a second `struct n` (or
+    /// `(struct n *)0`) in the block then finds it and is not diagnosed
+    /// again (WP-1448). Only elaborated-type-specifiers find it
+    /// ([`Sema::is_elab_only_local`]). Not when the conflicting name is
+    /// declared in the same block (clang's lookup still finds that).
+    fn conflict_tag_visible(&self, n: Symbol) -> bool {
+        self.in_local_scope()
+            && !self.lookup_current_scope(n).iter().any(|&d| !is_tag_kind(self.kind_of(d)))
+    }
+
     /// An unqualified tag `n` that redeclares nothing, naming an entity
     /// of another kind (`kind_conflict`): an elaborated reference to a
     /// non-tag, a class template over a non-template, or a class over a
@@ -9325,6 +9342,9 @@ impl Sema<'_, '_> {
         // anyway, invalid and hidden from lookup (clang's recovery as an
         // anonymous tag).
         let mut conflict = false;
+        // The conflict's recovery tag is visible to later lookups
+        // (`conflict_tag_visible`).
+        let mut conflict_visible = false;
         let mut respecialized = false;
         let mut param_shadow = false;
         if let Some((n, nloc)) = name {
@@ -9361,10 +9381,13 @@ impl Sema<'_, '_> {
                     opaque_enum,
                     nloc,
                 );
+                conflict_visible =
+                    conflict && use_ == TagUse::Reference && self.conflict_tag_visible(n);
             }
             if let Some(&p) = found.last()
                 && use_ == TagUse::Reference
                 && qualifier.is_none()
+                && !self.is_elab_only_local(p)
                 && self.diagnose_tag_hidden_by_type_name(keyword, n, p, nloc)
             {
                 // clang's recovery: the elaborated name still denotes the tag.
@@ -9568,7 +9591,7 @@ impl Sema<'_, '_> {
         if let Some((n, _)) = name
             && (self.in_local_scope() || self.c_hoisted_to_block(ctx))
             && qualifier.is_none()
-            && !conflict
+            && (!conflict || conflict_visible)
             && !proto_tag
         {
             self.push_local(n, d);

@@ -982,6 +982,25 @@ impl Sema<'_, '_> {
                 }
                 continue;
             }
+            let typedef =
+                |me: &Self, x| matches!(me.kind_of(x), DeclKind::Typedef | DeclKind::TypeAlias);
+            if typedef(self, d) && typedef(self, t) {
+                // [namespace.udecl]/11 with [basic.scope.scope]/4: a
+                // typedef-name redeclaring the typedef-name a
+                // using-declarator named conflicts only when it denotes
+                // another type; checked as a redeclaration of the target
+                // (clang's `MergeTypedefNameDecl` sees through the
+                // shadow; in a class, [class.mem.general]/6 makes any
+                // redeclaration an error).
+                let Some(name) = name.as_ident() else { continue };
+                let ty = self.ast.decls.typedef(d).map_or(QualType::ERROR, |x| x.underlying);
+                let loc = self.decl_loc(d);
+                if self.check_typedef_redefinition(t, ty, false, name, loc).is_some() {
+                    continue;
+                }
+                self.ast.decls.set_flags(d, kiln_ast::decl::DeclFlags::INVALID);
+                return true;
+            }
             if !self.using_conflicts(t, d) {
                 continue;
             }

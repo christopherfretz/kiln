@@ -40,13 +40,22 @@ sema_explicit_inst_declaration_after_definition = Error (0) "explicit instantiat
 sema_explicit_inst_duplicate = Error (1) "duplicate explicit instantiation of '{0}'";
 sema_explicit_inst_exception_spec_mismatch = Error (0) "exception specification in explicit instantiation does not match instantiated one";
 sema_explicit_inst_inline = Error (0) "explicit instantiation cannot be 'inline'";
+// [expr.prim.id.qual]/3 (clang `err_explicit_instantiation_must_be_global`).
+sema_explicit_inst_must_be_global = Error (1) "explicit instantiation of '{0}' must occur at global scope";
+// clang 22 `err_explicit_instantiation_no_candidate`: the matching member's
+// constraints are not satisfied ([temp.explicit]/10, [over.match.viable]/3).
+sema_explicit_inst_no_candidate = Error (1) "no viable candidate for explicit instantiation of '{0}'";
 sema_explicit_inst_nontemplate_type = Error (1) "explicit instantiation of non-templated type '{0}'";
 sema_explicit_inst_not_known = Error (1) "explicit instantiation of '{0}' does not refer to a function template, variable template, member function, member class, or static data member";
+// [expr.prim.id.qual]/3 (clang `err_explicit_instantiation_out_of_scope`).
+sema_explicit_inst_out_of_scope = Error (2) "explicit instantiation of '{0}' not in a namespace enclosing '{1}'";
 sema_explicit_inst_requires_name = Error (0) "explicit instantiation declaration requires a name";
 sema_explicit_inst_undefined_func_template = Error (1) "explicit instantiation of undefined function template '{0}'";
 sema_explicit_inst_undefined_member = Error (3) "explicit instantiation of undefined {0:member class|member function|static data member} '{1}' of class template '{2}'";
 sema_explicit_inst_undefined_template = Error (1) "explicit instantiation of undefined template '{0}'";
 sema_explicit_inst_undefined_var_template = Error (1) "explicit instantiation of undefined variable template '{0}'";
+// C++11-C++20 [temp.explicit]/5 (clang `err_explicit_instantiation_unqualified_wrong_namespace`).
+sema_explicit_inst_unqualified_wrong_namespace = Error (2) "explicit instantiation of '{0}' must occur in namespace '{1}'";
 sema_explicit_non_ctor_or_conv = Error (0) "'explicit' can only be applied to a constructor or conversion function";
 sema_explicit_non_function = Error (0) "'explicit' can only appear on non-static member functions";
 sema_explicit_object_lambda_ambiguous_base = Error (2) "lambda {0} is inaccessible due to ambiguity:{1}";

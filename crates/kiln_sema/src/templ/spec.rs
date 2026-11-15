@@ -252,6 +252,8 @@ impl Sema<'_, '_> {
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
             }
             TagForm::ExplicitInst { declaration } => {
+                let n = self.decl_name(tmpl);
+                self.check_explicit_inst_scope(tmpl, n, qualifier.is_some(), name_loc);
                 let spec =
                     self.act_on_explicit_class_inst(tmpl, args, &locs, declaration, name_loc)?;
                 Ok((Some(spec), self.spec_tag_type(keyword, name, args, spec)))
@@ -423,6 +425,87 @@ impl Sema<'_, '_> {
             .with_note(note);
         self.emit(d);
         file
+    }
+
+    /// [expr.prim.id.qual]/3 (WP-1448): an explicit instantiation whose
+    /// name is qualified (its nested-name-specifier is declarative) must
+    /// inhabit a scope that contains the entity instantiated, i.e. a
+    /// namespace enclosing the innermost namespace of `pattern` (the
+    /// template, or the member of the class template). `name` is the
+    /// entity as clang prints it. An unqualified name is checked only
+    /// before C++23: C++11-C++20 [temp.explicit]/5 required the
+    /// template's own namespace (or, for an inline one, a namespace of
+    /// its enclosing namespace set); P1787 dropped that sentence and the
+    /// working draft has no replacement, so from C++23 an unqualified
+    /// explicit instantiation found by lookup is valid (clang and GCC
+    /// still reject it; docs/status/deviations.md). Diagnosed, the
+    /// instantiation still takes effect, as clang's
+    /// `CheckExplicitInstantiationScope` recovers. A class or block
+    /// scope is rejected by the parser.
+    pub(crate) fn check_explicit_inst_scope(
+        &mut self,
+        pattern: DeclId,
+        name: String,
+        qualified: bool,
+        loc: Loc,
+    ) {
+        if self.inst.stack.len() != self.templ.explicit_depth {
+            return;
+        }
+        let cur = self.ast.redecl_context(self.ctx);
+        if !matches!(self.kind_of(cur), DeclKind::Namespace | DeclKind::TranslationUnit) {
+            return;
+        }
+        let mut orig = self.ast.decls.get(pattern).ctx().unwrap_or(self.ast.tu);
+        for _ in 0..10_000 {
+            if matches!(self.kind_of(orig), DeclKind::Namespace | DeclKind::TranslationUnit) {
+                break;
+            }
+            orig = self.ast.decls.get(orig).ctx().unwrap_or(self.ast.tu);
+        }
+        let ok = if qualified {
+            self.encloses(cur, orig)
+        } else {
+            self.std >= kiln_lex::Std::Cxx23 || self.in_enclosing_namespace_set(cur, orig)
+        };
+        if ok {
+            return;
+        }
+        let note =
+            self.diag(DiagId::note_explicit_instantiation_here, self.ast.decls.get(pattern).loc());
+        let d = if self.kind_of(orig) == DeclKind::TranslationUnit {
+            self.diag(DiagId::sema_explicit_inst_must_be_global, loc).arg(name)
+        } else if qualified {
+            self.diag(DiagId::sema_explicit_inst_out_of_scope, loc)
+                .arg(name)
+                .arg(self.decl_name(orig))
+        } else {
+            self.diag(DiagId::sema_explicit_inst_unqualified_wrong_namespace, loc)
+                .arg(self.qualified_decl_name(pattern))
+                .arg(self.decl_name(orig))
+        };
+        self.emit(d.with_note(note));
+    }
+
+    /// Whether namespace `cur` is `ns` or, while `ns` is inline, one of
+    /// the namespaces enclosing it ([namespace.def.general]/7).
+    fn in_enclosing_namespace_set(&self, cur: DeclId, mut ns: DeclId) -> bool {
+        let cur = self.ast.first(cur);
+        for _ in 0..10_000 {
+            if self.ast.first(ns) == cur {
+                return true;
+            }
+            let inline = self
+                .ast
+                .decls
+                .namespace(self.ast.first(ns))
+                .is_some_and(kiln_ast::decl::NamespaceData::is_inline);
+            match self.ast.decls.get(ns).ctx() {
+                Some(p) if inline => ns = self.ast.redecl_context(p),
+                _ => return false,
+            }
+        }
+        false
     }
 
     // -- partial specializations ---------------------------------------------------------
@@ -1078,6 +1161,9 @@ impl Sema<'_, '_> {
             return false;
         }
         let Some((ext, _)) = self.templ.explicit_inst.take() else { return false };
+        let pattern = self.ast.instantiated_from(m).unwrap_or(m);
+        let n = self.decl_name(m);
+        self.check_explicit_inst_scope(pattern, n, true, name_loc);
         self.explicit_member_class_inst(m, ext.is_some(), name_loc);
         true
     }

@@ -465,6 +465,10 @@ impl Sema<'_, '_> {
             .instantiated_from(ctor)
             .and_then(|p| self.ast.definition(p))
             .map_or_else(|| self.ast.decls.get(ctor).loc(), |d| self.ast.decls.get(d).loc());
+        // A class made invalid by an invalid member (`zz x;`): its
+        // members are not initialized implicitly, so no "must explicitly
+        // initialize" error follows (clang; WP-1448).
+        let any_errors = any_errors || self.ast.decls.get(class).has(DeclFlags::INVALID);
         let mut info = InitInfo {
             ctor,
             iik,

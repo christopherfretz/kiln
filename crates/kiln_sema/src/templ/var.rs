@@ -773,6 +773,16 @@ impl Sema<'_, '_> {
         self.emit(e);
     }
 
+    /// `v<args>` for a diagnostic: variable template `tmpl` (unqualified)
+    /// with the specialization's written arguments `args`.
+    fn var_spec_inst_name(&self, tmpl: DeclId, args: ArgListId) -> String {
+        let mut n = self.decl_name(tmpl);
+        let canon = self.ast.types.canonical_args(args);
+        let names = crate::names::sema_names(self);
+        kiln_ast::types::write_arg_list_scoped(&self.ast.types, &names, canon, &mut n);
+        n
+    }
+
     /// The explicit instantiation definition of variable template
     /// specialization `v` at `name_loc`, once checked.
     fn explicit_var_spec_def(&mut self, v: DeclId, name_loc: Loc) {
@@ -837,6 +847,8 @@ impl Sema<'_, '_> {
             };
             let Some((i, info)) = self.ast.spec_info(v).map(|(i, s)| (i, *s)) else { return };
             self.explicit_inst_visibility_attrs(v, attrs);
+            let n = self.var_spec_inst_name(sid.template, info.print_args);
+            self.check_explicit_inst_scope(sid.template, n, d.qualifier.is_some(), name_loc);
             // Checked in clang's order: the redeclaration, then (whatever
             // its effect) the type; a later explicit instantiation sees
             // this one even when its type is wrong.
@@ -891,6 +903,9 @@ impl Sema<'_, '_> {
             return;
         };
         let m = self.ast.first(m);
+        let pattern = self.ast.instantiated_from(m).unwrap_or(m);
+        let n = self.decl_name(m);
+        self.check_explicit_inst_scope(pattern, n, true, name_loc);
         if let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) {
             match info.kind {
                 SpecKind::ExplicitSpecialization => return,

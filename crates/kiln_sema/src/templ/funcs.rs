@@ -520,6 +520,8 @@ impl Sema<'_, '_> {
             let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
             self.explicit_inst_visibility_attrs(m.spec, &attrs);
             self.explicit_inst_annotations(m.spec, ds, d, name_loc);
+            let n = self.decl_name(m.template);
+            self.check_explicit_inst_scope(m.template, n, d.qualifier.is_some(), name_loc);
             self.act_on_explicit_function_inst(m, ext.is_some(), name_loc);
             return Ok(None);
         }
@@ -557,6 +559,8 @@ impl Sema<'_, '_> {
         }
         let attrs: Vec<_> = ds.attrs.iter().chain(&d.attrs).copied().collect();
         self.explicit_inst_visibility_attrs(m.spec, &attrs);
+        let n = self.decl_name(m.template);
+        self.check_explicit_inst_scope(m.template, n, true, loc);
         self.act_on_explicit_function_inst(m, ext.is_some(), loc);
     }
 
@@ -1078,6 +1082,9 @@ impl Sema<'_, '_> {
             }
             let Some(pty) = self.declared_fn_type(c) else { continue };
             if self.ast.types.same_type(pty, ty) {
+                if inst && self.clang_compat >= 22 && self.explicit_inst_unsatisfied(c, d, name) {
+                    return Some(None);
+                }
                 return Some(Some(self.ast.first(c)));
             }
             if exc.is_none() && self.same_ignoring_exc_spec(pty, ty) {
@@ -1139,6 +1146,35 @@ impl Sema<'_, '_> {
         let e = self.with_class_defined_note(e, q);
         self.emit(e);
         Some(None)
+    }
+
+    /// clang 22 (`-fclang-compat=22`): an explicit instantiation whose
+    /// declarator matches member function `c` of a class template
+    /// specialization only by type, with `c`'s trailing requires-clause
+    /// not satisfied, has no viable candidate ([temp.explicit]/10 skips
+    /// such a member only in a class's explicit instantiation;
+    /// [over.match.viable]/3). Diagnosed (true) with the satisfaction
+    /// notes; clang 19 instantiates the member (WP-1448).
+    fn explicit_inst_unsatisfied(&mut self, c: DeclId, d: &Declarator, name: DeclName) -> bool {
+        let loc = d.name_loc();
+        let Some(sat) = self.check_function_constraints(c, loc) else { return false };
+        if self.sat_ok(sat) {
+            return false;
+        }
+        if self.sat_hard_error(sat) {
+            return true;
+        }
+        let note = self
+            .diag(DiagId::note_ovl_candidate_kind_not_viable, self.ast.decls.get(c).loc())
+            .arg("function")
+            .arg("constraints not satisfied");
+        let e = self
+            .diag(DiagId::sema_explicit_inst_no_candidate, loc)
+            .arg(self.decl_name_str(name))
+            .with_note(note);
+        let e = self.with_sat_notes(e, sat);
+        self.emit(e);
+        true
     }
 
     /// Where the definition of member `m` of a class template
@@ -1386,6 +1422,9 @@ impl Sema<'_, '_> {
         name_loc: Loc,
     ) {
         let Some((i, info)) = self.ast.member_spec_info(m).map(|(i, x)| (i, *x)) else { return };
+        let pattern = self.ast.instantiated_from(m).unwrap_or(m);
+        let n = self.decl_name(m);
+        self.check_explicit_inst_scope(pattern, n, true, name_loc);
         let name = self.qualified_decl_name(m);
         match (info.kind, declaration) {
             (

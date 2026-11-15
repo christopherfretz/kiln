@@ -231,6 +231,12 @@ impl Sema<'_, '_> {
         if self.sat_ok(sat) {
             return false;
         }
+        // The check itself was ill-formed (a hard error, already
+        // diagnosed): clang's `CheckFunctionConstraints` fails and the
+        // use is not diagnosed again (WP-1448).
+        if self.sat_hard_error(sat) {
+            return true;
+        }
         let d =
             self.diag(DiagId::sema_reference_to_unsatisfied_function, loc).arg(self.decl_arg(f));
         let d = self.with_sat_notes(d, sat);
@@ -310,6 +316,15 @@ impl Sema<'_, '_> {
     /// A satisfied result.
     pub(crate) fn satisfied_id(&mut self) -> SatId {
         self.inst.concepts.push(Satisfaction { ok: true, records: Vec::new() })
+    }
+
+    /// Whether unsatisfied `id` failed by a hard error diagnosed while
+    /// checking it ([temp.constr.atomic]/3: an atomic constraint not of
+    /// type `bool`, or not a constant expression): such a failure leaves
+    /// no record to explain it.
+    pub(crate) fn sat_hard_error(&self, id: SatId) -> bool {
+        let s = self.inst.concepts.sat(id);
+        !s.ok && s.records.is_empty()
     }
 
     /// Whether satisfaction `id` holds.
