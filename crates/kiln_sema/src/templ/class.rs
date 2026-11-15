@@ -1214,13 +1214,13 @@ impl Sema<'_, '_> {
         // specialization (clang `InstantiateClass` `InstantiateAttrs`):
         // from here it prints by its `preferred_name` typedef.
         if matched.is_none() && self.ast.has_preferred_name_attr(tmpl) {
-            let first = self.ast.first(spec);
-            self.ast.templates.mark_preferred_named(first);
+            self.ast.templates.mark_preferred_named(self.ast.first(spec));
         }
         let parent = self.ast.decls.get(spec).ctx().unwrap_or(self.ast.tu);
         let outer = self.inst_context_pairs(parent);
         self.in_inst_context(parent, |s| s.instantiate_class_body(spec, def, &args, &outer));
         self.replay_dependent_access(def, spec);
+        self.note_used_attr_members(spec, poi);
         self.pop_inst_frame();
         // clang `InstantiateClass` returns the specialization's
         // invalidity: the use that instantiated it fails quietly (`A<int>
@@ -1230,6 +1230,33 @@ impl Sema<'_, '_> {
             return false;
         }
         self.ast.definition(spec).is_some()
+    }
+
+    /// The member function templates of class template specialization
+    /// `spec` (just instantiated at `poi`) whose pattern carries GNU
+    /// `used` and has no definition are noted as used there, so an
+    /// inline one is `-Wundefined-inline` at the end of the unit, with
+    /// the class's point of instantiation as its use (clang; WP-1448).
+    /// Non-template `used` members are referenced, and instantiated, by
+    /// [`Sema::reference_used_members`]. A non-template class's `used`
+    /// member template is not a use (clang).
+    fn note_used_attr_members(&mut self, spec: DeclId, poi: Loc) {
+        let Some(def) = self.ast.definition(spec) else { return };
+        let members: Vec<DeclId> = self.ast.members(def).collect();
+        for m in members {
+            if self.kind_of(m) != DeclKind::FunctionTemplate {
+                continue;
+            }
+            let Some(f) = self.ast.template_info(m).and_then(|i| i.pattern) else { continue };
+            // A pattern with a body is defined once it is instantiated.
+            let pattern_defined = self
+                .ast
+                .instantiated_from(f)
+                .is_some_and(|p| self.ast.definition(self.ast.first(p)).is_some());
+            if !pattern_defined && self.find_attr(f, kiln_ast::attr::AttrKind::USED).is_some() {
+                self.note_undefined_use(f, poi);
+            }
+        }
     }
 
     /// Instantiates the definition of `r`, a member class of a class

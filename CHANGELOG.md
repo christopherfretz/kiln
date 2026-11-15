@@ -77,9 +77,9 @@ Planned as 1.3.0.
 
 ### Changed
 
-- The PCH snapshot format is 10 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426, WP-1414 and WP-1435; new diagnostics, options and AST
-  data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
+- The PCH snapshot format is 11 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426, WP-1414, WP-1435 and WP-1448; new diagnostics, options
+  and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
   it is not misread, as [spec/pch.md](spec/pch.md) describes.
 
 ### Fixed
@@ -234,6 +234,28 @@ Planned as 1.3.0.
   of explicitly instantiated classes and of classes with a key function
   are emitted in one source order. Only the order of definitions in the
   output changes.
+- C++: an explicit instantiation whose name is qualified must appear in a
+  namespace that encloses its template ([expr.prim.id.qual]/3), as clang
+  checks it: "explicit instantiation of 'E' not in a namespace enclosing
+  'N'", or "must occur at global scope"; before C++23 an unqualified one
+  must be in the template's namespace (WP-1448). kiln accepted these
+  before. From C++23 an unqualified one is accepted (the rule was
+  removed; docs/status/deviations.md).
+- C++: a typedef-name declared after a using-declaration that named a
+  typedef-name is checked against it: another type is "typedef
+  redefinition with different types", the same type is valid (WP-1448).
+- Fewer follow-on errors (WP-1448): a second `struct I` naming the same
+  typedef in a block is not diagnosed again; a constructor with a
+  parameter of an unknown type is not also "cannot be redeclared"; an
+  invalid class gets no "must explicitly initialize the reference
+  member"; a constraint that is not `bool` is not reported again as an
+  invalid reference. At `-fclang-compat=22` an explicit instantiation of
+  a member whose constraints are not satisfied is clang 22's "no viable
+  candidate for explicit instantiation".
+- A `used` member function template of a class template that is never
+  defined gets `-Wundefined-inline` when the class is instantiated, as
+  clang (WP-1448). A `used` destructor of a class template is accepted,
+  where clang rejects it (docs/status/deviations.md).
 
 ## [1.2.1] - 2026-11-14
 

@@ -119,7 +119,12 @@ impl Sema<'_, '_> {
             // ([`Sema::check_spec_scope`]). A templated declaration, an
             // explicit specialization without a template-id and a member
             // specialization are all checked here (WP-1174).
-            if d.spec_id.is_some() {
+            // An explicit instantiation's scope is checked against the
+            // instantiated entity ([`Sema::check_explicit_inst_scope`],
+            // clang's `CheckExplicitInstantiationScope`).
+            if d.spec_id.is_some()
+                || (self.templ.explicit_inst.is_some() && self.at_explicit_head())
+            {
                 return QualifiedDecl::Keep;
             }
             let m = self.not_enclosing_diag(cur, dc, &n, loc);

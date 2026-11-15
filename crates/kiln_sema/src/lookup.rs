@@ -420,9 +420,20 @@ impl Sema<'_, '_> {
     ) -> Option<Found> {
         let hit = match kind {
             LookupKind::Tag => s.find(name, Ns::Tag),
-            LookupKind::Ordinary => s.find(name, Ns::Ordinary).or_else(|| s.find(name, Ns::Tag)),
+            LookupKind::Ordinary => s.find(name, Ns::Ordinary).or_else(|| {
+                s.locals
+                    .iter()
+                    .rev()
+                    .find(|e| e.0 == name && e.2 == Ns::Tag && !self.is_elab_only_local(e.1))
+                    .map(|e| e.1)
+            }),
             LookupKind::All => {
-                let v: Vec<DeclId> = s.locals.iter().filter(|e| e.0 == name).map(|e| e.1).collect();
+                let v: Vec<DeclId> = s
+                    .locals
+                    .iter()
+                    .filter(|e| e.0 == name && !self.is_elab_only_local(e.1))
+                    .map(|e| e.1)
+                    .collect();
                 let found = self.filter(v, kind);
                 return (!found.is_empty()).then_some(found);
             }
@@ -430,7 +441,11 @@ impl Sema<'_, '_> {
                 .locals
                 .iter()
                 .rev()
-                .find(|(n, d, _)| *n == name && self.accept(self.ast.strip_shadow(*d), kind))
+                .find(|(n, d, _)| {
+                    *n == name
+                        && !self.is_elab_only_local(*d)
+                        && self.accept(self.ast.strip_shadow(*d), kind)
+                })
                 .map(|e| e.1),
         };
         let mut hit = self.prefer_valid_local(s, hit?);
@@ -439,11 +454,23 @@ impl Sema<'_, '_> {
         if kind != LookupKind::Tag
             && self.is_invalid_typedef_name(hit)
             && let Some(t) = s.find(name, Ns::Tag)
+            && !self.is_elab_only_local(t)
         {
             hit = t;
         }
         let found = self.filter(self.block_scope_set(s, name, hit, kind), kind);
         (!found.is_empty()).then_some(found)
+    }
+
+    /// Whether block-scope entry `d` is the invalid recovery tag of an
+    /// elaborated reference to a typedef-name ([`Sema::act_on_tag`]):
+    /// only a tag lookup (a later elaborated-type-specifier) finds it, so
+    /// `I x;` still names the typedef (WP-1448).
+    pub(crate) fn is_elab_only_local(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        n.has(DeclFlags::INVALID)
+            && n.misc().friend() == kiln_ast::decl::FriendKind::Undeclared
+            && is_tag_kind(n.kind())
     }
 
     /// A typedef or alias-declaration diagnosed as invalid.
