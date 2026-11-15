@@ -99,6 +99,13 @@ environment:
 ";
 
 fn main() -> ExitCode {
+    // An interrupted run ends with the signal's status, after the signal
+    // thread's cleanup, never with the command's own (spec/harness.md
+    // "Jobserver", Signals).
+    jobs::finish(command())
+}
+
+fn command() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("test") => test::main(args),
@@ -365,8 +372,17 @@ fn ci_unit_steps(oracle_only: bool, group: Option<&str>) -> Vec<Vec<String>> {
     vec![step, own(&["test", "-p", pkg, "--test", target, "--", "--nocapture"])]
 }
 
-#[allow(clippy::too_many_lines, reason = "one linear sequence of gate steps")]
+/// `cargo xtask ci`: the steps, then the total time (also after a failed
+/// step).
 fn ci(args: impl Iterator<Item = String>) -> ExitCode {
+    let start = std::time::Instant::now();
+    let code = ci_steps(args);
+    eprintln!("xtask ci: total: {:.1}s", start.elapsed().as_secs_f64());
+    code
+}
+
+#[allow(clippy::too_many_lines, reason = "one linear sequence of gate steps")]
+fn ci_steps(args: impl Iterator<Item = String>) -> ExitCode {
     let usage = CI_USAGE.replace("{groups}", &unit_group_names());
     let args = match parse_ci_args(args) {
         Ok(Some(a)) => a,
@@ -627,6 +643,8 @@ fn ci_step(step: &[String]) -> bool {
     let mut retried = false;
     loop {
         eprintln!("xtask ci: cargo {shown}");
+        let start = std::time::Instant::now();
+        let took = || format!("{:.1}s", start.elapsed().as_secs_f64());
         let mut cmd = std::process::Command::new(env!("CARGO"));
         cmd.args(step);
         let (status, stderr) = match util::process::run_step(&mut cmd, true) {
@@ -637,6 +655,7 @@ fn ci_step(step: &[String]) -> bool {
             }
         };
         if status.success() {
+            eprintln!("xtask ci: cargo {shown}: ok in {}", took());
             return true;
         }
         if test::ci_should_retry(&stderr, retried) {
@@ -647,7 +666,7 @@ fn ci_step(step: &[String]) -> bool {
             retried = true;
             continue;
         }
-        eprintln!("xtask ci: failed with {status}");
+        eprintln!("xtask ci: failed with {status} in {}", took());
         return false;
     }
 }
