@@ -1123,7 +1123,9 @@ impl Cg<'_> {
     /// clang `EmitFunctionEpilog` (a naked function has no epilogue: the
     /// return block ends in `unreachable`).
     pub(crate) fn emit_epilog(&mut self) -> R<()> {
-        if self.f.naked {
+        // A naked function has no epilogue, and a function whose type is
+        // `noreturn` does not return (`FI.isNoReturn()`).
+        if self.f.naked || self.cur_fn_type_noreturn() {
             self.f.fir.push(Op::Unreachable, LTy::VOID);
             return Ok(());
         }

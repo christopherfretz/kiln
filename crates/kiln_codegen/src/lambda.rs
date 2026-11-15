@@ -157,6 +157,11 @@ impl Cg<'_> {
         } else {
             None
         };
+        // The call operator's `noreturn` marks the call and ends the block
+        // as any direct call's does (clang `EmitCall`), whichever spelling
+        // declared it.
+        let (extra, noreturn) = self.noreturn_extra(Some(call_op), fty);
+        let from = self.f.calls.len();
         let r = self.call_vals(
             &sig,
             V::C(Value::func(f)),
@@ -165,8 +170,11 @@ impl Cg<'_> {
             &vals,
             &[],
             dest,
-            &[],
+            &extra,
         )?;
+        if noreturn {
+            self.finish_noreturn_call(from, Some(f), None)?;
+        }
         if sig.sret() {
             return Ok(());
         }

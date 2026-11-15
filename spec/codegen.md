@@ -918,7 +918,16 @@ them, the aggregate path included (a reversed `<=>` with a class result).
   delegating call (an inheriting constructor, a lambda's static invoker,
   a thunk: `Cg::delegate_call_arg`, clang `EmitDelegateCallArg`) is a
   plain `load ptr` of its slot with neither, at every compat level
-  (WP-416).
+  (WP-416). The static invoker's call of a `noreturn` call operator is
+  marked as a direct call's is (`Cg::noreturn_call`: the call-site
+  `noreturn`, then `unreachable`), whichever spelling declared it; the
+  invoker itself is `noreturn` (IR attribute, `DIFlagNoReturn`) only when
+  the function type is, i.e. for the GNU spelling: a C++11
+  `[[noreturn]]` appertains to the call operator alone, as clang 19 and
+  22 emit it. The invoker (and a generic lambda's invoker template) is
+  private, as clang's `addFunctionPointerConversion` makes it, so its
+  debug declaration has no access flag (WP-1434,
+  `debug_lambda_noreturn_invoker.cpp`).
 - **Captured locals (WP-581).** A `DeclRefExpr` marked
   `REFERS_TO_ENCLOSING` names the closure's member for the capture
   (`captured_var_lvalue`: a by-copy capture is the field, a by-reference
@@ -1536,6 +1545,31 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   deferred (inline, internal or instantiated) body (WP-1389); a
   line-tables-only unit has no `globals:`, `retainedTypes:`, `enums:`,
   `imports:` and no variable records;
+- every `DISubprogram`'s `type:` (definition, member declaration in
+  class scope, declaration-only subprogram of a using-declaration) is a
+  `DISubroutineType`: the function's declared type is taken through all
+  top-level sugar (clang `castAs<FunctionProtoType>`), so a function
+  declared through a function typedef (`typedef int Fn(int); Fn h;`,
+  `static Fn f;`, `typedef int CF() const;`), an alias, `decltype` or a
+  substituted template parameter gets its prototype, with the sugar of
+  its return and parameter types kept; `noreturn`, the method's
+  cv-qualifiers (the `this` type) and its ref-qualifier are read through
+  the same sugar (`Cg::di_fn_decl_type`, `debuginfo/types.rs`; WP-1434,
+  `debug_fn_typedef_fwd_decl.cpp`, `debug_member_fn_typedef.cpp`). A
+  thunk and a coroutine `await_suspend` wrapper get clang's empty
+  `DISubroutineType`;
+- a function type with a non-default calling convention carries clang
+  19's `getDwarfCC` as `cc:` on its `DISubroutineType` (subprograms and
+  function pointer types alike; LLVM writes `DW_AT_calling_convention`
+  on the subprogram's DIE from it): `DW_CC_LLVM_Win64` (`ms_abi`),
+  `DW_CC_LLVM_vectorcall`, `DW_CC_LLVM_X86RegCall`,
+  `DW_CC_LLVM_IntelOclBicc`, `DW_CC_LLVM_PreserveMost`,
+  `DW_CC_LLVM_PreserveAll`, `DW_CC_LLVM_PreserveNone`,
+  `DW_CC_LLVM_Swift`, `DW_CC_LLVM_SwiftTail`, and `DW_CC_LLVM_AAPCS` for
+  `aarch64_vector_pcs` and `aarch64_sve_pcs`; none for a convention the
+  target defaults or ignores (`sysv_abi` on x86-64 Linux, `cdecl`,
+  which sema normalizes to the default; WP-1434,
+  `debug_calling_conv.cpp`);
 - class and function template specialization names under clang's
   debug-information printing policy (every argument, inline namespaces
   kept, enumeration values as casts, integral arguments typed),
