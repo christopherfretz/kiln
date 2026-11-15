@@ -156,6 +156,19 @@ case (`crates/kiln_source/tests/snap.rs`). Code whose output depends on
 map order already sorts or uses an ordered map; snapshots do not change
 that rule.
 
+**Fixed hashers** (WP-1415). The impls for `HashMap`/`HashSet` (std and
+hashbrown) require `S: kiln_snap::FixedHasher`: a hasher whose hashes
+are the same in every process, implemented for every
+`BuildHasherDefault<H>` (kiln's `FxBuildHasher` is one). The standard
+library's `RandomState` has none, because it is seeded per process: a
+table of it iterates in another order in every run, so two builds of the
+same snapshot would write different bytes (spec/pch.md
+"Reproducibility"). Encoding such a table is a compile error (the
+`compile_fail` example on `FixedHasher`). With a fixed hasher, the
+order is a function of the table's history, which a deterministic
+compile repeats. A hand-written root that iterates a table itself, or
+fills a list from one, keeps the same rule.
+
 **Canonical mode** (`Writer::canonical`, `to_bytes_canonical`) writes
 maps and sets sorted by each entry's encoded bytes, with the length in
 place of the capacity: two equal states give equal bytes whatever their

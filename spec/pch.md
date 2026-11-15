@@ -460,6 +460,43 @@ written (`tests/pch_snapshot_producer.rs`
 `a_prefix_without_a_snapshot_still_gets_a_pch`).
 `-Wno-pch-snapshot-unused` silences it.
 
+**Reproducibility** (WP-1415). Two producers give byte-identical PCH
+files when they run the same kiln binary with the same command line,
+in the same working directory, over input files with the same paths,
+contents and modification times, with the same environment variables
+that the identity reads (`SOURCE_DATE_EPOCH`, `KILN_REPRODUCIBLE_TIME`)
+and the same toolchain found (GCC installation, resource directory).
+Nothing else enters the bytes: not the output path, the process, the
+time of the build, thread scheduling (the only threads list
+directories, and their results are joined in order), memory addresses
+(sharing is numbered in write order, spec/snap.md "Sharing") or a hash
+seed (every hash table a snapshot writes has a fixed hasher,
+spec/snap.md "Hash maps"); the encoding has no padding. The bytes that
+legitimately depend on the invocation:
+
+| bytes | depend on |
+|---|---|
+| the record's `cwd` line and the identity's `working directory` | the absolute working directory |
+| each `file` line | the file's absolute path, size, modification time (nanoseconds) and content |
+| the record's `kiln` line, the identity's `kiln build` | the kiln version and commit |
+| the identity's `include search path`, `predefined macros`, `target`, `options` | the command line and what it resolves to: the search directories as found (absolute where the toolchain's are), the target, the predefines |
+| the identity's `reproducible time`; the text of `__DATE__`, `__TIME__` and `__TIMESTAMP__` the header expanded | `-fkiln-reproducible-time`, `KILN_REPRODUCIBLE_TIME`, `SOURCE_DATE_EPOCH` (spec/driver.md "Reproducible time"); without them, the time of the build and the header's modification time |
+| the roots' file names (and `__FILE__` spellings) | the names as the header and the search list spell them: relative for a relative `-I`, absolute for an absolute one; `-fmacro-prefix-map` rewrites `__FILE__` |
+| the `image` and `end` lines | the checksums of all of the above |
+
+So a packager who builds the same sources twice in the same directory,
+with the modification times clamped (as `SOURCE_DATE_EPOCH` builds
+usually do) and the same epoch, gets the same file; building in another
+directory changes the record's `cwd` and `file` lines and the identity's
+working directory, and nothing in the roots (a relative `-I` leaves no
+absolute path there). Byte equality is promised between runs of one
+kiln binary, not between kiln builds for different host architectures:
+a hash table's iteration order follows its group width, which is the
+host's. Tests: `tests/pch_snapshot.rs` `reproducible::same_bytes_twice`
+(a C++ prefix with templates, lambdas and inline functions, and a C
+prefix, each built twice in fresh processes) and
+`reproducible::another_directory_changes_only_its_paths`.
+
 ## Consumer
 
 A compile with `-include-pch p.pch` (or a PCH found by the `-include`

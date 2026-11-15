@@ -66,6 +66,13 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- A precompiled header is byte-reproducible (WP-1415): two builds of
+  the same header with the same kiln, command line and working
+  directory, over files with the same modification times, now write the
+  same bytes. Before, hash tables in the snapshot were written in a
+  per-process order. spec/pch.md "Reproducibility" lists the bytes that
+  depend on the invocation (the working directory, each input's path,
+  size and modification time, the identity).
 - `-mcmodel=` is checked against the target and the relocation model as
   clang's driver checks it (WP-1419). On AArch64, `-mcmodel=large` with
   the default PIE, `-fpic`, `-fPIE` or `-static` is now clang's error

@@ -5,7 +5,7 @@ use std::any::TypeId;
 use std::borrow::Cow;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::hash::{BuildHasher, Hash};
+use std::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
 use std::marker::PhantomData;
 use std::num::NonZero;
 use std::path::PathBuf;
@@ -722,6 +722,33 @@ fn duplicate<T: ?Sized>(r: &Reader<'_>) -> SnapError {
     r.invalid::<T>("duplicate key")
 }
 
+/// A hasher whose hashes are the same in every process: the only kind a
+/// snapshotted hash table may use (WP-1415, spec/snap.md "Reproducible
+/// output"). A table is written in iteration order, and that order
+/// follows the hashes, so a randomly seeded hasher (the standard
+/// library's `RandomState`) would make two runs over the same input
+/// write different bytes. `RandomState` has no impl, so such a table is
+/// a compile error where it is encoded rather than a stream that differs
+/// between builds:
+///
+/// ```compile_fail
+/// let m: std::collections::HashMap<u32, u32> = Default::default();
+/// let mut w = kiln_snap::Writer::new();
+/// w.put(&m); // `RandomState` is not a `FixedHasher`
+/// ```
+///
+/// ```
+/// use std::hash::{BuildHasherDefault, DefaultHasher};
+/// let m: std::collections::HashMap<u32, u32, BuildHasherDefault<DefaultHasher>> =
+///     (0..64).map(|n| (n, n * 2)).collect();
+/// let mut w = kiln_snap::Writer::new();
+/// w.put(&m);
+/// ```
+pub trait FixedHasher: BuildHasher + Default + 'static {}
+
+/// Every `BuildHasherDefault`: each hasher starts from `H::default()`.
+impl<H: Hasher + Default + 'static> FixedHasher for BuildHasherDefault<H> {}
+
 macro_rules! hash_map {
     ($($map:ident)::+) => {
         /// The capacity, the length, then the entries in iteration order;
@@ -732,7 +759,7 @@ macro_rules! hash_map {
         where
             K: Snap + Eq + Hash,
             V: Snap,
-            S: BuildHasher + Default + 'static,
+            S: FixedHasher,
         {
             fn put(&self, w: &mut Writer) {
                 if w.is_canonical() {
@@ -777,7 +804,7 @@ macro_rules! hash_set {
         impl<T, S> Snap for $($set)::+<T, S>
         where
             T: Snap + Eq + Hash,
-            S: BuildHasher + Default + 'static,
+            S: FixedHasher,
         {
             fn put(&self, w: &mut Writer) {
                 if w.is_canonical() {

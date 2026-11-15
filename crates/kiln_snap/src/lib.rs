@@ -27,6 +27,7 @@ pub mod timing;
 mod wire;
 
 pub use error::{ErrorKind, SnapError};
+pub use impls::FixedHasher;
 pub use kiln_snap_derive::Snap;
 pub use schema::{Desc, Schema, SchemaHash, schema_hash};
 pub use wire::{ID_SPACES, Reader, WINDOW, Writer};

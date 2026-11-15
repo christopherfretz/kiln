@@ -29,7 +29,7 @@ use crate::ids::{DiagClass, DiagId};
 use crate::policy::{Mapping, Policy, Severity};
 
 /// Mappings a state replaces, over the command-line policy.
-type Overrides = HashMap<DiagId, Mapping>;
+type Overrides = kiln_source::fx::FxHashMap<DiagId, Mapping>;
 
 /// The `#pragma clang diagnostic` state at one point, detached from
 /// locations ([`crate::DiagEngine::pragma_snapshot`]): the states the
@@ -62,7 +62,7 @@ pub(crate) struct Pragmas {
 impl Pragmas {
     pub(crate) fn new() -> Pragmas {
         Pragmas {
-            states: vec![Arc::new(Overrides::new())],
+            states: vec![Arc::new(Overrides::default())],
             points: Vec::new(),
             cur: 0,
             stack: Vec::new(),
@@ -233,7 +233,7 @@ impl Pragmas {
     pub(crate) fn install(&mut self, at: Loc, snap: &PragmaSnapshot) {
         let base = u32::try_from(self.states.len()).unwrap_or(u32::MAX);
         for st in &snap.states {
-            let mut over = Overrides::new();
+            let mut over = Overrides::default();
             for &(id, severity, f) in st {
                 over.insert(
                     id,

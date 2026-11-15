@@ -12,6 +12,8 @@
 //!   chained and module consumers. Each restored compile is compared with
 //!   the replay of the same PCH ([cpp.include]); where clang's PCH is the
 //!   reference, clang++-19's output is checked when it is installed.
+//! - [`reproducible`] (WP-1415): the same PCH built twice is the same
+//!   bytes; built in another directory, only the paths differ.
 #![forbid(unsafe_code)]
 
 /// WP-1392: identity, validation, modes and the section header.
@@ -1098,5 +1100,179 @@ mod behaviour {
         assert!(restored(&s), "{}", s.stderr);
         assert_eq!(s.code, 0, "{}", s.stderr);
         assert_eq!(diags(&s), diags(&r));
+    }
+}
+
+/// WP-1415: a PCH is byte-reproducible (spec/pch.md "Reproducibility").
+mod reproducible {
+
+    use std::fmt::Write as _;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, SystemTime};
+
+    use kiln_pp::bmi;
+
+    fn kilnpp() -> PathBuf {
+        Path::new(env!("CARGO_BIN_EXE_kiln")).with_file_name("kiln++")
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("kiln-pch-repro-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A C++ prefix with class and function templates, generic and
+    /// non-generic lambdas, inline and `constexpr` functions, a virtual
+    /// class, an enumeration, macros, include guards and a `#pragma once`.
+    const CXX: &[(&str, &str)] = &[
+        (
+            "h.h",
+            "#pragma once\n#include <s.h>\n#include \"g.h\"\n#include \"many.h\"\n\
+             template <class T> struct Box { T v; constexpr T get() const { return v; } };\n\
+             template <class T> constexpr T twice(T x) { return [](T y) { return y + y; }(x); }\n\
+             inline int counter() { static int n = 0; return ++n; }\n\
+             namespace ns { struct A { virtual ~A() {} int f(int); };\n\
+             inline int A::f(int x) { return x * V; } }\n\
+             constexpr int k = twice(Box<int>{21}.get());\n\
+             inline auto pick = [](auto a, auto b) { return a < b ? b : a; };\n\
+             template <class... Ts> constexpr int count(Ts...) { return sizeof...(Ts); }\n\
+             static_assert(count(1, 2.0, 'c') == 3 && k == 42);\n\
+             enum class E { a, b, c };\n#define MAC(x) ((x) + G)\n",
+        ),
+        ("g.h", "#ifndef G_H\n#define G_H\n#define G 2\nstruct G1 { int g = G; };\n#endif\n"),
+        ("sys/s.h", "#define V 1\ntypedef unsigned long size_type;\n"),
+    ];
+
+    /// A C prefix: structures, `static inline` functions, an enumeration,
+    /// typedefs, macros and an include guard.
+    const C: &[(&str, &str)] = &[
+        (
+            "h.h",
+            "#include <s.h>\n#include \"g.h\"\n#include \"many.h\"\n\
+             struct point { int x, y; };\n\
+             static inline int add(int a, int b) { return a + b + G; }\n\
+             enum color { RED, GREEN, BLUE };\ntypedef struct point point_t;\n\
+             #define SQ(x) ((x) * (x))\nextern int table[16];\n",
+        ),
+        ("g.h", "#ifndef G_H\n#define G_H\n#define G 2\n#endif\n"),
+        ("sys/s.h", "#define V 1\ntypedef unsigned long size_type;\n"),
+    ];
+
+    /// Writes `files` under `d`, each with the same modification time,
+    /// and `many.h`, which includes sixteen guarded headers: enough
+    /// entries in the preprocessor's tables of files and guards that a
+    /// hash table written in a per-process order would differ.
+    fn write(d: &Path, files: &[(&str, &str)]) {
+        let t = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut many: Vec<(String, String)> = (0..16)
+            .map(|i| {
+                let text = format!(
+                    "#ifndef M{i}_H\n#define M{i}_H\nstatic inline int m{i}(void) {{ return {i}; }}\n#endif\n"
+                );
+                (format!("m/m{i}.h"), text)
+            })
+            .collect();
+        let mut all = String::new();
+        for i in 0..16 {
+            let _ = writeln!(all, "#include \"m/m{i}.h\"");
+        }
+        many.push(("many.h".to_owned(), all));
+        let many = many.iter().map(|(n, t)| (n.as_str(), t.as_str()));
+        for (name, text) in files.iter().copied().chain(many) {
+            let p = d.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, text).unwrap();
+            let f = std::fs::OpenOptions::new().write(true).open(&p).unwrap();
+            f.set_modified(t).unwrap();
+        }
+    }
+
+    /// Builds `h.h` in `d` into `out` (a fresh process) and returns the bytes.
+    fn build(d: &Path, c: bool, out: &str) -> Vec<u8> {
+        let (std, lang) = if c { ("-std=c17", "c-header") } else { ("-std=c++20", "c++-header") };
+        let o = Command::new(kilnpp())
+            .args([std, "-isystem", "sys", "-x", lang, "h.h", "-o", out])
+            .current_dir(d)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success(), "{out}:\n{stderr}");
+        assert!(stderr.is_empty(), "{out}:\n{stderr}");
+        std::fs::read(d.join(out)).unwrap()
+    }
+
+    /// The record's text and the snapshot section of `pch`.
+    fn split(pch: &[u8]) -> (String, Vec<u8>) {
+        let at = pch.windows(5).position(|w| w == b"\nend ").unwrap();
+        let text_end = at + 1 + pch[at + 1..].iter().position(|&b| b == b'\n').unwrap() + 1;
+        let text = std::str::from_utf8(&pch[..text_end]).unwrap().to_owned();
+        let sections = bmi::read_sections(&pch[text_end..]).unwrap();
+        let snap = sections.into_iter().find(|s| s.tag == bmi::SECTION_SNAPSHOT);
+        (text, snap.expect("the PCH has a snapshot section").bytes)
+    }
+
+    /// The same prefix, built twice with the same command line in the same
+    /// directory, gives the same bytes: a C++ prefix and a C one.
+    #[test]
+    fn same_bytes_twice() {
+        for (c, files) in [(false, CXX), (true, C)] {
+            let d = scratch(if c { "c" } else { "cxx" });
+            write(&d, files);
+            let a = build(&d, c, "a.pch");
+            let b = build(&d, c, "b.pch");
+            let _ = split(&a);
+            assert!(a == b, "c={c}: two builds of the same PCH differ");
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    /// Built in another directory with the same relative command line, the
+    /// PCH differs only where spec/pch.md "Reproducibility" says: the
+    /// record's `cwd` and `file` lines (and its checksums), and the
+    /// identity's working directory. With two directories of names of the
+    /// same length, putting one's name for the other's makes the record's
+    /// lines and the whole snapshot section equal.
+    #[test]
+    fn another_directory_changes_only_its_paths() {
+        let root = scratch("dirs");
+        let (d1, d2) = (root.join("one"), root.join("two"));
+        for d in [&d1, &d2] {
+            std::fs::create_dir_all(d).unwrap();
+            write(d, CXX);
+        }
+        let a = build(&d1, false, "h.pch");
+        let b = build(&d2, false, "h.pch");
+        assert!(a != b, "the record names the working directory");
+        let (n1, n2) = (
+            std::fs::canonicalize(&d1).unwrap().display().to_string(),
+            std::fs::canonicalize(&d2).unwrap().display().to_string(),
+        );
+        let ((ta, sa), (tb, sb)) = (split(&a), split(&b));
+        let mut differing = Vec::new();
+        for (la, lb) in ta.lines().zip(tb.lines()) {
+            if la == lb {
+                continue;
+            }
+            let word = la.split(' ').next().unwrap_or("");
+            differing.push(word.to_owned());
+            if word == "cwd" || word == "file" {
+                assert_eq!(la.replace(&n1, &n2), lb, "only the directory differs");
+            }
+        }
+        differing.dedup();
+        assert_eq!(differing, ["cwd", "file", "image", "end"], "{ta}\n{tb}");
+        assert_eq!(ta.lines().count(), tb.lines().count());
+        assert_eq!(sa.len(), sb.len());
+        let from_one = sa.windows(n1.len()).filter(|w| *w == n1.as_bytes()).count();
+        assert_eq!(from_one, 1, "the directory is in the identity once");
+        let mut fixed = sa.clone();
+        let at = sa.windows(n1.len()).position(|w| w == n1.as_bytes()).unwrap();
+        fixed[at..at + n1.len()].copy_from_slice(n2.as_bytes());
+        assert!(fixed == sb, "the snapshot depends on the directory beyond the identity");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

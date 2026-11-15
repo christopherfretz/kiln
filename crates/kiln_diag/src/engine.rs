@@ -2,7 +2,7 @@
 //! warning policy, deduplicates, enforces the error limit, counts, and
 //! hands [`Diagnostic`] records to a [`DiagSink`].
 
-use std::collections::HashSet;
+use kiln_source::fx::FxHashSet;
 use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -33,7 +33,7 @@ pub trait DiagSink {
 
 struct State<'sm> {
     sink: Box<dyn DiagSink + Send + 'sm>,
-    seen: HashSet<(DiagId, Span, u64)>,
+    seen: FxHashSet<(DiagId, Span, u64)>,
 }
 
 /// The diagnostics engine. Shared by reference (`&DiagEngine` is
@@ -103,7 +103,7 @@ impl<'sm> DiagEngine<'sm> {
             policy,
             error_limit: opts.error_limit,
             clang_compat: opts.clang_compat,
-            state: Mutex::new(State { sink: Box::new(sink), seen: HashSet::new() }),
+            state: Mutex::new(State { sink: Box::new(sink), seen: FxHashSet::default() }),
             pragmas: RwLock::new(Pragmas::new()),
             has_pragmas: AtomicBool::new(false),
             errors: AtomicU32::new(0),

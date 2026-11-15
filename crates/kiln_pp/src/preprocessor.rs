@@ -1,7 +1,8 @@
 //! The preprocessor driver: the include / macro-expansion stack, the main
 //! lexing loop ([cpp.pre], [cpp.rescan]) and the public API.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use kiln_source::fx::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 use std::rc::Rc;
 
 use kiln_diag::{Diag, DiagEngine, DiagId, SCRATCH_BUFFER_NAME};
@@ -301,7 +302,7 @@ pub struct Preprocessor<'a, 'd> {
     /// A token lexed while markers were queued (returned after them).
     pub(crate) pending: Option<Token>,
     /// Scratch buffers: one virtual buffer per distinct string.
-    pub(crate) scratch: HashMap<Box<str>, FileId>,
+    pub(crate) scratch: FxHashMap<Box<str>, FileId>,
     /// Recycled token buffers.
     pub(crate) pool: Vec<Vec<PpTok>>,
     /// Spare `bounds` / `pre` vectors of macro arguments (see `read_args`).
@@ -310,19 +311,19 @@ pub struct Preprocessor<'a, 'd> {
     /// Directive-name classification by symbol.
     pub(crate) dirs: crate::directive::DirTable,
     pub(crate) counter: u32,
-    pub(crate) once_files: HashSet<FileId>,
+    pub(crate) once_files: FxHashSet<FileId>,
     /// Files with a detected include guard, and its macro.
-    pub(crate) guards: HashMap<FileId, Symbol>,
+    pub(crate) guards: FxHashMap<FileId, Symbol>,
     /// The `X` of a `#if !defined(X)` just evaluated by `eval_if`.
     pub(crate) if_ndef: Option<Symbol>,
     pub(crate) poisoned: SymMap<Span>,
     pub(crate) pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
-    pub(crate) entered: HashSet<FileId>,
+    pub(crate) entered: FxHashSet<FileId>,
     /// `-fkiln-source-path-style=gcc`: whether each directory a header was
     /// looked up relative to its includer in is a system one, by its GCC
     /// spelling (libcpp `make_cpp_dir`'s `dir_hash`: the first lookup in a
     /// directory fixes it; `directive.rs` `record_gcc_file_name`).
-    pub(crate) gcc_dirs: HashMap<Box<str>, bool>,
+    pub(crate) gcc_dirs: FxHashMap<Box<str>, bool>,
     pub(crate) include_depth: u32,
     /// An `#include` hit the depth limit (clang
     /// `HasReachedMaxIncludeDepth`): from then on a file already entered
@@ -361,7 +362,7 @@ pub struct Preprocessor<'a, 'd> {
     /// Depth of `#pragma GCC/clang diagnostic push` (for "cannot pop").
     pub(crate) diag_pushes: u32,
     /// Scratch buffers holding `#embed` byte spellings.
-    pub(crate) embed_bufs: HashSet<FileId>,
+    pub(crate) embed_bufs: FxHashSet<FileId>,
     /// Attribute-macro definition history (see [`crate::AttrMacro`]).
     pub(crate) attr_macros: Vec<crate::AttrMacro>,
     /// Index into `attr_macros` of each macro whose attribute-macro
@@ -428,19 +429,19 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             callbacks: Box::new(NoCallbacks),
             markers: VecDeque::new(),
             pending: None,
-            scratch: HashMap::new(),
+            scratch: FxHashMap::default(),
             pool: Vec::new(),
             arg_pool: Vec::new(),
             syms,
             dirs: crate::directive::DirTable::new(interner),
             counter: 0,
-            once_files: HashSet::new(),
-            guards: HashMap::new(),
+            once_files: FxHashSet::default(),
+            guards: FxHashMap::default(),
             if_ndef: None,
             poisoned: SymMap::default(),
             pushed: SymMap::default(),
-            entered: HashSet::new(),
-            gcc_dirs: HashMap::new(),
+            entered: FxHashSet::default(),
+            gcc_dirs: FxHashMap::default(),
             include_depth: 0,
             include_limit_reached: false,
             unit_first_hash: None,
@@ -458,7 +459,7 @@ impl<'a, 'd> Preprocessor<'a, 'd> {
             quiet_lex: false,
             dir_hash: Loc::default(),
             diag_pushes: 0,
-            embed_bufs: HashSet::new(),
+            embed_bufs: FxHashSet::default(),
             attr_macros: Vec::new(),
             attr_live: SymMap::default(),
             attr_macro_gen: 0,

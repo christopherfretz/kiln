@@ -37,6 +37,7 @@
 //! | `if_ndef`, `disable_expand`, `in_args`, `arg_preexpand`, `parsing_if`, `va_scope`, `in_directive`, `dir_eod`, `quiet_lex` | transient, at rest | no directive, argument or `#if` being read |
 //! | `name_gate` | at rest | must be off (`-fkiln-bmi-image` is not supported with snapshots) |
 
+use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -59,12 +60,12 @@ struct Decoded {
     macros: MacroTable,
     pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     poisoned: SymMap<Span>,
-    once_files: HashSet<FileId>,
-    guards: HashMap<FileId, Symbol>,
-    entered: HashSet<FileId>,
-    scratch: HashMap<Box<str>, FileId>,
-    embed_bufs: HashSet<FileId>,
-    gcc_dirs: HashMap<Box<str>, bool>,
+    once_files: FxHashSet<FileId>,
+    guards: FxHashMap<FileId, Symbol>,
+    entered: FxHashSet<FileId>,
+    scratch: FxHashMap<Box<str>, FileId>,
+    embed_bufs: FxHashSet<FileId>,
+    gcc_dirs: FxHashMap<Box<str>, bool>,
     counter: u32,
     include_limit_reached: bool,
     unit_first_hash: Option<Loc>,
@@ -484,12 +485,12 @@ impl Preprocessor<'_, '_> {
         .field::<MacroTable>("macros")
         .field::<SymMap<Vec<Option<Rc<MacroDef>>>>>("pushed")
         .field::<SymMap<Span>>("poisoned")
-        .field::<HashSet<FileId>>("once_files")
-        .field::<HashMap<FileId, Symbol>>("guards")
-        .field::<HashSet<FileId>>("entered")
-        .field::<HashMap<Box<str>, FileId>>("scratch")
-        .field::<HashSet<FileId>>("embed_bufs")
-        .field::<HashMap<Box<str>, bool>>("gcc_dirs")
+        .field::<FxHashSet<FileId>>("once_files")
+        .field::<FxHashMap<FileId, Symbol>>("guards")
+        .field::<FxHashSet<FileId>>("entered")
+        .field::<FxHashMap<Box<str>, FileId>>("scratch")
+        .field::<FxHashSet<FileId>>("embed_bufs")
+        .field::<FxHashMap<Box<str>, bool>>("gcc_dirs")
         .field::<u32>("counter")
         .field::<bool>("include_limit_reached")
         .field::<Option<Loc>>("unit_first_hash")
@@ -529,10 +530,10 @@ impl Preprocessor<'_, '_> {
             MacroTable::schema(s);
             SymMap::<Vec<Option<Rc<MacroDef>>>>::schema(s);
             SymMap::<Span>::schema(s);
-            HashSet::<FileId>::schema(s);
-            HashMap::<FileId, Symbol>::schema(s);
-            HashMap::<Box<str>, FileId>::schema(s);
-            HashMap::<Box<str>, bool>::schema(s);
+            FxHashSet::<FileId>::schema(s);
+            FxHashMap::<FileId, Symbol>::schema(s);
+            FxHashMap::<Box<str>, FileId>::schema(s);
+            FxHashMap::<Box<str>, bool>::schema(s);
             u32::schema(s);
             bool::schema(s);
             Option::<Loc>::schema(s);

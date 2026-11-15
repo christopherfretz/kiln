@@ -9,6 +9,7 @@ use std::{error, fmt, fs, io};
 use kiln_snap::Snap;
 
 use crate::arena::AppendVec;
+use crate::fx::FxHashMap;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
 
@@ -468,7 +469,7 @@ pub struct SourceManager {
     last_expansion: AtomicU32,
     /// Include-guarded files and the `#include` spelling suggested for
     /// each, set by the preprocessor.
-    guarded: Mutex<HashMap<FileId, Box<str>>>,
+    guarded: Mutex<FxHashMap<FileId, Box<str>>>,
     /// `-ffile-prefix-map=` / `-fmacro-prefix-map=` entries `(old, new)`,
     /// in clang's lookup order ([`Self::set_macro_prefix_map`]).
     macro_prefix_map: OnceLock<PrefixMap>,
@@ -477,7 +478,7 @@ pub struct SourceManager {
     /// GCC 16.1's spelling of each included file, recorded by the
     /// preprocessor under [`SourcePathStyle::Gcc`]
     /// ([`Self::set_gcc_file_name`]).
-    gcc_names: Mutex<HashMap<FileId, Box<str>>>,
+    gcc_names: Mutex<FxHashMap<FileId, Box<str>>>,
 }
 
 /// How the source-location builtins (`__builtin_FILE()`,
@@ -585,10 +586,10 @@ impl SourceManager {
             last_file: AtomicU32::new(0),
             prev_file: AtomicU32::new(0),
             last_expansion: AtomicU32::new(0),
-            guarded: Mutex::new(HashMap::new()),
+            guarded: Mutex::new(FxHashMap::default()),
             macro_prefix_map: OnceLock::new(),
             source_path_style: OnceLock::new(),
-            gcc_names: Mutex::new(HashMap::new()),
+            gcc_names: Mutex::new(FxHashMap::default()),
         }
     }
 

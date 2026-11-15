@@ -326,7 +326,7 @@ fn hash_maps_round_trip_and_canonical_is_order_free() {
     assert_eq!(ra.capacity(), a.capacity());
     assert_eq!(to_bytes_canonical(&a), to_bytes_canonical(&b));
     assert_eq!(to_bytes_canonical(&ra), to_bytes_canonical(&a));
-    let set: HashSet<String> = ["x", "y", "z"].iter().map(|s| (*s).to_owned()).collect();
+    let set: HashSet<String, FxBuild> = ["x", "y", "z"].iter().map(|s| (*s).to_owned()).collect();
     assert_eq!(round(&set), set);
     let mut hb: hashbrown::HashMap<u64, u8, FxBuild> = hashbrown::HashMap::default();
     hb.extend((0..100).map(|n| (n * 7, n as u8)));
@@ -728,7 +728,7 @@ fn schema_constant_sees_every_field_change() {
         <(u32, u64) as Snap>::SCHEMA_HASH,
         <(u64, u32) as Snap>::SCHEMA_HASH,
         <BTreeMap<u32, String> as Snap>::SCHEMA_HASH,
-        <HashMap<u32, String> as Snap>::SCHEMA_HASH,
+        <HashMap<u32, String, FxBuild> as Snap>::SCHEMA_HASH,
         <Rc<u32> as Snap>::SCHEMA_HASH,
         <Arc<u32> as Snap>::SCHEMA_HASH,
     ];

@@ -4,6 +4,7 @@
 //! with fresh preprocessor state, bracketed by [`Marker::UnitBegin`] /
 //! [`Marker::UnitEnd`].
 
+use kiln_source::fx::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -191,8 +192,8 @@ pub(crate) struct UnitSave {
     key: String,
     header: bool,
     macros: MacroTable,
-    once_files: HashSet<FileId>,
-    guards: HashMap<FileId, Symbol>,
+    once_files: FxHashSet<FileId>,
+    guards: FxHashMap<FileId, Symbol>,
     poisoned: SymMap<Span>,
     pushed: SymMap<Vec<Option<Rc<MacroDef>>>>,
     if_ndef: Option<Symbol>,
