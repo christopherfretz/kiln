@@ -275,6 +275,11 @@ fn kiln_ir(file: &Path, triple: &str) -> Result<String, String> {
         "-std=c++26",
         &format!("--target={triple}"),
         &compat,
+        // clang passes `SIZE_MAX` to the allocation function for an
+        // invalid run-time array bound; kiln throws
+        // `std::bad_array_new_length` first ([expr.new]/8, spec/codegen.md
+        // "Array new"), which the run tests check.
+        "-fno-kiln-new-bound-check",
         "-o",
         "-",
     ]

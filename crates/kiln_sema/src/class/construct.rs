@@ -116,7 +116,10 @@ impl Sema<'_, '_> {
         let at = self.begin_loc(e);
         let (variable, direct) = match ctx {
             ConvCtx::Initialization => (true, false),
-            ConvCtx::DirectInitialization | ConvCtx::Cast | ConvCtx::Condition => (true, true),
+            ConvCtx::DirectInitialization
+            | ConvCtx::Cast
+            | ConvCtx::CStyleCast
+            | ConvCtx::Condition => (true, true),
             _ => (false, false),
         };
         let sites = DiagSites {

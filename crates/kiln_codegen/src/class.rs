@@ -1021,6 +1021,39 @@ impl Cg<'_> {
         off + bsize > nv
     }
 
+    /// clang `EmitBaseInitializer`: a base initializer that uses `this`
+    /// in an evaluated operand (`B(this)`, `B(f())` for a member `f`)
+    /// sees the vtable pointers of `rd`'s structor first, so that a
+    /// conversion of `this` to a virtual base reads the offset from the
+    /// (construction) vtable this subobject is being built with
+    /// ([class.cdtor]/3), not from whatever the storage held. The vptrs
+    /// are stored again after the base initializers.
+    fn init_vptrs_for_base_init(&mut self, rd: DeclId, init: ExprId) -> R<()> {
+        if self.is_dynamic(rd) && self.expr_uses_this(init) {
+            self.init_vtable_ptrs(rd)?;
+        }
+        Ok(())
+    }
+
+    /// clang `BaseInitializerUsesThis` (`DynamicThisUseChecker`, an
+    /// `EvaluatedExprVisitor`): a `this` in `e` outside the unevaluated
+    /// operands of `sizeof`, `alignof`, `noexcept` and a
+    /// requires-expression.
+    fn expr_uses_this(&self, e: ExprId) -> bool {
+        let ast = self.ast;
+        let mut work = vec![e];
+        while let Some(x) = work.pop() {
+            match ast.exprs.get(x).kind() {
+                ExprKind::CXXThisExpr => return true,
+                ExprKind::UnaryExprOrTypeTraitExpr
+                | ExprKind::CXXNoexceptExpr
+                | ExprKind::RequiresExpr => {}
+                _ => ast.exprs.children_into(x, &ast.lists, &mut work),
+            }
+        }
+        false
+    }
+
     /// clang `EmitConstructorBody` (the base and complete variants share
     /// it: no virtual bases).
     pub(crate) fn emit_ctor_body(&mut self, d: DeclId, body: StmtId) -> R<()> {
@@ -1052,6 +1085,7 @@ impl Cg<'_> {
             match ci.kind {
                 CtorInitKind::Base => {
                     self.flush_memcpy_run(d, &mut run)?;
+                    self.init_vptrs_for_base_init(rd, ci.init)?;
                     let t = QualType::unqual(TypeId::new(ci.target));
                     let Some(base) = ast.types.as_record(t) else {
                         return err(Some(ci.loc), "base initializer of a non-class type");
@@ -1085,6 +1119,7 @@ impl Cg<'_> {
                         continue;
                     }
                     self.flush_memcpy_run(d, &mut run)?;
+                    self.init_vptrs_for_base_init(rd, ci.init)?;
                     let t = QualType::unqual(TypeId::new(ci.target));
                     let Some(base) = ast.types.as_record(t) else {
                         return err(Some(ci.loc), "base initializer of a non-class type");

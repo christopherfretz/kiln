@@ -84,6 +84,9 @@ fn kiln_ir_arch(
         llvm_major,
         // The oracle is clang 19 (`clang-19` below).
         clang_compat,
+        // clang's `new T[n]` passes SIZE_MAX for an invalid bound; kiln's [expr.new]/8
+        // check is compared elsewhere (`-fno-kiln-new-bound-check`).
+        bad_array_new_length: false,
         ..CodegenOptions::default()
     };
     let m = emit(&mut tu.ast, &mut tu.oven, &target, &opts).map_err(|e| format!("codegen: {e}"))?;

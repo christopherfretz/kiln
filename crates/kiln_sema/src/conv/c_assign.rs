@@ -28,7 +28,7 @@ fn action(ctx: ConvCtx) -> Option<&'static str> {
         ConvCtx::Argument => Some("1"),
         ConvCtx::Return => Some("2"),
         ConvCtx::Initialization | ConvCtx::DirectInitialization => Some("4"),
-        ConvCtx::Comparison | ConvCtx::Condition | ConvCtx::Cast => None,
+        ConvCtx::Comparison | ConvCtx::Condition | ConvCtx::Cast | ConvCtx::CStyleCast => None,
     }
 }
 

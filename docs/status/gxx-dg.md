@@ -73,6 +73,12 @@ structs, 1 case) is gone in the second run; it is on the 60 s edge.
 
 ### Wrong-code (272 cases, 107 tests)
 
+WP-1460 fixed cluster 4 (`expr/cast4.C`, `init/ctor2.C`) and most of
+cluster 9 (`bad_array_new1.C`, `bad_array_new2.C`, sized deallocation
+before C++14 in `sized-dealloc1.C`); `abi/vbase13.C`, `init/new40.C`,
+`aligned-new9.C` and `g++.jason/new3.C` remain (GCC layout and C++03
+limit, `-faligned-new=N`, `-fcheck-new`).
+
 Clang fails 58 of these tests too. Many of those depend on GCC-specific
 semantics (object-size builtins, `-flifetime-dse`, ICF addresses,
 `__PRETTY_FUNCTION__` text). The clusters below come first from the 38

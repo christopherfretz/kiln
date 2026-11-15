@@ -351,7 +351,7 @@ impl CodegenJob<'_> {
             no_builtin: a.no_builtin(),
             no_builtin_fns: a.no_builtin_fns(),
             freestanding: a.predef.freestanding.unwrap_or(false),
-            sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            sized_deallocation: a.predef.sized_deallocation_for(&job.std),
             short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
@@ -540,6 +540,9 @@ impl CodegenJob<'_> {
             // UBSan's `shift-base` depends on the language (WP-675).
             opts.sanitize.cplusplus = job.std.cplusplus;
             opts.sanitize.cxx20 = job.std.cplusplus && job.std.lex >= kiln_lex::Std::Cxx20;
+            opts.bad_array_new_length = job.std.cplusplus
+                && job.std.lex >= kiln_lex::Std::Cxx11
+                && a.new_bound_check.unwrap_or(true);
             // WP-1032: the ignorelists the driver validated.
             opts.ignorelist = a.sanitize.ignorelist(
                 opts.sanitize.kinds,

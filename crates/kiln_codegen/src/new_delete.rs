@@ -19,7 +19,7 @@ use kiln_source::Loc;
 use crate::builtins::PtrAlign;
 use crate::cleanup::{ArrayDelete, Cleanup, Depth, IrregularPartialArray, NewDelete, Saved};
 use crate::expr::LV;
-use crate::fir::{Fir, Op, V};
+use crate::fir::{Blk, Fir, Op, V};
 use crate::func::{Addr, CallArg, min_align};
 use crate::module::{Cg, R, err};
 use crate::tbaa::Tb;
@@ -601,8 +601,18 @@ impl Cg<'_> {
             }
         }
 
+        // [expr.new]/8: the bound is invalid (`invalid`, an `i1`) when
+        // negative, more than the initializers, or the allocation would
+        // exceed `PTRDIFF_MAX` bytes. From C++11 the allocation function
+        // is then not called (`new_bound_check`).
+        let mut invalid: Option<V> = None;
         // EmitCXXNewAllocSize.
-        let (size, size_nc, num_elems) = if is_array {
+        let (size, size_nc, num_elems) = if is_array && self.opts.bad_array_new_length {
+            let Some(ae) = x.array_size else {
+                return err(loc, "array new without a size");
+            };
+            self.new_array_size(ae, esize, asm, cookie, min_elems, &mut invalid)?
+        } else if is_array {
             let Some(ae) = x.array_size else {
                 return err(loc, "array new without a size");
             };
@@ -692,7 +702,10 @@ impl Cg<'_> {
             // initialization throw ([expr.new]/28; clang adds it to
             // `allocatorArgs`).
             placement_vals.push(CallArg::Scalar(p.v));
-            (p.v, if p.decl { p.align } else { alloc_align })
+            // The reserved placement form is non-throwing ([new.delete.placement]).
+            let check = self.new_bound_check(invalid, true)?;
+            let v = self.new_bound_join(check, p.v);
+            (v, if p.decl { p.align } else { alloc_align })
         } else {
             // A type-aware allocation function (P2719) is passed
             // `std::type_identity<T>{}` first (clang `EmitCXXNewExpr`).
@@ -732,7 +745,9 @@ impl Cg<'_> {
                 arg_tys.push(aq);
                 placement_vals.push(v);
             }
+            let check = self.new_bound_check(invalid, nothrow)?;
             let p = self.emit_new_delete_call(op_new, &vals, &arg_tys, loc)?;
+            let p = self.new_bound_join(check, p);
             let mut align = alloc_align;
             if !pass_align && af.replaceable {
                 let (bsize, _) = self.size_align(base);
@@ -858,6 +873,126 @@ impl Cg<'_> {
                 .push(Op::Phi { ty: LTy::PTR, inc: vec![(data, nn_end), (z, nb)] }, LTy::PTR));
         }
         Ok(data)
+    }
+
+    /// The size in bytes of `new T[ae]` (cookie included), the size
+    /// without the cookie and the element count, for C++11 and later
+    /// ([expr.new]/8): `invalid` is set to the `i1` that is true when the
+    /// bound is invalid, `None` when it cannot be (a constant in range: no
+    /// compare). One unsigned compare of the `size_t` bound against
+    /// `(PTRDIFF_MAX - cookie) / sizeof(T)` covers a negative signed
+    /// bound (sign-extended past `PTRDIFF_MAX`) and an overflowing size
+    /// together, as GCC's `max_outer_nelts`; a braced initializer adds a
+    /// compare against its length. An unsigned bound type too narrow to
+    /// reach the limit needs no compare. The elements are `esize * asm`
+    /// bytes (`asm` the constant inner dimensions).
+    fn new_array_size(
+        &mut self,
+        ae: ExprId,
+        esize: u64,
+        asm: u64,
+        cookie: u64,
+        min_elems: u64,
+        invalid: &mut Option<V>,
+    ) -> R<(V, V, Option<V>)> {
+        const LIMIT: u64 = i64::MAX as u64;
+        let tsm = esize.wrapping_mul(asm);
+        let max_n = LIMIT.saturating_sub(cookie).checked_div(tsm).unwrap_or(LIMIT);
+        let nv = match self.fold_int(ae) {
+            Some(c) => self.i64c(c),
+            None => self.emit_scalar(ae)?,
+        };
+        if let Some((_, c, _)) = self.cint(nv) {
+            let c = c as u64;
+            // Sema diagnoses a constant invalid bound ([expr.new]/8.5);
+            // one that reaches here is still never allocated.
+            if c > max_n || c < min_elems {
+                *invalid = Some(V::C(self.m.const_bool(true)));
+            }
+            let bytes = c.wrapping_mul(tsm);
+            let size = self.i64c(i128::from(bytes.wrapping_add(cookie)));
+            let size_nc = if cookie == 0 { size } else { self.i64c(i128::from(bytes)) };
+            let num = self.i64c(i128::from(c.wrapping_mul(asm)));
+            return Ok((size, size_nc, Some(num)));
+        }
+        let ast = self.ast;
+        let src = match ast.exprs.get(ae).kind() {
+            ExprKind::ImplicitCastExpr => ast.exprs.get(ast.exprs.operand(ae)).ty(),
+            _ => ast.exprs.get(ae).ty(),
+        };
+        let narrow = ast.types.is_integral(src) && !self.is_signed(src) && {
+            let bits = self.size_align(src).0 * 8;
+            bits < 64 && (1u64 << bits) - 1 <= max_n
+        };
+        let mut inv = None;
+        if !narrow {
+            let m = self.i64c(i128::from(max_n));
+            inv = Some(self.icmp(IntPredicate::Ugt, nv, m));
+        }
+        if min_elems > 0 {
+            let m = self.i64c(i128::from(min_elems));
+            let lt = self.icmp(IntPredicate::Ult, nv, m);
+            inv = Some(match inv {
+                Some(h) => self.bin(BinOp::Or, Flags::NONE, h, lt),
+                None => lt,
+            });
+        }
+        *invalid = inv;
+        let nuw = Flags::NUW;
+        let mut size = nv;
+        let mut num = nv;
+        if tsm != 1 {
+            let tv = self.i64c(i128::from(tsm));
+            size = self.bin(BinOp::Mul, nuw, nv, tv);
+            if asm != 1 {
+                num = if esize == 1 {
+                    size
+                } else {
+                    let a = self.i64c(i128::from(asm));
+                    self.bin(BinOp::Mul, nuw, nv, a)
+                };
+            }
+        }
+        let size_nc = size;
+        if cookie != 0 {
+            let cv = self.i64c(i128::from(cookie));
+            size = self.bin(BinOp::Add, nuw, size, cv);
+        }
+        Ok((size, size_nc, Some(num)))
+    }
+
+    /// [expr.new]/8.6: branch on an invalid bound before the allocation
+    /// function is called. A throwing allocation function becomes a call
+    /// of `__cxa_throw_bad_array_new_length` (the Itanium ABI's throw of
+    /// `std::bad_array_new_length`); a non-throwing one a null result,
+    /// for which the blocks (the invalid one and the join) are returned
+    /// for [`Self::new_bound_join`].
+    fn new_bound_check(&mut self, invalid: Option<V>, nothrow: bool) -> R<Option<(Blk, Blk)>> {
+        let Some(inv) = invalid else { return Ok(None) };
+        let bad = self.f.fir.create_block();
+        let ok = self.f.fir.create_block();
+        self.cond_br(inv, bad, ok);
+        self.emit_block(bad, false);
+        let r = if nothrow {
+            let join = self.f.fir.create_block();
+            self.br(join);
+            Some((bad, join))
+        } else {
+            self.emit_noreturn_runtime_call("__cxa_throw_bad_array_new_length")?;
+            None
+        };
+        self.emit_block(ok, false);
+        Ok(r)
+    }
+
+    /// The allocation `p` of a checked non-throwing new-expression, or
+    /// null from the invalid bound's block ([expr.new]/8.6.1).
+    fn new_bound_join(&mut self, check: Option<(Blk, Blk)>, p: V) -> V {
+        let Some((bad, join)) = check else { return p };
+        let Some(ok_end) = self.f.fir.cur() else { return p };
+        self.emit_block(join, false);
+        let z = V::C(self.m.const_null(LTy::PTR));
+        self.f.fir.push(Op::Phi { ty: LTy::PTR, inc: vec![(p, ok_end), (z, bad)] }, LTy::PTR)
     }
 
     /// A call of the `llvm.{op}.with.overflow.i64` intrinsic on `a`, `b`.

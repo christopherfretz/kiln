@@ -121,6 +121,20 @@ check access. In a SFINAE context `(D*)(B*)` is therefore valid whenever
 `is_virtual_base_of` tells a virtual base from a non-virtual one (WP-787,
 `tests/conformance/expr.cast/c-style-cast-inaccessible-base.cpp`).
 
+The static_cast a C-style or functional cast tries is also the
+"static_cast followed by a const_cast" of [expr.cast]/4.3: its standard
+conversion is computed in `ConvCtx::CStyleCast`, whose qualification step
+accepts any similar target (the same levels, [expr.const.cast]/3), casting
+cv-qualification away (clang's `IsQualificationConversion` with `CStyle`).
+So `(B*)pcd` for a `const D* pcd` is the derived-to-base conversion, with
+the base offset, typed `B*` (one `DerivedToBase` cast, as clang), not a
+`reinterpret_cast`; the same holds for `(void*)pci`, `BP(pcd)` and a pointer
+to member converted from base to derived. When that interpretation is
+ill-formed (an ambiguous base, a downcast through a virtual base) the cast
+is ill-formed, never reinterpreted ([expr.cast]/4: "even if a cast resulting
+from that interpretation is ill-formed"; WP-1460,
+`tests/conformance/expr.cast/cstyle-static-then-const*.cpp`).
+
 ## 4. Ranking (`compare_standard_conversions`)
 `compare_standard_conversions(a, b) -> IcsCompare {Better, Worse,
 Indistinguishable}` implements these rules in clang 19's
@@ -199,7 +213,9 @@ rejection. Test: `tests/conformance/basic.extended.fp/p1467-conversions.cpp`.
 - `Return`;
 - `Comparison`;
 - `Condition`, which is contextual bool and counts as direct ([conv.general]/4);
-- `Cast`.
+- `Cast`;
+- `CStyleCast`, the static_cast of a C-style or functional cast, whose
+  qualification step may cast cv-qualification away (§3, [expr.cast]/4.3).
 
 `ConvError { id, args, notes }` is emitted by the caller with
 `err.diag(s, e)`, which puts the caret at `e` (`err.diag_at(s, loc)` at

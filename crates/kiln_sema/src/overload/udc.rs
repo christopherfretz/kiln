@@ -29,9 +29,10 @@ const MAX_UDC_DEPTH: u8 = 2;
 /// [over.match.ref]/1.1; a condition and a cast are ones).
 pub(crate) fn udc_options(ctx: ConvCtx) -> IcsOptions {
     match ctx {
-        ConvCtx::DirectInitialization | ConvCtx::Condition | ConvCtx::Cast => {
-            IcsOptions::ALLOW_EXPLICIT
-        }
+        ConvCtx::DirectInitialization
+        | ConvCtx::Condition
+        | ConvCtx::Cast
+        | ConvCtx::CStyleCast => IcsOptions::ALLOW_EXPLICIT,
         _ => IcsOptions::NONE,
     }
 }
