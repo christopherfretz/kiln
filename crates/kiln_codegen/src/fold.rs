@@ -53,6 +53,24 @@ struct Bridge<'x> {
     ast: &'x mut Ast,
     abi: &'x Target,
     cxx_year: u32,
+    /// `decl_align` / `alignof_decl` answers by declaration (`true`: the
+    /// `alignof` rule): `kiln_abi::layout::decl_align` builds a new
+    /// `Layouter` per call, about a tenth of the fold pre-pass of a unit
+    /// whose initializers test the alignment of many globals
+    /// (`__builtin_is_aligned(&x, 8)`; WP-1434). Folding runs after Sema,
+    /// so a declaration's alignment cannot change.
+    aligns: FxHashMap<(DeclId, bool), u64>,
+}
+
+impl Bridge<'_> {
+    fn cached_align(&mut self, d: DeclId, alignof: bool) -> u64 {
+        if let Some(&a) = self.aligns.get(&(d, alignof)) {
+            return a;
+        }
+        let a = kiln_abi::layout::decl_align(self.ast, d, self.abi, alignof);
+        self.aligns.insert((d, alignof), a);
+        a
+    }
 }
 
 impl SemaBridge for Bridge<'_> {
@@ -81,11 +99,11 @@ impl SemaBridge for Bridge<'_> {
     }
 
     fn decl_align(&mut self, d: DeclId) -> u64 {
-        kiln_abi::layout::decl_align(self.ast, d, self.abi, false)
+        self.cached_align(d, false)
     }
 
     fn alignof_decl(&mut self, d: DeclId) -> u64 {
-        kiln_abi::layout::decl_align(self.ast, d, self.abi, true)
+        self.cached_align(d, true)
     }
 
     fn final_overrider(
@@ -140,7 +158,8 @@ pub(crate) fn prepass(ast: &mut Ast, oven: &mut Oven, target: &Target) -> Folds 
         c.tu();
         (c.out, c.inits, c.c_static, c.imm, c.statics, c.dtors, c.ps_args, c.arr_lists)
     };
-    let mut b = Bridge { ast, abi: target, cxx_year: oven.cxx_year() };
+    let mut b =
+        Bridge { ast, abi: target, cxx_year: oven.cxx_year(), aligns: FxHashMap::default() };
     let mut folds = Folds::default();
     let mut refolded = FxHashSet::default();
     let mut tried = FxHashSet::default();

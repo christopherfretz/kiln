@@ -2206,7 +2206,11 @@ impl Cg<'_> {
 
     /// The call-site attributes of a call of `d` (`noreturn` per
     /// `noreturn_call`) and whether `unreachable` follows it.
-    fn noreturn_extra(&self, d: Option<DeclId>, fty: QualType) -> (Vec<kiln_llvm::Attr>, bool) {
+    pub(crate) fn noreturn_extra(
+        &self,
+        d: Option<DeclId>,
+        fty: QualType,
+    ) -> (Vec<kiln_llvm::Attr>, bool) {
         let (site, unreachable) = self.noreturn_call(d, fty);
         (
             if site {

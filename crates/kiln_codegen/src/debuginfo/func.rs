@@ -3,7 +3,6 @@
 
 use kiln_ast::attr::AttrKind;
 use kiln_ast::decl::{DeclFlags, DeclKind, DefinitionBits, TagKind};
-use kiln_ast::types::TypeView;
 use kiln_ast::{DeclId, QualType, StmtId};
 use kiln_llvm::{FuncId, GlobalId, MdField, MetadataId};
 use kiln_source::Loc;
@@ -85,9 +84,7 @@ impl Cg<'_> {
                 _ => unit,
             };
             if reduced {
-                let noreturn = self.has_fn_attr(d, AttrKind::NORETURN)
-                    || matches!(n.ty().map(|q| ast.types.view(q.ty())), Some(TypeView::Function(fp)) if fp.info().noreturn());
-                if noreturn {
+                if self.di_fn_noreturn(d) {
                     fl.push("DIFlagNoReturn");
                 }
                 tparams = self.di_template_params(d);
@@ -105,7 +102,7 @@ impl Cg<'_> {
                     None => fake(self),
                 }
             } else {
-                match n.ty().and_then(|q| self.di_type(q)) {
+                match self.di_free_fn_type(d) {
                     Some(t) => t,
                     None => fake(self),
                 }
@@ -273,12 +270,10 @@ impl Cg<'_> {
         self.f.fir.declare(DbgRec { addr: slot.addr, var, expr, loc });
     }
 
-    /// The method qualifiers of member function `m`.
+    /// The method qualifiers of member function `m`, also through a
+    /// function typedef (`typedef int CF() const;`).
     fn di_this_quals(&self, m: DeclId) -> u8 {
-        match self.ast.decls.get(m).ty().map(|q| self.ast.types.view(q.ty())) {
-            Some(TypeView::Function(fp)) => fp.info().this_quals().bits(),
-            _ => 0,
-        }
+        self.di_fn_proto(m).map_or(0, |fp| fp.info().this_quals().bits())
     }
 
     fn di_declaring(&self) -> bool {

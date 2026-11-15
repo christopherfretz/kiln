@@ -3923,14 +3923,37 @@ impl Cg<'_> {
         }
         let virt =
             ast.redecls_of(d).any(|r| ast.decls.function(r).is_some_and(|f| f.spec.is_virtual()));
-        let gnu = ast.redecls_of(d).any(|r| {
+        (ty_nr || self.gnu_noreturn(d) || !virt, true)
+    }
+
+    /// Function `d` has the GNU `noreturn` attribute on a redeclaration,
+    /// which clang folds into its function type (`handleNoReturnAttr`),
+    /// unlike the C++11 `[[noreturn]]`.
+    fn gnu_noreturn(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        ast.redecls_of(d).any(|r| {
             ast.lists.iter::<kiln_ast::AttrId>(ast.attrs.of_decl(r)).any(|a| {
                 let n = ast.attrs.get(a);
                 n.kind == kiln_ast::attr::AttrKind::NORETURN
                     && n.syntax == kiln_ast::attr::AttrSyntax::Gnu
             })
-        });
-        (ty_nr || gnu || !virt, true)
+        })
+    }
+
+    /// The function being emitted has a `noreturn` function type (clang
+    /// `CGFunctionInfo::isNoReturn`): the GNU attribute, or a type that
+    /// carries it (a lambda's static invoker of a GNU-`noreturn` call
+    /// operator, a function declared through a `noreturn` typedef).
+    pub(crate) fn cur_fn_type_noreturn(&self) -> bool {
+        let ast = self.ast;
+        let Some(d) = self.f.decl else { return false };
+        self.gnu_noreturn(d)
+            || ast
+                .decls
+                .get(d)
+                .ty()
+                .and_then(|q| ast.types.proto(q))
+                .is_some_and(|p| p.info().noreturn())
     }
 
     /// The returned call `e` of a `[[clang::musttail]]` return is about

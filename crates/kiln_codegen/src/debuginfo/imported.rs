@@ -406,7 +406,7 @@ impl Cg<'_> {
             }
             _ => unit,
         };
-        let ty = if let Some(t) = n.ty().and_then(|q| self.di_type(q)) {
+        let ty = if let Some(t) = self.di_free_fn_type(t) {
             t
         } else {
             let e = self.m.md_tuple(&[]);
@@ -417,9 +417,7 @@ impl Cg<'_> {
             )
         };
         let mut fl = vec!["DIFlagPrototyped"];
-        let noreturn = self.has_fn_attr(t, kiln_ast::attr::AttrKind::NORETURN)
-            || matches!(n.ty().map(|q| ast.types.view(q.ty())), Some(TypeView::Function(fp)) if fp.info().noreturn());
-        if noreturn {
+        if self.di_fn_noreturn(t) {
             fl.push("DIFlagNoReturn");
         }
         let mut sp: Vec<&str> = Vec::new();

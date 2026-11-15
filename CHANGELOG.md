@@ -46,6 +46,19 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Debug info: a function declared through a function typedef, an alias
+  or `decltype` and named by a using-declaration without a definition
+  in the unit (`namespace N { typedef int Fn(int); Fn h; } using N::h;`)
+  no longer loses the whole module's debug information to LLVM's
+  "invalid subroutine type" (WP-1434); every subprogram's type reads
+  through the sugar, `noreturn` carried by the typedef included.
+- Debug info: a function type with a non-default calling convention
+  (`ms_abi`, `preserve_most`, `aarch64_vector_pcs`, ...) carries
+  `DW_AT_calling_convention` as clang 19 writes it (WP-1434).
+- A lambda's static invoker marks its call of a `noreturn` call operator
+  `noreturn` and ends there, and a function whose type is `noreturn`
+  ends in `unreachable` instead of `ret`, as clang emits them
+  (WP-1434).
 - C: a struct, union or enum tag and a typedef of the same name in one
   scope no longer conflict (WP-1427). Tags and ordinary identifiers are
   separate name spaces (C17 6.2.3), so `typedef enum {...} state;

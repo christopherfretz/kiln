@@ -12,7 +12,8 @@ use kiln_ast::lambda::CaptureKind;
 use kiln_ast::names::DeclNameView;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
-    ArgView, BuiltinType as T, FuncProto, RefQual, TemplateArg, TypeView, write_arg_list_debug,
+    ArgView, BuiltinType as T, CallConv, FuncProto, RefQual, TemplateArg, TypeView,
+    write_arg_list_debug,
 };
 use kiln_ast::{ConstValueId, DeclId, QualType};
 use kiln_llvm::{MdField, MdNode, MetadataId};
@@ -463,8 +464,37 @@ impl Cg<'_> {
             RefQual::RValue => &["DIFlagRValueReference"],
             RefQual::None => &[],
         };
-        let f = Fields::default().flags("flags", flags).n("types", Some(types));
+        let mut f = Fields::default().flags("flags", flags);
+        if let Some(cc) = Self::di_dwarf_cc(fp.info().cc()) {
+            f = f.raw("cc", cc);
+        }
+        let f = f.n("types", Some(types));
         self.m.md_specialized("DISubroutineType", false, f.0)
+    }
+
+    /// clang `getDwarfCC`: the `cc:` of a `DISubroutineType` of
+    /// convention `cc` (DWARF `DW_AT_calling_convention`, which LLVM also
+    /// puts on the subprogram's DIE), None for the target's default.
+    /// kiln normalizes a convention the target ignores or defaults
+    /// (`sysv_abi` on x86-64 Linux, `cdecl`) to `Default` in sema.
+    fn di_dwarf_cc(cc: CallConv) -> Option<&'static str> {
+        Some(match cc {
+            CallConv::Default | CallConv::C => return None,
+            CallConv::Win64 => "DW_CC_LLVM_Win64",
+            CallConv::SysV => "DW_CC_LLVM_X86_64SysV",
+            CallConv::VectorCall => "DW_CC_LLVM_vectorcall",
+            CallConv::RegCall => "DW_CC_LLVM_X86RegCall",
+            CallConv::IntelOclBicc => "DW_CC_LLVM_IntelOclBicc",
+            CallConv::Aapcs | CallConv::AArch64VectorCall | CallConv::AArch64SveCall => {
+                "DW_CC_LLVM_AAPCS"
+            }
+            CallConv::AapcsVfp => "DW_CC_LLVM_AAPCS_VFP",
+            CallConv::Swift => "DW_CC_LLVM_Swift",
+            CallConv::SwiftAsync => "DW_CC_LLVM_SwiftTail",
+            CallConv::PreserveMost => "DW_CC_LLVM_PreserveMost",
+            CallConv::PreserveAll => "DW_CC_LLVM_PreserveAll",
+            CallConv::PreserveNone => "DW_CC_LLVM_PreserveNone",
+        })
     }
 
     /// The plain `this` pointer type of a member of `rd` with
@@ -1095,18 +1125,55 @@ impl Cg<'_> {
         s
     }
 
-    /// The type of member function `m` (clang `getOrCreateMethodType`).
-    /// A member declared through a function typedef (`static Fn f;`) has
-    /// the typedef as its type; clang's `castAs<FunctionProtoType>` sees
-    /// through all top-level sugar to the prototype, keeping the sugar of
-    /// its return and parameter types, and so does this. Stopping at the
-    /// typedef made the declaration's `type:` a `DW_TAG_typedef`, which
-    /// LLVM's verifier rejects ("invalid subroutine type"), dropping the
-    /// module's debug information.
-    pub(crate) fn di_method_type(&mut self, m: DeclId) -> Option<MetadataId> {
+    /// The declared type of function `f` with all top-level sugar
+    /// removed: a function declared through a function typedef
+    /// (`typedef int Fn(int); Fn h;`, `static Fn f;`), an alias
+    /// template or a `decltype` has the sugar as its type, and clang's
+    /// `castAs<FunctionProtoType>` sees through all of it to the
+    /// prototype, keeping the sugar of its return and parameter types.
+    /// Every `DISubprogram` `type:` producer goes through this (or
+    /// [`Self::di_fn_proto`]): stopping at the typedef made `type:` a
+    /// `DW_TAG_typedef`, which LLVM's verifier rejects ("invalid
+    /// subroutine type"), dropping the module's debug information.
+    pub(crate) fn di_fn_decl_type(&self, f: DeclId) -> Option<QualType> {
         let ast = self.ast;
-        let q = self.di_unwrap(ast.types.desugar_top(ast.decls.get(m).ty()?));
-        let TypeView::Function(fp) = ast.types.view(q.ty()) else { return self.di_type(q) };
+        Some(self.di_unwrap(ast.types.desugar_top(ast.decls.get(f).ty()?)))
+    }
+
+    /// The prototype of function `f`'s type, through top-level sugar
+    /// ([`Self::di_fn_decl_type`]); None for a K&R C function.
+    pub(crate) fn di_fn_proto(&self, f: DeclId) -> Option<FuncProto> {
+        match self.ast.types.view(self.di_fn_decl_type(f)?.ty()) {
+            TypeView::Function(fp) => Some(fp),
+            _ => None,
+        }
+    }
+
+    /// clang `FunctionDecl::isNoReturn` for debug info: the attribute on
+    /// any redeclaration, or `noreturn` on the function type, also when a
+    /// typedef carries it (`typedef void F() __attribute__((noreturn));`).
+    pub(crate) fn di_fn_noreturn(&self, f: DeclId) -> bool {
+        self.has_fn_attr(f, AttrKind::NORETURN)
+            || self.di_fn_proto(f).is_some_and(|p| p.info().noreturn())
+    }
+
+    /// The `type:` of the subprogram of free function `f` (clang
+    /// `getOrCreateFunctionType`): its function type through top-level
+    /// sugar ([`Self::di_fn_decl_type`]).
+    pub(crate) fn di_free_fn_type(&mut self, f: DeclId) -> Option<MetadataId> {
+        let q = self.di_fn_decl_type(f)?;
+        match self.ast.types.view(q.ty()) {
+            TypeView::Function(fp) => Some(self.di_fn_type(&fp, None)),
+            _ => self.di_type(q),
+        }
+    }
+
+    /// The type of member function `m` (clang `getOrCreateMethodType`),
+    /// through top-level sugar ([`Self::di_fn_decl_type`]).
+    pub(crate) fn di_method_type(&mut self, m: DeclId) -> Option<MetadataId> {
+        let q = self.di_fn_decl_type(m)?;
+        let TypeView::Function(fp) = self.ast.types.view(q.ty()) else { return self.di_type(q) };
+        let ast = self.ast;
         if self.is_static_method(m) || self.is_explicit_object_method(m) {
             return Some(self.di_fn_type(&fp, None));
         }
@@ -1153,11 +1220,9 @@ impl Cg<'_> {
             sp.push("DISPFlagDeleted");
         }
         // Through a function typedef too, as `di_method_type`.
-        let fp = match ast.types.view(self.di_unwrap(ast.types.desugar_top(n.ty()?)).ty()) {
-            TypeView::Function(fp) => Some(fp),
-            _ => None,
-        };
-        if self.has_fn_attr(first, AttrKind::NORETURN) || fp.is_some_and(|f| f.info().noreturn()) {
+        n.ty()?;
+        let fp = self.di_fn_proto(first);
+        if self.di_fn_noreturn(first) {
             fl.push("DIFlagNoReturn");
         }
         if ast.decls.function(first).is_some_and(|f| f.spec.storage() == FnStorage::Static) {

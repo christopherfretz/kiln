@@ -1259,7 +1259,7 @@ impl Sema<'_, '_> {
             .map(|i| i.params);
         self.ast.templates.pattern_next = list.is_some();
         let conv = self.builder().function(h, DeclKind::CXXConversion, conv_ty, spec, None);
-        self.wrap_thunk_template(conv, list);
+        self.wrap_thunk_template(conv, list, Access::Public);
         if list.is_none() {
             self.share_call_constraints(call_op, conv);
         }
@@ -1278,13 +1278,16 @@ impl Sema<'_, '_> {
         if escalated {
             spec = spec.with_escalated(true);
         }
+        // clang `addFunctionPointerConversion` makes the invoker private
+        // (only the conversion names it); debug info reads it so: no
+        // `DIFlagPublic` on its declaration.
         let sym = self.ast.symbols().intern("__invoke");
         let h = DeclHead::new(closure, DeclName::ident(sym), lbracket)
             .flags(DeclFlags::IMPLICIT)
-            .access(Access::Public);
+            .access(Access::Private);
         self.ast.templates.pattern_next = list.is_some();
         let inv = self.builder().function(h, DeclKind::CXXMethod, invoker, spec, None);
-        self.wrap_thunk_template(inv, list);
+        self.wrap_thunk_template(inv, list, Access::Private);
         if list.is_none() {
             self.share_call_constraints(call_op, inv);
         }
@@ -1332,10 +1335,15 @@ impl Sema<'_, '_> {
 
     /// Wraps the conversion or invoker pattern `f` of a generic lambda in
     /// a function template over the call operator's parameter list.
-    fn wrap_thunk_template(&mut self, f: DeclId, list: Option<kiln_ast::TemplateParamListId>) {
+    fn wrap_thunk_template(
+        &mut self,
+        f: DeclId,
+        list: Option<kiln_ast::TemplateParamListId>,
+        access: Access,
+    ) {
         if let Some(list) = list {
             let t = self.builder().template_decl(DeclKind::FunctionTemplate, f, list, None);
-            self.ast.decls.set_access(t, Access::Public);
+            self.ast.decls.set_access(t, access);
         }
     }
 
