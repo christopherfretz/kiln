@@ -3290,7 +3290,12 @@ impl Parser<'_, '_> {
         // clang `ParseDirectDeclarator` (`MaybeParseCXX11Attributes`):
         // `alignas` too, so a bit-width may follow (`int b alignas(8) : 3`).
         if self.at_cxx11_attr() || self.at_kw(Kw::Alignas) {
+            let start = d.attrs.len();
             self.parse_attributes(&mut d.attrs);
+            // An SME type keyword here applies to the declared type
+            // (`int v __arm_streaming;` is `only applies to function
+            // types`; WP-1426).
+            self.s.mark_sme_in_type(&d.attrs[start..]);
         }
     }
 
@@ -5014,6 +5019,9 @@ impl Parser<'_, '_> {
         contracts: Option<LateToks>,
     ) {
         d.defaulted = self.at_eq_default();
+        if !self.at(Punct::Equal) {
+            self.s.warn_gnu_attrs_on_definition(&d.attrs);
+        }
         self.s.act_function_def_next(true);
         let f = self.s.act_on_declarator(ds, base, d);
         self.s.act_function_def_next(false);

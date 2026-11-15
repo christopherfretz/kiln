@@ -21,7 +21,7 @@ fn sizes() {
     assert_eq!(size_of::<QualType>(), 4);
     assert_eq!(size_of::<Option<QualType>>(), 4);
     assert_eq!(size_of::<TypeId>(), 4);
-    assert_eq!(size_of::<FuncProto>(), 16);
+    assert_eq!(size_of::<FuncProto>(), 20);
     assert_eq!(size_of::<TemplateArg>(), 12);
     assert_eq!(size_of::<ConstArray>(), 16);
 }

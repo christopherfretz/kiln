@@ -191,14 +191,19 @@ impl Sema<'_, '_> {
     /// pattern's). `+sve2` and the architecture levels that include SVE
     /// imply `+sve` through the parser's feature closure.
     pub(crate) fn sve_features_of(&self, f: Option<DeclId>) -> (bool, bool) {
-        let state = |fs: &[String], name: &str| {
-            fs.iter().rev().find_map(|e| match e.split_at_checked(1) {
-                Some((sign, n)) if n == name => Some(sign == "+"),
-                _ => None,
-            })
-        };
-        let mut sve = self.sve;
-        let mut sme = state(&self.target_features, "sme").unwrap_or(false);
+        (self.fn_feature(f, "sve", self.sve), self.fn_feature(f, "sme", self.module_feature("sme")))
+    }
+
+    /// Whether the translation unit's features ([`Sema::target_features`])
+    /// enable `name`.
+    pub(crate) fn module_feature(&self, name: &str) -> bool {
+        feature_state(&self.target_features, name).unwrap_or(false)
+    }
+
+    /// Whether function `f`'s features (`None`: the translation unit's,
+    /// `module`) have `name`, as [`Sema::sve_features_of`].
+    pub(crate) fn fn_feature(&self, f: Option<DeclId>, name: &str, module: bool) -> bool {
+        let mut on = module;
         let attr = f.and_then(|f| self.find_attr(f, kiln_ast::attr::AttrKind::TARGET));
         let attr = attr.map(|a| *self.ast.attrs.get(a));
         if let Some(n) = attr
@@ -211,10 +216,9 @@ impl Sema<'_, '_> {
                 .chain(self.target_features.iter().cloned())
                 .collect();
             let fs = (self.target_attr_features)(&text, &module, self.clang_compat >= 22);
-            sve = state(&fs, "sve").unwrap_or(sve);
-            sme = state(&fs, "sme").unwrap_or(sme);
+            on = feature_state(&fs, name).unwrap_or(on);
         }
-        (sve, sme)
+        on
     }
 
     /// clang `err_sve_vector_in_non_sve_target` for each SVE type a use of
@@ -226,8 +230,8 @@ impl Sema<'_, '_> {
 
     /// [`Sema::check_sve_support`] against function `f`'s features: with
     /// `sme` but not `sve`, clang's `err_sve_vector_in_non_streaming_function`
-    /// (kiln has no streaming functions: the `__arm_streaming` keyword
-    /// attributes are not parsed).
+    /// unless `f` is streaming (`__arm_streaming` or
+    /// `__arm_locally_streaming`, clang `IsArmStreamingFunction`; WP-1426).
     pub(crate) fn check_sve_support_in(&mut self, f: Option<DeclId>, q: QualType, loc: Loc) {
         let types = self.sve_types_of(q);
         if types.is_empty() {
@@ -235,6 +239,9 @@ impl Sema<'_, '_> {
         }
         let (sve, sme) = self.sve_features_of(f);
         if sve {
+            return;
+        }
+        if sme && f.is_some_and(|f| self.is_streaming_fn(f)) {
             return;
         }
         let id = if sme {
@@ -797,4 +804,12 @@ impl Sema<'_, '_> {
         let v = self.ast.types.vector(elem, count, kind);
         self.ast.types.qualify(v, kiln_ast::types::Quals::from_bits(ty.quals_bits()))
     }
+}
+
+/// The last `+name` / `-name` of feature list `fs`.
+fn feature_state(fs: &[String], name: &str) -> Option<bool> {
+    fs.iter().rev().find_map(|e| match e.split_at_checked(1) {
+        Some((sign, n)) if n == name => Some(sign == "+"),
+        _ => None,
+    })
 }

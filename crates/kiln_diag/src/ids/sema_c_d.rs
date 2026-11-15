@@ -88,7 +88,8 @@ sema_capture_class_member = Error (1) "class member '{0}' cannot appear in captu
 sema_capture_more_than_once = Error (1) "'{0}' can appear only once in a capture list";
 sema_capture_not_automatic = Error (1) "'{0}' cannot be captured because it does not have automatic storage duration";
 sema_capture_not_variable = Error (1) "'{0}' in capture list does not name a variable";
-sema_capture_of_sizeless_type = Error (2) "by-copy capture of variable {0} with sizeless type {1}";
+sema_capture_of_abstract_type = Error (1) "by-copy capture of value of abstract type {0}";
+sema_capture_of_incomplete_or_sizeless_type = Error (3) "by-copy capture of variable {0} with {1:incomplete|sizeless} type {2}";
 sema_carries_dependency_missing_on_first_decl = Error (1) "{0:function|parameter} declared '[[carries_dependency]]' after its first declaration";
 // WP-954: [dcl.attr.depend]: clang `err_carries_dependency_param_not_function_decl`,
 // `err_carries_dependency_missing_on_first_decl`,
@@ -143,6 +144,7 @@ sema_conditional_vector_operand_type = Error (1) "enumeration type {0} is not al
 sema_conditional_vector_scalar_type_unsupported = Error (2) "scalar type {0} not supported with vector condition type {1}";
 sema_conditional_vector_size = Error (2) "vector condition type {0} and result type {1} do not have the same number of elements";
 sema_conditional_void_nonvoid = Error (2) "{0:left|right} operand to ? is void, but {0:right|left} operand is of type {1}";
+sema_conflicting_overriding_attributes = Error (3) "virtual function '{0}' has different attributes ({1}) than the function it overrides (which has {2})";
 // clang `err_conflicting_overriding_cc_attributes` (WP-808)
 sema_conflicting_overriding_cc = Error (3) "virtual function '{0}' has different calling convention attributes ({1}) than the function it overrides (which has calling convention {2})";
 sema_conflicting_types = Error (1) "conflicting types for '{0}'";

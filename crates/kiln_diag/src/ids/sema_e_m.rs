@@ -287,6 +287,14 @@ sema_invalid_pcs = Error (0) "invalid PCS type";
 sema_invalid_storage_class_in_func_decl = Error (0) "invalid storage class specifier in function declarator";
 sema_invalid_unary_operand = Error (1) "invalid argument type {0} to unary expression";
 sema_invalid_use_of_function_type = Error (0) "a function type is not allowed here";
+sema_keyword_attr_not_type_attr = Error (1) "{0} cannot be applied to types";
+sema_keyword_attr_on_decl = Error (1) "{0} cannot be applied to a declaration";
+sema_keyword_attrs_not_compatible = Error (2) "{0} and {1} are not compatible";
+// WP-1426: the AArch64 SME keyword attributes (clang SemaType
+// `handleArmStateAttribute`, SemaDecl `ActOnFunctionDeclarator`,
+// SemaChecking `checkCall`, SemaDeclCXX `CheckOverridingFunctionAttributes`).
+sema_keyword_not_supported_on_target = Error (1) "{0} is not supported on this target";
+sema_keyword_wrong_decl_type = Error (2) "{0} only applies to {1}";
 sema_lambda_capture_anonymous_var = Error (0) "unnamed variable cannot be implicitly captured in a lambda expression";
 sema_lambda_capture_default_arg = Error (0) "lambda expression in default argument cannot capture any entity";
 sema_lambda_impcap = Error (1) "variable '{0}' cannot be implicitly captured in a lambda with no capture-default specified";

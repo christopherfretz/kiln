@@ -313,6 +313,9 @@ impl Sema<'_, '_> {
             (t, self.non_reference(t))
         };
         let mut fresh: Vec<LambdaId> = Vec::new();
+        // clang `tryCaptureVariable`: once a capture fails, the inner
+        // lambdas' captures of the same use are not diagnosed again.
+        let mut invalid = false;
         for (j, &l) in chain.iter().enumerate().rev() {
             let explicit = j == 0 && top == Some(l);
             let data = self.ast.exprs.lambdas.get(l);
@@ -337,16 +340,12 @@ impl Sema<'_, '_> {
                 if !mutable && !self.ast.types.is_reference(cap) {
                     rf = self.ast.types.qualify(rf, Quals::CONST);
                 }
-                // clang `captureInLambda` (`RequireCompleteSizedType`): a
-                // by-copy capture needs a sized type; an SVE vector has
-                // none (a closure member of it would be a sizeless field).
-                if build && self.ast.types.is_sizeless(cap) {
-                    let msg = self
-                        .diag(DiagId::sema_capture_of_sizeless_type, loc)
-                        .arg(self.decl_arg(d))
-                        .arg(self.ty_arg(cap));
-                    self.emit(msg);
+                if build && !invalid {
+                    invalid = self.check_by_copy_capture(d, cap, loc);
                 }
+            }
+            if invalid && let Some(s) = self.lambda_scope_mut(l) {
+                s.capture_failed = true;
             }
             if build {
                 let c = LambdaCapture {
@@ -382,6 +381,36 @@ impl Sema<'_, '_> {
             };
         }
         Captured::Yes(rf)
+    }
+
+    /// clang `captureInLambda` for a by-copy capture of `d` as a member
+    /// of type `cap` at `loc` ([expr.prim.lambda.capture]/10: the member
+    /// is an object of that type, so the type is complete, sized and not
+    /// abstract; [basic.types.general]/5, [class.abstract]/3). A dependent
+    /// type is checked as the lambda is instantiated. True after an error.
+    fn check_by_copy_capture(&mut self, d: DeclId, cap: QualType, loc: Loc) -> bool {
+        if self.ast.types.is_dependent(cap) || cap == QualType::ERROR {
+            return false;
+        }
+        // `RequireCompleteSizedType`: an SVE vector has no size (a closure
+        // member of it would be a sizeless field).
+        let sizeless = self.ast.types.is_sizeless(cap);
+        if sizeless || !self.require_complete(cap, loc) {
+            let msg = self
+                .diag(DiagId::sema_capture_of_incomplete_or_sizeless_type, loc)
+                .arg(self.decl_arg(d))
+                .arg(u8::from(sizeless))
+                .arg(self.ty_arg(cap));
+            let msg = if sizeless { msg } else { self.incomplete_note(msg, cap) };
+            self.emit(msg);
+            return true;
+        }
+        // `RequireNonAbstractType`.
+        let Some(c) = self.abstract_class(cap) else { return false };
+        let msg = self.diag(DiagId::sema_capture_of_abstract_type, loc).arg(self.ty_arg(cap));
+        let msg = self.pure_virtual_notes(msg, c);
+        self.emit(msg);
+        true
     }
 
     /// Whether a capture by copy of lambda `l` is `const` in its body
@@ -809,7 +838,12 @@ impl Sema<'_, '_> {
             let explicit = j == 0 && top.is_some_and(|t| t.0 == l);
             let star = explicit && top.is_some_and(|t| t.1);
             let ty = if star {
-                self.pointee_sugared(this_ty).unwrap_or(QualType::ERROR)
+                let t = self.pointee_sugared(this_ty).unwrap_or(QualType::ERROR);
+                // The closure member is a copy of `*this`
+                // ([expr.prim.lambda.capture]/15): clang's copy
+                // initialization of it rejects an abstract class.
+                self.require_non_abstract_alloc(loc, t);
+                t
             } else {
                 this_ty
             };
@@ -1077,6 +1111,15 @@ impl Sema<'_, '_> {
             } else {
                 TryCapture::ExplicitByCopy
             };
+            // clang `DiagnoseUseOfDecl` of the captured variable in the
+            // call operator's context: its target features are the
+            // translation unit's (a lambda does not inherit the enclosing
+            // function's `target`); a pushed `#pragma clang attribute`
+            // `target` reaches the call operator, so the check then waits
+            // for it (`check_explicit_sve_captures`).
+            if self.pragma_attrs.is_empty() {
+                self.check_explicit_sve_capture(var, nloc, None);
+            }
             let ellipsis = c.ellipsis.unwrap_or(Loc::INVALID);
             let _ = self.try_capture_var(var, nloc, kind, Some(id), ellipsis, true);
         }
@@ -1089,6 +1132,32 @@ impl Sema<'_, '_> {
             && let Some(s) = self.lambda_scope_mut(id)
         {
             s.cap_ranges.extend(intro.captures.iter().map(|c| (c.loc, c.end)));
+        }
+    }
+
+    /// The SVE target check of an explicit capture of `var` at `loc`
+    /// against function `f`'s features (`None`: the translation unit's).
+    fn check_explicit_sve_capture(&mut self, var: DeclId, loc: Loc, f: Option<DeclId>) {
+        if let Some(t) = self.ast.decls.get(var).ty()
+            && self.ast.types.is_sizeless(t)
+        {
+            self.check_sve_support_in(f, t, loc);
+        }
+    }
+
+    /// The SVE target checks of lambda `id`'s explicit captures against
+    /// its call operator `f` when a `#pragma clang attribute` was pushed
+    /// (see [`Sema::act_on_explicit_captures`]).
+    pub(crate) fn check_explicit_sve_captures(&mut self, id: LambdaId, f: DeclId) {
+        if self.pragma_attrs.is_empty() {
+            return;
+        }
+        let caps: Vec<(DeclId, Loc)> = (self.ast.exprs.lambdas.get(id).captures.iter())
+            .filter(|c| !c.implicit && !c.init)
+            .filter_map(|c| Some((c.var?, c.loc)))
+            .collect();
+        for (v, loc) in caps {
+            self.check_explicit_sve_capture(v, loc, Some(f));
         }
     }
 
@@ -1270,6 +1339,11 @@ impl Sema<'_, '_> {
                     s.deduce_var_auto(v, declared, &init, loc, direct)
                 })
                 .unwrap_or(QualType::ERROR);
+            // The member is an object of the deduced type: clang's
+            // initialization of it rejects an abstract class.
+            if !by_ref {
+                self.require_non_abstract_alloc(loc, ty);
+            }
             // A dependent initializer is kept for instantiation, as a
             // variable's (`dependent_init_form`); clang
             // `InitializedEntity::InitializeLambdaCapture` otherwise.

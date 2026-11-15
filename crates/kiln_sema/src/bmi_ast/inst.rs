@@ -858,7 +858,7 @@ impl Ck<'_> {
                 for _ in 0..n {
                     self.ty(d)?;
                 }
-                self.r.take(2)?;
+                self.r.take(4)?;
                 if self.r.u8()? > 1 {
                     return bad("bad instantiation key");
                 }

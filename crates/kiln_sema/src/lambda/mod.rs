@@ -201,6 +201,7 @@ pub(crate) struct SignatureSite {
 
 /// A lambda whose body is being analysed: what [`Sema`] saved on entry.
 #[derive(Debug)]
+#[allow(clippy::struct_excessive_bools, reason = "independent per-lambda flags")]
 pub(crate) struct LambdaScope {
     pub(crate) id: LambdaId,
     pub(crate) closure: DeclId,
@@ -269,6 +270,10 @@ pub(crate) struct LambdaScope {
     /// is built outside any template: the dependent depth at its
     /// introducer, restored at its end.
     saved_dependent_depth: Option<u32>,
+    /// A capture of this lambda failed (clang `Capture::isInvalid`): the
+    /// lambda-expression is invalid (`BuildLambdaExpr`), so no warning
+    /// about it follows.
+    pub(crate) capture_failed: bool,
 }
 
 impl Sema<'_, '_> {
@@ -335,6 +340,7 @@ impl Sema<'_, '_> {
             cap_ranges: Vec::new(),
             shadowing: Vec::new(),
             saved_dependent_depth,
+            capture_failed: false,
         });
         self.act_on_explicit_captures(id, intro);
         self.create_init_capture_vars(id);
@@ -617,6 +623,7 @@ impl Sema<'_, '_> {
             l.explicit_result =
                 d.chunks.iter().any(|c| matches!(c, Chunk::Function { trailing: Some(_), .. }));
         }
+        self.check_explicit_sve_captures(id, f);
         // A non-template call operator's object parameter type is checked
         // here, once, at the parameter (clang); a specialization's at
         // each call.
@@ -1087,6 +1094,9 @@ impl Sema<'_, '_> {
         }
         if let Some(depth) = top.saved_dependent_depth {
             self.ast.templates.dependent_depth = depth;
+        }
+        if top.capture_failed {
+            return self.act_on_error_expr(&[], lbracket);
         }
         self.maybe_bind_temporary(e)
     }

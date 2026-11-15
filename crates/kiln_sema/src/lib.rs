@@ -119,6 +119,7 @@ mod selectany;
 mod self_ref;
 mod shadow;
 mod side_effects;
+mod sme;
 mod snap;
 mod splice;
 mod splice_local;

@@ -910,6 +910,7 @@ impl Cg<'_> {
         if sig.no_csr {
             extra.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
         }
+        crate::sme::sme_attrs(self.ast, Some(d), sig.sme, &mut extra);
         // A thunk is `nounwind` only by its method's type or attributes
         // (clang `ConstructAttributeList(IsThunk)`): `generateThunk` never
         // runs `TryMarkNoThrow` over its body.

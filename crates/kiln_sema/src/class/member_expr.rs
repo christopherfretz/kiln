@@ -2486,6 +2486,7 @@ impl Sema<'_, '_> {
             // WP-186: `format(printf, F, A)` (`F` and `A` count `this`).
             self.check_format_attr(m, &conv_args);
         }
+        self.check_sme_call(proto.info(), rparen);
         let (ty, vk) = self.call_result(proto.ret(), loc);
         let call = self.builder().member_call(
             call_callee,

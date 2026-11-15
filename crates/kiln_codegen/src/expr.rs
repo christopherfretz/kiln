@@ -4282,6 +4282,7 @@ impl Cg<'_> {
         if sig.no_csr {
             fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
         }
+        crate::sme::sme_attrs(self.ast, callee_decl, sig.sme, &mut fa);
         fa.extend(extra.iter().cloned());
         self.call_size_attrs(fid, &mut fa);
         self.stmt_call_attrs(callee_decl, &mut fa);

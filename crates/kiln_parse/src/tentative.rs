@@ -94,8 +94,10 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
         r
     }
 
+    /// At `[[`, or at an SME keyword attribute (WP-1426).
     fn at_cxx11_attr(&self) -> bool {
-        self.at(Punct::LSquare) && self.next_is(Punct::LSquare)
+        (self.at(Punct::LSquare) && self.next_is(Punct::LSquare))
+            || self.kw().is_some_and(|k| k.sme_index().is_some())
     }
 
     /// Skips a balanced bracket group starting at the opener at `i`;
@@ -164,7 +166,14 @@ impl<'x, 'a, 'sm> Scan<'x, 'a, 'sm> {
     /// False on an unbalanced group.
     fn skip_attributes(&mut self) -> bool {
         loop {
-            if self.at_cxx11_attr() || matches!(self.kw(), Some(Kw::Alignas | Kw::Attribute)) {
+            if let Some(k) = self.kw().and_then(Kw::sme_index) {
+                // An SME keyword, with its state list (WP-1426).
+                self.i += 1;
+                if k >= 2 && k != 7 && self.at(Punct::LParen) && !self.skip_group_here() {
+                    return false;
+                }
+            } else if self.at_cxx11_attr() || matches!(self.kw(), Some(Kw::Alignas | Kw::Attribute))
+            {
                 if !self.at(Punct::LSquare) {
                     self.i += 1;
                 }

@@ -539,8 +539,13 @@ impl Sema<'_, '_> {
     }
 
     /// clang `CheckOverridingFunctionAttributes`: an overrider has the
-    /// calling convention of the function it overrides (WP-808).
+    /// SME attributes (checked first, WP-1426) and the calling convention
+    /// of the function it overrides (WP-808).
     fn check_override_cc(&mut self, name: DeclName, at: Loc, ty: QualType, o: DeclId) {
+        let shown = self.decl_name_str(name);
+        if self.check_override_sme(shown, at, ty, o) {
+            return;
+        }
         let oty = self.ast.decls.get(o).ty().unwrap_or(QualType::ERROR);
         let cc = |s: &Self, t: QualType| s.ast.types.proto(t).map(|p| p.info().cc());
         if cc(self, ty) == cc(self, oty) {

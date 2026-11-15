@@ -3728,6 +3728,13 @@ impl<'a, 'b> Mangler<'a, 'b> {
     /// mangle alike; `cc` is false where the caller wrote the convention.
     fn function_type(&mut self, _q: QualType, p: &kiln_ast::types::FuncProto, cc: bool) {
         let ast = self.ast;
+        // clang 20 `mangleType(const FunctionProtoType *)`: the SME
+        // attributes wrap the type as `11__SME_ATTRSI <type> Lj<bits>E E`
+        // (AAPCS64 `AAPCSBitmaskSME`); clang 19 drops them (WP-1426).
+        let sme = if self.anon.compat19 { 0 } else { p.info().sme() };
+        if sme != 0 {
+            self.out.push_str("11__SME_ATTRSI");
+        }
         if cc {
             self.cc_qualifier(p);
         }
@@ -3769,6 +3776,11 @@ impl<'a, 'b> Mangler<'a, 'b> {
             RefQual::None => {}
         }
         self.out.push('E');
+        if sme != 0 {
+            self.out.push_str("Lj");
+            self.out.push_str(&sme.to_string());
+            self.out.push_str("EE");
+        }
     }
 }
 

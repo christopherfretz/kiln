@@ -383,7 +383,13 @@ impl AttrKind {
     /// [`crate::types::FuncInfo`] ([`AttrKind::CALLING_CONV`],
     /// [`AttrKind::NO_CALLER_SAVED_REGS`], [`AttrKind::REGPARM`]).
     pub fn is_fn_type_attr(self) -> bool {
-        matches!(self, AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM)
+        matches!(
+            self,
+            AttrKind::CALLING_CONV
+                | AttrKind::NO_CALLER_SAVED_REGS
+                | AttrKind::REGPARM
+                | AttrKind::SME_TYPE
+        )
     }
 
     // WP-813: clang's class B attributes (inlining and call shape,
@@ -461,6 +467,21 @@ impl AttrKind {
     /// literal's `ExprId`, `b` the raw `ListId` of the extra arguments
     /// (constant-evaluated, or still dependent in a template), or 0.
     pub const ANNOTATE: AttrKind = AttrKind(278);
+    /// An `AArch64` SME keyword attribute on a function type (WP-1426;
+    /// `__arm_streaming`, `__arm_streaming_compatible`, `__arm_in`,
+    /// `__arm_out`, `__arm_inout`, `__arm_preserves`, `__arm_agnostic`):
+    /// `a` is the [`crate::types::sme`] bits it adds; `b` bits 0..4 the
+    /// keyword's index in [`SME_KEYWORDS`], bits 4..18 and 18..32 the
+    /// offsets from `loc` of its `"za"` and `"zt0"` strings (0: unknown).
+    /// Consumed like [`AttrKind::CALLING_CONV`]
+    /// into [`crate::types::FuncInfo::sme`].
+    pub const SME_TYPE: AttrKind = AttrKind(279);
+    /// `__arm_locally_streaming` on a function definition (WP-1426): the
+    /// body runs in streaming mode (`"aarch64_pstate_sm_body"`).
+    pub const ARM_LOCALLY_STREAMING: AttrKind = AttrKind(280);
+    /// `__arm_new("za", "zt0")` on a function definition (WP-1426): `a`
+    /// bit 0 is ZA, bit 1 ZT0 (`"aarch64_new_za"`, `"aarch64_new_zt0"`).
+    pub const ARM_NEW: AttrKind = AttrKind(281);
 
     /// Whether this is one of the vector type attributes, which are
     /// consumed into the declared type ([`AttrKind::VECTOR_SIZE`],
@@ -504,6 +525,21 @@ pub const ZERO_CALL_USED_REGS_KINDS: [&str; 9] = [
     "all-gpr",
     "all-arg",
     "all",
+];
+
+/// The SME keyword attributes, by the `b` word of an
+/// [`AttrKind::SME_TYPE`] node; `__arm_locally_streaming` and `__arm_new`
+/// are declaration attributes (WP-1426).
+pub const SME_KEYWORDS: [&str; 9] = [
+    "__arm_streaming",
+    "__arm_streaming_compatible",
+    "__arm_in",
+    "__arm_out",
+    "__arm_inout",
+    "__arm_preserves",
+    "__arm_agnostic",
+    "__arm_locally_streaming",
+    "__arm_new",
 ];
 
 /// The spellings of the calling-convention attributes kiln knows, by the
@@ -770,6 +806,10 @@ impl AttrNode {
     /// error on a parameter but unchecked in the type position (clang
     /// does not count the arguments of a type attribute).
     pub const LIFETIMEBOUND_ARGS: u8 = 4;
+    /// [`AttrKind::SME_TYPE`] flag (bit 2): written in a type position
+    /// (after a parameter clause), where it applies to the function type;
+    /// elsewhere it `cannot be applied to a declaration` (WP-1426).
+    pub const SME_IN_TYPE: u8 = 4;
     /// Flag (bit 3, any kind): written with the `gnu::` attribute scope
     /// (`[[gnu::noreturn]]`). With `AttrSyntax::Gnu` it selects the GNU
     /// spelling of `NODISCARD` (`warn_unused_result`) and `NORETURN`, and

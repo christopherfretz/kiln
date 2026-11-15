@@ -5,23 +5,63 @@ use std::fmt;
 use super::kinds::{CallConv, Quals, RefQual};
 use crate::ids::{DeclId, ExprId, ProfileId, QualType};
 
+/// The `AArch64` SME function type attributes (ACLE; clang
+/// `FunctionType::AArch64SMETypeAttributes`), packed as clang's Itanium
+/// mangling spells them (`AAPCSBitmaskSME`): [`sme::STREAMING`],
+/// [`sme::STREAMING_COMPATIBLE`], [`sme::AGNOSTIC_ZA`], then the ZA and ZT0
+/// states (3 bits each: [`sme::IN`], [`sme::OUT`], [`sme::INOUT`],
+/// [`sme::PRESERVES`]) at [`sme::ZA_SHIFT`] and [`sme::ZT0_SHIFT`].
+pub mod sme {
+    /// `__arm_streaming`.
+    pub const STREAMING: u16 = 1;
+    /// `__arm_streaming_compatible`.
+    pub const STREAMING_COMPATIBLE: u16 = 2;
+    /// `__arm_agnostic("sme_za_state")`.
+    pub const AGNOSTIC_ZA: u16 = 4;
+    /// The ZA state's position.
+    pub const ZA_SHIFT: u16 = 3;
+    /// The ZT0 state's position.
+    pub const ZT0_SHIFT: u16 = 6;
+    /// `__arm_in`.
+    pub const IN: u16 = 1;
+    /// `__arm_out`.
+    pub const OUT: u16 = 2;
+    /// `__arm_inout`.
+    pub const INOUT: u16 = 3;
+    /// `__arm_preserves`.
+    pub const PRESERVES: u16 = 4;
+    /// Every bit in use.
+    pub const MASK: u16 = 0x1ff;
+
+    /// The ZA state of `bits` (0: none).
+    pub const fn za(bits: u16) -> u16 {
+        (bits >> ZA_SHIFT) & 7
+    }
+
+    /// The ZT0 state of `bits` (0: none).
+    pub const fn zt0(bits: u16) -> u16 {
+        (bits >> ZT0_SHIFT) & 7
+    }
+}
+
 /// The packed per-function bits: `variadic | ref_qual(2) | this_quals(3) |
 /// cc(4) | noreturn | trailing_return | no_caller_saved_registers |
-/// regparm(3)`
+/// regparm(3) | sme(9)`
 /// (spec/types.md §5.4). Built with the
 /// `with_*` methods.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default, kiln_snap::Snap)]
-pub struct FuncInfo(u16);
+pub struct FuncInfo(u32);
 
 impl FuncInfo {
-    const VARIADIC: u16 = 1;
-    const REF_SHIFT: u16 = 1;
-    const QUALS_SHIFT: u16 = 3;
-    const CC_SHIFT: u16 = 6;
-    const NORETURN: u16 = 1 << 10;
-    const TRAILING: u16 = 1 << 11;
-    const NO_CSR: u16 = 1 << 12;
-    const REGPARM_SHIFT: u16 = 13;
+    const VARIADIC: u32 = 1;
+    const REF_SHIFT: u32 = 1;
+    const QUALS_SHIFT: u32 = 3;
+    const CC_SHIFT: u32 = 6;
+    const NORETURN: u32 = 1 << 10;
+    const TRAILING: u32 = 1 << 11;
+    const NO_CSR: u32 = 1 << 12;
+    const REGPARM_SHIFT: u32 = 13;
+    const SME_SHIFT: u32 = 16;
 
     /// No bits set: a non-variadic, non-member function with the default
     /// calling convention.
@@ -31,14 +71,29 @@ impl FuncInfo {
 
     /// The raw bits.
     #[inline]
-    pub const fn bits(self) -> u16 {
+    pub const fn bits(self) -> u32 {
         self.0
     }
 
-    /// The info with raw bits `bits`.
+    /// The info with raw bits `bits` (the unused high bits cleared).
     #[inline]
-    pub const fn from_bits(bits: u16) -> FuncInfo {
-        FuncInfo(bits)
+    pub const fn from_bits(bits: u32) -> FuncInfo {
+        FuncInfo(bits & ((1 << (Self::SME_SHIFT + 9)) - 1))
+    }
+
+    /// The `AArch64` SME attributes ([`sme`]; 0: none).
+    #[inline]
+    pub const fn sme(self) -> u16 {
+        ((self.0 >> Self::SME_SHIFT) as u16) & sme::MASK
+    }
+
+    /// With SME attributes `bits` ([`sme`]).
+    #[must_use]
+    pub const fn with_sme(self, bits: u16) -> FuncInfo {
+        FuncInfo(
+            (self.0 & !((sme::MASK as u32) << Self::SME_SHIFT))
+                | (((bits & sme::MASK) as u32) << Self::SME_SHIFT),
+        )
     }
 
     /// True for `(..., ...)`.
@@ -135,7 +190,7 @@ impl FuncInfo {
     #[must_use]
     pub const fn with_regparm(self, v: Option<u8>) -> FuncInfo {
         let n = match v {
-            Some(n) if n < 7 => n as u16 + 1,
+            Some(n) if n < 7 => n as u32 + 1,
             _ => 0,
         };
         FuncInfo((self.0 & !(7 << Self::REGPARM_SHIFT)) | (n << Self::REGPARM_SHIFT))
@@ -150,19 +205,19 @@ impl FuncInfo {
     /// With ref-qualifier `r`.
     #[must_use]
     pub const fn with_ref_qual(self, r: RefQual) -> FuncInfo {
-        FuncInfo((self.0 & !(3 << Self::REF_SHIFT)) | ((r as u16) << Self::REF_SHIFT))
+        FuncInfo((self.0 & !(3 << Self::REF_SHIFT)) | ((r as u32) << Self::REF_SHIFT))
     }
 
     /// With method qualifiers `q`.
     #[must_use]
     pub const fn with_this_quals(self, q: Quals) -> FuncInfo {
-        FuncInfo((self.0 & !(7 << Self::QUALS_SHIFT)) | ((q.bits() as u16) << Self::QUALS_SHIFT))
+        FuncInfo((self.0 & !(7 << Self::QUALS_SHIFT)) | ((q.bits() as u32) << Self::QUALS_SHIFT))
     }
 
     /// With calling convention `cc`.
     #[must_use]
     pub const fn with_cc(self, cc: CallConv) -> FuncInfo {
-        FuncInfo((self.0 & !(15 << Self::CC_SHIFT)) | ((cc as u16) << Self::CC_SHIFT))
+        FuncInfo((self.0 & !(15 << Self::CC_SHIFT)) | ((cc as u32) << Self::CC_SHIFT))
     }
 
     /// With the `noreturn` bit set to `v`.
@@ -189,6 +244,7 @@ impl fmt::Debug for FuncInfo {
             .field("trailing_return", &self.trailing_return())
             .field("no_caller_saved_regs", &self.no_caller_saved_regs())
             .field("regparm", &self.regparm())
+            .field("sme", &self.sme())
             .finish()
     }
 }
@@ -285,15 +341,15 @@ impl ExcSpec {
     }
 }
 
-/// A function prototype's side record: 16 bytes (spec/types.md §5.4).
+/// A function prototype's side record: 20 bytes (spec/types.md §5.4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, kiln_snap::Snap)]
 pub struct FuncProto {
     pub(crate) ret: QualType,
     pub(crate) params: u32,
-    pub(crate) n_params: u16,
     pub(crate) info: FuncInfo,
     /// 3-bit tag (low bits) + 29-bit operand.
     pub(crate) exc: u32,
+    pub(crate) n_params: u16,
 }
 
 impl FuncProto {

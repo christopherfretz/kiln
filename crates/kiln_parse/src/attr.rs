@@ -230,9 +230,53 @@ fn forbids_args(name: &str) -> bool {
 }
 
 impl Parser<'_, '_> {
-    /// True at `[[`.
+    /// True at `[[`, or at an SME keyword attribute (`__arm_streaming`,
+    /// clang `KEYWORD_ATTRIBUTE`s, parsed wherever a C++11
+    /// attribute-specifier is).
     pub(crate) fn at_cxx11_attr(&self) -> bool {
-        self.at(Punct::LSquare) && self.peek_is(1, Punct::LSquare)
+        (self.at(Punct::LSquare) && self.peek_is(1, Punct::LSquare)) || self.at_sme_attr()
+    }
+
+    /// True at an SME keyword attribute.
+    fn at_sme_attr(&self) -> bool {
+        self.kw().is_some_and(|k| k.sme_index().is_some())
+    }
+
+    /// An SME keyword attribute (ACLE; clang `ParseCXX11AttributeSpecifier`
+    /// of a `KEYWORD_ATTRIBUTE`): the keyword, and for the state keywords
+    /// `__arm_new`, `__arm_in`, `__arm_out`, `__arm_inout`,
+    /// `__arm_preserves` and `__arm_agnostic` a parenthesized list of
+    /// string literals.
+    fn parse_sme_attr(&mut self, out: &mut Vec<AttrId>) {
+        let Some(idx) = self.kw().and_then(Kw::sme_index) else { return };
+        let loc = self.bump().span.lo;
+        let mut states = Vec::new();
+        let takes_args = idx >= 2 && idx != 7;
+        if takes_args {
+            let Some(open) = self.expect(Punct::LParen) else { return };
+            // `__arm_in()`: `missing state for '__arm_in'` (sema).
+            while !self.at(Punct::RParen) {
+                if !self.at_string() {
+                    let name = kiln_ast::attr::SME_KEYWORDS[idx];
+                    let d = self.s.diag(DiagId::parse_attribute_requires_string, self.loc());
+                    self.emit(d.arg(name));
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return;
+                }
+                let Some(e) = self.parse_string_literal(true) else {
+                    self.skip_until(&[Punct::RParen], false, true);
+                    return;
+                };
+                states.push(e);
+                if self.eat(Punct::Comma).is_none() {
+                    break;
+                }
+            }
+            self.expect_closing(Punct::RParen, Punct::LParen, open);
+        }
+        if let Some(a) = self.s.act_on_sme_attribute(idx, &states, loc) {
+            out.push(a);
+        }
     }
 
     /// True at a `[[...]]` / `alignas(...)` attribute-specifier-seq
@@ -351,6 +395,11 @@ impl Parser<'_, '_> {
                 && Self::punct_of(self.tok_at(i + 1)) == Some(Punct::LSquare)
             {
                 i = self.skip_balanced(i)?;
+            } else if let Some(k) = self.kw_of(t).and_then(Kw::sme_index) {
+                i += 1;
+                if k >= 2 && k != 7 && Self::punct_of(self.tok_at(i)) == Some(Punct::LParen) {
+                    i = self.skip_balanced(i)?;
+                }
             } else if self.kw_of(t) == Some(Kw::Alignas) {
                 i = self.skip_balanced(i + 1)?;
             } else {
@@ -574,6 +623,10 @@ impl Parser<'_, '_> {
         reason = "one arm per attribute argument grammar, as clang's ParseCXX11AttributeArgs"
     )]
     fn parse_cxx11_attributes(&mut self, out: &mut Vec<AttrId>) {
+        if self.at_sme_attr() {
+            self.parse_sme_attr(out);
+            return;
+        }
         let before = self.prev_lo();
         let open = self.bump().span.lo;
         self.bump();

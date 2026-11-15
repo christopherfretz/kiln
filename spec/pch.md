@@ -125,7 +125,7 @@ block holding them is read and they are ignored.
 
 ```
 "KILNSNAP"                              8 bytes, the magic
-u32 FORMAT_VERSION                      little-endian (now 7)
+u32 FORMAT_VERSION                      little-endian (now 8)
 kiln_snap stream: u64 SCHEMA_HASH, identity, lookup log
 kiln_snap stream: the roots
 ```
@@ -134,7 +134,7 @@ kiln_snap stream: the roots
   anything is decoded: a section shorter than 12 bytes is `its section
   is truncated (no header)`, another magic `its section is not a kiln
   snapshot (bad magic)`, another version `its section has format version
-  N, expected 7` (`src/pch_snapshot.rs` `tests::section_header`;
+  N, expected 8` (`src/pch_snapshot.rs` `tests::section_header`;
   `tests/pch_snapshot.rs` `section_header`, `cross_version`).
 - The head's stream holds `pch_snapshot::SCHEMA_HASH` (u64), the
   identity (a list of `(component, text)` pairs, "Identity" below) and
