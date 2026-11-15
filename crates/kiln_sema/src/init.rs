@@ -1053,7 +1053,7 @@ impl Sema<'_, '_> {
     /// C++: the initialization of an object of class type `ty` from `e`
     /// by a constructor or a conversion function ([dcl.init.general]/16.6);
     /// `None` when neither applies.
-    fn class_init_from_expr(
+    pub(crate) fn class_init_from_expr(
         &mut self,
         ty: QualType,
         e: ExprId,

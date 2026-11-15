@@ -98,6 +98,8 @@ pub struct ParseOptions {
     pub freestanding: bool,
     /// `-f[no-]sized-deallocation` ([`kiln_sema::Sema::sized_deallocation`]).
     pub sized_deallocation: bool,
+    /// `-f[no-]short-enums` ([`kiln_sema::Sema::short_enums`]).
+    pub short_enums: bool,
     /// `-f[no-]char8_t` ([`kiln_sema::Sema::char8`]; `None`: by `std`).
     pub char8: Option<bool>,
     /// `-f[no-]math-errno` ([`kiln_sema::Sema::math_errno`]).
@@ -176,6 +178,7 @@ impl Default for ParseOptions {
             no_builtin_fns: Vec::new(),
             freestanding: false,
             sized_deallocation: true,
+            short_enums: false,
             char8: None,
             math_errno: true,
             sve: false,
@@ -361,6 +364,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.freestanding = opts.freestanding;
     s.contracts = opts.contracts;
     s.sized_deallocation = opts.sized_deallocation;
+    s.short_enums = opts.short_enums;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;
     s.clang_constexpr_builtin = clang_constexpr_builtin;

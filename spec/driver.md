@@ -84,6 +84,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-O*` | also selects `llc`'s level and the `opt` pipeline, and is passed to the link (see "Code generation") |
 | `-disable-llvm-passes` (usually after `-Xclang`) | no `opt` run: `-emit-llvm` writes the frontend's IR (see "IR optimization") |
 | `-O*`, `-f[no-]exceptions`, `-f[no-]cxx-exceptions`, `-f[no-]rtti`, `-f[no-]char8_t`, `-ffreestanding`, `-fhosted`, `-pthread`, `-f[no-]threadsafe-statics`, `-f[no-]sized-deallocation` | change predefined macros only (see "Predefines"); `-f[no-]char8_t` also reaches the lexer, the parser and sema (`ParseOptions::char8`, `PpOptions::char8`: the `char8_t` keyword and the type of `u8` literals, spec/lex.md "-fno-char8_t", WP-808); `-fno-sized-deallocation` also reaches sema (`ParseOptions::sized_deallocation`: no implicit sized global `operator delete`, none preferred, spec/sema.md "`-fno-sized-deallocation`", WP-808); `-fno-rtti` also makes sema reject `typeid` and `dynamic_cast` to a class, and codegen leave vtables' RTTI slots null (`CodegenOptions::rtti`, spec/codegen.md "RTTI", WP-720) |
+| `-f[no-]short-enums` (WP-1461) | the last wins (default off, as clang and GCC on the Linux targets): `ParseOptions::short_enums` lays out every enumeration without a fixed underlying type as `__attribute__((packed))` does (the smallest of `signed char`/`short`/`int`/... or `unsigned char`/`unsigned short`/`unsigned int`/... that holds its values, promoting to `int`; clang `ActOnEnumBody`), in C and C++. It is part of the module-file fingerprint and the PCH language options (`short enum types`), so units built with and without it do not mix (spec/modules.md §11.4). No predefined macro changes (clang 19 defines none) |
 | `-f[no-]builtin`, `-fno-builtin-<name>` (repeatable), `-ffreestanding`, `-fhosted` | clang's library-builtin switches (WP-808): `Args::no_builtin()` is the last `-f[no-]builtin` negative or the last `-ffreestanding` / `-fhosted` freestanding (`-fbuiltin` does not cancel `-ffreestanding`); `Args::no_builtin_fns()` the sorted `-fno-builtin-<name>` names, none under `no_builtin()` (the clang driver drops them). They reach sema (`ParseOptions::no_builtin{,_fns}`: no library-builtin recognition, spec/sema.md §5.4), codegen (`CodegenOptions::no_builtin{,_fns}`, spec/codegen.md "no-builtin") and the feature queries (`__has_builtin` of a library builtin is 0, spec/pp.md) |
 | `-fsigned-char`, `-funsigned-char` (`-fno-unsigned-char`, `-fno-signed-char` are their synonyms; the last one wins) | the signedness of plain `char` ([basic.fundamental]/7), overriding the target's (signed on x86-64, unsigned on AArch64): it sets `TargetTypes::char_signed` of the `kiln_abi::Target` the parser, sema, the Oven and codegen use, the `#if` evaluator's character type ([cpp.cond]), and adds or removes `__CHAR_UNSIGNED__` as clang 19 does (see "Predefines") |
 | `-finput-charset=<v>`, `-fexec-charset=<v>` | the source and execution character sets ([lex.charset]/1, [lex.phases]/1.1): kiln reads source as UTF-8 and encodes ordinary literals as UTF-8, so, as clang's driver, it accepts only `UTF-8` (any letter case) and changes nothing; another value is the driver error `invalid value '<v>' in '-finput-charset=<v>'` (WP-726; folly passes `-finput-charset=UTF-8`) |
@@ -261,7 +262,7 @@ pass (CMake presets, distribution `CFLAGS`). `CodegenFlags`
 
 **2. Accepted and ignored silently** (no observable effect in kiln today;
 do not add a diagnostic): `-f[no-]common`, `-fstack-usage`,
-`-fno-short-enums`, `-m64` (every kiln target is 64-bit;
+`-m64` (every kiln target is 64-bit;
 `-m32` stays unknown) and `-pipe`.
 WP-677 (configure scripts and CMake probe them; clang 19 accepts them):
 `-fdiagnostics-show-template-tree` (kiln prints template diffs inline,
@@ -288,7 +289,7 @@ found building open-source SIMD libraries). An empty `-mtune=` is `unsupported a
 
 **3. Rejected** with `drv_unsupported_flag`, the error `'<flag>' is not
 supported by kiln` (exit 1, no job runs; not the generic `unknown argument`):
-`-fshort-enums`, `-ffat-lto-objects` (WP-873; bitcode plus object code in
+`-ffat-lto-objects` (WP-873; bitcode plus object code in
 one `.o` is WP-899), the `-fsanitize*` and `-fno-sanitize*`
 options "Sanitizers" below does not list (`-fsanitize-coverage=`,
 `-fsanitize-cfi-*`, ...), and under
@@ -2909,9 +2910,9 @@ Each deviation is covered by a test or a test note.
     `-march=native` emits no `"target-cpu"` and `-mtune=native` no
     `"tune-cpu"` (clang resolves the host); `-fwrapv-pointer` is accepted at `-fclang-compat=19`
     (clang 19 has no such flag); the
-    profile-guided optimization flags ("Coverage flags"),
-    `-fshort-enums`, and the sanitizers "Sanitizers" does not
-    list, are errors; and the Oven ignores `-fwrapv` and `-ftrapv`.
+    profile-guided optimization flags ("Coverage flags")
+    and the sanitizers "Sanitizers" does not
+    list are errors; and the Oven ignores `-fwrapv` and `-ftrapv`.
 20. **`-fmacro-prefix-map=` keeps `.` components and repeated `/`.** Once
     any `-fmacro-prefix-map=`/`-ffile-prefix-map=` is given, clang also
     applies `llvm::sys::path::remove_dots` (no `..` folding) to every

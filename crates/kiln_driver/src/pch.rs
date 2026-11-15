@@ -525,6 +525,7 @@ fn options(args: &Args, tc: &Toolchain, std: LangStd) -> Vec<(&'static str, OptV
         Compat::Below22,
     ));
     v.push(("signed char", b(get("char") == "-fsigned-char"), Compat::All));
+    v.push(("short enum types", b(get("short-enums") == "-fshort-enums"), Compat::All));
     v.push((
         "sized deallocation",
         b(get("sized-deallocation") == "-fsized-deallocation"),

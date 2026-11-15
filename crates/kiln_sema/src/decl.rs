@@ -10374,7 +10374,11 @@ impl Sema<'_, '_> {
     /// whose C++ type is `t`. C17 6.7.2.2p3: an enumeration constant is
     /// an `int`; clang's `ActOnEnumBody` keeps that for a value `int`
     /// represents in an enumeration without a fixed underlying type, and
-    /// otherwise gives the constant the underlying type.
+    /// otherwise gives the constant the underlying type. C23 6.7.2.2p15
+    /// (clang 22's `ActOnEnumBody`, in every C mode, and GCC): once the
+    /// enumeration is complete, its constants are all `int` only if every
+    /// value is representable as an `int`; otherwise every constant has
+    /// the enumerated type, which a use sees as its underlying type.
     pub(crate) fn c_enumerator_type(&self, d: DeclId, en: QualType, t: QualType) -> QualType {
         if !self.is_c() {
             return t;
@@ -10383,13 +10387,37 @@ impl Sema<'_, '_> {
         let fixed = data.is_some_and(|x| x.flags & EnumData::FIXED != 0);
         let value = self.ast.decls.enumerator(d).and_then(|x| x.value);
         let value = value.and_then(|v| self.const_int(v));
-        if !fixed && value.is_some_and(|v| i32::try_from(v).is_ok()) {
+        let all_int = match data.and_then(|x| x.int_type) {
+            Some(it) if self.clang_compat >= 22 => self.c_enum_values_fit_int(en, it),
+            _ => true,
+        };
+        if !fixed && all_int && value.is_some_and(|v| i32::try_from(v).is_ok()) {
             return QualType::INT;
         }
         match data.and_then(|x| x.int_type) {
             Some(it) if self.ast.types.as_enum(t).is_some() => it,
             _ => t,
         }
+    }
+
+    /// Whether every value of the complete C enumeration `en`, whose
+    /// underlying type is `it`, is representable as an `int` (C23
+    /// 6.7.2.2p15). The underlying type is the narrowest that fits, so
+    /// only an `unsigned int` one needs its values scanned.
+    fn c_enum_values_fit_int(&self, en: QualType, it: QualType) -> bool {
+        let width = conv::rank::int_width(self, it).unwrap_or(32);
+        if width < 32 || self.ast.types.canonical(it) == QualType::INT {
+            return true;
+        }
+        if width > 32 || self.ast.types.canonical(it) != QualType::UINT {
+            return false;
+        }
+        let Some(e) = self.ast.types.as_enum(en) else { return true };
+        let e = self.ast.definition(e).unwrap_or(e);
+        self.ast.decls.members(e).all(|m| {
+            let v = self.ast.decls.enumerator(m).and_then(|x| x.value);
+            v.and_then(|v| self.const_int(v)).is_none_or(|v| i32::try_from(v).is_ok())
+        })
     }
 
     /// The value and the converted initializer of an enumerator whose
@@ -10749,7 +10777,10 @@ impl Sema<'_, '_> {
             // enumeration; `int` stands in until it is instantiated.
             Some((QualType::INT, QualType::INT))
         } else {
-            let packed = self.find_attr(e, AttrKind::PACKED).is_some();
+            // `-fshort-enums` lays every such enumeration out as a
+            // `packed` one (clang `ActOnEnumBody`: "equivalent to
+            // specifying the packed attribute on all enum definitions").
+            let packed = self.short_enums || self.find_attr(e, AttrKind::PACKED).is_some();
             let (best, promotion) = match mode {
                 Some(t) => (t, conv::rank::promoted_type(self, t, None).unwrap_or(t)),
                 None => self.best_enum_types(&build.enumerators, packed),

@@ -9333,6 +9333,46 @@ warnings and converts the operands as GCC does. kiln follows its C paths
   the result is a prvalue: `sizeof (0, f)` is a pointer's size.
 Tests: `tests/c/expr/`, `tests/c/conv/*-clang22.c`, `incompatible-pointer-error.c`.
 
+### 5.30 Wrong-code rules from GCC's C++ testsuite (WP-1461)
+- **Member partial specialization arguments** ([temp.spec.partial.member]/2).
+  When an enclosing class template is instantiated, a member partial
+  specialization's substituted arguments are converted again against
+  the new member template (`converted_member_partial_args`, only when an
+  argument is a non-type expression), so a substituted NTTP compares
+  equal to the converted argument of a use. Tests:
+  `temp.spec.partial.member/enclosing-nttp-in-member-partial-args*.cpp`.
+- **`T::template B` as a template template argument** ([temp.deduct.type]/5.1):
+  a dependent template name in a partial specialization's arguments is a
+  non-deduced context (`deduce_template_name`); it is checked against
+  the argument after the other parameters are deduced. Tests:
+  `temp.deduct.type/dependent-template-name-template-argument*.cpp`.
+- **Explicit specialization of a constrained member** ([temp.expl.spec]/1,
+  [temp.constr.order]/5): when several members of the class template
+  specialization match the declared type, the one whose constraints are
+  satisfied and most constrained is specialized
+  (`most_constrained_member_match`, clang `CheckMemberSpecialization`).
+  Test: `temp.expl.spec/constrained-member-most-constrained-run.cpp`.
+- **`typeid` of an array of cv class** ([expr.typeid]/5,
+  [basic.type.qualifier]/3): the cv-qualifiers of an array's element
+  are the array's own, so they are dropped from the element too
+  (`A3_A4_1S`, not `A3_A4_K1S`; clang `getUnqualifiedArrayType`). Tests:
+  `expr.typeid/array-of-cv-element*.cpp`.
+- **Structured bindings of an array** ([dcl.struct.bind]/1): each element
+  is copy-initialized from the corresponding element of an `= e`
+  initializer and direct-initialized for `{e}` and `(e)`, so an explicit
+  copy constructor is viable only in the direct forms (GCC and clang 22;
+  clang 19 copy-initializes `{e}`). Tests:
+  `dcl.struct.bind/array-element-init-*.cpp`.
+- **C enumeration constants** (C23 6.7.2.2p15, clang 22 in every C mode,
+  GCC): once a non-fixed enumeration is complete, its constants are
+  `int` only if every value fits in `int`; otherwise each has the
+  enumeration's underlying type (`c_enum_values_fit_int`). At
+  `-fclang-compat` below 22 the per-value C17 rule stays. Test:
+  `dcl.enum/c23-constants-take-enum-type.c`.
+- **`-fshort-enums`** (spec/driver.md): every non-fixed enumeration is
+  laid out as a `packed` one (`Sema::short_enums`; clang `ActOnEnumBody`).
+  Tests: `dcl.enum/short-enums*`.
+
 ## 6. Initialization (`init.rs`)
 - **`perform_init(ty, init, direct_list)`** implements [dcl.init]:
   - an invalid element (WP-408): an expression standing for clang's

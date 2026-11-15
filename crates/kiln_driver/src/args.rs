@@ -318,6 +318,10 @@ pub struct PredefArgs {
     pub threadsafe_statics: Option<bool>,
     /// `-f[no-]sized-deallocation`.
     pub sized_deallocation: Option<bool>,
+    /// `-f[no-]short-enums` (last wins): an enumeration without a fixed
+    /// underlying type takes the smallest integer type that holds its
+    /// values, as with `__attribute__((packed))` (WP-1461).
+    pub short_enums: bool,
     /// `-f[no-]coro-aligned-allocation`: aligned coroutine frame
     /// allocation (default off, as clang).
     pub coro_aligned_allocation: bool,
@@ -517,7 +521,7 @@ pub enum ArgError {
     /// '{triple}'"; `-mtls-dialect=`, WP-1411).
     UnsupportedValueForTarget(String, String, String),
     /// A GCC/clang flag kiln recognises but deliberately does not
-    /// implement (`-fshort-enums`, profile-guided optimization,
+    /// implement (`-ffat-lto-objects`, profile-guided optimization,
     /// spec/driver.md "Codegen flags"): "'{arg}' is not supported by kiln".
     UnsupportedByKiln(String),
     /// "invalid argument '{0}' only allowed with '{1}'"
@@ -2132,6 +2136,8 @@ impl Args {
             "-fno-threadsafe-statics" => p.threadsafe_statics = Some(false),
             "-fsized-deallocation" => p.sized_deallocation = Some(true),
             "-fno-sized-deallocation" => p.sized_deallocation = Some(false),
+            "-fshort-enums" => p.short_enums = true,
+            "-fno-short-enums" => p.short_enums = false,
             "-fcoro-aligned-allocation" => p.coro_aligned_allocation = true,
             "-fno-coro-aligned-allocation" => p.coro_aligned_allocation = false,
             "-fno-inline" => p.no_inline = true,

@@ -96,12 +96,16 @@ Planned as 1.3.0.
   installation has it, as `g++` does. GCC's
   `-fcontracts-client-check=none` and `-fcontracts-definition-check=on`
   are accepted; its other contract options are diagnosed as unsupported.
+- `-fshort-enums` and `-fno-short-enums` (WP-1461): every enumeration
+  without a fixed underlying type takes the smallest type that holds its
+  values, as with `__attribute__((packed))`, in C and C++, as GCC and
+  clang (`-fshort-enums` was rejected before).
 
 ### Changed
 
-- The PCH snapshot format is 14 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448, WP-1449, WP-1456 and
-  WP-1463; new
+- The PCH snapshot format is 15 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448, WP-1449, WP-1456,
+  WP-1463 and WP-1461; new
   diagnostics, options and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
   it is not misread, as [spec/pch.md](spec/pch.md) describes.
 - `__is_trivially_copyable`, `__is_trivial`, `__is_pod` and
@@ -368,6 +372,17 @@ Planned as 1.3.0.
   lifetime-extended temporaries. A delete-expression whose destructor
   throws still calls `operator delete`. A class-typed statement
   expression's result is destroyed after its own temporaries.
+- Wrong code found running GCC's C++ testsuite (WP-1461): a member
+  partial specialization with a non-type argument of the enclosing
+  template is chosen again; `T::template B` in a partial
+  specialization's arguments is a non-deduced context; an explicit
+  specialization of a constrained member specializes the most
+  constrained matching member; `typeid` of an array of cv class drops
+  the cv-qualifiers from the element too (`A3_A4_1S`); and the
+  elements of a structured binding of an array are copy-initialized
+  for `= e` and direct-initialized for `{e}` and `(e)`. In C, the
+  constants of an enumeration whose values do not all fit in `int`
+  have the enumeration's type (C23, as clang 22 and GCC).
 
 ## [1.2.1] - 2026-11-14
 
