@@ -62,6 +62,10 @@ pub struct AstNames<'a> {
     /// (`AlwaysIncludeTypeForTemplateArgument`: `3UL`). Never set for
     /// diagnostics.
     pub debug_info: bool,
+    /// The path prefixes replaced in an unnamed tag's location (clang's
+    /// debug-information `PrintingCallbacks::remapPath`, after
+    /// `-fdebug-prefix-map`: the last matching `(old, new)` pair wins).
+    pub path_prefix_map: &'a [(String, String)],
 }
 
 impl std::fmt::Debug for AstNames<'_> {
@@ -81,6 +85,7 @@ impl<'a> AstNames<'a> {
             scoped_nns: false,
             scoped_spec_args: false,
             debug_info: false,
+            path_prefix_map: &[],
         }
     }
 
@@ -94,6 +99,7 @@ impl<'a> AstNames<'a> {
             scoped_nns: false,
             scoped_spec_args: false,
             debug_info: false,
+            path_prefix_map: &[],
         }
     }
 
@@ -101,6 +107,17 @@ impl<'a> AstNames<'a> {
     /// ([`Self::debug_info`]).
     pub fn for_debug_info(ast: &'a Ast) -> Self {
         AstNames { debug_info: true, ..AstNames::new(ast) }
+    }
+
+    /// [`Self::for_debug_info`] with unnamed tags located in `sources`
+    /// (`(lambda at F:L:C)`, clang's `AnonymousTagLocations`), their paths
+    /// remapped by `prefix_map` ([`Self::path_prefix_map`]).
+    pub fn for_debug_info_at(
+        ast: &'a Ast,
+        sources: Option<&'a SourceManager>,
+        prefix_map: &'a [(String, String)],
+    ) -> Self {
+        AstNames { sources, path_prefix_map: prefix_map, ..Self::for_debug_info(ast) }
     }
 
     /// These names, printing the types written in expressions canonical
@@ -485,7 +502,15 @@ impl<'a> AstNames<'a> {
         if let Some(sm) = self.sources
             && let Some(p) = sm.presumed_line_col(n.loc())
         {
-            let _ = write!(out, " at {}:{}:{}", p.file_name, p.line, p.col);
+            let file = self
+                .path_prefix_map
+                .iter()
+                .rev()
+                .find_map(|(old, new)| {
+                    p.file_name.strip_prefix(old.as_str()).map(|rest| format!("{new}{rest}"))
+                })
+                .unwrap_or_else(|| p.file_name.to_string());
+            let _ = write!(out, " at {}:{}:{}", file, p.line, p.col);
         }
         out.push(')');
     }

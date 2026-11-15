@@ -13,7 +13,7 @@ use kiln_ast::names::DeclNameView;
 use kiln_ast::templates::SpecKind;
 use kiln_ast::types::{
     ArgView, BuiltinType as T, CallConv, FuncProto, RefQual, TemplateArg, TypeView,
-    write_arg_list_debug,
+    write_arg_list_debug, write_arg_list_debug_written,
 };
 use kiln_ast::{ConstValueId, DeclId, QualType};
 use kiln_llvm::{MdField, MdNode, MetadataId};
@@ -23,12 +23,19 @@ use crate::module::Cg;
 
 const PTR: &str = "DW_TAG_pointer_type";
 
-impl Cg<'_> {
+impl<'a> Cg<'a> {
     fn di_cu(&self) -> MetadataId {
         self.di.as_deref().map_or_else(|| super::unreachable_md(), |d| d.cu)
     }
 
     /// The identifier naming `d` (clang `getName`; empty when unnamed).
+    /// The names under clang's debug-information printing policy, an
+    /// unnamed tag located (`(lambda at F:L:C)`) with its path remapped
+    /// (`-fdebug-prefix-map`).
+    pub(crate) fn di_names(&self) -> AstNames<'a> {
+        AstNames::for_debug_info_at(self.ast, self.sm, &self.opts.debug.prefix_map)
+    }
+
     pub(crate) fn di_ident(&self, d: DeclId) -> String {
         let ast = self.ast;
         match ast.names.view(ast.decls.get(d).name()) {
@@ -133,9 +140,8 @@ impl Cg<'_> {
         n
     }
 
-    /// clang `UnwrapTypeForDebugInfo`: sugar other than typedefs is
-    /// dropped, its qualifiers kept. Alias templates are unwrapped too
-    /// (clang names them as typedefs; docs/status/debuginfo.md). A
+    /// clang `UnwrapTypeForDebugInfo`: sugar other than typedefs and
+    /// alias template specializations is dropped, its qualifiers kept. A
     /// substituted template parameter is its canonical replacement: clang
     /// substitutes a specialization's canonical arguments, so `T` of
     /// `g<Int>` (`using Int = int`) is `int`, not the typedef (WP-1400).
@@ -151,7 +157,7 @@ impl Cg<'_> {
                 | TypeView::Attributed { equivalent: i, .. }
                 | TypeView::Decltype { underlying: i, .. }
                 | TypeView::ExtQual { base: i, .. }
-                | TypeView::TemplateSpecialization { underlying: Some(i), .. }
+                | TypeView::TemplateSpecialization { underlying: Some(i), alias: false, .. }
                 | TypeView::TypeOf { underlying: Some(i), .. }
                 | TypeView::UnaryTransform { result: Some(i), .. }
                 | TypeView::Auto { deduced: Some(i), .. }
@@ -235,7 +241,9 @@ impl Cg<'_> {
             }
             TypeView::MemberPointer { pointee, class } => {
                 let cls = self.di_type(QualType::unqual(class));
-                let base = match self.ast.types.view(self.ast.types.canonical(pointee).ty()) {
+                // clang `castAs<FunctionProtoType>`: the top-level sugar
+                // goes, that of the return and parameter types stays.
+                let base = match self.ast.types.view(self.ast.types.desugar_top(pointee).ty()) {
                     TypeView::Function(fp) => {
                         let rd = self.ast.types.as_record(QualType::unqual(class));
                         self.di_instance_fn_type(&fp, rd, false)
@@ -296,6 +304,9 @@ impl Cg<'_> {
                 f = f.flags("flags", self.di_member_access(decl).as_slice());
                 Some(self.di_derived("DW_TAG_typedef", base, f))
             }
+            TypeView::TemplateSpecialization { name, args, underlying: Some(u), alias: true } => {
+                self.di_alias_spec(name, args, u)
+            }
             TypeView::Enum(d) => self.di_enum(d, q),
             TypeView::Record(d) => Some(self.di_record(d, q)),
             TypeView::QualifiedArray { quals, base } => {
@@ -303,6 +314,41 @@ impl Cg<'_> {
             }
             _ => None,
         }
+    }
+
+    /// clang `CreateType(const TemplateSpecializationType *)`: an alias
+    /// template specialization is a `DW_TAG_typedef` of its aliased type
+    /// named by the template's unqualified name and its arguments as
+    /// written (`V<int>`, `A<short>` for `n::A<short>`), at the alias's
+    /// declaration and in its scope, with no access flag. A `nodebug`
+    /// alias, or one naming no alias template, is its aliased type.
+    fn di_alias_spec(
+        &mut self,
+        name: kiln_ast::ids::TemplateNameId,
+        args: kiln_ast::ids::ArgListId,
+        u: QualType,
+    ) -> Option<MetadataId> {
+        let ast = self.ast;
+        let base = self.di_type(u);
+        let Some(td) = ast.types.template_decl(name).map(|d| ast.first(d)) else { return base };
+        if ast.decls.get(td).kind() != DeclKind::TypeAliasTemplate {
+            return base;
+        }
+        let alias = ast.template_info(td).and_then(|i| i.pattern).unwrap_or(td);
+        if self.has_fn_attr(alias, AttrKind::NODEBUG) || self.has_fn_attr(td, AttrKind::NODEBUG) {
+            return base;
+        }
+        let mut n = self.di_ident(td);
+        write_arg_list_debug_written(&ast.types, &self.di_names(), args, &mut n);
+        let loc = ast.decls.get(alias).loc();
+        let (file, line) = (self.di_file(loc), self.di_line(loc));
+        let scope = self.di_scope_nocu(td);
+        let f = Fields::default()
+            .s("name", &n)
+            .n("scope", scope)
+            .n("file", Some(file))
+            .u("line", u64::from(line));
+        Some(self.di_derived("DW_TAG_typedef", base, f))
     }
 
     fn ptr_bits(&self) -> u64 {
@@ -646,7 +692,7 @@ impl Cg<'_> {
             && let Some((_, si)) = ast.spec_info(rd)
         {
             let l = ast.types.canonical_args(si.args);
-            write_arg_list_debug(&ast.types, &AstNames::for_debug_info(ast), l, &mut s);
+            write_arg_list_debug(&ast.types, &self.di_names(), l, &mut s);
         }
         s
     }
@@ -1114,7 +1160,7 @@ impl Cg<'_> {
     /// a function template specialization.
     pub(crate) fn di_fn_name(&self, f: DeclId) -> String {
         let ast = self.ast;
-        let names = AstNames::for_debug_info(ast);
+        let names = self.di_names();
         let mut s = String::new();
         names.write_name(f, &mut s);
         if let Some((_, si)) = ast.spec_info(f)
@@ -1309,10 +1355,10 @@ impl Cg<'_> {
     /// (`allocator<char>`, not `__enable_if_t<..., _Alloc>`, whose
     /// `enable_if<true, ...>` would otherwise be described; WP-1400).
     ///
-    /// A class template specialization's trailing arguments that its
-    /// name suppresses as defaults (`print_args`, clang's
-    /// `TemplateArgument::getIsDefaulted`, which `CheckTemplateArgumentList`
-    /// sets for an argument taken from or equal to its default) are
+    /// A class or variable template specialization's arguments taken from
+    /// or equal to their parameter's default, trailing or not
+    /// (`SpecInfo::defaulted`, clang's `TemplateArgument::getIsDefaulted`,
+    /// which `CheckTemplateArgumentList` sets for each such argument), are
     /// `defaulted: true` (at every DWARF version: the back end drops it
     /// before DWARF 5). A function template's never are
     /// (clang's deduced arguments carry no such bit).
@@ -1324,11 +1370,10 @@ impl Cg<'_> {
             ast.lists.iter::<DeclId>(ast.templates.param_list(info.params).params).collect();
         let canon = ast.types.canonical_args(si.args);
         let args: Vec<ArgView> = ast.types.args(canon).iter().map(TemplateArg::view).collect();
-        let first_default = ast.spec_print_args(d).map_or(usize::MAX, |l| ast.types.args(l).len());
         let mut ops = Vec::new();
         for (i, a) in args.into_iter().enumerate() {
             let name = params.get(i).map(|&p| self.di_ident(p)).unwrap_or_default();
-            let defaulted = i >= first_default && !matches!(a, ArgView::Pack(_));
+            let defaulted = i < 64 && si.defaulted >> i & 1 != 0 && !matches!(a, ArgView::Pack(_));
             if let Some(p) = self.di_template_arg(&name, a, defaulted) {
                 ops.push(Some(p));
             }

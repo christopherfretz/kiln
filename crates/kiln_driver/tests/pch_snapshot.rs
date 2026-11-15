@@ -272,6 +272,19 @@ mod product {
         bytes
     }
 
+    /// The current snapshot format version: the last line of the
+    /// checked-in format record (`FORMAT_VERSION` is crate-private), so
+    /// a version bump does not edit these tests.
+    fn format_version() -> u32 {
+        include_str!("../pch-snapshot-format.txt")
+            .lines()
+            .map(str::trim)
+            .rfind(|l| !l.is_empty() && !l.starts_with('#'))
+            .and_then(|l| l.split_once(' '))
+            .and_then(|(v, _)| v.parse().ok())
+            .expect("pch-snapshot-format.txt has a `<version> <hash>` line")
+    }
+
     /// A truncated, a foreign and an old-version section are refused before
     /// anything is decoded; the compile replays.
     #[test]
@@ -281,16 +294,14 @@ mod product {
         // The rewrite itself keeps the section usable.
         std::fs::write(d.join("h.pch"), with_section(&pch, <[u8]>::to_vec)).unwrap();
         assert_eq!(note(&ok(&d, &consume(&["-fkiln-pch-snapshot"]))), USED);
+        let old = format!("its section has format version 0, expected {}", format_version());
         let cases: [(&str, Box<Edit>); 3] = [
             ("its section is truncated (no header)", Box::new(|b: &[u8]| b[..5].to_vec())),
             (
                 "its section is not a kiln snapshot (bad magic)",
                 Box::new(|b: &[u8]| [b"FOREIGN!".as_slice(), &b[8..]].concat()),
             ),
-            (
-                "its section has format version 0, expected 8",
-                Box::new(|b: &[u8]| [&b[..8], &[0, 0, 0, 0][..], &b[12..]].concat()),
-            ),
+            (&old, Box::new(|b: &[u8]| [&b[..8], &[0, 0, 0, 0][..], &b[12..]].concat())),
         ];
         for (why, edit) in cases {
             std::fs::write(d.join("h.pch"), with_section(&pch, edit)).unwrap();
@@ -344,15 +355,19 @@ mod product {
         // is `section_header`'s version 0) and another schema hash (a
         // build whose snapshotted types differ): the configuration
         // differs, so the consumer warns and replays.
+        let cur = format_version();
+        let newer = cur + 1;
         let version: Box<Edit> =
-            Box::new(|b: &[u8]| [&b[..8], &[9, 0, 0, 0][..], &b[12..]].concat());
+            Box::new(move |b: &[u8]| [&b[..8], &newer.to_le_bytes()[..], &b[12..]].concat());
         let schema: Box<Edit> = Box::new(|b: &[u8]| {
             let mut b = b.to_vec();
             b[12] ^= 0x5a;
             b
         });
+        let newer_name = format!("v{newer}.pch");
+        let newer_why = format!("its section has format version {newer}, expected {cur}");
         for (name, edit, why) in [
-            ("v9.pch", version, "its section has format version 9, expected 8"),
+            (newer_name.as_str(), version, newer_why.as_str()),
             ("schema.pch", schema, "written by another build (schema hash)"),
         ] {
             std::fs::write(d.join(name), with_section(&pch, edit)).unwrap();

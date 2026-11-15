@@ -177,6 +177,10 @@ pub struct SpecInfo {
     /// arguments that equal their parameter's default (clang's
     /// `SuppressDefaultTemplateArgs`).
     pub print_args: ArgListId,
+    /// Bit `i` set: argument `i` was taken from its parameter's default or
+    /// equals it (clang's `TemplateArgument::getIsDefaulted`; debug
+    /// information's `defaulted:`). Arguments past the 64th never are.
+    pub defaulted: u64,
 }
 
 /// A member of a class template specialization (12 bytes, clang's
@@ -1631,6 +1635,7 @@ impl AstBuilder<'_> {
             from_args: None,
             point_of_instantiation: Loc::INVALID,
             print_args: args,
+            defaulted: 0,
         });
         let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
         self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
@@ -1753,6 +1758,19 @@ impl AstBuilder<'_> {
         let ctx = n.ctx().unwrap_or(self.ast.tu);
         let mut h = DeclHead::new(ctx, n.name(), n.loc());
         h.misc = n.misc();
+        // The specialization of an implicit pattern (a generic lambda's
+        // `__invoke` and conversion function) is implicit too (clang's
+        // `TemplateDeclInstantiator` copies `isImplicit`): debug
+        // information marks it artificial and locates neither its
+        // declaration nor its parameters.
+        if self
+            .ast
+            .template_info(tmpl)
+            .and_then(|i| i.pattern)
+            .is_some_and(|p| self.ast.decls.get(p).has(DeclFlags::IMPLICIT))
+        {
+            h = h.flags(DeclFlags::IMPLICIT);
+        }
         let i = self.ast.templates.specs.len() as u32;
         let d = self.ast.decls.next_id();
         let redecl = crate::decl::Redecl { prev: None, group: self.ast.redecls.new_group(d) };
@@ -1775,6 +1793,7 @@ impl AstBuilder<'_> {
             from_args: None,
             point_of_instantiation: Loc::INVALID,
             print_args: args,
+            defaulted: 0,
         });
         let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
         self.ast.templates.spec_order.entry(tmpl).or_default().push(d);
@@ -1862,6 +1881,7 @@ impl AstBuilder<'_> {
             from_args: None,
             point_of_instantiation: Loc::INVALID,
             print_args: args,
+            defaulted: 0,
         });
         let _ = self.ast.templates.specializations.insert((tmpl, canonical), d);
         self.ast.templates.spec_order.entry(tmpl).or_default().push(d);

@@ -373,8 +373,15 @@ On the six standard-library units of "Class declarations and
 definitions" (aarch64, `-g -O0`), the `DICompositeType` and
 `DISubprogram` names that differ from clang 19's (sorted lists, `diff`
 lines): u1 0 -> 0, u2 21 -> 0, u3 5 -> 1, u4 20 -> 0, u5 22 -> 0, u6 36
--> 0. The one left in u3 is a missing `max_size` subprogram, not a
-name. u2 now defines the same 23 classes and declares the same 12 as
+-> 0. The one left in u3 is a `max_size` subprogram, not a name, and
+not a debug-information rule (WP-1414): clang 19 calls the
+`always_inline` `allocator_traits<allocator<int>>::max_size` from
+`vector::_S_max_size` (`const size_t __allocmax =
+_Alloc_traits::max_size(__a);`, `__a` a reference parameter) and keeps
+its `DISubprogram` through the inlined call's `inlinedAt`; clang 19
+does not implement P2280 (references of unknown origin in constant
+expressions), so it cannot fold the initializer. kiln and clang 22 do,
+fold it, and describe no `max_size`, so kiln matches clang 22 there. u2 now defines the same 23 classes and declares the same 12 as
 clang 19 (before: 24 / 12, the extra `enable_if`).
 
 Debugger check (`tests/debuginfo/template_names_anon_union.cpp`, gdb
@@ -402,6 +409,35 @@ Before WP-1400, kiln's build printed `type = n::v1::str<char>` for
 `whatis s` and `No symbol "i" in current context.` (lldb: `error: no
 variable named 'i' found in this frame`).
 
+## Specialization names, defaulted arguments and sugar (WP-1414)
+
+- A value argument in a specialization name is spelled as clang's
+  `TemplateArgument::print`: only the value's own class is named, nested
+  aggregates are plain braces (`T<Out{{2}, 2.500000e-01}>`), a
+  floating-point value is `%e` of its `double` approximation
+  (`1.000000e+00`, `INF`, `-INF`, `nan`), and a lambda is `(lambda at
+  F:L:C)` with the path remapped by `-fdebug-prefix-map`. A probe of
+  about 60 argument kinds matches clang 19 and clang 22 name for name.
+  `tests/codegen/debug_template_value_spelling.cpp`; the diagnostic
+  spelling is `tests/conformance/temp.arg.nontype/value-argument-spelling.cpp`.
+- `defaulted: true` follows `getIsDefaulted` per argument (a bit per
+  argument on `SpecInfo`): a non-trailing argument equal to its default
+  and the arguments of an explicit specialization are marked, for class
+  and variable templates; never for function templates.
+  `tests/codegen/debug_template_defaulted.cpp`.
+- An alias template specialization keeps its typedef (`V<int>` at the
+  alias, in its scope); a member pointer keeps the pointee's sugar
+  (top-level sugar only, as `castAs`); the `__invoke<T>` and conversion
+  specializations of a generic lambda are artificial; a template
+  parameter object referenced in a function template adds no class to
+  `retainedTypes`. `tests/codegen/debug_alias_template.cpp`,
+  `debug_member_pointer_sugar.cpp`, `debug_lambda_generic_invoker.cpp`,
+  `debug_template_class_values.cpp`.
+- The anonymous type numbering difference reported by WP-1437 did not
+  reproduce: a scan of every `tests/codegen` file with a lambda or an
+  unnamed class (with and without `-g`) and the six standard-library
+  units found no difference.
+
 ## Gaps
 
 Every gap is a documented difference from clang 19 (D). Since WP-910
@@ -416,18 +452,6 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   value as a number, and a template value argument of the type has
   `value: null` (no IR constant). lldb names `Holder<^^int>` as
   `Holder<unsigned long>`.
-- D: a floating-point template argument in a class name prints as
-  `T<1.5e0>` (clang: `T<1.500000e+00>`), in `write_arg_list_debug`
-  (`crates/kiln_ast/src/types/print.rs:497`, called from
-  `crates/kiln_codegen/src/debuginfo/types.rs` `di_class_name`).
-- D: `defaulted: true` (WP-1400) marks only a class template
-  specialization's trailing arguments its name suppresses as defaults
-  (`SpecInfo::print_args`). clang's `TemplateArgument::getIsDefaulted`
-  also marks a non-trailing argument equal to its default (`cg<int,
-  char>` for `template <class T = int, class U = long>`: `T` is
-  defaulted) and the arguments of an explicit specialization; that needs
-  one bit per argument on `SpecInfo` (a `Snap` type), so it is left
-  (`types.rs` `di_template_params`).
 - D (WP-1365): with `-include-pch`, the header's using-directives,
   using-declarations and aliases get entities in kiln (they reach the
   top-level walk) and none in clang, whose AST reader hands them to no
@@ -440,11 +464,20 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
 - D: no `DILabel`.
 - D: statement end locations exist only for compound and loop statements
   (`debuginfo/stmt.rs:82`).
-- D: alias template specializations are unwrapped (`types.rs:135`), so
-  `C<int>` for an alias template `C` loses its `Alias<int>` typedef.
+- D: an alias template specialization's typedef is named by its
+  written arguments; a written trailing argument equal to its default
+  is not suppressed (clang: `A<short>` for `A<short, 2>`)
+  (`debuginfo/types.rs` `di_alias_spec`). Found by WP-1414.
+- D: for a class with a `const` member of class type (a lambda closure
+  in the test that found it), `DIFlagNonTrivial` differs from clang's,
+  which comes from `CXXRecordDecl::isTrivial` and does not follow the
+  standard's triviality there; kiln follows the standard.
+  `tests/codegen/debug_template_value_spelling.cpp` avoids such a member
+  (`debuginfo/types.rs` `di_complete_class`). Found by WP-1414.
 - D: `di_const_ref` approximates `DeclMustBeEmitted`
-  (`debuginfo/func.rs:388`), and floating-point static members get no
-  `extraData`.
+  (`debuginfo/func.rs:388`; since WP-1414 only for variables and
+  enumerators, as clang's `tryEmitAsConstant`), and floating-point
+  static members get no `extraData`.
 - D: no call-site declaration subprograms above `-O0` (the call site
   DIE gap above).
 - D: a thunk's `DISubprogram` has a `scopeLine` (clang: none), its `this`
@@ -468,5 +501,5 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   single `opt` run would cut it (perf-reflection.md F4).
 - Call-site declaration subprograms above `-O0` (the call site DIE gap).
 - The D items under "Gaps", in roughly this order: structured bindings,
-  global-initializer subprograms, alias templates, then the rest
+  global-initializer subprograms, then the rest
   (`DIImportedEntity`: WP-1365).

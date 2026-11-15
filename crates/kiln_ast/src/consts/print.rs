@@ -383,8 +383,20 @@ impl Printer<'_> {
             return;
         }
         let at = out.len();
-        format_float(kind, bits, out);
-        if out[at..].ends_with("inf") || out[at..].ends_with("nan") {
+        // A template argument prints as clang's `APValue::printPretty`
+        // (`1.000000e+00`, `INF`); the dump keeps the exact shortest form.
+        if self.template() {
+            super::format_float_clang(kind, bits, out);
+            // Six digits of a `double`: exact only when they read back.
+            let d = super::to_f64(kind, bits);
+            let wide = matches!(kind, FloatKind::X87Extended | FloatKind::Quad);
+            if wide || out[at..].parse::<f64>().ok() != Some(d) {
+                self.lost();
+            }
+        } else {
+            format_float(kind, bits, out);
+        }
+        if out[at..].ends_with("inf") || out[at..].ends_with("INF") || out[at..].ends_with("nan") {
             self.lost();
         }
     }
@@ -742,7 +754,11 @@ impl Printer<'_> {
                 out.push('}');
             }
             Shape::Record { members, union } => {
-                if self.template() {
+                // clang's `TemplateArgument::print` names the class of the
+                // value only (`Out{{2}}`; `APValue::printPretty` prints a
+                // subobject, a base included, as a braced list), GCC every
+                // one (`Out{In{2}}`).
+                if self.template() && (depth == 0 || self.opts.gcc) {
                     self.env.type_name(ty, out);
                 }
                 if depth >= self.opts.max_depth {
