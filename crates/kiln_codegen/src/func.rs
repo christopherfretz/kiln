@@ -178,6 +178,19 @@ pub(crate) struct Fx {
     /// (clang `AggValueSlot::IsDestructed`): a bound temporary written
     /// there needs no cleanup.
     pub dest_destructed: bool,
+    /// CWG2867 ([`crate::Cg::emit_var_decl`]): the `ExprWithCleanups` of
+    /// a tuple-like structured binding declaration's initializer, whose
+    /// temporaries outlive it until the bindings' `get` calls are done;
+    /// its emission opens no cleanup scope of its own.
+    pub open_full_expr: Option<kiln_ast::ExprId>,
+    /// CWG2867: the declaration and holding variables of the structured
+    /// binding declaration being emitted, whose own cleanups (destructor,
+    /// lifetime end) are pushed after its full-expression ends.
+    pub held_vars: Vec<DeclId>,
+    /// CWG2867: a holding variable's initializer, whose lifetime-extended
+    /// temporaries stay pending until the declaration's full-expression
+    /// ends (`Scope::hold_le`).
+    pub hold_le_of: Option<kiln_ast::ExprId>,
     /// clang `CallArgList::CleanupsToDeactivate`: the EH cleanup of each
     /// callee-destroyed argument evaluated for a call not yet emitted,
     /// as `(argument address, cleanup depth, placeholder)` (WP-460;
@@ -313,6 +326,9 @@ impl Fx {
             ub_accessed: None,
             slot_volatile: false,
             dest_destructed: false,
+            open_full_expr: None,
+            held_vars: Vec::new(),
+            hold_le_of: None,
             arg_cleanups: Vec::new(),
             param_cleanups: Vec::new(),
             sw: None,

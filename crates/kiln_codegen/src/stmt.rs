@@ -29,6 +29,12 @@ pub(crate) struct Scope {
     old_stack_save: bool,
     /// A `LexicalScope`'s debug block end (WP-814).
     pub(crate) dbg_end: Option<kiln_source::Loc>,
+    /// CWG2867: the full-expression of a structured binding's holding
+    /// variable: the lifetime-extended temporaries it creates are not
+    /// pushed at its end but stay pending, guarded by deferred cleanups,
+    /// until the declaration's full-expression ends
+    /// ([`Cg::redefer_extended`]).
+    pub(crate) hold_le: bool,
 }
 
 impl Cg<'_> {
@@ -72,6 +78,7 @@ impl Cg<'_> {
             old_cur,
             old_stack_save,
             dbg_end: None,
+            hold_le: false,
         }
     }
 
@@ -141,7 +148,12 @@ impl Cg<'_> {
                 self.f.cl.guards.push(g);
             }
         }
-        self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
+        if s.hold_le {
+            self.pop_cleanup_blocks_reload(s.depth, reload);
+            self.redefer_extended(s.le);
+        } else {
+            self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
+        }
         if guarded {
             self.f.cl.guards.retain(|g| g.base < base);
         }

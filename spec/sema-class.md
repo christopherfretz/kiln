@@ -1914,6 +1914,26 @@ reference member denotes what it was bound to, so `int &r = make().first;`
 `returning reference to local temporary object`, for the extension, the
 return check and the `-Wreturn-stack-address` walk alike (WP-276).
 
+The operand forms are one predicate, `Sema::extension_operands`
+(`class/temporary.rs`, WP-1459), which `temporaries_bound_by` follows to every
+extended `MaterializeTemporaryExpr`; codegen and the Oven read only its result
+(the `extended by` decls), so run time and constant evaluation cannot
+disagree on what is extended. One step yields: the operand of parentheses,
+`ExprWithCleanups` and `ConstantExpr`; of a no-op or derived-to-base cast
+(implicit or named); of a base-to-derived, dynamic or lvalue-reinterpreting
+cast whose operand and result are both glvalues (`static_cast<const D&>(b)`,
+`dynamic_cast`, `reinterpret_cast<const unsigned&>`); the object of a `.`
+naming a non-reference non-static data member; the array operand of a
+subscript, on either side (`1[A().arr]`); the right operand of a comma; the
+object operand of a glvalue `.*` (`A().*pm`, [class.temporary]/6.6); both
+arms of a glvalue `?:`; the false arm of a glvalue GNU `a ?: b` (the
+condition's temporary is not extended). Only the evaluated arm's temporary is
+constructed and destroyed (`class.temporary/extension-conditional-array-arms-run.cpp`).
+GCC 16.1 destroys the temporary early through a nested member access of a
+`.*`, a conditional or a comma, a reversed subscript and a `dynamic_cast`; clang
+19 and 22 extend all of them (`class.temporary/extension-operand-forms-run.cpp`
+and its `-constexpr` twin).
+
 **P2718R0 (C++23 range-for)**: temporaries in the *for-range-initializer* are
 extended to `__range` (clang 19 dump: `MaterializeTemporaryExpr 'S' xvalue
 extended by Var '__range1'`). Sema collects every full-expression-duration
@@ -1926,7 +1946,11 @@ Status (WP-089): implemented. `Sema::begin_for_range_init(extend)` opens a
 collection (`extend` is `Sema.range_lifetime_extension`, set by the parser for
 `-std=c++23` and later) and `end_for_range_init` closes it, returning the
 collected temporaries; `materialize_temporary` pushes each one it creates onto
-the innermost open `extend_collector`. Temporaries already bound to a reference
+the innermost open `extend_collector`. GCC's `-f[no-]range-for-ext-temps`
+(spec/driver.md) overrides the C++23 default in either direction
+(`ParseOptions.range_for_ext_temps`); before C++17 a discarded class prvalue is
+then materialized too, as GCC 16.1 does (`stmt.ranged/p2718-flag{,-cxx11}-run.cpp`,
+`p2718-no-flag-run.cpp`). Temporaries already bound to a reference
 inside the initializer are left alone. After `__range` is initialized each
 collected temporary still of full-expression duration is extended to
 `__range` (`extend_temporary`, so it gets the `extended by Var '__range1'`
@@ -1952,7 +1976,8 @@ D{4}.v; }`) is rebuilt and extended the same way (WP-1177;
 `stmt.ranged/p2718-default-member-initializer{,-nested}-run.cpp`).
 
 A discarded class prvalue in a lifetime-extending context (an open
-`extend_collector`: the for-range-initializer from C++23, and an enumerating
+`extend_collector`: the for-range-initializer from C++23 or with
+`-frange-for-ext-temps`, and an enumerating
 expansion-init-list, spec/sema.md §7.6a) undergoes the temporary
 materialization conversion ([expr.context]/2, C++17): `materialize_discarded`
 (`class/temporary.rs`), called for the operand of a cast to `void`

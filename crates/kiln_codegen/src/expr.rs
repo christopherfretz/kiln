@@ -4676,6 +4676,9 @@ impl Cg<'_> {
                 }
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
+            ExprKind::ExprWithCleanups if self.take_open_full_expr(e) => {
+                self.agg_visit(self.sub(e), dest, zeroed)
+            }
             ExprKind::ExprWithCleanups => {
                 let obj = self.take_pending_guard(dest.v);
                 let sc = self.begin_scope(false);
@@ -5622,8 +5625,64 @@ impl Cg<'_> {
     /// tuple-like bindings' holding variables follow it (clang
     /// `EmitDecl` of a `DecompositionDecl`).
     pub(crate) fn emit_var_decl(&mut self, d: DeclId) -> R<()> {
+        if let Some(init) = self.held_decomp_init(d)
+            && !is_static_local(self.ast, d)
+        {
+            return self.emit_decomp_held(d, init);
+        }
         self.emit_one_var_decl(d)?;
         self.emit_binding_vars(d)
+    }
+
+    /// The initializer of tuple-like structured binding declaration `d`
+    /// when it is a full-expression with temporaries (CWG2867): `None`
+    /// for any other declaration.
+    pub(crate) fn held_decomp_init(&self, d: DeclId) -> Option<ExprId> {
+        let ast = self.ast;
+        let l = ast.decls.decomp_bindings(d)?;
+        ast.lists.iter::<DeclId>(l).find_map(|b| ast.decls.binding_var(b))?;
+        let init = ast.decls.var(d)?.init?;
+        (ast.exprs.get(init).kind() == ExprKind::ExprWithCleanups).then_some(init)
+    }
+
+    /// CWG2867 ([dcl.struct.bind]/4, [intro.execution]/5): the
+    /// initialization of a tuple-like structured binding declaration's
+    /// holding variables (the `get` calls) is part of its full-expression,
+    /// so the temporaries of its initializer `init` are destroyed after
+    /// them. `init` is emitted without a scope of its own, in one around
+    /// the holding variables; each holding variable's initializer keeps
+    /// its own full-expression, but the temporaries it extends and the
+    /// cleanups of the variables wait for the end of the declaration's
+    /// (`Fx::held_vars`, `Scope::hold_le`), so they are destroyed in
+    /// reverse order of construction at the end of the block.
+    fn emit_decomp_held(&mut self, d: DeclId, init: ExprId) -> R<()> {
+        let ast = self.ast;
+        let holding: Vec<DeclId> = ast
+            .decls
+            .decomp_bindings(d)
+            .map(|l| ast.lists.iter::<DeclId>(l).filter_map(|b| ast.decls.binding_var(b)).collect())
+            .unwrap_or_default();
+        let sc = self.begin_scope(false);
+        let mut held = Vec::with_capacity(holding.len() + 1);
+        held.push(d);
+        held.extend_from_slice(&holding);
+        let saved = std::mem::replace(&mut self.f.held_vars, held);
+        self.f.open_full_expr = Some(init);
+        let mut r = self.emit_one_var_decl(d);
+        self.f.open_full_expr = None;
+        // `guard_init`'s object is guarded as a deferred cleanup instead.
+        self.f.cl.pending_guard = None;
+        for h in holding {
+            if r.is_err() {
+                break;
+            }
+            self.f.hold_le_of = ast.decls.var(h).and_then(|v| v.init);
+            r = self.emit_one_var_decl(h);
+            self.f.hold_le_of = None;
+        }
+        self.f.held_vars = saved;
+        self.end_scope(sc);
+        r
     }
 
     /// A condition variable ([stmt.pre]/4): only the variable itself. A
@@ -5758,7 +5817,7 @@ impl Cg<'_> {
             } else {
                 Cleanup::Dtor { addr: addr.v, record: rd, base: false }
             };
-            self.push_cleanup(c);
+            self.push_var_cleanup(d, c);
         }
         self.push_cleanup_attr(d);
         Ok(())

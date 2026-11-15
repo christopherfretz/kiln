@@ -117,6 +117,10 @@ pub struct PredefConfig {
     /// mode when `Some(true)`, none when `Some(false)`; `None` keeps the
     /// default (C++26 only; spec/contracts.md §1).
     pub contracts: Option<bool>,
+    /// GCC's `-f[no-]range-for-ext-temps` (P2718R0 in any standard, or
+    /// not even from C++23): `__cpp_range_based_for` follows it, as GCC
+    /// 16.1's does; `None` keeps the standard's value.
+    pub range_for_ext_temps: Option<bool>,
     /// The `AArch64` target features the `__ARM_*` macros derive from.
     pub arm: ArmTarget,
     /// Off `AArch64`, how the `-march=<cpu>` macros differ from the base
@@ -191,6 +195,7 @@ impl PredefConfig {
             std_float_aliases: true,
             reflection: false,
             contracts: None,
+            range_for_ext_temps: None,
             arm: ArmTarget::default(),
             x86_macros: Vec::new(),
             sanitize_macros: Vec::new(),
@@ -605,14 +610,32 @@ fn apply_gnu89_inline(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
 }
 
 /// `-f[no-]contracts` (spec/contracts.md §1): `__cpp_contracts` in any
-/// C++ mode, or none.
-fn apply_contracts(m: &mut BTreeMap<String, String>, contracts: Option<bool>) {
+/// C++ mode, or none; with `-f[no-]range-for-ext-temps` (`ext`, the
+/// other feature-test macro a `-f` flag changes).
+fn apply_contracts(m: &mut BTreeMap<String, String>, contracts: Option<bool>, ext: Option<bool>) {
+    apply_range_for_ext_temps(m, ext);
     match contracts {
         Some(true) => set(m, "__cpp_contracts", "202502L"),
         Some(false) => {
             m.remove("__cpp_contracts");
         }
         None => {}
+    }
+}
+
+/// `-f[no-]range-for-ext-temps`: `__cpp_range_based_for` is P2718R0's
+/// `202211L` exactly when the for-range-initializer's temporaries are
+/// extended; without them it is the C++17 value (`201603L`), or C++11's
+/// (`200907L`) where the standard had no newer one. As in GCC 16.1, the
+/// flag does not raise C++11/14's `200907L`: P2718R0's value implies
+/// C++17's generalized range-for.
+fn apply_range_for_ext_temps(m: &mut BTreeMap<String, String>, on: Option<bool>) {
+    const KEY: &str = "__cpp_range_based_for";
+    let Some(cur) = m.get(KEY).cloned() else { return };
+    match on {
+        Some(true) if !cur.starts_with("200907") => set(m, KEY, "202211L"),
+        Some(false) if cur == "202211L" => set(m, KEY, "201603L"),
+        _ => {}
     }
 }
 
@@ -680,7 +703,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
-        apply_contracts(m, cfg.contracts);
+        apply_contracts(m, cfg.contracts, cfg.range_for_ext_temps);
         apply_std_keyed(m, cfg.reflection);
         apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);
     }

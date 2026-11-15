@@ -611,6 +611,11 @@ pub struct Args {
     /// (P2864) is the C++20 deprecation warning instead
     /// ([`kiln_sema::Sema::permissive`]; spec/driver.md).
     pub permissive: bool,
+    /// GCC's `-f[no-]range-for-ext-temps` (the last one): P2718R0's
+    /// lifetime extension of the for-range-initializer's temporaries in
+    /// any standard, or not even from C++23
+    /// ([`kiln_parse::ParseOptions::range_for_ext_temps`]).
+    pub range_for_ext_temps: Option<bool>,
     /// `-fcontract-evaluation-semantic=ignore|observe|enforce|quick_enforce`
     /// (GCC's spelling; P2900 evaluation semantics, spec/contracts.md §6).
     /// `None` is the default, enforce.
@@ -1705,6 +1710,8 @@ impl Args {
                 self.no_crash_diagnostics = true;
             }
             "-fpermissive" => self.permissive = true,
+            "-frange-for-ext-temps" => self.range_for_ext_temps = Some(true),
+            "-fno-range-for-ext-temps" => self.range_for_ext_temps = Some(false),
             _ => {
                 if let Some(v) = arg.strip_prefix("-fcrash-diagnostics-dir=") {
                     self.crash_diagnostics_dir = Some(v.to_owned());

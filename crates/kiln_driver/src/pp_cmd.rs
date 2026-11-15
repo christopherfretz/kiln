@@ -268,6 +268,7 @@ impl Job<'_> {
         cfg.clang_compat = p.clang_compat;
         cfg.reflection = p.reflection_for(&self.std);
         cfg.contracts = Some(p.contracts_for(&self.std));
+        cfg.range_for_ext_temps = self.args.range_for_ext_temps;
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         let mut text = build_predefines(&base, &cfg, &self.args.macros);

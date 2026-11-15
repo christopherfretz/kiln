@@ -362,6 +362,7 @@ impl CodegenJob<'_> {
             target_attr_features: crate::features::target_attr_feature_list,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
+            range_for_ext_temps: a.range_for_ext_temps,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
             record_carried: a.bmi_kind != Some(1) && job.module_output_path().is_some(),

@@ -4418,6 +4418,35 @@ Tests: `except.ctor/run-temporary-dtor-throws-after-init.cpp`,
 `class.temporary/run-extended-temporary-destroyed-when-later-dtor-throws.cpp`,
 `ext.gnu.stmt.expr/result-destroyed-after-own-temporaries-run.cpp`.
 
+### Held decomposition full-expressions (CWG2867, WP-1459)
+[dcl.struct.bind]/4 (CWG2867): the initializations of a tuple-like
+decomposition's holding variables (`get` calls) are part of the
+full-expression of its initializer, so the initializer's temporaries are
+destroyed after the last `get`, while each holding variable's own extended
+temporary lives as long as the binding. `emit_var_decl` takes a block-scope,
+non-static decomposition with holding variables and an `ExprWithCleanups`
+initializer through `emit_decomp_held` (`expr.rs`):
+- one scope is opened for the whole sequence; `Fx.open_full_expr` makes
+  the initializer's `ExprWithCleanups` transparent (`take_open_full_expr`,
+  in `agg_visit` and the reference-binding path), so its temporaries'
+  cleanups land in that scope;
+- each holding variable's `ExprWithCleanups` gets a scope of its own whose
+  lifetime-extended entries are kept (`Scope.hold_le`, set from
+  `Fx.hold_le_of`), and `end_scope_with` re-defers them
+  (`redefer_extended`) instead of pushing them;
+- the variables' own cleanups go through `push_var_cleanup`: for a
+  variable in `Fx.held_vars` they join the deferred lifetime-extended list,
+  so they are pushed only after the held scope pops; the destruction
+  order at the end of the block is unchanged (the holding variables and
+  their temporaries in reverse, then the decomposed object).
+Static and `thread_local` decompositions (`global_init.rs`
+`global_var_decl_init`) run the holding variables' initialization inside the
+initializer's scope and mark them done (`DONE`), so `static_local_init`
+and the init function skip them. A non-tuple-like decomposition has no
+holding variables and is unchanged. clang 19 and 22 do not implement
+CWG2867 (they destroy the temporaries before the first `get`); GCC 16.1 does
+(`dcl.struct.bind/cwg2867-get-temporaries-run.cpp`, GCC oracle).
+
 ### no-builtin (WP-808)
 `-fno-builtin` / `-ffreestanding` (`CodegenOptions::no_builtin`, clang
 `LangOpts.NoBuiltin`), `-fno-builtin-<name>`
