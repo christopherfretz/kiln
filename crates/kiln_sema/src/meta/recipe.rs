@@ -30,6 +30,24 @@ impl Sema<'_, '_> {
         param: Option<usize>,
         q: QualType,
     ) -> Result<Option<Shape>, String> {
+        let sh = self.meta_op_shape(op, param, q)?;
+        // A range read by its layout only when kiln knows it (§3.5).
+        Ok(match sh {
+            Some(Shape::Range | Shape::Elems) if param.is_some() && !self.range_by_layout(q) => {
+                Some(Shape::Iter)
+            }
+            sh => sh,
+        })
+    }
+
+    /// [`Self::meta_shape`] by the op alone: [`Shape::Range`] and
+    /// [`Shape::Elems`] whatever the argument's class.
+    pub(super) fn meta_op_shape(
+        &mut self,
+        op: MetaOp,
+        param: Option<usize>,
+        q: QualType,
+    ) -> Result<Option<Shape>, String> {
         use MetaOp as M;
         match (op, param) {
             (M::Value(ValueOp::ExcCvtFromUtf8), None) => {

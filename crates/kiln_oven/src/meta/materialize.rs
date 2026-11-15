@@ -53,6 +53,13 @@ pub enum Shape {
     /// thaws ([`MetaOut::Frozen`], [`MetaOut::Deref`]; `extract<T>` of a
     /// class `T`).
     Whole,
+    /// A [`Shape::Range`] or [`Shape::Elems`] argument of a class whose
+    /// layout kiln does not know (any class but the standard contiguous
+    /// ones, spec/reflection.md §3.5): never read by its layout. A direct
+    /// call is compiled as an ordinary call of the intrinsic, whose body
+    /// (`SemaBridge::ensure_body`) iterates the range once into a
+    /// `std::vector` and calls the intrinsic with that.
+    Iter,
 }
 
 /// A scalar member of a recipe's class: its byte offset in the complete
@@ -224,6 +231,7 @@ pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, Stri
     match shape {
         Shape::Elems => return super::value::elems_recipe(types, t),
         Shape::Whole => return Ok(Recipe::Whole),
+        Shape::Iter => return Err("is a range read by iterating it".into()),
         _ => {}
     }
     match types.kind(t) {
@@ -287,7 +295,7 @@ pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, Stri
             }
             _ => span(&ls, &is_info),
         },
-        Shape::Elems | Shape::Whole => None,
+        Shape::Elems | Shape::Whole | Shape::Iter => None,
     };
     found.ok_or_else(|| {
         let what = match shape {
@@ -296,7 +304,7 @@ pub(crate) fn recipe(types: &Types, t: OTy, shape: Shape) -> Result<Recipe, Stri
             Shape::SrcLoc => "one pointer",
             Shape::Pair => "two scalar members",
             Shape::Range => "a contiguous range of 'std::meta::info'",
-            Shape::Elems | Shape::Whole => "a contiguous range",
+            Shape::Elems | Shape::Whole | Shape::Iter => "a contiguous range",
         };
         format!("does not hold {what}")
     })

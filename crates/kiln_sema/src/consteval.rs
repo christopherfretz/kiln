@@ -124,6 +124,13 @@ pub(crate) struct ImmState {
     /// reads the value instead of evaluating the call
     /// ([`Sema::early_immediate_value`]).
     early_values: FxHashMap<ExprId, ConstValueId>,
+    /// The immediate invocations of a template evaluated so far whose
+    /// value depended on the evaluation point (the Oven marked the
+    /// evaluation impure): never stored, so each instantiation evaluates
+    /// its own (WP-1482). Consumed by
+    /// [`Sema::finish_immediate_invocations`].
+    #[snap(skip)]
+    point_dependent: Vec<ExprId>,
     /// The default arguments and default member initializers used by
     /// that full-expression outside its immediate invocations, checked
     /// there already (`None`) or, in an immediate-escalating function,
@@ -909,9 +916,13 @@ impl Sema<'_, '_> {
         // argument `substitute` converts) is finished on its own: it must
         // not take the enclosing one's variable or member (WP-1328).
         let saved = self.take_immediate_state(false);
+        let before = self.impure_evals();
         let r =
             self.eval_const(self.ast.exprs.operand(c), EvalContext::new(EvalKind::Consteval, at));
         self.restore_immediate_state(saved);
+        if self.impure_evals() != before && self.in_template() {
+            self.imm.point_dependent.push(c);
+        }
         r
     }
 
@@ -1060,7 +1071,9 @@ impl Sema<'_, '_> {
                 continue;
             }
             let r = self.prefolded_or_eval(c);
-            if let Ok(v) = r {
+            if let Ok(v) = r
+                && !self.imm.point_dependent.contains(&c)
+            {
                 let _ = self.ast.exprs.set_constant_value(c, v);
                 let op = self.ast.exprs.operand(c);
                 if !self.ast.exprs.get(op).value_category().is_glvalue()
@@ -1120,6 +1133,64 @@ impl Sema<'_, '_> {
             .collect()
     }
 
+    /// Marks instantiation-dependent each invocation of `targets`, its
+    /// call, and every node of full-expression `root` above one, so an
+    /// instantiation rebuilds the call (a fresh immediate invocation
+    /// evaluated at its own point) instead of sharing the pattern's
+    /// non-dependent node. The parents were built before the evaluation
+    /// found the value point-dependent, so their bits are set here, not
+    /// copied (`Exprs::mark_instantiation_dependent`).
+    fn mark_point_dependent(&mut self, root: ExprId, targets: &[ExprId]) {
+        // The tree in breadth-first order, each node with its parent's
+        // index.
+        let mut nodes: Vec<(ExprId, usize)> = vec![(root, usize::MAX)];
+        let mut kids = Vec::new();
+        let mut i = 0;
+        while i < nodes.len() {
+            kids.clear();
+            self.ast.exprs.children_into(nodes[i].0, &self.ast.lists, &mut kids);
+            nodes.extend(kids.iter().map(|&k| (k, i)));
+            i += 1;
+        }
+        let mut hit = vec![false; nodes.len()];
+        for (j, &(x, _)) in nodes.iter().enumerate() {
+            if !targets.contains(&x) {
+                continue;
+            }
+            let mut p = j;
+            while p != usize::MAX && !hit[p] {
+                hit[p] = true;
+                p = nodes[p].1;
+            }
+        }
+        for (&(x, _), h) in nodes.iter().zip(hit) {
+            if h {
+                self.ast.exprs.mark_instantiation_dependent(x);
+            }
+        }
+        for &c in targets {
+            let call = self.ast.exprs.operand(c);
+            self.ast.exprs.mark_instantiation_dependent(call);
+        }
+    }
+
+    /// The point-dependent invocations among `outer` (a nested
+    /// full-expression finished during an evaluation leaves the
+    /// enclosing one's).
+    fn take_point_dependent(&mut self, outer: &[(ExprId, DeclId)]) -> Vec<ExprId> {
+        let mut ours = Vec::new();
+        if !self.imm.point_dependent.is_empty() {
+            self.imm.point_dependent.retain(|c| {
+                let hit = outer.iter().any(|&(x, _)| x == *c);
+                if hit {
+                    ours.push(*c);
+                }
+                !hit
+            });
+        }
+        ours
+    }
+
     /// The end of full-expression `e` (from [`Sema::act_on_full_expr`]):
     /// evaluates its immediate invocations and checks the references to
     /// immediate functions ([expr.const]/16-19).
@@ -1149,7 +1220,14 @@ impl Sema<'_, '_> {
             self.func.as_ref().map(|s| s.decl).filter(|&f| self.is_immediate_escalating(f));
         let report_after =
             var.filter(|&v| var_defer && escalating.is_none() && self.checked_var(v));
+        // A template's invocation whose value depends on where it is
+        // evaluated (`access_context::current()` in a class template's
+        // member initializer; spec/reflection.md §3.3) is not stored: the
+        // instantiations share the wrapper and evaluate it at their own
+        // point, in their own scope (WP-1482). A pure one is stored, and
+        // shared, as below.
         let results: Vec<_> = outer.iter().map(|&(c, _)| self.immediate_result(c)).collect();
+        let point_dependent = self.take_point_dependent(&outer);
         let imm_results = self.consteval_only_results(&outer, &results);
         // Each invocation is evaluated once (WP-1140): its value is
         // stored before the initializer is folded below, so that fold,
@@ -1157,9 +1235,14 @@ impl Sema<'_, '_> {
         // read it as a leaf (spec/oven.md "Valued immediate invocations")
         // instead of running the call again.
         for (&(c, _), r) in outer.iter().zip(&results) {
-            if let Ok(v) = *r {
+            if let Ok(v) = *r
+                && !point_dependent.contains(&c)
+            {
                 let _ = self.ast.exprs.set_constant_value(c, v);
             }
+        }
+        if !point_dependent.is_empty() {
+            self.mark_point_dependent(e, &point_dependent);
         }
         // A constant-initialized variable's initializer (clang evaluates
         // it as a whole): its invocations keep their wrappers, unvalued

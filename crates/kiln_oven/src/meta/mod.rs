@@ -298,6 +298,11 @@ pub enum MetaOut {
     /// The value of the object a frozen pointer designates, read as the
     /// call's result type (`extract<T>` of an object or a variable).
     Deref(ConstValueId),
+    /// The object at Oven address `addr`, a variable whose lifetime
+    /// began within the running evaluation ([`crate::Oven::meta_local`]):
+    /// its address (`by_ref`: a reference result) or its value
+    /// (`extract` of an automatic variable).
+    Live { addr: u64, by_ref: bool },
     /// A string view (`materialize::Shape::Str`): a frozen pointer to the
     /// characters of a static string object, and its length.
     Str(ConstValueId, u64),

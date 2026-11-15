@@ -14,8 +14,8 @@
 //@ skip(clang): clang 19 does not implement P2996 reflection
 //@ strict-diags
 //@ inst-report: substitute-trial-rollback.inst.json
-//@ oven: 54 peak_bytes<=0 allocs<=0
-//@ oven: 55 peak_bytes<=0 allocs<=0 steps<=70000
+//@ oven: 53 peak_bytes<=0 allocs<=0
+//@ oven: 54 peak_bytes<=0 allocs<=0 steps<=70000
 // Declared here rather than by kiln_meta.h so that the golden holds only
 // this file's templates; the arguments are arrays.
 namespace std::meta {
@@ -33,15 +33,14 @@ template <class T> struct Ok { static_assert(sizeof(T) == 100); };
 
 constexpr info chr[] = {^^char};
 constexpr info i32[] = {^^int};
-struct Span { const info* data; decltype(sizeof 0) size; };
-constexpr Span none{nullptr, 0};
+constexpr info three[] = {^^int, ^^int, ^^int};
 
 consteval int trial(int n) {
   int ok = 0;
   for (int k = 0; k < n; ++k) {
     ok += can_substitute(^^R, chr);
     ok += can_substitute(^^Bad, i32);
-    ok += can_substitute(^^Pair, none);
+    ok += can_substitute(^^Pair, three);
     ok += can_substitute(^^h, i32);
     ok += can_substitute(^^Ok, i32);
   }

@@ -537,6 +537,18 @@ was not marked impure (`Oven::impure_count`): a point-dependent value
 aggregate initialization) is evaluated afresh at each use. Tested by
 `meta.reflection.access.context/eval-point.cpp`.
 
+Templates (WP-1482): an immediate invocation in a template whose
+evaluation the Oven marked impure (`Sema::eval_immediate`) keeps no
+stored value, and it, its call and every node of its full-expression
+above it are marked instantiation-dependent
+(`Sema::mark_point_dependent`), so each instantiation rebuilds the call
+instead of sharing the pattern's non-dependent node and evaluates it at
+its own point: `access_context::current()` in a static data member
+initializer of `S<T>` gives `^^S<int>` in `S<int>`. An invocation not
+marked impure is stored once and shared by every instantiation, as
+before. Tested by
+`meta.reflection.access.context/eval-point-specialization.cpp`.
+
 ### 3.5 Materialized results and range arguments
 - **Recipes.** When a call of an intrinsic is compiled, the Oven asks sema
   for the call's *shapes* (`SemaBridge::meta_shape`): one for a
@@ -563,6 +575,7 @@ aggregate initialization) is evaluated afresh at each use. Tested by
   | `Vector` | every op returning `vector<info>` | three `info *` (begin, end, end of capacity) in offset order | a fresh allocation (below) |
   | `Pair` | `offset_of` (`member_offset`), `access_context::current` and the `access_context` factories | two scalar leaves in offset order | the two values |
   | `Range` | each `reflection_range` parameter (`substitute`, `can_substitute`, …) | `(info *, size)` (`span`, `initializer_list`), `(begin, end, …)` (`vector`), or an array of `info` (`array<info, N>`, a built-in array) | read before the call as a pointer and a length |
+| `Iter` | a `Range` or `Elems` argument of a class not read by layout (below) | none | iterated into a `vector` by the intrinsic's body |
 
 - **Mismatch.** A result or argument class that does not match its shape
   is not an error of the declaration: the call compiles to a trap, and
@@ -604,6 +617,35 @@ aggregate initialization) is evaluated afresh at each use. Tested by
   `meta_range_at`. The range is not copied. A range whose elements cannot
   be read (uninitialized, out of the object) is the evaluator's ordinary
   fault.
+- **Which ranges are read by layout (WP-1482).** A range argument (a
+  `reflection_range` parameter, `Range`, or a value op's element range,
+  `Elems`) is read from its layout only when sema knows the class
+  (`Sema::range_by_layout`): a non-class (a built-in array), or a class
+  declared in `std` (inline namespaces skipped) named `array`,
+  `basic_string_view`, `basic_string`, `initializer_list`, `vector` (not
+  `vector<bool>`) or `span` of dynamic extent (or the one-parameter
+  stand-in of `tests/support/kiln_meta.h`). Every other range (a fixed-
+  extent `span`, `views::transform`, `views::filter`, `zip`, an input
+  view, a user's container) has the shape `Iter`, and a layout that merely
+  looks like a pointer pair is never read: the answer is either the
+  iterated elements or an error, never a wrong array.
+- **Iterating (WP-1482).** A call with an `Iter` argument compiles as an
+  ordinary call of the intrinsic specialization. Its body is built by
+  sema on first use (`SemaBridge::ensure_body`, `Sema::meta_iter_thunk`):
+  for each `Iter` parameter `p`, `std::vector<V> v; for (auto&& x : p)
+  v.emplace_back(x);` and then a call of the same intrinsic template with
+  `v` (an lvalue `vector<V>&`, read by layout) in `p`'s place. `V` is
+  `info` for `Range` and `std::ranges::range_value_t<R>` for `Elems`. The
+  range is therefore traversed exactly once, as a range-based `for`
+  traverses it (one `ranges::begin`, one `ranges::end`, then `==`, `*`,
+  `++` per element), so a single-pass input range works. The vector is an
+  ordinary transient allocation, freed when the body returns: memory used
+  to iterate is reclaimed during the evaluation, and nothing of it is in
+  the result. The contiguous path is unchanged (no thunk is built or
+  called for a range read by layout). Not supported, and diagnosed as a
+  call of an undefined function: an `Iter` range whose value type is
+  `bool` or an array type (`vector<V>` cannot hold it; a range of arrays
+  of a known contiguous class is read by layout).
 - **Test helpers.** `__kiln_reflection_range(r)` (the range as a
   `vector<info>`), `__kiln_member_offset(bytes, bits)` and
   `__kiln_access_context(scope, cls)` exercise the `Range`, `Vector` and
@@ -1101,7 +1143,9 @@ it, with `from() == ^^data_member_spec`:
    `string`, §3.5); the Oven reads its flag, then the pointer and length,
    and the bytes are checked as UTF-8 by `kiln_lex::is_identifier`
    (XID_Start/XID_Continue, `$` not accepted).
-4. It is not a keyword or alternative token: "'n' is a keyword, not an
+4. It is not a keyword or alternative token, nor a built-in type trait's
+   spelling (`__is_convertible`, `__builtin_is_implicit_lifetime`: clang
+   and GCC lex those as keywords; WP-1482): "'n' is a keyword, not an
    identifier".
 5. A name or a bit-field width is given: "neither 'name' nor 'bit_width'
    specified".

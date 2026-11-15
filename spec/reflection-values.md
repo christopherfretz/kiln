@@ -121,6 +121,20 @@ shape, so a public name would claim the library template itself.
    usable in constant expressions. A reference bound to the result,
    constexpr or not, holds that address, and codegen emits it as a
    constant rather than a call (spec/landed/oven/WP-640.md).
+   An `U*` from an array of arrays points at its first row when `U` is
+   qualification-compatible with the element type (LWG4483).
+   **Automatic variables (WP-1482).** A local variable or function
+   parameter (not a reference) reflects the object of its innermost
+   instance live in a frame of the current evaluation (`Oven::meta_local`:
+   a live slot whose origin is the variable, in a frame at or above the
+   evaluation's entry). Sema registers each local named by a `^^` in a
+   compiled body as memory-backed, so the slot exists. `extract<U&>`
+   binds to it and `extract<U>` reads it, by the rules above. No such
+   instance (the frame returned, or the variable belongs to another
+   evaluation) fails "'v' is not a variable of static storage duration,
+   nor one whose lifetime began within the evaluation": never a read of
+   a dead object. A reference parameter or local extracts through to its
+   referent as above.
 3. A function: `T` a function pointer (noexcept may be dropped);
    `T` a function reference is ill-formed (IS, as GCC).
 4. A non-static data member or member function: `T` a member pointer of

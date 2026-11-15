@@ -561,7 +561,7 @@ impl Sema<'_, '_> {
         let n = self.ast.decls.get(m);
         let kind = n.kind();
         if never_a_member(kind)
-            || n.has(DeclFlags::IMPLICIT)
+            || (n.has(DeclFlags::IMPLICIT) && !self.anonymous_union_object(m))
             || kind == DeclKind::TranslationUnit
             || matches!(self.ast.templ_link(m).get(), Some((TemplLinkKind::Specialization, _)))
         {
@@ -580,6 +580,21 @@ impl Sema<'_, '_> {
         let kind = if self.undeduced_decl(m) { mk::PUBLIC | mk::PLACEHOLDER } else { mk::PUBLIC };
         l.items.push(MemberEntry { r, decl: m, kind });
         Ok(())
+    }
+
+    /// Whether `m` is the unnamed variable an anonymous union at
+    /// namespace scope declares ([class.union.anon]/1): a member of the
+    /// namespace, as the union's class is (WP-1482; GCC 16.1 lists both).
+    fn anonymous_union_object(&self, m: DeclId) -> bool {
+        self.kind_of(m) == DeclKind::Var
+            && self
+                .ast
+                .decls
+                .get(m)
+                .ty()
+                .and_then(|t| self.ast.types.as_record(t))
+                .and_then(|d| self.ast.decls.record(d))
+                .is_some_and(|r| r.defn.contains(kiln_ast::decl::DefinitionBits::ANONYMOUS))
     }
 
     /// `enumerators_of(r)`: the enumerators of the enumeration type `r`

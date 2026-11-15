@@ -122,6 +122,18 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Reflection, found running GCC's C++ testsuite (WP-1482): a range
+  argument of `reflect_constant_array`, `define_static_array`,
+  `substitute` and the other range-taking metafunctions is iterated once
+  (`views::transform`, `views::filter`, a fixed-extent `span`, input
+  ranges, a user's container), where it was read from its memory layout
+  and rejected; the standard contiguous classes are still read directly.
+  `extract` reads an automatic variable whose lifetime began in the
+  evaluation and rejects one whose frame has returned.
+  `access_context::current()` in a class template's member initializer
+  names the specialization. A member of a namespace-scope anonymous union
+  is a class member, and `members_of` of the namespace lists the union's
+  variable. `data_member_spec` rejects built-in trait names.
 - C++26 forms found running GCC's C++ testsuite (WP-1464): the C23
   one-argument `va_start(ap)` and `__STDC_VERSION_STDARG_H__` at C++26
   (P3348R4); an array placement new at the first element of an array

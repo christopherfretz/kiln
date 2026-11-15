@@ -214,6 +214,17 @@ parity is out of scope. The negative tests are `entity-neg.cpp`,
   member of an anonymous union answers for the field it names. A
   non-member answers false.
 - **`is_namespace_member`** is false for a fundamental type.
+- **Anonymous unions (WP-1482).** A member of an anonymous union is the
+  union's member at namespace scope too ([class.union.anon]/1):
+  `is_class_member` true, `is_namespace_member` false, `parent_of` the
+  union. `members_of` of the namespace lists the union's unnamed
+  variable and its class. `main` has C++ language linkage, so it has a
+  parent; a function with internal linkage in `extern "C"` has no C
+  language linkage of its name; an alias template has its namespace's
+  linkage; a local of a consteval block has the block's closure call
+  operator as parent. GCC 16.1 differs on these four
+  (docs/status/deviations.md;
+  `meta.reflection.queries/linkage-parent-draft.cpp`).
 - **`parent_of` / `has_parent`** look through linkage specifications
   and `export` declarations ([dcl.link]/4): a class, typedef, alias,
   enumeration or namespace declared in an `extern "C"` or `extern "C++"`

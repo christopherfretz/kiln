@@ -422,8 +422,12 @@ impl Oven {
                 }
                 Ok(self.frozen_reg(b, cv, ty, top))
             }
-            MetaOut::Deref(cv) => {
-                let p = self.thaw_ptr(b, cv, ty, top) as u64;
+            MetaOut::Deref(_) | MetaOut::Live { by_ref: false, .. } => {
+                let p = match out {
+                    MetaOut::Deref(cv) => self.thaw_ptr(b, cv, ty, top) as u64,
+                    MetaOut::Live { addr, .. } => addr,
+                    _ => 0,
+                };
                 if p == 0 {
                     return Ok(None);
                 }
@@ -436,6 +440,7 @@ impl Oven {
                 }
                 self.load(p, ty, ak::READ).map(Some)
             }
+            MetaOut::Live { addr, by_ref: true } => Ok(Some(u128::from(addr))),
             _ => Ok(None),
         }
     }

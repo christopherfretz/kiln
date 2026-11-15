@@ -10,7 +10,6 @@
 //@ expect: compile-ok
 //@ strict-diags
 //@ oracle: gcc
-//@ xfail(kiln): WP-1482, the intrinsic reads a range from its layout (pointer + size, element pointers), never iterates it
 #include <ranges>
 #include <span>
 #include <utility>

@@ -24,6 +24,25 @@ use crate::{MetaOp, Note, Oven, SemaBridge};
 const MAX_NAME: u64 = 4096;
 
 impl Oven {
+    /// The address of variable `d`'s object (a local or parameter, built
+    /// in memory because it is reflected) while its lifetime, begun in a
+    /// frame of the running evaluation, lasts: what `extract` of an
+    /// automatic variable reads ([meta.reflection.extract]; WP-1482).
+    /// None for a variable of another evaluation, of a frame that
+    /// returned, or whose block ended: never a stale read.
+    pub fn meta_local(&self, d: kiln_ast::DeclId) -> Option<u64> {
+        let frames = self.stack.get(self.run.entry..).unwrap_or_default();
+        self.mem.live.iter().rev().find_map(|&s| {
+            let a = self.mem.slots.get(s as usize)?;
+            let ours = a.live
+                && matches!(a.origin, crate::mem::Origin::Var(v) if v == d)
+                && frames.iter().any(|f| f.serial == a.frame);
+            ours.then(|| {
+                crate::mem::Ptr { slot: s, generation: a.generation, past: false, off: 0 }.encode()
+            })
+        })
+    }
+
     /// Runs reflection intrinsic `sub` (a [`MetaOp`] code) of the
     /// `Op::Builtin` at `pc`: its `n` arguments are in the consecutive
     /// registers from `base` of the frame at `fb`; `t1` is the element
@@ -172,7 +191,7 @@ impl Oven {
         match out {
             MetaOut::Scalar(v) => Ok(v),
             MetaOut::Info(r) => Ok(u128::from(r.bits())),
-            MetaOut::Frozen(_) | MetaOut::Deref(_) if value_op => {
+            MetaOut::Frozen(_) | MetaOut::Deref(_) | MetaOut::Live { .. } if value_op => {
                 let whole = site
                     .and_then(|s| s.result)
                     .filter(|rc| matches!(rc, Recipe::Whole))
@@ -183,7 +202,7 @@ impl Oven {
                 }
             }
             MetaOut::Frozen(cv) => Ok(self.thaw_ptr(b, cv, OTy(t2), top)),
-            MetaOut::Deref(_) => unfit(self),
+            MetaOut::Deref(_) | MetaOut::Live { .. } => unfit(self),
             MetaOut::Str(..) | MetaOut::SrcLoc(_) | MetaOut::Pair(..) | MetaOut::Infos(_) => {
                 let Some((rc, s)) = site.and_then(|s| Some((s.result?, s))) else {
                     return unfit(self);

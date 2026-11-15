@@ -249,7 +249,13 @@ impl Sema<'_, '_> {
         oven: &mut Oven,
     ) -> Result<ReflectionId, MetaError> {
         let x = self.ast.reflections.get(r);
-        match self.type_of_reflectee(x) {
+        // A data member description (T, N, A, W, NUA) has type T
+        // ([meta.reflection.queries] *has-type*); its table is the Oven's.
+        let ty = match x {
+            Reflectee::DataMemberSpec(id) => oven.dms(id).map(|d| d.ty),
+            _ => self.type_of_reflectee(x),
+        };
+        match ty {
             Some(t) if !self.ast.types.is_dependent(t) => {
                 let mut t = self.ast.types.canonical(t);
                 if matches!(x, Reflectee::Decl(_))

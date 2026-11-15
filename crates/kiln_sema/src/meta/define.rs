@@ -130,6 +130,14 @@ pub(crate) fn is_keyword(s: &str) -> bool {
     KEYWORDS.binary_search(&s).is_ok()
 }
 
+/// Whether `s` is a keyword of the implementation: a built-in type trait
+/// (`__is_convertible`, `__builtin_is_implicit_lifetime`), which clang
+/// and GCC lex as a keyword, so no declaration can name such a member
+/// (WP-1482).
+fn is_trait_keyword(s: &str) -> bool {
+    kiln_ast::expr::TypeTrait::from_name(s).is_some()
+}
+
 impl Sema<'_, '_> {
     pub(super) fn meta_define(
         &mut self,
@@ -232,7 +240,7 @@ impl Sema<'_, '_> {
                 let shown = kiln_diag::escape_diag_text(bytes);
                 return fail(loc, format!("'{shown}' is not a valid identifier"));
             };
-            if is_keyword(s) {
+            if is_keyword(s) || is_trait_keyword(s) {
                 return fail(loc, format!("'{s}' is a keyword, not an identifier"));
             }
             Some(self.ast.symbols().intern(s))
