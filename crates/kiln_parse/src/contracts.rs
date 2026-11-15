@@ -24,9 +24,10 @@ use crate::parser::Parser;
 
 impl Parser<'_, '_> {
     /// True at a *function-contract-specifier*: `pre` or `post` followed
-    /// by `(` or an attribute-specifier `[[` (C++26).
+    /// by `(` or an attribute-specifier `[[`, where contracts are on (C++26,
+    /// or `-fcontracts` before it as GCC 16.1; [`kiln_sema::Sema::contracts`]).
     pub(crate) fn at_contract_spec(&self) -> bool {
-        self.std >= Std::Cxx26
+        self.s.contracts.unwrap_or(self.std >= Std::Cxx26)
             && matches!(self.tok().kind,
                 TokKind::Identifier(s) if s == self.kw.pre_ || s == self.kw.post_)
             && (self.peek_is(1, Punct::LParen)

@@ -489,6 +489,7 @@ impl Sema<'_, '_> {
             } else {
                 self.note_this_use(loc);
             }
+            self.check_contract_implicit_this(loc);
         }
         // [dcl.attr.deprecated]/4: a member access naming a member
         // function template warns for the template, then for the

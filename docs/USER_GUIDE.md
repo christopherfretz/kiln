@@ -168,10 +168,19 @@ probes"). For code that must tell kiln apart, test `__KILN__` and
   and `kiln-hashed` are experimental opt-ins (see
   [STABILITY.md](STABILITY.md)).
 - **Contracts** (P2900: `pre`, `post`, `contract_assert`) are supported
-  at C++26. `-fcontract-evaluation-semantic=ignore|observe|enforce|quick_enforce`
+  at C++26, and in earlier modes with `-fcontracts` (GCC 16.1's flag;
+  `-fno-contracts` turns them off, `contract_assert` stays a C++26
+  keyword). `-fcontract-evaluation-semantic=ignore|observe|enforce|quick_enforce`
   (GCC's spelling) selects the semantic for the translation unit. The
-  default is `enforce`. A violation calls the default handler from
-  kiln's `<contracts>`, or your own `handle_contract_violation`.
+  default is `enforce`. A violation calls your own
+  `handle_contract_violation` or the default one: libstdc++ 16's (in
+  `libstdc++exp.a`, which kiln++ links, as `g++` does, when `-fcontracts`
+  or `-fno-contracts` is given and the GCC installation has it), or, with
+  libc++ and older libstdc++, the one from kiln's `<contracts>`. GCC's
+  `-fcontracts-client-check=none` and `-fcontracts-definition-check=on`
+  (kiln checks in the called function) are accepted; their other values,
+  `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks` and
+  `-fcontracts-conservative-ipa` are not supported.
 - **Erroneous behaviour** (P2795) at C++26: an automatic variable of at
   most 4096 bytes that has no initializer is zero-filled at its
   declaration, so reading it gives zero instead of an indeterminate
@@ -625,8 +634,8 @@ All `-fkiln-*` flags are experimental, except the PCH snapshot and validation fl
 
 ### Flags that behave differently from clang
 
-- `-fcontract-evaluation-semantic=` uses GCC's spelling. clang 22 has no
-  P2900 contracts.
+- `-f[no-]contracts` and `-fcontract-evaluation-semantic=` are GCC's
+  options. clang 22 has no P2900 contracts.
 - `-fconstexpr-ops-limit=` (GCC's) is accepted and sets the step budget.
 - At `-std=c++26`, uninitialized automatic variables are zero-filled
   (P2795 erroneous behaviour; see [Language modes](#language-modes)), as

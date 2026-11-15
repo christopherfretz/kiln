@@ -267,6 +267,7 @@ impl Job<'_> {
         cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
         cfg.reflection = p.reflection_for(&self.std);
+        cfg.contracts = Some(p.contracts_for(&self.std));
         cfg.std_float_aliases =
             self.args.stdlib.unwrap_or_default() != crate::toolchain::StdLib::LibCxx;
         let mut text = build_predefines(&base, &cfg, &self.args.macros);
@@ -686,6 +687,7 @@ impl Job<'_> {
             ),
             ("freestanding", on(p.freestanding.unwrap_or(false), "-ffreestanding", "-fhosted")),
             ("reflection", on(p.reflection_for(&self.std), "-freflection", "-fno-reflection")),
+            ("contracts", on(p.contracts_for(&self.std), "-fcontracts", "-fno-contracts")),
             ("reflection-mangling", format!("-fkiln-reflection-mangling={mangling}")),
             ("clang-compat", format!("-fclang-compat={}", p.clang_compat.major())),
         ];

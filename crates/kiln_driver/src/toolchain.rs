@@ -600,6 +600,27 @@ impl Toolchain {
         v.iter().any(|d| Path::new(&d.path).join("contracts").is_file())
     }
 
+    /// libstdc++'s `libstdc++exp.a` in the selected GCC installation (GCC
+    /// 16.1's default contract-violation handler; spec/driver.md "Link
+    /// options"): the version directory (Debian's layout) or the
+    /// installation's own library directories (`<prefix>/lib64`, `lib`,
+    /// `<prefix>/<triple>/lib64`, `lib`), the directories clang's GCC
+    /// toolchain searches for `-l` there. `None` without one.
+    pub fn libstdcxx_exp_archive(&self) -> Option<PathBuf> {
+        let g = self.gcc.as_ref()?;
+        let prefix = format!("{}/../../../..", g.path);
+        [
+            g.path.clone(),
+            format!("{prefix}/lib64"),
+            format!("{prefix}/lib"),
+            format!("{prefix}/{}/lib64", g.triple),
+            format!("{prefix}/{}/lib", g.triple),
+        ]
+        .into_iter()
+        .map(|d| Path::new(&d).join("libstdc++exp.a"))
+        .find(|p| p.is_file())
+    }
+
     /// clang `Linux::addLibCxxIncludePaths`: the first of
     /// `<llvm>/bin/../include`, `<sysroot>/usr/local/include`,
     /// `<sysroot>/usr/include` with a `c++/v1`, the per-target directory

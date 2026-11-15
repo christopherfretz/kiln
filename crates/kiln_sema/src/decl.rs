@@ -8661,7 +8661,12 @@ impl Sema<'_, '_> {
         // The return type as written: diagnostics name its typedef.
         let ret = self.sugared_proto(fty).map_or(QualType::ERROR, |p| p.ret());
         let pushed = self.enter_definition_scopes(f);
-        self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed });
+        self.fn_saved.push(crate::class::SavedFn {
+            func: self.func.take(),
+            pushed,
+            nsdmi_this: std::mem::take(&mut self.nsdmi_this),
+            contract_ctx: std::mem::take(&mut self.contract_ctx),
+        });
         let mut fs = Scope::new(ScopeKind::Function, None);
         fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);
@@ -8823,6 +8828,8 @@ impl Sema<'_, '_> {
                 self.pop_scope();
             }
             self.func = saved.func;
+            self.nsdmi_this = saved.nsdmi_this;
+            self.contract_ctx = saved.contract_ctx;
         }
         self.ctx = self
             .ast

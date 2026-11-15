@@ -933,7 +933,12 @@ impl Sema<'_, '_> {
             top.body_open = true;
             top.explicit_constexpr = explicit_constexpr;
         }
-        self.fn_saved.push(crate::class::SavedFn { func: self.func.take(), pushed: 0 });
+        self.fn_saved.push(crate::class::SavedFn {
+            func: self.func.take(),
+            pushed: 0,
+            nsdmi_this: Vec::new(),
+            contract_ctx: Vec::new(),
+        });
         let mut fs = Scope::new(ScopeKind::Function, None);
         fs.errors = self.diags.unrecoverable_error_count();
         self.scopes.push(fs);

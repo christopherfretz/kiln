@@ -334,6 +334,13 @@ pub struct PredefArgs {
     /// `^^`/`[: :]` tokens and the kiln reflection intrinsics. `None`: on
     /// at C++26 and off below it ([`PredefArgs::reflection_for`]).
     pub reflection: Option<bool>,
+    /// The last of `-f[no-]contracts` (GCC 16.1; spec/contracts.md §1):
+    /// contract syntax and `__cpp_contracts`. `None`: on exactly at C++26
+    /// ([`PredefArgs::contracts_for`]).
+    pub contracts: Option<bool>,
+    /// `-fcontracts` or `-fno-contracts` was given: GCC 16.1's `g++`
+    /// then links `libstdc++exp` (spec/driver.md "Link options").
+    pub contracts_flag: bool,
     /// `-fclang-compat=<major>`: whose predefined macros and feature-query
     /// answers kiln reproduces (spec/pp.md "clang compatibility level").
     pub clang_compat: ClangCompat,
@@ -348,6 +355,14 @@ impl PredefArgs {
     /// (spec/reflection.md §1.4).
     pub fn reflection_for(&self, std: &crate::toolchain::LangStd) -> bool {
         self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
+    }
+
+    /// Whether contracts are on for an input in `std` (GCC 16.1's
+    /// `-fcontracts`): the last `-f[no-]contracts`, else on exactly at
+    /// C++26. C++ only: `pre`, `post` and `__cpp_contracts` follow it,
+    /// `contract_assert` stays a C++26 keyword (spec/contracts.md §1).
+    pub fn contracts_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        std.cplusplus && self.contracts.unwrap_or(std.lex >= kiln_lex::Std::Cxx26)
     }
 
     /// GNU89 inline semantics: C only, `-fgnu89-inline` or a standard
@@ -1882,8 +1897,39 @@ impl Args {
         true
     }
 
-    /// `-fcontract-evaluation-semantic=<semantic>`.
+    /// `-fcontract-evaluation-semantic=<semantic>`, and the rest of GCC
+    /// 16.1's contract options (spec/contracts.md §6.1): the values of
+    /// `-fcontracts-client-check=` and `-fcontracts-definition-check=`
+    /// that name what kiln does (`none`, `on`: checks in the callee only)
+    /// are accepted, the other values are unsupported; the optimization
+    /// knobs are not supported by kiln.
     fn contract_semantic_flag(&mut self, arg: &str) -> bool {
+        for (opt, ours, theirs) in [
+            ("-fcontracts-client-check=", "none", &["pre", "all"][..]),
+            ("-fcontracts-definition-check=", "on", &["off"][..]),
+        ] {
+            if let Some(v) = arg.strip_prefix(opt) {
+                if v != ours {
+                    self.errors.push(if theirs.contains(&v) {
+                        ArgError::UnsupportedByKiln(arg.to_owned())
+                    } else {
+                        ArgError::UnsupportedValue(opt.to_owned(), v.to_owned())
+                    });
+                }
+                return true;
+            }
+        }
+        if let Some(knob) = arg.strip_prefix("-f").map(|f| f.strip_prefix("no-").unwrap_or(f))
+            && matches!(
+                knob,
+                "contract-checks-outlined"
+                    | "contract-disable-optimized-checks"
+                    | "contracts-conservative-ipa"
+            )
+        {
+            self.errors.push(ArgError::UnsupportedByKiln(arg.to_owned()));
+            return true;
+        }
         let Some(v) = arg.strip_prefix("-fcontract-evaluation-semantic=") else {
             return false;
         };
@@ -2062,6 +2108,10 @@ impl Args {
             "-fno-exceptions" | "-fno-cxx-exceptions" => p.exceptions = Some(false),
             "-freflection" => p.reflection = Some(true),
             "-fno-reflection" => p.reflection = Some(false),
+            "-fcontracts" | "-fno-contracts" => {
+                p.contracts = Some(arg == "-fcontracts");
+                p.contracts_flag = true;
+            }
             "-frtti" => p.rtti = Some(true),
             "-fno-rtti" => p.rtti = Some(false),
             "-fchar8_t" => p.char8_t = Some(true),
@@ -2449,6 +2499,49 @@ mod tests {
         assert_eq!(
             parse("-fcontract-evaluation-semantic=assume a.cpp").errors,
             [ArgError::UnsupportedValue("-fcontract-evaluation-semantic=".into(), "assume".into())]
+        );
+    }
+
+    /// WP-1463: `-f[no-]contracts` (last wins; on by default exactly at
+    /// C++26, C++ only) and GCC 16.1's other contract options: the values
+    /// naming kiln's behaviour are accepted, the rest are diagnosed.
+    #[test]
+    fn contracts_flags() {
+        use crate::toolchain::LangStd;
+        let (c23, c26, c11) = (
+            LangStd::parse("c++23").unwrap(),
+            LangStd::parse("c++26").unwrap(),
+            LangStd::parse("c11").unwrap(),
+        );
+        let a = parse("a.cpp");
+        assert!(!a.predef.contracts_for(&c23) && a.predef.contracts_for(&c26));
+        assert!(!a.predef.contracts_flag);
+        let a = parse("-fcontracts a.cpp");
+        assert!(a.predef.contracts_for(&c23) && !a.predef.contracts_for(&c11));
+        assert!(a.predef.contracts_flag && a.errors.is_empty());
+        let a = parse("-fcontracts -fno-contracts a.cpp");
+        assert!(!a.predef.contracts_for(&c26) && a.predef.contracts_flag);
+        for ok in ["-fcontracts-client-check=none", "-fcontracts-definition-check=on"] {
+            assert_eq!(parse(&format!("{ok} a.cpp")).errors, [], "{ok}");
+        }
+        for no in [
+            "-fcontracts-client-check=all",
+            "-fcontracts-client-check=pre",
+            "-fcontracts-definition-check=off",
+            "-fcontract-checks-outlined",
+            "-fno-contract-checks-outlined",
+            "-fcontract-disable-optimized-checks",
+            "-fcontracts-conservative-ipa",
+        ] {
+            assert_eq!(
+                parse(&format!("{no} a.cpp")).errors,
+                [ArgError::UnsupportedByKiln(no.into())],
+                "{no}"
+            );
+        }
+        assert_eq!(
+            parse("-fcontracts-client-check=some a.cpp").errors,
+            [ArgError::UnsupportedValue("-fcontracts-client-check=".into(), "some".into())]
         );
     }
 

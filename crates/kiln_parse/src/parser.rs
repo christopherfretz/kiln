@@ -340,7 +340,9 @@ impl<'a, 'sm> Parser<'a, 'sm> {
         let lex_opts = src.lex_options();
         let std = lex_opts.std;
         let cxx11 = std >= Std::Cxx11;
-        let cxx26 = std >= Std::Cxx26;
+        // `contract_assert` is a keyword from C++26 on, unless
+        // `-fno-contracts` turned contracts off (spec/contracts.md §2).
+        let cxx26 = std >= Std::Cxx26 && s.contracts != Some(false);
         let mut kw = Keywords::with_std(s.ast.symbols(), s.gnu, cxx11, cxx26, s.clang_compat);
         if !lit_opts.char8() {
             kw.remove(s.ast.symbols(), "char8_t");

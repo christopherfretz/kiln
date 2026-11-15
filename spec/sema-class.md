@@ -2533,7 +2533,11 @@ specifiers, friends, default arguments, NSDMIs and `this` now have bodies.
   `pub fn end_delayed_access(&mut self, decl: Option<DeclId>)`.
 - §2.5: `act_on_this`; NSDMI replay brackets the initializer with
   `pub fn act_on_start_field_init(&mut self, field: DeclId)` (pushes `C*` on
-  `Sema.nsdmi_this`) and `act_on_field_init` (pops it). Implicit `this->`,
+  `Sema.nsdmi_this`) and `act_on_field_init` (pops it). A function
+  definition nested in one (a local class's member function in a lambda
+  in a default member initializer or a contract predicate) sets aside
+  `nsdmi_this` and `contract_ctx` in its `SavedFn` until its `}`: its
+  `this` is its own (WP-1463). Implicit `this->`,
   `const` member assignment notes, and "must be called" for bound member
   functions.
 - §2.6: `&C::m`, `.*`/`->*` (`act_on_ptr_mem`), member-pointer

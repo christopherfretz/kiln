@@ -36,6 +36,8 @@ LANGUAGE:
                           gnu++26 (default gnu++17); C: c89 ... c23, gnuNN
   -f[no-]reflection       C++26 static reflection (P2996; on by default
                           at -std=c++26)
+  -f[no-]contracts        Contracts (P2900; on by default at -std=c++26;
+                          also links libstdc++exp, as g++)
   -fcontract-evaluation-semantic=<semantic>
                           Contract evaluation semantic (P2900): ignore,
                           observe, enforce (default) or quick_enforce
@@ -477,6 +479,7 @@ mod tests {
             "-fno-kiln-pch-snapshot",
             "-fkiln-pch-snapshot=check",
             "-fkiln-pch-validate=content",
+            "-f[no-]contracts",
             "-fcontract-evaluation-semantic=<semantic>",
             "-fclang-compat=<major>",
             "--llvm-dir=<dir>",
