@@ -50,6 +50,8 @@ impl Parser<'_, '_> {
     /// with no captures and no parameters returning `void`, and the call
     /// of that lambda.
     fn parse_consteval_block_call(&mut self, loc: Loc) -> ExprId {
+        // Both brackets at `consteval`: the mark of a consteval block's
+        // lambda (`Sema::consteval_block_closure`, [meta.reflection.scope]/3.5).
         let intro = LambdaIntroducer { lbracket: loc, rbracket: loc, ..Default::default() };
         let id = self.s.act_on_lambda_start(&intro);
         let specs = LambdaSpecifiers { consteval: Some(loc), ..Default::default() };

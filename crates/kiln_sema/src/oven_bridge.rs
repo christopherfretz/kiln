@@ -86,6 +86,10 @@ impl SemaBridge for Bridge<'_, '_, '_> {
             self.sema.define_defaulted_comparison(f, loc);
             return self.sema.defined_body(f);
         }
+        // A metafunction called indirectly (WP-1462).
+        if let Some(b) = self.sema.meta_intrinsic_thunk(f) {
+            return Some(b);
+        }
         self.sema.instantiate_for_oven(f, oven)
     }
 

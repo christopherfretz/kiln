@@ -743,18 +743,26 @@ impl Sema<'_, '_> {
         let mut imm_leaf = None;
         for c in found {
             let at = self.begin_loc(c);
-            let r = match early.next_if(|&(x, _)| x == c) {
-                Some((_, r)) => r,
-                None => self.eval_const(
+            // An early result was recorded (or not) where it was found.
+            let (r, pure) = if let Some((_, r)) = early.next_if(|&(x, _)| x == c) {
+                (r, false)
+            } else {
+                let before = self.impure_evals();
+                let r = self.eval_const(
                     self.ast.exprs.operand(c),
                     EvalContext::new(EvalKind::Consteval, at),
-                ),
+                );
+                (r, self.impure_evals() == before)
             };
             let fail = match r {
                 // Codegen reads it at each use without source-location
-                // values instead of evaluating the call again (WP-1129).
+                // values instead of evaluating the call again (WP-1129),
+                // unless the value depends on the evaluation point
+                // (`access_context::current()`; WP-1462).
                 Ok(v) => {
-                    self.ast.exprs.set_default_immediate_value(c, v);
+                    if pure {
+                        self.ast.exprs.set_default_immediate_value(c, v);
+                    }
                     if imm_leaf.is_none() && self.reflection && self.ast.has_consteval_only_value(v)
                     {
                         imm_leaf = Some(c);
@@ -889,6 +897,12 @@ impl Sema<'_, '_> {
     }
 
     /// Evaluates immediate invocation `c` ([expr.const]/25).
+    /// The Oven's count of evaluations whose value depends on where they
+    /// run ([`kiln_oven::Oven::impure_count`]); 0 while it is lent out.
+    fn impure_evals(&self) -> u64 {
+        self.oven.as_ref().map_or(0, |o| o.impure_count())
+    }
+
     fn eval_immediate(&mut self, c: ExprId) -> Result<ConstValueId, EvalFailure> {
         let at = self.begin_loc(c);
         // A full-expression sema builds during the evaluation (a template
@@ -1003,10 +1017,14 @@ impl Sema<'_, '_> {
             let rebuilt = !found.is_empty() || self.ast.exprs.source_loc_values(u.expr).is_some();
             let mut results = Vec::with_capacity(found.len());
             for c in found {
+                let before = self.impure_evals();
                 let r = self.eval_immediate(c);
+                let pure = self.impure_evals() == before;
                 let failed = match r {
                     Ok(v) => {
-                        self.ast.exprs.set_default_immediate_value(c, v);
+                        if pure {
+                            self.ast.exprs.set_default_immediate_value(c, v);
+                        }
                         false
                     }
                     Err(_) => true,

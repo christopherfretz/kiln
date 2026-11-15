@@ -79,7 +79,14 @@ impl Sema<'_, '_> {
                     && self.fn_spec(self.ast.first(f)).is_explicit()
             }),
             Q::IsNoexcept => return self.is_noexcept(x, ctx, oven).map(Some),
-            Q::IsBitField => self.field(x).is_some_and(|f| f.bit_width.is_some()),
+            // Also a data member description whose W is given
+            // ([meta.reflection.queries], WP-1462).
+            Q::IsBitField => match x {
+                Reflectee::DataMemberSpec(id) => {
+                    oven.dms(id).is_some_and(|d| d.bit_width.is_some())
+                }
+                _ => self.field(x).is_some_and(|f| f.bit_width.is_some()),
+            },
             Q::IsEnumerator => self.decl_kind(x) == Some(DeclKind::EnumConstant),
             // `is_const(r)` inspects `type_of(r)`, whose `const` for a const
             // object or a class-type annotation `const_object` supplies.

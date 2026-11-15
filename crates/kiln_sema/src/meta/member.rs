@@ -741,7 +741,9 @@ impl Sema<'_, '_> {
                     self.bit_width_of(d),
                     false,
                 ),
-                DeclKind::Var | DeclKind::VarTemplateSpecialization => {
+                // A function parameter is a variable too (in its function's
+                // body; WP-1462).
+                DeclKind::Var | DeclKind::VarTemplateSpecialization | DeclKind::ParmVar => {
                     let t = self.reflected_var_type(d).unwrap_or(QualType::ERROR);
                     // No type yet (*has-type*): `auto` in its own initializer.
                     if self.ast.types.is_reference(t) || self.undeduced_decl(d) {
@@ -751,11 +753,22 @@ impl Sema<'_, '_> {
                 }
                 _ => return bad(),
             },
-            Reflectee::Value(cv) | Reflectee::Object(cv) => (self.ast.consts.ty(cv), None, false),
+            Reflectee::Value(cv) => (self.ast.consts.ty(cv), None, false),
+            // An object reflection holds a pointer to the object.
+            Reflectee::Object(p) => {
+                let Some(t) = self.ast.types.pointee(self.ast.consts.ty(p)) else { return bad() };
+                (t, None, false)
+            }
             Reflectee::BaseSpec(d, i) => {
                 let def = self.ast.definition(d).unwrap_or(d);
                 let Some(spec) = self.base_spec_index(def, i) else { return bad() };
                 (self.ast.decls.base_spec(spec).ty, None, false)
+            }
+            // A data member description (T, N, A, W, NUA) measures T, a
+            // bit-field when W is given ([meta.reflection.layout], WP-1462).
+            Reflectee::DataMemberSpec(id) => {
+                let Some(d) = oven.dms(id) else { return bad() };
+                (d.ty, d.bit_width, false)
             }
             _ => return bad(),
         };
@@ -807,8 +820,46 @@ impl Sema<'_, '_> {
         // A variable's or data member's own alignment (`alignas` counts).
         let decl = match self.ast.reflections.get(r) {
             Reflectee::Decl(d) => Some(d),
+            // A variable's complete object has the variable's alignment.
+            Reflectee::Object(p) => match self.ast.consts.scalar(p) {
+                Some(kiln_ast::consts::Scalar::Pointer {
+                    base: kiln_ast::consts::PtrBase::Decl(v),
+                    offset: 0,
+                    ..
+                }) if matches!(
+                    self.kind_of(v),
+                    DeclKind::Var | DeclKind::VarTemplateSpecialization
+                ) && self.reflected_var_type(v).is_some_and(|vt| {
+                    self.ast.types.canonical(vt).without_quals()
+                        == self.ast.types.canonical(t).without_quals()
+                }) =>
+                {
+                    Some(v)
+                }
+                _ => None,
+            },
+            // [meta.reflection.layout]: a value has no alignment (an
+            // object does).
+            Reflectee::Value(_) => {
+                return fail(loc, "reflection not suitable for alignment_of");
+            }
+            // A description's A, else T's alignment.
+            Reflectee::DataMemberSpec(id) => {
+                if let Some(a) = oven.dms(id).and_then(|d| d.alignment) {
+                    return Ok(u64::from(a));
+                }
+                None
+            }
             _ => None,
         };
+        // A variable's alignment needs no complete type: `extern int a[];`
+        // is aligned as an `int` (WP-1462).
+        let unbounded = decl.is_some()
+            && matches!(
+                self.ast.types.canonical_view(t),
+                kiln_ast::types::TypeView::IncompleteArray(_)
+            );
+        let t = if unbounded { self.ast.types.element(t).unwrap_or(t) } else { t };
         if self.measured(t).is_none() {
             return fail(loc, "reflection with incomplete type in alignment_of");
         }

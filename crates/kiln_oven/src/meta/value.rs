@@ -277,11 +277,15 @@ impl Oven {
             return Ok(n);
         }
         let et = ctx.elem;
-        let lit = self.alloc_any(Ptr::decode(p)).is_some_and(|a| {
-            matches!(a.origin, Origin::Str(..))
-                && Ptr::decode(p).off == 0
-                && u64::from(a.size) == n * self.types.size(et)
-        });
+        // "r is a reference to a string literal object": the argument is
+        // the literal's array itself, not a view over its characters
+        // (`string_view("abcd", 5)` keeps its last NUL).
+        let lit = ctx.elems_inline
+            && self.alloc_any(Ptr::decode(p)).is_some_and(|a| {
+                matches!(a.origin, Origin::Str(..))
+                    && Ptr::decode(p).off == 0
+                    && u64::from(a.size) == n * self.types.size(et)
+            });
         if !lit {
             return Ok(n);
         }

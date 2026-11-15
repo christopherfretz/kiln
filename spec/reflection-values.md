@@ -70,7 +70,10 @@ shape, so a public name would claim the library template itself.
 4. `reflect_constant_string(r)` / `reflect_constant_array(r)`: the
    element type must be structural (arrays are peeled to their innermost
    element); characters for the string form, which appends a null
-   terminator. The result is `Reflectee::Object` of a `PtrBase::Const`
+   terminator, except that the terminator of a string literal object
+   passed by reference (the argument is the literal's array itself) is
+   not taken in first ([meta.define.static]/4; WP-1462): a `string_view`
+   whose size covers the literal's terminator keeps it as a character. The result is `Reflectee::Object` of a `PtrBase::Const`
    constant array of the elements, interned by content, so equal
    contents give one object and one reflection. An empty
    `reflect_constant_array` is `unsupported` (the IS gives `array<T, 0>`).
@@ -109,8 +112,10 @@ shape, so a public name would claim the library template itself.
 2. An object or variable: `T` a reference `U&` binds to the object when
    `U` is reference-compatible with its type; `T` a pointer `U*` to an
    array element points at the first element when `T` is an array of `U`
-   ([meta.reflection.extract]/3). A constexpr reference variable extracts
-   through to its referent. Otherwise "cannot be extracted as".
+   ([meta.reflection.extract]/3). A reference variable usable in
+   constant expressions (constexpr, or constant-initialized,
+   [expr.const]/4; WP-1462) extracts through to its referent; another
+   fails "reference 'r' is not usable in constant expressions". Otherwise "cannot be extracted as".
    `extract<U&>` is a glvalue immediate invocation: its value is the
    object's address, never the object's value. That object need not be
    usable in constant expressions. A reference bound to the result,

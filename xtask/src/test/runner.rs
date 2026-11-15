@@ -352,6 +352,11 @@ impl Test<'_> {
                 p => Self::verdict(p),
             });
         }
+        // A test that is not compared with the clang oracle (`oracle:
+        // none`, implied by `skip(clang)`) needs no oracle header.
+        if !spec.oracle {
+            return None;
+        }
         let oracle = self.cfg.oracle.clone().filter(|_| self.cfg.oracle_kind.speaks_clang())?;
         self.build_pch(&oracle, spec).err().map(Self::verdict)
     }

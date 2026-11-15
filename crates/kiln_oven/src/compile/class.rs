@@ -469,6 +469,7 @@ impl Compiler<'_> {
             let loc = self.ast().decls.get(def).loc();
             if !delegating && !union {
                 self.unconstructed_bases(&inits, this, cls, loc);
+                self.default_init_info_members(&inits, this, cls, loc);
             }
             // The subobjects completed so far: `done` entries of `fields`.
             let mut done = 0;
@@ -652,6 +653,34 @@ impl Compiler<'_> {
             let m = self.next;
             let q = self.elem_ptr_loc(this, off, loc);
             self.emit_loc(Op::EndLife, 8 | 16, &[q, bt.0], loc);
+            self.next = m;
+        }
+    }
+
+    /// The members of `cls` that constructor `inits` default-initializes
+    /// without an initializer of their own (non-class members: Sema
+    /// lists class members, as clang does), whose `std::meta::info`
+    /// subobjects are zero-initialized, the null reflection
+    /// ([class.base.init]/9.3, [dcl.init.general]/6.3).
+    fn default_init_info_members(&mut self, inits: &[CtorInit], this: u32, cls: OTy, loc: Loc) {
+        let n = self.o.types.vbase_start(cls);
+        let fields = self.o.types.fields(cls)[..n].to_vec();
+        if !fields.iter().any(|f| !f.base && self.default_inits_info(f.ty, 0)) {
+            return;
+        }
+        let covered: Vec<usize> = inits.iter().filter_map(|c| self.init_index(c, cls)).collect();
+        for (i, fi) in fields.into_iter().enumerate() {
+            if fi.base
+                || fi.width.is_some()
+                || covered.contains(&i)
+                || super::is_reference_decl(self.ast(), fi.decl)
+                || !self.default_inits_info(fi.ty, 0)
+            {
+                continue;
+            }
+            let m = self.next;
+            let q = self.elem_ptr_loc(this, fi.offset, loc);
+            self.default_init_info(q, fi.ty, loc, 0);
             self.next = m;
         }
     }
@@ -890,9 +919,99 @@ impl Compiler<'_> {
             self.emit_at(Op::ZeroInit, 0, &[p, ty.0], e);
         }
         if trivial {
+            if !zeroing && self.default_inits_info(ty, 0) {
+                let loc = self.ctor_loc(e);
+                self.default_init_info(p, ty, loc, 0);
+            }
             return;
         }
         self.construct_obj(e, p, ty);
+    }
+
+    /// Whether default-initializing an object of `ty` by trivial default
+    /// constructors initializes something: a `std::meta::info`
+    /// subobject, which [dcl.init.general]/6.3 zero-initializes (the null
+    /// reflection, /5.1). Union members are not initialized (no member is
+    /// active), nor are references. Depth-bounded: a malformed layout
+    /// yields false.
+    pub(super) fn default_inits_info(&self, ty: OTy, depth: u32) -> bool {
+        if depth > 64 {
+            return false;
+        }
+        match self.kind(ty) {
+            TyKind::Reflection => true,
+            TyKind::Array { elem, .. } => self.default_inits_info(elem, depth + 1),
+            TyKind::Record { union: false, .. } => self.o.types.fields(ty).iter().any(|f| {
+                f.width.is_none()
+                    && !super::is_reference_decl(self.ast(), f.decl)
+                    && self.default_inits_info(f.ty, depth + 1)
+            }),
+            _ => false,
+        }
+    }
+
+    /// Default-initializes the object of `ty` at `p` as trivial default
+    /// constructors do ([dcl.init.general]/6.1–6.2: no initialization),
+    /// except that each `std::meta::info` subobject is zero-initialized,
+    /// the null reflection ([dcl.init.general]/6.3). Callers test
+    /// [`Self::default_inits_info`] first, so a class holding no `info`
+    /// costs nothing.
+    pub(super) fn default_init_info(&mut self, p: u32, ty: OTy, loc: Loc, depth: u32) {
+        if depth > 64 || !self.default_inits_info(ty, 0) {
+            return;
+        }
+        match self.kind(ty) {
+            TyKind::Reflection => {
+                self.emit_loc(Op::ZeroInit, 0, &[p, ty.0], loc);
+            }
+            TyKind::Array { elem, n } => {
+                let mut base = elem;
+                while let TyKind::Array { elem: e, .. } = self.kind(base) {
+                    base = e;
+                }
+                if matches!(self.kind(base), TyKind::Reflection) {
+                    // All `info` elements (of any rank): zeroed whole.
+                    self.emit_loc(Op::ZeroInit, 0, &[p, ty.0], loc);
+                    return;
+                }
+                // Element by element, as `construct_obj`.
+                let m = self.next;
+                let k = self.reg();
+                let one = self.reg();
+                let lim = self.reg();
+                let c = self.reg();
+                self.konst(k, 0);
+                self.konst(one, 1);
+                self.konst(lim, u128::from(n));
+                let top = self.here();
+                self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, lim]);
+                let exit = self.jmp_if(c, false);
+                let q = self.reg();
+                self.emit_loc(Op::PtrAdd, int_aux(64, false), &[q, p, k, elem.0], loc);
+                self.default_init_info(q, elem, loc, depth + 1);
+                self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
+                let j = self.jmp();
+                self.patch(j, top);
+                self.patch_here(exit);
+                self.next = m;
+            }
+            TyKind::Record { union: false, .. } => {
+                let fields = self.o.types.fields(ty).to_vec();
+                for fi in fields {
+                    if fi.width.is_some()
+                        || super::is_reference_decl(self.ast(), fi.decl)
+                        || !self.default_inits_info(fi.ty, 0)
+                    {
+                        continue;
+                    }
+                    let m = self.next;
+                    let q = self.elem_ptr_loc(p, fi.offset, loc);
+                    self.default_init_info(q, fi.ty, loc, depth + 1);
+                    self.next = m;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The class (or array element class) `e` constructs has a virtual
@@ -947,7 +1066,12 @@ impl Compiler<'_> {
         let trivial = ast.decls.function(ctor).is_some_and(|f| f.spec.is_trivial());
         if trivial {
             match args[..] {
-                [] => {}
+                [] => {
+                    if self.default_inits_info(ty, 0) {
+                        let loc = self.ctor_loc(e);
+                        self.default_init_info(p, ty, loc, 0);
+                    }
+                }
                 // A trivial copy/move constructor copies the object
                 // representation ([class.copy.ctor]/14); a class's
                 // source is read whole, so it must be fully initialized

@@ -39,7 +39,7 @@ impl Sema<'_, '_> {
             ValueOp::Extract => {
                 let r = info_arg(args, 0)?;
                 self.use_reflected_var(r, loc, oven);
-                let out = self.extract(r, ret, loc)?;
+                let out = self.extract(r, ret, loc, oven)?;
                 if let Some(f) = self.extracted_function(r, &out) {
                     self.use_reflected_function(f, loc, oven);
                 }
@@ -433,7 +433,13 @@ impl Sema<'_, '_> {
     }
 
     /// `extract<T>(r)` ([meta.reflection.extract]), `t` being `T`.
-    fn extract(&mut self, r: ReflectionId, t: QualType, loc: Loc) -> Result<MetaOut, MetaError> {
+    fn extract(
+        &mut self,
+        r: ReflectionId,
+        t: QualType,
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<MetaOut, MetaError> {
         let tc = self.ast.types.canonical(t);
         match self.ast.reflections.get(r) {
             Reflectee::Value(cv) => self.extract_value(r, cv, tc, loc),
@@ -441,7 +447,7 @@ impl Sema<'_, '_> {
             // via `constant_of`, P3394R4).
             Reflectee::Annotation(a) => {
                 let c = self.annotation_constant(a, loc)?;
-                self.extract(c, t, loc)
+                self.extract(c, t, loc, oven)
             }
             Reflectee::Object(p) => self.extract_object(r, p, tc, loc),
             Reflectee::Decl(d) => match self.kind_of(d) {
@@ -450,7 +456,7 @@ impl Sema<'_, '_> {
                         return Err(MetaError::invalid());
                     };
                     if self.ast.types.is_reference(vt) {
-                        return self.extract_through_ref(r, d, vt, tc, loc);
+                        return self.extract_through_ref(r, d, (vt, tc), loc, oven);
                     }
                     if !self.has_static_storage(d) {
                         return fail(
@@ -481,24 +487,23 @@ impl Sema<'_, '_> {
     }
 
     /// `extract<T>` of reference variable `d` of type `vt`: of the object
-    /// it refers to, its initializer being a constant.
+    /// it refers to, its initializer being a constant (a reference
+    /// constant-initialized is usable in constant expressions without
+    /// `constexpr`, [expr.const]/4; WP-1462).
     fn extract_through_ref(
         &mut self,
         r: ReflectionId,
         d: DeclId,
-        vt: QualType,
-        tc: QualType,
+        (vt, tc): (QualType, QualType),
         loc: Loc,
+        oven: &mut Oven,
     ) -> Result<MetaOut, MetaError> {
-        let v = match self.ast.decls.var(d).map(|v| v.eval.state()) {
-            Some(kiln_ast::decl::VarEvalState::Value(v)) => self.ast.consts.scalar(v),
-            _ => None,
-        };
+        let v = self.var_init_value(d, oven).and_then(|v| self.ast.consts.scalar(v));
         let Some(Scalar::Pointer { base, offset, .. }) = v else {
             return fail(
                 loc,
                 format!(
-                    "kiln: extracting through reference '{}' needs it to be constexpr",
+                    "reference '{}' is not usable in constant expressions",
                     self.reflection_str(r)
                 ),
             );

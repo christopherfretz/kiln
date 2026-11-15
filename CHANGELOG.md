@@ -121,6 +121,18 @@ Planned as 1.3.0.
   a non-`int` `main` under `-ffreestanding` is an ordinary function; and
   a pointer to a member template in a variable template no longer
   recurses without bound.
+- Reflection (WP-1462): a default-initialized `std::meta::info` is the
+  null reflection and a constant (`constexpr info r;`, arrays, members,
+  `new info`, through PCH and modules); metafunctions can be called
+  through a pointer or reference (`views::filter(is_template)`);
+  `current_class`, `current_function` and `access_context::current` in a
+  consteval block and in a default member initializer used by aggregate
+  initialization answer for the right scope; `size_of`, `alignment_of`,
+  `bit_size_of`, `is_bit_field` and `identifier_of` accept data member
+  descriptions; `reflect_constant_string` keeps the terminator of a
+  `string_view` that covers it; `extract` reads through a
+  constant-initialized reference. GCC's `g++.dg/reflect` goes from 306 to
+  384 of 565 cases passing.
 - A regression from 1.1.0, present in 1.2.0 and 1.2.1 (WP-1455): an
   out-of-line constructor whose parameter names an enclosing class of
   its own class, `O::I::R::R(I::R &&) {}`, was rejected with "use of

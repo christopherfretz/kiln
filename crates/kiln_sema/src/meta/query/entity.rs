@@ -576,7 +576,11 @@ impl Sema<'_, '_> {
     }
     /// The value of the constant initializer of variable `d` (evaluated
     /// now if it was not yet); `None` when it has none.
-    fn var_init_value(&mut self, d: DeclId, oven: &mut Oven) -> Option<ConstValueId> {
+    pub(in crate::meta) fn var_init_value(
+        &mut self,
+        d: DeclId,
+        oven: &mut Oven,
+    ) -> Option<ConstValueId> {
         let holder = self
             .ast
             .redecls_of(d)

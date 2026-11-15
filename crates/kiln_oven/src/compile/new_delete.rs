@@ -187,6 +187,11 @@ impl Compiler<'_> {
             }
             if let Some(i) = init {
                 self.init(i, dst, elem);
+            } else if self.default_inits_info(elem, 0) {
+                // [expr.new]/23.1, [dcl.init.general]/6.3: a
+                // default-initialized `std::meta::info` is the null
+                // reflection.
+                self.default_init_info(dst, elem, loc_new, 0);
             }
             return;
         };
@@ -246,7 +251,17 @@ impl Compiler<'_> {
             ArrInit::List { k, .. } => k,
             _ => 0,
         };
-        if matches!(ai, ArrInit::Zero | ArrInit::List { zero_rest: true, .. }) {
+        // Default-initialized `std::meta::info` elements are the null
+        // reflection ([dcl.init.general]/6.2–6.3); elements of class type
+        // come as `Each`, by their constructor.
+        let info_elems = matches!(ai, ArrInit::None) && {
+            let mut base = elem;
+            while let TyKind::Array { elem: e, .. } = self.kind(base) {
+                base = e;
+            }
+            matches!(self.kind(base), TyKind::Reflection)
+        };
+        if info_elems || matches!(ai, ArrInit::Zero | ArrInit::List { zero_rest: true, .. }) {
             aux |= new_aux::ZERO;
         }
         let cnt = self.rv_copy(stripped);
@@ -254,6 +269,37 @@ impl Compiler<'_> {
             self.placement_new(e, arg, dst, aux, cnt, k, size_loc);
         } else {
             self.emit_site(Op::New, aux, &[dst, elem.0, cnt, oi, k as u32], e, size_loc);
+        }
+        if matches!(ai, ArrInit::None) && !info_elems && self.default_inits_info(elem, 0) {
+            // Elements of a class with a trivial default constructor (no
+            // initializer): their `info` subobjects are the null
+            // reflection ([dcl.init.general]/6.3).
+            let skip = (aux & new_aux::NOTHROW != 0).then(|| {
+                let c = self.reg();
+                self.emit(Op::PtrToBool, 0, &[c, dst]);
+                self.jmp_if(c, false)
+            });
+            let m = self.next;
+            let k = self.reg();
+            let one = self.reg();
+            let c = self.reg();
+            self.konst(k, 0);
+            self.konst(one, 1);
+            let top = self.here();
+            self.emit(Op::ICmp, int_aux(64, false) | cmp::LT << 9, &[c, k, cnt]);
+            let exit = self.jmp_if(c, false);
+            let q = self.reg();
+            self.emit_ptr_add(int_aux(64, false), &[q, dst, k, elem.0], e);
+            self.default_init_info(q, elem, size_loc, 0);
+            self.emit(Op::IAdd, int_aux(64, false), &[k, k, one]);
+            let j = self.jmp();
+            self.patch(j, top);
+            self.patch_here(exit);
+            self.next = m;
+            if let Some(j) = skip {
+                self.patch_here(j);
+            }
+            return;
         }
         if let ArrInit::Each(i) = ai {
             // A null result (`std::nothrow`) has no elements: the loop

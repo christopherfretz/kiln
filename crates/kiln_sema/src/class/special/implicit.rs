@@ -987,9 +987,14 @@ impl Sema<'_, '_> {
             if is_ref && !has_init {
                 bits = bits.with(DefinitionBits::HAS_UNINIT_REF_OR_CONST);
             }
+            // [dcl.init.general]/7.1: `std::meta::info` is
+            // const-default-constructible (default-initialized, it is the
+            // null reflection, /6.3).
+            let info = self.is_meta_info(elem);
             if !is_ref
                 && quals.is_const()
                 && !has_init
+                && !info
                 && class.is_none_or(|c| !self.can_const_default_init(c))
             {
                 bits = bits.with(DefinitionBits::HAS_UNINIT_REF_OR_CONST);
@@ -1002,7 +1007,7 @@ impl Sema<'_, '_> {
                         }
                     }
                     None => {
-                        if self.ast.types.as_record(elem).is_none() {
+                        if self.ast.types.as_record(elem).is_none() && !info {
                             uninit_fields = true;
                         }
                     }
