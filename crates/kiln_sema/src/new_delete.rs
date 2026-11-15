@@ -1088,7 +1088,7 @@ impl Sema<'_, '_> {
     /// clang's `ConstantArrayType::getNumAddressingBits` check: `n`
     /// elements of `elem` need more than 61 address bits (the 64-bit
     /// targets' maximum object size).
-    fn array_too_large(&self, n: u64, elem: QualType) -> bool {
+    pub(crate) fn array_too_large(&self, n: u64, elem: QualType) -> bool {
         const MAX_BITS: u32 = 61;
         let Some((size, _)) = crate::target::size_align(&self.ast, elem, &self.abi) else {
             return false;

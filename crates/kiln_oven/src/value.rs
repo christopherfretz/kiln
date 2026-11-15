@@ -10,6 +10,7 @@ use kiln_ast::expr::ExprKind;
 use kiln_ast::strings::StringEncoding;
 use kiln_ast::{Ast, ConstValueId, DeclId, ExprId, QualType, StringLitId};
 use kiln_source::Loc;
+use kiln_source::fx::FxHashSet;
 
 use crate::compile::{GKind, GState, RetKind, is_local_var};
 use crate::failure::{EvalFailure, FailKind, Note};
@@ -145,8 +146,18 @@ pub(crate) enum Freeze {
 /// object too; its `LifetimeExtendedTemporary` is returned (it lives in
 /// the extending variable's function).
 pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
-    fn walk(ast: &Ast, v: ConstValueId, depth: u32) -> Option<DeclId> {
-        if depth > 64 {
+    // Each value is walked once: a value reached again gave `None` the
+    // first time (else the walk had stopped), and a temporary's value
+    // can point back into itself (`struct X { const X* p = this; }`
+    // bound by a constexpr reference), so without the set two such
+    // pointers make the walk exponential in `depth` (WP-1456).
+    fn walk(
+        ast: &Ast,
+        v: ConstValueId,
+        depth: u32,
+        seen: &mut FxHashSet<ConstValueId>,
+    ) -> Option<DeclId> {
+        if depth > 64 || !seen.insert(v) {
             return None;
         }
         match ast.consts.scalar(v) {
@@ -155,19 +166,19 @@ pub fn automatic_referent(ast: &Ast, v: ConstValueId) -> Option<DeclId> {
                     ast.decls.var(d).is_some_and(|x| x.spec.tls() != kiln_ast::decl::TlsKind::None);
                 (is_local_var(ast, d) && !tls).then_some(d)
             }
-            Some(Scalar::Pointer { base: PtrBase::Const(c), .. }) => walk(ast, c, depth + 1),
+            Some(Scalar::Pointer { base: PtrBase::Const(c), .. }) => walk(ast, c, depth + 1, seen),
             Some(Scalar::Pointer { base: PtrBase::Temporary(t), .. }) => {
                 let l = ast.decls.lifetime_extended(t)?;
                 if is_local_var(ast, l.extending) {
                     return Some(t);
                 }
-                walk(ast, l.value?, depth + 1)
+                walk(ast, l.value?, depth + 1, seen)
             }
             Some(_) => None,
-            None => ast.consts.relocs(v).iter().find_map(|r| walk(ast, r.value, depth + 1)),
+            None => ast.consts.relocs(v).iter().find_map(|r| walk(ast, r.value, depth + 1, seen)),
         }
     }
-    walk(ast, v, 0)
+    walk(ast, v, 0, &mut FxHashSet::default())
 }
 
 impl Oven {

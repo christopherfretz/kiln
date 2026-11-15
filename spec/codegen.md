@@ -3230,6 +3230,13 @@ Validation: `tests/codegen/asm_stmt.cpp` matches clang 19 exactly on
 aarch64 and x86_64. Not implemented: `asm goto` (callbr), the `unwind`
 clobber inside a `try` (no `invoke`), `=@cc` outputs, register-variable
 operands, MMX type adjustment.
+Before any lowering, a register-only output (no memory alternative, not
+`_Complex`) of an aggregate whose size is not 1/2/4/8/16 bytes is
+`cg_store_value_to_reg` ("impossible constraint in asm: cannot store
+value into a register", clang 19's `_19` row says "can't") at the
+operand, and the statement emits nothing (clang `EmitAsmStores`
+`err_store_value_to_reg`; WP-1456, the backend aborted on it;
+`kiln_driver` test `asm_output_aggregate_not_register_sized`).
 
 **Landed (WP-757): observable checkpoints (P1494R5).**
 `__builtin_observable_checkpoint()` is GCC's builtin behind libstdc++'s
@@ -4309,6 +4316,29 @@ Linux targets; `Cg::frame_pointer` applies it.
   `kiln_driver` `frame_pointer_flags_last_win`,
   `tests/codegen/frame_pointer_*.cpp` and `noinline_matrix_o{1,2}.cpp`
   (exact under oracle 19 on both targets).
+
+### Freestanding `main` (WP-1456)
+Under `-ffreestanding` `main` is an ordinary function (clang's
+`FunctionDecl::isMain` is false; `Ast::freestanding`, set by the parser
+from the options): it is mangled (`_Z4mainv`), any return type is fine,
+and no implicit `return 0` is added (`tests/codegen/freestanding_main_nonint.cpp`).
+Where the implicit return of a hosted `main` applies it stores the zero
+of the return slot's type.
+
+### i128 to `bfloat` (WP-1456)
+`sitofp`/`uitofp` from `i128` to `bfloat` is a call of libgcc's
+`__floattibf`/`__floatuntibf` (`nounwind`) on every target but x86-64:
+LLVM's AArch64 backend has no libcall for it and aborts (clang 19 and 22
+crash; `conv.fpint/int128-to-bf16-run.cpp`).
+
+### Self-referencing lifetime-extended temporaries (WP-1456)
+A constant initializer of a temporary bound to a static or `thread_local`
+reference may point at the temporary itself (`this` in a default member
+initializer). `let_global` marks the temporary in progress while it builds
+the constant; a re-entry for the same temporary gets a placeholder global
+of the declared type (internal), which the finished global replaces
+in place (`retype_global_to_end`), as clang's `GetAddrOfGlobalTemporary`
+(`class.temporary/nsdmi-this-lifetime-extended-run.cpp`).
 
 ### no-builtin (WP-808)
 `-fno-builtin` / `-ffreestanding` (`CodegenOptions::no_builtin`, clang

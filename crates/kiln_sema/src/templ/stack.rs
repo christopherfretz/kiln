@@ -125,6 +125,12 @@ impl FrameKind {
         )
     }
 
+    /// A constraint-satisfaction check of a template or concept-id
+    /// (clang `ConstraintsCheck`, an instantiation record).
+    pub const fn is_satisfaction_check(self) -> bool {
+        matches!(self, FrameKind::ConstraintsCheck | FrameKind::ConceptCheck)
+    }
+
     /// The context note clang prints for the frame.
     pub const fn note(self) -> DiagId {
         match self {
@@ -249,6 +255,11 @@ pub struct InstantiationStack {
     pub(crate) frames: Vec<InstFrame>,
     /// Frames that are not instantiations.
     pub(crate) non_inst: u32,
+    /// The `ConstraintsCheck` / `ConceptCheck` frames: clang counts them
+    /// toward the depth limit (`isInstantiationRecord`), [`Self::depth`]
+    /// does not ([`Self::record_depth`]). Transient, as `frames`.
+    #[snap(skip)]
+    pub(crate) checks: u32,
     /// The stack depth at which the context was last printed; 0 = never
     /// (clang's `LastEmittedCodeSynthesisContextDepth`).
     pub(crate) last_emitted: Cell<u32>,
@@ -280,6 +291,15 @@ impl InstantiationStack {
     /// The instantiation depth (frames that count toward the limit).
     pub fn depth(&self) -> u32 {
         self.frames.len() as u32 - self.non_inst
+    }
+
+    /// clang's instantiation depth (`CodeSynthesisContexts` less its
+    /// `NonInstantiationEntries`): [`Self::depth`] plus the
+    /// constraint-satisfaction checks, so a satisfaction that recurses
+    /// through ever new specializations stops at the limit
+    /// ([temp.inst]/16; WP-1456).
+    pub fn record_depth(&self) -> u32 {
+        self.depth() + self.checks
     }
 
     /// clang's `inTemplateInstantiation`: a frame that is an
@@ -342,6 +362,9 @@ impl InstantiationStack {
         if !f.kind.is_instantiation() {
             self.non_inst += 1;
         }
+        if f.kind.is_satisfaction_check() {
+            self.checks += 1;
+        }
         self.frames.push(f);
     }
 
@@ -349,6 +372,9 @@ impl InstantiationStack {
         let f = self.frames.pop()?;
         if !f.kind.is_instantiation() {
             self.non_inst -= 1;
+        }
+        if f.kind.is_satisfaction_check() {
+            self.checks -= 1;
         }
         // Popping the frame where the context was printed: the next
         // diagnostic prints it again (clang's `popCodeSynthesisContext`).
@@ -491,7 +517,12 @@ impl Sema<'_, '_> {
             | FrameKind::MetaSubstitution => Some(true),
             _ => None,
         };
-        if kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth {
+        let over = if kind.is_satisfaction_check() {
+            self.inst.stack.record_depth() >= self.inst.limits.depth
+        } else {
+            kind.is_instantiation() && self.inst.stack.depth() >= self.inst.limits.depth
+        };
+        if over {
             // As clang, the frame that exceeds the limit is part of the
             // backtrace (`R<1024>` with the default depth).
             self.inst.stack.push(InstFrame {

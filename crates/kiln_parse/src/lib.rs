@@ -371,6 +371,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.permissive = opts.permissive;
     s.ast.contract_semantic = opts.contract_semantic;
     s.ast.lang_c = opts.c.is_some();
+    s.ast.freestanding = opts.freestanding;
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
     s.tu_prefix = opts.prefix;

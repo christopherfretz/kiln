@@ -7,10 +7,13 @@ use kiln_ast::decl::VarStorage;
 use kiln_ast::expr::{CastKind, ExprKind};
 use kiln_ast::stmt::asm_bits;
 use kiln_ast::{DeclId, ExprId, QualType, StmtId};
+use kiln_diag::{Diag, DiagId};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, AttrSetId, CallOpts, CastOp, InlineAsm, IntPredicate, MemoryEffects,
     ModRef, TypeId as LTy,
 };
+
+use kiln_source::Span;
 
 use crate::fir::{Blk, Fir, Op, V};
 use crate::module::{Cg, R, err};
@@ -111,6 +114,32 @@ impl Cg<'_> {
             return err(Some(loc), "invalid asm template reached codegen");
         };
         let asm_text = String::from_utf8_lossy(&tasm::generate_asm_string(&pieces)).into_owned();
+
+        // clang `EmitAsmStores`: a register output of aggregate type is
+        // stored as the integer type of its size; with no such type
+        // (`=r` of a 256-byte struct) the statement is an error, not IR
+        // the back end aborts on (WP-1456).
+        for (i, o) in ops[..nout].iter().enumerate() {
+            let q = ast.exprs.get(o.expr).ty();
+            if outs[i].allows_memory() || ast.types.as_complex(q).is_some() {
+                continue;
+            }
+            let mt = self.mty(q);
+            if !(outs[i].allows_register() && self.m.types.is_aggregate(mt)) {
+                continue;
+            }
+            let (size, _) = self.size_align(q);
+            if size != 0 && !matches!(size, 1 | 2 | 4 | 8 | 16) {
+                let id = if self.opts.clang_compat >= 22 {
+                    DiagId::cg_store_value_to_reg
+                } else {
+                    DiagId::cg_store_value_to_reg_19
+                };
+                let span = self.loc_of(o.expr).map_or(Span::INVALID, Span::empty);
+                self.diags.push(Diag::new(id, span));
+                return Ok(());
+            }
+        }
 
         let mut constraints = String::new();
         let mut arg_tys: Vec<LTy> = Vec::new();

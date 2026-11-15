@@ -365,6 +365,16 @@ impl Substituter<'_, '_, '_> {
                     self.sema.error(DiagId::sema_zero_array_size_sfinae, loc);
                     return Err(SubstFail);
                 }
+                // clang `BuildArrayType`: the substituted element may
+                // make the array exceed the maximum object size.
+                if self.sema.array_too_large(a.size, e) {
+                    let msg = self
+                        .sema
+                        .diag(DiagId::sema_array_too_large, at)
+                        .arg(self.sema.element_count_text(a.size));
+                    self.sema.emit(msg);
+                    return Err(SubstFail);
+                }
                 Ok(self.sema.ast.types.constant_array(e, a.size, None))
             }
             TypeView::IncompleteArray(elem) => {
