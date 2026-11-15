@@ -50,6 +50,12 @@ Planned as 1.3.0.
   intrinsic, the count that compile went from 3094 to 4426 of 4884
   (docs/status/neon-builtins.md). `__has_builtin` now answers 1 for
   them.
+- The GNU unwinder builtins, in C and C++ (WP-1428):
+  `__builtin_dwarf_cfa`, `__builtin_unwind_init`, `__builtin_eh_return`,
+  `__builtin_eh_return_data_regno` (a constant expression),
+  `__builtin_dwarf_sp_column`, `__builtin_extend_pointer` and, on
+  AArch64, `__builtin_sponentry`, lowered as clang lowers them. They were
+  undeclared identifiers before.
 
 ### Changed
 

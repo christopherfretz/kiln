@@ -2770,12 +2770,13 @@ impl Sema<'_, '_> {
 
     /// Whether the target declares builtin `id`: the NEON builtins are
     /// `AArch64` target builtins (WP-558), the x86 ones x86-64 target
-    /// builtins (WP-610, WP-630); every other builtin is
-    /// target-independent.
+    /// builtins (WP-610, WP-630), and `__builtin_sponentry` is an `AArch64`
+    /// target builtin (clang `BuiltinsAArch64.def`; WP-1428); every other
+    /// builtin is target-independent.
     pub(crate) fn target_has_builtin(&self, id: u32) -> bool {
         use kiln_abi::target::Arch;
         let arch = self.abi.triple.arch;
-        if builtin::neon::is_neon(id) || builtin::arm::is_arm(id) {
+        if builtin::neon::is_neon(id) || builtin::arm::is_arm(id) || id == builtin::SPONENTRY {
             return arch == Arch::AArch64;
         }
         !builtin::x86::is_x86(id) || arch == Arch::X86_64

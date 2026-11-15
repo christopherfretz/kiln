@@ -5779,6 +5779,14 @@ pub mod builtin {
         row(EXTRACT_RETURN_ADDR, "__builtin_extract_return_addr", "v*v*", N),
         row(FROB_RETURN_ADDR, "__builtin_frob_return_addr", "v*v*", N),
         row(CLEAR_CACHE, "__builtin___clear_cache", "vc*c*", N),
+        // WP-1428.
+        row(DWARF_CFA, "__builtin_dwarf_cfa", "v*", N),
+        row(SPONENTRY, "__builtin_sponentry", "v*", C),
+        row(UNWIND_INIT, "__builtin_unwind_init", "v", 0),
+        row(EH_RETURN_DATA_REGNO, "__builtin_eh_return_data_regno", "iIi", N | C),
+        row(DWARF_SP_COLUMN, "__builtin_dwarf_sp_column", "Ui", N),
+        row(EH_RETURN, "__builtin_eh_return", "vzv*", R),
+        row(EXTEND_POINTER, "__builtin_extend_pointer", "ULLiv*", N),
         // WP-1057.
         row(READCYCLECOUNTER, "__builtin_readcyclecounter", "ULLi", N),
         // WP-774.
@@ -5916,6 +5924,35 @@ pub mod builtin {
     pub const FROB_RETURN_ADDR: u32 = 2445;
     /// `void __builtin___clear_cache(char *, char *)`: `llvm.clear_cache`.
     pub const CLEAR_CACHE: u32 = 2446;
+    // ---- WP-1428 (the unwinder builtins; found in unwinder-style code).
+    /// `void *__builtin_dwarf_cfa()` (clang `NoThrow`): the DWARF
+    /// canonical frame address, `llvm.eh.dwarf.cfa(i32 0)`. Never a
+    /// constant.
+    pub const DWARF_CFA: u32 = 2447;
+    /// `void *__builtin_sponentry()` (clang `BuiltinsAArch64.def`, `Const`;
+    /// an `AArch64` target builtin): the stack pointer on entry,
+    /// `llvm.sponentry`.
+    pub const SPONENTRY: u32 = 2448;
+    /// `void __builtin_unwind_init()` (no attributes): spills the
+    /// callee-saved registers, `llvm.eh.unwind.init`.
+    pub const UNWIND_INIT: u32 = 2449;
+    /// `int __builtin_eh_return_data_regno(int)` (`NoThrow`, `Const`, an
+    /// integer constant argument): the DWARF number of the `N`th
+    /// exception-handling data register (clang `getEHDataRegisterNumber`:
+    /// 0 and 1 for 0 and 1 on x86-64 and `AArch64`, else -1). A constant
+    /// expression.
+    pub const EH_RETURN_DATA_REGNO: u32 = 2450;
+    /// `unsigned __builtin_dwarf_sp_column()` (`NoThrow`): the DWARF
+    /// number of the stack pointer (clang `getDwarfEHStackPointer`: 7 on
+    /// x86-64, 31 on `AArch64`). Not a constant expression.
+    pub const DWARF_SP_COLUMN: u32 = 2451;
+    /// `void __builtin_eh_return(size_t offset, void *handler)`
+    /// (`NoReturn`): `llvm.eh.return.i64` (`.i32` for a 32-bit `size_t`),
+    /// then `unreachable`.
+    pub const EH_RETURN: u32 = 2452;
+    /// `unsigned long long __builtin_extend_pointer(void *)` (`NoThrow`):
+    /// the pointer as an `_Unwind_Word` (`ptrtoint` to `i64`).
+    pub const EXTEND_POINTER: u32 = 2453;
 
     /// WP-1104: the `__builtin_` library forwards ([`MALLOC`] ...).
     pub static LIBC_FWD: &[Info] = &[

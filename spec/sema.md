@@ -5952,6 +5952,22 @@ under its own name, the same signature, gating and codegen
     with its own name in the warning
     (`ext.gnu.builtins/return-address-args.cpp`).
     `__builtin_debugtrap()` takes no argument.
+  - The unwinder builtins (WP-1428; clang `Builtins.td`, C and C++):
+    `void *__builtin_dwarf_cfa()` (`NoThrow`), `void __builtin_unwind_init()`
+    (no attributes), `unsigned __builtin_dwarf_sp_column()` (`NoThrow`),
+    `void __builtin_eh_return(size_t, void *)` (`NoReturn`; the offset
+    converts to `size_t` as a parameter), `unsigned long long
+    __builtin_extend_pointer(void *)` (`NoThrow`) and `int
+    __builtin_eh_return_data_regno(int)` (`NoThrow, Const`; an `I`
+    constant, `argument to '__builtin_eh_return_data_regno' must be a
+    constant integer` at the callee; the call is an integer constant
+    expression in C and a core constant expression in C++). `void
+    *__builtin_sponentry()` (`Const`) is an `AArch64` target builtin
+    (`target_has_builtin`): elsewhere the name is undeclared and
+    `__has_builtin` false. Argument counts are checked as for any
+    prototyped builtin (`ext.gnu.builtins/unwind-builtins-args.cpp`,
+    `sponentry-{x86-64,aarch64-args}.cpp`,
+    `eh-return-data-regno-constant.cpp`, `tests/c/expr/eh-return-data-regno-ice*.c`).
   - `__builtin_prefetch(addr [, rw [, locality]])` (id 976, `vvC*.`,
     `NoThrow, Const`; `check_prefetch`, clang `BuiltinPrefetch`; WP-610):
     `addr` converts to `const void *` as a parameter; more than three

@@ -246,6 +246,10 @@ impl Cg<'_> {
                     | id::VA_START
                     | id::FRAME_ADDRESS
                     | id::RETURN_ADDRESS
+                    | id::DWARF_CFA
+                    | id::SPONENTRY
+                    | id::UNWIND_INIT
+                    | id::EH_RETURN
                     | id::OBJECT_SIZE
                     | id::DYNAMIC_OBJECT_SIZE
             )

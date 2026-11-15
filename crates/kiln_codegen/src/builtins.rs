@@ -932,6 +932,62 @@ impl Cg<'_> {
             // target's `decodeReturnAddress` / `encodeReturnAddress`, the
             // identity on AArch64 and x86-64 (WP-1288).
             id::EXTRACT_RETURN_ADDR | id::FROB_RETURN_ADDR => self.emit_scalar(a0)?,
+            // WP-1428, clang `EmitBuiltinExpr`: `BI__builtin_dwarf_cfa` is
+            // `llvm.eh.dwarf.cfa(i32 0)` (the CFA offset is always 0),
+            // `BI__builtin_sponentry` `llvm.sponentry` (AArch64 only, sema
+            // declares it nowhere else), `BI__builtin_unwind_init`
+            // `llvm.eh.unwind.init`.
+            id::DWARF_CFA => {
+                let f = kiln_llvm::intrinsics::eh_dwarf_cfa(&mut self.m);
+                let zero = V::C(self.m.const_int(LTy::I32, 0));
+                self.intrinsic_call(f, vec![zero])
+            }
+            id::SPONENTRY => {
+                let f = kiln_llvm::intrinsics::sponentry(&mut self.m);
+                self.intrinsic_call(f, vec![])
+            }
+            id::UNWIND_INIT => {
+                let f = kiln_llvm::intrinsics::eh_unwind_init(&mut self.m);
+                self.intrinsic_call(f, vec![]);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            // `BI__builtin_eh_return_data_regno` when not folded: the
+            // target's `getEHDataRegisterNumber` (0 -> 0, 1 -> 1, else -1
+            // on x86-64 and AArch64).
+            id::EH_RETURN_DATA_REGNO => {
+                let n = self.fold_int(a0).unwrap_or(-1);
+                V::C(self.m.const_int(LTy::I32, if matches!(n, 0 | 1) { n } else { -1 }))
+            }
+            // `BI__builtin_dwarf_sp_column`: `getDwarfEHStackPointer`, 7
+            // (`%rsp`) on x86-64, 31 (`sp`) on AArch64.
+            id::DWARF_SP_COLUMN => {
+                V::C(self.m.const_int(LTy::I32, if self.is_x86() { 7 } else { 31 }))
+            }
+            // `BI__builtin_eh_return`: `llvm.eh.return.i32/i64` by the
+            // width of the (size_t) offset, then `unreachable` and a fresh
+            // insertion block.
+            id::EH_RETURN => {
+                let Some(a1) = arg(1) else {
+                    return err(self.loc_of(e), "__builtin_eh_return without two arguments");
+                };
+                let off = self.emit_scalar(a0)?;
+                let h = self.emit_scalar(a1)?;
+                let oty = self.f.fir.ty(&self.m, off);
+                let f = kiln_llvm::intrinsics::eh_return(&mut self.m, oty);
+                self.intrinsic_call(f, vec![off, h]);
+                self.f.fir.push(Op::Unreachable, LTy::VOID);
+                self.f.fir.set_cur(None);
+                let cont = self.f.fir.create_block();
+                self.emit_block(cont, false);
+                return Ok(BuiltinCall::Emitted(None));
+            }
+            // `BI__builtin_extend_pointer`: `ptrtoint` to the pointer-sized
+            // integer, extended to the 64-bit `_Unwind_Word` (a no-op on
+            // x86-64 and AArch64).
+            id::EXTEND_POINTER => {
+                let p = self.emit_scalar(a0)?;
+                self.cast(CastOp::PtrToInt, p, LTy::I64)
+            }
             // clang `BI__builtin___clear_cache`: `llvm.clear_cache(p, q)`.
             id::CLEAR_CACHE => {
                 let Some(a1) = arg(1) else {
