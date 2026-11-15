@@ -16,7 +16,7 @@
 //! | `consts` | state + rebuilt | [`ConstStore`] root: pools as data, intern table rebuilt |
 //! | `layouts`, `virtuals`, `vtables`, `cmp_categories` | state | as data: computed on demand, but `-fdump-ast` prints cached layouts only, and the comparison categories record a check already diagnosed, so dropping them is observable |
 //! | `tu` | state | as data |
-//! | `contract_semantic`, `lang_c` | state | as data (configuration: the consumer checks them against its own) |
+//! | `contract_semantic`, `lang_c`, `freestanding` | state | as data (configuration: the consumer checks them against its own) |
 //! | `contract_sites` | state | as data |
 //! | `symbols` | state (shared) | the `Arc<Interner>`: written once per snapshot through sharing, so the restored AST shares the interner with whatever else in the same snapshot holds it |
 //! | `inst` | state | the instantiation meter, as data |
@@ -169,6 +169,7 @@ impl Snap for Ast {
             modules,
             contract_semantic,
             lang_c,
+            freestanding,
             contract_sites,
             symbols,
             inst,
@@ -196,6 +197,7 @@ impl Snap for Ast {
         modules.put(w);
         contract_semantic.put(w);
         lang_c.put(w);
+        freestanding.put(w);
         contract_sites.put(w);
         inst.put(w);
     }
@@ -224,6 +226,7 @@ impl Snap for Ast {
         let modules = timed(r, "Ast.modules")?;
         let contract_semantic = timed(r, "Ast.contract_semantic")?;
         let lang_c = timed(r, "Ast.lang_c")?;
+        let freestanding = timed(r, "Ast.freestanding")?;
         let contract_sites = timed(r, "Ast.contract_sites")?;
         let inst = timed(r, "Ast.inst")?;
         let ast = Ast {
@@ -249,6 +252,7 @@ impl Snap for Ast {
             modules,
             contract_semantic,
             lang_c,
+            freestanding,
             contract_sites,
             symbols,
             inst,
@@ -283,6 +287,7 @@ impl Snap for Ast {
         .field::<crate::modules::ModuleTable>("modules")
         .field::<ContractSemantic>("contract_semantic")
         .field::<bool>("lang_c")
+        .field::<bool>("freestanding")
         .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
         .field::<InstantiationMeter>("inst")
         .finish();
@@ -312,6 +317,7 @@ impl Snap for Ast {
             .field::<crate::modules::ModuleTable>("modules")
             .field::<ContractSemantic>("contract_semantic")
             .field::<bool>("lang_c")
+            .field::<bool>("freestanding")
             .field::<ColdMap<StmtId, ContractSite>>("contract_sites")
             .field::<InstantiationMeter>("inst");
         if s.register::<Self>(d) {

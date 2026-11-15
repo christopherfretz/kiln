@@ -1054,6 +1054,49 @@ fn unmangleable_dimension_is_an_error() {
 }
 
 #[test]
+fn asm_output_aggregate_not_register_sized() {
+    // WP-1456 (found running GCC's C++ testsuite): an `=r`/`+r` output of an
+    // aggregate whose size is not a register width reached the backend and
+    // aborted it. clang rejects it while emitting the asm stores; the
+    // wording changed from "can't" (19) to "cannot" (22). A 4-byte struct
+    // and an `=m` output are fine.
+    let d = scratch("asm_store_reg");
+    let src = "struct Big { int s[64]; };\nstruct Three { char c[3]; };\n\
+               struct Four { short s[2]; };\nvoid f() {\n  Big b; Three t; Four u;\n  \
+               asm(\"\" : \"=r\"(b));\n  asm(\"\" : \"+r\"(t));\n  asm(\"\" : \"=r\"(u));\n  \
+               asm(\"\" : \"=m\"(b));\n}\n";
+    std::fs::write(d.join("t.cpp"), src).unwrap();
+    let want = |w: &str| {
+        [6, 7].map(|l| {
+            format!(
+                "t.cpp:{l}:17: error: impossible constraint in asm: {w} store value into a register"
+            )
+        })
+    };
+    for (compat, w) in [(None, "cannot"), (Some("-fclang-compat=19"), "can't")] {
+        let _ = std::fs::remove_file(d.join("t.ll"));
+        let mut args = vec!["-S", "-emit-llvm", "t.cpp"];
+        args.extend(compat);
+        let o = kiln_in(&d, &args);
+        let err = text(&o.stderr);
+        let errors: Vec<&str> = err.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(errors, want(w), "{err}");
+        assert_eq!(o.status.code(), Some(1));
+        assert!(!d.join("t.ll").exists());
+    }
+    if have("clang++-19") {
+        let c = Command::new("clang++-19")
+            .args(["-S", "-emit-llvm", "-o", "c.ll", "t.cpp"])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        let cerr = text(&c.stderr);
+        let cerrors: Vec<&str> = cerr.lines().filter(|l| l.contains(": error: ")).collect();
+        assert_eq!(cerrors, want("can't"), "clang++-19");
+    }
+}
+
+#[test]
 fn duplicate_mangled_name() {
     let d = scratch("dupname");
     let cases = [

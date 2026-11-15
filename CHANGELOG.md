@@ -110,6 +110,17 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Crashes and hangs found running GCC's C++ testsuite (WP-1456): an
+  array type larger than the target's maximum object size is "array is
+  too large" (it ran out of memory); a register `asm` output of an
+  aggregate that is not register sized is "impossible constraint in asm"
+  (the backend aborted); `__int128` to `__bf16` on AArch64 calls libgcc
+  (LLVM aborted); a recursive constraint satisfaction check stops at the
+  template depth limit; `this` in a default member initializer of a
+  lifetime-extended `constexpr` temporary no longer overflows the stack;
+  a non-`int` `main` under `-ffreestanding` is an ordinary function; and
+  a pointer to a member template in a variable template no longer
+  recurses without bound.
 - A regression from 1.1.0, present in 1.2.0 and 1.2.1 (WP-1455): an
   out-of-line constructor whose parameter names an enclosing class of
   its own class, `O::I::R::R(I::R &&) {}`, was rejected with "use of

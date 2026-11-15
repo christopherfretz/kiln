@@ -2340,7 +2340,10 @@ impl<'a, 'sm> Sema<'a, 'sm> {
 /// substitution failure (a constraint whose satisfaction depends on
 /// itself, [temp.constr.atomic]/3).
 fn is_sfinae_report(id: DiagId) -> bool {
-    matches!(id, DiagId::sema_constraint_depends_on_self)
+    // `err_template_recursion_depth_exceeded` is `NoSFINAE` too: a
+    // satisfaction check that recurses in a deduction stops with it
+    // (WP-1456).
+    matches!(id, DiagId::sema_constraint_depends_on_self | DiagId::sema_template_recursion_depth)
 }
 
 /// An access-control error ([class.access]) that clang's

@@ -441,7 +441,9 @@ impl Cg<'_> {
             debug_assert!(self.dup_reported, "second body for {} (WP-1425)", self.m.func(f).name());
             return Ok(());
         }
-        let is_main = mangle::decl_name(ast, first) == "main"
+        // clang `FunctionDecl::isMain`: never under `-ffreestanding`.
+        let is_main = !ast.freestanding
+            && mangle::decl_name(ast, first) == "main"
             && ast.decls.get(first).ctx().is_some_and(|c| self.is_tu_level(c));
 
         let params: Vec<LTy> = {
@@ -571,7 +573,8 @@ impl Cg<'_> {
             }
         }
         if is_main && let Some(slot) = self.f.ret_slot {
-            let z = self.m.const_int(slot.ty, 0);
+            // clang `getNullValue`: GNU C accepts a non-`int` `main`.
+            let z = self.m.const_zero(slot.ty);
             self.store(V::C(z), slot.v, slot.align, false);
         }
         // EmitStartEHSpec: a non-throwing function is a terminate scope
@@ -2556,6 +2559,18 @@ impl Cg<'_> {
         }
         if let Some(r) = self.fold_cast(op, v, to).or_else(|| self.fold_vec_cast(op, v, to)) {
             return r;
+        }
+        // LLVM's AArch64 back end has no libcall for `[su]itofp i128` to
+        // `bfloat` (llc aborts, clang's IR too): call libgcc's (GCC 13+)
+        // `__float[un]tibf`, as GCC does (WP-1456).
+        if matches!(op, CastOp::SIToFP | CastOp::UIToFP)
+            && from == LTy::I128
+            && to == LTy::BFLOAT
+            && !self.is_x86()
+        {
+            let name = if op == CastOp::SIToFP { "__floattibf" } else { "__floatuntibf" };
+            let f = self.rt_fn(name, LTy::BFLOAT, &[LTy::I128], &[]);
+            return self.nounwind_runtime_call(f, LTy::BFLOAT, vec![v]);
         }
         self.f.fir.push(Op::Cast { op, flags: Flags::NONE, v, to }, to)
     }

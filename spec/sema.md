@@ -434,7 +434,12 @@ oracle's major (spec/harness.md "Two-oracle policy"). At level 22:
   branch on an unknown condition in the CFG (clang 22
   builds its CFG; clang 19 builds none and checks nothing; §7.5.1). `array is too large (N elements)` groups N's
   digits with `'` (`18'446'744'073'709'551'615`;
-  `element_count_text`). Wording-only changes are `_19` diag rows
+  `element_count_text`). The check (`array_too_large`: the
+  size in bytes needs more than 61 address bits; only the count when the
+  element is incomplete or dependent, clang `BuildArrayType`) applies to a
+  declarator's constant bound, a template-substituted array type and a
+  `new` bound, before any layout (WP-1456,
+  `dcl.array/array-too-large.cpp`). Wording-only changes are `_19` diag rows
   (spec/diag.md §2.5), e.g. `case ranges are a GNU extension`, `you need
   to include <typeinfo> or import std before using the 'typeid'
   operator`.
@@ -8642,6 +8647,14 @@ Each rule names the libc++ test it fixed and its corpus test.
   `inTemplateInstantiation` counts `ConstraintsCheck`;
   `InstStack::in_instantiation_record`), so `requires(T& t) { t == t; }`
   holds for `int[5]` (WP-446, libc++'s `equality_comparable<int[5]>`).
+  Each satisfaction check (`ConstraintsCheck`, `ConceptCheck` frames)
+  also counts toward the `-ftemplate-depth` limit
+  (`InstantiationStack::record_depth`, as clang counts its
+  `CodeSynthesisContext`s), so a satisfaction check that recurses through
+  ever new specializations stops with the fatal depth error, which is
+  not a SFINAE error (`is_sfinae_report`; clang NoSFINAE); recursion at
+  the same arguments is still "depends on itself" (WP-1456,
+  `temp.constr.atomic/recursive-satisfaction-depth*.cpp`).
   Tests: `expr.eq/p2865-array-comparison*.cpp`.
 - P0847 lambdas and P2036: spec/sema-lambda.md §2, §3.1, §4.4. P2360
   and P3176: spec/parse.md. P0963: §4.9. P2741: §4.6.

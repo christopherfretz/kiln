@@ -1332,11 +1332,19 @@ pub fn implicit_convert(
     // target does not ask for: the target resolves it first, and the
     // perform step below re-runs that resolution (spec/sema-lambda.md
     // §3.5, WP-1170).
+    // Only a retargeting that changed the type is tried again: a target
+    // of the same function type in another class (`void (H::*)()` for
+    // `&C::m<0>`) resolves to the same specialization, which still does
+    // not convert (WP-1456: it recursed until the stack ran out).
+    let mut retargeted = false;
     if ctx != ConvCtx::Condition
         && s.mismatched_template_id(e, to).is_some()
         && let Some(x) = retarget_template_id(s, e, to, ctx)
     {
-        return implicit_convert(s, x, to, ctx);
+        if ty(s, x) != from {
+            return implicit_convert(s, x, to, ctx);
+        }
+        retargeted = true;
     }
     // A function template-id resolved early: clang's perform step
     // resolves it again (`PerformImplicitConversion`; a reference binding
@@ -1372,7 +1380,10 @@ pub fn implicit_convert(
         exc_spec_compat(s, e, from, to, ctx)?;
         return apply_standard_conversion(s, e, &scs, to);
     }
-    if let Some(x) = retarget_template_id(s, e, to, ctx) {
+    if !retargeted
+        && let Some(x) = retarget_template_id(s, e, to, ctx)
+        && ty(s, x) != from
+    {
         return implicit_convert(s, x, to, ctx);
     }
     Err(conversion_error(s, e, to, ctx))

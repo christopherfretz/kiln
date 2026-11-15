@@ -40,6 +40,8 @@ is one test at one standard (or one optimization level).
 
 ### Crash / hang (20 cases, all clusters)
 
+WP-1456 fixed all six clusters below (re-run of the 20 cases: 17 pass, 3 freestanding `main` cases are rejected by kiln and clang alike because the runner drops `-ffreestanding`); the counts on this page predate it.
+
 1. **Out of memory on a huge or recursive template** (6 cases, 2 tests).
    Expected a diagnostic, got the 2 GiB cap.
    `template<int N> struct A { int a[N][N][N][N][N][N][N][N][N][N]; }; A<66000> x;`

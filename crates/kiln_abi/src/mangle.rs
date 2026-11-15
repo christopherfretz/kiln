@@ -923,6 +923,13 @@ pub fn is_regcall_fn(ast: &Ast, d: DeclId) -> bool {
             .is_some_and(|p| p.info().cc() == kiln_ast::types::CallConv::RegCall)
 }
 
+/// Whether function `d` is the global `main` of a hosted implementation
+/// (clang `FunctionDecl::isMain`: a freestanding one has no `main`, so
+/// `const char *main()` there is `_Z4mainv`).
+fn is_main_name(ast: &Ast, d: DeclId) -> bool {
+    !ast.freestanding && decl_name(ast, d) == "main" && in_global_ns(ast, d)
+}
+
 /// True if the function or variable `d` is emitted under its plain
 /// source name: `main`, `extern "C"` entities, and variables at global
 /// scope.
@@ -942,7 +949,7 @@ pub fn is_unmangled(ast: &Ast, d: DeclId) -> bool {
         return !ast.is_overloadable(d);
     }
     match n.kind() {
-        DeclKind::Function => decl_name(ast, d) == "main" && in_global_ns(ast, d),
+        DeclKind::Function => is_main_name(ast, d),
         // Only variables with internal linkage are mangled at global scope
         // (clang `shouldMangleCXXName`): `static int h;` is `_ZL1h`.
         // A variable template specialization is `_Z1vIiE`.
@@ -1675,10 +1682,7 @@ impl<'a, 'b> Mangler<'a, 'b> {
         let ast = self.ast;
         let n = ast.decls.get(d);
         let is_fn = is_function_kind(n.kind());
-        if is_fn
-            && ((is_extern_c(ast, d) && !ast.is_overloadable(d))
-                || (decl_name(ast, d) == "main" && in_global_ns(ast, d)))
-        {
+        if is_fn && ((is_extern_c(ast, d) && !ast.is_overloadable(d)) || is_main_name(ast, d)) {
             // Unmangled functions appear in local names by source name only.
             self.source_name(&decl_name(ast, d));
             return;

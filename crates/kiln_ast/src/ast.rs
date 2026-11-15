@@ -87,6 +87,10 @@ pub struct Ast {
     /// §1.0): every entity has C language linkage, so names are not
     /// mangled ([C17 6.2.2], clang `shouldMangleCXXName`).
     pub lang_c: bool,
+    /// `-ffreestanding` ([intro.compliance.general]/7): no function is
+    /// `main` ([basic.start.main]/1, clang `FunctionDecl::isMain`), so
+    /// a global `main` is mangled and gets no implicit `return 0`.
+    pub freestanding: bool,
     /// The `std::contracts::contract_violation` data of each contract
     /// assertion sema built outside a template pattern (spec/contracts.md
     /// §6.3): recorded by sema, read by codegen.
@@ -293,6 +297,7 @@ impl Ast {
             modules: crate::modules::ModuleTable::default(),
             contract_semantic: crate::stmt::ContractSemantic::default(),
             lang_c: false,
+            freestanding: false,
             contract_sites: crate::slot::ColdMap::new("contract_sites"),
             symbols,
             inst: InstantiationMeter::default(),

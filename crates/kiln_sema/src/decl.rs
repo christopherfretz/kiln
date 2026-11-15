@@ -1746,6 +1746,17 @@ impl Sema<'_, '_> {
                                 self.emit(msg.per_instantiation());
                                 self.ast.types.constant_array(ty, 0, None)
                             }
+                            // clang `BuildArrayType`: more than the
+                            // maximum object size, before anything is laid
+                            // out ([dcl.array]/1, [intro.memory]; WP-1456).
+                            Some(Ok(n)) if self.array_too_large(n, ty) => {
+                                let l = self.begin_loc(*e);
+                                let msg = self
+                                    .diag(DiagId::sema_array_too_large, l)
+                                    .arg(self.element_count_text(n));
+                                self.emit(msg);
+                                fail!();
+                            }
                             Some(Ok(n)) => self.ast.types.constant_array(ty, n, None),
                             Some(Err(size)) => {
                                 self.note_vla_type(*loc);
@@ -1960,7 +1971,10 @@ impl Sema<'_, '_> {
                 None
             }
             Ok(v) => {
-                if v > i128::from(u64::MAX >> 4) {
+                // clang `getNumAddressingBits` of the count alone (the
+                // element's size is checked with the type, where known):
+                // more than 61 bits.
+                if v > i128::from(u64::MAX >> 3) {
                     let msg = self
                         .diag(DiagId::sema_array_too_large, loc)
                         .arg(self.element_count_text(v));

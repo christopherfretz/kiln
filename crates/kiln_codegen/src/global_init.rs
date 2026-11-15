@@ -65,6 +65,11 @@ pub(crate) struct GlobalInits {
     /// `_ZGR` globals by lifetime-extended temporary (clang
     /// `MaterializedGlobalTemporaryMap`).
     temps: FxHashMap<DeclId, GlobalId>,
+    /// The temporaries whose constant initializer is being emitted: one
+    /// that points into itself (`struct X { const X* p = this; }` bound by
+    /// `constexpr const X& r = X{};`) gets a placeholder global on
+    /// re-entry, as in clang `GetAddrOfGlobalTemporary` (WP-1456).
+    temps_in_progress: Vec<DeclId>,
     /// clang `CXXThreadLocals`: the namespace-scope `thread_local`
     /// variables (first declarations) in global creation order.
     pub tls_vars: Vec<DeclId>,
@@ -725,8 +730,22 @@ impl Cg<'_> {
             local_index,
             l.mangling_index,
         );
+        if self.gi.temps_in_progress.contains(&t) {
+            // Re-entered while emitting its own initializer: the
+            // placeholder the finished global replaces.
+            let pt = self.mty(ty);
+            let g = self.m.add_global(&name, pt);
+            self.m.global_mut(g).linkage = Linkage::Internal;
+            self.gi.temps.insert(t, g);
+            return Ok(g);
+        }
         let init = match l.value {
-            Some(c) => Some(self.const_value(c, ty, None, true)?),
+            Some(c) => {
+                self.gi.temps_in_progress.push(t);
+                let k = self.const_value(c, ty, None, true);
+                let _ = self.gi.temps_in_progress.pop();
+                Some(k?)
+            }
             None => None,
         };
         let lt = match init {
@@ -746,8 +765,16 @@ impl Cg<'_> {
         } else {
             Linkage::Internal
         };
-        let g = self.m.add_global(&name, lt);
-        self.gi.temps.insert(t, g);
+        // clang replaces the placeholder by the new global, appended to the
+        // module; pointers are opaque, so its uses stay valid.
+        let g = if let Some(&g) = self.gi.temps.get(&t) {
+            self.m.retype_global_to_end(g, lt);
+            g
+        } else {
+            let g = self.m.add_global(&name, lt);
+            self.gi.temps.insert(t, g);
+            g
+        };
         if self.var_is_tls(vfirst) {
             // [basic.stc.thread]: one temporary per thread, with the
             // variable's model (clang `GetAddrOfGlobalTemporary`).

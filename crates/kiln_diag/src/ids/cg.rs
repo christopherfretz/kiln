@@ -42,4 +42,9 @@ cg_error = Error (1) "{0}";
 cg_function_needs_feature = Error (3) "always_inline function '{1}' requires target feature '{2}', but would be inlined into function '{0}' that is compiled without support for '{2}'";
 // clang `err_ifunc_resolver_return` (`checkAliases`); WP-763.
 cg_ifunc_resolver_return = Error (0) "ifunc resolver function must return a pointer";
+// clang `err_store_value_to_reg` (`EmitAsmStores`): a register output
+// of aggregate type whose size is no integer type's; WP-1456.
+cg_store_value_to_reg = Error (0) "impossible constraint in asm: cannot store value into a register";
+// clang 19's text of `cg_store_value_to_reg`, kept for -fclang-compat=19.
+cg_store_value_to_reg_19 = Error (0) "impossible constraint in asm: can't store value into a register";
 cg_sync_op_misaligned = Warning [SyncAlignment] (0) "__sync builtin operation must have natural alignment (consider using __atomic)";
