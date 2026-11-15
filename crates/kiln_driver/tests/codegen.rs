@@ -2754,3 +2754,68 @@ fn explicit_instantiation_one_body_per_function() {
         }
     }
 }
+
+/// spec/driver.md "Debug information flags" (WP-1488):
+/// `-fno-kiln-debug-source-checksum` leaves the MD5 off every `DIFile`
+/// (the unit's, an included header's, a `#line` file's), so a comment
+/// edit in a header that moves no line gives a byte-identical object;
+/// with the default the objects differ (the header's MD5 in
+/// `.debug_line`).
+#[test]
+fn debug_source_checksum_off() {
+    let d = scratch("srcsum");
+    let header = |c: &str| {
+        std::fs::write(d.join("h.h"), format!("// {c}\ninline int h(int x) {{ return x + 1; }}\n"))
+            .unwrap();
+    };
+    header("one");
+    std::fs::write(d.join("main.cpp"), "#include \"h.h\"\nint f(int a) { return h(a); }\n")
+        .unwrap();
+    // A `#line` file has no checksum, and LLVM then drops MD5 from the
+    // whole line table: that unit stays out of the object comparison.
+    std::fs::write(
+        d.join("line.cpp"),
+        "#include \"h.h\"\nint f(int a) { return h(a); }\n#line 40 \"gen.y\"\nint g() { return 2; }\n",
+    )
+    .unwrap();
+    let ir = |flags: &[&str]| {
+        let o = kiln_in(&d, &[&["-S", "-emit-llvm", "-o", "-", "line.cpp"], flags].concat());
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
+        let ir = text(&o.stdout);
+        ir.lines().filter(|l| l.contains("!DIFile(")).map(str::to_owned).collect::<Vec<_>>()
+    };
+    let on = ir(&["-g"]);
+    assert_eq!(on.len(), 3, "{on:?}");
+    for (f, sum) in [("line.cpp", true), ("h.h", true), ("gen.y", false)] {
+        let l = on.iter().find(|l| l.contains(&format!("{f}\","))).unwrap();
+        assert_eq!(l.contains("checksumkind: CSK_MD5"), sum, "{l}");
+    }
+    for flags in [
+        &["-g", "-fno-kiln-debug-source-checksum"][..],
+        &["-fno-kiln-debug-source-checksum", "-gline-tables-only"],
+        &["-fkiln-debug-source-checksum", "-fno-kiln-debug-source-checksum", "-g"],
+    ] {
+        let off = ir(flags);
+        assert_eq!(off.len(), 3, "{flags:?}: {off:?}");
+        assert!(off.iter().all(|l| !l.contains("checksum")), "{flags:?}: {off:?}");
+    }
+    // No debug information, or DWARF 4: accepted, nothing to leave out.
+    assert!(ir(&["-fno-kiln-debug-source-checksum"]).is_empty());
+    assert!(
+        ir(&["-gdwarf-4", "-fno-kiln-debug-source-checksum"])
+            .iter()
+            .all(|l| !l.contains("checksum"))
+    );
+    if !tools() {
+        return;
+    }
+    let obj = |flags: &[&str], c: &str| {
+        header(c);
+        let o = kiln_in(&d, &[&["-c", "-g", "main.cpp", "-o", "main.o"], flags].concat());
+        assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""), "{flags:?}");
+        std::fs::read(d.join("main.o")).unwrap()
+    };
+    let off = ["-fno-kiln-debug-source-checksum"];
+    assert!(obj(&off, "one") == obj(&off, "two"), "objects differ with the checksum off");
+    assert!(obj(&[], "one") != obj(&[], "two"), "objects equal with the checksum on");
+}

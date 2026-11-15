@@ -1554,7 +1554,9 @@ unchanged, byte for byte. Otherwise kiln emits what clang 19's
 order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
 (producer string aside):
 - a `DICompileUnit` (`!llvm.dbg.cu`) whose file carries the main
-  buffer's MD5, the `"Dwarf Version"` and `"Debug Info Version"` module
+  buffer's MD5 (every `DIFile` of a real buffer carries its MD5 at
+  DWARF 5, none under `DebugOptions::source_checksum == false`,
+  `-fno-kiln-debug-source-checksum`, WP-1488), the `"Dwarf Version"` and `"Debug Info Version"` module
   flags, and `DIFile`s split against the compilation directory after
   `-fdebug-prefix-map=`;
 - under line tables only, a `DISubprogram` per definition with

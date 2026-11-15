@@ -627,6 +627,7 @@ The full list is spec/driver.md, "Options".
 | `-f[no-]kiln-pch-snapshot[=write\|load\|check]` | the PCH snapshot (default on; see [Precompiled headers](#precompiled-headers)) |
 | `-fkiln-pch-validate=mtime\|content` | how a PCH's input files are checked (default `mtime`: size and time, then content) |
 | `-f[no-]kiln-bmi-image` | experimental, off by default: write and use the declaration image in module files (see [Modules](#modules)) |
+| `-f[no-]kiln-debug-source-checksum` | MD5 checksums of source files in the DWARF 5 line table (default on; see [Debug information](#debug-information)) |
 | `-fkiln-reproducible-time` | fixed `__DATE__`/`__TIME__`/`__TIMESTAMP__` (see [Environment variables](#environment-variables)) |
 | `-fkiln-outline-expansions=N`, `-fkiln-dump-cfg`, `-fkiln-cfg-stats`, `-fkiln-cfg-max-elems=N` | internal tuning and debugging of the codegen CFG |
 
@@ -677,6 +678,16 @@ clang debug flags emit DWARF that gdb and lldb read as they read
 clang's. A flag kiln cannot honour is an error, not ignored. The details
 are in spec/driver.md, "Debug information flags", and
 [status/debuginfo.md](status/debuginfo.md).
+
+`-fno-kiln-debug-source-checksum` (kiln only) leaves the MD5 checksum of
+each source file out of the DWARF 5 line table. With it, an edit that
+does not move any line, such as changing a comment in a header, leaves
+the objects that include the header byte-identical, so an incremental
+linker such as mortar does not process them again. What is lost: a
+debugger can no longer tell that a source file changed after the build
+(lldb compares the checksum to warn about stale sources). Use it for
+development builds; the default, `-fkiln-debug-source-checksum`, keeps
+the checksums as clang does.
 
 ### Sanitizers
 

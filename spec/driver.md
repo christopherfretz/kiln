@@ -133,7 +133,7 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fpic`, `-fPIC`, `-fpie`, `-fPIE`, `-fno-pic` (and `-fno-PIC`/`-fno-pie`/`-fno-PIE`) | the relocation model, the last one winning (default `-fPIE`, as clang on Linux): the `__pic__`/`__pie__` predefines, `llc`'s `-relocation-model=`, the `PIC Level`/`PIE Level` module flags and which globals are `dso_local` (spec/codegen.md "Symbol visibility and `dso_local`", WP-544) |
 | `-f[no-]semantic-interposition`, `-f[no-]direct-access-external-data` | the `dso_local` inputs of clang's `shouldAssumeDSOLocal` (spec/codegen.md "Symbol visibility and `dso_local`"): under `-fPIC`, `-fno-semantic-interposition` makes external non-COMDAT function definitions `dso_local` and `-fsemantic-interposition` adds the `SemanticInterposition` module flag; `-fdirect-access-external-data` (default only with `-fno-pic`) makes non-TLS variable declarations (and, under `-fno-pic`, function declarations) `dso_local` under `-fPIE`/`-fno-pic`, and a value other than the relocation model's default adds the `direct-access-external-data` module flag. The last of each pair wins |
 | `-fvisibility=default\|hidden\|protected\|internal`, `-fvisibility-ms-compat`, `-f[no-]visibility-inlines-hidden` | the default symbol visibility (`CodegenOptions::visibility` / `type_visibility` / `inlines_hidden`, spec/codegen.md "Symbol visibility and `dso_local`", WP-544): the last `-fvisibility=` or `-fvisibility-ms-compat` wins; `internal` is `hidden`, as clang; `-fvisibility-ms-compat` is hidden value visibility with default type visibility (vtables, RTTI), accepted silently as by clang. `-fvisibility-inlines-hidden` hides inline functions that are not explicit instantiations (the last of the pair wins). An unknown value is clang's `-cc1` error `invalid value '<v>' in '-fvisibility=<v>'` (no `kiln++:` prefix, once per input, as the `-std=` one), unless a later `-fvisibility=`/`-fvisibility-ms-compat` replaces it (clang forwards only the last) |
-| `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
+| `-g`, `-g0`..`-g3`, `-ggdb*`, `-gline-tables-only`, `-gdwarf-N`, `-gsplit-dwarf`, `-gz`, `-f[no-]kiln-debug-source-checksum`, ... | DWARF debug information; see "Debug information flags" below (WP-814) |
 | `-l<lib>`, `-L<dir>`, `-B<dir>`, `-Wl,<args>`, `-Xlinker <arg>`, `-rpath <dir>`, `-z <arg>`, `-u <sym>`, `-T <script>`, `-fuse-ld=<ld>`, `-static`, `-nostdlib`, `-nodefaultlibs`, `-nostartfiles`, `-nolibc`, `-nostdlib++`, `-static-pie`, `-static-libgcc`, `-static-libstdc++`, `-shared-libgcc`, `-r`, `-shared`, `-rdynamic`, `-pie`, `-no-pie` | passed to the link command, in command-line order relative to the inputs (`-rpath` takes a separate value only, as clang's; WP-1288); see "Link options" (WP-1453) |
 | `-Wa,<a>[,<b>...]`, `-Xassembler <a>` | assembler options (WP-1288). For a C or C++ source kiln has no assembler step (`llc` writes the object, and marks the stack non-executable with `.note.GNU-stack` already), so the values are checked against what clang's integrated assembler accepts on Linux and otherwise have no effect; an assembly input's assembler receives them as written ("Assembler inputs", WP-1331). The accepted values: `--noexecstack`, `-L`, `--fatal-warnings`, `--no-warn`, `-W`, `-I<dir>` / `-I <dir>`, `-gdwarf-*`, `-force_cpusubtype_ALL`, `--allow-experimental-crel`, `--no-crel`, `-march=`/`-mcpu=`/`-mfpu=<v>`, `-mrelax-relocations=yes\|no`. `--compress-debug-sections[=none\|zlib\|zstd]` (also `-compress-...`) acts as `-gz[=...]` when there is no `-gz` (an unknown type is `invalid value '<t>' in '<v>'`). Any other value is `unsupported argument '<v>' to option '-Wa,'` (or `'-Xassembler'`), as in clang, and is checked only when a source is assembled (`-c` or a link); `-E`, `-fsyntax-only`, `-S` and `-emit-llvm` ignore them. Without a source to assemble, `-Wa,` is `argument unused during compilation: '-Wa,...'`, and `-Xassembler <a>` too under `-c` (clang's link job claims it silently). Not accepted, unlike clang: `--crel`, `--defsym`, `--version` |
 | `-dD` | with `-E`: the text, plus every `#define`/`#undef` where it occurs, the predefines' and command line's first (as clang's; WP-920) |
@@ -374,6 +374,21 @@ Every `-g` flag is implemented, accepted as clang's default, or an error.
   `crates/kiln_driver/tests/driver.rs`
   `pubnames_name_table_kind`, `debug_flags.rs`
   `pubnames_name_table_kind`.
+- **Source checksums** (WP-1488, kiln only: clang 22's driver has no
+  spelling for this; `-gsrc-hash=` is `-cc1`/clang-cl only):
+  `-fno-kiln-debug-source-checksum` leaves `checksumkind`/`checksum`
+  off every `DIFile` of the unit (the compile unit's, included files,
+  files named by `#line`), so the DWARF 5 line table has no MD5 and an
+  edit that keeps every line number (a comment) leaves the object's
+  bytes unchanged: stable objects for incremental links (mortar). No
+  file is hashed then. `-fkiln-debug-source-checksum` is the default;
+  the last of the pair wins. Accepted without `-g` (no effect) and at
+  DWARF 4 (which has no checksum anyway). It acts on the IR, so `llc`
+  and `-fkiln-backend=hod` both follow; a PCH or module built either
+  way serves a compilation with the other setting (the checksum is
+  computed at code generation, never stored). Tests: `debug_flags.rs`
+  `source_checksum_last_wins`, `crates/kiln_driver/tests/codegen.rs`
+  `debug_source_checksum_off`.
 - **Accepted with no effect** (each spells clang's Linux default):
   `-gcolumn-info`, `-gdwarf32`, `-gno-embed-source`, `-gno-codeview`,
   `-ggnu-pubnames-none`,

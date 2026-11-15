@@ -151,6 +151,9 @@ DEBUG INFORMATION:
   -fmacro-prefix-map=<old>=<new>
                           Remap <old> to <new> in __FILE__ and source
                           locations
+  -fkiln-debug-source-checksum, -fno-kiln-debug-source-checksum
+                          [kiln] Put (default) or leave out the source
+                          files' MD5 in the DWARF 5 line table
 
 SANITIZERS AND COVERAGE:
   -fsanitize=<checks>     Runtime checks: address, hwaddress, thread,
