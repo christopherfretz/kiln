@@ -56,6 +56,10 @@ commands:
               compile) through kiln at -O0/-O2, beside GCC 16.1 and clang-19, and write a
               per-case TSV and a summary; informational, not part of ci (`cargo xtask
               gcc-torture --help`; spec/harness.md \"GCC testsuites\")
+  gxx-dg      run GCC 16.1's C++ tests (g++.dg, g++.dg/torture, c-c++-common,
+              g++.old-deja) through kiln++ at g++-dg.exp's standards, matching errors by
+              line and severity, beside GCC 16.1 and clang; informational, not part of ci
+              (`cargo xtask gxx-dg --help`; spec/harness.md \"GCC testsuites\")
   libstdcxx   compile each public libstdc++ header alone with kiln and clang++-19 and
               report per-header status (docs/status/libstdcxx.md); informational, not
               part of ci (`cargo xtask libstdcxx --help`; contract in spec/libstdcxx.md)
@@ -102,6 +106,7 @@ fn main() -> ExitCode {
         Some("clang-ast") => clang_ast::main(args),
         Some("clang-neg") => clang_neg::main(args),
         Some("gcc-torture") => gcc_tests::torture::main(args),
+        Some("gxx-dg") => gcc_tests::gxx::main(args),
         Some("diag-split") => diag_split::main(args),
         Some("gen-pp-corpus") => gen_pp::main(args),
         Some("gen-reflect") => gen_reflect::main(args),

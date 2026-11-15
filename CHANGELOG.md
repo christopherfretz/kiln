@@ -12,6 +12,14 @@ Planned as 1.3.0.
 
 ### Added
 
+- `cargo xtask gxx-dg` (WP-1443): GCC 16.1's C++ testsuite (`g++.dg`
+  with `g++.dg/torture`, `c-c++-common`, `g++.old-deja`) through kiln++,
+  with GCC and clang as oracles. It reads the `dg-` directives (errors and
+  warnings by line, target and xfail selectors, `c++NN` standards as
+  `g++-dg.exp` picks them) and sorts failures into crash, wrong-code,
+  rejects-valid, accepts-invalid and wrong-line, each split by what clang
+  does. The first triaged run is `docs/status/gxx-dg.md`: kiln passes
+  47950 of 56766 cases. `scripts/fetch-gcc-tests.sh` fetches the C++ suites.
 - `-fstack-clash-protection` and `-mstack-probe-size=` take effect
   (WP-1411): the function attributes and the `probe-stack` and
   `stack-probe-size` module flags are written as clang 19 writes them,

@@ -22,6 +22,10 @@ pub struct Target {
     pub expensive: bool,
     /// `__OPTIMIZE__`: the option set optimizes (see [`Target::with_option`]).
     pub optimize: bool,
+    /// The C++ standard a C++ suite compiles the case at (98, 11, 14, 17,
+    /// 20, 23 or 26; see [`cxx_std_of`]); `None` for a C suite. It answers
+    /// the `c++NN`, `c++NN_only` and `c++NN_down` names, `c++` and `c`.
+    pub cxx: Option<u32>,
 }
 
 impl Target {
@@ -34,7 +38,7 @@ impl Target {
             "x86_64" => "x86_64-pc-linux-gnu".to_owned(),
             a => format!("{a}-unknown-linux-gnu"),
         };
-        Self { arch: arch.to_owned(), triplet, expensive, optimize: false }
+        Self { arch: arch.to_owned(), triplet, expensive, optimize: false, cxx: None }
     }
 
     /// This target under one option set: `__OPTIMIZE__` holds when the
@@ -43,6 +47,42 @@ impl Target {
     pub fn with_option(&self, option: &[String]) -> Self {
         let last = option.iter().rev().find(|f| f.starts_with("-O"));
         Self { optimize: last.is_some_and(|o| o != "-O0"), ..self.clone() }
+    }
+
+    /// This target compiling C++ at `std` (a [`cxx_std_of`] number).
+    #[must_use]
+    pub fn with_cxx(&self, std: u32) -> Self {
+        Self { cxx: Some(std), ..self.clone() }
+    }
+
+    /// The C++ names of `target-supports.exp` (GCC 16): `c++` and `c`;
+    /// `c++NN` is NN or later, `c++NN_only` exactly NN, `c++NN_down` NN or
+    /// earlier (`c++98` is any C++). `None` for a name that is not one.
+    fn cxx_effective(&self, name: &str) -> Option<Result<bool, String>> {
+        let Some(std) = self.cxx else {
+            return name.starts_with("c++").then_some(Ok(false));
+        };
+        if name == "c" {
+            return Some(Ok(false));
+        }
+        if name == "c++" {
+            return Some(Ok(true));
+        }
+        let rest = name.strip_prefix("c++")?;
+        let (num, kind) = match rest.split_once('_') {
+            Some((n, k)) => (n, k),
+            None => (rest, ""),
+        };
+        let Some(want) = cxx_std_number(num) else {
+            return Some(Err(format!("unknown effective target {name}")));
+        };
+        let rank = |s: u32| if s == 98 { 0 } else { s };
+        Some(match kind {
+            "" => Ok(rank(std) >= rank(want)),
+            "only" => Ok(std == want),
+            "down" => Ok(rank(std) <= rank(want)),
+            _ => Err(format!("unknown effective target {name}")),
+        })
     }
 
     /// `istarget <pattern>`.
@@ -55,6 +95,9 @@ impl Target {
     pub fn effective(&self, name: &str) -> Result<bool, String> {
         let x86 = self.arch == "x86_64";
         let arm64 = self.arch == "aarch64";
+        if let Some(v) = self.cxx_effective(name) {
+            return v;
+        }
         Ok(match name {
             // Hosted LP64 GNU/Linux with glibc.
             "int32plus"
@@ -123,7 +166,28 @@ impl Target {
             | "lra"
             | "c"
             | "c99"
-            | "struct_return" => true,
+            | "struct_return"
+            // The C++ suites (g++.dg, c-c++-common, g++.old-deja).
+            | "exceptions_enabled"
+            | "rtti"
+            | "shared"
+            | "size24plus"
+            | "variadic_mi_thunk"
+            | "fstack_protector"
+            | "ident_directive"
+            | "tls_link"
+            | "non_bionic"
+            | "inf"
+            | "float16"
+            | "hostedlib"
+            | "musttail"
+            | "struct_musttail"
+            | "external_musttail"
+            | "pie_enabled"
+            | "4byte_wchar_t"
+            | "comdat_group"
+            | "speculation_barrier_defined"
+            | "ucn" => true,
             // Not this target, or nothing every compiler here provides.
             "ia32"
             | "ilp32"
@@ -154,11 +218,41 @@ impl Target {
             | "noinit"
             | "persistent"
             | "section_anchors"
-            | "label_values_unsupported" => false,
+            | "label_values_unsupported"
+            // GCC-only machinery, or the vectorizer properties its
+            // `dg-final` scans check (counted as skips, not run).
+            | "strub"
+            | "lto_incremental"
+            | "freorder"
+            | "store_merge"
+            | "fopenacc"
+            | "vect_simd_clones"
+            | "vect_early_break"
+            | "vect_float"
+            | "vect_double"
+            | "vect_int_mult"
+            | "arm_neon_ok"
+            | "naked_functions"
+            | "ppc_float128_sw"
+            | "powerpc_altivec"
+            | "powerpc_vsx"
+            | "default_packed"
+            | "short_eq_int"
+            | "arm_eabi"
+            | "vma_equals_lma"
+            | "no_fsanitize_address"
+            | "vect_slp_v2qi_store_unalign"
+            // `-fimplicit-constexpr`, a GCC-only flag no case passes.
+            | "implicit_constexpr" => false,
             "run_expensive_tests" => self.expensive,
             "__OPTIMIZE__" => self.optimize,
-            "x86" | "sse2" | "sse2_runtime" | "lp64_x86" | "int128_x86" => x86,
+            "x86" | "sse2" | "sse2_runtime" | "sse" | "sse_runtime" | "lp64_x86" | "int128_x86" => {
+                x86
+            }
             "aarch64_little_endian" | "aarch64_asm_sve_ok" => arm64,
+            "has_q_floating_suffix" | "has_w_floating_suffix" => x86,
+            // C++20 concepts (or the Concepts TS flag no case passes).
+            "concepts" => self.cxx.is_some_and(|s| s != 98 && s >= 20),
             n => return Err(format!("unknown effective target {n}")),
         })
     }
@@ -214,6 +308,31 @@ impl Target {
             .collect();
         Some((kw, self.selector(&rest.join(" "))))
     }
+}
+
+/// The standard number of a `-std=` value's year (`17`, `1z`, `2c`,
+/// `0x`, `03`): 98, 11, 14, 17, 20, 23 or 26.
+pub fn cxx_std_number(year: &str) -> Option<u32> {
+    Some(match year {
+        "98" | "03" => 98,
+        "11" | "0x" => 11,
+        "14" | "1y" => 14,
+        "17" | "1z" => 17,
+        "20" | "2a" => 20,
+        "23" | "2b" => 23,
+        "26" | "2c" => 26,
+        _ => return None,
+    })
+}
+
+/// The C++ standard the last `-std=c++NN` / `-std=gnu++NN` in `flags`
+/// selects, as a [`cxx_std_number`].
+pub fn cxx_std_of(flags: &[String]) -> Option<u32> {
+    flags.iter().rev().find_map(|f| {
+        let v = f.strip_prefix("-std=")?;
+        let year = v.strip_prefix("c++").or_else(|| v.strip_prefix("gnu++"))?;
+        cxx_std_number(year)
+    })
 }
 
 struct Expr<'a> {
@@ -283,6 +402,26 @@ mod tests {
         let o2 = t.with_option(&["-O2".to_owned()]);
         assert!(o2.selector("__OPTIMIZE__").unwrap());
         assert!(!o2.with_option(&["-O0".to_owned()]).selector("__OPTIMIZE__").unwrap());
+    }
+
+    #[test]
+    fn cxx_standards() {
+        let t = Target::for_arch("aarch64", false);
+        let c17 = t.with_cxx(17);
+        assert!(c17.selector("c++11").unwrap() && c17.selector("c++17").unwrap());
+        assert!(!c17.selector("c++20").unwrap() && c17.selector("c++17_only").unwrap());
+        assert!(c17.selector("c++17_down").unwrap() && !c17.selector("c++14_down").unwrap());
+        assert!(c17.selector("c++98").unwrap() && !c17.selector("c++98_only").unwrap());
+        assert!(c17.selector("c++").unwrap() && !c17.selector("c").unwrap());
+        assert!(t.with_cxx(98).selector("c++98_only").unwrap());
+        assert!(t.with_cxx(98).selector("! c++11").unwrap());
+        assert!(t.with_cxx(26).selector("c++26").unwrap());
+        assert!(c17.selector("c++17_bogus").is_err());
+        assert!(t.selector("c").unwrap() && !t.selector("c++").unwrap());
+        let f = |s: &[&str]| s.iter().map(|&x| x.to_owned()).collect::<Vec<_>>();
+        assert_eq!(cxx_std_of(&f(&["-std=c++17", "-O2", "-std=gnu++2c"])), Some(26));
+        assert_eq!(cxx_std_of(&f(&["-std=c++0x"])), Some(11));
+        assert_eq!(cxx_std_of(&f(&["-std=gnu17"])), None);
     }
 
     #[test]

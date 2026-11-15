@@ -73,6 +73,11 @@ C mode:
 - `c-mode.md`: `kiln` on C code (WP-1282): the C OSS rows against clang 19,
   gcc.c-torture at gnu23 and gnu17 (`cargo xtask gcc-torture --report`),
   and the failure clusters ranked for wave 2.
+- `gxx-dg.md`: GCC 16.1's C++ testsuite (g++.dg, g++.dg/torture,
+  c-c++-common, g++.old-deja) through kiln++ (`cargo xtask gxx-dg
+  --report`, WP-1443): totals by directory and class, and the triaged
+  clusters (crash, wrong-code, rejects-valid where clang accepts,
+  accepts-invalid where clang rejects).
 
 Performance:
 

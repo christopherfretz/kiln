@@ -1253,8 +1253,151 @@ the checkout (`locate`), the Tcl list subset (`tcl`), directive extraction
 and per-option resolution (`dg`), selectors and effective targets
 (`target`), `.x` evaluation (`xfile`), a compiler with flag probing and
 the compile/link/run step (`Tool`, `Case`), and the classes and cluster
-keys (`outcome`). A g++.dg runner adds its suite list and default actions
-(and `dg-error` line matching if it wants more than accept/reject) on top.
+keys (`outcome`). `cargo xtask gxx-dg` (below) adds its suites, the
+standard list, the diagnostic matcher (`expect`) and its report on top.
+
+### The g++.dg runner
+
+`cargo xtask gxx-dg` (WP-1443) runs GCC's C++ tests through kiln++, GCC
+16.1 and clang, informational like `gcc-torture` (never in `ci`; exit
+status non-zero only for a tool error). The checkout is the same one
+(`scripts/fetch-gcc-tests.sh` adds `g++.dg`, `c-c++-common`,
+`g++.old-deja` and the nine `gcc.dg`/`gcc.target` files their tests include
+by relative path; about 160 MB with `.git`).
+
+**Suites** (`--suite`, default all four), as GCC's `.exp` drivers run them:
+
+- `dg`: `g++.dg/**/*.C` in every directory without an `.exp` file of its
+  own (`find-cxx-tests` of `g++.dg/dg.exp`; `g++.dg/torture` is its own
+  suite), default flags `-pedantic-errors -Wno-long-long`. The directories
+  with their own driver (`modules`, `lto`, `gomp`, `asan`, `pch`, ... ) are
+  not run; the summary lists them with their file counts.
+- `torture`: `g++.dg/torture/*.C` and `c-c++-common/torture/*.c`
+  (`dg-torture.exp`: gcc-dg-runtest, no default flags, no `-std=`), at the
+  option sets `--opt` (default `-O0,-O2`, the two of GCC's torture list
+  this runner uses).
+- `common`: `c-c++-common/*.[cSi]` and `c-c++-common/cpp/*.[cS]`, no
+  default flags; a `.c` file is compiled as C++ (`-x c++`, as `g++` does).
+  `.S` and `.i` inputs are skipped as `input kind`.
+- `old-deja`: `g++.old-deja/**/*.C`, default flags as `dg`.
+
+The default action is `compile` (`-S`, as GCC's); `dg-options` replaces a
+suite's default flags.
+
+**Standards.** Each test of `dg`, `common` and `old-deja` runs at the
+standards `g++-std-flags` of GCC 16's `lib/g++-dg.exp` picks: one run with
+no `-std=` added when the test names `-std=*++` anywhere; else the prefix
+is `-std=gnu++` when the test has a `dg-options` line and `-std=c++`
+otherwise, and the years are those named on the test's `{ dg* c++NN` lines
+(a year on a `dg-do` or `dg-require-effective-target` line other than 98
+is also the floor; `coroutines/` has floor 20, `modules/` 17), filled to
+three from `20, 98, 26, 17, 11, 14, 23` above the floor (98 counts as 3).
+A plain test therefore runs at C++20, C++98 and C++26. `--std 20,26` is
+GCC's `GXX_TESTSUITE_STDS`: that list, filtered by the floor. A case
+without any `-std=` (the torture suite, a test whose own `-std=` sits under
+a selector that does not match) gets `-std=gnu++20` first, GCC 16's
+`cxx_default`, so that kiln and clang compile at GCC's default too. The
+case's standard (the last `-std=` of the run's flags or the test's options)
+answers the `c++NN` (NN or later), `c++NN_only`, `c++NN_down` (NN or
+earlier), `c++` and `c` effective targets (`target.rs`).
+
+**Directives** beyond the torture runner's: `dg-additional-sources`
+(compiled with the test's flags and linked with it); `dg-shouldfail` (a run
+test passes when the program fails and is `wrong` when it exits 0);
+`dg-ice` marks the case xfail; any `dg-module-*` skips the test as
+`modules (dg-module-*)`, counted, not run. `dg-final` checks
+(`scan-assembler`, `scan-tree-dump`, ...) and `dg-output` are GCC-internal
+or output checks the runner does not compare: the case's class comes from
+its compile (and run), and the summary counts the tests holding each kind
+under "Not applicable". Flags a compiler rejects are dropped for it as in
+the torture runner, each C++ tool probing a unit after the case's `-std=`
+(GCC 16 takes `-freflection` only at C++26); a unit is a flag and, for
+`-D`, `-U`, `-I`, `-isystem`, `-idirafter`, `-iquote`, `-include`,
+`-imacros`, `--embed-directory`, `--param`, `-Xlinker` and `-mllvm`, the
+word after it. `${srcdir}` in a test's flags
+is the checkout's `gcc/testsuite`.
+
+**Diagnostic matching** (`xtask/src/gcc_tests/expect.rs`). The
+expectations of a case are its applicable `dg-error`, `dg-warning`,
+`dg-message` and `dg-bogus` directives, `dg-<kind> <regexp> [<comment>
+[{ target|xfail <sel> } [<line>]]]`: a non-matching `target` drops one, a
+matching `xfail` marks it (GCC does not meet it); the line is the
+directive's own, or `.`, `.-N`, `.+N`, a number, or 0 for "no line". A
+compiler's diagnostics are its `<file>:<line>[:<col>]: <severity>:` lines;
+`error`, `fatal error` and `sorry, unimplemented` are errors. The file is
+not looked at, as `DejaGnu` does not (a test expects an error in a header
+it includes by that header's line); a diagnostic without a location has
+line 0. Only the line and the severity are compared, never the message (GCC's
+regexps are GCC's wording; kiln's is clang's). With `required` the lines of
+the non-xfail `dg-error`s:
+
+- no line required: the case passes when the compiler reports no error and
+  every step succeeds, else it is `compile-reject` (rejects-valid);
+- lines required, no error at all: `accept-invalid` (detail: the first
+  expected regexp);
+- errors reported: every required line other than 0 must hold an error
+  (else `wrong-line`, `missed error at L<n>`), and no error may sit on a
+  line where nothing is expected (else `wrong-line`, `extra error at
+  L<n>: <first such error>`). An error where a `dg-warning` or
+  `dg-message` is expected is accepted (`-pedantic-errors` and
+  `-Werror=` make severities differ between compilers) and so is an error
+  on an xfail `dg-error` or xfail `dg-bogus` line (GCC errs there); one on
+  a `dg-bogus` line is extra. A line argument may be a `dg-line` name. Errors
+  with line 0 satisfy a line-0 expectation and are never extra.
+  `dg-excess-errors` or `dg-prune-output` (whose patterns are GCC's
+  wording, which cannot be applied to other compilers' output) turns the
+  extra-error check off for the case.
+
+Missing warnings are not failures. A negative case that passes stops after
+the compile; a positive one goes on to link and run as its action says,
+classed as in the torture runner (`wrong`, `crash`, `timeout`).
+
+**Oracles.** kiln runs every case; GCC (`--gcc`, default `$KILN_GCC`) and
+clang (`--clang`, default `clang++-22`, which also makes kiln's flags start
+with `-fclang-compat=22`) run only the cases kiln does not pass
+(`--oracles-on fail`, the default; `all` runs them on every case), through
+the same judge; GCC with `-fdiagnostics-plain-output` and `LC_ALL=C`, as
+GCC's testsuite runs it. When the GCC oracle runs, kiln and clang build
+against its libstdc++ (`--gcc-toolchain=<its prefix>`: the headers the tests
+were written for, `<meta>` among them) and every link adds that library
+directory as run path (`-Wl,-rpath,...`), as GCC's own install does; the
+report header notes the flag without the local path. A line that kiln
+echoes from the source under a diagnostic (`  21 | ...`) never counts as an
+internal compiler error, whatever its text. A GCC failure on a case is a runner or environment
+question (or a GCC bug candidate where the test contradicts the standard),
+never kiln's.
+
+**Triage buckets** of a kiln failure: `kiln crash / hang` (crash or
+timeout), `wrong-code` (a run test compiled and the program failed),
+`rejects-valid` split into `clang accepts` (clang passes the case: a kiln
+bug candidate) and `clang rejects too` (a GCC extension or GCC-specific
+expectation, low priority), `accepts-invalid` split into `clang rejects`
+(clang reports an error, on whatever line: a kiln bug candidate) and
+`clang accepts too`, and `wrong-line` split into `clang matches` (clang
+passes the case) and `clang differs too` (a location convention GCC and
+clang do not share). Clusters inside a bucket use the
+torture runner's cluster key.
+
+**Outputs.** `--tsv` (default `<target>/xtask-gxx-dg/results.tsv`): one
+row per case, `test opt kiln kiln_detail gcc gcc_detail clang clang_detail
+negative xfail dropped` (`opt` is the case's `-std=`, `-` for none, or the
+torture option set); while the run goes, each finished case is appended
+to `<tsv stem>.partial.tsv` (removed at the end), so an interrupted run
+keeps its rows. `--summary` (default `.../summary.md`): the header,
+results by class per compiler, the buckets, the priority directories
+(`g++.dg/reflect`, `g++.dg/contracts`, `g++.dg/cpp26`, `g++.dg/cpp2a`,
+`g++.dg/cpp23`, `g++.dg/torture`, `c-c++-common/torture`), every directory
+by class, the top 30 clusters of each bucket with examples, and the not
+applicable counts (skips by reason, unchecked `dg-final` kinds, directories
+with their own driver) and dropped flags (each flag once, without the
+standard it was probed under, absolute paths as `<path>`, the first 60
+and a count of the rest). `--report <page>` splices it
+between `<!-- gxx-dg:begin ... -->` and `<!-- gxx-dg:end -->`
+(`docs/status/gxx-dg.md`). `--sample <n>` runs n tests evenly spaced over
+the sorted selection, `--filter` selects by id globs (comma-separated), `--list` plans only.
+Each step holds a jobserver token and runs under `--mem-limit` (default
+2048 MiB plus kiln's stack reservation) and `--timeout` (default 60 s per
+compile or link step; `--run-timeout` 10 s per run).
 
 ## Resource limits
 
@@ -2145,6 +2288,17 @@ or infrastructure error. Parse errors name their line.
   `torture_eval_before_compile`); the result classes and cluster keys;
   the option parser, planning and skip collapsing, the TSV, the summary and
   its splice; flag units. All on inline text, so `ci` needs no checkout.
+- `xtask/src/gcc_tests/{expect,gxx}.rs` (WP-1443): "The g++.dg runner":
+  line references (`.`, `.-N`, `.+N`, 0), expectation selectors (`target`,
+  `xfail`, `c++NN` at the case's standard), `dg-excess-errors` /
+  `dg-prune-output`, the diagnostic reader (line, severity, other files),
+  the judge (rejects-valid, accept-invalid, missed and extra lines,
+  warnings and messages accepting an error); `g++-std-flags` (floors,
+  fill order, `gnu++` with `dg-options`, a test's own `-std=`,
+  `GXX_TESTSUITE_STDS`); case planning (torture option sets and
+  `cxx_default`, modules and input-kind skips, additional sources,
+  `dg-shouldfail`, `dg-final` kinds); the buckets, clusters, summary and
+  TSV; the `c++NN` effective targets.
 
 ## Open questions
 
