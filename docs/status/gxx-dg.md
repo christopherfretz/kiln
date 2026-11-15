@@ -78,6 +78,8 @@ semantics (object-size builtins, `-flifetime-dse`, ICF addresses,
 `__PRETTY_FUNCTION__` text). The clusters below come first from the 38
 tests that clang passes, then from GCC's own behaviour.
 
+WP-1458 fixed cluster 2 (its 42 tests: 11 → 36 of 106 cases pass; the C++98 runs wait for cluster 1, `init-temp1.C` is an overload-resolution bug).
+
 1. **Exception specifications and `std::unexpected`, C++98 to C++14**
    (about 20 cases, 9 tests). `void f() throw(int) { throw 'c'; }` must call
    the unexpected handler, which may rethrow `std::bad_exception`.

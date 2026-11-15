@@ -7,7 +7,7 @@ use kiln_ast::stmt::{IfKind, StmtKind};
 use kiln_ast::{DeclId, ExprId, StmtId};
 use kiln_llvm::{BinOp, Flags, IntPredicate, TypeId as LTy};
 
-use crate::cleanup::{Depth, JumpDest};
+use crate::cleanup::{Cleanup, Depth, JumpDest, Kind};
 use crate::coverage::pgo::Key;
 use crate::fir::{Blk, Op, V};
 use crate::func::{Jump, RetKind, SwitchCtx};
@@ -20,6 +20,8 @@ pub(crate) struct Scope {
     le: usize,
     /// The `CleanupDeactivationScope`'s `OldDeactivateCleanupStackSize`.
     deferred: usize,
+    /// The length of `Cleanups::extended_done` at entry.
+    extended_done: usize,
     lexical: bool,
     /// The enclosing `CurrentCleanupScopeDepth`.
     old_cur: Depth,
@@ -65,6 +67,7 @@ impl Cg<'_> {
             depth,
             le: self.f.cl.lifetime_extended.len(),
             deferred: self.f.cl.deferred.len(),
+            extended_done: self.f.cl.extended_done.len(),
             lexical,
             old_cur,
             old_stack_save,
@@ -85,11 +88,41 @@ impl Cg<'_> {
         self.end_scope_reload(s, &mut []);
     }
 
+    /// [`Cg::end_scope`] of a full-expression (or an element's
+    /// initialization) that has just completed `obj` (destroyed by that
+    /// cleanup): while the scope's temporaries are destroyed, a
+    /// destructor that throws first destroys `obj` and the
+    /// lifetime-extended temporaries of the scope ([except.ctor]/2,
+    /// [`crate::cleanup::Guard`]). Nothing changes unless one of those
+    /// destructors may throw.
+    pub(crate) fn end_scope_guarded(&mut self, s: Scope, obj: Option<Cleanup>) {
+        self.end_scope_with(s, &mut [], obj);
+    }
+
+    /// Takes the pending [`crate::cleanup::Guard`] object of an
+    /// initializer whose top-level full-expression initializes `dest`.
+    pub(crate) fn take_pending_guard(&mut self, dest: V) -> Option<Cleanup> {
+        match self.f.cl.pending_guard.take() {
+            Some((a, c)) if a == dest => Some(c),
+            other => {
+                self.f.cl.pending_guard = other;
+                None
+            }
+        }
+    }
+
     /// `ForceCleanup(ValuesToReload)`: [`Cg::end_scope`], keeping the
     /// values in `reload` usable at the insertion point when the popped
     /// cleanups are shared with a branch out of the scope (a `co_await`
     /// suspension's destroy path, a statement expression's jump).
     pub(crate) fn end_scope_reload(&mut self, s: Scope, reload: &mut [&mut V]) {
+        self.end_scope_with(s, reload, None);
+    }
+
+    /// The body of [`Cg::end_scope_reload`] and
+    /// [`Cg::end_scope_guarded`].
+    fn end_scope_with(&mut self, s: Scope, reload: &mut [&mut V], obj: Option<Cleanup>) {
+        let base = s.depth;
         // ~LexicalScope: the block ends, then the cleanups run at its end.
         let dbg = s.dbg_end.and_then(|end| {
             self.dbg_block_end(true, end);
@@ -97,7 +130,21 @@ impl Cg<'_> {
         });
         let labels = if s.lexical { self.f.lex_labels.pop() } else { None };
         self.deactivate_deferred(s.deferred);
+        // The lifetime-extended temporaries and `obj` are complete: guard
+        // them while the scope's other cleanups run.
+        let mut objs: Vec<Cleanup> = self.f.cl.extended_done.drain(s.extended_done..).collect();
+        objs.extend(obj);
+        let guarded = !objs.is_empty() && self.opts.exceptions && self.scope_may_throw(base);
+        if guarded {
+            for obj in objs {
+                let g = crate::cleanup::Guard { base, top: usize::MAX, obj, flag: None };
+                self.f.cl.guards.push(g);
+            }
+        }
         self.pop_cleanup_blocks_le_reload(s.depth, s.le, reload);
+        if guarded {
+            self.f.cl.guards.retain(|g| g.base < base);
+        }
         self.dbg_restore(dbg);
         self.f.cl.cur_scope = s.old_cur;
         self.f.did_stack_save = s.old_stack_save;
@@ -482,13 +529,62 @@ impl Cg<'_> {
                 let t = V::C(self.m.const_bool(true));
                 self.store(t, flag, 1, false);
             }
+            if let Some(q) = ast.decls.get(v).ty() {
+                self.guard_return_value(q);
+            }
         } else if let Some(e) = rv {
             self.store_return_value(e)?;
+            self.guard_return_value(ast.exprs.get(e).ty());
         }
         self.end_scope(sc);
         let rd = self.f.ret_dest.expect("set by the prologue");
         self.branch_through_cleanup(rd);
         Ok(())
+    }
+
+    /// CWG2176 ([except.ctor]/2): once a return statement has
+    /// initialized the returned object (of type `q`, a class; or named it,
+    /// for a named return value), a destructor of a temporary or a local
+    /// that throws before the function returns destroys it first. A
+    /// function-wide flagged [`crate::cleanup::Guard`], set here; only
+    /// when a cleanup still to run may throw.
+    fn guard_return_value(&mut self, q: kiln_ast::QualType) {
+        if !self.opts.exceptions || self.f.ret_kind != RetKind::Sret {
+            return;
+        }
+        let Some(slot) = self.f.ret_slot else { return };
+        let Some(obj) = self.destroy_cleanup(slot, q) else { return };
+        // A named return value's own EH cleanup already covers the
+        // cleanups pushed after it.
+        let top = self
+            .f
+            .cl
+            .stack
+            .iter()
+            .position(|s| {
+                matches!(&s.kind, Kind::Cleanup(Cleanup::NrvoDtor { addr, .. }) if *addr == slot.v)
+            })
+            .map_or(usize::MAX, |i| i + 1);
+        let guarded = self.f.cl.stack.iter().enumerate().any(|(i, s)| {
+            i + 1 < top
+                && s.normal
+                && s.active
+                && matches!(&s.kind, Kind::Cleanup(c) if self.cleanup_may_throw(c))
+        });
+        if !guarded {
+            return;
+        }
+        let flag = self.f.fir.alloca(LTy::I1, 1);
+        let V::I(i) = flag else { return };
+        let f0 = V::C(self.m.const_bool(false));
+        self.f.fir.insert_after(
+            i,
+            Op::Store { val: f0, ptr: flag, mem: crate::func::mem(1, false) },
+            LTy::VOID,
+        );
+        let t = V::C(self.m.const_bool(true));
+        self.store(t, flag, 1, false);
+        self.f.cl.guards.push(crate::cleanup::Guard { base: 0, top, obj, flag: Some(flag) });
     }
 
     /// Evaluates the returned expression `e` into the return slot

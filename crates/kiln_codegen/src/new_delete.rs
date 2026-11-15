@@ -1423,6 +1423,15 @@ impl Cg<'_> {
                     let off = self.load(LTy::I64, op, 8, false);
                     let complete = self.gep(LTy::I8, p, vec![off], true);
                     let fp = self.virtual_fn_ptr(dtor, Some(mangle::Structor::Complete), p, al)?;
+                    if self.dtor_may_throw(def) {
+                        // [expr.delete]/7: deallocated even if the
+                        // destructor throws (the `CallObjectDelete` cleanup).
+                        let c = Cleanup::DtorDelete { op_delete: od, ptr: complete, ty: dt };
+                        self.push_cleanup(c);
+                        self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
+                        self.pop_cleanup_block(false);
+                        return Ok(true);
+                    }
                     self.call_vals(&sig, fp, None, Some(p), &[], &[], None, &[])?;
                     self.emit_delete_call(od, complete, dt, loc)?;
                     return Ok(true);
@@ -1440,6 +1449,16 @@ impl Cg<'_> {
         let first = ast.first(dtor);
         let fty = ast.decls.get(first).ty().expect("destructor type");
         let sig = self.call_sig_this(fty, false, &[], Some(dclass));
+        if self.dtor_may_throw(def)
+            && let Some(od) = ast.exprs.operator_delete(e)
+        {
+            // [expr.delete]/7: the deallocation function is called even if
+            // the destructor throws (clang's `CallObjectDelete` cleanup).
+            self.push_cleanup(Cleanup::DtorDelete { op_delete: od, ptr: p, ty: dt });
+            self.call_vals(&sig, callee, fid, Some(p), &[], &[], None, &[])?;
+            self.pop_cleanup_block(false);
+            return Ok(true);
+        }
         self.call_vals(&sig, callee, fid, Some(p), &[], &[], None, &[])?;
         Ok(false)
     }

@@ -1064,7 +1064,16 @@ impl Cg<'_> {
                     let ty = self.record_ty(base);
                     let dest = Addr { v, ty, align: min_align(this.align, off) };
                     let overlap = self.base_may_overlap(rd, base, off);
-                    self.emit_agg_into(ci.init, dest, overlap)?;
+                    if self.opts.exceptions
+                        && ast.exprs.get(ci.init).kind() == ExprKind::ExprWithCleanups
+                        && self.has_nontrivial_dtor(base)
+                    {
+                        let c = Cleanup::BaseOfThis { base, offset: off, virt: false };
+                        self.f.cl.pending_guard = Some((v, c));
+                    }
+                    let r = self.emit_agg_into(ci.init, dest, overlap);
+                    self.f.cl.pending_guard = None;
+                    r?;
                     self.push_base_eh_dtor(base, off, false);
                 }
                 CtorInitKind::VirtualBase => {
@@ -1093,13 +1102,21 @@ impl Cg<'_> {
                 CtorInitKind::Delegating => {
                     self.flush_memcpy_run(d, &mut run)?;
                     let this = self.this_addr();
-                    self.ub_checked(|s| s.emit_agg_into(ci.init, this, false))?;
                     // clang `EmitDelegatingCXXConstructorCall`: once the
                     // target constructor returns the object is complete
-                    // ([except.ctor]/4), so a throw destroys it.
-                    if self.opts.exceptions && self.has_nontrivial_dtor(rd) {
+                    // ([except.ctor]/4), so a throw destroys it, also
+                    // one from a temporary of the initializer (WP-1458).
+                    let dtor = (self.opts.exceptions && self.has_nontrivial_dtor(rd)).then(|| {
                         let base = self.f.structor == Some(Structor::Base);
-                        let c = Cleanup::DelegatingDtor { addr: this.v, record: rd, base };
+                        Cleanup::DelegatingDtor { addr: this.v, record: rd, base }
+                    });
+                    if ast.exprs.get(ci.init).kind() == ExprKind::ExprWithCleanups {
+                        self.f.cl.pending_guard = dtor.clone().map(|c| (this.v, c));
+                    }
+                    let r = self.ub_checked(|s| s.emit_agg_into(ci.init, this, false));
+                    self.f.cl.pending_guard = None;
+                    r?;
+                    if let Some(c) = dtor {
                         self.push_cleanup_kind(c, false, true);
                     }
                 }
@@ -1353,7 +1370,10 @@ impl Cg<'_> {
         let addr = lv.addr;
         if self.is_aggregate(fq) {
             let overlap = false;
-            self.ub_checked(|s| s.emit_agg_into(init, addr, overlap))?;
+            self.guard_init(init, addr, fq);
+            let r = self.ub_checked(|s| s.emit_agg_into(init, addr, overlap));
+            self.f.cl.pending_guard = None;
+            r?;
         } else {
             self.init_to_lvalue(init, lv, false)?;
         }
@@ -1738,7 +1758,7 @@ impl Cg<'_> {
             self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
         self.push_cleanup(c.clone());
         let depth = self.f.cl.depth();
-        self.f.cl.deferred.push((depth, dominator));
+        self.f.cl.deferred.push((depth, dominator, true));
         if let Some(flag) = deact_flag {
             self.init_full_expr_cleanup_with_flag(flag);
             self.f.cl.stack[depth - 1].aux.push(flag.v);
@@ -1887,7 +1907,11 @@ impl Cg<'_> {
             self.emit_null_init(at, eq, size)?;
         }
         let r = self.construct_one(e, at, false, checked);
-        self.end_scope(sc);
+        // The element is complete: if a temporary of its initialization
+        // (a default argument) throws on destruction, it is destroyed too.
+        let obj = (self.opts.exceptions && self.has_nontrivial_dtor(ctor_class))
+            .then_some(Cleanup::Dtor { addr: phi, record: ctor_class, base: false });
+        self.end_scope_guarded(sc, obj);
         r?;
         let one = self.i64c(1);
         let next = self.gep(elem, phi, vec![one], true);

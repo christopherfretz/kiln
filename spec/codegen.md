@@ -4340,6 +4340,39 @@ of the declared type (internal), which the finished global replaces
 in place (`retype_global_to_end`), as clang's `GetAddrOfGlobalTemporary`
 (`class.temporary/nsdmi-this-lifetime-extended-run.cpp`).
 
+### Cleanups while an exception is in flight (WP-1458)
+[except.ctor]/2 and CWG2176: when a destructor that may throw (non-trivial,
+not `noexcept`, `-fexceptions`) runs as a normal cleanup at the end of a
+full-expression, every object already complete is destroyed if it throws.
+clang 19/22 lose some of these (the deferred EH cleanups are deactivated, or
+the variable's cleanup is pushed only after its full-expression); kiln
+registers **guards** (`cleanup.rs` `Guard`, `Cleanups::guards`): a complete
+object and the cleanup depths `(base, top)` it covers. When
+`emit_normal_cleanup` runs a cleanup that may throw at a depth inside a
+guard's range, it pushes the guard's object as an EH-only
+`Cleanup::Guard` around the call; shared cleanup code (several branches)
+applies only flagged guards.
+- `end_scope_guarded(scope, obj)`: an aggregate variable, member or base
+  initialized by a full-expression (`guard_init` → `pending_guard`, taken
+  by the `ExprWithCleanups` arm of `agg_visit`), an array element of an
+  init-list filler loop, a constructor loop (`construct_array_n`) and the
+  lifetime-extended temporaries deactivated in the scope
+  (`Cleanups::extended_done`, recorded by `deactivate_deferred`).
+- The return object (`emit_return` → `guard_return_value`, sret only):
+  function-wide, flagged (`alloca i1`, set after the return value is
+  stored, cleared when the guard runs); with NRVO `top` is the
+  `NrvoDtor`'s depth, so the variable's own EH cleanup is not doubled.
+- A delete-expression whose destructor may throw calls `operator delete`
+  in a `DtorDelete` EH cleanup ([expr.delete]/7).
+- Nothing is registered when no active cleanup in the range may throw, so
+  the IR of code without throwing destructors, and all `-fno-exceptions`
+  IR, is unchanged.
+Tests: `except.ctor/run-temporary-dtor-throws-after-init.cpp`,
+`except.ctor/run-return-dtor-throws.cpp`,
+`expr.delete/run-dtor-throws-still-deallocates.cpp`,
+`class.temporary/run-extended-temporary-destroyed-when-later-dtor-throws.cpp`,
+`ext.gnu.stmt.expr/result-destroyed-after-own-temporaries-run.cpp`.
+
 ### no-builtin (WP-808)
 `-fno-builtin` / `-ffreestanding` (`CodegenOptions::no_builtin`, clang
 `LangOpts.NoBuiltin`), `-fno-builtin-<name>`
