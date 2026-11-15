@@ -342,7 +342,9 @@ fn spawn_reader(child: &mut Child, stdout: bool) -> thread::JoinHandle<Vec<u8>> 
 ///
 /// A step that ended because xtask is being interrupted does not return:
 /// the calling thread waits for the signal thread to finish returning the
-/// jobserver tokens and end the process, instead of racing it to `exit`.
+/// jobserver tokens and end the process, instead of racing it to `exit`
+/// ([`crate::jobs::exit_interrupted`], which ends the process itself should
+/// the signal thread not do it in time).
 pub fn run_step(cmd: &mut Command, tee: bool) -> io::Result<(ExitStatus, String)> {
     run_step_hiding(cmd, tee, None)
 }
@@ -358,9 +360,7 @@ pub fn run_step_hiding(
     let table = crate::jobs::signals_caught().then_some(&LIVE);
     let r = run_step_in(table, cmd, tee, hide);
     if table.is_some_and(|t| t.lock().shutdown) {
-        loop {
-            thread::park();
-        }
+        crate::jobs::exit_interrupted();
     }
     r
 }
@@ -598,7 +598,7 @@ enum Stop {
 }
 
 /// How long a [`Stop::Term`] group gets after `SIGTERM` before `SIGKILL`.
-const TERM_GRACE: Duration = Duration::from_secs(3);
+pub const TERM_GRACE: Duration = Duration::from_secs(3);
 
 /// A spawn in flight: counted so that a shutdown waits for (and kills) a
 /// child whose pid is not known yet. Always ended by [`Spawning::spawned`]
@@ -709,11 +709,27 @@ impl Drop for LiveChild<'_> {
 /// Kills (`SIGKILL`, by process group) every child started by [`run`],
 /// [`run_with_input`] or [`run_measured`] that is still running, stops
 /// every [`run_step`] cargo step (`SIGTERM`, then `SIGKILL` after
-/// [`TERM_GRACE`]), waits up to `grace` for their reaping, and makes every
+/// `term_grace`), waits up to `grace` for their reaping, and makes every
 /// later spawn fail. Called once, by the SIGINT/SIGTERM thread, before the
 /// jobserver tokens are returned. Returns how many children were stopped.
-pub fn kill_live_children(grace: Duration) -> usize {
-    LIVE.shutdown(grace, TERM_GRACE)
+pub fn kill_live_children(grace: Duration, term_grace: Duration) -> usize {
+    LIVE.shutdown(grace, term_grace)
+}
+
+/// `SIGKILL` to every live child's group, without waiting for anything, and
+/// every later spawn fails: a second signal during [`kill_live_children`],
+/// or its time bound (the process ends right after). Skipped if the table
+/// is locked (by a cleanup stuck while holding it).
+pub fn kill_live_children_now() {
+    let mut st = match LIVE.state.try_lock() {
+        Ok(st) => st,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    st.shutdown = true;
+    for &(pid, _) in &st.pids {
+        kill_group(pid);
+    }
 }
 
 #[cfg(unix)]

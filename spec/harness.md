@@ -1484,7 +1484,7 @@ it runs alongside:
   in-flight children; the pool can only lower the effective parallelism.
 - **Release.** Tokens are released by `Drop`: on a normal exit, an error
   return, a worker panic, and a child killed by the memory cap or a timeout.
-- **Signals (WP-157, WP-163, WP-434).** xtask catches **SIGINT and SIGTERM** on a
+- **Signals (WP-157, WP-163, WP-434, WP-1436).** xtask catches **SIGINT and SIGTERM** on a
   dedicated thread (the `signal-hook` crate), with or without a pool. The
   thread starts with the first child. The handler's `unsafe` stays inside
   that dependency, so xtask remains `forbid(unsafe_code)`. On either signal:
@@ -1502,23 +1502,62 @@ it runs alongside:
        is still alive. Cargo is a jobserver client of its own and holds no
        xtask token, so tokens that cargo still held when it died are lost
        until `cargo xtask jobserver refill`. The thread that ran the step
-       then parks and leaves the exit to the signal thread.
+       then waits and leaves the exit to the signal thread (see "Always
+       exits" below).
      - The thread then waits until each child is reaped and no spawn is in
        flight. It waits at most 10 s, for a child in uninterruptible sleep.
      - A child whose spawn was in flight is killed as it registers.
      - From then on, every new spawn fails with `Interrupted`, so a worker
        that sees its test die cannot start the next one.
-     - stderr says `xtask: signal N: killed K child process(es)`.
   2. Every pool byte the process still holds (by live tokens, or already
      read for waiting workers) is written back to the fifo. This happens
      only after step 1, so an orphan never runs on a returned token. Tokens
      whose children were reaped in step 1 went back through their normal
-     `Drop`.
+     `Drop`. The jobserver helper thread reads no more bytes from then on;
+     a read it had in flight puts its byte straight back, and the cleanup
+     waits up to 200 ms for that before going on.
   3. Later token drops return nothing, and new acquisitions are free. Each
      token is therefore returned exactly once.
-  4. The signal's default action ends the process (falling back to exit
-     status 128 + signal). stderr says `xtask: signal N: returned K
-     jobserver token(s)`.
+  4. stderr says `xtask: signal N: killed K child process(es)` and `xtask:
+     signal N: returned K jobserver token(s)` (each only when K > 0). These
+     lines are written after steps 1 and 2 and ignore write errors, so
+     neither a stderr pipe whose reader is gone (EPIPE) nor a full one can
+     stop the cleanup.
+  5. The signal's default action ends the process, so the parent sees it
+     killed by that signal (if that cannot be emulated, `_exit` with status
+     128 + signal, without exit handlers).
+
+  **Always exits (WP-1436).** Steps 1 to 4 run on a cleanup thread of their
+  own; the signal thread only watches it, and nothing on the signal thread
+  can panic. The process ends in every case:
+  - when the cleanup is done, or when it panicked;
+  - **15 s after the signal at the latest**, whatever the cleanup is stuck
+    on: every live child group then gets `SIGKILL`, the held tokens are
+    returned, and stderr says `xtask: signal N: cleanup still running after
+    15.0s; exiting anyway`;
+  - **at once on a second SIGINT or SIGTERM** that arrives 0.5 s or more
+    after the first (one within 0.5 s is the same interruption delivered
+    twice: `timeout(1)` signals its child and then its process group):
+    every live child group gets `SIGKILL`, the held tokens are returned,
+    stderr says `xtask: signal N: exiting without waiting for cleanup`, and
+    the second signal's default action ends the process.
+
+  No other thread can end the process first or wait forever: a cargo step
+  that ended because of the signal, `main` once its command returns, and a
+  thread that panics during the cleanup (typically on the dead stderr pipe)
+  all wait for the signal thread, and end the process themselves with the
+  signal's default action should it not have done so 20 s after they
+  started waiting. So an interrupted run never exits with its command's own
+  status (or 101 for a panic) before its children are reaped and its tokens
+  returned.
+
+  The hang this fixes: the message of step 4 used `eprintln!`, which
+  panics on EPIPE. With xtask's stderr a pipe whose reader had died (the
+  caller's shell or `| tail` killed together with xtask), the panic ended
+  the signal thread before step 5, and the thread that had run the
+  interrupted cargo step waited for it forever: one thread, asleep in
+  `thread::park`, SIGTERM still caught, a second SIGTERM swallowed by the
+  dead thread's handler.
 
   The memory cap and the timeout are unchanged: they kill one child's group
   and leave the table to its normal reap. Not covered are the helper `git`
@@ -1745,7 +1784,12 @@ the groups always cover the workspace. It needs `unit` selected and not
 `--oracle-only` (usage error otherwise). `ci_tests` checks the groups are
 disjoint packages that exist, and that `.github/workflows/ci-lane.yml`'s
 unit matrix lists every group. Each selected step prints its time
-(`xtask ci: unit: done in 61.2s`, `xtask ci: kiln built in 48.0s`).
+(`xtask ci: unit: done in 61.2s`, `xtask ci: kiln built in 48.0s`), and
+so does each cargo command of a step when it ends (WP-1436): `xtask ci:
+cargo <args>: ok in 12.3s`, or on failure `xtask ci: failed with <exit
+status> in 12.3s`. Each corpus run's line ends with its own time (`... N
+tests in 123.45s`). The last line of every `ci` run that is not
+interrupted, passed or failed, is the total: `xtask ci: total: 1234.5s`.
 
 **`--oracle-only`** (WP-488) is the second oracle's gate: GitHub CI runs
 `KILN_ORACLE=19 cargo xtask ci --quick --oracle-only` after `cargo xtask
@@ -2176,6 +2220,18 @@ or infrastructure error. Parse errors name their line.
   within pool + implicit token with every byte returned
   (`bounds_concurrency_by_pool_plus_implicit`), a freed implicit token
   wakes a waiter, and a panicking holder returns its token.
+- `xtask/src/jobs/signal_tests.rs` (WP-1436, "Jobserver", Signals): each
+  test re-executes the test binary as a probe with a 4-token fifo and `sh`
+  stub children in one phase, sends the signal, and asserts the probe died
+  of it within 60 s, no stub is left running and the pool holds exactly 4
+  tokens again: `sigterm_while_building`, `sigint_while_building`,
+  `sigterm_while_building_with_stderr_reader_gone` (the WP-1436 hang),
+  `sigterm_during_ci_step`, `sigint_during_ci_step_with_stderr_reader_gone`,
+  `sigterm_while_tests_run`, `sigint_while_tests_run_with_stderr_reader_gone`,
+  `sigterm_between_spawns`, `second_signal_exits_at_once` (a step ignoring
+  SIGTERM, 60 s limits) and `stuck_cleanup_is_bounded` (the same with a 1 s
+  bound). The limits come from `KILN_XTASK_TEST_SIGNAL_MS`, which only the
+  test build reads. About 1 s in all.
 - `xtask/src/gen_pp.rs`: the generator's options, and idempotent generation
   over a fake header tree.
 - `xtask/src/test/tests.rs`:

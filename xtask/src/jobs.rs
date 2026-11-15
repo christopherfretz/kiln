@@ -22,7 +22,9 @@
 //! back. SIGINT and SIGTERM are caught (by a `signal-hook` thread, so the
 //! `unsafe` of signal handling stays in that dependency): every live child of
 //! `util::process` is killed and reaped, then the held and spare pool bytes
-//! are written back, then the signal's default action ends the process. Only SIGKILL (which no process can catch) or another uncaught
+//! are written back, then the signal's default action ends the process,
+//! always, within a bound, whatever the cleanup or the other threads do
+//! ([`release_on_signal`]). Only SIGKILL (which no process can catch) or another uncaught
 //! fatal signal loses the tokens xtask held, as it would for make or cargo;
 //! `cargo xtask jobserver refill` restores the pool afterwards.
 
@@ -30,8 +32,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 /// The jobserver this process inherited, if any (read from `MAKEFLAGS` once).
 /// The first call also starts the SIGINT/SIGTERM thread (with or without a
@@ -50,7 +53,10 @@ pub fn global() -> &'static Client {
             Client::none()
         })
     });
-    SIGNALS.call_once(|| release_on_signal(client));
+    SIGNALS.call_once(|| {
+        hold_panics_while_interrupted();
+        release_on_signal(client);
+    });
     client
 }
 
@@ -66,52 +72,233 @@ pub fn signals_caught() -> bool {
     SIGNALS_CAUGHT.load(Ordering::SeqCst)
 }
 
-/// How long an interrupted xtask waits for its killed children to be reaped
-/// before returning the tokens anyway (a child in uninterruptible sleep).
-#[cfg(unix)]
-const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+/// The signal that interrupted the process (0: none yet), set by the signal
+/// thread before anything else happens on the signal path.
+static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
 
-/// Starts a thread that, on SIGINT or SIGTERM, kills and reaps every live
-/// child (`util::process::kill_live_children`), then returns every pool byte
-/// the process holds, then ends it with the signal's default action (so the
-/// parent still sees "killed by SIGINT"; exit status 128 + signal if that
-/// cannot be emulated). The tokens go back after the children are dead, so
-/// the pool is never oversubscribed by an orphan, and exactly once.
+/// The interrupting signal, once SIGINT or SIGTERM has arrived.
+pub fn interrupted() -> Option<i32> {
+    match INTERRUPTED.load(Ordering::SeqCst) {
+        0 => None,
+        s => Some(s),
+    }
+}
+
+/// The time limits of the signal path (`spec/harness.md` "Jobserver",
+/// Signals). The test binary can stretch or shrink them through
+/// `KILN_XTASK_TEST_SIGNAL_MS=<reap>,<term>,<bound>` (milliseconds), so the
+/// tests can hold a phase open without sleeping; release builds never read it.
+#[derive(Clone, Copy, Debug)]
+struct Limits {
+    /// How long the cleanup waits for its killed children to be reaped
+    /// before returning the tokens anyway (a child in uninterruptible sleep).
+    reap: Duration,
+    /// How long a cargo step gets after `SIGTERM` before `SIGKILL`.
+    term: Duration,
+    /// How long the whole cleanup may take before the process ends anyway
+    /// (a cleanup blocked on a full stderr pipe, a lock, a stuck child).
+    bound: Duration,
+}
+
+fn limits() -> Limits {
+    let default = Limits {
+        reap: Duration::from_secs(10),
+        term: crate::util::process::TERM_GRACE,
+        bound: Duration::from_secs(15),
+    };
+    #[cfg(test)]
+    if let Ok(v) = std::env::var("KILN_XTASK_TEST_SIGNAL_MS") {
+        let ms: Vec<u64> = v.split(',').filter_map(|s| s.parse().ok()).collect();
+        if let [reap, term, bound] = ms[..] {
+            return Limits {
+                reap: Duration::from_millis(reap),
+                term: Duration::from_millis(term),
+                bound: Duration::from_millis(bound),
+            };
+        }
+    }
+    default
+}
+
+/// A signal this soon after the first is the same interruption delivered
+/// twice (`timeout(1)` signals its child and then its whole process group),
+/// not a second request.
+const DUPLICATE_WINDOW: Duration = Duration::from_millis(500);
+
+/// Starts the signal thread (`spec/harness.md` "Jobserver", Signals). On the
+/// first SIGINT or SIGTERM it records the signal and starts the cleanup on
+/// a thread of its own: kill and reap every live child
+/// (`util::process::kill_live_children`), then return every pool byte the
+/// process holds (after the children are dead, so the pool is never
+/// oversubscribed by an orphan, and exactly once), then report both on
+/// stderr. Whatever the cleanup does (finishes, panics, blocks on a full
+/// stderr pipe or a stuck child), the signal thread ends the process with
+/// the signal's default action once it is over or after [`Limits::bound`]
+/// (exit status 128 + signal if that cannot be emulated). A second signal
+/// during the cleanup ends the process at once, after `SIGKILL` to every live
+/// child group. Nothing on this thread can panic: its messages ignore write
+/// errors (stderr may be a pipe whose reader is gone, which is how WP-1436's
+/// hang happened: the message panicked, the thread died, and the main thread
+/// waited for it forever).
 #[cfg(unix)]
 fn release_on_signal(client: &'static Client) {
     use signal_hook::consts::{SIGINT, SIGTERM};
     let mut signals = match signal_hook::iterator::Signals::new([SIGINT, SIGTERM]) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            say(format_args!(
                 "xtask: warning: cannot catch SIGINT/SIGTERM ({e}); an interrupted run \
                  will neither kill its children nor return its jobserver tokens"
-            );
+            ));
             return;
         }
     };
-    let spawned = std::thread::Builder::new().name("jobserver-signals".into()).spawn(move || {
-        if let Some(sig) = signals.forever().next() {
-            let killed = crate::util::process::kill_live_children(SHUTDOWN_GRACE);
+    let spawned = std::thread::Builder::new().name(SIGNAL_THREAD.into()).spawn(move || {
+        // `forever` only ends when the handle is closed, which nothing does.
+        let Some(sig) = signals.forever().next() else { return };
+        INTERRUPTED.store(sig, Ordering::SeqCst);
+        let limits = limits();
+        let start = Instant::now();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let cleanup = move || {
+            let killed = crate::util::process::kill_live_children(limits.reap, limits.term);
+            let returned = client.release_all();
             if killed > 0 {
-                eprintln!("xtask: signal {sig}: killed {killed} child process(es)");
+                say(format_args!("xtask: signal {sig}: killed {killed} child process(es)"));
             }
-            let n = client.release_all();
-            if n > 0 {
-                eprintln!("xtask: signal {sig}: returned {n} jobserver token(s)");
+            if returned > 0 {
+                say(format_args!("xtask: signal {sig}: returned {returned} jobserver token(s)"));
             }
-            let _ = signal_hook::low_level::emulate_default_handler(sig);
-            std::process::exit(128 + sig);
+            let _ = tx.send(());
+        };
+        let worker = std::thread::Builder::new().name(CLEANUP_THREAD.into());
+        if let Err(e) = worker.spawn(cleanup) {
+            // No thread for it: the cleanup runs here, unbounded but
+            // panic-free; the main thread's own deadline still holds.
+            let _ = crate::util::process::kill_live_children(limits.reap, limits.term);
+            client.release_all();
+            say_bounded(format!("xtask: warning: cannot start the cleanup thread ({e})"));
+            die(sig);
         }
+        loop {
+            match rx.recv_timeout(Duration::from_millis(50)) {
+                // Done, or the cleanup panicked (its sender is gone).
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if start.elapsed() >= limits.bound {
+                crate::util::process::kill_live_children_now();
+                client.release_all();
+                say_bounded(format!(
+                    "xtask: signal {sig}: cleanup still running after {:.1}s; exiting anyway",
+                    limits.bound.as_secs_f64()
+                ));
+                break;
+            }
+            if let Some(again) = signals.pending().next()
+                && start.elapsed() >= DUPLICATE_WINDOW
+            {
+                crate::util::process::kill_live_children_now();
+                client.release_all();
+                say_bounded(format!("xtask: signal {again}: exiting without waiting for cleanup"));
+                die(again);
+            }
+        }
+        die(sig);
     });
     match spawned {
         Ok(_) => SIGNALS_CAUGHT.store(true, Ordering::SeqCst),
-        Err(e) => eprintln!("xtask: warning: cannot start the jobserver signal thread ({e})"),
+        Err(e) => {
+            say(format_args!("xtask: warning: cannot start the jobserver signal thread ({e})"));
+        }
     }
 }
 
 #[cfg(not(unix))]
 fn release_on_signal(_: &'static Client) {}
+
+/// The names of the threads of the signal path.
+const SIGNAL_THREAD: &str = "jobserver-signals";
+const CLEANUP_THREAD: &str = "jobserver-cleanup";
+
+/// One line on stderr that never panics: on the signal path stderr may be a
+/// pipe whose reader is gone (EPIPE), where `eprintln!` panics.
+fn say(args: std::fmt::Arguments<'_>) {
+    let _ = writeln!(std::io::stderr(), "{args}");
+}
+
+/// [`say`] on a thread of its own, waiting for it at most 100 ms: the
+/// signal thread must not block on a full stderr pipe.
+fn say_bounded(line: String) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().spawn(move || {
+        say(format_args!("{line}"));
+        let _ = tx.send(());
+    });
+    if spawned.is_ok() {
+        let _ = rx.recv_timeout(Duration::from_millis(100));
+    }
+}
+
+/// Ends the process as `sig` would by default (so the parent sees "killed
+/// by SIGTERM"); if that does not end it, `_exit(128 + sig)` without running
+/// exit handlers, which `std::process::exit` would do and which can block
+/// behind another thread's exit.
+#[cfg(unix)]
+fn die(sig: i32) -> ! {
+    let _ = signal_hook::low_level::emulate_default_handler(sig);
+    signal_hook::low_level::exit(128 + sig)
+}
+
+#[cfg(not(unix))]
+fn die(sig: i32) -> ! {
+    std::process::exit(128 + sig)
+}
+
+/// For a thread that finds the process interrupted ([`interrupted`]): waits
+/// for the signal thread to end the process, and ends it itself if that has
+/// not happened well after [`Limits::bound`], so no thread is left waiting
+/// forever. The cargo steps of `util::process::run_step`, `main` once a
+/// command returns, and a thread panicking during the cleanup (its panic
+/// message would mostly be the dead stderr pipe) end here.
+pub fn exit_interrupted() -> ! {
+    let deadline = Instant::now() + limits().bound + Duration::from_secs(5);
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            break;
+        }
+        std::thread::park_timeout(deadline - now);
+    }
+    die(interrupted().unwrap_or(15))
+}
+
+/// `main`'s exit: `code`, unless the process is being interrupted, in which
+/// case the signal thread ends it (with the signal's status, after the
+/// cleanup) instead of `main` racing it to `exit`.
+pub fn finish(code: ExitCode) -> ExitCode {
+    if interrupted().is_some() {
+        exit_interrupted();
+    }
+    code
+}
+
+/// Makes a panic of any other thread during the cleanup wait for the
+/// process to end ([`exit_interrupted`]) instead of unwinding into `main`,
+/// which would exit with 101 before the children are reaped and the tokens
+/// returned. Outside an interruption the previous hook runs as before.
+fn hold_panics_while_interrupted() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let own = std::thread::current()
+            .name()
+            .is_some_and(|n| n == SIGNAL_THREAD || n == CLEANUP_THREAD);
+        if interrupted().is_some() && !own {
+            exit_interrupted();
+        }
+        previous(info);
+    }));
+}
 
 /// The fifo of the last `--jobserver-auth=` word of `MAKEFLAGS` when it is
 /// the `fifo:<path>` form (make passes the last one as authoritative).
@@ -161,6 +348,9 @@ struct State {
     /// [`Client::release_all`] ran: every byte went back, so tokens dropped
     /// later return nothing and new ones are free (the process is exiting).
     released: bool,
+    /// The helper is in (or just back from) a `read` of the fifo, so it may
+    /// hold a byte nobody has accounted for yet.
+    reading: bool,
 }
 
 /// A held parallelism slot; dropping it releases it.
@@ -204,6 +394,7 @@ impl Client {
             broken: false,
             held: Vec::new(),
             released: false,
+            reading: false,
         };
         Ok(Self {
             pool: Some(Arc::new(Pool {
@@ -291,6 +482,19 @@ impl Client {
         for &b in &bytes {
             pool.give_back(b);
         }
+        // The helper may be blocked in `read`, and the bytes just written
+        // back wake it: the one it takes goes straight back too, but only
+        // if the process lives that long. Wait (briefly: with an empty pool
+        // it stays blocked) until it has.
+        let deadline = Instant::now() + HELPER_SETTLE;
+        let mut st = pool.lock();
+        while st.reading {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            st = pool.workers.wait_timeout(st, left).unwrap_or_else(PoisonError::into_inner).0;
+        }
         bytes.len()
     }
 }
@@ -313,28 +517,36 @@ impl Pool {
     }
 }
 
+/// How long [`Client::release_all`] waits for a helper `read` in flight to
+/// put back the byte it may have taken.
+const HELPER_SETTLE: Duration = Duration::from_millis(200);
+
 /// Reads one pool byte per request; a byte nobody waits for any more goes
-/// straight back to the pool.
+/// straight back to the pool. After [`Client::release_all`] it reads no more.
 fn helper(pool: &Pool) {
     loop {
         {
             let mut st = pool.lock();
-            while st.requested == 0 {
+            while st.requested == 0 || st.released {
                 st = pool.helper.wait(st).unwrap_or_else(PoisonError::into_inner);
             }
+            st.reading = true;
         }
         let mut byte = [0u8; 1];
         let r = (&pool.fifo).read_exact(&mut byte);
         let mut st = pool.lock();
         st.requested = st.requested.saturating_sub(1);
+        st.reading = false;
         match r {
             Ok(()) if st.waiters > st.spare.len() && !st.released => {
                 st.spare.push(byte[0]);
                 pool.workers.notify_all();
             }
             Ok(()) => {
-                drop(st);
+                // Under the lock, so `release_all` sees `reading` clear only
+                // once the byte is back.
                 pool.give_back(byte[0]);
+                pool.workers.notify_all();
             }
             Err(e) => {
                 eprintln!(
@@ -756,3 +968,8 @@ mod tests {
         assert_eq!(idle(&path, 1), 1);
     }
 }
+
+/// SIGINT/SIGTERM delivered to a real (re-executed) process at each phase
+/// (WP-1436).
+#[cfg(all(test, target_os = "linux"))]
+mod signal_tests;
