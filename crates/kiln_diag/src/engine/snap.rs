@@ -23,7 +23,7 @@
 //! | `fatal` | transient, at rest | must be false: a snapshot after a fatal error is refused |
 //! | `holding`, `held`, `held_counts` | transient, at rest | must be 0, empty, 0: a snapshot inside a [`DiagEngine::hold`] is refused |
 
-use std::collections::HashSet;
+use kiln_source::fx::FxHashSet;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
 
@@ -160,7 +160,7 @@ impl DiagEngine<'_> {
         if !fresh {
             return Err(r.invalid::<Self>("restore into a used diagnostics engine"));
         }
-        let seen: HashSet<(DiagId, Span, u64)> = at("DiagEngine.seen", r.get())?;
+        let seen: FxHashSet<(DiagId, Span, u64)> = at("DiagEngine.seen", r.get())?;
         let pragmas: Pragmas = at("DiagEngine.pragmas", r.get())?;
         if let Err(why) = pragmas.check() {
             return Err(r.invalid::<Self>(why).within("DiagEngine.pragmas"));
@@ -195,18 +195,18 @@ impl DiagEngine<'_> {
     /// [`Self::snap_put`] writes) and those of the types it encodes.
     /// The constant schema hash of the root ([`Self::snap_schema`]).
     pub const SNAP_SCHEMA_HASH: u64 = SchemaHash::new("configured root", "DiagEngine")
-        .field::<HashSet<(DiagId, Span, u64)>>("seen")
+        .field::<FxHashSet<(DiagId, Span, u64)>>("seen")
         .field::<Pragmas>("pragmas")
         .field::<u32>("prefix_reported")
         .finish();
     pub fn snap_schema(s: &mut Schema) {
         let d = Desc::new("configured root")
             .hash(Self::SNAP_SCHEMA_HASH)
-            .field::<HashSet<(DiagId, Span, u64)>>("seen")
+            .field::<FxHashSet<(DiagId, Span, u64)>>("seen")
             .field::<Pragmas>("pragmas")
             .field::<u32>("prefix_reported");
         if s.register::<DiagEngine<'static>>(d) {
-            HashSet::<(DiagId, Span, u64)>::schema(s);
+            FxHashSet::<(DiagId, Span, u64)>::schema(s);
             Pragmas::schema(s);
         }
     }

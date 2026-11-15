@@ -653,7 +653,7 @@ pub struct Sema<'a, 'sm> {
     pub(crate) declarator_records: Vec<(DeclId, usize, DeclId)>,
     /// Parameters created by [`Sema::act_on_prototype_param`] that no
     /// function has adopted yet ([`Sema::create_params`]).
-    pub(crate) unowned_params: std::collections::HashSet<DeclId>,
+    pub(crate) unowned_params: kiln_source::fx::FxHashSet<DeclId>,
     /// The requires-expression parameter-declaration-clauses being parsed
     /// ([`Sema::act_on_start_requires_params`]), prototype scopes for
     /// `ParamData::scope_depth` alongside `prototype_params`.
@@ -661,10 +661,10 @@ pub struct Sema<'a, 'sm> {
     /// The declared type (`cv auto`, `auto &`, `auto &&`) of each
     /// decomposition declared in a template, which instantiation
     /// deduces anew (the pattern's own may be deduced, spec/sema.md).
-    pub(crate) decomp_written: std::collections::HashMap<DeclId, QualType>,
+    pub(crate) decomp_written: kiln_source::fx::FxHashMap<DeclId, QualType>,
     /// The structured binding packs `...xs` declared so far (P1061,
     /// spec/sema.md §4.9).
-    pub(crate) binding_packs: std::collections::HashSet<DeclId>,
+    pub(crate) binding_packs: kiln_source::fx::FxHashSet<DeclId>,
     /// Constructor parameters that shadow a field, with the field
     /// (clang's `Sema::ShadowingDecls`): `-Wshadow-field-in-constructor`
     /// at the end of the definition unless a modification diagnosed one
@@ -673,12 +673,12 @@ pub struct Sema<'a, 'sm> {
     /// A binding pack decomposed once its element count is known: the
     /// bindings it expanded into, which replace it in its decomposition's
     /// binding list (instantiation maps the pattern pack to them).
-    pub(crate) binding_pack_elems: std::collections::HashMap<DeclId, kiln_ast::ListId>,
+    pub(crate) binding_pack_elems: kiln_source::fx::FxHashMap<DeclId, kiln_ast::ListId>,
     /// clang `RefsMinusAssignments`: per local variable, its references
     /// minus those that are the target of a discarded assignment, and
     /// whether it is a condition variable (clang `isCXXCondDecl`)
     /// (`-Wunused-but-set-variable`, [`Self::diagnose_unused_locals`]).
-    pub(crate) refs_minus_assign: std::collections::HashMap<DeclId, (i32, bool)>,
+    pub(crate) refs_minus_assign: kiln_source::fx::FxHashMap<DeclId, (i32, bool)>,
     /// The preprocessor's attribute-macro history and its generation, as
     /// last copied by [`Self::sync_attr_macros`] (the fix-it spelling of
     /// `-Wimplicit-fallthrough`).
@@ -1489,13 +1489,13 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             braced_args: Vec::new(),
             prototype_params: Vec::new(),
             declarator_records: Vec::new(),
-            unowned_params: std::collections::HashSet::new(),
+            unowned_params: kiln_source::fx::FxHashSet::default(),
             requires_param_scopes: 0,
-            decomp_written: std::collections::HashMap::new(),
-            binding_packs: std::collections::HashSet::new(),
+            decomp_written: kiln_source::fx::FxHashMap::default(),
+            binding_packs: kiln_source::fx::FxHashSet::default(),
             shadow_ctor: Vec::new(),
-            binding_pack_elems: std::collections::HashMap::new(),
-            refs_minus_assign: std::collections::HashMap::new(),
+            binding_pack_elems: kiln_source::fx::FxHashMap::default(),
+            refs_minus_assign: kiln_source::fx::FxHashMap::default(),
             attr_macros: (0, Vec::new()),
             declared_returns: kiln_source::fx::FxHashMap::default(),
             handler_type_locs: kiln_source::fx::FxHashMap::default(),

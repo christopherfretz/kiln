@@ -48,6 +48,7 @@ use super::{
     Alloc, Body, Entry, FILE_SPACE_END, FileEntry, FileKind, FileRange, LazyOutcome, LineDirective,
     MACRO_SPACE_END, Origin, SourceManager, file_key, lock,
 };
+use crate::fx::FxHashMap;
 use crate::hash::content_hash;
 use crate::loc::{FileId, Loc, MACRO_BIT, Span};
 
@@ -214,8 +215,8 @@ impl Snap for SourceManager {
         let expansions: super::AppendVec<Entry> = timed(r, "SourceManager.expansions")?;
         let macro_names = timed(r, "SourceManager.macro_names")?;
         let kinds = timed(r, "SourceManager.kinds")?;
-        let guarded: Mutex<HashMap<FileId, Box<str>>> = timed(r, "SourceManager.guarded")?;
-        let gcc_names: Mutex<HashMap<FileId, Box<str>>> = timed(r, "SourceManager.gcc_names")?;
+        let guarded: Mutex<FxHashMap<FileId, Box<str>>> = timed(r, "SourceManager.guarded")?;
+        let gcc_names: Mutex<FxHashMap<FileId, Box<str>>> = timed(r, "SourceManager.gcc_names")?;
         let alloc: Mutex<Alloc> = timed(r, "SourceManager.alloc")?;
         let sm = SourceManager {
             files,
@@ -250,8 +251,8 @@ impl Snap for SourceManager {
         .field::<super::AppendVec<Entry>>("expansions")
         .field::<super::AppendVec<(Loc, Span)>>("macro_names")
         .field::<RwLock<Vec<(u32, FileKind)>>>("kinds")
-        .field::<Mutex<HashMap<FileId, Box<str>>>>("guarded")
-        .field::<Mutex<HashMap<FileId, Box<str>>>>("gcc_names")
+        .field::<Mutex<FxHashMap<FileId, Box<str>>>>("guarded")
+        .field::<Mutex<FxHashMap<FileId, Box<str>>>>("gcc_names")
         .field::<Mutex<Alloc>>("alloc")
         .finish();
     fn schema(s: &mut Schema) {
@@ -263,8 +264,8 @@ impl Snap for SourceManager {
             .field::<super::AppendVec<Entry>>("expansions")
             .field::<super::AppendVec<(Loc, Span)>>("macro_names")
             .field::<RwLock<Vec<(u32, FileKind)>>>("kinds")
-            .field::<Mutex<HashMap<FileId, Box<str>>>>("guarded")
-            .field::<Mutex<HashMap<FileId, Box<str>>>>("gcc_names")
+            .field::<Mutex<FxHashMap<FileId, Box<str>>>>("guarded")
+            .field::<Mutex<FxHashMap<FileId, Box<str>>>>("gcc_names")
             .field::<Mutex<Alloc>>("alloc");
         if s.register::<Self>(d) {
             super::AppendVec::<Box<str>>::schema(s);
@@ -273,7 +274,7 @@ impl Snap for SourceManager {
             super::AppendVec::<Entry>::schema(s);
             super::AppendVec::<(Loc, Span)>::schema(s);
             RwLock::<Vec<(u32, FileKind)>>::schema(s);
-            Mutex::<HashMap<FileId, Box<str>>>::schema(s);
+            Mutex::<FxHashMap<FileId, Box<str>>>::schema(s);
             Mutex::<Alloc>::schema(s);
         }
     }

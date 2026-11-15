@@ -20,6 +20,7 @@ use kiln_ast::{ConstValueId, DeclId, ExprId, QualType};
 use kiln_diag::DiagId;
 use kiln_oven::{EvalContext, EvalFailure, EvalKind};
 use kiln_source::Loc;
+use kiln_source::fx::FxHashMap;
 
 use crate::Sema;
 use crate::class::CleanupState;
@@ -105,7 +106,7 @@ pub(crate) struct ImmState {
     #[snap(skip)]
     pending: ImmPending,
     /// The escalated functions and why.
-    reasons: HashMap<DeclId, Escalation>,
+    reasons: FxHashMap<DeclId, Escalation>,
     /// The failed immediate invocations of a `constexpr` or `constinit`
     /// variable's initializer, with the variable and the callee, to be
     /// reported after the variable's check; `true` for one of a
@@ -122,7 +123,7 @@ pub(crate) struct ImmState {
     /// values: a trial fold that strips the wrapper (`strip_impcast`)
     /// reads the value instead of evaluating the call
     /// ([`Sema::early_immediate_value`]).
-    early_values: HashMap<ExprId, ConstValueId>,
+    early_values: FxHashMap<ExprId, ConstValueId>,
     /// The default arguments and default member initializers used by
     /// that full-expression outside its immediate invocations, checked
     /// there already (`None`) or, in an immediate-escalating function,
@@ -136,7 +137,7 @@ pub(crate) struct ImmState {
     /// consteval-only leaf is being checked is used: it has no first token
     /// of its own, so it is reported there (clang
     /// `CXXDefaultArgExpr::getUsedLocation`).
-    pub(crate) default_use_locs: HashMap<ExprId, Loc>,
+    pub(crate) default_use_locs: FxHashMap<ExprId, Loc>,
 }
 
 /// The results of the immediate invocations of a default argument or
