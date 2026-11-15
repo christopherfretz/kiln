@@ -459,18 +459,18 @@ impl Sema<'_, '_> {
                         return self.extract_through_ref(r, d, (vt, tc), loc, oven);
                     }
                     if !self.has_static_storage(d) {
-                        return fail(
-                            loc,
-                            format!(
-                                "'{}' is not a variable of static storage duration",
-                                self.reflection_str(r)
-                            ),
-                        );
+                        return self.extract_local(r, d, (vt, tc), loc, oven);
                     }
                     let first = self.ast.first(d);
                     let p = self.object_ptr(vt, PtrBase::Decl(first), 0)?;
                     let konst = self.ast.types.canonical(vt).quals().is_const();
                     self.extract_place(r, p, konst, tc, loc)
+                }
+                DeclKind::ParmVar => {
+                    let Some(vt) = self.ast.decls.get(d).ty() else {
+                        return Err(MetaError::invalid());
+                    };
+                    self.extract_local(r, d, (vt, tc), loc, oven)
                 }
                 DeclKind::Function => self.extract_function(r, d, tc, loc),
                 DeclKind::CXXMethod if self.is_static_method(d) || self.has_explicit_object(d) => {
@@ -512,6 +512,43 @@ impl Sema<'_, '_> {
         let konst = self.ast.types.canonical(obj).quals().is_const();
         let p = self.object_ptr(obj, base, offset)?;
         self.extract_place(r, p, konst, tc, loc)
+    }
+
+    /// `extract<T>` of automatic variable or parameter `d` of type `vt`
+    /// (not a reference): its object, if its lifetime began within the
+    /// running evaluation and has not ended ([meta.reflection.extract],
+    /// [expr.const]/10.9; the Oven finds it in a live frame,
+    /// [`Oven::meta_local`]); a reference to it, or its value.
+    fn extract_local(
+        &mut self,
+        r: ReflectionId,
+        d: DeclId,
+        (vt, tc): (QualType, QualType),
+        loc: Loc,
+        oven: &mut Oven,
+    ) -> Result<MetaOut, MetaError> {
+        let found = (!self.ast.types.is_reference(vt)).then(|| oven.meta_local(d)).flatten();
+        let Some(addr) = found else {
+            return fail(
+                loc,
+                format!(
+                    "'{}' is not a variable of static storage duration, nor one whose lifetime \
+                     began within the evaluation",
+                    self.reflection_str(r)
+                ),
+            );
+        };
+        let t = &self.ast.types;
+        let u = t.canonical(vt);
+        if t.is_reference(tc) {
+            let tt = t.pointee(tc).map_or(QualType::ERROR, |q| t.canonical(q));
+            if self.qual_compatible(u, tt, u.quals().is_const()) {
+                return Ok(MetaOut::Live { addr, by_ref: true });
+            }
+        } else if tc.without_quals() == u.without_quals() && !t.is_array(u) {
+            return Ok(MetaOut::Live { addr, by_ref: false });
+        }
+        self.mismatch(r, tc, loc)
     }
 
     fn not_extractable<T>(&self, r: ReflectionId, loc: Loc) -> Result<T, MetaError> {
@@ -620,10 +657,10 @@ impl Sema<'_, '_> {
         if t.is_pointer(tc) && t.is_array(u) {
             let e = t.element(u).map_or(QualType::ERROR, |q| t.canonical(q));
             let pt = t.pointee(tc).map_or(QualType::ERROR, |q| t.canonical(q));
-            if e.without_quals() == pt.without_quals()
-                && pt.quals().contains(e.quals())
-                && pt.quals().is_const()
-            {
+            // An element that is an array (LWG4483: `const int (*)[3]`
+            // into a `reflect_constant_array` of `int[3][3]`) matches
+            // bound by bound, the qualifiers on its innermost element.
+            if self.qual_compatible(e, pt, true) {
                 // `extract-value<T>(constant_of(r))`: the pointer is into
                 // `reflect_constant_array` of the array's value, not into
                 // the array itself ([meta.reflection.queries] constant_of).

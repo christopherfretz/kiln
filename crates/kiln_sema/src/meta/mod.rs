@@ -9,6 +9,7 @@ mod annot;
 mod define;
 mod ext;
 mod gcc_names;
+mod iterate;
 pub(crate) mod member;
 pub(crate) mod names;
 mod query;
@@ -159,10 +160,14 @@ impl Sema<'_, '_> {
     pub(crate) fn meta_intrinsic_thunk(&mut self, f: DeclId) -> Option<kiln_ast::StmtId> {
         use kiln_ast::expr::{CastKind, ExprFlags, NonOdrUse, ValueCategory};
         use kiln_ast::types::TypeView;
-        self.meta_intrinsic_of(f)?;
+        let op = self.meta_intrinsic_of(f)?;
         let n = *self.ast.decls.get(f);
         if n.kind() != DeclKind::Function {
             return None;
+        }
+        // A range parameter read by iterating it (§3.5).
+        if let Some(body) = self.meta_iter_thunk(f, op) {
+            return body.ok();
         }
         let fty = n.ty()?;
         let loc = n.loc();

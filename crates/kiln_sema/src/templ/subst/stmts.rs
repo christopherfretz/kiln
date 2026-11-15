@@ -645,7 +645,13 @@ impl Substituter<'_, '_, '_> {
             // constant expression: the statement fails, its branches are
             // not instantiated.
             let (var, c) = if kind == IfKind::Constexpr && d.cond_var.is_none() {
-                (None, self.opt_expr(d.cond)?)
+                // Manifestly constant-evaluated, as where it was written
+                // (`has_template_arguments(t) && template_of(t) == ...`
+                // invokes `template_of` only when the left is true).
+                self.sema.enter_constant_evaluated();
+                let c = self.opt_expr(d.cond);
+                self.sema.exit_constant_evaluated(None);
+                (None, c?)
             } else {
                 self.condition(d.cond_var, d.cond, loc)?
             };

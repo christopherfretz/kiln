@@ -254,6 +254,12 @@ impl Sema<'_, '_> {
                 }
                 e
             }
+            // A member of an anonymous union is the union's member
+            // ([class.union.anon]/1), at namespace scope too (`parent_of`).
+            DeclKind::IndirectField => {
+                let chain = self.ast.indirect_field_chain(d);
+                self.ast.lists.iter::<DeclId>(chain).last()?
+            }
             _ => d,
         };
         self.semantic_parent(self.ast.first(d))

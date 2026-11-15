@@ -1914,6 +1914,31 @@ impl Sema<'_, '_> {
         if obj.is_bad() {
             return set.push_non_viable(cand, CandidateFailure::BadConversion { arg: u16::MAX });
         }
+        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
+        let ret =
+            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
+        let explicit = self.fn_spec(f).is_explicit();
+        // [over.match.conv]/1.2, [over.match.copy]/1.2: an explicit
+        // conversion function is a candidate (of a direct-initialization)
+        // only when it yields the target type up to a qualification
+        // conversion (clang `isAllowableExplicitConversion`); in a
+        // copy-initialization it is then "not a candidate".
+        // [over.match.ref]/1.1 has the same rule for the explicit
+        // functions a direct-initialization admits. Decided before its
+        // constraints are checked, as clang does: `view_interface`'s
+        // constrained `explicit operator bool` is never a candidate for a
+        // view's iterator constructor, whose satisfaction would depend on
+        // the view being a range (libstdc++ `cache_latest_view`).
+        if explicit
+            && !self.allowable_explicit_conversion(ret, to)
+            && (!matches!(set.kind, SetKind::ConvToRef { .. })
+                || opts.contains(IcsOptions::ALLOW_EXPLICIT)
+                || self.ast.templates.trailing_requires.get(f).is_some())
+        {
+            self.ovl.stats.candidates -= 1;
+            set.ics.truncate(start as usize);
+            return;
+        }
         if let Some(sat) = self.check_function_constraints(f, set.loc).filter(|&s| !self.sat_ok(s))
         {
             // [over.match.viable]/3: a conversion function whose trailing
@@ -1921,29 +1946,8 @@ impl Sema<'_, '_> {
             // object argument (clang `AddConversionCandidate`).
             return set.push_non_viable(cand, CandidateFailure::ConstraintsNotSatisfied { sat });
         }
-        let fty = self.ast.decls.get(f).ty().unwrap_or(QualType::ERROR);
-        let ret =
-            self.ast.types.proto(fty).map_or(QualType::ERROR, kiln_ast::types::FuncProto::ret);
-        if self.fn_spec(f).is_explicit() {
-            // [over.match.conv]/1.2, [over.match.copy]/1.2: an explicit
-            // conversion function is a candidate (of a direct-
-            // initialization) only when it yields the target type up to
-            // a qualification conversion (clang
-            // `isAllowableExplicitConversion`); in a copy-initialization
-            // it is then "not a candidate". [over.match.ref]/1.1 has the
-            // same rule for the explicit functions a direct-
-            // initialization admits.
-            if (!matches!(set.kind, SetKind::ConvToRef { .. })
-                || opts.contains(IcsOptions::ALLOW_EXPLICIT))
-                && !self.allowable_explicit_conversion(ret, to)
-            {
-                self.ovl.stats.candidates -= 1;
-                set.ics.truncate(start as usize);
-                return;
-            }
-            if !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
-                return set.push_non_viable(cand, CandidateFailure::Explicit);
-            }
+        if explicit && !opts.contains(IcsOptions::ALLOW_EXPLICIT) {
+            return set.push_non_viable(cand, CandidateFailure::Explicit);
         }
         if self.is_trivial_class_conversion(a.ty, to) {
             return set.push_non_viable(cand, CandidateFailure::TrivialConversion);

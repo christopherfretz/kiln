@@ -1878,6 +1878,15 @@ impl Scan<'_> {
                     }
                 }
             }
+            // A reflected local lives in memory: `extract` reads it there
+            // (spec/reflection-values.md §2).
+            ExprKind::CXXReflectExpr => {
+                if let kiln_ast::reflect::Reflectee::Decl(d) = ast.exprs.reflect_operand(e)
+                    && matches!(ast.decls.get(d).kind(), DeclKind::Var | DeclKind::ParmVar)
+                {
+                    self.mem.insert(d);
+                }
+            }
             ExprKind::CompoundAssignOperator => {
                 self.expr(ExprId::new(n.a()), ok);
                 self.expr(ast.exprs.compound_assign(e).rhs, false);
@@ -1888,7 +1897,6 @@ impl Scan<'_> {
             | ExprKind::TypeTraitExpr
             | ExprKind::ArrayTypeTraitExpr
             | ExprKind::ExpressionTraitExpr
-            | ExprKind::CXXReflectExpr
             | ExprKind::ConceptSpecializationExpr
             | ExprKind::RequiresExpr => {}
             ExprKind::CallExpr
@@ -6703,8 +6711,11 @@ impl Compiler<'_> {
         }
         // Reflection intrinsics (WP-267 spike; spec/oven.md "Reflection
         // runtime"): recognized by the bridge, run natively.
+        // A range argument read by iterating it (`Shape::Iter`, §3.5):
+        // an ordinary call, of the body `ensure_body` gives the intrinsic.
         if let Some(d) = direct
             && let Some(op) = self.b.meta_intrinsic(d)
+            && !self.meta_iterates(op, &args)
         {
             return self.meta_call(e, (op, d), &args, sret);
         }
@@ -6900,6 +6911,15 @@ impl Compiler<'_> {
             self.srcloc = Some(e);
         }
         saved
+    }
+
+    /// Whether an argument of a call of intrinsic `op` is a range read by
+    /// iterating it ([`crate::Shape::Iter`]).
+    fn meta_iterates(&mut self, op: crate::MetaOp, args: &[ExprId]) -> bool {
+        args.iter().enumerate().any(|(i, &x)| {
+            let q = self.ast().exprs.get(x).ty();
+            matches!(self.b.meta_shape(op, Some(i), q), Ok(Some(crate::Shape::Iter)))
+        })
     }
 
     /// A call of reflection intrinsic `op` (`bi::META`;
