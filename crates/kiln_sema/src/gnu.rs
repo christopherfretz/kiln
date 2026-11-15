@@ -4,7 +4,7 @@
 
 use kiln_ast::decl::{DeclKind, DefinitionBits};
 pub use kiln_ast::expr::OffsetofComponent;
-use kiln_ast::expr::{ExprKind, ValueCategory};
+use kiln_ast::expr::{ExprKind, OffsetofStep, ValueCategory};
 use kiln_ast::ids::RawId;
 use kiln_ast::names::DeclName;
 use kiln_ast::stmt::StmtKind;
@@ -255,7 +255,8 @@ impl Sema<'_, '_> {
 
     /// `__builtin_offsetof(ty, comps...)` at `loc` (clang
     /// `BuildBuiltinOffsetOf`): a `std::size_t` prvalue holding the byte
-    /// offset of the designated subobject. Indices must be constant.
+    /// offset of the designated subobject; with an index that is not a
+    /// constant, a value computed when it is evaluated (GNU).
     pub fn act_on_builtin_offsetof(
         &mut self,
         loc: Loc,
@@ -281,49 +282,77 @@ impl Sema<'_, '_> {
             return self.builder().dependent_offsetof(st, ty, comps, loc, rparen);
         }
         let mut indices = Vec::new();
+        let mut steps = Vec::new();
         let mut invalid = false;
-        let offset = self.offsetof_value(loc, ty, comps, &mut indices, &mut invalid);
-        let fits = offset.and_then(|v| u32::try_from(v).ok());
-        if offset.is_some() && fits.is_none() {
-            self.unsupported("a '__builtin_offsetof' value outside 0 to 2^32 - 1", loc);
+        if !self.offsetof_steps(loc, ty, comps, &mut indices, &mut steps, &mut invalid) {
+            return self.recover_err(&indices, loc);
         }
-        match fits {
-            Some(v) => {
-                let st = self.size_type();
-                self.builder().offsetof(st, &indices, v, invalid, loc, rparen)
-            }
-            None => self.recover_err(&indices, loc),
+        let st = self.size_type();
+        // Every index a constant: the value is a constant, each index
+        // taken at its true value (an unsigned index zero-extended, a
+        // signed one sign-extended, as the run-time lowering casts it)
+        // and the sum wrapped to `size_t`.
+        let mut total = Some(0u64);
+        for step in &steps {
+            let add = match *step {
+                OffsetofStep::Offset(b) => Some(b),
+                OffsetofStep::Index { index, elem_size } => {
+                    self.fold_int(index).map(|v| (v as u64).wrapping_mul(elem_size))
+                }
+            };
+            total = total.zip(add).map(|(t, a)| t.wrapping_add(a));
+        }
+        let bits = target::size_align(&self.ast, st, &self.abi).map_or(64, |x| x.0 * 8);
+        let total = total.map(|t| if bits < 64 { t & ((1u64 << bits) - 1) } else { t });
+        match total.map(|t| (t, u32::try_from(t))) {
+            Some((_, Ok(v))) => self.builder().offsetof(st, &indices, v, invalid, loc, rparen),
+            // A constant offset past `u32` (or a negative index's wrapped
+            // one) is kept as one step.
+            Some((t, Err(_))) => self.builder().offsetof_steps(
+                st,
+                &indices,
+                &[OffsetofStep::Offset(t)],
+                invalid,
+                loc,
+                rparen,
+            ),
+            // An index that is not a constant: the value is computed when
+            // the expression is evaluated, from clang's `OffsetOfNode`s
+            // (GNU extension: C and C++ accept any integral index).
+            None => self.builder().offsetof_steps(st, &indices, &steps, invalid, loc, rparen),
         }
     }
 
-    /// The offset in bytes `__builtin_offsetof(ty, comps...)` designates,
-    /// or `None` after an error. The converted indices go to `indices`;
-    /// `invalid` is set when the designator passes through an invalid
-    /// class (the value is then not a constant, clang `ExprConstant`).
-    fn offsetof_value(
+    /// The steps of `__builtin_offsetof(ty, comps...)`, one per clang
+    /// `OffsetOfNode` (a base class, a member of an anonymous struct or
+    /// union chain, a member, an array index), or `false` after an
+    /// error. The converted indices go to `indices`; `invalid` is set
+    /// when the designator passes through an invalid class (the value is
+    /// then not a constant, clang `ExprConstant`).
+    fn offsetof_steps(
         &mut self,
         loc: Loc,
         ty: QualType,
         comps: &[OffsetofComponent],
         indices: &mut Vec<ExprId>,
+        steps: &mut Vec<OffsetofStep>,
         invalid: &mut bool,
-    ) -> Option<i128> {
+    ) -> bool {
         if self.is_error_type(ty) {
-            return None;
+            return false;
         }
         if self.ast.types.as_record(ty).is_none() {
             let d = self.diag(DiagId::sema_offsetof_record_type, loc).arg(self.ty_arg(ty));
             self.emit(d);
-            return None;
+            return false;
         }
         if !self.require_complete(ty, loc) {
             let d = self.diag(DiagId::sema_offsetof_incomplete_type, loc).arg(self.ty_arg(ty));
             self.emit(self.incomplete_note(d, ty));
-            return None;
+            return false;
         }
         *invalid |= self.is_invalid_class(ty);
         let mut cur = ty;
-        let mut bits: i128 = 0;
         let mut warned = false;
         for &c in comps {
             match c {
@@ -334,51 +363,49 @@ impl Sema<'_, '_> {
                         let d =
                             self.diag(DiagId::sema_offsetof_array_type, end).arg(self.ty_arg(cur));
                         self.emit(d);
-                        return None;
+                        return false;
                     };
                     let idx = conv::lvalue_to_rvalue(self, index);
                     indices.push(idx);
                     let it = self.ast.exprs.get(idx).ty();
                     if self.is_error_type(it) {
-                        return None;
+                        return false;
                     }
                     if !self.ast.types.is_integral(it) && !conv::is_unscoped_enum(self, it) {
                         self.error(DiagId::sema_subscript_not_integer, self.begin_loc(idx));
-                        return None;
+                        return false;
                     }
-                    let Some(i) = self.fold_int(idx) else {
-                        self.unsupported(
-                            "a non-constant array index in '__builtin_offsetof'",
-                            self.begin_loc(idx),
-                        );
-                        return None;
-                    };
-                    let size = target::size_align(&self.ast, elem, &self.abi).map_or(0, |x| x.0);
-                    bits += i * i128::from(size) * 8;
+                    let elem_size =
+                        target::size_align(&self.ast, elem, &self.abi).map_or(0, |x| x.0);
+                    steps.push(OffsetofStep::Index { index: idx, elem_size });
                     cur = elem;
                 }
                 OffsetofComponent::Field { name, start, end } => {
-                    let (b, next) = self.offsetof_field(loc, cur, name, start, end, &mut warned)?;
+                    let Some(next) =
+                        self.offsetof_field(loc, cur, name, (start, end), &mut warned, steps)
+                    else {
+                        return false;
+                    };
                     *invalid |= self.is_invalid_class(cur);
-                    bits += b;
                     cur = next;
                 }
             }
         }
-        Some(bits / 8)
+        true
     }
 
-    /// One `name` component of an offsetof designator into `cur`: the
-    /// member's bit offset and type, or `None` after an error.
+    /// One `name` component (written from `start` to `end`) of an
+    /// offsetof designator into `cur`: its steps go to `steps`; the
+    /// member's type, or `None` after an error.
     fn offsetof_field(
         &mut self,
         loc: Loc,
         cur: QualType,
         name: Symbol,
-        start: Loc,
-        end: Loc,
+        (start, end): (Loc, Loc),
         warned: &mut bool,
-    ) -> Option<(i128, QualType)> {
+        steps: &mut Vec<OffsetofStep>,
+    ) -> Option<QualType> {
         if !self.require_complete(cur, start) {
             let d = self.diag(DiagId::sema_offsetof_incomplete_type, start).arg(self.ty_arg(cur));
             self.emit(self.incomplete_note(d, cur));
@@ -431,14 +458,13 @@ impl Sema<'_, '_> {
             self.emit(d);
             return None;
         }
-        let mut bits = 0i128;
         if let Some(&outer) = chain.first()
             && let Some(parent) = self.ast.decls.get(outer).ctx()
         {
-            bits = self.offsetof_base_bits(def, parent, end)?;
+            self.offsetof_base_steps(def, parent, end, steps)?;
         }
         for f in chain {
-            bits += i128::from(self.field_bit_offset(f));
+            steps.push(OffsetofStep::Offset(self.field_bit_offset(f) / 8));
         }
         let fty = self.ast.decls.get(field).ty().unwrap_or(QualType::ERROR);
         let fty = if self.ast.types.is_reference(fty) {
@@ -446,33 +472,41 @@ impl Sema<'_, '_> {
         } else {
             fty
         };
-        Some((bits, fty))
+        Some(fty)
     }
 
-    /// The bit offset in class `def` of its base class subobject
-    /// `parent` holding a member an offsetof designator names (0 when
-    /// `parent` is `def`), or `None` after diagnosing a member of a
+    /// The offsets in class `def` of the base class subobjects down to
+    /// `parent`, holding a member an offsetof designator names (none
+    /// when `parent` is `def`), one step per base as clang's `Base`
+    /// `OffsetOfNode`s, or `None` after diagnosing a member of a
     /// virtual base, whose offset is not fixed (clang
     /// `BuildBuiltinOffsetOf`: "invalid application of 'offsetof' to a
     /// field of a virtual base"). Lookup already rejected an ambiguous
     /// base ([class.member.lookup]/6).
-    fn offsetof_base_bits(&mut self, def: DeclId, parent: DeclId, end: Loc) -> Option<i128> {
+    fn offsetof_base_steps(
+        &mut self,
+        def: DeclId,
+        parent: DeclId,
+        end: Loc,
+        steps: &mut Vec<OffsetofStep>,
+    ) -> Option<()> {
         let BaseSearch::Unique(path) = find_base(self, def, parent) else {
-            return Some(0);
+            return Some(());
         };
         if path.last_virtual.is_some() {
             self.error(DiagId::sema_offsetof_field_of_virtual_base, end);
             return None;
         }
-        let mut bytes = 0u64;
         let mut cur = def;
         for &c in &path.classes {
             let first = self.ast.first(c);
             let bases = kiln_abi::ensure_layout(&mut self.ast, cur, &self.abi)?.bases.clone();
-            bytes += bases.iter().find(|&&(b, _)| self.ast.first(b) == first)?.1;
+            steps.push(OffsetofStep::Offset(
+                bases.iter().find(|&&(b, _)| self.ast.first(b) == first)?.1,
+            ));
             cur = self.ast.definition(c).unwrap_or(c);
         }
-        Some(i128::from(bytes) * 8)
+        Some(())
     }
 
     /// The bit offset of non-static data member `f` in its class.

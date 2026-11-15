@@ -1184,6 +1184,26 @@ pub enum OffsetofComponent {
     },
 }
 
+/// One step of the run-time computation of a `__builtin_offsetof` whose
+/// value is not a constant (clang `OffsetOfNode`s as
+/// `ScalarExprEmitter::VisitOffsetOfExpr` adds them up; spec/sema.md
+/// "`__builtin_offsetof`"): the result is the sum of the steps, in
+/// `size_t`, left to right ([`ColdExprData::offsetof_layout`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, kiln_snap::Snap)]
+pub enum OffsetofStep {
+    /// A member, or a base class subobject: `bytes` past the enclosing
+    /// object (wrapped to `size_t`).
+    Offset(u64),
+    /// An array subscript: the value of `index` (a child of the
+    /// `OffsetOfExpr`) converted to `size_t`, times `elem_size` bytes.
+    Index {
+        /// The converted index expression.
+        index: ExprId,
+        /// The size in bytes of the array's element type.
+        elem_size: u64,
+    },
+}
+
 /// The meaning of the accessor of an ext-vector element access `v.xyzw`
 /// (clang `CheckExtVectorComponent` and
 /// `ExtVectorElementExpr::getEncodedElementAccess`; spec/sema.md §5.8).
@@ -1389,6 +1409,10 @@ pub struct ColdExprData {
     /// designator as written, rebuilt at instantiation (clang keeps its
     /// `OffsetOfNode`s; spec/sema.md §5.8).
     pub offsetof_pattern: ColdMap<ExprId, (QualType, Box<[OffsetofComponent]>)>,
+    /// An `OffsetOfExpr` whose value is computed when it is evaluated:
+    /// an array index is not a constant, or the constant offset does not
+    /// fit the node's `u32` (a negative index wraps it).
+    pub offsetof_layout: ColdMap<ExprId, Box<[OffsetofStep]>>,
     /// A dependent `CXXSpliceExpr` written as a template-id,
     /// `template [: r :] < args >` (P2996 [expr.prim.splice]): the
     /// template arguments as written.
@@ -1535,6 +1559,7 @@ impl Default for ColdExprData {
             union_field: ColdMap::new("union_field"),
             cast_written: ColdMap::new("cast_written"),
             offsetof_pattern: ColdMap::new("offsetof_pattern"),
+            offsetof_layout: ColdMap::new("offsetof_layout"),
             splice_args: ColdMap::new("splice_args"),
             default_arg_rewritten: ColdMap::new("default_arg_rewritten"),
         }
@@ -3220,6 +3245,7 @@ impl HeapSize for ExprArena {
         r.push(self.cold.default_imm.mem_row().prefixed("cold"));
         r.push(self.cold.cast_written.mem_row().prefixed("cold"));
         r.push(self.cold.offsetof_pattern.mem_row().prefixed("cold"));
+        r.push(self.cold.offsetof_layout.mem_row().prefixed("cold"));
         r.push(self.cold.splice_args.mem_row().prefixed("cold"));
         r.push(self.cold.default_arg_rewritten.mem_row().prefixed("cold"));
         r
@@ -3381,7 +3407,15 @@ impl ExprArena {
         Symbol::from_index(self.expect_kind(e, ExprKind::ExtVectorElementExpr).b)
     }
 
-    /// The byte offset an `OffsetOfExpr` evaluates to.
+    /// The steps of an `OffsetOfExpr` whose value is computed when it is
+    /// evaluated ([`ColdExprData::offsetof_layout`]); `None` when it is
+    /// the constant [`Self::offsetof_value`].
+    pub fn offsetof_layout(&self, e: ExprId) -> Option<&[OffsetofStep]> {
+        self.cold.offsetof_layout.get(e).map(|s| &**s)
+    }
+
+    /// The byte offset an `OffsetOfExpr` evaluates to, unless it has an
+    /// [`Self::offsetof_layout`].
     pub fn offsetof_value(&self, e: ExprId) -> u64 {
         u64::from(self.expect_kind(e, ExprKind::OffsetOfExpr).b)
     }

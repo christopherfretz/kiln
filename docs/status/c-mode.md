@@ -205,7 +205,6 @@ accepts, rejects or emits):
   `constexpr unsigned u = -1;`) or a non-null `constexpr` pointer.
 - C89 -Wdeclaration-after-statement is missing.
 - Case-value overflow in C++98 is not checked.
-- The "expanded from macro" note for `offsetof` is missing.
 
 ## C OSS rows
 

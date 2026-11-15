@@ -299,7 +299,9 @@ pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
         }
         let n = s.ast.exprs.get(x);
         match n.kind() {
-            ExprKind::UnaryExprOrTypeTraitExpr | ExprKind::OffsetOfExpr => continue,
+            ExprKind::UnaryExprOrTypeTraitExpr => continue,
+            // An index that is not a constant is evaluated (GNU).
+            ExprKind::OffsetOfExpr if s.ast.exprs.offsetof_layout(x).is_none() => continue,
             ExprKind::DeclRefExpr => {
                 if s.kind_of(s.ast.exprs.decl(x)) != DeclKind::EnumConstant {
                     return false;
@@ -310,7 +312,8 @@ pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
                     return false;
                 }
             }
-            ExprKind::IntegerLiteral
+            ExprKind::OffsetOfExpr
+            | ExprKind::IntegerLiteral
             | ExprKind::CharacterLiteral
             | ExprKind::FloatingLiteral
             | ExprKind::CXXBoolLiteralExpr

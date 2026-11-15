@@ -3702,6 +3702,9 @@ impl Compiler<'_> {
             ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_invalid_record(e) => {
                 self.trap(e, "");
             }
+            ExprKind::OffsetOfExpr if self.ast().exprs.offsetof_layout(e).is_some() => {
+                self.offsetof_steps(e, dst, ty);
+            }
             ExprKind::OffsetOfExpr => {
                 let v = u128::from(self.ast().exprs.offsetof_value(e));
                 let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
@@ -4408,6 +4411,52 @@ impl Compiler<'_> {
         let ra = self.opnd(a, ga, shift);
         let rb = self.opnd(b, gb, false);
         self.arith(iop, ty, bt, dst, ra, rb, e);
+    }
+
+    /// `dst` = an `OffsetOfExpr` with run-time steps in `size_t` type
+    /// `ty`: the sum of its offsets and of each index times its element
+    /// size, the index cast to `size_t` by its own signedness (its true
+    /// value, as codegen's `CreateIntCast`), all wrapping.
+    fn offsetof_steps(&mut self, e: ExprId, dst: u32, ty: OTy) {
+        let steps: Vec<kiln_ast::expr::OffsetofStep> =
+            self.ast().exprs.offsetof_layout(e).map(<[_]>::to_vec).unwrap_or_default();
+        let (w, s) = int_of(self.kind(ty)).unwrap_or((64, false));
+        let aux = int_aux(w as u8, s);
+        let mut total = 0u128;
+        let mut acc = None;
+        for step in steps {
+            let r = match step {
+                kiln_ast::expr::OffsetofStep::Offset(b) => {
+                    total = total.wrapping_add(u128::from(b));
+                    continue;
+                }
+                kiln_ast::expr::OffsetofStep::Index { index, elem_size } => {
+                    let it = self.ety(index);
+                    let (iw, is) = int_of(self.kind(it)).unwrap_or((64, true));
+                    let v = self.rv(index);
+                    let r = self.reg();
+                    let cast = iw | u32::from(is) << 8 | w << 9 | u32::from(s) << 17;
+                    self.emit(Op::ICast, cast, &[r, v]);
+                    let size = self.reg();
+                    self.konst(size, crate::arith::canon(u128::from(elem_size), w, s));
+                    self.emit_at(Op::IMul, aux, &[r, r, size], e);
+                    r
+                }
+            };
+            acc = Some(match acc {
+                None => r,
+                Some(a) => {
+                    self.emit_at(Op::IAdd, aux, &[a, a, r], e);
+                    a
+                }
+            });
+        }
+        let base = self.reg();
+        self.konst(base, crate::arith::canon(total, w, s));
+        match acc {
+            Some(a) => self.emit_at(Op::IAdd, aux, &[dst, base, a], e),
+            None => self.emit(Op::Mov, 0, &[dst, base]),
+        };
     }
 
     /// `dst = a op b` in type `ty` (`bt`: the right operand's type, for

@@ -128,8 +128,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 3 (WP-1411) is a new diagnostic id (`DiagId`'s schema hash);
 /// version 4 (WP-1417) two more ids and two new `Sema` options;
 /// version 5 (WP-1422) a new note id; version 6 (WP-1419) a new
-/// driver warning id.
-pub(crate) const FORMAT_VERSION: u32 = 6;
+/// driver warning id; version 7 (WP-1433) a new AST cold map
+/// (`offsetof_layout`).
+pub(crate) const FORMAT_VERSION: u32 = 7;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

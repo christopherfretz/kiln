@@ -3451,6 +3451,25 @@ impl<'a> AstBuilder<'a> {
         e
     }
 
+    /// `__builtin_offsetof(T, designator)` whose value is computed when
+    /// it is evaluated: the sum of `steps` in `size_t` (`ty`), an index
+    /// not being a constant or the constant offset not fitting a `u32`.
+    /// `indices` are all the array subscripts written, as
+    /// [`Self::offsetof`].
+    pub fn offsetof_steps(
+        &mut self,
+        ty: QualType,
+        indices: &[ExprId],
+        steps: &[crate::expr::OffsetofStep],
+        invalid_record: bool,
+        loc: Loc,
+        rparen: Loc,
+    ) -> ExprId {
+        let e = self.offsetof(ty, indices, 0, invalid_record, loc, rparen);
+        self.ast.exprs.cold.offsetof_layout.insert(e, steps.into()).expect(FRESH_EXPR);
+        e
+    }
+
     /// A value-dependent `__builtin_offsetof(operand, comps...)` in a
     /// template (clang's dependent `OffsetOfExpr`): a `std::size_t`
     /// (`ty`) prvalue, never type-dependent, value-dependent through the
