@@ -4073,6 +4073,17 @@ impl Oven {
             Some(s) if self.types.has_subobject(a.ty, off, s) => s,
             _ => self.outermost_at(a.ty, off).unwrap_or_else(|| self.dynamic_type(a.ty, off)),
         };
+        // P2747R2 [expr.const.core]/2.20.2.1: an array `T` may be placed
+        // at the first element of an array object (the `int *` that
+        // `std::allocator<int>::allocate(3)` returns designates an
+        // element of an `int[3]`).
+        let target = match self.types.kind(ty) {
+            TyKind::Array { .. } if !self.placement_fits(target, ty) => self
+                .outermost_at(a.ty, off)
+                .filter(|&o| self.placement_fits(o, ty))
+                .unwrap_or(target),
+            _ => target,
+        };
         if !self.placement_fits(target, ty) {
             return Err(Fault::PlacementType { from: target, to: ty });
         }

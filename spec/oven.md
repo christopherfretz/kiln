@@ -2092,11 +2092,17 @@ libc++ `tests/conformance/expr.new/libcxx-constexpr-*.cpp`).
   `__voidify`, so a first member or `optional`/`variant` storage at
   offset 0 is the designated object, `construct-at-member.cpp`), and it
   may hold the new object when its array extent is at least the new
-  type's and their element types are the same: `new (a) int[3]` with
-  `int a[3]` decayed designates one `int` ("... from 'int' to
-  'int[3]'"; `new (&a) int[3]` is the valid spelling), and `new (&a)
-  int[n]` into `int a[2]` with `n == 3` is "... from 'int[2]' to
-  'int[3]'". An array placement (`new_aux::ARRAY`) first checks its
+  type's and their element types are the same. For an array `T` an
+  element designator that does not fit retries with the outermost array
+  at `p` ([expr.const.core]/2.20.2.1, P2747R2: "or, if T is an array
+  type, to the first element of an object of a type similar to T";
+  WP-1464), so `new (a) int[3]` with `int a[3]` decayed, and an array
+  placement into `std::allocator<int>` storage, are valid, as in GCC 16
+  (clang 22 rejects both: "... from 'int' to 'int[3]'";
+  `expr.new/p2747-placement-array-first-element.cpp`). `new (a + 1)
+  int[2]` into the same `a` is still "... from 'int' to 'int[2]'", and
+  `new (&a) int[n]` into `int a[2]` with `n == 3` is "... from 'int[2]'
+  to 'int[3]'". An array placement (`new_aux::ARRAY`) first checks its
   bound `n` as an array `new` does, against `k` explicit initializers
   (`new_aux::BOUND`). It then
   begins the lifetime of `sizeof(T)` bytes, marks them uninitialized, and

@@ -110,6 +110,16 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- C++26 forms found running GCC's C++ testsuite (WP-1464): the C23
+  one-argument `va_start(ap)` and `__STDC_VERSION_STDARG_H__` at C++26
+  (P3348R4); an array placement new at the first element of an array
+  object (`new (a) int[3]` for `int a[3]`, `std::allocator` storage) is a
+  constant expression (P2747R2; clang 22 rejects it); an iterating
+  expansion statement whose range is not a constant but whose size is
+  (`std::span<int, 3>`, a member `std::array`) is evaluated at run time
+  (CWG3140); a `constexpr` tuple-like structured binding whose `get` is
+  not `constexpr` is an error (P2686R5; clang 22 accepts it); GNU vector
+  and `_Complex` types decompose in structured bindings, as in clang.
 - Crashes and hangs found running GCC's C++ testsuite (WP-1456): an
   array type larger than the target's maximum object size is "array is
   too large" (it ran out of memory); a register `asm` output of an

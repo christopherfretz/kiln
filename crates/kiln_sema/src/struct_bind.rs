@@ -5,7 +5,7 @@
 //! `ActOnDecompositionDeclarator` / `CheckCompleteDecompositionDeclaration`).
 
 use kiln_ast::decl::{DeclFlags, DeclKind, DeclMisc, VarSpec, VarStorage};
-use kiln_ast::expr::{CastKind, ExprKind, Radix, ValueCategory};
+use kiln_ast::expr::{CastKind, ExprKind, Radix, UnaryOp, ValueCategory};
 use kiln_ast::names::DeclName;
 use kiln_ast::types::{Nns, Quals, TagKeyword, TemplateArg, TypeView};
 use kiln_ast::{DeclHead, DeclId, ExprId, NnsId, QualType, TemplateParamListId};
@@ -453,6 +453,10 @@ impl Sema<'_, '_> {
         let loc = vn.loc();
         let ok = if self.ast.types.is_array(dty) && self.ast.types.array_size(dty).is_some() {
             self.decompose_array(v, dty, &bindings)
+        } else if let Some(p) = self.vector_parts(dty) {
+            self.decompose_simple(v, dty, u64::from(p.count), &bindings, false)
+        } else if self.ast.types.as_complex(dty).is_some() {
+            self.decompose_simple(v, dty, 2, &bindings, true)
         } else {
             match self.tuple_like(loc, dty) {
                 TupleLike::Error => false,
@@ -581,6 +585,48 @@ impl Sema<'_, '_> {
             let sub = self.act_on_full_expr(sub);
             self.ast.decls.set_ty(b, elem);
             let _ = self.ast.decls.set_binding(b, sub, None);
+        }
+        true
+    }
+
+    /// GNU extension (clang `checkVectorDecomposition` /
+    /// `checkComplexDecomposition`): a vector type decomposes into its
+    /// `n` elements `e[i]`, a complex type (`complex` set) into
+    /// `__real e` and `__imag e`; each binding has the element type with
+    /// `e`'s cv-qualifiers.
+    fn decompose_simple(
+        &mut self,
+        v: DeclId,
+        dty: QualType,
+        n: u64,
+        bindings: &[DeclId],
+        complex: bool,
+    ) -> bool {
+        let Some(bindings) = self.expand_binding_pack(v, dty, bindings, n) else { return false };
+        if bindings.len() as u64 != n {
+            self.wrong_number_of_bindings(v, dty, bindings.len(), n);
+            return false;
+        }
+        for (i, &b) in bindings.iter().enumerate() {
+            let loc = self.ast.decls.get(b).loc();
+            let base = self.decomp_ref(v, loc);
+            let e = if complex {
+                let op = if i == 0 { UnaryOp::Real } else { UnaryOp::Imag };
+                self.real_imag(op, base, loc)
+            } else {
+                let idx = self.builder().int_literal(QualType::INT, i as u64, Radix::Decimal, loc);
+                self.vector_subscript(base, idx, loc)
+            };
+            if self.is_err_expr(e) {
+                return false;
+            }
+            let q = self.ast.types.effective_quals(dty);
+            let et = self.ety(e);
+            let et = if q.is_empty() { et } else { self.ast.types.qualify(et, q) };
+            self.note_var_init_full_expr(v);
+            let e = self.act_on_full_expr(e);
+            self.ast.decls.set_ty(b, et);
+            let _ = self.ast.decls.set_binding(b, e, None);
         }
         true
     }
@@ -895,6 +941,26 @@ impl Sema<'_, '_> {
         // [dcl.struct.bind]/4: the holding variable is checked as any
         // reference variable (clang's implicit `-Wdangling` wording).
         self.check_var_lifetime(hv, init);
+        // P2686R5 [dcl.struct.bind]/1, /7: the holding variable is
+        // declared with the declaration's constexpr or constinit, so it
+        // is constant-initialized from `get<i>`: a `get` that is not
+        // constexpr makes the declaration ill-formed. clang 22 does not
+        // check it; GCC 16 does (WP-1464).
+        // Only once `e` is a constant: an `e` that is not was diagnosed
+        // (or, in an expansion statement's fallback, is abandoned).
+        let e_constant = self
+            .ast
+            .decls
+            .var(v)
+            .is_some_and(|x| matches!(x.eval.state(), kiln_ast::decl::VarEvalState::Value(_)));
+        if vspec.is_constexpr() && e_constant {
+            self.check_constexpr_init(hv, init);
+        } else if vspec.is_constinit()
+            && let Some((_, at)) = self.constinit_of(v)
+        {
+            self.constinit_locs.insert(hv, at);
+            self.check_constinit(hv);
+        }
         let r = self.build_decl_ref(hv, loc);
         self.ast.decls.set_ty(b, t);
         let _ = self.ast.decls.set_binding(b, r, Some(hv));
