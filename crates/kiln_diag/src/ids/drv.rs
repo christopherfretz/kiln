@@ -19,7 +19,9 @@ drv_compilation_database = Error (2) "compilation database '{0}' could not be op
 drv_emit_llvm_link = Error (0) "-emit-llvm cannot be used when linking";
 drv_framework_dir_ignored = Warning (1) "ignoring framework directory '{0}' (kiln does not search frameworks)";
 // WP-1371: `-fkiln-backend=hod` (spec/driver.md "Back-end selection").
-drv_hod_failed = Warning (2) "hod failed ({0}): {1}; falling back to llc";
+// WP-1477: the fallback succeeds, so a blanket `-Werror` does not
+// promote it; `-Werror=hod-fallback` does.
+drv_hod_failed = WarningNoWerror [HodFallback] (2) "hod failed ({0}): {1}; falling back to llc";
 drv_hod_failed_strict = Error (2) "hod failed ({0}): {1} (KILN_HOD_STRICT=1: no fallback)";
 drv_hod_not_found = Error (1) "-fkiln-backend=hod: no hod executable found (searched {0})";
 drv_ignoring_tabstop = Warning (2) "ignoring invalid -ftabstop value '{0}', using default value {1}";
