@@ -56,13 +56,23 @@ Planned as 1.3.0.
   `__builtin_dwarf_sp_column`, `__builtin_extend_pointer` and, on
   AArch64, `__builtin_sponentry`, lowered as clang lowers them. They were
   undeclared identifiers before.
+- The AArch64 SME keyword attributes (WP-1426): `__arm_streaming`,
+  `__arm_streaming_compatible`, `__arm_in`, `__arm_out`, `__arm_inout`,
+  `__arm_preserves`, `__arm_locally_streaming`, `__arm_new` and, at
+  `-fclang-compat=20` and later, `__arm_agnostic`. The type keywords are
+  part of the function type (conversions, redeclarations, overriders,
+  clang 20 mangling), every keyword gets clang 19's IR attributes and
+  diagnostics, and SVE types may be used in a streaming function with
+  `sme`. The SME intrinsics of `<arm_sme.h>` are not provided yet.
+- clang's `-Wgcc-compat` warning for a GNU attribute GCC knows written
+  after the declarator of a function definition (WP-1426).
 
 ### Changed
 
-- The PCH snapshot format is 7 (WP-1411, WP-1417, WP-1422, WP-1419 and
-  WP-1433; new diagnostics, options and AST data changed the schema). Rebuild a PCH built by
-  kiln 1.2.0; until then it is not misread, as [spec/pch.md](spec/pch.md)
-  describes.
+- The PCH snapshot format is 8 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433 and WP-1426; new diagnostics, options and AST data changed the
+  schema). Rebuild a PCH built by kiln 1.2.0; until then it is not
+  misread, as [spec/pch.md](spec/pch.md) describes.
 
 ### Fixed
 
@@ -73,6 +83,10 @@ Planned as 1.3.0.
   per-process order. spec/pch.md "Reproducibility" lists the bytes that
   depend on the invocation (the working directory, each input's path,
   size and modification time, the identity).
+- A by-copy lambda capture of a variable of incomplete or abstract class
+  type is clang's error (WP-1426); kiln did not diagnose it before. An
+  explicit capture `[v]` of an SVE variable is checked against the
+  target's features at the capture, as clang.
 - `-mcmodel=` is checked against the target and the relocation model as
   clang's driver checks it (WP-1419). On AArch64, `-mcmodel=large` with
   the default PIE, `-fpic`, `-fPIE` or `-static` is now clang's error

@@ -896,11 +896,12 @@ impl Substituter<'_, '_, '_> {
         // rebuilt declarator carries no attributes, so the bit is set on
         // the instantiation's type here (WP-749).
         // So are its calling convention and `no_caller_saved_registers`
-        // (WP-808).
+        // (WP-808), and its SME attributes (WP-1426).
         let keep = move |i: kiln_ast::types::FuncInfo| {
             i.with_noreturn(i.noreturn() || info.noreturn())
                 .with_cc(info.cc())
                 .with_no_caller_saved_regs(info.no_caller_saved_regs())
+                .with_sme(info.sme())
         };
         if let Some(ft) = self.sema.ast.decls.get(f).ty()
             && let Some(nt) = self.sema.with_fn_info(ft, &keep, false)

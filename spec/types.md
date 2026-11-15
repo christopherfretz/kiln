@@ -215,11 +215,14 @@ function definition's own signature is checked against its own features
 at the end of its body; a lambda's against the enclosing function's (the
 context clang has popped back to), or its own at namespace scope. With
 `sme` but no `sve` the error is clang's "SVE vector type T cannot be used
-in a non-streaming function" (`sema_sve_type_non_streaming`): kiln does
-not parse the `__arm_streaming` keyword attributes, so no function is
-streaming (follow-up). A by-copy capture of an SVE variable is "by-copy
+in a non-streaming function" (`sema_sve_type_non_streaming`), except in
+a streaming function (`__arm_streaming` or `__arm_locally_streaming`,
+§5.4; WP-1426). A by-copy capture of an SVE variable is "by-copy
 capture of variable 'v' with sizeless type T" at the capture (clang
 `captureInLambda`'s `RequireCompleteSizedType`), with or without `sve`.
+An explicit capture `[v]` of an SVE variable is also checked against
+the translation unit's features at the capture (clang checks it in the
+call operator's context, which does not inherit `target`; WP-1426).
 
 Operators (WP-435, `sve.rs` `sve_binary`, clang
 `CheckSizelessVectorOperands`): `+ - * /` take two vectors of one type or
@@ -482,11 +485,11 @@ if `arm_sve.h` support is ever required).
 
 ### 5.4 Function types ([dcl.fct], [except.spec])
 ```rust
-struct FuncProto {      // 16 bytes
+struct FuncProto {      // 20 bytes (field order: ret, params, info, exc, n_params)
     ret: QualType,
     params: u32,        // start in type_lists (adjusted parameter types, [dcl.fct]/5)
     n_params: u16,
-    info: FuncInfo,     // u16: variadic | ref_qual(2: none,&,&&) | this_quals(3: cvr)
+    info: FuncInfo,     // u32: variadic | ref_qual(2: none,&,&&) | this_quals(3: cvr)
                         //      | cc(4: default, preserve_most, vectorcall, ...) | noreturn | trailing_return
                         //      | no_caller_saved_registers (x86-64 only; clang ExtInfo bit)
                         // cc is canonical: a convention the target ignores (or that is the
@@ -494,6 +497,7 @@ struct FuncProto {      // 16 bytes
                         // so `void(*)()` and `void(*)() __attribute__((sysv_abi))` are one type
                         // (WP-808, spec/landed/codegen/WP-808.md).
                         //      | regparm(3: 0 = none, else N+1; x86-64 only)
+                        //      | sme(9, bit 16: AArch64 SME attributes, WP-1426)
     exc: ExcSpec,       // u32: 3-bit tag + 29-bit operand
 }
 enum ExcSpec /* tag */ {
@@ -526,6 +530,39 @@ enum ExcSpec /* tag */ {
   (`U6ms_abi`); `regcall` prefixes the name with `__regcall3__`.
   `va_start` in an `ms_abi` function on a SysV target is an error
   (clang `checkVAStartABI`; `__builtin_ms_va_list` is not provided).
+- `AArch64` SME keyword attributes (WP-1426, ACLE; clang
+  `handleArmStateAttribute`, `kiln_sema/src/sme.rs`): `__arm_streaming`,
+  `__arm_streaming_compatible`, `__arm_in`, `__arm_out`, `__arm_inout`,
+  `__arm_preserves` (states `"za"`, `"zt0"`) and, at
+  `-fclang-compat=20` and later, `__arm_agnostic("sme_za_state")` are
+  keywords parsed wherever a C++11 attribute-specifier is; they apply to
+  the function type only after a parameter clause (elsewhere: `cannot be
+  applied to a declaration`, or `only applies to function types` on a
+  non-function). `FuncInfo::sme` holds clang's `AAPCSBitmaskSME`: bit 0
+  streaming, bit 1 streaming-compatible, bit 2 ZA-agnostic, ZA state at
+  bit 3 and ZT0 state at bit 6 (1 in, 2 out, 3 inout, 4 preserves). The
+  bits are part of type identity (no implicit conversion between
+  `void()` and `void() __arm_streaming`); a redeclaration or an override
+  with other bits is an error, checked before the calling convention.
+  Two streaming modes, or two states for ZA or ZT0, conflict. The
+  declaration attributes `__arm_locally_streaming` and `__arm_new("za",
+  "zt0")` apply to functions only (`cannot be applied to types` after a
+  parameter clause); `__arm_new` of a state the type already has is an
+  error. A definition that is streaming needs `sme`, ZA state `sme` and
+  ZT0 state `sme2` (the function's features, `target` attribute
+  included); a call to a streaming function needs `sme` in the caller, a
+  call sharing ZA or ZT0 needs the caller to have that state, and a call
+  sharing ZT0 but not ZA from a caller with ZA state is clang's
+  not-yet-implemented spill error. In a streaming function with `sme` but
+  not `sve`, SVE types are allowed. Mangling at `-fclang-compat=20` and
+  later wraps the type as `11__SME_ATTRSI <function-type> Lj<bits>E E`;
+  clang 19 does not mangle the bits. Codegen gives every definition,
+  declaration and call the clang 19 string attributes
+  (`"aarch64_pstate_sm_enabled"`, `"aarch64_pstate_sm_compatible"`,
+  `"aarch64_pstate_sm_body"`, `"aarch64_{in,out,inout,preserves,new}_{za,zt0}"`,
+  `"aarch64_za_state_agnostic"`); kiln does not lower the mode switches
+  itself, LLVM does. Off `AArch64` every keyword is `not supported on
+  this target`.
 - Canonicalization: params and return canonical; `trailing_return` cleared;
   `exc` canonical: from C++17 `Nothrow`/`None`/`DependentNoexcept`/
   `Deferred`; before C++17 the exception specification is not part of the

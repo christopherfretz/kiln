@@ -99,7 +99,7 @@ pub(crate) use locs::Locs;
 use locs::{FileRec, LocTable, SlocRec};
 
 /// The image format's version (the first field); bumped on any change.
-pub(crate) const IMAGE_VERSION: u32 = 35;
+pub(crate) const IMAGE_VERSION: u32 = 36;
 
 /// "None" in an index or offset field.
 const NONE: u32 = u32::MAX;
@@ -257,7 +257,7 @@ enum TyRec {
     Func {
         ret: QRef,
         params: Vec<QRef>,
-        info: u16,
+        info: u32,
         exc: u8,
         /// WP-1300: for `exc` 7 to 9 (`noexcept(e)` false, true or
         /// dependent, [`exprs`]), the expression section of `e`; else
@@ -1414,7 +1414,7 @@ fn encode(img: &Image) -> Vec<u8> {
                 for p in params {
                     w.q(*p);
                 }
-                w.u16(*info);
+                w.u32(*info);
                 w.u8(*exc);
                 if *exc >= exprs::NX_FALSE {
                     w.u32(*nx);
@@ -2110,7 +2110,7 @@ fn decode(bytes: &[u8]) -> Res<Image> {
                 for _ in 0..n {
                     params.push(r.q()?);
                 }
-                let info = r.u16()?;
+                let info = r.u32()?;
                 let exc = r.u8()?;
                 if exc_spec(exc).is_none() && !matches!(exc, 5..=exprs::NX_DEPENDENT) {
                     return bad("bad exception specification");

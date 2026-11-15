@@ -129,8 +129,9 @@ pub(crate) const MAGIC: [u8; 8] = *b"KILNSNAP";
 /// version 4 (WP-1417) two more ids and two new `Sema` options;
 /// version 5 (WP-1422) a new note id; version 6 (WP-1419) a new
 /// driver warning id; version 7 (WP-1433) a new AST cold map
-/// (`offsetof_layout`).
-pub(crate) const FORMAT_VERSION: u32 = 7;
+/// (`offsetof_layout`); version 8 (WP-1426) the SME diagnostic ids and
+/// attribute kinds and the 32-bit `FuncInfo`.
+pub(crate) const FORMAT_VERSION: u32 = 8;
 /// The length of the magic and the format version.
 pub(crate) const HEADER_LEN: usize = 12;
 

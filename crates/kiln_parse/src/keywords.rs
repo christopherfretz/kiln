@@ -164,6 +164,35 @@ keywords! {
     BuiltinLine = "__builtin_LINE";
     BuiltinColumn = "__builtin_COLUMN";
     BuiltinSourceLocation = "__builtin_source_location";
+    ArmStreaming = "__arm_streaming";
+    ArmStreamingCompatible = "__arm_streaming_compatible";
+    ArmIn = "__arm_in";
+    ArmOut = "__arm_out";
+    ArmInout = "__arm_inout";
+    ArmPreserves = "__arm_preserves";
+    ArmAgnostic = "__arm_agnostic";
+    ArmLocallyStreaming = "__arm_locally_streaming";
+    ArmNew = "__arm_new";
+}
+
+impl Kw {
+    /// The SME keyword attribute this keyword is (clang
+    /// `KEYWORD_ATTRIBUTE`): its index in
+    /// [`kiln_ast::attr::SME_KEYWORDS`].
+    pub fn sme_index(self) -> Option<usize> {
+        Some(match self {
+            Kw::ArmStreaming => 0,
+            Kw::ArmStreamingCompatible => 1,
+            Kw::ArmIn => 2,
+            Kw::ArmOut => 3,
+            Kw::ArmInout => 4,
+            Kw::ArmPreserves => 5,
+            Kw::ArmAgnostic => 6,
+            Kw::ArmLocallyStreaming => 7,
+            Kw::ArmNew => 8,
+            _ => return None,
+        })
+    }
 }
 
 /// Symbol-to-keyword map for one interner.
@@ -231,6 +260,8 @@ impl Keywords {
                 if (!gnu && *s == "typeof")
                     || (!cxx11 && *s == "nullptr")
                     || (!cxx26 && *s == "contract_assert")
+                    // clang 20 added `__arm_agnostic`.
+                    || (compat < 20 && *s == "__arm_agnostic")
                 {
                     continue;
                 }

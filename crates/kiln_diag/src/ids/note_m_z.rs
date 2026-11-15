@@ -148,6 +148,7 @@ note_requirement_type_constraint_19 = Note (2) "{0:and|because} type constraint 
 note_requirement_would_be_invalid = Note (3) "{0:and|because} '{1}' would be invalid: {2}";
 note_rewriting_operator_as_spaceship = Note (0) "while rewriting comparison as call to 'operator<=>' declared here";
 note_single_arg_concept_false = Note (3) "{0:and|because} {1} does not satisfy '{2}'";
+note_sme_use_preserves_za = Note (0) "add '__arm_preserves(\"za\")' to the callee if it preserves ZA";
 note_specialized_decl = Note (0) "attempt to specialize declaration here";
 note_substituted_constraint_ill_formed = Note (1) "because substituted constraint expression is ill-formed{0}";
 note_surrounding_namespace_ends_here = Note (0) "surrounding namespace with visibility attribute ends here";

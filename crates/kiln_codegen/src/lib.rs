@@ -56,6 +56,7 @@ mod null_init;
 mod outline;
 mod psabi;
 mod recursion;
+mod sme;
 mod stmt;
 mod sve;
 mod target_features;

@@ -25,6 +25,15 @@ sema_sizeof_incomplete = Error (2) "invalid application of '{0}' to an incomplet
 sema_sizeof_pack_no_pack = Error (1) "{0} does not refer to the name of a parameter pack";
 sema_sizeof_sizeless = Error (2) "invalid application of '{0}' to sizeless type {1}";
 sema_sizeof_void = Extension [PointerArith] (1) "invalid application of '{0}' to a void type";
+sema_sme_attr_mismatch = Error (2) "function declared {0} was previously declared {1}, which has different SME function attributes";
+sema_sme_attr_wrong_type = Error (2) "{0} only applies to function types; type here is {1}";
+sema_sme_call_no_sme = Error (0) "call to a streaming function requires 'sme'";
+sema_sme_definition_sm_no_sme = Error (0) "function executed in streaming-SVE mode requires 'sme'";
+sema_sme_definition_za_no_sme = Error (0) "function using ZA state requires 'sme'";
+sema_sme_definition_zt0_no_sme2 = Error (0) "function using ZT0 state requires 'sme2'";
+sema_sme_unimplemented_za_save_restore = Error (0) "call to a function that shares state other than 'za' from a function that has live 'za' state requires a spill/fill of ZA, which is not yet implemented";
+sema_sme_za_call_no_za_state = Error (0) "call to a shared ZA function requires the caller to have ZA state";
+sema_sme_zt0_call_no_zt0_state = Error (0) "call to a shared ZT0 function requires the caller to have ZT0 state";
 sema_sometimes_uninit_var = WarningOff [SometimesUninitialized] (5) "variable {0} is {1:used|captured} uninitialized whenever {2:'{3}' loop {4}|'{3}' loop {4}|switch {3} is taken|its declaration is reached|{3} is called|'{3}' condition is {4}}";
 sema_spaceship_narrowing_const = Error (2) "argument to 'operator<=>' evaluates to {0}, which cannot be narrowed to type {1}";
 sema_spaceship_narrowing_var = Error (2) "argument to 'operator<=>' cannot be narrowed from type {0} to {1}";

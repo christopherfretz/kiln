@@ -76,6 +76,9 @@ pub(crate) struct Sig {
     pub cc: CallConv,
     /// x86 `no_caller_saved_registers` on the function type (WP-808).
     pub no_csr: bool,
+    /// The `AArch64` SME bits of the function type (WP-1426;
+    /// [`kiln_ast::types::sme`]).
+    pub sme: u16,
 }
 
 impl Sig {
@@ -2050,10 +2053,11 @@ impl<'a> Cg<'a> {
         let ret = p.ret();
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
         let (cc, no_csr) = (p.info().cc(), p.info().no_caller_saved_regs());
+        let sme = p.info().sme();
         let info =
             self.classify(ret, &params, params.len(), !extern_c, this.is_some(), cc, variadic);
         let fn_ty = self.fn_type(&info, this.is_some(), variadic);
-        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr }
+        Sig { info, fn_ty, ret, params, nothrow, this, vtt: false, cc, no_csr, sme }
     }
 
     /// WP-803: `sig` (of function type `fty`, variadic extras included)
@@ -2106,6 +2110,7 @@ impl<'a> Cg<'a> {
             vtt: false,
             cc: CallConv::Default,
             no_csr: false,
+            sme: 0,
         }
     }
 
@@ -2176,7 +2181,8 @@ impl<'a> Cg<'a> {
         let decl_info = self.classify(ret, &params, params.len(), !extern_c, t, cc, va);
         let fn_ty = self.fn_type(&decl_info, t, va);
         let nothrow = ast.types.exc_spec(&p).is_nothrow();
-        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr }
+        let sme = p.info().sme();
+        Sig { info, fn_ty, ret, params: all, nothrow, this, vtt: false, cc, no_csr, sme }
     }
 
     /// `sig` without its parameters (only `this`, and the VTT if any,
@@ -2856,6 +2862,7 @@ impl<'a> Cg<'a> {
         if sig.no_csr {
             fa.push(Attr::Str("no_caller_saved_registers".into(), "".into()));
         }
+        crate::sme::sme_attrs(ast, Some(first), sig.sme, &mut fa);
         // clang `ConstructAttributeList` under `-fno-plt`: a function not
         // yet defined is `nonlazybind` (kiln: none in the translation unit;
         // spec/codegen.md "Hardening and overflow options").

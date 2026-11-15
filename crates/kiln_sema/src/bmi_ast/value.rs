@@ -545,8 +545,8 @@ impl Sema<'_, '_> {
                 for _ in 0..n {
                     params.push(self.wire_ty(t, r, d)?);
                 }
-                let b = r.take(2).ok()?;
-                let info = FuncInfo::from_bits(u16::from_le_bytes([b[0], b[1]]));
+                let b = r.take(4).ok()?;
+                let info = FuncInfo::from_bits(u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
                 let exc = match r.u8().ok()? {
                     0 => ExcSpec::None,
                     1 => ExcSpec::Nothrow,

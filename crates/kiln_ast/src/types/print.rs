@@ -2040,6 +2040,7 @@ impl Printer<'_> {
         }
         self.push(")");
         let info = proto.info();
+        self.sme_attrs(info.sme());
         if !self.inside_cc_attr
             && let Some(a) = info.cc().attribute()
         {
@@ -2075,6 +2076,36 @@ impl Printer<'_> {
             self.after(proto.ret());
         }
         self.empty_ph = saved;
+    }
+
+    /// The SME attributes of a function type (clang
+    /// `printFunctionProtoAfter`): the streaming mode, then the ZA and the
+    /// ZT0 state.
+    fn sme_attrs(&mut self, bits: u16) {
+        use crate::types::sme;
+        if bits == 0 {
+            return;
+        }
+        if bits & sme::STREAMING_COMPATIBLE != 0 {
+            self.push(" __arm_streaming_compatible");
+        }
+        if bits & sme::STREAMING != 0 {
+            self.push(" __arm_streaming");
+        }
+        if bits & sme::AGNOSTIC_ZA != 0 {
+            // clang 22's `printFunctionProtoAfter` writes no space here.
+            self.push("__arm_agnostic(\"sme_za_state\")");
+        }
+        for (state, name) in [(sme::za(bits), "za"), (sme::zt0(bits), "zt0")] {
+            let kw = match state {
+                sme::PRESERVES => "preserves",
+                sme::IN => "in",
+                sme::OUT => "out",
+                sme::INOUT => "inout",
+                _ => continue,
+            };
+            self.push(&format!(" __arm_{kw}(\"{name}\")"));
+        }
     }
 
     /// clang's `FunctionProtoType::printExceptionSpecification`.

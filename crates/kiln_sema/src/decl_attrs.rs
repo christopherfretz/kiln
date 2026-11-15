@@ -226,6 +226,46 @@ impl Sema<'_, '_> {
         out
     }
 
+    /// clang `ParseFunctionDefinition`: each GNU attribute GCC knows (one
+    /// with a `[[gnu::]]` spelling, clang `isKnownToGCC`) among the
+    /// declarator's attributes `attrs` of a definition with a body warns
+    /// `-Wgcc-compat` at its name (WP-1426).
+    pub fn warn_gnu_attrs_on_definition(&mut self, attrs: &[AttrId]) {
+        let x86 = self.abi.triple.arch == kiln_abi::target::Arch::X86_64;
+        let cxx26 = self.std >= kiln_lex::Std::Cxx26;
+        for &a in attrs {
+            let node = *self.ast.attrs.get(a);
+            if node.syntax != AttrSyntax::Gnu || node.flags & AttrNode::IMPLICIT != 0 {
+                continue;
+            }
+            let name = attr_name(&node).or_else(|| match node.kind {
+                AttrKind::TARGET => Some("target"),
+                AttrKind::TARGET_CLONES => Some("target_clones"),
+                AttrKind::TARGET_VERSION => Some("target_version"),
+                AttrKind::REGPARM => Some("regparm"),
+                AttrKind::CALLING_CONV => {
+                    kiln_ast::attr::CC_ATTR_SPELLINGS.get(node.b as usize).copied()
+                }
+                _ => None,
+            });
+            let Some(name) = name else { continue };
+            let gcc = crate::attr_triage::attribute_support(
+                name,
+                AttrSyntax::Cxx11,
+                Some("gnu"),
+                self.clang_compat,
+                cxx26,
+                x86,
+            );
+            if gcc == crate::attr_triage::Support::Unknown {
+                continue;
+            }
+            let shown = format!("'{}'", self.attr_shown(&node, name));
+            let msg = self.diag(DiagId::sema_attribute_on_function_definition, node.loc).arg(shown);
+            self.emit(msg);
+        }
+    }
+
     pub fn act_on_type_position_attrs(&mut self, attrs: &mut Vec<AttrId>, in_chunk: bool) {
         // An annotation appertains only to a declaration
         // ([dcl.attr.annotation]/1), never to a type.
@@ -249,6 +289,21 @@ impl Sema<'_, '_> {
                 let msg = self
                     .diag(DiagId::sema_attribute_not_type_attr, node.loc)
                     .arg(format!("'{shown}'"));
+                self.emit(msg);
+                return false;
+            }
+            // WP-1426: an SME type keyword here applies to the type
+            // (`Sema::apply_cc_attrs`); `__arm_locally_streaming` and
+            // `__arm_new` are declaration attributes.
+            if in_chunk && node.kind == AttrKind::SME_TYPE {
+                self.ast.attrs.set_flags(a, node.flags | AttrNode::SME_IN_TYPE);
+                return true;
+            }
+            if in_chunk && matches!(node.kind, AttrKind::ARM_LOCALLY_STREAMING | AttrKind::ARM_NEW)
+            {
+                let msg = self
+                    .diag(DiagId::sema_keyword_attr_not_type_attr, node.loc)
+                    .arg(Self::sme_keyword_shown(&node));
                 self.emit(msg);
                 return false;
             }
@@ -603,6 +658,16 @@ impl Sema<'_, '_> {
             // (a class): clang's `'X' attribute only applies to functions
             // and methods`; on a declarator it is consumed into the type
             // ([`Sema::apply_cc_attrs`]; WP-808).
+            AttrKind::SME_TYPE => {
+                let msg = self
+                    .diag(DiagId::sema_keyword_attr_on_decl, node.loc)
+                    .arg(Self::sme_keyword_shown(&node));
+                self.emit(msg);
+                false
+            }
+            AttrKind::ARM_LOCALLY_STREAMING | AttrKind::ARM_NEW => {
+                self.check_sme_decl_attr(d, node)
+            }
             AttrKind::CALLING_CONV | AttrKind::NO_CALLER_SAVED_REGS | AttrKind::REGPARM => {
                 let name = if node.kind == AttrKind::CALLING_CONV {
                     kiln_ast::attr::CC_ATTR_SPELLINGS

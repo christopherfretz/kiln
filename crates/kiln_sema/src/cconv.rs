@@ -263,6 +263,7 @@ impl Sema<'_, '_> {
         if self.is_error_type(ty) {
             return ty;
         }
+        self.drop_decl_position_sme(&mut nodes);
         let name = |n: &AttrNode| {
             if n.kind == AttrKind::NO_CALLER_SAVED_REGS {
                 "no_caller_saved_registers"
@@ -275,6 +276,14 @@ impl Sema<'_, '_> {
         let Some(info) = self.fn_info_through(ty) else {
             let ts = format!("'{}'", self.ty_str(ty));
             for n in &nodes {
+                if n.kind == AttrKind::SME_TYPE {
+                    let msg = self
+                        .diag(DiagId::sema_sme_attr_wrong_type, n.loc)
+                        .arg(Self::sme_keyword_shown(n))
+                        .arg(ts.clone());
+                    self.emit(msg);
+                    continue;
+                }
                 let msg = self
                     .diag(DiagId::sema_type_attribute_wrong_type, n.loc)
                     .arg(format!("'{}'", name(n)))
@@ -294,7 +303,11 @@ impl Sema<'_, '_> {
         let mut written = false;
         let mut no_csr = info.no_caller_saved_regs();
         let mut regparm = info.regparm();
+        let sme = self.merge_sme_attrs(info, &nodes);
         for n in &nodes {
+            if n.kind == AttrKind::SME_TYPE {
+                continue;
+            }
             if n.kind == AttrKind::NO_CALLER_SAVED_REGS {
                 no_csr = true;
                 continue;
@@ -324,7 +337,7 @@ impl Sema<'_, '_> {
             written = true;
         }
         let f = move |i: FuncInfo| {
-            i.with_cc(cc).with_no_caller_saved_regs(no_csr).with_regparm(regparm)
+            i.with_cc(cc).with_no_caller_saved_regs(no_csr).with_regparm(regparm).with_sme(sme)
         };
         self.with_fn_info(ty, &f, true).unwrap_or(ty)
     }
@@ -414,8 +427,12 @@ impl Sema<'_, '_> {
             self.emit(msg);
         }
         let regparm = old.regparm();
+        // A redeclaration with other SME attributes is an error; it takes
+        // the previous ones, so nothing else is said about it (WP-1426).
+        self.check_sme_redecl(ty, pty, prev, at);
+        let sme = old.sme();
         let f = move |i: FuncInfo| {
-            i.with_cc(cc).with_no_caller_saved_regs(no_csr).with_regparm(regparm)
+            i.with_cc(cc).with_no_caller_saved_regs(no_csr).with_regparm(regparm).with_sme(sme)
         };
         self.with_fn_info(ty, &f, false).unwrap_or(ty)
     }

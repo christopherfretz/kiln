@@ -4008,11 +4008,13 @@ impl Sema<'_, '_> {
         // The calling convention and `no_caller_saved_registers` do not
         // decide correspondence either: a redeclaration naming another is
         // diagnosed by `Sema::merge_cc` (clang `IsOverload` /
-        // `MergeFunctionDecl`, WP-808).
+        // `MergeFunctionDecl`, WP-808); nor do the SME attributes
+        // (`Sema::check_sme_redecl`, WP-1426).
         let plain = |i: FuncInfo| {
             i.with_noreturn(false)
                 .with_cc(kiln_ast::types::CallConv::Default)
                 .with_no_caller_saved_regs(false)
+                .with_sme(0)
         };
         let (ia, ib) = (plain(pa.info()), plain(pb.info()));
         let a = self.ast.types.function(pa.ret(), &ra, ia, ExcSpec::None);
@@ -8468,6 +8470,7 @@ impl Sema<'_, '_> {
     #[allow(clippy::too_many_lines, reason = "one declaration's semantic checks in clang's order")]
     pub fn act_on_start_function_def(&mut self, f: DeclId) {
         self.check_alias_definition(f);
+        self.check_sme_definition(f);
         self.no_builtin_defined(f, false);
         // A deleted function is defined by its first declaration.
         let deleted = Some(self.ast.first(f)).filter(|&p| p != f && self.is_deleted_fn(p));

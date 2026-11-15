@@ -78,7 +78,10 @@ sema_arith_void_pointer = Extension [GnuPointerArith] (1) "arithmetic on{0: a po
 // [expr.add]/1: in C++ a `void` or function pointee is an error, not
 // the GNU extension of C (WP-219)
 sema_arith_void_pointer_cxx = Error (1) "arithmetic on{0: a|} pointer{0:|s} to void";
+sema_arm_conflicting_state = Error (1) "conflicting attributes for state '{0}'";
 sema_arm_invalid_specialreg = Error (0) "invalid special register for builtin";
+sema_arm_missing_state = Error (1) "missing state for {0}";
+sema_arm_unknown_state = Error (1) "unknown state '{0}'";
 sema_array_comparison = Warning [ArrayCompare] (0) "comparison between two arrays compare their addresses and will be deprecated in c++20; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_comparison_cxx26 = WarningError [ArrayCompareCxx26] (0) "comparison between two arrays is ill-formed in C++26; to compare array addresses, use unary '+' to decay operands to pointers";
 sema_array_designator_empty_range = Error (2) "array designator range [{0}, {1}] is empty";
@@ -187,6 +190,8 @@ sema_attribute_nonnull_no_pointers = Warning [IgnoredAttributes] (0) "'nonnull' 
 sema_attribute_not_function_pointer = Warning [IgnoredAttributes] (2) "{0} attribute is ignored because {1} is not a function pointer";
 sema_attribute_not_supported_in_cxx = Error (1) "{0} attribute is not supported in C++";
 sema_attribute_not_type_attr = Error (1) "{0} attribute cannot be applied to types";
+// WP-1426: clang `warn_attribute_on_function_definition`.
+sema_attribute_on_function_definition = Warning [GccCompat] (1) "GCC does not allow {0} attribute in this position on a function definition";
 sema_attribute_param_integers_only = Error (1) "{0} attribute argument may only refer to a function parameter of integer type";
 // WP-954: clang `err_attribute_argument_n_type` (constant) for `annotate`.
 sema_attribute_param_not_constant_expr = Error (2) "{0} attribute requires parameter {1} to be a constant expression";

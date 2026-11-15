@@ -412,6 +412,19 @@ contain any unexpanded parameter packs`); its type is a pack expansion of
 at instantiation (§9). A non-pack init-capture whose initializer names an
 unexpanded pack is `initializer contains unexpanded parameter pack`.
 
+The captured type of a by-copy capture, explicit or implicit, must be
+complete, sized and not abstract ([expr.prim.lambda.capture]/10, clang
+`captureInLambda`; WP-1426, `lambda/capture.rs` `check_by_copy_capture`):
+otherwise `by-copy capture of variable 'v' with incomplete type T` (and
+the forward-declaration note), `... with sizeless type T`, or `by-copy
+capture of value of abstract type T` (with the pure-virtual notes, once
+per class). Only the outermost lambda whose capture fails reports, once
+per variable; the lambda then becomes an error expression, so nothing
+else (`-Wunused-value`) is said about it. A by-reference capture is not
+checked. `[*this]` of an abstract class and a by-copy init-capture of
+one are `allocating an object of abstract class type` instead, and leave
+the lambda valid.
+
 ### 4.2 Implicit capture ([expr.prim.lambda.capture]/9-12)
 
 A name in the body that odr-uses (or, for a reference or a variable
