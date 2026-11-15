@@ -81,19 +81,19 @@ impl Sema<'_, '_> {
         let loc = ctx.loc;
         *out = match q {
             QueryOp::HasIdentifier => {
-                MetaOut::Scalar(u128::from(self.identifier(info_arg(args, 0)?).is_some()))
+                MetaOut::Scalar(u128::from(self.identifier(info_arg(args, 0)?, oven).is_some()))
             }
             QueryOp::IdentifierOf => {
-                self.meta_text(info_arg(args, 0)?, Text::Identifier, false, loc)?
+                self.meta_text(info_arg(args, 0)?, Text::Identifier, false, loc, oven)?
             }
             QueryOp::U8IdentifierOf => {
-                self.meta_text(info_arg(args, 0)?, Text::Identifier, true, loc)?
+                self.meta_text(info_arg(args, 0)?, Text::Identifier, true, loc, oven)?
             }
             QueryOp::DisplayStringOf => {
-                self.meta_text(info_arg(args, 0)?, Text::Display, false, loc)?
+                self.meta_text(info_arg(args, 0)?, Text::Display, false, loc, oven)?
             }
             QueryOp::U8DisplayStringOf => {
-                self.meta_text(info_arg(args, 0)?, Text::Display, true, loc)?
+                self.meta_text(info_arg(args, 0)?, Text::Display, true, loc, oven)?
             }
             QueryOp::SourceLocationOf => MetaOut::SrcLoc(self.meta_location_of(info_arg(args, 0)?)),
             QueryOp::KilnReflectionRange => {
@@ -130,13 +130,14 @@ impl Sema<'_, '_> {
         t: Text,
         u8: bool,
         loc: Loc,
+        oven: &Oven,
     ) -> Result<MetaOut, MetaError> {
         let key = (r, t as u8 + u8::from(u8));
         if let Some(&(cv, len)) = self.meta_names.strs.get(&key) {
             return Ok(MetaOut::Str(cv, len));
         }
         let s = match t {
-            Text::Identifier => match self.identifier(r) {
+            Text::Identifier => match self.identifier(r, oven) {
                 Some(id) => self.ast.symbols().as_str(id).to_owned(),
                 None => {
                     return fail(loc, format!("'{}' has no identifier", self.reflection_str(r)));
@@ -157,10 +158,13 @@ impl Sema<'_, '_> {
     /// cv-unqualified enumeration; a declaration with an identifier that
     /// is not a specialization; a literal operator (its ud-suffix). Not
     /// constructors, destructors, operator and conversion functions (and
-    /// their templates), unnamed entities and other types.
-    fn identifier(&self, r: ReflectionId) -> Option<Ident> {
-        if let Reflectee::FnParam(f, i) = self.ast.reflections.get(r) {
-            return self.param_identifier(f, i);
+    /// their templates), unnamed entities and other types; a data member
+    /// description's N (/1.11, WP-1462).
+    fn identifier(&self, r: ReflectionId, oven: &Oven) -> Option<Ident> {
+        match self.ast.reflections.get(r) {
+            Reflectee::FnParam(f, i) => return self.param_identifier(f, i),
+            Reflectee::DataMemberSpec(id) => return oven.dms(id)?.name,
+            _ => {}
         }
         self.decl_identifier(self.named_decl(r)?)
     }

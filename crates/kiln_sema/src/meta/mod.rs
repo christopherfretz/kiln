@@ -150,6 +150,60 @@ impl Sema<'_, '_> {
     /// parameter list (`info` or not, per parameter) are an op's; or a
     /// kiln extension declared at namespace scope. Only under
     /// `-freflection`.
+    /// The body the Oven runs when a metafunction is called through a
+    /// pointer or reference to it (`views::filter(is_template)`): `{
+    /// return f(params...); }`, whose direct call is the intrinsic. It is
+    /// not attached as `f`'s definition, which would make `f` a library
+    /// function ([`Self::meta_intrinsic_of`]). Non-static members are not
+    /// given one. Spec: spec/reflection.md §3.1.
+    pub(crate) fn meta_intrinsic_thunk(&mut self, f: DeclId) -> Option<kiln_ast::StmtId> {
+        use kiln_ast::expr::{CastKind, ExprFlags, NonOdrUse, ValueCategory};
+        use kiln_ast::types::TypeView;
+        self.meta_intrinsic_of(f)?;
+        let n = *self.ast.decls.get(f);
+        if n.kind() != DeclKind::Function {
+            return None;
+        }
+        let fty = n.ty()?;
+        let loc = n.loc();
+        let ret = self.ast.types.proto(fty)?.ret();
+        let mut args = Vec::new();
+        for p in self.param_decls(f) {
+            let pty = self.ast.decls.get(p).ty()?;
+            let nr = self.non_reference(pty);
+            let r = self.builder().decl_ref(p, nr, loc, None, NonOdrUse::None, ExprFlags::NONE);
+            let a = match self.ast.types.canonical_view(pty) {
+                TypeView::LValueRef(_) => r,
+                TypeView::RValueRef(_) => {
+                    self.builder().implicit_cast(CastKind::NoOp, r, nr, ValueCategory::XValue)
+                }
+                // A class parameter is passed as the glvalue it is copied
+                // from (the Oven reads class arguments by address).
+                _ if self.ast.types.as_record(nr).is_some() => r,
+                _ => crate::conv::lvalue_to_rvalue(self, r),
+            };
+            args.push(a);
+        }
+        let callee = self.builder().decl_ref(f, fty, loc, None, NonOdrUse::None, ExprFlags::NONE);
+        let callee = crate::conv::decay(self, callee);
+        let vk = match self.ast.types.canonical_view(ret) {
+            TypeView::LValueRef(_) => ValueCategory::LValue,
+            TypeView::RValueRef(_) => ValueCategory::XValue,
+            _ => ValueCategory::PRValue,
+        };
+        let rt = self.non_reference(ret);
+        let call = self.builder().call(callee, &args, rt, vk, loc, loc, ExprFlags::NONE);
+        let is_void = self.ast.types.is_void(rt);
+        let ret = self.builder().return_stmt(Some(call).filter(|_| !is_void), None, loc);
+        let body = if is_void {
+            let e = self.builder().expr_stmt(call);
+            self.builder().compound(&[e, ret], loc, loc)
+        } else {
+            self.builder().compound(&[ret], loc, loc)
+        };
+        Some(body)
+    }
+
     pub(crate) fn meta_intrinsic_of(&self, f: DeclId) -> Option<MetaOp> {
         if !self.reflection {
             return None;

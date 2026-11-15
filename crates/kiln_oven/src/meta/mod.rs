@@ -265,6 +265,12 @@ pub struct MetaCtx {
     /// [`crate::Oven::meta_c_bytes`] reads); for a value op given a
     /// range ([`materialize::Shape::Elems`]), the range's element type.
     pub(crate) elem: OTy,
+    /// A value op's range argument is an array object itself (a built-in
+    /// array, read in place), not a class viewing elements elsewhere: only
+    /// then can the argument be "a reference to a string literal object"
+    /// whose terminator `reflect_constant_string` drops
+    /// ([meta.define.static]/4).
+    pub(crate) elems_inline: bool,
     /// The intrinsic's declaration: the specialization whose signature
     /// gives a function template's `T` (`extract<T>`, `reflect_constant`;
     /// WP-479).

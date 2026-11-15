@@ -498,9 +498,12 @@ impl Sema<'_, '_> {
                     });
                     return DeleteReason::Yes;
                 }
+                // [dcl.init.general]/7.1: `std::meta::info` is
+                // const-default-constructible.
                 if !in_union
                     && quals.is_const()
                     && !init
+                    && !self.is_meta_info(fty)
                     && rec.is_none_or(|r| {
                         !self.defn_bits(r).contains(DefinitionBits::CAN_CONST_DEFAULT_INIT)
                     })

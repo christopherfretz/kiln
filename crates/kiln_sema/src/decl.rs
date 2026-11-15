@@ -8321,6 +8321,21 @@ impl Sema<'_, '_> {
                 .any(|x| x != v && self.ast.decls.var(x).is_some_and(|y| y.init.is_some()))
     }
 
+    /// [dcl.init.general]/6.3: default-initializing a `std::meta::info`
+    /// (or, /6.2, each element of an array of them) zero-initializes it,
+    /// /5.1: the null reflection; /7.1: the type is
+    /// const-default-constructible, so a `const` or `constexpr` one needs
+    /// no initializer and is a constant. The variable gets an implicit
+    /// value-initialization, which the Oven, codegen and the snapshot
+    /// paths already carry (WP-1462).
+    fn default_init_info_var(&mut self, v: DeclId, ty: QualType, constexpr: bool) {
+        let init = self.builder().implicit_value_init(ty);
+        let _ = self.builder().set_var_init(v, init);
+        if constexpr {
+            self.check_constexpr_init(v, init);
+        }
+    }
+
     fn default_init_var(&mut self, v: DeclId) {
         if self.ast.decls.decomp_bindings(v).is_some() {
             self.decomposition_requires_init(v);
@@ -8409,6 +8424,10 @@ impl Sema<'_, '_> {
         }
         let quals = self.ast.types.effective_quals(ty);
         let elem = self.base_element(ty);
+        if !self.is_c() && self.is_meta_info(elem) {
+            self.default_init_info_var(v, ty, spec.is_constexpr());
+            return;
+        }
         if spec.is_constexpr() {
             // [dcl.constexpr]/6: a default-initialized `constexpr` object
             // of class type is initialized by its default constructor,

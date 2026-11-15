@@ -96,6 +96,24 @@ Section references in brackets are to the C++26 IS.
   that is not an index the table handed out does not freeze ("kiln: value
   is not a reflection the compiler produced") and is not a valid
   intrinsic operand (§8.1).
+- **Default-initialization** ([dcl.init.general]/6.3, /5.1, /7.1;
+  WP-1462). A default-initialized `info` is zero-initialized: the null
+  reflection, and `info` is const-default-constructible, so `constexpr
+  info r;` is a constant and a class whose members are `info` without a
+  default member initializer is const-default-constructible (its
+  defaulted default constructor is not deleted for a `const info`
+  member). Sema gives a variable of type `info` (or array of it)
+  without an initializer an implicit value-initialization, which every
+  later layer (Oven, codegen, PCH snapshot, BMI) already carries. The
+  Oven zero-initializes the `info` subobjects that default-initialization
+  by a trivial default constructor leaves (`construct`), the `info`
+  members a constructor has no mem-initializer for (`member_prologue`),
+  and those of `new T` / `new T[n]` without an initializer; other scalar
+  members stay indeterminate. Compile-time only: the check walks the
+  layout when the bytecode is built, never at run time. GCC 16.1
+  zero-initializes only variables of type `info` (not arrays, members or
+  new-expressions); kiln follows the text (`dcl.init.general/
+  p6-info-default-init*.cpp`).
 - Overflow of the u32 index is a diagnostic, not a panic
   (`sema_too_many_reflections`; WP-471).
 
@@ -293,6 +311,15 @@ on every probe, including `display_string_of`, which both spell
   intrinsics too.
 - A recognized call with more than `MAX_META_ARGS` (8) arguments is not
   compiled (unsupported). No table row has more than three.
+- **Indirect calls** (WP-1462). A metafunction is a function: its address
+  may be taken (`views::filter(is_template)`, a `size_t (*)(info)`
+  parameter). Asked for the body of a recognized intrinsic that is a
+  non-member function, the bridge's `ensure_body` returns a synthesized
+  `{ return f(params...); }` (sema `meta_intrinsic_thunk`), whose direct
+  call is the intrinsic; it is not attached as `f`'s definition, which
+  would make `f` a library function. Class parameters are passed as the
+  glvalue the Oven reads by address. Tested by
+  `meta.reflection.queries/metafunction-pointer.cpp`.
 
 ### 3.2 The instruction and the bridge entry point
 - The call compiles to `Op::Builtin` with aux `bi::META | code << 8`, where
@@ -497,6 +524,18 @@ The context the VM passes with every call:
 
 The evaluation point is the pair `(scope, loc)`. A `PointDependent` op
 answers as of that point.
+
+Scope rules (WP-1462): a consteval block's synthesized lambda is no scope
+of its own (its introducer's `[` and `]` are both the `consteval`
+keyword, which marks it); the walk continues from the closure type's
+context ([meta.reflection.scope]/3.5). A class template specialization is
+a class scope like any other. Sema records the value of an immediate
+invocation in a default argument or default member initializer for reuse
+at later uses (`set_default_immediate_value`) only when the evaluation
+was not marked impure (`Oven::impure_count`): a point-dependent value
+(`access_context::current()` in a default member initializer used by an
+aggregate initialization) is evaluated afresh at each use. Tested by
+`meta.reflection.access.context/eval-point.cpp`.
 
 ### 3.5 Materialized results and range arguments
 - **Recipes.** When a call of an intrinsic is compiled, the Oven asks sema
@@ -1104,6 +1143,13 @@ annotation list) is interned by content in the Oven
 (`kiln_oven/src/meta/define.rs`, `DmsTable`), so two calls with the same
 options give the same reflection, whichever form the name was spelled
 in. `is_data_member_spec` tests for that kind.
+
+Queries of a description (WP-1462): `has_identifier`/`identifier_of`
+give N ([meta.reflection.names]); `is_bit_field` is whether W is given;
+`size_of`, `alignment_of` and `bit_size_of` measure T, with
+`alignment_of` A when given and `bit_size_of` W when given, and
+`size_of`/`alignment_of` of one with a W throw ([meta.reflection.layout]).
+Tested by `meta.reflection.layout/dms-object-param.cpp`.
 
 ### 6.2 `define_aggregate`
 **Preconditions**, checked in order. They are "Constant When" ones: a

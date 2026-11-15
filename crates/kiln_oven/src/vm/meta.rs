@@ -71,6 +71,14 @@ impl Oven {
             .filter(|_| value_op || matches!(op, MetaOp::Trait(_)))
             .and_then(|s| s.ranges.iter().flatten().find_map(|&rc| recipe_elem(&self.types, rc)))
             .unwrap_or(OTy(t1));
+        let elems_inline = value_op
+            && site.is_some_and(|s| {
+                s.ranges
+                    .iter()
+                    .flatten()
+                    .next()
+                    .is_some_and(|rc| matches!(rc, Recipe::Inline { off: 0, .. }))
+            });
         // The function whose body holds the call (thunks have none).
         let scope = self.stack.last().and_then(|f| self.funcs[f.func as usize].decl);
         // The first register above the calling frame's: where anything
@@ -84,6 +92,7 @@ impl Oven {
             plainly: self.plain(),
             trial,
             elem,
+            elems_inline,
             callee: site.map(|s| s.callee),
             top,
         };

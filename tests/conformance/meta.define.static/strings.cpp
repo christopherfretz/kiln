@@ -42,6 +42,12 @@ static_assert(std::define_static_string(cs) == std::define_static_string("ab"));
 static_assert(std::define_static_string(std::string_view("hello")) == s);
 static_assert(std::define_static_string(std::string_view("hello", 3)) ==
               std::define_static_string("hel"));
+// A view over a literal that takes in its terminator is no string
+// literal: the terminator is one of its characters ([meta.define.static]
+// /4 drops it only for a reference to a string literal object; WP-1462).
+static_assert(std::define_static_string(std::string_view("abc", 4)) ==
+              std::define_static_string("abc\0"));
+static_assert(std::define_static_string(std::string_view("abc", 4))[4] == '\0');
 static_assert(*std::define_static_string("") == '\0');
 
 // Other character types.
@@ -98,7 +104,7 @@ class source_location {
 constexpr auto loc1 = source_location::current();
 constexpr auto loc2 = source_location::current();
 constexpr auto loc3 = source_location::current("f.cpp", 1);
-static_assert(loc1.line() == 98 && loc2.line() == 99);
+static_assert(loc1.line() == 104 && loc2.line() == 105);
 static_assert(!loc1.same(loc2));
 static_assert(loc3.same(source_location::current("f.cpp", 1)));
 static_assert(loc1.file() == loc2.file());

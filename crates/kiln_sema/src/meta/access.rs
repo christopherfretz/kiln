@@ -65,10 +65,18 @@ impl Sema<'_, '_> {
             }
             AccessOp::CurrentClass => {
                 let s = self.current_scope(ctx);
-                let c = if self.kind_of(s) == DeclKind::CXXRecord {
+                let class = |k| {
+                    matches!(
+                        k,
+                        DeclKind::CXXRecord
+                            | DeclKind::ClassTemplateSpecialization
+                            | DeclKind::ClassTemplatePartialSpecialization
+                    )
+                };
+                let c = if class(self.kind_of(s)) {
                     Some(s)
                 } else if self.kind_of(s).is_function() {
-                    self.ast.decls.get(s).ctx().filter(|&c| self.kind_of(c) == DeclKind::CXXRecord)
+                    self.ast.decls.get(s).ctx().filter(|&c| class(self.kind_of(c)))
                 } else {
                     None
                 };
@@ -120,18 +128,32 @@ impl Sema<'_, '_> {
     }
 
     /// The function, class or namespace whose scope the evaluation point
-    /// is immediately in ([meta.reflection.access.context]/5): the
+    /// is immediately in ([meta.reflection.scope]/5, CURRENT-SCOPE): the
     /// function whose body holds the call, else the context the
-    /// constant expression is in.
+    /// constant expression is in. A consteval block's body is not a
+    /// function of its own: the evaluation point is in the scope the
+    /// outermost enclosing consteval-block-declaration inhabits
+    /// ([meta.reflection.scope]/3.5), so the walk goes on from the
+    /// block's synthesized lambda to the context of its closure type.
     fn current_scope(&self, ctx: &MetaCtx) -> DeclId {
         let mut cur = Some(ctx.scope.unwrap_or_else(|| self.access_start()));
         for _ in 0..10_000 {
             let Some(c) = cur else { break };
             let k = self.kind_of(c);
             if k.is_function()
+                && let Some(closure) = self.consteval_block_closure(c)
+            {
+                cur = self.ast.decls.get(closure).ctx();
+                continue;
+            }
+            if k.is_function()
                 || matches!(
                     k,
-                    DeclKind::CXXRecord | DeclKind::Namespace | DeclKind::TranslationUnit
+                    DeclKind::CXXRecord
+                        | DeclKind::ClassTemplateSpecialization
+                        | DeclKind::ClassTemplatePartialSpecialization
+                        | DeclKind::Namespace
+                        | DeclKind::TranslationUnit
                 )
             {
                 return c;
@@ -139,6 +161,18 @@ impl Sema<'_, '_> {
             cur = self.ast.decls.get(c).ctx();
         }
         self.ast.tu
+    }
+
+    /// The closure type of the consteval block whose synthesized lambda
+    /// has call operator `f`, if it is one: the parser gives that lambda
+    /// an introducer whose `[` and `]` are both the `consteval` keyword
+    /// (`kiln_parse` `parse_consteval_block_call`), which no written
+    /// lambda has (its brackets are two tokens), and a substituted lambda
+    /// keeps its pattern's introducer.
+    pub(crate) fn consteval_block_closure(&self, f: DeclId) -> Option<DeclId> {
+        let id = self.ast.call_op_lambda(f)?;
+        let data = self.ast.exprs.lambdas.get(id);
+        (data.lbracket.is_valid() && data.lbracket == data.rbracket).then_some(data.closure)
     }
 
     /// The reflection of scope `s` (a function, class or namespace).

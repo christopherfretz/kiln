@@ -907,6 +907,13 @@ impl Oven {
         self.run.impure += 1;
     }
 
+    /// How many times an evaluation was marked impure so far (monotonic):
+    /// a caller compares it around an evaluation to learn whether the
+    /// value depends on where it ran. O(1).
+    pub fn impure_count(&self) -> u64 {
+        self.run.impure
+    }
+
     /// Opens a transactional trial (spec/oven.md "Trial evaluation",
     /// `TrialMode::Transactional`) around bridge work that may evaluate
     /// nested constants (`std::meta::can_substitute`): every effect is
