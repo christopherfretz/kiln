@@ -15,6 +15,9 @@ pub enum DbgRecordKind {
     Declare,
     /// `#dbg_value`: `addr` is the variable's value.
     Value,
+    /// `#dbg_label(!label, !loc)`: `var` is the `DILabel`; `addr` and
+    /// `expr` are not printed.
+    Label,
 }
 
 /// A debug variable record (LLVM 19 `DbgVariableRecord`), printed as

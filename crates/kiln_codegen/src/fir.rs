@@ -438,6 +438,8 @@ pub(crate) struct IndirectGoto {
 /// A `#dbg_declare` record before an instruction (WP-814).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DbgRec {
+    /// A `#dbg_label` (`var` is the `DILabel`, `addr` and `expr` unused).
+    pub label: bool,
     pub addr: V,
     pub var: MetadataId,
     pub expr: MetadataId,
@@ -479,6 +481,11 @@ pub(crate) struct FirDbg {
     /// The function's variables (the subprogram's `retainedNodes` when
     /// optimizing).
     pub vars: Vec<MetadataId>,
+    /// The function's labels, after the variables in `retainedNodes`
+    /// when optimizing (`DIBuilder::finalizeSubprogram`).
+    pub labels: Vec<MetadataId>,
+    /// clang `VLAExprCounter`: the next `__vla_exprN`.
+    pub vla_exprs: u32,
     /// Nesting of clang `DisableDebugLocationUpdates` (a default
     /// argument): while nonzero no location or scope changes and no
     /// variable is described; the builder keeps its location.
@@ -507,6 +514,8 @@ impl FirDbg {
             ret_ptr: None,
             ret_dbg: true,
             vars: Vec::new(),
+            labels: Vec::new(),
+            vla_exprs: 0,
             disabled: 0,
             trailing: Vec::new(),
             recs: Vec::new(),
@@ -1527,7 +1536,11 @@ impl Fir {
                 if let (Some(Some(id)), Some(addr)) = (vmap[*i as usize].map(Value::as_inst), addr)
                 {
                     let rec = kiln_llvm::DbgRecord {
-                        kind: kiln_llvm::DbgRecordKind::Declare,
+                        kind: if r.label {
+                            kiln_llvm::DbgRecordKind::Label
+                        } else {
+                            kiln_llvm::DbgRecordKind::Declare
+                        },
                         addr,
                         var: r.var,
                         expr: r.expr,

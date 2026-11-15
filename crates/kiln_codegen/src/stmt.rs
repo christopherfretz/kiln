@@ -208,7 +208,8 @@ impl Cg<'_> {
     }
 
     /// clang `EmitLabel`.
-    pub(crate) fn emit_label(&mut self, d: DeclId) {
+    /// clang `EmitLabel` of label `d` defined by the statement at `at`.
+    pub(crate) fn emit_label(&mut self, d: DeclId, at: kiln_source::Loc) {
         let blk = match self.f.labels.get(&d).copied() {
             None => {
                 let b = self.f.fir.create_block();
@@ -231,6 +232,9 @@ impl Cg<'_> {
             l.push(d);
         }
         self.emit_block(blk, false);
+        if self.dbg_on() {
+            self.di_label(d, at);
+        }
     }
 
     fn stmt_children(&self, s: StmtId) -> Vec<StmtId> {
@@ -386,7 +390,7 @@ impl Cg<'_> {
                 r
             }
             StmtKind::LabelStmt => {
-                self.emit_label(DeclId::new(n.a()));
+                self.emit_label(DeclId::new(n.a()), n.loc());
                 self.prof_inc(Key::Stmt(s));
                 self.emit_stmt(StmtId::new(n.b()))
             }

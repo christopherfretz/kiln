@@ -253,6 +253,14 @@ pub(crate) struct Di<'a> {
     /// (scope, entity, file, line) of the pending ones: an identical
     /// entity is kept once (LLVM uniquing).
     import_keys: FxHashSet<(MetadataId, DeclId, MetadataId, u32)>,
+    /// clang `SizeExprCache`: a variable length array dimension's
+    /// `DISubrange` count (its `__vla_exprN` variable, or a constant),
+    /// by the dimension's size expression (WP-1445).
+    pub vla_counts: FxHashMap<kiln_ast::ExprId, MdField>,
+    /// During the top-level walk, the next top-level declaration: what
+    /// clang has parsed when it emits the current one (invalid for the
+    /// last one: everything; `None` after the walk; WP-1445).
+    pub top_cut: Option<Loc>,
 }
 
 /// An imported entity whose `entity:` is a function or variable not
@@ -332,6 +340,8 @@ impl<'a> Cg<'a> {
             ns_aliases: FxHashMap::default(),
             pending_imports: Vec::new(),
             import_keys: FxHashSet::default(),
+            vla_counts: FxHashMap::default(),
+            top_cut: None,
         }));
     }
 
@@ -684,6 +694,33 @@ fn join(parts: &[&str]) -> String {
         s.push_str(p);
     }
     s
+}
+
+/// True if `a` precedes `b` in the translation unit (clang
+/// `isBeforeInTranslationUnit`): the two locations' include chains are
+/// compared at their nearest common file.
+pub(crate) fn before_in_tu(sm: &SourceManager, a: Loc, b: Loc) -> bool {
+    let chain = |l: Loc| {
+        let mut v = Vec::new();
+        let mut l = sm.expansion_loc(l);
+        while let Some((f, off)) = sm.offset_of(l) {
+            v.push((f, off));
+            let inc = sm.include_loc(l);
+            if !inc.is_valid() || v.len() > 256 {
+                break;
+            }
+            l = sm.expansion_loc(inc);
+        }
+        v
+    };
+    let (ca, cb) = (chain(a), chain(b));
+    for (i, &(fa, oa)) in ca.iter().enumerate() {
+        if let Some(j) = cb.iter().position(|&(fb, _)| fb == fa) {
+            let ob = cb[j].1;
+            return oa < ob || (oa == ob && i < j);
+        }
+    }
+    false
 }
 
 #[cfg(test)]

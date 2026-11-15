@@ -7168,6 +7168,16 @@ impl Sema<'_, '_> {
         if ds.loc.is_valid() && ds.loc != d.name_loc() && self.is_instantiation_dependent_type(ty) {
             let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
             self.note_type_spec_loc(v, ds, d.name_loc());
+        } else if ds.loc.is_valid()
+            && ds.loc != d.name_loc()
+            && !self.is_c()
+            && ds.constexpr.is_none()
+            && !self.in_local_scope()
+        {
+            // A variable that may be dynamically initialized: its
+            // initialization function's exception exit is here (clang
+            // `CurEHLocation = D->getBeginLoc()`; WP-1445).
+            let _ = self.ast.decls.cold.begin_loc.insert(v, ds.loc);
         }
         self.note_ref_loc(v, d, ty);
         self.lambda_mangle.var = Some(v);

@@ -232,6 +232,13 @@ positioned with `position_at_end(bb)`, `position_before(inst)` or
 | EH | `landingpad` (`cleanup`, `catch`/`filter` clauses), `resume`, `catchswitch`, `catchpad`, `cleanuppad`, `catchret`, `cleanupret` |
 | terminators | `br`, `cond_br`, `switch`, `indirect_br`, `ret`, `ret_void`, `unreachable` |
 
+Debug records (LLVM 19's record form, `DbgRecord`, attached before an
+instruction or at a block's end) are not instructions. `DbgRecordKind`
+is `Declare` (`#dbg_declare(T v, !var, !DIExpression(...), !loc)`),
+`Value` (`#dbg_value(...)`, same operands) or `Label`
+(`#dbg_label(!label, !loc)`: `var` is the `DILabel`, the value and
+expression operands are not printed; WP-1445).
+
 Instructions without a result return a `void` value that is rejected as an
 operand. An `Inst` is a payload plus result type, **at most 24 bytes**
 (asserted); variable-length operand lists live in the function's operand
@@ -390,7 +397,6 @@ Not modeled; codegen must not need them in M2. Each is additive later.
 - `ifunc`s, prefix/prologue data, `partition`, `sanitizer_metadata`,
   `no_sanitize_*` on globals, `uselistorder` directives, summary entries
   (`^0 = ...`), `callbr`.
-- Debug records (`#dbg_value(...)`); the intrinsic form is used (§6).
 - Constant expressions LLVM 19 removed or folds on parse (`fadd`, `icmp`,
   `select`, `extractvalue`, ...).
 - `; preds =` and `; Function Attrs:` comments (§7).

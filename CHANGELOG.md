@@ -66,6 +66,14 @@ Planned as 1.3.0.
   `sme`. The SME intrinsics of `<arm_sme.h>` are not provided yet.
 - clang's `-Wgcc-compat` warning for a GNU attribute GCC knows written
   after the declarator of a function definition (WP-1426).
+- More debug info under `-g`, matching clang 19 (WP-1445): structured
+  bindings are debugger variables (clang's `DIExpression` on the
+  decomposed object), a variable-length array gets its variable and a
+  `DISubrange` counted by `__vla_exprN`, labels get `DILabel` and
+  `#dbg_label`, and the generated initializer functions
+  (`__cxx_global_var_init*`, `_GLOBAL__sub_I_*`,
+  `__cxx_global_array_dtor`, `__tls_init`) get artificial subprograms,
+  so a breakpoint in a dynamic initializer works.
 
 ### Changed
 
@@ -76,6 +84,9 @@ Planned as 1.3.0.
 
 ### Fixed
 
+- Debug info (WP-1445): an explicitly specialized member function's
+  declaration is at the specialization, and a class with a const member
+  of class type is `DIFlagNonTrivial`, as in clang.
 - A precompiled header is byte-reproducible (WP-1415): two builds of
   the same header with the same kiln, command line and working
   directory, over files with the same modification times, now write the

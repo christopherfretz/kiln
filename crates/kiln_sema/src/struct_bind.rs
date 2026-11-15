@@ -821,7 +821,12 @@ impl Sema<'_, '_> {
         // in `BuildRecoveryCallExpr`); a failed overload resolution is.
         let mut recoverable = true;
         let call = if member_get {
-            let m = self.act_on_member(e, get, loc, loc, false);
+            // clang looks `get` up at the decomposition's location
+            // (`LookupResult MemberGet(S, GetDN, Src->getLocation())`),
+            // which becomes the member expression's and the call's
+            // expression location (the `-g` line of the call, WP-1445).
+            let vloc = self.ast.decls.get(v).loc();
+            let m = self.act_on_member(e, get, vloc, loc, false);
             if self.is_err_expr(m) {
                 return None;
             }

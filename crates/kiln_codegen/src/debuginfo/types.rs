@@ -475,7 +475,16 @@ impl<'a> Cg<'a> {
             let (count, next) = match self.ast.types.view(el.ty()) {
                 TypeView::ConstantArray(c) => (i64::try_from(c.size).unwrap_or(-1), c.elem),
                 TypeView::IncompleteArray(e) if one && subs.is_empty() => (1, e),
-                TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => (-1, e),
+                // A dimension `EmitAndRegisterVariableArrayDimensions`
+                // registered counts by its `__vla_exprN` (WP-1445).
+                TypeView::VariableArray { elem, size } => {
+                    let c = self.di.as_deref().and_then(|d| d.vla_counts.get(&size).cloned());
+                    let f = Fields(vec![("count", c.unwrap_or(MdField::Int(-1)))]);
+                    subs.push(Some(self.m.md_specialized("DISubrange", false, f.0)));
+                    el = elem;
+                    continue;
+                }
+                TypeView::IncompleteArray(e) => (-1, e),
                 _ => break,
             };
             let s =
@@ -750,6 +759,28 @@ impl<'a> Cg<'a> {
         k == DebugInfoKind::Constructor && self.di_can_home(rd)
     }
 
+    /// clang's `isTrivial()` differs from [class.prop]/1 for a class with a
+    /// non-mutable member (or array) of const or volatile class type: its
+    /// implicit copy (or move) member selects no member of the subobject
+    /// (`findTrivialSpecialMember`), so clang counts it non-trivial even
+    /// though it is deleted and not eligible. For `DIFlagNonTrivial` only;
+    /// the type traits follow the standard (docs/status/deviations.md).
+    fn di_clang_cv_class_member(&self, def: DeclId) -> bool {
+        let ast = self.ast;
+        ast.decls.members(def).any(|m| {
+            let n = ast.decls.get(m);
+            let (DeclKind::Field, Some(mut q)) = (n.kind(), n.ty()) else { return false };
+            if ast.decls.field(m).is_some_and(kiln_ast::decl::FieldData::is_mutable) {
+                return false;
+            }
+            let cv = ast.types.effective_quals(q);
+            while let Some(e) = ast.types.element(q) {
+                q = e;
+            }
+            (cv.is_const() || cv.is_volatile()) && ast.types.as_record(q).is_some()
+        })
+    }
+
     /// clang `hasExplicitMemberDefinition`: a method of the class was
     /// instantiated from a member function the class template defines
     /// (and is not explicitly specialized).
@@ -853,7 +884,9 @@ impl<'a> Cg<'a> {
         } else {
             "DIFlagTypePassByReference"
         }];
-        if !(bits.contains(B::TRIVIAL_DEFAULT_CTOR) && bits.contains(B::TRIVIALLY_COPYABLE)) {
+        if !(bits.contains(B::TRIVIAL_DEFAULT_CTOR) && bits.contains(B::TRIVIALLY_COPYABLE))
+            || self.di_clang_cv_class_member(def)
+        {
             flags.push("DIFlagNonTrivial");
         }
         if bits.contains(B::ANONYMOUS) {
@@ -1010,7 +1043,7 @@ impl<'a> Cg<'a> {
         let mut flags = vec!["DIFlagFwdDecl"];
         let bits = self.class_bits(rd);
         let def = self.class_def(rd);
-        if def.is_none()
+        if def.is_none_or(|d| self.di_clang_cv_class_member(d))
             || !(bits.contains(B::TRIVIAL_DEFAULT_CTOR) && bits.contains(B::TRIVIALLY_COPYABLE))
         {
             flags.push("DIFlagNonTrivial");
@@ -1227,6 +1260,48 @@ impl<'a> Cg<'a> {
         self.di_instance_fn_type(&fp, rd, false)
     }
 
+    /// Where member function `first` (a first declaration) is declared
+    /// as clang's member list sees it when the class's debug type is
+    /// built: an explicit function template specialization where it is
+    /// written; an explicitly specialized member of a class template
+    /// specialization at the specialization if it was declared by then
+    /// (clang `CheckMemberSpecialization`'s `setLocation`); during the
+    /// top-level walk any other member of a specialization at its
+    /// pattern's first declaration (its definition is instantiated at the
+    /// end of the unit, `InstantiateFunctionDefinition` then moves it).
+    fn di_member_spec_loc(&self, first: DeclId) -> Option<kiln_source::Loc> {
+        let ast = self.ast;
+        let redecl =
+            |m: DeclId| ast.redecls_of(m).find(|&r| r != m).map(|r| ast.decls.get(r).loc());
+        if ast.spec_info(first).is_some_and(|(_, i)| i.kind == SpecKind::ExplicitSpecialization) {
+            return redecl(first);
+        }
+        let (_, info) = ast.member_spec_info(first)?;
+        let d = self.di.as_deref()?;
+        if info.kind == SpecKind::ExplicitSpecialization
+            && let Some(s) = redecl(first)
+            && d.top_cut
+                .is_none_or(|c| c == kiln_source::Loc::INVALID || super::before_in_tu(d.sm, s, c))
+        {
+            return Some(s);
+        }
+        // `template struct X<int>;` instantiates the member definitions at
+        // once ([temp.explicit]/10), so the member already sits at its
+        // definition.
+        let eid = SpecKind::ExplicitInstantiationDefinition;
+        let explicit = info.kind == eid
+            || ast
+                .decls
+                .get(first)
+                .ctx()
+                .and_then(|c| ast.spec_info(c))
+                .is_some_and(|(_, i)| i.kind == eid);
+        if explicit {
+            return None;
+        }
+        d.top_cut.map(|_| ast.decls.get(ast.first(info.instantiated_from)).loc())
+    }
+
     /// The declaration of member function `m` (clang
     /// `CreateCXXMemberFunction`, cached by first declaration).
     pub(crate) fn di_method_decl(&mut self, m: DeclId) -> Option<MetadataId> {
@@ -1246,8 +1321,11 @@ impl<'a> Cg<'a> {
         let linkage =
             (!structor && !local).then(|| mangle::mangle_decl(ast, &mut self.anon, first));
         let implicit = n.has(DeclFlags::IMPLICIT);
+        // clang `CheckMemberSpecialization` moves the instantiated member
+        // to its first explicit specialization (`setLocation`).
+        let loc = self.di_member_spec_loc(first).unwrap_or(n.loc());
         let (file, line) =
-            if implicit { (None, 0) } else { (Some(self.di_file(n.loc())), self.di_line(n.loc())) };
+            if implicit { (None, 0) } else { (Some(self.di_file(loc)), self.di_line(loc)) };
         let spec = |p: fn(FnSpec) -> bool| {
             ast.redecls_of(first).any(|r| ast.decls.function(r).is_some_and(|f| p(f.spec)))
         };
