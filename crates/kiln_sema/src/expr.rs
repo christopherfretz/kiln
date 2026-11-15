@@ -7075,6 +7075,13 @@ impl Sema<'_, '_> {
         } else {
             e
         };
+        if self.is_c()
+            && style == CastStyle::CStyle
+            && self.ast.types.as_record(ty).is_some()
+            && let Some(r) = self.c_record_self_cast(e, ty, loc, rparen)
+        {
+            return r;
+        }
         // [expr.static.cast]/4 with a class target: direct-initialization
         // of a temporary from an object of the same or a derived class
         // ([dcl.init.general]/16.6.2; clang's `ConstructorConversion`).

@@ -1010,18 +1010,14 @@ impl Sema<'_, '_> {
         if let Some(x) = self.atomic_class_init(ty, e, ctx, at) {
             return x;
         }
-        if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
+        // C: a structure or union is initialized by the simple-assignment
+        // constraints (C23 6.7.11p13, 6.5.17.2), whose lvalue conversion
+        // drops the operand's qualifiers, so a `volatile` source is fine
+        // (it was a C++ copy construction, WP-1449).
+        if !self.is_c()
+            && let Some(x) = self.class_init_from_expr(ty, e, ctx, at)
+        {
             return x;
-        }
-        if self.ast.types.as_record(ty).is_some() && !self.expr_is_type_dependent(e) {
-            if ctx == ConvCtx::DirectInitialization {
-                let site = ConstructSite::at(at);
-                if let Some(x) = self.construct_class(ty, &[e], InitStyle::Direct, site) {
-                    return x;
-                }
-            } else if let Some(x) = self.convert_to_class(e, ty, ctx, at, DeletedAs::Call) {
-                return x;
-            }
         }
         // A type-dependent initializer whose type is known (`T x(U(a))`,
         // `U(a)` a `CXXUnresolvedConstructExpr` of class `U`): initialized
@@ -1051,6 +1047,29 @@ impl Sema<'_, '_> {
                 let loc = self.ast.exprs.get(e).loc();
                 self.recover(ty, &[e], loc)
             }
+        }
+    }
+
+    /// C++: the initialization of an object of class type `ty` from `e`
+    /// by a constructor or a conversion function ([dcl.init.general]/16.6);
+    /// `None` when neither applies.
+    fn class_init_from_expr(
+        &mut self,
+        ty: QualType,
+        e: ExprId,
+        ctx: ConvCtx,
+        at: Loc,
+    ) -> Option<ExprId> {
+        if let Some(x) = self.construct_from_class(e, ty, ctx, at, DeletedAs::Call) {
+            return Some(x);
+        }
+        if self.ast.types.as_record(ty).is_none() || self.expr_is_type_dependent(e) {
+            return None;
+        }
+        if ctx == ConvCtx::DirectInitialization {
+            self.construct_class(ty, &[e], InitStyle::Direct, ConstructSite::at(at))
+        } else {
+            self.convert_to_class(e, ty, ctx, at, DeletedAs::Call)
         }
     }
 
@@ -1272,8 +1291,14 @@ impl Sema<'_, '_> {
 
     /// A value-initialized member with no initializer: a nested list for a
     /// class or an array of classes, `ImplicitValueInitExpr` otherwise
-    /// (clang's `InitListChecker` fillers).
+    /// (clang's `InitListChecker` fillers). In C every filler is an
+    /// `ImplicitValueInitExpr` (C has no list-initialization of a
+    /// subaggregate without braces; clang's C `InitListChecker`), which
+    /// codegen emits as the null of the named type.
     pub(crate) fn filler(&mut self, ty: QualType, at: Loc) -> ExprId {
+        if self.is_c() {
+            return self.builder().implicit_value_init(ty);
+        }
         let mut base = ty;
         while self.ast.types.array_size(base).is_some()
             && let Some(e) = self.ast.types.element(base)

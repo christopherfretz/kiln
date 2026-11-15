@@ -31,6 +31,33 @@ impl Sema<'_, '_> {
         if first == second { format!("'{}'", self.ty_str(second)) } else { self.ty_arg(second) }
     }
 
+    /// A C-style cast of a structure or union to its own type (C17 6.5.4p2
+    /// requires a scalar type; GCC and clang accept it as an extension,
+    /// `-Wpedantic`): the operand's value, converted by a no-op cast
+    /// (clang `CheckCStyleCast`, `ext_typecheck_cast_nonscalar`). The
+    /// lvalue conversion drops the operand's qualifiers, so a `volatile`
+    /// structure casts too. `None` when the types differ.
+    pub(super) fn c_record_self_cast(
+        &mut self,
+        e: ExprId,
+        ty: QualType,
+        loc: Loc,
+        rparen: Loc,
+    ) -> Option<ExprId> {
+        if !self.ast.types.same_unqualified(self.ety(e), ty) {
+            return None;
+        }
+        let x = conv::decay(self, e);
+        let msg = self
+            .diag(DiagId::sema_c_cast_nonscalar_same, loc)
+            .arg(self.ty_arg(ty))
+            .range(self.expr_range(e));
+        self.emit(msg);
+        self.mark_explicit(x, e);
+        let to = conv::strip_cv(self, ty);
+        Some(self.explicit_cast(CastStyle::CStyle, CastKind::NoOp, x, to, loc, rparen))
+    }
+
     /// A C-style cast between a pointer and a non-pointer scalar (clang
     /// `CheckCStyleCast`): a pointer to an integer narrower than a pointer
     /// warns `-Wpointer-to-int-cast` (C17 6.3.2.3p6: implementation-defined,

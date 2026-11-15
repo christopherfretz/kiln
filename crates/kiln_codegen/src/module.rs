@@ -171,6 +171,11 @@ pub(crate) struct Cg<'a> {
     pub walk_epoch: u32,
     /// Definitions to emit (clang `DeferredDeclsToEmit`).
     pub to_emit: Vec<Def>,
+    /// C: the acting definitions of the objects defined only by tentative
+    /// definitions, in the order of their first tentative definition,
+    /// emitted after the top-level walk (clang `CompleteTentativeDefinition`
+    /// at the end of the translation unit).
+    pub c_tentatives: Vec<DeclId>,
     /// First declarations of the end-of-TU instantiations not yet handed
     /// to `EmitGlobal` (§2a): while held, a reference only declares them,
     /// as clang's references to a pending instantiation without a body.
@@ -400,6 +405,7 @@ impl<'a> Cg<'a> {
             deferred: FxHashMap::default(),
             completion_index: FxHashMap::default(),
             walk_epoch: u32::MAX,
+            c_tentatives: Vec::new(),
             held: ast
                 .templates
                 .end_of_tu_defs()
@@ -539,6 +545,9 @@ impl<'a> Cg<'a> {
         }
         self.emit_members(tu)?;
         self.walk_epoch = u32::MAX;
+        for d in std::mem::take(&mut self.c_tentatives) {
+            self.emit_global_var_def(d)?;
+        }
         // A variable instantiated at a reference whose declaration the
         // walk did not reach (§2a).
         for (_, _, v) in self.ast.templates.ref_var_insts() {
@@ -1321,17 +1330,36 @@ impl<'a> Cg<'a> {
         // C tentative definitions (C23 6.9.2p2): the definition with an
         // initializer, else the last tentative one, defines the object;
         // Sema completed that one's type (clang `EmitTentativeDefinition`
-        // of `getActingDefinition`, WP-1286).
+        // of `getActingDefinition`, WP-1286). Without an initializer the
+        // object is defined at the end of the translation unit, in the
+        // order of the first tentative definitions (clang Sema's
+        // `TentativeDefinitions`); a reference before then has already
+        // placed it in the module (WP-1449).
         if ast.lang_c && v.init.is_none() {
             let init =
                 ast.redecls_of(d).any(|r| ast.decls.var(r).is_some_and(|x| x.init.is_some()));
-            let last = ast.redecls_of(d).find(|&r| {
-                ast.decls.var(r).is_some_and(|x| x.spec.storage() != VarStorage::Extern)
-            });
-            if init || last != Some(d) {
+            if init {
                 return Ok(());
             }
+            let mut tentative = ast.redecls_of(d).filter(|&r| {
+                ast.decls.var(r).is_some_and(|x| x.spec.storage() != VarStorage::Extern)
+            });
+            let last = tentative.next();
+            let first = tentative.last().or(last);
+            if first == Some(d)
+                && let Some(last) = last
+            {
+                self.c_tentatives.push(last);
+            }
+            return Ok(());
         }
+        self.emit_global_var_def(d)
+    }
+
+    /// clang `EmitGlobal` for a variable definition: emitted now, or
+    /// deferred to its first use when discardable.
+    fn emit_global_var_def(&mut self, d: DeclId) -> R<()> {
+        let ast = self.ast;
         let first = ast.first(d);
         // [temp.explicit]/14: an explicit instantiation declaration
         // provides no definition (references name the external symbol).

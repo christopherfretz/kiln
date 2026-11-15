@@ -4,10 +4,10 @@
 // index cast to size_t by its own signedness and multiplied by its
 // element size with a plain `mul`; a constant designator is one
 // constant, a negative constant index wraps. No bounds check under
-// -fsanitize=undefined (clang emits none; the bool and enum load checks
-// are off because kiln checks enum loads in C, which clang does not).
+// -fsanitize=undefined (clang emits none; `function`, which kiln does
+// not implement yet, is off).
 //@ expect: ir
-//@ args: -std=gnu17 -fsanitize=undefined -fno-sanitize=function,bool,enum
+//@ args: -std=gnu17 -fsanitize=undefined -fno-sanitize=function
 #include <stddef.h>
 struct in { char c; int x[3][5]; };
 struct out { int n; struct in a[4]; long data[]; };

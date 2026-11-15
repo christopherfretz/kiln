@@ -85,9 +85,9 @@ Planned as 1.3.0.
 
 ### Changed
 
-- The PCH snapshot format is 11 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426, WP-1414, WP-1435 and WP-1448; new diagnostics, options
-  and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
+- The PCH snapshot format is 12 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448 and WP-1449; new
+  diagnostics, options and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
   it is not misread, as [spec/pch.md](spec/pch.md) describes.
 
 ### Fixed
@@ -264,6 +264,24 @@ Planned as 1.3.0.
   defined gets `-Wundefined-inline` when the class is instantiated, as
   clang (WP-1448). A `used` destructor of a class template is accepted,
   where clang rejects it (docs/status/deviations.md).
+- C: `-fsanitize=enum` (and `undefined`) no longer reports a valid C
+  enumeration value as out of range (WP-1449): C has no enum range
+  check, as clang; `_Bool` is still checked, and the handler data names
+  C types as clang does (`'_Bool'`, `'struct S'`). At
+  `-fclang-compat=19` pointer-overflow uses clang 19's C rule.
+- C: a structure or union initialized from, or cast from, a `volatile`
+  or `const` one (`struct S t = *vp;`, `(struct S)*vp`) is accepted; it
+  was rejected as "no matching constructor" (WP-1449). An assignment to
+  a `volatile` structure is a volatile copy. A same-type structure cast
+  gets clang's `-Wpedantic` warning.
+- C codegen matches clang (WP-1449): padding in C constant aggregates
+  and list initializations is zero at `-fclang-compat=20` and later,
+  bit-field constants are one byte per element, `_Atomic` arrays are
+  initialized element by element, and objects defined only by tentative
+  definitions are emitted at the end of the translation unit in clang's
+  order.
+- `-flto -moutline` on x86-64 warns once more for the link job, as clang
+  (WP-1449).
 
 ## [1.2.1] - 2026-11-14
 

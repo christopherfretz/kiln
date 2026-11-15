@@ -620,6 +620,13 @@ fn machine_outliner_flags() {
         let o = run(&kilnpp(), &dir, args);
         assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), warn), "{args:?}");
     }
+    // clang's LTO link job warns again (WP-1449); a compile job does not.
+    let link = [x86, "-###", "-flto", "-moutline", "t.cpp"];
+    let compile = [x86, "-###", "-flto", "-moutline", "-c", "t.cpp"];
+    for (args, n) in [(&link[..], 2), (&compile[..], 1)] {
+        let o = run(&kilnpp(), &dir, args);
+        assert_eq!(text(&o.stderr).matches(warn).count(), n, "{args:?}");
+    }
     let o = run(&kilnpp(), &dir, &[x86, "-moutline", "-mno-outline", "-fsyntax-only", "t.cpp"]);
     assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
     for (flag, want) in [("-moutline", " \"-moutline\""), ("-mno-outline", " \"-mno-outline\"")] {

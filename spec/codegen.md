@@ -1768,10 +1768,16 @@ cut the front-end cost of `-g` without changing a byte of the IR.
     The `memcpy` family checks its pointer arguments' alignment.
   - array-bounds (`EmitBoundsCheck`), except on flexible-array-like
     members (`-fstrict-flex-arrays=0`).
-  - bool and enum on scalar loads (`EmitScalarRangeCheck`).
+  - bool and enum on scalar loads (`EmitScalarRangeCheck`). In C an
+    enumeration has no range check (any value of its compatible type is
+    valid, C23 6.7.3.3); `_Bool` and C23 `enum : bool` are checked
+    (WP-1449).
   - float-cast-overflow (`EmitFloatConversionCheck`), including
     complex parts and `_Atomic` destinations (signed bounds).
-  - pointer-overflow (`EmitCheckedInBoundsGEP`).
+  - pointer-overflow (`EmitCheckedInBoundsGEP`). In C below
+    `-fclang-compat=20` a zero offset is checked too and the null rule
+    is "base and result both non-null" (clang 19; clang 20+, N3322,
+    treats C as C++).
   - nonnull-attribute, returns-nonnull-attribute (through
     `return.sloc.ptr`) and builtin (`__builtin_ctz`/`clz` of zero).
     The `memcpy`/`memmove`/`mempcpy`/`memcpy_inline` builtins check
@@ -1789,7 +1795,9 @@ cut the front-end cost of `-g` without changing a byte of the IR.
     do, take the compare-exchange loop with the checked operation.
   - Type descriptors name the written type, or the canonical type
     (`getRecordType`, `getThisType`, the float-cast operands). A
-    canonical tag prints with its full scope.
+    canonical tag prints with its full scope. In C the names use
+    clang's C printing policy (`'_Bool'`, `'bool'` from C23,
+    `'struct S'`).
     The name is clang's `ConvertArgToString(ak_qualtype)`, the very
     formatting of a type argument of a diagnostic (WP-1158;
     `kiln_ast::diag_names::DiagNames::type_arg`, shared with Sema's
@@ -2482,7 +2490,39 @@ changes nothing:
   the natural layout fits the type's size (tail-padded with `undef`),
   packed otherwise; the named type only when layout-identical. A class
   that is not POD for layout (packed IR type with tail padding) is
-  therefore a literal `{ i32, i8 }`, as clang.
+  therefore a literal `{ i32, i8 }`, as clang. A bit-field's storage is
+  one `i8` per byte it covers (clang `addBits`, C and C++). In C at
+  `-fclang-compat=20` and later (clang `shouldZeroInitPadding`) the gaps,
+  the tail and a union's bytes past its member are `zeroinitializer`
+  instead of `undef`, so a padded structure constant is a literal
+  struct (WP-1449; `tests/c/decl/constant-padding-ir.c`).
+- **C specifics** (WP-1449):
+  - a non-constant list initialization of a C aggregate at compat 20+
+    zeroes the padding as clang's `AggExprEmitter::DoZeroInitPadding`:
+    a `memset` of the gap before each member (byte GEP without
+    `inbounds`), a bit-field's storage unit stored as zero before its
+    first field, the tail, a union's bytes past its member, the whole
+    union for `{}`; initialization stops at a flexible array member
+    (all versions; `tests/c/decl/local-init-padding-ir.c`). A member
+    omitted from a C list is an `ImplicitValueInitExpr` (Sema's
+    filler), so it is the null of its type;
+  - a local array of `_Atomic` elements is not POD (clang `isPODType`),
+    hence no constant aggregate: its elements are stored one by one
+    (a `memset` first when mostly zero, a filler loop for a long
+    tail); zero is preserved through the atomic conversions (clang
+    `castPreservesZero`; `tests/c/decl/atomic-array-init-ir.c`);
+  - a structure or union cast to its own type is a `NoOp` cast of the
+    operand's value (`-Wpedantic` "C99 forbids casting nonscalar type";
+    `tests/c/expr/struct-self-cast-ir.c`); a structure initialized from
+    a qualified one is an `LValueToRValue` copy (volatile `memcpy` from
+    a `volatile` source), and an assignment to a `volatile` structure
+    copies with a volatile `memcpy` (`tests/c/decl/qualified-struct-init-ir.c`);
+  - **C tentative definitions**: an object defined only by tentative
+    definitions is emitted after the top-level walk, in the order of
+    its first tentative definition (clang `TentativeDefinitions` /
+    `CompleteTentativeDefinition`), through its acting definition (the
+    last one); a global an earlier reference created keeps its module
+    position (`tests/c/decl/tentative-definition-order-ir.c`).
 - **Record types** are `kiln_abi::IrTypes` lowerings (spec/abi.md §8.6),
   so a pointer field is `ptr` and no member is ever `i0`, even for a
   record nested in a member class declared before its definition
