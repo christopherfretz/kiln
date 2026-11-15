@@ -455,6 +455,7 @@ impl CodegenJob<'_> {
                 c: job.std.c,
                 gnu89_inline: a.predef.gnu89_inline_for(&job.std),
                 exceptions: a.predef.exceptions.unwrap_or(job.std.cplusplus),
+                dynamic_exception_specs: job.std.cplusplus && job.std.lex < kiln_lex::Std::Cxx17,
                 rtti: a.predef.rtti.unwrap_or(job.std.cplusplus),
                 ident: ident(),
                 outline_atomics: a

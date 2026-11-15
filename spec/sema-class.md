@@ -617,6 +617,14 @@ then invalid, so the definition, its constant evaluation and the enclosing
 class's implicit default constructor raise nothing more. These fields are
 reported before the bases are visited (clang visits the bases first).
 
+A user-declared destructor without an exception specification gets the
+implicit one (C++11 [class.dtor]/3, `ExcSpec::Deferred`, `declare.rs`) only
+from C++11, and so does a class-specific deallocation function
+(`noexcept`, C++11 [except.spec]/15, `decl.rs`): in C++98/03 both may throw
+anything (C++03 [except.spec]/13 covers only implicitly declared members),
+as clang gates `AdjustDestructorExceptionSpec` on C++11 (WP-1457,
+tests/conformance/except.spec/run-dtor-dealloc-may-throw-cxx98.cpp).
+
 ### 2.8 Unions and variant members
 [class.union]: at most one variant member has an NSDMI or appears in a
 ctor-initializer (`initializing multiple members of union` + note `previous

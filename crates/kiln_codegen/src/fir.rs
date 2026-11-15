@@ -148,10 +148,12 @@ pub(crate) enum Op {
         addr: V,
         dests: Vec<Blk>,
     },
-    /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`.
+    /// `landingpad { ptr, i32 } [cleanup] catch ptr <clause>...`, then
+    /// `filter [N x ptr] <filter>` for a dynamic exception specification.
     LandingPad {
         cleanup: bool,
         clauses: Vec<V>,
+        filter: Option<V>,
     },
     /// `resume { ptr, i32 } %v`.
     Resume {
@@ -350,7 +352,9 @@ impl Op {
                 std::iter::once(*callee).chain(args.iter().copied()).collect()
             }
             Op::AssumeBundle { args, .. } => args.clone(),
-            Op::LandingPad { clauses, .. } => clauses.clone(),
+            Op::LandingPad { clauses, filter, .. } => {
+                clauses.iter().chain(filter).copied().collect()
+            }
             Op::Resume { v } | Op::IndirectBr { addr: v, .. } => vec![*v],
             Op::CondBr { c, .. } => vec![*c],
             Op::Switch { c, cases, .. } => {
@@ -385,7 +389,9 @@ impl Op {
                 std::iter::once(callee).chain(args.iter_mut()).collect()
             }
             Op::AssumeBundle { args, .. } => args.iter_mut().collect(),
-            Op::LandingPad { clauses, .. } => clauses.iter_mut().collect(),
+            Op::LandingPad { clauses, filter, .. } => {
+                clauses.iter_mut().chain(filter.iter_mut()).collect()
+            }
             Op::Resume { v } | Op::IndirectBr { addr: v, .. } => vec![v],
             Op::CondBr { c, .. } => vec![c],
             Op::Switch { c, cases, .. } => {
@@ -1460,9 +1466,12 @@ impl Fir {
                         let ind: Vec<BlockId> = indirect.iter().map(|&x| blk(x)).collect();
                         b.callbr_ex(*fn_ty, val(*callee), &args, blk(*normal), &ind, opts)?
                     }
-                    Op::LandingPad { cleanup, clauses } => {
-                        let cl: Vec<Clause> =
-                            clauses.iter().map(|&x| Clause::Catch(val(x))).collect();
+                    Op::LandingPad { cleanup, clauses, filter } => {
+                        let cl: Vec<Clause> = clauses
+                            .iter()
+                            .map(|&x| Clause::Catch(val(x)))
+                            .chain(filter.map(|x| Clause::Filter(val(x))))
+                            .collect();
                         b.landingpad(inst.ty, *cleanup, &cl)?
                     }
                     Op::Resume { v } => b.resume(val(*v))?,

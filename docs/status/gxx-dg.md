@@ -79,6 +79,8 @@ before C++14 in `sized-dealloc1.C`); `abi/vbase13.C`, `init/new40.C`,
 `aligned-new9.C` and `g++.jason/new3.C` remain (GCC layout and C++03
 limit, `-faligned-new=N`, `-fcheck-new`).
 
+WP-1457 fixed cluster 1 (dynamic exception specifications filter at run time in C++98 to C++14; C++98 destructors and class-specific `operator delete` may throw): its 14 tests went from 23 wrong cases to 0.
+
 Clang fails 58 of these tests too. Many of those depend on GCC-specific
 semantics (object-size builtins, `-flifetime-dse`, ICF addresses,
 `__PRETTY_FUNCTION__` text). The clusters below come first from the 38

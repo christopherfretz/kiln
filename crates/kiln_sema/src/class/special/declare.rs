@@ -663,7 +663,11 @@ impl Sema<'_, '_> {
         // implicit one ([except.spec]/8), computed when needed. In a
         // dependent context it is left alone; the instantiation gets its own
         // (clang `AdjustDestructorExceptionSpec` returns early there).
+        // C++11 on only: in C++98/03 a destructor declared without one
+        // may throw anything (C++03 [except.spec]/13-14 give the implicit
+        // specification only to implicitly declared members).
         if shape == Shape::Dtor
+            && self.std >= kiln_lex::Std::Cxx11
             && prev_ok.is_none()
             && !self.ast.decls.get(f).has(DeclFlags::DEPENDENT_CTX)
             && d.late_noexcept.is_none()

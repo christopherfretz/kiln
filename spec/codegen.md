@@ -3140,7 +3140,7 @@ off and sema rejects `try`/`throw`).
 
 - **EH scope stack** (`cleanup.rs`, `eh.rs`): cleanups, catch scopes and
   terminate scopes share one stack (`EHScopeStack`), with clang's
-  innermost-EH-scope links, `CurrentCleanupScopeDepth`, cached EH
+  innermost-EH-scope links (and, before C++17, the function's filter scope), `CurrentCleanupScopeDepth`, cached EH
   dispatch blocks and `IsUsedAsEHCleanup`. A call is an `invoke` when
   `getInvokeDest` finds an EH scope (`emit_call_op`,
   `runtime_call_or_invoke`, `noreturn_runtime_call_or_invoke`);
@@ -3160,7 +3160,25 @@ off and sema rejects `try`/`throw`).
   noexcept-specifier is non-throwing by [except.spec]/8 even when
   nothing in the TU uses it: sema resolves the exception specification
   of every definition (spec/sema.md §4.7, WP-431;
-  `tests/codegen/dtor_implicit_noexcept.cpp`, `_o1.cpp`).
+  `tests/codegen/dtor_implicit_noexcept.cpp`, `_o1.cpp`). From C++11
+  only: in C++98/03 such a destructor may throw (spec/sema-class.md §2.7).
+- **Filter scopes** (C++98 to C++14, `CodegenOptions::dynamic_exception_specs`,
+  WP-1457): a function whose definition is written with `throw(A, B)` or
+  `throw()` ([except.spec], [except.unexpected] of those editions) gets a
+  filter scope instead of a terminate scope (clang `EmitStartEHSpec` /
+  `EmitEndEHSpec`, `push_eh_spec_filter` / `pop_eh_spec_filter`). Its
+  landing pads end with `filter [N x ptr] [@_ZTI…]` (the listed types
+  without reference and cv-qualifiers; `[0 x ptr] zeroinitializer` for
+  `throw()`), keeping `cleanup` when a cleanup is on the way; the
+  filter's dispatch block, placed after its last use, tests
+  `ehselector < 0` (absent for `throw()`) and calls `__cxa_call_unexpected(exn)`
+  (`noreturn`, a plain `call`: the runtime filters what the unexpected
+  handler throws against the frame's specification) or resumes. The
+  definition's own type decides (a redeclaration may say `noexcept`).
+  With `-fno-exceptions` nothing is emitted; from C++17 `throw()` is a
+  terminate scope and `throw(T)` is ill-formed.
+  `tests/conformance/except.spec/ir-dynamic-spec-filter-cxx14.cpp`,
+  `run-dynamic-spec-unexpected-*.cpp`.
 - **throw** ([expr.throw]): `__cxa_allocate_exception(size)`, the
   operand initialized in place under a `FreeException` EH cleanup
   (deactivated after it), then `__cxa_throw(exn, @_ZTI…, dtor or null)`
