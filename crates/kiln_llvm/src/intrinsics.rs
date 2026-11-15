@@ -522,6 +522,9 @@ pub enum TargetMem {
     ArgReadWrite,
     /// `nounwind` (any memory effect).
     Unknown,
+    /// `nounwind memory(none)` (the SM3/SM4 intrinsics, which LLVM declares
+    /// without `DefaultAttrsIntrinsic`; WP-1421).
+    UnknownNone,
     /// `nounwind memory(argmem: readwrite)`.
     UnknownArgReadWrite,
     /// `nounwind memory(argmem: write)`.
@@ -557,6 +560,7 @@ pub fn target_intrinsic(
             Shape::Basic(Some(MemoryEffects::argmem_only(ModRef::ReadWrite)))
         }
         TargetMem::Unknown => Shape::NoUnwind(false),
+        TargetMem::UnknownNone => Shape::NoUnwind(true),
         TargetMem::UnknownArgReadWrite => {
             Shape::NoUnwindMem(MemoryEffects::argmem_only(ModRef::ReadWrite))
         }
@@ -647,6 +651,18 @@ pub fn neon_store_n(m: &mut Module, name: &str, vt: TypeId, k: usize) -> FuncId 
     let p = ptr(m);
     let nc: &[Attr] = &[Attr::Flag(NoCapture)];
     let mut params: Vec<(TypeId, &[Attr])> = vec![(vt, &[][..]); k];
+    params.push((p, nc));
+    let mem = MemoryEffects::argmem_only(ModRef::ReadWrite);
+    declare(m, name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
+}
+
+/// `void @llvm.aarch64.neon.st{2,3,4}lane.<VTy>.p0(<VTy> x k, i64, ptr
+/// nocapture)` by full name, as LLVM declares it (WP-1421).
+pub fn neon_store_lane(m: &mut Module, name: &str, vt: TypeId, k: usize) -> FuncId {
+    let p = ptr(m);
+    let nc: &[Attr] = &[Attr::Flag(NoCapture)];
+    let mut params: Vec<(TypeId, &[Attr])> = vec![(vt, &[][..]); k];
+    params.push((TypeId::I64, &[][..]));
     params.push((p, nc));
     let mem = MemoryEffects::argmem_only(ModRef::ReadWrite);
     declare(m, name, TypeId::VOID, &params, &[], Shape::Basic(Some(mem)))
