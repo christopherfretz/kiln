@@ -1341,6 +1341,56 @@ impl Sema<'_, '_> {
         sub.class_body(spec, def, None);
     }
 
+    /// The member functions of class `spec`, a just-instantiated class
+    /// template specialization or member class, that carry GNU `used`
+    /// are referenced at the class's point of instantiation, so their
+    /// definitions are instantiated (and emitted, spec/codegen.md §2a)
+    /// whether called or not: clang `VisitCXXMethodDecl` calls
+    /// `MarkFunctionReferenced` for a `UsedAttr` method of an
+    /// instantiated class. Only non-template member functions
+    /// (constructors, destructors and conversions included): a member
+    /// function template, a friend and a static data member are not
+    /// referenced. Done once the class is complete (clang does it while
+    /// declaring each member, where a `used` destructor fails with
+    /// "exception specification needed for member of incomplete class").
+    fn reference_used_members(&mut self, spec: DeclId) {
+        if !self.ast.attrs.has_kind(kiln_ast::attr::AttrKind::USED)
+            || self.decl_in_local_scope(spec)
+        {
+            return;
+        }
+        let first = self.ast.first(spec);
+        let poi = self
+            .ast
+            .spec_info(first)
+            .map(|(_, s)| s.point_of_instantiation)
+            .or_else(|| self.ast.member_spec_info(first).map(|(_, m)| m.point_of_instantiation))
+            .unwrap_or(Loc::INVALID);
+        let members: Vec<DeclId> = self.ast.decls.members(spec).collect();
+        for m in members {
+            let n = self.ast.decls.get(m);
+            if n.has(DeclFlags::INVALID)
+                || n.has(DeclFlags::IMPLICIT)
+                || n.misc().friend() != kiln_ast::decl::FriendKind::None
+                || !matches!(
+                    n.kind(),
+                    DeclKind::CXXMethod
+                        | DeclKind::CXXConstructor
+                        | DeclKind::CXXDestructor
+                        | DeclKind::CXXConversion
+                )
+                || !self
+                    .ast
+                    .lists
+                    .iter::<kiln_ast::ids::AttrId>(self.ast.attrs.of_decl(m))
+                    .any(|a| self.ast.attrs.get(a).kind == kiln_ast::attr::AttrKind::USED)
+            {
+                continue;
+            }
+            self.mark_function_referenced(m, poi);
+        }
+    }
+
     /// Instantiates the definition of `f`, a member function of a class
     /// template specialization (or a friend defined in one), from its
     /// pattern ([temp.inst]/4-5, §4.4). Nothing happens if `f` is already
@@ -2392,6 +2442,9 @@ impl Substituter<'_, '_, '_> {
         }
         if local.is_none() {
             sub.sema.act_on_finish_class_contexts(spec);
+            if !invalid {
+                sub.sema.reference_used_members(spec);
+            }
         }
         sub.entity = saved_entity;
     }

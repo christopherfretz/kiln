@@ -276,7 +276,21 @@ pub(crate) struct Cg<'a> {
     /// Dynamic classes explicitly instantiated by a definition, in
     /// order: their vtables are required ([temp.explicit]/10; Sema's
     /// `MarkVTableUsed(DefinitionRequired)`).
-    pub explicit_vtables: Vec<DeclId>,
+    /// Each with the declaration its explicit instantiation follows
+    /// ([`Self::explicit_position`]), which orders it among the vtables
+    /// of key functions (`emit_key_function_vtables`).
+    pub explicit_vtables: Vec<(DeclId, DeclId)>,
+    /// The position ([`Self::explicit_position`]) of the explicit
+    /// instantiation definitions being emitted.
+    pub explicit_anchor: Option<DeclId>,
+    /// Explicit instantiation definitions (classes, functions,
+    /// variables) listed in a top-level block that
+    /// [`Self::emit_parse_time_defs`] emitted ahead of the block.
+    parse_time_handed: FxHashSet<DeclId>,
+    /// The static data members an explicit instantiation definition
+    /// names (`template int C<long>::m;`), keyed in
+    /// `TemplateTables::explicit_member_insts` (first declarations).
+    keyed_explicit_vars: FxHashSet<DeclId>,
     /// The [`Self::explicit_vtables`] whose explicit instantiation
     /// definition is an imported unit's, emitted after the deferred
     /// definitions.
@@ -438,6 +452,14 @@ impl<'a> Cg<'a> {
             deferred_vtables: Vec::new(),
             opportunistic_vtables: Vec::new(),
             explicit_vtables: Vec::new(),
+            explicit_anchor: None,
+            parse_time_handed: FxHashSet::default(),
+            keyed_explicit_vars: ast
+                .templates
+                .explicit_member_insts_all()
+                .filter(|&m| ast.decls.get(m).kind() == DeclKind::Var)
+                .map(|m| ast.first(m))
+                .collect(),
             imported_explicit_vtables: Vec::new(),
             explicit_insts_done: FxHashSet::default(),
             vt_emitted: FxHashSet::default(),
@@ -599,7 +621,10 @@ impl<'a> Cg<'a> {
             }
             self.emit_ref_vars(d, false)?;
             if !ast.templates.is_late_explicit_inst(ast.first(d)) {
+                let at = self.prev_position(ctx, &members[..i]);
+                let saved = self.explicit_anchor.replace(at);
                 self.emit_member(d)?;
+                self.explicit_anchor = saved;
             }
             if !epochs.is_empty() {
                 // The explicit instantiation definitions after `d` are
@@ -612,6 +637,119 @@ impl<'a> Cg<'a> {
             self.emit_ref_vars(d, true)?;
         }
         Ok(())
+    }
+
+    /// What Sema handed to the consumer while it parsed top-level
+    /// namespace, linkage specification or export block `ctx`, in that
+    /// order and before the block's own declarations: clang hands the
+    /// block to `HandleTopLevelDecl` once it is closed, but an explicit
+    /// instantiation definition's members (`InstantiateClassMembers`,
+    /// `InstantiateFunctionDefinition`) and a variable instantiated at a
+    /// reference (`InstantiateVariableDefinition`) as soon as they are
+    /// instantiated. So a block's explicit instantiations, wherever in it
+    /// they are written, are emitted before its first declaration
+    /// (WP-1430). Each key is handed over once, so the walk of the block
+    /// that follows finds them done.
+    fn emit_parse_time_defs(&mut self, ctx: DeclId, depth: usize) -> R<()> {
+        let ast = self.ast;
+        if depth > 256 {
+            return Ok(());
+        }
+        self.emit_ref_vars(ctx, true)?;
+        let members: Vec<DeclId> = ast.decls.members(ctx).collect();
+        for (i, &d) in members.iter().enumerate() {
+            self.emit_ref_vars(d, false)?;
+            let n = ast.decls.get(d);
+            if matches!(n.kind(), DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export)
+                && !n.has(DeclFlags::INVALID)
+            {
+                self.emit_parse_time_defs(d, depth + 1)?;
+            } else if self.parse_time_handed.contains(&d) {
+                // A block nested in a linkage specification is walked
+                // with it, and again on its own.
+            } else if self.listed_explicit_class(d) {
+                // `template struct X<int>;`, listed where it is written.
+                let at = self.prev_position(ctx, &members[..i]);
+                let saved = self.explicit_anchor.replace(at);
+                self.parse_time_handed.insert(d);
+                self.emit_class_members(d)?;
+                self.explicit_anchor = saved;
+            } else if self.listed_explicit_fn(d) {
+                // `template int f<long>(long);`.
+                self.emit_member(d)?;
+                self.parse_time_handed.insert(d);
+            }
+            self.emit_explicit_member_insts(d)?;
+            self.emit_ref_vars(d, true)?;
+        }
+        Ok(())
+    }
+
+    /// Whether member `d` of a block is the explicit instantiation
+    /// definition of a class, listed where it is written (one that
+    /// follows an explicit instantiation declaration is keyed instead,
+    /// `TemplateTables::add_moved_class_inst`).
+    fn listed_explicit_class(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        matches!(n.kind(), DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization)
+            && !n.has(DeclFlags::INVALID)
+            && !n.has(DeclFlags::DEPENDENT_CTX)
+            && !ast.templates.is_moved_class_inst(ast.first(d))
+            && ast
+                .spec_info(ast.first(d))
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDefinition)
+    }
+
+    /// Whether `d` is the instantiated out-of-line definition of a static
+    /// data member instantiated by an explicit instantiation definition.
+    /// (`template int C<long>::m;` keys it where it is written, the
+    /// class's explicit instantiation emits it with its other members.)
+    /// Or a variable template specialization that an explicit
+    /// instantiation definition keys: it is listed where it was first
+    /// named, in its template's block.
+    fn explicit_inst_member_def(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        if self.keyed_explicit_vars.contains(&ast.first(d)) {
+            return true;
+        }
+        let Some(sem) = ast.decls.get(d).ctx() else { return false };
+        if !matches!(
+            ast.decls.get(sem).kind(),
+            DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization
+        ) || ast.decls.lexical_ctx(d) == Some(sem)
+            || ast.instantiated_from(ast.first(d)).is_none()
+            // `template <> int C<int>::m = 5;` is an ordinary definition.
+            || ast
+                .member_spec_info(ast.first(d))
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization)
+        {
+            return false;
+        }
+        self.class_explicit_inst_kind(ast.first(sem))
+            == Some(SpecKind::ExplicitInstantiationDefinition)
+    }
+
+    /// Whether member `d` of a block is the explicit instantiation
+    /// definition of a function (template specialization), listed where
+    /// it is written (a variable template's is keyed,
+    /// [`Self::explicit_inst_member_def`]).
+    fn listed_explicit_fn(&self, d: DeclId) -> bool {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        matches!(
+            n.kind(),
+            DeclKind::Function
+                | DeclKind::CXXMethod
+                | DeclKind::CXXConversion
+                | DeclKind::CXXConstructor
+                | DeclKind::CXXDestructor
+        ) && !n.has(DeclFlags::INVALID)
+            && !n.has(DeclFlags::DEPENDENT_CTX)
+            && !ast.templates.is_late_explicit_inst(ast.first(d))
+            && ast
+                .spec_info(ast.first(d))
+                .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitInstantiationDefinition)
     }
 
     /// The variables Sema instantiated at a reference in (or after)
@@ -683,8 +821,23 @@ impl<'a> Cg<'a> {
         if insts.is_empty() || !self.explicit_insts_done.insert(after) {
             return Ok(());
         }
+        let saved = self.explicit_anchor.replace(self.explicit_position(after));
         for &m in insts {
             if ast.templates.is_late_explicit_inst(ast.first(m)) {
+                continue;
+            }
+            // A static data member (`template int C<long>::m;`): its
+            // instantiated out-of-line definition, as for a class's
+            // ([`Self::emit_class_members`]).
+            if ast.decls.get(m).kind() == DeclKind::Var {
+                let first = ast.first(m);
+                if ast.spec_info(first).is_some() {
+                    // A variable template specialization (`template int
+                    // v<long>;`).
+                    self.emit_global_var(ast.definition(m).unwrap_or(m))?;
+                } else if let Some(def) = ast.redecls_of(m).find(|&r| r != first) {
+                    self.emit_global_var(def)?;
+                }
                 continue;
             }
             let Some(def) = ast.definition(m) else { continue };
@@ -698,7 +851,48 @@ impl<'a> Cg<'a> {
                 _ => self.emit_global_fn(def)?,
             }
         }
+        self.explicit_anchor = saved;
         Ok(())
+    }
+
+    /// [`Self::explicit_position`] of a declaration written after
+    /// `prev`, the members of `ctx` before it. An implicit declaration
+    /// (a global `operator delete` declared for a virtual destructor) is
+    /// appended where Sema declared it, not where it is written, so it is
+    /// passed over.
+    fn prev_position(&self, ctx: DeclId, prev: &[DeclId]) -> DeclId {
+        let ast = self.ast;
+        prev.iter()
+            .rev()
+            .find(|&&p| !ast.decls.get(p).has(DeclFlags::IMPLICIT))
+            .map_or(ctx, |&p| self.explicit_position(p))
+    }
+
+    /// Where in the translation unit an explicit instantiation keyed
+    /// `after` is: right after declaration `after`, or after the last
+    /// declaration of block `after` (a namespace, linkage specification
+    /// or export block), or at the start of the translation unit. Sema
+    /// numbers declarations in the order it creates them, so this orders
+    /// it against a key function's definition (clang's `VTableUses`
+    /// order).
+    pub(crate) fn explicit_position(&self, after: DeclId) -> DeclId {
+        let ast = self.ast;
+        let mut d = after;
+        for _ in 0..1024 {
+            if d == ast.tu
+                || !matches!(
+                    ast.decls.get(d).kind(),
+                    DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export
+                )
+            {
+                break;
+            }
+            match ast.decls.member_list(d).and_then(|l| l.last) {
+                Some(last) => d = last,
+                None => break,
+            }
+        }
+        d
     }
 
     /// The functions and variables explicitly instantiated before their
@@ -728,6 +922,14 @@ impl<'a> Cg<'a> {
         let ast = self.ast;
         {
             let n = ast.decls.get(d);
+            // Handed over while its block was parsed
+            // ([`Self::emit_parse_time_defs`]); a class's other parts
+            // still follow below.
+            if self.parse_time_handed.contains(&d)
+                && !matches!(n.kind(), DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization)
+            {
+                return Ok(());
+            }
             // A templated declaration ([temp.pre]/8: an out-of-line
             // member of a class template) is emitted only as instantiated.
             if n.has(DeclFlags::INVALID) || n.has(DeclFlags::DEPENDENT_CTX) || self.is_templated(d)
@@ -741,6 +943,9 @@ impl<'a> Cg<'a> {
             }
             match n.kind() {
                 DeclKind::Namespace | DeclKind::LinkageSpec | DeclKind::Export => {
+                    if n.ctx() == Some(ast.tu) || ast.decls.lexical_ctx(d) == Some(ast.tu) {
+                        self.emit_parse_time_defs(d, 0)?;
+                    }
                     self.emit_members(d)?;
                 }
                 DeclKind::Function | DeclKind::CXXMethod | DeclKind::CXXConversion => {
@@ -755,6 +960,12 @@ impl<'a> Cg<'a> {
                 DeclKind::CXXConstructor | DeclKind::CXXDestructor => {
                     self.emit_global_structor(d)?;
                 }
+                // The instantiated out-of-line definition of a static data
+                // member of an explicitly instantiated class is listed in
+                // the block of the member's pattern; clang hands it over
+                // with the explicit instantiation's other members
+                // ([`Self::emit_class_members`], WP-1430).
+                DeclKind::Var if self.explicit_inst_member_def(d) => {}
                 DeclKind::Var => self.emit_global_var(d)?,
                 // clang `EmitTopLevelDecl(CXXRecord)`: static data members
                 // and nested classes; inline member functions are emitted
@@ -763,12 +974,15 @@ impl<'a> Cg<'a> {
                     if n.kind() == DeclKind::CXXRecord {
                         self.cov_defer_class(d, 0);
                     }
-                    if !ast.templates.is_moved_class_inst(ast.first(d)) {
+                    if !ast.templates.is_moved_class_inst(ast.first(d))
+                        && !self.parse_time_handed.contains(&d)
+                    {
                         self.emit_class_members(d)?;
                     }
                     if ast.modules.active {
                         self.emit_module_class_defs(d, 0)?;
                     }
+                    self.emit_used_inline_defs(d, 0)?;
                 }
                 DeclKind::FunctionTemplate | DeclKind::ClassTemplate | DeclKind::VarTemplate => {}
                 DeclKind::FileScopeAsm => self.emit_file_scope_asm(d),
@@ -821,7 +1035,12 @@ impl<'a> Cg<'a> {
             // that is not multiversioned (always, without `fmv`) is
             // emitted at the end of the TU, "until all versions have been
             // semantically checked".
-            if self.target_version_so_far(d) {
+            // An implicit instantiation neither, as a later explicit
+            // instantiation could change its linkage: one that is `used`
+            // waits in `DeferredDeclsToEmit`.
+            if self.target_version_so_far(d)
+                || self.discardable_fn(d) && self.is_implicit_instantiation(d)
+            {
                 self.to_emit.push(Def::Decl(d));
                 return Ok(());
             }
@@ -873,7 +1092,8 @@ impl<'a> Cg<'a> {
         }
         if explicit && self.is_dynamic(d) && self.vtable_explicit_inst_kind(ast.first(d)).is_some()
         {
-            self.explicit_vtables.push(ast.first(d));
+            let at = self.explicit_anchor.unwrap_or(ast.first(d));
+            self.explicit_vtables.push((at, ast.first(d)));
         }
         let members: Vec<DeclId> = ast.decls.members(d).collect();
         for m in members {
@@ -981,6 +1201,67 @@ impl<'a> Cg<'a> {
                 }
                 DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
                     self.emit_module_class_defs(m, depth + 1)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The in-class function definitions of namespace-scope class `d`
+    /// (and of its nested classes, in member order) that carry GNU
+    /// `used`, friends' included: emitted right after the class's static
+    /// data members, as clang's `HandleInlineFunctionDefinition` defers
+    /// them to the end of the class's `HandleTopLevelDecl`, where
+    /// `DeclMustBeEmitted` holds for them. A class template
+    /// specialization's members are not definitions of the class: Sema
+    /// instantiates the `used` ones and they are emitted with the other
+    /// instantiations (`Sema::reference_used_members`); an explicit
+    /// specialization's are ordinary definitions ([temp.expl.spec]/5).
+    fn emit_used_inline_defs(&mut self, d: DeclId, depth: usize) -> R<()> {
+        let ast = self.ast;
+        let n = ast.decls.get(d);
+        if !ast.attrs.has_kind(kiln_ast::attr::AttrKind::USED)
+            || depth > 256
+            || n.has(DeclFlags::INVALID)
+            || n.has(DeclFlags::DEPENDENT_CTX)
+            || ast.definition(d) != Some(d)
+        {
+            return Ok(());
+        }
+        match ast.templ_link(d).get() {
+            None => {}
+            Some((TemplLinkKind::Specialization, _))
+                if ast
+                    .spec_info(d)
+                    .is_some_and(|(_, s)| s.kind == SpecKind::ExplicitSpecialization) => {}
+            Some(_) => return Ok(()),
+        }
+        let used = |s: &Self, f: DeclId| {
+            ast.decls.function(f).is_some_and(|x| x.body.is_some() && x.templ.get().is_none())
+                && !ast.decls.get(f).has(DeclFlags::INVALID)
+                && !s.module_non_inline_def(f)
+                && s.has_fn_attr(f, kiln_ast::attr::AttrKind::USED)
+        };
+        let members: Vec<DeclId> = ast.decls.members(d).collect();
+        for m in members {
+            match ast.decls.get(m).kind() {
+                DeclKind::CXXMethod | DeclKind::CXXConversion if used(self, m) => {
+                    self.emit_global_fn(m)?;
+                }
+                DeclKind::CXXConstructor | DeclKind::CXXDestructor if used(self, m) => {
+                    self.emit_global_structor(m)?;
+                }
+                DeclKind::Friend => {
+                    if let FriendTarget::Decl(f) = ast.decls.friend_target(m)
+                        && ast.decls.get(f).kind() == DeclKind::Function
+                        && used(self, f)
+                    {
+                        self.emit_global_fn(f)?;
+                    }
+                }
+                DeclKind::CXXRecord | DeclKind::ClassTemplateSpecialization => {
+                    self.emit_used_inline_defs(m, depth + 1)?;
                 }
                 _ => {}
             }

@@ -493,25 +493,39 @@ impl Cg<'_> {
         // clang marks the vtable of every dynamic class defined in a named
         // module unit's purview used when the class is completed.
         classes.extend(self.module_dynamic_classes().into_iter().map(|c| (c, c)));
-        classes.sort_unstable();
-        for (_, c) in classes {
+        // One order for both kinds, Sema's `VTableUses`: a key
+        // function's class where the key function is defined, an
+        // explicitly instantiated class where its explicit instantiation
+        // is (after the declaration it follows; WP-1430). The sort is
+        // stable, so explicit instantiations after one declaration keep
+        // their order.
+        let mut all: Vec<(DeclId, bool, DeclId)> =
+            classes.into_iter().map(|(def, c)| (def, false, c)).collect();
+        all.sort_unstable();
+        all.extend(
+            std::mem::take(&mut self.explicit_vtables).into_iter().map(|(at, c)| (at, true, c)),
+        );
+        all.sort_by_key(|&(at, explicit, _)| (at, explicit));
+        for (_, explicit, c) in all {
+            if explicit {
+                // An imported unit's explicit instantiation definition:
+                // clang defines the vtable from the module file's
+                // used-vtable records, after the translation unit's
+                // deferred definitions
+                // ([`Self::emit_imported_explicit_vtables`]).
+                if self.explicit_def_imported(c) == Some(true) {
+                    self.imported_explicit_vtables.push(c);
+                    continue;
+                }
+                self.emit_vtable_def(c)?;
+                continue;
+            }
             if ast.decls.get(c).has(DeclFlags::INVALID) {
                 continue;
             }
             if self.vtable_linkage(c) == VtLinkage::Strong {
                 self.emit_vtable_def(c)?;
             }
-        }
-        for c in std::mem::take(&mut self.explicit_vtables) {
-            // An imported unit's explicit instantiation definition: clang
-            // defines the vtable from the module file's used-vtable
-            // records, after the translation unit's deferred definitions
-            // ([`Self::emit_imported_explicit_vtables`]).
-            if self.explicit_def_imported(c) == Some(true) {
-                self.imported_explicit_vtables.push(c);
-                continue;
-            }
-            self.emit_vtable_def(c)?;
         }
         Ok(())
     }
