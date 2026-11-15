@@ -1320,6 +1320,12 @@ literal is one instruction and one step, not an interpreted loop.
   and `__builtin_thread_pointer` likewise (WP-782);
   `__builtin_extract_return_addr`, `__builtin_frob_return_addr` and
   `__builtin___clear_cache` likewise (WP-1288);
+  the unwinder builtins `__builtin_dwarf_cfa`, `__builtin_sponentry`,
+  `__builtin_unwind_init`, `__builtin_dwarf_sp_column`,
+  `__builtin_eh_return` and `__builtin_extend_pointer` likewise
+  (WP-1428), while `__builtin_eh_return_data_regno(N)` is a constant
+  (clang `getEHDataRegisterNumber`, the same on x86-64 and AArch64: `N`
+  for 0 and 1, else -1);
   every `__builtin___X_chk` likewise (WP-803);
   `__builtin_prefetch` likewise (WP-610); every x86 builtin but the
   scalar bit ones below likewise, `__builtin_ia32_pause` (WP-610)

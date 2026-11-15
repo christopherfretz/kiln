@@ -701,6 +701,36 @@ pub fn returnaddress(m: &mut Module) -> FuncId {
     declare(m, "llvm.returnaddress", p, &params, &[], Shape::Basic(Some(none)))
 }
 
+/// `ptr @llvm.eh.dwarf.cfa(i32)` (WP-1428): `nounwind`, as LLVM 19 and
+/// 22 declare it.
+pub fn eh_dwarf_cfa(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let params: [(TypeId, &[Attr]); 1] = [(TypeId::I32, &[])];
+    declare(m, "llvm.eh.dwarf.cfa", p, &params, &[], Shape::NoUnwind(false))
+}
+
+/// `void @llvm.eh.unwind.init()` (WP-1428): `nounwind`.
+pub fn eh_unwind_init(m: &mut Module) -> FuncId {
+    declare(m, "llvm.eh.unwind.init", TypeId::VOID, &[], &[], Shape::NoUnwind(false))
+}
+
+/// `void @llvm.eh.return.i32/i64(iN offset, ptr handler)` (WP-1428):
+/// `nounwind`; `offset` is `i32` or `i64`.
+pub fn eh_return(m: &mut Module, offset: TypeId) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.eh.return", &[offset]);
+    let n: &[Attr] = &[];
+    declare(m, &name, TypeId::VOID, &[(offset, n), (p, n)], &[], Shape::NoUnwind(false))
+}
+
+/// `ptr @llvm.sponentry.p0()` (WP-1428, `AArch64`): `memory(none)`.
+pub fn sponentry(m: &mut Module) -> FuncId {
+    let p = ptr(m);
+    let name = overloaded_name(m, "llvm.sponentry", &[p]);
+    let none = MemoryEffects::all(ModRef::None);
+    declare(m, &name, p, &[], &[], Shape::Basic(Some(none)))
+}
+
 /// Arithmetic of an `llvm.*.with.overflow.*` intrinsic.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum OverflowOp {

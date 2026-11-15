@@ -663,6 +663,18 @@ them, the aggregate path included (a reversed `<=>` with a class result).
       fold is `zext (call i1 @llvm.is.constant.<ty>(x))` for an integer,
       enumeration or floating operand without side effects, else `0`
       (clang `CGBuiltin`; spec/landed/codegen/WP-1288.md).
+      The unwinder builtins (WP-1428, clang `EmitBuiltinExpr`):
+      `__builtin_dwarf_cfa()` is `call ptr @llvm.eh.dwarf.cfa(i32 0)`,
+      `__builtin_sponentry()` (AArch64) `call ptr @llvm.sponentry.p0()`,
+      `__builtin_unwind_init()` `call void @llvm.eh.unwind.init()` (all
+      three never outlined), `__builtin_eh_return(off, h)` `call void
+      @llvm.eh.return.i64(i64 off, ptr h)` (`.i32` for a 32-bit `size_t`)
+      followed by `unreachable` and a fresh insertion block;
+      `__builtin_eh_return_data_regno(N)` is the folded constant and
+      `__builtin_dwarf_sp_column()` the `i32` constant 7 on x86-64 and 31
+      on AArch64 (`getDwarfEHStackPointer`); `__builtin_extend_pointer(p)`
+      is `ptrtoint ptr p to i64` (`builtins_unwind.cpp`,
+      `tests/c/expr/unwind-builtins-*-ir.c`).
       `__builtin_readcyclecounter()` is `call i64 @llvm.readcyclecounter()`
       on every target (WP-1057, `builtin_readcyclecounter{,-19}.cpp`).
       `__builtin_thread_pointer()` is `call ptr @llvm.thread.pointer()`,

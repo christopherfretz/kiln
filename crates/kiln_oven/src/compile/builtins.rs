@@ -795,6 +795,19 @@ impl Compiler<'_> {
                     self.patch(pc + 3, end);
                 }
             }
+            // WP-1428: clang `getEHDataRegisterNumber`, the same on x86-64
+            // and AArch64: 0 and 1 map to themselves, any other to -1.
+            id::EH_RETURN_DATA_REGNO => {
+                let v = self.rv(arg(0)?);
+                let one = self.reg();
+                self.konst(one, 1);
+                let le = self.reg();
+                self.emit(Op::ICmp, crate::kbc::int_aux(32, false) | cmp::LE << 9, &[le, v, one]);
+                self.konst(dst, u128::MAX);
+                let j = self.jmp_if(le, false);
+                self.emit(Op::Mov, 0, &[dst, v]);
+                self.patch_here(j);
+            }
             // WP-419: clang `EvaluateBuiltinClassifyType`: the operand's
             // GCC type class; the operand is not evaluated.
             id::CLASSIFY_TYPE => {
@@ -1091,6 +1104,14 @@ impl Compiler<'_> {
             | id::CLEAR_CACHE
             // WP-1057: nor the cycle counter.
             | id::READCYCLECOUNTER
+            // WP-1428: nor the unwinder builtins, but for
+            // `__builtin_eh_return_data_regno`.
+            | id::DWARF_CFA
+            | id::SPONENTRY
+            | id::UNWIND_INIT
+            | id::DWARF_SP_COLUMN
+            | id::EH_RETURN
+            | id::EXTEND_POINTER
             // WP-610: nor `__builtin_prefetch`.
             | id::PREFETCH
             // WP-630: nor the nontemporal accesses and
