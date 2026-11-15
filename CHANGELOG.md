@@ -41,6 +41,15 @@ Planned as 1.3.0.
 - `-fmerge-all-constants` and `-fno-merge-all-constants` are accepted
   (WP-1417). They have no effect: a constant `const` local array or
   class is still copied to the stack, where clang makes it a static.
+- Every AArch64 NEON and fp16 builtin that kiln's `arm_neon.h` and
+  `arm_fp16.h` reach now compiles, lowered as clang 19 lowers it
+  (WP-1421). These are the multi-register and lane loads and stores,
+  the compares, the scalar and saturating forms, the conversions, the
+  SHA3/SHA512/SM crypto builtins and `vldap1`/`vstl1`. Before, 628
+  builtins stopped at "not supported yet". In a census of one call per
+  intrinsic, the count that compile went from 3094 to 4426 of 4884
+  (docs/status/neon-builtins.md). `__has_builtin` now answers 1 for
+  them.
 
 ### Changed
 

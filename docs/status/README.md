@@ -64,6 +64,9 @@ Open-source projects and platforms:
 - `x86_64-sweep.md`: the WP-961 x86_64 sweep on GitHub's runners
   (`.github/workflows/sweep.yml`): libc++ 22 and ten projects against the
   clang 19 control, with x86_64-only triage.
+- `neon-builtins.md`: a census of the AArch64 NEON/fp16/ACLE intrinsics,
+  one call each (`scripts/neon-intrinsic-census.py`), before and after
+  WP-1421, and the header names kiln lacks.
 
 C mode:
 

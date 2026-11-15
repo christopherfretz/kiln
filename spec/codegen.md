@@ -4722,7 +4722,29 @@ No lowering changed; the new forms reach codegen as existing AST.
   `target.neon/crypto-run.cpp`, `ir-crypto-19.cpp`; the table lookups
   `vtbl1`..`vtbl4`, `vtbx1`..`vtbx4`, `vqtbl1`..`vqtbl4` and
   `vqtbx1`..`vqtbx4`: spec/landed/codegen/WP-1288.md "NEON table
-  lookups"). The
+  lookups; and the rest of what `arm_neon.h` and `arm_fp16.h` reach,
+  WP-1421: the one-call builtins as clang's `AArch64SIMDIntrinsicMap` /
+  `AArch64SISDIntrinsicMap` rows (`neon.rs` `Gen`: each operand bitcast
+  to its parameter, a scalar `b`/`h` operand inserted at lane 0 of a
+  64-bit `poison` vector and lane 0 of a wider result taken, a 16-bit
+  conversion an `i32` call truncated or its 16-bit source extended;
+  `vcale`/`vcalt` swap their operands; SM3/SM4 are declared `nounwind
+  memory(none)`, `xar` and `sm3tt*` take an `immarg`), the compares
+  against zero as clang's `EmitAArch64CompareBuiltinExpr` (compared as
+  the type the operand had before the header's bitcast, then `sext`),
+  the short sequences of `EmitAArch64BuiltinExpr` (`neon.rs` `Sp`:
+  `vadd_v` of polynomials as `xor`, `v{add,sub}hn`, `vrsra_n`,
+  `vqdmlal`, `vmul_lane` of `double`, the `d` shifts, `vfmah`/`vfmsh`
+  emitting operand 1 twice as clang does), `vld1_x{2,3,4}`/`vldK_dup`/
+  `vldK_lane` (`ld1xK`, `ldKr`, `ldKlane` with the lane as `i64`),
+  `vst1_x{2,3,4}`/`vstK_lane`, and `vldap1_lane`/`vstl1_lane` as an
+  acquire load / release store of the lane at the pointer's alignment;
+  tests `target.neon/ir-{ld-st-multi,compare,cvt,sisd,vector-misc,crypto-sha3-fml,image-codec-forms}-19.cpp`,
+  `sisd-compare-cvt-run.cpp`, `image-codec-forms-run.cpp`; coverage:
+  docs/status/neon-builtins.md; no `__builtin_neon_*` builtin stays in
+  `UNLOWERED_BUILTINS`, and a compare against zero whose type code's quad
+  bit disagrees with its name, which clang's sema rejects, is "invalid
+  type code"). The
   AArch64 ACLE builtins (`__builtin_arm_*`,
   `arm.rs`) are spec/landed/sema/WP-724.md "ACLE builtins".
 - With `CodegenOptions::sve` (AArch64 only), every function definition
