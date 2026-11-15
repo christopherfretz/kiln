@@ -1340,7 +1340,10 @@ impl Sema<'_, '_> {
                 && !self.unparsed_exc.contains(&first));
         let dependent = self.ast.decls.get(p).has(DeclFlags::DEPENDENT_CTX);
         let old_implicit = dtor && computed && !dependent;
-        let new_implicit = dtor && ne == ExcSpec::None && !dependent;
+        // C++98/03: a destructor written without one has none (it may
+        // throw anything), as for the first declaration (`declare.rs`).
+        let new_implicit =
+            dtor && ne == ExcSpec::None && !dependent && self.std >= kiln_lex::Std::Cxx11;
         let checked = (self.exceptions || self.std >= kiln_lex::Std::Cxx17)
             && self.same_ignoring_exc_spec(pty, ty)
             && !(old_implicit && new_implicit)

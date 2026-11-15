@@ -394,6 +394,14 @@ Planned as 1.3.0.
   allocation function, and GCC throws from the nothrow form.
   `-fno-kiln-new-bound-check` restores clang's behaviour. Sized
   deallocation is on by default only from C++14, as in clang.
+- C++98 to C++14: a dynamic exception specification (`throw(A, B)`,
+  `throw()`) filters at run time, as clang and GCC do: a throw it does not
+  allow calls the unexpected handler (`std::set_unexpected`), and what the
+  handler throws propagates, becomes `std::bad_exception`, or calls
+  `terminate`; kiln let the exception through or called `terminate`. In
+  C++98/03 a destructor or class-specific `operator delete` declared
+  without a specification may throw (it was implicitly `noexcept`)
+  (WP-1457).
 
 ## [1.2.1] - 2026-11-14
 

@@ -6,7 +6,7 @@ use kiln_abi::call::ArgKind;
 use kiln_abi::irtype::IrType;
 use kiln_abi::mangle;
 use kiln_ast::decl::DeclKind;
-use kiln_ast::types::TypeView;
+use kiln_ast::types::{ExcSpec, TypeView};
 use kiln_ast::{DeclId, QualType};
 use kiln_llvm::{
     Attr, AttrKind, AttrList, BinOp, CallOpts, CastOp, ConstData, Flags, FloatPredicate, FuncId,
@@ -402,6 +402,24 @@ impl Cg<'_> {
         self.f.fir.set_cur(None);
     }
 
+    /// The types of the dynamic exception specification written on the
+    /// definition `d` (clang reads `CurCodeDecl`'s own type), `Some(empty)`
+    /// for `throw()`, when they are run-time filters (C++98 to C++14);
+    /// `None` otherwise.
+    fn dynamic_exc_filter(&self, d: DeclId) -> Option<Vec<QualType>> {
+        if !self.opts.dynamic_exception_specs {
+            return None;
+        }
+        let t = &self.ast.types;
+        let ty = self.ast.decls.get(d).ty()?;
+        let p = t.proto_of(ty.ty()).or_else(|| t.proto(ty))?;
+        match t.exc_spec(p) {
+            ExcSpec::DynamicNone => Some(Vec::new()),
+            ExcSpec::Dynamic(l) => Some(t.type_list_types(l).to_vec()),
+            _ => None,
+        }
+    }
+
     /// clang `GenerateCode` for the definition `d` into `f` (`structor`:
     /// the constructor/destructor variant being emitted).
     pub fn gen_code(&mut self, d: DeclId, f: FuncId, structor: Option<mangle::Structor>) -> R<()> {
@@ -577,10 +595,16 @@ impl Cg<'_> {
             let z = self.m.const_zero(slot.ty);
             self.store(V::C(z), slot.v, slot.align, false);
         }
-        // EmitStartEHSpec: a non-throwing function is a terminate scope
-        // (thunks are emitted without a declaration and get none).
-        let eh_spec = sig.nothrow && self.opts.exceptions && thunk.is_none();
-        if eh_spec {
+        // EmitStartEHSpec: before C++17 a dynamic exception specification
+        // on the definition is a filter scope; otherwise a non-throwing
+        // function is a terminate scope (thunks are emitted without a
+        // declaration and get none).
+        let eh_filter =
+            if self.opts.exceptions && thunk.is_none() { self.dynamic_exc_filter(d) } else { None };
+        let eh_spec = eh_filter.is_none() && sig.nothrow && self.opts.exceptions && thunk.is_none();
+        if let Some(types) = &eh_filter {
+            self.push_eh_spec_filter(types)?;
+        } else if eh_spec {
             self.push_terminate();
         }
         self.f.cl.prologue = self.f.cl.depth();
@@ -870,7 +894,9 @@ impl Cg<'_> {
             self.emit_postconditions(d)?;
         }
         self.emit_epilog()?;
-        if eh_spec {
+        if eh_filter.is_some() {
+            self.pop_eh_spec_filter();
+        } else if eh_spec {
             self.pop_terminate();
         }
         self.finish_indirect_goto()?;

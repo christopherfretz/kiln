@@ -113,6 +113,13 @@ pub struct CodegenOptions {
     /// function ([expr.new]/8, C++11 and later; the default). Off (C++98)
     /// the allocation function is passed `SIZE_MAX`, as clang does.
     pub bad_array_new_length: bool,
+    /// Dynamic exception specifications are run-time filters (C++98 to
+    /// C++14, [except.spec] and [except.unexpected] of those editions):
+    /// a function defined with `throw(A, B)` or `throw()` gets a filter
+    /// scope whose failure calls `__cxa_call_unexpected` (clang
+    /// `EmitStartEHSpec` when not `CPlusPlus17`). Off (the default) a
+    /// `throw()` is `noexcept(true)`, a terminate scope.
+    pub dynamic_exception_specs: bool,
     /// RTTI is enabled (`-frtti`, the default). When disabled (`-fno-rtti`)
     /// a vtable's RTTI slot is null and `type_info` objects are emitted
     /// only for exception handling, as `linkonce_odr` definitions in every
@@ -740,6 +747,7 @@ impl Default for CodegenOptions {
             c: None,
             exceptions: true,
             bad_array_new_length: true,
+            dynamic_exception_specs: false,
             rtti: true,
             ident: String::new(),
             outline_atomics: Some(true),

@@ -217,12 +217,15 @@ pub(crate) struct Handler {
     pub blk: Blk,
 }
 
-/// What a scope is (clang `EHScope::Kind`; filters are C++14-only).
+/// What a scope is (clang `EHScope::Kind`).
 #[derive(Clone, Debug)]
 pub(crate) enum Kind {
     Cleanup(Cleanup),
     Catch(Vec<Handler>),
     Terminate,
+    /// A dynamic exception specification (C++98 to C++14), clang
+    /// `EHFilterScope`: the type-infos it allows (none for `throw()`).
+    Filter(Vec<V>),
 }
 
 /// One scope (clang `EHCleanupScope`, `EHCatchScope`, `EHTerminateScope`).
@@ -643,6 +646,11 @@ impl Cg<'_> {
     pub(crate) fn pop_terminate(&mut self) {
         let s = self.f.cl.stack.pop();
         debug_assert!(matches!(s.map(|s| s.kind), Some(Kind::Terminate)), "push_terminate");
+    }
+
+    /// `EHScopeStack::pushFilter`.
+    pub(crate) fn push_filter(&mut self, types: Vec<V>) {
+        self.push_scope(Kind::Filter(types), false, false);
     }
 
     /// `EHScopeStack::pushCatch`.

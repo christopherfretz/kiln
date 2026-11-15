@@ -4725,10 +4725,13 @@ impl Sema<'_, '_> {
             ty
         };
         // [except.spec]/9: a class-specific deallocation function without
-        // an exception specification is non-throwing.
+        // an exception specification is non-throwing (C++11 on: C++03
+        // has no such rule, clang gates it on C++11 as well).
         let ty = match d.op_name {
             Some(OverloadedOperator::Delete | OverloadedOperator::ArrayDelete)
-                if method && self.written_exc_spec(ty) == ExcSpec::None =>
+                if method
+                    && self.std >= kiln_lex::Std::Cxx11
+                    && self.written_exc_spec(ty) == ExcSpec::None =>
             {
                 self.with_basic_noexcept(ty)
             }

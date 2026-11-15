@@ -116,11 +116,18 @@ impl Cg<'_> {
         let mut catch_all = false;
         let mut cleanup = false;
         let mut clauses: Vec<V> = Vec::new();
+        let mut filter_types: Option<Vec<V>> = None;
         'walk: for s in self.f.cl.stack.iter().rev() {
             match &s.kind {
                 Kind::Cleanup(_) => cleanup = cleanup || s.eh,
                 Kind::Terminate => {
                     catch_all = true;
+                    break 'walk;
+                }
+                // The function's filter is the outermost EH scope; its
+                // types go last, as one `filter` clause.
+                Kind::Filter(ts) => {
+                    filter_types = Some(ts.clone());
                     break 'walk;
                 }
                 Kind::Catch(hs) => {
@@ -139,8 +146,12 @@ impl Cg<'_> {
         if catch_all {
             clauses.push(V::C(self.m.const_null(LTy::PTR)));
         }
+        let filter = if catch_all { None } else { filter_types.map(|ts| self.filter_array(&ts)) };
         let lp_ty = self.lpad_ty();
-        let lp = self.f.fir.push(Op::LandingPad { cleanup: !catch_all && cleanup, clauses }, lp_ty);
+        let lp = self
+            .f
+            .fir
+            .push(Op::LandingPad { cleanup: !catch_all && cleanup, clauses, filter }, lp_ty);
         let exn = self.f.fir.push(Op::ExtractValue { agg: lp, idx: 0 }, LTy::PTR);
         let es = self.exn_slot();
         self.store(exn, es, 8, false);
@@ -152,6 +163,86 @@ impl Cg<'_> {
         self.dbg_restore(dl);
         self.f.fir.set_cur(saved);
         lpad
+    }
+
+    /// The `filter` clause's constant array of type-infos (`[0 x ptr]
+    /// zeroinitializer` for `throw()`).
+    fn filter_array(&mut self, ts: &[V]) -> V {
+        let ty = self.m.types.array(LTy::PTR, ts.len() as u64);
+        if ts.is_empty() {
+            return V::C(self.m.const_zero(ty));
+        }
+        let elems: Vec<Value> = ts
+            .iter()
+            .map(|t| match t {
+                V::C(c) => *c,
+                _ => unreachable!("a filter type-info is a constant"),
+            })
+            .collect();
+        V::C(self.m.const_array(LTy::PTR, &elems).expect("an array of type-infos"))
+    }
+
+    /// `EmitStartEHSpec` for a dynamic exception specification (C++98 to
+    /// C++14, `throw(A, B)` or `throw()`): a filter scope allowing the
+    /// type-infos of the listed types without reference and
+    /// cv-qualifiers.
+    pub(crate) fn push_eh_spec_filter(&mut self, types: &[kiln_ast::QualType]) -> R<()> {
+        let ast = self.ast;
+        let mut ts = Vec::with_capacity(types.len());
+        for &q in types {
+            let q = if ast.types.is_reference(q) {
+                ast.types.pointee(q).expect("referenced type")
+            } else {
+                q
+            };
+            ts.push(V::C(self.rtti(q)?));
+        }
+        self.push_filter(ts);
+        Ok(())
+    }
+
+    /// `EmitEndEHSpec` / `emitFilterDispatchBlock`: pops the function's
+    /// filter scope; its dispatch block, if used, calls
+    /// `__cxa_call_unexpected` when the selector is negative (the filter
+    /// failed) and resumes otherwise. The call is not an `invoke`: the
+    /// runtime filters what the unexpected handler throws against the
+    /// specification of the frame that called it ([except.unexpected]).
+    pub(crate) fn pop_eh_spec_filter(&mut self) {
+        let s = self.f.cl.stack.pop();
+        let Some(Kind::Filter(ts)) = s.as_ref().map(|s| &s.kind) else {
+            unreachable!("pop_eh_spec_filter: the filter is the innermost scope");
+        };
+        let Some(dispatch) = s.as_ref().and_then(|s| s.cached_eh) else { return };
+        if self.f.fir.block_uses(dispatch) == 0 {
+            self.f.fir.erase_block(dispatch);
+            return;
+        }
+        let n = ts.len();
+        let saved = self.f.fir.cur();
+        self.emit_block_after_uses(dispatch);
+        if n != 0 {
+            let ss = self.sel_slot();
+            let sel = self.load(LTy::I32, ss, 4, false);
+            let zero = V::C(self.m.const_int(LTy::I32, 0));
+            let fails = self.icmp(kiln_llvm::IntPredicate::Slt, sel, zero);
+            let unexpected = self.f.fir.create_block();
+            let resume = self.eh_resume_block();
+            self.cond_br(fails, unexpected, resume);
+            self.emit_block(unexpected, false);
+        }
+        let exn = self.exn_from_slot();
+        let f = self.rt_fn("__cxa_call_unexpected", LTy::VOID, &[LTy::PTR], &[]);
+        let fn_ty = self.m.func(f).ty();
+        let fa = self.m.attr_set(&[Attr::Flag(AttrKind::NoReturn)]);
+        let opts =
+            CallOpts { attrs: AttrList { func: fa, ..AttrList::default() }, ..CallOpts::default() };
+        let c = self.f.fir.push(
+            Op::Call { fn_ty, callee: V::C(Value::func(f)), args: vec![exn], opts: Box::new(opts) },
+            LTy::VOID,
+        );
+        self.f.calls.push((Fir::last_inst(c), Some(f), false));
+        self.f.fir.push(Op::Unreachable, LTy::VOID);
+        self.f.fir.set_cur(saved);
     }
 
     /// `{ ptr, i32 }`.
@@ -169,7 +260,7 @@ impl Cg<'_> {
         }
         let b = match &self.f.cl.stack[d - 1].kind {
             Kind::Catch(hs) if hs.len() == 1 && hs[0].rtti.is_none() => hs[0].blk,
-            Kind::Catch(_) | Kind::Cleanup(_) => self.f.fir.create_block(),
+            Kind::Catch(_) | Kind::Cleanup(_) | Kind::Filter(_) => self.f.fir.create_block(),
             Kind::Terminate => self.terminate_handler(),
         };
         self.f.cl.stack[d - 1].cached_eh = Some(b);
@@ -224,7 +315,10 @@ impl Cg<'_> {
         self.set_personality();
         let lp_ty = self.lpad_ty();
         let null = V::C(self.m.const_null(LTy::PTR));
-        let lp = self.f.fir.push(Op::LandingPad { cleanup: false, clauses: vec![null] }, lp_ty);
+        let lp = self
+            .f
+            .fir
+            .push(Op::LandingPad { cleanup: false, clauses: vec![null], filter: None }, lp_ty);
         let exn = self.f.fir.push(Op::ExtractValue { agg: lp, idx: 0 }, LTy::PTR);
         self.call_terminate(exn);
         self.f.fir.set_cur(saved);

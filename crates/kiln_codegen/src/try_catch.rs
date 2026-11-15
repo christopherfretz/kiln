@@ -205,7 +205,7 @@ impl Cg<'_> {
 
     /// `EmitBlockAfterUses`: places `b` after the block of its most
     /// recent user (first in LLVM's use list), else at the end.
-    fn emit_block_after_uses(&mut self, b: Blk) {
+    pub(crate) fn emit_block_after_uses(&mut self, b: Blk) {
         let after = self
             .f
             .fir
