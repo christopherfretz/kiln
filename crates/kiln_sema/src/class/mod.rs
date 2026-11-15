@@ -121,10 +121,16 @@ pub struct ClassBuild {
 /// The function being defined when a nested function definition starts
 /// (a member function defined inside a local class), and the number of
 /// class/namespace scopes entered for an out-of-line member definition.
+/// A function definition also sets aside the default member initializers
+/// and contract predicates it is nested in (a local class's member
+/// function in a lambda there): its `this` is its own, not theirs
+/// ([expr.prim.this]/2-3); a lambda keeps them.
 #[derive(Debug)]
 pub(crate) struct SavedFn {
     pub(crate) func: Option<crate::stmt::FnState>,
     pub(crate) pushed: usize,
+    pub(crate) nsdmi_this: Vec<(DeclId, QualType)>,
+    pub(crate) contract_ctx: Vec<crate::contracts::ContractCtx>,
 }
 
 impl ClassBuild {

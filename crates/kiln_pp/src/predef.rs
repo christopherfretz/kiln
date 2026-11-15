@@ -113,6 +113,10 @@ pub struct PredefConfig {
     /// 16.1's value; spec/reflection.md "Feature macros"), and the
     /// working draft's `__cpp_consteval 202606L` (P4101R1).
     pub reflection: bool,
+    /// `-f[no-]contracts` (GCC 16.1): `__cpp_contracts 202502L` in any C++
+    /// mode when `Some(true)`, none when `Some(false)`; `None` keeps the
+    /// default (C++26 only; spec/contracts.md §1).
+    pub contracts: Option<bool>,
     /// The `AArch64` target features the `__ARM_*` macros derive from.
     pub arm: ArmTarget,
     /// Off `AArch64`, how the `-march=<cpu>` macros differ from the base
@@ -186,6 +190,7 @@ impl PredefConfig {
             clang_compat: ClangCompat::Clang22,
             std_float_aliases: true,
             reflection: false,
+            contracts: None,
             arm: ArmTarget::default(),
             x86_macros: Vec::new(),
             sanitize_macros: Vec::new(),
@@ -599,6 +604,18 @@ fn apply_gnu89_inline(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     }
 }
 
+/// `-f[no-]contracts` (spec/contracts.md §1): `__cpp_contracts` in any
+/// C++ mode, or none.
+fn apply_contracts(m: &mut BTreeMap<String, String>, contracts: Option<bool>) {
+    match contracts {
+        Some(true) => set(m, "__cpp_contracts", "202502L"),
+        Some(false) => {
+            m.remove("__cpp_contracts");
+        }
+        None => {}
+    }
+}
+
 fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
     if cfg.gnu {
         m.remove("__STRICT_ANSI__");
@@ -663,6 +680,7 @@ fn apply_flags(m: &mut BTreeMap<String, String>, cfg: &PredefConfig) {
         if !cfg.sized_deallocation {
             m.remove("__cpp_sized_deallocation");
         }
+        apply_contracts(m, cfg.contracts);
         apply_std_keyed(m, cfg.reflection);
         apply_p1467(m, cfg.std_float_aliases, cfg.aarch64);
     }

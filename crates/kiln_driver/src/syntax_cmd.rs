@@ -355,6 +355,7 @@ impl SyntaxJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),
+            contracts: Some(a.predef.contracts_for(&job.std)),
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),

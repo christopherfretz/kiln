@@ -89,11 +89,19 @@ Planned as 1.3.0.
   command-line order (WP-1453); they were unknown arguments before (found
   building ICU4C, which links a library with `-nodefaultlibs -nostdlib
   -shared`). A compile-only run warns about them as clang does.
+- `-fcontracts` and `-fno-contracts`, as in GCC 16.1 (WP-1463):
+  contracts (`pre`, `post`, `__cpp_contracts`) before C++26, or none at
+  C++26. With libstdc++, either flag also links `libstdc++exp` (the
+  default `handle_contract_violation` of libstdc++ 16) when the GCC
+  installation has it, as `g++` does. GCC's
+  `-fcontracts-client-check=none` and `-fcontracts-definition-check=on`
+  are accepted; its other contract options are diagnosed as unsupported.
 
 ### Changed
 
-- The PCH snapshot format is 12 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448 and WP-1449; new
+- The PCH snapshot format is 14 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426, WP-1414, WP-1435, WP-1448, WP-1449, WP-1456 and
+  WP-1463; new
   diagnostics, options and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
   it is not misread, as [spec/pch.md](spec/pch.md) describes.
 - `__is_trivially_copyable`, `__is_trivial`, `__is_pod` and
@@ -338,6 +346,13 @@ Planned as 1.3.0.
   was rejected as "no matching constructor" (WP-1449). An assignment to
   a `volatile` structure is a volatile copy. A same-type structure cast
   gets clang's `-Wpedantic` warning.
+- Contracts, found running GCC's C++ testsuite (WP-1463): a result name
+  with the name of a parameter is an error; a constructor's
+  precondition or a destructor's postcondition that reaches a member
+  through an implicit `this` is an error; a postcondition of a function
+  template that names its result now checks each specialization's
+  result. A local class's member function defined in a lambda in a
+  contract or a default member initializer uses its own `this`.
 - C codegen matches clang (WP-1449): padding in C constant aggregates
   and list initializations is zero at `-fclang-compat=20` and later,
   bit-field constants are one byte per element, `_Atomic` arrays are

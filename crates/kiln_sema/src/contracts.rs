@@ -30,6 +30,10 @@ pub(crate) struct ContractCtx {
     /// The type of `this` there and its pointer-to-const version
     /// ([expr.prim.this]/2).
     pub(crate) this: Option<(QualType, QualType)>,
+    /// A precondition of a constructor (0) or a postcondition of a
+    /// destructor (1) of the class: an implicit `(*this).` there is
+    /// ill-formed ([expr.prim.id.general]/2, [over.call.func]/3.1).
+    pub(crate) no_implicit_this: Option<(DeclId, u8)>,
 }
 
 /// What [`Sema::act_on_start_contract`] opened, for
@@ -90,14 +94,19 @@ impl Sema<'_, '_> {
                 None => QualType::ERROR,
             };
             let ctx = f.map_or(self.ctx, |f| self.contract_fn(f));
+            // The result name of a templated function is in a dependent
+            // context, so a predicate naming it is rebuilt for each
+            // specialization even when it is not type- or value-dependent
+            // (`template<class T> int g(int a) post(r: r > 0)`; WP-1463).
+            let mut flags =
+                if ty == QualType::ERROR { DeclFlags::INVALID } else { DeclFlags::empty() };
+            if self.in_template() || self.ast.decls.get(ctx).has(DeclFlags::DEPENDENT_CTX) {
+                flags = flags.with(DeclFlags::DEPENDENT_CTX);
+            }
             let d = self.ast.decls.push(
                 NewDecl {
                     kind: DeclKind::ContractResultName,
-                    flags: if ty == QualType::ERROR {
-                        DeclFlags::INVALID
-                    } else {
-                        DeclFlags::empty()
-                    },
+                    flags,
                     misc: DeclMisc::default(),
                     name: DeclName::ident(name),
                     ctx: Some(ctx),
@@ -108,6 +117,9 @@ impl Sema<'_, '_> {
                 Payload::None(0),
             );
             self.push_local(name, d);
+            if let Some(f) = f {
+                self.check_result_name_conflict(self.contract_fn(f), name, loc);
+            }
             d
         });
         let this = self.current_this().map(|t| {
@@ -120,7 +132,21 @@ impl Sema<'_, '_> {
             };
             (t, c)
         });
-        self.contract_ctx.push(ContractCtx { watermark, lambdas: self.lambdas.len(), this });
+        let no_implicit_this = f.and_then(|f| {
+            let f = self.contract_fn(f);
+            let which = match (kind, self.kind_of(f)) {
+                (ContractKind::Pre, DeclKind::CXXConstructor) => 0,
+                (ContractKind::Post, DeclKind::CXXDestructor) => 1,
+                _ => return None,
+            };
+            Some((self.ast.decls.get(f).ctx()?, which))
+        });
+        self.contract_ctx.push(ContractCtx {
+            watermark,
+            lambdas: self.lambdas.len(),
+            this,
+            no_implicit_this,
+        });
         // A precondition or postcondition is in the function parameter
         // scope of `f` ([basic.scope.contract]): a lambda in its predicate
         // is in `f` and may capture `f`'s parameters
@@ -206,6 +232,48 @@ impl Sema<'_, '_> {
 
     /// The function a contract of `f` belongs to: a function template's
     /// pattern.
+    /// [basic.scope.contract]/2.1: a result name that is not
+    /// name-independent (`_`) and potentially conflicts with a parameter of
+    /// its function makes the program ill-formed (diagnosed as a
+    /// redefinition of the parameter; WP-1463).
+    fn check_result_name_conflict(&mut self, f: DeclId, name: Symbol, loc: Loc) {
+        let spelled = crate::decl::sym_str(self, name);
+        if spelled == "_" {
+            return;
+        }
+        let Some(params) = self.ast.decls.function(f).map(|x| x.params) else { return };
+        let clash = self
+            .ast
+            .lists
+            .iter::<DeclId>(params)
+            .any(|p| self.ast.decls.get(p).name().as_ident() == Some(name));
+        if clash {
+            let d = self.diag(DiagId::sema_param_redefinition, loc).arg(spelled);
+            self.emit(d);
+        }
+    }
+
+    /// [expr.prim.id.general]/2, [over.call.func]/3.1: in the predicate
+    /// of a precondition of a constructor or a postcondition of a
+    /// destructor of class X, a potentially-evaluated id-expression naming
+    /// a member of X (or a base) through an implicit `(*this).`, and an
+    /// unqualified call selecting a non-static member function, are
+    /// ill-formed (WP-1463).
+    pub(crate) fn check_contract_implicit_this(&mut self, loc: Loc) {
+        let Some(&ContractCtx { no_implicit_this: Some((x, which)), .. }) =
+            self.contract_ctx.last()
+        else {
+            return;
+        };
+        if self.unevaluated > 0
+            || self.this_class().is_none_or(|(_, c)| self.ast.first(c) != self.ast.first(x))
+        {
+            return;
+        }
+        let d = self.diag(DiagId::sema_contract_implicit_this, loc).arg(which);
+        self.emit(d);
+    }
+
     pub(crate) fn contract_fn(&self, f: DeclId) -> DeclId {
         if self.kind_of(f) == DeclKind::FunctionTemplate {
             self.pattern_of(f).unwrap_or(f)

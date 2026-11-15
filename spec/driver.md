@@ -93,6 +93,8 @@ linker prints its version; Meson's linker probe, WP-920), and `-c
 | `-fkiln-source-path-style=<clang\|gcc>` | kiln: how `__builtin_FILE()`, `__builtin_FILE_NAME()`, `std::source_location::current()` (also as a default argument) and `std::meta::source_location_of` spell a file (`SourcePathStyle`, `SourceManager::presumed_file_name`; WP-636). `clang` (the default): the presumed name as written, as clang 19 and 22 (`SourceLocExpr::EvaluateInContext`), so `-I /p//inc/./` gives `/p//inc/./x.h`; `gcc`: GCC 16.1's, an included file named by the path GCC's header search built, not normalized (`-I /p//inc/./` gives `/p//inc/./x.h`, `-I inc//` gives `inc//x.h`), and by its realpath when found through a system directory and that is shorter (`-isystem /p//inc/./` gives `/p/inc/x.h`; spec/reflection.md §3.9, WP-1262). `-fmacro-prefix-map=` applies after either; `__FILE__` and `__BASE_FILE__` keep clang's spelling under both. Any other value is an error, printed as `language not recognized: '<v>'` (the `lib.rs:146` wording defect, see `-fmacro-prefix-map=`); the last one wins |
 | `-fconstexpr-steps=N`, `-fconstexpr-depth=N`, `-fconstexpr-backtrace-limit=N` | constant-evaluation limits, as clang's (defaults 1048576, 512, 10; a backtrace limit of 0 shows every frame); `constexpr_opts`, spec/oven.md "Integration". GCC's `-fconstexpr-ops-limit=N` (passed by real reflection-heavy builds) sets the step budget too |
 | `-ffile-prefix-map=<old>=<new>`, `-fmacro-prefix-map=<old>=<new>` | `__FILE__`, `__BASE_FILE__`, `__builtin_FILE()`, `std::source_location` and `std::meta::source_location_of` spell a path starting with `<old>` with `<new>` instead (`SourceManager::remap_macro_path`; clang `processPathForFileMacro`). Entries are tried in descending order of `<old>`, the first match wins, and the match is a plain string prefix. A value without `=` is an error, printed as `language not recognized: '<v>'` (clang: `invalid argument '<v>' to -fmacro-prefix-map=`; a wording defect, `crates/kiln_driver/src/lib.rs:146` renders every `ArgError::InvalidValue` so; deviation 20). `-ffile-prefix-map=` also remaps debug information file names, as `-fdebug-prefix-map=` does ("Debug information flags") |
+| `-f[no-]contracts` | GCC 16.1's: contracts in any C++ mode / none at C++26 (default: on exactly at C++26; the last one wins; spec/contracts.md §1). Either one also adds `-lstdc++exp` to the link, as `g++` does ("Link options") |
+| `-fcontracts-client-check=none`, `-fcontracts-definition-check=on` | GCC's, accepted: kiln checks contracts in the called function. Their other GCC values, `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks` and `-fcontracts-conservative-ipa` (and `-fno-`) are `'<opt>' is not supported by kiln`; an unknown value is `unsupported argument` (spec/contracts.md §6.1) |
 | `-fcontract-evaluation-semantic=<ignore\|observe\|enforce\|quick_enforce>` | the contract evaluation semantic of the translation unit (GCC's spelling; `quick-enforce` also accepted; default `enforce`; `ParseOptions::contract_semantic`, `Ast::contract_semantic`); any other value is `unsupported argument`. All four semantics compile to IR and are evaluated in the Oven (spec/contracts.md §6, WP-707) |
 | `-fconstexpr-memory=N[k\|m\|g]` | kiln: live abstract-memory bytes per evaluation (default 256 MiB; binary suffixes) |
 | `-f[no-]reflection` | P2996 reflection (WP-267; on by default at C++26 since WP-920, operator decision Q7; the last one wins; below C++26 off whatever the flag, an explicit `-freflection` accepted and ignored; spec/reflection.md §1.4): `^^`, `[:`, `:]` are lexed, and `^^`, type splices and the kiln intrinsics are accepted (spec/sema.md §8a, spec/parse.md §5.2). `__cpp_reflection` is not predefined. Passed to the preprocessor, the parser and sema for `-E`, `-fsyntax-only` and codegen jobs |
@@ -187,6 +189,29 @@ on the linker's command line; compile-only: what `-c`, `-S`, `-E`,
 | `-print-file-name=`, `-print-prog-name=`, `-print-libgcc-file-name`, `-print-search-dirs` | the answer | same | "Toolchain probes" | unchanged |
 | `-print-multiarch` | `unsupported option` | Debian multiarch name | GCC's answer ("Toolchain probes") | unchanged |
 | `-print-multi-os-directory` | `unsupported option` | the multilib OS directory (`../lib64`) | unknown argument | unchanged (follow-up) |
+
+**`libstdc++exp` (WP-1463).** A violated contract assertion calls
+`handle_contract_violation(const std::contracts::contract_violation&)`
+(`_Z25handle_contract_violationRKNSt9contracts18contract_violationE`;
+spec/contracts.md §6.3). With libc++ and with libstdc++ before 16 (no
+`<contracts>`) kiln's codegen emits a weak default and nothing is
+linked. libstdc++ 16 ships the default in the static archive
+`libstdc++exp.a`, and GCC 16.1's `g++` links it (`-lstdc++exp` right
+before `-lstdc++`) exactly when `-fcontracts` or `-fno-contracts` is on
+the command line, whatever the `-std=` (measured with `g++-16 -###`;
+`-fcontract-evaluation-semantic=` and the other contract options do not
+add it, and `-nostdlib++` drops it with `-lstdc++`). kiln++ adds
+`-lstdc++exp` after the inputs and link options (so clang++ puts its
+`-lstdc++` right after it) under the same condition, and only when the
+C++ driver links (not `kiln`), the standard library is libstdc++,
+none of `-nostdlib`, `-nodefaultlibs`, `-nostdlib++` is given, and the
+selected GCC installation has `libstdc++exp.a` (in its version
+directory, Debian's layout, or in `<prefix>/lib64`, `lib`,
+`<prefix>/<triple>/lib64`, `lib`; `Toolchain::libstdcxx_exp_archive`).
+Without the archive nothing is added and nothing is said. A static
+archive adds nothing to a program that does not reference it: a
+contract-free program linked with and without `-fcontracts` against
+GCC 16.1 is byte-identical (`codegen_cmd.rs` `link_libstdcxx_exp`).
 
 ### Response files (WP-799)
 

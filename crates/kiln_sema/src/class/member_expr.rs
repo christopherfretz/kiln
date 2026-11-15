@@ -248,6 +248,7 @@ impl Sema<'_, '_> {
             && let Some((this_ty, _)) = self.this_class()
         {
             self.note_this_use(loc);
+            self.check_contract_implicit_this(loc);
             let this = self.builder().this_expr(this_ty, true, loc);
             let obj_ty = self.ast.types.pointee(this_ty).unwrap_or(QualType::ERROR);
             self.diagnose_deprecated(d, loc);

@@ -401,6 +401,10 @@ pub struct Sema<'a, 'sm> {
     /// `-ffreestanding` (clang `LangOptions::Freestanding`): `main` is
     /// an ordinary name ([basic.start.main]/1; WP-1015).
     pub freestanding: bool,
+    /// `-f[no-]contracts` (GCC 16.1): whether `pre` and `post` introduce
+    /// function contract specifiers; `None` is "exactly at C++26"
+    /// (spec/contracts.md §1-§2).
+    pub contracts: Option<bool>,
     /// `-f[no-]sized-deallocation` (clang `LangOptions::SizedDeallocation`,
     /// default on; WP-808): off, the sized global `operator delete` and
     /// `operator delete[]` are not declared implicitly, and a global
@@ -1424,6 +1428,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             char8: None,
             no_builtin_fns: Vec::new(),
             freestanding: false,
+            contracts: None,
             lib_builtin_name: |n, _| kiln_ast::decl::builtin::lib_by_name(n).is_some(),
             clang_constexpr_builtin: |_, _| None,
             nc_strict_only: false,

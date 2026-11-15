@@ -124,6 +124,9 @@ pub struct ParseOptions {
     /// `-fcontract-evaluation-semantic=` ([`kiln_ast::Ast::contract_semantic`];
     /// spec/contracts.md §6).
     pub contract_semantic: kiln_ast::stmt::ContractSemantic,
+    /// `-f[no-]contracts` ([`kiln_sema::Sema::contracts`]; `None`: by
+    /// `std`).
+    pub contracts: Option<bool>,
     /// No deduction pre-filters ([`kiln_sema::Sema::full_deduction`]; a
     /// test hook).
     #[doc(hidden)]
@@ -185,6 +188,7 @@ impl Default for ParseOptions {
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
             contract_semantic: kiln_ast::stmt::ContractSemantic::Enforce,
+            contracts: None,
             full_deduction: false,
             full_redecl_scan: false,
         }
@@ -355,6 +359,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.no_builtin = opts.no_builtin;
     s.no_builtin_fns.clone_from(&opts.no_builtin_fns);
     s.freestanding = opts.freestanding;
+    s.contracts = opts.contracts;
     s.sized_deallocation = opts.sized_deallocation;
     s.char8 = opts.char8;
     s.lib_builtin_name = kiln_pp::is_library_builtin;

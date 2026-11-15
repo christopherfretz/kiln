@@ -54,6 +54,7 @@
 //! | `target_features`, `target_attr_features` | configuration | `-march`/`-mcpu`/`-target-feature`, the driver's `target("...")` parser (a `fn`) |
 //! | `gnu_lib_builtins` | configuration | `-stdlib=libstdc++` |
 //! | `no_builtin`, `no_builtin_fns`, `freestanding` | configuration | `-fno-builtin[-name]`, `-ffreestanding` |
+//! | `contracts` | configuration | `-f[no-]contracts` |
 //! | `sized_deallocation` | configuration | `-f[no-]sized-deallocation` |
 //! | `char8` | configuration | `-f[no-]char8_t` |
 //! | `lib_builtin_name`, `clang_constexpr_builtin` | configuration | the preprocessor's builtin tables (`fn`s) |
@@ -149,7 +150,7 @@ macro_rules! sema_fields {
                 lax_vector_conversions, range_lifetime_extension, gnu, gnu89_inline, c,
                 clang_compat, cf_protection_branch, sve, sve_vector_bits, aarch64_cpu_valid,
                 target_features, target_attr_features,
-                gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, sized_deallocation,
+                gnu_lib_builtins, no_builtin, no_builtin_fns, freestanding, contracts, sized_deallocation,
                 char8, lib_builtin_name, clang_constexpr_builtin, math_errno, cfg_dump,
                 cfg_stats, full_deduction, full_redecl_scan, tu_prefix, permissive, cfg_max_elems, std],
             // `ctx` first: the most telling refusal (a prefix ending inside

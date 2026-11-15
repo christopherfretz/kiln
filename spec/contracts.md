@@ -32,19 +32,32 @@ instantiation of the specifiers, the ast-dump, the evaluation-semantic
 driver knob and `__cpp_contracts` (`202502L` at C++26; absent before;
 `kiln_pp/src/predef.rs` KILN_FEATURES).
 
+**`-f[no-]contracts` (WP-1463).** GCC 16.1's flag, the last one wins
+(`PredefArgs::contracts_for`, `Sema::contracts`, `PredefConfig::contracts`):
+contracts are on exactly at C++26 by default; `-fcontracts` turns them on
+in any earlier C++ mode (`pre`/`post` introduce function contract
+specifiers and `__cpp_contracts` is `202502L`), `-fno-contracts` turns
+them off at C++26 (`pre`/`post` are plain names, `contract_assert` is
+not a keyword, `__cpp_contracts` is undefined). Before C++26
+`contract_assert` stays an ordinary identifier with `-fcontracts`, as
+in GCC (which says "not declared"). C mode ignores the flag. The flag is
+part of a PCH's and a module's configuration (`pp_cmd` lang fields).
+
 Out (WP-707): evaluation in the Oven and in codegen, the violation
 handler and `<contracts>`. Out (later): P3598 (splices in contract
 predicates), contract labels, per-assertion semantics.
 
 ## 2. Lexing
 
-`contract_assert` is a keyword at C++26 (`kiln_pp/src/builtin.rs`; at
+`contract_assert` is a keyword at C++26 unless `-fno-contracts`
+(`Parser::new`; `kiln_pp/src/builtin.rs`; at
 `-fclang-compat=22`, as at 19, `__is_identifier(contract_assert)` is 0
 at C++26 and 1 before, and it is an ordinary identifier before C++26).
 `pre` and `post` are identifiers with a special meaning in one place
 only: `pre` or `post` followed by `(` or by `[[`, in the position of §3
-(`Parser::at_contract_spec`, `kiln_parse/src/contracts.rs`). Anywhere
-else they are plain names, also at C++26.
+(`Parser::at_contract_spec`, `kiln_parse/src/contracts.rs`), where
+contracts are on (C++26 or `-fcontracts`, §1). Anywhere else they are
+plain names, also at C++26.
 
 ## 3. Grammar and placement (kiln_parse `contracts.rs`)
 
@@ -133,6 +146,23 @@ assertion-statement:
   convert is the usual conversion error. The assertion is analysed
   between `act_on_start_contract` and `act_on_end_contract` (function
   specifiers) or `act_on_start_contract_assert` (statements).
+- **Result name and parameters** ([basic.scope.contract]/2.1, WP-1463):
+  a result name that is not name-independent (`_`) and has the name of
+  a parameter of its function is `sema_param_redefinition` ("redefinition
+  of parameter 'r'"). In a templated function the result name is in a
+  dependent context (`DEPENDENT_CTX`), so a predicate naming it is
+  rebuilt for each specialization even when it is not dependent.
+- **Implicit `this` in a constructor's precondition or a destructor's
+  postcondition** ([expr.prim.id.general]/2, [over.call.func]/3.1,
+  WP-1463): there a potentially-evaluated id-expression made into
+  `(*this).m` of the class, and an unqualified call that selects a
+  non-static member function, are `sema_contract_implicit_this`
+  (`Sema::check_contract_implicit_this`, from `implicit_member_ref` and
+  `finish_member_winner`); `this->m`, a static member and an
+  unevaluated operand (`sizeof(m)`, the paragraph's Example 1) are fine.
+  A lambda in the predicate that names a member through its captured
+  `this` makes the transformation in the predicate and is diagnosed too
+  (current class: the constructor's).
 - **Implicit const-ness** ([expr.prim.id.unqual]/7): an id-expression in
   the predicate that names a variable (parameter, local, static local,
   global, member of an anonymous union), a structured binding or a
@@ -286,6 +316,13 @@ are `-fcontracts`, `-fcontract-evaluation-semantic=`,
 `-fcontracts-client-check=`, `-fcontracts-definition-check=`,
 `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`,
 `-fcontracts-conservative-ipa` and `-fpreview=inclusiveincontracts`;
+kiln accepts `-fcontracts` (§1), `-fcontracts-client-check=none` and
+`-fcontracts-definition-check=on` (GCC's defaults: the checks are in the
+called function, as kiln's always are) and diagnoses the other values
+and `-fcontract-checks-outlined`, `-fcontract-disable-optimized-checks`
+and `-fcontracts-conservative-ipa` as not supported (WP-1463; a
+caller-side check and the outlining are code generation choices kiln
+has not implemented; `-fpreview=inclusiveincontracts` is a D option);
 it has no semantic attribute (it warns that attributes on a
 function-contract-specifier are ignored) and no contract labels. A
 per-assertion form (labels, P3400) is post-C++26 work; the `aux` slots
@@ -392,7 +429,13 @@ stay reserved for it.
     A user's (strong) definition replaces either at link time; no
     runtime library is needed.
   - With one, kiln emits no default: the program links the stdlib's
-    handler (libstdc++ 16: with `-lstdc++exp`, as under GCC).
+    handler (libstdc++ 16: `handle_contract_violation` is a weak
+    definition in `libstdc++exp.a`, member `contract26.o`, with
+    `invoke_default_contract_violation_handler`). GCC 16.1's `g++` adds
+    `-lstdc++exp` only when `-fcontracts` or `-fno-contracts` is on its
+    command line (not for a plain `-std=c++26`, where `g++` fails to
+    link a program that checks an assertion); kiln++'s link does the
+    same (spec/driver.md "Link options", WP-1463).
 
   The alternatives were rejected: libstdc++'s handler cannot be
   linked into a libc++ program (a second C++ runtime), and
@@ -463,6 +506,7 @@ after the decl, the declared type. clang has no such nodes, so the
 | `parse_contract_attribute_ignored` | warning: attributes are ignored on 'contract_assert' / function contract specifiers |
 | `sema_contract_const_modify` | cannot modify 'x' in a contract predicate: it is implicitly const |
 | `sema_contract_coroutine_post_param` | a postcondition of a coroutine cannot odr-use the non-reference parameter 'x' |
+| `sema_contract_implicit_this` | a precondition of a constructor / postcondition of a destructor cannot access a member through an implicit 'this'; write 'this->' explicitly |
 | `sema_contract_deleted_or_defaulted` | deleted/defaulted function cannot have function contract specifiers |
 | `sema_contract_only_implicit_capture` | 'x' is not implicitly captured by a contract assertion (note: 'x' declared here) |
 | `sema_contract_post_nonconst_param` | a value parameter used in a postcondition must be const |
@@ -476,7 +520,10 @@ Oven (§6.4): `oven_contract_predicate_false` /
 `oven_contract_condition_not_constant` (errors, enforce and
 quick_enforce) and their `_observe` warnings, as notes of the
 evaluation's failure with the call stack.
-Driver: `unsupported argument 'v' to option '-fcontract-evaluation-semantic='`.
+Driver: `unsupported argument 'v' to option '-fcontract-evaluation-semantic='`
+(and `-fcontracts-client-check=`, `-fcontracts-definition-check=`);
+`'-fcontracts-client-check=all' is not supported by kiln` for the GCC
+values and options kiln does not implement (§6.1).
 
 ## 9. Known gaps, divergences and open questions
 
@@ -526,6 +573,20 @@ Divergences recorded by WP-755 (`oracle: none` unless noted):
   and the earlier declaration when a friend redeclaration adds the seq
   (`p7-friend-redecl.cpp` is compared with GCC on the verdict only, as
   every `oracle: gcc` compile-fail test is).
+
+Divergences recorded by WP-1463 (found running GCC's C++ testsuite):
+
+- [expr.prim.id.general]/2 Example 1: `C() pre(sizeof(b) > 0)` is OK
+  (the operand is not potentially evaluated); GCC 16.1 rejects it. GCC
+  accepts a member named through a lambda's captured `this` in a
+  constructor's precondition; kiln rejects it (the transformation is in
+  the predicate) (`expr.prim.id/contract-implicit-this-kiln.cpp`).
+- A friend redeclaration's seq is a complete-class context of the class
+  that declares the friend ([class.mem.general]/7), so it finds a static
+  member declared later; GCC reports "not declared".
+- An explicit specialization whose definition adds a seq to a first
+  declaration without one, and a friend redeclaration with a different
+  seq, are ill-formed (§5 "Redeclarations"); GCC accepts both.
 
 Divergences recorded by WP-765:
 

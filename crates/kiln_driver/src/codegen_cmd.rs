@@ -343,6 +343,7 @@ impl CodegenJob<'_> {
             inst_limits: a.templ.limits(),
             inst_report: a.templ.report,
             reflection: a.predef.reflection_for(&job.std),
+            contracts: Some(a.predef.contracts_for(&job.std)),
             coro_aligned_allocation: a.predef.coro_aligned_allocation,
             lax_vector_conversions: a.lax_vector_conversions,
             clang_compat: a.predef.clang_compat.major(),
@@ -1694,8 +1695,30 @@ fn link_command(args: &Args, tc: &Toolchain, inputs: &[(usize, String)]) -> Comm
             cmd.arg(path.clone());
         }
     }
+    if links_libstdcxx_exp(args, tc) {
+        cmd.arg("-lstdc++exp");
+    }
     cmd.arg("-o").arg(args.output.clone().unwrap_or_else(|| "a.out".to_owned()));
     cmd
+}
+
+/// Whether the link adds `-lstdc++exp` after the inputs, where GCC 16.1's
+/// `g++` puts it (right before the `-lstdc++` the linking clang++ adds):
+/// as `g++`, when `-fcontracts` or `-fno-contracts` was given; only for
+/// the C++ driver with libstdc++, without `-nostdlib`, `-nodefaultlibs` or
+/// `-nostdlib++`, and only when the selected GCC installation has the
+/// archive (spec/driver.md "Link options"). It holds libstdc++'s default
+/// `handle_contract_violation` (spec/contracts.md §6.3); as a static
+/// archive it adds nothing to a program that does not reference it.
+fn links_libstdcxx_exp(args: &Args, tc: &Toolchain) -> bool {
+    args.predef.contracts_flag
+        && args.mode != DriverMode::Gcc
+        && args.stdlib.unwrap_or_default() == StdLib::LibStdCxx
+        && !args
+            .link
+            .iter()
+            .any(|o| matches!(o.arg.as_str(), "-nostdlib" | "-nodefaultlibs" | "-nostdlib++"))
+        && tc.libstdcxx_exp_archive().is_some()
 }
 
 /// A step as `-###` (`quote_all`) or `-v` prints it.
@@ -2404,6 +2427,46 @@ mod tests {
         let tc = searched_toolchain();
         let cmd = link_command(&a, &tc, &[(0, "a.o".to_owned())]);
         assert_eq!(cmd.args, ["-stdlib=libc++", "-fexperimental-library", "a.o", "-o", "a.out"]);
+    }
+
+    /// WP-1463 (spec/driver.md "Link options"): `-f[no-]contracts` adds
+    /// `-lstdc++exp` after the inputs, as GCC 16.1's `g++` does, only with
+    /// libstdc++, a GCC installation holding the archive and the default
+    /// libraries; never in the C driver.
+    #[test]
+    fn link_libstdcxx_exp() {
+        let temp = TempDir::new();
+        let ver = temp.path.join("lib/gcc/x86_64-linux-gnu/16");
+        std::fs::create_dir_all(&ver).unwrap();
+        let lib64 = temp.path.join("lib64");
+        std::fs::create_dir_all(&lib64).unwrap();
+        let gcc = crate::toolchain::GccInstall {
+            path: ver.display().to_string(),
+            triple: "x86_64-linux-gnu".to_owned(),
+            version: "16".to_owned(),
+        };
+        let tc = Toolchain { gcc: Some(gcc), ..searched_toolchain() };
+        let link = |argv: &[&str]| link_command(&args(argv), &tc, &[(0, "a.o".to_owned())]).args;
+        // No archive: nothing added, no diagnostic.
+        assert_eq!(link(&["-fcontracts", "a.o"]), ["a.o", "-o", "a.out"]);
+        std::fs::write(lib64.join("libstdc++exp.a"), b"!<arch>\n").unwrap();
+        assert_eq!(
+            link(&["-fcontracts", "a.o", "-lm"]),
+            ["a.o", "-lm", "-lstdc++exp", "-o", "a.out"]
+        );
+        assert_eq!(link(&["-fno-contracts", "a.o"]), ["a.o", "-lstdc++exp", "-o", "a.out"]);
+        assert_eq!(link(&["a.o"]), ["a.o", "-o", "a.out"]);
+        for off in ["-nostdlib", "-nodefaultlibs", "-nostdlib++"] {
+            assert_eq!(link(&["-fcontracts", off, "a.o"]), [off, "a.o", "-o", "a.out"]);
+        }
+        assert_eq!(
+            link(&["-fcontracts", "-stdlib=libc++", "a.o"]),
+            ["-stdlib=libc++", "a.o", "-o", "a.out"]
+        );
+        let c = Args::parse_as("kiln", &["-fcontracts".to_owned(), "a.o".to_owned()]);
+        let cmd = link_command(&c, &tc, &[(0, "a.o".to_owned())]);
+        assert_eq!(cmd.args, ["--driver-mode=gcc", "a.o", "-o", "a.out"]);
+        temp.remove();
     }
 
     /// The host toolchain as if no `KILN_DEFAULT_GCC` were built in, so
