@@ -229,6 +229,50 @@ accepts, rejects or emits):
 - C89 -Wdeclaration-after-statement is missing.
 - Case-value overflow in C++98 is not checked.
 
+## WP-1449 C codegen fidelity batch (wp/1449, 2026-11-15)
+
+C IR compared with clang 19 and 22 (spec/codegen.md "C specifics",
+"Sanitizers"):
+
+- UBSan: no enum range check in C (only `_Bool` and C23 `enum : bool`),
+  so `-fsanitize=enum` no longer rejects a valid C enum value; type
+  descriptors print `'_Bool'`/`'bool'`/`'struct S'`; pointer-overflow
+  follows clang 19's C rule below compat 20.
+- Zero padding in C constants and list initialization at compat 20+;
+  bit-field constants one `i8` per byte (C and C++); omitted C members
+  are value-initialized (null of their type).
+- `_Atomic` arrays are initialized element by element (no constant
+  copy).
+- `(struct S)s` is a no-op cast of the value, `volatile`/`const`
+  operands included (they were rejected), with clang's `-Wpedantic`
+  warning. Initializing a structure or union from a `volatile` one
+  (`struct S t = *vp;`, also in a braced list) was rejected the same
+  way (a C++ copy construction) and now uses the C assignment rules;
+  `*vp = s` copies with a volatile `memcpy`.
+- Tentative definitions are emitted at the end of the TU in first-
+  declaration order.
+- `-flto -moutline` on x86 warns once more for the link job, as clang.
+
+Still open (the sanitizer audit, C at gnu17/gnu23 against clang 19 and 22,
+and one find):
+
+- `-fsanitize=function`: clang emits `!func_sanitize` on C definitions;
+  kiln has none (WP-934).
+- `__builtin_assume_aligned` under `-fsanitize=alignment`: no
+  `__ubsan_handle_alignment_assumption` (C and C++).
+- Not a sanitizer, found on the way: a structure lvalue passed by value
+  in C is first copied to a temporary (C++'s copy construction); clang
+  loads the coerced argument straight from the object
+  (`addUncopiedAggregate`). Repro: `struct S { int a; char b; double d; };
+  void use(struct S); void f(struct S *p) { struct S t = *p; use(t); }`.
+- float-cast-overflow in C: the reported column is the operand's, not
+  the cast's `(` (Sema builds C casts as a `NoOp` over the implicit
+  conversion).
+
+gcc.c-torture (`cargo xtask gcc-torture --profile debug --oracles none`,
+execute/ieee/builtins at -O0 and -O2, gnu23): 3274/3610 at base
+`7c69b5447` and at head, no per-case change.
+
 ## C OSS rows
 
 `scripts/oss/oss-build.sh <row> --compiler kiln` (each row sets `c = "kiln"`)

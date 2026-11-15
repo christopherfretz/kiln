@@ -736,6 +736,12 @@ impl Cg<'_> {
             .collect();
         for (i, m) in members.iter().enumerate() {
             let at = rel + offs[i];
+            if let Some(f) = by_member[i]
+                && rec.bitfields.contains_key(&f)
+            {
+                self.bitfield_bytes(img, off, at, &rec, i, out);
+                continue;
+            }
             if let Some(f) = by_member[i] {
                 // A bit-field storage unit is rebuilt from its bytes (the
                 // object representation already packs the fields, in
@@ -786,6 +792,41 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// clang `ConstStructBuilder::AppendBitField`, which writes through
+    /// `ConstantAggregateBuilder::addBits`: the bit-field storage unit
+    /// `member` of `rec` at byte `at` of the object at `off` of `img` is
+    /// one `i8` per byte that a named, non-empty bit-field of it covers
+    /// (bytes no field covers are padding), whatever the unit's IR type.
+    fn bitfield_bytes(
+        &mut self,
+        img: &Img,
+        off: u64,
+        at: u64,
+        rec: &kiln_abi::irtype::IrRecord,
+        member: usize,
+        out: &mut Vec<(u64, Value)>,
+    ) {
+        let ast = self.ast;
+        let mut covered: Vec<u64> = Vec::new();
+        for (f, info) in &rec.bitfields {
+            if rec.field_index.get(f).is_none_or(|&i| i as usize != member)
+                || info.size == 0
+                || ast.decls.get(*f).name().is_empty()
+            {
+                continue;
+            }
+            let lo = u64::from(info.offset) / 8;
+            let hi = (u64::from(info.offset) + u64::from(info.size) - 1) / 8;
+            covered.extend(lo..=hi);
+        }
+        covered.sort_unstable();
+        covered.dedup();
+        for k in covered {
+            let b = self.m.const_int(LTy::I8, i128::from(img.byte(off + at + k)));
+            out.push((at + k, b));
+        }
+    }
+
     /// A member pointer stored in an image: the Oven records it as a
     /// relocation (a `MemberPtr` or member `Null` scalar) over its `i64`
     /// (data) or `{ i64, i64 }` (function) storage, whose bytes are 0; a
@@ -826,6 +867,9 @@ impl Cg<'_> {
     /// bytes), else a packed one with explicit padding; the named type
     /// when layout-identical, else a literal struct.
     fn build_struct_const(&mut self, t: LTy, size: u64, fields: &[(u64, Value)]) -> R<Value> {
+        // clang 20+ in C (`ConstStructBuilder::DoZeroInitPadding`): every
+        // gap before a field and the tail are explicit zero bytes.
+        let zero_pad = self.zero_init_padding();
         // `ConstantAggregateBuilder::add`, appending: padding fills a gap
         // the natural layout would leave; a misaligned element makes the
         // layout unnatural.
@@ -834,6 +878,11 @@ impl Cg<'_> {
         let mut end = 0u64;
         for &(o, v) in fields {
             let (s, a) = self.ir_layout(self.m.const_type(v));
+            if zero_pad && end < o {
+                let pad = self.padding_const(o - end);
+                elems.push((end, pad));
+                end = o;
+            }
             let aligned = end.next_multiple_of(a);
             if aligned > o || !o.is_multiple_of(a) {
                 natural = false;
@@ -843,6 +892,11 @@ impl Cg<'_> {
             }
             elems.push((o, v));
             end = o + s;
+        }
+        if zero_pad && end < size {
+            let pad = self.padding_const(size - end);
+            elems.push((end, pad));
+            end = size;
         }
         // `buildFrom`.
         let desired = size.max(end);
@@ -899,10 +953,20 @@ impl Cg<'_> {
         })
     }
 
-    /// clang `ConstantAggregateBuilderUtils::getPadding`.
+    /// clang `ConstantAggregateBuilderUtils::getPadding`: `undef` bytes,
+    /// zero ones where [`Cg::zero_init_padding`].
     fn padding_const(&mut self, n: u64) -> Value {
         let t = if n > 1 { self.m.types.array(LTy::I8, n) } else { LTy::I8 };
-        self.m.const_undef(t)
+        if self.zero_init_padding() { self.m.const_zero(t) } else { self.m.const_undef(t) }
+    }
+
+    /// clang 20+ `CodeGenModule::shouldZeroInitPadding`: in C (any
+    /// standard; not C++), the padding of a constant aggregate or union is
+    /// zero bytes (C23 6.7.11p11 asks it of default initialization; clang
+    /// zero-fills every padding byte of every C constant, as the Linux
+    /// kernel relies on). clang 19 leaves it `undef`.
+    pub(crate) fn zero_init_padding(&self) -> bool {
+        self.ast.lang_c && self.opts.clang_compat >= 20
     }
 
     /// A union constant (clang `ConstStructBuilder` for unions): the active
@@ -942,7 +1006,11 @@ impl Cg<'_> {
         let mut elems = vec![c];
         if size > fs {
             let pt = self.m.types.array(LTy::I8, size - fs);
-            elems.push(self.m.const_undef(pt));
+            elems.push(if self.zero_init_padding() {
+                self.m.const_zero(pt)
+            } else {
+                self.m.const_undef(pt)
+            });
         }
         let want = self.m.types.struct_fields(t).map(<[LTy]>::to_vec).unwrap_or_default();
         let got: Vec<LTy> = elems.iter().map(|&v| self.m.const_type(v)).collect();

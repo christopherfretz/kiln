@@ -20,6 +20,9 @@ sema_c_assign_pointer_to_int = WarningError [IntConversion] (4) "incompatible po
 // WP-1276: C functions without a prototype (clang `warn_strict_uses_without_prototype`, `warn_non_prototype_changes_behavior`, `note_conflicting_prototype`).
 sema_c_call_without_prototype = Warning [DeprecatedNonPrototype] (2) "passing arguments to {0:a function|'{1}'} without a prototype is deprecated in all versions of C and is not supported in C23";
 sema_c_cast_non_int_to_pointer = Error (1) "operand of type {0} cannot be cast to a pointer type";
+// C 6.5.4p2: a cast names a scalar type; a structure or union cast to
+// its own type is an extension (clang `ext_typecheck_cast_nonscalar`).
+sema_c_cast_nonscalar_same = Extension (1) "C99 forbids casting nonscalar type {0} to the same type";
 // C 6.5.4p4: a pointer and a floating type do not convert by a cast
 sema_c_cast_pointer_to_non_int = Error (1) "pointer cannot be cast to type {0}";
 sema_c_compare_complete_incomplete_pointers = Extension [C11Extensions] (4) "pointer comparisons before C11 need to be between two complete or two incomplete types; {0} is {2:|in}complete and {1} is {3:|in}complete";

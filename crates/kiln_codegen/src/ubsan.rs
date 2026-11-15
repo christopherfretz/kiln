@@ -335,7 +335,10 @@ impl Cg<'_> {
         };
         // clang `ConvertArgToString(ak_qualtype)`: the diagnostic
         // engine's own type-argument formatting (WP-1158).
-        let names = DiagNames::new(ast, self.sm, self.opts.clang_compat);
+        // C prints with clang's C policy (`_Bool`, `struct S`; `bool` in
+        // C23).
+        let names = DiagNames::new(ast, self.sm, self.opts.clang_compat)
+            .with_c_lang(self.opts.c.map(|c| c >= kiln_lex::CStd::C23));
         // A canonical type (`getRecordType`, `getThisType`, the
         // canonicalized types of `EmitScalarConversion`) has no written
         // qualifier or elaboration: clang prints its tags with full scope.
@@ -1312,14 +1315,19 @@ impl Cg<'_> {
 
     /// clang `getRangeForType` with `StrictEnums`: the values `[min, end)`
     /// of a `bool` (or an enumeration with underlying type `bool`) or of
-    /// an enumeration without a fixed underlying type
+    /// a C++ enumeration without a fixed underlying type
     /// (`EnumDecl::getValueRange`, [dcl.enum]/8); `None` for any other
-    /// type (and for ranges beyond 64 bits).
+    /// type (and for ranges beyond 64 bits). A C enumeration has no
+    /// narrower range: every value of its compatible integer type is one
+    /// of its values (C23 6.7.3.3p13-15; clang's `IsRegularCPlusPlusEnum`).
     fn ub_value_range(&self, q: QualType) -> Option<(i128, i128)> {
         if self.has_bool_rep(q) {
             return Some((0, 2));
         }
         let ast = self.ast;
+        if ast.lang_c {
+            return None;
+        }
         let TypeView::Enum(d) = ast.types.canonical_view(q) else { return None };
         let d = ast.definition(d).unwrap_or(d);
         let data = ast.decls.enumeration(d)?;
@@ -1722,7 +1730,11 @@ impl Cg<'_> {
                 }
                 total.unwrap_or_else(|| self.i64c(0))
             };
-            if self.cint(total).is_some_and(|c| c.1 == 0) {
+            // clang 19 skips a zero offset only in C++: in C `nullptr + 0`
+            // is undefined (clang 20+, N3322: everywhere).
+            if self.cint(total).is_some_and(|c| c.1 == 0)
+                && !(self.ast.lang_c && self.opts.clang_compat < 20)
+            {
                 return Ok(());
             }
             let int_ptr = self.cast(CastOp::PtrToInt, base, LTy::I64);
@@ -1732,7 +1744,15 @@ impl Cg<'_> {
                 let base_nn = self.ub_is_not_null(base);
                 let z = self.i64c(0);
                 let res_nn = self.icmp(IntPredicate::Ne, computed, z);
-                checks.push((self.icmp(IntPredicate::Eq, base_nn, res_nn), San::POINTER_OVERFLOW));
+                // clang 19 in C: `nullptr + 0` is undefined too, so both
+                // pointers must be non-null (`CreateAnd`); clang 20+
+                // (N3322) and C++ only require both null or both not.
+                let valid = if self.ast.lang_c && self.opts.clang_compat < 20 {
+                    self.ub_and(base_nn, res_nn)
+                } else {
+                    self.icmp(IntPredicate::Eq, base_nn, res_nn)
+                };
+                checks.push((valid, San::POINTER_OVERFLOW));
             }
             if overflow_check {
                 let t = V::C(self.m.const_bool(true));

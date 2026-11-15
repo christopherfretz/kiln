@@ -622,6 +622,14 @@ fn driver_warnings(
                 .arg("-moutline")
                 .emit(&e);
         }
+        // clang's LTO link job warns again (`addLTOOptions` calls
+        // `addMachineOutlinerArgs` for the linker plugin; WP-1449).
+        if args.action == Action::Link && args.codegen.lto.is_some() && !args.compile.emit_llvm {
+            Diag::new(DiagId::drv_option_ignored, Span::INVALID)
+                .arg(tc.target.arch)
+                .arg("-moutline")
+                .emit(&e);
+        }
     }
     if threshold_ignored {
         large_data_threshold_warnings(inputs, &e);

@@ -2793,6 +2793,18 @@ impl Cg<'_> {
             BinaryOp::Assign => {
                 if self.is_aggregate(q) {
                     let lv = self.emit_lvalue(l)?;
+                    // clang `EmitFinalDestCopy`: the copy is volatile when
+                    // the destination is (`*vp = s` in C, WP-1449).
+                    let src = self.strip_noop(r);
+                    if self.is_volatile(lv.q)
+                        && self.ast.exprs.get(src).kind().is_cast()
+                        && self.ast.exprs.cast_kind(src) == CastKind::LValueToRValue
+                    {
+                        let from = self.emit_lvalue(self.ast.exprs.operand(src))?;
+                        let size = self.size_align(q).0;
+                        self.agg_copy(q, lv.addr, from.addr, size, true);
+                        return Ok(lv);
+                    }
                     self.emit_agg(r, lv.addr, false)?;
                     return Ok(lv);
                 }
@@ -4455,7 +4467,26 @@ impl Cg<'_> {
                     | CastKind::FloatingToIntegral
                     | CastKind::BooleanToSignedIntegral
                     | CastKind::IntegralToPointer
-                    | CastKind::PointerToIntegral => e = ast.exprs.operand(e),
+                    | CastKind::PointerToIntegral
+                    // clang `castPreservesZero`: also the complex, vector
+                    // and atomic conversions (a zero `_Atomic` element of
+                    // a zeroed array is not stored, WP-1449).
+                    | CastKind::UserDefinedConversion
+                    | CastKind::ConstructorConversion
+                    | CastKind::ToUnion
+                    | CastKind::VectorSplat
+                    | CastKind::NonAtomicToAtomic
+                    | CastKind::AtomicToNonAtomic
+                    | CastKind::IntegralRealToComplex
+                    | CastKind::FloatingRealToComplex
+                    | CastKind::IntegralComplexCast
+                    | CastKind::FloatingComplexCast
+                    | CastKind::IntegralComplexToReal
+                    | CastKind::FloatingComplexToReal
+                    | CastKind::IntegralComplexToBoolean
+                    | CastKind::FloatingComplexToBoolean
+                    | CastKind::IntegralComplexToFloatingComplex
+                    | CastKind::FloatingComplexToIntegralComplex => e = ast.exprs.operand(e),
                     CastKind::NullToPointer => return true,
                     _ => return false,
                 },
@@ -5064,12 +5095,29 @@ impl Cg<'_> {
         let is_union = self.tys.record(rd).is_union;
         let rty = self.record_ty(rd);
         let base = Addr { v: dest.v, ty: rty, align: dest.align };
+        // clang 20+ in C (`AggExprEmitter::DoZeroInitPadding`): the
+        // padding of an object not already zeroed is set to zero bytes.
+        let zero_pad = self.zero_init_padding() && !zeroed;
         if is_union {
             let Some(f) = union_field else { return Ok(()) };
             let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
+            let size = self.size_align(self.ast.exprs.get(e).ty()).0;
+            if zero_pad && inits.is_empty() {
+                // `EmitNullInitializationToLValue(DestLV)`: the whole union.
+                let uq = self.ast.exprs.get(e).ty();
+                return self.emit_null_init(base, uq, size);
+            }
             let lv = self.init_field_lvalue(base, f, fq)?;
             return match inits.first() {
-                Some(&i) => self.init_to_lvalue(i, lv, zeroed),
+                Some(&i) => {
+                    self.init_to_lvalue(i, lv, zeroed)?;
+                    if zero_pad {
+                        let fs = self.size_align(fq).0;
+                        let mut start = fs * 8;
+                        self.zero_padding_to(base, None, size * 8, &mut start);
+                    }
+                    Ok(())
+                }
                 None => self.null_init_lvalue(lv, zeroed),
             };
         }
@@ -5110,8 +5158,21 @@ impl Cg<'_> {
             .members(def)
             .filter(|&m| ast.decls.get(m).kind() == DeclKind::Field)
             .collect();
-        for f in fields {
+        let (offsets, total) = if zero_pad {
+            let l = self.tys.layouter().record(def);
+            (l.fields.clone(), l.size)
+        } else {
+            (Box::default(), 0)
+        };
+        let mut pad_start = 0u64;
+        for (idx, f) in fields.into_iter().enumerate() {
             let fd = ast.decls.field(f);
+            let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
+            // clang: "We're done once we hit the flexible array member."
+            if matches!(ast.types.canonical_view(fq), kiln_ast::types::TypeView::IncompleteArray(_))
+            {
+                break;
+            }
             let unnamed_bf =
                 fd.is_some_and(|x| x.bit_width.is_some()) && mangle::decl_name(ast, f).is_empty();
             if unnamed_bf {
@@ -5120,7 +5181,10 @@ impl Cg<'_> {
             if k >= inits.len() && zeroed {
                 break;
             }
-            let fq = ast.decls.get(f).ty().expect("Sema: a field has a type");
+            if zero_pad {
+                let at = offsets.get(idx).copied().unwrap_or(0);
+                self.zero_padding_to(base, Some((rd, f)), at, &mut pad_start);
+            }
             let lv = self.init_field_lvalue(base, f, fq)?;
             if k < inits.len() {
                 self.init_to_lvalue(inits[k], lv, zeroed)?;
@@ -5137,8 +5201,71 @@ impl Cg<'_> {
                 self.push_deferred_destroy(c);
             }
         }
+        if zero_pad {
+            self.zero_padding_to(base, None, total * 8, &mut pad_start);
+        }
         self.deactivate_deferred(deferred);
         Ok(())
+    }
+
+    /// clang 20+ `AggExprEmitter::DoZeroInitPadding` (C): zero the bytes
+    /// of `dest` from bit `start` to bit `end` (the offset of the next
+    /// field `next` of class `rd`, or the object's size); a bit-field's
+    /// whole storage unit is zeroed by an integer store before its first
+    /// field is stored, so its bits need no masking. `start` moves past
+    /// `next`.
+    fn zero_padding_to(
+        &mut self,
+        dest: Addr,
+        next: Option<(DeclId, DeclId)>,
+        end: u64,
+        start: &mut u64,
+    ) {
+        let bytes = |cg: &mut Self, s: u64, e: u64| {
+            let (s, e) = (s / 8, e / 8);
+            let v = if s == 0 {
+                dest.v
+            } else {
+                let o = cg.i64c(i128::from(s));
+                cg.gep(LTy::I8, dest.v, vec![o], false)
+            };
+            let a = Addr { v, ty: LTy::I8, align: min_align(dest.align, s) };
+            cg.memset(a, 0, e - s, false);
+        };
+        if let Some((rd, f)) = next
+            && let Some(info) = self.tys.record(rd).bitfields.get(&f).copied()
+        {
+            let s0 = info.storage_offset * 8;
+            let ss = u64::from(info.storage_size);
+            if s0 + ss > *start {
+                if s0 > *start {
+                    bytes(self, *start, s0);
+                }
+                let v = self.byte_offset_plain(dest.v, info.storage_offset);
+                let t = self.m.types.int(info.storage_size);
+                let z = V::C(self.m.const_int(t, 0));
+                self.store(z, v, min_align(dest.align, info.storage_offset), false);
+                *start = s0 + ss;
+            }
+            return;
+        }
+        if *start < end {
+            bytes(self, *start, end);
+        }
+        if let Some((_, f)) = next {
+            let fq = self.ast.decls.get(f).ty().expect("Sema: a field has a type");
+            *start = end + self.size_align(fq).0 * 8;
+        }
+    }
+
+    /// `p` advanced by `offset` bytes, as clang `CGBuilder::CreateConstGEP`
+    /// on an `i8` address (no `inbounds`).
+    fn byte_offset_plain(&mut self, p: V, offset: u64) -> V {
+        if offset == 0 {
+            return p;
+        }
+        let o = self.i64c(i128::from(offset));
+        self.gep(LTy::I8, p, vec![o], false)
     }
 
     /// clang `AggExprEmitter::VisitArrayInitLoopExpr`: binds the common

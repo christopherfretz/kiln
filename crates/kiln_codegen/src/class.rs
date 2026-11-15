@@ -2527,15 +2527,16 @@ impl Cg<'_> {
         }
     }
 
-    /// `QualType::isPODType` (C++11: trivial and standard-layout classes,
-    /// arrays of them, and every non-class type).
+    /// [`is_pod`].
     pub(crate) fn is_pod(&self, q: QualType) -> bool {
         is_pod(self.ast, q)
     }
 }
 
 /// `QualType::isPODType` (C++11: trivial and standard-layout classes,
-/// arrays of them, and every non-class type).
+/// arrays of them, and every non-class type but `_Atomic`; clang's
+/// `isCXX98PODType` (C) and `isCXX11PODType` both reject an atomic type,
+/// so a local array of `_Atomic` elements is not a constant aggregate).
 pub(crate) fn is_pod(ast: &kiln_ast::Ast, q: QualType) -> bool {
     let mut q = q;
     loop {
@@ -2544,6 +2545,9 @@ pub(crate) fn is_pod(ast: &kiln_ast::Ast, q: QualType) -> bool {
             TypeView::IncompleteArray(e) | TypeView::VariableArray { elem: e, .. } => e,
             _ => break,
         };
+    }
+    if matches!(ast.types.canonical_view(q), TypeView::Atomic(_)) {
+        return false;
     }
     match ast.types.as_record(q) {
         Some(r) => {
