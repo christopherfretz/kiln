@@ -33,19 +33,32 @@ Planned as 1.3.0.
   `-gno-pubnames` set the compile unit's name-table kind as clang 19
   does, and `-gsplit-dwarf` now gives GNU pubnames as clang's (WP-1422).
   `-gpubnames` and `-ggnu-pubnames` were rejected before.
+- `-mlarge-data-threshold=` is accepted on x86-64 (WP-1419): with
+  `-mcmodel=medium` or `large` it sets the `Large Data Threshold` module
+  flag, with another model it is clang's
+  `-Wunused-command-line-argument` warning, and on AArch64 it is an
+  unsupported option, as in clang.
 - `-fmerge-all-constants` and `-fno-merge-all-constants` are accepted
   (WP-1417). They have no effect: a constant `const` local array or
   class is still copied to the stack, where clang makes it a static.
 
 ### Changed
 
-- The PCH snapshot format is 5 (WP-1411, WP-1417 and WP-1422; new
+- The PCH snapshot format is 6 (WP-1411, WP-1417, WP-1422 and WP-1419; new
   diagnostics and options changed the schema). Rebuild a PCH built by
   kiln 1.2.0; until then it is not misread, as [spec/pch.md](spec/pch.md)
   describes.
 
 ### Fixed
 
+- `-mcmodel=` is checked against the target and the relocation model as
+  clang's driver checks it (WP-1419). On AArch64, `-mcmodel=large` with
+  the default PIE, `-fpic`, `-fPIE` or `-static` is now clang's error
+  "invalid argument '-mcmodel=large' only allowed with '-fno-pic'";
+  before, kiln wrote the large model beside PIC and the backend quietly
+  emitted small-model PIC code. `kernel` and `medium` on AArch64, `tiny`
+  on x86-64 and other values are "unsupported argument ... for target".
+  x86-64 `large` with PIE is still accepted.
 - Debug info: a function declared through a function typedef, an alias
   or `decltype` and named by a using-declaration without a definition
   in the unit (`namespace N { typedef int Fn(int); Fn h; } using N::h;`)

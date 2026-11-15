@@ -536,8 +536,9 @@ pub(crate) fn syntax_only(
 /// clang warns once per compile job, and the x86 feature flags' warnings
 /// (WP-1000: `argument unused during compilation` for the ones clang
 /// claims on `AArch64`, `the clang compiler does not support '-m3dnow'` on
-/// x86-64). `true` when `-Werror` made one an error (clang then runs no
-/// job).
+/// x86-64), and clang's `-mlarge-data-threshold=` warning without a
+/// medium or large x86-64 code model (WP-1419). `true` when `-Werror`
+/// made one an error (clang then runs no job).
 fn driver_warnings(
     args: &Args,
     tc: &Toolchain,
@@ -582,9 +583,13 @@ fn driver_warnings(
     }
     // WP-1397: the retired `-fkiln-pch-image`, once per invocation.
     let image = args.pch.image_ignored.as_deref();
+    // WP-1419: clang's x86-64 `-mlarge-data-threshold=` without
+    // `-mcmodel=medium` / `large`, once per job.
+    let threshold_ignored = args.codegen.large_data_threshold_ignored(!tc.target.is_aarch64());
     if promoted.is_empty()
         && ignored.is_none()
         && !no_outline
+        && !threshold_ignored
         && unused_xray.is_empty()
         && no_3dnow.is_empty()
         && image.is_none()
@@ -618,6 +623,9 @@ fn driver_warnings(
                 .emit(&e);
         }
     }
+    if threshold_ignored {
+        large_data_threshold_warnings(inputs, &e);
+    }
     if let Some(flag) = image {
         Diag::new(DiagId::drv_pch_image_ignored, Span::INVALID).arg(flag).emit(&e);
     }
@@ -631,6 +639,16 @@ fn driver_warnings(
     }
     e.flush();
     e.error_count() > 0
+}
+
+/// clang's x86-64 warning for `-mlarge-data-threshold=` without
+/// `-mcmodel=medium` / `large`, once per compile job (WP-1419).
+fn large_data_threshold_warnings(inputs: &[&args::Input], e: &DiagEngine<'_>) {
+    for _ in inputs.iter().filter(|i| codegen_cmd::is_source(i)) {
+        Diag::new(DiagId::drv_large_data_threshold_invalid_code_model, Span::INVALID)
+            .arg("mlarge-data-threshold=")
+            .emit(e);
+    }
 }
 
 /// The inputs that exist (`-` is standard input); the others are errors.
@@ -797,6 +815,21 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         }
         Diag::new(DiagId::drv_no_input_files, Span::INVALID).emit(&drv);
     }
+    // WP-1419: clang 19 reports an unclaimed target-specific option (the
+    // x86-only `-mlarge-data-threshold=` on `AArch64`) after building the
+    // jobs, and only when the driver saw no error (clang 22 reports it
+    // with the target's other errors, `features::resolve`).
+    if args.codegen.large_data_threshold.is_some()
+        && tc.target.is_aarch64()
+        && args.predef.clang_compat != kiln_pp::ClangCompat::Clang22
+        && drv.error_count() == 0
+    {
+        let t = args.target.as_deref().unwrap_or(tc.target.triple);
+        emit_arg_error(
+            &ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()),
+            &drv,
+        );
+    }
     if drv.error_count() == 0 {
         check_action(&args, &drv);
     }
@@ -806,6 +839,20 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
     }
     drv.flush();
     if drv.error_count() > 0 {
+        // WP-1419: clang's compile jobs warn about an unused x86-64
+        // `-mlarge-data-threshold=` after a driver error too (an
+        // unsupported `-mcmodel=`).
+        if args.codegen.large_data_threshold_ignored(!tc.target.is_aarch64()) {
+            let sm = SourceManager::new();
+            let e = make_engine(
+                &sm,
+                &codegen_cmd::driver_diag_options(&diag_opts),
+                io.stderr.clone(),
+                Some(&args.program),
+            );
+            large_data_threshold_warnings(&inputs, &e);
+            e.flush();
+        }
         return 1;
     }
     drop(drv);

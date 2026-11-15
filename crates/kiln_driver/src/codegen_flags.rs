@@ -21,7 +21,9 @@
 //!    none, GCC's cancels `-ftrapv`) and `-ftrapv-handler=`; WP-1411's
 //!    `-f[no-]stack-clash-protection`, `-mstack-probe-size=` and
 //!    `-mtls-dialect=` (x86-64: `llc -enable-tlsdesc` for `gnu2`); WP-1422's
-//!    `-ftls-model=` and `-m[no-]outline`), the
+//!    `-ftls-model=` and `-m[no-]outline`; WP-1419's `-mlarge-data-threshold=`
+//!    (x86-64), `-mcmodel=` being checked against the target and the PIC
+//!    mode, [`CodegenFlags::code_model_error`]), the
 //!    target checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
 //!    (`-f[no-]common`, `-fstack-usage`, the defaults
@@ -52,6 +54,24 @@
 use kiln_codegen::{CodeModel, StackProtector, StaticDestructors, UnwindTables};
 
 use crate::args::ArgError;
+
+/// An unsigned 32-bit integer as LLVM's `StringRef::getAsInteger` reads
+/// it with radix 0: `0x` hex, `0b` binary, `0o` or a leading `0` octal,
+/// else decimal; no sign, no blanks; `None` for an empty value.
+fn auto_radix_u32(v: &str) -> Option<u32> {
+    let lower = v.get(..2).map(str::to_ascii_lowercase);
+    let (radix, digits) = match lower.as_deref() {
+        Some("0x") => (16, &v[2..]),
+        Some("0b") => (2, &v[2..]),
+        Some("0o") => (8, &v[2..]),
+        _ if v.len() > 1 && v.starts_with('0') && v.as_bytes()[1].is_ascii_digit() => (8, &v[1..]),
+        _ => (10, v),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return None;
+    }
+    u32::from_str_radix(digits, radix).ok()
+}
 
 /// The code generation flags of a command line (the last of each pair
 /// wins).
@@ -100,8 +120,14 @@ pub struct CodegenFlags {
     pub data_sections: bool,
     /// The last `-mtune=<cpu>`.
     pub mtune: Option<String>,
-    /// The last `-mcmodel=<model>`.
-    pub code_model: Option<CodeModel>,
+    /// The last `-mcmodel=<model>`'s value as written, checked against
+    /// the target and the PIC mode by [`Self::code_model_error`]
+    /// (WP-1419); [`Self::code_model`] is the accepted model.
+    pub mcmodel: Option<String>,
+    /// The last `-mlarge-data-threshold=<n>`: (argument as written,
+    /// value); x86-64 only, with `-mcmodel=medium` or `large`
+    /// ([`Self::large_data_threshold`], WP-1419).
+    pub large_data_threshold: Option<(String, String)>,
     /// The last `-fcf-protection[=<kind>]` (`-fcf-protection` is `full`).
     pub cf_protection: Option<&'static str>,
     /// The last `-fpatchable-function-entry=<count>[,<offset>]`.
@@ -367,10 +393,11 @@ impl CodegenFlags {
                     }
                 };
             }
-            "-mcmodel" => match CodeModel::from_name(v) {
-                Some(m) => self.code_model = Some(m),
-                None => return unsupported(),
-            },
+            // WP-1419: checked against the target ([`Self::code_model_error`]).
+            "-mcmodel" => self.mcmodel = Some(v.to_owned()),
+            "-mlarge-data-threshold" => {
+                self.large_data_threshold = Some((arg.to_owned(), v.to_owned()));
+            }
             // clang's values; an unknown one is its "invalid value".
             "-mfunction-return" => {
                 self.function_return_given = true;
@@ -543,20 +570,79 @@ impl CodegenFlags {
         if v.is_empty() {
             return Some(0);
         }
-        let lower = v.get(..2).map(str::to_ascii_lowercase);
-        let (radix, digits) = match lower.as_deref() {
-            Some("0x") => (16, &v[2..]),
-            Some("0b") => (2, &v[2..]),
-            Some("0o") => (8, &v[2..]),
-            _ if v.len() > 1 && v.starts_with('0') && v.as_bytes()[1].is_ascii_digit() => {
-                (8, &v[1..])
-            }
-            _ => (10, v),
+        auto_radix_u32(v)
+    }
+
+    /// The accepted `-mcmodel=` model for the target (clang 22's
+    /// `addMCModel`, `CommonArgs.cpp`): `tiny`, `small` and
+    /// `large` on `AArch64`, `small`, `kernel`, `medium` and `large` on
+    /// x86-64. `None` without the option or for a value the target
+    /// rejects ([`Self::code_model_error`]).
+    pub fn code_model(&self, aarch64: bool) -> Option<CodeModel> {
+        let m = CodeModel::from_name(self.mcmodel.as_deref()?)?;
+        let ok = if aarch64 {
+            matches!(m, CodeModel::Tiny | CodeModel::Small | CodeModel::Large)
+        } else {
+            m != CodeModel::Tiny
         };
-        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        ok.then_some(m)
+    }
+
+    /// clang's driver check of the last `-mcmodel=` (`addMCModel`, once per
+    /// compile job; WP-1419): a value the
+    /// target does not accept ([`Self::code_model`]) is "unsupported
+    /// argument '<v>' to option '-mcmodel=' for target '<triple>'" (the
+    /// normalized triple); `large` on `AArch64` needs `-fno-pic` (`pic`:
+    /// the relocation model is not static, the default PIE included):
+    /// "invalid argument '-mcmodel=large' only allowed with '-fno-pic'".
+    /// clang 19's driver accepts `tiny` on x86-64 and its backend then
+    /// stops with a fatal error; kiln reports clang 22's error at both
+    /// levels (spec/driver.md "Codegen flags").
+    pub fn code_model_error(&self, aarch64: bool, pic: bool, triple: &str) -> Option<ArgError> {
+        let v = self.mcmodel.as_deref()?;
+        match self.code_model(aarch64) {
+            None => Some(ArgError::UnsupportedValueForTarget(
+                "-mcmodel=".to_owned(),
+                v.to_owned(),
+                triple.to_owned(),
+            )),
+            Some(CodeModel::Large) if aarch64 && pic => {
+                Some(ArgError::OnlyAllowedWith("-mcmodel=large".to_owned(), "-fno-pic".to_owned()))
+            }
+            Some(_) => None,
+        }
+    }
+
+    /// Whether clang's driver passes `-mlarge-data-threshold=` on to
+    /// `-cc1`: on x86-64, when the last `-mcmodel=` (as written) is
+    /// `medium` or `large`. Off x86-64 the option is unsupported for the
+    /// target (`crate::features::resolve`, `crate::run_as`); on x86-64 with
+    /// another model clang warns that it only applies to those
+    /// ([`Self::large_data_threshold_ignored`]).
+    fn large_data_threshold_passed(&self, x86: bool) -> bool {
+        x86 && self.large_data_threshold.is_some()
+            && matches!(self.mcmodel.as_deref(), Some("medium" | "large"))
+    }
+
+    /// clang's x86-64 warning "'mlarge-data-threshold=' only applies to
+    /// medium and large code models": the option without `-mcmodel=medium`
+    /// or `large` (WP-1419).
+    pub fn large_data_threshold_ignored(&self, x86: bool) -> bool {
+        x86 && self.large_data_threshold.is_some() && !self.large_data_threshold_passed(x86)
+    }
+
+    /// The `Large Data Threshold` module flag's value: the x86-64
+    /// `-mlarge-data-threshold=` clang passes to `-cc1`, read as `-cc1`
+    /// reads it (an unsigned 32-bit integer, radix 0 as
+    /// [`Self::probe_size`], an empty value invalid). `None` without it
+    /// (the codegen then writes clang's driver defaults, 65536 for
+    /// `medium` and 0 for `large`) or for an invalid value
+    /// ([`Self::invocation_errors`]).
+    pub fn large_data_threshold(&self, x86: bool) -> Option<u32> {
+        if !self.large_data_threshold_passed(x86) {
             return None;
         }
-        u32::from_str_radix(digits, radix).ok()
+        auto_radix_u32(&self.large_data_threshold.as_ref()?.1)
     }
 
     /// The TLS descriptor dialect is selected: x86-64's
@@ -630,7 +716,15 @@ impl CodegenFlags {
     /// the invalid value again). The job then stops with no error count.
     pub fn invocation_errors(&self, x86: bool, triple: &str) -> Vec<TargetError> {
         let invalid = |(a, x): &(String, String)| TargetError::InvalidValue(a.clone(), x.clone());
-        let mut v: Vec<TargetError> = self.invalid_values[0].iter().map(invalid).collect();
+        let mut v = Vec::new();
+        // WP-1419: `-cc1`'s integer `-mlarge-data-threshold=`, first.
+        if let Some((a, x)) = &self.large_data_threshold
+            && self.large_data_threshold_passed(x86)
+            && self.large_data_threshold(x86).is_none()
+        {
+            v.push(TargetError::InvalidInt(a.clone(), x.clone()));
+        }
+        v.extend(self.invalid_values[0].iter().map(invalid));
         if let Some(m) = &self.tls_model
             && !matches!(
                 m.1.as_str(),

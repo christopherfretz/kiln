@@ -33,6 +33,8 @@ drv_invalid_int_value = Error (2) "invalid integral value '{1}' in '{0}'";
 drv_invalid_stdlib_name = Error (1) "invalid library name in argument '{0}'";
 drv_invalid_value = Error (2) "invalid value '{1}' in '{0}'";
 drv_language_not_recognized = Error (1) "language not recognized: '{0}'";
+// WP-1419: clang `warn_drv_large_data_threshold_invalid_code_model` (x86-64).
+drv_large_data_threshold_invalid_code_model = Warning [UnusedCommandLineArgument] (1) "'{0}' only applies to medium and large code models";
 drv_linker_input_unused = Warning [UnusedCommandLineArgument] (1) "{0}: 'linker' input unused";
 // WP-1016: LLVM discovery (spec/driver.md "LLVM discovery").
 drv_llvm_dir_invalid = Error (3) "'{0}' (from {1}) is not a usable LLVM installation: {2}";

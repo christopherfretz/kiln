@@ -297,6 +297,10 @@ pub struct CodegenOptions {
     /// Data Threshold` for `medium` / `large`, as clang); `None` emits
     /// neither (the backend's default, `small`).
     pub code_model: Option<CodeModel>,
+    /// x86-64 `-mlarge-data-threshold=` with `-mcmodel=medium` / `large`:
+    /// the `Large Data Threshold` module flag instead of clang's driver
+    /// default for the model (WP-1419).
+    pub large_data_threshold: Option<u32>,
     /// How `std::meta::info` template arguments mangle
     /// (`-fkiln-reflection-mangling=`; spec/reflection.md §8.3).
     pub reflection_mangling: kiln_abi::ReflectionMangling,
@@ -773,6 +777,7 @@ impl Default for CodegenOptions {
             tune_cpu: None,
             no_inline: false,
             code_model: None,
+            large_data_threshold: None,
             reflection_mangling: kiln_abi::ReflectionMangling::Gcc,
             outline_expansions: OUTLINE_EXPANSIONS_DEFAULT,
             contract_default_handler: true,
