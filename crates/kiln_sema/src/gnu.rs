@@ -98,8 +98,8 @@ impl Sema<'_, '_> {
     /// `ActOnStmtExpr`). Its type is that of the last statement that is
     /// not a null statement (under `-fclang-compat=22`: the last statement),
     /// looking through labels, when that is an expression statement, else
-    /// `void`; it is always a prvalue. `lparen`
-    /// and `rparen` are the parentheses.
+    /// `void`; it is always a prvalue (bound to a temporary when of class
+    /// type). `lparen` and `rparen` are the parentheses.
     pub fn act_on_stmt_expr(
         &mut self,
         scope: StmtExprScope,
@@ -119,7 +119,11 @@ impl Sema<'_, '_> {
         let result = self.stmt_expr_result(body);
         let ty = result.map_or(QualType::VOID, |e| self.ast.exprs.get(e).ty());
         let dependent_ctx = self.in_template();
-        self.builder().stmt_expr(body, ty, result, dependent_ctx, lparen, rparen)
+        let e = self.builder().stmt_expr(body, ty, result, dependent_ctx, lparen, rparen);
+        // clang `BuildStmtExpr` (`StmtExprMayBindToTemp`): a class result
+        // is a temporary of the enclosing full-expression, destroyed after
+        // the temporaries of the result's own full-expression.
+        self.maybe_bind_temporary(e)
     }
 
     /// The expression whose value a statement expression with body `body`

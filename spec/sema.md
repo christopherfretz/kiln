@@ -6294,6 +6294,11 @@ for them.
   - The type is that of the last non-null statement, looking through
     labels, when that is an expression statement; otherwise `void`.
     The result is always a prvalue.
+  - A class-typed statement expression is bound to a temporary
+    (`maybe_bind_temporary`, clang `BuildStmtExpr`): its result is
+    destroyed at the end of the enclosing full-expression, after the
+    temporaries of its own last statement (WP-1458,
+    `ext.gnu.stmt.expr/result-destroyed-after-own-temporaries-run.cpp`).
   - Dependence (clang `computeDependence(StmtExpr*, TemplateDepth)`):
     the type's dependence, plus the result expression's, plus value-
     and instantiation-dependence whenever it appears in a dependent

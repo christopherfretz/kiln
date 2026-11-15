@@ -336,6 +336,13 @@ Planned as 1.3.0.
   order.
 - `-flto -moutline` on x86-64 warns once more for the link job, as clang
   (WP-1449).
+- A destructor that throws at the end of a full-expression destroys
+  every object already completed in it (WP-1458; clang and GCC leak
+  some): the variable, member, base, array element, delegating
+  constructor's object or returned object being initialized, and
+  lifetime-extended temporaries. A delete-expression whose destructor
+  throws still calls `operator delete`. A class-typed statement
+  expression's result is destroyed after its own temporaries.
 
 ## [1.2.1] - 2026-11-14
 

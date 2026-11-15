@@ -3607,9 +3607,20 @@ impl Cg<'_> {
     /// class (or array) type initializes `dest` from its result
     /// expression inside the compound statement's scope, so the copy of a
     /// local is made before the scope's cleanups destroy it.
+    /// The result object is destroyed by its owner, the statement
+    /// expression's own bound temporary or the object it initializes
+    /// (`AggValueSlot::IsDestructed`), after the temporaries of the
+    /// result's full-expression.
     fn agg_stmt_expr(&mut self, e: ExprId, dest: Addr, zeroed: bool) -> R<()> {
         let (scope, r) = self.stmt_expr_prefix(e)?;
-        self.emit_agg(r, dest, zeroed)?;
+        let saved = std::mem::replace(&mut self.f.dest_destructed, true);
+        // A temporary of the result's full-expression that throws on
+        // destruction destroys the complete result first.
+        self.guard_init(r, dest, self.ast.exprs.get(e).ty());
+        let res = self.emit_agg(r, dest, zeroed);
+        self.f.cl.pending_guard = None;
+        self.f.dest_destructed = saved;
+        res?;
         self.end_scope(scope);
         Ok(())
     }
@@ -4666,9 +4677,10 @@ impl Cg<'_> {
                 None => err(self.loc_of(e), "default argument not yet parsed"),
             },
             ExprKind::ExprWithCleanups => {
+                let obj = self.take_pending_guard(dest.v);
                 let sc = self.begin_scope(false);
                 let r = self.agg_visit(self.sub(e), dest, zeroed);
-                self.end_scope(sc);
+                self.end_scope_guarded(sc, obj);
                 r
             }
             ExprKind::MaterializeTemporaryExpr => self.agg_visit(self.sub(e), dest, zeroed),
@@ -5331,7 +5343,8 @@ impl Cg<'_> {
         } else {
             self.init_to_lvalue(sub, lv, false)
         };
-        self.end_scope(sc);
+        let obj = if inner { None } else { self.destroy_cleanup(lv.addr, eq) };
+        self.end_scope_guarded(sc, obj);
         self.f.array_index.pop();
         r?;
         let one = self.i64c(1);
@@ -5364,7 +5377,7 @@ impl Cg<'_> {
             self.f.fir.push(Op::Bin { op: BinOp::Or, flags: Flags::NONE, l: z, r: z }, LTy::I1);
         self.push_full_expr_cleanup(c, true, true);
         let depth = self.f.cl.depth();
-        self.f.cl.deferred.push((depth, dominator));
+        self.f.cl.deferred.push((depth, dominator, false));
     }
 
     /// clang `EmitCallArg`'s `pushFullExprCleanup<DestroyUnpassedArg>`
@@ -5424,7 +5437,10 @@ impl Cg<'_> {
     /// innermost first, and drops their placeholders.
     pub(crate) fn deactivate_deferred(&mut self, mark: usize) {
         let deferred: Vec<_> = self.f.cl.deferred.drain(mark..).collect();
-        for (c, dominator) in deferred.into_iter().rev() {
+        for (c, dominator, extended) in deferred.into_iter().rev() {
+            if extended && self.opts.exceptions {
+                self.note_extended_done(c);
+            }
             let d = Fir::last_inst(dominator);
             self.deactivate_cleanup_block(c, d);
             self.f.fir.erase(d);
@@ -5536,7 +5552,8 @@ impl Cg<'_> {
                 Some(f) => self.init_to_lvalue(f, lv, zeroed),
                 None => self.null_init_lvalue(lv, zeroed),
             };
-            self.end_scope(sc);
+            let obj = self.destroy_cleanup(lv.addr, eq);
+            self.end_scope_guarded(sc, obj);
             r?;
             let one = self.i64c(1);
             let next = self.gep(ety, cur, vec![one], true);
@@ -5747,6 +5764,28 @@ impl Cg<'_> {
         Ok(())
     }
 
+    /// The cleanup destroying the object of type `q` at `a` (an array
+    /// element-wise), `None` when it needs no destruction.
+    pub(crate) fn destroy_cleanup(&self, a: Addr, q: QualType) -> Option<Cleanup> {
+        let rd = self.destructed_class(q)?;
+        Some(if self.array_elem(q).is_some() {
+            Cleanup::ArrayDtor { addr: a, record: rd }
+        } else {
+            Cleanup::Dtor { addr: a.v, record: rd, base: false }
+        })
+    }
+
+    /// Before the initializer `init` of the object of type `q` at `a`:
+    /// when it is a full-expression, the object it completes is destroyed
+    /// if one of its temporaries' destructors then throws
+    /// ([except.ctor]/2, [`crate::cleanup::Guard`]).
+    pub(crate) fn guard_init(&mut self, init: ExprId, a: Addr, q: QualType) {
+        if !self.opts.exceptions || self.ast.exprs.get(init).kind() != ExprKind::ExprWithCleanups {
+            return;
+        }
+        self.f.cl.pending_guard = self.destroy_cleanup(a, q).map(|c| (a.v, c));
+    }
+
     /// clang `EmitAutoVarInit` for variable `d` of type `q` at `addr`.
     pub(crate) fn emit_var_init(
         &mut self,
@@ -5799,7 +5838,12 @@ impl Cg<'_> {
                 }
             }
             self.auto_init_prefill(d, q, addr, init);
-            return self.emit_agg_into(init, addr, false);
+            if is_local(ast, d) && !is_static_local(ast, d) {
+                self.guard_init(init, addr, q);
+            }
+            let r = self.emit_agg_into(init, addr, false);
+            self.f.cl.pending_guard = None;
+            return r;
         }
         if self.is_complex(q) {
             // clang `EmitAutoVarInit`: a constexpr variable stores its

@@ -109,6 +109,30 @@ pub(crate) enum Cleanup {
     /// Calls the GNU `cleanup` function `func` with the address `addr`
     /// of a local variable (clang `CallCleanupFunction`, WP-807).
     AttrFn { func: DeclId, addr: V },
+    /// The EH cleanup of a [`Guard`]: destroys the completed object
+    /// `obj` describes; with `flag`, only when the flag is set, clearing
+    /// it first.
+    Guard { obj: Box<Cleanup>, flag: Option<V> },
+}
+
+/// An object that is complete while cleanups pushed before its
+/// completion are still to run on the normal path ([except.ctor]/2):
+/// the temporaries of the full-expression that initialized it, or for a
+/// returned object every local still to be destroyed (CWG2176). When
+/// one of those cleanups (at a depth above `base`, below `top`) is emitted on the
+/// normal path and its destructor may throw, `obj` is pushed around it
+/// as an EH-only [`Cleanup::Guard`], so the object is destroyed before
+/// the temporaries and locals older than it. Without `flag` the guard
+/// applies only to a cleanup no branch shares (the object is complete
+/// on the fallthrough alone); `flag` says at run time that it is.
+#[derive(Clone, Debug)]
+pub(crate) struct Guard {
+    pub base: Depth,
+    /// Cleanups at or above this depth are not guarded (they run inside
+    /// the object's own EH cleanup: a named return value's).
+    pub top: Depth,
+    pub obj: Cleanup,
+    pub flag: Option<V>,
 }
 
 /// A value a cleanup uses: directly, or reloaded from the
@@ -299,7 +323,11 @@ pub(crate) struct Cleanups {
     /// `DeferredDeactivationCleanupStack`: cleanups deactivated when the
     /// enclosing `RunCleanupsScope` ends, each with the placeholder
     /// instruction standing for its dominating IP.
-    pub deferred: Vec<(Depth, V)>,
+    pub deferred: Vec<(Depth, V, bool)>,
+    /// The cleanups of the lifetime-extended temporaries (the `bool` of
+    /// `deferred`) deactivated so far, complete objects the enclosing
+    /// full-expression's end guards ([`Guard`]).
+    pub extended_done: Vec<Cleanup>,
     /// `ExceptionSlot`.
     pub exn_slot: Option<V>,
     /// `EHSelectorSlot`.
@@ -316,6 +344,13 @@ pub(crate) struct Cleanups {
     pub cur_scope: Depth,
     /// `PrologueCleanupDepth`.
     pub prologue: Depth,
+    /// The completed objects guarded while cleanups are popped
+    /// ([`Guard`]).
+    pub guards: Vec<Guard>,
+    /// The object an initializer's top-level `ExprWithCleanups` is about
+    /// to complete at the given address, with its destroying cleanup
+    /// (taken by that full-expression's scope as a [`Guard`]).
+    pub pending_guard: Option<(V, Cleanup)>,
 }
 
 impl Cleanups {
@@ -931,7 +966,7 @@ impl Cg<'_> {
         } else if has_fallthrough && !has_prebranched && !has_fixups && !has_existing_branches {
             self.destroy_optimistic_entry(top);
             self.f.cl.pop();
-            self.emit_cleanup(&cleanup, flag, false);
+            self.emit_normal_cleanup(top, &cleanup, flag, false);
         } else {
             self.emit_normal_cleanup_paths(
                 top,
@@ -1056,7 +1091,7 @@ impl Cg<'_> {
         };
 
         self.f.cl.pop();
-        self.emit_cleanup(cleanup, flag, false);
+        self.emit_normal_cleanup(top, cleanup, flag, true);
         let normal_exit = self.f.fir.cur().expect("cleanup body leaves an open block");
         match exit {
             Exit::Br(b) => {
@@ -1102,6 +1137,92 @@ impl Cg<'_> {
             for i in fixup_depth..self.f.cl.fixups.len() {
                 self.f.cl.fixups[i].optimistic = Some(new_entry);
             }
+        }
+    }
+
+    /// The normal-path [`Self::emit_cleanup`] of the cleanup that was at
+    /// `depth`, inside the EH-only [`Cleanup::Guard`]s of the completed
+    /// objects that must be destroyed if it throws ([`Guard`]); `shared`
+    /// when branches share the code (only flagged guards apply).
+    fn emit_normal_cleanup(&mut self, depth: Depth, c: &Cleanup, flag: Option<Addr>, shared: bool) {
+        if self.f.cl.guards.is_empty() || !self.cleanup_may_throw(c) {
+            self.emit_cleanup(c, flag, false);
+            return;
+        }
+        let guards: Vec<Cleanup> = self
+            .f
+            .cl
+            .guards
+            .iter()
+            .filter(|g| g.base < depth && depth < g.top && (!shared || g.flag.is_some()))
+            .map(|g| Cleanup::Guard { obj: Box::new(g.obj.clone()), flag: g.flag })
+            .collect();
+        for g in &guards {
+            self.push_cleanup_kind(g.clone(), false, true);
+        }
+        self.emit_cleanup(c, flag, false);
+        for _ in &guards {
+            self.pop_cleanup_block(false);
+        }
+    }
+
+    /// Whether running `c` may throw: it calls a destructor whose
+    /// exception specification is potentially-throwing.
+    pub(crate) fn cleanup_may_throw(&self, c: &Cleanup) -> bool {
+        match *c {
+            Cleanup::Dtor { record, .. }
+            | Cleanup::DelegatingDtor { record, .. }
+            | Cleanup::ArrayDtor { record, .. }
+            | Cleanup::SavedObject { record, .. }
+            | Cleanup::NrvoDtor { record, .. }
+            | Cleanup::FlaggedDtor { record, .. } => self.dtor_may_throw(record),
+            _ => false,
+        }
+    }
+
+    /// Whether destroying an object of class `record` may throw (its
+    /// destructor is non-trivial and not non-throwing, [except.spec]).
+    pub(crate) fn dtor_may_throw(&self, record: DeclId) -> bool {
+        let ast = self.ast;
+        if !self.opts.exceptions {
+            return false;
+        }
+        let Some(def) = self.class_def(record) else { return false };
+        if !self.has_nontrivial_dtor(def) {
+            return false;
+        }
+        let Some(dtor) = ast.destructor(def) else { return false };
+        let first = ast.first(dtor);
+        if ast.has_nothrow_attr(first) {
+            return false;
+        }
+        ast.decls
+            .get(first)
+            .ty()
+            .and_then(|t| ast.types.proto(t))
+            .is_some_and(|p| !ast.types.exc_spec(p).is_nothrow())
+    }
+
+    /// Whether an active normal cleanup above `base` may throw.
+    pub(crate) fn scope_may_throw(&self, base: Depth) -> bool {
+        self.f.cl.stack[base..].iter().any(|s| {
+            s.normal && s.active && matches!(s.kind, Kind::Cleanup(_)) && {
+                self.cleanup_may_throw(s.cleanup())
+            }
+        })
+    }
+
+    /// Records the cleanup at `c` of a lifetime-extended temporary about
+    /// to be deactivated, when it destroys a complete object
+    /// unconditionally, for the guards of its full-expression's end.
+    pub(crate) fn note_extended_done(&mut self, c: Depth) {
+        let s = &self.f.cl.stack[c - 1];
+        if s.active
+            && s.active_flag.is_none()
+            && matches!(s.kind, Kind::Cleanup(Cleanup::Dtor { .. } | Cleanup::ArrayDtor { .. }))
+        {
+            let obj = s.cleanup().clone();
+            self.f.cl.extended_done.push(obj);
         }
     }
 
@@ -1244,6 +1365,23 @@ impl Cg<'_> {
             Cleanup::AttrFn { func, addr } => {
                 if let Err(e) = self.emit_cleanup_fn_call(func, addr) {
                     self.f.error.get_or_insert(e);
+                }
+            }
+            Cleanup::Guard { ref obj, flag } => {
+                let mut skip = None;
+                if let Some(flag) = flag {
+                    let run = self.f.fir.create_block();
+                    let s = self.f.fir.create_block();
+                    let v = self.load(LTy::I1, flag, 1, false);
+                    self.cond_br(v, run, s);
+                    self.emit_block(run, false);
+                    let f0 = V::C(self.m.const_bool(false));
+                    self.store(f0, flag, 1, false);
+                    skip = Some(s);
+                }
+                self.run_cleanup(obj, true);
+                if let Some(s) = skip {
+                    self.emit_block(s, false);
                 }
             }
         }
