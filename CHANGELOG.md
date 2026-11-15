@@ -44,8 +44,8 @@ Planned as 1.3.0.
 
 ### Changed
 
-- The PCH snapshot format is 6 (WP-1411, WP-1417, WP-1422 and WP-1419; new
-  diagnostics and options changed the schema). Rebuild a PCH built by
+- The PCH snapshot format is 7 (WP-1411, WP-1417, WP-1422, WP-1419 and
+  WP-1433; new diagnostics, options and AST data changed the schema). Rebuild a PCH built by
   kiln 1.2.0; until then it is not misread, as [spec/pch.md](spec/pch.md)
   describes.
 
@@ -138,6 +138,12 @@ Planned as 1.3.0.
   longer makes the backend reject the module with "invalid type for
   undef constant" (WP-1424): the class's IR type is now defined in the
   module. libc++'s `std::not_fn<f>` tests failed to compile with `-g`.
+- `offsetof` with an array index that is not a constant
+  (`offsetof(struct flex, data[count])`) compiles in C and C++, as a GNU
+  extension clang and GCC accept (WP-1433): the value is computed at run
+  time as clang computes it, and the expression is not a constant
+  expression. It was rejected as not supported before, and so was a
+  constant `offsetof` whose negative index makes the offset wrap.
 
 ## [1.2.1] - 2026-11-14
 

@@ -123,8 +123,8 @@ current figure. What is not done yet:
 - **Diagnostics:**
   - some C warnings are missing: `-Wdeclaration-after-statement` (C89),
     `-Wmissing-prototypes`, `-Wmissing-variable-declarations`,
-    `-Wgnu-folding-constant`, `-Wvla` on `sizeof(int[n])`, and the
-    "expanded from macro 'offsetof'" note ([WP-1319](BACKLOG.md));
+    `-Wgnu-folding-constant` and `-Wvla` on `sizeof(int[n])`
+    ([WP-1319](BACKLOG.md));
   - after an invalid redefinition of an enumeration, its new
     enumerators are also reported as undeclared ([WP-1317](BACKLOG.md)).
 - **Implicitly declared `setjmp` and `vfork`** (called without their

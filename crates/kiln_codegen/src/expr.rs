@@ -327,6 +327,9 @@ impl Cg<'_> {
                     V::C(self.null_const(q)?)
                 }
             }
+            ExprKind::OffsetOfExpr if ast.exprs.offsetof_layout(e).is_some() => {
+                self.emit_offsetof_steps(e, q)?
+            }
             ExprKind::OffsetOfExpr => {
                 let t = self.lty(q);
                 V::C(self.m.const_int(t, i128::from(ast.exprs.offsetof_value(e))))
@@ -816,6 +819,34 @@ impl Cg<'_> {
         } else {
             v
         })
+    }
+
+    /// An `OffsetOfExpr` with run-time steps (clang
+    /// `ScalarExprEmitter::VisitOffsetOfExpr`): from 0, each step added in
+    /// turn with a plain `add`; an index is cast to `size_t` by its own
+    /// signedness (`CreateIntCast`) and multiplied by its element size
+    /// with a plain `mul`. Constant operands fold as `IRBuilder` folds
+    /// them; no bounds check, even under `-fsanitize`.
+    fn emit_offsetof_steps(&mut self, e: ExprId, q: QualType) -> R<V> {
+        let steps: Vec<kiln_ast::expr::OffsetofStep> =
+            self.ast.exprs.offsetof_layout(e).map(<[_]>::to_vec).unwrap_or_default();
+        let t = self.lty(q);
+        let mut acc = V::C(self.m.const_int(t, 0));
+        for step in steps {
+            let off = match step {
+                kiln_ast::expr::OffsetofStep::Offset(b) => V::C(self.m.const_int(t, i128::from(b))),
+                kiln_ast::expr::OffsetofStep::Index { index, elem_size } => {
+                    let it = self.ast.exprs.get(index).ty();
+                    let signed = self.is_signed(self.scalar_of(it));
+                    let v = self.emit_scalar(index)?;
+                    let v = self.int_cast(v, t, signed);
+                    let size = V::C(self.m.const_int(t, i128::from(elem_size)));
+                    self.bin(BinOp::Mul, Flags::NONE, v, size)
+                }
+            };
+            acc = self.bin(BinOp::Add, Flags::NONE, acc, off);
+        }
+        Ok(acc)
     }
 
     fn zext_or_same(&mut self, v: V, to: LTy) -> V {

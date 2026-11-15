@@ -6474,9 +6474,41 @@ for them.
   `size_t` prvalue `OffsetOfExpr`.
   - The byte offset is computed from `kiln_abi` layout.
   - `T`, and every class it steps into, must be a complete class
-    type; a bit-field member is an error. Array indices must be
-    integral constants; a non-constant index, and a result outside
-    0 to 2^32 - 1 (which a negative index gives), are unsupported.
+    type; a bit-field member is an error. An array index must have
+    integral or unscoped enumeration type.
+  - (WP-1433) The designator becomes clang's `OffsetOfNode`s as
+    `OffsetofStep`s: one `Offset` per base class on the path to the
+    member, one per member of an anonymous struct or union chain and
+    one for the member, and one `Index` (the converted index and its
+    element size) per subscript. When every index folds, the result is
+    a constant: each index at its true value (an unsigned index,
+    `bool` and an unsigned enumeration included, zero-extended; a
+    signed one sign-extended), times its element size, all summed
+    wrapping in `size_t`, so the constant equals what the run-time
+    lowering computes for the same index. Clang 19 and 22 differ here
+    for an unsigned index with the top bit of its own width set (they
+    sign-extend it); kiln gives the value GCC gives. A constant that
+    fits a `u32` is the node's value; any other (a negative index
+    wraps it) is kept as a single `Offset` step
+    (`ColdExprData::offsetof_layout`).
+  - An index that does not fold is a GNU extension clang and GCC
+    accept in C and C++: the `OffsetOfExpr` keeps all its steps
+    (`Builder::offsetof_steps`) and is not a constant expression. The
+    Oven evaluates the steps by the same rule (above), so a
+    constexpr function whose index is its parameter folds when a call
+    is constant-evaluated, and a required constant (`static_assert`,
+    a template argument, a `case` label, a C integer constant or
+    static initializer) fails at the index with the usual errors and
+    notes. In C it is not an integer constant expression
+    (`is_c_ice` looks at its indices) and makes a block-scope array a
+    VLA. Codegen follows clang's `ScalarExprEmitter::VisitOffsetOfExpr`:
+    from 0, one plain `add` per step, an index cast to `size_t` by its
+    own signedness (`CreateIntCast`, so the run-time value is the
+    true one) and scaled by a plain `mul`, constants folding as
+    `IRBuilder` folds them; no bounds check, under `-fsanitize` too.
+    Tests: `ext.gnu.offsetof/runtime-index-{run,ir,not-constant,never-constant-cxx20,unsigned-constant-run}.cpp`,
+    `tests/c/run/offsetof-runtime-index{,-c23,-unsigned}.c`,
+    `tests/c/expr/offsetof-runtime-index-{ir,not-constant,not-constant-c23}.c`.
   - (WP-716) A member is found by class member lookup, so through
     base classes too ([class.member.lookup]; an ambiguous name is
     reported as for a member access). The offset of the base

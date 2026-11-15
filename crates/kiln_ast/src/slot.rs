@@ -170,6 +170,7 @@ const COLD_MAP_NAMES: &[&str] = &[
     "member_extra",
     "member_like_friend",
     "member_op_loc",
+    "offsetof_layout",
     "offsetof_pattern",
     "overrides",
     "pack_index_origin",

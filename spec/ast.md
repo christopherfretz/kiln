@@ -402,7 +402,7 @@ struct ExprNode {        // 20 bytes
   | `CXXThrowExpr` | operand or none (rethrow) | | `throw_operand` |
   | `StmtExpr` | the `CompoundStmt` | | `stmt_expr_body` |
   | `AddrLabelExpr` (GNU `&&l`, WP-424) | the `LabelDecl` | `cold.end_loc` = the label name's location; a `void *` prvalue; instantiation-dependent in a template's body so each specialization rebuilds it for its own label (WP-444) | `addr_label` |
-  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`) | `offsetof_value` |
+  | `OffsetOfExpr` | `ListId` of the array index expressions | `b` = byte offset (`u32`); with cold `offsetof_layout` steps (an index that is not a constant, or an offset past `u32`) the value is their sum | `offsetof_value`, `offsetof_layout` |
   | `CompoundLiteralExpr` | the `InitListExpr` | | `compound_literal_init` |
   | `CXXScalarValueInitExpr` | none | | |
 - Source ranges are computed (`begin(e)` walks to the leftmost child;
