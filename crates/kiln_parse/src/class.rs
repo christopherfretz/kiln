@@ -1531,7 +1531,7 @@ impl Parser<'_, '_> {
     /// After empty decl-specifiers: no declarator that may omit them
     /// (a special member, an implicit-int declarator, or a qualified
     /// member name) follows.
-    fn at_member_without_type(&self) -> bool {
+    fn at_member_without_type(&mut self) -> bool {
         !self.at_special_declarator(DeclaratorContext::Member)
             && !self.at_implicit_int_declarator()
             && !self.at_qualified_member_declarator()
@@ -1903,7 +1903,7 @@ impl Parser<'_, '_> {
     /// be empty ([class.ctor.general]/1, [class.dtor]/1, [class.conv.fct];
     /// clang's `isConstructorDeclarator` and friends). Unqualified
     /// constructors only in the class's own member-specification.
-    pub(crate) fn at_special_declarator(&self, ctx: DeclaratorContext) -> bool {
+    pub(crate) fn at_special_declarator(&mut self, ctx: DeclaratorContext) -> bool {
         if !matches!(ctx, DeclaratorContext::File | DeclaratorContext::Member) {
             return false;
         }
@@ -1925,7 +1925,45 @@ impl Parser<'_, '_> {
             Some(q) => q == n,
             None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
         };
-        named && self.ctor_params_follow(i + 1, last.is_none())
+        if !named {
+            return false;
+        }
+        // The class the qualifier names, whose scope the parameter list
+        // is in (`X::Y::Y(`: the context `Y` is named in).
+        let qual = match last {
+            Some(_) => self.scan_name_qual_at(self.pos()).and_then(|(_, _, _, _, q)| q),
+            None => None,
+        };
+        self.ctor_params_follow_in(i + 1, last.is_none(), qual)
+    }
+
+    /// [`Parser::ctor_params_follow`] with the scope of the declarator-id's
+    /// qualifier `qual` entered, as clang's `isConstructorDeclarator`
+    /// does: after a qualified declarator-id the parameter-declaration-
+    /// clause is in the scope of the qualifier's class
+    /// ([basic.scope.class]/1, [basic.lookup.unqual]/3), so in
+    /// `O::I::R::R(I::R &&)` the name `I` is found through the enclosing
+    /// classes of `R`. Without it the lookahead found no `I` at namespace
+    /// scope and took the constructor for a type (WP-1455). A qualifier
+    /// the lookahead cannot resolve to its class (`X<T>::I::R::R(`, past
+    /// a dependent component: the walk stops at the class template) is a
+    /// scope it cannot look into, so a name after `(` that it cannot
+    /// classify there is taken for a type, as after a dependent
+    /// qualifier.
+    pub(crate) fn ctor_params_follow_in(
+        &mut self,
+        lp: usize,
+        unqualified: bool,
+        qual: Option<DeclId>,
+    ) -> bool {
+        let opaque = !unqualified
+            && !qual.is_some_and(|q| {
+                matches!(self.s.ast.decls.get(q).kind(), DeclKind::CXXRecord | DeclKind::Namespace)
+            });
+        let entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
+        let r = self.ctor_params_follow(lp, unqualified, opaque);
+        self.s.act_on_exit_declarator_scope(entered);
+        r
     }
 
     /// clang's `isConstructorDeclarator` after the constructor name: the
@@ -1943,7 +1981,7 @@ impl Parser<'_, '_> {
     /// `S (S::*pm)(int)`, `S (f)(int)` and `S ((int))` are declarators,
     /// and `S (X);` with `X` not a type is a constructor whose parameter
     /// type is unknown (clang 19).
-    pub(crate) fn ctor_params_follow(&self, lp: usize, unqualified: bool) -> bool {
+    pub(crate) fn ctor_params_follow(&self, lp: usize, unqualified: bool, opaque: bool) -> bool {
         let j = lp + 1;
         let t = self.tok_at(j);
         match Self::punct_of(t) {
@@ -1967,7 +2005,7 @@ impl Parser<'_, '_> {
         }
         // `X` or `N::X`, not a type: a parenthesized declarator-id, or a
         // constructor parameter of an unknown type.
-        let Some((end, class, _)) = self.scan_name(j) else { return false };
+        let Some((end, class, _)) = self.scan_name(j) else { return opaque };
         // A name after a dependent qualifier is a type here (clang's
         // `ImplicitTypenameContext::Yes`, [temp.res.general]/4.3.2:
         // `C<T>::C(T::type) {}`).
@@ -2080,9 +2118,10 @@ impl Parser<'_, '_> {
     /// the member-specification of class `C`, when a parameter list
     /// follows ([`Parser::ctor_params_follow`]).
     pub(crate) fn names_constructor(
-        &self,
+        &mut self,
         n: Symbol,
         last_qual: Option<Symbol>,
+        qual: Option<DeclId>,
         ctx: DeclaratorContext,
     ) -> bool {
         if Self::punct_of(self.peek(1)) != Some(Punct::LParen) {
@@ -2092,7 +2131,7 @@ impl Parser<'_, '_> {
             Some(q) => q == n,
             None => ctx == DeclaratorContext::Member && self.current_class_name() == Some(n),
         };
-        named && self.ctor_params_follow(self.pos() + 1, last_qual.is_none())
+        named && self.ctor_params_follow_in(self.pos() + 1, last_qual.is_none(), qual)
     }
 
     /// A destructor or operator-function-id / conversion-function-id

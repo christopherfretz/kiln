@@ -3186,7 +3186,7 @@ impl Parser<'_, '_> {
                 entered = qual.map_or(0, |q| self.s.act_on_enter_declarator_scope(q));
                 self.parse_special_declarator_id(d);
             } else if let Some(n) = self.ident() {
-                let ctor = self.names_constructor(n, last_qual, d.ctx);
+                let ctor = self.names_constructor(n, last_qual, qual, d.ctx);
                 let guide = if ctor
                     || d.typed
                     || qual.is_some()
@@ -4619,7 +4619,7 @@ impl Parser<'_, '_> {
     /// in context `ctx`: a special member's, or at namespace scope `y;`,
     /// a declarator without a type declared as an invalid `int` (clang's
     /// `err_missing_type_specifier`).
-    fn at_declarator_without_specifiers(&self, ctx: DeclaratorContext) -> bool {
+    fn at_declarator_without_specifiers(&mut self, ctx: DeclaratorContext) -> bool {
         self.at_special_declarator(ctx)
             || (ctx == DeclaratorContext::File
                 && (self.at_implicit_int_declarator()
