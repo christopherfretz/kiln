@@ -2395,15 +2395,12 @@ mod tests {
         assert!(a.permissive);
         assert_eq!(a.constexpr.steps, Some(2_000_000_000));
         assert_eq!(parse("-m32 a.cpp").errors, [ArgError::Unknown("-m32".into())]);
+        // WP-1419: the last `-mcmodel=` is checked against the target
+        // later (`features::resolve`).
         let a = parse("-mcmodel=medium -mcmodel=large a.cpp");
-        assert_eq!(
-            (a.codegen.code_model, a.errors),
-            (Some(kiln_codegen::CodeModel::Large), vec![])
-        );
-        assert_eq!(
-            parse("-mcmodel=huge a.cpp").errors,
-            [ArgError::UnsupportedValue("-mcmodel=".into(), "huge".into())]
-        );
+        assert_eq!((a.codegen.mcmodel.as_deref(), a.errors), (Some("large"), vec![]));
+        let a = parse("-mcmodel=huge a.cpp");
+        assert_eq!((a.codegen.code_model(false), a.errors), (None, vec![]));
         let a = parse("-B/opt/llvm/bin -B /x -fuse-ld=lld a.o");
         assert_eq!(a.errors, []);
         let link: Vec<_> = a.link.iter().map(|l| (l.arg.as_str(), l.kind)).collect();

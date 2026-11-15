@@ -428,6 +428,21 @@ fn resolve_x86(args: &Args, target: &Target, f: &mut TargetFeatures, errors: &mu
     }
 }
 
+/// clang's compile-job checks that precede the target features':
+/// `-mcmodel=` (`addMCModel`, WP-1419; `large` on `AArch64` needs a static
+/// relocation model, which the default PIE is not), then `-mtls-dialect=`
+/// (WP-1411). Both name the normalized triple, not the `--target=`
+/// spelling.
+fn code_model_and_tls_errors(args: &Args, target: &Target, errors: &mut Vec<ArgError>) {
+    let pic = args.predef.pic.is_none_or(|p| p != kiln_pp::PicModel::None);
+    if let Some(e) = args.codegen.code_model_error(target.is_aarch64(), pic, target.triple) {
+        errors.push(e);
+    }
+    if let Some(e) = args.codegen.tls_dialect_error(!target.is_aarch64(), target.triple) {
+        errors.push(e);
+    }
+}
+
 /// Resolves the target features of `args` for `target`. Off `AArch64`,
 /// `-march=`/`-mcpu=` are unsupported values, `-msve-vector-bits=` is an
 /// unsupported option and `-target-feature` is ignored. Every error is
@@ -437,11 +452,7 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     let mut errors = Vec::new();
     let unsupported = |opt: &str, v: &str| ArgError::UnsupportedValue(opt.to_owned(), v.to_owned());
     let native = |v: &Option<String>| v.as_deref() == Some("native");
-    // WP-1411: clang's `-mtls-dialect=` check, before the target's own;
-    // it names the normalized triple, not the `--target=` spelling.
-    if let Some(e) = args.codegen.tls_dialect_error(!target.is_aarch64(), target.triple) {
-        errors.push(e);
-    }
+    code_model_and_tls_errors(args, target, &mut errors);
     if !target.is_aarch64() {
         resolve_x86(args, target, &mut f, &mut errors);
         return (f, errors);
@@ -530,6 +541,13 @@ pub fn resolve(args: &Args, target: &Target) -> (TargetFeatures, Vec<ArgError>) 
     }
     if let Err(e) = args.codegen.branch_protection(true) {
         errors.push(e);
+    }
+    // WP-1419: clang 22 reports the x86-only `-mlarge-data-threshold=`
+    // with the job's other target errors (`--target=` as written); clang
+    // 19 only when the driver saw no other error (`crate::run_as`).
+    if v22 && args.codegen.large_data_threshold.is_some() {
+        let t = args.target.as_deref().unwrap_or(target.triple);
+        errors.push(ArgError::UnsupportedForTarget("-mlarge-data-threshold=".to_owned(), t.into()));
     }
     // WP-961: clang's x86-only `-mbranches-within-32B-boundaries`.
     if args.codegen.branches_within_32b {

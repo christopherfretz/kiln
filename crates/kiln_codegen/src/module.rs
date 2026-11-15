@@ -3664,13 +3664,17 @@ impl<'a> Cg<'a> {
             }
         }
         // clang `CodeGenModule::Release`: the x86-64 large data threshold
-        // is the driver's 65536 for `medium` and 0 for `large`.
+        // is `-mlarge-data-threshold=`, else the driver's 65536 for
+        // `medium` and 0 for `large`.
         if let Some(cm) = self.opts.code_model {
             m.add_module_flag_i32(1, "Code Model", cm.flag_value());
             if self.target.triple.arch == Arch::X86_64
                 && matches!(cm, CodeModel::Medium | CodeModel::Large)
             {
-                let t = if cm == CodeModel::Medium { 65536 } else { 0 };
+                let t = self
+                    .opts
+                    .large_data_threshold
+                    .map_or(if cm == CodeModel::Medium { 65536 } else { 0 }, i64::from);
                 m.add_module_flag_i64(1, "Large Data Threshold", t);
             }
         }

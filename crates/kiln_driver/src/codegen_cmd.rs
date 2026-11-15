@@ -213,7 +213,8 @@ fn codegen_flag_options(a: &Args, cpu: Option<String>, x86: bool) -> CodegenOpti
         target_cpu: cpu,
         tune_cpu: f.mtune.clone().filter(|t| t != "native"),
         no_inline: a.predef.no_inline,
-        code_model: f.code_model,
+        code_model: f.code_model(!x86),
+        large_data_threshold: f.large_data_threshold(x86),
         tls_model: f.tls_model(),
         hardening: f.hardening(x86),
         reflection_mangling: a.reflection_mangling,
@@ -1526,7 +1527,7 @@ fn llc(args: &Args, tc: &Toolchain, phase: Phase, out: String, input: &str) -> C
     }
     // The module's `Code Model` flag says the same; explicit, as clang
     // hands the model to the target machine.
-    if let Some(cm) = args.codegen.code_model {
+    if let Some(cm) = args.codegen.code_model(tc.target.is_aarch64()) {
         cmd.arg(format!("-code-model={}", cm.name()));
     }
     // clang `addX86AlignBranchArgs` (WP-961): the assembler pads branches
