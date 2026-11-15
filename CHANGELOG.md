@@ -100,6 +100,11 @@ Planned as 1.3.0.
   without a fixed underlying type takes the smallest type that holds its
   values, as with `__attribute__((packed))`, in C and C++, as GCC and
   clang (`-fshort-enums` was rejected before).
+- `-fno-kiln-debug-source-checksum` (WP-1488): under `-g`, no source
+  file's MD5 checksum goes into the DWARF 5 line table, so an edit that
+  moves no line (a comment in a header) leaves the objects byte-identical
+  for incremental links with mortar; a debugger can then no longer detect
+  a stale source. The default, `-fkiln-debug-source-checksum`, is unchanged.
 
 ### Changed
 

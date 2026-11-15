@@ -58,6 +58,11 @@ pub struct DebugOptions {
     /// `-ggnu-pubnames`); `None` leaves the field out, LLVM's `Default`
     /// (`-gpubnames`; WP-1422).
     pub name_table_kind: Option<&'static str>,
+    /// Whether a DWARF 5 `DIFile` carries its source's MD5
+    /// (`-fno-kiln-debug-source-checksum` clears it; WP-1488): all files
+    /// of the unit or none, as LLVM drops MD5 from the whole line table
+    /// when one file lacks it.
+    pub source_checksum: bool,
 }
 
 impl Default for DebugOptions {
@@ -74,6 +79,7 @@ impl Default for DebugOptions {
             language: "DW_LANG_C_plus_plus_14",
             flags: None,
             name_table_kind: Some("None"),
+            source_checksum: true,
         }
     }
 }
@@ -287,7 +293,8 @@ impl<'a> Cg<'a> {
         while let Some(r) = name.strip_prefix("./") {
             name = r;
         }
-        let checksum = o.main_id.map(|f| md5::hex(sm.text(f).as_bytes()));
+        let checksum =
+            o.main_id.filter(|_| o.source_checksum).map(|f| md5::hex(sm.text(f).as_bytes()));
         let cu_file = self.di_create_file(name, checksum.as_deref(), true);
         let kind = match o.kind {
             DebugInfoKind::LocTrackingOnly => "NoDebug",
@@ -360,6 +367,8 @@ impl<'a> Cg<'a> {
         // clang computes no checksum without a DWARF version (location
         // tracking only).
         let dwarf = if o.kind == DebugInfoKind::LocTrackingOnly { 0 } else { 5 };
+        // WP-1488: off means no file is hashed at all.
+        debug_assert!(o.source_checksum || checksum.is_none(), "checksum computed while off");
         if let Some(c) = checksum.filter(|_| o.dwarf_version.unwrap_or(dwarf) >= 5) {
             f = f.raw("checksumkind", "CSK_MD5").s("checksum", c);
         }
@@ -377,8 +386,8 @@ impl<'a> Cg<'a> {
             return f;
         }
         // A `#line` name has no buffer to checksum.
-        let checksum =
-            (p.file_name == sm.file_name(p.file)).then(|| md5::hex(sm.text(p.file).as_bytes()));
+        let checksum = (self.opts.debug.source_checksum && p.file_name == sm.file_name(p.file))
+            .then(|| md5::hex(sm.text(p.file).as_bytes()));
         let f = self.di_create_file(&name, checksum.as_deref(), false);
         if let Some(di) = self.di.as_deref_mut() {
             di.files.insert(name.into(), f);
@@ -401,7 +410,8 @@ impl<'a> Cg<'a> {
         if let Some(&f) = di.files.get(name.as_str()) {
             return f;
         }
-        let checksum = o.main_id.map(|f| md5::hex(di.sm.text(f).as_bytes()));
+        let checksum =
+            o.main_id.filter(|_| o.source_checksum).map(|f| md5::hex(di.sm.text(f).as_bytes()));
         let f = self.di_create_file(&name, checksum.as_deref(), false);
         if let Some(di) = self.di.as_deref_mut() {
             di.files.insert(name.into(), f);

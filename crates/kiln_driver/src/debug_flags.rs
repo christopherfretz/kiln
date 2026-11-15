@@ -65,6 +65,9 @@ pub struct DebugFlags {
     /// The last of `-ggnu-pubnames`, `-gno-gnu-pubnames`, `-gpubnames`
     /// and `-gno-pubnames`, as written (WP-1422; [`Self::name_table_kind`]).
     pub pubnames: Option<&'static str>,
+    /// `-fno-kiln-debug-source-checksum` was last (WP-1488): no
+    /// `DIFile` carries an MD5 checksum.
+    pub no_source_checksum: bool,
 }
 
 /// Flags accepted with no effect: each spells clang's default on Linux.
@@ -153,6 +156,8 @@ impl DebugFlags {
             "-gno-gnu-pubnames" => self.pubnames = Some("-gno-gnu-pubnames"),
             "-gpubnames" => self.pubnames = Some("-gpubnames"),
             "-gno-pubnames" => self.pubnames = Some("-gno-pubnames"),
+            "-fkiln-debug-source-checksum" => self.no_source_checksum = false,
+            "-fno-kiln-debug-source-checksum" => self.no_source_checksum = true,
             _ if DEFAULTS.contains(&arg) => {}
             _ if REJECTED.contains(&arg) => {
                 return Some(Err(ArgError::UnsupportedByKiln(arg.to_owned())));
@@ -286,6 +291,7 @@ impl DebugFlags {
             comp_dir: self.comp_dir.clone().unwrap_or_else(|| cwd.to_owned()),
             split_dwarf_file: split_file.filter(|_| on && self.split_dwarf),
             name_table_kind: self.name_table_kind(on && self.split_dwarf),
+            source_checksum: !self.no_source_checksum,
             ..DebugOptions::default()
         }
     }
@@ -477,5 +483,21 @@ mod tests {
             parse(&["-gno-record-gcc-switches", "-grecord-command-line"]).0.record_command_line
         );
         assert_eq!(parse(&["-O2"]).1, [None]);
+    }
+
+    /// WP-1488: the last of the source checksum pair wins; accepted
+    /// without `-g`.
+    #[test]
+    fn source_checksum_last_wins() {
+        let on = |a: &[&str]| {
+            let (f, r) = parse(a);
+            assert!(r.iter().all(|x| *x == Some(Ok(()))), "{a:?}");
+            f.options("/w", None).source_checksum
+        };
+        assert!(on(&["-g"]));
+        assert!(!on(&["-g", "-fno-kiln-debug-source-checksum"]));
+        assert!(!on(&["-fno-kiln-debug-source-checksum"]));
+        assert!(on(&["-fno-kiln-debug-source-checksum", "-fkiln-debug-source-checksum", "-g"]));
+        assert!(!on(&["-fkiln-debug-source-checksum", "-fno-kiln-debug-source-checksum"]));
     }
 }
