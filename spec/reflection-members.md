@@ -78,6 +78,34 @@ gone; `__kiln_define_member` (spec/reflection.md §6.3) stays.
   [meta.reflection.member.queries]/2; GCC 16.1 agrees;
   `meta.reflection.member.queries/members-of-unsatisfied-constraints.cpp`). The list is
   built once and never changes, apart from the next rule.
+- **Members-of-eligible** (classes and namespaces; WP-1490). One
+  predicate, `Sema::members_of_eligible` in
+  `crates/kiln_sema/src/meta/member.rs`, decides which declarations
+  enter the cached list, where it is built (`build_class`,
+  `namespace_member`), so `members_of` and every filter over the list
+  (`static_data_members_of`, `nonstatic_data_members_of`,
+  `subobjects_of`) agree ([meta.reflection.member.queries]/2-3 in the
+  C++26 working draft). Left out: declarations of no member entity or of
+  one reached another way (access, using, using-enum and
+  using-directive declarations, `static_assert`, enumerators,
+  parameters, deduction guides), friend declarations ([class.friend]/1),
+  and specializations of templates, explicit or instantiated (class,
+  function and variable templates, member templates included), and
+  partial specializations of class and variable templates (P2996R13's
+  note names partial specializations as counterexamples). The
+  injected-class-name and closure types never enter (neither is
+  declared in the class or namespace). Listed: a primary template once,
+  an unnamed bit-field, and an anonymous union's unnamed class and its
+  unnamed object, a non-static data member in a class and, at namespace
+  scope, a variable (`static union { int a; };`; WP-1482; GCC 16.1 lists
+  it too).
+  An instantiation of a partial specialization is a class like any
+  other: it has template arguments, `template_of` gives the primary
+  template, and its constructors' parameters are typed
+  (`meta.reflection.member.queries/members-of-specializations.cpp`).
+  Deviation: GCC 16.1 lists a deduction guide (`__dguide_...`);
+  kiln follows the text (spec/reflection-queries.md §5;
+  `members-of-deduction-guide.cpp`).
 - **Undeduced placeholder types** (classes and namespaces; WP-1243). A
   function or variable whose type still contains an undeduced
   placeholder type (`auto spin();` with no definition yet) is not

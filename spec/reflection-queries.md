@@ -258,6 +258,12 @@ Rechecked against g++ 16.1 `-std=c++26 -freflection` in WP-503:
     `reflect_constant failed`.
 
   `constant-of-values.cpp` lines 55, 60 and 89 fail under GCC.
+- `members_of` of a namespace or class holding a deduction guide: GCC
+  lists the guide (as `__dguide_<name>`); a deduction guide is not a
+  members-of-representable member ([meta.reflection.member.queries]/3,
+  [temp.deduct.guide]), so kiln leaves it out (WP-1490;
+  `meta.reflection.member.queries/members-of-deduction-guide.cpp`, which
+  therefore has no GCC oracle).
 - No longer a deviation: a closure type at namespace or class scope has
   no linkage in GCC 16.1 either (`linkage-storage.cpp`).
 

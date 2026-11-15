@@ -710,6 +710,22 @@ impl Types {
         }
     }
 
+    /// Whether the subobject of type `a` is the object that a glvalue of
+    /// type `b` at its address designates: the one identity every walk
+    /// from an allocation's root to a designated subobject compares by
+    /// (`Oven::union_walk`, `place_walk`, `union_of_member`,
+    /// `mutable_path`, `volatile_path`, [`Types::has_subobject`] and the
+    /// path cache's hops), so the member a union access reaches and the
+    /// member recorded active are told apart by the same rule. It is
+    /// [`Types::alike`]: a glvalue of a type similar to the object's
+    /// designates it ([basic.lval]/11; a `const T *const &` binds directly
+    /// to a `T *` member, CWG2352, and reads it as `const T *`, whose type
+    /// interns apart from `T *`: WP-1490).
+    #[inline]
+    pub fn same_object(&self, a: OTy, b: OTy) -> bool {
+        a == b || self.alike(a, b)
+    }
+
     /// [conv.qual]/2: whether `a` and `b` are similar types (alike but
     /// for the cv-qualifiers at each level; [`Types::intern`] drops the
     /// top-level ones).
@@ -1407,7 +1423,7 @@ impl Types {
         // The leading arrays by index arithmetic, then the first record
         // through the path cache (WP-644).
         loop {
-            if off == 0 && self.same_class(p, root) {
+            if off == 0 && self.same_object(root, p) {
                 return true;
             }
             match self.kind(root) {
@@ -1437,7 +1453,7 @@ impl Types {
 
     /// [`Types::has_subobject`], uncached.
     pub(crate) fn subobject_in(&self, root: OTy, off: u64, p: OTy) -> bool {
-        if off == 0 && self.same_class(p, root) {
+        if off == 0 && self.same_object(root, p) {
             return true;
         }
         match self.kind(root) {

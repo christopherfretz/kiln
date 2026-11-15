@@ -3028,6 +3028,32 @@ slot is rebuilt in place (`Types::refresh`, which also counts the
 rebuilds in `Types::rebuilt`). It is part of `Types::footprint`, which
 `Oven::footprint` includes.
 
+**Object identity in the walks (WP-1490).** Every walk above decides
+"this subobject is the object the access designates" by one predicate,
+`Types::same_object(t, p)`: the same class (either possibly a
+base-subobject view) or, level by level through pointers and arrays, a
+similar type ([conv.qual]/2, `Types::alike`). It is what `hop`
+(`Reached`), `has_subobject` and its uncached `subobject_in` (so the
+`Hop::Union` member mask, `member_toward`, and `place_in_unions`'s
+choice of the member a placement activates), and the loops of
+`union_path`, `place_in_unions`, `union_of_member`, `mutable_path` and
+`volatile_path` compare by, so the member an access reaches and the
+member recorded active are told apart by the same rule. A glvalue of a
+type similar to the object's designates that object ([basic.lval]/11):
+a `const T *const &` binds directly to a `T *` member ([dcl.init.ref]/5.1,
+CWG2352) and reads it as `const T *`, whose Oven type interns apart
+from `T *` (pointer types keep their pointee's qualifiers in `q`), and
+so does a `const T *const (&)[N]` bound to a `T *[N]`. Before WP-1490 the
+walks compared those by type index, so such a read of a union's active
+member found no member holding the object and was rejected as "read of
+member 'm' of union with active member 'm'" (libstdc++'s
+`vector::insert(pos, n, value)` with spare capacity copies an element
+owning a vector out of its union-held `_Temporary_value`;
+`tests/conformance/class.union/constexpr-similar-type-read.cpp`,
+`vector.modifiers/constexpr-fill-insert-reserved.cpp`). Reading an
+inactive member that way still names both members
+(`class.union/constexpr-similar-type-inactive.cpp`).
+
 The *extent front table* (WP-760, `ExtentFront` in `ty/path.rs`) holds
 whole-array answers of `Types::extent`: 256 entries, two-way per (root
 type, element type), direct-mapped, so a collision overwrites and the
