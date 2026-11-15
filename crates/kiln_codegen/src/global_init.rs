@@ -109,8 +109,9 @@ impl Cg<'_> {
     /// it).
     pub(crate) fn var_must_emit(&self, d: DeclId) -> bool {
         let ast = self.ast;
-        // clang `DeclMustBeEmitted`: a `used` variable is emitted.
-        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+        // clang `DeclMustBeEmitted`: a `used` variable is emitted (an
+        // instantiation has its pattern's attributes).
+        if ast.inherited_attr(d, kiln_ast::attr::AttrKind::USED).is_some() {
             return true;
         }
         let Some(ty) = ast.decls.get(d).ty() else { return false };
@@ -990,11 +991,17 @@ impl Cg<'_> {
     /// clang `SetCommonAttributes`: a `used` entity goes into
     /// `@llvm.compiler.used` (ELF), a `retain` one into `@llvm.used`
     /// (WP-805).
+    ///
+    /// An instantiation has the attributes of the definition it was
+    /// instantiated from (clang `InstantiateAttrs`): `template<class T>
+    /// __attribute__((used)) int vt = 1;`, or `used` written only on the
+    /// out-of-line definition of a class template's member.
     pub(crate) fn note_used_attrs(&mut self, d: DeclId, v: Value) {
-        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED) {
+        let ast = self.ast;
+        if ast.inherited_attr(d, kiln_ast::attr::AttrKind::USED).is_some() {
             self.gi.compiler_used.push(v);
         }
-        if self.has_fn_attr(d, kiln_ast::attr::AttrKind::RETAIN) {
+        if ast.inherited_attr(d, kiln_ast::attr::AttrKind::RETAIN).is_some() {
             self.gi.used.push(v);
         }
     }

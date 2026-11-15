@@ -193,6 +193,22 @@ Planned as 1.3.0.
   generic lambda's `__invoke<T>` is artificial; a template parameter
   object used in a function template no longer adds its class to the
   retained types (WP-1414).
+- A member function declared `__attribute__((used))` (or `[[gnu::used]]`)
+  in a class template is instantiated and emitted when the class is
+  implicitly instantiated, as clang does (WP-1430): constructors,
+  destructors and conversion functions too, `linkonce_odr` and listed in
+  `@llvm.compiler.used`. An ill-formed body is now diagnosed at the
+  class's point of instantiation. Before, such members were emitted only
+  when called, and an in-class `used` definition in a non-template class,
+  or a `used` constructor or destructor, was not emitted at all.
+- Explicit instantiation definitions written inside a namespace,
+  `extern "C++"` or `export` block are emitted before the block's other
+  declarations, as clang emits them (WP-1430); so is a static data
+  member's definition at an explicit instantiation of the member or of
+  its class (it was emitted with its template's namespace). The vtables
+  of explicitly instantiated classes and of classes with a key function
+  are emitted in one source order. Only the order of definitions in the
+  output changes.
 
 ## [1.2.1] - 2026-11-14
 

@@ -210,7 +210,10 @@ clang's `CodeGenModule` pipeline:
    [intro.execution]/7, so LLVM's `static int AnchorDest = AnchorSource;`
    with `extern volatile int AnchorSource;` is emitted; WP-801).
 2. **Key-function vtables** (`emit_key_function_vtables`, clang
-   `DefineUsedVTables` -> `HandleVTable`).
+   `DefineUsedVTables` -> `HandleVTable`), together with those of
+   explicitly instantiated classes, in one order: where the key function
+   is defined, where the explicit instantiation is (`VTableUses`,
+   WP-1430).
 3. **End-of-TU instantiations** (`emit_end_of_tu_instantiations`). Sema's
    end-of-TU drain (`kiln_sema::templ::pending`) records each definition
    it instantiates in `TemplateTables::end_of_tu_defs`, in clang's order:
@@ -245,6 +248,20 @@ clang's `CodeGenModule` pipeline:
    dynamic initializations in clang's order; a constant-initialized one
    is still deferred to its first use
    (`tests/codegen/var_template_point_of_instantiation.cpp`).
+
+   Inside a top-level namespace, linkage specification or export block
+   these parse-time handovers (the variables above and the explicit
+   instantiation definitions, §7h) come before the block's own
+   declarations, which clang emits only when the closed block is handed
+   over (`emit_parse_time_defs`, WP-1430).
+
+   Implicitly instantiating a class references its non-template member
+   functions declared `used` (clang `VisitCXXMethodDecl`), so they are
+   end-of-TU instantiations too; an implicit instantiation that must be
+   emitted waits in `to_emit` (clang `MayBeEmittedEagerly`). An in-class
+   `used` definition of a non-template class is emitted after the
+   class's static data members (`emit_used_inline_defs`;
+   spec/landed/codegen/WP-1430.md).
 4. **`emit_deferred`** (clang `EmitDeferred`): deferred vtables first,
    then `to_emit`, recursing depth-first into the names each definition
    newly references.
@@ -3620,6 +3637,12 @@ Where the definitions are emitted (clang hands them to
   debug assertion unless `cg_duplicate_mangled_name` was reported;
   structor variants sharing an asm label are built into their one
   symbol, as clang does).
+  Inside a top-level block, every explicit instantiation (keyed or
+  listed) is emitted before the block's first declaration, in source
+  order (clang emits the block's declarations when it is closed;
+  WP-1430). A static data member's instantiated out-of-line definition,
+  which is listed in its pattern's block, is emitted at the explicit
+  instantiation (of the member, keyed, or of its class), not there.
   Keying an empty block by itself read as both "at its start" and
   "after it", which built every such definition twice into one IR
   function (WP-1425, spec/landed/codegen/WP-1425.md). The member class gets the

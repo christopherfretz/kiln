@@ -773,6 +773,38 @@ impl Sema<'_, '_> {
         self.emit(e);
     }
 
+    /// The explicit instantiation definition of variable template
+    /// specialization `v` at `name_loc`, once checked.
+    fn explicit_var_spec_def(&mut self, v: DeclId, name_loc: Loc) {
+        self.mark_used(v);
+        if self.var_pattern_def(v).is_none() {
+            // Defined later: instantiated, and emitted, at the end of the
+            // TU (clang `PerformPendingInstantiations`), or an error at
+            // its first odr-use.
+            let poi = match self.inst.undefined_var_uses.get(&v) {
+                Some(&(at, true)) => at,
+                _ => name_loc,
+            };
+            self.queue_instantiation(v, poi);
+            let first = self.ast.first(v);
+            self.ast.templates.add_late_explicit_inst(first);
+        } else {
+            self.key_explicit_var_inst(v);
+        }
+    }
+
+    /// [temp.explicit]/10: clang hands the definition of `v`, a variable
+    /// template specialization or static data member an explicit
+    /// instantiation definition names, to codegen where the explicit
+    /// instantiation appears. The specialization is listed where it was
+    /// first named, the member's instantiated definition in its
+    /// pattern's block, so codegen is told where (WP-1430).
+    fn key_explicit_var_inst(&mut self, v: DeclId) {
+        if let Some(after) = self.explicit_inst_anchor() {
+            self.ast.templates.add_explicit_member_inst(after, v);
+        }
+    }
+
     /// `[extern] template T v<args>;` or `[extern] template T
     /// C<args>::m;` ([temp.explicit]/3): an explicit instantiation of a
     /// variable template specialization or of a static data member of a
@@ -831,19 +863,7 @@ impl Sema<'_, '_> {
                 return;
             }
             if !declaration {
-                self.mark_used(v);
-                if self.var_pattern_def(v).is_none() {
-                    // Defined later: instantiated, and emitted, at the end
-                    // of the TU (clang `PerformPendingInstantiations`),
-                    // or an error at its first odr-use.
-                    let poi = match self.inst.undefined_var_uses.get(&v) {
-                        Some(&(at, true)) => at,
-                        _ => name_loc,
-                    };
-                    self.queue_instantiation(v, poi);
-                    let first = self.ast.first(v);
-                    self.ast.templates.add_late_explicit_inst(first);
-                }
+                self.explicit_var_spec_def(v, name_loc);
             }
             return;
         }
@@ -904,6 +924,8 @@ impl Sema<'_, '_> {
             // `PerformPendingInstantiations`, spec/sema-templates.md §4.4),
             // here as well as at an implicit use queued earlier.
             self.queue_explicit_instantiation(m, name_loc);
+        } else {
+            self.key_explicit_var_inst(m);
         }
         self.mark_used(m);
     }

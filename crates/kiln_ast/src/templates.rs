@@ -687,6 +687,12 @@ impl TemplateTables {
         self.explicit_member_insts.get(&after).map_or(&[], Vec::as_slice)
     }
 
+    /// Every explicitly instantiated member (see `explicit_member_insts`),
+    /// in no particular order.
+    pub fn explicit_member_insts_all(&self) -> impl Iterator<Item = DeclId> + '_ {
+        self.explicit_member_insts.values().flatten().copied()
+    }
+
     /// Records that `decl`'s definition was instantiated by the
     /// end-of-translation-unit drain (see `end_of_tu_defs`).
     pub fn add_end_of_tu_def(&mut self, decl: DeclId) {

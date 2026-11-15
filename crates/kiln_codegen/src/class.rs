@@ -668,6 +668,7 @@ impl Cg<'_> {
             .ctx()
             .is_some_and(|c| self.class_bits(c).contains(DefinitionBits::ABSTRACT));
         let virtual_dtor = !is_ctor && fd.spec.is_virtual();
+        let used = self.has_fn_attr(d, kiln_ast::attr::AttrKind::USED);
         for v in [Structor::Base, Structor::Complete, Structor::Deleting] {
             if is_ctor && v == Structor::Complete && abstract_ {
                 continue;
@@ -675,7 +676,17 @@ impl Cg<'_> {
             if v == Structor::Deleting && !virtual_dtor {
                 continue;
             }
-            if !self.discardable_fn(d) {
+            // clang `DeclMustBeEmitted`: a `used` structor is emitted,
+            // an implicit instantiation's from `DeferredDeclsToEmit`
+            // (`MayBeEmittedEagerly`).
+            let discardable = self.discardable_fn(d);
+            if discardable && used && self.is_implicit_instantiation(d) {
+                if self.squeued.insert((first, v)) {
+                    self.to_emit.push(Def::Structor(d, v));
+                }
+                continue;
+            }
+            if !discardable || used {
                 // spec/modules.md §7: the module's object defines it.
                 if !self.owned_by_imported_unit(d) {
                     self.emit_structor_def(d, v)?;
@@ -790,6 +801,8 @@ impl Cg<'_> {
                     al.visibility = visibility;
                 }
                 let val = Value::alias(a);
+                // `emitConstructorDestructorAlias` → `SetCommonAttributes`.
+                self.note_used_attrs(d, val);
                 self.sfns.insert((first, v), (val, f));
                 if let Some(&p) = self.ph_of.get(&(first, v)) {
                     self.phs[p as usize] = Some(val);
@@ -962,6 +975,7 @@ impl Cg<'_> {
             al.unnamed_addr = UnnamedAddr::Global;
             al.visibility = visibility;
         }
+        self.note_used_attrs(d, Value::alias(a));
         self.sfns.insert((first, Structor::Base), (Value::alias(a), declared.unwrap_or(bf)));
         Ok(true)
     }
