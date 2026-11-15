@@ -440,7 +440,10 @@ fn failure_warns_and_falls_back_or_is_an_error_when_strict() {
         assert!(o.status.success(), "{}", text(&o.stderr));
         assert_eq!(
             text(&o.stderr),
-            format!("kiln++: warning: hod failed ({status}): {message}; falling back to llc\n")
+            format!(
+                "kiln++: warning: hod failed ({status}): {message}; falling back to llc \
+                 [-Whod-fallback]\n"
+            )
         );
         assert_eq!(read(&d.join("llvm.o")), read(&d.join("hod.o")));
         let _ = std::fs::remove_file(d.join("hod.o"));
@@ -461,6 +464,75 @@ fn failure_warns_and_falls_back_or_is_an_error_when_strict() {
         );
         assert!(!d.join("hod.o").exists(), "a partial object survived");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// WP-1477: the failure warning is `-Whod-fallback`, which a blanket
+/// `-Werror` does not promote (clang's `DefaultWarnNoWerror`): exit 0,
+/// the same warning, the llc result. `-Werror=hod-fallback` makes it an
+/// error and the input fails with no object (as `KILN_HOD_STRICT=1`);
+/// `-Wno-error=hod-fallback` undoes that; `-Wno-hod-fallback` and `-w`
+/// silence it and keep the fallback. Strict mode is an error with or
+/// without `-Werror`.
+#[test]
+fn failure_warning_is_not_promoted_by_werror() {
+    if !tools() {
+        return;
+    }
+    let d = scratch("failed-werror");
+    let o = compile(&d, &[], &[], "inline.cpp", "llvm.o");
+    assert!(o.status.success(), "{}", text(&o.stderr));
+    let hod = d.join("hod");
+    fake_hod(&hod, &d, FAIL);
+    let flag = format!("--hod={}", hod.display());
+    let warning = "kiln++: warning: hod failed (exit code 1): hod: error: internal error: boom; \
+                   falling back to llc [-Whod-fallback]\n";
+    let with = |extra: &[&str], env: &[(&str, &str)]| {
+        let _ = std::fs::remove_file(d.join("hod.o"));
+        compile(
+            &d,
+            env,
+            &[&["-fkiln-backend=hod", &flag][..], extra].concat(),
+            "inline.cpp",
+            "hod.o",
+        )
+    };
+    for extra in [
+        &["-Werror"][..],
+        &["-Werror", "-Wall", "-Wextra"],
+        &["-Werror=hod-fallback", "-Wno-error=hod-fallback"],
+        &["-Werror=hod-fallback", "-Werror", "-Wno-error=hod-fallback"],
+    ] {
+        let o = with(extra, &[]);
+        assert!(o.status.success(), "{extra:?}: {}", text(&o.stderr));
+        assert_eq!(text(&o.stderr), warning, "{extra:?}");
+        assert_eq!(read(&d.join("llvm.o")), read(&d.join("hod.o")), "{extra:?}");
+    }
+    for extra in [&["-Wno-hod-fallback"][..], &["-w"], &["-Werror", "-w"]] {
+        let o = with(extra, &[]);
+        assert!(o.status.success(), "{extra:?}: {}", text(&o.stderr));
+        assert_eq!(text(&o.stderr), "", "{extra:?}");
+        assert_eq!(read(&d.join("llvm.o")), read(&d.join("hod.o")), "{extra:?}");
+    }
+    for extra in [&["-Werror=hod-fallback"][..], &["-Werror", "-Werror=hod-fallback"]] {
+        let o = with(extra, &[]);
+        assert_eq!(o.status.code(), Some(1), "{extra:?}");
+        assert_eq!(
+            text(&o.stderr),
+            "kiln++: error: hod failed (exit code 1): hod: error: internal error: boom; falling \
+             back to llc [-Werror,-Whod-fallback]\n",
+            "{extra:?}"
+        );
+        assert!(!d.join("hod.o").exists(), "{extra:?}: an object survived");
+    }
+    let o = with(&["-Werror"], &[("KILN_HOD_STRICT", "1")]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        text(&o.stderr),
+        "kiln++: error: hod failed (exit code 1): hod: error: internal error: boom \
+         (KILN_HOD_STRICT=1: no fallback)\n"
+    );
+    assert!(!d.join("hod.o").exists(), "a partial object survived");
     let _ = std::fs::remove_dir_all(&d);
 }
 
@@ -674,7 +746,10 @@ fn coroutine_hod_bug_is_a_failure() {
         assert!(o.status.success(), "{}", text(&o.stderr));
         assert_eq!(
             text(&o.stderr),
-            format!("kiln++: warning: hod failed (exit code 1): {message}; falling back to llc\n")
+            format!(
+                "kiln++: warning: hod failed (exit code 1): {message}; falling back to llc \
+                 [-Whod-fallback]\n"
+            )
         );
         // The fallback ran the coroutine lowering, then `llc` (the stub
         // writes no object, and the partial one was removed).

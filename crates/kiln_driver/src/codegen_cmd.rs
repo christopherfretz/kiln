@@ -1997,8 +1997,9 @@ enum HodStep {
 /// Runs hod (`cmd`, made by [`crate::hod::command`]) on the module text
 /// `ir` (spec/driver.md "Back-end selection"): status 0 is done; status
 /// 2 (declined) falls back silently (`-v`: one line naming the reason);
-/// any other status or a signal warns and falls back, or is an error
-/// with `KILN_HOD_STRICT=1`. A non-zero status never leaves an `-o`
+/// any other status or a signal warns (`-Whod-fallback`, which a blanket
+/// `-Werror` does not promote) and falls back, or is an error with
+/// `KILN_HOD_STRICT=1` or `-Werror=hod-fallback`. A non-zero status never leaves an `-o`
 /// file behind.
 #[allow(clippy::too_many_arguments)]
 fn run_hod(
@@ -2056,8 +2057,12 @@ fn run_hod(
                     .emit(drv);
                 return HodStep::Failed;
             }
+            // WP-1477: a blanket `-Werror` leaves it a warning (the
+            // fallback's result is the output); `-Werror=hod-fallback`
+            // makes it an error and the input fails, as strict mode.
+            let before = drv.error_count();
             Diag::new(DiagId::drv_hod_failed, Span::INVALID).arg(status).arg(message).emit(drv);
-            HodStep::Fallback
+            if drv.error_count() > before { HodStep::Failed } else { HodStep::Fallback }
         }
     }
 }

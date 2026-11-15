@@ -4,6 +4,8 @@
 
 // ----- WP-228 (driver flags a target does not support)
 EagerLoadCxxNamedModules = "eager-load-cxx-named-modules" [];
+// WP-1477: `drv_hod_failed` (hod failed; the module goes to llc).
+HodFallback = "hod-fallback" [];
 // WP-1037: a `<h>.gch` the driver's `-include` probe ignores.
 IgnoredGch = "ignored-gch" [];
 OptionIgnored = "option-ignored" [];

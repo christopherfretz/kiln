@@ -128,6 +128,12 @@ Planned as 1.3.0.
   access error. The names after the constructor's `(` are now looked
   up in the scope of its class, as the parameters are. Found building
   LLVM's DWARFLinker.
+- `-fkiln-backend=hod` (WP-1477): when hod failed on a module and kiln
+  fell back to `llc`, a plain `-Werror` turned the fallback's warning
+  into an error and failed the build. The warning is now
+  `-Whod-fallback`, which a plain `-Werror` leaves a warning;
+  `-Werror=hod-fallback` makes it an error, and `KILN_HOD_STRICT=1`
+  still does.
 - Debug info (WP-1445): an explicitly specialized member function's
   declaration is at the specialization, and a class with a const member
   of class type is `DIFlagNonTrivial`, as in clang.
