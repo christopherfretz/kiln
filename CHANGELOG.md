@@ -82,6 +82,13 @@ Planned as 1.3.0.
   (`__cxx_global_var_init*`, `_GLOBAL__sub_I_*`,
   `__cxx_global_array_dtor`, `__tls_init`) get artificial subprograms,
   so a breakpoint in a dynamic initializer works.
+- The link-mode options `-nodefaultlibs`, `-nostartfiles`, `-nolibc`,
+  `-nostdlib++`, `-static-pie`, `-static-libgcc`, `-static-libstdc++`,
+  `-shared-libgcc`, `-r`, `-z <arg>`, `-u <sym>` and `-T <script>` are
+  accepted by `kiln` and `kiln++` and reach the link step as in clang, in
+  command-line order (WP-1453); they were unknown arguments before (found
+  building ICU4C, which links a library with `-nodefaultlibs -nostdlib
+  -shared`). A compile-only run warns about them as clang does.
 
 ### Changed
 

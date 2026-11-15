@@ -214,14 +214,26 @@ LINKING:
   -fuse-ld=<linker>       Link with <linker> (bfd, gold, lld, ...)
   -l<lib>                 Link with the library <lib>
   -L <dir>                Add <dir> to the library search path
+  -nodefaultlibs          No default libraries (the startup files stay)
+  -nolibc                 No C library
+  -nostartfiles           No startup files (the default libraries stay)
   -nostdlib               No standard libraries or startup files
+  -nostdlib++             No C++ standard library
   -pie, -no-pie           Link a position-independent executable (or not)
   -pthread                POSIX threads
+  -r                      Link a relocatable object
   -rdynamic               Export all symbols to the dynamic symbol table
   -shared                 Link a shared library
+  -shared-libgcc, -static-libgcc
+                          Link libgcc dynamically (or statically)
   -static                 Link statically
+  -static-libstdc++       Link the C++ standard library statically
+  -static-pie             Link a static position-independent executable
+  -T <script>             Use the linker script <script>
+  -u <symbol>             Start with <symbol> undefined
   -Wl,<args>              Pass the comma-separated <args> to the linker
   -Xlinker <arg>          Pass <arg> to the linker
+  -z <arg>                Pass -z <arg> to the linker
 
 DIAGNOSTICS:
   -W<warning>             Enable the warning <warning>
@@ -387,6 +399,8 @@ mod tests {
             "style" => "gcc",
             "text" => "main",
             "name" => "ld",
+            "script" => "x.ld",
+            "symbol" => "foo",
             "seconds" => "604800",
             _ => panic!("{form}: no sample value for <{ph}>; add one to `sample`"),
         }

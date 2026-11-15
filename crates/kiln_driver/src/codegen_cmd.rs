@@ -838,21 +838,19 @@ fn check_asm_opts(args: &Args, phase: Phase, sources: usize, drv: &DiagEngine<'_
 fn warn_unused_link_inputs(args: &Args, inputs: &[&Input], phase: Phase, drv: &DiagEngine<'_>) {
     let report_opts = |pos: usize| {
         for o in args.link.iter().filter(|o| o.pos == pos) {
-            match o.kind {
-                LinkOptKind::Input => {
-                    Diag::new(DiagId::drv_linker_input_unused, Span::INVALID).arg(&o.arg).emit(drv);
-                }
-                LinkOptKind::Option => {
-                    Diag::new(DiagId::drv_argument_unused, Span::INVALID).arg(&o.arg).emit(drv);
-                }
-                LinkOptKind::Silent => {}
-                LinkOptKind::Xlinker | LinkOptKind::Rpath => {
-                    let opt = o.kind.separate().unwrap_or_default();
-                    Diag::new(DiagId::drv_linker_input_unused, Span::INVALID)
-                        .arg(format!("{opt} {}", o.arg))
-                        .emit(drv);
-                }
+            if o.kind == LinkOptKind::Silent {
+                continue;
             }
+            let text = match o.kind.separate() {
+                Some(opt) => format!("{opt} {}", o.arg),
+                None => o.arg.clone(),
+            };
+            let id = if o.kind.is_input() {
+                DiagId::drv_linker_input_unused
+            } else {
+                DiagId::drv_argument_unused
+            };
+            Diag::new(id, Span::INVALID).arg(text).emit(drv);
         }
     };
     // `inputs` holds only the existing inputs; positions count all of them.
@@ -2329,6 +2327,57 @@ mod tests {
         assert_eq!(
             cmd.args,
             ["-O2", "-lm", "a.o", "-L/x", "b.o", "-Wl,-z,now", "-static", "-o", "a.out"]
+        );
+    }
+
+    /// WP-1453: the link-mode options keep their place among the
+    /// objects, `-l` and `-Wl,` options, as on clang's link line; the
+    /// separate forms are passed as two arguments.
+    #[test]
+    fn link_order_link_mode() {
+        let a = args(&[
+            "-nodefaultlibs",
+            "a.o",
+            "-Wl,--start-group",
+            "-lx",
+            "b.o",
+            "-ly",
+            "-Wl,--end-group",
+            "-nostartfiles",
+            "-z",
+            "defs",
+            "-ufoo",
+            "c.o",
+            "-T",
+            "x.ld",
+            "-shared",
+        ]);
+        let tc = searched_toolchain();
+        let inputs: Vec<(usize, String)> =
+            a.inputs.iter().enumerate().map(|(i, x)| (i, x.path.clone())).collect();
+        let cmd = link_command(&a, &tc, &inputs);
+        assert_eq!(
+            cmd.args,
+            [
+                "-nodefaultlibs",
+                "a.o",
+                "-Wl,--start-group",
+                "-lx",
+                "b.o",
+                "-ly",
+                "-Wl,--end-group",
+                "-nostartfiles",
+                "-z",
+                "defs",
+                "-u",
+                "foo",
+                "c.o",
+                "-T",
+                "x.ld",
+                "-shared",
+                "-o",
+                "a.out"
+            ]
         );
     }
 

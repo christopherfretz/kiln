@@ -56,7 +56,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use kiln_diag::{Diag, DiagEngine, DiagId, DiagOptions, Format, JsonSink, TextSink};
 use kiln_source::{SourceManager, Span};
 
-use crate::args::{Action, ArgError, Args, Lang, LinkOptKind};
+use crate::args::{Action, ArgError, Args, Lang};
 use crate::pp_cmd::{Job, JobResult};
 use crate::syntax_cmd::SyntaxJob;
 use crate::toolchain::{GccSearch, LangStd, Target, Toolchain};
@@ -810,13 +810,10 @@ pub fn run_as(argv0: &str, command_line: &[String], mut io: Io) -> i32 {
         print_version(&mut io.stderr, &tc, true);
     }
     let inputs = existing_inputs(&args, &drv);
-    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`, `-rpath`) as inputs:
-    // `clang++ -Wl,--version` runs the linker alone (Meson's linker probe,
-    // WP-920).
-    let linker_inputs = args
-        .link
-        .iter()
-        .any(|l| matches!(l.kind, LinkOptKind::Input | LinkOptKind::Xlinker | LinkOptKind::Rpath));
+    // clang counts linker inputs (`-l`, `-Wl,`, `-Xlinker`, `-rpath`, `-z`,
+    // `-r`) as inputs: `clang++ -Wl,--version` runs the linker alone
+    // (Meson's linker probe, WP-920).
+    let linker_inputs = args.link.iter().any(|l| l.kind.is_input());
     if inputs.is_empty() && !(linker_inputs && args.inputs.is_empty()) {
         if (args.version || args.verbose) && args.inputs.is_empty() && drv.error_count() == 0 {
             return 0;

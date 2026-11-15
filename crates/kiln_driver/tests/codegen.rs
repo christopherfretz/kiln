@@ -209,6 +209,205 @@ fn driver_errors_and_warnings() {
     assert_eq!(text(&o.stderr), "");
 }
 
+/// WP-1453 (spec/driver.md "Link options"): the link-mode options in a
+/// compile-only run warn as clang 19/22 do, in command-line order:
+/// `-nodefaultlibs`, `-nostdlib++` (like `-nostdlib`, `-static`) are
+/// silent, `-r` and `-z <arg>` are linker inputs, the rest are unused
+/// arguments.
+#[test]
+fn link_mode_options_unused_when_compiling() {
+    let d = setup("linkmode-unused");
+    let opts = [
+        "-nodefaultlibs",
+        "-nostdlib++",
+        "-nostartfiles",
+        "-nolibc",
+        "-static-pie",
+        "-static-libgcc",
+        "-static-libstdc++",
+        "-shared-libgcc",
+        "-r",
+        "-z",
+        "now",
+        "-ufoo",
+        "-T",
+        "x.ld",
+        "-fuse-ld=mold",
+    ];
+    let w = |m: &str| format!("kiln++: warning: {m} [-Wunused-command-line-argument]\n");
+    let expected = [
+        w("argument unused during compilation: '-nostartfiles'"),
+        w("argument unused during compilation: '-nolibc'"),
+        w("argument unused during compilation: '-static-pie'"),
+        w("argument unused during compilation: '-static-libgcc'"),
+        w("argument unused during compilation: '-static-libstdc++'"),
+        w("argument unused during compilation: '-shared-libgcc'"),
+        w("-r: 'linker' input unused"),
+        w("-z now: 'linker' input unused"),
+        w("argument unused during compilation: '-u foo'"),
+        w("argument unused during compilation: '-T x.ld'"),
+        w("argument unused during compilation: '-fuse-ld=mold'"),
+    ]
+    .concat();
+    for mode in ["-c", "-S"] {
+        let mut args = vec![mode, "add.cpp"];
+        args.extend(opts);
+        let o = kiln_in(&d, &args);
+        assert_eq!((o.status.code(), text(&o.stderr)), (Some(0), expected.clone()), "{mode}");
+    }
+    // `-z` alone is a linker input: no `no input files` (as `-Wl,`).
+    let o = kiln_in(&d, &["-###", "-z", "now"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    assert!(text(&o.stderr).ends_with(" \"-z\" \"now\" \"-o\" \"a.out\"\n"), "{}", text(&o.stderr));
+    // Not link options, as in clang: `-symbolic` (GCC's), `-znow`.
+    let o = kiln_in(&d, &["-c", "-symbolic", "-znow", "add.cpp"]);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        text(&o.stderr),
+        "kiln++: error: unknown argument: '-symbolic'\nkiln++: error: unknown argument: '-znow'\n"
+    );
+}
+
+/// The arguments of a `-###` command line (every one quoted, `"`, `\`
+/// and `$` escaped).
+fn unquote_command(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        if c != '"' {
+            continue;
+        }
+        let mut a = String::new();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => a.extend(chars.next()),
+                '"' => break,
+                c => a.push(c),
+            }
+        }
+        out.push(a);
+    }
+    out
+}
+
+/// WP-1453 (spec/driver.md "Link options"): kiln passes the link-mode
+/// options to the linking clang++ as written and in place, so the
+/// linker's command line is clang's: `-nodefaultlibs` drops the default
+/// libraries and keeps the start files, `-nostartfiles` the reverse,
+/// `-nostdlib` both, `-nostdlib++` only the C++ library (which the C
+/// driver `kiln` never adds), `-nolibc` only `-lc`. Checked on the line
+/// the linking clang++ prints under `-###` for both targets (nothing is
+/// linked, so no foreign sysroot is needed).
+#[test]
+fn link_mode_options_on_the_link_line() {
+    if !tools() {
+        return;
+    }
+    let d = setup("linkmode-line");
+    std::fs::write(d.join("a.o"), "").unwrap();
+    let ld_line = |driver: &Path, target: &str, opts: &[&str]| -> String {
+        let mut args = vec!["-###", target];
+        args.extend(opts);
+        args.extend(["a.o", "-o", "out"]);
+        let o = Command::new(driver).args(&args).current_dir(&d).output().unwrap();
+        let err = text(&o.stderr);
+        assert_eq!(o.status.code(), Some(0), "{err}");
+        let link = unquote_command(err.lines().last().unwrap());
+        // kiln's own command: the options, in place, before the object.
+        let at = link.iter().position(|a| a == "a.o").expect(&err);
+        // (`-ufoo` and `-Tx.ld` are passed as `-u foo`, `-T x.ld`.)
+        let joined = |o: &&&str| (o.starts_with("-u") || o.starts_with("-T")) && o.len() > 2;
+        for opt in opts.iter().filter(|o| o.starts_with('-') && !joined(o)) {
+            let p = link.iter().position(|a| a == opt).expect(&err);
+            assert!(p < at, "{opt}: {err}");
+        }
+        let o = Command::new(&link[0]).args(&link[1..]).arg("-###").current_dir(&d).output();
+        let err = text(&o.unwrap().stderr);
+        err.lines().last().unwrap_or_default().to_owned()
+    };
+    let kiln_c = PathBuf::from(env!("CARGO_BIN_EXE_kiln"));
+    let kiln_cxx = kilnpp();
+    // (C++ driver, options, start files, -lc, -lstdc++)
+    let cases: &[(bool, &[&str], bool, bool, bool)] = &[
+        (true, &[], true, true, true),
+        (true, &["-nodefaultlibs"], true, false, false),
+        (true, &["-nostartfiles"], false, true, true),
+        (true, &["-nostdlib"], false, false, false),
+        (true, &["-nodefaultlibs", "-nostdlib", "-shared"], false, false, false),
+        (true, &["-nostdlib++"], true, true, false),
+        (true, &["-nolibc"], true, false, true),
+        (false, &[], true, true, false),
+        (false, &["-nodefaultlibs"], true, false, false),
+        (false, &["-nostartfiles"], false, true, false),
+        (false, &["-nostdlib++"], true, true, false),
+    ];
+    for target in ["--target=x86_64-linux-gnu", "--target=aarch64-linux-gnu"] {
+        for &(cxx, opts, starts, libc, libcxx) in cases {
+            let ld = ld_line(if cxx { &kiln_cxx } else { &kiln_c }, target, opts);
+            let what = format!("{target} cxx={cxx} {opts:?}: {ld}");
+            assert_eq!(ld.contains("crti.o\""), starts, "{what}");
+            assert_eq!(ld.contains("\"-lc\""), libc, "{what}");
+            assert_eq!(ld.contains("\"-lstdc++\""), libcxx, "{what}");
+        }
+        let has = |opts: &[&str], needle: &str| {
+            let ld = ld_line(&kiln_cxx, target, opts);
+            assert!(ld.contains(needle), "{target} {opts:?} lacks {needle}: {ld}");
+        };
+        has(&["-static-pie"], "rcrt1.o\"");
+        has(&["-static-libgcc"], "\"-lgcc_eh\"");
+        has(&["-static-libstdc++"], "\"-Bstatic\" \"-lstdc++\" \"-Bdynamic\"");
+        has(&["-shared-libgcc"], "\"-lgcc_s\"");
+        has(&["-pthread"], "\"-lpthread\"");
+        has(&["-r"], "\"-r\" \"a.o\"");
+        has(&["-z", "now", "-u", "foo", "-T", "x.ld"], "\"-z\" \"now\"");
+        has(&["-ufoo"], "\"-u\" \"foo\"");
+        has(&["-Tx.ld"], "\"-T\" \"x.ld\"");
+        has(&["-Xlinker", "--gc-sections", "-Wl,-z,defs"], "\"--gc-sections\" \"-z\" \"defs\"");
+    }
+    // Options kiln's link command carries unchanged (the linker driver
+    // checks them): `-fuse-ld=` values and `--sysroot`.
+    for opt in ["-fuse-ld=lld", "-fuse-ld=bfd", "-fuse-ld=gold", "-fuse-ld=mold", "-fuse-ld=/x/ld"]
+    {
+        let o = kiln_in(&d, &["-###", "--target=x86_64-linux-gnu", opt, "a.o"]);
+        let err = text(&o.stderr);
+        assert!(err.ends_with(&format!("\"{opt}\" \"a.o\" \"-o\" \"a.out\"\n")), "{err}");
+    }
+    let o = kiln_in(&d, &["-###", "--sysroot=/x", "a.o"]);
+    assert!(text(&o.stderr).contains("\"--sysroot=/x\""), "{}", text(&o.stderr));
+}
+
+/// WP-1453: the reported command shapes on the host. A shared library
+/// linked with `-nodefaultlibs -nostdlib -shared` (found building ICU4C,
+/// whose stub data library is linked that way), and a C program linked
+/// with `-nostartfiles` that brings its own `_start`.
+#[test]
+fn link_mode_options_end_to_end() {
+    if !tools() {
+        return;
+    }
+    let d = setup("linkmode-run");
+    std::fs::write(d.join("stub.cpp"), "extern \"C\" int stub_data = 7;\n").unwrap();
+    let o = kiln_in(&d, &["-fPIC", "-c", "stub.cpp"]);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let o = kiln_in(&d, &["-nodefaultlibs", "-nostdlib", "-shared", "stub.o", "-o", "libstub.so"]);
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let so = std::fs::read(d.join("libstub.so")).unwrap();
+    assert_eq!(&so[..4], b"\x7fELF");
+    std::fs::write(
+        d.join("start.c"),
+        "void _exit(int) __attribute__((noreturn));\nvoid _start(void) { _exit(7); }\n",
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_kiln"))
+        .args(["-nostartfiles", "start.c", "-o", "start"])
+        .current_dir(&d)
+        .output()
+        .unwrap();
+    assert_eq!((o.status.code(), text(&o.stderr).as_str()), (Some(0), ""));
+    let r = Command::new(d.join("start")).output().unwrap();
+    assert_eq!(r.status.code(), Some(7));
+}
+
 /// `-Wa,` / `-Xassembler` and `-rpath` (spec/driver.md, WP-1288), as
 /// clang 19: assembler values are checked only when a source is
 /// assembled; `-rpath <dir>` is a linker input.
