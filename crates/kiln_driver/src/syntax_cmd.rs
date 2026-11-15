@@ -376,6 +376,7 @@ impl SyntaxJob<'_> {
             cfg_stats: a.cfg_stats,
             cfg_max_elems: a.cfg_max_elems.unwrap_or(kiln_sema::cfg::DEFAULT_MAX_ELEMS),
             permissive: a.permissive,
+            range_for_ext_temps: a.range_for_ext_temps,
             contract_semantic: a.contract_semantic.unwrap_or_default(),
             cf_protection_branch: a.codegen.cf_protection_branch(x86),
             record_carried: writes_kind2,

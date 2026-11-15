@@ -123,6 +123,10 @@ pub struct ParseOptions {
     pub cfg_max_elems: usize,
     /// `-fpermissive` ([`kiln_sema::Sema::permissive`]).
     pub permissive: bool,
+    /// GCC's `-f[no-]range-for-ext-temps`: whether the temporaries of a
+    /// for-range-initializer persist until the end of the loop (P2718R0,
+    /// [stmt.ranged]/1 and [class.temporary]/7); `None`: from C++23.
+    pub range_for_ext_temps: Option<bool>,
     /// `-fcontract-evaluation-semantic=` ([`kiln_ast::Ast::contract_semantic`];
     /// spec/contracts.md §6).
     pub contract_semantic: kiln_ast::stmt::ContractSemantic,
@@ -190,6 +194,7 @@ impl Default for ParseOptions {
             cfg_stats: false,
             cfg_max_elems: kiln_sema::cfg::DEFAULT_MAX_ELEMS,
             permissive: false,
+            range_for_ext_temps: None,
             contract_semantic: kiln_ast::stmt::ContractSemantic::Enforce,
             contracts: None,
             full_deduction: false,
@@ -384,7 +389,7 @@ fn configure(s: &mut Sema<'_, '_>, opts: &ParseOptions) {
     s.full_deduction = opts.full_deduction;
     s.full_redecl_scan = opts.full_redecl_scan;
     s.tu_prefix = opts.prefix;
-    s.range_lifetime_extension = opts.std >= Std::Cxx23;
+    s.range_lifetime_extension = opts.range_for_ext_temps.unwrap_or(opts.std >= Std::Cxx23);
     s.inst.limits = opts.inst_limits;
     s.inst.report.format = opts.inst_report;
 }

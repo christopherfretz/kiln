@@ -3141,7 +3141,18 @@ destructor is deleted ([class.dtor]/7, [class.union.anon]; clang
 full-expression temporaries are frame allocations released at the end of
 the full-expression; temporaries extended by a local (automatic) are
 allocated before the initializer runs and destroyed with the variable
-(`ext_temps`); temporaries extended by a variable of static storage
+(`ext_temps`; one in an arm of a conditional operator has a flag register
+set when its arm materializes it, and its destruction is registered only
+if set, so only the evaluated arm's temporary is destroyed, WP-1459). A
+block-scope tuple-like decomposition holds its initializer's
+full-expression open until its holding variables are initialized
+(CWG2867, `decl_held`): the extended temporaries of the initializer and of
+every holding variable are allocated first, the initializer's
+`ExprWithCleanups` is evaluated without a scope of its own (`open_ewc`)
+inside one scope that also covers the `get` calls, and the destructions of
+the decomposed object and of the extended temporaries are registered after
+that scope closes (`dcl.struct.bind/cwg2867-get-temporaries-constexpr.cpp`);
+a `constexpr` decomposition keeps the separate full-expressions. Temporaries extended by a variable of static storage
 duration whose initializer is being evaluated are allocated before the
 initializer with `Origin::Let(t)` (`t` the `LifetimeExtendedTemporary`),
 outlive the initializer's full-expression, and are frozen after the

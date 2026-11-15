@@ -290,7 +290,7 @@ impl Cg<'_> {
             return;
         }
         if let Some(size) = self.emit_lifetime_start(addr, ty) {
-            self.push_cleanup(Cleanup::LifetimeEnd { addr, size });
+            self.push_var_cleanup(d, Cleanup::LifetimeEnd { addr, size });
         }
     }
 }

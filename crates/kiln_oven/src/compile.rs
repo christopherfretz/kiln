@@ -1157,6 +1157,10 @@ pub(crate) struct Compiler<'a> {
     /// being initialized, allocated before its initializer's cleanups
     /// scope (keyed by the `MaterializeTemporaryExpr`).
     ext_temps: FxHashMap<ExprId, u32>,
+    /// The decomposition being initialized by [`Compiler::decl_held`].
+    held: Option<class::Held>,
+    /// Flags of the `ext_temps` in a conditional operator's arm.
+    ext_flags: FxHashMap<ExprId, u32>,
     /// Local class objects declared `const`: allocated modifiable, made
     /// const once initialized ([class.ctor.general]/5).
     late_const: FxHashSet<DeclId>,
@@ -1239,6 +1243,8 @@ impl<'a> Compiler<'a> {
             lambda_this: None,
             closure_reg: None,
             ext_temps: FxHashMap::default(),
+            held: None,
+            ext_flags: FxHashMap::default(),
             late_const: FxHashSet::default(),
             cur_fn: None,
             base_obj: false,
@@ -2299,6 +2305,27 @@ impl Compiler<'_> {
         self.scopes.push(Some(mark));
     }
 
+    /// Opens the scope of the full-expression `e` (an
+    /// `ExprWithCleanups`), unless it is the initializer of a held
+    /// decomposition ([`Self::decl_held`]), whose scope is already open.
+    /// Whether it opened one, for [`Self::close_ewc`].
+    fn open_ewc(&mut self, e: ExprId) -> bool {
+        if let Some(h) = self.held.as_mut()
+            && h.ewc == Some(e)
+        {
+            h.ewc = None;
+            return false;
+        }
+        self.open_scope(&[], true);
+        true
+    }
+
+    fn close_ewc(&mut self, open: bool) {
+        if open {
+            self.close_scope();
+        }
+    }
+
     fn close_scope(&mut self) {
         if let Some(Some(mark)) = self.scopes.pop() {
             self.emit(Op::ScopeExit, 0, &[mark]);
@@ -3226,9 +3253,60 @@ impl Compiler<'_> {
     /// A declaration in a `DeclStmt` (or a condition variable); a
     /// decomposition's holding variables follow it.
     fn decl(&mut self, d: DeclId) {
+        let hs = holding_vars(self.b.ast(), d);
+        if let Some(init) = self.held_decomp_init(d, &hs) {
+            return self.decl_held(d, init, &hs);
+        }
         self.decl_one(d);
-        for h in holding_vars(self.b.ast(), d) {
+        for h in hs {
             self.decl_one(h);
+        }
+    }
+
+    /// The initializer of block-scope automatic decomposition `d` with
+    /// holding variables `hs` whose temporaries must persist until they
+    /// are initialized ([`Self::decl_held`]).
+    fn held_decomp_init(&self, d: DeclId, hs: &[DeclId]) -> Option<ExprId> {
+        let ast = self.b.ast();
+        let v = ast.decls.var(d)?;
+        let init = v.init?;
+        let ok = !hs.is_empty()
+            && self.held.is_none()
+            && is_local_var(ast, d)
+            && !v.spec.is_constexpr()
+            && ast.exprs.get(init).kind() == ExprKind::ExprWithCleanups;
+        ok.then_some(init)
+    }
+
+    /// CWG2867 ([dcl.struct.bind]/4, [class.temporary]/5): the `get`
+    /// calls initializing the holding variables `hs` of decomposition `d`
+    /// belong to the full-expression of its initializer `init`, so its
+    /// temporaries are destroyed only after the last of them. The
+    /// storage of every temporary the variables extend is allocated
+    /// first, outside that full-expression's scope; their destructions,
+    /// and `d`'s, are registered after it, in construction order.
+    fn decl_held(&mut self, d: DeclId, init: ExprId, hs: &[DeclId]) {
+        let mut inits = vec![init];
+        inits.extend(hs.iter().filter_map(|&h| self.b.ast().decls.var(h).and_then(|v| v.init)));
+        let ext: Vec<_> = inits.iter().map(|&i| self.begin_extended(i)).collect();
+        self.held = Some(class::Held { d, ewc: Some(init), inits, local: None });
+        self.open_scope(&[], true);
+        self.decl_one(d);
+        if let Some(h) = self.held.as_mut() {
+            h.ewc = None;
+        }
+        for &h in hs {
+            self.decl_one(h);
+        }
+        self.close_scope();
+        let local = self.held.take().and_then(|h| h.local);
+        for (i, e) in ext.iter().enumerate() {
+            self.end_extended(e);
+            if i == 0
+                && let Some((p, ty)) = local
+            {
+                self.end_local_init(d, p, ty);
+            }
         }
     }
 
@@ -3781,9 +3859,9 @@ impl Compiler<'_> {
             ExprKind::CXXThisExpr => self.this_expr(e, dst),
             ExprKind::ExprWithCleanups => {
                 let op = self.ast().exprs.operand(e);
-                self.open_scope(&[], true);
+                let open = self.open_ewc(e);
                 self.rv_inner(op, dst);
-                self.close_scope();
+                self.close_ewc(open);
             }
             ExprKind::CXXBindTemporaryExpr => {
                 let op = self.ast().exprs.operand(e);
@@ -5480,9 +5558,9 @@ impl Compiler<'_> {
             }
             ExprKind::ExprWithCleanups => {
                 let op = self.ast().exprs.operand(e);
-                self.open_scope(&[], true);
+                let open = self.open_ewc(e);
                 let p = self.lv(op, acc);
-                self.close_scope();
+                self.close_ewc(open);
                 p
             }
             ExprKind::CXXDefaultInitExpr if self.default_init_of(e).is_some() => {
@@ -5856,9 +5934,9 @@ impl Compiler<'_> {
             }
             ExprKind::ExprWithCleanups => {
                 let op = self.ast().exprs.operand(e);
-                self.open_scope(&[], true);
+                let open = self.open_ewc(e);
                 self.init_inner(op, p, ty);
-                self.close_scope();
+                self.close_ewc(open);
                 return;
             }
             ExprKind::CXXBindTemporaryExpr => {
@@ -6473,9 +6551,9 @@ impl Compiler<'_> {
             }
             ExprKind::ExprWithCleanups => {
                 let op = self.ast().exprs.operand(e);
-                self.open_scope(&[], true);
+                let open = self.open_ewc(e);
                 self.effect(op);
-                self.close_scope();
+                self.close_ewc(open);
             }
             ExprKind::ConditionalOperator => {
                 let c = self.rv(ExprId::new(n.a()));

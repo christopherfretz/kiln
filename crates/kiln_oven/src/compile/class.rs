@@ -285,6 +285,9 @@ impl Compiler<'_> {
             // storage was allocated, and its destruction is registered,
             // outside the initializer's full-expression.
             self.init(x, r, ty);
+            if let Some(&f) = self.ext_flags.get(&e) {
+                self.konst(f, 1);
+            }
             return Place::Mem(r);
         }
         // A temporary a non-reference variable outside this evaluation
@@ -316,28 +319,38 @@ impl Compiler<'_> {
     /// The `MaterializeTemporaryExpr`s whose temporaries initializer
     /// `init` of a local variable extends ([class.temporary]/6), with
     /// their types.
-    fn extended_temps(&mut self, init: ExprId, sd: StorageDuration) -> Vec<(ExprId, ExprId)> {
+    fn extended_temps(&mut self, init: ExprId, sd: StorageDuration) -> Vec<(ExprId, ExprId, bool)> {
         let ast = self.ast();
         let mut out = Vec::new();
-        let mut work = vec![init];
-        while let Some(e) = work.pop() {
+        let mut work = vec![(init, false)];
+        let mut kids = Vec::new();
+        while let Some((e, arm)) = work.pop() {
             let n = ast.exprs.get(e);
+            kids.clear();
+            let mut arm = arm;
             match n.kind() {
                 ExprKind::MaterializeTemporaryExpr => {
                     if ast.exprs.temporary_storage(e) == sd {
-                        out.push((e, ast.exprs.operand(e)));
+                        out.push((e, ast.exprs.operand(e), arm));
                     }
-                    work.push(ast.exprs.operand(e));
+                    kids.push(ast.exprs.operand(e));
                 }
                 // A default argument rebuilt for this use holds
                 // temporaries of its own (spec/sema.md §7.6a).
                 ExprKind::CXXDefaultArgExpr | ExprKind::CXXDefaultInitExpr => {
-                    work.extend(ast.exprs.default_arg_rewritten(e));
+                    kids.extend(ast.exprs.default_arg_rewritten(e));
                 }
                 // Not part of this initializer's evaluation.
                 ExprKind::LambdaExpr | ExprKind::StmtExpr => {}
-                _ => ast.exprs.children_into(e, &ast.lists, &mut work),
+                // Only the evaluated arm's temporary is created
+                // ([class.temporary]/6, both arms of a glvalue `?:`).
+                ExprKind::ConditionalOperator | ExprKind::BinaryConditionalOperator => {
+                    arm = true;
+                    ast.exprs.children_into(e, &ast.lists, &mut kids);
+                }
+                _ => ast.exprs.children_into(e, &ast.lists, &mut kids),
             }
+            work.extend(kids.iter().map(|&k| (k, arm)));
         }
         out.reverse();
         out
@@ -345,18 +358,29 @@ impl Compiler<'_> {
 
     /// Allocates the storage of the temporaries initializer `init` of
     /// local `d` extends; returns them for [`Self::end_extended`].
-    pub(super) fn begin_extended(&mut self, init: ExprId) -> Vec<(u32, OTy, Loc)> {
-        if !self.has_temps {
+    ///
+    /// A temporary in an arm of a conditional operator also gets a flag
+    /// register, set when its arm materializes it: only then is its
+    /// destruction registered.
+    pub(super) fn begin_extended(&mut self, init: ExprId) -> Vec<ExtTemp> {
+        // A held decomposition's were allocated before its scope opened.
+        if !self.has_temps || self.held.as_ref().is_some_and(|h| h.inits.contains(&init)) {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (mte, x) in self.extended_temps(init, StorageDuration::Automatic) {
+        for (mte, x, arm) in self.extended_temps(init, StorageDuration::Automatic) {
             let ty = self.ety(x);
             let r = self.reg();
             self.alloc(r, ty, Origin::Temp(x), false, x);
             self.ext_temps.insert(mte, r);
+            let flag = arm.then(|| {
+                let f = self.reg();
+                self.konst(f, 0);
+                self.ext_flags.insert(mte, f);
+                f
+            });
             let loc = self.begin(x);
-            out.push((r, ty, loc));
+            out.push(ExtTemp { r, ty, loc, flag });
         }
         out
     }
@@ -380,7 +404,7 @@ impl Compiler<'_> {
         {
             temps.extend(self.extended_temps(init, StorageDuration::Automatic));
         }
-        for (mte, x) in temps {
+        for (mte, x, _) in temps {
             let ast = self.ast();
             let Some(t) = ast.exprs.lifetime_extended_temporary(mte) else { continue };
             let extends = ast
@@ -399,15 +423,26 @@ impl Compiler<'_> {
 
     /// Registers the destruction of the extended temporaries (after the
     /// variable's initialization; they are destroyed with it).
-    pub(super) fn end_extended(&mut self, temps: &[(u32, OTy, Loc)]) {
-        for &(r, ty, loc) in temps {
-            self.push_cleanup(r, ty, 0, loc);
+    pub(super) fn end_extended(&mut self, temps: &[ExtTemp]) {
+        for t in temps {
+            let skip = t.flag.map(|f| self.jmp_if(f, false));
+            self.push_cleanup(t.r, t.ty, 0, t.loc);
+            if let Some(j) = skip {
+                self.patch_here(j);
+            }
         }
     }
 
     /// After the initialization of local `d` at `p`: registers its
     /// destruction, and makes a `const` class object const.
     pub(super) fn end_local_init(&mut self, d: DeclId, p: u32, ty: OTy) {
+        if let Some(h) = self.held.as_mut()
+            && h.d == d
+        {
+            // Registered after the held full-expression (`decl_held`).
+            h.local = Some((p, ty));
+            return;
+        }
         let loc = self.b.ast().decls.get(d).loc();
         self.push_cleanup(p, ty, 0, loc);
         if self.late_const.contains(&d) {
@@ -1546,4 +1581,28 @@ impl Compiler<'_> {
 /// A constructor step that is not an element's ([`crate::CtorStep`]).
 fn step(pc: u32, cur: u32) -> crate::CtorStep {
     crate::CtorStep { pc, cur, off: 0, len: 0 }
+}
+
+/// An extended temporary of a local's initializer ([`Compiler::begin_extended`]):
+/// its storage register, type and location, and the flag register of one
+/// in a conditional operator's arm.
+pub(super) struct ExtTemp {
+    r: u32,
+    ty: OTy,
+    loc: Loc,
+    flag: Option<u32>,
+}
+
+/// A decomposition whose initializer's full-expression is held open until
+/// its holding variables are initialized ([`Compiler::decl_held`]).
+pub(super) struct Held {
+    /// The decomposition variable.
+    pub(super) d: DeclId,
+    /// Its initializer, an `ExprWithCleanups` whose scope is open, until
+    /// its evaluation starts.
+    pub(super) ewc: Option<ExprId>,
+    /// The initializers whose extended temporaries are preallocated.
+    pub(super) inits: Vec<ExprId>,
+    /// Where `d` was initialized, with its type, for its destruction.
+    pub(super) local: Option<(u32, OTy)>,
 }

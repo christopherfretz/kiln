@@ -89,6 +89,8 @@ tests that clang passes, then from GCC's own behaviour.
 WP-1458 fixed cluster 2 (its 42 tests: 11 → 36 of 106 cases pass; the C++98 runs wait for cluster 1, `init-temp1.C` is an overload-resolution bug).
 WP-1461 fixed clusters 5 to 8 below except `__PRETTY_FUNCTION__` text: 21 of their 22 cases pass now (`init/copy3.C` needs `-fno-elide-constructors`, which kiln does not have).
 
+WP-1459 fixed cluster 3, temporary lifetime (29 tests: 30 → 64 of 73 run cases pass; the rest are other bugs: `decomp6.C` and `paren-init7.C` pick an explicit copy constructor, `cast4.C` a cast's base offset, `ctor2.C` the vtable during base construction, `copy3.C` `-fno-elide-constructors`).
+
 1. **Exception specifications and `std::unexpected`, C++98 to C++14**
    (about 20 cases, 9 tests). `void f() throw(int) { throw 'c'; }` must call
    the unexpected handler, which may rethrow `std::bad_exception`.

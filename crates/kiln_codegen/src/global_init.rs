@@ -444,8 +444,46 @@ impl Cg<'_> {
     }
 
     /// clang `EmitCXXGlobalVarDeclInit`: initializes global `g` of
-    /// variable `d` (when `perform`) and registers its destructor.
+    /// variable `d` (when `perform`) and registers its destructor. A
+    /// tuple-like structured binding declaration's holding variables are
+    /// initialized here too, before the temporaries of its initializer
+    /// are destroyed (CWG2867, [dcl.struct.bind]/4; as
+    /// [`Cg::emit_var_decl`] does for a local), in the same function and
+    /// under the same guard; their own initialization is then skipped.
     fn global_var_decl_init(&mut self, d: DeclId, g: GlobalId, perform: bool) -> R<()> {
+        let Some(init) = self.held_decomp_init(d).filter(|_| perform) else {
+            return self.global_var_decl_init_one(d, g, perform);
+        };
+        let ast = self.ast;
+        let local = self.static_locals.contains_key(&ast.first(d));
+        let sc = self.begin_scope(false);
+        self.f.open_full_expr = Some(init);
+        let mut r = self.global_var_decl_init_one(d, g, perform);
+        self.f.open_full_expr = None;
+        let holding: Vec<DeclId> = ast
+            .decls
+            .decomp_bindings(d)
+            .map(|l| ast.lists.iter::<DeclId>(l).filter_map(|b| ast.decls.binding_var(b)).collect())
+            .unwrap_or_default();
+        for h in holding {
+            let first = ast.first(h);
+            if r.is_err() || self.gi.delayed.get(&first) == Some(&DONE) {
+                continue;
+            }
+            let gh = if local { self.static_local(h) } else { self.get_gvar(h) };
+            let hinit = ast.decls.var(h).and_then(|v| v.init);
+            r = gh.and_then(|gh| {
+                let needs = self.static_needs_init(h, hinit);
+                if needs { self.global_var_decl_init_one(h, gh, true) } else { Ok(()) }
+            });
+            self.gi.delayed.insert(first, DONE);
+        }
+        self.end_scope(sc);
+        r
+    }
+
+    /// [`Self::global_var_decl_init`] of one variable.
+    fn global_var_decl_init_one(&mut self, d: DeclId, g: GlobalId, perform: bool) -> R<()> {
         let ast = self.ast;
         let first = ast.first(d);
         let ty = ast.decls.get(d).ty().expect("var type");
@@ -566,6 +604,11 @@ impl Cg<'_> {
         if ast.lang_c && (perform || dtor) {
             let loc = Some(ast.decls.get(d).loc());
             return err(loc, "C static local initializer did not fold");
+        }
+        // A structured binding's holding variable initialized with its
+        // declaration (CWG2867, `global_var_decl_init`).
+        if self.gi.delayed.get(&ast.first(d)) == Some(&DONE) {
+            return Ok(());
         }
         if perform || dtor { self.guarded_init(d, g, perform) } else { Ok(()) }
     }

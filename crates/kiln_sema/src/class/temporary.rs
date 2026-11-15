@@ -71,10 +71,9 @@ impl Sema<'_, '_> {
     /// bind), so materializing it changes nothing. Only class types:
     /// a scalar temporary's lifetime is not observable.
     pub(crate) fn materialize_discarded(&mut self, e: ExprId) -> ExprId {
-        if self.extend_collector.is_none()
-            || self.unevaluated > 0
-            || self.std < kiln_lex::Std::Cxx17
-        {
+        // Before C++17 only `-frange-for-ext-temps` collects, and
+        // GCC 16.1 extends the discarded temporary there too.
+        if self.extend_collector.is_none() || self.unevaluated > 0 {
             return e;
         }
         let n = *self.ast.exprs.get(e);
@@ -701,59 +700,116 @@ impl Sema<'_, '_> {
         }
     }
 
+    /// One step of the list of [class.temporary]/6: the operands of the
+    /// glvalue `e` that, when they denote a temporary object (or one of
+    /// these forms again), make `e` denote that temporary or a subobject
+    /// of it, so that a reference bound to `e` extends it. Shared by
+    /// lifetime extension ([`Sema::temporaries_bound_by`]) and nothing
+    /// else decides it: codegen and the constant evaluator read the
+    /// extension sema records on the `MaterializeTemporaryExpr`.
+    ///
+    /// - parentheses (and the full-expression wrappers sema adds);
+    /// - subscripting of an array operand (either operand of `[]` may be
+    ///   the array, [expr.sub]/2);
+    /// - class member access with `.` naming a non-static data member of
+    ///   non-reference type (a reference member denotes what it was
+    ///   bound to);
+    /// - a pointer-to-member operation `.*` whose right operand points
+    ///   to a data member;
+    /// - a `const_cast`, `static_cast`, `dynamic_cast` or
+    ///   `reinterpret_cast` (or a cast notation performing one), and the
+    ///   implicit glvalue conversions, that convert without a
+    ///   user-defined conversion to a glvalue designating the operand's
+    ///   object, its complete object or a subobject (no-op/qualification,
+    ///   derived-to-base, base-to-derived, dynamic, and reference
+    ///   reinterpretation);
+    /// - both the second and third operands of a glvalue conditional
+    ///   expression (only the GNU `a ?: b`'s third: its second is the
+    ///   saved condition, which neither GCC nor clang extends);
+    /// - the right operand of a glvalue comma expression.
+    pub(crate) fn extension_operands(&self, e: ExprId) -> ExtensionOperands {
+        let ex = &self.ast.exprs;
+        let n = *ex.get(e);
+        match n.kind() {
+            ExprKind::ParenExpr | ExprKind::ExprWithCleanups | ExprKind::ConstantExpr => {
+                ExtensionOperands::One(ex.operand(e))
+            }
+            k if k.is_cast() => {
+                let s = ex.operand(e);
+                let glvalue =
+                    n.value_category().is_glvalue() && ex.get(s).value_category().is_glvalue();
+                match ex.cast_kind(e) {
+                    CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase => {
+                        ExtensionOperands::One(s)
+                    }
+                    CastKind::BaseToDerived | CastKind::Dynamic | CastKind::LValueBitCast
+                        if glvalue =>
+                    {
+                        ExtensionOperands::One(s)
+                    }
+                    _ => ExtensionOperands::None,
+                }
+            }
+            ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
+                let m = ex.decl(e);
+                let mty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
+                if self.kind_of(m) == DeclKind::Field && !self.ast.types.is_reference(mty) {
+                    ExtensionOperands::One(ex.operand(e))
+                } else {
+                    ExtensionOperands::None
+                }
+            }
+            ExprKind::ArraySubscriptExpr => {
+                for side in ex.operands(e) {
+                    let mut b = side;
+                    while ex.get(b).kind() == ExprKind::ParenExpr {
+                        b = ex.operand(b);
+                    }
+                    if ex.get(b).kind() == ExprKind::ImplicitCastExpr
+                        && ex.cast_kind(b) == CastKind::ArrayToPointerDecay
+                    {
+                        return ExtensionOperands::One(ex.operand(b));
+                    }
+                }
+                ExtensionOperands::None
+            }
+            ExprKind::BinaryOperator => match ex.binary_op(e) {
+                BinaryOp::Comma => ExtensionOperands::One(ex.operands(e)[1]),
+                // A `.*` with a pointer to member function is only ever
+                // called, never bound.
+                BinaryOp::PtrMemD if n.value_category().is_glvalue() => {
+                    ExtensionOperands::One(ex.operands(e)[0])
+                }
+                _ => ExtensionOperands::None,
+            },
+            ExprKind::ConditionalOperator if n.value_category().is_glvalue() => {
+                ExtensionOperands::Two(ex.cond_arms(e))
+            }
+            ExprKind::BinaryConditionalOperator if n.value_category().is_glvalue() => {
+                let [_, _, _, f] = ex.binary_conditional_operands(e, &self.ast.lists);
+                ExtensionOperands::One(f)
+            }
+            _ => ExtensionOperands::None,
+        }
+    }
+
     /// The temporaries a reference initialized by the glvalue `e` binds
-    /// ([class.temporary]/6: through parentheses, no-op and
-    /// derived-to-base casts, access to a non-reference member, array subscripts of
-    /// array temporaries, the right operand of a comma and both arms of a
-    /// conditional), followed by those bound by the reference members of
-    /// an aggregate temporary.
+    /// (through the forms of [`Sema::extension_operands`],
+    /// [class.temporary]/6), followed by those bound by the reference
+    /// members of an aggregate temporary.
     pub(crate) fn temporaries_bound_by(&mut self, e: ExprId, out: &mut Vec<ExprId>, depth: u32) {
         if depth > 256 {
             return;
         }
-        let n = *self.ast.exprs.get(e);
-        match n.kind() {
-            ExprKind::ParenExpr | ExprKind::ExprWithCleanups | ExprKind::ConstantExpr => {
-                self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
-            }
-            k if k.is_cast()
-                && matches!(
-                    self.ast.exprs.cast_kind(e),
-                    CastKind::NoOp | CastKind::DerivedToBase | CastKind::UncheckedDerivedToBase
-                ) =>
-            {
-                self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
-            }
-            ExprKind::MemberExpr if !n.has(ExprFlags::ARROW) => {
-                // [class.temporary]/6: a member access designating a
-                // non-static data member of non-reference type; a
-                // reference member denotes what it was bound to.
-                let m = self.ast.exprs.decl(e);
-                let mty = self.ast.decls.get(m).ty().unwrap_or(QualType::ERROR);
-                if self.kind_of(m) == DeclKind::Field && !self.ast.types.is_reference(mty) {
-                    self.temporaries_bound_by(self.ast.exprs.operand(e), out, depth + 1);
-                }
-            }
-            ExprKind::ArraySubscriptExpr => {
-                let [base, _] = self.ast.exprs.operands(e);
-                let mut b = base;
-                while self.ast.exprs.get(b).kind() == ExprKind::ParenExpr {
-                    b = self.ast.exprs.operand(b);
-                }
-                if self.ast.exprs.get(b).kind() == ExprKind::ImplicitCastExpr
-                    && self.ast.exprs.cast_kind(b) == CastKind::ArrayToPointerDecay
-                {
-                    self.temporaries_bound_by(self.ast.exprs.operand(b), out, depth + 1);
-                }
-            }
-            ExprKind::BinaryOperator if self.ast.exprs.binary_op(e) == BinaryOp::Comma => {
-                self.temporaries_bound_by(self.ast.exprs.operands(e)[1], out, depth + 1);
-            }
-            ExprKind::ConditionalOperator => {
-                let [t, f] = self.ast.exprs.cond_arms(e);
+        match self.extension_operands(e) {
+            ExtensionOperands::One(x) => return self.temporaries_bound_by(x, out, depth + 1),
+            ExtensionOperands::Two([t, f]) => {
                 self.temporaries_bound_by(t, out, depth + 1);
-                self.temporaries_bound_by(f, out, depth + 1);
+                return self.temporaries_bound_by(f, out, depth + 1);
             }
+            ExtensionOperands::None => {}
+        }
+        match self.ast.exprs.get(e).kind() {
             ExprKind::MaterializeTemporaryExpr => {
                 if self.ast.exprs.lifetime_extended_temporary(e).is_none() {
                     out.push(e);
@@ -850,4 +906,16 @@ impl Sema<'_, '_> {
             _ => {}
         }
     }
+}
+
+/// What [`Sema::extension_operands`] passes lifetime extension on to.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExtensionOperands {
+    /// Not one of the forms of [class.temporary]/6.
+    None,
+    /// The operand of parentheses, a member access, a subscript, a cast,
+    /// a `.*` or a comma.
+    One(ExprId),
+    /// The second and third operands of a glvalue conditional.
+    Two([ExprId; 2]),
 }

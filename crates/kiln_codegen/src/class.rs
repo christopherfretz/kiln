@@ -1740,7 +1740,14 @@ impl Cg<'_> {
             // survives a cleanup block shared with a branch out of the
             // full-expression (a `co_await` suspension's destroy path),
             // `ForceCleanup({&V})` (WP-726).
-            let sc = self.begin_scope(false);
+            if self.take_open_full_expr(e) {
+                return self.emit_ref_binding_in(self.sub(e));
+            }
+            let mut sc = self.begin_scope(false);
+            if self.f.hold_le_of == Some(e) {
+                self.f.hold_le_of = None;
+                sc.hold_le = true;
+            }
             let mut r = self.emit_ref_binding_in(self.sub(e));
             match &mut r {
                 Ok(v) => self.end_scope_reload(sc, &mut [v]),
@@ -1800,6 +1807,50 @@ impl Cg<'_> {
         }
         let le_flag = in_cond.then(|| self.create_cleanup_active_flag());
         self.f.cl.lifetime_extended.push((c, le_flag));
+    }
+
+    /// Whether `e` is the `ExprWithCleanups` whose full-expression a
+    /// structured binding declaration holds open (CWG2867,
+    /// `Fx::open_full_expr`): it is then emitted without its own scope.
+    pub(crate) fn take_open_full_expr(&mut self, e: ExprId) -> bool {
+        let open = self.f.open_full_expr == Some(e);
+        if open {
+            self.f.open_full_expr = None;
+        }
+        open
+    }
+
+    /// CWG2867: the lifetime-extended cleanups recorded since `old_le` by
+    /// a structured binding's holding variable, whose full-expression just
+    /// ended, stay pending until the declaration's full-expression ends; a
+    /// destructor among them is pushed again as a deferred-deactivation
+    /// cleanup, so that a later `get` that throws still destroys the
+    /// temporary.
+    pub(crate) fn redefer_extended(&mut self, old_le: usize) {
+        let pending: Vec<_> = self.f.cl.lifetime_extended.drain(old_le..).collect();
+        for (c, flag) in pending {
+            if flag.is_none() && matches!(c, Cleanup::Dtor { .. } | Cleanup::ArrayDtor { .. }) {
+                self.push_lifetime_extended_destroy(c);
+            } else {
+                self.f.cl.lifetime_extended.push((c, flag));
+            }
+        }
+    }
+
+    /// Pushes cleanup `c` of local variable `d`. While a tuple-like
+    /// structured binding declaration's full-expression is open (CWG2867,
+    /// `Fx::held_vars`), the cleanups of its variable and holding
+    /// variables are pushed after it ends, as a lifetime-extended
+    /// temporary's are: a destructor guarded by a deferred-deactivation
+    /// cleanup until then.
+    pub(crate) fn push_var_cleanup(&mut self, d: DeclId, c: Cleanup) {
+        if !self.f.held_vars.contains(&d) {
+            self.push_cleanup(c);
+        } else if matches!(c, Cleanup::LifetimeEnd { .. }) {
+            self.f.cl.lifetime_extended.push((c, None));
+        } else {
+            self.push_lifetime_extended_destroy(c);
+        }
     }
 
     // ---- constructor calls ---------------------------------------------
