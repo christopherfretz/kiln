@@ -31,7 +31,7 @@ struct W { virtual void f(); NT n; ~W(); };
 struct MV { MV(MV&&); };
 struct MA { MA& operator=(MA&&); };
 struct CA { CA& operator=(const CA&); };
-union U { NT n; };
+union U { NT n; U &operator=(const U &); };
 template<class T> struct TS { T t; };
 using A = NT;
 static_assert(std::is_trivially_copyable_v<NT>);

@@ -1521,12 +1521,16 @@ impl Sema<'_, '_> {
         self.ast.decls.set_ty(f, t);
         if self.should_delete(f, k, false) {
             self.ast.decls.mark_function(f, FnSpec::new().with_deleted(true));
-            if let Some(b) = k.defaulted_deleted_bit() {
-                if self.special.finishing.iter().any(|x| x.0 == d) {
+            // An assignment operator has no `DEFAULTED_*_DELETED` bit: it
+            // is recorded as deleted while the class is finishing too
+            // (clang `setImplicitCopyAssignmentIsDeleted`), so that a
+            // class with a member or base of this type sees it as not
+            // simple and declares its own at `}` (WP-1452).
+            match k.defaulted_deleted_bit() {
+                Some(b) if self.special.finishing.iter().any(|x| x.0 == d) => {
                     self.set_finishing_bits(d, |x| x.with(b));
-                } else {
-                    *self.special.deleted_implicit.entry(d).or_default() |= k.bit();
                 }
+                _ => *self.special.deleted_implicit.entry(d).or_default() |= k.bit(),
             }
         }
         f

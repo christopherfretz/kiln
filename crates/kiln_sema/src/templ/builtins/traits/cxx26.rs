@@ -78,30 +78,11 @@ impl Sema<'_, '_> {
         if !bits.contains(DefinitionBits::TRIVIAL_DTOR) || dtor.is_some_and(|(_, del)| del) {
             return false;
         }
-        let declared: Vec<DeclId> = self.ast.constructors(r).iter().collect();
-        // clang skips an ineligible constructor ([special]/6: its
-        // constraints are not satisfied, or another is at least as
-        // constrained).
-        for c in declared {
-            if self.is_deleted_fn(c)
-                || !self.fn_spec(c).is_trivial()
-                || self.fn_spec(c).not_selected()
-            {
-                continue;
-            }
-            let loc = self.ast.decls.get(c).loc();
-            if self.check_function_constraints(c, loc).is_none_or(|s| self.sat_ok(s)) {
-                return true;
-            }
-        }
-        (self.needs_implicit(r, K::DefaultCtor)
-            && bits.contains(DefinitionBits::TRIVIAL_DEFAULT_CTOR))
-            || (self.needs_implicit(r, K::CopyCtor)
-                && bits.contains(DefinitionBits::TRIVIAL_COPY_CTOR)
-                && !self.known_deleted(r, K::CopyCtor))
-            || (self.needs_implicit(r, K::MoveCtor)
-                && self.has_trivial(r, K::MoveCtor)
-                && !self.known_deleted(r, K::MoveCtor))
+        // [class.prop]/9: some eligible constructor ([special]/6, the one
+        // test every trait uses) is trivial.
+        [K::DefaultCtor, K::CopyCtor, K::MoveCtor]
+            .into_iter()
+            .any(|k| self.eligible_specials(r, k).any_trivial)
     }
 
     /// `__builtin_is_cpp_trivially_relocatable(T)` (clang 22

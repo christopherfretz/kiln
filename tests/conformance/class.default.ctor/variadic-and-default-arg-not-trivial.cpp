@@ -4,6 +4,11 @@
 // parameters) is never trivial, deleted or not. The same holds for a
 // variadic copy or move constructor ([class.copy.ctor]/11). A deleted
 // `T() = delete` stays trivial (clang `SpecialMemberIsTrivial`; WP-1090).
+// A deleted member is not eligible ([special]/6), so `E` is not a trivial
+// class and `K` (whose implicit copy assignment is its only eligible
+// copy/move member) is trivially copyable and trivial; clang counts the
+// deleted members, so those rows are in
+// class.prop/trivially-copyable-matrix-gcc.cpp (WP-1452).
 //@ std: c++26
 //@ expect: compile-ok
 //@ args: -Wno-deprecated-builtins
@@ -41,7 +46,7 @@ static_assert(!__has_trivial_constructor(C) && !__is_trivial(C));
 static_assert(!__has_trivial_constructor(D) && !__is_trivial(D));
 static_assert(!__is_literal_type(D));
 static_assert(!__has_trivial_constructor(J) && !__is_trivial(J));
-static_assert(__has_trivial_constructor(E) && __is_trivial(E) && __is_pod(E));
+static_assert(__has_trivial_constructor(E));
 static_assert(!__is_constructible(E) && __is_literal_type(E));
 static_assert(__has_trivial_constructor(F) && __is_trivial(F));
 static_assert(__is_trivially_constructible(F) && __is_nothrow_constructible(F));
@@ -49,12 +54,11 @@ static_assert(!__has_trivial_constructor(G) && !__is_trivial(G));
 static_assert(!__has_trivial_constructor(H) && !__is_trivial(H));
 
 // A deleted variadic copy or move constructor is not trivial either.
-static_assert(!__is_trivially_copyable(K) && !__has_trivial_copy(K));
-static_assert(!__is_trivial(K) && !__is_pod(K));
+static_assert(!__has_trivial_copy(K));
 static_assert(!__is_trivially_copyable(M) && !__is_trivial(M));
 
 // Constant evaluation: `__builtin_bit_cast` needs a trivially copyable
-// type ([bit.cast]/1), so it is not available for K.
-template <class T> constexpr bool bit_castable = requires { __builtin_bit_cast(T, 0); };
-static_assert(!bit_castable<K>);
-static_assert(bit_castable<int>);
+// type ([bit.cast]/1), so it is not available for M.
+template <class T> constexpr bool bit_castable = requires { __builtin_bit_cast(T, (char)0); };
+static_assert(!bit_castable<M>);
+static_assert(bit_castable<char>);

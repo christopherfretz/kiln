@@ -908,7 +908,7 @@ impl Sema<'_, '_> {
             T::IsAggregate => self.is_aggregate_trait(q),
             T::IsTriviallyCopyable => self.is_trivially_copyable_type(q),
             T::IsTrivial => self.is_trivial_type(q),
-            T::IsPod => self.is_pod_type(q),
+            T::IsPod => self.is_pod_trait(q),
             T::IsStandardLayout => self.is_standard_layout_type(q),
             T::IsLiteral | T::IsLiteralType => self.trait_literal(q),
             T::IsTriviallyRelocatable => self.is_trivially_relocatable(q),
@@ -1067,14 +1067,16 @@ impl Sema<'_, '_> {
         if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
+        // [class.prop]/1 by eligible members ([special]/6), not clang's
+        // `TRIVIALLY_COPYABLE` bit (spec/sema-class.md §4.7.3).
         match self.defined_record(e) {
-            Some(r) => self.bits_of(r).contains(DefinitionBits::TRIVIALLY_COPYABLE),
+            Some(r) => self.is_trivially_copyable_class(r),
             None => false,
         }
     }
 
-    /// [basic.types.general]/9 trivial types (clang `isTrivialType`).
-    fn is_trivial_type(&self, q: QualType) -> bool {
+    /// [basic.types.general]/9 trivial types.
+    fn is_trivial_type(&mut self, q: QualType) -> bool {
         let e = self.base_element(q);
         // `std::meta::info` is scalar: trivially copyable, trivial and
         // POD ([basic.types.general]/9; GCC 16.1 agrees). A constant
@@ -1088,16 +1090,24 @@ impl Sema<'_, '_> {
         if self.is_scalar_or_vector(e) || self.ast.types.is_sizeless(e) {
             return true;
         }
+        // [class.prop]/2: trivially copyable, one or more eligible
+        // default constructors, all trivial ([special]/6: a deleted one
+        // is not eligible; spec/sema-class.md §4.7.3).
         match self.defined_record(e) {
-            // [class.prop]/2: one or more eligible default constructors,
-            // all trivial (clang `isTrivialType`).
-            Some(r) => {
-                self.has_special(r, SpecialKind::DefaultCtor)
-                    && self.all_trivial(r, SpecialKind::DefaultCtor)
-                    && self.bits_of(r).contains(DefinitionBits::TRIVIALLY_COPYABLE)
-            }
+            Some(r) => self.is_trivial_class(r),
             None => false,
         }
+    }
+
+    /// `__is_pod` ([depr.meta.types]/4: `is_trivial_v<T> &&
+    /// is_standard_layout_v<T>`). The legacy `__has_trivial_*` and
+    /// `__has_nothrow_*` shortcuts and the `va_arg` warning keep clang's
+    /// [`Sema::is_pod_type`].
+    fn is_pod_trait(&mut self, q: QualType) -> bool {
+        if self.defined_record(self.base_element(q)).is_none() {
+            return self.is_pod_type(q);
+        }
+        self.is_trivial_type(q) && self.is_standard_layout_type(q)
     }
 
     /// C++11 POD types (clang `isCXX11PODType`): trivial and

@@ -4,8 +4,10 @@
 // the same kind and parameter-type-list, is not eligible and does not make
 // the class non-trivial; a trivial eligible member makes the class "have" a
 // trivial one even next to a non-trivial or deleted overload (clang
-// `HasTrivialSpecialMembers` / `hasNonTrivial*`, WP-1109). Deleted members
-// stay eligible (clang). Oracle-checked: clang++-19 and clang++-22 agree.
+// `HasTrivialSpecialMembers` / `hasNonTrivial*`, WP-1109). Oracle-checked:
+// clang++-19 and clang++-22 agree. clang counts a deleted member as
+// eligible, so `__is_trivial(N)`, `__is_pod(A)` and the traits of `DD` differ from the
+// text ([special]/6); they are in trivially-copyable-matrix-text.cpp.
 //@ args: -Wno-deprecated-builtins
 //@ strict-diags
 
@@ -13,7 +15,6 @@
 struct N { N(...) = delete; N() = default; };
 static_assert(__has_trivial_constructor(N));
 static_assert(__is_pod(N));
-static_assert(!__is_trivial(N));
 static_assert(!__is_trivially_constructible(N));
 static_assert(__is_trivially_copyable(N));
 
@@ -26,7 +27,6 @@ static_assert(!__is_pod(ND));
 // `= default` next to a user-provided overload with another parameter list.
 struct A { A(int = 0); A() = default; };
 static_assert(__has_trivial_constructor(A));
-static_assert(__is_pod(A));
 static_assert(!__is_trivial(A));
 static_assert(!__is_trivially_constructible(A));
 
@@ -52,11 +52,9 @@ struct D { D(D&&) = delete; D(const D&) = default; };
 static_assert(__is_trivially_copyable(D));
 static_assert(__has_trivial_move_constructor(D));
 
-// A deleted destructor is trivial.
+// A deleted destructor is trivial for the legacy trait.
 struct DD { ~DD() = delete; };
 static_assert(__has_trivial_destructor(DD));
-static_assert(__is_trivially_copyable(DD));
-static_assert(__is_trivial(DD));
 
 // Constrained default constructors in a class template instantiated both
 // ways: only the satisfied one is eligible.
