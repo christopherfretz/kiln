@@ -26,7 +26,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
 
 ## Evidence
 
-- `tests/codegen/debug_*.cpp`: 48 cases (WP-1389), byte-exact against clang 19 on
+- `tests/codegen/debug_*`: 72 cases (70 C++, 2 C; WP-1445), byte-exact against clang 19 on
   aarch64 and x86_64 (`crates/kiln_codegen/tests/ir_vs_clang.rs`).
 - `llvm-dwarfdump-19 --verify` is clean on all 60 `-g` objects from
   `tests/codegen` and `tests/debuginfo`.
@@ -50,6 +50,7 @@ it landed (2026-11-08, aarch64 Linux host, LLVM 19 back end).
   | `vtable_home.cpp` (WP-1372) | `print *this`, `ptype` and members through a virtual base in methods of dynamic classes with no key function in a namespace | pass | pass |
   | `class_decl_two_units.cpp` (WP-1389) | `ptype` and `print *w` of a class this unit declares (defined in a shared header, only used through a pointer) and another unit defines | pass | pass |
   | `template_names_anon_union.cpp` (WP-1400) | `whatis` of a class template specialization with a default argument in an inline namespace, `print` of a block-scope anonymous union member, `ptype` (gdb) / `image lookup` (lldb) of a function template instance by its debug name | pass | pass |
+  | `bindings_vla_init.cpp` (WP-1445) | `print` of a structured binding and of a VLA element, a breakpoint in a dynamic initializer (`__cxx_global_var_init`) | pass | pass |
   | `reflection.cpp` (WP-910) | a `define_aggregate` class, a `Holder<^^int>` specialization, a `constexpr std::meta::info` | pass | skip (no P2996) |
 
   Since WP-816 `tests/debuginfo` is a default root of `cargo xtask test`
@@ -438,6 +439,45 @@ variable named 'i' found in this frame`).
   unnamed class (with and without `-g`) and the six standard-library
   units found no difference.
 
+## Bindings, VLAs, labels and generated functions (WP-1445)
+
+Each item was compared with clang 19 and 22 (they agree unless noted)
+and is byte-exact against clang 19 in its `tests/codegen` case.
+
+- A block-scope structured binding is a `DILocalVariable` on the
+  decomposed object's storage, with clang's `DIExpression`
+  (`DW_OP_deref` for a reference decomposition, `DW_OP_plus_uconst` for
+  a member or array element, `DW_OP_LLVM_extract_bits_sext`/`_zext` for
+  a bit-field); a tuple-like binding is its holding variable; range-for,
+  `if`/`switch` initializers, static locals and lambda captures
+  included (`debug_structured_binding_locals.cpp`). At compat 22 a use
+  of a binding is at the use (clang 20's `DisableDebugLocationUpdates`);
+  a binding pack (clang 22 only) gets one variable per element.
+- A VLA gets its variable and `DISubrange(count: !__vla_exprN)`, in C
+  and C++, multi-dimensional included (`debug_vla.cpp`, `debug_vla.c`).
+- A label gets a `DILabel` and `#dbg_label`, dead code and `-O2`
+  included (`debug_labels.cpp`, `debug_labels.c`, `debug_labels_o2.cpp`).
+- `__cxx_global_var_init*`, `__cxx_global_array_dtor`, `__tls_init` and
+  `_GLOBAL__sub_I_*` get clang's artificial `DISubprogram`s and line-0
+  locations; a guarded initializer's landing pad is at the variable's
+  declaration start (`debug_global_init.cpp`). clang gives the thread
+  wrapper (`_ZTW*`) no subprogram, and neither does kiln.
+- An explicitly specialized member's declaration subprogram is at the
+  specialization (`debug_member_specialization.cpp`; see "Gaps" for the
+  order rule).
+- A class with a non-mutable const or volatile member (or array) of
+  class type is `DIFlagNonTrivial`, as in clang, whose `isTrivial()`
+  counts the implicit copy or move member that selects no member of the
+  subobject (`findTrivialSpecialMember`) as non-trivial. Only the flag
+  follows clang (`debuginfo/types.rs` `di_clang_cv_class_member`): the
+  type traits follow [class.prop]/1, where such a class is trivially
+  copyable (docs/status/deviations.md; `debug_nontrivial_const_member.cpp`).
+- The alias template typedef difference listed by WP-1414 (a written
+  trailing argument equal to its default) did not reproduce: clang 19
+  and 22 keep a written argument (`A<short, 2>`) and kiln matches in
+  every form tried, in and out of templates
+  (`debug_alias_template_defaults.cpp`).
+
 ## Gaps
 
 Every gap is a documented difference from clang 19 (D). Since WP-910
@@ -457,23 +497,29 @@ spec/landed/codegen/WP-814.md "Deviations" and WP-910.md.
   top-level walk) and none in clang, whose AST reader hands them to no
   consumer. (The deduced-return-type part of this item was closed by
   WP-1389, see "Class declarations and definitions".)
-- D: no `DISubprogram` for `__cxx_global_var_init`, `__tls_init` or
-  atexit stubs.
-- D: no `DILocalVariable` for structured bindings or variable-length
-  arrays. A VLA type has `count: -1` (`types.rs:408`).
-- D: no `DILabel`.
 - D: statement end locations exist only for compound and loop statements
   (`debuginfo/stmt.rs:82`).
-- D: an alias template specialization's typedef is named by its
-  written arguments; a written trailing argument equal to its default
-  is not suppressed (clang: `A<short>` for `A<short, 2>`)
-  (`debuginfo/types.rs` `di_alias_spec`). Found by WP-1414.
-- D: for a class with a `const` member of class type (a lambda closure
-  in the test that found it), `DIFlagNonTrivial` differs from clang's,
-  which comes from `CXXRecordDecl::isTrivial` and does not follow the
-  standard's triviality there; kiln follows the standard.
-  `tests/codegen/debug_template_value_spelling.cpp` avoids such a member
-  (`debuginfo/types.rs` `di_complete_class`). Found by WP-1414.
+- D: clang names a class template specialization's member functions
+  in its debug type where they are when the type is first built: an
+  explicitly specialized member at the specialization only if it was
+  parsed by then, an implicitly instantiated one at its out-of-class
+  definition once that is instantiated (end of the unit). kiln takes the
+  moment as the top-level declaration being emitted (the specialization
+  must come before the next one) or, after the walk, the end of the
+  unit; a member of an explicitly instantiated class (`template struct
+  X<int>;`) is at its definition. A class first built while emitting something clang emits at a
+  different time (a deferred function kiln emits in the walk, or the
+  reverse) can differ (`debuginfo/types.rs` `di_member_spec_loc`).
+  WP-1445.
+- D: an explicit cast in a constant initializer (`static auto x =
+  P{3, 4};`) does not put its type in `retainedTypes` (clang's
+  `ConstExprEmitter::VisitCastExpr` calls `EmitExplicitCastExprType`);
+  `debug_structured_binding_locals.cpp` avoids one. Found by WP-1445.
+- D (C only): the conversion of a C-style cast (`(int)d`) is at the
+  enclosing operator's location instead of the cast's `(`;
+  `debug_vla.c` avoids one. Found by WP-1445.
+- `__dtor_*` atexit stubs (clang's `-fno-use-cxa-atexit` path) do not
+  apply: kiln always registers destructors with `__cxa_atexit`.
 - D: `di_const_ref` approximates `DeclMustBeEmitted`
   (`debuginfo/func.rs:388`; since WP-1414 only for variables and
   enumerators, as clang's `tryEmitAsConstant`), and floating-point

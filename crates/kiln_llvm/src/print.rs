@@ -1433,10 +1433,19 @@ impl<'a> Printer<'a> {
 
     /// `    #dbg_declare(T v, !var, !DIExpression(...), !loc)` and a newline.
     fn debug_record(&self, w: Out<'_>, r: &crate::function::DbgRecord) -> fmt::Result {
-        w.write_str(match r.kind {
-            crate::function::DbgRecordKind::Declare => "    #dbg_declare(",
-            crate::function::DbgRecordKind::Value => "    #dbg_value(",
-        })?;
+        use crate::function::DbgRecordKind as K;
+        let head = match r.kind {
+            K::Declare => "    #dbg_declare(",
+            K::Value => "    #dbg_value(",
+            K::Label => {
+                w.write_str("    #dbg_label(")?;
+                self.md_operand(w, r.var)?;
+                w.write_str(", ")?;
+                self.md_operand(w, r.loc)?;
+                return w.write_str(")\n");
+            }
+        };
+        w.write_str(head)?;
         self.typed(w, r.addr)?;
         w.write_str(", ")?;
         self.md_operand(w, r.var)?;

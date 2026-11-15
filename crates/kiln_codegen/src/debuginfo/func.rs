@@ -183,6 +183,96 @@ impl Cg<'_> {
         self.f.fir.dbg = Some(Box::new(FirDbg::new(dbg, s)));
     }
 
+    /// clang `StartFunction` of a compiler-generated initialization or
+    /// cleanup function `f` ([basic.start.dynamic], [basic.start.term];
+    /// WP-1445): with `var`, a `GlobalDecl(var, DynamicInitKind)`, so the
+    /// artificial subprogram is named after `f` (`__cxx_global_var_init`,
+    /// `__cxx_global_array_dtor`) and has the type `void(params)`;
+    /// without, `GlobalDecl()` (`_GLOBAL__sub_I_*`, `__tls_init`): only a
+    /// linkage name and no types. `ptr_param`: one `void *` parameter.
+    /// No line: the location is invalid, so
+    /// the file is the main file. `CurEHLocation` is `var`'s begin. A
+    /// `nodebug` variable's function gets none. The caller then applies
+    /// the artificial location ([`Self::dbg_apply`] of an invalid one).
+    pub(crate) fn di_init_fn_start(&mut self, f: FuncId, var: Option<DeclId>, ptr_param: bool) {
+        let Some(di) = self.di.as_deref() else { return };
+        let (dbg, cu) = (di.dbg, di.cu);
+        if var.is_some_and(|v| self.has_fn_attr(v, AttrKind::NODEBUG)) {
+            return;
+        }
+        let file = self.di_file(Loc::INVALID);
+        let fname = self.m.func(f).name().to_owned();
+        let mut types = Vec::new();
+        if var.is_some() && self.di_reduced() {
+            types.push(None);
+            if ptr_param {
+                types.push(Some(self.di_void_ptr()));
+            }
+        }
+        let types = self.m.md_tuple(&types);
+        let ty = self.m.md_specialized(
+            "DISubroutineType",
+            false,
+            Fields::default().n("types", Some(types)).0,
+        );
+        let mut fl = vec!["DIFlagArtificial"];
+        if self.opts.opt_level > 0
+            && self.opts.debug.kind != DebugInfoKind::LocTrackingOnly
+            && self.opts.debug.dwarf_version.unwrap_or(5) >= 5
+        {
+            fl.push("DIFlagAllCallsDescribed");
+        }
+        let mut sp = Vec::new();
+        if self.m.func(f).linkage.is_local() {
+            sp.push("DISPFlagLocalToUnit");
+        }
+        if self.opts.opt_level > 0 {
+            sp.push("DISPFlagOptimized");
+        }
+        sp.push("DISPFlagDefinition");
+        let f_ = if var.is_some() {
+            Fields::default().s("name", &fname)
+        } else {
+            Fields::default().s("linkageName", &fname)
+        };
+        let f_ = f_
+            .n("scope", Some(file))
+            .n("file", Some(file))
+            .n("type", Some(ty))
+            .flags("flags", &fl)
+            .sp_flags(&sp)
+            .n("unit", Some(cu));
+        let s = self.m.md_specialized("DISubprogram", true, f_.0);
+        self.m.func_mut(f).add_metadata(dbg, s);
+        let mut fd = FirDbg::new(dbg, s);
+        if let Some(v) = var {
+            let ast = self.ast;
+            fd.eh_loc = ast.decls.cold.begin_loc.get(v).copied().unwrap_or(ast.decls.get(v).loc());
+        }
+        self.f.fir.dbg = Some(Box::new(fd));
+    }
+
+    /// The unnamed artificial `void *` parameter of a
+    /// `__cxx_global_array_dtor` (clang `generateDestroyHelper`'s
+    /// `ImplicitParamDecl`), argument 1 in `addr`.
+    pub(crate) fn di_declare_void_ptr_param(&mut self, addr: V) {
+        if !self.di_declaring() {
+            return;
+        }
+        let ty = Some(self.di_void_ptr());
+        let _ = self.di_declare(None, "", ty, VarSlot { addr, arg: Some(1), deref: false }, false);
+    }
+
+    /// `void *` (`DW_TAG_pointer_type` with a null base).
+    fn di_void_ptr(&mut self) -> MetadataId {
+        let bits = u64::from(self.ast.types.target().pointer_bytes) * 8;
+        let f = Fields::default()
+            .raw("tag", "DW_TAG_pointer_type")
+            .nn("baseType", None)
+            .u("size", bits);
+        self.m.md_specialized("DIDerivedType", false, f.0)
+    }
+
     /// The end of the prologue (clang `StartFunction`'s
     /// `EmitLocation(StartLoc)`); a thunk's body is artificial.
     pub(crate) fn di_prologue_end(&mut self, start: Loc, thunk: bool) {
@@ -208,18 +298,15 @@ impl Cg<'_> {
         ty: Option<MetadataId>,
         slot: VarSlot,
         this: bool,
-    ) {
+    ) -> Option<MetadataId> {
         let ast = self.ast;
         let unwritten = d.is_none_or(|d| {
             let n = ast.decls.get(d);
             n.has(DeclFlags::IMPLICIT)
                 || n.ctx().is_some_and(|c| ast.decls.get(c).has(DeclFlags::IMPLICIT))
         });
-        let Some(ty) = ty else { return };
-        let scope = match self.f.fir.dbg.as_deref() {
-            Some(x) => x.scope(),
-            None => return,
-        };
+        let ty = ty?;
+        let scope = self.f.fir.dbg.as_deref()?.scope();
         let (mut line, mut col, mut file) = (0, 0, None);
         if !unwritten && let Some(d) = d {
             let l = ast.decls.get(d).loc();
@@ -254,10 +341,7 @@ impl Cg<'_> {
                 vec![("", MdField::Raw("DW_OP_deref".into()))],
             )
         } else {
-            match self.di.as_deref() {
-                Some(x) => x.empty_expr,
-                None => return,
-            }
+            self.di.as_deref()?.empty_expr
         };
         let loc = self.di_location_at(line, col, scope);
         let opt = self.opts.opt_level > 0;
@@ -267,7 +351,40 @@ impl Cg<'_> {
                 x.vars.push(var);
             }
         }
-        self.f.fir.declare(DbgRec { addr: slot.addr, var, expr, loc });
+        self.f.fir.declare(DbgRec { label: false, addr: slot.addr, var, expr, loc });
+        Some(var)
+    }
+
+    /// clang `EmitAndRegisterVariableArrayDimensions`: each variable
+    /// dimension of a variable length array, outermost first, gets an
+    /// artificial `__vla_exprN` variable (a function-wide counter) on the
+    /// `i64` slot holding it, which that dimension's `DISubrange` counts
+    /// by; a dimension that folded to a constant counts by it
+    /// ([dcl.array]; WP-1445).
+    pub(crate) fn di_declare_vla_dims(&mut self, dims: &[(kiln_ast::ExprId, Result<V, i64>)]) {
+        if !self.di_declaring() {
+            return;
+        }
+        let size_t = QualType::unqual(self.ast.types.target().size_t);
+        for &(size, dim) in dims {
+            let count = match dim {
+                Ok(slot) => {
+                    let Some(x) = self.f.fir.dbg.as_deref_mut() else { return };
+                    let name = format!("__vla_expr{}", x.vla_exprs);
+                    x.vla_exprs += 1;
+                    let ty = self.di_type(size_t);
+                    let s = VarSlot { addr: slot, arg: None, deref: false };
+                    match self.di_declare(None, &name, ty, s, false) {
+                        Some(v) => MdField::Node(Some(v)),
+                        None => continue,
+                    }
+                }
+                Err(c) => MdField::Int(c),
+            };
+            if let Some(x) = self.di.as_deref_mut() {
+                x.vla_counts.insert(size, count);
+            }
+        }
     }
 
     /// The method qualifiers of member function `m`, also through a
@@ -288,7 +405,8 @@ impl Cg<'_> {
         let Some(rd) = self.f.this_class else { return };
         let quals = self.f.decl.map_or(0, |m| self.di_this_quals(m));
         let ty = self.di_this_ptr(rd, quals);
-        self.di_declare(None, "this", ty, VarSlot { addr, arg: Some(1), deref: false }, true);
+        let _ =
+            self.di_declare(None, "this", ty, VarSlot { addr, arg: Some(1), deref: false }, true);
     }
 
     /// The VTT parameter (`void **`) at `addr`.
@@ -306,7 +424,7 @@ impl Cg<'_> {
         };
         let vp = ptr(self, None);
         let ty = ptr(self, Some(vp));
-        self.di_declare(
+        let _ = self.di_declare(
             None,
             "vtt",
             Some(ty),
@@ -321,7 +439,8 @@ impl Cg<'_> {
             return;
         }
         let ty = self.di_type(QualType::unqual(self.ast.types.target().size_t));
-        self.di_declare(None, "", ty, VarSlot { addr, arg: Some(arg), deref: false }, false);
+        let _ =
+            self.di_declare(None, "", ty, VarSlot { addr, arg: Some(arg), deref: false }, false);
     }
 
     /// Parameter or local variable `d` in `slot`.
@@ -336,12 +455,126 @@ impl Cg<'_> {
         {
             x.cur_loc = self.ast.decls.get(d).loc();
         }
+        // clang `EmitDeclareOfAutoVariable`: a decomposition's storage is
+        // no user variable; its bindings are.
+        if slot.arg.is_none() && self.ast.decls.is_decomposition(d) {
+            let by_ref = self.referee(q).is_some();
+            self.di_declare_bindings(d, VarSlot { deref: slot.deref || by_ref, ..slot });
+            return;
+        }
         let name = self.di_ident(d);
         let ty = self.di_type(q);
         if ty.is_some() && slot.arg.is_none() {
             self.di_declare_anon_union_members(q, slot);
         }
-        self.di_declare(Some(d), &name, ty, slot, false);
+        let _ = self.di_declare(Some(d), &name, ty, slot, false);
+    }
+
+    /// clang `EmitDeclare(const BindingDecl *)` for each binding of
+    /// decomposition `d` stored in `slot` ([dcl.struct.bind]; WP-1445): a
+    /// `DILocalVariable` on the decomposition's storage, at the member's
+    /// byte offset (`DW_OP_plus_uconst`), a bit-field's bits extracted
+    /// (`DW_OP_LLVM_extract_bits_*` after its storage unit's offset), or
+    /// an array element's offset for a literal index. A tuple-like
+    /// binding names its holding variable, which is declared on its own.
+    fn di_declare_bindings(&mut self, d: DeclId, slot: VarSlot) {
+        let ast = self.ast;
+        let Some(list) = ast.decls.decomp_bindings(d) else { return };
+        let Some(scope) = self.f.fir.dbg.as_deref().map(FirDbg::scope) else { return };
+        let opt = self.opts.opt_level > 0;
+        for b in ast.lists.iter::<DeclId>(list).collect::<Vec<_>>() {
+            if self.has_fn_attr(b, AttrKind::NODEBUG) {
+                continue;
+            }
+            let Some(e) = ast.decls.binding_expr(b) else { continue };
+            let ek = ast.exprs.get(e).kind();
+            if ek == kiln_ast::expr::ExprKind::DeclRefExpr || ast.decls.binding_var(b).is_some() {
+                continue;
+            }
+            let loc = ast.decls.get(b).loc();
+            let file = self.di_file(loc);
+            let Some(bq) = ast.decls.get(b).ty() else { continue };
+            let Some(ty) = self.di_type(bq) else { continue };
+            let mut ops: Vec<String> = Vec::new();
+            if slot.deref {
+                ops.push("DW_OP_deref".into());
+            }
+            match ek {
+                kiln_ast::expr::ExprKind::MemberExpr => {
+                    let fd = ast.exprs.decl(e);
+                    if ast.decls.get(fd).kind() == DeclKind::Field {
+                        self.di_binding_field_ops(fd, bq, &mut ops);
+                    }
+                }
+                kiln_ast::expr::ExprKind::ArraySubscriptExpr => {
+                    let idx = ast.exprs.children(e, &ast.lists)[1];
+                    if ast.exprs.get(idx).kind() == kiln_ast::expr::ExprKind::IntegerLiteral
+                        && let Some(v) = ast.exprs.int_value(idx)
+                        && v != 0
+                    {
+                        let size = self.size_align(bq).0;
+                        ops.push(format!("DW_OP_plus_uconst, {}", v * size));
+                    }
+                }
+                _ => {}
+            }
+            let (line, col) = self.di_line_col(loc);
+            let name = self.di_ident(b);
+            let mut f = Fields::default();
+            if !name.is_empty() {
+                f = f.s("name", &name);
+            }
+            f = f
+                .n("scope", Some(scope))
+                .n("file", Some(file))
+                .u("line", u64::from(line))
+                .n("type", Some(ty));
+            let var = self.m.md_specialized("DILocalVariable", false, f.0);
+            let expr = if ops.is_empty() {
+                match self.di.as_deref() {
+                    Some(x) => x.empty_expr,
+                    None => return,
+                }
+            } else {
+                let raw = ops.join(", ");
+                self.m.md_specialized("DIExpression", false, vec![("", MdField::Raw(raw.into()))])
+            };
+            let l = self.di_location_at(line, col, scope);
+            if let Some(x) = self.f.fir.dbg.as_deref_mut() {
+                x.tracked = true;
+                if opt {
+                    x.vars.push(var);
+                }
+            }
+            self.f.fir.declare(DbgRec { label: false, addr: slot.addr, var, expr, loc: l });
+        }
+    }
+
+    /// The `DIExpression` operations of a binding to field `fd` (clang
+    /// `EmitDeclare(const BindingDecl *)`): the field's byte offset in its
+    /// own class, or for a bit-field its storage unit's offset and the
+    /// bits to extract, at most the binding type's size `bq`.
+    fn di_binding_field_ops(&mut self, fd: DeclId, bq: QualType, ops: &mut Vec<String>) {
+        let ast = self.ast;
+        let Some(def) = ast.decls.get(fd).ctx().and_then(|rd| self.class_def(rd)) else { return };
+        if let Some(bf) = self.tys.record(def).bitfields.get(&fd).copied() {
+            if bf.storage_offset != 0 {
+                ops.push(format!("DW_OP_plus_uconst, {}", bf.storage_offset));
+            }
+            let op = if bf.is_signed {
+                "DW_OP_LLVM_extract_bits_sext"
+            } else {
+                "DW_OP_LLVM_extract_bits_zext"
+            };
+            let size = u64::from(bf.size).min(self.size_align(bq).0 * 8);
+            ops.push(format!("{op}, {}, {size}", bf.offset));
+            return;
+        }
+        if let Ok(off) = self.field_byte_offset(fd)
+            && off != 0
+        {
+            ops.push(format!("DW_OP_plus_uconst, {off}"));
+        }
     }
 
     /// clang `EmitDeclare` for a block-scope anonymous union's unnamed
@@ -394,8 +627,44 @@ impl Cg<'_> {
             } else {
                 empty
             };
-            self.f.fir.declare(DbgRec { addr: slot.addr, var, expr, loc });
+            self.f.fir.declare(DbgRec { label: false, addr: slot.addr, var, expr, loc });
         }
+    }
+
+    /// clang `EmitLabel`'s `CGDebugInfo::EmitLabel` for label `d`, whose
+    /// block was just started: a `DILabel` and a `#dbg_label` at the
+    /// block's end ([stmt.label]; WP-1445). When optimizing the label is
+    /// kept in the subprogram's `retainedNodes` (`AlwaysPreserve`). `loc`
+    /// is the defining statement's (clang moves a `LabelDecl` a `goto`
+    /// created first to its definition).
+    pub(crate) fn di_label(&mut self, d: DeclId, loc: Loc) {
+        if !self.di_declaring() || self.has_fn_attr(d, AttrKind::NODEBUG) {
+            return;
+        }
+        let Some(scope) = self.f.fir.dbg.as_deref_mut().map(|x| {
+            x.cur_loc = loc;
+            x.scope()
+        }) else {
+            return;
+        };
+        let file = self.di_file(loc);
+        let (line, col) = self.di_line_col(loc);
+        let name = self.di_ident(d);
+        let f = Fields::default()
+            .n("scope", Some(scope))
+            .s("name", &name)
+            .n("file", Some(file))
+            .u("line", u64::from(line));
+        let label = self.m.md_specialized("DILabel", false, f.0);
+        let l = self.di_location_at(line, col, scope);
+        if self.opts.opt_level > 0
+            && let Some(x) = self.f.fir.dbg.as_deref_mut()
+        {
+            x.tracked = true;
+            x.labels.push(label);
+        }
+        let addr = V::C(self.m.const_bool(false));
+        self.f.fir.declare(DbgRec { label: true, addr, var: label, expr: label, loc: l });
     }
 
     /// The subprogram's `retainedNodes` once it has a variable (clang
@@ -406,8 +675,8 @@ impl Cg<'_> {
         if !x.tracked {
             return;
         }
-        let (sp, vars) = (x.sp, std::mem::take(&mut x.vars));
-        let ops: Vec<Option<MetadataId>> = vars.into_iter().map(Some).collect();
+        let (sp, vars, labels) = (x.sp, std::mem::take(&mut x.vars), std::mem::take(&mut x.labels));
+        let ops: Vec<Option<MetadataId>> = vars.into_iter().chain(labels).map(Some).collect();
         let t = self.m.md_tuple(&ops);
         let _ = self.m.md_set_field(sp, "retainedNodes", MdField::Node(Some(t)));
     }

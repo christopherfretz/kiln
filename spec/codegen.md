@@ -1638,6 +1638,43 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   parameter object describes nothing; only a variable or an enumerator
   read as its constant gets a type, a global variable expression or (for
   a static data member) its class in `retainedTypes` (WP-1414);
+- a block-scope structured binding is a `DILocalVariable` at its
+  binding's line, declared on the decomposed object's storage (which
+  itself gets no variable): `DW_OP_deref` first when the decomposition
+  is a reference, `DW_OP_plus_uconst` with a member's byte offset in its
+  own class or an array element's `index * size`, and for a bit-field
+  `DW_OP_LLVM_extract_bits_sext`/`_zext` of its bit offset and
+  width after the storage unit's offset; a tuple-like binding is its
+  hidden holding variable. At compat 20 and later a use of a binding
+  emits the binding expression with location updates off (clang
+  `DisableDebugLocationUpdates`), so its code is at the use (WP-1445,
+  `debug_structured_binding_locals.cpp`);
+- a variable-length array is a `DILocalVariable` whose
+  `DISubrange(count:)` for each non-constant bound is an artificial
+  `__vla_exprN` variable of type `size_t` (numbered per function,
+  declared after the bounds' stores, clang
+  `EmitAndRegisterVariableArrayDimensions`); a constant bound stays a
+  count (WP-1445, `debug_vla.cpp`, `debug_vla.c`);
+- a label is a `DILabel` (scope, name, file, line) with a `#dbg_label`
+  record at the start of its block, dead code included; when optimizing
+  it is kept in the subprogram's `retainedNodes` after the variables
+  (WP-1445, `debug_labels.cpp`, `debug_labels.c`, `debug_labels_o2.cpp`);
+- the generated initialization functions have artificial, local
+  `DISubprogram`s without a line, scoped to the main file:
+  `__cxx_global_var_init[.N]` (named after itself, `!{null}` type; its
+  body at line 0, each expression at its own location, `ret` at the last
+  one, its landing pad at the variable's declaration start),
+  `__cxx_global_array_dtor` (an unnamed artificial `void *` parameter,
+  everything at line 0; the enclosing function's current location is
+  reset), and `_GLOBAL__sub_I_*`, `__tls_init` and the priority
+  initializers (linkage name only, empty type, calls at line 0, `ret`
+  without a location). The thread wrapper has none, as in clang
+  (WP-1445, `debug_global_init.cpp`);
+- the declaration `DISubprogram` of an explicitly specialized member
+  function (or explicit member function template specialization) is at
+  the specialization's first declaration (clang
+  `CheckMemberSpecialization`'s `setLocation`; WP-1445,
+  `debug_member_specialization.cpp`);
 - statement and expression locations with clang's `EmitStopPoint`,
   `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
   steps, breaks and finishes where it does in a clang build.

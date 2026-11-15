@@ -237,8 +237,19 @@ impl Cg<'_> {
         self.m.attr_set(&a)
     }
 
-    /// `StartFunction` for an initialization function `f`.
-    fn start_init_fn(&mut self, f: FuncId) {
+    /// `StartFunction` for an initialization function `f` of variable
+    /// `var` (`None`: the unit's `_GLOBAL__sub_I_*`, `__tls_init`), with
+    /// its artificial subprogram (WP-1445). The body is then emitted at
+    /// the artificial location (`ApplyDebugLocation::CreateArtificial`),
+    /// which [`Self::finish_init_fn`] ends for a unit function.
+    fn start_init_fn(&mut self, f: FuncId, var: Option<DeclId>) {
+        self.start_init_fn_with(f, var, false);
+        let _ = self.dbg_apply(kiln_source::Loc::INVALID);
+    }
+
+    /// [`Self::start_init_fn`] without the artificial location; `ptr`:
+    /// `f` takes a `void *` (`__cxx_global_array_dtor`).
+    fn start_init_fn_with(&mut self, f: FuncId, var: Option<DeclId>, ptr: bool) {
         self.f = Fx::empty();
         self.f.fir = Fir::new(Vec::new());
         self.start_fp();
@@ -246,6 +257,7 @@ impl Cg<'_> {
         self.f.san = self.opts.sanitize.kinds;
         self.ignore_sanitizers(f, None);
         self.f.mustprogress = false;
+        self.di_init_fn_start(f, var, ptr);
         let ret_block = self.f.fir.create_block();
         self.f.ret_block = Some(ret_block);
         self.f.ret_dest = Some(JumpDest { blk: ret_block, depth: Some(0), index: 1 });
@@ -256,6 +268,13 @@ impl Cg<'_> {
     /// `FinishFunction` for an initialization function `f`, then its
     /// attributes and lowering (`d` locates errors).
     fn finish_init_fn(&mut self, f: FuncId, d: DeclId) -> R<()> {
+        // A unit function's artificial location ends before
+        // `FinishFunction` (its `ret` has none); a variable's lasts, and
+        // the epilogue takes `CurLoc` (the initializer's last location).
+        if d == self.ast.tu && self.dbg_on() {
+            self.f.fir.set_dbg_loc(None);
+        }
+        self.di_finish_function(kiln_source::Loc::INVALID);
         let prologue = self.f.cl.prologue;
         self.pop_cleanup_blocks(prologue);
         self.emit_return_block();
@@ -272,6 +291,7 @@ impl Cg<'_> {
             self.f.fir.erase_block(rb);
             self.f.ret_block = None;
         }
+        self.di_fn_finish();
         // `StartFunction`'s declaration: the variable (`d`), or none for
         // `_GLOBAL__sub_I_*` and `__tls_init` (`d` is the TU).
         let start = if d == self.ast.tu {
@@ -309,7 +329,7 @@ impl Cg<'_> {
         let f = self.init_function("__cxx_global_var_init")?;
         // GenerateCXXGlobalVarDeclInitFunc.
         let saved = std::mem::replace(&mut self.f, Fx::empty());
-        self.start_init_fn(f);
+        self.start_init_fn(f, Some(d));
         self.ignore_sanitizers(f, Some(ast.decls.get(d).loc()));
         let lin = self.m.global(g).linkage;
         let r = if matches!(
@@ -464,15 +484,23 @@ impl Cg<'_> {
         let nu = self.m.attr_set(&[Attr::Flag(AttrKind::NoUndef)]);
         self.m.func_mut(f).attrs.params = vec![nu];
         let saved = std::mem::replace(&mut self.f, Fx::empty());
-        self.start_init_fn(f);
+        self.start_init_fn_with(f, Some(d), true);
         self.ignore_sanitizers(f, Some(self.ast.decls.get(d).loc()));
         // The (unused) object parameter is spilled, as every parameter
         // at -O0.
         let p = self.f.fir.alloca(LTy::PTR, 8);
         self.store(V::Arg(0), p, 8, false);
+        self.di_declare_void_ptr_param(p);
+        let _ = self.dbg_apply(kiln_source::Loc::INVALID);
         self.array_destroy_at(a, record, true);
         let r = self.finish_init_fn(f, d);
         self.f = saved;
+        // clang's one `CGDebugInfo` started the helper at no location: the
+        // enclosing function's current location is gone too (its `ret`
+        // is at line 0).
+        if let Some(x) = self.f.fir.dbg.as_deref_mut() {
+            x.cur_loc = kiln_source::Loc::INVALID;
+        }
         r?;
         Ok(V::C(Value::func(f)))
     }
@@ -895,7 +923,7 @@ impl Cg<'_> {
                 }
                 let f = self.init_function(&format!("_GLOBAL__I_{p:06}"))?;
                 let saved = std::mem::replace(&mut self.f, Fx::empty());
-                self.start_init_fn(f);
+                self.start_init_fn(f, None);
                 self.emit_init_calls(&chunk);
                 let r = self.finish_init_fn(f, self.ast.tu);
                 self.f = saved;
@@ -907,7 +935,7 @@ impl Cg<'_> {
         if let Some(name) = own_module_init {
             let f = self.module_init_function(&name)?;
             let saved = std::mem::replace(&mut self.f, Fx::empty());
-            self.start_init_fn(f);
+            self.start_init_fn(f, None);
             let r = self.emit_module_init_body(&name, &fns);
             let r = r.and_then(|()| self.finish_init_fn(f, self.ast.tu));
             self.f = saved;
@@ -918,7 +946,7 @@ impl Cg<'_> {
                 format!("_GLOBAL__sub_I_{}", transformed_file_name(&self.opts.source_filename));
             let f = self.init_function(&name)?;
             let saved = std::mem::replace(&mut self.f, Fx::empty());
-            self.start_init_fn(f);
+            self.start_init_fn(f, None);
             self.emit_init_calls(&fns);
             let r = self.finish_init_fn(f, self.ast.tu);
             self.f = saved;
@@ -1058,7 +1086,7 @@ impl Cg<'_> {
         fns: &[FuncId],
     ) -> R<()> {
         let saved = std::mem::replace(&mut self.f, Fx::empty());
-        self.start_init_fn(f);
+        self.start_init_fn(f, None);
         let r = self.emit_guarded_calls(guard, fns);
         let r = r.and_then(|()| self.finish_init_fn(f, self.ast.tu));
         self.f = saved;

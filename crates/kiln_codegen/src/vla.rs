@@ -135,17 +135,30 @@ impl Cg<'_> {
         // dimension is stored to an `i64` slot (the debug-info
         // `__vla_exprN`), emitted with or without debug info.
         let mut t = q;
+        let mut dims: Vec<(ExprId, Result<V, i64>)> = Vec::new();
         while let TypeView::VariableArray { elem, size } = self.ast.types.canonical_view(t) {
             let n = self.f.vla_sizes[&size];
-            if self.cint(n).is_none() {
+            if let Some((_, c, _)) = self.cint(n) {
+                dims.push((size, Err(i64::try_from(c).unwrap_or(-1))));
+            } else {
                 let al = self.pref_align(LTy::I64);
                 let s = self.f.fir.alloca(LTy::I64, al);
                 self.store(n, s, al, false);
+                dims.push((size, Ok(s)));
             }
             t = elem;
         }
         let addr = Addr { v, ty, align };
         self.f.locals.insert(d, addr);
+        if self.dbg_on() {
+            // Each dimension's `__vla_exprN`, then the array, whose
+            // subranges count by them (WP-1445).
+            self.di_declare_vla_dims(&dims);
+            self.di_declare_var(
+                d,
+                crate::debuginfo::func::VarSlot { addr: v, arg: None, deref: false },
+            );
+        }
         // [basic.indet]/1: the erroneous value (spec/codegen.md §7y).
         self.auto_var_init_vla(d, q, addr)
     }

@@ -620,6 +620,12 @@ impl<'a> Cg<'a> {
                 self.cov_defer_insts(k);
             }
             self.emit_ref_vars(d, false)?;
+            if ctx == ast.tu
+                && let Some(di) = self.di.as_deref_mut()
+            {
+                di.top_cut =
+                    Some(members.get(i + 1).map_or(Loc::INVALID, |&n| ast.decls.get(n).loc()));
+            }
             if !ast.templates.is_late_explicit_inst(ast.first(d)) {
                 let at = self.prev_position(ctx, &members[..i]);
                 let saved = self.explicit_anchor.replace(at);
@@ -635,6 +641,11 @@ impl<'a> Cg<'a> {
             }
             self.emit_explicit_member_insts(d)?;
             self.emit_ref_vars(d, true)?;
+        }
+        if ctx == ast.tu
+            && let Some(di) = self.di.as_deref_mut()
+        {
+            di.top_cut = None;
         }
         Ok(())
     }

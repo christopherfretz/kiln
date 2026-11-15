@@ -2319,8 +2319,13 @@ impl Cg<'_> {
                 let Some(b) = ast.decls.binding_expr(d) else {
                     return err(Some(ast.decls.get(d).loc()), "unbound binding");
                 };
-                let lv = self.emit_lvalue(b)?;
-                Ok(LV { q, ..lv })
+                // clang 20+ emits the binding expression with debug
+                // location updates off: its code is at the use, not the
+                // binding (`DisableDebugLocationUpdates`; WP-1445).
+                let was = self.dbg_disable(self.opts.clang_compat >= 20);
+                let lv = self.emit_lvalue(b);
+                self.dbg_enable(was);
+                Ok(LV { q, ..lv? })
             }
             DeclKind::Var | DeclKind::ParmVar => {
                 if let Some(lv) = self.constant_ref_lvalue(e, d, q)? {
@@ -3619,7 +3624,7 @@ impl Cg<'_> {
             let n = *ast.stmts.get(s);
             match n.kind() {
                 StmtKind::LabelStmt => {
-                    self.emit_label(DeclId::new(n.a()));
+                    self.emit_label(DeclId::new(n.a()), n.loc());
                     s = StmtId::new(n.b());
                 }
                 StmtKind::AttributedStmt => s = StmtId::new(n.b()),
