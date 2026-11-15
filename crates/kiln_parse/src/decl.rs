@@ -612,7 +612,7 @@ impl Parser<'_, '_> {
                 self.skip_to_semi();
                 return Vec::new();
             };
-            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl);
+            let d = self.s.act_on_alias_decl(name, nl, ty, &attrs, own, tl, loc);
             self.s.note_alias_decl_loc(d, loc);
             // clang reports a `typename T...[i]` type-id as unterminated
             // (spec/parse.md, typename-specifiers).

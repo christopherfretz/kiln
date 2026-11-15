@@ -43,6 +43,29 @@ GCC 16.1 (torture only). Re-run everything with the commands in each section;
   2. an ICE on the GNU `a ?: b` with a logical condition, not covered by
      wp/1276.
 
+## Deliberate differences from clang
+
+- Pointers to differently qualified arrays before C23 (WP-1435). kiln
+  treats `T (*)[N]` and `const T (*)[N]` as C23 6.7.3p9 (N2607) does in
+  every C mode, as clang does: initialization, assignment, argument
+  passing, `return`, comparison and `?:` accept them. Before C23,
+  C17 6.7.3p10 qualifies the element and not the array, so the pointed-to
+  types are incompatible and those uses are constraint violations that
+  need a diagnostic. clang 19 and 22 give none; GCC warns under
+  `-Wpedantic`. kiln gives GCC's words, "invalid use of pointers to arrays
+  with different qualifiers in ISO C before C23", as an extension in the
+  kiln-only group `-Wc23-array-pointer-qualifiers`: off by default, a
+  warning under `-pedantic`, an error under `-pedantic-errors`, never at
+  c23/gnu23. It is reported at the converted operand (GCC: at the `=` of
+  an assignment), at a comparison's operator and at the `?` of `?:` (GCC:
+  the `:`). When the conversion also drops a qualifier, the
+  discards-qualifiers warning comes too, as in GCC. Tests:
+  `tests/c/conv/array-pointer-qualifiers-pedantic-gnu17.c` and
+  `-pedantic-errors-gnu17.c` (xfail(clang), since clang is silent); the
+  gnu23 twins `array-pointer-add-qualifier-gnu23.c` and
+  `conditional-array-pointer-qualifiers-gnu23.c` run with
+  `-pedantic-errors` and stay clean; spec/diag.md D17.
+
 ## WP-1286 re-measure (wp/1286, 2026-11-11)
 
 - gcc.c-torture, gnu23, `-O0,-O2`, kiln on main `92fc1f18e` against

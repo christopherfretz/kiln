@@ -15,6 +15,7 @@ use kiln_ast::expr::{CastKind, ExprKind, UnaryOp, ValueCategory};
 use kiln_ast::types::{BuiltinType, TypeView};
 use kiln_ast::{ExprId, QualType};
 use kiln_diag::DiagId;
+use kiln_source::Loc;
 
 use super::{ConvCtx, ConvError, array_decayed, cast_to, decay, ty};
 use crate::Sema;
@@ -231,6 +232,27 @@ pub(crate) fn compatible_pointees(s: &mut Sema<'_, '_>, a: QualType, b: QualType
     compatible(s, a, b)
 }
 
+/// Before C23, pointees `a` and `b` that are arrays whose (innermost)
+/// elements are differently qualified (`int [3]` and `const int [3]`):
+/// C17 6.7.3p10 qualifies the element, not the array, so the types are not
+/// compatible and the conversion, comparison or `?:` that kiln accepts as
+/// C23 6.7.3p9 (N2607) does is a constraint violation. clang is silent;
+/// GCC's `-Wpedantic` warning is kiln's off-by-default extension at `loc`
+/// (spec/diag.md D17).
+pub(crate) fn pre_c23_array_qualifiers(s: &mut Sema<'_, '_>, a: QualType, b: QualType, loc: Loc) {
+    if !s.is_c() || s.c_at_least(kiln_lex::CStd::C23) {
+        return;
+    }
+    let types = &s.ast.types;
+    let (a, b) = (types.canonical(a), types.canonical(b));
+    if types.is_array(a)
+        && types.is_array(b)
+        && types.effective_quals(a) != types.effective_quals(b)
+    {
+        s.error(DiagId::ext_c_array_pointer_qualifiers, loc);
+    }
+}
+
 /// clang's `checkPointerTypesForAssignment` of `rhs` to `lhs`, both
 /// (canonical) pointer types.
 fn check_pointers(s: &mut Sema<'_, '_>, lhs: QualType, rhs: QualType) -> PtrCheck {
@@ -330,6 +352,62 @@ pub(crate) fn is_c_ice(s: &Sema<'_, '_>, e: ExprId) -> bool {
         s.ast.exprs.children_into(x, &s.ast.lists, &mut stack);
     }
     true
+}
+
+/// The operand of the C integer constant expression `e`, which failed to
+/// evaluate, that clang's `CheckICE` reports (C17 6.6p3, p6): the first,
+/// in source order, that may not appear in one: a read of an object (a
+/// name that is not an enumeration constant), `*`, `&`, `++`, `--`, an
+/// assignment, a member access, a subscript, a call of a function that is
+/// not a builtin, a compound literal, a string or a statement expression.
+/// The operand of `sizeof` or `_Alignof` is not looked into; the indices
+/// of `offsetof` are. `None` when there is none (the caller keeps its
+/// location).
+pub(crate) fn c_not_ice_operand(s: &Sema<'_, '_>, e: ExprId) -> Option<ExprId> {
+    let mut stack = vec![e];
+    let mut kids = Vec::new();
+    let mut seen = 0u32;
+    while let Some(x) = stack.pop() {
+        seen += 1;
+        if seen > 4096 {
+            return None;
+        }
+        let n = s.ast.exprs.get(x);
+        let bad = match n.kind() {
+            ExprKind::UnaryExprOrTypeTraitExpr => continue,
+            ExprKind::DeclRefExpr => s.kind_of(s.ast.exprs.decl(x)) != DeclKind::EnumConstant,
+            ExprKind::UnaryOperator => matches!(
+                s.ast.exprs.unary_op(x),
+                UnaryOp::Deref
+                    | UnaryOp::AddrOf
+                    | UnaryOp::PreInc
+                    | UnaryOp::PreDec
+                    | UnaryOp::PostInc
+                    | UnaryOp::PostDec
+            ),
+            ExprKind::BinaryOperator | ExprKind::CompoundAssignOperator => {
+                s.ast.exprs.binary_op(x).is_assignment()
+            }
+            ExprKind::CallExpr => {
+                let callee = s.ignore_paren_imp_casts(s.ast.exprs.callee(x));
+                s.ast.exprs.get(callee).kind() != ExprKind::DeclRefExpr
+                    || s.ast.decls.builtin_id(s.ast.exprs.decl(callee)).is_none()
+            }
+            ExprKind::MemberExpr
+            | ExprKind::ArraySubscriptExpr
+            | ExprKind::CompoundLiteralExpr
+            | ExprKind::StringLiteral
+            | ExprKind::StmtExpr => true,
+            _ => false,
+        };
+        if bad {
+            return Some(x);
+        }
+        kids.clear();
+        s.ast.exprs.children_into(x, &s.ast.lists, &mut kids);
+        stack.extend(kids.iter().rev());
+    }
+    None
 }
 
 /// C17 6.3.2.3p3: whether `e` is a null pointer constant, an integer
@@ -661,6 +739,12 @@ fn convert_shown(
             };
             let ck = if same { CastKind::NoOp } else { CastKind::BitCast };
             let x = cast_to(s, ck, x, to, None);
+            if matches!(chk, PtrCheck::Compatible | PtrCheck::DiscardsQualifiers)
+                && let (Some(a), Some(b)) = (s.ast.types.pointee(to_c), s.ast.types.pointee(from_c))
+            {
+                let at = s.expr_range(e).lo;
+                pre_c23_array_qualifiers(s, a, b, at);
+            }
             let (id, hint) = match chk {
                 PtrCheck::Compatible => return Some(Ok(x)),
                 PtrCheck::DiscardsQualifiers => (DiagId::sema_c_assign_discards_qualifiers, None),

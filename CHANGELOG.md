@@ -69,10 +69,10 @@ Planned as 1.3.0.
 
 ### Changed
 
-- The PCH snapshot format is 9 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433, WP-1426 and WP-1414; new diagnostics, options and AST data changed the
-  schema). Rebuild a PCH built by kiln 1.2.0; until then it is not
-  misread, as [spec/pch.md](spec/pch.md) describes.
+- The PCH snapshot format is 10 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426, WP-1414 and WP-1435; new diagnostics, options and AST
+  data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
+  it is not misread, as [spec/pch.md](spec/pch.md) describes.
 
 ### Fixed
 
@@ -87,6 +87,20 @@ Planned as 1.3.0.
   type is clang's error (WP-1426); kiln did not diagnose it before. An
   explicit capture `[v]` of an SVE variable is checked against the
   target's features at the capture, as clang.
+- C++: a typedef or alias-declaration of a class's or enumeration's name
+  in its scope that names another type (`struct t1 {}; typedef long t1;`)
+  is now clang's "typedef redefinition with different types", in
+  namespace, class and block scope and through a using-declaration; the
+  name keeps denoting the class. An alias template's conflicts are
+  reported at its `using`, as clang does. After "typedef 'X' cannot be
+  referenced with the 'struct' specifier" no incomplete-type errors follow
+  (WP-1435).
+- C: before C23, `-pedantic` now diagnoses converting, comparing or
+  choosing with `?:` between pointers to differently qualified arrays
+  (`int (*)[3]` and `const int (*)[3]`), as GCC does
+  (`-Wc23-array-pointer-qualifiers`; clang is silent). Integer constant
+  expression errors point at the first non-constant operand, without
+  notes, as clang's do (WP-1435).
 - `-mcmodel=` is checked against the target and the relocation model as
   clang's driver checks it (WP-1419). On AArch64, `-mcmodel=large` with
   the default PIE, `-fpic`, `-fPIE` or `-static` is now clang's error

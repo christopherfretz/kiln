@@ -228,6 +228,13 @@ impl Sema<'_, '_> {
                 }
             }
         };
+        // clang `LookupResult::resolveKind` ignores an invalid declaration
+        // unless it is the only one left: a typedef-name diagnosed as
+        // redefining a class or enumeration of its scope (`struct t1 {};
+        // typedef long t1;`) leaves the name denoting the class.
+        if out.decls.len() > 1 && out.decls.iter().any(|&d| is_tag_kind(self.kind_of(d))) {
+            keep(&mut out, &|d| !self.is_invalid_typedef_name(d));
+        }
         if kind == LookupKind::Ordinary && out.decls.iter().any(|&d| !is_tag_kind(self.kind_of(d)))
         {
             // [basic.scope.hiding]/2 as clang applies it
@@ -426,9 +433,23 @@ impl Sema<'_, '_> {
                 .find(|(n, d, _)| *n == name && self.accept(self.ast.strip_shadow(*d), kind))
                 .map(|e| e.1),
         };
-        let hit = self.prefer_valid_local(s, hit?);
+        let mut hit = self.prefer_valid_local(s, hit?);
+        // As `filter`: an invalid typedef-name gives way to a class or
+        // enumeration of the block.
+        if kind != LookupKind::Tag
+            && self.is_invalid_typedef_name(hit)
+            && let Some(t) = s.find(name, Ns::Tag)
+        {
+            hit = t;
+        }
         let found = self.filter(self.block_scope_set(s, name, hit, kind), kind);
         (!found.is_empty()).then_some(found)
+    }
+
+    /// A typedef or alias-declaration diagnosed as invalid.
+    fn is_invalid_typedef_name(&self, d: DeclId) -> bool {
+        let n = self.ast.decls.get(d);
+        matches!(n.kind(), DeclKind::Typedef | DeclKind::TypeAlias) && n.has(DeclFlags::INVALID)
     }
 
     /// clang `LookupResult::resolveKind` ("ignore an invalid declaration
