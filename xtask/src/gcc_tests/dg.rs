@@ -211,7 +211,8 @@ fn resolve_inner(
                 timeout_factor = arg(0).parse().unwrap_or(1.0);
             }
             "dg-add-options" => match arg(0) {
-                "ieee" | "stack_size" => {}
+                // No-ops on a hosted LP64 GNU/Linux target.
+                "ieee" | "stack_size" | "bind_pic_locally" | "tls" | "float16" => {}
                 o => return Ok(Plan::Skip(format!("dg-add-options {o}"))),
             },
             "dg-require-alias"
@@ -333,7 +334,7 @@ mod tests {
         );
         let d = directives("/* { dg-do run { target avr-*-* } } */\n");
         assert!(matches!(resolve(&d, &defaults(), &t, &o(&["-O2"])), Plan::Skip(_)));
-        let d = directives("/* { dg-add-options bind_pic_locally } */\n");
+        let d = directives("/* { dg-add-options arm_neon_fp16 } */\n");
         assert!(matches!(resolve(&d, &defaults(), &t, &o(&["-O2"])), Plan::Skip(_)));
     }
 

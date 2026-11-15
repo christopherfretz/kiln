@@ -14,6 +14,8 @@
 //! the first runner.
 
 pub mod dg;
+pub mod expect;
+pub mod gxx;
 pub mod outcome;
 pub mod target;
 pub mod tcl;
@@ -109,6 +111,8 @@ pub struct Tool {
     /// is dropped: there is nothing to compare against).
     baseline: bool,
     scratch: PathBuf,
+    /// The probe TU's file name.
+    probe: String,
 }
 
 /// The major version in a `clang --version` line (`Debian clang version
@@ -128,6 +132,18 @@ impl Tool {
         env: Vec<(String, String)>,
         scratch: &Path,
     ) -> Result<Self, String> {
+        Self::new_for(role, path, env, scratch, "probe.c")
+    }
+
+    /// [`Tool::new`] probing with `probe` (`probe.c`, or `probe.cc` for a
+    /// C++ driver), the name the probe TU is written under.
+    pub fn new_for(
+        role: Role,
+        path: PathBuf,
+        env: Vec<(String, String)>,
+        scratch: &Path,
+        probe: &str,
+    ) -> Result<Self, String> {
         let mut v = Command::new(&path);
         v.arg("--version").envs(env.iter().map(|(k, x)| (k, x)));
         let o = process::run(&mut v, Duration::from_secs(30))
@@ -138,7 +154,7 @@ impl Tool {
         let version = o.stdout_str().lines().next().unwrap_or_default().trim().to_owned();
         let scratch = scratch.join(format!("probe-{}", role.name()));
         std::fs::create_dir_all(&scratch)
-            .and_then(|()| std::fs::write(scratch.join("probe.c"), PROBE_TU))
+            .and_then(|()| std::fs::write(scratch.join(probe), PROBE_TU))
             .map_err(|e| format!("cannot write {}: {e}", scratch.display()))?;
         let mut t = Self {
             role,
@@ -149,6 +165,7 @@ impl Tool {
             probed: Mutex::default(),
             baseline: true,
             scratch,
+            probe: probe.to_owned(),
         };
         t.baseline = t.probe(&[]);
         Ok(t)
@@ -168,6 +185,13 @@ impl Tool {
         self.lead.push(arg);
     }
 
+    /// [`Tool::lead_with`] noting `note` in place of `arg` (a flag whose
+    /// value is a local path).
+    pub fn lead_noted(&mut self, arg: String, note: &str) {
+        self.version = format!("{} ({note})", self.version);
+        self.lead.push(arg);
+    }
+
     /// The major version of a clang tool ([`clang_major`]).
     pub fn clang_major(&self) -> Option<u32> {
         clang_major(&self.version)
@@ -176,7 +200,7 @@ impl Tool {
     fn probe(&self, unit: &[String]) -> bool {
         let mut c = self.command();
         c.args(unit)
-            .arg("probe.c")
+            .arg(&self.probe)
             .arg("-o")
             .arg(format!("probe-{}", std::process::id()))
             .current_dir(&self.scratch);
@@ -204,11 +228,28 @@ impl Tool {
     }
 
     /// `flags` without the units this compiler rejects, and those units.
+    ///
+    /// A C++ tool (probe `probe.cc`) probes each unit after the case's
+    /// last `-std=`: GCC accepts `-freflection` or `-fcontracts` only at
+    /// the standards that have them.
     pub fn filter(&self, flags: &[String]) -> (Vec<String>, Vec<String>) {
         let mut kept = Vec::new();
         let mut dropped = Vec::new();
+        let std = flags
+            .iter()
+            .rev()
+            .find(|f| f.starts_with("-std="))
+            .filter(|_| Path::new(&self.probe).extension().is_some_and(|e| e == "cc"));
         for unit in flag_units(flags) {
-            if self.accepts(&unit) {
+            let probe_unit = match std {
+                Some(s) if !unit[0].starts_with("-std=") => {
+                    let mut u = vec![s.clone()];
+                    u.extend(unit.iter().cloned());
+                    u
+                }
+                _ => unit.clone(),
+            };
+            if self.accepts(&probe_unit) {
                 kept.extend(unit);
             } else {
                 dropped.push(unit.join(" "));
@@ -239,6 +280,13 @@ pub struct Case<'a> {
     pub compile_timeout: Duration,
     pub run_timeout: Duration,
     pub mem: Option<MemLimit>,
+    /// `-x <lang>` before each source (g++ compiles c-c++-common's `.c`
+    /// files as C++); `None` lets the driver go by the extension.
+    pub lang: Option<&'a str>,
+    /// The diagnostics the test expects (g++.dg): when set, the compile
+    /// steps' diagnostics are judged by line and severity
+    /// ([`expect::judge`]) instead of by `negative` alone.
+    pub expect: Option<&'a expect::Expected>,
 }
 
 /// A case's verdict and the flag units the compiler rejected (dropped).
@@ -267,20 +315,44 @@ impl Tool {
             _ => ("-c", "o"),
         };
         let mut objects = Vec::new();
+        let mut stderr = String::new();
+        let mut compiled = true;
         for (i, src) in case.sources.iter().enumerate() {
             let out = dir.join(format!("{i}.{ext}"));
             let mut args: Vec<std::ffi::OsString> = flags.iter().map(Into::into).collect();
-            args.extend([mode.into(), src.into(), "-o".into(), out.clone().into()]);
+            args.push(mode.into());
+            if let Some(l) = case.lang {
+                args.extend(["-x".into(), l.into()]);
+            }
+            args.extend([src.into(), "-o".into(), out.clone().into()]);
             let v = self.step(&args, dir, case, "compile");
             match v {
                 Err(v) => return done(v),
-                Ok(Some(v)) => {
+                Ok((Some(v), err)) if case.expect.is_some() => {
+                    if matches!(v.class, Class::Crash | Class::Timeout) {
+                        return done(v);
+                    }
+                    stderr.push_str(&err);
+                    compiled = false;
+                }
+                Ok((Some(v), _)) => {
                     return done(if case.negative { outcome::negative(Some(v)) } else { v });
                 }
-                Ok(None) => objects.push(out),
+                Ok((None, err)) => {
+                    stderr.push_str(&err);
+                    objects.push(out);
+                }
             }
         }
-        if case.negative {
+        if let Some(exp) = case.expect {
+            let diags = expect::diagnostics(&stderr);
+            if let Some(v) = expect::judge(exp, &diags, compiled) {
+                return done(v);
+            }
+            if exp.negative() || !compiled {
+                return done(Verdict::pass());
+            }
+        } else if case.negative {
             return done(outcome::negative(None));
         }
         if !case.action.links() {
@@ -292,8 +364,8 @@ impl Tool {
         args.extend(case.link_flags.iter().map(Into::into));
         args.extend(["-o".into(), exe.clone().into()]);
         match self.step(&args, dir, case, "link") {
-            Err(v) | Ok(Some(v)) => return done(v),
-            Ok(None) => {}
+            Err(v) | Ok((Some(v), _)) => return done(v),
+            Ok((None, _)) => {}
         }
         if case.action != Action::Run {
             return done(Verdict::pass());
@@ -307,15 +379,16 @@ impl Tool {
         })
     }
 
-    /// One compiler invocation: `Ok(None)` on success, `Ok(Some)` with its
-    /// failure, `Err` when it could not be started.
+    /// One compiler invocation: `Ok((None, stderr))` on success,
+    /// `Ok((Some, stderr))` with its failure, `Err` when it could not be
+    /// started.
     fn step(
         &self,
         args: &[std::ffi::OsString],
         dir: &Path,
         case: &Case<'_>,
         step: &str,
-    ) -> Result<Option<Verdict>, Verdict> {
+    ) -> Result<(Option<Verdict>, String), Verdict> {
         let mut c = self.command();
         c.args(args).current_dir(dir);
         let limit = match self.role {
@@ -330,7 +403,10 @@ impl Tool {
         let mut tries = 0;
         loop {
             match process::run(&mut c, case.compile_timeout) {
-                Ok(o) => return Ok(outcome::compile_step(o.status, &o.stderr_str(), step)),
+                Ok(o) => {
+                    let err = o.stderr_str();
+                    return Ok((outcome::compile_step(o.status, &err, step), err));
+                }
                 Err(_) if tries < 2 => {
                     tries += 1;
                     std::thread::sleep(Duration::from_secs(2));
@@ -352,6 +428,21 @@ impl Tool {
     }
 }
 
+/// `existing` with its region between `begin` and `end` replaced by
+/// `region` (which carries the markers), appended when it has none.
+pub fn splice_region(existing: &str, region: &str, begin: &str, end: &str) -> String {
+    let b = existing.find(begin);
+    match (b, b.and_then(|b| existing[b..].find(end).map(|e| b + e))) {
+        (Some(b), Some(e)) => {
+            let after = &existing[e + end.len()..];
+            let after = after.strip_prefix('\n').unwrap_or(after);
+            format!("{}{region}{after}", &existing[..b])
+        }
+        _ if existing.is_empty() => region.to_owned(),
+        _ => format!("{}\n\n{region}", existing.trim_end()),
+    }
+}
+
 /// Groups flags into units: a flag that takes its value as the next word
 /// (`--param`, `-include`, `-Xlinker`, `-mllvm`) with that word.
 pub fn flag_units(flags: &[String]) -> Vec<Vec<String>> {
@@ -359,8 +450,21 @@ pub fn flag_units(flags: &[String]) -> Vec<Vec<String>> {
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         let mut unit = vec![f.clone()];
-        if matches!(f.as_str(), "--param" | "-include" | "-Xlinker" | "-mllvm" | "-isystem" | "-I")
-            && let Some(v) = it.next()
+        if matches!(
+            f.as_str(),
+            "--param"
+                | "-include"
+                | "-imacros"
+                | "-Xlinker"
+                | "-mllvm"
+                | "-isystem"
+                | "-idirafter"
+                | "-iquote"
+                | "-I"
+                | "-D"
+                | "-U"
+                | "--embed-directory"
+        ) && let Some(v) = it.next()
         {
             unit.push(v.clone());
         }
@@ -388,5 +492,13 @@ mod tests {
             .collect();
         assert_eq!(flag_units(&f).len(), 3);
         assert_eq!(flag_units(&f)[1], ["--param", "max-unroll-times=4"]);
+        let g: Vec<String> = ["-D", "_GNU_SOURCE", "--embed-directory", "/d", "-O2"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(
+            flag_units(&g),
+            [vec!["-D", "_GNU_SOURCE"], vec!["--embed-directory", "/d"], vec!["-O2"]]
+        );
     }
 }

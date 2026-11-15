@@ -18,6 +18,7 @@ and perf-sensitive behavior ships with a recorded baseline.
 | libc++ suite | `libcxx/test` of llvmorg-19.1.7 (`scripts/fetch-libcxx-tests.sh [<tag>]`), driven by `cargo xtask libcxx` (`spec/libcxx.md`); manual/periodic gate, not part of `ci`; M3 gate status in `docs/status/libcxx-m3.md`, whole-suite status and the 10% sample procedure in `docs/status/libcxx.md` (M3b) | The real world |
 | Accepts-invalid | clang's own C++ negative tests (`clang/test/{CXX,SemaCXX}` of llvmorg-22.1.8, `-verify` files; `scripts/fetch-clang-tests.sh`), driven by `cargo xtask clang-neg` (`spec/clang-neg.md`); informational, not part of `ci`; status in `docs/status/accepts-invalid.md` | kiln rejects what clang rejects: no file where clang expects an error passes silently through kiln (accept vs reject only, no wording) |
 | GCC C torture | GCC 16.1's `gcc.c-torture` (`execute`, `execute/ieee`, `execute/builtins`, `compile`; `scripts/fetch-gcc-tests.sh`, gitignored `.oss/gcc-tests`, never vendored), driven by `cargo xtask gcc-torture` (spec/harness.md "GCC testsuites"); informational, not part of `ci`; status in `docs/status/c-mode.md` | kiln's C mode compiles and runs GCC's C tests at `-O0` and `-O2` as GCC 16.1 and clang-19 do; each case is pass, compile-reject, crash, wrong or timeout beside the oracles' result |
+| GCC C++ testsuite | GCC 16.1's `g++.dg` (with `g++.dg/torture`), `c-c++-common` and `g++.old-deja` (same sparse checkout, `scripts/fetch-gcc-tests.sh`, never vendored), driven by `cargo xtask gxx-dg` (spec/harness.md "The g++.dg runner"); informational, not part of `ci`; status in `docs/status/gxx-dg.md` | kiln++ meets each test's `dg-error` expectations by line and severity (never by message) at the standards GCC's `g++-dg.exp` picks, compiles valid tests and runs `dg-do run` ones; each case is pass, rejects-valid, accept-invalid, wrong-line, wrong, crash or timeout, with GCC 16.1 and clang on the cases kiln fails |
 | libstdc++ headers | every public header of the system libstdc++ (`/usr/include/c++/14`) as a one-line TU, driven by `cargo xtask libstdcxx` (`spec/libstdcxx.md`); informational, not part of `ci`; status in `docs/status/libstdcxx.md` | The other real world (GCC's library) |
 | Feature table | `docs/STANDARD_SUPPORT.md`, the standard support table (one section per standard, C++98/03 to C++26, reflection and kiln extensions), checked by `cargo xtask features` (`spec/harness.md` "Feature table"); manual/M4-gate check, not part of `ci` | Every core-language feature marked `done` has passing tests and clang 22's `__cpp_*` value at its standard; the summary matches the sections |
 | Perf | `bench/` + `bench/baselines/*.json` | No wall-clock or memory regression; vs-clang ratios |
@@ -46,7 +47,7 @@ lane runs the CMake C++20 modules end-to-end
 `cargo xtask ci` and `cargo xtask test` run the same comparisons. Off the queue, by hand or nightly on the dev
 host: `cargo xtask bench` (including `bench/reflect` and the vs-GCC table
 via `--compiler $KILN_GCC`), `--scaling` sweeps, `--external` corpora,
-`cargo xtask libcxx`, `libstdcxx`, `clang-neg`, `gcc-torture` and `features`.
+`cargo xtask libcxx`, `libstdcxx`, `clang-neg`, `gcc-torture`, `gxx-dg` and `features`.
 
 **OSS builds** (ROADMAP M8). `scripts/oss/oss-build.sh <project>
 [--compiler kiln|clang]` clones a project of `scripts/oss/projects.toml`
@@ -334,6 +335,19 @@ into `docs/status/c-mode.md`, which carries the hand-written triage and
 the `tests/c/` xfail repros. The pieces are suite-independent, so a
 g++.dg runner reuses them. The exit status is non-zero only for a tool
 error. The contract is spec/harness.md "GCC testsuites".
+
+`cargo xtask gxx-dg` does the same for GCC's C++ tests (WP-1443):
+`g++.dg` (its directories with their own `.exp` driver, such as
+`modules`, `lto` or `gomp`, are counted, not run), `g++.dg/torture` at
+`-O0` and `-O2`, `c-c++-common` compiled as C++ and `g++.old-deja`, each
+test at the standards GCC 16's `g++-dg.exp` picks for it (C++20, C++98 and
+C++26 for a test that names none). Errors are matched by line and severity
+against the test's `dg-error`, `dg-warning` and `dg-message` lines; the
+message text is GCC's wording and is never compared. GCC 16.1 and clang
+run the cases kiln does not pass, which splits rejects-valid and
+accepts-invalid by what clang does. `dg-final` scans are GCC-internal and
+counted as not applicable. `--report` splices the summary into
+`docs/status/gxx-dg.md`, which carries the hand-written triage.
 
 `cargo xtask features` is outside `ci` as well. It checks the language
 feature table, `docs/STANDARD_SUPPORT.md`, which has one section per standard

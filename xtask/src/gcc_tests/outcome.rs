@@ -22,18 +22,23 @@ pub enum Class {
     Timeout,
     /// A test that expects an error compiled clean.
     AcceptInvalid,
+    /// The compiler reported errors, but not on the lines the test
+    /// expects them on, or also on lines it expects none on (g++.dg's
+    /// line matching, [`super::expect`]).
+    WrongLine,
     /// The compiler could not be run at all (missing, a tool error).
     NotRun,
 }
 
 impl Class {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Pass,
         Self::CompileReject,
         Self::Crash,
         Self::Wrong,
         Self::Timeout,
         Self::AcceptInvalid,
+        Self::WrongLine,
         Self::NotRun,
     ];
 
@@ -45,6 +50,7 @@ impl Class {
             Self::Wrong => "wrong",
             Self::Timeout => "timeout",
             Self::AcceptInvalid => "accept-invalid",
+            Self::WrongLine => "wrong-line",
             Self::NotRun => "not-run",
         }
     }
@@ -81,7 +87,13 @@ pub fn compile_step(status: Option<ExitStatus>, stderr: &str, step: &str) -> Opt
     if process::out_of_memory(Some(st), stderr) {
         return Some(Verdict::new(Class::Crash, "out of memory"));
     }
-    if let Some(l) = stderr.lines().find(|l| l.contains("internal compiler error")) {
+    // A source line echoed under a diagnostic (`  21 |     ...`) can quote
+    // the words in a comment; only a diagnostic line counts.
+    let echoed = |l: &str| {
+        let t = l.trim_start().trim_start_matches(|c: char| c.is_ascii_digit());
+        t.trim_start().starts_with('|')
+    };
+    if let Some(l) = stderr.lines().find(|l| l.contains("internal compiler error") && !echoed(l)) {
         return Some(Verdict::new(Class::Crash, strip_location(l)));
     }
     if let Some((key, _)) = crash_key(stderr) {
@@ -232,6 +244,8 @@ mod tests {
         .unwrap();
         assert_eq!(v, Verdict::new(Class::Crash, "internal compiler error: Segmentation fault"));
         assert_eq!(compile_step(signal(11), "", "compile").unwrap().class, Class::Crash);
+        let echoed = "t.C:21:5: error: unknown type name 'ff'\n   21 |  new ff; // internal compiler error here\n";
+        assert_eq!(compile_step(code(1), echoed, "compile").unwrap().class, Class::CompileReject);
     }
 
     #[cfg(unix)]

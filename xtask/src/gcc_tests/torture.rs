@@ -466,6 +466,8 @@ fn run_job(cfg: &Config, tests: &[Test], job: &Job, idx: usize) -> Row {
         compile_timeout: cfg.timeout.mul_f64(job.plan.timeout_factor.max(1.0)),
         run_timeout: cfg.run_timeout.mul_f64(job.plan.timeout_factor.max(1.0)),
         mem: cfg.mem,
+        lang: None,
+        expect: None,
     };
     let dir = cfg.scratch.join(idx.to_string());
     let mut results = BTreeMap::new();
@@ -997,16 +999,7 @@ pub fn render(info: &RunInfo, rows: &[Row], roles: &[Role]) -> String {
 /// replaced by `region` (appended when it has none).
 pub fn splice(existing: &str, region: &str, std: Option<&str>) -> String {
     let (begin, end) = markers(std);
-    let b = existing.find(&begin);
-    match (b, b.and_then(|b| existing[b..].find(&end).map(|e| b + e))) {
-        (Some(b), Some(e)) => {
-            let after = &existing[e + end.len()..];
-            let after = after.strip_prefix('\n').unwrap_or(after);
-            format!("{}{region}{after}", &existing[..b])
-        }
-        _ if existing.is_empty() => region.to_owned(),
-        _ => format!("{}\n\n{region}", existing.trim_end()),
-    }
+    super::splice_region(existing, region, &begin, &end)
 }
 
 #[cfg(test)]
