@@ -364,6 +364,7 @@ impl SyntaxJob<'_> {
             no_builtin_fns: a.no_builtin_fns(),
             freestanding: a.predef.freestanding.unwrap_or(false),
             sized_deallocation: a.predef.sized_deallocation.unwrap_or(true),
+            short_enums: a.predef.short_enums,
             char8: a.predef.char8_t,
             math_errno: a.fp_model().opts.math_errno,
             sve: feats.sve,

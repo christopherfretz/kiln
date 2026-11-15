@@ -411,6 +411,10 @@ pub struct Sema<'a, 'sm> {
     /// deallocation lookup never prefers a sized one
     /// ([`Sema::usual_delete`]).
     pub sized_deallocation: bool,
+    /// `-f[no-]short-enums` (clang `LangOptions::ShortEnums`, default
+    /// off): every enumeration without a fixed underlying type is laid
+    /// out as a `packed` one (WP-1461).
+    pub short_enums: bool,
     /// `-f[no-]char8_t` (clang `LangOptions::Char8`): `None` is the
     /// default, C++20 and later; see [`Sema::char8`].
     pub char8: Option<bool>,
@@ -1425,6 +1429,7 @@ impl<'a, 'sm> Sema<'a, 'sm> {
             gnu_lib_builtins: false,
             no_builtin: false,
             sized_deallocation: true,
+            short_enums: false,
             char8: None,
             no_builtin_fns: Vec::new(),
             freestanding: false,

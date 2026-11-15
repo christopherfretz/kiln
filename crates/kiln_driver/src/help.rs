@@ -54,6 +54,8 @@ LANGUAGE:
   -ffreestanding          Freestanding implementation (implies -fno-builtin)
   -f[no-]coro-aligned-allocation
                           Aligned allocation for coroutine frames
+  -f[no-]short-enums      Give an enumeration without a fixed underlying
+                          type the smallest type that holds its values
   -f[no-]sized-deallocation
                           C++14 sized deallocation functions
   -f[no-]threadsafe-statics

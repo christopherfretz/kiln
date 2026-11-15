@@ -1735,7 +1735,7 @@ fn codegen_flags_classes() {
 fn codegen_flags_rejected() {
     let d = scratch("cgflags-rej");
     std::fs::write(d.join("m.cpp"), "int main(){}\n").unwrap();
-    let rejected = ["-fshort-enums", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
+    let rejected = ["-ffat-lto-objects", "-fsanitize=cfi", "-fsanitize-coverage=trace-pc"];
     for f in rejected {
         let o = kiln_in(&d, &[f, "-c", "m.cpp", "-o", "r.o"]);
         assert_eq!(

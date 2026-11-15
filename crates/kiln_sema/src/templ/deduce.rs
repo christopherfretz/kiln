@@ -1132,6 +1132,19 @@ impl Sema<'_, '_> {
             let a = TemplateArg::template(t.canonical_template_name(an));
             return self.record_deduction(parm.index, parm.pack, a, d);
         }
+        // `T::template B` is a non-deduced context ([temp.deduct.type]/5.1:
+        // the nested-name-specifier of a qualified-id): nothing is deduced
+        // from it, and the match is checked once the deduced arguments are
+        // substituted ([temp.spec.partial.match]/2, `partial_args_match`;
+        // clang `DeduceTemplateArguments` on a `TemplateName` with no
+        // template declaration).
+        if matches!(
+            t.template_name_view(t.canonical_template_name(pn)),
+            kiln_ast::types::TemplateName::DependentIdentifier { .. }
+                | kiln_ast::types::TemplateName::DependentOperator { .. }
+        ) {
+            return Tdk::Success;
+        }
         if t.same_template_name(pn, an) {
             return Tdk::Success;
         }

@@ -1082,6 +1082,7 @@ impl Sema<'_, '_> {
             }
             let Some(pty) = self.declared_fn_type(c) else { continue };
             if self.ast.types.same_type(pty, ty) {
+                let c = self.most_constrained_member_match(c, &cands, ty, d.name_loc());
                 if inst && self.clang_compat >= 22 && self.explicit_inst_unsatisfied(c, d, name) {
                     return Some(None);
                 }
@@ -1155,6 +1156,62 @@ impl Sema<'_, '_> {
     /// such a member only in a class's explicit instantiation;
     /// [over.match.viable]/3). Diagnosed (true) with the satisfaction
     /// notes; clang 19 instantiates the member (WP-1448).
+    /// Of the members of a class template specialization whose type is
+    /// `ty` (the first, `first`, among `cands`), the one an explicit
+    /// specialization or instantiation `C<args>::f` names: the one whose
+    /// constraints are satisfied, and of several, the most constrained
+    /// ([temp.expl.spec]/1 with [temp.constr.order]/5; clang
+    /// `CheckMemberSpecialization` / `getMoreConstrainedFunction`):
+    /// `void f(); void f() requires C<T>;` in `S<T>`, then
+    /// `template<> void S<X>::f()` specializes the second when `C<X>`
+    /// holds. `first` itself when no other member has that type (no
+    /// allocation), or when no single candidate is more constrained than
+    /// the rest.
+    fn most_constrained_member_match(
+        &mut self,
+        first: DeclId,
+        cands: &[DeclId],
+        ty: QualType,
+        loc: Loc,
+    ) -> DeclId {
+        let same = |s: &mut Self, c: DeclId| {
+            s.kind_of(c).payload() == kiln_ast::decl::PayloadClass::Function
+                && s.ast.member_spec_info(c).is_some()
+                && s.declared_fn_type(c).is_some_and(|p| s.ast.types.same_type(p, ty))
+        };
+        let firsts = |s: &Self, c: DeclId| s.ast.first(c);
+        let f0 = firsts(self, first);
+        let others = cands.iter().any(|&c| firsts(self, c) != f0 && same(self, c));
+        if !others {
+            return first;
+        }
+        let mut viable: Vec<(DeclId, Vec<ExprId>)> = Vec::new();
+        for &c in cands {
+            let f = firsts(self, c);
+            if !same(self, c) || viable.iter().any(|v| v.0 == f) {
+                continue;
+            }
+            if let Some(sat) = self.check_function_constraints(f, loc)
+                && !self.sat_ok(sat)
+            {
+                continue;
+            }
+            let r = self.ast.templates.trailing_requires.get(f).copied();
+            viable.push((f, r.into_iter().collect()));
+        }
+        let Some(mut best) = viable.first().map(|v| v.0) else { return first };
+        let mut best_r = viable[0].1.clone();
+        for (f, r) in &viable[1..] {
+            if self.more_constrained(*f, r, best, &best_r) {
+                best = *f;
+                best_r.clone_from(r);
+            }
+        }
+        let unique =
+            viable.iter().all(|(f, r)| *f == best || self.more_constrained(best, &best_r, *f, r));
+        if unique { best } else { first }
+    }
+
     fn explicit_inst_unsatisfied(&mut self, c: DeclId, d: &Declarator, name: DeclName) -> bool {
         let loc = d.name_loc();
         let Some(sat) = self.check_function_constraints(c, loc) else { return false };

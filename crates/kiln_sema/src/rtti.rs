@@ -70,7 +70,16 @@ impl Sema<'_, '_> {
         if written == QualType::ERROR {
             return self.recover_err(&kids, loc);
         }
-        let unqual = conv::strip_cv(self, written);
+        // The cv-qualifiers of an array type are its element type's
+        // ([basic.type.qualifier]/3), so they are top-level too:
+        // `typeid(S volatile[3][4])` names `S[3][4]` (clang
+        // `getUnqualifiedArrayType` in `BuildCXXTypeId` and
+        // `CXXTypeidExpr::getTypeOperand`).
+        let unqual = if self.ast.types.is_array(written) {
+            self.ast.types.unqualified(written)
+        } else {
+            conv::strip_cv(self, written)
+        };
         if (operand.is_err() && self.is_incomplete_dependent_record(unqual))
             || self.ast.types.as_record(unqual).is_some() && !self.require_complete(unqual, loc)
         {
@@ -99,6 +108,17 @@ impl Sema<'_, '_> {
                 TypeidOperand::Expr(conv::raw_cast(self, CastKind::NoOp, e, unqual, vk, None))
             }
             Ok(e) => TypeidOperand::Expr(e),
+            // A non-dependent array type operand is stored without its
+            // element cv, so codegen, the mangler and the constant
+            // evaluator all see the type `typeid` names; a dependent one
+            // keeps its spelling until instantiation.
+            Err(t)
+                if unqual != written
+                    && self.ast.types.is_array(written)
+                    && !self.ast.types.is_dependent(t) =>
+            {
+                TypeidOperand::Type(unqual)
+            }
             Err(t) => TypeidOperand::Type(t),
         };
         // clang's type is the bare `RecordType`, printed with its scope:

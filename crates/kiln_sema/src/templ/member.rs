@@ -108,6 +108,15 @@ impl Substituter<'_, '_, '_> {
         let r = (|| {
             let list = self.sema.templ.heads.last().and_then(|h| h.list).ok_or(SubstFail)?;
             let args = self.args(args, n.loc())?;
+            // An argument naming an enclosing template's non-type
+            // parameter (`inner<C, S>` in `outer<bool C>`) is now that
+            // parameter's value as an expression: converted again, as
+            // clang's `InstantiateClassTemplatePartialSpecialization`
+            // checks the instantiated argument list, so the partial's
+            // canonical arguments hold the value (`true`) that the
+            // prefilter and deduction compare against a specialization's
+            // ([temp.spec.partial.member]/2, [temp.spec.partial.match]/2).
+            let args = self.converted_member_partial_args(new_tmpl, args, n.loc())?;
             let ctx = self.sema.ast.decls.get(new_tmpl).ctx().unwrap_or(self.sema.ast.tu);
             let h = kiln_ast::DeclHead::new(ctx, n.name(), n.loc());
             let p = if let Some(v) = self.sema.ast.decls.var(m).map(|v| v.spec) {
@@ -149,6 +158,33 @@ impl Substituter<'_, '_, '_> {
         self.sema.act_on_finish_template_decl();
         self.sema.templ.cur = None;
         r
+    }
+
+    /// The substituted arguments `args` of a member partial specialization
+    /// of `tmpl`, converted again when one of them became a
+    /// non-dependent expression (an enclosing non-type parameter replaced
+    /// by its value); any other list is returned as is, so the common
+    /// case costs one pass over the arguments and no allocation.
+    fn converted_member_partial_args(
+        &mut self,
+        tmpl: DeclId,
+        args: kiln_ast::ids::ArgListId,
+        loc: kiln_source::Loc,
+    ) -> SubstResult<kiln_ast::ids::ArgListId> {
+        use kiln_ast::types::ArgView;
+        let types = &self.sema.ast.types;
+        let needs = types
+            .args(args)
+            .iter()
+            .any(|a| matches!(a.view(), ArgView::Expr { profile: None, .. }));
+        if !needs {
+            return Ok(args);
+        }
+        let written: Vec<kiln_ast::types::TemplateArg> = types.args(args).to_vec();
+        match self.sema.check_template_args(tmpl, &written, &[], loc) {
+            Ok(conv) => Ok(conv.sugared),
+            Err(()) => Err(SubstFail),
+        }
     }
 
     /// Redeclares the partial specializations of member class or variable

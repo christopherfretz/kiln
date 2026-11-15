@@ -686,6 +686,7 @@ impl Job<'_> {
                 ),
             ),
             ("freestanding", on(p.freestanding.unwrap_or(false), "-ffreestanding", "-fhosted")),
+            ("short-enums", on(p.short_enums, "-fshort-enums", "-fno-short-enums")),
             ("reflection", on(p.reflection_for(&self.std), "-freflection", "-fno-reflection")),
             ("contracts", on(p.contracts_for(&self.std), "-fcontracts", "-fno-contracts")),
             ("reflection-mangling", format!("-fkiln-reflection-mangling={mangling}")),

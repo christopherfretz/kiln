@@ -26,16 +26,16 @@
 //!    mode, [`CodegenFlags::code_model_error`]), the
 //!    target checks of which are [`CodegenFlags::target_errors`];
 //! 2. accepted and ignored: no observable effect in kiln
-//!    (`-f[no-]common`, `-fstack-usage`, the defaults
-//!    `-fno-short-enums` and `-m64`, and `-pipe`), or deliberately ignored
+//!    (`-f[no-]common`, `-fstack-usage`, the default
+//!    `-m64`, and `-pipe`), or deliberately ignored
 //!    although clang honours it (WP-873: `-fdiagnostics-show-template-tree`,
 //!    `-f[no-]strict-vtable-pointers`, `-f[no-]vectorize`,
 //!    `-f[no-]slp-vectorize`, `-f[no-]tree-[slp-]vectorize`,
 //!    `-fno-fat-lto-objects`; WP-982: `-f[no-]modules-reduced-bmi`;
 //!    WP-1417: `-f[no-]merge-all-constants`; spec/driver.md "Codegen
 //!    flags");
-//! 3. rejected with "'<flag>' is not supported by kiln": `-fshort-enums`
-//!    and `-ffat-lto-objects`, and, only with `-fxray-instrument`, the
+//! 3. rejected with "'<flag>' is not supported by kiln":
+//!    `-ffat-lto-objects`, and, only with `-fxray-instrument`, the
 //!    other `-fxray-*` options ([`CodegenFlags::xray_errors`]; without it
 //!    they are clang's "argument unused during compilation",
 //!    [`CodegenFlags::unused_xray_args`]).
@@ -217,7 +217,6 @@ const ZERO_CALL_KINDS: &[&str] = &[
 /// Flags accepted and ignored (class 2), exactly as written.
 const IGNORED: &[&str] = &[
     "-fstack-usage",
-    "-fno-short-enums",
     // Every target kiln has is 64-bit (`-m32` stays unknown).
     "-m64",
     // kiln's jobs talk through pipes already.
@@ -255,7 +254,6 @@ const IGNORED: &[&str] = &[
 
 /// Flags rejected (class 3), exactly as written.
 const REJECTED: &[&str] = &[
-    "-fshort-enums",
     // Bitcode plus object code in one `.o` (WP-873 follow-up).
     "-ffat-lto-objects",
 ];
@@ -949,7 +947,7 @@ mod tests {
         ] {
             assert_eq!(parse(&[a]).1, [Some(Ok(()))], "{a}");
         }
-        let a = "-fshort-enums";
+        let a = "-ffat-lto-objects";
         assert_eq!(parse(&[a]).1, [Some(Err(ArgError::UnsupportedByKiln(a.into())))], "{a}");
         assert_eq!(parse(&["-fbogus"]).1, [None]);
         assert_eq!(parse(&["-mtune=x86-64"]).0.mtune.as_deref(), Some("x86-64"));

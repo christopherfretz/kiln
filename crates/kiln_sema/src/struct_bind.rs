@@ -386,7 +386,17 @@ impl Sema<'_, '_> {
         };
         self.ast.decls.set_ty(v, ty);
         let loc = self.eloc(e);
-        let init = match self.init_subobject_from(ty, e, InitEntity::Var, loc) {
+        // [dcl.struct.bind]/1: each element is copy-initialized (`= a`)
+        // or direct-initialized (`(a)`, `{a}`) from the corresponding
+        // element, "as specified by the form of the initializer": an
+        // explicit copy constructor is a candidate only for the latter
+        // ([over.match.ctor]/1, [over.match.copy]/1.2). GCC 16.1 agrees;
+        // clang 19 copy-initializes for `{a}`.
+        let ctx = match init {
+            Initializer::Expr(_) => conv::ConvCtx::Initialization,
+            Initializer::Paren(..) | Initializer::List(_) => conv::ConvCtx::DirectInitialization,
+        };
+        let init = match self.init_decomp_elements(ty, e, ctx, loc) {
             Ok(x) => x,
             Err(()) => self.recover_err(&[e], loc),
         };
@@ -395,6 +405,50 @@ impl Sema<'_, '_> {
         // P2686R5: a constexpr one is constant-initialized from the array.
         if self.ast.decls.var(v).is_some_and(|x| x.spec.is_constexpr()) && !self.is_err_expr(init) {
             self.check_constexpr_init(v, init);
+        }
+    }
+
+    /// The element-wise initialization of array `ty` from array `arg`
+    /// for [`Self::init_decomposition_array`]: an `ArrayInitLoopExpr` per
+    /// dimension, whose class elements are initialized by overload
+    /// resolution in context `ctx` (copy- or direct-initialization from
+    /// an lvalue element, [dcl.init.general]/16.6.2) rather than by the
+    /// copy constructor alone; any other element as
+    /// [`Self::init_subobject_from`] does.
+    fn init_decomp_elements(
+        &mut self,
+        ty: QualType,
+        arg: ExprId,
+        ctx: conv::ConvCtx,
+        loc: Loc,
+    ) -> Result<ExprId, ()> {
+        let t = &self.ast.types;
+        if t.is_array(ty) {
+            let ove = self.builder().opaque_value(arg);
+            let size_t = self.size_type();
+            let idx = self.builder().array_init_index(size_t, loc);
+            let pty = conv::array_decayed(self, self.ety(ove));
+            let decayed = conv::raw_cast(
+                self,
+                CastKind::ArrayToPointerDecay,
+                ove,
+                pty,
+                ValueCategory::PRValue,
+                None,
+            );
+            let ety = self.ast.types.pointee(pty).unwrap_or(QualType::ERROR);
+            let sub = self.builder().subscript(decayed, idx, ety, loc);
+            let elem_ty = self.ast.types.element(ty).unwrap_or(QualType::ERROR);
+            let elem = self.init_decomp_elements(elem_ty, sub, ctx, loc)?;
+            return Ok(self.builder().array_init_loop(ty, ove, elem));
+        }
+        let class = t.as_record(ty).and_then(|r| self.ast.definition(r));
+        if class.is_none_or(|c| self.ast.decls.get(c).has(DeclFlags::DEPENDENT_CTX)) {
+            return self.init_subobject_from(ty, arg, InitEntity::Var, loc);
+        }
+        match self.class_init_from_expr(ty, arg, ctx, loc) {
+            Some(x) => Ok(x),
+            None => self.init_subobject_from(ty, arg, InitEntity::Var, loc),
         }
     }
 
