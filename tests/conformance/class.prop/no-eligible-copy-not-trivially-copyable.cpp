@@ -5,12 +5,12 @@
 // [class.prop]/2: a class whose only default constructor is deleted (a
 // const member with no initializer of a type that is not
 // const-default-constructible, [class.default.ctor]/2.4) has no eligible
-// default constructor and is not trivial. kiln answers true for all of
-// these, as GCC 14 does. GCC 16.1 follows the standard on the second part
-// only; clang 19/22 answer false on the first part (for its own reason,
-// see const-class-member-trivially-copyable.cpp) and true for T1 and C9.
-// Found by WP-1445.
-//@ xfail: kiln counts deleted special members as eligible (no eligible copy/move member, no eligible default constructor)
+// default constructor and is not trivial. GCC 16.1 follows the standard on
+// the second part only, clang 19/22 on the first part only (for their own
+// reason, see const-class-member-trivially-copyable.cpp), so neither is the
+// oracle (docs/status/deviations.md). Found by WP-1445, fixed by WP-1452.
+//@ skip(clang): clang 19/22 count the deleted default constructor of T1, C2, C9 as eligible
+//@ skip(gcc): GCC 16.1 makes a class whose copy/move operations are all deleted trivially copyable
 //@ strict-diags
 struct E {};
 struct I { int i; };

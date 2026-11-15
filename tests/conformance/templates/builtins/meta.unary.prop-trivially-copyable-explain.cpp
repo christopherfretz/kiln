@@ -1,9 +1,8 @@
 // [meta.unary.prop] is_trivially_copyable, [basic.types.general]/9,
 // [class.prop]/1: clang 22 explains a failed __is_trivially_copyable,
 // std::is_trivially_copyable_v or std::is_trivially_copyable::value
-// requirement: virtual and non-trivially-copyable bases, members, a
-// user-provided destructor and copy/move operations, a reference type, and
-// where the class is defined (an array or void gets the first note only).
+// requirement: bases, members, user-provided special members, references, the
+// definition. U declares operator= or it would be trivially copyable (WP-1452).
 //@ expect: compile-fail
 //@ strict-diags
 //@ requires: clang>=22
@@ -40,6 +39,7 @@
 //@ diag: 89:15 error "static assertion failed due to requirement '__is_trivially_copyable(U)'"
 //@ diag: 89:15 note "'U' is not trivially copyable"
 //@ diag: 89:15 note "because it has a non-trivially-copyable member 'n' of type 'NT'"
+//@ diag: 89:15 note "because it has a user provided copy assignment operator"
 //@ diag: 79:7 note "'U' defined here"
 //@ diag: 90:15 error "static assertion failed due to requirement '__is_trivially_copyable(TS<NT>)'"
 //@ diag: 90:15 note "'TS<NT>' is not trivially copyable"
@@ -76,7 +76,7 @@ struct W { virtual void f(); NT n; ~W(); };
 struct MV { MV(MV&&); };
 struct MA { MA& operator=(MA&&); };
 struct CA { CA& operator=(const CA&); };
-union U { NT n; };
+union U { NT n; U &operator=(const U &); };
 template<class T> struct TS { T t; };
 using A = NT;
 static_assert(std::is_trivially_copyable_v<NT>);

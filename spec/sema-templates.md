@@ -6772,10 +6772,10 @@ assignment rules' compatibility. It is an integer constant expression.
 | `__is_abstract(T)` | complete; has a pure virtual function, own or inherited and not overridden | `cls.abstract` |
 | `__is_final(T)` | complete; a class marked `final` | decl flag |
 | `__is_aggregate(T)` | complete; an array, or a class per [dcl.init.aggr]/1 | `cls.aggregate` |
-| `__is_trivial(T)` | complete; scalar, a trivial class, or an array of those | `cls.trivial` |
-| `__is_trivially_copyable(T)` | complete; [basic.types.general]/9 | `cls.trivially_copyable` |
+| `__is_trivial(T)` | complete; scalar, a trivial class ([class.prop]/2 by eligible members, spec/sema-class.md §4.7.3), or an array of those | `cls.trivial` |
+| `__is_trivially_copyable(T)` | complete; [basic.types.general]/9, a class by [class.prop]/1 (spec/sema-class.md §4.7.3) | `cls.trivially_copyable` |
 | `__is_standard_layout(T)` | complete; [basic.types.general]/9 | `cls.standard_layout` |
-| `__is_pod(T)` | complete; trivial and standard-layout | `cls` |
+| `__is_pod(T)` | complete; trivial and standard-layout ([depr.meta.types]/4) | `cls` |
 | `__has_virtual_destructor(T)` | complete; its destructor is virtual | `cls` |
 | `__has_unique_object_representations(T)` | complete; [meta.unary.prop]: no padding bits; floating types are false; member pointers per the Itanium ABI | `abi.record_layout` + `tc` |
 | `__is_trivially_equality_comparable(T)` | clang 19 (WP-166): not an enum or array; for a class, `const T& == const T&` (built under a SFINAE frame from the TU) selects a defaulted `operator==` whose parameters are `const T&` (or `T` when trivially copyable), recursively for every base and field (reference or enum fields fail; a union fails); then unique object representations without the trivially-copyable requirement | `cls` + `abi` + lookup |

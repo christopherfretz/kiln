@@ -1024,16 +1024,20 @@ kind (the destructor has only the first, as it is selected):
   `!TRIVIAL_DTOR`).
 
 Readers use the one clang uses:
-- `TRIVIALLY_COPYABLE` ([class.prop]/1) is "no `NONTRIVIAL_*` copy/move and
-  `TRIVIAL_DTOR`" (`with_trivially_copyable`), so a deleted or ineligible
-  non-trivial copy constructor does not matter.
-- `__is_pod` / `isCXX11PODType` (clang `isTrivial`) and debug info's
-  `DIFlagNonTrivial` read `TRIVIAL_DEFAULT_CTOR` and `TRIVIALLY_COPYABLE`;
-  `N` is POD.
-- `__is_trivial` and `__has_trivial_*` (beyond the POD shortcut) and the
-  `__has_nothrow_*` shortcuts need "all eligible trivial":
-  `Sema::all_trivial` = `has_trivial && !has_nontrivial`; `N` is not
-  trivial.
+- `TRIVIALLY_COPYABLE` is clang's `isTriviallyCopyable`: "no `NONTRIVIAL_*`
+  copy/move and `TRIVIAL_DTOR`" (`with_trivially_copyable`), counting a
+  deleted member as eligible. Debug info, the `buildMemcpyForAssignmentOp`
+  shortcut, defaulted comparisons, codegen and the constant evaluator's
+  `memcpy` read it. The traits do not: `__is_trivially_copyable`,
+  `__is_trivial` and `__is_pod` follow [class.prop]/1-2 by eligible
+  members (§4.7.3).
+- clang's `isCXX11PODType` (`Sema::is_pod_type`, the `va_arg` non-POD
+  warning and the `__has_trivial_*` / `__has_nothrow_*` POD shortcut) and
+  debug info's `DIFlagNonTrivial` read `TRIVIAL_DEFAULT_CTOR` and
+  `TRIVIALLY_COPYABLE`; `N` is POD there.
+- `__has_trivial_*` (beyond the POD shortcut) and the `__has_nothrow_*`
+  shortcuts need "all eligible trivial" in clang's sense:
+  `Sema::all_trivial` = `has_trivial && !has_nontrivial`.
 - `isValidVarArgType` (sema and the oven) reads `NONTRIVIAL_*`.
 - Code generation never skips a call by class bits alone: a construct
   expression is elided only when the constructor overload resolution
@@ -1324,10 +1328,11 @@ keyword with a removal fix-it ([temp.mem]/3, clang
 virtual. `tests/conformance/class.virtual/requires-clause.cpp`.
 
 #### 4.7.2 Eligible special members ([special]/6; WP-1109)
-A special member function is eligible if it is not deleted (kiln, as
-clang, keeps deleted ones eligible), its constraints are satisfied, and no
-other special member of the same kind with the same parameter-type-list is
-more constrained. `select_eligible_special_members` (class/special/
+A special member function is eligible if it is not deleted, its
+constraints are satisfied, and no other special member of the same kind
+with the same parameter-type-list is more constrained. The class bits
+(§4.3) keep clang's model, in which a deleted member stays eligible; the
+standard's predicates do not (§4.7.3). `select_eligible_special_members` (class/special/
 prospective.rs) runs at `}` right after destructor selection (§4.7.1), for
 every non-dependent class (so per class template instantiation), and marks
 each ineligible user-declared constructor and assignment operator
@@ -1357,6 +1362,59 @@ traits skip deleted and `not_selected` members, as clang
 Tests: `class.prop/trivial-eligible-special-members.cpp`,
 `class.default.ctor/eligible-ctor-side-effects-run.cpp`,
 `tests/codegen/abi_matrix_eligible.cpp`.
+
+#### 4.7.3 Trivially copyable and trivial classes ([class.prop]/1-2; WP-1452)
+`Sema::is_eligible_special` (class/special/eligible.rs) is the one
+eligibility test: not deleted and not `FnSpec::not_selected` (so the
+constraints and "more constrained" of §4.7.2, and the selected
+destructor of §4.7.1). `eligible_specials(r, k)` applies it to the
+declared members of kind `k` and, when none is declared, to the implicit
+one the class would declare, which is deleted only when the class bits
+say so (`known_deleted`; an implicit copy or move member whose deletion
+needs overload resolution is declared at `}`, and a deleted implicit
+assignment operator is recorded in `deleted_implicit` even while its
+class is finishing, so classes containing it see it as not simple). It
+returns whether there is an eligible member, whether all are trivial and
+whether one is.
+- **Trivially copyable** (`is_trivially_copyable_class`, the
+  `__is_trivially_copyable` trait, `std::meta::is_trivially_copyable_type`,
+  `__builtin_bit_cast`, the atomic builtins, `__builtin_clear_padding`,
+  `has_unique_object_representations`): at least one eligible copy/move
+  constructor or assignment operator, every eligible one trivial, and a
+  trivial, non-deleted destructor. A class whose four copy/move members
+  are all deleted (a `volatile` or `const volatile` member of class type,
+  a base or member of such a class, explicit `= delete`s) is not
+  trivially copyable, nor is one with a deleted destructor; a deleted
+  non-trivial member (`T(const T&, ...) = delete` beside `T(T&&) =
+  default`, a union whose variant member has a non-trivial copy
+  constructor but trivial assignments) does not count.
+- **Trivial** (`is_trivial_class`, `__is_trivial`): trivially copyable and
+  one or more eligible default constructors, all trivial. Whether the
+  implicit default constructor is deleted ([class.default.ctor]/2: a
+  reference or const member without initializer, a subobject without a
+  usable default constructor) needs overload resolution, so the trait
+  declares it first (`ensure_implicit`). `T() = delete` alone leaves no
+  eligible default constructor; `N(...) = delete; N() = default;` is
+  trivial.
+- **POD** (`__is_pod`): [depr.meta.types]/4, trivial and standard-layout.
+- **Implicit-lifetime** (spec/sema-templates.md §9.1,
+  `__builtin_is_implicit_lifetime`): some eligible constructor is trivial,
+  by the same function.
+- Not changed: the expression-based traits (`__is_trivially_constructible`,
+  `__is_trivially_assignable`, `__is_trivially_destructible`, which select
+  by overload resolution), the legacy `__has_trivial_*` (§4.3, GCC's
+  documented semantics), `__is_literal_type`, and argument passing:
+  [class.temporary]/3 and Itanium C++ ABI §3.1.2.3 "non-trivial for the
+  purposes of calls" (`kiln_abi::call::can_pass_in_registers`, from the
+  `*_FOR_CALL` bits) is a different predicate. A class whose copy and move
+  constructors are all deleted is passed indirectly, whatever its
+  assignment operators.
+Where clang 19/22 and GCC 16.1 differ from the text:
+docs/status/deviations.md. Tests:
+`class.prop/trivially-copyable-matrix*.cpp`,
+`class.prop/no-eligible-copy-not-trivially-copyable.cpp`,
+`class.prop/const-class-member-trivially-copyable.cpp` (WP-1445),
+`tests/codegen/abi_matrix_trivially_copyable.cpp`.
 
 ### 4.8 Destruction of variables
 Sema does not insert destructor calls for named objects: a variable, parameter

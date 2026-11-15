@@ -11,6 +11,8 @@
 //! - `deletion`: `should_delete` ([class.default.ctor]/2,
 //!   [class.copy.ctor]/10, [class.copy.assign]/7, [class.dtor]/7) and
 //!   its notes, `= default` checks.
+//! - `eligible`: eligible special members ([special]/6) and the
+//!   trivially copyable and trivial class predicates ([class.prop]/1-2).
 //! - `excspec`: the implicit exception specifications of special
 //!   members ([except.spec]/7-8), resolved when the member is used.
 //! - `uses`: uses of deleted functions ([dcl.fct.def.delete]/2) and the
@@ -19,6 +21,7 @@
 mod declare;
 mod define;
 mod deletion;
+mod eligible;
 mod excspec;
 mod implicit;
 mod prospective;

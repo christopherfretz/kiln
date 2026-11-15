@@ -89,6 +89,17 @@ Planned as 1.3.0.
   WP-1433, WP-1426, WP-1414, WP-1435, WP-1448 and WP-1449; new
   diagnostics, options and AST data changed the schema). Rebuild a PCH built by kiln 1.2.0; until then
   it is not misread, as [spec/pch.md](spec/pch.md) describes.
+- `__is_trivially_copyable`, `__is_trivial`, `__is_pod` and
+  `__builtin_is_implicit_lifetime` (and with them
+  `std::is_trivially_copyable`, `std::is_trivial`, `__builtin_bit_cast`,
+  the atomic builtins and `std::meta::is_trivially_copyable_type`) follow
+  [class.prop]/1-2 (WP-1452): a deleted or ineligible special member does
+  not count, so a class whose copy and move operations are all deleted,
+  or whose destructor is deleted, is not trivially copyable, and one with
+  no eligible default constructor is not trivial. clang 19/22 and GCC 16.1
+  each differ from the standard on some of these classes
+  (docs/status/deviations.md). Argument passing, debug info and the
+  `__has_trivial_*` traits are unchanged.
 
 ### Fixed
 
