@@ -383,6 +383,17 @@ Planned as 1.3.0.
   for `= e` and direct-initialized for `{e}` and `(e)`. In C, the
   constants of an enumeration whose values do not all fit in `int`
   have the enumeration's type (C23, as clang 22 and GCC).
+- g++.dg wrong-code (WP-1460). A C-style or functional cast that casts
+  away cv-qualification on the way to a base at a non-zero offset is a
+  static_cast followed by a const_cast, so it adjusts the address
+  ([expr.cast]/4.3). A base or virtual-base initializer that uses `this`
+  sees the construction vtable ([class.cdtor]). `new T[n]` with a
+  negative or too large bound, or with fewer elements than initializers,
+  throws `std::bad_array_new_length`, or yields null with a non-throwing
+  allocation function ([expr.new]/8). clang passes SIZE_MAX to the
+  allocation function, and GCC throws from the nothrow form.
+  `-fno-kiln-new-bound-check` restores clang's behaviour. Sized
+  deallocation is on by default only from C++14, as in clang.
 
 ## [1.2.1] - 2026-11-14
 

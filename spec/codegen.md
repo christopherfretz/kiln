@@ -1048,6 +1048,33 @@ clang's `EmitCXXNewExpr`, `EmitCXXNewAllocSize`,
   `select` gives `-1`, in clang's instruction order. The flattened
   element count of a multidimensional new is the count times the inner
   bounds.
+- **Invalid bound** ([expr.new]/8, C++11 and later, WP-1460; this is
+  the C++98 and `-fno-kiln-new-bound-check` behaviour above, clang's). A
+  run-time bound is invalid when it is negative before the conversion to
+  `size_t`, when fewer than the explicit initializers, or when the
+  allocation, cookie included, would exceed kiln's limit, `PTRDIFF_MAX`
+  bytes. One `icmp ugt` of the `size_t` count against `(PTRDIFF_MAX -
+  cookie) / (sizeof(T) * inner bounds)` covers a negative signed bound
+  (sign-extended past the limit) and overflow; the initializer count adds
+  an `icmp ult`, or-ed. An unsigned bound type too narrow to reach the
+  limit (`unsigned short` of `int`) gets no compare; a constant in range
+  (Sema diagnoses a constant invalid bound) gets none either, and its IR
+  is the clang IR above. The size is then `mul nuw` and `add nuw`. The
+  compare branches, after the placement arguments and before the
+  allocation function is called, to a block that calls
+  `__cxa_throw_bad_array_new_length` (`noreturn`, an invoke inside a
+  handler or cleanup scope, the Itanium ABI's throw of
+  `std::bad_array_new_length`), or, for a non-throwing allocation
+  function (the reserved placement form included), to a join where the
+  result is a `phi` of the allocation and null. The constant evaluator
+  rejects an invalid bound as clang does ("cannot allocate array").
+  Deviations from clang 22, which calls the allocation function with
+  `SIZE_MAX` instead: a class `operator new[]` and a nothrow form are not
+  called; `new char[n]` with a negative `n`, or a size between
+  `PTRDIFF_MAX` and `SIZE_MAX`, throws instead of reaching the allocation
+  function. GCC 16.1 also throws from the nothrow form (it does not
+  follow [expr.new]/8.6.1). The IR-diff corpus pins clang's form with
+  `-fno-kiln-new-bound-check`.
 - **Null check.** (clang: nothrow and (non-POD or `hasInitializer`);
   class default-init always has a `CXXConstructExpr` initializer in
   clang's AST, so a nothrow `new` of any class is checked.) A `noexcept`

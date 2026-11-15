@@ -361,6 +361,15 @@ impl PredefArgs {
         self.reflection.unwrap_or(std.cplusplus && std.lex >= kiln_lex::Std::Cxx26)
     }
 
+    /// Sized deallocation ([expr.delete]/10, P0722): `-f[no-]sized-deallocation`,
+    /// else on from C++14 (clang `LangOptions::SizedDeallocation`, whose
+    /// default is C++14; before it a global `operator delete(void*,
+    /// std::size_t)` is a placement deallocation function, never called by
+    /// a delete-expression; WP-1460).
+    pub fn sized_deallocation_for(&self, std: &crate::toolchain::LangStd) -> bool {
+        self.sized_deallocation.unwrap_or(std.lex >= kiln_lex::Std::Cxx14)
+    }
+
     /// Whether contracts are on for an input in `std` (GCC 16.1's
     /// `-fcontracts`): the last `-f[no-]contracts`, else on exactly at
     /// C++26. C++ only: `pre`, `post` and `__cpp_contracts` follow it,
@@ -675,6 +684,12 @@ pub struct Args {
     /// `-fno-kiln-module-cache` (false) / `-fkiln-module-cache` (true), the
     /// last one: whether `import std;` uses the module-file cache.
     pub module_cache: Option<bool>,
+    /// `-fno-kiln-new-bound-check` (false) / `-fkiln-new-bound-check`
+    /// (true), the last one: whether an invalid run-time array bound of a
+    /// new-expression throws `std::bad_array_new_length` without calling
+    /// the allocation function ([expr.new]/8; on by default from C++11).
+    /// Off, the allocation function is passed `SIZE_MAX`, as clang does.
+    pub new_bound_check: Option<bool>,
     /// `-fmodules-prune-interval=<seconds>` (the last one): how often the
     /// module cache is checked for unused entries (clang's default, 7
     /// days, when absent; 0 disables pruning; spec/driver.md "Module
@@ -1566,6 +1581,8 @@ impl Args {
             "-fmodule-output" => self.module_output = Some((arg.to_owned(), None)),
             "-fkiln-module-cache" => self.module_cache = Some(true),
             "-fno-kiln-module-cache" => self.module_cache = Some(false),
+            "-fkiln-new-bound-check" => self.new_bound_check = Some(true),
+            "-fno-kiln-new-bound-check" => self.new_bound_check = Some(false),
             "-c" => (self.action, self.compile.object) = (Action::Compile, true),
             "-S" => (self.action, self.compile.assembly) = (Action::Compile, true),
             "-emit-llvm" => (self.action, self.compile.emit_llvm) = (Action::Compile, true),

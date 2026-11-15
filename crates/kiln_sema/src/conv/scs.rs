@@ -455,28 +455,37 @@ fn standard_conversion_non_atomic(
     };
     scs.second = second;
     scs.to_types[1] = conv;
-    // Third step.
-    let third = if is_function_pointer_conversion(s, conv, to) {
-        ThirdStep::FunctionPointer
-    } else {
-        match qualification_relation(s, conv, to) {
-            QualRelation::Similar { identical: true, .. } => ThirdStep::Identity,
-            QualRelation::Similar { convertible: true, .. } => ThirdStep::Qualification,
-            _ => {
-                if s.ast.types.same_unqualified(conv, to) {
-                    ThirdStep::Identity
-                } else {
-                    return None;
-                }
-            }
-        }
-    };
+    let third = third_step(s, conv, to, ctx)?;
     if third == ThirdStep::Identity && !s.ast.types.same_unqualified(conv, to) {
         return None;
     }
     scs.third = third;
     scs.to_types[2] = to;
     Some(scs)
+}
+
+/// The third step of a standard conversion sequence from `conv` (the type
+/// after the second step) to `to`; `None` when there is none.
+fn third_step(
+    s: &mut Sema<'_, '_>,
+    conv: QualType,
+    to: QualType,
+    ctx: ConvCtx,
+) -> Option<ThirdStep> {
+    if is_function_pointer_conversion(s, conv, to) {
+        return Some(ThirdStep::FunctionPointer);
+    }
+    match qualification_relation(s, conv, to) {
+        QualRelation::Similar { identical: true, .. } => Some(ThirdStep::Identity),
+        QualRelation::Similar { convertible: true, .. } => Some(ThirdStep::Qualification),
+        // [expr.cast]/4.3: the `const_cast` after the `static_cast`.
+        QualRelation::Similar { .. }
+            if ctx == ConvCtx::CStyleCast && super::qual::similar_same_levels(s, conv, to) =>
+        {
+            Some(ThirdStep::Qualification)
+        }
+        _ => s.ast.types.same_unqualified(conv, to).then_some(ThirdStep::Identity),
+    }
 }
 
 /// clang's `IsComplexPromotion`: `_Complex T` to `_Complex U` where `T`

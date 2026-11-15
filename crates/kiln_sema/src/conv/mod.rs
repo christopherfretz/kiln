@@ -82,11 +82,25 @@ pub enum ConvCtx {
     Condition,
     /// The implicit part of an explicit cast.
     Cast,
+    /// The implicit part of a C-style or functional cast, which is a
+    /// `static_cast` followed by a `const_cast` when the `static_cast`
+    /// alone does not apply ([expr.cast]/4.3): the qualification step
+    /// may change cv-qualification at any level of similar types,
+    /// casting constness away (clang `IsQualificationConversion` with
+    /// `CStyle`). `(B*)pcd` for a `const D* pcd` is the derived-to-base
+    /// conversion, never a `reinterpret_cast`.
+    CStyleCast,
 }
 
 impl ConvCtx {
     fn is_direct(self) -> bool {
-        matches!(self, ConvCtx::DirectInitialization | ConvCtx::Condition | ConvCtx::Cast)
+        matches!(
+            self,
+            ConvCtx::DirectInitialization
+                | ConvCtx::Condition
+                | ConvCtx::Cast
+                | ConvCtx::CStyleCast
+        )
     }
 }
 

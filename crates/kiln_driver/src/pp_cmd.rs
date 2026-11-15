@@ -262,7 +262,7 @@ impl Job<'_> {
         cfg.freestanding = p.freestanding.unwrap_or(false);
         cfg.pthread = p.pthread;
         cfg.threadsafe_statics = p.threadsafe_statics.unwrap_or(true);
-        cfg.sized_deallocation = p.sized_deallocation.unwrap_or(true);
+        cfg.sized_deallocation = p.sized_deallocation_for(&self.std);
         cfg.kiln_version = crate::version::triple();
         cfg.version_macro = Some(format!("kiln {}", crate::version::VERSION));
         cfg.clang_compat = p.clang_compat;
@@ -680,7 +680,7 @@ impl Job<'_> {
             (
                 "sized-deallocation",
                 on(
-                    p.sized_deallocation.unwrap_or(true),
+                    p.sized_deallocation_for(&self.std),
                     "-fsized-deallocation",
                     "-fno-sized-deallocation",
                 ),

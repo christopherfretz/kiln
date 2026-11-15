@@ -28,7 +28,9 @@ template <class T> void operator delete(std::type_identity<T>, void *, std::size
 
 S *one() { return new S; }
 void drop(S *s) { delete s; }
-S *many(int n) { return new S[n]; }
+// A constant bound: a run-time one adds kiln's [expr.new]/8 check, which
+// clang does not emit (invalid-bound-run.cpp).
+S *many() { return new S[4]; }
 void drop_many(S *s) { delete[] s; }
 int *global() { return new int(3); }
 void drop_global(int *p) { delete p; }

@@ -107,6 +107,12 @@ pub struct CodegenOptions {
     /// C++ exceptions are enabled (`-fexceptions`, the default). When
     /// disabled every function is `nounwind`.
     pub exceptions: bool,
+    /// An invalid array bound of a new-expression evaluated at run time
+    /// throws `std::bad_array_new_length` (or yields null for a
+    /// non-throwing allocation function) without calling the allocation
+    /// function ([expr.new]/8, C++11 and later; the default). Off (C++98)
+    /// the allocation function is passed `SIZE_MAX`, as clang does.
+    pub bad_array_new_length: bool,
     /// RTTI is enabled (`-frtti`, the default). When disabled (`-fno-rtti`)
     /// a vtable's RTTI slot is null and `type_info` objects are emitted
     /// only for exception handling, as `linkonce_odr` definitions in every
@@ -733,6 +739,7 @@ impl Default for CodegenOptions {
             source_filename: String::new(),
             c: None,
             exceptions: true,
+            bad_array_new_length: true,
             rtti: true,
             ident: String::new(),
             outline_atomics: Some(true),

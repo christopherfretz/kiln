@@ -7171,8 +7171,12 @@ and aggregate element types.
   destructor, new-expression cleanup, coroutine frame) never prefers a
   sized function, even a user-declared one (`usual_delete`, as clang
   19). A class's own lookup is unchanged: its only `operator
-  delete(void*, std::size_t)` still gets the size.
-  `tests/conformance/expr.delete/fno-sized-deallocation-*.cpp`.
+  delete(void*, std::size_t)` still gets the size. Without either flag
+  sized deallocation is on from C++14 only, clang's default (WP-1460):
+  before C++14 a user's global `operator delete(void*, std::size_t)` is
+  never called by a delete-expression.
+  `tests/conformance/expr.delete/fno-sized-deallocation-*.cpp`,
+  `tests/conformance/expr.delete/sized-deallocation-before-cxx14-run.cpp`.
 - Gaps: `-Wmismatched-new-delete`
   is not reported; a non-constant bound in a parenthesized type-id is a
   plain warning (clang's is an extension warning, so an error under

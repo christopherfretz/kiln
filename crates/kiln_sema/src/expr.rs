@@ -7205,9 +7205,9 @@ impl Sema<'_, '_> {
             }
         }
         // static_cast: an implicit conversion sequence ([expr.static.cast]/4).
+        let cctx = if style.allows_const() { ConvCtx::CStyleCast } else { ConvCtx::Cast };
         if style.allows_static()
-            && conv::standard_conversion(self, e, to, ConvCtx::Cast).is_some()
-            && let Some(scs) = conv::standard_conversion(self, e, to, ConvCtx::Cast)
+            && let Some(scs) = conv::standard_conversion(self, e, to, cctx)
         {
             let was = std::mem::replace(&mut self.explicit_conv, true);
             let was_access =

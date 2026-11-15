@@ -58,7 +58,7 @@ impl Cg<'_> {
     /// `__cxa_bad_typeid`). As clang's builder, the insertion point stays
     /// on the terminated block, so the next block is laid out right after
     /// it (before a landing pad the invoke created).
-    fn emit_noreturn_runtime_call(&mut self, name: &str) -> R<()> {
+    pub(crate) fn emit_noreturn_runtime_call(&mut self, name: &str) -> R<()> {
         let f = self.runtime_fn(name, LTy::VOID, &[], &[])?;
         // emitBadCastCall / emitBadTypeidCall: EmitRuntimeCallOrInvoke,
         // setDoesNotReturn, then `unreachable`.
