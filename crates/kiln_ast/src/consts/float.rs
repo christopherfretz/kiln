@@ -16,6 +16,7 @@
 )]
 
 use std::cmp::Ordering;
+use std::fmt::Write as _;
 
 use super::value::FloatKind;
 
@@ -93,6 +94,95 @@ pub(crate) fn format_generic(kind: FloatKind, bits: u128, out: &mut String) {
     }
     out.push('e');
     out.push_str(&(k - 1).to_string());
+}
+
+/// clang's `APValue::printPretty` of a floating-point value (a template
+/// argument, spec/ast.md §9.3): the value rounded to `double`
+/// (`GetApproxValue`, to nearest, ties to even) in C's `%e` form, six
+/// digits after the point and a signed exponent of at least two digits
+/// (`1.000000e+00`, `-0.000000e+00`, `1.234568e+08`); an infinity as
+/// `INF` / `-INF` and any NaN as `nan` (`raw_ostream::operator<<(double)`).
+pub fn format_float_clang(kind: FloatKind, bits: u128, out: &mut String) {
+    let d = to_f64(kind, bits);
+    if d.is_nan() {
+        out.push_str("nan");
+        return;
+    }
+    if d.is_infinite() {
+        out.push_str(if d < 0.0 { "-INF" } else { "INF" });
+        return;
+    }
+    let s = format!("{d:.6e}");
+    let (m, x) = s.split_once('e').unwrap_or((&s, "0"));
+    let x: i32 = x.parse().unwrap_or(0);
+    out.push_str(m);
+    out.push('e');
+    out.push(if x < 0 { '-' } else { '+' });
+    let _ = write!(out, "{:02}", x.unsigned_abs());
+}
+
+/// The `kind` value with encoding `bits` rounded to the nearest `f64`
+/// (ties to even; out of range: an infinity; NaN payloads are not kept).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    reason = "widths and exponents are checked bounds of the encoding"
+)]
+pub fn to_f64(kind: FloatKind, bits: u128) -> f64 {
+    match kind {
+        FloatKind::Single => return f64::from(f32::from_bits(bits as u32)),
+        FloatKind::Double => return f64::from_bits(bits as u64),
+        _ => {}
+    }
+    let f = format_of(kind);
+    let int_bits = u32::from(f.explicit_int);
+    let total = 1 + f.exp_bits + int_bits + f.frac_bits;
+    let neg = bits >> (total - 1) & 1 != 0;
+    let sign = if neg { 1u64 << 63 } else { 0 };
+    let exp_field = (bits >> (f.frac_bits + int_bits)) as u32 & ((1 << f.exp_bits) - 1);
+    let frac = bits & ((1u128 << f.frac_bits) - 1);
+    if exp_field == (1u32 << f.exp_bits) - 1 {
+        return if frac == 0 { f64::from_bits(sign | 0x7ff0_0000_0000_0000) } else { f64::NAN };
+    }
+    let int_bit = if f.explicit_int { bits >> f.frac_bits & 1 } else { u128::from(exp_field != 0) };
+    let mant = (int_bit << f.frac_bits) | frac;
+    if mant == 0 {
+        return f64::from_bits(sign);
+    }
+    let bias = (1i64 << (f.exp_bits - 1)) - 1;
+    // The value is `mant * 2^e`.
+    let e = i64::from(exp_field.max(1)) - bias - i64::from(f.frac_bits);
+    let len = i64::from(128 - mant.leading_zeros());
+    // The exponent of the leading bit, and that of the result's last bit
+    // (52 below it, but not below the subnormal 2^-1074).
+    let top = e + len - 1;
+    let lsb = (top - 52).max(-1074);
+    let shift = lsb - e;
+    let mut m = if shift <= 0 {
+        mant << (-shift) as u32
+    } else if shift >= 128 {
+        0
+    } else {
+        let q = mant >> shift as u32;
+        let rem = mant & ((1u128 << shift as u32) - 1);
+        let half = 1u128 << (shift as u32 - 1);
+        if rem > half || (rem == half && q & 1 == 1) { q + 1 } else { q }
+    };
+    let mut lsb = lsb;
+    if m >> 53 != 0 {
+        m >>= 1;
+        lsb += 1;
+    }
+    if m >> 52 == 0 {
+        // Subnormal (or zero): the encoding is the significand itself.
+        return f64::from_bits(sign | m as u64);
+    }
+    let biased = lsb + 52 + 1023;
+    if biased >= 0x7ff {
+        return f64::from_bits(sign | 0x7ff0_0000_0000_0000);
+    }
+    f64::from_bits(sign | (biased as u64) << 52 | (m as u64 & ((1u64 << 52) - 1)))
 }
 
 /// GCC 16.1's `pp_c_floating_constant` digits (spec/reflection.md §3.9):

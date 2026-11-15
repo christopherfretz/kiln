@@ -203,9 +203,13 @@ impl Sema<'_, '_> {
             .map_or(TagKind::Struct, |r| r.tag);
         let args = self.first_written_template_args(conv);
         let spec = self.builder().class_spec(tmpl, args, conv.canonical, tag);
-        let print = self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
+        let (print, defaulted) =
+            self.suppress_default_args(tmpl, conv.canonical, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
-            self.ast.templates.update_spec(i, |s| s.print_args = print);
+            self.ast.templates.update_spec(i, |s| {
+                s.print_args = print;
+                s.defaulted = defaulted;
+            });
         }
         // GCC counts every argument of a specialization first formed by
         // substitution (its coercion receives the defaults already filled
@@ -255,66 +259,92 @@ impl Sema<'_, '_> {
 
     /// `args` without the trailing arguments equal to their parameter's
     /// default (clang's `SuppressDefaultTemplateArgs`): the arguments a
-    /// specialization's name prints with. The first `written` came from
-    /// the source; a default is recomputed for those silently (SFINAE).
+    /// specialization's name prints with; and the set of every argument
+    /// equal to its default, trailing or not (bit `i` for argument `i`;
+    /// clang's `TemplateArgument::getIsDefaulted`, which
+    /// `CheckTemplateArgumentList` sets for each argument taken from its
+    /// default or equal to it, read by debug information's `defaulted:`).
+    /// The first `written` came from the source; a default is recomputed
+    /// for those silently (SFINAE).
     pub(crate) fn suppress_default_args(
         &mut self,
         tmpl: DeclId,
         args: ArgListId,
         written: usize,
         loc: Loc,
-    ) -> ArgListId {
+    ) -> (ArgListId, u64) {
         let head = self.head_template(tmpl);
         let params = self.template_params(head);
         let elems: Vec<TemplateArg> = self.ast.types.args(args).to_vec();
         if elems.len() != params.len() {
-            return args;
+            return (args, 0);
         }
         let depth = self.template_param_depth(head);
+        let mut mask = 0u64;
         let mut n = elems.len();
-        while n > 0 {
-            let p = params[n - 1];
-            if self.ast.template_parm(p).is_none_or(|x| x.pack) {
-                break;
+        let mut trailing = true;
+        for i in (0..elems.len()).rev() {
+            let d = self.arg_equals_default(tmpl, params[i], &elems, i, written, depth, loc);
+            if d && i < 64 {
+                mask |= 1 << i;
             }
-            let Some(def) = self.template_default(p) else { break };
-            if n > written {
-                n -= 1;
-                continue;
-            }
-            if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm
-                && !self.integral_constant_default(def)
-            {
-                // clang's `isSubstitutedTemplateArgument`: a value equals a
-                // non-type default only when the default is a
-                // non-dependent integral constant expression (`= 2`, not
-                // `= N` or `= Max<L>::value`).
-                break;
-            }
-            if let (ArgView::Type(pat), ArgView::Type(t)) = (def.view(), elems[n - 1].view())
-                && !self.default_shape_matches(t, pat, &elems[..n - 1], depth)
-            {
-                break;
-            }
-            if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
-                break;
-            }
-            if let Some(f) = self.inst.stack.frames.last_mut() {
-                f.sfinae = Some(true);
-            }
-            self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
-            let r = self.default_template_arg(tmpl, depth, p, def, loc, &elems[..n - 1]);
-            let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
-            self.pop_inst_frame();
-            let types = &self.ast.types;
-            match r {
-                Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[n - 1]) => {
-                    n -= 1;
-                }
-                _ => break,
+            if trailing && d {
+                n = i;
+            } else {
+                trailing = false;
             }
         }
-        if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) }
+        let print = if n == elems.len() { args } else { self.ast.types.arg_list(&elems[..n]) };
+        (print, mask)
+    }
+
+    /// Whether argument `i` of `elems` (for parameter `p`) equals the
+    /// parameter's default ([`Self::suppress_default_args`]); one past the
+    /// `written` arguments always does.
+    #[allow(clippy::too_many_arguments, reason = "the specialization's context")]
+    fn arg_equals_default(
+        &mut self,
+        tmpl: DeclId,
+        p: DeclId,
+        elems: &[TemplateArg],
+        i: usize,
+        written: usize,
+        depth: u16,
+        loc: Loc,
+    ) -> bool {
+        if self.ast.template_parm(p).is_none_or(|x| x.pack) {
+            return false;
+        }
+        let Some(def) = self.template_default(p) else { return false };
+        if i >= written {
+            return true;
+        }
+        if self.ast.decls.get(p).kind() == DeclKind::NonTypeTemplateParm
+            && !self.integral_constant_default(def)
+        {
+            // clang's `isSubstitutedTemplateArgument`: a value equals a
+            // non-type default only when the default is a
+            // non-dependent integral constant expression (`= 2`, not
+            // `= N` or `= Max<L>::value`).
+            return false;
+        }
+        if let (ArgView::Type(pat), ArgView::Type(t)) = (def.view(), elems[i].view())
+            && !self.default_shape_matches(t, pat, &elems[..i], depth)
+        {
+            return false;
+        }
+        if !self.push_inst_frame(FrameKind::DefaultArgChecking, p, tmpl, loc) {
+            return false;
+        }
+        if let Some(f) = self.inst.stack.frames.last_mut() {
+            f.sfinae = Some(true);
+        }
+        self.inst.sfinae.borrow_mut().push(crate::templ::stack::SfinaeState::default());
+        let r = self.default_template_arg(tmpl, depth, p, def, loc, &elems[..i]);
+        let failed = self.inst.sfinae.borrow_mut().pop().is_some_and(|s| s.errors > 0);
+        self.pop_inst_frame();
+        let types = &self.ast.types;
+        matches!(r, Ok(a) if !failed && types.canonical_arg(a) == types.canonical_arg(elems[i]))
     }
 
     /// Whether written type argument `t` can equal its default `pat` in

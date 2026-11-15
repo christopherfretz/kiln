@@ -1053,7 +1053,16 @@ whether it is exact: false when some part printed as a placeholder (an
     enumerator matches still prints as its cast (`(n::E)7`, not `7`), so
     the spelling re-parses as the enumeration (`display_string_of`).
 - **References** print without `&` (`x`).
-- **Class values** print as `S{1, 2}`.
+- **Class values** print as `S{1, 2}`: only the value's own class is
+  named, a member or base subobject is a braced list as in the dump
+  (`Out{{2}, 1}`, `D{{1}, 2}`; clang's `APValue::printPretty`). The GCC
+  form (`gcc`) names every class (`Out{In{2}, 1}`).
+- **Floats** print as clang's `APValue::printPretty` (`GetApproxValue`):
+  the value rounded to `double` (to nearest, ties to even) in C's `%e`
+  form, six digits after the point and an exponent of at least two
+  digits (`1.000000e+00`, `-0.000000e+00`, `1.234568e+08`), an infinity
+  `INF` / `-INF`, any NaN `nan` (`consts::format_float_clang`; WP-1414).
+  `gcc_float` keeps GCC's form (spec/reflection.md §3.9).
 - Everything else prints as in the dump.
 - The type (suffix or cast) shows only where clang's `IncludeType` asks
   for it: in a type's argument list, an argument of a template parameter

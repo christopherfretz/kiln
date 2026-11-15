@@ -229,6 +229,7 @@ impl<'a, W: io::Write> Dumper<'a, W> {
                 scoped_nns: false,
                 scoped_spec_args: false,
                 debug_info: false,
+                path_prefix_map: &[],
             },
             opts,
             out,

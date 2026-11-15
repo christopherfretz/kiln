@@ -503,6 +503,40 @@ pub fn write_arg_list_debug(
     arg_list_canonical(ctx, names, l, true, out);
 }
 
+/// The arguments `l` of an alias template specialization as written,
+/// nested closers split (`> >`): the name clang's debug information gives
+/// its `DW_TAG_typedef` (`CGDebugInfo::CreateType(const
+/// TemplateSpecializationType *)`, which turns `PrintCanonicalTypes`
+/// off).
+pub fn write_arg_list_debug_written(
+    ctx: &TypeContext,
+    names: &dyn TypeNames,
+    l: ArgListId,
+    out: &mut String,
+) {
+    let mut p = Printer {
+        ctx,
+        names,
+        out: std::mem::take(out),
+        empty_ph: true,
+        scope: false,
+        suppress_tag: false,
+        c_policy: names.c_lang().is_some(),
+        split_closers: true,
+        no_parens: false,
+        inside_cc_attr: false,
+        diag_desugar: false,
+        in_tst_args: true,
+        scoped_args: false,
+        canon_args: false,
+        written_tags: false,
+        c22: names.clang_compat() >= 22,
+        depth: 0,
+    };
+    p.arg_list(l, false);
+    *out = p.out;
+}
+
 fn arg_list_canonical(
     ctx: &TypeContext,
     names: &dyn TypeNames,

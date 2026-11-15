@@ -75,9 +75,12 @@ impl Sema<'_, '_> {
             return Ok(s);
         }
         let spec = self.builder().var_spec(tmpl, conv.sugared, conv.canonical, ty, vspec);
-        let print = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
+        let (print, defaulted) = self.suppress_default_args(tmpl, conv.sugared, written.len(), loc);
         if let Some((i, _)) = self.ast.spec_info(spec) {
-            self.ast.templates.update_spec(i, |s| s.print_args = print);
+            self.ast.templates.update_spec(i, |s| {
+                s.print_args = print;
+                s.defaulted = defaulted;
+            });
         }
         Ok(spec)
     }
@@ -127,10 +130,13 @@ impl Sema<'_, '_> {
         };
         let pspec = pattern.and_then(|p| self.ast.decls.var(p)).map(|x| x.spec).unwrap_or_default();
         let spec = self.builder().var_spec(tmpl, args, canonical, QualType::ERROR, pspec);
-        let print = self.suppress_default_args(tmpl, args, written, poi);
+        let (print, defaulted) = self.suppress_default_args(tmpl, args, written, poi);
         let i = self.ast.spec_info(spec).map(|(i, _)| i);
         if let Some(i) = i {
-            self.ast.templates.update_spec(i, |s| s.print_args = print);
+            self.ast.templates.update_spec(i, |s| {
+                s.print_args = print;
+                s.defaulted = defaulted;
+            });
         }
         let Some(pattern) = pattern.filter(|_| !self.inst.fatal) else {
             // Ambiguous (diagnosed) or no pattern.

@@ -1586,9 +1586,41 @@ order, so `-S -emit-llvm -g` output equals clang's after `opt-19`
   debug-information printing policy (every argument, inline namespaces
   kept, enumeration values as casts, integral arguments typed),
   `templateParams` and substituted types from the canonical arguments,
-  `defaulted: true` on a class specialization's suppressed trailing
-  defaults, and one artificial variable per member of a block-scope
-  anonymous union (WP-1400, spec/landed/codegen/WP-1400.md);
+  and one artificial variable per member of a block-scope anonymous
+  union (WP-1400, spec/landed/codegen/WP-1400.md);
+- a template value argument in a name is spelled as clang's
+  `TemplateArgument::print` / `APValue::printPretty` spell it, the same
+  in diagnostics and `__PRETTY_FUNCTION__` (spec/ast.md §9.3): only the
+  value's class is named and a member or base subobject is a braced list
+  (`T<Out{{2}}>`, `T<D{{1}, 2}>`, `T<U{.f = 2.000000e+00}>`); a
+  floating-point value is its `double` (rounded to nearest) in C's `%e`
+  form (`1.000000e+00`, `-0.000000e+00`), an infinity `INF`/`-INF`, a NaN
+  `nan`; an unnamed tag, a closure type included, is located
+  (`(lambda at F:L:C)`, the path after `-fdebug-prefix-map`;
+  `AstNames::for_debug_info_at`). WP-1414,
+  `debug_template_value_spelling.cpp`;
+- `defaulted: true` on every argument of a class or variable template
+  specialization that was taken from its parameter's default or equals it
+  (the check that suppresses a trailing default in the name, applied to
+  each argument: `SpecInfo::defaulted`, clang's `getIsDefaulted`), trailing
+  or not, explicit specializations included; never on a pack or a
+  function template's arguments (WP-1414, `debug_template_defaulted.cpp`);
+- an alias template specialization is a `DW_TAG_typedef` of its aliased
+  type (clang `CreateType(const TemplateSpecializationType *)`), named by
+  the template's unqualified name and its arguments as written
+  (`A<short>` for `n::A<short>`), at the alias declaration and in its
+  scope, without an access flag; `nodebug` on the alias leaves the
+  aliased type (WP-1414, `debug_alias_template.cpp`);
+- a pointer to member function's subroutine type keeps the sugar of its
+  return and parameter types (WP-1414, `debug_member_pointer_sugar.cpp`);
+- a specialization of an implicit function template (a generic lambda's
+  conversion function and static invoker) is implicit: artificial, a
+  declaration without file and line, parameters without them (WP-1414,
+  `debug_lambda_generic_invoker.cpp`);
+- a constant read of a non-static member (a folded `p.a`) or a template
+  parameter object describes nothing; only a variable or an enumerator
+  read as its constant gets a type, a global variable expression or (for
+  a static data member) its class in `retainedTypes` (WP-1414);
 - statement and expression locations with clang's `EmitStopPoint`,
   `ApplyDebugLocation` and cleanup/landing-pad rules, so a debugger
   steps, breaks and finishes where it does in a clang build.

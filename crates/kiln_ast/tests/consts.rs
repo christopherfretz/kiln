@@ -12,7 +12,7 @@ use std::mem::size_of;
 use kiln_ast::consts::{
     ByteImage, ByteRange, ConstError, ConstStore, ConstValue, FloatKind, IntBits, IntStyle, Member,
     MemberKind, NoEnv, NullKind, PrintEnv, PrintOptions, PrintStyle, PtrBase, Reloc, Scalar,
-    ShadowKind, ShadowRun, Shape, UnionMember, ValueKind,
+    ShadowKind, ShadowRun, Shape, UnionMember, ValueKind, format_float_clang, to_f64,
 };
 use kiln_ast::strings::{StringEncoding, StringPool};
 use kiln_ast::{
@@ -836,7 +836,7 @@ fn print_scalars() {
                 bits: u128::from(0.1f64.to_bits()),
             }),
             "1e-1",
-            "1e-1",
+            "1.000000e-01",
         ),
         (
             push(Scalar::Float {
@@ -845,7 +845,7 @@ fn print_scalars() {
                 bits: u128::from((-0.0f64).to_bits()),
             }),
             "-0e0",
-            "-0e0",
+            "-0.000000e+00",
         ),
         (
             push(Scalar::Float {
@@ -854,7 +854,7 @@ fn print_scalars() {
                 bits: u128::from(f64::INFINITY.to_bits()),
             }),
             "inf",
-            "inf",
+            "INF",
         ),
         (
             push(Scalar::Float {
@@ -872,7 +872,7 @@ fn print_scalars() {
                 bits: u128::from(1e100f64.to_bits()),
             }),
             "1e100",
-            "1e100",
+            "1.000000e+100",
         ),
         (push(Scalar::Null { ty: ty(INT_PTR), kind: NullKind::Pointer }), "nullptr", "nullptr"),
         (
@@ -1145,7 +1145,7 @@ fn print_exact_and_enum_cast() {
             bits: u128::from(f64::INFINITY.to_bits()),
         })
         .unwrap();
-    assert_eq!(exact(&st, inf, &opts), ("inf".to_string(), false));
+    assert_eq!(exact(&st, inf, &opts), ("INF".to_string(), false));
     let half = st
         .push_scalar(Scalar::Float {
             ty: ty(DOUBLE),
@@ -1153,7 +1153,7 @@ fn print_exact_and_enum_cast() {
             bits: u128::from(1.5f64.to_bits()),
         })
         .unwrap();
-    assert_eq!(exact(&st, half, &opts), ("1.5e0".to_string(), true));
+    assert_eq!(exact(&st, half, &opts), ("1.500000e+00".to_string(), true));
 }
 
 #[test]
@@ -1165,7 +1165,7 @@ fn print_aggregates() {
     assert_eq!(show_targ(&st, &strings, a3), "{1, 2, 3}");
     let n = st.push_aggregate(agg(NEST, &le(&[1, 2, 3, u32::MAX]))).unwrap();
     assert_eq!(show(&st, &strings, n), "{1, {2}, {3, -1}}");
-    assert_eq!(show_targ(&st, &strings, n), "N{1, N::(anonymous){2}, {3, -1}}");
+    assert_eq!(show_targ(&st, &strings, n), "N{1, {2}, {3, -1}}");
     // Bit-fields: a = -1 (3 bits), unnamed 5 bits skipped, b = 9 (4 bits).
     let bf_bytes = [0b0000_0111u8, 0b0000_1001, 0, 0];
     let bf = st.push_aggregate(agg(BITS, &bf_bytes)).unwrap();
@@ -1277,4 +1277,57 @@ fn memory_report() {
     let sm = sp.heap_bytes();
     assert_eq!(sm.row("bytes").unwrap().live_bytes, 3);
     assert_eq!(sm.row("entries").unwrap().count, 1);
+}
+
+fn clang_float(kind: FloatKind, bits: u128) -> String {
+    let mut s = String::new();
+    format_float_clang(kind, bits, &mut s);
+    s
+}
+
+#[test]
+fn clang_float_spelling() {
+    // clang's template-argument spelling: GetApproxValue, then `%e`.
+    let d = |v: f64| clang_float(FloatKind::Double, u128::from(v.to_bits()));
+    assert_eq!(d(1.0), "1.000000e+00");
+    assert_eq!(d(-0.0), "-0.000000e+00");
+    assert_eq!(d(0.25), "2.500000e-01");
+    assert_eq!(d(1e300), "1.000000e+300");
+    assert_eq!(d(5e-324), "4.940656e-324");
+    assert_eq!(d(f64::INFINITY), "INF");
+    assert_eq!(d(f64::NEG_INFINITY), "-INF");
+    assert_eq!(d(f64::NAN), "nan");
+    assert_eq!(clang_float(FloatKind::Single, u128::from(0.1f32.to_bits())), "1.000000e-01");
+    assert_eq!(clang_float(FloatKind::Half, 0x3e00), "1.500000e+00");
+    assert_eq!(clang_float(FloatKind::BFloat16, 0x3fc0), "1.500000e+00");
+    // x87 2.5 and quad 2.5.
+    assert_eq!(
+        clang_float(FloatKind::X87Extended, (0x4000u128 << 64) | 0xa000_0000_0000_0000),
+        "2.500000e+00"
+    );
+    assert_eq!(
+        clang_float(FloatKind::Quad, 0x4000_4000_0000_0000_0000_0000_0000_0000),
+        "2.500000e+00"
+    );
+}
+
+#[test]
+fn to_f64_rounds_and_saturates() {
+    // Half subnormal 2^-24.
+    assert_eq!(to_f64(FloatKind::Half, 1).to_bits(), (2f64.powi(-24)).to_bits());
+    // Quad 1 + 2^-53 is a tie: rounds to even (1.0); 1 + 3*2^-54 rounds up.
+    let one = 0x3fffu128 << 112;
+    assert_eq!(to_f64(FloatKind::Quad, one | (1u128 << 59)).to_bits(), 1.0f64.to_bits());
+    assert_eq!(
+        to_f64(FloatKind::Quad, one | (3u128 << 58)).to_bits(),
+        (1.0 + f64::EPSILON).to_bits()
+    );
+    // Quad above f64 range saturates to infinity; below underflows to 0.
+    assert_eq!(to_f64(FloatKind::Quad, 0x7000u128 << 112).to_bits(), (f64::INFINITY).to_bits());
+    assert_eq!(to_f64(FloatKind::Quad, 0x0001u128 << 112).to_bits(), 0.0f64.to_bits());
+    // x87 negative 1.
+    assert_eq!(
+        to_f64(FloatKind::X87Extended, (0xbfffu128 << 64) | (1u128 << 63)).to_bits(),
+        (-1.0f64).to_bits()
+    );
 }

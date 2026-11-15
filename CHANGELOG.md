@@ -69,8 +69,8 @@ Planned as 1.3.0.
 
 ### Changed
 
-- The PCH snapshot format is 8 (WP-1411, WP-1417, WP-1422, WP-1419,
-  WP-1433 and WP-1426; new diagnostics, options and AST data changed the
+- The PCH snapshot format is 9 (WP-1411, WP-1417, WP-1422, WP-1419,
+  WP-1433, WP-1426 and WP-1414; new diagnostics, options and AST data changed the
   schema). Rebuild a PCH built by kiln 1.2.0; until then it is not
   misread, as [spec/pch.md](spec/pch.md) describes.
 
@@ -180,6 +180,19 @@ Planned as 1.3.0.
   time as clang computes it, and the expression is not a constant
   expression. It was rejected as not supported before, and so was a
   constant `offsetof` whose negative index makes the offset wrap.
+- Debug info: template specialization names spell value arguments as
+  clang does (WP-1414): only the value's own class is named
+  (`T<Out{{2}, 2.500000e-01}>`), a floating-point argument is
+  `1.500000e+00` (was `1.5e0`), `INF` or `nan`, and a lambda is
+  `(lambda at file:line:col)`. Diagnostics name such arguments the same
+  way.
+- Debug info: `defaulted: true` marks every template argument equal to
+  its default, not only a trailing run, and the arguments of an explicit
+  specialization (WP-1414); an alias template specialization keeps its
+  typedef (`V<int>`); a member pointer keeps its pointee's typedefs; a
+  generic lambda's `__invoke<T>` is artificial; a template parameter
+  object used in a function template no longer adds its class to the
+  retained types (WP-1414).
 
 ## [1.2.1] - 2026-11-14
 

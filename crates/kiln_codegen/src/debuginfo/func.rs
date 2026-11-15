@@ -492,6 +492,13 @@ impl Cg<'_> {
         }
         let ast = self.ast;
         let n = ast.decls.get(d);
+        // clang's `tryEmitAsConstant` makes the reference for a variable
+        // or an enumerator only: a folded non-static member (`p.a` of a
+        // template parameter object) or the parameter object itself
+        // describes nothing, so its class is no retained type.
+        if !matches!(n.kind(), DeclKind::Var | DeclKind::EnumConstant) {
+            return;
+        }
         let Some(q) = n.ty() else { return };
         let ty = self.di_type(q);
         if n.kind() == DeclKind::EnumConstant {
